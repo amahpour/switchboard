@@ -1,0 +1,16 @@
+{
+  "_source": "m0:codex-hooks-verify/logs/tui_u3.hooks.jsonl",
+  "_unverified": false,
+  "session_id": "00000000-0000-4000-8000-000000000003",
+  "turn_id": "00000000-0000-4000-8000-000000000004",
+  "transcript_path": "/ws/transcript.jsonl",
+  "cwd": "/ws",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-5.5",
+  "permission_mode": "default",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "echo one"
+  },
+  "tool_use_id": "call_fixture_0005"
+}

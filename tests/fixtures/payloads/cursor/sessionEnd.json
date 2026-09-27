@@ -1,0 +1,18 @@
+{
+  "_source": "m0:cursor-agent/wsh/.yk/hooks.jsonl",
+  "_unverified": false,
+  "conversation_id": "00000000-0000-4000-8000-000000000020",
+  "generation_id": "00000000-0000-4000-8000-000000000020",
+  "model": "default",
+  "reason": "completed",
+  "duration_ms": 11830,
+  "is_background_agent": false,
+  "final_status": "completed",
+  "session_id": "00000000-0000-4000-8000-000000000020",
+  "hook_event_name": "sessionEnd",
+  "cursor_version": "2026.09.23-86fc751",
+  "workspace_roots": [
+    "/ws"
+  ],
+  "transcript_path": "/ws/transcript.jsonl"
+}

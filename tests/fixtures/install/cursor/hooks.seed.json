@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "hooks": {
+    "stop": [{"command": "notify-user done", "timeout": 30}],
+    "afterFileEdit": [{"command": "echo user-hook"}]
+  }
+}

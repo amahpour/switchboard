@@ -1,0 +1,15 @@
+{
+ "$schema": "http://json-schema.org/draft-07/schema#",
+ "properties": {
+  "includeTurns": {
+   "type": "boolean"
+  },
+  "threadId": {
+   "type": "string"
+  }
+ },
+ "required": [
+  "threadId"
+ ],
+ "type": "object"
+}

@@ -1,0 +1,30 @@
+# Build-context filter for the repo root: the sandbox/Dockerfile.test context and
+# sandbox/Dockerfile's named context switchboard-src (docs/SANDBOX.md). An allowlist:
+# only what the build and the test suite need goes in, so gitignored local files
+# (logs, databases, target/, node_modules/, .env files) never reach an image.
+*
+!src/
+!tests/
+!pyproject.toml
+!uv.lock
+!.python-version
+!README.md
+!LICENSE
+!sandbox/run-tests.sh
+# ...and, inside those, nothing local (mirrors .gitignore)
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/node_modules
+**/logs
+**/*.log
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.sqlite
+**/*.sqlite-*
+**/.switchboard*
+**/.env*
+**/.DS_Store
+tests/live/_runs

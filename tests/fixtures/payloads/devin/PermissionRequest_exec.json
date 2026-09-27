@@ -1,0 +1,12 @@
+{
+  "_source": "m0:devin-cli-verify/i3/log/h.jsonl",
+  "_unverified": false,
+  "hook_event_name": "PermissionRequest",
+  "tool_name": "exec",
+  "tool_input": {
+    "command": "date -u"
+  },
+  "tool_use_id": "call_fixture_0031",
+  "session_id": "brisk-otter-3",
+  "prompt_id": "00000000-0000-4000-8000-000000000033"
+}

@@ -1,0 +1,59 @@
+# syntax=docker/dockerfile:1
+# Linux test image: switchboard's pytest suite on Debian bookworm, CPython 3.13, as a
+# non-root user, against a copy of the repo (docs/SANDBOX.md §10).
+#
+#   docker compose -f sandbox/compose.yaml build test
+#   docker compose -f sandbox/compose.yaml run --rm test              # the default suite
+#   docker compose -f sandbox/compose.yaml run --rm test -m perf      # pytest args pass through
+#
+# The build context is the repo root; the root .dockerignore keeps .venv, .git
+# and caches out. Nothing from the host is mounted at run time
+# unless you add the read-only /src/switchboard mount shown in SANDBOX.md.
+FROM debian:bookworm-slim
+
+ARG TARGETARCH
+ARG UV_VERSION=0.7.13
+# sha256 of uv-<arch>-unknown-linux-gnu.tar.gz from the uv GitHub release
+ARG UV_SHA256_ARM64=0b2ad9fe4295881615295add8cc5daa02549d29cc9a61f0578e397efcf12f08f
+ARG UV_SHA256_AMD64=909278eb197c5ed0e9b5f16317d1255270d1f9ea4196e7179ce934d48c4c2545
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl git lsof procps sqlite3 tini \
+ && rm -rf /var/lib/apt/lists/*
+
+# uv from its release tarball, checksum-pinned (pyproject pins uv ==0.7.13).
+RUN set -eu; \
+    case "$TARGETARCH" in \
+      arm64) a=aarch64; s="$UV_SHA256_ARM64" ;; \
+      amd64) a=x86_64;  s="$UV_SHA256_AMD64" ;; \
+      *) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSLo /tmp/uv.tgz "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-$a-unknown-linux-gnu.tar.gz"; \
+    echo "$s  /tmp/uv.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/uv.tgz -C /usr/local/bin --strip-components=1 "uv-$a-unknown-linux-gnu/uv" "uv-$a-unknown-linux-gnu/uvx"; \
+    rm /tmp/uv.tgz; uv --version
+
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python UV_PYTHON_PREFERENCE=only-managed UV_LINK_MODE=copy
+# The stdlib is byte-compiled here: it is root-owned, so the non-root user can't
+# write its .pyc files, and every process (each hook run) would recompile what it
+# imports (`import json` alone took 36 ms).
+RUN uv python install 3.13 \
+ && P="$(uv python find 3.13)" \
+ && "$P" -m compileall -q -j0 -x '/(test|tests|idlelib|lib2to3)/' "$("$P" -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')" \
+ && useradd -m -s /bin/bash -u 1000 dev
+
+COPY --chmod=0755 sandbox/run-tests.sh /usr/local/bin/switchboard-run-tests
+
+USER dev
+WORKDIR /home/dev/switchboard
+# Dependencies first, so a source change doesn't re-download them.
+COPY --chown=dev:dev pyproject.toml uv.lock .python-version README.md LICENSE ./
+RUN uv sync --frozen --no-install-project
+COPY --chown=dev:dev . .
+RUN uv sync --frozen
+# Runs have no network (compose: network_mode none): uv must use its cache even
+# when an index response is stale (re-building the editable switchboard resolves hatchling).
+ENV UV_OFFLINE=1
+
+# tini reaps orphans (the suite daemonizes brokers), like init on a real host.
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/switchboard-run-tests"]

@@ -1,0 +1,77 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "notify-user done",
+            "timeout": 600
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness codex --event Stop; exit 0'",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo user-hook"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness codex --event PostToolUse; exit 0'",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness codex --event UserPromptSubmit; exit 0'",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Interrupt": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness codex --event Interrupt; exit 0'",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness codex --event SessionEnd; exit 0'",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}

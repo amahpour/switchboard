@@ -1,0 +1,24 @@
+{
+  "_source": "m3:live claude 2.1.282 (haiku, default mode)",
+  "_unverified": false,
+  "session_id": "00000000-0000-4000-8000-00000000c101",
+  "transcript_path": "/ws/transcript.jsonl",
+  "cwd": "/ws",
+  "scratchpad_dir": "/tmp/scratch",
+  "prompt_id": "00000000-0000-4000-8000-00000000c104",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUseFailure",
+  "tool_name": "mcp__switchboard__wait",
+  "tool_input": {
+    "room": "#build",
+    "timeout_s": 30
+  },
+  "tool_use_id": "toolu_fixture_c004",
+  "error": "MCP server \"switchboard\" tool \"wait\" timed out after 5s",
+  "is_interrupt": false,
+  "duration_ms": 5003,
+  "mcp_server": {
+    "name": "switchboard",
+    "source": "dynamic"
+  }
+}

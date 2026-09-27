@@ -1,0 +1,12 @@
+{
+  "_source": "m0:devin-cli-verify/a1/log/h.jsonl",
+  "_unverified": false,
+  "hook_event_name": "PreToolUse",
+  "tool_name": "read",
+  "tool_input": {
+    "file_path": "/ws/one.txt"
+  },
+  "tool_use_id": "call_fixture_0025",
+  "session_id": "brisk-otter-1",
+  "prompt_id": "00000000-0000-4000-8000-000000000024"
+}

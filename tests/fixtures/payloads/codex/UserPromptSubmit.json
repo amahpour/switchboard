@@ -1,0 +1,12 @@
+{
+  "_source": "m0:codex-hooks-verify/logs/tui_u2.hooks.jsonl",
+  "_unverified": false,
+  "session_id": "00000000-0000-4000-8000-000000000001",
+  "turn_id": "00000000-0000-4000-8000-000000000002",
+  "transcript_path": "/ws/transcript.jsonl",
+  "cwd": "/ws",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-6-luna",
+  "permission_mode": "default",
+  "prompt": "Call the ykraw MCP tool whoami once, then reply with just: ok"
+}

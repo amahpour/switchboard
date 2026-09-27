@@ -1,0 +1,48 @@
+# switchboard sandbox (docs/SANDBOX.md). Run from this directory, or pass -f sandbox/compose.yaml.
+name: switchboard
+services:
+  box:
+    build:
+      context: .
+      additional_contexts:
+        switchboard-src: ..           # the repo, read at build time only (Dockerfile)
+    image: switchboard-box
+    container_name: switchboard-box
+    init: true                        # reaps orphaned codex app-server / MCP children
+    environment:
+      SWITCHBOARD_FIREWALL: "${SWITCHBOARD_FIREWALL:-1}"
+      SWITCHBOARD_PORT: "${SWITCHBOARD_PORT:-8765}"
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, NET_RAW, NET_BIND_SERVICE]   # used by the root entrypoint; dev gets CapEff 0
+    security_opt: ["no-new-privileges:true"]          # no setuid path back to root
+    cpus: 6
+    mem_limit: 8g
+    pids_limit: 4096
+    ports:
+      # never "8765:8765": that binds 0.0.0.0 and [::], i.e. your LAN. Same port inside and
+      # out, so the broker's Host/Origin check (switchboard.localhost:<port>) holds.
+      - "127.0.0.1:${SWITCHBOARD_PORT:-8765}:${SWITCHBOARD_PORT:-8765}"
+      - "[::1]:${SWITCHBOARD_PORT:-8765}:${SWITCHBOARD_PORT:-8765}"   # browsers may try ::1 first for switchboard.localhost
+    volumes:
+      - switchboard-home:/home/dev
+      - switchboard-data:/var/lib/switchboard
+      - work:/work
+      # no host mounts: switchboard is baked into the image (Dockerfile)
+
+  # The Linux test run (SANDBOX.md §10): `docker compose run --rm test [pytest args]`.
+  # Not started by `up` (profile). No host mounts, no network, no capabilities.
+  test:
+    profiles: [test]
+    build:
+      context: ..
+      dockerfile: sandbox/Dockerfile.test
+    image: switchboard-test           # its tini entrypoint reaps orphans; no init: needed
+    network_mode: none                # the suite is offline: loopback only
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 4096
+
+volumes:
+  switchboard-home: {external: true}  # survives `docker compose down -v`
+  switchboard-data: {}
+  work: {}

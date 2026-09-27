@@ -1,0 +1,8 @@
+{
+  "_source": "m0:devin-cli-verify/a1/log/h.jsonl",
+  "_unverified": false,
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "Read one.txt, then two.txt, then three.txt using the read tool, one call at a time. Then reply with one short sentence.",
+  "session_id": "brisk-otter-1",
+  "prompt_id": "00000000-0000-4000-8000-000000000024"
+}

@@ -1,0 +1,41 @@
+[project]
+name = "switchboard"
+version = "0.2.0"
+description = "A 90s-style local hangout where you and your coding agents talk and hand work to each other"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.141.1",
+    "starlette==1.7.0",
+    "uvicorn==0.53.0",
+    "websockets==17.1",
+    "fastmcp==4.0.9",
+    "mcp==2.2.0",
+]
+
+[project.scripts]
+switchboard = "switchboard.cli:main"
+
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio", "httpx", "hatchling"]   # exact versions frozen in the committed uv.lock
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/switchboard"]
+
+[tool.uv]
+required-version = "==0.7.13"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+markers = [
+    "live: drives real agent CLIs (opt-in via SWITCHBOARD_LIVE)",
+    "perf: strict timing targets (run once per milestone commit)",
+]
+addopts = "-m 'not live and not perf'"

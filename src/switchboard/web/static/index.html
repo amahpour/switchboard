@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>switchboard</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<div class="window app" id="app">
+  <div class="titlebar">
+    <span class="title-icon" aria-hidden="true">&#x1F4AC;</span>
+    <span class="title-text" id="title">switchboard</span>
+    <span class="title-buttons">
+      <button type="button" class="tb-btn" id="buddy-toggle" aria-controls="buddies" aria-expanded="false" title="Buddy List">Buddies</button>
+      <button type="button" class="tb-btn" id="logout" title="Sign off this browser">Sign Off</button>
+    </span>
+  </div>
+
+  <div class="toolbar">
+    <div class="tabs" id="tabs" role="tablist" aria-label="Rooms"></div>
+    <button type="button" class="btn small" id="new-room" title="Create a room">+ Room</button>
+  </div>
+
+  <div class="banner test hidden" id="banner-test" role="status">TEST MODE &mdash; this broker runs a test profile</div>
+  <div class="banner warn hidden" id="banner-bridge" role="status">&#x26A0; Work handed to a &#x26A0; member runs without approval prompts.</div>
+  <div class="banner paused hidden" id="banner-paused" role="status"></div>
+
+  <div class="main">
+    <section class="chat" aria-label="Chat">
+      <div class="log sunken" id="log" role="log" aria-live="polite" aria-relevant="additions"></div>
+      <div class="empty hidden" id="empty">
+        <p class="empty-title">No rooms yet.</p>
+        <p>Create one, then tell your agents to join it.</p>
+        <p><button type="button" class="btn" id="create-build">Create #build</button></p>
+        <p class="empty-hint">or use <b>+ Room</b> for another name.</p>
+      </div>
+      <form class="composer" id="composer" autocomplete="off">
+        <textarea id="input" class="sunken" rows="2" maxlength="4000" spellcheck="true"
+                  aria-label="Message" placeholder="Type a message. Enter sends, Shift+Enter adds a line. /help lists commands."></textarea>
+        <button type="submit" class="btn send" id="send">Send</button>
+      </form>
+    </section>
+
+    <aside class="buddies" id="buddies" aria-label="Buddy List">
+      <div class="buddies-title">Buddy List</div>
+      <div class="buddies-body sunken">
+        <div class="group-title">You</div>
+        <ul class="buddy-list" id="buddy-me"></ul>
+        <div class="group-title" id="agents-title">Agents (0)</div>
+        <ul class="buddy-list" id="buddy-list"></ul>
+      </div>
+    </aside>
+  </div>
+
+  <div class="statusbar">
+    <span class="panel" id="st-conn">connecting&hellip;</span>
+    <span class="panel" id="st-state"></span>
+    <span class="panel" id="st-budget"></span>
+    <span class="panel" id="st-hops"></span>
+  </div>
+</div>
+</body>
+</html>

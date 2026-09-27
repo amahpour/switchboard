@@ -1,0 +1,7 @@
+{
+  "_source": "m0:devin-cli-verify/a1/log/h.jsonl",
+  "_unverified": false,
+  "hook_event_name": "SessionStart",
+  "source": "startup",
+  "session_id": "brisk-otter-1"
+}

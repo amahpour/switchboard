@@ -1,0 +1,17 @@
+{
+  "_source": "m0:devin-cli-verify/i2/log/h.jsonl",
+  "_unverified": false,
+  "hook_event_name": "PostToolUse",
+  "tool_name": "mcp__yv__wait",
+  "tool_input": {
+    "timeout_s": 240
+  },
+  "tool_use_id": "call_fixture_0026",
+  "tool_response": {
+    "success": true,
+    "output": "sanitized tool output",
+    "error": null
+  },
+  "session_id": "brisk-otter-2",
+  "prompt_id": "00000000-0000-4000-8000-000000000028"
+}

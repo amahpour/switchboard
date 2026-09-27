@@ -1,0 +1,15 @@
+{
+  "_source": "m0:devin-cli-verify/i2/log/h.jsonl",
+  "_unverified": false,
+  "hook_event_name": "PreToolUse",
+  "tool_name": "run_subagent",
+  "tool_input": {
+    "title": "room-listener",
+    "task": "Call mcp_call_tool with server_name yv, tool_name wait, arguments {\"timeout_s\": 600}, exactly once. When it returns, finish and return exactly the text it returned, nothing else.",
+    "profile": "subagent_general",
+    "is_background": true
+  },
+  "tool_use_id": "call_fixture_0029",
+  "session_id": "brisk-otter-2",
+  "prompt_id": "00000000-0000-4000-8000-000000000030"
+}

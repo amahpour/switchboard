@@ -1,0 +1,24 @@
+{
+  "_source": "m0:cursor-agent/wsm/.yk/hooks.jsonl",
+  "_unverified": false,
+  "conversation_id": "00000000-0000-4000-8000-000000000013",
+  "generation_id": "00000000-0000-4000-8000-000000000018",
+  "model": "default",
+  "tool_name": "MCP:sleep_for",
+  "tool_input": {
+    "label": "s70",
+    "seconds": 70
+  },
+  "error_message": "MCP error -32001: Request timed out",
+  "failure_type": "error",
+  "duration": 60002.959,
+  "tool_use_id": "00000000-0000-4000-8000-000000000019",
+  "is_interrupt": false,
+  "session_id": "00000000-0000-4000-8000-000000000013",
+  "hook_event_name": "postToolUseFailure",
+  "cursor_version": "2026.09.23-86fc751",
+  "workspace_roots": [
+    "/ws"
+  ],
+  "transcript_path": "/ws/transcript.jsonl"
+}

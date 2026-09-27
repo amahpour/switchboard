@@ -1,0 +1,14 @@
+switchboard install devin:
+~/.config/devin/mcp_config.json (update, with a backup):
+  + mcpServers.switchboard: {"command": "/opt/yk/venv/bin/python", "args": ["-I", "-m", "switchboard", "mcp", "--home", "/opt/yk/home"]}
+~/.config/devin/config.json (update, with a backup):
+  + hooks.SessionStart[0]: {"matcher": "", "hooks": [{"type": "command", "command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness devin --event SessionStart; exit 0'", "timeout": 10}]}
+  + hooks.UserPromptSubmit[0]: {"matcher": "", "hooks": [{"type": "command", "command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness devin --event UserPromptSubmit; exit 0'", "timeout": 10}]}
+  + hooks.PreToolUse[0]: {"matcher": "", "hooks": [{"type": "command", "command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness devin --event PreToolUse; exit 0'", "timeout": 10}]}
+  + hooks.PostToolUse[0]: {"matcher": "", "hooks": [{"type": "command", "command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness devin --event PostToolUse; exit 0'", "timeout": 10}]}
+  + hooks.Stop[1]: {"matcher": "", "hooks": [{"type": "command", "command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness devin --event Stop; exit 0'", "timeout": 30}]}
+  + hooks.SessionEnd[0]: {"matcher": "", "hooks": [{"type": "command", "command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness devin --event SessionEnd; exit 0'", "timeout": 10}]}
+  + permissions.allow: ["mcp__switchboard__join", "mcp__switchboard__leave", "mcp__switchboard__who", "mcp__switchboard__say", "mcp__switchboard__read", "mcp__switchboard__wait", "mcp__switchboard__pass", "mcp__switchboard__away"]
+note: permissions.allow pre-approves switchboard's eight tools in Devin: they run without an approval prompt (nothing else is allowlisted)
+note: hooks and the MCP server take effect in new Devin sessions; they are inert until a session joins a room
+note: an idle Devin agent listens in wait(); interject by typing, then Enter on an empty line

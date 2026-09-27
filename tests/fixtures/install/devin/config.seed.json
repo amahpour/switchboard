@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "shell": "zsh",
+  "permissions": {"allow": ["read"], "deny": ["exec(rm *)"]},
+  "hooks": {
+    "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "notify-user done"}]}]
+  }
+}

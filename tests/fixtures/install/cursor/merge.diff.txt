@@ -1,0 +1,13 @@
+switchboard install cursor:
+~/.cursor/mcp.json (update, with a backup):
+  + mcpServers.switchboard: {"command": "/opt/yk/venv/bin/python", "args": ["-I", "-m", "switchboard", "mcp", "--home", "/opt/yk/home"]}
+~/.cursor/hooks.json (update, with a backup):
+  + hooks.sessionStart[0]: {"command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness cursor --event sessionStart; exit 0'", "timeout": 10}
+  + hooks.beforeSubmitPrompt[0]: {"command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness cursor --event beforeSubmitPrompt; exit 0'", "timeout": 10}
+  + hooks.postToolUse[0]: {"command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness cursor --event postToolUse; exit 0'", "timeout": 10}
+  + hooks.postToolUseFailure[0]: {"command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness cursor --event postToolUseFailure; exit 0'", "timeout": 10}
+  + hooks.stop[1]: {"command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness cursor --event stop --max-wait 630; exit 0'", "timeout": 660, "loop_limit": null}
+  + hooks.sessionEnd[0]: {"command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness cursor --event sessionEnd; exit 0'", "timeout": 10}
+note: Cursor doesn't reload hooks.json in a running agent: this takes effect in new `agent` sessions; the hooks are inert until a session joins a room
+note: idle Cursor sessions are reached by a parked stop hook (tier cursor:stop-park, provisional: parks longer than ~40 s are unproven until the Cursor re-test)
+note: switchboard's tools may ask for approval in Cursor (no allow rule is written)

@@ -1,0 +1,6 @@
+# Domains the firewall lets agents reach on TCP 443 (docs/SANDBOX.md §5).
+# One or more per line; a domain also covers its subdomains; '#' starts a comment.
+api.anthropic.com claude.ai platform.claude.com     # Claude: code.claude.com/docs/en/network-config
+auth.openai.com chatgpt.com api.openai.com          # Codex: read from source at rust-v0.156.1
+cursor.sh cursorapi.com cursor-cdn.com cursor.com   # Cursor: cursor.com/docs/enterprise/network-configuration
+devin.ai windsurf.com codeium.com codeiumdata.com   # Devin: docs.devin.ai/desktop/troubleshooting/windsurf-common-issues; CLI hosts untested

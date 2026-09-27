@@ -1,0 +1,22 @@
+model = "gpt-5.5"
+approval_policy = "on-request"
+
+[features]
+daemon_auto_start = true
+
+[mcp_servers.other]
+command = "npx"
+args = ["-y", "other-server"]
+
+[mcp_servers.other.env]
+OTHER_API_TOKEN = "placeholder-not-a-secret"
+
+[tui]
+screen_reader_detection_done = true
+
+# >>> switchboard >>>
+# Added by `switchboard install codex`; this span is replaced on re-install.
+[mcp_servers.switchboard]
+command = "/opt/yk/venv/bin/python"
+args = ["-I", "-m", "switchboard", "mcp", "--home", "/opt/yk/home"]
+# <<< switchboard <<<

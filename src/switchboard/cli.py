@@ -1,0 +1,516 @@
+"""The ``switchboard`` command line (DESIGN.md §3).
+
+Imports stay lazy so that quick verbs (say, tail, who) don't pay for FastAPI.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+from typing import Any
+
+EXIT_OK = 0
+EXIT_ERR = 1
+EXIT_USAGE = 2
+EXIT_DOWN = 3
+
+
+def _paths(args: argparse.Namespace):
+    from switchboard.paths import Paths
+
+    return Paths.from_home(getattr(args, "home", None))
+
+
+def _home_given(args: argparse.Namespace) -> bool:
+    return getattr(args, "home", None) is not None
+
+
+def _call(args: argparse.Namespace, method: str, params: dict[str, Any] | None = None, timeout: float = 10.0) -> dict[str, Any]:
+    from switchboard.mcp.client import call_sync
+
+    return call_sync(_paths(args).sock, method, params or {}, timeout)
+
+
+def _clean(text: str) -> str:
+    from switchboard.envelope import clean
+
+    return clean(text)
+
+
+def _hhmmss(ts: float) -> str:
+    return time.strftime("%H:%M:%S", time.localtime(ts))
+
+
+def format_line(msg: dict[str, Any]) -> str:
+    """``[14:02:11] <alice> text`` (control characters stripped for the terminal)."""
+    ts = _hhmmss(msg.get("ts") or 0)
+    name = _clean(str(msg.get("from", "?")))
+    text = _clean(str(msg.get("text", "")))
+    kind = msg.get("kind", "chat")
+    if kind == "join":
+        line = f"[{ts}] * {name} {text or 'joined'}"
+    elif kind == "leave":
+        line = f"[{ts}] * {name} {text or 'left'}"
+    elif kind == "notice":
+        line = f"[{ts}] -!- {text}"
+    else:
+        tag = " (via cli)" if msg.get("via") == "cli" else ""
+        line = f"[{ts}] <{name}>{tag} {text}"
+    return line.replace("\n", "\n" + " " * 11)
+
+
+# ------------------------------------------------------------------ commands
+def cmd_start(args: argparse.Namespace) -> int:
+    from switchboard.broker import daemon
+    from switchboard.config import ConfigError, load
+
+    paths = _paths(args)
+    if args.test_trust_uds and not args.test_mode:
+        print("switchboard: --test-trust-uds needs --test-mode", file=sys.stderr)
+        return EXIT_USAGE
+    if args.test_mode:
+        why = daemon.check_test_mode(paths, _home_given(args))
+        if why:
+            print(f"switchboard: {why}", file=sys.stderr)
+            return EXIT_USAGE
+    if args.foreground:
+        try:
+            cfg = load(paths)
+        except ConfigError as e:
+            print(f"switchboard: config error: {e}", file=sys.stderr)
+            return EXIT_ERR
+        return daemon.run_foreground(
+            paths,
+            cfg,
+            port=args.port,
+            test_mode=args.test_mode,
+            test_trust_uds=args.test_trust_uds,
+        )
+    try:
+        load(paths)
+    except ConfigError as e:
+        print(f"switchboard: config error: {e}", file=sys.stderr)
+        return EXIT_ERR
+    return daemon.start(
+        paths, port=args.port, test_mode=args.test_mode, test_trust_uds=args.test_trust_uds
+    )
+
+
+def cmd_stop(args: argparse.Namespace) -> int:
+    from switchboard.broker import daemon
+
+    return daemon.stop(_paths(args))
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    st = _call(args, "sys.status")
+    if args.json:
+        print(json.dumps(st, indent=2))
+        return EXIT_OK
+    up = int(st.get("uptime_s", 0))
+    print(f"switchboard {st['version']} running: pid {st['pid']}, up {up // 3600}h{up % 3600 // 60:02d}m")
+    print(f"  web UI  {st['url']}  ({st.get('web_clients', 0)} browser tab(s) connected)")
+    print(f"  home    {st['home']}")
+    print(f"  hooks   {st['hooks']}")
+    print(f"  codex   {st['codex_link']}")
+    if st.get("test_mode"):
+        print("  TEST MODE")
+    rooms = st.get("rooms", [])
+    if not rooms:
+        print("  rooms   none yet (create one in the web UI)")
+    for r in rooms:
+        state = f"paused ({r['paused_reason']})" if r["paused"] else "active"
+        limit = r.get("hop_limit")
+        hops = (f"{r['hop_count']}, loop guard off" if limit == 0
+                else f"{r['hop_count']}" if limit is None else f"{r['hop_count']}/{limit}")
+        print(
+            f"  {r['name']}: {state}, {r['members']} agent(s), budget "
+            f"{r['budget_remaining']}/{r['budget_per_hour']}, hops {hops}"
+        )
+    return EXIT_OK
+
+
+def cmd_login(args: argparse.Namespace) -> int:
+    res = _call(args, "human.login_link")
+    print(f"Sign in (the link works once, for 5 minutes):\n  {res['url']}")
+    if args.open:
+        import webbrowser
+
+        webbrowser.open(res["url"])
+    return EXIT_OK
+
+
+def cmd_logout(args: argparse.Namespace) -> int:
+    if not args.all:
+        print("switchboard: use `switchboard logout --all` (or the Log out button in the web UI)", file=sys.stderr)
+        return EXIT_USAGE
+    res = _call(args, "human.logout_all")
+    print(f"revoked {res['revoked']} web session(s)")
+    return EXIT_OK
+
+
+def cmd_rooms(args: argparse.Namespace) -> int:
+    res = _call(args, "room.list")
+    if args.json:
+        print(json.dumps(res["rooms"], indent=2))
+        return EXIT_OK
+    if not res["rooms"]:
+        print("no rooms yet (create one in the web UI)")
+    for r in res["rooms"]:
+        s = r["settings"]
+        flag = "  [paused]" if s["paused"] else ""
+        print(f"{r['name']}  {r['members']} agent(s){flag}")
+    return EXIT_OK
+
+
+def cmd_create(args: argparse.Namespace) -> int:
+    res = _call(args, "room.create", {"name": args.room})
+    print(f"created {res['room']['name']}")
+    return EXIT_OK
+
+
+def cmd_say(args: argparse.Namespace) -> int:
+    text = " ".join(args.text)
+    if text == "-":
+        text = sys.stdin.read()
+    res = _call(args, "human.say", {"room": args.room, "text": text})
+    if args.verbose:
+        print(res["id"])
+    return EXIT_OK
+
+
+def cmd_cmd(args: argparse.Namespace) -> int:
+    if not args.command:
+        print("usage: switchboard cmd ROOM /command [args ...]", file=sys.stderr)
+        return EXIT_USAGE
+    text = " ".join(args.command).strip()
+    if not text.startswith("/"):
+        text = "/" + text
+    res = _call(args, "human.command", {"room": args.room, "text": text})
+    print(_clean(res.get("text", "")))
+    return EXIT_OK if res.get("ok", True) else EXIT_ERR
+
+
+def cmd_who(args: argparse.Namespace) -> int:
+    res = _call(args, "room.who", {"room": args.room})
+    if args.json:
+        print(json.dumps(res, indent=2))
+        return EXIT_OK
+    members = res["members"]
+    print(f"{res['room']}: {res['human']} (you, human) + {len(members)} agent(s)")
+    for m in members:
+        flags = []
+        if m["approval_mode"] == "bypass":
+            flags.append("⚠")
+        elif m["approval_mode"] == "unknown":
+            flags.append("?")
+        if m["env_leak"]:
+            flags.append("env shared")
+        if m["held"]:
+            flags.append("held")
+        if m["queued"]:
+            flags.append(f"{m['queued']} queued")
+        if m["parked"]:
+            flags.append("parked — needs a poke")
+        if m.get("transcript"):
+            flags.append(f"transcript: {_clean(m['transcript'])}")
+        away = f'  away: "{_clean(m["away"])}"' if m.get("away") else ""
+        tier = (m.get("tier") or "-") + (f" ({m['tier_note']})" if m.get("tier_note") else "")
+        print(f"  {_clean(m['name'])}  {m['harness']}  {m['status']}  {tier}  {' '.join(flags)}{away}".rstrip())
+    return EXIT_OK
+
+
+def cmd_tail(args: argparse.Namespace) -> int:
+    from switchboard.mcp.client import BrokerDown, Stream
+
+    params: dict[str, Any] = {"room": args.room, "follow": not args.no_follow, "limit": args.lines}
+    if args.after is not None:
+        params["after"] = args.after
+        params["limit"] = 500
+
+    def emit(msg: dict[str, Any]) -> None:
+        if args.json:
+            print(json.dumps(msg, ensure_ascii=False), flush=True)
+        else:
+            print(format_line(msg), flush=True)
+
+    with Stream(_paths(args).sock) as s:
+        res = s.call("room.tail", params)
+        last = 0
+        for m in res.get("messages", []):
+            emit(m)
+            last = max(last, m["id"])
+        more = bool(res.get("more"))
+        while more:  # --after far back: page through the rest before following
+            page = s.call("room.history", {"room": args.room, "after": last, "limit": 1000})["messages"]
+            for m in page:
+                emit(m)
+                last = max(last, m["id"])
+            more = len(page) == 1000
+        if args.no_follow:
+            return EXIT_OK
+        try:
+            for push in s.pushes():
+                data = push.get("data") or {}
+                if push.get("push") == "message":
+                    m = data.get("msg") or {}
+                    if m.get("id", 0) <= last:
+                        continue  # at-least-once: skip anything already printed
+                    last = m["id"]
+                    emit(m)
+                elif push.get("push") == "notice" and not args.json:
+                    print(f"-!- {_clean(str(data.get('text', '')))}", flush=True)
+        except BrokerDown:
+            print("switchboard: the broker went away", file=sys.stderr)
+            return EXIT_DOWN
+        except KeyboardInterrupt:
+            return EXIT_OK
+    return EXIT_OK
+
+
+def cmd_mcp(args: argparse.Namespace) -> int:
+    from switchboard.mcp.server import main as mcp_main
+
+    argv: list[str] = []
+    if _home_given(args):
+        argv += ["--home", args.home]
+    if args.harness:
+        argv += ["--harness", args.harness]
+    if args.test_session:
+        argv += ["--test-session", args.test_session]
+    if args.ack:
+        argv += ["--ack", args.ack]
+    return mcp_main(argv)
+
+
+def cmd_hook(args: argparse.Namespace) -> int:
+    """Debug helper: exec the installed hook copy, exactly as a harness would."""
+    from switchboard.paths import hook_sha12
+
+    paths = _paths(args)
+    copy = paths.hook_copy(hook_sha12())
+    if not copy.exists():
+        print(f"switchboard: no hook copy at {copy}; run `switchboard start` once", file=sys.stderr)
+        return EXIT_OK
+    argv = [sys.executable, "-I", "-S", str(copy), "--home", str(paths.home),
+            "--harness", args.harness, "--event", args.event]
+    if args.max_wait is not None:
+        argv += ["--max-wait", str(args.max_wait)]
+    os.execv(sys.executable, argv)
+    return EXIT_OK  # pragma: no cover
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    """What happened in a room (DESIGN.md §12.6), read from the database (read-only)."""
+    import sqlite3
+
+    from switchboard import report
+
+    now = time.time()
+    try:
+        since = report.parse_window(args.since, args.last, now)
+        con = report.open_ro(_paths(args).db)
+        try:
+            rep = report.build(con, args.room, since=since, now=now)
+        finally:
+            con.close()
+    except report.ReportError as e:
+        print(f"switchboard: {e}", file=sys.stderr)
+        return EXIT_ERR
+    except sqlite3.Error as e:  # e.g. "database is locked" after the timeout, or an unexpected schema
+        print(f"switchboard: can't read the switchboard database: {e}", file=sys.stderr)
+        return EXIT_ERR
+    out = json.dumps(rep, indent=2) + "\n" if args.json else report.render_markdown(rep)
+    if args.out:
+        try:
+            with open(args.out, "w", encoding="utf-8") as f:
+                f.write(out)
+        except OSError as e:
+            print(f"switchboard: can't write {args.out}: {e.strerror or e}", file=sys.stderr)
+            return EXIT_ERR
+        print(f"wrote {args.out}")
+    else:
+        sys.stdout.write(out)
+    return EXIT_OK
+
+
+def cmd_install(args: argparse.Namespace) -> int:
+    from switchboard.install import common
+
+    return common.run_install(args)
+
+
+def cmd_uninstall(args: argparse.Namespace) -> int:
+    from switchboard.install import common
+
+    return common.run_uninstall(args)
+
+
+# -------------------------------------------------------------------- parser
+def build_parser() -> argparse.ArgumentParser:
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
+        "--home",
+        default=argparse.SUPPRESS,
+        help="switchboard home (default: $SWITCHBOARD_HOME or ~/.switchboard)",
+    )
+    p = argparse.ArgumentParser(
+        prog="switchboard",
+        description="A 90s-style hangout for you and your coding agents.",
+        parents=[common],
+    )
+    p.add_argument("--version", action="version", version=_version())
+    sub = p.add_subparsers(dest="cmd", metavar="COMMAND")
+
+    s = sub.add_parser("start", parents=[common], help="start the broker (daemonizes)")
+    s.add_argument("--foreground", action="store_true", help="run in this process")
+    s.add_argument("--port", type=int, default=None, help="TCP port (default 7419; 0 = any)")
+    s.add_argument("--test-mode", action="store_true", help=argparse.SUPPRESS)
+    s.add_argument("--test-trust-uds", action="store_true", help=argparse.SUPPRESS)
+    s.set_defaults(func=cmd_start)
+
+    s = sub.add_parser("stop", parents=[common], help="stop the broker")
+    s.set_defaults(func=cmd_stop)
+
+    s = sub.add_parser("status", parents=[common], help="show broker status")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_status)
+
+    s = sub.add_parser("login", parents=[common], help="print a one-time sign-in link for the web UI")
+    s.add_argument("--open", action="store_true", help="also open it in your browser")
+    s.set_defaults(func=cmd_login)
+
+    s = sub.add_parser("logout", parents=[common], help="revoke web sessions")
+    s.add_argument("--all", action="store_true", help="revoke every web session")
+    s.set_defaults(func=cmd_logout)
+
+    s = sub.add_parser("rooms", parents=[common], help="list rooms")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_rooms)
+
+    s = sub.add_parser("create", parents=[common], help="create a room (needs the web session)")
+    s.add_argument("room")
+    s.set_defaults(func=cmd_create)
+
+    s = sub.add_parser("say", parents=[common], help="post to a room as you (literal text)")
+    s.add_argument("room")
+    s.add_argument("text", nargs="+", help="message text ('-' reads stdin)")
+    s.add_argument("-v", "--verbose", action="store_true", help="print the new message id")
+    s.set_defaults(func=cmd_say)
+
+    s = sub.add_parser("cmd", parents=[common], help="run a slash command, e.g. /pause")
+    s.add_argument("room")
+    # everything after the room is the command, dash words included (a /review note may
+    # say "--from"); options such as --home go before the room
+    s.add_argument("command", nargs=argparse.REMAINDER, help="the command and its arguments, e.g. /pause")
+    s.set_defaults(func=cmd_cmd)
+
+    s = sub.add_parser("tail", parents=[common], help="print and follow a room")
+    s.add_argument("room")
+    s.add_argument("--after", type=int, default=None, help="start after this message id")
+    s.add_argument("-n", "--lines", type=int, default=20, help="backlog lines (default 20)")
+    s.add_argument("--json", action="store_true", help="one JSON object per line")
+    s.add_argument("--no-follow", action="store_true", help="print the backlog and exit")
+    s.set_defaults(func=cmd_tail)
+
+    s = sub.add_parser("who", parents=[common], help="list a room's members")
+    s.add_argument("room")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_who)
+
+    s = sub.add_parser("report", parents=[common],
+                       help="latency, turns, posts vs passes and rules fired in a room (markdown or JSON)")
+    s.add_argument("--room", required=True, help="the room, e.g. '#build'")
+    s.add_argument("--since", default=None, help="start at this ISO time (default: the room's creation)")
+    s.add_argument("--last", default=None, help="only the last N s/m/h/d, e.g. 2h")
+    s.add_argument("--json", action="store_true", help="JSON instead of markdown")
+    s.add_argument("--out", default=None, help="write to FILE instead of stdout")
+    s.set_defaults(func=cmd_report)
+
+    s = sub.add_parser("install", parents=[common],
+                       help="register switchboard's MCP server and hooks with a harness (shows a diff first)")
+    s.add_argument("harness", choices=["claude", "codex", "cursor", "devin", "all"],
+                   help="a harness, or all (every harness whose CLI is on PATH, one confirmation)")
+    s.add_argument("--dry-run", action="store_true", help="show the diff, write nothing")
+    s.add_argument("--yes", action="store_true", help="apply without asking")
+    s.add_argument("--print-args", action="store_true",
+                   help="print per-launch flags/files as JSON (writes nothing)")
+    s.add_argument("--workspace", default=None, help="with --print-args: the workspace dir")
+    s.add_argument("--user-home", default=None, help="treat DIR as ~ (tests)")
+    s.add_argument("--allow-editable", action="store_true",
+                   help="allow an editable/source install of switchboard (agents could edit its code)")
+    s.set_defaults(func=cmd_install)
+
+    s = sub.add_parser("uninstall", parents=[common],
+                       help="remove switchboard's own MCP server and hooks from a harness (shows a diff first)")
+    s.add_argument("harness", choices=["claude", "codex", "cursor", "devin", "all"],
+                   help="a harness, or all (the four in order, one confirmation)")
+    s.add_argument("--dry-run", action="store_true", help="show the diff, write nothing")
+    s.add_argument("--yes", action="store_true", help="apply without asking")
+    s.add_argument("--user-home", default=None, help="treat DIR as ~ (tests)")
+    s.add_argument("--purge-hooks", action="store_true",
+                   help="also delete switchboard's hook copies in <home>/hooks if no harness config still runs them")
+    s.set_defaults(func=cmd_uninstall)
+
+    s = sub.add_parser("mcp", parents=[common], help="run the stdio MCP server (harnesses start this)")
+    s.add_argument("--harness", choices=["test"], default=None, help=argparse.SUPPRESS)
+    s.add_argument("--test-session", default=None, help=argparse.SUPPRESS)
+    s.add_argument("--ack", choices=["next_call", "immediate", "never"], default=None,
+                   help=argparse.SUPPRESS)
+    s.set_defaults(func=cmd_mcp)
+
+    s = sub.add_parser("hook", parents=[common], help="run the installed hook script (debugging)")
+    s.add_argument("--harness", required=True, choices=["claude", "codex", "cursor", "devin"])
+    s.add_argument("--event", required=True)
+    s.add_argument("--max-wait", type=float, default=None)
+    s.set_defaults(func=cmd_hook)
+    return p
+
+
+def _version() -> str:
+    from switchboard import __version__
+
+    return f"switchboard {__version__}"
+
+
+def main(argv: list[str] | None = None) -> int:
+    os.umask(0o077)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if not getattr(args, "func", None):
+        parser.print_help()
+        return EXIT_USAGE
+    from switchboard.mcp.client import BrokerDown, RpcError
+    from switchboard.paths import UnsafePathError
+
+    try:
+        return int(args.func(args) or 0)
+    except BrokerDown:
+        print(
+            "switchboard: the broker is not running (start it with `switchboard start`)",
+            file=sys.stderr,
+        )
+        return EXIT_DOWN
+    except RpcError as e:
+        print(f"switchboard: {e.code}: {_clean(e.message)}", file=sys.stderr)
+        return EXIT_ERR
+    except UnsafePathError as e:
+        print(f"switchboard: unsafe path: {e}", file=sys.stderr)
+        return EXIT_ERR
+    except PermissionError as e:
+        print(f"switchboard: {e}", file=sys.stderr)
+        return EXIT_ERR
+    except TimeoutError as e:
+        print(f"switchboard: {e}", file=sys.stderr)
+        return EXIT_ERR
+    except KeyboardInterrupt:
+        return 130
+    except BrokenPipeError:
+        return EXIT_OK
+
+
+if __name__ == "__main__":  # pragma: no cover
+    sys.exit(main())

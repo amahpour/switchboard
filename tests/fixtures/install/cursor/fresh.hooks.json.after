@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness cursor --event sessionStart; exit 0'",
+        "timeout": 10
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness cursor --event beforeSubmitPrompt; exit 0'",
+        "timeout": 10
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness cursor --event postToolUse; exit 0'",
+        "timeout": 10
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness cursor --event postToolUseFailure; exit 0'",
+        "timeout": 10
+      }
+    ],
+    "stop": [
+      {
+        "command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness cursor --event stop --max-wait 630; exit 0'",
+        "timeout": 660,
+        "loop_limit": null
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness cursor --event sessionEnd; exit 0'",
+        "timeout": 10
+      }
+    ]
+  }
+}

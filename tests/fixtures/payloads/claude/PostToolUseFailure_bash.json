@@ -1,0 +1,20 @@
+{
+  "_source": "m3:live claude 2.1.282 (haiku, default mode)",
+  "_unverified": false,
+  "session_id": "00000000-0000-4000-8000-00000000c100",
+  "transcript_path": "/ws/transcript.jsonl",
+  "cwd": "/ws",
+  "scratchpad_dir": "/tmp/scratch",
+  "prompt_id": "00000000-0000-4000-8000-00000000c102",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUseFailure",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "false",
+    "description": "Run false command (expected to fail)"
+  },
+  "tool_use_id": "toolu_fixture_c001",
+  "error": "Exit code 1",
+  "is_interrupt": false,
+  "duration_ms": 683
+}

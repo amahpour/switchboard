@@ -1,0 +1,20 @@
+{
+  "model": "opus",
+  "env": {
+    "SOME_API_TOKEN": "placeholder-not-a-secret"
+  },
+  "permissions": {
+    "allow": ["Bash(git status)"]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit",
+        "hooks": [{"type": "command", "command": "echo user-hook", "timeout": 5}]
+      }
+    ],
+    "Notification": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "say done"}]}
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "_source": "m3:live claude 2.1.282 (haiku, default mode)",
+  "_unverified": false,
+  "session_id": "00000000-0000-4000-8000-00000000c100",
+  "transcript_path": "/ws/transcript.jsonl",
+  "cwd": "/ws",
+  "scratchpad_dir": "/tmp/scratch",
+  "prompt_id": "00000000-0000-4000-8000-00000000c103",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "[switchboard] #build: 1 message from alice (your user, relayed by switchboard). pass() is a good default; speak only if you add something new.\nbatch yk:b1.638eb12b\n- id=4 at=02:19:10 from=alice kind=human to_you=yes prio=human text=\"ping 1: reply in #build with the switchboard say tool, text exactly: pong 1\"\nReply with say(\"#build\", text, reply_to=<id>) or pass(\"#build\"). Ignore ids you have already seen."
+}

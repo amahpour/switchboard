@@ -1,0 +1,15 @@
+{
+  "_source": "m0:cursor-agent/wsc/.yk/hooks.jsonl",
+  "_unverified": false,
+  "conversation_id": "00000000-0000-4000-8000-000000000010",
+  "generation_id": "00000000-0000-4000-8000-000000000010",
+  "model": "default",
+  "is_background_agent": false,
+  "session_id": "00000000-0000-4000-8000-000000000010",
+  "hook_event_name": "sessionStart",
+  "cursor_version": "2026.09.23-86fc751",
+  "workspace_roots": [
+    "/ws"
+  ],
+  "transcript_path": null
+}

@@ -1,0 +1,12 @@
+{
+  "_source": "m3:live claude 2.1.282 (haiku, default mode)",
+  "_unverified": false,
+  "session_id": "00000000-0000-4000-8000-00000000c100",
+  "transcript_path": "/ws/transcript.jsonl",
+  "cwd": "/ws",
+  "scratchpad_dir": "/tmp/scratch",
+  "prompt_id": "00000000-0000-4000-8000-00000000c102",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "Use the switchboard tools: call join with room \"#build\" and screen_name \"claude-1\". Then run the Bash command `false` (it fails on purpose; that is fine), then the Bash command `echo ready`, then reply with one word: joined. Later, switchboard will relay messages that I (alice) post in #build; answer each one with the switchboard say tool, or pass, exactly as the message asks. Keep it short."
+}

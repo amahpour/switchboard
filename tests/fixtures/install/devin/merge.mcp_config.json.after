@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "other-server": {
+      "command": "node",
+      "args": [
+        "srv.js"
+      ],
+      "env": {
+        "OTHER_API_TOKEN": "placeholder-not-a-secret"
+      }
+    },
+    "switchboard": {
+      "command": "/opt/yk/venv/bin/python",
+      "args": [
+        "-I",
+        "-m",
+        "switchboard",
+        "mcp",
+        "--home",
+        "/opt/yk/home"
+      ]
+    }
+  }
+}

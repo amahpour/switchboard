@@ -1,0 +1,17 @@
+switchboard install codex:
+~/.codex/config.toml (update, with a backup):
+  + # >>> switchboard >>>
+  + # Added by `switchboard install codex`; this span is replaced on re-install.
+  + [mcp_servers.switchboard]
+  + command = "/opt/yk/venv/bin/python"
+  + args = ["-I", "-m", "switchboard", "mcp", "--home", "/opt/yk/home"]
+  + # <<< switchboard <<<
+~/.codex/hooks.json (update, with a backup):
+  + hooks.UserPromptSubmit[0]: {"hooks": [{"type": "command", "command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness codex --event UserPromptSubmit; exit 0'", "timeout": 10}]}
+  + hooks.PostToolUse[1]: {"hooks": [{"type": "command", "command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness codex --event PostToolUse; exit 0'", "timeout": 10}]}
+  + hooks.Stop[1]: {"hooks": [{"type": "command", "command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness codex --event Stop; exit 0'", "timeout": 10}]}
+  + hooks.Interrupt[0]: {"hooks": [{"type": "command", "command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness codex --event Interrupt; exit 0'", "timeout": 3}]}
+  + hooks.SessionEnd[0]: {"hooks": [{"type": "command", "command": "/bin/sh -c 'H=\"/opt/yk/home/hooks/switchboard_hook-<SHA12>.py\"; P=\"/opt/yk/venv/bin/python\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness codex --event SessionEnd; exit 0'", "timeout": 3}]}
+note: start codex, run /hooks, then review and trust the switchboard hooks: Codex doesn't run a hook until you trust it, and switchboard never trusts anything itself
+note: hooks and the MCP server take effect in new Codex sessions; they are inert until a session joins a room
+note: idle wakes need the TUI attached to the Codex app-server daemon (daemon_auto_start, or `codex app-server daemon start`); otherwise switchboard uses `codex queue` (up to ~10 s)

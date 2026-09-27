@@ -1,0 +1,22 @@
+{
+  "_source": "m0:codex-hooks-verify/logs/tui_u2.hooks.jsonl",
+  "_unverified": false,
+  "session_id": "00000000-0000-4000-8000-000000000001",
+  "turn_id": "00000000-0000-4000-8000-000000000002",
+  "transcript_path": "/ws/transcript.jsonl",
+  "cwd": "/ws",
+  "hook_event_name": "PostToolUse",
+  "model": "gpt-6-luna",
+  "permission_mode": "default",
+  "tool_name": "mcp__ykraw__whoami",
+  "tool_input": {},
+  "tool_response": {
+    "content": [
+      {
+        "type": "text",
+        "text": "sanitized tool output"
+      }
+    ]
+  },
+  "tool_use_id": "00000000-0000-4000-8000-000000000006"
+}

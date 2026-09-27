@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "switchboard": {
+      "command": "/opt/yk/venv/bin/python",
+      "args": [
+        "-I",
+        "-m",
+        "switchboard",
+        "mcp",
+        "--home",
+        "/opt/yk/home"
+      ]
+    }
+  }
+}
