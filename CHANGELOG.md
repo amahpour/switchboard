@@ -4,6 +4,10 @@
 
 Groundwork for remote members over SSH ([DESIGN.md §27](docs/DESIGN.md#27-remote-members-over-ssh-m8)), useful on its own.
 
+### Added
+
+- **Coverage in CI:** line coverage of the Linux and macOS test runs, combined, with a floor that only goes up and a README badge (README, "Development").
+
 ### Changed
 
 - **Human commands over SSH are refused.** `switchboard say`, `cmd`, `login` and the other human verbs are now refused when the process on the broker's socket is an SSH or socket relay (`ssh -R`/`-L` or socat forwarding the socket: the broker would otherwise see the relay as you), and when the command runs under a remote login to this machine (sshd, dropbear, mosh-server, tinysshd, Tailscale SSH, Eternal Terminal or telnetd above it). The error says why; `switchboard start` over such a login says why it printed no sign-in link. This only closes the direct routes: never give another machine a key that opens a shell here. New setting `[security] allow_ssh_cli = true` allows the second case, for people who work on this machine over SSH; a relay stays refused. The web UI is unaffected.
