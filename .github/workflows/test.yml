@@ -39,6 +39,13 @@ jobs:
       - name: lsof (the Codex client check and a bind test use it)
         if: runner.os == 'Linux'
         run: command -v lsof || (sudo apt-get update && sudo apt-get install -y --no-install-recommends lsof)
+      # The `ssh` tier (tests/integration/test_remote_ssh.py) runs a user-level sshd on 127.0.0.1
+      # (tests/fakes/sshd.py); macOS runners have /usr/sbin/sshd already
+      - name: OpenSSH server and client, rsync (the ssh tier)
+        if: runner.os == 'Linux'
+        run: |
+          if [ -x /usr/sbin/sshd ] && command -v ssh >/dev/null && command -v rsync >/dev/null; then exit 0; fi
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends openssh-server openssh-client rsync
       - run: uv sync --frozen
       # pyproject's addopts deselect `live` (real agent CLIs) and `perf` (timing targets).
       # --cov measures this process and ([tool.coverage.run] patch) its Python children.

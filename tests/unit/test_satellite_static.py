@@ -116,7 +116,26 @@ def test_the_satellite_loads_no_adapter() -> None:
     it (M8d review): what runs on the remote machine stays what §27.4.8 lists."""
     code = ("import sys, switchboard.remote.satellite, switchboard.config; "
             "print(sorted(m for m in sys.modules if m.startswith(('switchboard.adapters', 'switchboard.delivery',"
-            " 'switchboard.broker.agents', 'switchboard.broker.rpc'))))")
+            " 'switchboard.broker.agents', 'switchboard.broker.rpc', 'switchboard.broker.remote',"
+            " 'switchboard.remote.pairing', 'switchboard.install'))))")
     out = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True, timeout=60,
                          env=child_env(), check=True)
     assert out.stdout.strip() == "[]", out.stdout
+
+
+def test_pairing_runs_only_the_system_ssh_tools() -> None:
+    """``remote add|remove|doctor`` run ``/usr/bin/ssh`` and ``/usr/bin/ssh-keygen`` and nothing
+    else, from one function that checks its argv[0], with no shell (DESIGN.md §27.5.8)."""
+    src = (PKG / "remote" / "pairing.py").read_text()
+    tree = ast.parse(src)
+    calls = [(fn.name, _dotted(c.func)) for fn in ast.walk(tree) if isinstance(fn, ast.FunctionDef)
+             for c in ast.walk(fn) if isinstance(c, ast.Call) and _dotted(c.func) in _spawn_calls(src)]
+    assert calls == [("_run", "subprocess.run")], calls
+    assert "shell=True" not in src and "os.system" not in src
+    from switchboard.remote import pairing
+
+    import pytest as _pytest
+
+    for bad in (["/bin/sh", "-c", "id"], ["ssh", "-G", "x"], ["/usr/bin/scp"], []):
+        with _pytest.raises(pairing.PairingError):
+            pairing._run(bad)

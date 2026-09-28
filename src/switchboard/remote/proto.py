@@ -81,7 +81,10 @@ REMOTE_METHODS = frozenset(
 
 S2B = frozenset({"hello", "open", "req", "close", "alive", "reg", "pong", "status", "bye"})
 B2S = frozenset({"welcome", "refuse", "out", "close", "watch", "ping"})
-BYE_WHY = frozenset({"eof", "shutdown", "replaced", "local_broker", "busy"})
+# ``exposed`` (M8e): at start, another process of the remote user held the link's stdio
+# (§27.16); ``local_broker`` and ``exposed`` block the link, the others end it as down
+BYE_WHY = frozenset({"eof", "shutdown", "replaced", "local_broker", "busy", "exposed"})
+BYE_BLOCKS = frozenset({"replaced", "local_broker", "exposed"})
 HARDEN = frozenset({"prctl", "none", "failed"})
 WANT = frozenset({"idle", "busy"})
 # mcp.posted's err when the satellite's last-mile check drops a Claude ``deliver`` push
@@ -152,7 +155,12 @@ class ShellNoise(Exception):
 
 
 class LinkEOF(Exception):
-    """The link ended before a hello."""
+    """The link ended before a hello; ``got``: the bytes that came before the end (shell
+    noise), so the caller knows whether the remote command ran at all."""
+
+    def __init__(self, msg: str = "", got: int = 0):
+        super().__init__(msg)
+        self.got = got
 
 
 # ------------------------------------------------------------------ values
@@ -569,7 +577,7 @@ async def read_hello(reader: asyncio.StreamReader, timeout: float = HELLO_TIMEOU
         except (ValueError, asyncio.LimitOverrunError):
             raise ShellNoise("a line over the frame limit before the hello") from None
         if not line:
-            raise LinkEOF("eof before hello")
+            raise LinkEOF("eof before hello", got=scan.bytes)
         got = scan.feed(line)
         if got is not None:
             return got

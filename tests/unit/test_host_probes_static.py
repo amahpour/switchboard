@@ -61,6 +61,8 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("remote/satellite.py", "Satellite.send_alive"): "the watched pids, which are pids on its own machine",
     ("remote/satellite.py", "Satellite.claude_status"): "a watched Claude on its own machine: that pid, and its"
                                                         " registry file in this home's sessions dir (M8d)",
+    ("remote/satellite.py", "exposure"): "the satellite's own ancestors (sshd's session process), which hold"
+                                         " the far ends of its stdio (M8e)",
 }
 
 

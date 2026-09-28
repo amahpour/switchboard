@@ -85,7 +85,7 @@ def _server(called: list[str]) -> rpc.RpcServer:
 
 FORBIDDEN_HERE = ["sys.stop", "sys.status", "sys.ping", "human.say", "human.command", "human.login_link",
                   "human.logout_all", "room.create", "room.list", "room.who", "room.history", "room.tail",
-                  "remote.enable", "remote.disable", "remote.status", "no.such.method"]
+                  "remote.enable", "remote.disable", "remote.remove", "remote.status", "no.such.method"]
 
 
 @pytest.mark.parametrize("method", FORBIDDEN_HERE)

@@ -37,6 +37,7 @@ testpaths = ["tests"]
 markers = [
     "live: drives real agent CLIs (opt-in via SWITCHBOARD_LIVE)",
     "perf: strict timing targets (run once per milestone commit)",
+    "ssh: a real OpenSSH link through a user-level sshd on loopback (skipped without /usr/sbin/sshd)",
 ]
 addopts = "-m 'not live and not perf'"
 # pytest-cov turns this ResourceWarning (ignored by default) back on. A recorded warning

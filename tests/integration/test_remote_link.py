@@ -257,6 +257,13 @@ async def test_removed_remote_ends_its_members_at_once() -> None:
             wait_for(lambda: not link.members(), timeout=10, what="the member ended")
             assert "bench left (fpga-pi unreachable)" in lines(link, "leave")
             assert link.call("remote.status")["remotes"] == []
+        # its consent went with it (M8e): the very same entry and files back need a new enable
+        time.sleep(1.5)  # a sweep after the members were ended
+        link.write_remotes(link.toml)
+        wait_for(lambda: link.call("remote.status")["remotes"], what="the entry back")
+        time.sleep(2.0)  # time enough to dial, had any consent been left
+        st = link.call("remote.status")["remotes"][0]
+        assert (st["state"], st["reason"], st["attempts"]) == ("disabled", "not_enabled", 0), st
 
 
 def test_concurrent_enables_share_one_attempt() -> None:
@@ -381,3 +388,33 @@ def test_broker_closed_remote_conn_is_cleaned_up() -> None:
         assert link.status()["state"] == "up"
     finally:
         link.close()
+
+
+async def test_remove_ends_members_and_forgets_consent() -> None:
+    """``switchboard remote remove`` on the desktop (§27.5.8): the broker closes the link, ends
+    the host's members at once ("left (<host> removed)") and drops its consent row; the
+    table goes from remotes.toml. A re-added entry needs a new enable."""
+    with FakeLink(trust=True) as link:
+        async with FakeAgent(link.pi, "bench") as a:
+            await a.call("join", room="#fpga", screen_name="bench")
+            r = link.cli("remote", "remove", link.name, "--yes")
+            assert r.returncode == 0, r.stdout + r.stderr
+            assert "1 member(s) ended" in r.stdout and "switchboard remote remove fpga-pi" in r.stdout
+        assert "bench left (fpga-pi removed)" in lines(link, "leave")
+        assert any("remote removed by" in t for t in link.notices())
+        assert link.call("remote.status")["remotes"] == []
+        assert "fpga-pi" not in (link.desk / "remotes.toml").read_text()
+        link.write_remotes(link.toml)  # the same entry again: no consent is left for it
+        st = wait_for(lambda: link.call("remote.status")["remotes"], what="the entry back")[0]
+        assert st["state"] == "disabled" and st["reason"] == "not_enabled"
+
+
+def test_remove_is_human_only_under_the_production_policy() -> None:
+    if not human_cli_denied_here():
+        pytest.skip("this pytest runs as the human: the refusal needs an agent or ssh in its chain")
+    with FakeLink(trust=False) as link:
+        before = (link.desk / "remotes.toml").read_text()
+        r = link.cli("remote", "remove", link.name, "--yes")
+        assert r.returncode != 0 and "forbidden" in r.stderr, r.stdout + r.stderr
+        assert (link.desk / "remotes.toml").read_text() == before
+        assert link.status()["state"] == "up"

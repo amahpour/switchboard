@@ -148,3 +148,29 @@ def test_host_is_a_name_or_an_address_nothing_else() -> None:
     for h in ("fe80::1%-oProxyCommand=sh -c x", "fe80::1% x", "fe80::1%a=b", "-oProxyCommand=x", "a b",
               "fe80::1%" + "x" * 16):
         assert not host_ok(h), h
+
+
+def test_remotes_toml_must_be_yours_and_not_writable_by_others(tmp_path: Path) -> None:
+    """M8c left this for M8e: ``remotes.toml`` is read only when it is a regular file of
+    this user that nobody else can write (``remote add`` writes it 0600)."""
+    import os
+
+    from switchboard.remote.config import load_remotes
+
+    paths = Paths(tmp_path)
+    assert load_remotes(paths, test_mode=False) == {}
+    f = tmp_path / "remotes.toml"
+    f.write_text(GOOD)
+    for mode, ok in ((0o600, True), (0o644, True), (0o664, False), (0o646, False)):
+        f.chmod(mode)
+        if ok:
+            assert set(load_remotes(paths, test_mode=False)) == {"fpga-pi"}
+        else:
+            with pytest.raises(RemoteConfigError, match="writable only by you"):
+                load_remotes(paths, test_mode=False)
+    f.chmod(0o600)
+    real = tmp_path / "real.toml"
+    f.rename(real)
+    os.symlink(real, f)
+    with pytest.raises(RemoteConfigError):
+        load_remotes(paths, test_mode=False)

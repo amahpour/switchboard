@@ -63,7 +63,10 @@ def test_one_bye_leaves_the_other_online() -> None:
             assert a.tool("join", room="#fpga", screen_name="one")["ok"]
             assert b.tool("join", room="#fpga", screen_name="two")["ok"]
             a.close()  # its MCP server says bye
-            wait_for(lambda: member(link, "one")["status"] == "offline", what="one offline")
+            # offline, or already ended: its agent process exited too, and the next alive frame
+            # ends the session within about a second (a slow machine can miss the offline step)
+            wait_for(lambda: next((m for m in link.members() if m["name"] == "one"), {"status": "offline"})[
+                "status"] == "offline", what="one offline")
             assert member(link, "two")["status"] != "offline"
             assert b.tool("say", room="#fpga", text="still here")["ok"]
         finally:

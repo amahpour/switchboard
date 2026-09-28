@@ -17,8 +17,10 @@ ARG UV_VERSION=0.7.13
 ARG UV_SHA256_ARM64=0b2ad9fe4295881615295add8cc5daa02549d29cc9a61f0578e397efcf12f08f
 ARG UV_SHA256_AMD64=909278eb197c5ed0e9b5f16317d1255270d1f9ea4196e7179ce934d48c4c2545
 
+# openssh-server, openssh-client and rsync: the `ssh` tier's user-level sshd on 127.0.0.1
+# (tests/fakes/sshd.py); no system sshd is started in the image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl git lsof procps sqlite3 tini \
+      ca-certificates curl git lsof procps sqlite3 tini openssh-server openssh-client rsync \
  && rm -rf /var/lib/apt/lists/*
 
 # uv from its release tarball, checksum-pinned (pyproject pins uv ==0.7.13).

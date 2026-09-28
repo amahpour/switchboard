@@ -144,7 +144,71 @@ def test_status_on_satellite_home() -> None:
         assert r.returncode == 0, r.stderr
         assert r.stdout.startswith("switchboard satellite ") and "for fpga-pi: link up" in r.stdout
         assert "desktop desk" in r.stdout and "#fpga" in r.stdout
+        from switchboard.mcp.client import call_sync
+
+        st = call_sync(link.pi_paths.sock, "sys.status", {}, 5)
+        assert st["stdio"] == "socket"  # the exec transport's socketpair (sshd's is usually "pipe")
         assert link.cli("remote", "disable", link.name).returncode == 0
         wait_for(lambda: not os.path.exists(link.pi_paths.sock), what="the satellite gone")
         r = link.pi_cli("status")
         assert r.returncode == 3 and "link down: the desktop (desk) dials this machine" in r.stdout
+
+
+def _first_line(fd: int, timeout: float = 20.0) -> bytes:
+    import select
+    import time
+
+    buf = b""
+    deadline = time.monotonic() + timeout
+    while b"\n" not in buf:
+        left = deadline - time.monotonic()
+        assert left > 0, buf
+        r, _, _ = select.select([fd], [], [], left)
+        if r:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            buf += chunk
+    return buf.split(b"\n", 1)[0]
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the /proc fd scan runs on Linux")
+@pytest.mark.parametrize("held", ["stdin", "stdout", "none"])
+def test_refuses_when_another_process_holds_its_stdio(pi: Path, held: str) -> None:
+    """With pipes (sshd's usual stdio), a process of the same user that holds the link's stdin
+    or stdout (opened through /proc before the prctl, or inherited from the login shell) could
+    read and forge frames: the satellite says ``bye exposed`` and never takes the home's
+    locks. Its parent, which holds the far ends, doesn't count (M8c's deferred item, §27.16)."""
+    import json
+
+    in_r, in_w = os.pipe()
+    out_r, out_w = os.pipe()
+    keep = {"stdin": (in_r,), "stdout": (out_w,), "none": ()}[held]
+    holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], pass_fds=keep,
+                              env=child_env(), stdin=subprocess.DEVNULL)
+    try:
+        sat = subprocess.Popen([sys.executable, "-I", "-m", "switchboard", "satellite", "--home", str(pi), "--name",
+                                "fpga-pi", "--test-mode"], stdin=in_r, stdout=out_w, stderr=subprocess.PIPE,
+                               env=child_env())
+        os.close(in_r)
+        os.close(out_w)
+        try:
+            first = json.loads(_first_line(out_r))
+            if held == "none":
+                assert first["t"] == "hello", first
+            else:
+                assert first == {"t": "bye", "why": "exposed"}, first
+                assert sat.wait(15) == 0
+                assert not (pi / "run" / "satellite.pid").exists()  # refused before the locks
+                log = (pi / "logs" / "satellite.log").read_text()
+                assert f"pids [{holder.pid}]" in log
+        finally:
+            os.close(in_w)
+            if sat.poll() is None:
+                sat.wait(15)
+            os.close(out_r)
+            assert sat.stderr is not None
+            sat.stderr.close()
+    finally:
+        holder.kill()
+        holder.wait(5)
