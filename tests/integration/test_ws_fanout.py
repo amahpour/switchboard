@@ -62,7 +62,8 @@ def test_two_websockets_and_a_uds_tail_get_the_message(broker: InProcBroker, web
             assert f["room"] == room and m["id"] == mid
             assert (m["from"], m["sender_kind"], m["via"], m["kind"]) == ("alice", "human", "web", "chat")
             assert set(m) == {"id", "ts", "from", "harness", "sender_kind", "via", "kind", "text",
-                              "reply_to", "mentions"}
+                              "reply_to", "mentions", "host"}  # host: M8c, None on this machine
+            assert m["host"] is None
         assert push["data"]["room"] == room and push["data"]["msg"]["id"] == mid
     finally:
         ws1.close()

@@ -52,6 +52,13 @@ INSTRUCTIONS = (
     ' Read messages marked "not shown here" with read() first.'
 )
 BROKER_DOWN = "switchboard broker not running — ask your user to run: switchboard start"
+
+
+def link_down(desktop: str) -> str:
+    """BROKER_DOWN on a satellite home (DESIGN.md §27.10): the broker is on the desktop,
+    which dials this machine; nothing here can start it."""
+    return (f"the link to the switchboard broker on {desktop} is down: ask your user to check"
+            " `switchboard remote status` on the desktop")
 # wait() caps per harness (DESIGN.md §6.1); the broker clamps again.
 WAIT_CAPS = {"claude": 110, "codex": 240, "cursor": 50, "devin": 600, "test": 50, "unknown": 50}
 HELLO_TIMEOUT_S = 3.0
@@ -105,8 +112,10 @@ class McpState:
         test_session: str | None = None,
         ack: str = "next_call",
         inbox_hold_s: float = 0.3,
+        broker_down: str = BROKER_DOWN,
     ):
         self.conn = conn
+        self.broker_down = broker_down
         self.env = env
         self.parent_argv = parent_argv
         self.ppid = ppid
@@ -239,13 +248,13 @@ class McpState:
     # ---------------------------------------------------------------- calls
     async def call(self, method: str, params: dict[str, Any], timeout: float = 15.0) -> dict[str, Any]:
         if not await self.ensure_hello():
-            return {"ok": False, "error": BROKER_DOWN}
+            return {"ok": False, "error": self.broker_down}
         try:
             res = await self.conn.call(method, params, timeout=timeout, ready_timeout=HELLO_TIMEOUT_S)
         except RpcError as e:
             return {"ok": False, "error": e.message, "code": e.code}
         except (BrokerDown, OSError, TimeoutError):
-            return {"ok": False, "error": BROKER_DOWN}
+            return {"ok": False, "error": self.broker_down}
         return {"ok": True, **res}
 
     def cred_for(self, room: str, tid: str | None) -> tuple[str, str] | str:
@@ -502,6 +511,13 @@ def broker_backoff(paths: "Paths") -> tuple[float, float]:
     return SATELLITE_BACKOFF if satellite else DEFAULT_BACKOFF
 
 
+def broker_down_text(paths: "Paths") -> str:
+    """What a tool says when no broker answers: on a satellite home, that the link is down."""
+    from switchboard.remote.config import is_satellite_home, satellite_desktop
+
+    return link_down(satellite_desktop(paths)) if is_satellite_home(paths) else BROKER_DOWN
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="switchboard mcp", description="switchboard's stdio MCP server")
     ap.add_argument("--home", default=None)
@@ -531,6 +547,7 @@ def main(argv: list[str] | None = None) -> int:
         test_session=args.test_session,
         ack=args.ack,
         inbox_hold_s=cfg.claude.inbox_hold_s,
+        broker_down=broker_down_text(paths),
     )
     try:
         asyncio.run(serve(build_server(st), st))

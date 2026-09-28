@@ -185,6 +185,36 @@ def write_hook_copy(paths: Paths) -> Path:
     return target
 
 
+def test_mode_refusal(paths: Paths, home_given: bool) -> str | None:
+    """Why ``--test-mode`` is refused for this home, or None if it's allowed (§2 test
+    mode). The broker (``switchboard start --test-mode``) and the satellite
+    (``switchboard satellite --test-mode``) share it."""
+    if os.environ.get("SWITCHBOARD_TEST") != "1":
+        return "--test-mode needs SWITCHBOARD_TEST=1 in the environment"
+    if not home_given:
+        return "--test-mode needs an explicit --home"
+    if not is_under_system_tmp(paths.home):
+        return "--test-mode needs a --home under the system temp dir"
+    if not paths.test_marker.exists():
+        return f"--test-mode needs a {paths.test_marker.name} marker file in the home"
+    real_default = os.path.realpath(os.path.expanduser("~/.switchboard"))
+    if str(paths.home) == real_default:
+        return "--test-mode can't use ~/.switchboard"
+    return None
+
+
+def hook_state_text(paths: Paths) -> str:
+    """``ok (<n> copies)`` or ``MISMATCH: <names>``: the hook copies in ``<home>/hooks``."""
+    bad = check_hook_copies(paths)
+    if bad:
+        return "MISMATCH: " + ", ".join(bad)
+    try:
+        n = len(list(paths.hooks_dir.glob("switchboard_hook-*.py")))
+    except OSError:
+        n = 0
+    return f"ok ({n} cop{'y' if n == 1 else 'ies'})"
+
+
 def check_hook_copies(paths: Paths) -> list[str]:
     """Names of hook copies whose content no longer matches the hash in their name."""
     bad = []

@@ -24,6 +24,14 @@ pass() follows the read-first rule (DESIGN.md §24): refused while the member ha
 a peer message it saw only as a stub. A random pass that is refused does
 nothing; a cooperative agent (quiescence) reads, then passes, and the simulator
 asserts that the read() lifted the rule unless read() hit its limit.
+
+Remote members (DESIGN.md §27, M8c): some members of the hook- and wait()-reached
+kinds (test, devin, cursor) live on a remote host, ``pi``. A ``link_drop`` takes
+every member of that host offline at once, as the broker does when a link goes
+down (their connections close: open waits and parks end, pull answers expire,
+status offline; nobody is ended), and while it is down they can do nothing. A
+``link_up`` brings them back as a reconnecting MCP server does (``starting``).
+Quiescence starts with the link up.
 """
 
 from __future__ import annotations
@@ -41,10 +49,13 @@ from switchboard.adapters.claude import ClaudeAdapter, registry_transition
 from switchboard.adapters.codex import Clients, CodexAdapter
 from switchboard.adapters.devin import WAIT_TOOL
 from switchboard.config import Config
-from switchboard.models import WATCHDOG_DONE, Action, HookEvent, HookOut, Notice, Push, Room
+from switchboard.models import WATCHDOG_DONE, Action, HookEvent, HookOut, Notice, Push, Room, session_key
 
 KINDS = ("test", "devin", "claude", "cursor", "codex")
 SINGLE_ROOM = ("test", "devin")  # wait()-based: one open wait() per session, so one room
+# kinds that may live on the remote host: no push path in M8c, they are reached by hooks and wait()
+REMOTE_KINDS = ("test", "devin", "cursor")
+PI = "pi"
 BIG_BUDGET = 100_000
 
 
@@ -84,6 +95,7 @@ class Mem:
     cont: tuple[int, str] | None = None  # Devin: a printed Stop block awaiting its next hook
     n: int = 0
     lazy: bool = False  # in quiescence: takes every delivery but never answers (the watchdog's case)
+    host: str = ""  # '' on the broker's machine, PI on the remote host
     to_read: set[int] = field(default_factory=set)  # lazy: memberships with an escalated @mention to read()
 
 
@@ -151,25 +163,28 @@ class Sim:
         self.store.create_batch = checked_batch  # type: ignore[method-assign]
         self.store.watchdog_done = escalate  # type: ignore[method-assign]
         self.members: list[Mem] = []
+        self.link_up = True  # the remote host's link
         kinds = [r.choice(KINDS) for _ in range(r.randint(2, 5))]
         for i, kind in enumerate(kinds):
-            self._add(kind, f"{kind[:3]}{i}", i)
+            host = PI if kind in REMOTE_KINDS and r.random() < 0.4 else ""
+            self._add(kind, f"{kind[:3]}{i}", i, host)
 
     # ------------------------------------------------------------- set-up
-    def _add(self, kind: str, name: str, i: int) -> None:
+    def _add(self, kind: str, name: str, i: int, host: str = "") -> None:
         r = self.rng
         status = {"test": "busy", "devin": "busy", "claude": "idle", "cursor": "busy", "codex": "idle"}[kind]
-        p, m = self.w.agent(name, harness=kind, status=status, hooks=kind != "test")
+        p, m = self.w.agent(name, harness=kind, status=status, hooks=kind != "test", host=host)
         mids = [m.id]
         if len(self.rooms) > 1 and kind not in SINGLE_ROOM and r.random() < 0.7:
             mids.append(self.store.create_membership(self.rooms[1].id, p.id, name, f"h2-{name}").id)
-        mem = Mem(kind=kind, name=name, pid=p.id, mids=mids, conn=1000 + i, lazy=r.random() < 0.3)
+        mem = Mem(kind=kind, name=name, pid=p.id, mids=mids, conn=1000 + i, lazy=r.random() < 0.3, host=host)
         if kind == "claude":
             mem.mode = r.choice(["prompting", "bypass"])
             self.store.update_participant(p.id, claude_socket=f"/tmp/yk-sim-{i}.sock", approval_mode=mem.mode)
             self.claude.attach(p.mcp_pid, p.mcp_start, mem.iconn)
         elif kind == "cursor":
-            self.store.update_participant(p.id, session_key=f"cursor:conv-{name}", bind_state="bound")
+            self.store.update_participant(p.id, session_key=session_key("cursor", host, f"conv-{name}"),
+                                          bind_state="bound")
         elif kind == "codex":
             mem.tid = f"019a0000-0000-7000-8000-{i:012d}"
             self.store.update_participant(p.id, session_key=f"codex:{mem.tid}", thread_proof=1,
@@ -194,6 +209,35 @@ class Sim:
 
     def active(self) -> list[Mem]:
         return [m for m in self.members if m.mids]
+
+    def reachable(self) -> list[Mem]:
+        """Active members that can act now: a remote host's members can't while its link is down."""
+        return [m for m in self.active() if self.link_up or not m.host]
+
+    # ------------------------------------------------------------- the link
+    def link_drop(self) -> None:
+        """The remote host's link goes down: what AgentService.conn_closed does for each of
+        its connections (waits and parks end, pull answers expire, offline), for all at once."""
+        self.link_up = False
+        for mem in self.active():
+            if not mem.host:
+                continue
+            self.run(self.engine.close_conn_sinks(mem.conn))
+            p = self.p(mem)
+            acts = self.engine.expire_pull_batches(p.id, "disconnect")
+            acts += self.engine.set_status(p, "offline", "mcp:bye")
+            self.run(acts)
+            mem.sink = mem.park = None
+            mem.acks.clear()
+            mem.cont = None
+            mem.shown.clear()
+
+    def link_back(self) -> None:
+        """Up again: each MCP server reconnects and says hello (AgentService.hello)."""
+        self.link_up = True
+        for mem in self.active():
+            if mem.host and self.p(mem).status == "offline":
+                self.run(self.engine.set_status(self.p(mem), "starting", "mcp:hello"))
 
     def room_of(self, mid: int) -> Room:
         m = self.store.get_membership(mid)
@@ -548,9 +592,17 @@ class Sim:
         kinds = ["human", "say", "pass", "read", "tick", "tick", "big_tick", "cmd", "push", "harness",
                  "harness", "harness"]
         weights = [10, 8, 4, 2, 10, 4, 1, 5, 8, 12, 12, 12]
+        kinds = kinds + ["link"]
+        weights = weights + [2 if any(m.host for m in self.members) else 0]
         what = r.choices(kinds, weights)[0]
-        act = self.active()
-        if what == "human":
+        act = self.reachable()
+        if what == "link":
+            self.trace.append("link_drop" if self.link_up else "link_up")
+            if self.link_up:
+                self.link_drop()
+            else:
+                self.link_back()
+        elif what == "human":
             self.human()
         elif what in ("say", "pass", "read") and act:
             mem = r.choice(act)
@@ -566,6 +618,9 @@ class Sim:
             self.command()
         elif what == "push" and self.inflight:
             bid = r.choice(sorted(self.inflight))
+            if not self.link_up and any(m.host and m.pid == self.inflight[bid].participant_id
+                                        for m in self.members):
+                return  # no push reaches a remote member while its link is down
             self.trace.append(f"push:{bid}")
             self.deliver(bid, r.choices(["ok", "lost", "fail"], [7, 2, 1])[0])
         elif what == "harness" and act:
@@ -759,6 +814,9 @@ class Sim:
         """Lift every cooldown, then let every agent cooperate (confirm what it is
         offered, answer with pass(), end its turn and listen again) while the
         clock runs past max_hold_s plus the largest TTL."""
+        if not self.link_up:
+            self.trace.append("link_up")
+            self.link_back()
         for room in self.rooms:
             if self.store.room_by_id(room.id).paused:
                 self.store.set_paused(room.id, False)

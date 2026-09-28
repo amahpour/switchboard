@@ -18,7 +18,7 @@ from typing import Any
 from switchboard import db
 from switchboard.config import Config
 from switchboard.mcp.client import BrokerDown, RpcError, call_sync, ping
-from switchboard.paths import Paths, is_under_system_tmp
+from switchboard.paths import Paths, test_mode_refusal
 
 log = logging.getLogger("switchboard.daemon")
 
@@ -53,18 +53,7 @@ def setup_logging(paths: Paths, level: int = logging.INFO) -> None:
 
 def check_test_mode(paths: Paths, home_given: bool) -> str | None:
     """Why --test-mode is refused here, or None if it's allowed (§2 test mode)."""
-    if os.environ.get("SWITCHBOARD_TEST") != "1":
-        return "--test-mode needs SWITCHBOARD_TEST=1 in the environment"
-    if not home_given:
-        return "--test-mode needs an explicit --home"
-    if not is_under_system_tmp(paths.home):
-        return "--test-mode needs a --home under the system temp dir"
-    if not paths.test_marker.exists():
-        return f"--test-mode needs a {paths.test_marker.name} marker file in the home"
-    real_default = os.path.realpath(os.path.expanduser("~/.switchboard"))
-    if str(paths.home) == real_default:
-        return "--test-mode can't use ~/.switchboard"
-    return None
+    return test_mode_refusal(paths, home_given)
 
 
 def read_pidfile(paths: Paths) -> tuple[int, float] | None:

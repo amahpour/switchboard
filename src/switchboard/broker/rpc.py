@@ -9,11 +9,18 @@
   whose ``params.cred`` matches a membership issued to this very MCP process
   (checked by AgentService). ``hook``: any same-uid peer; AgentService decides
   which session, if any, the event may affect.
+- A remote connection (``broker/remote.py`` ``RemoteConn``: a client of a remote
+  host's satellite, DESIGN.md §27.5.2) may call only ``REMOTE_METHODS``, checked
+  before any role: every human, room, sys and remote method is ``forbidden`` for it
+  under every peer policy, and no role but anon, mcp, member and hook is ever
+  granted to it. Its requests arrive through ``dispatch_remote``, which rebases the
+  far side's ages to this broker's clock first (§27.4.6).
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import itertools
 import json
 import logging
@@ -30,6 +37,9 @@ from switchboard.broker.commands import Actor
 from switchboard.broker.hub import Subscriber
 from switchboard.broker.peer import Peer, PeerPolicy
 from switchboard.broker.service import ServiceError, message_dict
+from switchboard.models import LOCAL_HOST
+from switchboard.remote import proto
+from switchboard.remote.proto import REMOTE_METHODS
 
 if TYPE_CHECKING:  # pragma: no cover
     from switchboard.broker.app import BrokerState
@@ -37,6 +47,15 @@ if TYPE_CHECKING:  # pragma: no cover
 log = logging.getLogger("switchboard.rpc")
 
 MAX_LINE = 1 << 20
+# Roles a remote connection may ever hold (DESIGN.md §27.5.2); human_cli, human and
+# login never, whatever the peer policy says.
+REMOTE_ROLES = frozenset({"anon", "mcp", "member", "hook"})
+REMOTE_FORBIDDEN = "human and room commands run on the desktop"
+# The facts a remote host's satellite attached to the request being handled (its
+# attest on mcp.hello, its hook chain on hook.event): set by dispatch_remote for that
+# one request (a long poll's task keeps its copy), never read from params.
+REQUEST_FACTS: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "switchboard_request_facts", default=None)
 ERROR_CODES = frozenset(
     {
         "bad_request",
@@ -73,6 +92,14 @@ class MethodSpec:
 
 class Conn:
     _ids = itertools.count(1)
+    # a connection to this broker's own socket: its peer is a process on this machine
+    host = LOCAL_HOST
+    remote = False
+
+    @property
+    def facts(self) -> dict[str, Any]:
+        """A local connection has no satellite facts: its kernel peer is the fact."""
+        return {}
 
     def __init__(self, server: "RpcServer", writer: asyncio.StreamWriter, peer: Peer):
         self.id = next(self._ids)
@@ -234,9 +261,29 @@ class RpcServer:
                 wtask.cancel()
 
     async def _dispatch(self, conn: Conn, line: bytes) -> None:
-        rid: Any = None
         try:
             req = json.loads(line)
+        except (ValueError, UnicodeDecodeError):
+            conn.send({"id": None, "error": {"code": "bad_request", "message": "invalid JSON"}})
+            return
+        await self._dispatch_obj(conn, req)
+
+    async def dispatch_remote(self, conn: Conn, req: Any, facts: dict[str, Any] | None, recv: float) -> None:
+        """A request from a remote host's satellite (DESIGN.md §27.4.4): its ages become
+        times on this broker's clock (``t = recv - t_age``, clamped; any wall-clock
+        value from the far side is dropped), and its ``facts`` are visible to the
+        handler of this request only. Then the same path as a local request."""
+        if isinstance(req, dict) and isinstance(req.get("params"), dict) and isinstance(req.get("method"), str):
+            req = {**req, "params": proto.from_ages(req["method"], req["params"], recv)}
+        token = REQUEST_FACTS.set(facts)
+        try:
+            await self._dispatch_obj(conn, req)
+        finally:
+            REQUEST_FACTS.reset(token)
+
+    async def _dispatch_obj(self, conn: Conn, req: Any) -> None:
+        rid: Any = None
+        try:
             if not isinstance(req, dict):
                 raise RpcError("bad_request", "request must be an object")
             rid = req.get("id")
@@ -247,15 +294,15 @@ class RpcServer:
             params = {} if params is None else params
             if not isinstance(method, str) or not isinstance(params, dict):
                 raise RpcError("bad_request", "method must be a string and params an object")
+            if _is_remote(conn) and method not in REMOTE_METHODS:
+                # before any role check, under every peer policy (§27.5.2)
+                raise RpcError("forbidden", f"{method[:40]}: {REMOTE_FORBIDDEN}")
             spec = self.methods.get(method)
             if spec is None:
                 raise RpcError("not_found", f"unknown method {method}")
             self._authorize(conn, spec.role, method)
         except RpcError as e:
             conn.send({"id": rid, "error": {"code": e.code, "message": e.message}})
-            return
-        except (ValueError, UnicodeDecodeError):
-            conn.send({"id": None, "error": {"code": "bad_request", "message": "invalid JSON"}})
             return
         if spec.long_poll:
             t = asyncio.create_task(self._run(conn, rid, method, spec, params))
@@ -280,6 +327,9 @@ class RpcServer:
             conn.send({"id": rid, "error": {"code": "internal", "message": "internal error"}})
 
     def _authorize(self, conn: Conn, role: str, method: str) -> None:
+        if _is_remote(conn) and role not in REMOTE_ROLES:
+            # belt and braces: REMOTE_METHODS holds no such method (§27.5.2)
+            raise RpcError("forbidden", f"{method}: {REMOTE_FORBIDDEN}")
         if role == "anon":
             return
         pol, peer = self.policy, conn.peer
@@ -315,6 +365,11 @@ class RpcServer:
                 "login links are only issued to a terminal you typed in: run `switchboard login` there",
             )
         raise RpcError("forbidden", f"{method}: role {role} not available")
+
+
+def _is_remote(conn: Any) -> bool:
+    """A connection carried by a remote host's link (a stand-in without the flag is local)."""
+    return getattr(conn, "remote", False) is True
 
 
 def _socket_alive(p: Path) -> bool:
@@ -480,6 +535,22 @@ def build_methods(state: "BrokerState") -> dict[str, MethodSpec]:
     async def hook_ack(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
         return agents().hook_ack(conn, p)
 
+    def remotes() -> Any:
+        if state.remotes is None:
+            raise RpcError("internal", "remotes are not running")
+        return state.remotes
+
+    async def remote_enable(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
+        # human only (§27.5.8): it dials, and waits up to 15 s for the link to come up or fail
+        return await remotes().enable(_str(p, "name"), via="cli", actor=state.peer_policy.describe(conn.peer))
+
+    async def remote_disable(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
+        return await remotes().disable(_str(p, "name"), via="cli")
+
+    async def remote_status(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
+        name = p.get("name")
+        return await remotes().status(name if isinstance(name, str) and name else None)
+
     return {
         "mcp.hello": MethodSpec("anon", mcp_hello),
         "mcp.attach": MethodSpec("mcp", mcp_attach),
@@ -509,4 +580,9 @@ def build_methods(state: "BrokerState") -> dict[str, MethodSpec]:
         "human.command": MethodSpec("human_cli", human_command),
         "human.login_link": MethodSpec("login", human_login_link),
         "human.logout_all": MethodSpec("human_cli", human_logout_all),
+        # remotes (DESIGN.md §27.5.8, §27.11): consent is human-only; the state is anyone's
+        # on this machine's socket (never over a link: REMOTE_METHODS)
+        "remote.enable": MethodSpec("human_cli", remote_enable, long_poll=True),
+        "remote.disable": MethodSpec("human_cli", remote_disable),
+        "remote.status": MethodSpec("anon", remote_status),
     }

@@ -44,14 +44,17 @@ def fixture(harness: str, name: str, **over: Any) -> dict[str, Any]:
 class FakeCli:
     _tags = itertools.count(1)
 
-    def __init__(self, b: InProcBroker, harness: str):
+    def __init__(self, b: InProcBroker | None, harness: str, *, home: str | Path | None = None,
+                 env: dict[str, str] | None = None):
+        """``home``: another switchboard home than the broker's (a session on a remote host)."""
         assert harness in ("cursor", "devin")
         self.b = b
+        self.home = str(home) if home is not None else str(b.paths.home)  # type: ignore[union-attr]
         self.harness = harness
         self.bindir = Path(tempfile.mkdtemp(prefix="yk-fx-", dir="/tmp"))
         exe = self.bindir / ("cursor-agent" if harness == "cursor" else "devin")
         shutil.copy(FAKE, exe)
-        extra = dict(YK_FAKE_HOME=str(b.paths.home))
+        extra = dict(YK_FAKE_HOME=self.home, **(env or {}))
         argv = [sys.executable, str(exe)]
         if harness == "cursor":
             extra["YK_FAKE_CLIENT"] = "Cursor"
@@ -86,7 +89,7 @@ class FakeCli:
 
     # ---------------------------------------------------------------- hooks
     def command(self, event: str, max_wait: int | None = None) -> str:
-        return hook_command(sys.executable, str(self.b.paths.home), hook_sha12(), self.harness, event, max_wait)
+        return hook_command(sys.executable, self.home, hook_sha12(), self.harness, event, max_wait)
 
     def hook(self, payload: dict[str, Any], *, max_wait: int | None = None) -> str:
         r = self.send({"op": "hook", "command": self.command(payload["hook_event_name"], max_wait),

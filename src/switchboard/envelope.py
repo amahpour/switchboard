@@ -151,6 +151,10 @@ def render_item(item: Any, recipient: str, room: str, *, inline: bool, limit: in
     ]
     if item.sender_kind == "agent" and item.sender_harness:
         parts.append(f"harness={_word(item.sender_harness)}")
+    host = getattr(item, "sender_host", None)
+    if item.sender_kind == "agent" and host:
+        # another machine's agent (DESIGN.md §27.11): its text may quote what that machine saw
+        parts.append(f"host={_word(host)}")
     parts.append(f"to_you={'yes' if to_you(item, recipient) else 'no'}")
     parts.append(f"prio={item.prio_label}")
     if item.reply_to:
@@ -383,6 +387,9 @@ def render_catchup_line(msg: Any, recipient: str) -> str:
     ]
     if kind == "agent" and msg.sender_harness:
         parts.append(f"harness={_word(msg.sender_harness)}")
+    host = getattr(msg, "sender_host", None)
+    if kind == "agent" and host:
+        parts.append(f"host={_word(host)}")
     if msg.reply_to:
         parts.append(f"reply_to={int(msg.reply_to)}")
     # catch-up is history, not a delivery: read() won't repeat it
@@ -395,7 +402,7 @@ def render_join(
     room: str,
     screen_name: str,
     human_name: str,
-    others: Sequence[tuple[str, str]],
+    others: Sequence[tuple[str, str] | tuple[str, str, str]],
     catchup: Sequence[Any],
     nonce: str,
     guidance: str,
@@ -404,7 +411,9 @@ def render_join(
 ) -> str:
     """The join() result: rules, catch-up, how delivery works, and the join nonce.
 
-    The membership credential is never part of this text.
+    ``others`` are ``(name, harness)`` or ``(name, harness, host)``: a member on
+    another machine is listed ``name (harness@host)`` (DESIGN.md §27.11). The
+    membership credential is never part of this text.
     """
     r = _word(room)
     me = _word(screen_name)
@@ -413,7 +422,7 @@ def render_join(
     verb = "rejoined" if rejoined else "joined"
     lines.append(f"[switchboard] You {verb} {r} as {me}. Your user is {h} (kind=human).")
     if others:
-        lines.append("Other agents here: " + ", ".join(f"{_word(n)} ({_word(hn)})" for n, hn in others) + ".")
+        lines.append("Other agents here: " + ", ".join(_other(o) for o in others) + ".")
     else:
         lines.append("No other agents are here yet.")
     lines.append("Room rules:")
@@ -429,6 +438,12 @@ def render_join(
     if test_mode:
         lines.append("[TEST MODE] This broker runs in test mode.")
     return "\n".join(lines)
+
+
+def _other(o: Sequence[str]) -> str:
+    name, harness = o[0], o[1]
+    host = o[2] if len(o) > 2 else ""
+    return f"{_word(name)} ({_word(harness)}@{_word(host)})" if host else f"{_word(name)} ({_word(harness)})"
 
 
 def render_reminder(memberships: Sequence[tuple[str, str]], human_name: str) -> str:

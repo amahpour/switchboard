@@ -34,6 +34,27 @@ def _call(args: argparse.Namespace, method: str, params: dict[str, Any] | None =
     return call_sync(_paths(args).sock, method, params or {}, timeout)
 
 
+def _satellite_home(args: argparse.Namespace) -> bool:
+    """This home is a satellite home, the far end of a remote link (DESIGN.md §27.3)."""
+    from switchboard.remote.config import is_satellite_home
+
+    return is_satellite_home(_paths(args))
+
+
+def _desktop(args: argparse.Namespace) -> str:
+    from switchboard.remote.config import satellite_desktop
+
+    return satellite_desktop(_paths(args))
+
+
+def on_desktop(args: argparse.Namespace) -> int:
+    """A human verb on a satellite home: the broker, the web UI and the human's
+    authority are on the desktop, never here."""
+    print(f"switchboard: run this on the desktop ({_desktop(args)}): this is a satellite home;"
+          " the broker and the web UI run there", file=sys.stderr)
+    return EXIT_ERR
+
+
 def _clean(text: str) -> str:
     from switchboard.envelope import clean
 
@@ -68,6 +89,10 @@ def cmd_start(args: argparse.Namespace) -> int:
     from switchboard.config import ConfigError, load
 
     paths = _paths(args)
+    if _satellite_home(args):
+        print(f"switchboard: this is a satellite home: the broker runs on {_desktop(args)}, which dials this"
+              " machine (`switchboard remote status` there)", file=sys.stderr)
+        return EXIT_ERR
     if args.test_trust_uds and not args.test_mode:
         print("switchboard: --test-trust-uds needs --test-mode", file=sys.stderr)
         return EXIT_USAGE
@@ -102,10 +127,38 @@ def cmd_start(args: argparse.Namespace) -> int:
 def cmd_stop(args: argparse.Namespace) -> int:
     from switchboard.broker import daemon
 
+    if _satellite_home(args):
+        return on_desktop(args)
     return daemon.stop(_paths(args))
 
 
+def cmd_satellite_status(args: argparse.Namespace) -> int:
+    """``switchboard status`` on a satellite home: the satellite answers it, or no one does."""
+    from switchboard.mcp.client import BrokerDown
+
+    try:
+        st = _call(args, "sys.status", timeout=5.0)
+    except (BrokerDown, OSError, TimeoutError):
+        st = None
+    if st is None or st.get("role") != "satellite":
+        print(f"link down: the desktop ({_desktop(args)}) dials this machine; on the desktop run"
+              " `switchboard remote status`")
+        return EXIT_DOWN
+    if args.json:
+        print(json.dumps(st, indent=2))
+        return EXIT_OK
+    print(f"switchboard satellite {st['version']} for {st['name']}: link {st['link']}, pid {st['pid']}")
+    print(f"  desktop {st.get('desktop') or '?'} (switchboard {st.get('desktop_version') or '?'})")
+    print(f"  rooms   {', '.join(st.get('rooms') or []) or 'none'}")
+    print(f"  hooks   {st.get('hooks')}")
+    if st.get("test_mode"):
+        print("  TEST MODE")
+    return EXIT_OK
+
+
 def cmd_status(args: argparse.Namespace) -> int:
+    if _satellite_home(args):
+        return cmd_satellite_status(args)
     st = _call(args, "sys.status")
     if args.json:
         print(json.dumps(st, indent=2))
@@ -130,10 +183,18 @@ def cmd_status(args: argparse.Namespace) -> int:
             f"  {r['name']}: {state}, {r['members']} agent(s), budget "
             f"{r['budget_remaining']}/{r['budget_per_hour']}, hops {hops}"
         )
+    remotes = st.get("remotes") or []
+    if remotes:
+        from switchboard.remote.describe import describe
+
+        for info in remotes:
+            print(f"  remote  {_clean(describe(info))}")
     return EXIT_OK
 
 
 def cmd_login(args: argparse.Namespace) -> int:
+    if _satellite_home(args):
+        return on_desktop(args)
     res = _call(args, "human.login_link")
     print(f"Sign in (the link works once, for 5 minutes):\n  {res['url']}")
     if args.open:
@@ -144,6 +205,8 @@ def cmd_login(args: argparse.Namespace) -> int:
 
 
 def cmd_logout(args: argparse.Namespace) -> int:
+    if _satellite_home(args):
+        return on_desktop(args)
     if not args.all:
         print("switchboard: use `switchboard logout --all` (or the Log out button in the web UI)", file=sys.stderr)
         return EXIT_USAGE
@@ -167,12 +230,16 @@ def cmd_rooms(args: argparse.Namespace) -> int:
 
 
 def cmd_create(args: argparse.Namespace) -> int:
+    if _satellite_home(args):
+        return on_desktop(args)
     res = _call(args, "room.create", {"name": args.room})
     print(f"created {res['room']['name']}")
     return EXIT_OK
 
 
 def cmd_say(args: argparse.Namespace) -> int:
+    if _satellite_home(args):
+        return on_desktop(args)
     text = " ".join(args.text)
     if text == "-":
         text = sys.stdin.read()
@@ -183,6 +250,8 @@ def cmd_say(args: argparse.Namespace) -> int:
 
 
 def cmd_cmd(args: argparse.Namespace) -> int:
+    if _satellite_home(args):
+        return on_desktop(args)
     if not args.command:
         print("usage: switchboard cmd ROOM /command [args ...]", file=sys.stderr)
         return EXIT_USAGE
@@ -219,7 +288,8 @@ def cmd_who(args: argparse.Namespace) -> int:
             flags.append(f"transcript: {_clean(m['transcript'])}")
         away = f'  away: "{_clean(m["away"])}"' if m.get("away") else ""
         tier = (m.get("tier") or "-") + (f" ({m['tier_note']})" if m.get("tier_note") else "")
-        print(f"  {_clean(m['name'])}  {m['harness']}  {m['status']}  {tier}  {' '.join(flags)}{away}".rstrip())
+        name = _clean(m["name"]) + (f"@{_clean(m['host'])}" if m.get("host") else "")
+        print(f"  {name}  {m['harness']}  {m['status']}  {tier}  {' '.join(flags)}{away}".rstrip())
     return EXIT_OK
 
 
@@ -335,6 +405,48 @@ def cmd_report(args: argparse.Namespace) -> int:
     else:
         sys.stdout.write(out)
     return EXIT_OK
+
+
+def cmd_remote(args: argparse.Namespace) -> int:
+    """``switchboard remote enable|disable|status`` (DESIGN.md §27.5.8, §27.11)."""
+    from switchboard.remote.describe import describe
+
+    if _satellite_home(args):
+        return on_desktop(args)
+    if args.remote_cmd == "enable":
+        # the broker dials and waits up to 15 s for the link to come up or fail
+        res = _call(args, "remote.enable", {"name": args.name}, timeout=30.0)
+        print(_clean(res.get("text") or describe(res)))
+        return EXIT_OK if res.get("state") == "up" else EXIT_ERR
+    if args.remote_cmd == "disable":
+        res = _call(args, "remote.disable", {"name": args.name})
+        print(_clean(res.get("text") or describe(res)))
+        return EXIT_OK
+    params = {"name": args.name} if args.name else {}
+    res = _call(args, "remote.status", params)
+    if args.json:
+        print(json.dumps(res, indent=2))
+        return EXIT_OK
+    if res.get("config_error"):
+        print(f"remotes.toml: {_clean(res['config_error'])}")
+    if not res.get("remotes"):
+        print("no remotes (none in remotes.toml)")
+    for info in res.get("remotes", []):
+        print(_clean(describe(info)))
+    return EXIT_OK
+
+
+def cmd_satellite(args: argparse.Namespace) -> int:
+    from switchboard.remote.satellite import main as satellite_main
+
+    if args.test_mode and not _home_given(args):
+        print("switchboard satellite: --test-mode needs an explicit --home", file=sys.stderr)
+        return 2
+    # the default home when none is given ($SWITCHBOARD_HOME or ~/.switchboard), never the cwd
+    argv = ["--home", str(_paths(args).home), "--name", args.name]
+    if args.test_mode:
+        argv.append("--test-mode")
+    return satellite_main(argv)
 
 
 def cmd_install(args: argparse.Namespace) -> int:
@@ -461,6 +573,23 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--ack", choices=["next_call", "immediate", "never"], default=None,
                    help=argparse.SUPPRESS)
     s.set_defaults(func=cmd_mcp)
+
+    s = sub.add_parser("remote", parents=[common], help="remote members: enable, disable or show a link")
+    rsub = s.add_subparsers(dest="remote_cmd", metavar="ACTION", required=True)
+    r = rsub.add_parser("enable", parents=[common], help="consent to this remote's current config and dial it")
+    r.add_argument("name")
+    r = rsub.add_parser("disable", parents=[common], help="stop dialing a remote (its members go offline)")
+    r.add_argument("name")
+    r = rsub.add_parser("status", parents=[common], help="show every remote link, or one")
+    r.add_argument("name", nargs="?", default=None)
+    r.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_remote)
+
+    # the far end of a remote link: started by sshd as the link key's forced command
+    s = sub.add_parser("satellite", parents=[common])
+    s.add_argument("--name", required=True)
+    s.add_argument("--test-mode", action="store_true")
+    s.set_defaults(func=cmd_satellite)
 
     s = sub.add_parser("hook", parents=[common], help="run the installed hook script (debugging)")
     s.add_argument("--harness", required=True, choices=["claude", "codex", "cursor", "devin"])

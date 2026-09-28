@@ -71,3 +71,49 @@ def test_hook_copy_tamper_is_reported(tmp_home, monkeypatch) -> None:
         ws.close()
     finally:
         b.stop()
+
+
+@pytest.mark.skipif(shutil.which("lsof") is None, reason="lsof not installed")
+def test_remote_adds_no_listener() -> None:
+    """A link is the broker's own child on a socketpair (DESIGN.md §27.12 never-do 13): the
+    broker still has one TCP listener (127.0.0.1) and one named Unix socket (broker.sock)."""
+    from fakes.fake_link import FakeLink
+
+    with FakeLink(trust=True) as link:
+        b = link.broker
+        sat = link.satellite_pid()
+        assert sat
+        tcp = subprocess.run(["lsof", "-nP", "-a", "-p", str(b.pid), "-iTCP", "-sTCP:LISTEN"],
+                             capture_output=True, text=True, timeout=20).stdout
+        rows = [ln for ln in tcp.splitlines()[1:] if ln.strip()]
+        assert len(rows) == 1 and f"127.0.0.1:{b.port} (LISTEN)" in rows[0], tcp
+        udp = subprocess.run(["lsof", "-nP", "-a", "-p", str(b.pid), "-iUDP"],
+                             capture_output=True, text=True, timeout=20).stdout
+        assert udp.strip() == ""
+        unix = subprocess.run(["lsof", "-nP", "-a", "-p", str(b.pid), "-U"],
+                              capture_output=True, text=True, timeout=20).stdout
+        sock = os.path.realpath(link.desk_paths.sock)
+        # a bound socket's NAME is its path (Linux lsof may add "type=STREAM (LISTEN)")
+        named = {w for ln in unix.splitlines()[1:] for w in ln.split()[5:] if w.startswith("/")}
+        assert {os.path.realpath(n) for n in named} == {sock}, unix
+
+
+@pytest.mark.skipif(shutil.which("lsof") is None, reason="lsof not installed")
+def test_satellite_has_no_network_socket() -> None:
+    """The satellite has no TCP or UDP socket at all (DESIGN.md §27.4.8)."""
+    from fakes.fake_link import FakeLink
+
+    with FakeLink(trust=True) as link:
+        sat = link.satellite_pid()
+        assert sat
+        # on Linux the satellite is non-dumpable (§27.4.8): no other process of the user can list
+        # its fds, lsof included, and an empty answer would prove nothing. Only trust an empty
+        # -i list when lsof can see its Unix sockets (the link and the home's socket).
+        # test_satellite_static.py checks the satellite's code for network sockets on every OS.
+        unix = subprocess.run(["lsof", "-nP", "-a", "-p", str(sat), "-U"],
+                              capture_output=True, text=True, timeout=20).stdout
+        if not [ln for ln in unix.splitlines()[1:] if ln.strip()]:
+            pytest.skip("lsof can't list the non-dumpable satellite's fds on this OS")
+        inet = subprocess.run(["lsof", "-nP", "-a", "-p", str(sat), "-i"],
+                              capture_output=True, text=True, timeout=20).stdout
+        assert inet.strip() == "", inet

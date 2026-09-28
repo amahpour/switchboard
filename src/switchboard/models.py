@@ -369,6 +369,7 @@ class Item:
     # reminders sent, plus WATCHDOG_DONE once it is finished (escalated or answered)
     reminders: int = 0
     in_context_at: float | None = None
+    sender_host: str | None = None  # a remote agent sender's host (DESIGN.md §27.11)
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "Item":
@@ -377,7 +378,7 @@ class Item:
         except (ValueError, IndexError, KeyError):
             mentions = ()
         opt: dict[str, Any] = {}
-        for k in ("redelivered", "reminders", "in_context_at"):
+        for k in ("redelivered", "reminders", "in_context_at", "sender_host"):
             try:
                 opt[k] = r[k]
             except (IndexError, KeyError):
@@ -401,6 +402,7 @@ class Item:
             redelivered=bool(opt.get("redelivered") or 0),
             reminders=int(opt.get("reminders") or 0),
             in_context_at=opt.get("in_context_at"),
+            sender_host=opt.get("sender_host"),
         )
 
     @property

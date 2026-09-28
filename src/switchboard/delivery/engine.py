@@ -144,7 +144,15 @@ class Engine:
         return self.clock.now()
 
     def adapter(self, p: Participant) -> Adapter:
-        return self.adapters.get(p.harness) or self.adapters["unknown"]
+        return self.adapter_for(p.harness, getattr(p, "host", ""))
+
+    def adapter_for(self, harness: str, host: str = "") -> Adapter:
+        """The adapter of a ``harness`` session on ``host`` ('' for this machine). A Codex
+        session on another host has its own pull-only adapter (DESIGN.md §27.7): the
+        Codex push paths all talk to this machine's app-server."""
+        if harness == "codex" and host:
+            return self.adapters.get("codex@remote") or self.adapters["unknown"]
+        return self.adapters.get(harness) or self.adapters["unknown"]
 
     def token(self, b: Batch) -> str:
         return envelope.batch_token(self.key, b.id, b.membership_id)

@@ -10,7 +10,7 @@ from switchboard.adapters import build_adapters
 from switchboard.config import Config
 from switchboard.delivery.engine import Engine
 from switchboard.delivery.sinks import SinkRegistry
-from switchboard.models import Action, HookEvent, Membership, Message, Participant, ResolveSink
+from switchboard.models import Action, HookEvent, Membership, Message, Participant, ResolveSink, session_key
 from switchboard.store import Store
 
 KEY = b"k" * 32
@@ -30,11 +30,12 @@ class World:
 
     # ------------------------------------------------------------ setup
     def agent(self, name: str, *, harness: str = "test", status: str = "busy", hooks: bool = False,
-              ack: str = "next_call", room_id: int | None = None) -> tuple[Participant, Membership]:
+              ack: str = "next_call", room_id: int | None = None, host: str = "") -> tuple[Participant, Membership]:
+        """A joined participant; ``host`` names a remote host (its pids are pids there)."""
         self._pid += 1
         p = self.store.upsert_participant(
-            harness, f"{harness}:{name}", status=status, agent_pid=self._pid, agent_start=1.0,
-            mcp_pid=self._pid + 100000, mcp_start=2.0, tier="mcp-only", session_id=f"sid-{name}",
+            harness, session_key(harness, host, name), status=status, agent_pid=self._pid, agent_start=1.0,
+            mcp_pid=self._pid + 100000, mcp_start=2.0, tier="mcp-only", session_id=f"sid-{name}", host=host,
         )
         if hooks:
             p = self.store.update_participant(p.id, hooks_seen_at=self.clock.now())
