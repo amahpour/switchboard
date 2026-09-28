@@ -19,7 +19,9 @@
   ``wait()`` or shown as parked.
 
 ``ClaudeRegistryPoller`` (in this adapter) reads ``<sessions_dir>/<pid>.json``
-every 250 ms for joined Claude sessions. It sets and clears
+every 250 ms for joined Claude sessions on this machine (through the broker's
+local host view, DESIGN.md §27.5.6; a remote member's registry is relayed by its
+link, M8d). Channels and registry views are keyed ``(host, pid)``. It sets and clears
 ``waiting-approval`` (``status == "waiting"``), and it ends a turn that
 fired no Stop hook (Esc) once the registry has said ``idle`` for a second
 after the last hook. The ``status`` field is undocumented (FINDINGS §2 1.5).
@@ -41,7 +43,7 @@ from switchboard.adapters.base import SendError as _BaseSendError
 from switchboard.broker import proc
 from switchboard.clock import Clock, SystemClock
 from switchboard.config import Config
-from switchboard.models import Batch, Participant, Release, Route
+from switchboard.models import LOCAL_HOST, Batch, Participant, Release, Route
 
 log = logging.getLogger("switchboard.claude")
 
@@ -63,6 +65,11 @@ TIER_HOOK = "claude:hook"
 
 class SendError(_BaseSendError):
     pass
+
+
+def _host(p: Any) -> str:
+    """A participant's host ('' for this machine; stand-ins without the field are local)."""
+    return getattr(p, "host", LOCAL_HOST)
 
 
 @dataclass(frozen=True)
@@ -128,9 +135,9 @@ class ClaudeAdapter(Adapter):
 
     def __init__(self, cfg: Config):
         super().__init__(cfg)
-        # mcp_pid -> (mcp_start, rpc Conn): the attached push channels
-        self.conns: dict[int, tuple[float | None, Any]] = {}
-        self.registry: dict[int, RegView] = {}  # agent pid -> latest registry read
+        # (host, mcp_pid) -> (mcp_start, rpc Conn): the attached push channels
+        self.conns: dict[tuple[str, int], tuple[float | None, Any]] = {}
+        self.registry: dict[tuple[str, int], RegView] = {}  # (host, agent pid) -> latest registry read
         self.pending_posts: dict[int, tuple[asyncio.Future[dict[str, Any]], Any]] = {}
         self.backoff: dict[int, tuple[float, int]] = {}  # participant id -> (until, failures)
         self.unconfirmed_at: dict[int, float] = {}  # participant id -> last idle_no_token expiry
@@ -139,23 +146,27 @@ class ClaudeAdapter(Adapter):
         self._task: asyncio.Task[None] | None = None
 
     # -------------------------------------------------------- attach state
-    def attach(self, mcp_pid: int, mcp_start: float | None, conn: Any) -> None:
-        self.conns[int(mcp_pid)] = (mcp_start, conn)
+    def attach(self, mcp_pid: int, mcp_start: float | None, conn: Any, host: str = LOCAL_HOST) -> None:
+        self.conns[(host, int(mcp_pid))] = (mcp_start, conn)
 
     def detach(self, conn: Any) -> list[int]:
         """Forget every channel on ``conn``; pending posts on it fail. Returns the mcp pids."""
-        gone = [pid for pid, (_s, c) in self.conns.items() if c is conn]
-        for pid in gone:
-            del self.conns[pid]
+        gone = [key for key, (_s, c) in self.conns.items() if c is conn]
+        for key in gone:
+            del self.conns[key]
         for _bid, (fut, c) in list(self.pending_posts.items()):
             if c is conn and not fut.done():
                 fut.set_result({"ok": False, "err": "disconnected"})
-        return gone
+        return [pid for _host, pid in gone]
+
+    def reg_view(self, p: Participant) -> RegView | None:
+        """The latest registry view of ``p``'s agent (on its own host)."""
+        return self.registry.get((_host(p), p.agent_pid or -1))
 
     def conn_for(self, p: Participant | None) -> Any:
         if p is None or not p.mcp_pid or not p.claude_socket:
             return None
-        e = self.conns.get(p.mcp_pid)
+        e = self.conns.get((_host(p), p.mcp_pid))
         if e is None or not proc.same_start(e[0], p.mcp_start) or getattr(e[1], "closed", False):
             return None
         return e[1]
@@ -168,7 +179,8 @@ class ClaudeAdapter(Adapter):
         return (TIER_INBOX, None) if self.attached(p) else (TIER_HOOK, None)
 
     def conn_tier(self, ident: Any, existing: Participant | None) -> tuple[str, str | None]:
-        e = self.conns.get(int(ident.mcp_pid)) if ident is not None and ident.mcp_pid else None
+        e = (self.conns.get((getattr(ident, "host", LOCAL_HOST), int(ident.mcp_pid)))
+             if ident is not None and ident.mcp_pid else None)
         if (e is not None and ident.claude_socket and proc.same_start(e[0], ident.mcp_start)
                 and not getattr(e[1], "closed", False)):
             return TIER_INBOX, None
@@ -209,7 +221,7 @@ class ClaudeAdapter(Adapter):
         return max(0.0, t + delay - now)
 
     def _registry_busy(self, p: Participant, now: float) -> bool:
-        reg = self.registry.get(p.agent_pid or -1)
+        reg = self.reg_view(p)
         return reg is not None and now - reg.read_at <= REGISTRY_FRESH_S and reg.status == "busy"
 
     def route(self, p: Participant, rel: Release, sink: Any, now: float) -> Route:
@@ -237,7 +249,7 @@ class ClaudeAdapter(Adapter):
             if p.push_expiries >= EXPIRY_PARK_AT:
                 return Route("none", reason="inbox deliveries not confirmed; retrying later")
             return Route("defer", reason="inbox frame not confirmed; retrying")
-        reg = self.registry.get(p.agent_pid or -1)
+        reg = self.reg_view(p)
         if reg is None or now - reg.read_at > REGISTRY_LOST_S:
             return Route("none", reason="can't read the Claude session registry")
         if now - reg.read_at > REGISTRY_FRESH_S or reg.status != "idle":
@@ -254,7 +266,7 @@ class ClaudeAdapter(Adapter):
         # so it is idle here too: an idle session fires no hook to change it
         if b.posted_at is None or p.status not in ("idle", "starting"):
             return None
-        reg = self.registry.get(p.agent_pid or -1)
+        reg = self.reg_view(p)
         if reg is not None and reg.status not in (None, "idle"):
             return None  # the session is running again: the frame may still land
         idle_since = max(b.posted_at, p.status_at or 0.0)
@@ -309,23 +321,38 @@ class ClaudeAdapter(Adapter):
         self.backoff[p.id] = (self.clock.now() + delay, n)
 
     # ------------------------------------------------------------- registry
-    def observe(self, agent_pid: int, data: dict[str, Any], now: float) -> tuple[RegView, bool]:
+    def observe(self, agent_pid: int, data: dict[str, Any], now: float,
+                host: str = LOCAL_HOST) -> tuple[RegView, bool]:
         """Record one registry read; returns (view, status changed)."""
-        prev = self.registry.get(agent_pid)
+        key = (host, int(agent_pid))
+        prev = self.registry.get(key)
         view = registry_view(data, prev, now)
-        self.registry[agent_pid] = view
+        self.registry[key] = view
         return view, prev is None or prev.status != view.status
 
+    def _local_view(self) -> Any:
+        """This machine's host view: the broker's (``state.hosts``), else one made
+        from this adapter's config (unit tests that drive ``poll_once`` directly)."""
+        views = getattr(getattr(self.runner, "state", None), "hosts", None)
+        if views is not None:
+            return views.local
+        from switchboard.broker.hosts import LocalView
+
+        return LocalView(self.cfg.claude.sessions_dir)
+
     def poll_once(self) -> None:
+        """Read the registry of every joined Claude session on this machine. Remote
+        rows are never read here: their pids are pids on another host (§27.5.6)."""
         st = self.runner.state
         engine = st.engine
         now = self.clock.now()
-        seen: set[int] = set()
+        view_of = self._local_view()
+        seen: set[tuple[str, int]] = set()
         for p in st.store.joined_participants():
-            if p.harness != "claude" or not p.agent_pid:
+            if p.harness != "claude" or not p.agent_pid or p.host != LOCAL_HOST:
                 continue
-            seen.add(p.agent_pid)
-            data = read_registry(self.cfg.claude.sessions_dir, p.agent_pid)
+            seen.add((LOCAL_HOST, p.agent_pid))
+            data = view_of.read_registry(p.agent_pid)
             if data is None:
                 continue  # stale view: no idle wake; the liveness check ends a dead session
             if data.get("pid") not in (None, p.agent_pid):
@@ -342,8 +369,8 @@ class ClaudeAdapter(Adapter):
                 acts += engine.evaluate_participant(p.id)
             if acts:
                 self.runner.execute(acts)
-        for pid in [x for x in self.registry if x not in seen]:
-            del self.registry[pid]
+        for key in [x for x in self.registry if x[0] == LOCAL_HOST and x not in seen]:
+            del self.registry[key]
 
     async def _poll_loop(self) -> None:
         while True:

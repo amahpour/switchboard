@@ -18,9 +18,10 @@ from fastapi import FastAPI
 
 from switchboard import db
 from switchboard.adapters import build_adapters
-from switchboard.broker import proc, web
+from switchboard.broker import web
 from switchboard.broker.agents import AgentService
 from switchboard.broker.auth import UI_HOST, HostOriginGuard, LoginTokens, SecurityHeaders, Sessions
+from switchboard.broker.hosts import HostViews
 from switchboard.broker.hub import Hub, WsSubscriber
 from switchboard.broker.peer import AllowAllHumans, PeerPolicy, ProcessPeerPolicy
 from switchboard.broker.rpc import RpcServer
@@ -48,6 +49,8 @@ class BrokerState:
     clock: Clock
     info: BrokerInfo
     login_tokens: LoginTokens
+    # every probe about a participant goes through its host's view (DESIGN.md §27.5.6)
+    hosts: HostViews = None  # type: ignore[assignment]
     store: Store = None  # type: ignore[assignment]
     sessions: Sessions = None  # type: ignore[assignment]
     hub: Hub = None  # type: ignore[assignment]
@@ -105,15 +108,17 @@ def create_app(
         clock=clock,
         info=BrokerInfo(port=port, test_mode=test_mode, home=str(paths.home), started_at=clock.now()),
         login_tokens=LoginTokens(clock),
+        hosts=HostViews(cfg.claude.sessions_dir),
     )
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         os.umask(0o077)
         paths.ensure()
-        con = db.open_db(paths.db)
+        con = db.open_db(paths.db)  # a version-1 database is migrated here, after a backup (§27.6)
         state.store = Store(con, clock)
-        state.recovery = state.store.recover_on_start(proc.alive)
+        # local rows only: a remote row's pids are pids on its own host (§27.5.6)
+        state.recovery = state.store.recover_on_start(state.hosts.local.alive)
         if any(state.recovery.values()):
             log.warning("restart recovery: %s", state.recovery)
         write_hook_copy(paths)

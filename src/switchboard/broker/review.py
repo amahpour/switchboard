@@ -16,7 +16,7 @@ import shutil
 
 from switchboard.config import Config
 from switchboard.envelope import clean
-from switchboard.models import Participant
+from switchboard.models import LOCAL_HOST, Participant, session_key
 
 AGENTSVIEW_URL = "https://github.com/kenn-io/agentsview"
 README_SECTION = 'README "Reviews with context (agentsview)"'
@@ -42,8 +42,14 @@ def transcript_id(harness: str, session_id: str | None) -> str | None:
 
 
 def participant_transcript(p: Participant, name: str, cfg: Config) -> tuple[str | None, str]:
-    """``(agentsview id, "")`` for a member's session, or ``(None, why there is none)``."""
+    """``(agentsview id, "")`` for a member's session, or ``(None, why there is none)``.
+
+    A member on a remote host (DESIGN.md §27) has none here: its transcript is on
+    that host, where an agentsview run on this machine can't see it."""
     h = p.harness
+    if p.host != LOCAL_HOST:
+        return None, (f"{name} runs on {p.host}: its transcript is on that machine, not this one;"
+                      " ask it to summarize its work instead")
     if h == "devin":
         return None, (f"{name} is a devin session: agentsview has no Devin transcripts yet;"
                       " ask it to summarize its work instead")
@@ -51,11 +57,11 @@ def participant_transcript(p: Participant, name: str, cfg: Config) -> tuple[str 
         what = "a test session" if h == "test" else "a session of an unknown harness"
         return None, f"{name} is {what}: it has no transcript agentsview knows; ask it to summarize its work instead"
     sid = p.session_id
-    if h == "cursor" and (p.bind_state != "bound" or p.session_key != f"cursor:{sid}"):
+    if h == "cursor" and (p.bind_state != "bound" or not sid or p.session_key != session_key(h, p.host, sid)):
         # before the join nonce binds it (§6.3) switchboard doesn't know the conversation
         return None, (f"{name} isn't bound to its Cursor conversation yet (that happens after its first"
                       " tool call following join()): try again in a moment")
-    if h == "codex" and p.session_key != f"codex:{sid}":
+    if h == "codex" and (not sid or p.session_key != session_key(h, p.host, sid)):
         sid = None
     if not sid:
         return None, f"{name} has no known {h} session id yet: try again once it has run a tool"

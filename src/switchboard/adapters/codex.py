@@ -108,7 +108,17 @@ from switchboard.broker import proc
 from switchboard.broker.peer import match_agent
 from switchboard.clock import Clock, SystemClock
 from switchboard.config import Config
-from switchboard.models import Batch, HookEvent, Notice, Participant, Release, Route, Snapshot
+from switchboard.models import (
+    LOCAL_HOST,
+    Batch,
+    HookEvent,
+    Notice,
+    Participant,
+    Release,
+    Route,
+    Snapshot,
+    split_session_key,
+)
 
 log = logging.getLogger("switchboard.codex")
 
@@ -133,6 +143,8 @@ QUEUE_TIMEOUT_S = 30.0
 SEND_BACKOFF_S = (1.0, 30.0)
 LSOF_CANDIDATES = ("/usr/sbin/lsof", "/usr/bin/lsof", "/sbin/lsof", "/bin/lsof")
 RESTART_NOTE = "Codex daemon restarting"
+# a Codex row with a host (a remote member, M8c) is never this machine's daemon's
+REMOTE_WHY = "not a Codex session on this machine"
 # hook events that show a thread whose SessionEnd was seen is running again
 RESUME_EVENTS = frozenset({"UserPromptSubmit", "PostToolUse", "Stop", "Interrupt"})
 BIN_RETRY_S = 5.0  # a codex binary that can't be found is looked up again at most this often
@@ -154,7 +166,12 @@ APP_SERVER_RE = re.compile(r"(^|\s)app-server(\s|$)")
 
 
 def thread_of(p: Participant) -> str:
-    return p.session_key[len(PREFIX):] if p.session_key.startswith(PREFIX) else ""
+    """The Codex thread id of a session on this machine (key ``codex:<thread>``), else ''.
+    A remote Codex row (``codex@<host>:<thread>``) has none here: this adapter serves
+    this machine's Codex daemon, and a remote thread is never one of its threads
+    (DESIGN.md §27.7)."""
+    parts = split_session_key(p.session_key)
+    return parts[2] if parts is not None and parts[:2] == ("codex", LOCAL_HOST) else ""
 
 
 def client_id(batch_id: int) -> str:
@@ -555,6 +572,16 @@ class CodexAdapter(Adapter):
     def now(self) -> float:
         return self.clock.now()
 
+    def _local_view(self) -> Any:
+        """This machine's host view (DESIGN.md §27.5.6): the broker's
+        (``state.hosts``), else one made from the config (unit tests without a broker)."""
+        views = getattr(self.st, "hosts", None)
+        if views is not None:
+            return views.local
+        from switchboard.broker.hosts import LocalView
+
+        return LocalView(self.cfg.claude.sessions_dir)
+
     def _spawn(self, coro: Any) -> None:
         try:
             t = asyncio.get_running_loop().create_task(coro)
@@ -577,9 +604,12 @@ class CodexAdapter(Adapter):
         return p
 
     def _joined(self) -> list[Participant]:
+        """Joined Codex sessions on this machine. CodexLink, ``live`` and the clients
+        check are about this machine's daemon and processes: a remote Codex row
+        (``host`` set) is never theirs (DESIGN.md §27.5.6, §27.7)."""
         if self.st is None:
             return []
-        return [p for p in self.st.store.joined_participants() if p.harness == "codex"]
+        return [p for p in self.st.store.joined_participants() if p.harness == "codex" and p.host == LOCAL_HOST]
 
     # ======================================================== capabilities
     def loaded_fresh(self, now: float | None = None) -> bool:
@@ -635,6 +665,8 @@ class CodexAdapter(Adapter):
     def tier(self, p: Participant | None) -> tuple[str, str | None]:
         if p is None:
             return "mcp-only", "unverified thread"
+        if p.host != LOCAL_HOST:
+            return "mcp-only", REMOTE_WHY  # never this daemon's thread (§27.7); M8c routes it elsewhere
         if self.cfg.codex.require_thread_proof and not p.thread_proof:
             return "mcp-only", "unverified thread"
         if p.id in self.orphans:
@@ -656,6 +688,7 @@ class CodexAdapter(Adapter):
 
     def conn_tier(self, ident: Any, existing: Participant | None) -> tuple[str, str | None]:
         if existing is not None and existing.thread_proof and ident is not None \
+                and existing.host == getattr(ident, "host", LOCAL_HOST) \
                 and existing.mcp_pid == ident.mcp_pid and proc.same_start(existing.mcp_start, ident.mcp_start):
             return self.tier(existing)
         if self.cfg.codex.require_thread_proof:
@@ -699,7 +732,11 @@ class CodexAdapter(Adapter):
 
     # ============================================================ liveness
     def live(self, p: Participant, now: float | None = None) -> tuple[bool, str]:
-        """The liveness guard (§9.3), from cached state (route() is pure)."""
+        """The liveness guard (§9.3), from cached state (route() is pure). Only a
+        session on this machine can be live here: a remote row's pids are pids on its
+        own host, never probed on this one (§27.5.6)."""
+        if p.host != LOCAL_HOST:
+            return False, REMOTE_WHY
         now = self.now() if now is None else now
         if not p.active or p.status == "offline":
             return False, "offline"
@@ -718,7 +755,7 @@ class CodexAdapter(Adapter):
                 return False, HOLD_WHY
             return True, ""
         # queue tier: the thread's own process (an embedded TUI or another app-server)
-        if not p.agent_pid or not proc.alive(p.agent_pid, p.agent_start):
+        if not p.agent_pid or not self._local_view().alive(p.agent_pid, p.agent_start):
             return False, "the Codex process is gone"
         if p.agent_pid in self.server_pids:
             return False, "thread not loaded in the Codex daemon"
@@ -1533,7 +1570,11 @@ class CodexAdapter(Adapter):
         """A verified ``mcp.hello``. A Codex one names a live app-server that runs
         switchboard's MCP servers (remembered: after a restart, the new daemon's).
         If it is a restarting session's own MCP process (a reconnect), its
-        credentials are still valid: re-bind it to that process's app-server."""
+        credentials are still valid: re-bind it to that process's app-server.
+        An identity from another host (a remote Codex, §27.7) is none of this
+        adapter's business: its pids are pids on that host."""
+        if getattr(ident, "host", ""):
+            return
         if getattr(ident, "harness", None) == "codex" and ident.agent_pid:
             self.fresh_agents[(ident.agent_pid, ident.agent_start)] = self.now()
             while len(self.fresh_agents) > FRESH_AGENTS_MAX:
@@ -1543,7 +1584,7 @@ class CodexAdapter(Adapter):
             if o is None or p.harness != "codex":
                 continue
             if getattr(ident, "harness", None) == "codex" and ident.agent_pid and \
-                    proc.alive(ident.agent_pid, ident.agent_start):
+                    self._local_view().alive(ident.agent_pid, ident.agent_start):
                 self._rebind(p, o, (ident.agent_pid, ident.agent_start), "mcp_hello")
         if self.orphans:
             self._spawn(self.try_rebind())

@@ -7,15 +7,32 @@ loop; every write is wrapped in ``db.tx`` (``BEGIN IMMEDIATE``).
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
 from switchboard import db
 from switchboard.clock import Clock, SystemClock
-from switchboard.models import WATCHDOG_DONE, Batch, Event, Item, Member, Membership, Message, Participant, Room
+from switchboard.models import (
+    LOCAL_HOST,
+    WATCHDOG_DONE,
+    Batch,
+    Event,
+    Item,
+    Member,
+    Membership,
+    Message,
+    Participant,
+    RemoteRow,
+    Room,
+    valid_host,
+)
+from switchboard.models import session_key as make_session_key
 
 OPEN_DELIVERY_STATES = ("pending", "offered", "in_context")
+CONFIG_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+REASON_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 
 
 class StoreError(Exception):
@@ -140,6 +157,7 @@ class Store:
         reply_to: int | None = None,
         mentions: Iterable[str] = (),
         skip_memberships: Iterable[int] = (),
+        sender_host: str | None = None,
     ) -> Message:
         """Persist a message and its per-recipient delivery rows in one transaction.
 
@@ -147,15 +165,18 @@ class Store:
         prio 2 for a human message, 1 when the member is @mentioned, else 0.
         join/leave/notice messages are never delivered to agents. ``skip_memberships``
         get no delivery row either (the author named in a ``/review`` request, §26).
+        ``sender_host`` is a remote agent sender's host (§27.6); None on this machine.
         """
+        if sender_host is not None and not valid_host(sender_host):
+            raise ValueError(f"not a host name: {sender_host!r}")
         skip = {int(x) for x in skip_memberships}
         now = self.clock.now()
         mentions_l = sorted({m.lower() for m in mentions})
         with db.tx(self.con):
             cur = self.con.execute(
                 "INSERT INTO messages(room_id, ts, sender_membership_id, sender_name,"
-                " sender_harness, sender_kind, via, kind, text, reply_to, mentions)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                " sender_harness, sender_kind, via, kind, text, reply_to, mentions, sender_host)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     room_id,
                     now,
@@ -168,6 +189,7 @@ class Store:
                     text,
                     reply_to,
                     json.dumps(mentions_l),
+                    sender_host,
                 ),
             )
             mid = cur.lastrowid
@@ -253,7 +275,7 @@ class Store:
         rows = self.con.execute(
             "SELECT m.id AS membership_id, m.participant_id, m.room_id, m.screen_name,"
             " m.held, m.joined_at, p.harness, p.status, p.tier, p.tier_note, p.away,"
-            " p.approval_mode, p.env_leak,"
+            " p.approval_mode, p.env_leak, p.host,"
             " (SELECT COUNT(*) FROM deliveries d WHERE d.membership_id=m.id"
             "   AND d.state='pending') AS queued,"
             " (SELECT COUNT(*) FROM deliveries d WHERE d.membership_id=m.id"
@@ -279,6 +301,7 @@ class Store:
                 joined_at=r["joined_at"],
                 queued=r["queued"],
                 inflight=r["inflight"],
+                host=r["host"],
             )
             for r in rows
         ]
@@ -434,10 +457,14 @@ class Store:
 
     # --------------------------------------------------------------- recovery
     def recover_on_start(
-        self, alive: Callable[[int, float | None], bool]
+        self, alive: Callable[[int, float | None], bool | None]
     ) -> dict[str, int]:
         """Restart semantics (§4): expire open offers, mark everyone offline,
-        end participants whose agent process is gone."""
+        end participants whose agent process is gone.
+
+        ``alive`` probes this machine's processes, so only local rows (``host = ''``)
+        are probed: a remote row's pids are pids on its own host. Remote rows go
+        offline like every row and wait for their link (DESIGN.md §27.5.6)."""
         now = self.clock.now()
         ended: list[tuple[int, int, str]] = []  # (room_id, membership_id, name)
         with db.tx(self.con):
@@ -457,12 +484,13 @@ class Store:
             ).rowcount
             parts = self.con.execute(
                 "SELECT id, agent_pid, agent_start FROM participants"
-                " WHERE ended_at IS NULL AND agent_pid IS NOT NULL"
+                " WHERE ended_at IS NULL AND agent_pid IS NOT NULL AND host=?",
+                (LOCAL_HOST,),
             ).fetchall()
             n_ended = 0
             for p in parts:
-                if alive(p["agent_pid"], p["agent_start"]):
-                    continue
+                if alive(p["agent_pid"], p["agent_start"]) is not False:
+                    continue  # alive, or can't tell (None): never ended on a guess
                 n_ended += 1
                 self.con.execute(
                     "UPDATE participants SET ended_at=? WHERE id=?", (now, p["id"])
@@ -492,6 +520,80 @@ class Store:
         }
 
 
+    # ---------------------------------------------------------------- remotes
+    # One row per remote that was ever enabled (DESIGN.md §27.6, §27.5.8): the broker
+    # dials a remote only when its row holds an enabled_at for the current config_hash
+    # and no block (blocked_at is NULL): ``RemoteRow.may_dial`` is the one gate. A
+    # block (host key, auth, replaced) holds until the next enable clears it.
+    def remote_row(self, name: str) -> RemoteRow | None:
+        r = self.con.execute("SELECT * FROM remotes WHERE name=?", (name,)).fetchone()
+        return RemoteRow.from_row(r) if r else None
+
+    def remote_rows(self) -> list[RemoteRow]:
+        return [RemoteRow.from_row(r) for r in self.con.execute("SELECT * FROM remotes ORDER BY name")]
+
+    @staticmethod
+    def _remote_name(name: str) -> str:
+        if not valid_host(name):
+            raise ValueError(f"not a remote name: {name!r}")
+        return name
+
+    def set_remote_enabled(self, name: str, config_hash: str, via: str) -> RemoteRow:
+        """The human enabled this remote for exactly ``config_hash`` (``via`` cli or web).
+        Enabling also clears a block (§27.4.7)."""
+        self._remote_name(name)
+        if not isinstance(config_hash, str) or not CONFIG_HASH_RE.match(config_hash):
+            raise ValueError("config_hash must be a sha256 hex digest")
+        if via not in ("cli", "web"):
+            raise ValueError(f"enabled via {via!r}")
+        now = self.clock.now()
+        with db.tx(self.con):
+            self.con.execute(
+                "INSERT INTO remotes(name, config_hash, enabled_at, enabled_via, blocked_at, blocked_reason)"
+                " VALUES(?,?,?,?,NULL,NULL) ON CONFLICT(name) DO UPDATE SET config_hash=excluded.config_hash,"
+                " enabled_at=excluded.enabled_at, enabled_via=excluded.enabled_via,"
+                " blocked_at=NULL, blocked_reason=NULL",
+                (name, config_hash, now, via),
+            )
+        got = self.remote_row(name)
+        assert got is not None
+        return got
+
+    def set_remote_disabled(self, name: str) -> bool:
+        """``remote disable``: forget the consent (the row and its hash stay). False if no row."""
+        self._remote_name(name)
+        with db.tx(self.con):
+            return self.con.execute(
+                "UPDATE remotes SET enabled_at=NULL, enabled_via=NULL WHERE name=?", (name,)
+            ).rowcount == 1
+
+    def set_remote_blocked(self, name: str, reason: str) -> bool:
+        """The link needs the owner (``host_key``, ``auth``, ``replaced``, ...): no retry
+        until the next enable. False if the remote has no row."""
+        self._remote_name(name)
+        if not isinstance(reason, str) or not REASON_RE.match(reason):
+            raise ValueError(f"blocked reason {reason!r}")
+        now = self.clock.now()
+        with db.tx(self.con):
+            return self.con.execute(
+                "UPDATE remotes SET blocked_at=?, blocked_reason=? WHERE name=?", (now, reason, name)
+            ).rowcount == 1
+
+    def touch_remote_up(self, name: str) -> bool:
+        """The link came up (a handshake completed) now."""
+        self._remote_name(name)
+        now = self.clock.now()
+        with db.tx(self.con):
+            return self.con.execute(
+                "UPDATE remotes SET last_up_at=? WHERE name=?", (now, name)
+            ).rowcount == 1
+
+    def clear_remote(self, name: str) -> bool:
+        """``remote remove``: drop the row (consent, block and history). False if none."""
+        self._remote_name(name)
+        with db.tx(self.con):
+            return self.con.execute("DELETE FROM remotes WHERE name=?", (name,)).rowcount == 1
+
     # ============================================================ M2: agents
     # ----------------------------------------------------------- participants
     _PARTICIPANT_COLS = frozenset(
@@ -501,7 +603,7 @@ class Store:
             "tier", "tier_note", "approval_mode", "env_leak", "away", "boundary_seq", "gen",
             "gen_tainted", "rearms_in_gen", "last_loop_count", "unconfirmed_followups",
             "push_expiries", "hooks_seen_at", "last_say_at", "last_seen", "ended_at",
-            "session_key",
+            "session_key", "host",
         }
     )
 
@@ -520,18 +622,26 @@ class Store:
         bad = set(fields) - self._PARTICIPANT_COLS
         if bad:
             raise ValueError(f"unknown participant fields: {sorted(bad)}")
+        host = fields.pop("host", LOCAL_HOST)
+        if host != LOCAL_HOST and not valid_host(host):
+            raise ValueError(f"not a host name: {host!r}")
         now = self.clock.now()
         with db.tx(self.con):
             cur = self.find_participant(harness, session_key)
             if cur is None:
-                cols = ["harness", "session_key", "created_at", "last_seen", *fields]
-                vals = [harness, session_key, now, now, *fields.values()]
+                # a session key names its host (§27.5.4): '<h>:...' here, '<h>@<host>:...' remote
+                if not session_key.startswith(make_session_key(harness, host, "")):
+                    raise ValueError(f"session key {session_key!r} is not a {harness} key of host {host!r}")
+                cols = ["harness", "session_key", "created_at", "last_seen", "host", *fields]
+                vals = [harness, session_key, now, now, host, *fields.values()]
                 c = self.con.execute(
                     f"INSERT INTO participants({','.join(cols)}) VALUES({','.join('?' * len(cols))})",
                     vals,
                 )
                 pid = int(c.lastrowid)
             else:
+                if cur.host != host:
+                    raise ValueError("a session never moves between hosts")
                 pid = cur.id
                 upd = {**fields, "ended_at": None, "last_seen": now}
                 self._update_participant(pid, upd)
@@ -545,6 +655,8 @@ class Store:
         bad = set(fields) - self._PARTICIPANT_COLS
         if bad:
             raise ValueError(f"unknown participant fields: {sorted(bad)}")
+        if "host" in fields:
+            raise ValueError("a participant's host is set when it is created and never changes")
         sets = ", ".join(f"{k}=?" for k in fields)
         self.con.execute(
             f"UPDATE participants SET {sets} WHERE id=?", [*fields.values(), participant_id]
@@ -597,17 +709,20 @@ class Store:
         ).fetchall()
         return [Participant.from_row(r) for r in rows]
 
-    def active_participants_by_agent(self, harness: str, agent_pid: int) -> list[Participant]:
-        """Active participants of ``harness`` whose agent process is ``agent_pid``, newest first."""
+    def active_participants_by_agent(self, harness: str, host: str, agent_pid: int) -> list[Participant]:
+        """Active participants of ``harness`` on ``host`` whose agent process is
+        ``agent_pid`` (a pid on that host), newest first."""
         rows = self.con.execute(
-            "SELECT * FROM participants WHERE harness=? AND agent_pid=? AND ended_at IS NULL ORDER BY id DESC",
-            (harness, agent_pid),
+            "SELECT * FROM participants WHERE harness=? AND host=? AND agent_pid=? AND ended_at IS NULL"
+            " ORDER BY id DESC",
+            (harness, host, agent_pid),
         ).fetchall()
         return [Participant.from_row(r) for r in rows]
 
-    def participants_by_mcp(self, mcp_pid: int, mcp_start: float | None) -> list[Participant]:
+    def participants_by_mcp(self, host: str, mcp_pid: int, mcp_start: float | None) -> list[Participant]:
+        """Active participants served by the MCP process ``(mcp_pid, mcp_start)`` on ``host``."""
         rows = self.con.execute(
-            "SELECT * FROM participants WHERE ended_at IS NULL AND mcp_pid=?", (mcp_pid,)
+            "SELECT * FROM participants WHERE ended_at IS NULL AND host=? AND mcp_pid=?", (host, mcp_pid)
         ).fetchall()
         out = [Participant.from_row(r) for r in rows]
         return [p for p in out if p.mcp_start is not None and mcp_start is not None

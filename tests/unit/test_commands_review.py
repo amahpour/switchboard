@@ -224,6 +224,29 @@ def test_members_without_a_transcript_say_why(svc: RoomService, monkeypatch: pyt
         assert (e.code, e.message) == ("bad_request", msg)
 
 
+def test_a_remote_member_has_no_transcript_here(svc: RoomService, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A member on another host (DESIGN.md §27): its transcript is on that host, which
+    an agentsview run on this machine can't read. Said so, whatever the harness;
+    never "not bound yet" or "no session id yet" because its key names the host."""
+    with_agentsview(monkeypatch)
+    agent(svc, "codex-1", "codex", "t-1")
+    room = svc.room("#build")
+    for h, rest, name, extra in [
+        ("claude", "4242@1.00", "pi-claude", {}),
+        ("codex", "thread-P", "pi-codex", {"thread_proof": 1}),
+        ("cursor", "c0ffee00-0000-4000-8000-000000000003", "pi-cursor", {"bind_state": "bound"}),
+    ]:
+        sid = SID if h == "claude" else rest
+        p = svc.store.upsert_participant(h, f"{h}@fpga-pi:{rest}", host="fpga-pi", status="idle",
+                                         session_id=sid, **extra)
+        svc.store.create_membership(room.id, p.id, name, "h-" + name)
+        e = refused(svc, f"/review codex-1 {name}")
+        assert (e.code, e.message) == ("bad_request", f"/review: {name} runs on fpga-pi: its transcript is on"
+                                                      " that machine, not this one; ask it to summarize its work"
+                                                      " instead")
+    assert set(svc.transcript_ids(room)) == {"codex-1"}
+
+
 # ---------------------------------------------------------- the message
 def test_request_text() -> None:
     t = review.request_text("codex-1", "claude-1", SID, note="focus on parse_port")

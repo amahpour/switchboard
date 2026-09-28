@@ -40,8 +40,8 @@ def test_participant_upsert_and_reactivate(store: Store) -> None:
 
 def test_mcp_lookup_uses_start_time(store: Store) -> None:
     _room, p, _m = setup(store)
-    assert [x.id for x in store.participants_by_mcp(11, 2.0)] == [p.id]
-    assert store.participants_by_mcp(11, 9.0) == []
+    assert [x.id for x in store.participants_by_mcp("", 11, 2.0)] == [p.id]
+    assert store.participants_by_mcp("", 11, 9.0) == []
 
 
 def test_name_reuse_and_kick_memory(store: Store, clock: FakeClock) -> None:
