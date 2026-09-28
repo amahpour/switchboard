@@ -945,7 +945,9 @@ def test_a_rejoin_in_the_grace_window_is_a_reconnect_only_once_proven(w: W) -> N
 
 
 def test_a_daemon_that_does_not_come_back_ends_the_member(tmp_home: Path) -> None:
-    cfg = FAST.replace(codex=dataclasses.replace(FAST.codex, restart_grace_s=1.0))
+    # The grace is the only window in which RESTARTING is visible: 1 s was missed
+    # on a loaded macOS runner under xdist (CI saw "session ended" straight away).
+    cfg = FAST.replace(codex=dataclasses.replace(FAST.codex, restart_grace_s=3.0))
     w = W(tmp_home, cfg=cfg)
     try:
         w.join()
