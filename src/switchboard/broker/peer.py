@@ -31,7 +31,10 @@ _LOCAL_PEERCRED = 1
 _LOCAL_PEERPID = 2
 
 AGENT_MATCHERS: dict[str, tuple[re.Pattern[str], ...]] = {
-    "claude": (re.compile(r"(^|/)claude(\s|$)"), re.compile(r"/claude/versions/")),
+    # Claude Desktop runs its sessions in WSL and on Linux as ~/.claude/remote/ccd-cli/<version>
+    # (the program itself, anchored to argv[0] so a command that merely names that path isn't one).
+    "claude": (re.compile(r"(^|/)claude(\s|$)"), re.compile(r"/claude/versions/"),
+               re.compile(r"^\S*/\.claude/remote/ccd-cli/[0-9][0-9A-Za-z.+-]*(\s|$)")),
     "codex": (re.compile(r"(^|/)codex(\s|$)"), re.compile(r"codex app-server")),
     # Unconfirmed against a live ps capture (Cursor not yet run live); see DESIGN §5.3.
     "cursor": (re.compile(r"cursor-agent"),),

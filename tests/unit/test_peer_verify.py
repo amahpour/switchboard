@@ -45,6 +45,9 @@ def test_claude_verified_only_with_parent_and_registry(tmp_path: Path) -> None:
     shell = verify("claude", [MCP, "/bin/zsh", "/x/claude/versions/2.1.282"], sock="/tmp/cc-socks/99.sock",
                    sd=str(d))
     assert shell.harness == "unknown"  # started from an agent's shell: not the harness itself
+    desk = verify("claude", [MCP, "/home/x/.claude/remote/ccd-cli/2.1.284 --output-format stream-json"],
+                  sock="/tmp/cc-socks/99.sock", sd=str(d))
+    assert desk.harness == "claude" and desk.agent_pid == 99  # a Claude Desktop session (WSL, Linux)
 
 
 def test_codex_devin_cursor() -> None:

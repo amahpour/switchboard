@@ -527,7 +527,7 @@ A **remote connection** (`RemoteConn`, M8c: a client of a remote host's satellit
 **`broker/peer.py`**
 - `peer_pid(sock)` uses `getsockopt(0, 2 /*LOCAL_PEERPID*/, 4)` on macOS and `SO_PEERCRED` on Linux. `peer_uid` uses `getpeereid` or `SO_PEERCRED`.
 - `AGENT_MATCHERS` match on argv:
-  - claude: `(^|/)claude(\s|$)` or `/claude/versions/`;
+  - claude: `(^|/)claude(\s|$)`, `/claude/versions/`, or a program at `~/.claude/remote/ccd-cli/<version>` (argv[0] only). The last is how Claude Desktop runs its sessions in WSL and on Linux. Without it such a session was an unknown agent, so it got no inbox wakes, and its shell passed the human check on a machine running its own broker;
   - codex: `(^|/)codex(\s|$)` or `codex app-server`;
   - cursor: `cursor-agent`, to be confirmed against a live Cursor process tree;
   - devin: `devin` followed by `acp`.
