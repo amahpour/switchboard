@@ -28,6 +28,7 @@ import ipaddress
 import json
 import os
 import re
+import stat
 import time
 import tomllib
 from dataclasses import asdict, dataclass
@@ -173,11 +174,27 @@ def parse_remotes(text: str, *, test_mode: bool) -> dict[str, RemoteEntry]:
 
 
 def load_remotes(paths: Paths, *, test_mode: bool) -> dict[str, RemoteEntry]:
-    """``<home>/remotes.toml``, or {} if there is none."""
+    """``<home>/remotes.toml``, or {} if there is none. The file must be yours and
+    writable by nobody else (``remote add`` writes it 0600)."""
+    path = remotes_path(paths)
     try:
-        raw = remotes_path(paths).read_bytes()
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
     except FileNotFoundError:
         return {}
+    except OSError as e:
+        raise RemoteConfigError(f"remotes.toml: {e.strerror or e}") from None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise RemoteConfigError("remotes.toml is not a regular file")
+        if st.st_uid != os.getuid() or st.st_mode & 0o022:
+            raise RemoteConfigError("remotes.toml must be yours and writable only by you (chmod 600 remotes.toml)")
+        with os.fdopen(fd, "rb") as f:
+            fd = -1
+            raw = f.read(1 << 20)
+    finally:
+        if fd >= 0:
+            os.close(fd)
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as e:
@@ -198,9 +215,10 @@ def key_fingerprint(pub_line: str) -> str:
 
 
 def link_material(paths: Paths, name: str) -> tuple[str, str]:
-    """The link key's fingerprint and the pinned host-key line of remote ``name``
-    (``remotes/<name>/id_ed25519.pub`` and ``known_hosts``); '' for what isn't there
-    (an exec-transport remote has neither)."""
+    """The link key's fingerprint and the pinned host keys of remote ``name``
+    (``remotes/<name>/id_ed25519.pub``, and every non-blank line of ``known_hosts``:
+    ssh trusts each of them, so an added line is a new config); '' for what isn't
+    there (an exec-transport remote has neither)."""
     d = remote_dir(paths, name)
     try:
         fp = key_fingerprint((d / "id_ed25519.pub").read_text(encoding="utf-8").strip())
@@ -208,10 +226,152 @@ def link_material(paths: Paths, name: str) -> tuple[str, str]:
         fp = ""
     try:
         lines = [ln.strip() for ln in (d / "known_hosts").read_text(encoding="utf-8").splitlines()]
-        pin = next((ln for ln in lines if ln and not ln.startswith("#")), "")
+        pin = "\n".join(ln for ln in lines if ln)
     except (OSError, UnicodeDecodeError):
         pin = ""
     return fp, pin
+
+
+SSH_BIN = "/usr/bin/ssh"  # the only client a link dials through (§27.4.1)
+SSH_KEYGEN_BIN = "/usr/bin/ssh-keygen"
+
+
+def host_key_alias(name: str) -> str:
+    """The name the link pins the remote's host key under (``HostKeyAlias``), so a new
+    DHCP address doesn't break the pin (§27.4.1)."""
+    return f"switchboard-{name}"
+
+
+def link_key_path(paths: Paths, name: str) -> Path:
+    return remote_dir(paths, name) / "id_ed25519"
+
+
+def pin_path(paths: Paths, name: str) -> Path:
+    return remote_dir(paths, name) / "known_hosts"
+
+
+def system_bin_problem(path: str) -> str | None:
+    """Why ``path`` may not be run as the system's OpenSSH (``/usr/bin/ssh``,
+    ``ssh-keygen``), or None: it must be a regular executable file owned by root and
+    writable by nobody else, as is every directory above it. A binary a user could
+    replace would carry the link key to whatever it is."""
+    p = Path(path)
+    if not p.is_absolute():
+        return f"{path} is not an absolute path"
+    try:
+        st = os.stat(p)
+    except OSError as e:
+        return f"{path}: {e.strerror or e}"
+    if not stat.S_ISREG(st.st_mode) or not st.st_mode & 0o111:
+        return f"{path} is not an executable file"
+    for q, s in [(p, st)] + [(d, None) for d in p.resolve().parents]:
+        try:
+            s = s or os.stat(q)
+        except OSError as e:
+            return f"{q}: {e.strerror or e}"
+        if s.st_uid != 0:
+            return f"{q} is not owned by root"
+        if s.st_mode & 0o022:
+            return f"{q} is writable by others than root"
+    return None
+
+
+# what ssh would read as more than a path in ``-i`` and ``-o UserKnownHostsFile=``: a
+# blank splits the value (several files), '#' starts a comment, '%' and '${' expand,
+# a quote or backslash is parsed, '~' expands
+_SSH_PATH_UNSAFE = re.compile(r"[\s\"'\\#%$~\x00-\x1f\x7f]")
+PIN_KEY_TYPES = re.compile(r"^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(?:256|384|521))$")  # plain host keys
+PIN_MAX_BYTES = 16 * 1024
+
+
+def home_path_problem(paths: Paths) -> str | None:
+    """Why this home's path can't go into ssh's argv as one path, or None."""
+    if _SSH_PATH_UNSAFE.search(str(paths.home)):
+        return ("the switchboard home's path has a blank, a quote, a backslash or one of # % $ ~, which ssh"
+                " would read as more than one path: use a home without them (--home or SWITCHBOARD_HOME)")
+    return None
+
+
+def _key_blob_type(b64: str) -> str:
+    """The key type named inside an OpenSSH public key blob, or ''."""
+    try:
+        blob = base64.b64decode(b64, validate=True)
+    except (binascii.Error, ValueError):
+        return ""
+    if len(blob) < 4:
+        return ""
+    n = int.from_bytes(blob[:4], "big")
+    try:
+        return blob[4:4 + n].decode("ascii") if 0 < n <= 64 and len(blob) >= 4 + n else ""
+    except UnicodeDecodeError:
+        return ""
+
+
+def _private_dir_problem(p: Path, rel: str) -> str | None:
+    try:
+        st = os.lstat(p)
+    except OSError:
+        return f"{rel}/ is missing"
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077:
+        return f"{rel}/ must be a private directory of yours (0700)"
+    return None
+
+
+def pin_problem(paths: Paths, name: str) -> str | None:
+    """Why ``remotes/<name>/known_hosts`` is not exactly one pinned host key, or None: a
+    regular file of yours (never a link) that nobody else can write, holding one line
+    ``switchboard-<name> <type> <key>`` and nothing else. ssh trusts every line of it, so
+    a second key, a wildcard or an ``@cert-authority`` line would widen the pin."""
+    rel = f"remotes/{name}/known_hosts"
+    try:
+        fd = os.open(pin_path(paths, name), os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    except OSError:
+        return f"{rel} is missing or not a regular file (the pin `switchboard remote add` makes)"
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o022:
+            return f"{rel} must be a regular file of yours that nobody else can write (0600)"
+        raw = os.read(fd, PIN_MAX_BYTES + 1)
+    finally:
+        os.close(fd)
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = ""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    alias = host_key_alias(name)
+    if len(raw) > PIN_MAX_BYTES or len(lines) != 1:
+        return (f"{rel} must hold exactly one line, the host key pinned under {alias}"
+                f" ({len(lines)} found): anything more would be trusted too")
+    words = lines[0].split()
+    if (len(words) != 3 or words[0] != alias or not PIN_KEY_TYPES.match(words[1])
+            or _key_blob_type(words[2]) != words[1]):
+        return f"{rel} has no pinned host key for {alias} (one line: {alias} <type> <key>)"
+    return None
+
+
+def ssh_files_problem(paths: Paths, name: str) -> str | None:
+    """Why remote ``name``'s link files can't be used, or None: the home's path fits in
+    ssh's argv; ``remotes/`` and ``remotes/<name>/`` are private directories of yours;
+    the link key ``remotes/<name>/id_ed25519`` is a regular file of yours that nobody
+    else can read (ssh refuses it otherwise); ``known_hosts`` holds exactly the one
+    pinned host key (``pin_problem``). Messages name files relative to the home (a
+    blocked notice reaches the remote's rooms)."""
+    why = home_path_problem(paths)
+    if why:
+        return why
+    why = (_private_dir_problem(paths.home / "remotes", "remotes")
+           or _private_dir_problem(remote_dir(paths, name), f"remotes/{name}"))
+    if why:
+        return why
+    rel = f"remotes/{name}/id_ed25519"
+    try:
+        st = os.lstat(link_key_path(paths, name))
+    except OSError:
+        return f"{rel} is missing (the link key `switchboard remote add` makes)"
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077:
+        return f"{rel} must be a private file of yours (0600)"
+    return pin_problem(paths, name)
 
 
 def config_hash(entry: RemoteEntry, key_fp: str, pinned_line: str) -> str:

@@ -547,6 +547,10 @@ def build_methods(state: "BrokerState") -> dict[str, MethodSpec]:
     async def remote_disable(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
         return await remotes().disable(_str(p, "name"), via="cli")
 
+    async def remote_remove(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
+        # human only (§27.5.8): ends the host's members and forgets its consent
+        return await remotes().remove(_str(p, "name"), via="cli")
+
     async def remote_status(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
         name = p.get("name")
         return await remotes().status(name if isinstance(name, str) and name else None)
@@ -584,5 +588,6 @@ def build_methods(state: "BrokerState") -> dict[str, MethodSpec]:
         # on this machine's socket (never over a link: REMOTE_METHODS)
         "remote.enable": MethodSpec("human_cli", remote_enable, long_poll=True),
         "remote.disable": MethodSpec("human_cli", remote_disable),
+        "remote.remove": MethodSpec("human_cli", remote_remove),
         "remote.status": MethodSpec("anon", remote_status),
     }

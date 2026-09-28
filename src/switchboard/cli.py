@@ -407,10 +407,84 @@ def cmd_report(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _pairing(args: argparse.Namespace) -> int:
+    """``switchboard remote add|accept|remove|doctor`` (DESIGN.md §27.5.8, §27.8)."""
+    from pathlib import Path
+
+    from switchboard.config import ConfigError, load
+    from switchboard.install.common import InstallError
+    from switchboard.remote import pairing
+
+    paths = _paths(args)
+    sat = _satellite_home(args)
+    ak = Path(args.authorized_keys).expanduser() if getattr(args, "authorized_keys", None) else None
+    try:
+        if args.remote_cmd == "add":
+            if sat:
+                return on_desktop(args)
+            return pairing.add(paths, args.name, args.dest, rooms=args.rooms, port=args.port,
+                               harnesses=args.harnesses, ssh_config=args.ssh_config, known_hosts=args.known_hosts,
+                               authorized_keys=ak, label=args.label)
+        if args.remote_cmd == "accept":
+            return pairing.accept(paths, args.token, from_=args.from_, ak_path=ak, yes=args.yes,
+                                  allow_editable=args.allow_editable)
+        if args.remote_cmd == "remove":
+            if sat:
+                return pairing.remove_remote(paths, args.name, ak_path=ak, yes=args.yes)
+            return pairing.remove_desktop(paths, args.name, yes=args.yes,
+                                          call=lambda m, p: _call(args, m, p, timeout=30.0))
+        # doctor
+        akp = ak or pairing.default_authorized_keys()
+        if sat:
+            findings = pairing.doctor_remote(paths, ak_path=akp, environ=os.environ,
+                                             probe_desktop=args.probe_desktop,
+                                             status=lambda: _satellite_status(paths))
+            print(f"switchboard remote doctor (satellite home {paths.home}):")
+        else:
+            if args.probe_desktop is not None:
+                print("switchboard: --probe-desktop is for a remote (satellite) home", file=sys.stderr)
+                return EXIT_USAGE
+            try:
+                allow = load(paths).security.allow_ssh_cli
+            except ConfigError as e:
+                print(f"switchboard: config error: {e}", file=sys.stderr)
+                return EXIT_ERR
+            ssh_dir = Path(args.ssh_dir).expanduser() if args.ssh_dir else Path(os.path.expanduser("~")) / ".ssh"
+            findings = pairing.doctor_desktop(paths, ak_path=akp, ssh_dir=ssh_dir, allow_ssh_cli=allow,
+                                              status=lambda: _remote_status(args))
+            print(f"switchboard remote doctor (desktop home {paths.home}):")
+        return pairing.print_findings(findings, sys.stdout)
+    except (pairing.PairingError, InstallError) as e:
+        print(f"switchboard remote {args.remote_cmd}: {e}", file=sys.stderr)
+        return EXIT_ERR
+
+
+def _satellite_status(paths: Any) -> dict[str, Any] | None:
+    from switchboard.mcp.client import BrokerDown, RpcError, call_sync
+
+    try:
+        return call_sync(paths.sock, "sys.status", {}, 3.0)
+    except (BrokerDown, RpcError, OSError, TimeoutError):
+        return None
+
+
+def _remote_status(args: argparse.Namespace) -> dict[str, Any] | None:
+    from switchboard.mcp.client import BrokerDown, RpcError
+
+    try:
+        return _call(args, "remote.status", {}, timeout=5.0)
+    except (BrokerDown, RpcError, OSError, TimeoutError):
+        return None
+
+
 def cmd_remote(args: argparse.Namespace) -> int:
-    """``switchboard remote enable|disable|status`` (DESIGN.md §27.5.8, §27.11)."""
+    """``switchboard remote add|accept|enable|disable|status|remove|doctor`` (DESIGN.md
+    §27.5.8, §27.8, §27.11). On a satellite home only ``accept``, ``remove`` and
+    ``doctor`` run; the rest belong to the desktop."""
     from switchboard.remote.describe import describe
 
+    if args.remote_cmd in ("add", "accept", "remove", "doctor"):
+        return _pairing(args)
     if _satellite_home(args):
         return on_desktop(args)
     if args.remote_cmd == "enable":
@@ -574,8 +648,43 @@ def build_parser() -> argparse.ArgumentParser:
                    help=argparse.SUPPRESS)
     s.set_defaults(func=cmd_mcp)
 
-    s = sub.add_parser("remote", parents=[common], help="remote members: enable, disable or show a link")
+    s = sub.add_parser("remote", parents=[common],
+                       help="remote members over ssh: pair (add/accept), enable, disable, status, remove, doctor")
     rsub = s.add_subparsers(dest="remote_cmd", metavar="ACTION", required=True)
+    r = rsub.add_parser("add", parents=[common],
+                        help="desktop: pair a remote (link key, pinned host key, remotes.toml) and print its token")
+    r.add_argument("name", help="the remote's name, e.g. fpga-pi")
+    r.add_argument("dest", help="[user@]host, resolved once with `ssh -G`")
+    r.add_argument("--rooms", action="append", required=True,
+                   help="the only rooms its members may join (comma list, or repeat), e.g. '#fpga'")
+    r.add_argument("--port", type=int, default=None, help="ssh port (default: from your ssh config, else 22)")
+    r.add_argument("--harnesses", action="append", default=None,
+                   help="harnesses allowed there (comma list; default claude,codex,cursor,devin)")
+    r.add_argument("--ssh-config", default=None, help="ssh config for `ssh -G` (default: yours)")
+    r.add_argument("--known-hosts", default=None,
+                   help="known_hosts file holding the remote's host key (default: your ssh config's)")
+    r.add_argument("--authorized-keys", default=None,
+                   help="this machine's authorized_keys, scanned for shell keys (default ~/.ssh/authorized_keys)")
+    r.add_argument("--label", default=None, help="this machine's name in the token (default: its host name)")
+    r = rsub.add_parser("accept", parents=[common],
+                        help="remote: authorize the desktop's link key for the satellite only (shows the line first)")
+    r.add_argument("token", help="the token `remote add` printed: 'switchboard-link v1 …'")
+    r.add_argument("--from", dest="from_", default=None,
+                   help="accept the key only from this address (the desktop's IP; comma list allowed)")
+    r.add_argument("--authorized-keys", default=None, help="the file to write (default ~/.ssh/authorized_keys)")
+    r.add_argument("--yes", action="store_true", help="apply without asking")
+    # switchboard's own tests only (their venv is editable): refused outside a test home
+    r.add_argument("--allow-editable", action="store_true", help=argparse.SUPPRESS)
+    r = rsub.add_parser("remove", parents=[common],
+                        help="unpair: on the desktop the link, members, key and table; on the remote its key line")
+    r.add_argument("name")
+    r.add_argument("--authorized-keys", default=None, help="remote: the file to edit (default ~/.ssh/authorized_keys)")
+    r.add_argument("--yes", action="store_true", help="apply without asking")
+    r = rsub.add_parser("doctor", parents=[common], help="check this machine's side of its remote links")
+    r.add_argument("--authorized-keys", default=None, help="the authorized_keys to check (default ~/.ssh/…)")
+    r.add_argument("--ssh-dir", default=None, help="desktop: where this machine's own public keys are (default ~/.ssh)")
+    r.add_argument("--probe-desktop", default=None, metavar="DEST",
+                   help="remote: also try `ssh DEST true` (a shell on the desktop from here is a warning)")
     r = rsub.add_parser("enable", parents=[common], help="consent to this remote's current config and dial it")
     r.add_argument("name")
     r = rsub.add_parser("disable", parents=[common], help="stop dialing a remote (its members go offline)")

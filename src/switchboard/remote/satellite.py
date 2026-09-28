@@ -11,8 +11,12 @@ no pty and no network socket (``tests/unit/test_satellite_static.py``).
 
 - **Start.** ``satellite.toml`` must name ``--name``; ``SSH_CONNECTION`` must be set
   (unless ``--test-mode``, which checks the home as the broker's does); neither
-  stdin nor stdout may be a TTY. Then ``harden()``; frames go out on a private dup
-  of fd 1 and fd 1 points at stderr, so a stray print can't corrupt the link.
+  stdin nor stdout may be a TTY. Then ``harden()``, and on Linux ``exposure()``: if
+  another process of this user (not an ancestor, such as sshd's session process)
+  holds the link's stdin or stdout (it opened ``/proc/<pid>/fd`` before the
+  ``prctl``, or inherited them from the login shell), ``bye exposed`` and exit.
+  Frames go out on a private dup of fd 1 and fd 1 points at stderr, so a stray
+  print can't corrupt the link.
   ``run/satellite.lock`` (taking over an older satellite: replace marker, SIGTERM,
   3 s), then ``run/broker.lock`` for its whole life, so no broker runs from this
   home meanwhile (``bye local_broker`` if one does).
@@ -102,6 +106,73 @@ def harden() -> str:
         return "prctl" if libc.prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) == 0 else "failed"
     except (OSError, AttributeError):
         return "failed"
+
+
+def stdio_kind(fds: tuple[int, int] = (0, 1)) -> str:
+    """What the link's stdin and stdout are: ``socket`` (the exec transport's socketpair,
+    or sshd's), ``pipe`` (sshd's usual), ``tty`` or ``other``; for ``sys.status``."""
+    kinds = set()
+    for fd in fds:
+        try:
+            if os.isatty(fd):
+                return "tty"
+            m = os.fstat(fd).st_mode
+        except OSError:
+            return "other"
+        kinds.add("socket" if stat.S_ISSOCK(m) else "pipe" if stat.S_ISFIFO(m) else "other")
+    return kinds.pop() if len(kinds) == 1 else "mixed"
+
+
+def link_fd_ids(fds: tuple[int, int] = (0, 1)) -> frozenset[tuple[int, int]]:
+    """(device, inode) of the link's stdin and stdout: what another process holding them
+    would show in its own ``/proc/<pid>/fd``."""
+    out = set()
+    for fd in fds:
+        with contextlib.suppress(OSError):
+            st = os.fstat(fd)
+            out.add((st.st_dev, st.st_ino))
+    return frozenset(out)
+
+
+def exposure(ids: frozenset[tuple[int, int]], proc_root: str = "/proc") -> list[int]:
+    """Linux: the pids of other processes of this user that hold the link's stdin or stdout
+    (by device and inode), not counting this process and its ancestors (sshd's session
+    process holds the far ends of its pipes). With pipes (sshd's usual stdio) a
+    process of this user could open ``/proc/<satellite>/fd/0`` and ``1`` in the moment
+    before ``harden()`` and keep them, to read and forge link frames; after ``harden()``
+    no new one can, so a scan after it sees every holder that is still listable. A
+    holder that made itself non-dumpable too can't be listed (its ``fd`` directory is
+    refused) and is not seen: this is a check, not a boundary (§27.16)."""
+    if not ids or not sys.platform.startswith("linux"):
+        return []
+    proc.set_no_spawn()  # /proc only, as for the rest of its life (pin_linux_clock)
+    me = os.getpid()
+    uid = os.getuid()
+    skip = {me} | {p.pid for p in proc.ancestry(me, 64)}
+    found: list[int] = []
+    try:
+        names = os.listdir(proc_root)
+    except OSError:
+        return []
+    for name in names:
+        if not name.isdigit() or int(name) in skip:
+            continue
+        base = f"{proc_root}/{name}"
+        try:
+            if os.stat(base).st_uid != uid:
+                continue
+            fds = os.listdir(f"{base}/fd")
+        except OSError:
+            continue  # gone, or its fds aren't ours to list (a non-dumpable process)
+        for fd in fds:
+            try:
+                st = os.stat(f"{base}/fd/{fd}")
+            except OSError:
+                continue
+            if (st.st_dev, st.st_ino) in ids:
+                found.append(int(name))
+                break
+    return sorted(found)
 
 
 def start_refusal(paths: Paths, name: str, *, test_mode: bool, environ: Any, fds: tuple[int, int] = (0, 1)
@@ -319,8 +390,9 @@ class LocalConn:
 class Satellite:
     def __init__(self, paths: Paths, name: str, *, test_mode: bool, sessions_dir: str, harden_state: str,
                  pid_shift: int = 0, clock_skew: float = 0.0, link_proto: int = proto.LINK_PROTO,
-                 desktop: str = "", frame_log: str | None = None):
+                 desktop: str = "", frame_log: str | None = None, stdio: str = "other"):
         self.paths = paths
+        self.stdio = stdio
         self.name = name
         self.test_mode = test_mode
         self.sessions_dir = sessions_dir
@@ -451,6 +523,7 @@ class Satellite:
             "harnesses": w.get("harnesses", []),
             "hooks": self.hook_state,
             "harden": self.harden_state,
+            "stdio": self.stdio,
             "test_mode": self.test_mode,
             "connections": len(self.conns),
         }
@@ -876,6 +949,11 @@ def main(argv: list[str] | None = None) -> int:
             return EXIT_REFUSED
     # before reading anything from the link: no same-user process may take this one over
     harden_state = harden()
+    stdio = stdio_kind()
+    # and none holds the link's stdio already (opened in the moment before harden(), or
+    # inherited from the login shell): checked before the locks, so a refused satellite
+    # never takes over a running one
+    holders = exposure(link_fd_ids())
     # stdio hygiene: the link is private dups of fds 0 and 1; fd 1 becomes stderr (a stray
     # print can't corrupt the link) and fd 0 /dev/null (nothing else reads it)
     in_fd, out_fd = os.dup(0), os.dup(1)
@@ -889,10 +967,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"switchboard satellite: unsafe path: {e}", file=sys.stderr)
         return EXIT_REFUSED
     setup_logging(paths)
+    if holders:
+        log.warning("refusing: other processes of this user hold the link's stdio: pids %s", holders[:16])
+        _first_frame(out_fd, proto.bye("exposed"))
+        return 0
     # before any start time is read (its own, the lock holder's, any client's)
     clock_state = pin_linux_clock(paths)
-    log.info("start: %s (test mode %s, harden %s, process clock %s)", args.name, args.test_mode, harden_state,
-             clock_state)
+    log.info("start: %s (test mode %s, harden %s, stdio %s, process clock %s)", args.name, args.test_mode,
+             harden_state, stdio, clock_state)
     from switchboard.config import ConfigError, load
 
     try:
@@ -913,7 +995,7 @@ def main(argv: list[str] | None = None) -> int:
     write_hook_copy(paths)
     sat = Satellite(paths, args.name, test_mode=args.test_mode, sessions_dir=cfg.claude.sessions_dir,
                     harden_state=harden_state, pid_shift=shift, clock_skew=skew, link_proto=link_proto,
-                    desktop=conf.desktop if conf else "", frame_log=frame_log)
+                    desktop=conf.desktop if conf else "", frame_log=frame_log, stdio=stdio)
     try:
         return asyncio.run(sat.run(in_fd, out_fd))
     finally:
