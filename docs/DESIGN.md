@@ -196,6 +196,9 @@ ctx_max_chars = 6000
 
 [review]
 agentsview = ""                # §26 /review: an absolute path (~/ allowed); "" = shutil.which on the broker's PATH at each /review
+
+[security]
+allow_ssh_cli = false          # §27.5.7: human commands from under a remote login (ssh, mosh, ...) on this machine (a relay peer: never)
 ```
 
 ---
@@ -497,6 +500,12 @@ For Codex, every `agent.*` call also carries `thread_id` (from `_meta.threadId`)
   - devin: `devin` followed by `acp`.
 - `is_agent_chain(chain)`: any ancestor matches any of these.
 - **`human_cli_allowed(peer)`** requires a matching uid and a **fail-closed** verdict on the whole chain from `ancestry_to_root`: the walk is `complete`, every ancestor's argv is known (non-empty), and none matches `is_agent_chain`. Shell nesting depth therefore doesn't matter. The result is cached per connection. `human.login_link` also requires `tty(peer_pid)`; that part is only defense in depth, because a process can get a pty from `script(1)`.
+- **The SSH rules** (§27.5.7, M8a) refuse `human_cli` and `login` on top of that:
+  - **relay peer**, always: the kernel peer itself (`chain[0]`) is an SSH or socket relay: its program is `ssh`, `sshd`, `sshd-session`, `socat`, `nc`, `ncat`, `netcat`, `autossh`, `dropbear` or `dbclient` (the basename of argv[0], of the script an interpreter such as `python3` or `sh` runs, or of a busybox applet), or its process title is `<one of those>: …` (`sshd-session: alice@notty`, an ssh ControlMaster's `ssh: <control path> [mux]`). Through any forward of `broker.sock` (`ssh -R`, `ssh -L`, socat) the kernel peer is the relay, never the program behind it. No setting relaxes this rule.
+  - **remote-login ancestor**, unless `[security] allow_ssh_cli = true`: a process above the caller (`chain[1:]`) is a remote-login server, by its program's own name, never its arguments: a process title `sshd: …`/`sshd-session: …`, or the basename of argv[0] `sshd`, `sshd-session`, `dropbear`, `mosh-server`, `tinysshd`, `tailscaled` (Tailscale SSH), `etserver`/`etterminal` (Eternal Terminal), `telnetd` or `in.telnetd`. Other remote-login servers are not recognized. This refuses `ssh desktop switchboard cmd …` and `ssh -t desktop switchboard login` from any machine with a key that opens a shell here. Message text (`switchboard say '#r' 'I restarted /usr/sbin/sshd'`, also in a `uv run` or `sh -c` wrapper's argv) never counts.
+  - Order: a relay peer is named first. The remote-login reason is given only to a chain that would otherwise be human; a chain with an agent in it, or one that can't be walked to the root, keeps its old refusal and message, so an agent is never told to turn `allow_ssh_cli` on (it would not help it).
+  - `PeerPolicy.refusal(peer)` names the reason, and `RpcServer._authorize` puts it in the `forbidden` message ("human.say arrived through ssh or another remote login (sshd above the caller); human commands must come from a terminal on this machine, or set [security] allow_ssh_cli = true"). Other refusals keep their messages. `AllowAllHumans` (test trust) is unchanged. `broker/app.py` `default_peer_policy(cfg, test_trust_uds)` builds the policy for `create_app` and `run_foreground` alike.
+  - Neither rule is a boundary: anything with a shell on this machine can still act as the human through a detached process or keystrokes into the owner's tmux (§11). They close the direct routes remote members would make routine.
 - **`verify_mcp_peer(conn, harness)`** fills `agent_pid`/`agent_start` and `mcp_pid`/`mcp_start`, or refuses:
 
   | Harness | Requirement |
@@ -1126,7 +1135,7 @@ In M1, `/kick`, `/hold` and `/release` on an agent-less room return "no such mem
    - Claude sessions not in bypass get mid-task delivery only after a finished tool.
    - Cursor and Devin deliver only after a tool, at stop, or on a wait return (engine tests).
 8. **Let a room message change settings.** Commands need a human role, and raising commands need the web session. Tests: an agent calls `say("/pause")`; a peer with agent ancestry calls `human.command` and gets `forbidden`.
-9. **Listen on anything but `127.0.0.1` and the 0600 UDS** (bind test). The UI is served only on `switchboard.localhost`, with a strict CSP, `textContent`-only rendering, and no FastAPI docs routes.
+9. **Listen on anything but `127.0.0.1` and the 0600 UDS** (bind test). The only outbound connection is one `ssh` child per enabled remote, with a fixed argv (§27.4.1). The UI is served only on `switchboard.localhost`, with a strict CSP, `textContent`-only rendering, and no FastAPI docs routes.
 10. **Log or forward secrets.**
     - Hooks allowlist their fields and never read env values.
     - The Claude token stays in the MCP process.
@@ -1135,11 +1144,19 @@ In M1, `/kick`, `/hold` and `/release` on an agent-less room return "no such mem
     - Nothing secret goes on a hook command line (Claude shows it to the model, F§3 2.2).
     - A canary test covers install output, logs and backups.
 11. **Trust a caller-supplied pid, session id or thread id without a kernel check.**
-    - Pids come from the socket peer, with start times (§5.3).
+    - Pids come from the socket peer on the broker host, with start times (§5.3), or from the satellite of the member's own host, which reads its own socket peer (§27.5.3); never from a request param.
     - Credentials work only on the verified MCP connection.
     - Batch tokens are HMACed per membership, and acks need a per-reply nonce.
     - Claude inbox posts are guarded in the MCP process (§6.4).
 12. **Run hook code that agents can edit.** Hooks run from a content-addressed 0444 copy in `$SWITCHBOARD_HOME/hooks`, checked every 60 s. `install` refuses an editable switchboard.
+13. **Forward a socket or listen on the network for remotes** (§27.12). The ssh child never gets `-L`, `-R`, `-D` or `-W`, and runs with `ClearAllForwardings` and `-F /dev/null`; the link is the broker's own ssh child with socketpair stdio. The bind test still sees one TCP listener on `127.0.0.1` and no new UDS on the desktop.
+14. **Grant `human_cli`, `human` or `login` to a remote connection,** to a peer that is itself an SSH or relay process, or (unless `[security] allow_ssh_cli`) to a peer under a remote-login server (§5.3, §27.5.7; the last two since M8a, `tests/unit/test_peer_ssh_rules.py`).
+15. **Dial a remote the owner hasn't enabled for exactly its current config, or use the owner's SSH keys, agent or config for a link** (§27.5.8).
+16. **Probe the broker host for a remote participant, or take a fact about one host from another host's link.** Remote pids are only ever looked up through that host's `RemoteView` (§27.5.6).
+17. **Execute anything on the Pi, or move files.** The satellite has no spawn site; bitstreams move by the agents' own restricted keys (§27.4.8, §27.8.4).
+18. **Use a remote host's wall clock in delivery logic.** Only ages cross the link (§27.4.6).
+
+Items 13 and 15–18 are about remote members (§27), built from M8b on; until then there is no remote code to break them.
 
 **Static guardrail test** (`tests/unit/test_guardrails_static.py`). It greps `src/switchboard/**` for all of the following:
 - `hooks.state`, `trusted_hash`, `"trust": true`, `crossSessionInbound`;
@@ -1716,3 +1733,481 @@ The prior art and the reasons for the order of the request are in [research/tran
 - **Web UI:** no change; `/review` goes through the existing command route, and `/help` lists it.
 - **README advice on allow rules** (R1 review fix): pre-allowing `agentsview sync` is fine, but not `agentsview session messages` (such a rule lets a steered reviewer read every indexed session unprompted); approve each call after checking its id. A rule on the bare name trusts the first `agentsview` on the reviewer's PATH, so where that PATH has a directory other agents can write, name the absolute path (`[review] agentsview`). The request keeps the bare name when the broker finds it on its PATH: an absolute path would put a local path into every member's context and match no existing allow rule.
 - **Tests:** `tests/unit/test_commands_review.py` (parsing, `//review` literal, the role, the id per harness and unsafe ids, the reasons, an unproven Codex thread (refused, allowed with proofs off), the request text (no angle brackets, the secrets sentence), one post with the author skipped and a bystander at prio 2, CLI audit, not-a-member and kicked, note length, a limit below the request, a note that @mentions the author, `switchboard cmd` with dash words, agentsview missing or found at each call, the config path (quoted, missing, not executable, a directory), config validation, no process APIs, the warnings, held/paused hints, `/who` flags with and without agentsview, `switchboard who`'s flag) and `tests/integration/test_review.py` (in-process broker: a test-agent reviewer's open `wait()` returns the request through the engine, `to_you=yes`, while the stand-in Claude author gets no delivery row and a test-agent bystander gets it `to_you=no`; a hold keeps it pending until `/release`; a stand-in Codex author over the UDS as `switchboard cmd` sends it, refused until its thread proof is recorded; kicked and departed members; nothing posted without agentsview; an agent's `/review` text stays literal; `/who` and `room.who` with and without agentsview, and `room.who` for a caller that fails the human_cli check); `tests/unit/test_report.py` counts a `review` event in JSON and markdown. `shutil.which` is patched, or the config names a stub file; no test runs agentsview or touches `~/.claude`, `~/.codex` or `~/.agentsview`.
+
+## 27. Remote members over SSH (M8)
+
+M8 lets an agent session on a second machine on the owner's LAN (the Raspberry Pi wired to the FPGA board) join rooms on the desktop broker as a first-class member. The desktop agent builds a bitstream, the Pi agent flashes and tests it, and the owner watches and steers in the web UI on the desktop. Line references are to the code before M8 (0.2.0) and are approximate. The design comes from a four-way code map of that code, three competing designs and three reviews; the winner (the desktop dials the Pi, and a Pi-side satellite vouches for Pi processes) is described here with the reviewers' grafts. Each deviation found while building goes into the §27.16 "implementation notes" list, as §15–§26 did for earlier milestones.
+
+**Measured while designing (2026-09-25).** M8a copies the scripts into `tests/manual/m8/` with a README (temp dirs only, no keys committed):
+- Through any SSH or socat socket forward the broker's kernel peer is the relay, never the Pi process: with `ssh -R` the desktop `ssh` client, with `ssh -L` the desktop `sshd-session` (two containers with separate PID namespaces, and a user-level sshd on this Mac). A plain Pi shell then posted as the human and paused a room; two Pi agents collapsed into one participant (`unknown:None@?`, second join refused); one Pi MCP `bye` took the other offline; with the broker down behind a live tunnel, `BrokerConn` made 20,009 connects in 3 s.
+- An SSH key with `restrict,command="…"` carries a JSON-lines stdio link (loopback p50 0.149 ms, p95 0.178 ms against 0.095 ms without SSH; 272 ms setup; a 1 MiB frame passes). The same key is refused a `-L` socket forward ("refused streamlocal port forward"), `-W` ("administratively prohibited"), a pty, and any other command (the forced command runs instead; the request shows only as `SSH_ORIGINAL_COMMAND`).
+- `authorized_keys` `permitlisten` does not restrict Unix-socket paths: a forwarding-capable key reaches every socket the user owns.
+- Linux arm64 container, no Yama: a same-uid process can write into another process's stdout pipe through `/proc/<pid>/fd/1`, list its fds, read its environ and `ptrace` it; after `prctl(PR_SET_DUMPABLE, 0)` all of these are refused (EACCES/EPERM).
+- OpenSSH reads `~/.ssh/config` from the passwd home even with `HOME` changed; `-F /dev/null` reads nothing.
+
+**Review blockers and where they are resolved.**
+
+| Blocker | Resolved in |
+|---|---|
+| Same-uid Pi processes could forge link frames | §27.4.8 (non-dumpable satellite), §27.5.9, gate G2 |
+| A remote connection must fail closed on every local-identity path; no desktop probe of a Pi pid | §27.5.2 (`RemotePeer` has no pid or uid), §27.5.6 (every probe site, static test, PID shift) |
+| A hand-made `ssh -R` of `broker.sock`, or `ssh desktop switchboard …`, must not make anyone the human | §27.5.7 |
+| Human-only verbs, `sys.status` and room reads must not cross the link | §27.5.2 |
+| Abuse of the broker-held link key | §27.4.7 (`blocked(replaced)`), §27.5.8 (human-only enable, `from=`), §27.12 |
+| A reconnect must never block itself on `bye replaced` | §27.4.7 (one child at a time), §27.10 |
+| The Pi's login shell may print text before the satellite; stdout hygiene | §27.4.4, §27.4.8 |
+| The first schema migration must not risk the chatroom | §27.6 |
+| The bitstream path must not give the Pi a way onto the desktop | §27.8.4, §27.5.7, `remote doctor` |
+| The `BrokerConn` reconnect storm | §27.14 (built in M8a) |
+| Claude Code on linux-arm64 is unverified | §27.15 gate G1 |
+| The desktop's OS is unknown | the build targets a macOS or Linux desktop; WSL2 stays untested |
+
+### 27.1 Goals and non-goals
+
+**Goals**
+1. A harness session on another machine (Claude Code first; Codex, Cursor and Devin where their CLIs run there), started by the owner by hand like every member, joins rooms on the desktop broker. It gets its own participant, a harness verified by a kernel check, status and approval holds, and for Claude the idle wake (`claude:inbox`).
+2. Human authority stays on the desktop. Nothing that arrives from another machine can post as the human, run a slash command, mint a login link or stop the broker.
+3. Everything stays local: SSH on the owner's LAN, no relay or cloud service. The broker still listens only on `127.0.0.1` and its 0600 UDS; the link is an outbound `ssh` child with socketpair stdio.
+4. Failure is visible and safe: a lost link takes that machine's members offline, stops every push to them, and says so in the room.
+5. It makes a good demo video: `bench @fpga-pi` in the buddy list, a live link chip, the Pi agent waking on "artifact: …", an approval prompt on the Pi shown as a hold in the UI, and the result posted back.
+
+**Non-goals in M8**
+- Forwarding the broker socket, or any socket, in either direction. It is refused by design (§27.12) and by code (§27.5.7; since M8a for human verbs only, see §27.16).
+- Moving files. switchboard never transfers bitstreams; agents do, with a separate restricted key (§27.8.4).
+- A broker, database or web UI on the Pi; remote humans; viewing the UI from another machine (unchanged: `127.0.0.1` only).
+- Codex push on the Pi (its `turn/start`, `turn/steer`, `codex queue` and `lsof` checks are broker-host code, `src/switchboard/adapters/codex.py:503,973-1001,1287-1352`). A satellite-side CodexLink is M9.
+- A Pi-dialed link, NAT traversal, more than one broker, Windows. WSL2 stays untested.
+- Parsing hand-off lines into UI cards (the convention in §27.9 is plain chat text).
+
+### 27.2 Topology
+
+```
+ DESKTOP (broker host; the owner sits here)                               PI (bench host, same LAN)
+ ┌──────────────────────────────────────────────────────┐           ┌─────────────────────────────────────────────────┐
+ │ browser ─► http://switchboard.localhost:7419 (127.0.0.1)  │           │ the owner's ssh session ─► claude "bench" (by hand)    │
+ │ claude "vivado" ─ switchboard mcp ─┐                      │           │        ├─ switchboard mcp ─┐   (installed on the Pi, │
+ │   hooks ───────────────────────┤ broker.sock (0600)   │           │        └─ hooks ───────┤    unchanged code)      │
+ │                                ▼                      │           │                        ▼ <pi home>/run/broker.sock│
+ │ ┌─────────────── broker (switchboard start) ─────────────┐│           │ ┌──────── switchboard satellite ───────────────────┐ │
+ │ │ RpcServer ◄── RemoteConn per Pi connection          ││  JSON     │ │ owns the Pi socket; per connection: kernel   │ │
+ │ │ RemoteManager: one ssh child per enabled remote ────┼┼─ lines ──►│ │ peer, verify_mcp_peer, ancestry, registry,   │ │
+ │ │   (socketpair stdio, fixed argv, own key)           ││  over SSH │ │ proc.alive, all on the Pi; spawns nothing;   │ │
+ │ └──────────┬──────────────────────────────────────────┘│           │ │ lives exactly as long as one link            │ │
+ │            └─ /usr/bin/ssh -F /dev/null … ─────────────┼── TCP 22 ─►│ └─ started by sshd: restrict,command="…satellite"│
+ └──────────────────────────────────────────────────────┘           └─────────────────────────────────────────────────┘
+ bitstreams (not switchboard): vivado's Bash ─ rsync ─ key fpga_push, restrict,command="rrsync -wo ~/fpga/in" ─► Pi
+```
+
+The broker makes every decision, as today (§1 principle 1). The satellite plays, on the Pi, the role the kernel and `/proc` play for local members: it reports what the Pi's kernel and filesystem say about each connection, and the broker trusts those facts only for that Pi's own members.
+
+### 27.3 What runs where
+
+| Component | Desktop | Pi |
+|---|---|---|
+| Broker, SQLite, web UI | yes, unchanged binds | never (`switchboard start` refuses on a satellite home) |
+| `RemoteManager` (`broker/remote.py`) | one outbound `ssh` child per **enabled** remote, supervised by the broker | — |
+| `switchboard satellite` (`remote/satellite.py`) | — | started only by `sshd` as the link key's forced command; binds `sock_path(<pi home>)` (`src/switchboard/hook/switchboard_hook.py:75-86`); exits when its link ends |
+| `switchboard mcp`, hook script | as today | the same code, installed with `switchboard install claude` **on the Pi** (baked Pi Python and home, `src/switchboard/install/common.py:147-165`); the hook file and its sha12 do not change in M8 |
+| Harness sessions | started by the owner | started by the owner in his own `ssh pi` session |
+| CLI | everything, plus `switchboard remote add/enable/disable/status/remove/doctor` | `switchboard status` (answered by the satellite), `switchboard remote accept/remove/doctor`, `install`; human verbs answer "run this on the desktop" |
+
+**New files, desktop** (`$SWITCHBOARD_HOME`, 0700 as in §2):
+```
+remotes.toml                        0600  one [remote.<name>] table per Pi (§27.8)
+remotes/<name>/                     0700
+  id_ed25519, id_ed25519.pub        0600  the link key: generated by `remote add`, used only by the broker's ssh child
+  known_hosts                       0600  the Pi's pinned host key, one line "switchboard-<name> ssh-ed25519 …"
+switchboard.db.v1.bak                   0600  written once by the v1→v2 migration (§27.6)
+```
+**New files, Pi** (`$SWITCHBOARD_HOME` on the Pi):
+```
+satellite.toml                      0600  written by `remote accept`: name, desktop label, key fingerprint, accepted_at
+run/broker.sock                     0600  the satellite's listening socket (the path every Pi MCP server and hook already dials)
+run/satellite.lock, satellite.pid         flock and "<pid> <start>" (takeover, §27.4.8)
+logs/satellite.log                  0600  ids and states only
+```
+
+### 27.4 The link
+
+#### 27.4.1 Direction and command
+The **desktop dials the Pi**. Reasons: the Pi, the least trusted machine (its agent reads UART output), holds no switchboard credential into the desktop; the desktop needs no sshd; the owner already reaches the Pi over SSH (today's `scp`); a desktop behind NAT still works.
+
+`RemoteManager` builds this argv (no shell; `ssh_bin` is `/usr/bin/ssh`, which must be root-owned; OpenSSH ≥ 8.0 on both machines):
+```
+/usr/bin/ssh -F /dev/null -T -x -a -k -e none
+  -i <home>/remotes/<name>/id_ed25519 -o IdentitiesOnly=yes -o IdentityAgent=none
+  -o UserKnownHostsFile=<home>/remotes/<name>/known_hosts -o GlobalKnownHostsFile=/dev/null
+  -o HostKeyAlias=switchboard-<name> -o StrictHostKeyChecking=yes -o UpdateHostKeys=no -o CheckHostIP=no
+  -o BatchMode=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no
+  -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=3
+  -o ControlMaster=no -o ControlPath=none -o ClearAllForwardings=yes -o PermitLocalCommand=no
+  -o LogLevel=ERROR -p <port> -l <user> <hostname> switchboard-satellite
+```
+- `-F /dev/null` skips `~/.ssh/config` and `/etc/ssh/ssh_config`, so the owner's `ControlMaster`, `ForwardAgent`, `RemoteForward` or `ProxyJump` settings can never reach the link. `hostname`, `user` and `port` were resolved once at `remote add` with `ssh -G` (§27.8).
+- `HostKeyAlias` pins the host key by name, so a DHCP address change doesn't break it; `StrictHostKeyChecking=yes` plus `BatchMode` means an unknown or changed key aborts without a prompt. switchboard answers no SSH prompt of any kind.
+- The child's env is `{PATH=/usr/bin:/bin, HOME=<passwd home>}` (clean-env rule, §0). Its stdin and stdout are **one end of an `AF_UNIX` socketpair** (a socket can't be reopened through `/proc/<pid>/fd`, a pipe can); stderr is a pipe, of which the broker keeps the last 2 KiB for the reason code.
+- `switchboard-satellite` is ignored by the forced command.
+- Test mode only (`--test-mode` broker): `transport = "exec"` in `remotes.toml` spawns `[sys.executable, -I, -m, switchboard, satellite, --home <pi home>, --name <name>, --test-mode]` instead, with the same socketpair. That is how CI runs the whole link without SSH.
+
+#### 27.4.2 Why not the alternatives
+- **Forward the broker socket (`ssh -R`/`-L`, socat):** the kernel peer is the relay (measured), so every Pi process passes `human_cli` (`src/switchboard/broker/peer.py:154-163`) and, with a TTY'd `ssh -R`, `login` (`peer.py:165-168`); all Pi sessions share one `(mcp_pid, mcp_start)` and one `unknown:` key (`src/switchboard/broker/agents.py:308-319,367-368,216-233`); every Pi member is `unknown`, mcp-only, with inert hooks (`peer.py:380-402`, `agents.py:650-669`). Stale forwarded sockets also need a root edit (`StreamLocalBindUnlink yes`) in the Pi's sshd_config.
+- **A second agent-only broker socket for `ssh -R`:** fixes the roles, but everything about Pi processes is then self-reported by the Pi MCP server and hook themselves, which breaks guardrail 11 (§11): any Pi process could claim any pid, forge another Pi session's hooks, and it changes the hook file.
+- **The Pi dials a forced-command relay on the desktop:** needs desktop sshd and puts a desktop credential on the Pi.
+- **TCP:** no kernel peer identity on TCP (`peer_pid`/`peer_uid` return None, measured on macOS), and guardrail 9.
+
+#### 27.4.3 The Pi side
+`remote accept` writes one line to the Pi's `~/.ssh/authorized_keys` (§27.8.2):
+```
+restrict[,from="<desktop ip>"],command="<pi python> -I -m switchboard satellite --home <pi home> --name <name>" ssh-ed25519 AAAA… switchboard-link <name>
+```
+`restrict` turns off port, agent and X11 forwarding, pty allocation and `~/.ssh/rc`. The satellite refuses to start unless `satellite.toml` names `<name>`, `SSH_CONNECTION` is set (or `--test-mode`), and neither stdin nor stdout is a TTY. sshd runs the command through the Pi user's login shell, which may print text first (a chatty `~/.bashrc`); the handshake tolerates that (§27.4.4).
+
+#### 27.4.4 Framing and handshake
+UTF-8 JSON, one object per line, at most 2 MiB per frame (a client line is at most 1 MiB, `src/switchboard/broker/rpc.py:39`, plus the envelope). Every frame has `t`.
+
+1. **Noise.** Until the satellite's `hello`, the broker skips lines that are not a JSON object with `t == "hello"`: at most 64 lines, 64 KiB and 10 s, then the link fails with `shell_noise` ("the Pi's login shell prints text before switchboard starts: check ~/.bashrc on the Pi"). After `hello`, any malformed frame closes the link.
+2. `s→b hello {proto: 1, version, name, now, hook_state, test_mode}`.
+3. The broker checks `proto == 1` (else `refuse` + `blocked(proto)`), `name` equals the remote's config name (else `blocked(name)`), and refuses a test-mode satellite unless it runs in test mode itself (a test-mode broker may talk to a production satellite, which the live rehearsal needs). A different switchboard `version` is only an info notice. `|now − receive time| > 5 s` posts one info notice ("fpga-pi's clock is 37 s ahead; delivery is unaffected, check NTP").
+4. `b→s welcome {proto: 1, version, link: <16 hex>, rooms, harnesses, limits}`, then `watch`.
+
+| Dir | `t` | Fields | Meaning |
+|---|---|---|---|
+| s→b | `open` | `c` | A local client connected to the Pi socket (after the satellite's uid gate, as `rpc.py:196-202`). The broker creates a `RemoteConn`. |
+| s→b | `req` | `c, line, facts?` | `line` is the client's request object as sent, with Pi times turned into ages (§27.4.6). `facts` is `{attest}` on `mcp.hello` and `{chain}` on `hook.event`, nothing else. |
+| b→s | `out` | `c, line, chk?` | A reply or push for connection `c`. `chk` only on a Claude `deliver` push (§27.5.6). |
+| both | `close` | `c` | Connection `c` ended (either side). |
+| b→s | `watch` | `procs, claude` | The `(pid, start)` of every agent and MCP process of this host's joined members; `claude` adds `[pid, start, claude_socket]` for Claude agents. Sent after `welcome` and whenever the set changes (where `refresh_index` runs, `agents.py:137-139`). |
+| s→b | `alive` | `dead` | Right after each `watch` and every 1 s: watched `(pid, start)` pairs that are gone or recycled; all others are alive as of this frame. |
+| s→b | `reg` | `views, read_age` | Every 250 ms while a Claude is watched: `[pid, start, status | null, since_age | null]` per Claude agent (§27.5.6). |
+| b→s | `ping` | `n` | Every 2 s. |
+| s→b | `pong` | `n` | RTT for the link chip. |
+| s→b | `status` | `hook_state` | Every 60 s (the Pi hook copy re-hash, reusing `src/switchboard/broker/app.py:181-210`). |
+| s→b | `bye` | `why` | `eof`, `shutdown`, `replaced`, `local_broker`, `busy`. |
+
+Requests from one local client stay in order on the link; long polls (`agent.wait`, `hook.event` parks) run as broker tasks and may answer out of order, exactly as on `broker.sock` (§5.1). The satellite answers `sys.ping` and `sys.status` itself (`role: "satellite"`, link state, desktop version) and refuses every other method outside the allowlist (§27.5.2) with `forbidden` "run this on the desktop: the broker and the web UI run there". That is for a clear message on the Pi only; the broker enforces the allowlist itself. Requests it sends on its own (§27.5.6) use negative ids, whose replies it drops.
+
+#### 27.4.5 Limits
+Per link: at most 64 open connections, at most `max_members` (default 8) participants with an active membership, and at most 300 satellite frames per second averaged over 5 s. Over any limit: `refuse`/close, a warn notice, reconnect with backoff; local members are never affected. Per local connection on the Pi, at most 5000 queued lines (as `rpc.Conn`, `rpc.py:82`).
+
+#### 27.4.6 Time: only ages cross the link
+The broker never uses a Pi wall-clock value in delivery logic. The satellite turns every Pi timestamp into an age on its own clock, and the broker rebases it to its receive time (`value = recv − age`), clamping each age to a sane range:
+- the hook's start `t` (`src/switchboard/hook/switchboard_hook.py:185`) → `t_age` (clamped to 0–30 s); the broker sets `t = recv − t_age` before the unchanged `hook.event` handler sees it. It feeds `expire_pull_batches(before=ev.t)`, orphan-wait closing and the latency marks (`src/switchboard/delivery/engine.py:581-590,1003,1020-1038,1051,1121-1134,1145`);
+- `mcp.posted` `t_post` → `t_post_age` (0–30 s; the runner's clamp still applies, `src/switchboard/delivery/runner.py:109-113`);
+- the Claude registry's `statusUpdatedAt` → `since_age` (0 s–1 day: a status can be old, and clamping it short would fake an Esc-ended turn in `registry_transition`, `src/switchboard/adapters/claude.py:119-121`), and the read time → `read_age` (0–5 s).
+
+Process start times from the Pi are only identity tokens compared with other Pi start times (`proc.same_start`), never with broker time. A Pi with no RTC before NTP sync therefore changes nothing but the skew notice.
+
+#### 27.4.7 Link liveness and reconnect
+States per remote: `disabled` → `connecting` → `up` → `down(reason)` → `connecting` …; and `blocked(reason)`, which never retries by itself.
+- **Down** (network-like, retried): the ssh child exited, the socketpair hit EOF, 3 pings went unanswered (6 s), `unreachable`, `refused`, `dns`, `timeout`. Backoff 1, 2, 4, 8, 10 s (cap) with ±20% jitter, reset after 60 s up.
+- **Blocked** (needs the owner): `host_key` (changed or unknown Pi key: a possible MITM), `auth` (publickey refused), `replaced` (§27.4.8), `proto`, `name`, `shell_noise`, `local_broker` (a broker runs on the Pi from that home). A warn notice names the reason and the fix; `switchboard remote enable <name>` or the web UI's Enable button (both human-only, §27.5.8) clears it.
+- **One child per remote.** Before spawning a new ssh child the broker SIGTERMs the old one (SIGKILL after 2 s), reaps it, closes its socketpair and drops every frame still buffered from it. A frame from an abandoned link can never reach the broker, so a reconnect can never block itself (the half-open race in §27.10).
+- When a link goes down the broker closes every `RemoteConn` of that host, which runs the existing `conn_closed` path (`agents.py:216-233`): open waits and parks end, pull batches expire, members go offline (Codex included for remote rows). Pending inbox posts fail with `disconnected` (`src/switchboard/adapters/claude.py:145-153`) and are re-routed by the existing backoff.
+- If a remote has been down, blocked or disabled for `end_after_s` (default 900 s, counted from broker start after a restart), its members are ended with "left (fpga-pi unreachable)", so no ghosts stay in the buddy list. A removed remote ends its members at once.
+
+#### 27.4.8 The satellite
+- **Start.** `umask 077`; `Paths.ensure()`; take `run/satellite.lock` (taking over an older satellite as below), then `run/broker.lock`, held for the satellite's life so no Pi-local broker can start on this home; if a Pi-local broker already holds it, `bye local_broker`. If another satellite holds `satellite.lock`, check that `run/satellite.pid` names a live process with the same start time and a `-m switchboard satellite` argv, write `run/satellite.replace` naming itself, SIGTERM it and wait up to 3 s (`bye busy` if it doesn't let go). The old satellite, on SIGTERM, sends `bye replaced` if the replace marker names a newer satellite, else `bye shutdown`, closes its local connections and unlinks the socket if it is still its own inode. Then bind `sock_path(home)` with umask 077 and chmod 0600, unlinking a stale socket as `RpcServer.start` does (`rpc.py:159-175`).
+- **Hardening.** On Linux the satellite calls `prctl(PR_SET_DUMPABLE, 0)` before reading stdin: same-uid processes (a prompt-injected Pi agent) can then neither `ptrace` it nor open `/proc/<pid>/fd/1` to forge frames (measured). macOS already refuses `task_for_pid` to unentitled same-user processes. sshd's own session child changed uid without exec, so the kernel's `suid_dumpable` rule should leave it non-dumpable too; gate G2 (§27.15) checks that on Raspberry Pi OS.
+- **Stdout hygiene.** Frames go out on a private dup of fd 1; fd 1 is then pointed at stderr, so a stray `print` can never corrupt the link. Logging goes to `logs/satellite.log` (ids and states only).
+- **It executes nothing.** The satellite has no `subprocess`, `exec`, `pty` or network socket (static test). The broker can't make it run anything or choose any Pi path: the inbox target is chosen by the Pi MCP server itself (`src/switchboard/mcp/claude_inbox.py:55-74`), and registry paths are `<pi sessions_dir>/<watched pid>.json`.
+- **End.** On stdin EOF, 10 s without a `ping`, or SIGTERM: `bye`, close local connections, unlink the socket, exit. A link drop therefore looks to Pi MCP servers exactly like a broker restart, which they already handle: re-hello on reconnect (`src/switchboard/mcp/client.py:219-236,278-292`), and the same `(host, mcp_pid, mcp_start)` re-activates their members (`agents.py:194-199`) with their credentials still valid.
+- **Why it doesn't outlive the link.** A Pi-resident daemon would keep Pi connections open across drops, but it would be a long-lived Pi process that any Pi-user process can talk to as if it were the link. Instead, on a satellite home the MCP server's reconnect backoff is capped at 2 s (a failed connect to a missing socket costs one syscall), so members come back within about 2 s of the link.
+
+#### 27.4.9 Latency
+A hook opens one local connection to the satellite (0.2 s connect budget, `switchboard_hook.py:42`) and pays one LAN round trip over the already-open SSH channel, well inside its 1.0 s wait and 1.5 s guard (`switchboard_hook.py:41,330`). A late reply prints nothing; the context offer expires `no_ack` after 5 s and is re-queued (`engine.py:1304-1306`). `wait()` and Cursor parks are long-lived virtual connections; ServerAlive (5 s × 3) and the 2 s pings bound a dead link to about 6–15 s.
+
+### 27.5 Identity and authorization
+
+#### 27.5.1 Host identity
+The identity of everything arriving on a link is the **config name** of the remote whose ssh child the broker spawned. Nothing the Pi says changes it. SSH authenticates both ends: the Pi's host key is pinned under `HostKeyAlias=switchboard-<name>`; the Pi's sshd checks the desktop's dedicated link key, whose forced command fixes what runs. Host names match `^[a-z][a-z0-9-]{0,23}$`, so they never contain `@` or `:`.
+
+#### 27.5.2 RemoteConn and the method allowlist
+Each `open` creates a `RemoteConn(Conn)` whose peer is `RemotePeer(host)` with `pid = uid = start = None`, and whose `send`/`close` write `out`/`close` frames (Conn ids come from the same counter, `rpc.py:75`, so sinks keyed by connection id stay unique). Every local-identity path therefore fails closed on a remote connection: `AllowAllHumans` needs `peer.uid == os.getuid()` (`peer.py:181-188`), `ProcessPeerPolicy` needs a uid and pid (`peer.py:154-163`), `verify_mcp_peer` refuses a peer without a pid (`peer.py:354-355`), `hook_event` is inert without one (`agents.py:653-654`).
+
+In `RpcServer._dispatch` (`rpc.py:236-265`), **before** `_authorize`, a remote connection may call only:
+```
+REMOTE_METHODS = {mcp.hello, mcp.attach, mcp.posted, mcp.bye,
+                  agent.join, agent.leave, agent.who, agent.say, agent.read, agent.wait, agent.unwait,
+                  agent.pass, agent.away, hook.event, hook.ack}
+```
+Anything else gets `forbidden` "human and room commands run on the desktop": `sys.stop`, `sys.status` (it lists home paths and every room), `sys.ping`, all `room.*` (Pi agents read through `agent.read`/`agent.wait`), all `human.*`, `remote.*`. `_authorize` also refuses any role other than `anon`, `mcp`, `member` and `hook` for a remote connection (belt and braces). This holds under every `PeerPolicy`, `AllowAllHumans` included; `actor_for` and `describe` (`rpc.py:348-351`) are never reached with a `RemotePeer`. `agent.join` also enforces the remote's `rooms` allowlist and `max_members`.
+
+#### 27.5.3 Which process: attestation on the Pi
+For `mcp.hello` the satellite calls the broker's own `verify_mcp_peer` (`peer.py:336-402`) on its own kernel peer (`Peer.from_socket`, `peer.py:87-96`), with the Pi's process table and the Pi's `claude.sessions_dir` (the Pi's `config.toml`), and sends the result as `facts.attest`: `{harness, mcp: [pid, start], agent: [pid, start] | null, evidence, tier_note, claude_socket}`. The Claude check is unchanged: parent argv `claude` **and** `<pi sessions_dir>/<ppid>.json` names the same `messagingSocketPath` as the hello (`peer.py:380-386`).
+
+`AgentService.hello` (`agents.py:156-214`) builds `McpIdentity(host=<name>)` from the attest instead of probing, after strict checks: pids are ints in `1..2^31−1`, starts finite floats ≥ 0, `evidence` from the fixed vocabulary `verify_mcp_peer` produces, `claude_socket` absolute and at most 1023 bytes. Then:
+- a harness outside the remote's `harnesses` list becomes `unknown` (tier note "not allowed for fpga-pi");
+- `test` is accepted only when both broker and satellite run in test mode (the satellite's `verify_mcp_peer` already refuses it otherwise, `peer.py:376-378`);
+- `codex` stays `codex` but is served by the remote Codex adapter (§27.7), and `CodexAdapter.on_mcp_hello` is skipped for remote identities (`agents.py:200-204`).
+
+The attestation is as strong as the local check, because it *is* the local check run on the machine whose kernel knows the answer. A Pi agent's Bash that opens its own MCP connection is attested as what it is (usually `unknown`), exactly as on the desktop.
+
+#### 27.5.4 Session keys and credentials
+All pid-keyed state gets the host. One helper, `skey(harness, host, rest)`, returns `"<harness>:<rest>"` for local rows (existing keys and rows unchanged) and `"<harness>@<host>:<rest>"` for remote ones: `claude@fpga-pi:4242@1727000000.51`, `codex@fpga-pi:<thread id>`, `cursor@fpga-pi:agent:…` then `cursor@fpga-pi:<conversation>`, `test@fpga-pi:<session>`. It is used in `_session_key` (`agents.py:308-319`), the Codex thread check in `_member` (`agents.py:369-372`), `_bind_cursor` (`agents.py:708-749`) and `resolve_hook_participant`'s SID-keyed comparison (`peer.py:278-286`, new `host` parameter). `UNIQUE(harness, session_key)` (`src/switchboard/db.py:54`) stays correct. `CodexAdapter._participant` looks up `"codex:" + tid` (`codex.py:571-577`), so it never finds a remote row.
+
+`join` also refuses to create a session whose global id (a Codex thread id or Cursor conversation id) is active on **another** host or locally: "conflict: this thread is joined from another machine". No session ever moves between hosts.
+
+Credentials are unchanged (32 bytes, stored as sha256, `agents.py:460-475`), but `_member` compares `(host, mcp_pid, mcp_start)` (`agents.py:367-368`): a Pi credential is useless on the desktop, a desktop credential is useless on a link, and within the Pi a credential works only from the MCP process that joined, as DESIGN §5.2 intends.
+
+#### 27.5.5 Hooks
+For `hook.event` the satellite sends `facts.chain`: `proc.ancestry(peer.pid, 8)` on the Pi as `[pid, start, verdict]`, where verdict is `match_agent(argv)` (`peer.py:66-70`): `claude`, `codex`, `cursor` or `devin`; `-` for a readable argv that is not an agent; `?` for an unreadable one. **No argv, env, cwd or transcript path leaves the Pi.**
+
+`hook_event` (`agents.py:640-684`) takes, for a remote connection, that chain instead of `proc.ancestry` (`agents.py:655`); the fast gate uses a per-host index (`refresh_index` becomes `{host: {agent pids}}`, `agents.py:137-139`); candidates are joined participants of that host only; and `resolve_hook_participant` runs unchanged on synthetic `ProcInfo` entries with its existing `argv_fn` parameter (`peer.py:253`) mapping verdicts back to canonical argv (`claude`, `codex`, `cursor-agent`, `devin acp`, `-`, and `''` for `?`). `nearest_agent_is` (`peer.py:223-243`) therefore fails closed exactly as locally, and the Cursor join-nonce bind works unchanged. A remote hook can never resolve to a desktop member (host filter) and a local hook never to a remote row (the local index holds only `host == ''` pids). `_remember_model` (`agents.py:784-791`) keys by `(host, pid, start)`.
+
+#### 27.5.6 Host views: liveness and the Claude registry
+New `broker/hosts.py`. `HostViews.view(host)` returns `LocalView` for `''` (`proc.alive`, `read_registry`) or the remote's `RemoteView`. **Every** process or registry probe about a participant goes through it:
+
+| Site | Today | M8 |
+|---|---|---|
+| `check_liveness` (`agents.py:806-831`) | `proc.alive` | `views.alive(p)`: `False` ends the session, `None` (unknown) skips |
+| `recover_on_start` (`src/switchboard/store.py:433-489`, called at `app.py:107`) | every row with an agent pid | only `host = ''` rows; remote rows go offline and wait for their link |
+| `_check_same_session` (`agents.py:330-347`) | `proc.alive` | unknown counts as alive: "conflict: can't verify on fpga-pi yet; try again in a few seconds" |
+| `_bind_cursor` (`agents.py:727`) | `proc.alive` | same rule |
+| `_cursor_session`, `participants_by_mcp`, `active_participants_by_agent` (`agents.py:321-328`, `store.py:597-611`) | pid only | `(host, pid)` |
+| `ClaudeAdapter` `conns`, `registry`, `conn_for`, `conn_tier`, `poll_once` (`claude.py:131-172,319-346`) | keyed by pid; local registry read | keyed by `(host, pid)`; `poll_once` reads local rows only; remote rows get `reg` frames |
+| `CodexAdapter._joined`, `live`, `refresh_clients`, `on_mcp_hello` (`codex.py:579-582,701-732,1287-1352,1532-1547`) | all joined Codex rows | `host = ''` rows only |
+| `_early_models` (`agents.py:111,481-486`) | `(pid, start)` | `(host, pid, start)` |
+
+`RemoteView.alive(pid, start)`: `False` if the pair is in the last `alive.dead`; `True` if it is watched and the last `alive` frame is at most 3 s old with the link up; otherwise `None`. A Pi agent that exits ends its session within about 2 s; one that died while the link was down ends on the first `alive` after reconnect.
+
+**Claude registry relay.** Every 250 ms the satellite reads `<pi sessions_dir>/<pid>.json` for each watched Claude with the snapshot's `read_registry` (`claude.py:77-88`), applies `poll_once`'s checks (`pid` field and `messagingSocketPath == claude_socket`, `claude.py:331-335`) and sends `[pid, start, status, since_age]` (status `null` when unreadable or mismatched). The broker builds a `RegView` with `read_at = recv − read_age` and runs the same `registry_transition` (`claude.py:103-122`) through a shared `apply_view` that `poll_once` also uses. So waiting-approval holds and Esc-ended turns work as locally. Remote freshness is 1.5 s for a push and 5 s before the member is parked with "can't read the Claude session registry" (local stays 0.5 s and 3 s, `claude.py:49-50`), because LAN jitter would otherwise defer wakes.
+
+**Last-mile check (in the satellite).** For a remote member, `ClaudeAdapter.send` (`claude.py:272-294`) adds `chk = {pid, start, want}` to the `out` frame, beside the push, never inside it: `want = "busy"` for a priority (mid-task, bypass-mode) batch, `"idle"` for a wake. Just before relaying the `deliver` push to the Pi MCP server the satellite checks that `(pid, start)` is a watched Claude that is alive and re-reads its registry. If the status is not `want`, it first sends a fresh `reg` frame, then an `mcp.posted {batch_id, ok: false, err: "stale_status"}` of its own on that connection, and drops the push. The adapter maps `stale_status` to `SendError(counted=False)`, an uncounted re-route (`src/switchboard/delivery/runner.py:99-104`). The Pi MCP server and its inbox guard are unchanged (`src/switchboard/mcp/server.py:183-206`). A push to a remote Claude therefore needs a relayed view at most 1.5 s old **and** a local read a few ms before the post: nothing is ever posted into an open approval prompt.
+
+**Guards against a missed site.** (1) A static test: outside `broker/hosts.py`, `broker/agents.py`, `adapters/claude.py`, `store.py` and `broker/app.py` may not call `proc.alive`, `proc.ancestry`, `proc.info` or `read_registry` on participant values. (2) In test mode the satellite adds `SWITCHBOARD_TEST_PID_SHIFT` (1,000,000,000) to every pid it reports and subtracts it from every pid it receives, so any desktop probe of a remote pid hits a nonexistent process and ends or silences that member at once, failing the T0 suite. (3) T2 runs desktop and Pi in separate PID namespaces.
+
+#### 27.5.7 The human side of `broker.sock`
+Two rules are added to `ProcessPeerPolicy.human_cli_allowed` and `login_allowed` (`peer.py:154-168`), both on by default:
+- **Relay peer:** refused if the kernel peer itself (`chain[0]`) is a relay or remote-login process: argv basename `ssh`, `sshd`, `sshd-session`, `socat`, `nc`, `ncat`, `netcat`, `autossh`, `dropbear`, `dbclient`, or a title matching `^sshd(-session)?:`. This closes a hand-made `ssh -R <pi path>:broker.sock` from a desktop terminal (chain ssh ← zsh ← Terminal, no sshd, so the second rule wouldn't see it) and `ssh -L` or socat forwards. No setting relaxes it.
+- **Remote login ancestor:** refused if any ancestor matches `^sshd(-session)?(:|\s|$)`, `(^|/)sshd(\s|$)`, `(^|/)dropbear(\s|$)` or `(^|/)mosh-server(\s|$)`, unless `[security] allow_ssh_cli = true`. This closes `ssh desktop switchboard cmd …` and `ssh -t desktop switchboard login` for any key that opens a shell on the desktop, the route by which a Pi agent holding such a key would become the human.
+
+The refusal names the reason ("…arrived through ssh; human commands must come from a terminal on this machine, or set [security] allow_ssh_cli"). The web UI is unaffected. Neither rule is a boundary against a detached same-user process (§5.3); they stop the routes M8 makes routine.
+
+#### 27.5.8 Consent and key lifecycle
+- **Generate** (`remote add`, desktop): `ssh-keygen -t ed25519 -N '' -C 'switchboard-link <name>@<desktop hostname>' -f <home>/remotes/<name>/id_ed25519`. switchboard never uses the owner's own keys or agent for the link, and never writes the desktop's `~/.ssh`.
+- **Pin** (`remote add`): the Pi's host key is copied from the owner's `~/.ssh/known_hosts` (`ssh-keygen -F`, hashed entries included) into `remotes/<name>/known_hosts` as `switchboard-<name> <key>`. No entry: refuse ("ssh to the Pi once and check its fingerprint first"). `remote add` prints the pinned fingerprint; `remote accept` on the Pi prints the Pi's own, for comparison.
+- **Pair**: `remote add` prints a one-line token, `switchboard-link v1 <name> <desktop label> ssh-ed25519 AAAA…`; `remote accept '<token>'` on the Pi shows the exact `authorized_keys` line, asks y/N, writes it with the install helpers' atomic write and 0600 backup (`src/switchboard/install/common.py:451-499`), refuses an editable install (`install/common.py:503-517`) and a Python or home path that fails `check_path` (`install/common.py:139-144`).
+- **Enable** (consent): the broker dials a remote only if the DB `remotes` row (§27.6) holds an `enabled_at` for **this exact config**: `config_hash` is sha256 over the canonical entry (host, user, port, rooms, harnesses, max_members, end_after_s), the link key fingerprint and the pinned host-key line. Enabling is human-only: `switchboard remote enable <name>` (new RPC `remote.enable`, role `human_cli`, long poll: it dials and returns `link ok: satellite 0.3.0 (proto 1), rtt 2.1 ms, clock +0.00 s, Pi hooks ok`) or the web UI's Enable button (`POST /api/remotes/<name>/enable`, web session, Origin and `X-Switchboard` as §5.4). Any edit to the entry or key means "needs enable (config changed)". Enabling also clears `blocked`. `remote.disable` is `human_cli` (it only reduces activity). A same-user process that edits `remotes.toml` can therefore at most stop a link, not arm one or widen its rooms.
+- **Notice**: every link-up posts `fpga-pi: link up (enabled via cli by alice on 2026-09-26; satellite 0.3.0, rtt 2 ms)` in the remote's rooms, in the style of the login-link notice (`rpc.py:427-429`).
+- **Rotate**: `remote remove` then `remote add`, `accept`, `enable`. **Remove**: `switchboard remote remove <name>` on the desktop disables, ends the host's members, deletes `remotes/<name>/` and the DB row, and prints the Pi-side step; `switchboard remote remove <name>` on the Pi removes the `authorized_keys` line (diff, confirm, backup) and `satellite.toml`.
+- **`from=`**: `remote accept --from <desktop ip>` restricts the key to the desktop's address. Recommended when the desktop has a fixed lease.
+
+#### 27.5.9 Endpoints
+The link is as strong as same-user isolation at its two ends. On the Pi: the satellite is non-dumpable; sshd's session child is expected to be (gate G2). On the desktop: the ssh child's stdio is a socketpair, which `/proc/<pid>/fd` can't reopen. A same-user desktop process that can `ptrace` (Linux without Yama, or Yama 0) can still take over the ssh child or the broker; that is today's same-user residual (§11), and the sandbox is the boundary.
+
+### 27.6 Data model (schema v2)
+The first schema migration (`SCHEMA_VERSION = 1`, `migrate()` refuses anything else, `db.py:16,196-211`):
+```sql
+ALTER TABLE participants ADD COLUMN host TEXT NOT NULL DEFAULT '';   -- '' = this machine
+ALTER TABLE messages ADD COLUMN sender_host TEXT;                   -- for envelopes and the UI
+CREATE INDEX participants_host_mcp ON participants(host, mcp_pid) WHERE ended_at IS NULL;
+CREATE TABLE remotes(
+  name TEXT PRIMARY KEY, config_hash TEXT NOT NULL,
+  enabled_at REAL, enabled_via TEXT CHECK(enabled_via IN ('cli','web')),
+  blocked_at REAL, blocked_reason TEXT, last_up_at REAL);
+UPDATE meta SET value='2' WHERE key='schema_version';
+```
+- **Backup first.** Before any `ALTER`, `migrate()` copies the database with the sqlite3 backup API to `<home>/switchboard.db.v1.bak` (0600; never overwritten: an existing one gets a `.<epoch>` suffix), checks `PRAGMA integrity_check` and row counts on the copy, then runs every statement above in one `BEGIN IMMEDIATE`. Any failure rolls back and leaves a v1 database; the broker refuses to start with the error. Afterwards `integrity_check` and per-table row counts must match.
+- **Downgrade.** A 0.2.0 (or older) broker refuses a v2 database ("schema version 2 is not supported"); restore `switchboard.db.v1.bak` to go back.
+- `Participant.host` and `Member.host` default to `''`; `store._PARTICIPANT_COLS` (`store.py:495-500`) and the members query gain `host`. `switchboard report` reads v1 and v2 (it opens query-only and never migrates).
+- Remote rows keep Pi pids in `agent_pid`/`mcp_pid`: their meaning is "pid on `host`".
+
+### 27.7 Per-harness support
+
+| On the Pi | Identity (checked on the Pi) | Tier | Idle wake | Mid-task | Status and holds | State in M8 |
+|---|---|---|---|---|---|---|
+| **Claude Code** | parent argv `claude` + Pi registry names `$CLAUDE_CODE_MESSAGING_SOCKET` | `claude:inbox` (`claude:hook` without inbox) | inbox post by the Pi MCP process after the satellite's last-mile check | PostToolUse/UserPromptSubmit context via relayed hooks; bypass members get the inbox only while the registry says busy | busy/idle from hooks; waiting-approval and Esc ends from the relayed registry; approval mode from `permission_mode` | built and tested with fakes (T0, T2); live after gate G1 |
+| **Codex** | parent argv `codex` | `codex:hook` (new, provisional) | none: `wait()` (240 s cap) | PostToolUse context | from hooks only; no push, so nothing to hold | fakes only; push needs a satellite-side CodexLink (M9) |
+| **Cursor Agent** | `cursor-agent` ancestor within 3 | `cursor:stop-park` (provisional, as locally) | stop-hook park over the link (≤ 630 s) | postToolUse priority context after the join-nonce bind | from hooks | contract replay through the link; the arm64 CLI and matcher unverified |
+| **Devin CLI** | `devin … acp` within 2 | `devin:wait-loop` | `wait()` long poll (600 s) and the Stop re-arm | PostToolUse context | from hooks | contract replay through the link; arm64 CLI unverified |
+| unknown | — | `mcp-only` | `wait()` 50 s | — | — | as today, one participant per MCP process |
+| test | test-mode satellite **and** broker | `mcp-only` | `wait()` | — | — | T0 |
+
+- **Claude path, end to end.** `ClaudeAdapter.route` (`claude.py:199-245`) is unchanged except for per-host freshness: attached, `hooks_seen_at` set, status idle or starting, a relayed view at most 1.5 s old saying `idle`. `send` pushes `deliver` on the member's `RemoteConn` with `chk`; the satellite checks and relays; the Pi MCP process posts into its parent's inbox with the token read from its own env (`claude_inbox.py:99-122`); `mcp.posted` comes back (ages rebased); the UserPromptSubmit hook's batch token confirms it (`engine.py:1005-1026`).
+- **Gate G1** (§27.15): Claude Code on linux-arm64 must write `~/.claude/sessions/<pid>.json` with `messagingSocketPath` and `status`, and set `CLAUDE_CODE_MESSAGING_SOCKET`/`_TOKEN`. If not, the Pi Claude is `claude:hook` under exactly the local rules (no weaker check is invented), and the demo parks `bench` in `wait()` between jobs.
+- **Remote Codex** gets its own small adapter (`adapters/remote_codex.py`, a `PullAdapter` with Codex's context events and caps, tier note "remote Codex: pull only"); `engine.adapter(p)` (`engine.py:146-147`) and the direct lookups in `hello`/`join` (`agents.py:205,404`) go through `adapter_for(harness, host)`. Remote Codex rows go offline on disconnect (the local exception at `agents.py:229` is for CodexLink-tracked threads only), get no thread proof, and never reach `CodexAdapter`.
+- **Config split.** Delivery timers come from the desktop `config.toml`; the Pi's `config.toml` gives the satellite `claude.sessions_dir` and the MCP server `inbox_hold_s`; the Pi's Cursor install bakes `--max-wait` from the Pi's `stop_park_s` (`install/cursor.py:60-85`), which the broker already bounds (`adapters/cursor.py:108-116`). Keep `stop_park_s` equal on both.
+
+### 27.8 Setup
+
+#### 27.8.1 Desktop, once
+```
+uv tool install git+https://github.com/amahpour/switchboard@v0.3.0   # same version on both machines
+switchboard stop && switchboard start          # the v1→v2 migration runs once; switchboard.db.v1.bak is written first
+ssh alice@fpga-pi.local true             # by hand, once: accept and check the Pi's host key
+switchboard remote add fpga-pi alice@fpga-pi.local --rooms '#fpga'
+```
+`remote add` resolves `alice@fpga-pi.local` with `ssh -G` (the owner's config is read here only, never at runtime) and refuses `ProxyJump`/`ProxyCommand`; validates host (`^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$` or an IP literal), user (`^[a-z_][a-z0-9_-]{0,31}$`) and port; generates the key; pins the host key; writes `remotes.toml`:
+```toml
+[remote.fpga-pi]
+host = "fpga-pi.local"
+user = "alice"
+port = 22
+rooms = ["#fpga"]                                   # required; the only rooms Pi members may join
+harnesses = ["claude", "codex", "cursor", "devin"]
+max_members = 8
+end_after_s = 900
+```
+and prints the pinned fingerprint and the token: `On the Pi run: switchboard remote accept 'switchboard-link v1 fpga-pi desk ssh-ed25519 AAAA…'`. It also warns about every `~/.ssh/authorized_keys` entry on the desktop without `command=` (§27.12).
+
+#### 27.8.2 Pi, once
+```
+uv tool install git+https://github.com/amahpour/switchboard@v0.3.0
+switchboard install claude --dry-run && switchboard install claude    # as on any machine; bakes the Pi's python and home
+switchboard remote accept 'switchboard-link v1 fpga-pi desk ssh-ed25519 AAAA…' [--from 192.0.2.10]
+```
+`remote accept` creates `run/` (0700) and `satellite.toml`, shows and writes the `authorized_keys` line, and prints the Pi's host-key fingerprint. From now on `switchboard start` on this home refuses ("this is a satellite home: the broker runs on desk").
+
+#### 27.8.3 Desktop: enable and check
+```
+switchboard remote enable fpga-pi     # → link ok: satellite 0.3.0 (proto 1), rtt 2.1 ms, clock +0.00 s, Pi hooks ok
+switchboard remote doctor             # authorized_keys scan, key and pin files, allow_ssh_cli, link state
+```
+After that the link comes up by itself at every `switchboard start`.
+
+#### 27.8.4 Bitstream key (the owner, by hand; switchboard never manages it)
+Default: the **desktop pushes**, so the Pi holds no key into the desktop.
+```
+# desktop
+ssh-keygen -t ed25519 -N '' -C fpga-push -f ~/.ssh/fpga_push
+# Pi: ~/.ssh/authorized_keys
+restrict,command="rrsync -wo /home/alice/fpga/in" ssh-ed25519 AAAA… fpga-push
+# desktop: ~/.ssh/config
+Host fpga-drop
+  HostName fpga-pi.local
+  User alice
+  IdentityFile ~/.ssh/fpga_push
+  IdentitiesOnly yes
+# push (paths are relative to ~/fpga/in on the Pi)
+rsync -t out/blinky/top.bit fpga-drop:blinky/
+```
+Pull variant (only if the desktop runs sshd and the owner wants the Pi to fetch): a Pi key `~/.ssh/fpga_pull` whose desktop line is `restrict,from="<pi ip>",command="rrsync -ro /home/alice/fpga/out" ssh-ed25519 … fpga-pull`. Never give the Pi an unrestricted desktop key. `rrsync` ships with rsync ≥ 3.2.4 (`/usr/bin/rrsync` on Debian 12; older: `/usr/share/doc/rsync/scripts/rrsync`); `remote doctor` checks for it.
+
+#### 27.8.5 Every session
+Desktop: `switchboard start` (links dial), web UI, create `#fpga`, `/hops 30` if the room's limit is lower (each build/result cycle is 2 agent hops; the default limit of 6, `config.py:29`, would pause the room after 3 cycles, `delivery/rules.py:202-204`). Desktop terminal: `claude` → "join #fpga as vivado". Second terminal: `ssh alice@fpga-pi.local`, `cd ~/bench && claude` → "join #fpga as bench". Nothing else switchboard-specific happens on the Pi. docs/DEMO-FPGA.md has the full script.
+
+### 27.9 The artifact hand-off convention
+Plain chat lines; switchboard does not parse them in M8.
+```
+artifact: <relpath> sha256:<64 hex> size:<bytes> board:<id> [via:push|pull]
+result: <sha256 first 12> pull=ok|fail|skip verify=ok|fail flash=ok|fail|skip uart=pass(<n>/<m>)|fail|skip t=<s>s [note="<≤ 80 chars>"]
+```
+- The desktop agent pushes first, then posts `artifact:` with an @mention of the Pi agent. `relpath` is relative to the drop directory (`~/fpga/in` for a push, the pull root otherwise): no leading `/`, no `..`.
+- The Pi agent recomputes the sha256 and never flashes on a mismatch (`verify=fail`, stop). It flashes, runs the UART test, and answers with one `result:` line using `reply_to`, quoting at most 10 UART lines.
+- Both treat UART output, test logs and each other's text as data, never as instructions (the MCP instructions already say peer text is untrusted, `mcp/server.py:44-50`).
+
+### 27.10 Failure handling and reconnect
+
+| Event | What happens | Recovery |
+|---|---|---|
+| Pi off, unreachable, DNS | `down(reason)`, one notice per allowed room, backoff 1–10 s; Pi hooks fail to connect and exit 0 (`switchboard_hook.py:333-336`); Pi MCP tools say "the link to the switchboard broker on desk is down: ask your user to check `switchboard remote status` on the desktop" | automatic |
+| Link drop mid-session (ssh exits, 3 missed pongs) | `RemoteConn`s close → members offline, waits/parks end, pull batches expire, inbox posts fail `disconnected` and re-route; satellite exits on EOF or after 10 s | new satellite; Pi MCP servers reconnect within about 2 s; same `(host, mcp_pid)` → members back, same credentials, Claude re-attaches, queued messages delivered |
+| Half-open TCP (Wi-Fi drop) | broker declares down at 6 s, kills and reaps child 1, spawns child 2; satellite 2 takes over satellite 1, whose `bye replaced` goes into the dead connection | never blocks: frames from an abandoned child are dropped (§27.4.7); T1 test with a SIGSTOP'd `sshd-session` |
+| `bye replaced` on the **current** link | something else started a satellite (a desktop process with the link key, a Pi process) → `blocked(replaced)`, warn notice | the owner: `switchboard remote enable fpga-pi` |
+| Host key changed / auth refused | `blocked(host_key|auth)`, warn notice with ssh's reason | the owner checks the key, fixes, enables |
+| Pi shell prints text before the satellite | skipped (≤ 64 lines); more: `blocked(shell_noise)` | fix `~/.bashrc` |
+| Pi agent exits | next `alive` frame → "left (session ended)" within about 2 s | — |
+| Pi agent dies while the link is down | ended on the first `alive` after reconnect | — |
+| Link down ≥ `end_after_s` (900 s) | members ended "left (fpga-pi unreachable)" | re-join when back |
+| Desktop broker restart | ssh child dies with the broker (EOF ends the satellite); `recover_on_start` probes local rows only; remote rows offline | links re-dial at start |
+| Pi reboot | link down; on return every watched pid is dead → sessions end | re-join |
+| Proto or name mismatch | `blocked(proto|name)` with both versions named | install the same version |
+| Pi clock skew | one info notice; delivery unaffected (ages only) | fix NTP |
+| Relayed registry stale (link congested, satellite stalled) | no push (defer; parked after 5 s); last-mile check refuses a post whose status changed | automatic |
+| Frame flood, malformed frame, > 64 connections, > `max_members` | link closed or join refused, warn notice; local members unaffected | automatic backoff |
+| Pi-local broker on the satellite home | `blocked(local_broker)` | stop it |
+| Approval prompt on the Pi | relayed registry → waiting-approval, deliveries held (`engine.py:237`) | the owner answers at the Pi terminal |
+| Loop guard trips | the room pauses after `hop_limit` agent messages | the owner resumes or raises `/hops` in the web UI |
+
+### 27.11 UI, CLI and status
+- **Buddy list:** `bench @fpga-pi` (the host as a badge after the name), then harness letter, tier, status, as today (`src/switchboard/web/static/app.js:188-214`). Message senders show `bench@fpga-pi`. Everything rendered with `textContent`.
+- **Header:** one chip per remote: `fpga-pi ● up 2 ms` / `down: unreachable (retry in 8 s)` / `blocked: host key changed` / `needs enable`. Clicking opens a remotes panel: state, reason, RTT, both versions, Pi hooks state, clock skew, rooms, members, and an **Enable / reconnect** button for `blocked` and `needs enable`.
+- **REST/WS:** `GET /api/remotes` (session), `POST /api/remotes/{name}/enable` and `/disable` (session, Origin, `X-Switchboard`); a `remotes` WebSocket event on every state change. `member_dict` and `message_dict` gain `host` (`src/switchboard/broker/service.py:91-125`).
+- **Notices:** link up (with how it was enabled), link down (with reason and "its members are offline"), blocked (warn), replaced (warn), clock skew (info), "left (fpga-pi unreachable)". They go to the remote's rooms.
+- **Join line:** `joined (claude on fpga-pi, claude:inbox)`.
+- **Envelopes:** remote senders get `host=fpga-pi` after `harness=` (`src/switchboard/envelope.py:152-153,384-385`), and the join text lists `bench (claude@fpga-pi)`, so desktop agents running with approvals off can tell Pi-originated text (which may quote attacker-controlled UART output) from local text.
+- **CLI:** `switchboard status` lists remotes (`fpga-pi: up 2 ms, satellite 0.3.0, members bench`); `switchboard who` shows `bench@fpga-pi`; `switchboard remote status [name]`. On the Pi, `switchboard status` prints the satellite's state or "link down: the desktop dials this Pi; on the desktop run `switchboard remote status fpga-pi`".
+- **`sys.status`** (local `broker.sock` only) gains `remotes: [{name, state, reason, since, rtt_ms, version, proto, skew_s, hooks, rooms, members}]`. `switchboard report` lists each participant's host.
+
+### 27.12 Security analysis
+
+**Assets:** the human's authority (posting as the human, raising commands, login links, stopping the broker), rooms Pi members aren't allowed in, desktop members' delivery state, the desktop itself, and the Pi user's session.
+
+| Actor | Can | Cannot |
+|---|---|---|
+| **LAN attacker** (no keys) | drop or delay traffic: links go down, members offline, no push (fail closed, visible) | read or inject (SSH); impersonate the Pi (pinned host key → `blocked(host_key)`) or the desktop (needs the link key); reach any new listener (there is none on either machine) |
+| **Compromised Pi** (Pi user or root) | everything about host `fpga-pi`: forge its members' identities, hooks, status, registry and results; join allowlisted rooms up to `max_members`; post (rate limit, budget, loop guard apply); read what its members may read; spend the wake budget | any human verb (allowlist before `_authorize`); other rooms; any desktop member (host-scoped keys, candidates, views); any desktop socket (the ssh child forwards nothing); any desktop command (the Pi holds no desktop login; at most a pull key limited to `rrsync -ro`) |
+| **Prompt-injected Pi agent** (Pi user, e.g. through UART output) | its own session, as locally; disrupt Pi peers as any same-user process can locally (kill the satellite, bind the socket, feed Pi MCP servers fake frames); push text into rooms as itself (labelled `@fpga-pi`); propose any flash command | become the human (the link has no human verb; the satellite refuses them; with the default push key it has no way onto the desktop; an unrestricted key would still be refused `switchboard login`/`say` over ssh by §27.5.7, but a shell is a shell: `remote doctor` warns, the docs forbid it); forge frames on the link (the satellite is non-dumpable); pass for another Pi session in a hook or credential check (kernel attestation on the Pi) |
+| **Same-user desktop process** (e.g. an injected desktop agent) | read the link key and start a satellite session on the Pi, which **replaces** the real link (`blocked(replaced)`, warn) and lets it speak as the broker to Pi agents, including inbox frames into the Pi Claude, bounded by the Pi's approvals; edit `remotes.toml` (only disables the link until the owner re-enables); `ptrace` the broker or ssh child where Yama allows | arm a link or widen its rooms (needs `remote.enable`: human_cli or the web session); use a remote connection for human verbs; act as a Pi member without replacing the link |
+| **Compromised desktop** (seen from the Pi) | put room text into Pi sessions (the feature), fill waits, supply hook context | run anything on the Pi (the satellite executes nothing), choose any Pi path, answer any prompt |
+
+**switchboard never does these (additions to §11):**
+13. **Forward a socket or listen on the network for remotes.** The ssh child never gets `-L`, `-R`, `-D` or `-W`, and runs with `ClearAllForwardings` and `-F /dev/null`; the link is the broker's own ssh child with socketpair stdio. The bind test still sees one TCP listener on `127.0.0.1` and no new UDS on the desktop.
+14. **Grant `human_cli`, `human` or `login` to a remote connection,** to a peer that is itself an SSH or relay process, or (unless `allow_ssh_cli`) to a peer under a remote-login server.
+15. **Dial a remote the owner hasn't enabled for exactly its current config, or use the owner's SSH keys, agent or config for a link.**
+16. **Probe the broker host for a remote participant, or take a fact about one host from another host's link.** Remote pids are only ever looked up through that host's `RemoteView`.
+17. **Execute anything on the Pi, or move files.** The satellite has no spawn site; bitstreams move by the agents' own restricted keys.
+18. **Use a remote host's wall clock in delivery logic.** Only ages cross the link.
+
+**Guardrail wording changes (§11):**
+- 9 → "Listen on anything but `127.0.0.1` and the 0600 UDS (bind test). The only outbound connection is one `ssh` child per enabled remote, with a fixed argv (§27.4.1)."
+- 11 → "Trust a caller-supplied pid, session id or thread id without a kernel check. Pids come from the socket peer on the broker host, or from the satellite of the member's own host, which reads its own socket peer; never from a request param."
+
+**New residual risks (README "What switchboard can't stop"):**
+- A compromised Pi controls every fact about its own host.
+- A same-user desktop process can use the link key to replace the link (visible, blocked) and meanwhile inject inbox frames into Pi Claude sessions. `from=` limits the key to the desktop's address; approvals on the Pi are the gate.
+- On a Linux desktop where Yama allows it, a same-user process can `ptrace` the broker or the ssh child.
+- Pi text reaches desktop agents as peer text; UART output is attacker-controllable if the board or its firmware is. Keep approvals on for agents that act on Pi results.
+- `[security] allow_ssh_cli = true` reopens `switchboard login` over SSH for every key that opens a shell on the desktop.
+
+### 27.13 Test plan
+Every tier keeps the rules of §0 and §12: temp homes, `clean_env`, no user-level config written, never the owner's `~/.ssh`, never the Mac's system sshd.
+
+**T0: unit and integration, default suite, macOS and Linux, no SSH.** Two homes: the desktop `tmp_home` with a test-mode broker (`SubprocBroker`, production peer policy unless the test needs trust) and a Pi home `/tmp/yk-pi-XXXX` with the test marker and `satellite.toml`. `remotes.toml` uses `transport = "exec"`; the satellite runs with `SWITCHBOARD_TEST_PID_SHIFT`. Pi-side agents are `FakeAgent(home=pi_home)` and `FakeClaude`/`fake_harness` with a Pi home, a Pi sessions dir and a Pi `FakeInbox` (the broker's own `sessions_dir` stays empty, so a desktop-side check could never pass by accident).
+- Unit: link frames and limits; noise tolerance; age rebasing and clamps; the exact `REMOTE_METHODS` set and "forbidden before authorize" under `AllowAllHumans`; `remotes.toml` parsing and the config hash; the ssh argv (golden) and the stderr→reason table; attest parity (the satellite's attest equals the broker's `verify_mcp_peer` verdict for the same stand-in process); synthetic-chain hook resolution (own host wins, desktop pid inert, nested agent inert, unreadable in between inert, SID keys with host); `RemoteView` semantics; remote Claude freshness and the `chk`/`stale_status` re-route; the relay-peer and sshd-ancestor rules with injected chains; the v1→v2 migration on a v0.1.0 fixture; `BrokerConn` backoff against an accept-then-close socket; static tests (no direct probes outside `hosts.py`, no spawn in the satellite, one spawn site in `broker/remote.py`, no argv/env in frames); `engine_sim` members that share one link and drop together.
+- Integration: two Pi agents are two participants; one `bye` leaves the other online; every human, room and sys method refused over the link even under `AllowAllHumans`; the Pi CLI's human verbs print the desktop message; room allowlist and member cap; credential from another Pi process refused; Codex thread can't cross hosts; Pi hooks resolve to Pi members only; Cursor bind and park, Devin wait loop over the link; Claude idle wake into the Pi inbox confirmed by the token; waiting-approval hold; registry flipped just before a post → no frame, later delivery; satellite SIGSTOP'd → no push, then recovery; liveness (exit, death during outage, `end_after_s`); broker and satellite restarts resume the same credentials; reconnect count bounded; `bye replaced` on the live link blocks, on an abandoned link is ignored; ±1 h skew changes nothing but a notice; one TCP listener and no satellite network sockets (`lsof`); secrets canary over link frames and `satellite.log`.
+
+**T1: real OpenSSH on loopback** (marker `ssh`; runs in the default suite where `/usr/sbin/sshd` exists, skipped elsewhere). A user-level sshd on `127.0.0.1:<free port>` with temp host and client keys, its own `AuthorizedKeysFile`, `UsePAM no`, `StrictModes no`, `PermitUserRC no`; the desktop side uses the production argv with the port overridden. Cases: real `remote add` (against a temp known_hosts and ssh config), `accept` (into the temp authorized_keys), `enable`, a Pi `FakeAgent` joining and posting; the link key refused `-L`, `-R`, `-W`, `-tt` and another command; changed host key → `blocked(host_key)`; wrong key → `blocked(auth)`; SIGSTOP'd `sshd-session` → down within about 15 s and back without `blocked` (the replaced race); sshd stopped → bounded backoff; rc noise (the forced command wrapped as `sh -c 'echo noise; exec …'`) tolerated; the satellite's parent is sshd and its stdio is not a TTY; a hand-made `ssh -R <tmp>:broker.sock` gives no human role. It runs on this Mac without root (measured) and on Linux CI once `openssh-server` is installed.
+
+**T2: two containers** (marker `twohost`, opt-in; `sandbox/twohost/compose.yaml`). `desk` (uid 1000, test-mode broker) and `pi` (uid 1001, own PID namespace, user-level sshd with the `remote accept` line) on an internal network with no egress. FPGA stand-ins in `pi`: an `openFPGALoader` stub that logs its argv and the file's sha256, a pty "board" (`fake_board.py`) and `uart_test.py` that prints `PASS 12/12` (or fails for a bitstream built with the `BROKEN` marker). Cases: the scripted hand-off with a push through `rrsync -wo` and the pull variant through `rrsync -ro`; `docker network disconnect` → offline → reconnect → delivery; separate PID namespaces (catches any design that silently depends on seeing Pi pids); gate G2: a `pi`-user process can't open `/proc/<satellite>/fd/1` or `/proc/<sshd-session>/fd/*`.
+
+**T3: live, opt-in** (`SWITCHBOARD_LIVE=pi` real Pi, `SWITCHBOARD_LIVE=fakepi` the demo container). `tests/live/m8_demo.py`, modelled on `m7_demo.py`, runs a test-mode desktop broker in a rehearsal home under `SWITCHBOARD_LIVE_DIR` that the owner paired with the Pi once by hand (`remote add` there, `remote accept` on the Pi; only one broker may dial a Pi at a time, so he disables the remote on his real home during a rehearsal): preflight (versions on both machines, link up, harness-config md5s on both machines, `hop_limit`), the owner starts both Claude sessions by hand and pastes the join prompts it prints (in `fakepi` mode, `--scripted` runs stand-in agents on both sides over the real SSH link instead, so the build can run it unattended), then the driver posts the scripted human messages through the web API, asserts tiers, holds and hand-off lines, and writes a timing report. It never copies logins, never adds keys, never touches the Mac's system sshd.
+
+**CI** (`.github/workflows/test.yml`): the Linux job installs `openssh-server openssh-client rsync` like the `lsof` step (`test.yml:38-40`), so T1 runs on both OSes; a separate `twohost` job on `ubuntu-latest` builds `sandbox/Dockerfile.twohost` and runs `-m twohost`. `sandbox/Dockerfile.test` adds the same three packages; `.dockerignore` allowlists the new sandbox files.
+
+### 27.14 Deviations from earlier constraints
+
+| Earlier | Now | Why |
+|---|---|---|
+| The original build spec: "no tunnels, no cross-machine", "build nothing cross-machine"; README "One machine, one user" | Remote members over SSH on the owner's LAN; still no tunnels of the broker socket, no cloud relays, no remote humans, no phones | the owner's M8 request, which amends that scope (2026-09-25); the README gets a "Remote members" section and a new limitation line in M8f |
+| Guardrail 9 (`DESIGN.md` §11) | adds "and one outbound ssh child per enabled remote" | the link is an outbound child, not a listener |
+| Guardrail 11 | pids from the local socket peer **or the member's own host's satellite** | the satellite reads its own kernel peer |
+| Schema v1, no migration path (`db.py:196-211`) | v2, with a backup first | hosts, `sender_host`, consent |
+| `human_cli`/`login` = no agent in the chain (§5.3) | also refused for relay peers and (by default) under a remote-login server | M8 makes SSH into the desktop a routine path; `allow_ssh_cli` for people who work on the desktop over SSH |
+| `BrokerConn` resets its backoff on every connect (`mcp/client.py:229`) | resets only after an answered hello; sleeps after a connection that ended without one; fails pending calls on EOF; 2 s cap on satellite homes | measured 20,009 connects in 3 s behind a tunnel |
+| `config.toml` sections | new `[security]`; remotes in their own `remotes.toml` | keeps the strict config parser (`config.py:132-161`) unchanged for existing keys |
+| `switchboard start` pings and reports "already running" | refuses on a satellite home | a live satellite answers ping |
+| SANDBOX.md box: no SSH, firewall drops TCP 22 (`sandbox/firewall.sh:21-30`) | unchanged: remotes aren't supported from inside the box | the box is the isolation boundary; the two-host setup is a separate compose file |
+
+### 27.15 Gates
+- **G1, Claude Code on linux-arm64** (the owner's Pi, about 10 minutes, before the demo is scripted): after `claude` starts in the Pi terminal, its Bash tool shows `CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_CODE_MESSAGING_TOKEN` as set (names only), and `~/.claude/sessions/<pid>.json` has `messagingSocketPath` and `status`. After `join`, the Pi member's tier is `claude:inbox`. If not: `claude:hook` and the `wait()` variant of the demo.
+- **G2, non-dumpable sshd session on Raspberry Pi OS:** a Pi-user process can't open `/proc/<sshd-session>/fd/*` for the link's session (T2 on Debian 12; repeat on the real Pi). If it can, the residual goes into §27.12 and README.
+- **G3, `rrsync`:** present on the Pi (push) or desktop (pull); `remote doctor` reports it.
+- **G4, other CLIs on arm64:** Codex, `cursor-agent`, Devin; their tiers stay "fakes only" until run there.
+
+### 27.16 Implementation notes and deviations (M8a–M8f)
+Filled in while building, one bullet per deviation from §27.1–§27.15 or decision the design left open, as §15–§26 did for earlier milestones.
+
+**M8a: standalone hardening (2026-09-27).** No remote code yet; everything below is useful without remotes.
+- **`BrokerConn` backoff** (`mcp/client.py`, as §27.14 says). After every ended connection the client sleeps the current delay before reconnecting. The delay goes back to its first step only after a connection on which a hello was answered, a result or an error (a broker was there), or, with no hello to send, one that lived 2 s (`HEALTHY_WITHOUT_HELLO_S`); otherwise it doubles up to the cap. An answer counts only for the connection it arrived on (a per-connection sequence number), so a late answer can't reset the backoff of the next one. `_read` fails every pending call with `BrokerDown("broker connection lost")` when it stops (EOF, a reset, cancellation), so a hello in flight returns at once instead of holding the connection "up" for its 10 s timeout; a reader still running when its connection is torn down (an unexpected error in the hello path) is cancelled then, so it can never fail the next connection's calls. Measured against an accept-then-close socket: the old client made 22,124 connects in 3 s; now 3 (`tests/unit/test_client_backoff.py`). Side effect, accepted: after a broker restart an MCP server's first reconnect waits 0.5 s (it used to try at once), so members come back up to 0.5 s later.
+- **Satellite-home cap** (`mcp/server.py`): `broker_backoff(paths)` gives `(0.5, 2.0)` when `Paths.satellite_conf` (`<home>/satellite.toml`) exists, else the default `(0.5, 10.0)`; `main()` builds its `BrokerConn` with it. Nothing writes `satellite.toml` before M8c.
+- **The SSH rules** (`broker/peer.py`, §27.5.7, now also in §5.3). `relay_name(argv)` looks at the program's own name only: the basename of argv's first word, or, when that is an interpreter (`python*`, `pypy*`, `perl*`, `ruby*`, `node`, `sh`, `bash`, `dash`, `zsh`, `ksh`; case-insensitive, so a framework build's `Python` counts), of its first non-option argument, the script (and `busybox`, of its applet); and a process title `<name>: …` whose name is one of the relays: sshd's `sshd:`/`sshd-session:` and, **an addition to the design's list**, an ssh ControlMaster's `ssh: <control path> [mux]`, the process that serves the forwards of every connection it multiplexes (the owner's `~/.ssh/config` may turn ControlMaster on). Arguments are never searched, so `switchboard say '#r' 'see /usr/bin/ssh'` is not a relay. The script case is what lets a stdlib stand-in copied to a path ending in `/ssh` (the `fake_harness` trick) be a relay in tests; a relay under any other name is not caught, which is fine for a rule that is not a boundary (§5.3). `ProcessPeerPolicy` takes `allow_ssh_cli` and, for tests, `argv_fn` and `tty_fn` (defaults `proc.argv_many`, `proc.tty`) besides `chain_fn`. Measured with `tests/manual/m8/forward_peer.sh` on macOS: the `ssh -L` peer is titled `sshd-session: <user>` (no `@notty`), caught by the title rule.
+- **The remote-login rule matches program names, above the caller** (a deviation from §27.5.7's regexes, found in review). The design's patterns searched the whole argv of every process in the chain, the caller's included, so `switchboard say '#build' 'I restarted /usr/sbin/sshd'` from a local terminal was refused (the same for `mosh-server` and `dropbear` in the text), with a hint to turn `allow_ssh_cli` on; under `uv run` the text is also in the `uv` parent's argv. Now `remote_login_name(argv)` looks only at the program's own name, as `relay_name` does: a title `sshd: …`/`sshd-session: …`, or argv[0]'s basename, and only for `chain[1:]` (the caller itself is left to the relay rule). Every pattern of the design still matches (its titles, `/usr/sbin/sshd -D`, `dropbear`, `mosh-server`), plus `sshd-session`'s own binary before it sets its title. **Additions to the design's list:** `tinysshd`, `tailscaled` (Tailscale SSH starts the login shell under it), `etserver`/`etterminal` (Eternal Terminal), `telnetd`/`in.telnetd`; none is ever above a local terminal. Other remote-login servers are not recognized (§5.3 says so).
+- **Which reason is named** (found in review). The relay reason comes first and suggests no setting. The remote-login reason is given only to a chain that would otherwise be human (`ssh_verdict`): a chain with an agent in it, or one that can't be walked to the root, keeps its old refusal and message. So an agent the owner started inside an ssh login is refused as an agent and is never told to set `allow_ssh_cli` (which would not help it and would open the rule for every shell key). The relay integration test still shows the relay reason whoever runs pytest.
+- **Policy construction in one place:** `broker/app.py` `default_peer_policy(cfg, test_trust_uds)` is what `create_app` (without a policy) and `daemon.run_foreground` both use; `tests/unit/test_config.py::test_security_reaches_the_broker_policy` checks that `config.toml`'s `[security] allow_ssh_cli` reaches both.
+- **`switchboard start` over ssh:** when its automatic `human.login_link` is refused by the SSH rules it says so and names the reason, instead of "run `switchboard login` in your own terminal", which would fail the same way over the same login.
+- **`[security] allow_ssh_cli`** (`config.py` `SecurityCfg`, strict bool, unknown keys refused); `broker/app.py` and `broker/daemon.py` build `ProcessPeerPolicy(allow_ssh_cli=…)` from it, through `default_peer_policy`.
+- **Measurement scripts** live in `tests/manual/m8/` (README there; this repository has no top-level experiments directory): `forward_peer.sh`, `forced_command.sh`, `latency.sh`, `dumpable.py` and helpers. None is named `test_*.py`, so pytest doesn't collect them; they clean up their temp dir with Python, not `rm`, and time out ssh calls with Python too (`with_timeout` in `lib.sh`; GNU `timeout` is not on stock macOS). `forced_command.sh` reports the other-command check as passed only when the forced command's own hello line came back.
+- **Tests:** `tests/unit/test_client_backoff.py` (the four the milestone names; a call made while the hello is in flight fails at once on EOF; the 2 s rule without a hello; the post-connection sleeps level off at the 2 s satellite cap behind an accept-then-close socket; 8 of its 9 tests fail against the client before M8a, the ninth checks `broker_backoff` and `main()`), `tests/unit/test_peer_ssh_rules.py` (injected chains; also `relay_name`/`remote_login_name` tables, message text that names sshd from a local terminal, an agent under ssh, and a real process copied to a path ending in `/ssh`), `tests/unit/test_config.py` (`[security]`, and that it reaches the broker's policy), `tests/unit/test_cli_unit.py` (`start`'s sign-in hint), `tests/integration/test_cli.py::test_cli_through_a_relay_named_ssh_is_forbidden` (production policy; `status` works through the relay, `say`, `cmd` and `login` are refused with the relay reason, nothing is posted). `tests/conftest.py` gains `human_cli_denial_word()` ("agent", "ssh" or None), which the three tests that adapt to who runs pytest now use, so the suite also passes when run over an ssh login.
+- **Scope and versions (this document).** The design was written before the public repository and the 0.2.0 rename release: its paths to the original build spec and plan are gone (§27.14 records the scope amendment itself), and the release that carries M8 is 0.3.0, so the setup lines in §27.8 and the example versions say 0.3.0 and the downgrade note says "a 0.2.0 (or older) broker". The `from=` example address is a documentation address (192.0.2.10).
+- **Deferred from the M8a review.** (1) The older agent matcher (§5.3) still searches the whole argv of every process in the chain, the caller's included, so a local `switchboard say '#r' 'see /usr/local/bin/claude'` is refused as an agent's; it fails closed, predates M8, and changing what counts as an agent is out of this step's scope. (2) "Refused by code" in §27.1 covers the human verbs only: a relay peer is still an ordinary same-user `unknown` MCP peer for `mcp.hello`, hooks and anonymous calls, so members joined through a hand-made socket forward share one `(mcp_pid, mcp_start)` and one `bye` can take the other offline, as measured in §27. The forward has to be made on this machine or with a key that opens a shell here, which §27.12 already forbids; refusing `mcp.hello` from a relay peer would change behavior beyond M8a's acceptance and is left for M8c, where the sanctioned link arrives.

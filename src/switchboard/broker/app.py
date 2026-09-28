@@ -22,7 +22,7 @@ from switchboard.broker import proc, web
 from switchboard.broker.agents import AgentService
 from switchboard.broker.auth import UI_HOST, HostOriginGuard, LoginTokens, SecurityHeaders, Sessions
 from switchboard.broker.hub import Hub, WsSubscriber
-from switchboard.broker.peer import PeerPolicy, ProcessPeerPolicy
+from switchboard.broker.peer import AllowAllHumans, PeerPolicy, ProcessPeerPolicy
 from switchboard.broker.rpc import RpcServer
 from switchboard.broker.service import BrokerInfo, RoomService
 from switchboard.clock import Clock, SystemClock
@@ -75,6 +75,15 @@ class BrokerState:
             log.warning("shutdown requested but no shutdown callback is set")
 
 
+def default_peer_policy(cfg: Config, test_trust_uds: bool = False) -> PeerPolicy:
+    """The broker's UDS peer policy: the production ``ProcessPeerPolicy`` with
+    ``[security] allow_ssh_cli`` from the config (DESIGN.md §27.5.7), or
+    ``AllowAllHumans`` under ``--test-trust-uds``."""
+    if test_trust_uds:
+        return AllowAllHumans()
+    return ProcessPeerPolicy(allow_ssh_cli=cfg.security.allow_ssh_cli)
+
+
 def create_app(
     paths: Paths,
     cfg: Config,
@@ -91,7 +100,7 @@ def create_app(
         paths=paths,
         cfg=cfg,
         port=port,
-        peer_policy=peer_policy or ProcessPeerPolicy(),
+        peer_policy=peer_policy or default_peer_policy(cfg),
         test_mode=test_mode,
         clock=clock,
         info=BrokerInfo(port=port, test_mode=test_mode, home=str(paths.home), started_at=clock.now()),

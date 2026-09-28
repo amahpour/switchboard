@@ -26,7 +26,7 @@ import logging
 import os
 import secrets
 import sys
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastmcp import Context, FastMCP
 from fastmcp.server.middleware import Middleware
@@ -35,9 +35,12 @@ from mcp.types import ToolAnnotations
 from switchboard.adapters.testagent import ACK_MODES
 from switchboard.broker.peer import claude_registry_socket
 from switchboard.mcp import claude_inbox
-from switchboard.mcp.client import BrokerConn, BrokerDown, RpcError
+from switchboard.mcp.client import DEFAULT_BACKOFF, BrokerConn, BrokerDown, RpcError
 from switchboard.mcp.identity import CLAUDE_ENV_PREFIX, detect, env_leak
 from switchboard.models import InvalidName, normalize_room
+
+if TYPE_CHECKING:  # pragma: no cover
+    from switchboard.paths import Paths
 
 log = logging.getLogger("switchboard.mcp")
 
@@ -484,6 +487,21 @@ async def serve(server: FastMCP, st: McpState) -> None:
         await st.conn.close()
 
 
+# DESIGN.md §27.4.8: on a satellite home the socket belongs to a satellite that lives
+# exactly as long as its link, so a missing socket is cheap to retry and members
+# should be back within about 2 s of the link.
+SATELLITE_BACKOFF = (0.5, 2.0)
+
+
+def broker_backoff(paths: "Paths") -> tuple[float, float]:
+    """BrokerConn's reconnect backoff for this home: capped at 2 s on a satellite home."""
+    try:
+        satellite = paths.satellite_conf.exists()
+    except OSError:
+        satellite = False
+    return SATELLITE_BACKOFF if satellite else DEFAULT_BACKOFF
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="switchboard mcp", description="switchboard's stdio MCP server")
     ap.add_argument("--home", default=None)
@@ -504,7 +522,7 @@ def main(argv: list[str] | None = None) -> int:
         cfg = Config()
     ppid = os.getppid()
     st = McpState(
-        BrokerConn(paths.sock),
+        BrokerConn(paths.sock, backoff=broker_backoff(paths)),
         env=env_view(),
         parent_argv=_parent_argv(ppid),
         ppid=ppid,

@@ -291,4 +291,5 @@ docker compose -f sandbox/compose.yaml run --rm test -m perf          # timing c
 docker compose -f sandbox/compose.yaml run --rm -v "$PWD:/src/switchboard:ro" test
 ```
 The read-only mount copies the same allowlisted paths. Runs have no network, so if `uv.lock` changed since the image was built, `run-tests.sh` stops and asks for `docker compose -f sandbox/compose.yaml build test`.
+The same image runs the one Linux-only M8 measurement by hand, with no network and no capabilities, as its plain user: `docker run --rm --network none --cap-drop ALL --entrypoint /bin/sh switchboard-test -c '.venv/bin/python tests/manual/m8/dumpable.py'` (what a same-uid process can do to another before and after `prctl(PR_SET_DUMPABLE, 0)`; [tests/manual/m8/README.md](../tests/manual/m8/README.md)).
 The Linux fixes it led to are in [DESIGN.md §25](DESIGN.md#25-linux-support-2026-09-25). CI (`.github/workflows/test.yml`) runs the same default suite on `ubuntu-latest` and `macos-latest`.

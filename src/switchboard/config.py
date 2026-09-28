@@ -102,6 +102,14 @@ class ReviewCfg:
 
 
 @dataclass(frozen=True)
+class SecurityCfg:
+    # DESIGN.md §27.5.7: human commands (switchboard say/cmd/login ...) from a process under a
+    # remote login on this machine (sshd, dropbear, mosh-server, ...). Off: refused. A relay peer
+    # is refused either way.
+    allow_ssh_cli: bool = False
+
+
+@dataclass(frozen=True)
 class Config:
     human_name: str = field(default_factory=default_human_name)
     port: int = 7419
@@ -111,6 +119,7 @@ class Config:
     cursor: CursorCfg = field(default_factory=CursorCfg)
     devin: DevinCfg = field(default_factory=DevinCfg)
     review: ReviewCfg = field(default_factory=ReviewCfg)
+    security: SecurityCfg = field(default_factory=SecurityCfg)
 
     def replace(self, **changes: Any) -> "Config":
         return dataclasses.replace(self, **changes)
@@ -126,6 +135,7 @@ _SECTIONS = {
     "cursor": CursorCfg,
     "devin": DevinCfg,
     "review": ReviewCfg,
+    "security": SecurityCfg,
 }
 
 

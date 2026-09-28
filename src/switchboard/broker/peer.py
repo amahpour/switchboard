@@ -63,6 +63,133 @@ def peer_uid(sock: socket.socket) -> int | None:
         return None
 
 
+# DESIGN.md §27.5.7: the two SSH rules of the human side of broker.sock.
+# A relay peer: the process on the broker socket is itself an SSH or socket relay.
+# Through any forward of the socket (``ssh -R``/``-L``, socat) the kernel peer is
+# the relay, never the program behind it, so it never gets a human role.
+RELAY_NAMES = frozenset(
+    {"ssh", "sshd", "sshd-session", "socat", "nc", "ncat", "netcat", "autossh", "dropbear", "dbclient"}
+)
+# A process title "<name>: ..." (sshd's "sshd-session: alice@notty", an ssh ControlMaster's
+# "ssh: <control path> [mux]", which serves every forward of the connections it multiplexes).
+_TITLE = re.compile(r"^([A-Za-z0-9_.-]+):(\s|$)")
+# A script run by an interpreter (``python3 /tmp/x/ssh``) is named by its script,
+# and a busybox applet by its applet.
+_SCRIPT_HOSTS = re.compile(
+    r"^(python[0-9.]*|pypy[0-9.]*|perl[0-9.]*|ruby[0-9.]*|node|sh|bash|dash|zsh|ksh|busybox)$"
+)
+# A remote-login server above the caller, by its program's own name (never its arguments):
+# sshd (its titles "sshd: ..." / "sshd-session: ...", its binaries), dropbear, mosh-server and,
+# beyond the design's list, other servers that start a login shell for a remote user.
+REMOTE_LOGIN_NAMES: dict[str, str] = {
+    "sshd": "sshd",
+    "sshd-session": "sshd",
+    "dropbear": "dropbear",
+    "mosh-server": "mosh-server",
+    "tinysshd": "tinysshd",
+    "tailscaled": "tailscaled",  # Tailscale SSH: the login shell runs under tailscaled
+    "etserver": "etserver",  # Eternal Terminal
+    "etterminal": "etterminal",
+    "telnetd": "telnetd",
+    "in.telnetd": "telnetd",
+}
+
+
+def program_name(argv: str) -> str | None:
+    """The program an argv runs, by its own name: a process title's ``<name>:``
+    (``sshd-session: alice@notty``), else the basename of the first word."""
+    a = argv.strip()
+    if not a:
+        return None
+    m = _TITLE.match(a)
+    if m:
+        return m.group(1)
+    return os.path.basename(a.split()[0]) or None
+
+
+def relay_name(argv: str) -> str | None:
+    """The relay this argv runs (``ssh``, ``socat``, ...), or None.
+
+    Looks at the program's own name: the basename of the first word, or for an
+    interpreter (``python3``, ``sh``, ...) of its script, and at process titles
+    (``sshd-session: alice@notty``, an ssh ControlMaster's ``ssh: <path> [mux]``).
+    Arguments are never searched, so ``switchboard say '#r' 'see /usr/bin/ssh'``
+    is not a relay.
+    """
+    a = argv.strip()
+    if not a:
+        return None
+    m = _TITLE.match(a)
+    if m:
+        return m.group(1) if m.group(1) in RELAY_NAMES else None
+    words = a.split()
+    name = os.path.basename(words[0])
+    if name in RELAY_NAMES:
+        return name
+    if _SCRIPT_HOSTS.match(name.lower()):
+        for w in words[1:]:
+            if not w.startswith("-"):
+                script = os.path.basename(w)
+                return script if script in RELAY_NAMES else None
+    return None
+
+
+def remote_login_name(argv: str) -> str | None:
+    """``sshd``, ``dropbear``, ``mosh-server``, ... if this argv is a remote-login server, else None.
+
+    Only the program's own name counts (``program_name``), never its arguments, so
+    ``uv run switchboard say '#r' 'I restarted /usr/sbin/sshd'`` is no remote login."""
+    name = program_name(argv)
+    return REMOTE_LOGIN_NAMES.get(name) if name else None
+
+
+def relay_refusal(chain: Sequence[ProcInfo], argvs: dict[int, str]) -> str | None:
+    """The relay rule: ``chain[0]`` (the kernel peer) is an SSH or socket relay.
+    No setting relaxes it."""
+    if not chain:
+        return None
+    relay = relay_name(argvs.get(chain[0].pid, ""))
+    if relay is None:
+        return None
+    return (f"arrived through ssh or a socket relay (the process on the broker socket is {relay});"
+            " human commands must come from a terminal on this machine")
+
+
+def remote_login_refusal(chain: Sequence[ProcInfo], argvs: dict[int, str], allow_ssh_cli: bool) -> str | None:
+    """The remote-login rule: a remote-login server above the caller (``chain[1:]``),
+    unless ``allow_ssh_cli``. The caller's own argv (the message text) is never looked at."""
+    if allow_ssh_cli:
+        return None
+    for p in chain[1:]:
+        login = remote_login_name(argvs.get(p.pid, ""))
+        if login is not None:
+            return (f"arrived through ssh or another remote login ({login} above the caller);"
+                    " human commands must come from a terminal on this machine,"
+                    " or set [security] allow_ssh_cli = true")
+    return None
+
+
+def ssh_verdict(
+    chain: Sequence[ProcInfo], complete: bool, argvs: dict[int, str], allow_ssh_cli: bool
+) -> tuple[bool, str | None]:
+    """``(human_cli, reason)`` for a chain under the SSH rules (§27.5.7) and the older ones.
+
+    The relay reason comes first (it has no setting to suggest). The remote-login
+    reason is given only to a chain that would otherwise be human: under an agent,
+    or on an incomplete chain, the old refusal stands, so an agent is never told
+    to turn ``allow_ssh_cli`` on (it would not help it anyway). Neither rule is a
+    boundary against a detached same-user process (§5.3); they stop the routes
+    remote members make routine.
+    """
+    why = relay_refusal(chain, argvs)
+    if why is not None:
+        return False, why
+    if not chain_is_human(chain, complete, argvs):
+        return False, None
+    why = remote_login_refusal(chain, argvs, allow_ssh_cli)
+    return why is None, why
+
+
 def match_agent(argv: str) -> str | None:
     for harness, pats in AGENT_MATCHERS.items():
         if any(p.search(argv) for p in pats):
@@ -119,6 +246,10 @@ class PeerPolicy:
     def login_allowed(self, peer: Peer) -> bool:
         return False
 
+    def refusal(self, peer: Peer) -> str | None:
+        """A reason worth naming when a human role is refused (the SSH rules), or None."""
+        return None
+
     def describe(self, peer: Peer) -> str:
         return "unknown"
 
@@ -134,10 +265,25 @@ def chain_is_human(chain: Sequence[ProcInfo], complete: bool, argvs: dict[int, s
 
 class ProcessPeerPolicy(PeerPolicy):
     """The production policy: same uid and no agent harness anywhere in the
-    ancestry, walked to pid 1 (fail closed)."""
+    ancestry, walked to pid 1 (fail closed). The SSH rules (§27.5.7) also
+    refuse a relay peer always and a remote-login ancestor unless
+    ``allow_ssh_cli`` (``[security] allow_ssh_cli``).
 
-    def __init__(self, chain_fn: ChainFn | None = None, cap: int = proc.MAX_CHAIN):
+    ``chain_fn``, ``argv_fn`` and ``tty_fn`` are injectable for tests."""
+
+    def __init__(
+        self,
+        chain_fn: ChainFn | None = None,
+        cap: int = proc.MAX_CHAIN,
+        *,
+        allow_ssh_cli: bool = False,
+        argv_fn: Callable[[list[ProcInfo]], dict[int, str]] | None = None,
+        tty_fn: Callable[[int], str | None] | None = None,
+    ):
         self._chain_fn = chain_fn or (lambda pid: proc.ancestry_to_root(pid, cap))
+        self._argv_fn = argv_fn or proc.argv_many
+        self._tty_fn = tty_fn or proc.tty
+        self.allow_ssh_cli = allow_ssh_cli
 
     def _walk(self, peer: Peer) -> tuple[Sequence[ProcInfo], bool]:
         if "walk" not in peer._cache:
@@ -151,21 +297,28 @@ class ProcessPeerPolicy(PeerPolicy):
     def chain(self, peer: Peer) -> Sequence[ProcInfo]:
         return self._walk(peer)[0]
 
+    def _verdict(self, peer: Peer) -> tuple[bool, str | None]:
+        if "human_cli" not in peer._cache:
+            ok, why = False, None
+            if peer.uid == os.getuid() and peer.pid:
+                chain, complete = self._walk(peer)
+                if chain and proc.same_start(chain[0].start, peer.start):
+                    argvs = self._argv_fn(list(chain))
+                    ok, why = ssh_verdict(chain, complete, argvs, self.allow_ssh_cli)
+            peer._cache["human_cli"] = ok
+            peer._cache["refusal"] = why
+        return peer._cache["human_cli"], peer._cache["refusal"]
+
     def human_cli_allowed(self, peer: Peer) -> bool:
-        if "human_cli" in peer._cache:
-            return peer._cache["human_cli"]
-        ok = False
-        if peer.uid == os.getuid() and peer.pid:
-            chain, complete = self._walk(peer)
-            if chain and proc.same_start(chain[0].start, peer.start):
-                ok = chain_is_human(chain, complete, proc.argv_many(list(chain)))
-        peer._cache["human_cli"] = ok
-        return ok
+        return self._verdict(peer)[0]
 
     def login_allowed(self, peer: Peer) -> bool:
         return self.human_cli_allowed(peer) and peer.pid is not None and (
-            proc.tty(peer.pid) is not None
+            self._tty_fn(peer.pid) is not None
         )
+
+    def refusal(self, peer: Peer) -> str | None:
+        return self._verdict(peer)[1]
 
     def describe(self, peer: Peer) -> str:
         return short_chain(self.chain(peer))

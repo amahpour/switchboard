@@ -169,17 +169,33 @@ def sock_for(home: str | os.PathLike | None) -> Path:
     return Paths.from_home(home).sock
 
 
+# (first step, cap) of the reconnect backoff, in seconds
+DEFAULT_BACKOFF = (0.5, 10.0)
+# A connection without a hello to send counts as healthy once it lived this long.
+HEALTHY_WITHOUT_HELLO_S = 2.0
+
+
 class BrokerConn:
     """One long-lived asyncio connection to the broker, reconnecting with 0.5-10 s backoff.
 
     ``hello`` params are stored and re-sent first on every (re)connect, so a
     broker restart doesn't strand the MCP server. Calls made while no broker
     answers fail fast with ``BrokerDown``.
+
+    Backoff (DESIGN.md §27.14): after every ended connection the client sleeps
+    the current delay before reconnecting. The delay goes back to its first step
+    only after a connection on which a hello was answered (or, with no hello to
+    send, one that lived ``HEALTHY_WITHOUT_HELLO_S``); otherwise it doubles, up
+    to the cap. So a socket that accepts and closes at once (a tunnel whose far
+    end is down) costs a few connects, not thousands. EOF fails pending calls
+    at once.
     """
 
-    def __init__(self, path: str | os.PathLike, *, backoff: tuple[float, float] = (0.5, 10.0)):
+    def __init__(self, path: str | os.PathLike, *, backoff: tuple[float, float] = DEFAULT_BACKOFF):
         self.path = str(path)
         self.backoff = backoff
+        self._conn_seq = 0  # which connection is current; a hello answer counts only on its own
+        self._answered_seq = -1
         self._ids = itertools.count(1)
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._writer: asyncio.StreamWriter | None = None
@@ -218,6 +234,7 @@ class BrokerConn:
 
     async def _run(self) -> None:
         delay = self.backoff[0]
+        loop = asyncio.get_running_loop()
         while not self._closed:
             try:
                 check_socket_owner(self.path)
@@ -226,10 +243,12 @@ class BrokerConn:
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, self.backoff[1])
                 continue
-            delay = self.backoff[0]
+            self._conn_seq += 1
+            seq = self._conn_seq
+            opened = loop.time()
             self._writer = writer
             self.connected.set()
-            reader_task = asyncio.get_running_loop().create_task(self._read(reader))
+            reader_task = loop.create_task(self._read(reader))
             try:
                 if self.hello_params is not None:
                     await self._send_hello()
@@ -245,9 +264,31 @@ class BrokerConn:
                 self._writer = None
                 with contextlib.suppress(Exception):
                     writer.close()
+                if not reader_task.done():  # never left reading into the next connection
+                    reader_task.cancel()
                 self._fail_pending(BrokerDown("broker connection lost"))
+            # Healthy: a broker answered a hello on this connection, or (no hello to send)
+            # the connection lived a while. Only then does the backoff start over.
+            healthy = self._answered_seq == seq or (
+                self.hello_params is None and loop.time() - opened >= HEALTHY_WITHOUT_HELLO_S
+            )
+            if healthy:
+                delay = self.backoff[0]
+            if self._closed:
+                break
+            await asyncio.sleep(delay)
+            if not healthy:
+                delay = min(delay * 2, self.backoff[1])
 
     async def _read(self, reader: asyncio.StreamReader) -> None:
+        try:
+            await self._read_lines(reader)
+        finally:
+            # EOF or a broken connection: fail every pending call now, so a hello
+            # in flight returns at once instead of waiting out its timeout.
+            self._fail_pending(BrokerDown("broker connection lost"))
+
+    async def _read_lines(self, reader: asyncio.StreamReader) -> None:
         while True:
             try:
                 line = await reader.readline()
@@ -276,6 +317,7 @@ class BrokerConn:
                 fut.set_result(obj.get("result") or {})
 
     async def _send_hello(self) -> None:
+        seq = self._conn_seq
         try:
             self.hello_result = await self._call_now("mcp.hello", self.hello_params or {}, 10.0)
             self.hello_error = None
@@ -284,6 +326,8 @@ class BrokerConn:
             self.hello_result = None
         except (BrokerDown, TimeoutError, OSError):
             return
+        if seq == self._conn_seq:
+            self._answered_seq = seq  # a broker answered (a result or an error) on this connection
         if self.hello_result is not None and self.after_hello is not None:
             try:
                 await self.after_hello(self.hello_result)
