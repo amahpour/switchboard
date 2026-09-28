@@ -23,6 +23,7 @@ from typing import Any
 
 from switchboard.broker import proc
 from switchboard.broker.proc import ProcInfo
+from switchboard.models import LOCAL_HOST, session_key
 
 _SOL_LOCAL = 0
 _LOCAL_PEERCRED = 1
@@ -402,8 +403,9 @@ def resolve_hook_participant(
     sid: str | None,
     candidates: Iterable[HookCandidate],
     *,
+    argv_fn: Callable[[list[ProcInfo]], dict[int, str]],
     join_nonce_bind: bool = False,
-    argv_fn: Callable[[list[ProcInfo]], dict[int, str]] | None = None,
+    host: str = LOCAL_HOST,
 ) -> HookCandidate | None:
     """Pick the one participant a hook event may affect, or None (inert).
 
@@ -413,14 +415,21 @@ def resolve_hook_participant(
        hooks are inert, not credited to the outer one). Pending (unbound)
        participants count only for a join-nonce bind.
     2. Codex, and bound Cursor participants, are keyed by the hook's session
-       id: ``session_key`` must equal ``<harness>:<sid>`` exactly, even with a
-       single candidate (an unjoined sibling thread under the same daemon is
-       inert). A Cursor join-nonce bind skips this: the caller checks that the
-       nonce is the one this participant's own join issued, and may re-key it.
+       id: ``session_key`` must equal ``session_key(harness, host, sid)``
+       (``<harness>:<sid>`` on this machine) exactly, even with a single
+       candidate (an unjoined sibling thread under the same daemon is inert).
+       A Cursor join-nonce bind skips this: the caller checks that the nonce
+       is the one this participant's own join issued, and may re-key it.
     3. If several candidates remain, keep those whose session id or key
        equals ``sid``. Exactly one wins.
+
+    ``chain``, ``argv_fn`` and the candidates all describe one host, ``host``
+    ('' for this machine): the caller passes only that host's participants, and
+    that host's view's ``argv_many`` (DESIGN.md §27.5.6). ``argv_fn`` has no
+    default, so no caller can fall back to this machine's process table for
+    another host's chain.
     """
-    argv_fn = argv_fn or proc.argv_many
+    sid_key = session_key(harness, host, sid) if sid else None
     cands = []
     for c in candidates:
         if c.harness != harness or not (c.bind_state == "bound" or join_nonce_bind):
@@ -429,13 +438,13 @@ def resolve_hook_participant(
         if idx is None:
             continue
         if harness in SID_KEYED and c.bind_state == "bound" and not (join_nonce_bind and harness == "cursor"):
-            if not sid or c.session_key != f"{harness}:{sid}":
+            if not sid or c.session_key != sid_key:
                 continue
         cands.append((idx, c))
     if len(cands) > 1 and sid:
         cands = [
             (i, c) for i, c in cands
-            if c.session_id == sid or c.session_key == f"{harness}:{sid}"
+            if c.session_id == sid or c.session_key == sid_key
         ]
     if len(cands) != 1:
         return None
@@ -467,6 +476,9 @@ class McpIdentity:
     evidence: str
     tier_note: str | None = None
     claude_socket: str | None = None
+    # the host whose kernel vouched for these pids: '' for this machine (the broker's own
+    # socket peer); a remote's name for an attest from that host's satellite (§27.5.3)
+    host: str = LOCAL_HOST
 
 
 def claude_registry_socket(sessions_dir: str | os.PathLike, claude_pid: int) -> str | None:

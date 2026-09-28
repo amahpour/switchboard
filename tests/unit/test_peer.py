@@ -289,6 +289,18 @@ def test_resolve_hook_participant() -> None:
     assert resolve(chain, "cursor", "conv", [pend], join_nonce_bind=True) == pend
 
 
+def test_the_hook_resolver_reads_argv_only_through_its_caller() -> None:
+    """``argv_fn`` has no default (DESIGN.md §27.5.6): a caller resolving another
+    host's chain can't fall back to this machine's process table by leaving it out.
+    The SID keys are the host's own (``session_key``)."""
+    chain = [_pi(300, 3.0), _pi(200, 2.0), _pi(100, 1.0)]
+    t1 = HookCandidate(4, "codex", 100, 1.0, session_id="t1", session_key="codex@fpga-pi:t1")
+    with pytest.raises(TypeError):
+        resolve_hook_participant(chain, "codex", "t1", [t1])  # type: ignore[call-arg]
+    assert resolve_hook_participant(chain, "codex", "t1", [t1], argv_fn=SHELLS, host="fpga-pi") == t1
+    assert resolve_hook_participant(chain, "codex", "t1", [t1], argv_fn=SHELLS) is None  # a local hook
+
+
 def test_codex_hooks_must_name_their_own_thread() -> None:
     """An unjoined sibling thread under the same daemon is inert, even when only
     one thread has joined (security review M2)."""

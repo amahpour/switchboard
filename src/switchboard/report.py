@@ -155,6 +155,7 @@ class Member:
     joined_at: float
     left_at: float | None
     left_reason: str | None
+    host: str = ""  # '' for the broker's machine; a remote's name (schema v2)
 
 
 def _data(raw: Any) -> dict[str, Any]:
@@ -172,6 +173,11 @@ class _Db:
 
     def q(self, sql: str, *args: Any) -> list[sqlite3.Row]:
         return self.con.execute(sql, args).fetchall()
+
+    def has_column(self, table: str, column: str) -> bool:
+        """Schema v1 databases (0.1.0, 0.2.0) have no ``participants.host``; the report
+        reads both and never migrates (it opens query-only)."""
+        return any(r[1] == column for r in self.con.execute(f"PRAGMA table_info({table})").fetchall())
 
 
 def _tier_timeline(db: _Db, pids: list[int]) -> dict[int, list[tuple[float, str]]]:
@@ -254,12 +260,14 @@ def build(con: sqlite3.Connection, room_name: str, *, since: float | None = None
     start = max(since, room["created_at"]) if since is not None else room["created_at"]
 
     # members of the room (a participant may have left and joined again: one row per membership)
+    host_col = "p.host" if db.has_column("participants", "host") else "''"
     members = [Member(membership_id=r["mid"], participant_id=r["pid"], name=r["screen_name"], harness=r["harness"],
                       tier=r["tier"], tier_note=r["tier_note"], status=r["status"],
                       approval_mode=r["approval_mode"], joined_at=r["joined_at"], left_at=r["left_at"],
-                      left_reason=r["left_reason"])
+                      left_reason=r["left_reason"], host=r["host"] or "")
                for r in db.q("SELECT m.id AS mid, m.participant_id AS pid, m.screen_name, m.joined_at, m.left_at,"
-                             " m.left_reason, p.harness, p.tier, p.tier_note, p.status, p.approval_mode"
+                             " m.left_reason, p.harness, p.tier, p.tier_note, p.status, p.approval_mode,"
+                             f" {host_col} AS host"
                              " FROM memberships m JOIN participants p ON p.id=m.participant_id"
                              " WHERE m.room_id=? AND (m.left_at IS NULL OR m.left_at>=?) ORDER BY m.id", rid, start)]
     by_mid = {m.membership_id: m for m in members}
@@ -405,6 +413,7 @@ def build(con: sqlite3.Connection, room_name: str, *, since: float | None = None
         wakes = [b for b in mb if b["kind"] == "wake"]
         agents.append({
             "name": m.name,
+            "host": _safe(m.host) or "",
             "harness": m.harness,
             # the tier when the window ended (a teardown afterwards may have changed the row)
             "tier": _safe(_tier_at(tiers.get(m.participant_id, []), end, m.tier)),
@@ -690,7 +699,8 @@ def render_markdown(rep: dict[str, Any], *, title: str | None = None) -> str:
         tier = f"`{a['tier']}`" + (f" ({a['tier_note']})" if a["tier_note"] else "")
         pk = a["parked"]
         pk_s = f"{pk['spells']} ({fmt_s(pk['seconds'])})" if pk["spells"] else "0"
-        L.append(_row([a["name"], a["harness"], a["model"] or "-", tier, a["turns"],
+        who = f"{a['name']}@{a['host']}" if a.get("host") else a["name"]
+        L.append(_row([who, a["harness"], a["model"] or "-", tier, a["turns"],
                        f"{wk['confirmed']}/{wk['offered']}", a["continuations"], a["mid_task"], a["posts"],
                        a["passes"], a["rate_limited"], pk_s, und_s]))
     L.append("")

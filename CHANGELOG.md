@@ -4,6 +4,10 @@
 
 Groundwork for remote members over SSH ([DESIGN.md §27](docs/DESIGN.md#27-remote-members-over-ssh-m8)), useful on its own.
 
+### Upgrading
+
+- **The database moves to schema 2, once, with a backup first.** The first broker start after upgrading from 0.2.0 (or 0.1.0) adds the columns and table that remote members need to `switchboard.db`; your rooms, history and memberships are kept as they are. Before it changes anything it writes a checked copy of the old database, `switchboard.db.v1.bak` (0600, in your switchboard home; an existing file of that name is never overwritten: the new copy gets a `.<time>` suffix). If any step fails, the database is left exactly as it was and the broker doesn't start; `switchboard start` shows why. 0.2.0 refuses the migrated database. **To go back to 0.2.0:** `switchboard stop`, copy `switchboard.db.v1.bak` over `switchboard.db`, delete `switchboard.db-wal` and `switchboard.db-shm` if they exist, then start 0.2.0 (anything posted since the upgrade is lost). The old file also predates what you revoked since the upgrade: run `switchboard logout --all` (web sign-ins you logged out come back with it), and `/kick` again any agent you kicked since the upgrade (its membership and credential are back too). `switchboard report` reads both versions and never migrates.
+
 ### Added
 
 - **Coverage in CI:** line coverage of the Linux and macOS test runs, combined, with a floor that only goes up and a README badge (README, "Development").

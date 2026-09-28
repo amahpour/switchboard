@@ -89,7 +89,7 @@ docker compose exec -u dev box /opt/sandbox/install-agents.sh
 docker compose exec -u dev box bash -lc 'switchboard install all'  # login shell: finds the CLIs; shows each diff and asks
 docker compose up -d --force-recreate box         # firewall back on (the default); volumes are kept
 ```
-`switchboard install` records the image's `/opt/uv/tools/switchboard/bin/python` and `/var/lib/switchboard` in the harness configs in the `switchboard-home` volume, and the broker rewrites its hook copy into `/var/lib/switchboard/hooks` at every start, so both survive a rebuild and a per-run reset (§7). Re-run `switchboard install all` after a switchboard upgrade (the hook file name changes with its content).
+`switchboard install` records the image's `/opt/uv/tools/switchboard/bin/python` and `/var/lib/switchboard` in the harness configs in the `switchboard-home` volume, and the broker rewrites its hook copy into `/var/lib/switchboard/hooks` at every start, so both survive a rebuild and a per-run reset (§7). Re-run `switchboard install all` after a switchboard upgrade (the hook file name changes with its content). The first broker start on a rebuilt image that moves from 0.2.0 to a schema-2 version migrates the database in `switchboard-data` once, after writing a checked backup, `/var/lib/switchboard/switchboard.db.v1.bak` (DESIGN.md §27.6; going back: CHANGELOG).
 
 ## 4. Log in to each agent
 

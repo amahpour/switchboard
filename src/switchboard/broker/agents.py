@@ -31,12 +31,14 @@ from switchboard import envelope
 from switchboard.adapters.base import HOOK_EVENTS
 from switchboard.adapters.testagent import ACK_MODES
 from switchboard.broker import proc
+from switchboard.broker.hosts import HostView, HostViews
 from switchboard.broker.peer import HookCandidate, McpIdentity, McpRefused, resolve_hook_participant, verify_mcp_peer
 from switchboard.broker.service import ServiceError
 from switchboard.delivery import rules
 from switchboard.envelope import TOKEN_RE, clean, sanitize
 from switchboard.models import (
     HARNESSES,
+    LOCAL_HOST,
     RESERVED_NAMES,
     SCREEN_NAME_RE,
     Action,
@@ -48,6 +50,7 @@ from switchboard.models import (
     Room,
     Snapshot,
     canonical_event,
+    session_key,
 )
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -104,11 +107,12 @@ def _model_ok(model: Any) -> bool:
 class AgentService:
     def __init__(self, state: "BrokerState"):
         self.state = state
-        self._agent_index: set[int] = set()
+        # host -> agent pids of that host's joined sessions (DESIGN.md §27.5.5)
+        self._agent_index: dict[str, set[int]] = {}
         self._models: dict[int, str] = {}  # participant id -> last model recorded
         # a SessionStart's model from a session that hasn't joined yet (Claude reports its
-        # model only there, before any join): (pid, start) of each process above the hook
-        self._early_models: dict[tuple[int, str], str] = {}
+        # model only there, before any join): (host, pid, start) of each process above the hook
+        self._early_models: dict[tuple[str, int, str], str] = {}
         rec = os.environ.get("SWITCHBOARD_RECORD_PAYLOADS")
         self.record_dir = Path(rec) if rec and state.test_mode else None
         self.refresh_index()
@@ -130,13 +134,23 @@ class AgentService:
     def svc(self) -> Any:
         return self.state.service
 
+    @property
+    def hosts(self) -> HostViews:
+        """Every probe about a participant goes through its host's view (§27.5.6)."""
+        return self.state.hosts
+
     def run(self, actions: list[Action]) -> None:
         if actions:
             self.state.runner.execute(actions)
 
     def refresh_index(self) -> None:
-        """Agent pids of joined sessions: hooks from anywhere else are inert at once."""
-        self._agent_index = {p.agent_pid for p in self.store.joined_participants() if p.agent_pid}
+        """Agent pids of joined sessions, per host: hooks from anywhere else are inert at once.
+        A local hook only ever meets the local set (a remote row's pid is a pid on its host)."""
+        idx: dict[str, set[int]] = {}
+        for p in self.store.joined_participants():
+            if p.agent_pid:
+                idx.setdefault(p.host, set()).add(p.agent_pid)
+        self._agent_index = idx
 
     # -------------------------------------------------- RoomService hooks
     def on_message(self, msg: Message) -> None:
@@ -191,7 +205,7 @@ class AgentService:
         )
         conn.mcp = mc
         # A reconnecting MCP server (same process) picks its sessions up again.
-        mine = self.store.participants_by_mcp(ident.mcp_pid, ident.mcp_start)
+        mine = self.store.participants_by_mcp(ident.host, ident.mcp_pid, ident.mcp_start)
         for p in mine:
             if p.harness == "test":
                 self.engine.ack_modes[p.id] = ack
@@ -225,7 +239,7 @@ class AgentService:
         if mc.inbox_attached:
             self._detach(conn, mc)
         acts: list[Action] = self.engine.close_conn_sinks(conn.id)
-        for p in self.store.participants_by_mcp(mc.ident.mcp_pid, mc.ident.mcp_start):
+        for p in self.store.participants_by_mcp(mc.ident.host, mc.ident.mcp_pid, mc.ident.mcp_start):
             if p.harness == "codex":
                 continue
             acts += self.engine.expire_pull_batches(p.id, "disconnect")
@@ -255,7 +269,7 @@ class AgentService:
             return {"attached": False, "reason": why or "no Claude adapter"}
         if mc.inbox_attached:  # a repeated hello on the same connection
             return {"attached": True, "tier": "claude:inbox"}
-        adapter.attach(mc.ident.mcp_pid, mc.ident.mcp_start, conn)
+        adapter.attach(mc.ident.mcp_pid, mc.ident.mcp_start, conn, host=mc.ident.host)
         mc.inbox_attached = True
         self.store.add_event("tier", data={"what": "attach", "harness": "claude"})
         self._refresh_tiers(mc)
@@ -271,7 +285,7 @@ class AgentService:
     def _refresh_tiers(self, mc: McpConn) -> None:
         """Re-derive the tier of every session this MCP process serves."""
         acts: list[Action] = []
-        for p in self.store.participants_by_mcp(mc.ident.mcp_pid, mc.ident.mcp_start):
+        for p in self.store.participants_by_mcp(mc.ident.host, mc.ident.mcp_pid, mc.ident.mcp_start):
             adapter = self.engine.adapter(p)
             tier, note = adapter.tier(p)
             note = mc.ident.tier_note or note
@@ -306,45 +320,62 @@ class AgentService:
 
     # ======================================================== membership
     def _session_key(self, mc: McpConn, thread_id: str | None) -> str:
-        h = mc.harness
+        h, host = mc.harness, mc.ident.host
         if h == "test":
-            return f"test:{mc.test_session}"
+            return session_key("test", host, str(mc.test_session))
         if h == "codex":
             if not thread_id:
                 raise ServiceError("bad_request", "Codex calls must carry _meta.threadId")
-            return f"codex:{thread_id}"
+            return session_key("codex", host, thread_id)
         if h == "cursor":
             # bound to the conversation id by the join nonce (M5); until then, the agent process
-            return f"cursor:agent:{mc.ident.agent_pid}@{_start_key(mc.ident.agent_start)}"
-        return f"{h}:{mc.ident.agent_pid}@{_start_key(mc.ident.agent_start)}"
+            return session_key("cursor", host, f"agent:{mc.ident.agent_pid}@{_start_key(mc.ident.agent_start)}")
+        return session_key(h, host, f"{mc.ident.agent_pid}@{_start_key(mc.ident.agent_start)}")
 
     def _cursor_session(self, mc: McpConn) -> Participant | None:
         """The active Cursor participant of this MCP server's verified agent process."""
         if mc.ident.agent_pid is None:
             return None
-        for p in self.store.active_participants_by_agent("cursor", mc.ident.agent_pid):
+        for p in self.store.active_participants_by_agent("cursor", mc.ident.host, mc.ident.agent_pid):
             if proc.same_start(p.agent_start, mc.ident.agent_start):
                 return p
         return None
 
     @staticmethod
-    def _check_same_session(existing: Participant, mc: McpConn) -> None:
+    def _same_mcp(p: Participant, ident: McpIdentity) -> bool:
+        """``(host, mcp_pid, mcp_start)`` equal: the very MCP process that holds ``p``."""
+        return p.host == ident.host and p.mcp_pid == ident.mcp_pid and proc.same_start(
+            p.mcp_start, ident.mcp_start)
+
+    def _check_same_session(self, existing: Participant, mc: McpConn) -> None:
         """A re-join may take over a session's memberships (rotating the
         credential) only from the MCP process that holds it (a broker
         reconnect) or once that process is gone (an MCP restart), and never
         from under another live agent process. Otherwise a process that merely
-        knows a Codex thread id could post as that thread's agent."""
-        same_mcp = existing.mcp_pid == mc.ident.mcp_pid and proc.same_start(
-            existing.mcp_start, mc.ident.mcp_start)
-        if same_mcp:
+        knows a Codex thread id could post as that thread's agent.
+
+        Both probes go to the session's own host (§27.5.6); a host that can't
+        tell (``None``) counts as alive: no takeover until it can."""
+        if self._same_mcp(existing, mc.ident):
             return
-        if existing.mcp_pid and proc.alive(existing.mcp_pid, existing.mcp_start):
-            raise ServiceError("conflict", "this session is already joined from another live switchboard MCP"
-                                           " server; ask your user")
-        same_agent = existing.agent_pid == mc.ident.agent_pid and proc.same_start(
-            existing.agent_start, mc.ident.agent_start)
-        if not same_agent and existing.agent_pid and proc.alive(existing.agent_pid, existing.agent_start):
-            raise ServiceError("conflict", "this session belongs to another live agent process; ask your user")
+        view = self.hosts.view(existing.host)
+        if existing.mcp_pid:
+            a = view.alive(existing.mcp_pid, existing.mcp_start)
+            if a is None:
+                raise ServiceError("conflict", f"can't verify this session on {existing.host or 'this machine'}"
+                                               " yet; try again in a few seconds")
+            if a:
+                raise ServiceError("conflict", "this session is already joined from another live switchboard MCP"
+                                               " server; ask your user")
+        same_agent = existing.host == mc.ident.host and existing.agent_pid == mc.ident.agent_pid and \
+            proc.same_start(existing.agent_start, mc.ident.agent_start)
+        if not same_agent and existing.agent_pid:
+            a = view.alive(existing.agent_pid, existing.agent_start)
+            if a is None:
+                raise ServiceError("conflict", f"can't verify this session on {existing.host or 'this machine'}"
+                                               " yet; try again in a few seconds")
+            if a:
+                raise ServiceError("conflict", "this session belongs to another live agent process; ask your user")
 
     def _mcp(self, conn: "Conn") -> McpConn:
         mc = getattr(conn, "mcp", None)
@@ -364,11 +395,13 @@ class AgentService:
         p = self.store.get_participant(m.participant_id)
         if p is None or not p.active:
             raise ServiceError("unauthorized", "this session has ended: join() again")
-        if p.mcp_pid != mc.ident.mcp_pid or not proc.same_start(p.mcp_start, mc.ident.mcp_start):
+        if not self._same_mcp(p, mc.ident):
+            # (host, mcp_pid, mcp_start): a credential works only from the MCP process that joined,
+            # on its own host (§27.5.4)
             raise ServiceError("unauthorized", "this credential belongs to another process")
         if p.harness == "codex":
             tid = params.get("thread_id")
-            if not isinstance(tid, str) or p.session_key != f"codex:{tid}":
+            if not isinstance(tid, str) or p.session_key != session_key("codex", p.host, tid):
                 raise ServiceError("unauthorized", "this credential belongs to another Codex thread")
         room = self.store.room_by_id(m.room_id)
         assert room is not None
@@ -426,13 +459,13 @@ class AgentService:
             tier_note=mc.ident.tier_note or note,
             env_leak=int(mc.env_leak),
             session_id=(tid or mc.session_id),
+            host=mc.ident.host,
         )
         if h == "test" or (existing is not None and existing.hooks_seen_at is not None):
             fields.update(status="busy", status_at=now, status_src="join")
         elif existing is None or existing.status == "offline":
             fields.update(status="starting", status_at=now, status_src="join")
-        same_mcp = existing is not None and existing.mcp_pid == mc.ident.mcp_pid and proc.same_start(
-            existing.mcp_start, mc.ident.mcp_start)
+        same_mcp = existing is not None and self._same_mcp(existing, mc.ident)
         if h == "codex" and not same_mcp:
             # a Codex thread proof belongs to the MCP process that proved it (§9.3):
             # a join from anywhere else proves the thread again
@@ -480,7 +513,7 @@ class AgentService:
                            text=f"joined ({h}, {tier})")
         self.refresh_index()
         if p.agent_pid:
-            early = self._early_models.get((p.agent_pid, _start_key(p.agent_start)))
+            early = self._early_models.get((p.host, p.agent_pid, _start_key(p.agent_start)))
             if early is not None:
                 self._note_model(p, early)
         adapter.on_joined(p, nonce, not same_mcp or not rejoined)
@@ -647,13 +680,18 @@ class AgentService:
         event = canonical_event(params.get("event") if isinstance(params.get("event"), str) else "")
         if event not in HOOK_EVENTS[harness]:
             return inert
+        # a local connection: its kernel peer is a process on this machine, and only this
+        # machine's participants can be its candidates (remote connections arrive in M8c)
+        host = LOCAL_HOST
+        view = self.hosts.view(host)
         pid = conn.peer.pid
         if pid and event == "SessionStart":
-            self._remember_model(pid, params.get("model"))
-        if not pid or not self._agent_index:
+            self._remember_model(host, view, pid, params.get("model"))
+        index = self._agent_index.get(host)
+        if not pid or not index:
             return inert
-        chain = proc.ancestry(pid, 8)
-        if not any(pi.pid in self._agent_index for pi in chain):
+        chain = view.ancestry(pid, 8) or []
+        if not any(pi.pid in index for pi in chain):
             return inert
         ev = parse_hook_event(harness, event, params)
         self._record(harness, event, params)
@@ -661,10 +699,11 @@ class AgentService:
             HookCandidate(participant_id=p.id, harness=p.harness, agent_pid=p.agent_pid,
                           agent_start=p.agent_start, session_id=p.session_id,
                           session_key=p.session_key, bind_state=p.bind_state)
-            for p in self.store.joined_participants()
+            for p in self.store.joined_participants() if p.host == host
         ]
         nonce_bind = harness == "cursor" and bool(ev.join_nonce)
-        c = resolve_hook_participant(chain, harness, ev.sid, cands, join_nonce_bind=nonce_bind)
+        c = resolve_hook_participant(chain, harness, ev.sid, cands, join_nonce_bind=nonce_bind,
+                                     argv_fn=lambda procs: view.argv_many(procs) or {}, host=host)
         if c is None:
             return inert
         p = self.store.get_participant(c.participant_id)
@@ -715,16 +754,17 @@ class AgentService:
         nonce, sid = ev.join_nonce or "", ev.sid or ""
         if not p.bind_nonce or not hmac.compare_digest(p.bind_nonce, nonce):
             # not this participant's current join: only its own bound conversation may go on
-            return p if p.bind_state == "bound" and p.session_key == f"cursor:{sid}" else None
+            return p if p.bind_state == "bound" and p.session_key == session_key("cursor", p.host, sid) else None
         if not CURSOR_SID_RE.fullmatch(sid):
             return None
-        key = f"cursor:{sid}"
+        key = session_key("cursor", p.host, sid)
         if p.session_key == key and p.bind_state == "bound":
             self.store.update_participant(p.id, bind_nonce=None)  # single use
             return self.store.get_participant(p.id)
         other = self.store.find_participant("cursor", key)
         if other is not None and other.id != p.id:
-            if other.active and other.agent_pid and proc.alive(other.agent_pid, other.agent_start):
+            # the holder's own host decides; one that can't tell (None) counts as alive
+            if other.active and other.agent_pid and self.hosts.agent_alive(other) is not False:
                 self.store.add_event("bind", participant_id=p.id, data={"what": "cursor", "ok": False,
                                                                         "why": "conversation held"})
                 log.warning("cursor participant %d: conversation already bound to live participant %d",
@@ -781,12 +821,13 @@ class AgentService:
         self._models[p.id] = model
         self.store.add_event("model", participant_id=p.id, data={"model": model})
 
-    def _remember_model(self, pid: int, model: Any) -> None:
-        """Keep a SessionStart's model for the processes above the hook, until a join names one."""
+    def _remember_model(self, host: str, view: HostView, pid: int, model: Any) -> None:
+        """Keep a SessionStart's model for the processes above the hook (on ``host``),
+        until a join names one."""
         if not _model_ok(model):
             return
-        for pi in proc.ancestry(pid, 8):
-            self._early_models[(pi.pid, _start_key(pi.start))] = model
+        for pi in view.ancestry(pid, 8) or []:
+            self._early_models[(host, pi.pid, _start_key(pi.start))] = model
         while len(self._early_models) > 256:  # bounded: oldest first
             self._early_models.pop(next(iter(self._early_models)))
 
@@ -815,7 +856,9 @@ class AgentService:
         for p in self.store.joined_participants():
             if not p.agent_pid:
                 continue
-            if proc.alive(p.agent_pid, p.agent_start):
+            # asked of the participant's own host (§27.5.6); None: that host can't tell now
+            # (a remote whose link is down), so the session is left alone, never ended
+            if self.hosts.agent_alive(p) is not False:
                 continue
             if self.engine.adapter(p).defer_end(p):
                 continue

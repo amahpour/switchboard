@@ -241,7 +241,7 @@ def test_waiting_approval_holds_every_path_until_the_prompt_clears(w: World, clo
     p, m, _c = claude(w, status="busy")
     # the registry says a permission prompt is open
     reg(w, p, "waiting")
-    view = ad(w).registry[p.agent_pid]
+    view = ad(w).registry[("", p.agent_pid)]  # keyed (host, pid); '' is this machine
     tr = registry_transition(w.p(p).status, w.p(p).hooks_seen_at, view, clock.now())
     assert tr == ("waiting-approval", False)
     w.actions += w.engine.set_status(w.p(p), *tr[:1], "claude:registry")
@@ -252,7 +252,7 @@ def test_waiting_approval_holds_every_path_until_the_prompt_clears(w: World, clo
     # declined with Esc: the registry goes idle, the turn is over
     clock.advance(0.5)
     reg(w, p, "idle")
-    tr = registry_transition(w.p(p).status, w.p(p).hooks_seen_at, ad(w).registry[p.agent_pid], clock.now())
+    tr = registry_transition(w.p(p).status, w.p(p).hooks_seen_at, ad(w).registry[("", p.agent_pid)], clock.now())
     assert tr == ("idle", True)
     w.actions += w.engine.set_status(w.p(p), tr[0], "claude:registry", bump=tr[1])
     [push] = pushes(w)
@@ -519,9 +519,9 @@ def test_poll_once_ignores_a_registry_file_that_is_not_this_session(w: World, cl
         data["messagingSocketPath"] = "/tmp/someone-else.sock"
     (sessions / f"{p.agent_pid}.json").write_text(json.dumps(data))
     a.poll_once()
-    assert p.agent_pid not in a.registry and w.p(p).status == "busy"
+    assert ("", p.agent_pid) not in a.registry and w.p(p).status == "busy"
     # the matching file is read, and sets the approval hold
     data.update(pid=p.agent_pid, messagingSocketPath=SOCK)
     (sessions / f"{p.agent_pid}.json").write_text(json.dumps(data))
     a.poll_once()
-    assert a.registry[p.agent_pid].status == "waiting" and w.p(p).status == "waiting-approval"
+    assert a.registry[("", p.agent_pid)].status == "waiting" and w.p(p).status == "waiting-approval"

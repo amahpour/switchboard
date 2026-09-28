@@ -12,6 +12,11 @@ from typing import Any
 
 ROOM_RE = re.compile(r"^#[a-z0-9][a-z0-9_-]{0,31}$")
 SCREEN_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,23}$")
+# A remote host's name (DESIGN.md §27.5.1): the config name of a remote in remotes.toml.
+# It never contains '@' or ':', so it can't be confused with a session key's parts.
+# The broker's own machine is the empty host ''.
+HOST_RE = re.compile(r"^[a-z][a-z0-9-]{0,23}$")
+LOCAL_HOST = ""
 
 SENDER_KINDS = ("human", "agent", "system")
 VIAS = ("web", "cli", "mcp", "system")
@@ -40,6 +45,35 @@ def normalize_room(name: str) -> str:
 
 def room_slug(name: str) -> str:
     return name[1:] if name.startswith("#") else name
+
+
+def valid_host(host: str) -> bool:
+    """A remote host name (``HOST_RE``); the local host '' is not one."""
+    return isinstance(host, str) and HOST_RE.match(host) is not None
+
+
+def session_key(harness: str, host: str, rest: str) -> str:
+    """A participant's session key (DESIGN.md §27.5.4): ``<harness>:<rest>`` on this
+    machine (the keys every earlier version wrote), ``<harness>@<host>:<rest>`` for a
+    remote host. ``UNIQUE(harness, session_key)`` then keeps hosts apart."""
+    if host == LOCAL_HOST:
+        return f"{harness}:{rest}"
+    if not valid_host(host):
+        raise ValueError(f"not a host name: {host!r}")
+    return f"{harness}@{host}:{rest}"
+
+
+def split_session_key(key: str) -> tuple[str, str, str] | None:
+    """The inverse of ``session_key``: ``(harness, host, rest)``, or None for a key in
+    neither form. Neither a harness nor a host name contains ':', so the first ':'
+    ends the head (a Codex thread id may contain ':' itself)."""
+    head, sep, rest = key.partition(":")
+    if not sep or not head:
+        return None
+    harness, at, host = head.partition("@")
+    if not harness or (at and not valid_host(host)):
+        return None
+    return harness, host, rest
 
 
 @dataclass(frozen=True)
@@ -99,6 +133,7 @@ class Message:
     text: str
     reply_to: int | None
     mentions: list[str] = field(default_factory=list)
+    sender_host: str | None = None  # the remote host of an agent sender (schema v2); None on this machine
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "Message":
@@ -119,6 +154,7 @@ class Message:
             text=r["text"],
             reply_to=r["reply_to"],
             mentions=list(mentions),
+            sender_host=r["sender_host"] if "sender_host" in r.keys() else None,
         )
 
 
@@ -143,6 +179,7 @@ class Member:
     inflight: int = 0
     parked: bool = False
     parked_reason: str | None = None
+    host: str = ""  # the participant's host: '' for this machine (DESIGN.md §27.6)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -173,6 +210,40 @@ class Event:
             kind=r["kind"],
             data=data,
         )
+
+
+@dataclass(frozen=True)
+class RemoteRow:
+    """A ``remotes`` row (DESIGN.md §27.6): the owner's consent for one remote's
+    exact config, and its last block and link-up times."""
+
+    name: str
+    config_hash: str
+    enabled_at: float | None
+    enabled_via: str | None
+    blocked_at: float | None
+    blocked_reason: str | None
+    last_up_at: float | None
+
+    @classmethod
+    def from_row(cls, r: sqlite3.Row) -> "RemoteRow":
+        return cls(**{k: r[k] for k in r.keys()})
+
+    def enabled_for(self, config_hash: str) -> bool:
+        """The owner's consent is for exactly this config (any edit means "needs
+        enable"). Consent only: a blocked remote is still enabled. Whether to dial
+        is ``may_dial``."""
+        return self.enabled_at is not None and self.config_hash == config_hash
+
+    @property
+    def blocked(self) -> bool:
+        return self.blocked_at is not None
+
+    def may_dial(self, config_hash: str) -> bool:
+        """The one dial gate (DESIGN.md §27.4.7, §27.5.8): enabled for exactly this
+        config and not blocked. A block (a host-key mismatch, an auth failure, a
+        replaced key) holds until the next enable clears it: no automatic retry."""
+        return self.enabled_for(config_hash) and not self.blocked
 
 
 # --------------------------------------------------------------------- agents
@@ -229,6 +300,9 @@ class Participant:
     created_at: float
     last_seen: float | None
     ended_at: float | None
+    # '' for this machine; a remote's config name for a member on that host, whose
+    # pids are pids on that host (DESIGN.md §27.6)
+    host: str = LOCAL_HOST
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "Participant":

@@ -499,3 +499,43 @@ def test_cli_writes_markdown_and_json_read_only(tmp_path: Path, clock: FakeClock
     assert main(["report", "--home", str(home), "--room", "#build"]) == 0
     assert (home / "switchboard.db").read_bytes() == before  # and never writes one
     assert main(["report", "--home", str(home), "--room", "#build", "--last", "2 weeks"]) == 1
+
+
+# ---------------------------------------------------------- schema v1 and v2
+def test_report_reads_v1_and_v2(tmp_path: Path) -> None:
+    """``switchboard report`` reads a 0.2.0 (schema v1) database as it is, never
+    migrating it, and a v2 one, where it names each participant's host (§27.6)."""
+    from switchboard import db
+    from switchboard.models import session_key
+
+    fixture = Path(__file__).resolve().parents[1] / "fixtures" / "db" / "v0_2_0.sql"
+    path = tmp_path / "switchboard.db"
+    raw = sqlite3.connect(path)
+    raw.executescript(fixture.read_text(encoding="utf-8"))
+    raw.close()
+    before = path.read_bytes()
+    con = report.open_ro(path)
+    rep1 = report.build(con, "#build", now=1_790_000_100.0)
+    md1 = report.render_markdown(rep1)
+    con.close()
+    assert db.schema_version(sqlite3.connect(path)) == 1  # read, never migrated
+    assert path.read_bytes() == before and not list(tmp_path.glob("*.v1.bak*"))
+    assert {a["name"] for a in rep1["agents"]} >= {"vivado", "bot-a"}
+    assert all(a["host"] == "" for a in rep1["agents"]) and "@" not in md1.split("## Agents")[1].split("\n\n")[1]
+
+    # the broker migrates it; then one of its participants is on a Pi
+    c = db.open_db(path)
+    pid = c.execute("SELECT participant_id FROM memberships WHERE screen_name='bot-a'").fetchone()[0]
+    c.execute("UPDATE participants SET host='fpga-pi', session_key=? WHERE id=?",
+              (session_key("test", "fpga-pi", "bot-a"), pid))
+    c.close()
+    con = report.open_ro(path)
+    rep2 = report.build(con, "#build", now=1_790_000_100.0)
+    md2 = report.render_markdown(rep2)
+    con.close()
+    hosts = {a["name"]: a["host"] for a in rep2["agents"]}
+    assert hosts["bot-a"] == "fpga-pi" and hosts["vivado"] == ""
+    assert "| bot-a@fpga-pi |" in md2 and "| vivado |" in md2
+    # everything else reads the same as before the migration
+    strip = [{k: v for k, v in a.items() if k != "host"} for a in rep2["agents"]]
+    assert strip == [{k: v for k, v in a.items() if k != "host"} for a in rep1["agents"]]

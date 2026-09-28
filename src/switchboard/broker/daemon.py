@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from switchboard import db
 from switchboard.config import Config
 from switchboard.mcp.client import BrokerDown, RpcError, call_sync, ping
 from switchboard.paths import Paths, is_under_system_tmp
@@ -138,6 +139,16 @@ def run_foreground(
         return 1
     try:
         setup_logging(paths)
+        # Create the database, or migrate a version-1 one (after a verified backup,
+        # DESIGN.md §27.6), here: under the single-instance lock and before anything
+        # listens, with a refusal on stderr (broker.out, which `switchboard start`
+        # shows) and not only in broker.log. The lifespan then finds it current.
+        try:
+            db.open_db(paths.db).close()
+        except db.SchemaError as e:
+            log.error("database refused: %s", e)
+            print(f"switchboard: {e}", file=sys.stderr)
+            return 1
         want = cfg.port if port is None else port
         try:
             tcp = loopback_listener(want)

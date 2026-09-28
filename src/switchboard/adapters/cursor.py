@@ -43,13 +43,13 @@ from __future__ import annotations
 from typing import Any
 
 from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, Adapter
-from switchboard.models import HookEvent, Participant, Release, Route
+from switchboard.models import HookEvent, Participant, Release, Route, split_session_key
 
 TIER = "cursor:stop-park"
 NOTE = "provisional"
 NOTE_DEGRADED = "provisional, degraded"
-KEY_PREFIX = "cursor:"
-PENDING_PREFIX = "cursor:agent:"
+# a pending (unbound) session key's part after the harness and host: agent:<pid>@<start>
+PENDING_REST = "agent:"
 # the hook gives the broker its own wait budget; the park ends this much sooner
 PARK_MARGIN_S = 30.0
 MIN_PARK_S = 1.0
@@ -64,8 +64,12 @@ UNBOUND_WHY = ("not bound to a Cursor conversation yet (no switchboard postToolU
 
 
 def bound(p: Participant) -> bool:
-    return p.bind_state == "bound" and p.session_key.startswith(KEY_PREFIX) \
-        and not p.session_key.startswith(PENDING_PREFIX)
+    """Bound to a Cursor conversation: its key is ``cursor:<conversation>`` here, or
+    ``cursor@<host>:<conversation>`` on a remote host (DESIGN.md §27.5.4), and no
+    longer the pending ``…:agent:<pid>@<start>``."""
+    parts = split_session_key(p.session_key)
+    return p.bind_state == "bound" and parts is not None and parts[0] == "cursor" \
+        and not parts[2].startswith(PENDING_REST)
 
 
 class CursorAdapter(Adapter):

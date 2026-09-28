@@ -73,7 +73,7 @@ def test_the_broker_refuses_attach_on_its_own(broker: InProcBroker, case: str) -
     r = attach(broker, conn, params)
     assert r["attached"] is False and r["reason"]
     assert conn.mcp is not None and conn.mcp.inbox_attached is False
-    assert 987654 not in broker.state.engine.adapters["claude"].conns
+    assert ("", 987654) not in broker.state.engine.adapters["claude"].conns  # keyed (host, mcp pid)
 
 
 def test_attach_without_hello_state_raises(broker: InProcBroker) -> None:
