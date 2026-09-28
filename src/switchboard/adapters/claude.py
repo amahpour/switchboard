@@ -20,36 +20,55 @@
 
 ``ClaudeRegistryPoller`` (in this adapter) reads ``<sessions_dir>/<pid>.json``
 every 250 ms for joined Claude sessions on this machine (through the broker's
-local host view, DESIGN.md §27.5.6; a remote member's registry is relayed by its
-link, M8d). Channels and registry views are keyed ``(host, pid)``. It sets and clears
-``waiting-approval`` (``status == "waiting"``), and it ends a turn that
-fired no Stop hook (Esc) once the registry has said ``idle`` for a second
-after the last hook. The ``status`` field is undocumented (FINDINGS §2 1.5).
+local host view, DESIGN.md §27.5.6). Channels and registry views are keyed
+``(host, pid)``. It sets and clears ``waiting-approval`` (``status == "waiting"``),
+and it ends a turn that fired no Stop hook (Esc) once the registry has said
+``idle`` for a second after the last hook. The ``status`` field is undocumented
+(FINDINGS §2 1.5).
+
+**A Claude session on a remote host** (DESIGN.md §27.5.6, §27.7) works the same
+way through its host's link: its registry is read on that host by the satellite
+and relayed (``reg`` frames, every 250 ms; ``relay``), and both kinds of read go
+through one ``apply_view``. A relayed view is fresh for 1.5 s (a push) and lost
+after 5 s (parked), against 0.5 s and 3 s locally, since LAN jitter would
+otherwise defer wakes. A push to a remote session carries ``chk = {pid, start,
+want}`` beside the frame (``want`` is ``busy`` for a mid-task priority batch,
+``idle`` for a wake): the satellite relays it only to the connection whose own
+attested Claude ``chk`` names, re-reads the registry a moment before, and if the
+status is no longer ``want`` drops it and reports ``stale_status`` itself (marked
+``facts.lastmile``), an uncounted re-route that waits for a newer view.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
+import dataclasses
 import logging
-import os
-import stat
 from dataclasses import dataclass
 from typing import Any
 
 from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, Adapter
 from switchboard.adapters.base import SendError as _BaseSendError
 from switchboard.broker import proc
+from switchboard.claude_registry import registry_status
 from switchboard.clock import Clock, SystemClock
 from switchboard.config import Config
-from switchboard.models import LOCAL_HOST, Batch, Participant, Release, Route
+from switchboard.models import LOCAL_HOST, Action, Batch, Participant, Release, Route
+from switchboard.remote.proto import STALE_STATUS
 
 log = logging.getLogger("switchboard.claude")
 
 REGISTRY_POLL_S = 0.25
 REGISTRY_FRESH_S = 0.5  # an idle wake needs a registry read at most this old (§9.2)
 REGISTRY_LOST_S = 3.0  # older than this: the registry is unreadable, the member is parked
+# the same for a session on a remote host, whose registry its link relays (§27.5.6)
+REMOTE_FRESH_S = 1.5
+REMOTE_LOST_S = 5.0
+# stale_status re-routes (the satellite's last-mile check refused a frame) in a row
+# before they back off too, as a Codex re-route does
+REROUTE_FREE = 2
+REROUTE_BACKOFF_S = (1.0, 30.0)
 REGISTRY_IDLE_GRACE_S = 1.0  # registry idle this long after the last hook ends a Stop-less turn
 POST_TIMEOUT_S = 10.0
 SEND_BACKOFF_S = (1.0, 30.0)
@@ -79,29 +98,13 @@ class RegView:
     status: str | None
     read_at: float  # broker clock time of the read
     since: float  # when the registry says this status began (statusUpdatedAt, else first seen)
-
-
-def read_registry(sessions_dir: str, pid: int) -> dict[str, Any] | None:
-    """``<sessions_dir>/<pid>.json`` if it is a regular file owned by us and parses."""
-    path = os.path.join(os.path.expanduser(str(sessions_dir)), f"{int(pid)}.json")
-    try:
-        st = os.stat(path)
-        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_size > 1 << 20:
-            return None
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return None
-    return data if isinstance(data, dict) else None
+    # the adapter's running count of views when this one arrived: "a view newer than a
+    # stale_status refusal" is decided by arrival order, never by a (steppable) clock
+    seq: int = dataclasses.field(default=0, compare=False)
 
 
 def registry_view(data: dict[str, Any], prev: RegView | None, now: float) -> RegView:
-    status = data.get("status")
-    status = status if isinstance(status, str) and len(status) <= 32 else None
-    since: float | None = None
-    upd = data.get("statusUpdatedAt")
-    if isinstance(upd, (int, float)) and not isinstance(upd, bool) and upd > 0:
-        since = float(upd) / 1000.0 if upd > 1e11 else float(upd)  # epoch ms (seconds tolerated)
+    status, since = registry_status(data)
     if since is None:
         since = prev.since if prev is not None and prev.status == status else now
     return RegView(status=status, read_at=now, since=since)
@@ -140,6 +143,15 @@ class ClaudeAdapter(Adapter):
         self.registry: dict[tuple[str, int], RegView] = {}  # (host, agent pid) -> latest registry read
         self.pending_posts: dict[int, tuple[asyncio.Future[dict[str, Any]], Any]] = {}
         self.backoff: dict[int, tuple[float, int]] = {}  # participant id -> (until, failures)
+        # participant id -> (until, stale_status re-routes in a row): a remote session whose
+        # satellite keeps refusing frames backs off too (REROUTE_FREE, REROUTE_BACKOFF_S)
+        self.reroutes: dict[int, tuple[float, int]] = {}
+        # participant id -> the view count (``view_seq``) when its last frame was refused as
+        # stale: no new frame until a view that arrived after the refusal (the satellite sent
+        # one just before it, which doesn't count). Arrival order, not time: a wall-clock
+        # step can't hold a member in re-check.
+        self.recheck: dict[int, int] = {}
+        self.view_seq = 0  # registry views stored so far (local reads and relayed ones)
         self.unconfirmed_at: dict[int, float] = {}  # participant id -> last idle_no_token expiry
         self.clock: Clock = SystemClock()
         self.runner: Any = None
@@ -162,6 +174,17 @@ class ClaudeAdapter(Adapter):
     def reg_view(self, p: Participant) -> RegView | None:
         """The latest registry view of ``p``'s agent (on its own host)."""
         return self.registry.get((_host(p), p.agent_pid or -1))
+
+    @staticmethod
+    def fresh_s(p: Participant) -> float:
+        """How old a registry view may be for a push: 0.5 s on this machine, 1.5 s for a
+        view relayed from a remote host (LAN jitter would otherwise defer wakes, §27.5.6)."""
+        return REGISTRY_FRESH_S if _host(p) == LOCAL_HOST else REMOTE_FRESH_S
+
+    @staticmethod
+    def lost_s(p: Participant) -> float:
+        """How old a registry view may be before the member is parked as unreadable."""
+        return REGISTRY_LOST_S if _host(p) == LOCAL_HOST else REMOTE_LOST_S
 
     def conn_for(self, p: Participant | None) -> Any:
         if p is None or not p.mcp_pid or not p.claude_socket:
@@ -207,6 +230,15 @@ class ClaudeAdapter(Adapter):
         b = self.backoff.get(p.id)
         return b is not None and now < b[0]
 
+    def _rerouting(self, p: Participant, now: float) -> bool:
+        r = self.reroutes.get(p.id)
+        return r is not None and now < r[0]
+
+    def _rechecking(self, p: Participant, reg: RegView) -> bool:
+        """A frame to ``p`` was refused as stale: wait for a view that arrived after that."""
+        t = self.recheck.get(p.id)
+        return t is not None and reg.seq <= t
+
     def _unconfirmed_wait(self, p: Participant, now: float) -> float:
         """Seconds before the next frame after unconfirmed ones (0: go now).
 
@@ -222,7 +254,8 @@ class ClaudeAdapter(Adapter):
 
     def _registry_busy(self, p: Participant, now: float) -> bool:
         reg = self.reg_view(p)
-        return reg is not None and now - reg.read_at <= REGISTRY_FRESH_S and reg.status == "busy"
+        return (reg is not None and now - reg.read_at <= self.fresh_s(p) and reg.status == "busy"
+                and not self._rechecking(p, reg))
 
     def route(self, p: Participant, rel: Release, sink: Any, now: float) -> Route:
         if sink is not None:
@@ -234,7 +267,8 @@ class ClaudeAdapter(Adapter):
             # running (not waiting on a prompt: e.g. the human switched modes and
             # no hook has said so yet); everyone else pulls it at the next tool boundary.
             if (inbox and p.approval_mode == "bypass" and not self._backing_off(p, now)
-                    and self._unconfirmed_wait(p, now) <= 0 and self._registry_busy(p, now)):
+                    and not self._rerouting(p, now) and self._unconfirmed_wait(p, now) <= 0
+                    and self._registry_busy(p, now)):
                 return Route("push", path="inbox")
             return Route("pull", reason="next tool call")
         if not inbox:
@@ -245,14 +279,18 @@ class ClaudeAdapter(Adapter):
             return Route("defer", reason="turn still running")
         if self._backing_off(p, now):
             return Route("defer", reason="inbox post failed; retrying")
+        if self._rerouting(p, now):
+            return Route("defer", reason="the session's status keeps changing under its frames; retrying")
         if self._unconfirmed_wait(p, now) > 0:
             if p.push_expiries >= EXPIRY_PARK_AT:
                 return Route("none", reason="inbox deliveries not confirmed; retrying later")
             return Route("defer", reason="inbox frame not confirmed; retrying")
         reg = self.reg_view(p)
-        if reg is None or now - reg.read_at > REGISTRY_LOST_S:
+        if reg is None or now - reg.read_at > self.lost_s(p):
             return Route("none", reason="can't read the Claude session registry")
-        if now - reg.read_at > REGISTRY_FRESH_S or reg.status != "idle":
+        if self._rechecking(p, reg):
+            return Route("defer", reason="registry changed; re-checking")
+        if now - reg.read_at > self.fresh_s(p) or reg.status != "idle":
             return Route("defer", reason="registry not idle yet")
         return Route("push", path="inbox")
 
@@ -281,17 +319,33 @@ class ClaudeAdapter(Adapter):
             self.unconfirmed_at[p.id] = now
 
     # ------------------------------------------------------------ transport
+    @staticmethod
+    def chk(p: Participant, batch: Batch) -> dict[str, Any] | None:
+        """What a remote host's satellite checks just before it relays this frame
+        (§27.5.6): the session's agent process, and the registry status the route
+        assumed: ``busy`` for a mid-task priority batch, ``idle`` for a wake."""
+        if not p.agent_pid or p.agent_start is None:
+            return None
+        return {"pid": p.agent_pid, "start": p.agent_start, "want": "busy" if batch.kind == "priority" else "idle"}
+
     async def send(self, p: Participant, batch: Batch, text: str, **meta: Any) -> float | None:
-        """Hand one frame to the session's MCP server and wait for ``mcp.posted``."""
+        """Hand one frame to the session's MCP server and wait for ``mcp.posted``. On a
+        remote host the frame goes through its satellite's last-mile check (``chk``)."""
         conn = self.conn_for(p)
-        if conn is None:
+        remote = getattr(conn, "remote", False) is True
+        chk = self.chk(p, batch) if remote else None
+        if conn is None or (remote and chk is None):
             self._failed(p)
             raise SendError("no inbox channel")
+        data = {"batch_id": batch.id, "text": text,
+                "room": str(meta.get("room") or ""), "sender": str(meta.get("sender") or "")}
         fut: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         self.pending_posts[batch.id] = (fut, conn)
         try:
-            conn.push("deliver", {"batch_id": batch.id, "text": text,
-                                  "room": str(meta.get("room") or ""), "sender": str(meta.get("sender") or "")})
+            if remote:
+                conn.push_checked("deliver", data, chk)
+            else:
+                conn.push("deliver", data)
             res = await asyncio.wait_for(fut, POST_TIMEOUT_S)
         except (asyncio.TimeoutError, TimeoutError):
             self._failed(p)
@@ -299,9 +353,19 @@ class ClaudeAdapter(Adapter):
         finally:
             self.pending_posts.pop(batch.id, None)
         if not res.get("ok"):
+            err = str(res.get("err") or "post failed")[:80]
+            if remote and err == STALE_STATUS and res.get("lastmile") is True:
+                # the satellite's own report (``facts.lastmile``): the session's status changed
+                # between the relayed view and the post, and nothing was posted; back to
+                # pending, uncounted, until a newer view says otherwise. The same code from
+                # the MCP connection itself is an ordinary counted failure, as locally.
+                self._rerouted(p)
+                raise SendError(STALE_STATUS, counted=False)
             self._failed(p)
-            raise SendError(str(res.get("err") or "post failed")[:80])
+            raise SendError(err)
         self.backoff.pop(p.id, None)
+        self.reroutes.pop(p.id, None)
+        self.recheck.pop(p.id, None)
         t = res.get("t_post")
         return float(t) if isinstance(t, (int, float)) and not isinstance(t, bool) else None
 
@@ -320,15 +384,33 @@ class ClaudeAdapter(Adapter):
         delay = min(SEND_BACKOFF_S[0] * (2 ** (n - 1)), SEND_BACKOFF_S[1])
         self.backoff[p.id] = (self.clock.now() + delay, n)
 
+    def _rerouted(self, p: Participant) -> None:
+        """A ``stale_status`` re-route: wait for a registry view newer than this refusal;
+        a few in a row are normal (the session changed under a frame), more back off
+        too (1 s doubling to 30 s), so a status that keeps changing, or a remote that
+        keeps refusing, can never spin frames over the link."""
+        now = self.clock.now()
+        self.recheck[p.id] = self.view_seq
+        _u, n = self.reroutes.get(p.id, (0.0, 0))
+        n += 1
+        until = 0.0
+        if n > REROUTE_FREE:
+            until = now + min(REROUTE_BACKOFF_S[0] * 2 ** (n - REROUTE_FREE - 1), REROUTE_BACKOFF_S[1])
+        self.reroutes[p.id] = (until, n)
+
     # ------------------------------------------------------------- registry
     def observe(self, agent_pid: int, data: dict[str, Any], now: float,
                 host: str = LOCAL_HOST) -> tuple[RegView, bool]:
         """Record one registry read; returns (view, status changed)."""
         key = (host, int(agent_pid))
         prev = self.registry.get(key)
-        view = registry_view(data, prev, now)
+        view = dataclasses.replace(registry_view(data, prev, now), seq=self._next_seq())
         self.registry[key] = view
         return view, prev is None or prev.status != view.status
+
+    def _next_seq(self) -> int:
+        self.view_seq += 1
+        return self.view_seq
 
     def _local_view(self) -> Any:
         """This machine's host view: the broker's (``state.hosts``), else one made
@@ -340,11 +422,23 @@ class ClaudeAdapter(Adapter):
 
         return LocalView(self.cfg.claude.sessions_dir)
 
+    def apply_view(self, p: Participant, view: RegView, now: float, changed: bool) -> list[Action]:
+        """What one registry view of ``p`` implies (§9.2): the approval hold, a declined or
+        approved prompt, an Esc-ended turn, or (``changed``) a fresh routing decision.
+        The same for a view read here (``poll_once``) and one relayed by a remote host's
+        link (``relay``)."""
+        engine = self.runner.state.engine
+        tr = registry_transition(p.status, p.hooks_seen_at, view, now)
+        if tr is not None:
+            return engine.set_status(p, tr[0], "claude:registry", bump=tr[1])
+        if changed:
+            return engine.evaluate_participant(p.id)
+        return []
+
     def poll_once(self) -> None:
         """Read the registry of every joined Claude session on this machine. Remote
         rows are never read here: their pids are pids on another host (§27.5.6)."""
         st = self.runner.state
-        engine = st.engine
         now = self.clock.now()
         view_of = self._local_view()
         seen: set[tuple[str, int]] = set()
@@ -361,15 +455,61 @@ class ClaudeAdapter(Adapter):
             if p.claude_socket and sock is not None and sock != p.claude_socket:
                 continue
             view, changed = self.observe(p.agent_pid, data, now)
-            tr = registry_transition(p.status, p.hooks_seen_at, view, now)
-            acts: list[Any] = []
-            if tr is not None:
-                acts += engine.set_status(p, tr[0], "claude:registry", bump=tr[1])
-            elif changed:
-                acts += engine.evaluate_participant(p.id)
+            rechecked = self._recheck_done(p, view)
+            acts = self.apply_view(p, view, now, changed or rechecked)
             if acts:
                 self.runner.execute(acts)
         for key in [x for x in self.registry if x[0] == LOCAL_HOST and x not in seen]:
+            del self.registry[key]
+
+    def _recheck_done(self, p: Participant, view: RegView) -> bool:
+        """The first view after a ``stale_status`` refusal: route again (its status may
+        be the same as the one the refusal's own view reported)."""
+        t = self.recheck.get(p.id)
+        if t is None or view.seq <= t:
+            return False
+        del self.recheck[p.id]
+        return True
+
+    def relay(self, host: str, got: dict[tuple[int, float], Any], now: float) -> list[Action]:
+        """A ``reg`` frame of ``host``'s link (§27.5.6): per watched Claude agent ``(pid,
+        start)``, the status its satellite read on that host (``None``: unreadable, or not
+        this session's file), when that status began (``since``, or ``None`` if the file
+        doesn't say) and when it was read (``read_at``), both on this broker's clock.
+        Checked and applied as ``poll_once`` does with a local read: an unreadable one
+        leaves the last view to age (no push after 1.5 s, parked after 5 s)."""
+        acts: list[Action] = []
+        seen: set[tuple[str, int]] = set()
+        for p in self.runner.state.store.joined_participants():
+            if p.harness != "claude" or p.host != host or not p.agent_pid:
+                continue
+            e = next((v for (pid, start), v in got.items()
+                      if pid == p.agent_pid and proc.same_start(start, p.agent_start)), None)
+            if e is None:
+                continue
+            key = (host, p.agent_pid)
+            seen.add(key)
+            if e.status is None:
+                continue
+            prev = self.registry.get(key)
+            if e.since is not None:
+                since = e.since
+            else:
+                since = prev.since if prev is not None and prev.status == e.status else e.read_at
+            view = RegView(status=e.status, read_at=e.read_at, since=since, seq=self._next_seq())
+            self.registry[key] = view
+            # a view that makes the member routable again (a new status, the first fresh
+            # one after a stale stretch, the first after a refusal) routes it at once
+            changed = (prev is None or prev.status != view.status or now - prev.read_at > self.fresh_s(p))
+            rechecked = self._recheck_done(p, view)
+            acts += self.apply_view(p, view, now, changed or rechecked)
+        for key in [x for x in self.registry if x[0] == host and x not in seen]:
+            del self.registry[key]
+        return acts
+
+    def forget_host(self, host: str) -> None:
+        """``host``'s link went down: its relayed views are void (a new link relays anew)."""
+        for key in [x for x in self.registry if x[0] == host]:
             del self.registry[key]
 
     async def _poll_loop(self) -> None:

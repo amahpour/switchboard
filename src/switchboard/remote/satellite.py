@@ -20,6 +20,19 @@ no pty and no network socket (``tests/unit/test_satellite_static.py``).
   Requests outside ``REMOTE_METHODS`` are refused here with "run this on the
   desktop"; ``sys.ping`` and ``sys.status`` are answered here. ``watch`` →
   ``alive`` (then every 1 s), ``ping`` → ``pong``, ``status`` every 60 s.
+- **Claude** (§27.5.6). For every Claude agent a ``watch`` names, it reads this
+  home's Claude registry (``<sessions_dir>/<pid>.json``, with the broker's own
+  pid and socket checks) and relays it every 250 ms (``reg``: status and ages
+  only). Every ``deliver`` push goes through the last-mile check, which is the
+  approval hold's enforcer on this machine whatever the desktop sends: it must
+  carry ``chk``, ``chk`` must name the Claude this connection's MCP server was
+  attested under at its ``mcp.hello`` (never another session's), that Claude
+  must be watched and alive, and a fresh read must say ``chk.want``. If not,
+  a fresh ``reg`` frame, then this satellite's own ``mcp.posted {ok: false,
+  err}`` (``stale_status``, or ``no_chk``/``bad_chk`` for a push the broker
+  should never have sent), marked ``facts.lastmile`` and with a negative
+  request id, whose answer it drops; the push is dropped. ``chk`` never
+  reaches the MCP server.
 - **End.** stdin EOF, 10 s without a ping, a ``refuse``, or SIGTERM: ``bye``
   (``replaced`` when the replace marker names a newer satellite), close every
   local connection, unlink the socket if it is still ours, exit.
@@ -53,7 +66,7 @@ import sys
 import time
 from typing import Any
 
-from switchboard import __version__
+from switchboard import __version__, claude_registry
 from switchboard.broker import proc
 from switchboard.broker.peer import McpRefused, Peer, match_agent, verify_mcp_peer
 from switchboard.models import HARNESSES
@@ -68,6 +81,7 @@ MAX_LINE = proto.MAX_LINE  # a client line, as on the broker's own socket
 LOCAL_QUEUE = 5000  # lines queued for one local client (§27.4.5)
 LOCAL_MAX_CONNS = 256  # the broker refuses more than 64; this only bounds the process
 ALIVE_S = 1.0
+REG_S = 0.25  # the relayed Claude registry (§27.5.6), as often as the broker polls its own
 STATUS_S = 60.0
 PING_TIMEOUT_S = 10.0
 WELCOME_TIMEOUT_S = 10.0
@@ -262,6 +276,10 @@ class LocalConn:
         self.q: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=LOCAL_QUEUE)
         self.closed = False
         self.task: asyncio.Task[None] | None = None
+        # the Claude this connection's MCP server was attested under at its last mcp.hello
+        # (this machine's pid, start, messaging socket), or None: the only session a
+        # deliver push on this connection may be for (§27.5.6)
+        self.agent: tuple[int, float, str] | None = None
 
     def send(self, obj: dict[str, Any]) -> bool:
         if self.closed:
@@ -318,6 +336,10 @@ class Satellite:
         self.watch_n: int | None = None
         # (pid as the broker knows it, this machine's pid or None, start)
         self.watched: list[tuple[int, int | None, float]] = []
+        # the watched Claude agents: pid as the broker knows it -> (this machine's pid or None,
+        # start, the messaging socket its MCP server proved at hello)
+        self.claude: dict[int, tuple[int | None, float, str | None]] = {}
+        self._own_ids = itertools.count(1)  # this satellite's own requests: negative ids
         self.last_ping = time.monotonic()
         self.welcome: dict[str, Any] | None = None
         self.link_up_at: float | None = None
@@ -465,11 +487,16 @@ class Satellite:
             return
         facts: dict[str, Any] | None = None
         if method == "mcp.hello":
+            lc.agent = None
             try:
-                facts = {"attest": self.attest(lc.peer, params)}
+                a = self.attest(lc.peer, params)
             except McpRefused as e:
                 err(rid, e.code, e.message)
                 return
+            facts = {"attest": a}
+            mine = self.in_pid(a["agent"][0]) if a["harness"] == "claude" and a["agent"] else None
+            if mine is not None and a["claude_socket"]:
+                lc.agent = (mine, a["agent"][1], a["claude_socket"])
         elif method == "hook.event":
             ch = self.chain(lc.peer)
             if ch:
@@ -526,8 +553,16 @@ class Satellite:
         t = f["t"]
         if t == "out":
             lc = self.conns.get(f["c"])
-            if lc is not None:
-                lc.send(f["line"])  # chk (M8d) rides beside the line, never inside it
+            if lc is None:
+                return
+            line = f["line"]
+            rid = line.get("id")
+            if proto.is_int(rid) and rid < 0:
+                return  # the broker's answer to one of this satellite's own requests
+            chk = f.get("chk")
+            if (chk is not None or line.get("push") == "deliver") and not self.last_mile(lc, line, chk):
+                return
+            lc.send(line)  # chk rides beside the line, never inside it
         elif t == "close":
             lc = self.conns.pop(f["c"], None)
             if lc is not None:
@@ -535,7 +570,11 @@ class Satellite:
         elif t == "watch":
             self.watch_n = f["n"]
             self.watched = [(pid, self.in_pid(pid), start) for pid, start in f["procs"]]
+            had_claude = bool(self.claude)
+            self.claude = {pid: (self.in_pid(pid), start, sock) for pid, start, sock in f["claude"]}
             self.send_alive()
+            if self.claude or had_claude:
+                self.send_reg()  # at once, so a Claude that just joined has a view within a round trip
         elif t == "ping":
             self.last_ping = time.monotonic()
             self.send(proto.pong(f["n"]))
@@ -552,6 +591,82 @@ class Satellite:
         # a pid below the test shift was never one of this machine's: gone, as far as it goes
         dead = [(pid, start) for pid, mine, start in self.watched if mine is None or not proc.alive(mine, start)]
         self.send(proto.alive(self.watch_n, dead))
+
+    # ------------------------------------------------------------- Claude
+    def claude_status(self, mine: int | None, start: float, sock: str | None) -> tuple[str | None, float | None]:
+        """``(status, since)`` of a watched Claude agent on this machine, from this home's
+        Claude registry, with the broker's own checks (``ClaudeAdapter.poll_once``): the
+        file names this pid (or no pid) and the socket its MCP server proved (or none).
+        ``(None, None)``: the process is gone or recycled, or the file is unreadable or
+        another session's. ``since`` (``statusUpdatedAt``) is on this machine's clock.
+        It never raises: a file nobody expected (a same-user process can write any) reads
+        as unreadable, and the link and every other session's view carry on."""
+        try:
+            if mine is None or not proc.alive(mine, start):
+                return None, None
+            data = claude_registry.read_registry(self.sessions_dir, mine)
+            if data is None or data.get("pid") not in (None, mine):
+                return None, None
+            path = data.get("messagingSocketPath")
+            if sock and path is not None and path != sock:
+                return None, None
+            status, since = claude_registry.registry_status(data)
+        except Exception:
+            log.warning("pid %s: the Claude registry could not be read", mine)
+            return None, None
+        if status is None:
+            return None, None
+        # test mode: this machine's processes run on the same (wrong) clock as it does
+        return status, (since + self.skew if since is not None else None)
+
+    def send_reg(self) -> None:
+        """The relayed registry of every watched Claude: statuses and ages, nothing else
+        (no path, no session id, no text)."""
+        t_read = self.now()
+        read = [(pid, start, *self.claude_status(mine, start, sock))
+                for pid, (mine, start, sock) in self.claude.items()]
+        now = self.now()
+        views = [(pid, start, status, (now - since) if status is not None and since is not None else None)
+                 for pid, start, status, since in read]
+        self.send(proto.reg(views, max(0.0, now - t_read)))
+
+    def send_reg_if_watched(self) -> None:
+        if self.claude:
+            self.send_reg()
+
+    def last_mile(self, lc: LocalConn, line: dict[str, Any], chk: dict[str, Any] | None) -> bool:
+        """A ``deliver`` push (or any line that carries ``chk = {pid, start, want}``): relay
+        it only if ``chk`` names the Claude this connection's MCP server was attested
+        under, that Claude is watched and alive, and a read now says ``want``. This machine
+        enforces the approval hold itself, whatever the desktop sends: nothing is ever
+        posted into an approval prompt, and never into another session than ``chk`` names.
+        Otherwise send a fresh ``reg`` (so the broker sees why), then this satellite's own
+        ``mcp.posted {ok: false, err}`` for the batch, marked ``facts.lastmile``, and drop
+        the push. ``err`` is ``stale_status`` for a status that changed after the broker's
+        view (an uncounted re-route there), ``no_chk``/``bad_chk`` for a push the broker
+        never sends (counted, so a broker fault shows as failed deliveries)."""
+        err = proto.STALE_STATUS
+        a = lc.agent
+        if chk is None:
+            err = proto.NO_CHK
+        elif a is None or self.in_pid(chk["pid"]) != a[0] or not proc.same_start(a[1], chk["start"]):
+            err = proto.BAD_CHK
+        else:
+            e = self.claude.get(chk["pid"])
+            status = None
+            if e is not None and proc.same_start(e[1], chk["start"]):
+                status, _since = self.claude_status(a[0], a[1], a[2])
+            if status == chk["want"]:
+                return True
+        log.info("conn %d: a push dropped (%s)", lc.c, err)
+        self.send_reg()
+        data = line.get("data")
+        bid = data.get("batch_id") if line.get("push") == "deliver" and isinstance(data, dict) else None
+        if proto.is_int(bid):
+            posted = {"id": -next(self._own_ids), "method": "mcp.posted",
+                      "params": {"batch_id": bid, "ok": False, "err": err}}
+            self.send(proto.req(lc.c, posted, {"lastmile": True}))
+        return False
 
     async def _read_link(self, reader: asyncio.StreamReader) -> None:
         while True:
@@ -582,7 +697,12 @@ class Satellite:
                     self.on_frame(f)
                     return
                 continue  # nothing else before the welcome
-            self.on_frame(f)
+            try:
+                self.on_frame(f)
+            except Exception:
+                # one frame's failure drops that frame, never the link's reader (pings stop
+                # being answered and every member of this host would go offline)
+                log.exception("a %s frame from the broker failed", f["t"])
 
     async def _every(self, seconds: float, fn: Any) -> None:
         while True:
@@ -669,6 +789,7 @@ class Satellite:
                 await self.bind()
                 log.info("link up: satellite %s for %s", __version__, self.name)
                 self._tasks.append(loop.create_task(self._every(ALIVE_S, self.send_alive)))
+                self._tasks.append(loop.create_task(self._every(REG_S, self.send_reg_if_watched)))
                 self._tasks.append(loop.create_task(self._every(1.0, self._check_ping)))
                 self._tasks.append(loop.create_task(self._every(STATUS_S, self._status)))
                 await self.done.wait()

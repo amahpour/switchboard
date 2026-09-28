@@ -15,7 +15,9 @@
   the noise-tolerant handshake; ``watch`` whenever the joined set of that host
   changes; pings; the state machine (disabled, connecting, up, down(reason),
   blocked(reason)) with backoff; limits; notices in the remote's rooms. A frame
-  from an abandoned child is dropped: it can never reach the broker.
+  from an abandoned child is dropped: it can never reach the broker. The
+  satellite's ``reg`` frames (the relayed Claude registry) go through the host's
+  ``RemoteView.registry`` to ``ClaudeAdapter.relay`` (M8d, §27.5.6).
 - ``RemoteConn``: one connection of a client on the remote host, as the RPC
   server sees it. Its peer is ``RemotePeer(host)`` with no pid, uid or start
   time, so every local-identity check fails closed; ``rpc`` allows it only
@@ -136,8 +138,9 @@ class RemoteConn(Conn):
         self.link.send_frame(self.attempt, proto.out(self.c, obj))
 
     def push_checked(self, kind: str, data: dict[str, Any], chk: dict[str, Any]) -> None:
-        """A push the satellite checks just before relaying it (M8d, §27.5.6): ``chk``
-        rides beside the push, never inside it."""
+        """A push the satellite checks just before relaying it (§27.5.6): ``chk``
+        (``{pid, start, want}``, a Claude ``deliver``) rides beside the push, never
+        inside it; the satellite strips it."""
         if self.closed:
             return
         self.link.send_frame(self.attempt, proto.out(self.c, {"push": kind, "data": data}, chk))
@@ -208,6 +211,7 @@ class RemoteLink:
         self.watch_n = 0
         self._watch: tuple[frozenset[tuple[int, float]], tuple[tuple[int, float, str | None], ...]] | None = None
         self._skew_noted = False
+        self._harden_noted = False
         self._version_noted: str | None = None
         self._down_noted: str | None = None  # a failing link's notice, once until it is next up
         self.last_up_for = 0.0  # how long the last attempt was up
@@ -486,18 +490,32 @@ class RemoteLink:
         with contextlib.suppress(ValueError):
             self.st.store.touch_remote_up(self.name)
         self._set("up")
+        self._hello_notices()
+        loop = asyncio.get_running_loop()
+        a.tasks.append(loop.create_task(self._pinger(a)))
+        a.tasks.append(loop.create_task(self._announce(a)))
+
+    def _hello_notices(self) -> None:
+        """What the hello says the owner should know, each once while it lasts: another
+        switchboard version, a clock off by more than 5 s, and a satellite that could not
+        make itself non-dumpable (``harden: failed``, Linux only: then same-user processes
+        there can read and forge its link frames, §27.4.8, §27.12)."""
         if self.sat_version != __version__ and self._version_noted != self.sat_version:
             self._version_noted = self.sat_version
             self.notice(f"{self.name}: satellite {self.sat_version}, this broker {__version__}: the link works;"
                         " install the same version on both machines when you can")
-        skewed = abs(self.skew_s) > SKEW_NOTICE_S
+        skewed = self.skew_s is not None and abs(self.skew_s) > SKEW_NOTICE_S
         if skewed and not self._skew_noted:
-            ahead = "ahead" if self.skew_s > 0 else "behind"
-            self.notice(f"{self.name}'s clock is {abs(self.skew_s):.0f} s {ahead}; delivery is unaffected, check NTP")
+            ahead = "ahead" if (self.skew_s or 0.0) > 0 else "behind"
+            self.notice(f"{self.name}'s clock is {abs(self.skew_s or 0.0):.0f} s {ahead}; delivery is unaffected,"
+                        " check NTP")
         self._skew_noted = skewed
-        loop = asyncio.get_running_loop()
-        a.tasks.append(loop.create_task(self._pinger(a)))
-        a.tasks.append(loop.create_task(self._announce(a)))
+        failed = self.harden == "failed"
+        if failed and not self._harden_noted:
+            self.notice(f"{self.name}: the satellite could not make itself non-dumpable (prctl failed): other"
+                        " processes of that user there can read and forge its link frames; check `switchboard"
+                        " remote status`", "warn")
+        self._harden_noted = failed
 
     async def _announce(self, a: Attempt) -> None:
         """The link-up notice, once the first pong gives an RTT (§27.5.8)."""
@@ -620,7 +638,7 @@ class RemoteLink:
         elif t == "status":
             self.hooks = f["hook_state"]
         elif t == "reg":
-            return  # the relayed Claude registry arrives with M8d
+            self._on_reg(f)
         elif t == "bye":
             why = f["why"]
             if why == "replaced":
@@ -634,6 +652,27 @@ class RemoteLink:
     def _check_liveness(self) -> None:
         with contextlib.suppress(Exception):
             self.st.agents.check_liveness()
+
+    def _claude(self) -> Any:
+        engine = getattr(self.st, "engine", None)
+        return engine.adapters.get("claude") if engine is not None else None
+
+    def _on_reg(self, f: dict[str, Any]) -> None:
+        """The relayed Claude registry (§27.5.6): the host's view rebases it to this
+        broker's clock and keeps only watched pairs; the Claude adapter applies it as a
+        local read (the approval hold, Esc-ended turns, the freshness a push needs)."""
+        now = self.now()
+        got = self.view.registry(f["views"], f["read_age"], now)
+        adapter = self._claude()
+        if adapter is None or getattr(adapter, "runner", None) is None:
+            return
+        try:
+            acts = adapter.relay(self.name, got, now)
+        except Exception:
+            log.exception("remote %s: relayed registry failed", self.name)
+            return
+        if acts:
+            self.st.runner.execute(acts)
 
     def _conn_gone(self, conn: RemoteConn) -> None:
         """The client on the remote host went away (or the link did): the local path's
@@ -650,6 +689,9 @@ class RemoteLink:
         if self.attempt is a:
             self.attempt = None
             self.view.link_down()
+            adapter = self._claude()
+            if adapter is not None:
+                adapter.forget_host(self.name)  # its relayed registry views are void now
         self.last_up_for = (self.now() - a.up_at) if a.up_at is not None else 0.0
         for conn in list(a.conns.values()):
             self._conn_gone(conn)

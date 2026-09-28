@@ -88,3 +88,26 @@ def test_a_repeating_failure_is_noticed_once_until_up() -> None:
     link._down_noted = None  # what a link-up does
     link._closed(bad)
     assert len(posted) == 3
+
+
+def test_a_satellite_that_could_not_harden_is_noticed_once_while_it_lasts() -> None:
+    """``harden: failed`` in the hello (Linux: prctl refused) means same-user processes there
+    can read and forge the link's frames: a warn notice, once until a link hardens again
+    (security review, M8d). macOS says ``none``: nothing to tell."""
+    from switchboard import __version__
+
+    link, posted = stub_link()
+    link.sat_version, link.skew_s = __version__, 0.0
+    for harden in ("prctl", "none"):
+        link.harden = harden
+        link._hello_notices()
+    assert posted == []
+    link.harden = "failed"
+    for _ in range(3):  # every reconnect of the same satellite
+        link._hello_notices()
+    assert len(posted) == 1 and "could not make itself non-dumpable" in posted[0]
+    link.harden = "prctl"
+    link._hello_notices()
+    link.harden = "failed"
+    link._hello_notices()
+    assert len(posted) == 2

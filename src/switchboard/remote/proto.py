@@ -19,7 +19,8 @@ s→b    hello       proto, version, name, now, hook_state, test_mode, harden
 b→s    welcome     proto, version, link, rooms, harnesses, limits
 b→s    refuse      why, message
 s→b    open        c
-s→b    req         c, line, facts?  (``{attest}`` on mcp.hello, ``{chain}`` on hook.event)
+s→b    req         c, line, facts?  (``{attest}`` on mcp.hello, ``{chain}`` on hook.event,
+                                     ``{lastmile}`` on the satellite's own mcp.posted)
 b→s    out         c, line, chk?
 both   close       c
 b→s    watch       n, procs, claude
@@ -83,6 +84,14 @@ B2S = frozenset({"welcome", "refuse", "out", "close", "watch", "ping"})
 BYE_WHY = frozenset({"eof", "shutdown", "replaced", "local_broker", "busy"})
 HARDEN = frozenset({"prctl", "none", "failed"})
 WANT = frozenset({"idle", "busy"})
+# mcp.posted's err when the satellite's last-mile check drops a Claude ``deliver`` push
+# (§27.5.6), in its own report marked ``facts.lastmile``: the session's registry no longer
+# says ``chk.want`` (an uncounted re-route on the broker); the push carried no ``chk``; or
+# ``chk`` doesn't name the Claude this connection's MCP server was attested under (both
+# counted failures: the broker never sends either)
+STALE_STATUS = "stale_status"
+NO_CHK = "no_chk"
+BAD_CHK = "bad_chk"
 
 # A hook chain's per-process verdict (§27.5.5): the agent a readable argv runs, '-' for a
 # readable argv that runs no agent, '?' for an unreadable one. No argv leaves the Pi.
@@ -251,6 +260,9 @@ def _facts(f: Any) -> dict[str, Any]:
         return {"attest": check_attest(f["attest"])}
     if "chain" in f:
         return {"chain": check_chain(f["chain"])}
+    if "lastmile" in f and f["lastmile"] is True:
+        # the satellite's own mcp.posted after its last-mile check dropped a push (§27.5.6)
+        return {"lastmile": True}
     raise FrameError("bad_facts")
 
 
@@ -484,6 +496,12 @@ def watch(n: int, procs: list[tuple[int, float]], claude: list[tuple[int, float,
 
 def alive(n: int, dead: list[tuple[int, float]]) -> dict[str, Any]:
     return {"t": "alive", "n": n, "dead": [list(d) for d in dead]}
+
+
+def reg(views: list[tuple[int, float, str | None, float | None]], read_age: float) -> dict[str, Any]:
+    """The relayed Claude registry: ``[pid, start, status | None, since_age | None]`` per
+    watched Claude, and how long ago (``read_age``) the satellite read it (§27.5.6)."""
+    return {"t": "reg", "views": [list(v) for v in views], "read_age": read_age}
 
 
 def ping(n: int) -> dict[str, Any]:

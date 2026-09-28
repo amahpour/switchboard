@@ -18,10 +18,10 @@ from switchboard.adapters.claude import (
     REGISTRY_IDLE_GRACE_S,
     ClaudeAdapter,
     RegView,
-    read_registry,
     registry_transition,
     registry_view,
 )
+from switchboard.claude_registry import read_registry
 from switchboard.config import Config
 from switchboard.models import Notice, Push, Release
 
@@ -118,7 +118,7 @@ def test_read_registry_only_our_regular_files(tmp_path: Path) -> None:
     (tmp_path / "44.json").write_text("not json")
     assert read_registry(str(tmp_path), 44) is None
     os.mkfifo(tmp_path / "45.json")
-    assert read_registry(str(tmp_path), 45) is None  # never opens a fifo
+    assert read_registry(str(tmp_path), 45) is None  # never blocks on or reads a fifo
 
 
 def test_route_matrix(w: World, clock: FakeClock) -> None:

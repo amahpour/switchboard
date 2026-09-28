@@ -116,3 +116,41 @@ def test_posted_fields_are_bounded(broker: InProcBroker) -> None:
         assert asyncio.run_coroutine_threadsafe(foreign(), broker.loop).result(5) is False
     finally:
         broker.on_loop(adapter.detach, conn)
+
+
+class RemoteStubConn(StubConn):
+    """A connection carried by a link, with the facts its satellite attached to the request."""
+
+    remote = True
+
+    def __init__(self, mc: McpConn | None, facts: dict[str, Any]) -> None:
+        super().__init__(mc)
+        self.facts = facts
+
+
+@pytest.mark.parametrize(("facts", "marked"), [({"lastmile": True}, True), ({}, False), ({"lastmile": 1}, False)])
+def test_only_the_satellites_own_report_is_marked(broker: InProcBroker, facts: dict[str, Any], marked: bool) -> None:
+    """``mcp.posted`` over a link is the satellite's own last-mile report only when the request
+    carries ``facts.lastmile`` (which a client can't set); the adapter re-routes only that one
+    uncounted (DESIGN.md §27.5.6, M8d review). A local connection is never marked."""
+    base = claude_conn()
+    conn = RemoteStubConn(base.mcp, facts)
+    adapter = broker.state.engine.adapters["claude"]
+
+    async def post(c: StubConn) -> dict[str, Any]:
+        fut = asyncio.get_running_loop().create_future()
+        adapter.pending_posts[79] = (fut, c)
+        broker.state.agents.posted(c, {"batch_id": 79, "ok": False, "err": "stale_status"})
+        adapter.pending_posts.pop(79, None)
+        return fut.result()
+
+    assert conn.mcp is not None
+    conn.mcp.inbox_attached = True
+    r = asyncio.run_coroutine_threadsafe(post(conn), broker.loop).result(5)
+    assert r.get("lastmile", False) is marked and r["err"] == "stale_status"
+    local = claude_conn()
+    assert local.mcp is not None
+    local.mcp.inbox_attached = True
+    local.facts = {"lastmile": True}  # type: ignore[attr-defined]  # a local conn has no satellite facts
+    r = asyncio.run_coroutine_threadsafe(post(local), broker.loop).result(5)
+    assert "lastmile" not in r

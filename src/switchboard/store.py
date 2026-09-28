@@ -1170,9 +1170,11 @@ class Store:
         return self.get_batch(batch_id)
 
     def expire_batch(
-        self, batch_id: int, reason: str, *, state: str = "expired", push: bool = False
+        self, batch_id: int, reason: str, *, state: str = "expired", push: bool = False, refund: bool = False
     ) -> Batch | None:
-        """Offer failed (or was cancelled): its deliveries go back to pending."""
+        """Offer failed (or was cancelled): its deliveries go back to pending. ``refund``: a
+        wake that reached nobody (a push re-route) gives its room's budget unit back, at most
+        up to the hourly budget, and no longer counts as a counted wake."""
         if state not in ("expired", "cancelled"):
             raise ValueError(state)
         now = self.clock.now()
@@ -1193,6 +1195,13 @@ class Store:
                 self.con.execute(
                     "UPDATE participants SET push_expiries=push_expiries+1 WHERE id="
                     "(SELECT participant_id FROM memberships WHERE id=?)",
+                    (b.membership_id,),
+                )
+            if refund and b.budget_counted:
+                self.con.execute("UPDATE batches SET budget_counted=0 WHERE id=?", (batch_id,))
+                self.con.execute(
+                    "UPDATE rooms SET budget_remaining=MIN(budget_remaining+1, budget_per_hour) WHERE id="
+                    "(SELECT room_id FROM memberships WHERE id=?)",
                     (b.membership_id,),
                 )
         return self.get_batch(batch_id)
