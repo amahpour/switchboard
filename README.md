@@ -350,7 +350,7 @@ The sandbox is the boundary for all of these.
 
 ## Development
 
-Development needs uv 0.7.13 exactly: `pyproject.toml` sets `[tool.uv] required-version`, so another uv version refuses `uv sync` and `uv run` in the checkout (CI and the Linux test container use 0.7.13).
+Development needs uv 0.7.13 or newer: `pyproject.toml` sets `[tool.uv] required-version = ">=0.7.13"`. CI and the Linux test container stay on 0.7.13 with `--frozen`, so a newer uv that would change `uv.lock` fails CI instead of slipping through (uv 0.12 re-locks the current lock unchanged).
 
 **Dev mode (like `pip install -e`).** Either run from the checkout with `uv run switchboard start` (the project `.venv` from `uv sync` is already editable), or make the global command point at the checkout with `uv tool install --editable .`. Then:
 - web UI changes (`src/switchboard/web/static/`): just refresh the browser, since the files are served from disk with `no-cache`;
