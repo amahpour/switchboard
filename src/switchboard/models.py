@@ -23,6 +23,18 @@ VIAS = ("web", "cli", "mcp", "system")
 MSG_KINDS = ("chat", "join", "leave", "notice")
 STATUSES = ("starting", "idle", "busy", "waiting-approval", "offline")
 HARNESSES = ("claude", "codex", "cursor", "devin", "test", "unknown")
+# The tier note of a Codex member whose thread proof is still running (DESIGN.md §9.3): its
+# join line, /who and the buddy list show this instead of "mcp-only". ASCII dots, not "…":
+# text shown through envelope.clean (NFKC) would turn that into "..." in some places only.
+VERIFYING = "verifying..."
+
+
+def tier_label(tier: str | None, note: str | None) -> str:
+    """A member's delivery tier as people read it: ``codex:daemon``, ``mcp-only (unverified
+    thread)``, or just ``verifying...`` while a Codex thread proof runs."""
+    if note == VERIFYING:
+        return VERIFYING
+    return (tier or "-") + (f" ({note})" if note else "")
 
 
 class InvalidName(ValueError):

@@ -16,15 +16,15 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from switchboard import __version__
+from switchboard.broker import catchup
 from switchboard.broker import commands as cmds
-from switchboard.broker import review
 from switchboard.broker.commands import Actor, CommandError
 from switchboard.broker.hub import Hub
 from switchboard.clock import Clock, SystemClock
 from switchboard.config import Config
 from switchboard.delivery.rules import parse_mentions
 from switchboard.envelope import clean
-from switchboard.models import InvalidName, Member, Message, Room, normalize_room
+from switchboard.models import InvalidName, Member, Message, Room, normalize_room, tier_label
 from switchboard.store import Conflict, Store
 
 log = logging.getLogger("switchboard.service")
@@ -84,7 +84,7 @@ def _hhmmss(ts: float | None) -> str:
 
 
 # Engine warnings that open with a fixed phrase (loop guard, wake budget, watchdog), and
-# the broker's "⚠ " notices (/review's approvals-off warning, §26). A notice's level isn't a
+# the broker's "⚠ " notices (/catchup's approvals-off warning, §26). A notice's level isn't a
 # column, so these are recognised by text to keep them styled as warnings in history and
 # replays too (§22). Only the broker writes system notices.
 WARN_NOTICE_PREFIXES = ("loop guard:", "the wake budget for this hour is used up", "watchdog:", "⚠ ")
@@ -264,7 +264,8 @@ class RoomService:
 
     def human_say(self, name: str, text: str, via: str, *, skip: tuple[int, ...] = ()) -> Message:
         """A message from the human. Posted literally, never parsed as a command.
-        ``skip``: memberships that get no delivery of it (only ``/review`` passes any, §26)."""
+        ``skip``: memberships that get no delivery of it (only ``/catchup`` passes any: its
+        subjects, §26)."""
         room = self.room(name)
         if not isinstance(text, str):
             raise ServiceError("bad_request", "text must be a string")
@@ -327,7 +328,7 @@ class RoomService:
             raise ServiceError(e.code, e.message) from None
         posted: Message | None = None
         if result.post is not None:
-            # /review: one ordinary human chat message (every delivery rule applies); a refusal
+            # /catchup: one ordinary human chat message (every delivery rule applies); a refusal
             # here (too long, empty) leaves nothing posted or recorded
             posted = self.human_say(room.name, result.post, via=actor.via, skip=result.post_skip)
         room = self.store.room_by_id(room.id) or room
@@ -361,22 +362,20 @@ class RoomService:
         return f" (via {actor.via})"
 
     # ------------------------------------------------------------- reporting
-    def transcript_ids(self, room: Room) -> dict[str, str]:
-        """Member name -> agentsview session id, for members that have one; empty unless the
-        broker can find agentsview (§26). Shown to the human only (/who, `switchboard who`)."""
-        if review.agentsview_command(self.cfg) is None:
-            return {}
+    def session_handles(self, room: Room) -> dict[str, str]:
+        """Member name -> ``<session id> @ <host>`` (``<id> @ this machine``), for members
+        whose session id /catchup would pass on (§26). Shown to the human only (/who,
+        `switchboard who`)."""
         out = {}
         for m in self.store.members(room.id):
-            p = self.store.get_participant(m.participant_id)
-            tid = review.participant_transcript(p, m.name, self.cfg)[0] if p is not None else None
-            if tid:
-                out[m.name] = tid
+            sid, _why = catchup.session_id(self.store.get_participant(m.participant_id), self.cfg)
+            if sid:
+                out[m.name] = f"{sid} @ {m.host or catchup.THIS_MACHINE}"
         return out
 
     def who_text(self, room: Room) -> str:
         members = self.member_rows(room.id)
-        transcripts = self.transcript_ids(room)
+        sessions = self.session_handles(room)
         lines = [f"{room.name}: {self.cfg.human_name} (you, human) + {len(members)} agent(s)"]
         if not members:
             lines.append("  no agents have joined yet")
@@ -396,11 +395,9 @@ class RoomService:
                 flags.append(f"{m.inflight} in flight")
             if m.parked:
                 flags.append(f"parked — needs a poke ({m.parked_reason or 'no wake path'})")
-            if m.name in transcripts:
-                flags.append(f"transcript: {transcripts[m.name]}")
-            tier = m.tier or "-"
-            if m.tier_note:
-                tier += f" ({m.tier_note})"
+            if m.name in sessions:
+                flags.append(f"session: {sessions[m.name]}")
+            tier = tier_label(m.tier, m.tier_note)
             away = f' away: "{clean(m.away)}"' if m.away else ""
             lines.append(
                 f"  {member_label(m)}  {m.harness}  {m.status}  {tier}"
@@ -424,7 +421,7 @@ class RoomService:
             counts = self.store.membership_delivery_counts(m.membership_id)
             exp = self.store.batch_expiry_counts(m.membership_id)
             exp_s = ", ".join(f"{k} {v}" for k, v in sorted(exp.items())) or "none"
-            tier = (m.tier or "-") + (f" ({m.tier_note})" if m.tier_note else "")
+            tier = tier_label(m.tier, m.tier_note)
             lines.append(
                 f"  {member_label(m)}: {m.status}, tier {tier}, queued {counts.get('pending', 0)},"
                 f" in flight {counts.get('offered', 0)}, expired: {exp_s}"

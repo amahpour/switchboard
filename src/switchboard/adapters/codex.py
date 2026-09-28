@@ -33,7 +33,12 @@
   ``yk:j<nonce>`` in the result of switchboard's own ``join`` tool call (tries at
   2, 5 and 15 s, then again at each turn end and link start, up to 20 more:
   an in-progress turn's items aren't in ``thread/read``). Until then (with
-  ``require_thread_proof``) the member is ``mcp-only`` / "unverified thread".
+  ``require_thread_proof``) the member is ``mcp-only``: "verifying..." while the
+  first tries run (its join line and /who say so), "unverified thread" after
+  they failed. A proof that passes posts "<name> is verified: <tier>" in each
+  room whose join line said "verifying..." since the session's last passed
+  proof; a proof of a membership kept across an MCP or daemon restart (a
+  "re-joined" notice, no join line) posts none.
 - **Liveness guard** before every ``turn/start``, ``turn/steer`` and queue call:
   no SessionEnd seen and not offline; for the daemon tier, the thread is in a
   ``thread/loaded/list`` at most 30 s old and ``lsof`` shows a Codex TUI (not
@@ -110,6 +115,7 @@ from switchboard.clock import Clock, SystemClock
 from switchboard.config import Config
 from switchboard.models import (
     LOCAL_HOST,
+    VERIFYING,
     Batch,
     HookEvent,
     Notice,
@@ -118,6 +124,7 @@ from switchboard.models import (
     Route,
     Snapshot,
     split_session_key,
+    tier_label,
 )
 
 log = logging.getLogger("switchboard.codex")
@@ -561,6 +568,8 @@ class CodexAdapter(Adapter):
         self._active_at: dict[str, float] = {}
         self._tasks: set[asyncio.Task[Any]] = set()
         self._proofs: dict[int, asyncio.Task[Any]] = {}
+        # participants whose first proof tries (PROOF_AT_S, after a join) still run: "verifying..."
+        self._verifying: set[int] = set()
         self._proof_tries: dict[tuple[int, str], int] = {}
         self._main: list[asyncio.Task[Any]] = []
 
@@ -668,7 +677,7 @@ class CodexAdapter(Adapter):
         if p.host != LOCAL_HOST:
             return "mcp-only", REMOTE_WHY  # never this daemon's thread (§27.7); M8c routes it elsewhere
         if self.cfg.codex.require_thread_proof and not p.thread_proof:
-            return "mcp-only", "unverified thread"
+            return "mcp-only", (VERIFYING if p.id in self._verifying else "unverified thread")
         if p.id in self.orphans:
             return "mcp-only", RESTART_NOTE  # its app-server died: waiting for the thread to come back
         tid = thread_of(p)
@@ -692,7 +701,7 @@ class CodexAdapter(Adapter):
                 and existing.mcp_pid == ident.mcp_pid and proc.same_start(existing.mcp_start, ident.mcp_start):
             return self.tier(existing)
         if self.cfg.codex.require_thread_proof:
-            return "mcp-only", "unverified thread"
+            return "mcp-only", VERIFYING  # on_joined starts the thread proof
         return "mcp-only", None
 
     def context_events(self, p: Participant) -> frozenset[str]:
@@ -1430,6 +1439,7 @@ class CodexAdapter(Adapter):
             except RuntimeError:
                 return
             self._proofs[p.id] = t
+            self._verifying.add(p.id)
         # a brand-new thread may not be in the loaded list yet, and nobody has
         # looked for its TUI: do both now rather than at the next poll
         self._spawn(self._after_join())
@@ -1476,6 +1486,7 @@ class CodexAdapter(Adapter):
                 except Exception:
                     continue
                 if join_proven(th, needle):
+                    joined = self.st.store.joins_since_thread_proof(participant_id)
                     self.st.store.update_participant(participant_id, thread_proof=1)
                     self.st.store.add_event("bind", participant_id=participant_id,
                                             data={"what": "thread_proof", "ok": True, "attempt": n})
@@ -1485,17 +1496,31 @@ class CodexAdapter(Adapter):
                         self._reconnected(self.st.store.get_participant(participant_id) or p, o, "join")
                     elif self._clear_ended(tid, "thread proof"):
                         self._sync_status(tid)
+                    self._verifying.discard(participant_id)
                     self.refresh_tiers()
+                    self._announce_verified(participant_id, joined)
                     return
             if report:
                 self.st.store.add_event("bind", participant_id=participant_id,
                                         data={"what": "thread_proof", "ok": False})
                 log.warning("codex participant %d: thread proof not found yet (retried at turn ends)",
                             participant_id)
+            self._verifying.discard(participant_id)
             self.refresh_tiers()
         finally:
             if self._proofs.get(participant_id) is asyncio.current_task():
                 self._proofs.pop(participant_id, None)
+                self._verifying.discard(participant_id)
+
+    def _announce_verified(self, participant_id: int, joined: set[int]) -> None:
+        """A passed thread proof: one info notice with the tier it has now in each room whose
+        join line said "verifying..." since the session's last passed proof (``joined``: nothing
+        else says it moved on). None for a membership kept across an MCP or daemon restart:
+        its join was announced before."""
+        p = self.st.store.get_participant(participant_id)
+        label = tier_label(p.tier, p.tier_note) if p is not None else "-"  # rows are never deleted
+        self._run([Notice(m.room_id, "info", f"{m.screen_name} is verified: {label}")
+                   for m in self.st.store.participant_memberships(participant_id) if m.id in joined])
 
     # ------------------------------------------------------- session end
     def _clear_ended(self, tid: str, why: str) -> bool:
@@ -1715,6 +1740,7 @@ class CodexAdapter(Adapter):
             self.orphans.pop(pid_, None)  # left, kicked or ended meanwhile
         for pid_ in [x for x in self._rejoins if x not in ids]:
             self._rejoins.pop(pid_, None)
+        self._verifying &= ids
         for p in joined:
             tier, note = self.tier(p)
             if (tier, note) != (p.tier, p.tier_note):

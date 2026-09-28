@@ -2,6 +2,8 @@
 
 The brief behind `/review` ([DESIGN.md §26](../DESIGN.md)): one agent reviews another's work with the engineering context (what was tried, why, what was rejected), not only the diff.
 
+(2026-09-28: `/review` became an alias of `/catchup`, which hands the agent exact session ids and a fixed protocol and lets it use whatever session-history tool it has, instead of an agentsview command; see DESIGN.md §26. The research below is unchanged.)
+
 **Verdict**
 Nobody ships exactly this. The closest is [hcom](https://github.com/aannoo/hcom). Its agents read each other's real transcripts across Claude, Codex and Cursor, and its README lists "review what claude did" as an example. But a session started by hand needs hooks installed and a restart first, and it doesn't support Devin. The closest product built for review is [`entire review`](https://github.com/entireio/cli), but it launches new reviewer agents for a branch instead of using the sessions that are already running.
 

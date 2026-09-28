@@ -229,7 +229,9 @@
     if (m.queued) row.append(el('span', 'flag', m.queued + ' queued'));
     if (m.inflight) row.append(el('span', 'flag', m.inflight + ' in flight'));
     li.append(row);
-    const tier = (m.tier || 'no tier yet') + (m.tier_note ? ' (' + m.tier_note + ')' : '');
+    // a Codex thread proof still running reads "verifying...", as in /who (models.tier_label)
+    const tier = m.tier_note === 'verifying...' ? m.tier_note
+      : (m.tier || 'no tier yet') + (m.tier_note ? ' (' + m.tier_note + ')' : '');
     li.append(el('div', 'sub', m.status + ' · ' + tier));
     if (m.away) li.append(el('div', 'away', 'away: ' + m.away));
     if (m.parked) li.append(el('div', 'parked', 'parked — needs a poke' + (m.parked_reason ? ' (' + m.parked_reason + ')' : '')));

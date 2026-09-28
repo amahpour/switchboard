@@ -434,14 +434,14 @@ def build_methods(state: "BrokerState") -> dict[str, MethodSpec]:
     async def room_who(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
         room = svc().room(_str(p, "room"))
         members = svc().members(room.name)
-        # agentsview ids (§26) only for a caller that passes the human_cli check (`switchboard who`
-        # in the human's terminal), never for an agent's shell, and only when agentsview is found
-        ids = svc().transcript_ids(room)
+        # session handles (§26) only for a caller that passes the human_cli check (`switchboard
+        # who` in the human's terminal), never for an agent's shell or the agents' who()
         pol = state.peer_policy
-        if ids and (pol.human_allowed(conn.peer) or pol.human_cli_allowed(conn.peer)):
+        if pol.human_allowed(conn.peer) or pol.human_cli_allowed(conn.peer):
+            handles = svc().session_handles(room)
             for m in members:
-                if m["name"] in ids:
-                    m["transcript"] = ids[m["name"]]
+                if m["name"] in handles:
+                    m["session"] = handles[m["name"]]
         return {
             "room": room.name,
             "human": state.cfg.human_name,

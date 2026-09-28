@@ -118,6 +118,10 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         os.umask(0o077)
         paths.ensure()
+        if cfg.review.agentsview:
+            # a 0.2.0 key: /catchup never looks for agentsview (DESIGN.md §26); once per start
+            log.warning("config.toml: [review] agentsview is ignored since /catchup replaced /review;"
+                        " you can remove it")
         con = db.open_db(paths.db)  # a version-1 database is migrated here, after a backup (§27.6)
         state.store = Store(con, clock)
         # local rows only: a remote row's pids are pids on its own host (§27.5.6)

@@ -42,6 +42,7 @@ from switchboard.models import (
     LOCAL_HOST,
     RESERVED_NAMES,
     SCREEN_NAME_RE,
+    VERIFYING,
     Action,
     HookEvent,
     Membership,
@@ -594,12 +595,16 @@ class AgentService:
                 self.run([Notice(room.id, "info", f"{m.screen_name} re-joined from a new switchboard MCP server")])
         else:
             m = self.store.create_membership(room.id, p.id, name, cred_hash(cred))
+            # a Codex thread proof about to run shows as "verifying...", not "mcp-only"; the
+            # event says so, so the proof that passes announces it here (§9.3)
+            verifying = note == VERIFYING
             self.store.add_event("join", room_id=room.id, membership_id=m.id, participant_id=p.id,
-                                 data={"harness": h, "tier": tier})
+                                 data={"harness": h, "tier": tier, **({"verifying": True} if verifying else {})})
             where = f"{h} on {host}" if host else h
+            shown = VERIFYING if verifying else tier
             self.svc._post(room, sender_name=name, sender_kind="agent", sender_harness=h,
                            sender_membership_id=m.id, via="mcp", kind="join",
-                           text=f"joined ({where}, {tier})", sender_host=host or None)
+                           text=f"joined ({where}, {shown})", sender_host=host or None)
         self.refresh_index()
         if p.agent_pid:
             early = self._early_models.get((p.host, p.agent_pid, _start_key(p.agent_start)))

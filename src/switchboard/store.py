@@ -164,7 +164,7 @@ class Store:
         Classification (§8.1): for every active membership other than the sender,
         prio 2 for a human message, 1 when the member is @mentioned, else 0.
         join/leave/notice messages are never delivered to agents. ``skip_memberships``
-        get no delivery row either (the author named in a ``/review`` request, §26).
+        get no delivery row either (the subjects of a ``/catchup`` request, §26).
         ``sender_host`` is a remote agent sender's host (§27.6); None on this machine.
         """
         if sender_host is not None and not valid_host(sender_host):
@@ -606,6 +606,23 @@ class Store:
             "session_key", "host",
         }
     )
+
+    def joins_since_thread_proof(self, participant_id: int) -> set[int]:
+        """The memberships this participant joined with a "verifying..." join line (``join``
+        events with ``verifying: true``) after its last passed Codex thread proof (a ``bind``
+        event with ``what: thread_proof, ok: true``): the joins no "is verified" notice followed
+        yet. Its ``thread_proof`` column is reset by a join from another MCP process; this
+        history isn't (DESIGN.md §9.3)."""
+        rows = self.con.execute("SELECT * FROM events WHERE kind IN ('join', 'bind') AND participant_id=?"
+                                " ORDER BY id", (participant_id,)).fetchall()
+        out: set[int] = set()
+        for e in (Event.from_row(r) for r in rows):
+            if e.kind == "join":
+                if e.data.get("verifying") is True and e.membership_id is not None:
+                    out.add(e.membership_id)
+            elif e.data.get("what") == "thread_proof" and e.data.get("ok") is True:
+                out.clear()
+        return out
 
     def get_participant(self, participant_id: int) -> Participant | None:
         r = self.con.execute("SELECT * FROM participants WHERE id=?", (participant_id,)).fetchone()

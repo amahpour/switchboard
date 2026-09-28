@@ -187,7 +187,8 @@ def test_codex_conn_tier_needs_the_same_host(w: World) -> None:
     ident = dict(harness="codex", mcp_pid=p.mcp_pid, mcp_start=p.mcp_start, agent_pid=p.agent_pid,
                  agent_start=p.agent_start, evidence="stub")
     assert a.conn_tier(McpIdentity(**ident), p) == a.tier(p) == ("codex:daemon", None)
-    assert a.conn_tier(McpIdentity(**ident, host=PI), p) == ("mcp-only", "unverified thread")
+    # anything else proves the thread again first: "verifying..." until on_joined's proof ends
+    assert a.conn_tier(McpIdentity(**ident, host=PI), p) == ("mcp-only", "verifying...")
 
 
 def test_a_remote_hello_leaves_the_codex_adapter_alone(w: World) -> None:

@@ -3,18 +3,18 @@
 Reachable only through ``human.command`` over the UDS (peer-checked) or an
 authenticated web session. An agent's ``say("/pause")`` is stored literally
 and never parsed. Commands that reduce activity need ``human_cli``; commands
-that raise it need ``human`` (the web session, or test trust). ``/review``
-(§26) posts one chat message as the human, so it needs what ``switchboard say``
-needs: ``human_cli``.
+that raise it need ``human`` (the web session, or test trust). ``/catchup``
+(§26, and ``/review``, its alias until 0.4) posts one chat message as the human,
+so it needs what ``switchboard say`` needs: ``human_cli``.
 """
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from switchboard.broker import review
+from switchboard.broker import catchup
 from switchboard.delivery.rules import parse_mentions
 from switchboard.models import SCREEN_NAME_RE, Room
 
@@ -37,10 +37,15 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
   /hold <name>        stop delivering to one agent (messages stay queued)
   /release <name>     resume delivery to a held agent (web only)
   /kick <name>        remove an agent and revoke its membership
-  /review <reviewer> <author> [note]
-                      ask one agent to review another's recent work: its
-                      changes first, then its session transcript (needs
-                      agentsview; the note is added to the request)
+  /catchup <agent> [on <member> | on "<topic>"] [note]
+                      one agent gets up to speed from the others' session
+                      history, with its own tool (e.g. AgentsView):
+    /catchup codex-1 on claude-1                on claude-1's work
+    /catchup codex-1 on "sprint cleanup"        on a topic, across the room
+    /catchup codex-1                            on the room since it joined
+    /catchup codex-1 on claude-1 pick it apart  plus a critical second opinion
+  /review <agent> <member> [note]
+                      old name of /catchup <agent> on <member> (until 0.4)
   /who                list members
   /status             room and delivery status
   /help               this list
@@ -49,7 +54,7 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
 _NO_ARGS = frozenset({"pause", "resume", "who", "status", "help"})
 _ONE_NAME = frozenset({"kick", "hold", "release"})
 _ONE_NUMBER = {"budget": MAX_BUDGET, "hops": MAX_HOPS}  # /name [n], 0 <= n <= max
-KNOWN = _NO_ARGS | _ONE_NAME | set(_ONE_NUMBER) | {"review"}
+KNOWN = _NO_ARGS | _ONE_NAME | set(_ONE_NUMBER) | {"catchup", "review"}
 
 _STATIC_ROLES = {
     "pause": "human_cli",
@@ -60,7 +65,8 @@ _STATIC_ROLES = {
     "who": "human_cli",
     "status": "human_cli",
     "help": "human_cli",
-    "review": "human_cli",  # posts a human chat message, like `switchboard say`
+    "catchup": "human_cli",  # posts a human chat message, like `switchboard say`
+    "review": "human_cli",  # the /catchup alias
 }
 
 
@@ -90,7 +96,7 @@ class Result:
     ok: bool
     text: str
     notice: str | None = None  # persisted room notice (state changes, CLI audit)
-    post: str | None = None  # a chat message to post as the human (/review)
+    post: str | None = None  # a chat message to post as the human (/catchup)
     post_skip: tuple[int, ...] = ()  # memberships that get no delivery of ``post``
     warnings: tuple[str, ...] = ()  # warn-level room notices, posted after ``post``
     room_changed: bool = False
@@ -111,6 +117,9 @@ def parse_command(text: str) -> Command:
     name, args = parts[0].lower(), tuple(parts[1:])
     if name not in KNOWN:
         raise CommandError("bad_request", f"unknown command /{name}; try /help")
+    if name == "catchup":
+        # parsed from the raw text: a quoted topic keeps its spaces
+        return _parse_catchup(raw[1:].split(None, 1)[1] if args else "", raw)
     if name == "review":
         return _parse_review(args, raw)
     if name in _NO_ARGS and args:
@@ -144,15 +153,72 @@ def _screen_name(cmd: str, arg: str) -> str:
     return n
 
 
+CATCHUP_USAGE = '/catchup <agent> [on <member> | on "<topic>"] [note]'
+_OPEN_QUOTES = '"\u201c'  # a straight or a curly opening double quote
+_CLOSE_QUOTES = '"\u201d'
+_SINGLE_QUOTES = "'\u2018\u2019"  # not a topic's quotes: said so, instead of "not a valid screen name"
+
+
+def _after_on(rest: str) -> str | None:
+    """The text after a leading ``on`` word (case-insensitive), or None when ``rest``
+    doesn't start with one. ``on"topic"`` counts too."""
+    if rest[:2].lower() != "on" or (len(rest) > 2 and not rest[2].isspace() and rest[2] not in _OPEN_QUOTES):
+        return None
+    return rest[2:].lstrip()
+
+
+def _parse_catchup(text: str, raw: str) -> Command:
+    """``/catchup <agent> [on <member> | on "<topic>"] [note...]``.
+
+    ``args``: ``(agent, mode, target, note)``, mode one of ``member`` (target: its name),
+    ``topic`` (target: the topic, cleaned, 1-200 characters) or ``room`` (target '').
+    The note is free text, cleaned like chat text. An unquoted topic of several words
+    reads as a member name and its note, and fails as a member name."""
+    words = text.split(None, 1)
+    if not words:
+        raise CommandError("bad_request", f"usage: {CATCHUP_USAGE}")
+    agent = _screen_name("catchup", words[0])
+    rest = words[1].strip() if len(words) > 1 else ""
+    after = _after_on(rest)
+    if after is None:
+        return Command(name="catchup", args=(agent, "room", "", catchup.clean_text(rest)), raw=raw)
+    if not after:
+        raise CommandError("bad_request", f"/catchup: on whom, or on what? usage: {CATCHUP_USAGE}")
+    if after[0] in _OPEN_QUOTES:
+        end = next((i for i, ch in enumerate(after[1:], 1) if ch in _CLOSE_QUOTES), None)
+        if end is None:
+            raise CommandError("bad_request", "/catchup: the topic needs a closing double quote")
+        topic = catchup.clean_text(after[1:end])
+        if not topic:
+            raise CommandError("bad_request", "/catchup: the topic is empty")
+        if len(topic) > catchup.TOPIC_MAX:
+            raise CommandError("bad_request", f"/catchup: the topic is too long ({len(topic)} characters;"
+                                              f" at most {catchup.TOPIC_MAX})")
+        return Command(name="catchup", args=(agent, "topic", topic, catchup.clean_text(after[end + 1:])),
+                       raw=raw)
+    if after[0] in _SINGLE_QUOTES:
+        inner = after[1:]
+        end = next((i for i, ch in enumerate(inner) if ch in _SINGLE_QUOTES), len(inner))
+        raise CommandError("bad_request", f'/catchup: a topic goes in double quotes: /catchup {agent} on'
+                                          f' "{catchup.clean_text(inner[:end])}"')
+    parts = after.split(None, 1)
+    member = _screen_name("catchup", parts[0])
+    if member == agent:
+        raise CommandError("bad_request", "/catchup: an agent can't catch up on itself; name another member")
+    note = catchup.clean_text(parts[1]) if len(parts) > 1 else ""
+    return Command(name="catchup", args=(agent, "member", member, note), raw=raw)
+
+
 def _parse_review(args: tuple[str, ...], raw: str) -> Command:
-    """``/review <reviewer> <author> [note...]``: two member names, then free text."""
+    """``/review <reviewer> <author> [note...]``, the alias of ``/catchup <reviewer> on <author>
+    review it critically[: note]`` (until 0.4). Same ``args`` as ``/catchup``."""
     if len(args) < 2:
         raise CommandError("bad_request", "usage: /review <reviewer> <author> [note]")
     reviewer, author = _screen_name("review", args[0]), _screen_name("review", args[1])
     if reviewer == author:
         raise CommandError("bad_request", "/review: the reviewer and the author must be two different members")
-    note = review.clean_note(" ".join(args[2:]))
-    return Command(name="review", args=(reviewer, author, note) if note else (reviewer, author), raw=raw)
+    note = catchup.review_note(catchup.clean_text(" ".join(args[2:])))
+    return Command(name="review", args=(reviewer, "member", author, note), raw=raw)
 
 
 def hops_raise(new: int, old: int) -> bool:
@@ -262,57 +328,81 @@ def _hops_set(room: Room, n: int, svc: "RoomService") -> Result:
     )
 
 
-def _review(cmd: Command, room: Room, svc: "RoomService") -> Result:
-    """Check the pair and agentsview, then hand back the request to post (§26). Nothing is
-    posted or recorded here: ``RoomService.command`` posts it as an ordinary human message."""
-    store = svc.store
-    members = []
-    for n in cmd.args[:2]:
-        m = store.find_member(room.id, n)
-        if m is None:
-            raise CommandError("not_found", f"no such member in {room.name}: {n}")
-        members.append(m)
-    rev, author = members
-    p = store.get_participant(author.participant_id)
-    tid, why = (review.participant_transcript(p, author.name, svc.cfg) if p
-                else (None, f"{author.name} has no transcript"))
-    if tid is None:
-        raise CommandError("bad_request", f"/review: {why}")
-    run = review.agentsview_command(svc.cfg)
-    if run is None:
-        raise CommandError("bad_request", review.missing_text(svc.cfg))
-    note = cmd.args[2] if len(cmd.args) > 2 else ""
+def _catchup(cmd: Command, room: Room, svc: "RoomService") -> Result:
+    """Check the names, name each subject's session, and hand back the request to post
+    (§26). Nothing is posted or recorded here: ``RoomService.command`` posts it as an
+    ordinary human message. Also ``/review`` (the alias), whose reply says so first."""
+    agent_name, mode, target, note = cmd.args
+    members = svc.store.members(room.id)
+    by_name = {m.name.lower(): m for m in members}
+    agent = by_name.get(agent_name)
+    if agent is None:
+        raise CommandError("not_found", f"no such member in {room.name}: {agent_name}")
+    if mode == "member":
+        subject = by_name.get(target)
+        if subject is None:
+            # "on sprint cleanup": most likely an unquoted topic, unless it is a single word (a
+            # typo) or the name of a member that left
+            hint = ""
+            if cmd.name == "catchup" and note and not svc.store.name_used_by_other(room.id, target, -1, 0.0):
+                hint = f' (a topic goes in double quotes: /catchup {agent.name} on "{target} {note}")'
+            raise CommandError("not_found", f"no such member in {room.name}: {target}{hint}")
+        subjects = [subject]
+    else:
+        subjects = [m for m in members if m.membership_id != agent.membership_id]
+        if not subjects:
+            raise CommandError("bad_request", f"/{cmd.name}: {agent.name} is the only agent in {room.name}:"
+                                              " there is nobody to catch up on")
+    since = catchup.window_start(mode, svc.clock.now(), agent.joined_at)
+    handles = [catchup.handle(m, svc.store.get_participant(m.participant_id), svc.cfg, agent.host)
+               for m in subjects]
+    topic = target if mode == "topic" else ""
     limit = svc.cfg.delivery.max_msg_chars
-    base = review.request_text(rev.name, author.name, tid, cmd=run)
+    # the alias's fixed "review it critically" is part of what the request needs; the rest
+    # of the note is what the human typed
+    fixed, own = "", note
+    if cmd.name == "review":
+        fixed = catchup.REVIEW_NOTE
+        own = note[len(fixed) + 2:]  # after "review it critically: "; '' when there is none
+    base = catchup.request_text(agent.name, mode, handles, since=since, max_chars=limit, topic=topic, note=fixed)
+    text = catchup.request_text(agent.name, mode, handles, since=since, max_chars=limit, topic=topic, note=note)
     if len(base) > limit:
-        raise CommandError("bad_request", f"/review: its request needs {len(base)} characters, but"
+        raise CommandError("bad_request", f"/{cmd.name}: its request needs {len(base)} characters, but"
                                           f" [delivery] max_msg_chars is {limit}")
-    text = review.request_text(rev.name, author.name, tid, cmd=run, note=note)
     if len(text) > limit:
-        fits = max(0, limit - len(base) - 1)
-        raise CommandError("bad_request", f"/review: the note is too long ({len(note)} characters;"
+        fits = limit - (len(text) - len(own))
+        raise CommandError("bad_request", f"/{cmd.name}: the note is too long ({len(own)} characters;"
                                           f" at most {fits} fit in one message)")
-    lines = [f"asked {rev.name} to review {author.name}'s recent work (agentsview id {tid})"]
-    if author.name.lower() in parse_mentions(note, [author.name]):
-        # the note @mentions the author, but the author gets no delivery of the request
-        lines.append(f"{author.name} won't get this request (it is about its work): post to it separately")
-    if rev.held:
-        lines.append(f"{rev.name} is held: it gets the request after /release {rev.name}")
+    lines = [catchup.REVIEW_DEPRECATED] if cmd.name == "review" else []
+    what = {"member": f"{subjects[0].name}'s work", "topic": f'"{topic}" across {len(handles)} session(s)',
+            "room": "what the room did"}[mode]
+    lines.append(f"asked {agent.name} to catch up on {what} since {catchup.when(since)}; it got:")
+    lines += [f"  {h.line()}" + (f" ({h.why})" if h.why else "") for h in handles]
+    for n in parse_mentions(f"{topic} {note}", [m.name for m in subjects]):
+        # the topic or note @mentions a subject, but subjects get no delivery of the request
+        lines.append(f"{n} won't get this request (it is about its work): post to it separately")
+    if agent.held:
+        lines.append(f"{agent.name} is held: it gets the request after /release {agent.name}")
     if room.paused:
         lines.append(f"{room.name} is paused: the request goes out after /resume")
-    warn = review.approvals_warning(rev.name, rev.approval_mode)
+    warn = catchup.approvals_warning(agent.name, agent.approval_mode)
     if warn:
         lines.append(warn)
+    data: dict[str, Any] = {"agent": agent.membership_id, "mode": mode,
+                  "subjects": [m.membership_id for m in subjects],
+                  "with_id": sum(1 for h in handles if h.sid)}
+    if cmd.name == "review":
+        data["alias"] = "review"
     return Result(
         True,
         "\n".join(lines),
         post=text,
-        # the request is about the author, not for it: waking it would spend a turn and add
-        # to the transcript the reviewer is about to read (§26)
-        post_skip=(author.membership_id,),
+        # the request is about the subjects, not for them: waking one would spend a turn and
+        # add to the session the agent is about to read (§26)
+        post_skip=tuple(m.membership_id for m in subjects),
         warnings=(warn,) if warn else (),
-        event="review",
-        event_data={"reviewer": rev.membership_id, "author": author.membership_id, "harness": author.harness},
+        event="catchup",
+        event_data=data,
     )
 
 
@@ -375,8 +465,8 @@ def apply(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
             return Result(True, _hops_show(room, svc.cfg.human_name))
         # Never un-pauses: a room the loop guard paused still needs /resume.
         return _hops_set(room, int(cmd.args[0]), svc)
-    if name == "review":
-        return _review(cmd, room, svc)
+    if name in ("catchup", "review"):
+        return _catchup(cmd, room, svc)
     # one-name commands
     target = cmd.args[0]
     member = store.find_member(room.id, target)

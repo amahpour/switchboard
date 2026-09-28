@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import dataclasses
 import getpass
-import os
 import re
 import tomllib
 from dataclasses import dataclass, field
@@ -96,8 +95,8 @@ class DevinCfg:
 
 @dataclass(frozen=True)
 class ReviewCfg:
-    # /review (DESIGN.md §26): where agentsview is; "" = look it up on the broker's PATH
-    # (shutil.which) at each /review. An absolute path ("~/" allowed). The broker never runs it.
+    # Ignored since /catchup (DESIGN.md §26), which never looks for agentsview: still accepted
+    # so a 0.2.0 config.toml loads; the broker logs a warning once at start when it is set.
     agentsview: str = ""
 
 
@@ -196,9 +195,6 @@ def from_dict(data: dict[str, Any]) -> Config:
     for key, cls in _SECTIONS.items():
         if key in data:
             kwargs[key] = _section(cls, data[key], key)
-    review = kwargs.get("review")
-    if review is not None and review.agentsview and not os.path.isabs(os.path.expanduser(review.agentsview)):
-        raise ConfigError("review.agentsview must be an absolute path (or start with ~/)")
     return Config(**kwargs)
 
 

@@ -290,8 +290,11 @@ def test_agents_rules_and_stalls(w: World, clock: FakeClock) -> None:
     w.store.add_event("expire", room_id=w.room.id, membership_id=m1.id,
                       data={"batch_id": 9, "path": "inbox", "reason": "idle_no_token"})
     w.store.add_event("requeue", room_id=w.room.id, membership_id=m1.id, data={"reason": "redeliver", "n": 1})
+    # a 0.2.0 /review event and a /catchup event: one row counts both (§26)
     w.store.add_event("review", room_id=w.room.id, data={"via": "web", "reviewer": m2.id, "author": m1.id,
                                                          "harness": "claude", "message_id": 1})
+    w.store.add_event("catchup", room_id=w.room.id, data={"via": "web", "agent": m2.id, "mode": "member",
+                                                          "subjects": [m1.id], "with_id": 1, "message_id": 2})
     # approval prompts from the status events: 75 s (a stall), 10 s, and one still open
     for secs, to in ((75.0, "idle"), (10.0, "busy"), (None, None)):
         w.store.add_event("status", participant_id=p1.id, data={"frm": "busy", "to": "waiting-approval",
@@ -325,7 +328,8 @@ def test_agents_rules_and_stalls(w: World, clock: FakeClock) -> None:
     md = report.render_markdown(rep)
     assert "**stalled**" in md and "claude-sonnet-4-6" in md
     assert "| read first (pass refused: a stub not read yet) | 1 |" in md
-    assert r["review"] == 1 and "| /review (review requests posted) | 1 |" in md
+    assert r["catchup"] == 2 and "review" not in r
+    assert "| /catchup (catch-up requests posted, /review included) | 2 |" in md
 
 
 def test_output_has_no_text_paths_or_emails(w: World, clock: FakeClock) -> None:

@@ -130,7 +130,8 @@ def demo_prompts() -> dict[str, str]:
             if v:
                 prompt = prompt.replace(k, v)
         out[who] = prompt
-    assert "Join #fpga as vivado" in out["vivado"] and "Join #fpga as bench" in out["bench"], out
+    assert "Join switchboard room #fpga as vivado" in out["vivado"], out
+    assert "Join switchboard room #fpga as bench" in out["bench"], out
     return out
 
 
