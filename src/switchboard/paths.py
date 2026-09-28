@@ -98,6 +98,12 @@ class Paths:
     def test_marker(self) -> Path:
         return self.home / TEST_MARKER
 
+    @property
+    def satellite_conf(self) -> Path:
+        """``satellite.toml``: present only on a satellite home, the far end of a
+        remote link (DESIGN.md §27.3; written by ``switchboard remote accept``)."""
+        return self.home / "satellite.toml"
+
     def hook_copy(self, sha12: str) -> Path:
         return self.hooks_dir / f"switchboard_hook-{sha12}.py"
 

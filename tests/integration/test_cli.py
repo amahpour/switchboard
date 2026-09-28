@@ -4,17 +4,22 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 import pytest
 
-from conftest import SubprocBroker, child_env, human_cli_denied_here
+from conftest import SubprocBroker, child_env, human_cli_denial_word
 from switchboard.broker import proc
 from switchboard.mcp.client import ping
+from switchboard.paths import Paths
+
+RELAY = Path(__file__).resolve().parents[1] / "fakes" / "fake_relay.py"
 
 
 def test_say_tail_who_cmd_stop(subproc_broker: SubprocBroker) -> None:
@@ -114,11 +119,12 @@ def test_without_test_trust_raising_commands_are_forbidden(tmp_home: Path) -> No
             h = {"Origin": b.base, "X-Switchboard": "1"}
             assert web.post("/api/rooms", json={"name": "#build"}, headers=h).status_code == 200
             assert web.post("/api/rooms/build/command", json={"text": "/pause"}, headers=h).status_code == 200
-        denied = human_cli_denied_here()
+        word = human_cli_denial_word()
+        denied = word is not None
 
         # Raising verbs: refused either way. Outside an agent the reason is the
-        # missing web session; under an agent, human_cli itself is refused first.
-        why = "agent" if denied else "web session"
+        # missing web session; under an agent (or an ssh login), human_cli itself is refused first.
+        why = word or "web session"
         for args in (("cmd", "#build", "/resume"), ("cmd", "#build", "/budget", "500")):
             r = b.cli(*args)
             assert r.returncode == 1 and "forbidden" in r.stderr and why in r.stderr, r.stderr
@@ -127,11 +133,11 @@ def test_without_test_trust_raising_commands_are_forbidden(tmp_home: Path) -> No
         r = b.cli("login")  # the CLI child has no controlling terminal
         assert r.returncode == 1 and "forbidden" in r.stderr, r.stderr
         if denied:
-            # this test process runs under an agent harness: human_cli is refused too
+            # this test process runs under an agent harness (or an ssh login): human_cli is refused too
             r = b.cli("cmd", "#build", "/budget", "1")
-            assert r.returncode == 1 and "forbidden" in r.stderr and "agent" in r.stderr
+            assert r.returncode == 1 and "forbidden" in r.stderr and why in r.stderr
             r = b.cli("say", "#build", "hi")
-            assert r.returncode == 1 and "forbidden" in r.stderr and "agent" in r.stderr
+            assert r.returncode == 1 and "forbidden" in r.stderr and why in r.stderr
         else:
             r = b.cli("cmd", "#build", "/budget", "1")  # lowering: allowed at human_cli
             assert r.returncode == 0 and "budget set to 1" in r.stdout, r.stderr
@@ -140,6 +146,66 @@ def test_without_test_trust_raising_commands_are_forbidden(tmp_home: Path) -> No
         assert b.cli("status").returncode == 0  # anon
     finally:
         b.kill()
+
+
+def test_cli_through_a_relay_named_ssh_is_forbidden(tmp_home: Path) -> None:
+    """DESIGN.md §27.5.7: through a hand-made forward of broker.sock (``ssh -R``,
+    ``ssh -L``, socat) the broker's kernel peer is the relay, so the relay rule
+    refuses every human verb, whoever sits behind it. Production peer policy
+    (no --test-trust-uds); the relay is a stdlib script copied to a path ending in /ssh."""
+    import httpx
+
+    b = SubprocBroker(tmp_home, trust=False).start()
+    d = Path(tempfile.mkdtemp(prefix="yk-rl-", dir="/tmp"))
+    relay = None
+    try:
+        tok = b.paths.test_login_token.read_text().strip()
+        with httpx.Client(base_url=b.base, timeout=10) as web:
+            assert web.get(f"/login?t={tok}").status_code == 303
+            h = {"Origin": b.base, "X-Switchboard": "1"}
+            assert web.post("/api/rooms", json={"name": "#build"}, headers=h).status_code == 200
+        exe = d / "ssh"
+        shutil.copy(RELAY, exe)
+        # the CLI side: a home whose socket path is the relay's listening socket
+        far = d / "far"
+        (far / "run").mkdir(parents=True, mode=0o700)
+        os.chmod(far, 0o700)
+        listen = Paths.from_home(far).sock
+        relay = subprocess.Popen([sys.executable, str(exe), str(listen), str(b.paths.sock)], env=child_env(),
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True)
+        assert relay.stdout is not None and relay.stdout.readline().strip() == "ready"
+
+        def via_relay(*args: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run([sys.executable, "-m", "switchboard", "--home", str(far), *args], env=b.env,
+                                  stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20,
+                                  start_new_session=True)
+
+        r = via_relay("status")  # anon: the relay itself works
+        assert r.returncode == 0 and "running" in r.stdout, r.stderr
+        for args in (("say", "#build", "through the relay"), ("cmd", "#build", "/budget", "1"),
+                     ("cmd", "#build", "/pause"), ("login",)):
+            r = via_relay(*args)
+            assert r.returncode == 1 and "forbidden" in r.stderr, (args, r.stderr)
+            # the relay reason, not the agent one: this holds under an agent harness too
+            assert "arrived through ssh" in r.stderr and "(the process on the broker socket is ssh)" in r.stderr, r.stderr
+            assert "allow_ssh_cli" not in r.stderr, r.stderr  # no setting relaxes it
+        r = b.cli("tail", "#build", "--no-follow")
+        assert "through the relay" not in r.stdout and "paused" not in r.stdout, r.stdout
+        # straight to broker.sock the same verb depends only on who runs pytest (the control case)
+        word = human_cli_denial_word()
+        r = b.cli("say", "#build", "direct")
+        if word is None:
+            assert r.returncode == 0, r.stderr
+        else:
+            assert r.returncode == 1 and word in r.stderr and "the process on the broker socket" not in r.stderr
+    finally:
+        if relay is not None:
+            relay.kill()
+            relay.wait(5)
+            if relay.stdout is not None:
+                relay.stdout.close()
+        b.kill()
+        shutil.rmtree(d, ignore_errors=True)
 
 
 def test_daemonized_start_and_stop(tmp_home: Path) -> None:
