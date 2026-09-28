@@ -148,3 +148,24 @@ def test_remote_view_none_when_link_down() -> None:
     assert v.alive(*a) is None  # up again: only a fresh alive frame vouches
     v.on_alive(1, [])
     assert v.alive(*a) is True
+
+
+def test_remote_view_registry_is_rebased_and_watched_only() -> None:
+    """A ``reg`` frame (M8d): ages become times on this broker's clock, clamped per field
+    (read_age 0-5 s, since_age 0 s-1 day, §27.4.6), and only watched pairs are taken."""
+    v, clock = fed_view()
+    a, b = (1000004242, 10.5), (1000004243, 11.0)
+    v.set_watch(1, {a})
+    recv = clock.t
+    got = v.registry([(a[0], a[1] + 0.004, "idle", 300.0), (b[0], b[1], "busy", 1.0)], 0.2, recv)
+    assert list(got) == [a]  # b isn't watched; a's start compares as proc.same_start does
+    r = got[a]
+    assert r.status == "idle" and r.read_at == pytest.approx(recv - 0.2)
+    assert r.since == pytest.approx(recv - 300.0)  # an old status stays old (no false Esc)
+    got = v.registry([(*a, None, None)], 60.0, recv)
+    assert got[a].status is None and got[a].since is None and got[a].read_at == pytest.approx(recv - 5.0)
+    got = v.registry([(*a, "idle", -50.0)], -1.0, recv)  # a remote clock ahead: never in the future
+    assert got[a].since == pytest.approx(recv) and got[a].read_at == pytest.approx(recv)
+    got = v.registry([(*a, "idle", 10 * 86400.0)], 0.0, recv)
+    assert got[a].since == pytest.approx(recv - 86400.0)
+    assert v.read_registry(a[0]) is None  # never a file on this machine

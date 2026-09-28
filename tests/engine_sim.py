@@ -32,6 +32,14 @@ down (their connections close: open waits and parks end, pull answers expire,
 status offline; nobody is ended), and while it is down they can do nothing. A
 ``link_up`` brings them back as a reconnecting MCP server does (``starting``).
 Quiescence starts with the link up.
+
+Remote Claude members (M8d) are reached by their inbox over the link: their registry
+reaches the adapter as the link's relayed view (``ClaudeAdapter.relay``, every watched
+remote Claude at once, only while the link is up; the views are forgotten when it
+drops, and the MCP servers attach again when it is back), and a frame to one passes
+the satellite's last-mile check: pushed when the session is no longer what the frame
+was routed for (``idle`` for a wake, ``busy`` for a priority batch), it is dropped
+after a fresh relayed view and re-routed, uncounted (``stale_status``).
 """
 
 from __future__ import annotations
@@ -48,13 +56,15 @@ from switchboard import envelope
 from switchboard.adapters.claude import ClaudeAdapter, registry_transition
 from switchboard.adapters.codex import Clients, CodexAdapter
 from switchboard.adapters.devin import WAIT_TOOL
+from switchboard.broker.hosts import Relayed
 from switchboard.config import Config
 from switchboard.models import WATCHDOG_DONE, Action, HookEvent, HookOut, Notice, Push, Room, session_key
 
 KINDS = ("test", "devin", "claude", "cursor", "codex")
 SINGLE_ROOM = ("test", "devin")  # wait()-based: one open wait() per session, so one room
-# kinds that may live on the remote host: no push path in M8c, they are reached by hooks and wait()
-REMOTE_KINDS = ("test", "devin", "cursor")
+# kinds that may live on the remote host: those reached by hooks and wait() (M8c), and Claude
+# with its inbox over the link (M8d); remote Codex is pull-only and not simulated here
+REMOTE_KINDS = ("test", "devin", "cursor", "claude")
 PI = "pi"
 BIG_BUDGET = 100_000
 
@@ -99,6 +109,14 @@ class Mem:
     to_read: set[int] = field(default_factory=set)  # lazy: memberships with an escalated @mention to read()
 
 
+class _Runner:
+    """What the Claude adapter's relay path reads of the broker's runner."""
+
+    def __init__(self, sim: "Sim") -> None:
+        self.state = type("S", (), {"store": sim.store, "engine": sim.engine, "clock": sim.clock})()
+        self.execute = sim.run
+
+
 class Sim:
     def __init__(self, tmp_path: Path, seed: int):
         self.seed = seed
@@ -124,6 +142,7 @@ class Sim:
         self.codex = self.engine.adapters["codex"]
         assert isinstance(self.claude, ClaudeAdapter) and isinstance(self.codex, CodexAdapter)
         self.claude.clock = self.clock
+        self.claude.runner = _Runner(self)
         self.codex.clock = self.clock
         self.codex.link_state = "up"
         self.inflight: dict[int, Push] = {}
@@ -181,7 +200,7 @@ class Sim:
         if kind == "claude":
             mem.mode = r.choice(["prompting", "bypass"])
             self.store.update_participant(p.id, claude_socket=f"/tmp/yk-sim-{i}.sock", approval_mode=mem.mode)
-            self.claude.attach(p.mcp_pid, p.mcp_start, mem.iconn)
+            self.claude.attach(p.mcp_pid, p.mcp_start, mem.iconn, host=host)
         elif kind == "cursor":
             self.store.update_participant(p.id, session_key=session_key("cursor", host, f"conv-{name}"),
                                           bind_state="bound")
@@ -231,13 +250,25 @@ class Sim:
             mem.acks.clear()
             mem.cont = None
             mem.shown.clear()
+            if mem.kind == "claude":  # its inbox channel was that connection
+                self.claude.detach(mem.iconn)
+                mem.iconn = FakeConn()
+                mem.attached = False
+        self.claude.forget_host(PI)  # the relayed views die with the link
 
     def link_back(self) -> None:
-        """Up again: each MCP server reconnects and says hello (AgentService.hello)."""
+        """Up again: each MCP server reconnects and says hello (AgentService.hello); a
+        Claude's attaches its inbox again; the first watch brings a relayed view."""
         self.link_up = True
         for mem in self.active():
             if mem.host and self.p(mem).status == "offline":
                 self.run(self.engine.set_status(self.p(mem), "starting", "mcp:hello"))
+            if mem.host and mem.kind == "claude" and not mem.attached:
+                p = self.p(mem)
+                self.claude.attach(p.mcp_pid, p.mcp_start, mem.iconn, host=PI)
+                mem.attached = True
+                self.run(self.engine.evaluate_participant(mem.pid))
+        self.relay()
 
     def room_of(self, mid: int) -> Room:
         m = self.store.get_membership(mid)
@@ -295,7 +326,11 @@ class Sim:
 
     # ---------------------------------------------------- adapters' loops
     def claude_poll(self, mem: Mem) -> None:
-        """What ClaudeAdapter.poll_once does for this session's registry file."""
+        """What ClaudeAdapter.poll_once does for this session's registry file (a remote
+        session's: the next relayed view)."""
+        if mem.host:
+            self.relay()
+            return
         p = self.p(mem)
         if p is None or not p.active or not mem.mids:
             return
@@ -305,6 +340,19 @@ class Sim:
             self.run(self.engine.set_status(p, tr[0], "claude:registry", bump=tr[1]))
         elif changed:
             self.run(self.engine.evaluate_participant(p.id))
+
+    def relay(self) -> None:
+        """A ``reg`` frame of the remote host's link: every watched remote Claude's registry,
+        read on that host now (``ClaudeAdapter.relay``). Nothing while the link is down."""
+        if not self.link_up:
+            return
+        now = self.clock.now()
+        got: dict[tuple[int, float], Relayed] = {}
+        for m in self.active():
+            if m.host and m.kind == "claude":
+                p = self.p(m)
+                got[(p.agent_pid, p.agent_start)] = Relayed(status=m.reg, since=None, read_at=now)
+        self.run(self.claude.relay(PI, got, now))
 
     def codex_view(self, mem: Mem, st: str) -> None:
         """A thread/status/changed notification (CodexAdapter._set_view + _apply_status)."""
@@ -360,6 +408,14 @@ class Sim:
             return True
         tok = self.token(bid)
         if push.path == "inbox":
+            want = "busy" if b.kind == "priority" else "idle"
+            if mem.host and mem.attached and mem.reg != want:
+                # the satellite's last-mile check: a fresh relayed view, then stale_status
+                self.trace.append(f"stale:{bid}")
+                self.relay()
+                adapter._rerouted(p)
+                self.run(self.engine.on_expire(bid, "reroute", count_failure=False))
+                return True
             if not mem.attached or mem.reg == "waiting":
                 return True  # never lands: the idle expiry takes it back
             if mem.reg == "idle":
@@ -734,7 +790,7 @@ class Sim:
                 self.claude.detach(mem.iconn)
                 mem.iconn = FakeConn()
             else:
-                self.claude.attach(p.mcp_pid, p.mcp_start, mem.iconn)
+                self.claude.attach(p.mcp_pid, p.mcp_start, mem.iconn, host=mem.host)
             mem.attached = not mem.attached
             self.run(self.engine.evaluate_participant(mem.pid))
         elif what == "wait" and mem.reg == "busy":  # a tool call inside a turn
@@ -911,7 +967,7 @@ class Sim:
         busy = False
         p = self.p(mem)
         if not mem.attached:
-            self.claude.attach(p.mcp_pid, p.mcp_start, mem.iconn)
+            self.claude.attach(p.mcp_pid, p.mcp_start, mem.iconn, host=mem.host)
             mem.attached = True
             busy = True
         if p.status == "offline":

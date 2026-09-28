@@ -41,6 +41,9 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("broker/peer.py", "ProcessPeerPolicy.__init__"): "default chain and argv readers for a local human peer",
     ("broker/peer.py", "AllowAllHumans.__init__"): "default chain reader for a local peer (test policy)",
     ("broker/peer.py", "verify_mcp_peer"): "a local MCP server's own ancestry (its kernel peer's chain)",
+    ("broker/peer.py", "claude_registry_socket"): "the registry file of an MCP server's own parent Claude on"
+                                                  " the machine it runs on (verify_mcp_peer, the MCP server's"
+                                                  " own guard), never a participant row's pid",
     ("broker/daemon.py", "_write_pidfile"): "the broker's own pid",
     ("broker/daemon.py", "_pid_matches"): "the pidfile's broker process",
     ("mcp/server.py", "_parent_argv"): "the MCP server's own parent process",
@@ -56,6 +59,8 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("remote/satellite.py", "main"): "the satellite's own start time, for its pidfile",
     ("remote/satellite.py", "Satellite.chain"): "its own kernel peer's chain (a hook on its own machine)",
     ("remote/satellite.py", "Satellite.send_alive"): "the watched pids, which are pids on its own machine",
+    ("remote/satellite.py", "Satellite.claude_status"): "a watched Claude on its own machine: that pid, and its"
+                                                        " registry file in this home's sessions dir (M8d)",
 }
 
 
@@ -73,7 +78,7 @@ class _Scan(ast.NodeVisitor):
         self.hits: list[tuple[int, str, str]] = []  # (line, function, what)
         self.stack: list[str] = []
         self.proc_names = {"proc"}  # names bound to the switchboard.broker.proc module
-        self.claude_names: set[str] = set()  # names bound to the adapters.claude module
+        self.claude_names: set[str] = set()  # names bound to the claude_registry (or adapters.claude) module
 
     def _func(self) -> str:
         return ".".join(self.stack) or "<module>"
@@ -97,7 +102,7 @@ class _Scan(ast.NodeVisitor):
         for a in node.names:
             if a.name.endswith("broker.proc"):
                 self.proc_names.add(a.asname or a.name)
-            if a.name.endswith("adapters.claude") and a.asname:
+            if a.name.endswith(("adapters.claude", "claude_registry")) and a.asname:
                 self.claude_names.add(a.asname)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
@@ -107,6 +112,8 @@ class _Scan(ast.NodeVisitor):
                 self.proc_names.add(a.asname or "proc")
             if mod.endswith("adapters") and a.name == "claude":
                 self.claude_names.add(a.asname or "claude")
+            if a.name == "claude_registry":
+                self.claude_names.add(a.asname or "claude_registry")
             if mod.endswith("broker.proc") and a.name in PROBES:
                 self._hit(node, f"from {mod} import {a.name}")
             if a.name == REGISTRY:
@@ -121,7 +128,7 @@ class _Scan(ast.NodeVisitor):
         else:
             dotted = _dotted(node)  # switchboard.broker.proc.alive, switchboard.adapters.claude.read_registry
             if dotted and ((dotted.endswith(".broker.proc." + node.attr) and node.attr in PROBES)
-                           or dotted.endswith(".adapters.claude." + REGISTRY)):
+                           or dotted.endswith((".adapters.claude." + REGISTRY, ".claude_registry." + REGISTRY))):
                 self._hit(node, dotted)
         self.generic_visit(node)
 
@@ -232,8 +239,12 @@ def test_aliases_and_getattr_are_caught() -> None:
         "    import switchboard.broker.proc\n"
         "    switchboard.broker.proc.ancestry(p.agent_pid)\n"
         "    switchboard.adapters.claude.read_registry('d', 1)\n"
+        "    from switchboard import claude_registry as cr\n"
+        "    cr.read_registry('d', p.agent_pid)\n"
+        "    switchboard.claude_registry.read_registry('d', 1)\n"
+        "    from switchboard.claude_registry import read_registry\n"
     )
     hits = direct_probes(src, "x.py")
-    assert len(hits) == 7, hits
+    assert len(hits) == 10, hits
     # a host view's own method of the same name is the sanctioned route
     assert direct_probes("def f(v, p):\n    v.read_registry(p.agent_pid)\n    v.alive(1, 2)\n", "x.py") == []

@@ -68,7 +68,9 @@ def test_pi_hooks_resolve_to_pi_member(link: FakeLink) -> None:
     fc = FakeClaude(None, home=link.pi, sessions_dir=link.pi_sessions)
     try:
         j = fc.tool("join", room="#fpga", screen_name="bench")
-        assert j["ok"] and j["tier"] == "claude:hook", j  # verified on the Pi; no inbox over a link yet
+        # verified on the Pi; this stand-in serves no inbox socket, so its MCP server's guard
+        # never attaches: claude:hook (the inbox over the link: test_remote_claude.py)
+        assert j["ok"] and j["tier"] == "claude:hook", j
         p = part(link, "claude")
         assert p["host"] == "fpga-pi" and p["agent_pid"] == fc.pid + PID_SHIFT
         assert p["session_key"].startswith(f"claude@fpga-pi:{fc.pid + PID_SHIFT}@")
@@ -86,7 +88,7 @@ def test_pi_hooks_resolve_to_pi_member(link: FakeLink) -> None:
         assert ids_in(ctx) == [mid] and "while you work" in ctx
         fc.hook(claude_fixture("Stop"))
         assert part(link, "claude")["status"] == "idle"
-        # a remote Claude listens with wait(), as claude:hook does locally
+        # a remote Claude without an inbox listens with wait(), as claude:hook does locally
         assert "wait(" in j["text"]
     finally:
         fc.close()

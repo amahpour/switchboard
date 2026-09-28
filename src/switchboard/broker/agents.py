@@ -304,12 +304,14 @@ class AgentService:
         push channel (DESIGN.md §6.4, §9.2). Only a connection whose process is a
         direct child of a claude whose registry names the same inbox socket,
         that has the session token and whose own guard passed, gets the inbox
-        tier; everything else stays ``claude:hook``."""
+        tier; everything else stays ``claude:hook``.
+
+        On a remote host (§27.5.6, §27.7) the same: the parent, registry and socket check
+        is the one its satellite ran there (``facts.attest``), and the channel is keyed by
+        ``(host, mcp pid)``. Frames to it carry ``chk`` for the satellite's last-mile
+        check (``ClaudeAdapter.send``)."""
         mc = self._mcp(conn)
         why = None
-        if _remote(conn):
-            # no push over a link yet: a remote Claude is claude:hook and listens with wait()
-            return {"attached": False, "reason": "the Claude inbox isn't relayed over a remote link yet"}
         if mc.harness != "claude" or not mc.ident.claude_socket:
             why = "not a verified Claude session"
         elif not mc.has_messaging_token:
@@ -349,7 +351,11 @@ class AgentService:
         self.run(acts)
 
     def posted(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
-        """``mcp.posted {batch_id, ok, t_post, err?}`` from the channel the frame went to."""
+        """``mcp.posted {batch_id, ok, t_post, err?}`` from the channel the frame went to.
+        Over a link it may come from the satellite itself, which marks its own report
+        ``facts.lastmile`` (a client can't set facts): its last-mile check dropped the frame,
+        ``err: "stale_status"`` (the adapter re-routes it, uncounted) or a counted
+        ``no_chk``/``bad_chk`` (§27.5.6)."""
         mc = self._mcp(conn)
         bid = params.get("batch_id")
         if not isinstance(bid, int) or isinstance(bid, bool) or not mc.inbox_attached:
@@ -363,11 +369,10 @@ class AgentService:
         if err is not None:
             # it reaches the broker log: codes only, never free text
             err = err if isinstance(err, str) and POST_ERR_RE.fullmatch(err) else "post_failed"
-        adapter.posted(bid, conn, {
-            "ok": params.get("ok") is True,
-            "t_post": float(t) if t_ok else None,
-            "err": err,
-        })
+        res: dict[str, Any] = {"ok": params.get("ok") is True, "t_post": float(t) if t_ok else None, "err": err}
+        if _remote(conn) and conn.facts.get("lastmile") is True:
+            res["lastmile"] = True  # the satellite's own report (§27.5.6)
+        adapter.posted(bid, conn, res)
         return {}
 
     # ======================================================== membership

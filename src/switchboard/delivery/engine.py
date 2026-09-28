@@ -497,7 +497,9 @@ class Engine:
     def on_expire(self, batch_id: int, reason: str, *, state: str = "expired",
                   count_failure: bool = True) -> list[Action]:
         """An offer failed: its deliveries go back to pending. ``count_failure=False``
-        (a push re-route) doesn't count toward the push-expiry warning."""
+        (a push re-route: nothing reached the session) doesn't count toward the push-expiry
+        warning, and a counted wake gives its room's budget unit back (the next offer
+        spends it again), so re-routes never drain the budget."""
         self.hook_acks.pop(batch_id, None)
         self.pull_deadlines.pop(batch_id, None)
         self.pull_tool_use.pop(batch_id, None)
@@ -510,7 +512,8 @@ class Engine:
                 return self._undo_stop_busy(cont.participant_id, cont.created_at, f"expired:{reason}")
             return []
         push = is_push_path(cur.path)
-        b = self.store.expire_batch(batch_id, reason, state=state, push=push and count_failure)
+        b = self.store.expire_batch(batch_id, reason, state=state, push=push and count_failure,
+                                    refund=push and not count_failure)
         if b is None:
             return []  # pragma: no cover - checked offered just above, in this same synchronous call
         m = self.store.get_membership(b.membership_id)

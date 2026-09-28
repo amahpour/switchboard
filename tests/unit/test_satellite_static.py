@@ -4,11 +4,17 @@ links have one spawn site (DESIGN.md §27.4.8, §27.12 never-do 13 and 17)."""
 from __future__ import annotations
 
 import ast
+import subprocess
+import sys
 from pathlib import Path
 
+from conftest import child_env
+
 PKG = Path(__file__).resolve().parents[2] / "src" / "switchboard"
-# the satellite and everything under remote/ that it runs (proto, config, describe)
-NO_SPAWN = ("remote/satellite.py", "remote/proto.py", "remote/config.py", "remote/describe.py")
+# the satellite and everything under remote/ that it runs (proto, config, describe), and the
+# Claude registry reader it shares with the broker (M8d)
+NO_SPAWN = ("remote/satellite.py", "remote/proto.py", "remote/config.py", "remote/describe.py",
+            "claude_registry.py")
 SPAWN_MODULES = frozenset({"subprocess", "pty", "pexpect", "multiprocessing", "tmux", "libtmux"})
 SPAWN_OS = frozenset({"system", "popen", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve",
                       "spawnvp", "spawnvpe", "posix_spawn", "posix_spawnp", "fork", "forkpty", "execl",
@@ -102,3 +108,15 @@ def test_broker_remote_has_one_spawn_site() -> None:
            and any(isinstance(c, ast.Call) and _dotted(c.func) == "asyncio.create_subprocess_exec"
                    for c in ast.walk(n))]
     assert fns == ["_spawn"]
+
+
+def test_the_satellite_loads_no_adapter() -> None:
+    """The satellite reads Claude's registry through the leaf ``claude_registry`` module, so
+    none of the broker's adapters (Codex's app-server client and the rest) is loaded into
+    it (M8d review): what runs on the remote machine stays what §27.4.8 lists."""
+    code = ("import sys, switchboard.remote.satellite, switchboard.config; "
+            "print(sorted(m for m in sys.modules if m.startswith(('switchboard.adapters', 'switchboard.delivery',"
+            " 'switchboard.broker.agents', 'switchboard.broker.rpc'))))")
+    out = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True, timeout=60,
+                         env=child_env(), check=True)
+    assert out.stdout.strip() == "[]", out.stdout

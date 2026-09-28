@@ -9,9 +9,9 @@ it asks ``HostViews.view(p.host)``.
 - ``LocalView`` answers from this machine's kernel (``broker.proc``) and this
   user's Claude session registry.
 - ``RemoteView`` answers for one remote host, from what its link reports: the
-  satellite's ``alive`` frames (M8c) and, from M8d, its relayed registry. It
-  never asks this machine anything, and it can't walk a remote process chain
-  (a remote hook brings its own, ``facts.chain``).
+  satellite's ``alive`` frames (M8c) and its relayed Claude registry (``reg``
+  frames, M8d; ``registry``). It never asks this machine anything, and it can't
+  walk a remote process chain (a remote hook brings its own, ``facts.chain``).
 - A host nobody configured gets a fresh all-``None`` view, never the local one.
 
 ``None`` is never "dead": callers treat it as alive where a wrong "dead" would
@@ -27,13 +27,15 @@ socket's kernel peer, the broker's pidfile, this machine's Codex daemon).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
-from switchboard.adapters.claude import read_registry
 from switchboard.broker import proc
 from switchboard.broker.proc import ProcInfo
+from switchboard.claude_registry import read_registry
 from switchboard.clock import Clock, SystemClock
 from switchboard.models import LOCAL_HOST, Participant, valid_host
+from switchboard.remote import proto
 
 
 class LocalView:
@@ -60,6 +62,17 @@ class LocalView:
         return read_registry(self.sessions_dir, pid)
 
 
+@dataclass(frozen=True)
+class Relayed:
+    """One Claude session's registry as its host's satellite read it (a ``reg`` frame),
+    with the times on this broker's clock: ``status`` is None when the satellite couldn't
+    read the file or it named another session; ``since`` None when it doesn't say."""
+
+    status: str | None
+    since: float | None
+    read_at: float
+
+
 class RemoteView:
     """One remote host, as its link reports it (DESIGN.md §27.5.6).
 
@@ -71,7 +84,12 @@ class RemoteView:
 
     The broker's link (``broker/remote.py``) feeds it: ``link_up``/``link_down``,
     ``set_watch`` for every ``watch`` frame it sends, ``on_alive`` for every
-    ``alive`` frame it receives."""
+    ``alive`` frame it receives, ``registry`` for every ``reg`` frame.
+
+    ``registry(views, read_age, recv)``: the relayed Claude registry of the watched
+    Claude sessions, rebased to this broker's clock (``read_at = recv - read_age``,
+    ``since = recv - since_age``, each clamped, §27.4.6). Only pairs the broker
+    watches are taken; the Claude adapter applies them (``ClaudeAdapter.relay``)."""
 
     FRESH_S = 3.0
     DEAD_MAX = 4096
@@ -119,6 +137,22 @@ class RemoteView:
                 self._alive_at.pop(p, None)
         return new
 
+    def registry(self, views: list[tuple[int, float, str | None, float | None]], read_age: float,
+                 recv: float) -> dict[tuple[int, float], Relayed]:
+        """A ``reg`` frame received at ``recv``: the relayed status of each watched Claude
+        pair (anything else in it is dropped), on this broker's clock."""
+        read_at = proto.rebase_field("read_age", read_age, recv)
+        if read_at is None:  # the frame's validator takes only numbers
+            return {}
+        out: dict[tuple[int, float], Relayed] = {}
+        for pid, start, status, since_age in views:
+            k = self._key(pid, start, self._watched)
+            if k is None:
+                continue
+            since = proto.rebase_field("since_age", since_age, recv) if since_age is not None else None
+            out[k] = Relayed(status=status, since=since, read_at=read_at)
+        return out
+
     # ----------------------------------------------------------- answers
     def _key(self, pid: int, start: float, table: dict[tuple[int, float], Any]) -> tuple[int, float] | None:
         k = (pid, start)
@@ -148,7 +182,9 @@ class RemoteView:
         return None
 
     def read_registry(self, pid: int) -> dict[str, Any] | None:
-        return None  # M8d: the relayed registry
+        # never a file on this machine: a remote session's registry arrives relayed
+        # (``registry``), read on its own host by its satellite
+        return None
 
 
 HostView = LocalView | RemoteView

@@ -21,6 +21,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from switchboard import claude_registry
 from switchboard.broker import proc
 from switchboard.broker.proc import ProcInfo
 from switchboard.models import LOCAL_HOST, session_key
@@ -482,19 +483,10 @@ class McpIdentity:
 
 
 def claude_registry_socket(sessions_dir: str | os.PathLike, claude_pid: int) -> str | None:
-    """``messagingSocketPath`` from ``<sessions_dir>/<pid>.json``, if the file is ours and readable."""
-    import json
-
-    path = os.path.join(os.path.expanduser(str(sessions_dir)), f"{int(claude_pid)}.json")
-    try:
-        st = os.stat(path)
-        if st.st_uid != os.getuid():
-            return None
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return None
-    v = data.get("messagingSocketPath") if isinstance(data, dict) else None
+    """``messagingSocketPath`` from ``<sessions_dir>/<pid>.json``, if the file is ours and readable
+    (``claude_registry.read_registry``: a regular file, never blocking, never raising)."""
+    data = claude_registry.read_registry(sessions_dir, claude_pid)
+    v = data.get("messagingSocketPath") if data is not None else None
     return v if isinstance(v, str) and v else None
 
 
