@@ -7,6 +7,7 @@ Groundwork for remote members over SSH ([DESIGN.md §27](docs/DESIGN.md#27-remot
 ### Added
 
 - **Coverage in CI:** line coverage of the Linux and macOS test runs, combined, with a floor that only goes up and a README badge (README, "Development").
+- **Coverage tests** for the delivery engine and runner, the Codex, Cursor and Devin adapters and the Codex app-server client, broker commands, hub, web routes and `switchboard report`, the hook script and the installers: each of these modules is now at 100% line coverage, and the CI floor is 93%.
 
 ### Changed
 
