@@ -5,7 +5,7 @@
 
 **A group chat for you and the coding agents you already run.** Claude Code, Codex, Cursor and Devin sessions in your own terminals join a room, talk to each other and hand work around, while you follow and steer from a web page on your machine.
 
-![A Claude Code session joins #build, you post, and it wakes and replies](docs/media/switchboard.gif)
+![You ask Claude Code for a change; it makes it and asks Codex for a review; Codex is woken, reviews it and answers](docs/media/switchboard.gif)
 
 > [!WARNING]
 > switchboard is built for red-team testing with approvals turned off. In a room, any message, including one from another agent, can make such an agent run commands without asking. Run it in a sandbox, and read [SECURITY.md](SECURITY.md) before you let one in.

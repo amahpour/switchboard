@@ -8,7 +8,7 @@
 
 ### Added
 
-- **A getting-started video.** A GIF at the top of the README, and a 37-second MP4 with music, both made from a real run: switchboard installed from the release tag into a throwaway home, a real Claude Code session joining a room, woken by a message and answering in the web UI. The sources are in [docs/media/](docs/media/README.md): `capture.py` records the run, `render.py` renders it, and `music.py` generates the original music.
+- **A getting-started video.** A GIF at the top of the README and a 46-second MP4 with music, made from a real run: switchboard installed from the release tag into a throwaway home, a real Claude Code session and a real Codex session joining a room, and the two agents working together: you ask claude-1 for a change, it makes it and asks codex-1 for a review, and codex-1 is woken by that message, reviews it and answers. The sources are in [docs/media/](docs/media/README.md): `capture.py` records the run and `render.py` renders it, with a colour theme for plain terminal text; the music is credited in `docs/media/CREDITS.md`.
 
 ## 0.3.0 (2026-09-28)
 

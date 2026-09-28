@@ -7,7 +7,7 @@ title cards; time is compressed where the capture was waiting.
 
     uv run --no-project --with pillow --with numpy --with fonttools python docs/media/render.py --build /tmp/sb-media
 
-Writes <build>/out/switchboard.mp4 (with music from music.py) and <build>/out/switchboard.gif.
+Writes <build>/out/switchboard.mp4 (with --music, the track in CREDITS.md) and <build>/out/switchboard.gif.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ SANS = FONTS + "dejavu/DejaVuSans.ttf"
 SANS_B = FONTS + "dejavu/DejaVuSans-Bold.ttf"
 FALLBACKS = (FONTS + "dejavu/DejaVuSans.ttf", FONTS + "noto/NotoSansMath-Regular.ttf")
 # glyphs no installed font has, drawn as their nearest look-alike
-SUBST = {"⏺": "●", "⎿": "└", "⏸": "‖", "⧉": "□"}
+SUBST = {"⏺": "●", "⎿": "└", "⏸": "‖", "⧉": "□", "⏵": "▸"}
 
 BG = (21, 24, 26)
 SURFACE = (28, 32, 35)
@@ -56,6 +56,7 @@ WINDOW = (12, 12, 848, 528)
 TOP = (12, 12, 848, 262)
 CHAT = (12, 84, 600, 500)
 LOG = (18, 90, 596, 212)
+FINAL = (18, 202, 598, 338)
 
 
 @lru_cache(maxsize=None)
@@ -70,6 +71,8 @@ class Capture:
     terms: dict[str, list[tuple[float, str]]] = field(default_factory=dict)
     shots: list[tuple[float, str, str]] = field(default_factory=list)
     marks: dict[str, float] = field(default_factory=dict)
+    messages: list[tuple[float, str]] = field(default_factory=list)
+    chat_box: tuple[float, float, float, float] | None = None
     scenes: dict[str, tuple[float, float]] = field(default_factory=dict)
     dpr: int = 2
     tag: str = ""
@@ -91,6 +94,10 @@ class Capture:
                 c.shots.append((t, r["file"], r["label"]))
             elif r["kind"] == "mark":
                 c.marks.setdefault(r["what"], t)
+                if r["what"] == "message":
+                    c.messages.append((t, r.get("who", "")))
+                if r["what"] == "end" and r.get("chat_box"):
+                    c.chat_box = tuple(r["chat_box"])
         return c
 
     def term(self, pane: str, t: float) -> str:
@@ -257,6 +264,72 @@ def _mono_has(ch: str) -> bool:
     return _has(MONO, ch)
 
 
+# A colour theme for plain text, the way a terminal theme and a highlighting shell would show
+# it: only cells the program printed in the default colour get one; the text never changes.
+TH_GREEN, TH_CYAN, TH_YELLOW = (152, 195, 121), (86, 182, 194), (229, 192, 123)
+TH_DIM, TH_WHITE, TH_BLUE = (120, 128, 134), (244, 244, 238), (97, 175, 239)
+THEME: list[tuple[re.Pattern[str], tuple[tuple[int, int, int] | None, bool]]] = [
+    # (pattern, (colour, bold)); later rules win; group 1, if any, is the span coloured
+    (re.compile(r"^(\s*\+ .*)$"), (TH_GREEN, False)),                          # a diff's added lines
+    (re.compile(r"^((?:~|/)\S+ \((?:create|change|update|remove)\):)"), (TH_YELLOW, True)),  # file headers
+    (re.compile(r"^(note:.*)$"), (TH_DIM, False)),
+    (re.compile(r"^(note:)"), (TH_YELLOW, False)),
+    (re.compile(r"^(switchboard (?:install|uninstall) \w+: skipped.*)$"), (TH_DIM, False)),
+    (re.compile(r"^(switchboard (?:install|uninstall) \w+:)$"), (TH_WHITE, True)),
+    (re.compile(r"^(wrote .*)$"), (TH_GREEN, False)),
+    (re.compile(r"^(ran:.*)$"), (TH_DIM, False)),
+    (re.compile(r"^(ran:)"), (TH_GREEN, False)),
+    (re.compile(r"^(summary:)"), (TH_WHITE, True)),
+    (re.compile(r"^\s+\w+: (installed|changed)\b"), (TH_GREEN, True)),
+    (re.compile(r"^(\s+\w+: skipped.*)$"), (TH_DIM, False)),
+    (re.compile(r"(Apply\? \[y/N\])"), (COPPER, True)),
+    (re.compile(r"^(Sign in .*)$"), (TH_WHITE, True)),
+    (re.compile(r"^(switchboard is running)"), (TH_WHITE, True)),
+    (re.compile(r"(https?://\S+)"), (TH_CYAN, False)),
+    (re.compile(r"(\[switchboard\])"), (COPPER, True)),
+    (re.compile(r"(?<![\w.])(@[a-z][a-z0-9_-]*)"), (TH_CYAN, True)),
+    (re.compile(r"(?<![\w/])(#build)\b"), (TH_CYAN, False)),
+    (re.compile(r"\b(from=alice kind=human)"), (TH_GREEN, False)),
+    (re.compile(r"^(\$) "), (TH_GREEN, True)),                                 # the prompt ...
+    (re.compile(r"^\$ (.+)$"), (TH_WHITE, True)),                              # ... and what was typed
+]
+
+
+# Claude Code's note under every message relayed into it: the same paragraph each time, so the
+# theme dims it and the relayed message itself stands out
+RELAY_NOTE = ("This came from another Claude session", "permission laundering")
+
+
+@dataclass
+class ThemeState:
+    carry: tuple[tuple[int, int, int] | None, bool] | None = None   # a wrapped line's style
+    in_note: bool = False
+
+
+def theme_colors(plain: str, cols: int, state: ThemeState) -> list[tuple[tuple[int, int, int] | None, bool]]:
+    base = state.carry if state.carry is not None else (None, False)
+    if RELAY_NOTE[0] in plain:
+        state.in_note = True
+    if state.in_note:
+        base = (TH_DIM, False)
+    out = [base] * len(plain)
+    for rx, style in THEME:
+        for m in rx.finditer(plain):
+            a, b = m.span(1) if rx.groups else m.span()
+            for i in range(a, b):
+                out[i] = style
+    if state.in_note and RELAY_NOTE[1] in plain:
+        state.in_note = False
+    # a line that fills the pane wrapped: its last style carries onto the next line
+    state.carry = out[-1] if len(plain.rstrip()) >= cols and out and out[-1][0] is not None else None
+    return out
+
+
+def neutral(c: tuple[int, int, int] | None) -> bool:
+    """No colour of its own: the default, or a grey the program used for plain text."""
+    return c is None or max(c) - min(c) < 24
+
+
 def draw_terminal(img: Image.Image, box: tuple[int, int, int, int], screen: str, title: str,
                   rows: tuple[int, int] | None = None, cols: int = 84) -> None:
     """A terminal window at `box`, showing `rows` (start, end) of the recorded screen."""
@@ -281,9 +354,14 @@ def draw_terminal(img: Image.Image, box: tuple[int, int, int, int], screen: str,
     max_rows = (y1 - y0 - 34 - 2 * 12) // lh
     lines = lines[-max_rows:] if len(lines) > max_rows else lines
     y = y0 + 34 + 12
+    state = ThemeState()
     for line in lines:
         x = x0 + pad
-        for ch, st in cells(line):
+        cl = cells(line)
+        themed = theme_colors("".join(ch or " " for ch, _ in cl), cols, state)
+        for (ch, st), (tfg, tbold) in zip(cl, themed):
+            if tfg is not None and neutral(st.fg) and not st.reverse:
+                st = Style(tfg, st.bg, st.bold or tbold, False, st.reverse, st.underline)
             fg = st.fg or TERM_FG
             bg = st.bg
             if st.reverse:
@@ -432,6 +510,7 @@ def build_scenes(c: Capture) -> list[Scene]:
     sc = []
     sc.append(Scene("title", 2.6, title_card("switchboard", "a group chat for you and your coding agents",
                                              "Claude Code · Codex · Cursor · Devin")))
+    area = (140, 24, W - 140, H - CAPTION_H - 20)
 
     def term_scene(pane: str, title: str, tmap: Callable[[float], float], step: str, text: str,
                    window: Callable[[str, float], tuple[int, int] | None] | None = None,
@@ -439,101 +518,96 @@ def build_scenes(c: Capture) -> list[Scene]:
         def draw(t: float) -> Image.Image:
             img = canvas()
             scr = c.term(pane, tmap(t))
-            rows = window(scr, t) if window else None
-            draw_terminal(img, (140, 24, W - 140, H - CAPTION_H - 20), scr, title, rows)
+            draw_terminal(img, area, scr, title, window(scr, t) if window else None)
             caption(img, step, text)
             return img
         return draw
 
-    # 1. install: type at double speed, then the output, then a beat on "Installed"
+    def browser(shot: Path, crop: tuple[float, ...], step: str, text: str) -> Image.Image:
+        img = canvas()
+        draw_browser(img, CONTENT, shot, crop, c.dpr)
+        caption(img, step, text)
+        return img
+
+    def last_frame(pane: str, scene: str) -> float:
+        a, b = c.scenes[scene]
+        return max(t for t, _ in c.terms[pane] if a <= t <= b)
+
+    # 1-3: install, register, start, in one terminal
     t_start = c.marks["start"]
     t_typed = c.when("term", r"switchboard@v\d", t_start)
     t_inst = c.when("term", r"Installed 1 executable", t_start)
-    sc.append(Scene("install", 3.8, term_scene("term", "Terminal", timemap(
-        [(0, t_start), (1.6, t_typed + 0.4), (2.8, t_inst), (3.8, t_inst + 0.1)]),
+    sc.append(Scene("install", 3.4, term_scene("term", "Terminal", timemap(
+        [(0, t_start), (1.5, t_typed + 0.4), (2.6, t_inst), (3.4, t_inst + 0.1)]),
         "1", "Install switchboard from GitHub")))
-    # 2. register: the diff, Apply? y, the summary
-    r0, r1 = c.scenes["register"]
+    r0, _ = c.scenes["register"]
     t_ask = c.when("term", r"Apply\? \[y/N\]\s*$", r0)
-    t_sum = c.when("term", r"claude: installed", r0)
-    sc.append(Scene("register", 5.2, term_scene("term", "Terminal", timemap(
-        [(0, r0), (1.0, t_ask - 0.2), (2.0, t_ask), (3.2, t_ask + 1.9), (3.9, t_sum), (5.2, t_sum + 0.2)]),
+    t_sum = c.when("term", r"summary:", t_ask)
+    t_reg = last_frame("term", "register")
+    sc.append(Scene("register", 5.0, term_scene("term", "Terminal", timemap(
+        [(0, r0), (0.9, t_ask - 0.2), (1.9, t_ask), (3.1, t_ask + 1.9), (3.7, t_sum), (5.0, t_reg)]),
         "2", "Register it with your agents: it shows the diff and asks first")))
-    # 3. start
-    s0, s1 = c.scenes["start"]
+    s0, _ = c.scenes["start"]
     t_link = c.when("term", r"login\?t=", s0)
-    sc.append(Scene("start", 2.8, term_scene("term", "Terminal", timemap(
-        [(0, s0), (1.1, t_link), (2.8, t_link + 0.2)]),
+    sc.append(Scene("start", 2.6, term_scene("term", "Terminal", timemap(
+        [(0, s0), (1.0, t_link), (2.6, t_link + 0.2)]),
         "3", "Start it: it prints a one-time sign-in link")))
 
-    # 4. sign in and create #build
+    # 4: sign in, create #build
     t_in, t_room = c.first("signed-in"), c.first("room")
+    sc.append(Scene("signin", 2.8, lambda t: browser(
+        c.shot(t_in if t < 1.3 else t_room, ("signed-in", "room")), WINDOW, "4", "Open the link and create a room")))
 
-    def signin(t: float) -> Image.Image:
-        img = canvas()
-        shot = c.shot(t_in if t < 1.5 else t_room, ("signed-in", "room"))
-        draw_browser(img, CONTENT, shot, WINDOW, c.dpr)
-        caption(img, "4", "Open the link and create a room")
-        return img
-    sc.append(Scene("signin", 3.0, signin))
+    # 5-6: the two agents join, each in its own terminal
+    a_ready = c.marks["claude-ready"]
+    a_typed = c.when("claude", r"❯ join switchboard room #build as claude-1", a_ready)
+    sc.append(Scene("join-claude", 3.6, term_scene("claude", "Terminal — Claude Code", timemap(
+        [(0, a_ready), (1.3, a_typed + 0.3), (3.6, last_frame("claude", "join-claude"))]),
+        "5", "Tell Claude Code to join the room", window=lambda scr, _t: follow(scr, 22))))
+    x_ready = c.marks["codex-ready"]
+    x_typed = c.when("codex", r"join switchboard room #build as codex-1", x_ready)
+    sc.append(Scene("join-codex", 3.6, term_scene("codex", "Terminal — Codex", timemap(
+        [(0, x_ready), (1.3, x_typed + 0.3), (3.6, last_frame("codex", "join-codex"))]),
+        "6", "…and Codex, in another terminal", window=lambda scr, _t: follow(scr, 22))))
+    sc.append(Scene("joined", 2.0, lambda t: browser(
+        c.shot(c.last("joined"), ("joined",)), TOP, "6", "Both are in the room, each in its own session")))
 
-    # 5. join: the agent's terminal, then the buddy list
-    j_ready = c.marks["claude-ready"]
-    j_typed = c.when("claude", r"❯ join switchboard room #build as claude-1", j_ready)
-    j_seen = c.first("joined")
-    j_idle = max(t for t, _ in c.terms["claude"] if t <= c.scenes["join"][1])
-    join_term = term_scene("claude", "Terminal — Claude Code", timemap(
-        [(0, j_ready), (1.4, j_typed + 0.3), (2.6, j_seen), (4.4, j_idle)]),
-        "5", "Tell your agent to join the room", window=lambda scr, _t: follow(scr, 22))
-
-    def join(t: float) -> Image.Image:
-        if t < 4.4:
-            return join_term(t)
-        img = canvas()
-        draw_browser(img, CONTENT, c.shot(c.last("joined"), ("joined",)), TOP, c.dpr)
-        caption(img, "5", "It shows up in the room, and its terminal stays its own")
-        return img
-    sc.append(Scene("join", 6.0, join))
-
-    # 6. post, the agent wakes, it answers
+    # 7: alice asks claude-1 for a change and a review from codex-1
     typing = [s for s in c.shots if s[2] in ("typing", "typed")]
-    posted, answered = c.marks["posted"], c.marks["answered"]
-    w_first = c.when("claude", r"message from alice", posted)
+    posted = c.marks["posted"]
 
-    def wake_window(scr: str, t: float) -> tuple[int, int]:
-        """First the message as it arrives in the session, then scroll down with the work."""
-        lines = [strip(x) for x in scr.rstrip("\n").split("\n")]
-        top = next((i for i, x in enumerate(lines) if "sent a message" in x), 0)
-        start_b, _ = follow(scr, 22)
-        u = min(max((t - 1.2) / 0.8, 0.0), 1.0)
-        start = round(top + (max(start_b, top) - top) * u)
-        return start, start + 22
+    def task(t: float) -> Image.Image:
+        i = min(int(t / 2.4 * len(typing)), len(typing) - 1)
+        return browser(c.build / typing[i][1], CHAT, "7", "Ask one agent for a change and the other for a review")
+    sc.append(Scene("task", 2.8, task))
 
-    w_done = c.when("claude", r"for \d+s · done", answered)
-    wake_term = term_scene("claude", "Terminal — Claude Code", timemap(
-        [(0, w_first - 0.05), (1.4, w_first + 0.8), (3.4, answered), (4.6, w_done + 0.2)]),
-        "6", "The agent is woken in its own session and gets to work", window=wake_window)
+    # 8: claude-1 is woken, makes the change and asks codex-1 in the room
+    msgs = [(t, w) for t, w in c.messages if "alice" not in w]
+    t_claude = next(t for t, w in msgs if "claude-1" in w)
+    t_codex = next(t for t, w in msgs if "codex-1" in w)
+    sc.append(Scene("claude", 4.6, term_scene("claude", "Terminal — Claude Code", timemap(
+        [(0, posted + 0.4), (1.2, posted + 0.4 + (t_claude - posted) * 0.35), (3.8, t_claude), (4.6, t_claude + 0.6)]),
+        "8", "Claude Code is woken, makes the change and asks codex-1", window=lambda scr, _t: follow(scr, 22))))
+    sc.append(Scene("ui-claude", 1.8, lambda t: browser(
+        c.shot(t_claude + 0.9, ("talk",)), CHAT, "8", "Claude Code is woken, makes the change and asks codex-1")))
 
-    def wake(t: float) -> Image.Image:
-        img = canvas()
-        if t < 2.2:                                   # alice types
-            i = min(int(t / 2.2 * len(typing)), len(typing) - 1)
-            draw_browser(img, CONTENT, c.build / typing[i][1], CHAT, c.dpr)
-            caption(img, "6", "Post a message: @claude-1 wakes that agent at once")
-            return img
-        if t < 3.0:                                   # sent
-            draw_browser(img, CONTENT, c.shot(posted + 0.6, ("wake",)), CHAT, c.dpr)
-            caption(img, "6", "Post a message: @claude-1 wakes that agent at once")
-            return img
-        if t < 7.6:
-            return wake_term(t - 3.0)
-        u = min((t - 7.6) / 1.2, 1.0)
-        draw_browser(img, CONTENT, c.shot(answered + 1.0, ("answered",)), lerp_box(CHAT, LOG, u), c.dpr)
-        caption(img, "7", "…and it answers in the room")
-        return img
-    sc.append(Scene("wake", 10.4, wake))
+    # 9: codex-1 is woken by claude-1's message, reviews the change and answers
+    sc.append(Scene("codex", 4.4, term_scene("codex", "Terminal — Codex", timemap(
+        [(0, t_claude + 0.2), (3.4, t_codex), (4.4, t_codex + 1.4)]),
+        "9", "Codex is woken by that message, reviews the change and replies", window=lambda scr, _t: follow(scr, 22))))
+
+    t_end = c.marks["end"]
+
+    def final(t: float) -> Image.Image:
+        u = min(t / 1.4, 1.0)
+        return browser(c.shot(t_end, ("end", "talk")), lerp_box(CHAT, c.chat_box or FINAL, u), "10",
+                       "Your agents hand work to each other, and you see all of it")
+    sc.append(Scene("final", 3.6, final))
     sc.append(Scene("end", 3.6, lambda t: end_card(c.tag, t)))
     return sc
+
+
+GIF_SCENES = ("task", "claude", "ui-claude", "codex", "final")
 
 
 # ------------------------------------------------------------------ output
@@ -554,13 +628,20 @@ def frames(scenes: list[Scene], fps: int, only: tuple[str, ...] | None = None):
             yield img
 
 
-def encode_mp4(scenes: list[Scene], out: Path, music: Path) -> None:
+def encode_mp4(scenes: list[Scene], out: Path, music: Path | None, start: float = 0.0) -> None:
+    """The MP4; with `music`, a background bed from `start` s in, faded and loudness-normalized."""
     total = sum(s.dur for s in scenes)
+    audio_in: list[str] = []
+    audio_out: list[str] = ["-an"]
+    if music is not None:
+        audio_in = ["-ss", f"{start:.2f}", "-t", f"{total:.2f}", "-i", str(music)]
+        fade = f"afade=t=in:d=0.4,afade=t=out:st={total - 2.5:.2f}:d=2.5,loudnorm=I=-19:TP=-2:LRA=11"
+        audio_out = ["-map", "1:a", "-af", fade, "-c:a", "aac", "-b:a", "160k", "-ar", "48000"]
     ff = subprocess.Popen(
         ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS),
-         "-i", "-", "-i", str(music), "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-preset", "slow",
-         "-crf", "22", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-t", f"{total:.2f}",
-         "-movflags", "+faststart", str(out)], stdin=subprocess.PIPE)
+         "-i", "-", *audio_in, "-map", "0:v", "-c:v", "libx264", "-preset", "slow", "-crf", "22",
+         "-pix_fmt", "yuv420p", *audio_out, "-t", f"{total:.2f}", "-movflags", "+faststart", str(out)],
+        stdin=subprocess.PIPE)
     assert ff.stdin is not None
     for img in frames(scenes, FPS):
         ff.stdin.write(img.tobytes())
@@ -588,6 +669,10 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--build", type=Path, required=True)
     ap.add_argument("--stills", action="store_true", help="also write one PNG per scene, for review")
+    ap.add_argument("--music", type=Path, help="a music track to lay under the MP4 (see CREDITS.md); silent without")
+    ap.add_argument("--music-start", type=float, default=0.0, help="where in the track to start, in seconds")
+    ap.add_argument("--name", default="switchboard", help="output file name, without extension")
+    ap.add_argument("--no-gif", action="store_true")
     args = ap.parse_args()
     c = Capture.load(args.build)
     scenes = build_scenes(c)
@@ -598,12 +683,12 @@ def main() -> None:
         for s in scenes:
             for frac in (0.2, 0.6, 0.95):
                 s.draw(s.dur * frac).save(out / f"still-{s.name}-{int(frac * 100):02d}.png")
-    music = out / "music.wav"
-    subprocess.run([sys.executable, str(HERE / "music.py"), "--seconds", f"{total:.2f}", "--out", str(music)],
-                   check=True)
-    encode_mp4(scenes, out / "switchboard.mp4", music)
-    encode_gif(scenes, out / "switchboard.gif", ("join", "wake"))
-    for f in ("switchboard.mp4", "switchboard.gif"):
+    encode_mp4(scenes, out / f"{args.name}.mp4", args.music, args.music_start)
+    made = [f"{args.name}.mp4"]
+    if not args.no_gif:
+        encode_gif(scenes, out / f"{args.name}.gif", GIF_SCENES)
+        made.append(f"{args.name}.gif")
+    for f in made:
         print(f"{out / f}: {(out / f).stat().st_size / 1e6:.1f} MB")
     print(f"length {total:.1f} s")
 
