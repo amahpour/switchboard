@@ -31,6 +31,7 @@ Remote members over SSH ([README](README.md#remote-members-over-ssh), [DESIGN.md
 
 ### Fixed
 
+- **Claude Desktop sessions in WSL and on Linux are recognized as Claude.** Claude Desktop runs them as `~/.claude/remote/ccd-cli/<version>`, which switchboard didn't match. Such a session was treated as an unknown agent: no inbox wakes, hooks did nothing, and its shell passed the human-only check on a machine running its own broker.
 - **Names and keys are checked as whole strings.** Remote names, host and user names, labels, key types and the link's version and reason fields were matched with a pattern that also let a trailing newline through; they now must match whole (a web route name with `%0A` is a 400, not a 404).
 - **A remote's hook-check line can't carry its own text.** `remote status` and the web UI showed the file names a remote's `hooks/` check found as the remote sent them. The satellite now names only files shaped like a hook copy and counts the rest, and the broker strips control, bidi and zero-width characters and line breaks from whatever arrives.
 - **A message that was never handed over no longer spends the wake budget.** When a wake is re-routed because the session changed just before it was posted (a Codex turn that ended, a remote Claude session that stopped being idle), the room gets its budget unit back; only the wake that is finally handed over counts.
