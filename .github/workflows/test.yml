@@ -49,7 +49,8 @@ jobs:
       - run: uv sync --frozen
       # pyproject's addopts deselect `live` (real agent CLIs) and `perf` (timing targets).
       # --cov measures this process and ([tool.coverage.run] patch) its Python children.
-      - run: uv run --frozen pytest -q -p no:cacheprovider --cov --cov-report=term
+      # -n auto: pytest-xdist runs the suite on every core (about 3x faster); pytest-cov merges the workers
+      - run: uv run --frozen pytest -q -p no:cacheprovider -n auto --cov --cov-report=term
       - name: Keep this OS's coverage data for the combine job
         run: |
           mkdir coverage-data

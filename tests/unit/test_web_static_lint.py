@@ -65,3 +65,9 @@ def test_css_loads_nothing_external() -> None:
 def test_writes_carry_the_csrf_header() -> None:
     js = (STATIC / "app.js").read_text()
     assert "'X-Switchboard'" in js and "credentials: 'same-origin'" in js
+
+
+def test_catchup_hint_for_commands_written_mid_message() -> None:
+    js = (STATIC / "app.js").read_text()
+    assert "CATCHUP_HINT" in js and "/catchup <agent> on <member>" in js
+    assert r"(^|\s)\/(catchup|review)\b" in js  # only a mention inside plain text triggers it
