@@ -165,7 +165,7 @@ def parse_token(text: str) -> Token:
     _m, _v, name, desktop, ktype, b64 = words
     if not valid_host(name):
         raise PairingError("the token's remote name is not valid (a-z first, then a-z, 0-9, '-'; at most 24)")
-    if not LABEL_RE.match(desktop):
+    if not LABEL_RE.fullmatch(desktop):
         raise PairingError("the token's desktop label is not valid")
     if ktype != KEY_TYPE:
         raise PairingError(f"the token's key type is {ktype[:32]!r}, not {KEY_TYPE}")
@@ -177,7 +177,7 @@ def desktop_label(raw: str | None = None) -> str:
     part of the host name, reduced to ``[A-Za-z0-9._-]``."""
     base = raw if raw is not None else socket.gethostname().split(".")[0]
     s = re.sub(r"[^A-Za-z0-9._-]+", "-", base).strip("-._")[:64]
-    return s if s and LABEL_RE.match(s) else "desktop"
+    return s if s and LABEL_RE.fullmatch(s) else "desktop"
 
 
 # ------------------------------------------------------------ authorized_keys
@@ -250,7 +250,7 @@ def parse_ak_line(line: str) -> AkEntry | None:
     first = s.split(None, 1)[0]
     opts = ""
     rest = s
-    if not _KEY_TYPE_RE.match(first):
+    if not _KEY_TYPE_RE.fullmatch(first):
         # options run to the first blank outside double quotes
         inq, j = False, 0
         while j < len(s):
@@ -265,7 +265,7 @@ def parse_ak_line(line: str) -> AkEntry | None:
             j += 1
         opts, rest = s[:j], s[j:].strip()
     parts = rest.split(None, 2)
-    if len(parts) < 2 or not _KEY_TYPE_RE.match(parts[0]):
+    if len(parts) < 2 or not _KEY_TYPE_RE.fullmatch(parts[0]):
         return None
     return AkEntry(options=_split_options(opts), keytype=parts[0], key=parts[1],
                    comment=parts[2] if len(parts) > 2 else "")
@@ -578,11 +578,11 @@ class Resolved:
 
 
 def split_dest(dest: str) -> tuple[str | None, str]:
-    m = _DEST_RE.match(dest)
+    m = _DEST_RE.fullmatch(dest)
     if not m or dest.startswith("-"):
         raise PairingError("the destination is [user@]host")
     user, host = m.group(1), m.group(2)
-    if user is not None and not USER_RE.match(user):
+    if user is not None and not USER_RE.fullmatch(user):
         raise PairingError("the user must be a login name (a-z, 0-9, '_', '-')")
     if not _is_host(host):
         raise PairingError("the host must be a host name or an IP address")
@@ -630,7 +630,7 @@ def resolve(host: str, user: str | None, port: int | None, ssh_config: str | Non
                            " through a jump host or proxy command (§27.4.1); give the remote's own address")
     if not _is_host(res.hostname):
         raise PairingError(f"ssh -G gave the host name {res.hostname[:80]!r}, which a link can't use")
-    if not USER_RE.match(res.user):
+    if not USER_RE.fullmatch(res.user):
         raise PairingError(f"ssh -G gave the user {res.user[:40]!r}: give a login name as user@host")
     if not 1 <= res.port <= 65535:
         raise PairingError("ssh -G gave no valid port")
@@ -663,7 +663,7 @@ def find_pin(lookup: str, files: Sequence[str]) -> tuple[str, str, str] | None:
                 if w[0] == "@revoked" and len(w) >= 4:
                     revoked.add(w[3])
                 continue  # a CA or a revocation is not a pin
-            if len(w) >= 3 and PIN_KEY_TYPES.match(w[1]) and key_fingerprint(f"{w[1]} {w[2]}"):
+            if len(w) >= 3 and PIN_KEY_TYPES.fullmatch(w[1]) and key_fingerprint(f"{w[1]} {w[2]}"):
                 keys.append((w[1], w[2]))  # a plain host key (a certificate is not a pin)
         keys = [k for k in keys if k[1] not in revoked]
         if keys:

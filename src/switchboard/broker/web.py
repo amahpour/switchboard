@@ -4,6 +4,12 @@ Every ``/api/*`` request needs the session cookie. Unsafe methods also pass
 ``HostOriginGuard`` (exact Origin + ``X-Switchboard: 1``). The WebSocket checks
 Origin and the cookie before ``accept()`` and only understands ``hello`` and
 ``ping`` from the client.
+
+Remote links (§27.11): ``GET /api/remotes`` is every remote's state;
+``POST /api/remotes/{name}/enable`` and ``/disable`` are the web UI's Enable /
+reconnect and Disable buttons, the web session's equivalents of the human-only
+``switchboard remote enable|disable`` (consent for exactly the current config,
+recorded as ``via web``). A ``remotes`` WebSocket event carries every change.
 """
 
 from __future__ import annotations
@@ -11,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -24,7 +31,7 @@ from switchboard.broker.auth import COOKIE_NAME, SESSION_TTL_S
 from switchboard.broker.commands import Actor
 from switchboard.broker.hub import WsSubscriber
 from switchboard.broker.service import ServiceError, message_dict
-from switchboard.models import InvalidName, normalize_room
+from switchboard.models import InvalidName, normalize_room, valid_host
 
 if TYPE_CHECKING:  # pragma: no cover
     from switchboard.broker.app import BrokerState
@@ -37,6 +44,7 @@ MAX_BODY = 64 * 1024
 WS_MAX_ROOMS = 64
 WS_BACKLOG = 500
 BAD_TOKEN_EVENT_S = 60.0
+HASH_RE = re.compile(r"[0-9a-f]{64}")  # a remote's config_hash (sha256 hex)
 
 
 class _StaticFiles(StaticFiles):
@@ -243,6 +251,51 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return _ok(res)
         except ServiceError as e:
             return _svc_err(e)
+
+    # ------------------------------------------------------------ remotes
+    # The web session is the human (§5.4): enabling a remote from here is the same consent
+    # as `switchboard remote enable` (§27.5.8), for exactly the entry's current config.
+    @app.get("/api/remotes")
+    async def remotes(request: Request) -> Response:
+        if session(request) is None:
+            return unauthorized()
+        mgr = state.remotes
+        if mgr is None:  # the broker is still starting its links
+            return _ok({"remotes": [], "config_error": None, "version": __version__})
+        try:
+            return _ok({**(await mgr.status()), "version": __version__})
+        except ServiceError as e:
+            return _svc_err(e)
+
+    async def remote_op(request: Request, name: str, op: str) -> Response:
+        if session(request) is None:
+            return unauthorized()
+        try:
+            body = await _json_body(request)
+            if not valid_host(name):
+                raise ServiceError("bad_request", "remote names look like fpga-pi")
+            mgr = state.remotes
+            if mgr is None:
+                raise ServiceError("conflict", "the broker is still starting its remote links; try again")
+            if op == "enable":
+                # the consent is for the config the page showed (its `config_hash`): an edit of
+                # remotes.toml or the key files since then is a 409, never a silent consent
+                want = body.get("config_hash")
+                if not isinstance(want, str) or not HASH_RE.fullmatch(want):
+                    raise ServiceError("bad_request", "config_hash missing: reload the remotes panel and enable again")
+                # a long poll, as the CLI's: it dials and waits up to 15 s for the outcome
+                return _ok(await mgr.enable(name, via="web", actor="web session", expect_hash=want))
+            return _ok(await mgr.disable(name, via="web"))
+        except ServiceError as e:
+            return _svc_err(e)
+
+    @app.post("/api/remotes/{name}/enable")
+    async def remote_enable(request: Request, name: str) -> Response:
+        return await remote_op(request, name, "enable")
+
+    @app.post("/api/remotes/{name}/disable")
+    async def remote_disable(request: Request, name: str) -> Response:
+        return await remote_op(request, name, "disable")
 
     # ---------------------------------------------------------- websocket
     @app.websocket("/ws")

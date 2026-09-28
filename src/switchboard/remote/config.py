@@ -92,9 +92,9 @@ def _is_host(h: str) -> bool:
     try:
         ip = ipaddress.ip_address(h)
     except ValueError:
-        return bool(HOSTNAME_RE.match(h)) and ".." not in h and not h.endswith("-")
+        return bool(HOSTNAME_RE.fullmatch(h)) and ".." not in h and not h.endswith("-")
     scope = getattr(ip, "scope_id", None)
-    return scope is None or bool(SCOPE_ID_RE.match(scope))
+    return scope is None or bool(SCOPE_ID_RE.fullmatch(scope))
 
 
 def _int(v: Any, where: str, lo: int, hi: int) -> int:
@@ -129,7 +129,7 @@ def parse_entry(name: str, data: Any, *, test_mode: bool) -> RemoteEntry:
         if not isinstance(host, str) or not _is_host(host):
             raise RemoteConfigError(f"{where}.host must be a host name or an IP address")
     if transport == "ssh" or user:
-        if not isinstance(user, str) or not USER_RE.match(user):
+        if not isinstance(user, str) or not USER_RE.fullmatch(user):
             raise RemoteConfigError(f"{where}.user must be a login name (a-z, 0-9, '_', '-')")
     port = _int(data.get("port", 22), f"{where}.port", 1, 65535)
     raw_rooms = data.get("rooms")
@@ -344,7 +344,7 @@ def pin_problem(paths: Paths, name: str) -> str | None:
         return (f"{rel} must hold exactly one line, the host key pinned under {alias}"
                 f" ({len(lines)} found): anything more would be trusted too")
     words = lines[0].split()
-    if (len(words) != 3 or words[0] != alias or not PIN_KEY_TYPES.match(words[1])
+    if (len(words) != 3 or words[0] != alias or not PIN_KEY_TYPES.fullmatch(words[1])
             or _key_blob_type(words[2]) != words[1]):
         return f"{rel} has no pinned host key for {alias} (one line: {alias} <type> <key>)"
     return None
@@ -412,7 +412,7 @@ def read_satellite_conf(paths: Paths) -> SatelliteConf:
     if not isinstance(name, str) or not valid_host(name):
         raise RemoteConfigError("satellite.toml: name must be a remote name such as fpga-pi")
     desktop = data.get("desktop", "")
-    if not isinstance(desktop, str) or (desktop and not LABEL_RE.match(desktop)):
+    if not isinstance(desktop, str) or (desktop and not LABEL_RE.fullmatch(desktop)):
         raise RemoteConfigError("satellite.toml: desktop must be a short label")
     fp = data.get("key_fingerprint", "")
     if not isinstance(fp, str) or len(fp) > 100:
@@ -433,7 +433,7 @@ def write_satellite_conf(paths: Paths, name: str, desktop: str = "", key_fp: str
     """Write ``satellite.toml`` atomically, 0600."""
     if not valid_host(name):
         raise RemoteConfigError(f"not a remote name: {name!r}")
-    if desktop and not LABEL_RE.match(desktop):
+    if desktop and not LABEL_RE.fullmatch(desktop):
         raise RemoteConfigError(f"not a desktop label: {desktop!r}")
     at = time.time() if accepted_at is None else accepted_at
     text = (f"name = {_toml_str(name)}\n"

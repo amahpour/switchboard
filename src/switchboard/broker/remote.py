@@ -62,7 +62,9 @@ from switchboard.remote.config import (
     RemoteEntry,
     entry_hash,
     host_key_alias,
+    key_fingerprint,
     link_key_path,
+    link_material,
     load_remotes,
     pin_path,
     remote_dir,
@@ -95,6 +97,7 @@ STDERR_KEEP = 2048
 MANAGER_TICK_S = 1.0
 DEFAULT_END_AFTER_S = 900.0  # remotes.toml's default end_after_s
 OUT_BACKLOG_BYTES = 16 * 1024 * 1024
+REMOTES_EVENT_S = 0.2  # the web UI's `remotes` event is debounced (as the buddy list's)
 STDERR_WAIT_S = 0.5  # after the child exited, for the last of its stderr
 
 
@@ -200,6 +203,27 @@ def last_line(text: str) -> str | None:
     """The last non-blank line of a child's stderr, cleaned for a notice or status."""
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     return clean(lines[-1])[:200] if lines else None
+
+
+def one_line(text: str, n: int = 200) -> str:
+    """Text the remote wrote (its ``hook_state``), for the owner's status and the web UI:
+    cleaned (no control, bidi or zero-width characters) and on one line."""
+    return " ".join(clean(text).split())[:n]
+
+
+def pinned_fingerprints(pin: str) -> list[str]:
+    """``<type> SHA256:<b64>`` for each host key pinned in ``known_hosts`` (for the remotes
+    panel: what an Enable trusts)."""
+    out = []
+    for line in pin.splitlines():
+        words = line.split()
+        if words and words[0].startswith("@"):
+            words = words[1:]
+        if len(words) >= 3:
+            fp = key_fingerprint(f"{words[1]} {words[2]}")
+            if fp:
+                out.append(f"{words[1]} {fp}")
+    return out
 
 
 class LinkClosed(Exception):
@@ -637,7 +661,7 @@ class RemoteLink:
             self.send_frame(a, proto.refuse("test_mode", "a test-mode satellite needs a test-mode broker"))
             raise LinkClosed("blocked", "test_mode")
         self.sat_version, self.sat_proto = h["version"], h["proto"]
-        self.sat_test_mode, self.harden, self.hooks = h["test_mode"], h["harden"], h["hook_state"]
+        self.sat_test_mode, self.harden, self.hooks = h["test_mode"], h["harden"], one_line(h["hook_state"])
         self.skew_s = round(h["now"] - recv, 2)
         self.send_frame(a, proto.welcome(
             version=__version__, link=a.link_id, rooms=list(self.entry.rooms),
@@ -691,6 +715,7 @@ class RemoteLink:
         rtt = f"{fmt_ms(self.rtt_ms)} ms" if self.rtt_ms is not None else "?"
         self.notice(f"{self.name}: link up (enabled via {via} by {self.st.cfg.human_name} on {when};"
                     f" satellite {self.sat_version}, rtt {rtt})")
+        self.mgr.changed(self)  # the chip's first RTT
         self._wake_waiters()
 
     async def _pinger(self, a: Attempt) -> None:
@@ -798,7 +823,10 @@ class RemoteLink:
                 self.rtt_ms = round((time.monotonic() - sent) * 1000.0, 1)
                 a.first_pong.set()
         elif t == "status":
-            self.hooks = f["hook_state"]
+            hooks = one_line(f["hook_state"])
+            if hooks != self.hooks:
+                self.hooks = hooks
+                self.mgr.changed(self)
         elif t == "reg":
             self._on_reg(f)
         elif t == "bye":
@@ -969,7 +997,38 @@ class RemoteLink:
             "last_up_at": row.last_up_at if row is not None else None,
             # why the last child ended, in its own words (its stderr's last line), for the owner
             "detail": self._detail() if self.state in ("down", "blocked") else None,
+            # what an enable consents to (§27.5.8): the web UI shows it and sends the hash back
+            "config_hash": self.hash,
+            "dest": self.dest(),
+            "host_keys": self.host_keys(),
+            "hint": self.hint(),
         }
+
+    def dest(self) -> str:
+        e = self.entry
+        if e.transport == "exec":
+            return f"exec: {e.home}"
+        host = f"[{e.host}]" if ":" in e.host else e.host
+        return f"{e.user}@{host}:{e.port}"
+
+    def host_keys(self) -> list[str]:
+        if self.entry.transport == "exec":
+            return []
+        return pinned_fingerprints(link_material(self.st.paths, self.name)[1])
+
+    def hint(self) -> str | None:
+        """What the owner can do about a link that isn't up (the panel's hint; ``describe``
+        has the same words for the CLI)."""
+        if self.state == "blocked":
+            return str(BLOCK_HINTS.get(self.reason, self.reason)).replace("<name>", self.name)
+        if self.state == "disabled" and self.reason == "config_changed":
+            return ("its remotes.toml entry or key files changed since you enabled it: check the destination"
+                    " and host key, then enable it again")
+        if self.state == "disabled" and self.reason == "not_enabled":
+            return "never enabled: check the destination and host key, then enable it"
+        if self.state == "disabled" and self.reason == "disabled":
+            return "disabled: enabling dials it again"
+        return None
 
     def _detail(self) -> str | None:
         """For the owner (``remote status``): why the last attempt ended, or the last line
@@ -991,13 +1050,38 @@ class RemoteManager:
         # reload, enable, disable and shutdown change links: one at a time (a stop of one
         # must never end the attempt another just started)
         self._ctl = asyncio.Lock()
+        self._event: asyncio.TimerHandle | None = None  # the pending `remotes` web event
+        self._event_had_links = False
+        self._members_seen: dict[str, tuple[str, ...]] = {}  # each host's member names, last published
 
     def now(self) -> float:
         return self.state.clock.now()
 
-    def changed(self, link: RemoteLink) -> None:
-        """A link's state changed (the web UI's remotes event arrives with M8f)."""
-        return None
+    def changed(self, link: RemoteLink | None = None) -> None:
+        """A link's state, its RTT, its members or the set of remotes changed: the web
+        UI's ``remotes`` event (every remote's state, as ``GET /api/remotes`` has it),
+        debounced to one per ``REMOTES_EVENT_S`` (§27.11)."""
+        if self._event is not None or not self.running:
+            return  # one pending already; or the manager is starting (the page asks) or shutting down
+        if not self.links and not self._event_had_links:
+            return  # no remotes, before or now: nothing for the UI
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:  # no loop (a unit test): publish at once
+            self._publish()
+            return
+        self._event = loop.call_later(REMOTES_EVENT_S, self._publish)
+
+    def _publish(self) -> None:
+        self._event = None
+        self._event_had_links = bool(self.links)
+        hub = self.state.hub
+        if hub is None:
+            return
+        try:
+            hub.remotes_changed(self.summary(), self.config_error)
+        except Exception:
+            log.exception("remotes event failed")
 
     # --------------------------------------------------------------- config
     def _file_stamp(self) -> tuple[tuple[int, int] | None, ...]:
@@ -1032,7 +1116,8 @@ class RemoteManager:
         except RemoteConfigError as e:
             if self.config_error != str(e):
                 log.warning("remotes.toml refused: %s", e)
-            self.config_error = str(e)
+                self.config_error = str(e)
+                self.changed()  # the page's "remotes.toml: not read" chip
             return
         self.config_error = None
         for name, entry in entries.items():
@@ -1057,6 +1142,7 @@ class RemoteManager:
             link = self.links.pop(name)
             await link.stop("disabled", "removed")
             self.state.hosts.remove_remote(name)
+        self.changed()
 
     # ------------------------------------------------------------ lifecycle
     async def start(self) -> None:
@@ -1068,6 +1154,9 @@ class RemoteManager:
 
     async def stop(self) -> None:
         self.running = False
+        if self._event is not None:
+            self._event.cancel()
+            self._event = None
         if self._task is not None:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -1180,8 +1269,14 @@ class RemoteManager:
         return n
 
     def refresh_watch(self) -> None:
+        """A host's joined set may have changed: its ``watch``; and the web UI's event, only
+        when a host's member names did change (this runs on every liveness tick)."""
         for link in self.links.values():
             link.refresh_watch()
+        members = {name: tuple(link.members()) for name, link in self.links.items()}
+        if members != self._members_seen:
+            self._members_seen = members
+            self.changed()
 
     # ------------------------------------------------------------ commands
     async def _link(self, name: str) -> RemoteLink:
@@ -1194,16 +1289,23 @@ class RemoteManager:
             raise ServiceError("not_found", f"no remote named {name[:40]} in remotes.toml")
         return link
 
-    async def enable(self, name: str, *, via: str, actor: str = "") -> dict[str, Any]:
+    async def enable(self, name: str, *, via: str, actor: str = "", expect_hash: str | None = None) -> dict[str, Any]:
         """The owner's consent for this remote's current config; dial now and wait (up
         to 15 s) for the link to come up, block or fail (§27.5.8). Two enables at once,
-        or an enable beside a reload, share one attempt: none ends the other's."""
+        or an enable beside a reload, share one attempt: none ends the other's. With
+        ``expect_hash`` (the web UI's Enable: the ``config_hash`` the page showed), the
+        consent is for that config only: a config changed since is a conflict."""
         loop = asyncio.get_running_loop()
         async with self._ctl:
             link = await self._link(name)
+            if expect_hash is not None and expect_hash != link.hash:
+                self.changed(link)  # the page gets the config as it is now
+                raise ServiceError("conflict", f"{name}: remotes.toml or its key files changed since the page showed"
+                                               " them; check the remote's destination and host key, then enable again")
             self.state.store.set_remote_enabled(name, link.hash, via)
             self.state.store.add_event("remote", data={"what": "enable", "name": name, "via": via})
             log.warning("remote %s enabled via %s (%s)", name, via, actor or "?")
+            self.changed(link)
             if link.state == "up" and link.attempt is not None:
                 return self._result(link)
             # registered before the supervisor next runs: this waiter sees its next outcome

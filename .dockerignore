@@ -11,6 +11,9 @@
 !README.md
 !LICENSE
 !sandbox/run-tests.sh
+# the two-host image (sandbox/Dockerfile.twohost): the remote's entrypoint and the bench stand-ins
+!sandbox/twohost/entrypoint-pi.sh
+!sandbox/twohost/bench/
 # ...and, inside those, nothing local (mirrors .gitignore)
 **/__pycache__
 **/*.pyc

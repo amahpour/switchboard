@@ -65,7 +65,10 @@ class Subscriber:
 
 
 class WsSubscriber(Subscriber):
-    """A browser WebSocket. Frames are the §5.5 server->client shapes."""
+    """A browser WebSocket. Frames are the §5.5 server->client shapes, plus ``remotes``:
+    every remote link's state, for the header chips and the remotes panel (§27.11)."""
+
+    kinds: frozenset[str] = Subscriber.kinds | {"remotes"}
 
     def __init__(self) -> None:
         super().__init__()
@@ -73,7 +76,7 @@ class WsSubscriber(Subscriber):
         self.q = asyncio.Queue(maxsize=WS_QUEUE_MAX)
 
     def format(self, kind: str, room: str | None, data: dict[str, Any]) -> Any:
-        return {"t": kind, "room": room, **data} if kind != "rooms" else {"t": "rooms", **data}
+        return {"t": kind, "room": room, **data} if kind not in ("rooms", "remotes") else {"t": kind, **data}
 
     async def run_sender(self, send_text: Callable[[str], Any], close: Callable[[int], Any]) -> None:
         try:
@@ -130,6 +133,11 @@ class Hub:
 
     def rooms_changed(self, names: list[str]) -> int:
         return self.publish("rooms", None, {"rooms": names})
+
+    def remotes_changed(self, remotes: list[dict[str, Any]], config_error: str | None = None) -> int:
+        """Every remote's state (``RemoteManager.summary()``), to the web UI only: the
+        UDS tail subscribers never ask for this kind."""
+        return self.publish("remotes", None, {"remotes": remotes, "config_error": config_error})
 
     def set_members_source(self, fn: Callable[[str], list[dict[str, Any]] | None]) -> None:
         self._members_fn = fn

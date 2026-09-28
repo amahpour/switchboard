@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import stat
 import tempfile
 from dataclasses import dataclass
@@ -203,11 +204,20 @@ def test_mode_refusal(paths: Paths, home_given: bool) -> str | None:
     return None
 
 
+HOOK_STATE_NAMES = 4  # names listed in a MISMATCH (a satellite's hook_state is at most 200 chars)
+_HOOK_COPY_NAME = re.compile(r"switchboard_hook-[0-9a-f]{12}\.py")
+
+
 def hook_state_text(paths: Paths) -> str:
-    """``ok (<n> copies)`` or ``MISMATCH: <names>``: the hook copies in ``<home>/hooks``."""
+    """``ok (<n> copies)`` or ``MISMATCH: <names>``: the hook copies in ``<home>/hooks``.
+    A satellite sends this to the desktop, where the owner reads it, so only names shaped
+    like a hook copy are listed (at most ``HOOK_STATE_NAMES``); other files are counted."""
     bad = check_hook_copies(paths)
     if bad:
-        return "MISMATCH: " + ", ".join(bad)
+        shown = [b for b in bad if _HOOK_COPY_NAME.fullmatch(b)][:HOOK_STATE_NAMES]
+        more = len(bad) - len(shown)  # named otherwise, or past the first few: counted only
+        what = f"{more} {'other ' if shown else ''}file{'' if more == 1 else 's'}"
+        return "MISMATCH: " + ", ".join(shown + ([what] if more else []))
     try:
         n = len(list(paths.hooks_dir.glob("switchboard_hook-*.py")))
     except OSError:
