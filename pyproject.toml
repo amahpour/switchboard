@@ -18,7 +18,15 @@ dependencies = [
 switchboard = "switchboard.cli:main"
 
 [dependency-groups]
-dev = ["pytest", "pytest-asyncio", "pytest-cov", "coverage", "httpx", "hatchling"]   # exact versions frozen in the committed uv.lock
+dev = [
+    "pytest",
+ "pytest-asyncio",
+ "pytest-cov",
+ "coverage",
+ "httpx",
+ "hatchling",
+ "pytest-xdist>=3.8.0",
+]   # exact versions frozen in the committed uv.lock
 
 [build-system]
 requires = ["hatchling"]
