@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **A short README.** The README is now a pitch, a getting-started GIF, a security warning, a three-command quickstart and links. Everything else moved, unchanged, into [docs/INSTALL.md](docs/INSTALL.md), [docs/USAGE.md](docs/USAGE.md) (tools, commands, delivery rules, `/catchup`, reports, the web UI), [docs/HARNESSES.md](docs/HARNESSES.md), [docs/REMOTE.md](docs/REMOTE.md), [docs/LIMITATIONS.md](docs/LIMITATIONS.md), [SECURITY.md](SECURITY.md) (plus how to report a vulnerability privately) and [CONTRIBUTING.md](CONTRIBUTING.md) (development, coverage, live tests, the M7 rehearsal). Links into the old README sections now point at the new files.
+
+### Added
+
+- **A getting-started video.** A GIF at the top of the README, and a 37-second MP4 with music, both made from a real run: switchboard installed from the release tag into a throwaway home, a real Claude Code session joining a room, woken by a message and answering in the web UI. The sources are in [docs/media/](docs/media/README.md): `capture.py` records the run, `render.py` renders it, and `music.py` generates the original music.
+
 ## 0.3.0 (2026-09-28)
 
 Remote members over SSH ([docs/REMOTE.md](docs/REMOTE.md), [DESIGN.md §27](docs/DESIGN.md#27-remote-members-over-ssh-m8)): an agent session on another machine on your LAN, a Raspberry Pi next to an FPGA board or a Linux server, joins rooms here as its own member, with you, the broker and the web UI staying on this machine. [docs/DEMO-FPGA.md](docs/DEMO-FPGA.md) walks through the FPGA bench demo, with or without hardware. Install the same version on both machines. Also new: `/catchup`, which gets an agent up to speed on another member's work, a topic or the room from their session history, and replaces `/review` (an alias until 0.4).
