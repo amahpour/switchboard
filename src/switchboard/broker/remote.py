@@ -57,6 +57,7 @@ from switchboard.models import Room, valid_host
 from switchboard.paths import Paths
 from switchboard.remote import proto
 from switchboard.remote.config import (
+    ANY_ROOM,
     SSH_BIN,
     RemoteConfigError,
     RemoteEntry,
@@ -406,10 +407,31 @@ class RemoteLink:
         log.info("remote %s: %s%s", self.name, state, f" ({reason})" if reason else "")
         self.mgr.changed(self)
 
+    def _notice_rooms(self) -> list[str]:
+        """The remote's listed rooms, or with ``"*"`` (any room) the rooms its members are in."""
+        if ANY_ROOM not in self.entry.rooms:
+            return list(self.entry.rooms)
+        names: list[str] = []
+        for p in self.st.store.joined_participants():
+            if p.host != self.name:
+                continue
+            for m in self.st.store.participant_memberships(p.id):
+                room = self.st.store.room_by_id(m.room_id)
+                if room is not None and room.name not in names:
+                    names.append(room.name)
+        return names
+
+    def _welcome_rooms(self) -> list[str]:
+        """The rooms named in the welcome frame (the satellite only shows them). With ``"*"``
+        the existing rooms, since the frame format allows room names only (at most 64)."""
+        if ANY_ROOM not in self.entry.rooms:
+            return list(self.entry.rooms)
+        return [r.name for r in self.st.store.list_rooms()][:64]
+
     def notice(self, text: str, level: str = "info") -> None:
         """A notice in each of the remote's rooms that exists."""
         svc = self.st.service
-        for name in self.entry.rooms:
+        for name in self._notice_rooms():
             room: Room | None = self.st.store.get_room(name)
             if room is not None:
                 with contextlib.suppress(Exception):
@@ -664,7 +686,7 @@ class RemoteLink:
         self.sat_test_mode, self.harden, self.hooks = h["test_mode"], h["harden"], one_line(h["hook_state"])
         self.skew_s = round(h["now"] - recv, 2)
         self.send_frame(a, proto.welcome(
-            version=__version__, link=a.link_id, rooms=list(self.entry.rooms),
+            version=__version__, link=a.link_id, rooms=self._welcome_rooms(),
             harnesses=list(self.entry.harnesses),
             limits={"max_conns": MAX_CONNS, "max_members": self.entry.max_members, "frame_rate": FRAME_RATE,
                     "queue_lines": QUEUE_LINES}))
@@ -1220,7 +1242,7 @@ class RemoteManager:
             doomed = []
             for m in st.store.participant_memberships(p.id):
                 room = st.store.room_by_id(m.room_id)
-                if not harness_ok or room is None or room.name not in entry.rooms:
+                if not harness_ok or room is None or not entry.allows_room(room.name):
                     doomed.append(m)
             if not doomed:
                 continue

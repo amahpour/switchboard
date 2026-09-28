@@ -668,8 +668,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="desktop: pair a remote (link key, pinned host key, remotes.toml) and print its token")
     r.add_argument("name", help="the remote's name, e.g. fpga-pi")
     r.add_argument("dest", help="[user@]host, resolved once with `ssh -G`")
-    r.add_argument("--rooms", action="append", required=True,
-                   help="the only rooms its members may join (comma list, or repeat), e.g. '#fpga'")
+    r.add_argument("--rooms", action="append", default=None,
+                   help="limit its members to these rooms (comma list, or repeat), e.g. '#fpga';"
+                        " default: any room")
     r.add_argument("--port", type=int, default=None, help="ssh port (default: from your ssh config, else 22)")
     r.add_argument("--harnesses", action="append", default=None,
                    help="harnesses allowed there (comma list; default claude,codex,cursor,devin)")

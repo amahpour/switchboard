@@ -360,8 +360,15 @@ def test_no_pin_refuses(tmp_path: Path) -> None:
     with pytest.raises(PairingError, match="no host key for \\[192.0.2.10\\]:2222"):
         _add(home, tmp_path, f"192.0.2.10 ssh-ed25519 {KEY}\n")  # port 22's key is not port 2222's
     assert not (home / "remotes").exists() and not (home / "remotes.toml").exists()
-    with pytest.raises(PairingError, match="rooms"):
-        _add(home, tmp_path, "", rooms=[" "])
+
+
+def test_add_without_rooms_allows_any_room(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    out = _add(home, tmp_path, f"[192.0.2.10]:2222 ssh-ed25519 {KEY}\n", rooms=None)
+    assert "any room" in out
+    table = tomllib.loads((home / "remotes.toml").read_text())["remote"]["fpga-pi"]
+    assert table["rooms"] == ["*"]
+    assert load_remotes(Paths.from_home(home), test_mode=False)["fpga-pi"].allows_room("#anything")
 
 
 def test_remove_table_keeps_the_rest() -> None:

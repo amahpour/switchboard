@@ -139,6 +139,16 @@ async def test_room_allowlist_on_join() -> None:
         assert link.members("#secret") == []
 
 
+async def test_any_room_remote_joins_every_room() -> None:
+    """rooms = ["*"] (the default): the link comes up (the welcome names the existing rooms)
+    and the host's members may join any room, including one created after pairing."""
+    with FakeLink(rooms=("*",), desk_rooms=("#fpga", "#secret"), kind="inproc") as link:
+        assert link.status()["state"] == "up"
+        async with FakeAgent(link.pi, "bench") as a:
+            assert (await a.join("#secret", "bench"))["ok"]
+            assert (await a.join("#fpga", "bench"))["ok"]
+
+
 async def test_max_members_cap() -> None:
     with FakeLink(max_members=2, kind="inproc") as link:
         agents = [FakeAgent(link.pi, f"b{i}") for i in range(3)]

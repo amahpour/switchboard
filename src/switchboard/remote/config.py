@@ -6,7 +6,7 @@
     host = "fpga-pi.local"          # a DNS name or an IP literal
     user = "alice"
     port = 22
-    rooms = ["#fpga"]               # required: the only rooms this host's members may join
+    rooms = ["#fpga"]               # the only rooms this host's members may join; ["*"] (the default) = any room
     harnesses = ["claude", "codex", "cursor", "devin"]
     max_members = 8                 # 1..32
     end_after_s = 900               # members of a host unreachable this long are ended
@@ -44,6 +44,7 @@ USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 MAX_MEMBERS_CAP = 32
 END_AFTER_MAX_S = 30 * 24 * 3600
 TRANSPORTS = ("ssh", "exec")
+ANY_ROOM = "*"  # rooms = ["*"]: this host's members may join any room (the default)
 _KEYS = frozenset({"host", "user", "port", "rooms", "harnesses", "max_members", "end_after_s", "transport", "home"})
 _SAT_KEYS = frozenset({"name", "desktop", "key_fingerprint", "accepted_at"})
 LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -65,6 +66,10 @@ class RemoteEntry:
     end_after_s: int = 900
     transport: str = "ssh"
     home: str = ""  # the satellite's home, exec transport only
+
+    def allows_room(self, room: str) -> bool:
+        """Whether this host's members may join or use ``room`` (``"*"`` = any room)."""
+        return ANY_ROOM in self.rooms or room in self.rooms
 
     def canonical(self) -> dict[str, Any]:
         d = asdict(self)
@@ -132,10 +137,14 @@ def parse_entry(name: str, data: Any, *, test_mode: bool) -> RemoteEntry:
         if not isinstance(user, str) or not USER_RE.fullmatch(user):
             raise RemoteConfigError(f"{where}.user must be a login name (a-z, 0-9, '_', '-')")
     port = _int(data.get("port", 22), f"{where}.port", 1, 65535)
-    raw_rooms = data.get("rooms")
+    raw_rooms = data.get("rooms", [ANY_ROOM])
     if not isinstance(raw_rooms, list) or not raw_rooms:
-        raise RemoteConfigError(f"{where}.rooms is required: the rooms this host's members may join, e.g. [\"#fpga\"]")
+        raise RemoteConfigError(f"{where}.rooms must list the rooms this host's members may join, e.g. [\"#fpga\"],"
+                                " or [\"*\"] for any room")
     rooms: list[str] = []
+    if ANY_ROOM in raw_rooms:
+        raw_rooms = []
+        rooms = [ANY_ROOM]
     for r in raw_rooms:
         try:
             n = normalize_room(r)
