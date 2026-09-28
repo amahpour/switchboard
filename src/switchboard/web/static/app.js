@@ -646,6 +646,9 @@
   }
 
   // -------------------------------------------------------------- input
+  const CATCHUP_HINT = 'Commands run only at the start of a message, and agents can\u2019t run them. ' +
+    'To catch an agent up, send: /catchup <agent> on <member> (or on "<topic>"; /help lists every form).';
+
   async function send(text) {
     const r = state.active ? state.rooms.get(state.active) : null;
     if (!r) {
@@ -661,6 +664,8 @@
         renderLocal(text.split(/\s+/)[0], !res.ok, res.text);
       } else {
         await api('POST', path + '/say', { text: text });
+        // "/catchup" inside a sentence is only text to the agents: say how to run it
+        if (/(^|\s)\/(catchup|review)\b/i.test(text)) renderLocal('/catchup', false, CATCHUP_HINT);
       }
       return true;
     } catch (e) {

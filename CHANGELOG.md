@@ -27,6 +27,7 @@ Remote members over SSH ([README](README.md#remote-members-over-ssh), [DESIGN.md
 
 ### Changed
 
+- **Tests run in parallel** with pytest-xdist (`uv run pytest -n auto`), in CI too: about 3 minutes instead of 9 locally.
 - **Remote machines may join any room by default.** `rooms = ["*"]` in `remotes.toml` (the default when `rooms` is left out, or when `remote add` gets no `--rooms`) lets that machine's members join every room, including rooms created later. List rooms to limit them, as before.
 - **`/review` is now an alias of `/catchup`** until 0.4: `/review <reviewer> <author> [note]` posts `/catchup <reviewer> on <author> review it critically[: note]`, and its reply says "/review is now /catchup; the alias goes away in 0.4". The request no longer asks to look at the changes first or names an `agentsview` command.
 - **`/who` and `switchboard who`** show each member's `session: <id> @ <host>` (`session` in `switchboard who --json`, replacing `transcript`), to you only, whether or not any history tool is installed.
