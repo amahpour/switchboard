@@ -476,7 +476,8 @@ def build(con: sqlite3.Connection, room_name: str, *, since: float | None = None
         "hold": kinds.get("hold", 0),
         "release": kinds.get("release", 0),
         "kick": kinds.get("kick", 0),
-        "review": kinds.get("review", 0),
+        # /catchup requests; 0.2.0's /review events count here too (§26)
+        "catchup": kinds.get("catchup", 0) + kinds.get("review", 0),
         "approval_holds": len(holds_approval),
         "codex_holds": codex_holds,
         "rearm": kinds.get("rearm", 0),
@@ -735,7 +736,7 @@ def render_markdown(rep: dict[str, Any], *, title: str | None = None) -> str:
     L.append(_row(["/hops n (hop limit changed)", r.get("hops_set", 0), ""]))
     L.append(_row(["/hold, /release", f"{r['hold']}, {r['release']}", ""]))
     L.append(_row(["/kick", r["kick"], ""]))
-    L.append(_row(["/review (review requests posted)", r.get("review", 0), ""]))
+    L.append(_row(["/catchup (catch-up requests posted, /review included)", r.get("catchup", 0), ""]))
     L.append(_row(["approval holds (a prompt was open)", r["approval_holds"], ""]))
     L.append(_row(["Codex holds (a TUI left the daemon)", r["codex_holds"], ""]))
     L.append(_row(["Devin re-arms", r["rearm"], ""]))

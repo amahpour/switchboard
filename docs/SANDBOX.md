@@ -186,7 +186,7 @@ Don't add `github.com`, `registry.npmjs.org`, `pypi.org` or `googleapis.com` (on
    ```
    Optional: run `tmux new -A -s agents` inside the box to keep sessions alive when a tab closes. You drive tmux yourself; switchboard never types into it.
 4. On the Mac, open the `switchboard login` link in Chrome or Firefox. It signs that browser in to `http://switchboard.localhost:8765/`.
-5. Tell each agent to join the room, for example "join #redteam as claude-1". Bypass-mode members show ⚠.
+5. Tell each agent to join the room, for example "join switchboard room #redteam as claude-1" (name switchboard, or an agent with Slack or Discord tools may use those). Bypass-mode members show ⚠.
 
 **Getting repos in and out.** The firewall blocks GitHub, so bring code in as a bundle:
 ```bash

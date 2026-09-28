@@ -249,13 +249,24 @@ def cmd_say(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def command_text(words: list[str]) -> str:
+    """The command ``switchboard cmd`` sends: its words joined by spaces. A word after the
+    first that has a space in it was quoted in the shell, and is passed on in double quotes,
+    so ``switchboard cmd '#build' /catchup codex-1 on "sprint cleanup"`` sends the topic in
+    quotes; a word that has a double quote itself goes as it is. The whole command as one
+    word (``'/catchup codex-1 on "sprint cleanup"'``) is passed on unchanged."""
+    out = [w if i == 0 or not any(c.isspace() for c in w) or '"' in w else f'"{w}"'
+           for i, w in enumerate(words)]
+    return " ".join(out).strip()
+
+
 def cmd_cmd(args: argparse.Namespace) -> int:
     if _satellite_home(args):
         return on_desktop(args)
     if not args.command:
         print("usage: switchboard cmd ROOM /command [args ...]", file=sys.stderr)
         return EXIT_USAGE
-    text = " ".join(args.command).strip()
+    text = command_text(args.command)
     if not text.startswith("/"):
         text = "/" + text
     res = _call(args, "human.command", {"room": args.room, "text": text})
@@ -264,6 +275,8 @@ def cmd_cmd(args: argparse.Namespace) -> int:
 
 
 def cmd_who(args: argparse.Namespace) -> int:
+    from switchboard.models import tier_label
+
     res = _call(args, "room.who", {"room": args.room})
     if args.json:
         print(json.dumps(res, indent=2))
@@ -284,10 +297,10 @@ def cmd_who(args: argparse.Namespace) -> int:
             flags.append(f"{m['queued']} queued")
         if m["parked"]:
             flags.append("parked — needs a poke")
-        if m.get("transcript"):
-            flags.append(f"transcript: {_clean(m['transcript'])}")
+        if m.get("session"):
+            flags.append(f"session: {_clean(m['session'])}")
         away = f'  away: "{_clean(m["away"])}"' if m.get("away") else ""
-        tier = (m.get("tier") or "-") + (f" ({m['tier_note']})" if m.get("tier_note") else "")
+        tier = tier_label(m.get("tier"), m.get("tier_note"))
         name = _clean(m["name"]) + (f"@{_clean(m['host'])}" if m.get("host") else "")
         print(f"  {name}  {m['harness']}  {m['status']}  {tier}  {' '.join(flags)}{away}".rstrip())
     return EXIT_OK
@@ -589,7 +602,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("cmd", parents=[common], help="run a slash command, e.g. /pause")
     s.add_argument("room")
-    # everything after the room is the command, dash words included (a /review note may
+    # everything after the room is the command, dash words included (a /catchup note may
     # say "--from"); options such as --home go before the room
     s.add_argument("command", nargs=argparse.REMAINDER, help="the command and its arguments, e.g. /pause")
     s.set_defaults(func=cmd_cmd)

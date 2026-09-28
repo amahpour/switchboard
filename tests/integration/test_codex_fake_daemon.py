@@ -331,8 +331,13 @@ def test_an_approval_request_is_never_answered(w: W) -> None:
 
 def test_thread_proof_gates_the_push_tier(w: W) -> None:
     w.join(prove=False)
+    assert lines(w, "join") == ["joined (codex, verifying...)"]  # pending: not "mcp-only"
     time.sleep(1.5)  # every proof attempt (0.2, 0.5, 1.0 s) failed
     assert w.tier() == ("mcp-only", "unverified thread") and w.part()["thread_proof"] == 0
+    # failed: no "verified" notice; /who and the buddy list are back to today's wording
+    assert verified(w) == []
+    assert "  codex-1  codex  idle  mcp-only (unverified thread)" in who_text(w)
+    assert w.member()["tier_note"] == "unverified thread"
     ev = w.q("SELECT data FROM events WHERE kind='bind' ORDER BY id DESC LIMIT 1")[0][0]
     assert json.loads(ev) == {"what": "thread_proof", "ok": False}
     mid = w.say("idle, but unverified")
@@ -526,6 +531,9 @@ def test_the_proof_is_retried_when_the_join_turn_outlasts_the_first_tries(w: W) 
     w.d.end_turn(TID)  # busy -> idle: tried again
     assert wait_for(lambda: w.part()["thread_proof"] == 1), "proof not retried at the turn end"
     assert wait_for(lambda: w.tier()[0] == "codex:daemon")
+    # the first proof of the session, although not one of the first tries: announced once
+    assert wait_for(lambda: verified(w)) and len(verified(w)) == 1
+    assert verified(w)[0].startswith("codex-1 is verified: codex:")
 
 
 def test_a_nonce_outside_the_join_result_proves_nothing(w: W) -> None:
@@ -728,6 +736,85 @@ def lines(w: W, kind: str) -> list[str]:
     return [r["text"] for r in w.q("SELECT text FROM messages WHERE kind=? ORDER BY id", kind)]
 
 
+def verified(w: W) -> list[str]:
+    """The "<name> is verified: <tier>" notices (a Codex session's first thread proof)."""
+    return [x for x in lines(w, "notice") if " is verified: " in x]
+
+
+def who_text(w: W) -> str:
+    r = w.web.post("/api/rooms/build/command", json={"text": "/who"}, headers=w.b.write_headers())
+    assert r.status_code == 200, r.text
+    return r.json()["text"]
+
+
+def new_mcp_server(w: W) -> None:
+    """The session's MCP server restarts (a new process, attached to the daemon)."""
+    assert w.cx is not None
+    w.cx.close()
+    w.cx = FakeClaude(w.b, as_harness="codex")
+    w.cx.p.stdin.write(json.dumps({"op": "attach", "path": w.sock}) + "\n")
+    w.cx.p.stdin.flush()
+    assert w.cx.recv()["attached"]
+
+
+def settled(w: W) -> None:
+    """A round trip through the broker's loop: whatever the proof that just passed was going
+    to post is posted by now (it posts in the same step that sets the tier)."""
+    who_text(w)
+
+
+def test_the_first_thread_proof_is_announced_once(w: W, monkeypatch: pytest.MonkeyPatch) -> None:
+    """While the first proof tries run, the join line, /who and the buddy list say
+    "verifying..." instead of "mcp-only"; the first proof posts one "is verified" notice
+    with the tier it has then; the same membership proven again (a join from a new MCP
+    server, which keeps it: "re-joined", no join line) posts none."""
+    monkeypatch.setattr(codex_mod, "PROOF_AT_S", (0.2, 0.5, 4.0))  # time to look before the last try
+    r = w.join(prove=False)
+    assert lines(w, "join") == ["joined (codex, verifying...)"]
+    assert w.tier() == ("mcp-only", "verifying...") and w.member()["tier_note"] == "verifying..."
+    line = next(x for x in who_text(w).splitlines() if x.startswith("  codex-1 "))
+    assert line.split("  ")[4] == "verifying..." and "mcp-only" not in line
+    assert verified(w) == []
+    w.d.prove(TID, r["text"])
+    assert wait_for(lambda: verified(w)), lines(w, "notice")
+    assert verified(w) == ["codex-1 is verified: codex:daemon"]
+    w.daemon_tier()
+    assert "verifying" not in who_text(w)
+    # the MCP server restarts: a join from the new one proves the thread again
+    new_mcp_server(w)
+    r2 = w.cx.tool("join", meta={"threadId": TID}, room="#build", screen_name="codex-1")
+    assert r2["ok"], r2
+    assert w.part()["thread_proof"] == 0 and w.tier() == ("mcp-only", "verifying...")
+    w.d.prove(TID, r2["text"])
+    assert wait_for(lambda: w.part()["thread_proof"] == 1)
+    assert wait_for(lambda: w.tier()[1] != "verifying..."), w.tier()
+    settled(w)
+    assert verified(w) == ["codex-1 is verified: codex:daemon"]  # not repeated
+    assert len(lines(w, "join")) == 1 and [x for x in lines(w, "notice") if "re-joined" in x]
+
+
+def test_a_rejoin_that_says_verifying_is_announced_again(w: W, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A verified session leaves, and joins again from a new MCP server (e.g. after `codex
+    resume`): a new join line says "verifying...", so the proof that passes posts a new
+    "is verified" notice, once."""
+    monkeypatch.setattr(codex_mod, "PROOF_AT_S", (0.2, 0.5, 4.0))
+    w.join()
+    assert wait_for(lambda: verified(w) == ["codex-1 is verified: codex:daemon"]), lines(w, "notice")
+    assert w.cx is not None and w.cx.tool("leave", meta={"threadId": TID}, room="#build")["ok"]
+    new_mcp_server(w)
+    r = w.cx.tool("join", meta={"threadId": TID}, room="#build", screen_name="codex-1")
+    assert r["ok"], r
+    assert lines(w, "join") == ["joined (codex, verifying...)"] * 2
+    w.d.prove(TID, r["text"])
+    assert wait_for(lambda: len(verified(w)) == 2), lines(w, "notice")
+    assert wait_for(lambda: w.tier()[1] != "verifying..."), w.tier()
+    settled(w)
+    first, second = verified(w)  # the tier it has then (the new MCP server may not be seen attached yet)
+    assert first == "codex-1 is verified: codex:daemon" and second.startswith("codex-1 is verified: codex:daemon")
+    ev = [json.loads(r[0]) for r in w.q("SELECT data FROM events WHERE kind='join' ORDER BY id")]
+    assert [e.get("verifying") for e in ev] == [True, True]
+
+
 def restart_events(w: W) -> list[tuple[str, str | None]]:
     return [(e["what"], e.get("via")) for e in (json.loads(r[0]) for r in w.q(
         "SELECT data FROM events WHERE kind='codex_restart' ORDER BY id"))]
@@ -786,13 +873,17 @@ def test_a_daemon_restart_keeps_the_member_and_delivers_after_it(w: W, monkeypat
     # ...but visible: another MCP process took the membership over, and its thread is proven again
     assert wait_for(lambda: [x for x in lines(w, "notice") if "re-joined" in x] == [
         "codex-1 re-joined from a new switchboard MCP server"])
-    assert w.part()["thread_proof"] == 0 and w.tier() == ("mcp-only", "unverified thread")
+    # "verifying..." while the first tries run (0.2, 0.5, 1.0 s here), then "unverified thread"
+    assert w.part()["thread_proof"] == 0 and w.tier()[0] == "mcp-only"
+    assert w.tier()[1] in ("verifying...", "unverified thread")
     assert w.cx.tool("say", meta={"threadId": TID}, room="#build", text="back")["ok"]
     w.d.prove(TID, r["text"])  # in the wake's turn: readable once it ends (the proof is retried then)
     w.d.end_turn(TID)
     w.hook("Stop", stop_hook_active=False)
     assert wait_for(lambda: w.tier() == ("codex:daemon", None)), w.tier()
     assert len([x for x in lines(w, "notice") if "reconnected" in x]) == 1
+    # proven again, but announced only the first time (at the first join)
+    assert verified(w) == ["codex-1 is verified: codex:daemon"]
 
 
 def test_a_restart_rebinds_to_the_app_server_serving_the_control_socket(

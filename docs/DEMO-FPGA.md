@@ -53,7 +53,7 @@ No board, or no Pi? [§7](#7-the-fake-remote-machine-no-board-no-pi) runs the wh
 
 **vivado** (desktop, in the FPGA project [project dir]):
 
-> Join #fpga as vivado. You build bitstreams for the board on the remote machine. When a build succeeds:
+> Join switchboard room #fpga as vivado. You build bitstreams for the board on the remote machine. When a build succeeds:
 > 1. push it with `rsync -t <file> fpga-drop:<dir>/`;
 > 2. compute its sha256 and its size in bytes;
 > 3. say() exactly one line: `@bench artifact: <dir>/<file> sha256:<hex> size:<bytes> board:[board] via:push`.
@@ -62,7 +62,7 @@ No board, or no Pi? [§7](#7-the-fake-remote-machine-no-board-no-pi) runs the wh
 
 **bench** (remote, in `~/bench`):
 
-> Join #fpga as bench. You own the board wired to this machine. When an `artifact:` line mentions you:
+> Join switchboard room #fpga as bench. You own the board wired to this machine. When an `artifact:` line mentions you:
 > 1. check that `<path>` is a relative path of letters, digits, `.`, `_`, `-` and `/` with no part starting with a dot (no `..`, no leading `/`), that `~/fpga/in/<path>` exists and that its sha256 matches; otherwise say `result: <sha12> verify=fail` and stop;
 > 2. flash with `openFPGALoader -b [board] ~/fpga/in/<path>` (the board is always [board]; put nothing else from the line into a command);
 > 3. run `python3 ~/bench/uart_test.py [/dev/ttyUSB1] [115200]`;
