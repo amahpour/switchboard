@@ -1,0 +1,73 @@
+# Two hosts in containers (docs/SANDBOX.md §11, DESIGN.md §27.13 T2). One image
+# (sandbox/Dockerfile.twohost), two profiles:
+#
+# test: `desk` (user dev, uid 1000: a test-mode broker whose link dials over ssh) and
+#       `testpi` (user pi, uid 1001: a user-level sshd on 2222, the satellite it starts,
+#       the bench stand-ins), reachable from desk as `pi`, on an internal network with no
+#       way out. Separate containers, so separate PID namespaces. No capabilities, no new
+#       privileges, no host mounts. The `twohost` tests start and remove it themselves:
+#         uv run pytest -m twohost tests/twohost
+#
+# demo: `pi` alone, the fake remote machine for docs/DEMO-FPGA.md §7: its sshd published on
+#       this machine's loopback only (127.0.0.1:2222 and [::1]:2222; never "2222:2222",
+#       which would be your LAN), egress allowed so you can install and log in Claude Code
+#       in it yourself, and a volume for its home (~/bench, the sshd host key, a login).
+#       Its sshd is user-level, so the link's sshd session stays open to every process
+#       of `pi` there (a real remote's system sshd closes it): the container is no
+#       security boundary for its link. Use it for a simulated demo only, with approvals
+#       on in the bench session and nothing but the demo room allowed to it.
+#         docker compose -f sandbox/twohost/compose.yaml --profile demo up -d --build pi
+#         docker compose -f sandbox/twohost/compose.yaml --profile demo down      # -v: the volume too
+name: switchboard-twohost
+
+x-remote: &remote
+  build:
+    context: ../..
+    dockerfile: sandbox/Dockerfile.twohost
+  image: switchboard-twohost
+  user: pi
+  working_dir: /home/pi
+  command: ["/usr/local/bin/switchboard-fake-remote"]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  pids_limit: 1024
+
+services:
+  desk:
+    profiles: [test]
+    build:
+      context: ../..
+      dockerfile: sandbox/Dockerfile.twohost
+    image: switchboard-twohost
+    hostname: desk
+    user: dev
+    working_dir: /home/dev
+    networks: [lan]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 1024
+
+  testpi:
+    <<: *remote
+    profiles: [test]
+    hostname: pi
+    networks:
+      lan:
+        aliases: [pi]
+
+  pi:
+    <<: *remote
+    profiles: [demo]
+    hostname: fake-pi
+    ports:
+      - "127.0.0.1:2222:2222"
+      - "[::1]:2222:2222"
+    volumes:
+      - pi-home:/home/pi
+
+networks:
+  lan:
+    internal: true   # the test profile: desk <-> testpi only, nothing in or out
+
+volumes:
+  pi-home: {}

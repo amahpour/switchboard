@@ -49,7 +49,7 @@ def room_slug(name: str) -> str:
 
 def valid_host(host: str) -> bool:
     """A remote host name (``HOST_RE``); the local host '' is not one."""
-    return isinstance(host, str) and HOST_RE.match(host) is not None
+    return isinstance(host, str) and HOST_RE.fullmatch(host) is not None
 
 
 def session_key(harness: str, host: str, rest: str) -> str:

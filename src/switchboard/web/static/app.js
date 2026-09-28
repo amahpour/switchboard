@@ -7,6 +7,14 @@
   const HARNESS_LETTER = { claude: 'C', codex: 'X', cursor: 'U', devin: 'D', test: 'T', unknown: '?' };
   const MAX_LINES = 2000;
 
+  // blocked(reason) in a header chip: a few words; the panel has the whole story (DESIGN.md §27.11)
+  const BLOCK_SHORT = {
+    host_key: 'host key changed', auth: 'key refused', files: 'key files', proto: 'version mismatch',
+    name: 'wrong name', shell_noise: 'shell prints text', replaced: 'link taken over', local_broker: 'broker there',
+    test_mode: 'test mode', ssh_bin: 'no /usr/bin/ssh', negotiate: 'no common algorithm',
+    command: 'forced command failed', satellite: 'satellite refused', exposed: 'stdio exposed',
+  };
+
   const state = {
     me: null,          // { human, test_mode, version, port }
     rooms: new Map(),  // name -> { name, slug, lastId, msgs: [], members: [], settings: {}, unread: 0 }
@@ -15,6 +23,12 @@
     wsOpen: false,
     backoff: 500,
     pingTimer: null,
+    remotes: [],       // GET /api/remotes and the `remotes` event: every remote link's state
+    remotesAt: 0,      // when that snapshot arrived (ms), for the retry countdowns
+    remotesError: null,
+    enabling: new Set(),  // remotes whose Enable is in flight (a long poll)
+    chipsKey: null,    // remotesKey() of the chips and the panel as rendered
+    panelKey: null,
   };
 
   // ------------------------------------------------------------ helpers
@@ -26,6 +40,9 @@
   }
 
   function pad2(n) { return (n < 10 ? '0' : '') + n; }
+
+  // `bench@fpga-pi` for a member or sender on a remote machine, the plain name on this one
+  function label(name, host) { return host ? name + '@' + host : name; }
 
   function hhmmss(ts) {
     const d = new Date(ts * 1000);
@@ -90,12 +107,12 @@
         b.title = m.harness;
         line.append(b);
       }
-      line.append(el('span', 'nick ' + cls, '<' + m.from + '>'), ' ', el('span', 'text', m.text));
+      line.append(el('span', 'nick ' + cls, '<' + label(m.from, m.host) + '>'), ' ', el('span', 'text', m.text));
       if (m.via === 'cli') line.append(el('span', 'via', 'via cli'));
       if (mentionsMe(m)) line.classList.add('mention');
     } else if (m.kind === 'join' || m.kind === 'leave') {
       line.append(el('span', 'door', m.kind === 'join' ? '\u{1F6AA}→ ' : '←\u{1F6AA} '),
-        el('span', 'text', m.from + ' ' + (m.text || (m.kind === 'join' ? 'joined' : 'left'))));
+        el('span', 'text', label(m.from, m.host) + ' ' + (m.text || (m.kind === 'join' ? 'joined' : 'left'))));
     } else {
       line.append(el('span', 'text', '*** ' + m.text));
       // A warn notice (loop guard, budget, watchdog) arrives once, as this room line.
@@ -193,6 +210,11 @@
     const hl = el('span', 'hl', HARNESS_LETTER[m.harness] || '?');
     hl.title = m.harness;
     row.append(dot, hl, el('span', 'name', m.name));
+    if (m.host) {
+      const h = el('span', 'host', '@' + m.host);
+      h.title = 'runs on ' + m.host + ', a remote machine: its text may quote what that machine saw';
+      row.append(h);
+    }
     if (m.approval_mode === 'bypass') {
       const f = el('span', 'flag warn', '⚠');
       f.title = 'approvals are off in this session: room messages can make it act without asking';
@@ -297,6 +319,7 @@
       state.wsOpen = true;
       state.backoff = 500;
       hello(Array.from(state.rooms.keys()));
+      loadRemotes().catch(function () {});  // the events missed while the socket was down
       renderStatus();
       clearInterval(state.pingTimer);
       state.pingTimer = setInterval(function () {
@@ -344,6 +367,279 @@
       if (!f.room || f.room === state.active) renderLocal('*** ' + f.text, f.level === 'warn');
     } else if (f.t === 'rooms') {
       loadRooms().catch(function () {});
+    } else if (f.t === 'remotes') {
+      setRemotes(f.remotes || [], f.config_error || null);
+    }
+  }
+
+  // ------------------------------------------------------------ remotes
+  // blocked reasons where Enable trusts something new (a host key, a satellite): it asks first
+  const ASK_BEFORE_ENABLE = new Set(['host_key', 'replaced', 'exposed']);
+
+  function retryLeft(r) {
+    if (r.retry_in_s === null || r.retry_in_s === undefined) return null;
+    return Math.max(0, Math.round(r.retry_in_s - (Date.now() - state.remotesAt) / 1000));
+  }
+
+  function fmtMs(ms) { return ms < 10 ? ms.toFixed(1) : String(Math.round(ms)); }
+
+  function has(v) { return v !== null && v !== undefined; }
+
+  function needsEnable(r) {
+    return r.state === 'blocked' || (r.state === 'disabled' && r.reason !== 'removed');
+  }
+
+  function chipText(r) {
+    if (r.state === 'up') return 'up ' + (has(r.rtt_ms) ? fmtMs(r.rtt_ms) + ' ms' : '');
+    if (r.state === 'connecting') return 'connecting…';
+    if (r.state === 'down') {
+      const left = retryLeft(r);
+      return 'down: ' + (r.reason || '?') + (left !== null ? ' (retry in ' + left + ' s)' : '');
+    }
+    if (r.state === 'blocked') return 'blocked: ' + (BLOCK_SHORT[r.reason] || r.reason || '?');
+    if (r.reason === 'config_changed') return 'needs enable (config changed)';
+    if (r.reason === 'not_enabled') return 'needs enable';
+    return r.reason || r.state;
+  }
+
+  // Everything a render shows except the numbers that tick (the RTT, the retry countdown):
+  // when only those changed, the chips and the panel update them in place, so the focus
+  // and a selection in the panel survive the 20 s refresh.
+  function remotesKey() {
+    return JSON.stringify([state.remotesError, Array.from(state.enabling).sort(), state.remotes.map(function (r) {
+      const c = Object.assign({}, r);
+      c.rtt_ms = has(r.rtt_ms);
+      c.retry_in_s = has(r.retry_in_s);
+      delete c.text;
+      return c;
+    })]);
+  }
+
+  function focusKey(box) {
+    const f = document.activeElement;
+    return f && box.contains(f) && f.dataset ? f.dataset.focus || null : null;
+  }
+
+  function refocus(box, key) {
+    if (!key) return;
+    for (const n of box.querySelectorAll('[data-focus]')) {
+      if (n.dataset.focus === key) { n.focus(); return; }
+    }
+  }
+
+  function byRemote(box, cls) {
+    const out = new Map();
+    for (const n of box.getElementsByClassName(cls)) out.set(n.dataset.remote, n);
+    return out;
+  }
+
+  function renderChips() {
+    const bar = $('remotes');
+    const key = remotesKey();
+    if (key === state.chipsKey) {
+      const texts = byRemote(bar, 'chip-text');
+      for (const r of state.remotes) {
+        const t = texts.get(r.name);
+        if (t) t.textContent = chipText(r);
+      }
+      return;
+    }
+    state.chipsKey = key;
+    const focused = focusKey(bar);
+    bar.replaceChildren();
+    bar.classList.toggle('hidden', state.remotes.length === 0 && !state.remotesError);
+    for (const r of state.remotes) {
+      const b = el('button', 'chip st-' + r.state);
+      b.type = 'button';
+      b.dataset.focus = 'chip:' + r.name;
+      b.title = 'remote machine ' + r.name + ': open the remotes panel';
+      const t = el('span', 'chip-text', chipText(r));
+      t.dataset.remote = r.name;
+      b.append(el('span', 'chip-name', r.name), el('span', 'chip-dot', '●'), t);
+      b.addEventListener('click', openRemotes);
+      bar.append(b);
+    }
+    if (state.remotesError) {
+      const b = el('button', 'chip st-blocked', 'remotes.toml: not read');
+      b.type = 'button';
+      b.dataset.focus = 'chip:config';
+      b.title = state.remotesError;
+      b.addEventListener('click', openRemotes);
+      bar.append(b);
+    }
+    refocus(bar, focused);
+  }
+
+  function kv(dl, k, v, cls) {
+    if (v === null || v === undefined || v === '') return null;
+    const dd = el('dd', cls || null, v);
+    dl.append(el('dt', null, k), dd);
+    return dd;
+  }
+
+  function when(ts) { return ts ? new Date(ts * 1000).toLocaleString() : null; }
+
+  function remoteCard(r) {
+    const card = el('div', 'remote-card');
+    const head = el('div', 'remote-head');
+    const st = el('span', 'remote-state', chipText(r));
+    st.dataset.remote = r.name;
+    head.append(el('span', 'chip-dot st-' + r.state, '●'), el('span', 'remote-name', r.name), st);
+    card.append(head);
+    const dl = el('dl', 'remote-facts');
+    kv(dl, 'State', r.state + (r.reason ? ' (' + r.reason + ')' : '') + (r.since ? ' since ' + when(r.since) : ''));
+    kv(dl, 'What to do', r.hint);
+    if (r.state === 'up' && has(r.rtt_ms)) kv(dl, 'RTT', fmtMs(r.rtt_ms) + ' ms', 'remote-rtt').dataset.remote = r.name;
+    // what an Enable consents to: where the link dials, the host key it trusts, the config's hash
+    kv(dl, 'Destination', r.dest);
+    kv(dl, 'Host key', (r.host_keys || []).join('\n'), 'remote-keys');
+    if (r.config_hash) {
+      kv(dl, 'Config', r.config_hash.slice(0, 12) + (r.reason === 'config_changed' ? ' (changed since you enabled it)' : ''));
+    }
+    if (r.version) kv(dl, 'Versions', 'satellite ' + r.version + ' (link protocol ' + r.proto + '), this broker ' + (state.me ? state.me.version : '?'));
+    kv(dl, 'Remote hooks', has(r.hooks) ? r.hooks + ' (as the remote reports)' : null);
+    if (has(r.skew_s)) kv(dl, 'Clock', (r.skew_s >= 0 ? '+' : '') + r.skew_s.toFixed(2) + ' s');
+    kv(dl, 'Hardened', r.harden);
+    kv(dl, 'Transport', r.transport + (r.test_mode ? ' (test mode)' : ''));
+    kv(dl, 'Rooms', (r.rooms || []).join(', '));
+    kv(dl, 'Harnesses', (r.harnesses || []).join(', '));
+    kv(dl, 'Members', (r.members || []).length ? r.members.join(', ') + ' (max ' + r.max_members + ')' : 'none (max ' + r.max_members + ')');
+    kv(dl, 'Enabled', r.enabled ? 'via ' + (r.enabled_via || '?') + ' on ' + when(r.enabled_at) : 'no');
+    kv(dl, 'Last up', when(r.last_up_at));
+    kv(dl, 'Dials', String(r.attempts));
+    card.append(dl);
+    if (r.detail) {
+      // text the remote machine may have printed (ssh's last line): data, shown to you only
+      card.append(el('div', 'fine', 'Last line from the link (the remote may have written it):'),
+        el('pre', 'cmd-out', r.detail));
+    }
+    const btns = el('div', 'dialog-buttons');
+    if (needsEnable(r) || state.enabling.has(r.name)) {
+      const b = el('button', 'btn', state.enabling.has(r.name) ? 'Dialing…' : (r.state === 'blocked' ? 'Enable / reconnect' : 'Enable'));
+      b.type = 'button';
+      b.dataset.focus = 'enable:' + r.name;
+      b.disabled = state.enabling.has(r.name);
+      b.title = 'consent to this remote\'s current config (the destination and host key above) and dial it now (the same as `switchboard remote enable ' + r.name + '`)';
+      b.addEventListener('click', function () { enableRemote(r.name); });
+      btns.append(b);
+    }
+    if (r.enabled && (r.state === 'up' || r.state === 'connecting' || r.state === 'down')) {
+      const d = el('button', 'btn', 'Disable');
+      d.type = 'button';
+      d.dataset.focus = 'disable:' + r.name;
+      d.title = 'stop dialing ' + r.name + ' (its members go offline)';
+      d.addEventListener('click', function () { disableRemote(r.name); });
+      btns.append(d);
+    }
+    if (btns.childNodes.length) card.append(btns);
+    const out = el('div', 'fine remote-result');
+    out.id = 'remote-result-' + r.name;
+    card.append(out);
+    return card;
+  }
+
+  function renderRemotesPanel() {
+    const body = $('remotes-body');
+    if ($('remotes-panel').classList.contains('hidden')) return;
+    const key = remotesKey();
+    if (key === state.panelKey) {
+      const states = byRemote(body, 'remote-state');
+      const rtts = byRemote(body, 'remote-rtt');
+      for (const r of state.remotes) {
+        if (states.has(r.name)) states.get(r.name).textContent = chipText(r);
+        if (rtts.has(r.name) && has(r.rtt_ms)) rtts.get(r.name).textContent = fmtMs(r.rtt_ms) + ' ms';
+      }
+      return;
+    }
+    state.panelKey = key;
+    const focused = focusKey(body);
+    const results = {};  // an Enable's answer survives a re-render
+    for (const n of body.querySelectorAll('.remote-result')) results[n.id] = [n.textContent, n.classList.contains('bad')];
+    body.replaceChildren();
+    if (state.remotesError) body.append(el('p', 'remote-error', 'remotes.toml was not read: ' + state.remotesError));
+    if (!state.remotes.length) body.append(el('p', null, 'No remotes. Add one with `switchboard remote add` in your terminal.'));
+    for (const r of state.remotes) body.append(remoteCard(r));
+    for (const id of Object.keys(results)) {
+      const n = document.getElementById(id);
+      if (n) {
+        n.textContent = results[id][0];
+        n.classList.toggle('bad', results[id][1]);
+      }
+    }
+    refocus(body, focused);
+  }
+
+  function setRemotes(list, err) {
+    state.remotes = list;
+    state.remotesAt = Date.now();
+    state.remotesError = err;
+    renderChips();
+    renderRemotesPanel();
+  }
+
+  async function loadRemotes() {
+    const data = await api('GET', '/api/remotes');
+    setRemotes(data.remotes || [], data.config_error || null);
+  }
+
+  function openRemotes() {
+    $('remotes-panel').classList.remove('hidden');
+    state.panelKey = null;  // it was not kept current while closed
+    renderRemotesPanel();
+    loadRemotes().catch(function () {});
+    $('remotes-close').focus();
+  }
+
+  function remoteResult(name, text, bad) {
+    const n = document.getElementById('remote-result-' + name);
+    if (n) {
+      n.textContent = text;
+      n.classList.toggle('bad', !!bad);
+    }
+  }
+
+  // an Enable's or a Disable's outcome, from the broker's facts (the hooks row stays in the
+  // panel, labelled: that text is the remote's)
+  function resultText(res) {
+    if (res.state === 'up') {
+      return 'link ok: satellite ' + (res.version || '?') + ' (link protocol ' + res.proto + ')' +
+        (has(res.rtt_ms) ? ', rtt ' + fmtMs(res.rtt_ms) + ' ms' : '') +
+        (has(res.skew_s) ? ', clock ' + (res.skew_s >= 0 ? '+' : '') + res.skew_s.toFixed(2) + ' s' : '');
+    }
+    return res.state + (res.reason ? ' (' + res.reason + ')' : '') + (res.hint ? ': ' + res.hint : '');
+  }
+
+  async function enableRemote(name) {
+    const r = state.remotes.find(function (x) { return x.name === name; });
+    if (!r) return;
+    if (r.state === 'blocked' && ASK_BEFORE_ENABLE.has(r.reason) &&
+        !window.confirm(name + ' is blocked (' + r.reason + '): ' + (r.hint || '') + '\n\nEnable it and dial ' +
+                        (r.dest || name) + ' again?')) return;
+    state.enabling.add(name);
+    renderRemotesPanel();
+    remoteResult(name, 'dialing ' + name + '…');
+    try {
+      // the consent is for the config this page shows: the broker refuses it (409) if it changed since
+      const res = await api('POST', '/api/remotes/' + encodeURIComponent(name) + '/enable', { config_hash: r.config_hash });
+      state.enabling.delete(name);
+      await loadRemotes().catch(function () {});
+      remoteResult(name, resultText(res), res.state !== 'up');
+    } catch (e) {
+      state.enabling.delete(name);
+      await loadRemotes().catch(function () {});
+      renderRemotesPanel();
+      remoteResult(name, String(e.message || e), true);
+    }
+  }
+
+  async function disableRemote(name) {
+    if (!window.confirm('Disable ' + name + '? Its members go offline until you enable it again.')) return;
+    try {
+      const res = await api('POST', '/api/remotes/' + encodeURIComponent(name) + '/disable', {});
+      await loadRemotes().catch(function () {});
+      remoteResult(name, resultText(res), false);
+    } catch (e) {
+      remoteResult(name, String(e.message || e), true);
     }
   }
 
@@ -412,6 +708,10 @@
       try { await api('POST', '/logout', {}); } catch (e) { /* already signed out */ }
       location.replace('/');
     });
+    $('remotes-close').addEventListener('click', function () { $('remotes-panel').classList.add('hidden'); });
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape') $('remotes-panel').classList.add('hidden');
+    });
     const toggle = $('buddy-toggle');
     toggle.addEventListener('click', function () {
       const open = $('buddies').classList.toggle('open');
@@ -449,7 +749,16 @@
     renderBuddies();
     await loadRooms();
     renderStatus();
+    await loadRemotes().catch(function () {});
     connect();
+    // the chips' countdowns tick; RTTs refresh (a state change arrives at once, by the socket)
+    setInterval(function () {
+      if (state.remotes.some(function (r) { return r.state === 'down'; })) {
+        renderChips();
+        renderRemotesPanel();
+      }
+    }, 1000);
+    setInterval(function () { if (state.remotes.length) loadRemotes().catch(function () {}); }, 20000);
     // Keep the sliding session (and its cookie) fresh while the page is open.
     setInterval(function () { api('GET', '/api/me').catch(function () {}); }, 30 * 60 * 1000);
   }

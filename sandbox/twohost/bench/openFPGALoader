@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""A stand-in for openFPGALoader on the fake remote machine (docs/DEMO-FPGA.md §7).
+
+It flashes nothing. It logs its argv and the bitstream's sha256 to
+``~/bench/flash.log``, tells the fake board (``fake_board.py``) what was
+"loaded" through ``~/bench/.board``, and prints what the real tool prints.
+Exit 1 for a missing file or an unknown ``-b`` board, as the real tool does.
+
+    openFPGALoader --detect
+    openFPGALoader -b fake [-f] <bitstream>
+    openFPGALoader -c <cable> <bitstream>
+"""
+
+import datetime
+import hashlib
+import json
+import os
+import sys
+import time
+
+BOARDS = {"fake": "Fake board (simulated: switchboard's fake remote machine)"}
+BENCH = os.path.expanduser("~/bench")
+
+
+def log(entry: dict) -> None:
+    os.makedirs(BENCH, mode=0o700, exist_ok=True)
+    with open(os.path.join(BENCH, "flash.log"), "a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
+def usage() -> int:
+    print("usage: openFPGALoader [--detect] [-b board | -c cable] [-f] <bitstream>", file=sys.stderr)
+    return 1
+
+
+def main(argv: list[str]) -> int:
+    board = cable = path = None
+    detect = False
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("-b", "--board", "-c", "--cable"):
+            if i + 1 >= len(argv):
+                return usage()
+            if a in ("-b", "--board"):
+                board = argv[i + 1]
+            else:
+                cable = argv[i + 1]
+            i += 2
+            continue
+        if a == "--detect":
+            detect = True
+        elif a in ("-f", "--write-flash", "-m", "--write-sram", "-v", "--verbose"):
+            pass
+        elif a in ("-h", "--help"):
+            usage()
+            return 0
+        elif a.startswith("-"):
+            print(f"error: unknown option {a}", file=sys.stderr)
+            return 1
+        else:
+            path = a
+        i += 1
+    when = datetime.datetime.now().isoformat(timespec="seconds")
+    if board is not None and board not in BOARDS:
+        print(f"Error: cannot find board {board}", file=sys.stderr)
+        log({"t": when, "argv": argv, "error": "unknown board"})
+        return 1
+    if detect:
+        print("Jtag frequency : requested 6.00MHz   -> real 6.00MHz")
+        print("index 0:")
+        print("\tidcode 0x362d093")
+        print("\tmanufacturer xilinx")
+        print("\tfamily artix a7 35t (simulated)")
+        print("\tmodel  xc7a35")
+        print("\tirlength 6")
+        return 0
+    if path is None:
+        return usage()
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError as e:
+        print(f"Error: {path}: {e.strerror}", file=sys.stderr)
+        log({"t": when, "argv": argv, "error": "no file"})
+        return 1
+    sha = hashlib.sha256(data).hexdigest()
+    log({"t": when, "argv": argv, "sha256": sha, "size": len(data), "board": board, "cable": cable})
+    state = {"sha256": sha, "broken": b"BROKEN" in data, "t": time.time()}
+    tmp = os.path.join(BENCH, ".board.tmp")
+    with open(tmp, "w") as f:
+        json.dump(state, f)
+    os.replace(tmp, os.path.join(BENCH, ".board"))
+    print("empty")
+    print("Jtag frequency : requested 6.00MHz   -> real 6.00MHz")
+    print("Open file DONE")
+    print("Parse file DONE")
+    print("load program")
+    print("Loading: [==================================================] 100.00%")
+    print("Done")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

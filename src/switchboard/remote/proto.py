@@ -288,11 +288,11 @@ def _v_hello(f: dict[str, Any]) -> dict[str, Any]:
         raise FrameError("bad_proto")
     if f["proto"] != LINK_PROTO:
         v = f.get("version")
-        return {"t": "hello", "proto": f["proto"], "version": v if isinstance(v, str) and _VERSION.match(v) else "?"}
+        return {"t": "hello", "proto": f["proto"], "version": v if isinstance(v, str) and _VERSION.fullmatch(v) else "?"}
     _keys(f, {"t", "proto", "version", "name", "now", "hook_state", "test_mode", "harden"})
-    if not isinstance(f["version"], str) or not _VERSION.match(f["version"]):
+    if not isinstance(f["version"], str) or not _VERSION.fullmatch(f["version"]):
         raise FrameError("bad_version")
-    if not isinstance(f["name"], str) or not HOST_RE.match(f["name"]):
+    if not isinstance(f["name"], str) or not HOST_RE.fullmatch(f["name"]):
         raise FrameError("bad_name")
     if not is_num(f["now"]):
         raise FrameError("bad_now")
@@ -306,12 +306,12 @@ def _v_welcome(f: dict[str, Any]) -> dict[str, Any]:
     _keys(f, {"t", "proto", "version", "link", "rooms", "harnesses", "limits"})
     if f["proto"] != LINK_PROTO or not is_int(f["proto"]):
         raise FrameError("bad_proto")
-    if not isinstance(f["version"], str) or not _VERSION.match(f["version"]):
+    if not isinstance(f["version"], str) or not _VERSION.fullmatch(f["version"]):
         raise FrameError("bad_version")
-    if not isinstance(f["link"], str) or not _HEX16.match(f["link"]):
+    if not isinstance(f["link"], str) or not _HEX16.fullmatch(f["link"]):
         raise FrameError("bad_link")
     rooms, hs, lim = f["rooms"], f["harnesses"], f["limits"]
-    if not isinstance(rooms, list) or len(rooms) > 64 or not all(isinstance(r, str) and ROOM_RE.match(r)
+    if not isinstance(rooms, list) or len(rooms) > 64 or not all(isinstance(r, str) and ROOM_RE.fullmatch(r)
                                                                   for r in rooms):
         raise FrameError("bad_rooms")
     if not isinstance(hs, list) or not all(h in HARNESSES for h in hs):
@@ -323,7 +323,7 @@ def _v_welcome(f: dict[str, Any]) -> dict[str, Any]:
 
 def _v_refuse(f: dict[str, Any]) -> dict[str, Any]:
     _keys(f, {"t", "why", "message"})
-    if not isinstance(f["why"], str) or not _REASON.match(f["why"]):
+    if not isinstance(f["why"], str) or not _REASON.fullmatch(f["why"]):
         raise FrameError("bad_why")
     _text(f["message"], 300)
     return dict(f)

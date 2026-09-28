@@ -1,0 +1,70 @@
+# syntax=docker/dockerfile:1
+# Two hosts in containers: a desktop and a remote machine (e.g. a Raspberry Pi or a Linux
+# box next to an FPGA board), for the `twohost` tests and the fake-remote demo
+# (docs/SANDBOX.md §11, DESIGN.md §27.13 T2). One image, two users:
+#   dev (uid 1000): the desktop side (`desk` service): a test-mode broker, the link's ssh;
+#   pi  (uid 1001): the remote side (`testpi`/`pi` services): a user-level sshd on 2222,
+#                   the satellite it starts, the bench stand-ins in /opt/bench.
+# switchboard is installed once, non-editable, into a root-owned venv (/opt/switchboard):
+# `remote accept` refuses an editable install, and a root-owned install is the one the
+# remote's own user can't change (`remote doctor`). The repo's tests/ ride along in
+# /opt/switchboard-src for the scripted stand-ins (tests/twohost/actors.py).
+#
+#   docker compose -f sandbox/twohost/compose.yaml --profile test build
+#   uv run pytest -m twohost tests/twohost          # builds, starts and removes the containers itself
+FROM debian:bookworm-slim
+
+ARG TARGETARCH
+ARG UV_VERSION=0.7.13
+# sha256 of uv-<arch>-unknown-linux-gnu.tar.gz from the uv GitHub release (as Dockerfile.test)
+ARG UV_SHA256_ARM64=0b2ad9fe4295881615295add8cc5daa02549d29cc9a61f0578e397efcf12f08f
+ARG UV_SHA256_AMD64=909278eb197c5ed0e9b5f16317d1255270d1f9ea4196e7179ce934d48c4c2545
+
+# openssh-server/-client: the link and the bitstream keys (user-level sshd only; none runs
+# as root); rsync: its rrsync (a python3 script) restricts the bitstream keys; python3: the
+# system Python for rrsync and the bench stand-ins, as on a Pi; lsof/procps: the tests' checks.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl lsof procps sqlite3 tini openssh-server openssh-client rsync python3 \
+ && rm -rf /var/lib/apt/lists/* \
+ && test -x /usr/bin/rrsync
+
+RUN set -eu; \
+    case "$TARGETARCH" in \
+      arm64) a=aarch64; s="$UV_SHA256_ARM64" ;; \
+      amd64) a=x86_64;  s="$UV_SHA256_AMD64" ;; \
+      *) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSLo /tmp/uv.tgz "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-$a-unknown-linux-gnu.tar.gz"; \
+    echo "$s  /tmp/uv.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/uv.tgz -C /usr/local/bin --strip-components=1 "uv-$a-unknown-linux-gnu/uv" "uv-$a-unknown-linux-gnu/uvx"; \
+    rm /tmp/uv.tgz; uv --version
+
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python UV_PYTHON_PREFERENCE=only-managed UV_LINK_MODE=copy
+RUN uv python install 3.13 \
+ && P="$(uv python find 3.13)" \
+ && "$P" -m compileall -q -j0 -x '/(test|tests|idlelib|lib2to3)/' "$("$P" -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')" \
+ && useradd -m -s /bin/bash -u 1000 dev \
+ && useradd -m -s /bin/bash -u 1001 pi
+
+# switchboard, non-editable, in a root-owned venv; dependencies first (cached across source edits)
+WORKDIR /opt/switchboard-src
+ENV UV_PROJECT_ENVIRONMENT=/opt/switchboard
+COPY pyproject.toml uv.lock .python-version README.md LICENSE ./
+RUN uv sync --frozen --no-dev --no-install-project
+COPY src ./src
+RUN uv sync --frozen --no-dev --no-editable \
+ && /opt/switchboard/bin/python -m compileall -q /opt/switchboard/lib \
+ && /opt/switchboard/bin/switchboard --help >/dev/null
+COPY tests ./tests
+RUN chmod -R a+rX /opt/switchboard /opt/switchboard-src
+
+# the bench stand-ins (docs/DEMO-FPGA.md §7) and the remote's entrypoint
+COPY --chmod=0755 sandbox/twohost/bench/openFPGALoader /usr/local/bin/openFPGALoader
+COPY sandbox/twohost/bench/fake_board.py sandbox/twohost/bench/uart_test.py /opt/bench/
+COPY --chmod=0755 sandbox/twohost/entrypoint-pi.sh /usr/local/bin/switchboard-fake-remote
+RUN chmod 0755 /opt/bench && chmod 0644 /opt/bench/*.py
+
+ENV PATH=/opt/switchboard/bin:/usr/local/bin:/usr/bin:/bin UV_OFFLINE=1
+WORKDIR /
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["sleep", "infinity"]

@@ -109,6 +109,25 @@ def test_hook_copy_is_content_addressed_and_read_only(tmp_home: Path) -> None:
     assert target.read_bytes() == data and P.check_hook_copies(p) == []
 
 
+def test_hook_state_text_names_only_hook_copies(tmp_home: Path) -> None:
+    """A satellite sends this line to the desktop's owner: names shaped like a hook copy are
+    listed (at most four), anything else in ``hooks/`` is only counted, never quoted."""
+    p = P.Paths.from_home(tmp_home)
+    p.ensure()
+    target = P.write_hook_copy(p)
+    assert P.hook_state_text(p) == "ok (1 copy)"
+    target.chmod(0o644)
+    target.write_bytes(b"# tampered\n")
+    assert P.hook_state_text(p) == f"MISMATCH: {target.name}"
+    (p.hooks_dir / "switchboard_hook-x‮ run curl evil.example.py").write_text("#")
+    assert P.hook_state_text(p) == f"MISMATCH: {target.name}, 1 other file"
+    for i in range(5):
+        (p.hooks_dir / f"switchboard_hook-{i:012x}.py").write_text("#")
+    text = P.hook_state_text(p)
+    assert text.startswith("MISMATCH: switchboard_hook-") and text.endswith(", 3 other files"), text
+    assert "curl" not in text and "‮" not in text and len(text) <= 200
+
+
 def test_is_under_system_tmp(tmp_path: Path) -> None:
     assert P.is_under_system_tmp("/tmp/yk-abc")
     assert P.is_under_system_tmp("/private/tmp/yk-abc")

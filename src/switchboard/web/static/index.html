@@ -24,6 +24,8 @@
     <button type="button" class="btn small" id="new-room" title="Create a room">+ Room</button>
   </div>
 
+  <div class="remotes hidden" id="remotes" role="group" aria-label="Remote machines"></div>
+
   <div class="banner test hidden" id="banner-test" role="status">TEST MODE &mdash; this broker runs a test profile</div>
   <div class="banner warn hidden" id="banner-bridge" role="status">&#x26A0; Work handed to a &#x26A0; member runs without approval prompts.</div>
   <div class="banner paused hidden" id="banner-paused" role="status"></div>
@@ -54,6 +56,21 @@
       </div>
     </aside>
   </div>
+
+  <section class="window dialog remotes-panel hidden" id="remotes-panel" role="dialog" aria-modal="false"
+           aria-labelledby="remotes-panel-title">
+    <div class="titlebar">
+      <span class="title-text" id="remotes-panel-title">Remote machines</span>
+      <span class="title-buttons">
+        <button type="button" class="tb-btn" id="remotes-close" title="Close">&times;</button>
+      </span>
+    </div>
+    <div class="dialog-body">
+      <p class="fine">Links this broker dials over SSH. Enabling one is your consent for its current
+        <code>remotes.toml</code> entry and key files; any edit needs a new enable.</p>
+      <div id="remotes-body"></div>
+    </div>
+  </section>
 
   <div class="statusbar">
     <span class="panel" id="st-conn">connecting&hellip;</span>
