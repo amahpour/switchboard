@@ -335,7 +335,24 @@ def test_an_unjoined_sibling_thread_cannot_touch_a_joined_thread(broker: InProcB
         cx.close()
 
 
-def test_a_codex_thread_cannot_be_taken_over_from_another_process(broker: InProcBroker) -> None:
+@pytest.fixture
+def no_sweep(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stop the periodic liveness sweep (every LIVENESS_S) from firing during the test.
+
+    The sweep can end a dead agent's session at any moment; tests that need a fixed
+    order between "the agent is gone" and "the sweep ran" call ``check_liveness``
+    themselves instead. Must be set up before the broker starts.
+    """
+    monkeypatch.setattr("switchboard.broker.agents.LIVENESS_S", 3600.0)
+
+
+@pytest.fixture
+def quiet_broker(no_sweep: None, broker: InProcBroker) -> InProcBroker:
+    return broker
+
+
+def test_a_codex_thread_cannot_be_taken_over_from_another_process(quiet_broker: InProcBroker) -> None:
+    broker = quiet_broker
     a = FakeClaude(broker, as_harness="codex")
     b = FakeClaude(broker, as_harness="codex")
     try:
@@ -354,6 +371,32 @@ def test_a_codex_thread_cannot_be_taken_over_from_another_process(broker: InProc
         assert r and r["text"].startswith("[switchboard] You rejoined #build as codex-1")
         [row] = q(broker, "SELECT agent_pid FROM participants WHERE harness='codex'")
         assert row[0] == b.pid
+    finally:
+        a.close()
+        b.close()
+
+
+def test_a_codex_thread_is_joined_fresh_after_the_sweep_ended_the_old_session(quiet_broker: InProcBroker) -> None:
+    """The other ordering: the liveness sweep ends A's session before B arrives."""
+    broker = quiet_broker
+    a = FakeClaude(broker, as_harness="codex")
+    b = FakeClaude(broker, as_harness="codex")
+    try:
+        assert a.tool("join", meta={"threadId": "thread-A"}, room="#build", screen_name="codex-1")["ok"]
+        r = b.tool("join", meta={"threadId": "thread-A"}, room="#build", screen_name="codex-1")
+        assert r["ok"] is False and r["code"] == "conflict", r
+        a.close()
+
+        def swept() -> bool:
+            broker.on_loop(broker.state.agents.check_liveness)
+            return not q(broker, "SELECT id FROM participants WHERE harness='codex' AND ended_at IS NULL")
+
+        assert wait_for(swept, 10), "the sweep never ended A's session"
+        r = b.tool("join", meta={"threadId": "thread-A"}, room="#build", screen_name="codex-1")
+        assert r["ok"], r
+        assert r["text"].startswith("[switchboard] You joined #build as codex-1"), r["text"]
+        rows = q(broker, "SELECT agent_pid FROM participants WHERE harness='codex' AND ended_at IS NULL")
+        assert [r[0] for r in rows] == [b.pid]
     finally:
         a.close()
         b.close()
