@@ -48,6 +48,14 @@ ALLOWED: dict[tuple[str, str], str] = {
         "lsof peers of this machine's Codex control socket, and agent pids of local rows only (_joined)",
     ("adapters/codex.py", "_codex_app_server"):
         "this machine's Codex app-servers, named by lsof or by a local mcp.hello",
+    # the satellite (M8c) is the remote host's own view: it runs there and probes only the
+    # machine it runs on, which is exactly what the broker's RemoteView of that host relays
+    ("remote/satellite.py", "_is_satellite"): "an older satellite of this home, before taking it over, or the"
+                                               " newer one its replace marker names",
+    ("remote/satellite.py", "Satellite.__init__"): "the satellite's own start time",
+    ("remote/satellite.py", "main"): "the satellite's own start time, for its pidfile",
+    ("remote/satellite.py", "Satellite.chain"): "its own kernel peer's chain (a hook on its own machine)",
+    ("remote/satellite.py", "Satellite.send_alive"): "the watched pids, which are pids on its own machine",
 }
 
 

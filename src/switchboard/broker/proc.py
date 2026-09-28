@@ -24,6 +24,25 @@ _NODEV = 0xFFFFFFFF
 # The peer check walks every ancestor up to pid 1; this cap only stops runaway walks.
 MAX_CHAIN = 64
 _PS_CANDIDATES = ("/bin/ps", "/usr/bin/ps")
+# The satellite on Linux (DESIGN.md §27.4.8) runs nothing: /proc only, and what /proc
+# can't tell reads as unknown ("" argv, no process), which fails closed.
+_NO_SPAWN = False
+# The satellite on Linux: the boot time its start times are computed from, fixed for the
+# whole boot (``pin_btime``), so a clock step doesn't change a process's start time.
+_BTIME_PIN: float | None = None
+
+
+def set_no_spawn(on: bool = True) -> None:
+    """Never run ``ps`` in this process (the satellite on Linux)."""
+    global _NO_SPAWN
+    _NO_SPAWN = on
+
+
+def pin_btime(btime: float | None) -> None:
+    """Compute Linux start times from ``btime`` instead of /proc/stat's, which moves when
+    the wall clock is stepped (a Pi without an RTC syncing NTP, a WSL2 resume)."""
+    global _BTIME_PIN
+    _BTIME_PIN = btime
 
 
 @lru_cache(maxsize=1)
@@ -36,7 +55,10 @@ def ps_bin() -> str | None:
 
 
 def _run_ps(args: list[str]) -> str:
-    """stdout of ``ps <args>``, or "" if ps is missing or fails."""
+    """stdout of ``ps <args>``, or "" if ps is missing or fails (or this process runs
+    nothing: ``set_no_spawn``)."""
+    if _NO_SPAWN:
+        return ""
     ps = ps_bin()
     if ps is None:
         return ""
@@ -102,6 +124,11 @@ def _info_darwin(pid: int) -> ProcInfo | None:
 # --------------------------------------------------------------------- Linux
 @lru_cache(maxsize=1)
 def _linux_btime() -> float:
+    return read_linux_btime()
+
+
+def read_linux_btime() -> float:
+    """/proc/stat's btime now (uncached): wall-clock boot time, which a clock step moves."""
     with open("/proc/stat") as f:
         for line in f:
             if line.startswith("btime "):
@@ -133,7 +160,7 @@ def _info_linux(pid: int) -> ProcInfo | None:
     tty_nr = int(fields[4])
     ticks = int(fields[19])
     hz = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
-    start = _linux_btime() + ticks / float(hz)
+    start = (_BTIME_PIN if _BTIME_PIN is not None else _linux_btime()) + ticks / float(hz)
     return ProcInfo(
         pid=pid, ppid=ppid, start=round(start, 2), uid=uid, comm=comm,
         tty_dev=tty_nr or None,

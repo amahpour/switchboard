@@ -24,6 +24,7 @@ from switchboard.broker.auth import UI_HOST, HostOriginGuard, LoginTokens, Secur
 from switchboard.broker.hosts import HostViews
 from switchboard.broker.hub import Hub, WsSubscriber
 from switchboard.broker.peer import AllowAllHumans, PeerPolicy, ProcessPeerPolicy
+from switchboard.broker.remote import RemoteManager
 from switchboard.broker.rpc import RpcServer
 from switchboard.broker.service import BrokerInfo, RoomService
 from switchboard.clock import Clock, SystemClock
@@ -31,7 +32,7 @@ from switchboard.config import Config
 from switchboard.delivery.engine import Engine
 from switchboard.delivery.runner import Runner
 from switchboard.delivery.sinks import SinkRegistry
-from switchboard.paths import Paths, check_hook_copies, write_hook_copy
+from switchboard.paths import Paths, hook_state_text, write_hook_copy
 from switchboard.store import Store
 
 log = logging.getLogger("switchboard.broker")
@@ -59,6 +60,8 @@ class BrokerState:
     engine: Engine = None  # type: ignore[assignment]
     runner: Runner = None  # type: ignore[assignment]
     agents: AgentService = None  # type: ignore[assignment]
+    # the remote hosts' links (DESIGN.md §27.4); None until the RPC server listens
+    remotes: RemoteManager | None = None
     shutdown_cb: Callable[[], None] | None = None
     recovery: dict[str, int] = field(default_factory=dict)
     tasks: list[asyncio.Task[Any]] = field(default_factory=list)
@@ -108,7 +111,7 @@ def create_app(
         clock=clock,
         info=BrokerInfo(port=port, test_mode=test_mode, home=str(paths.home), started_at=clock.now()),
         login_tokens=LoginTokens(clock),
-        hosts=HostViews(cfg.claude.sessions_dir),
+        hosts=HostViews(cfg.claude.sessions_dir, clock),
     )
 
     @contextlib.asynccontextmanager
@@ -144,10 +147,18 @@ def create_app(
         state.tasks.append(asyncio.create_task(state.agents.liveness_loop()))
         for adapter in state.engine.adapters.values():
             await adapter.start(state.runner)
+        # after the RPC server: a link's requests are dispatched through it (§27.3)
+        state.remotes = RemoteManager(state)
+        await state.remotes.start()
+        state.service.remotes = state.remotes
         log.info("broker up: pid %d port %d test_mode %s", os.getpid(), port, test_mode)
         try:
             yield
         finally:
+            if state.remotes is not None:
+                # every link's child is killed and reaped; remote members go offline
+                with contextlib.suppress(Exception):
+                    await state.remotes.stop()
             for t in state.tasks:
                 t.cancel()
             for t in state.tasks:
@@ -193,13 +204,7 @@ def _write_test_token(state: BrokerState) -> None:
 
 
 def _refresh_hook_state(state: BrokerState) -> None:
-    bad = check_hook_copies(state.paths)
-    if bad:
-        state.info.hook_state = "MISMATCH: " + ", ".join(bad)
-    else:
-        n = len(list(state.paths.hooks_dir.glob("switchboard_hook-*.py")))
-        state.info.hook_state = f"ok ({n} cop{'y' if n == 1 else 'ies'})"
-    return None
+    state.info.hook_state = hook_state_text(state.paths)
 
 
 async def _maintenance(state: BrokerState) -> None:

@@ -56,3 +56,16 @@ def test_codex_devin_cursor() -> None:
     assert verify("cursor", [MCP, "node x", "/opt/cursor-agent"]).harness == "cursor"
     assert verify("cursor", [MCP, "node"]).tier_note == "unverified cursor"
     assert verify("unknown", [MCP, "whatever"]).harness == "unknown"
+
+
+@pytest.mark.parametrize("relay", ["/usr/bin/ssh -R /tmp/x.sock:/h/run/broker.sock pi", "socat UNIX-LISTEN:/tmp/x",
+                                   "sshd-session: alice@notty", "python3 /tmp/k/ssh -L a:b pi"])
+def test_a_relay_on_the_socket_is_no_mcp_server(relay: str) -> None:
+    """Through a forward of the socket every process behind it would be one "MCP server"
+    (DESIGN.md §27.4.2): refused, whatever it claims (M8c; deferred from M8a)."""
+    for claimed in ("claude", "codex", "unknown", "test"):
+        with pytest.raises(McpRefused) as ei:
+            verify(claimed, [relay, "-zsh", "/sbin/launchd"], test_mode=True)
+        assert ei.value.code == "forbidden" and "remote link" in ei.value.message
+    # an MCP server that merely mentions ssh in its arguments is not one
+    assert verify("unknown", ["/venv/bin/python -m switchboard mcp --home /tmp/ssh", "-zsh"]).harness == "unknown"

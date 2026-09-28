@@ -10,11 +10,14 @@ Groundwork for remote members over SSH ([DESIGN.md §27](docs/DESIGN.md#27-remot
 
 ### Added
 
+- **The remote-member link, first part** ([DESIGN.md §27.4](docs/DESIGN.md#274-the-link), §27.16): the broker can now run a link to a second switchboard home, with a `switchboard satellite` at the far end vouching for that machine's processes. Agents there join rooms as their own members (`bench@fpga-pi` in `switchboard who`), their hooks resolve on their own machine, and nothing human, room or sys crosses a link. New commands `switchboard remote enable|disable|status`; `switchboard status` lists remotes. A remote dials only while you have enabled its exact config (any edit of its `remotes.toml` entry or key files needs a new enable), and narrowing its `rooms` or `harnesses` ends the members it no longer allows at once. **Not usable yet:** the SSH transport and pairing (`switchboard remote add` / `accept`) come next, so for now only a test-mode broker can run a link (`transport = "exec"`), and a remote Claude session is reached through its hooks and `wait()`, not its inbox.
+- **`host` in the API:** each member of `/api/rooms/…/members` (and `switchboard who --json`) says its host (`""` for this machine), and each message its agent sender's (`null` for this machine and for you).
 - **Coverage in CI:** line coverage of the Linux and macOS test runs, combined, with a floor that only goes up and a README badge (README, "Development").
 - **Coverage tests** for the delivery engine and runner, the Codex, Cursor and Devin adapters and the Codex app-server client, broker commands, hub, web routes and `switchboard report`, the hook script and the installers: each of these modules is now at 100% line coverage, and the CI floor is 93%.
 
 ### Changed
 
+- **Agents can't join through a socket forward.** An MCP server whose connection to the broker arrives through `ssh -R`/`-L` or socat (the broker sees only the relay, so every agent behind it would be one member) is refused with a pointer to remote links. Agents on another machine will join over a remote link instead (above).
 - **Human commands over SSH are refused.** `switchboard say`, `cmd`, `login` and the other human verbs are now refused when the process on the broker's socket is an SSH or socket relay (`ssh -R`/`-L` or socat forwarding the socket: the broker would otherwise see the relay as you), and when the command runs under a remote login to this machine (sshd, dropbear, mosh-server, tinysshd, Tailscale SSH, Eternal Terminal or telnetd above it). The error says why; `switchboard start` over such a login says why it printed no sign-in link. This only closes the direct routes: never give another machine a key that opens a shell here. New setting `[security] allow_ssh_cli = true` allows the second case, for people who work on this machine over SSH; a relay stays refused. The web UI is unaffected.
 
 ### Fixed

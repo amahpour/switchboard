@@ -42,18 +42,25 @@ def fixture(name: str, **over: Any) -> dict[str, Any]:
 class FakeClaude:
     """A fake harness process; ``as_harness="codex"`` makes it a Codex daemon stand-in."""
 
-    def __init__(self, b: InProcBroker, as_harness: str = "claude", *, inbox: bool = False,
-                 reg_socket: str | None = None, token: bool = True):
+    def __init__(self, b: InProcBroker | None, as_harness: str = "claude", *, inbox: bool = False,
+                 reg_socket: str | None = None, token: bool = True, home: str | Path | None = None,
+                 sessions_dir: str | Path | None = None, env: dict[str, str] | None = None):
+        """``home``/``sessions_dir``: another switchboard home and Claude registry than the
+        broker's (a session on a remote host, whose MCP server and hooks dial that home's
+        satellite, DESIGN.md §27.13)."""
         self.b = b
+        self.home = str(home) if home is not None else str(b.paths.home)  # type: ignore[union-attr]
+        self.sessions_dir = (str(sessions_dir) if sessions_dir is not None
+                             else (b.cfg.claude.sessions_dir if b is not None else ""))
         self.bindir = Path(tempfile.mkdtemp(prefix="yk-fc-", dir="/tmp"))
         exe = self.bindir / as_harness
         shutil.copy(FAKE, exe)
         self.inbox_path = str(self.bindir / "inbox.sock")
         self.inbox: FakeInbox | None = FakeInbox(self.inbox_path) if inbox else None
-        extra = dict(YK_FAKE_HOME=str(b.paths.home))
+        extra = dict(YK_FAKE_HOME=self.home, **(env or {}))
         if as_harness == "claude":
             extra.update(
-                YK_FAKE_SESSIONS=b.cfg.claude.sessions_dir,
+                YK_FAKE_SESSIONS=self.sessions_dir,
                 CLAUDECODE="1",
                 CLAUDE_CODE_MESSAGING_SOCKET=self.inbox_path,
                 CLAUDE_CODE_SESSION_ID=SID,
@@ -88,7 +95,7 @@ class FakeClaude:
 
     def hook(self, payload: dict[str, Any], event: str | None = None) -> str:
         ev = event or payload["hook_event_name"]
-        cmd = hook_command(sys.executable, str(self.b.paths.home), hook_sha12(), "claude", ev)
+        cmd = hook_command(sys.executable, self.home, hook_sha12(), "claude", ev)
         self.p.stdin.write(json.dumps({"op": "hook", "command": cmd, "payload": payload}) + "\n")
         self.p.stdin.flush()
         r = self.recv()
@@ -98,7 +105,7 @@ class FakeClaude:
     # ------------------------------------------------------------- registry
     @property
     def registry_path(self) -> Path:
-        return Path(self.b.cfg.claude.sessions_dir) / f"{self.pid}.json"
+        return Path(self.sessions_dir) / f"{self.pid}.json"
 
     def set_registry(self, status: str, *, updated_ms: int | None = None) -> None:
         """Rewrite the session's registry file the way Claude Code does."""

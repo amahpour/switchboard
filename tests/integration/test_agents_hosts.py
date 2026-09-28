@@ -172,11 +172,12 @@ def test_hello_and_disconnect_touch_only_their_own_hosts_rows(broker: InProcBrok
 def test_early_models_are_kept_per_host(broker: InProcBroker) -> None:
     a = broker.state.agents
     i = me()
-    broker.on_loop(a._remember_model, "", a.hosts.local, i.pid, "claude-test-model")
+    # M8c: _remember_model takes the hook's chain (a local walk, or a remote hook's facts.chain)
+    broker.on_loop(a._remember_model, "", a.hosts.local.ancestry(i.pid, 8), "claude-test-model")
     assert a._early_models.get(("", i.pid, f"{i.start:.2f}")) == "claude-test-model"
     assert not [k for k in a._early_models if k[0] != ""]
-    broker.on_loop(a._remember_model, PI, a.hosts.view(PI), i.pid, "claude-test-model")
-    assert not [k for k in a._early_models if k[0] == PI]  # nothing known about the Pi's processes yet
+    broker.on_loop(a._remember_model, PI, a.hosts.view(PI).ancestry(i.pid, 8) or [], "claude-test-model")
+    assert not [k for k in a._early_models if k[0] == PI]  # this machine is never walked for the Pi
 
 
 # The review's mutation run (M8b) found these unguarded: each test pins one host-scoped line.

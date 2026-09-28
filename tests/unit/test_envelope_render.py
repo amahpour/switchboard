@@ -212,3 +212,32 @@ def test_catchup_lines_do_not_promise_read() -> None:
                           reply_to=None, text="z" * 2000)
     line = envelope.render_catchup_line(msg, "bot")
     assert "500 more chars)" in line and "read()" not in line
+
+
+def test_remote_sender_host_field() -> None:
+    """A sender on another machine is named by its host (DESIGN.md §27.11): desktop agents with
+    approvals off can tell text that may quote what that machine saw (UART output) from local text."""
+    pi = dataclasses.replace(item(2, 1, text="result: 1a2b3c pull=ok"), sender_harness="claude",
+                             sender_host="fpga-pi")
+    local = dataclasses.replace(item(3, 0), sender_harness="codex")
+    t = render([pi, local])
+    [pi_line] = [ln for ln in t.splitlines() if ln.startswith("- id=2 ")]
+    [local_line] = [ln for ln in t.splitlines() if ln.startswith("- id=3 ")]
+    assert "harness=claude host=fpga-pi to_you=" in pi_line
+    assert "host=" not in local_line
+    # the human never has a host; a host name renders as a bare word whatever it holds
+    human = dataclasses.replace(item(1, 2), sender_host="fpga-pi")
+    assert "host=" not in render([human])
+    odd = dataclasses.replace(item(4, 0), sender_host="x y=z")
+    assert "host=x-yz " in render([odd])
+    # catch-up lines at join name it too
+    msg = SimpleNamespace(id=9, ts=0.0, sender_name="bench", sender_kind="agent", sender_harness="claude",
+                          sender_host="fpga-pi", reply_to=None, text="hi")
+    assert "harness=claude host=fpga-pi " in envelope.render_catchup_line(msg, "bot")
+
+
+def test_join_lists_harness_at_host() -> None:
+    t = render_join(room="#fpga", screen_name="vivado", human_name="alice",
+                    others=[("bench", "claude", "fpga-pi"), ("codex-1", "codex", ""), ("old", "devin")],
+                    catchup=[], nonce="0123456789abcdef", guidance="call wait()", test_mode=False)
+    assert "Other agents here: bench (claude@fpga-pi), codex-1 (codex), old (devin)." in t

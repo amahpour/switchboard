@@ -8,8 +8,10 @@ it asks ``HostViews.view(p.host)``.
 
 - ``LocalView`` answers from this machine's kernel (``broker.proc``) and this
   user's Claude session registry.
-- ``RemoteView`` answers for one remote host. Until the link feeds it (M8c) it
-  knows nothing: every answer is ``None``, "unknown".
+- ``RemoteView`` answers for one remote host, from what its link reports: the
+  satellite's ``alive`` frames (M8c) and, from M8d, its relayed registry. It
+  never asks this machine anything, and it can't walk a remote process chain
+  (a remote hook brings its own, ``facts.chain``).
 - A host nobody configured gets a fresh all-``None`` view, never the local one.
 
 ``None`` is never "dead": callers treat it as alive where a wrong "dead" would
@@ -30,6 +32,7 @@ from typing import Any
 from switchboard.adapters.claude import read_registry
 from switchboard.broker import proc
 from switchboard.broker.proc import ProcInfo
+from switchboard.clock import Clock, SystemClock
 from switchboard.models import LOCAL_HOST, Participant, valid_host
 
 
@@ -58,24 +61,94 @@ class LocalView:
 
 
 class RemoteView:
-    """One remote host, as its link reports it. M8b: nothing reports yet, so it
-    knows nothing about any pid (every answer is ``None``); M8c feeds it from the
-    satellite's ``alive`` frames and M8d from its ``reg`` frames."""
+    """One remote host, as its link reports it (DESIGN.md §27.5.6).
 
-    def __init__(self, host: str) -> None:
+    ``alive(pid, start)``: ``False`` once the satellite has reported the pair dead
+    (gone or recycled: final, a pid never comes back with the same start time);
+    ``True`` while the pair is watched, an ``alive`` frame that answered a watch
+    including it is at most ``FRESH_S`` old, and the link is up; ``None`` (can't
+    tell) otherwise. Nothing is ever read from this machine.
+
+    The broker's link (``broker/remote.py``) feeds it: ``link_up``/``link_down``,
+    ``set_watch`` for every ``watch`` frame it sends, ``on_alive`` for every
+    ``alive`` frame it receives."""
+
+    FRESH_S = 3.0
+    DEAD_MAX = 4096
+
+    def __init__(self, host: str, clock: Clock | None = None) -> None:
         self.host = host
+        self.clock: Clock = clock or SystemClock()
+        self.up = False
+        self._watched: dict[tuple[int, float], int] = {}  # pair -> the first watch seq that named it
+        self._alive_at: dict[tuple[int, float], float] = {}  # pair -> when an alive frame vouched for it
+        self._dead: dict[tuple[int, float], None] = {}  # insertion-ordered, bounded
+
+    # ------------------------------------------------------------- feed
+    def link_up(self) -> None:
+        self.up = True
+        self._alive_at.clear()
+
+    def link_down(self) -> None:
+        self.up = False
+        self._alive_at.clear()
+
+    def set_watch(self, n: int, pairs: set[tuple[int, float]]) -> None:
+        """The broker sent watch ``n`` naming ``pairs``."""
+        self._watched = {p: self._watched.get(p, n) for p in pairs}
+        for p in list(self._alive_at):
+            if p not in pairs:
+                del self._alive_at[p]
+
+    def on_alive(self, n: int, dead: list[tuple[int, float]]) -> set[tuple[int, float]]:
+        """An ``alive`` frame answering watch ``n``: returns the watched pairs newly dead."""
+        now = self.clock.now()
+        new: set[tuple[int, float]] = set()
+        gone = set(dead)
+        for d in dead:
+            if d not in self._dead:
+                self._dead[d] = None
+                if d in self._watched:
+                    new.add(d)
+        while len(self._dead) > self.DEAD_MAX:
+            self._dead.pop(next(iter(self._dead)))
+        for p, first in self._watched.items():
+            if first <= n and p not in gone:
+                self._alive_at[p] = now
+            elif p in gone:
+                self._alive_at.pop(p, None)
+        return new
+
+    # ----------------------------------------------------------- answers
+    def _key(self, pid: int, start: float, table: dict[tuple[int, float], Any]) -> tuple[int, float] | None:
+        k = (pid, start)
+        if k in table:
+            return k
+        for p in table:
+            if p[0] == pid and proc.same_start(p[1], start):
+                return p
+        return None
 
     def alive(self, pid: int | None, start: float | None) -> bool | None:
-        return None
+        if not pid or start is None:
+            return None
+        if self._key(pid, start, self._dead) is not None:
+            return False
+        if not self.up:
+            return None
+        k = self._key(pid, start, self._alive_at)
+        if k is None:
+            return None
+        return True if self.clock.now() - self._alive_at[k] <= self.FRESH_S else None
 
     def ancestry(self, pid: int, depth: int = 8) -> list[ProcInfo] | None:
-        return None
+        return None  # a remote hook brings its chain (facts.chain); nothing else walks one
 
     def argv_many(self, procs: list[ProcInfo]) -> dict[int, str] | None:
         return None
 
     def read_registry(self, pid: int) -> dict[str, Any] | None:
-        return None
+        return None  # M8d: the relayed registry
 
 
 HostView = LocalView | RemoteView
@@ -84,8 +157,9 @@ HostView = LocalView | RemoteView
 class HostViews:
     """The broker's views of every host it has members on."""
 
-    def __init__(self, sessions_dir: str) -> None:
+    def __init__(self, sessions_dir: str, clock: Clock | None = None) -> None:
         self.local = LocalView(sessions_dir)
+        self.clock: Clock = clock or SystemClock()
         self._remotes: dict[str, RemoteView] = {}
 
     def add_remote(self, host: str) -> RemoteView:
@@ -94,7 +168,7 @@ class HostViews:
             raise ValueError(f"not a host name: {host!r}")
         v = self._remotes.get(host)
         if v is None:
-            v = self._remotes[host] = RemoteView(host)
+            v = self._remotes[host] = RemoteView(host, self.clock)
         return v
 
     def remove_remote(self, host: str) -> None:
@@ -110,7 +184,7 @@ class HostViews:
         if host == LOCAL_HOST:
             return self.local
         v = self._remotes.get(host)
-        return v if v is not None else RemoteView(host)
+        return v if v is not None else RemoteView(host, self.clock)
 
     def alive(self, host: str, pid: int | None, start: float | None) -> bool | None:
         """Is ``(pid, start)`` on ``host`` alive? ``None``: this broker can't tell."""

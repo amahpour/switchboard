@@ -75,8 +75,8 @@ if not _localhost_names_resolve():
     _loopback_for_dot_localhost()
 
 
-@pytest.fixture(autouse=True)
-def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+def sanitize_env(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
+    """What ``clean_env`` does, for a fixture of a wider scope (it runs before the autouse one)."""
     for k in list(os.environ):
         if k.startswith(_STRIP_PREFIXES):
             monkeypatch.delenv(k, raising=False)
@@ -86,6 +86,11 @@ def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPath
     monkeypatch.setenv("SWITCHBOARD_TEST", "1")
     # Only switchboard.config's view of the login name: getpass itself stays real.
     monkeypatch.setattr(switchboard.config, "getpass", types.SimpleNamespace(getuser=lambda: TEST_HUMAN))
+
+
+@pytest.fixture(autouse=True)
+def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    sanitize_env(monkeypatch, tmp_path_factory)
     yield
 
 

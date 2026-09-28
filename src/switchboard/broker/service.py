@@ -103,6 +103,8 @@ def message_dict(m: Message) -> dict[str, Any]:
         "text": clean(m.text),
         "reply_to": m.reply_to,
         "mentions": m.mentions,
+        # the remote host of an agent sender (DESIGN.md §27.11); None on this machine
+        "host": m.sender_host,
     }
     if m.kind == "notice" and m.sender_kind == "system" and m.text.startswith(WARN_NOTICE_PREFIXES):
         d["level"] = "warn"
@@ -124,7 +126,14 @@ def member_dict(m: Member) -> dict[str, Any]:
         "inflight": m.inflight,
         "parked": m.parked,
         "parked_reason": m.parked_reason,
+        # the member's host: '' for this machine, else the remote's name (§27.11)
+        "host": m.host,
     }
+
+
+def member_label(m: Member) -> str:
+    """``bench@fpga-pi`` for a remote member, the plain name on this machine."""
+    return f"{m.name}@{m.host}" if m.host else m.name
 
 
 class RoomService:
@@ -144,6 +153,8 @@ class RoomService:
         self.on_room_changed: list[Callable[[Room, str], None]] = []
         # The delivery side (AgentService); None in unit tests of the human side.
         self.delivery: DeliveryHooks | None = None
+        # The remote hosts' links (broker/remote.py RemoteManager), once they run.
+        self.remotes: Any = None
         hub.set_members_source(self._members_snapshot)
         hub.set_settings_source(self._settings_snapshot)
 
@@ -304,6 +315,7 @@ class RoomService:
             via="system",
             kind="leave",
             text=f"was kicked by {self.cfg.human_name}",
+            sender_host=member.host or None,
         )
 
     def command(self, name: str, text: str, actor: Actor) -> dict[str, Any]:
@@ -391,7 +403,7 @@ class RoomService:
                 tier += f" ({m.tier_note})"
             away = f' away: "{clean(m.away)}"' if m.away else ""
             lines.append(
-                f"  {m.name}  {m.harness}  {m.status}  {tier}"
+                f"  {member_label(m)}  {m.harness}  {m.status}  {tier}"
                 + (f"  [{', '.join(flags)}]" if flags else "")
                 + away
             )
@@ -414,7 +426,7 @@ class RoomService:
             exp_s = ", ".join(f"{k} {v}" for k, v in sorted(exp.items())) or "none"
             tier = (m.tier or "-") + (f" ({m.tier_note})" if m.tier_note else "")
             lines.append(
-                f"  {m.name}: {m.status}, tier {tier}, queued {counts.get('pending', 0)},"
+                f"  {member_label(m)}: {m.status}, tier {tier}, queued {counts.get('pending', 0)},"
                 f" in flight {counts.get('offered', 0)}, expired: {exp_s}"
             )
         rule_kinds = (
@@ -465,4 +477,5 @@ class RoomService:
             "codex_link": self.info.codex_link,
             "hooks": self.info.hook_state,
             "test_mode": self.info.test_mode,
+            "remotes": self.remotes.summary() if self.remotes is not None else [],
         }

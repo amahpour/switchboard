@@ -846,7 +846,7 @@ class Store:
         "SELECT d.membership_id, d.message_id, d.prio, d.mentioned, d.state, d.batch_id,"
         " d.attempts, d.notified_at, d.redelivered, d.reminders, d.in_context_at,"
         " m.ts, m.sender_name, m.sender_kind,"
-        " m.sender_harness, m.text, m.reply_to, m.mentions"
+        " m.sender_harness, m.text, m.reply_to, m.mentions, m.sender_host"
         " FROM deliveries d JOIN messages m ON m.id=d.message_id"
     )
 
