@@ -100,6 +100,10 @@ def child_env(home: str | os.PathLike | None = None, **extra: str) -> dict[str, 
         "SWITCHBOARD_TEST": "1",
         "LOGNAME": TEST_HUMAN,
     }
+    # Under ``pytest --cov`` only: coverage's own subprocess setting ([tool.coverage.run]
+    # patch), so the Python children (broker, ``switchboard mcp``, CLI runs) are measured too.
+    if "COVERAGE_PROCESS_CONFIG" in os.environ:
+        env["COVERAGE_PROCESS_CONFIG"] = os.environ["COVERAGE_PROCESS_CONFIG"]
     env.update(extra)
     return env
 
