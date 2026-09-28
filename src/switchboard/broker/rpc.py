@@ -286,6 +286,9 @@ class RpcServer:
         if role == "human_cli":
             if pol.human_allowed(peer) or pol.human_cli_allowed(peer):
                 return
+            why = pol.refusal(peer)  # the SSH rules name their reason (§27.5.7)
+            if why:
+                raise RpcError("forbidden", f"{method} {why}")
             raise RpcError(
                 "forbidden",
                 f"{method} must come from your own terminal (not from an agent's shell;"
@@ -304,6 +307,9 @@ class RpcServer:
         if role == "login":
             if pol.login_allowed(peer):
                 return
+            why = pol.refusal(peer)
+            if why:
+                raise RpcError("forbidden", f"{method} {why}")
             raise RpcError(
                 "forbidden",
                 "login links are only issued to a terminal you typed in: run `switchboard login` there",

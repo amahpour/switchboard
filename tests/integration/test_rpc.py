@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import InProcBroker, has_controlling_tty, human_cli_denied_here
+from conftest import InProcBroker, has_controlling_tty, human_cli_denial_word
 from switchboard.broker import proc
 from switchboard.broker.peer import ProcessPeerPolicy
 from switchboard.mcp.client import RpcError, Stream, call_sync
@@ -127,7 +127,8 @@ def test_real_peer_policy_roles(tmp_home: Path) -> None:
         with pytest.raises(RpcError) as e:
             b.call("room.create", {"name": "#build"})
         assert e.value.code == "forbidden" and "web session" in e.value.message
-        denied = human_cli_denied_here()
+        word = human_cli_denial_word()
+        denied = word is not None
         if denied or not has_controlling_tty():
             with pytest.raises(RpcError) as e:
                 b.call("human.login_link")
@@ -137,7 +138,7 @@ def test_real_peer_policy_roles(tmp_home: Path) -> None:
         if denied:
             with pytest.raises(RpcError) as e:
                 b.call("human.say", {"room": "#build", "text": "x"})
-            assert e.value.code == "forbidden" and "agent" in e.value.message
+            assert e.value.code == "forbidden" and word in e.value.message
             with pytest.raises(RpcError):
                 b.call("sys.stop")
         else:

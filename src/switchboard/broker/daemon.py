@@ -125,8 +125,7 @@ def run_foreground(
 ) -> int:
     import uvicorn
 
-    from switchboard.broker.app import create_app
-    from switchboard.broker.peer import AllowAllHumans, ProcessPeerPolicy
+    from switchboard.broker.app import create_app, default_peer_policy
 
     os.umask(0o077)
     paths.ensure()
@@ -147,8 +146,7 @@ def run_foreground(
             return 1
         actual = tcp.getsockname()[1]
         _write_pidfile(paths)
-        policy = AllowAllHumans() if test_trust_uds else ProcessPeerPolicy()
-        app = create_app(paths, cfg, policy, test_mode, port=actual)
+        app = create_app(paths, cfg, default_peer_policy(cfg, test_trust_uds), test_mode, port=actual)
         server = uvicorn.Server(
             uvicorn.Config(
                 app,
@@ -247,7 +245,11 @@ def start(
         res = call_sync(paths.sock, "human.login_link", {})
         print(f"Sign in (the link works once, for 5 minutes):\n  {res['url']}", file=out)
     except RpcError as e:
-        if e.code == "forbidden":
+        if e.code == "forbidden" and "arrived through ssh" in e.message:
+            # the SSH rules (DESIGN.md §27.5.7): `switchboard login` over this ssh login fails the same way
+            print("To sign in, run `switchboard login` in a terminal on this machine.\n"
+                  f"No link here: this command {e.message.removeprefix('human.login_link ')}.", file=out)
+        elif e.code == "forbidden":
             print("To sign in, run `switchboard login` in your own terminal.", file=out)
         else:
             print(f"switchboard: login link failed: {e.message}", file=sys.stderr)

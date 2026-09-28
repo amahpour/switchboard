@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import types
 from pathlib import Path
 
@@ -120,3 +121,73 @@ def test_float_fields_take_fractions_and_ints() -> None:
 def test_with_delivery() -> None:
     c = Config().with_delivery(quiet_s=0.0, max_hold_s=0.0)
     assert c.delivery.quiet_s == 0.0 and c.delivery.max_hold_s == 0.0 and Config().delivery.quiet_s == 3.0
+
+
+def test_security_section(tmp_path: Path) -> None:
+    """[security] (DESIGN.md §27.5.7): allow_ssh_cli, off by default, a strict bool."""
+    assert Config().security.allow_ssh_cli is False
+    (tmp_path / "config.toml").write_text("[security]\nallow_ssh_cli = true\n")
+    assert load(Paths.from_home(tmp_path)).security.allow_ssh_cli is True
+    assert from_dict({"security": {}}).security.allow_ssh_cli is False
+    for bad in ("true", 1, 0):
+        with pytest.raises(ConfigError, match="security.allow_ssh_cli must be true or false"):
+            from_dict({"security": {"allow_ssh_cli": bad}})
+    with pytest.raises(ConfigError, match=r"\[security\] must be a table"):
+        from_dict({"security": True})
+
+
+def test_security_unknown_key_refused() -> None:
+    with pytest.raises(ConfigError, match=r"unknown key\(s\) in \[security\]: allow_ssh"):
+        from_dict({"security": {"allow_ssh": True}})
+    with pytest.raises(ConfigError, match="unknown top-level key"):
+        from_dict({"allow_ssh_cli": True})  # only inside [security]
+
+
+@pytest.mark.parametrize("toml,want", [("", False), ("[security]\nallow_ssh_cli = false\n", False),
+                                       ("[security]\nallow_ssh_cli = true\n", True)])
+def test_security_reaches_the_broker_policy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                            toml: str, want: bool) -> None:
+    """[security] allow_ssh_cli from config.toml reaches the production ProcessPeerPolicy,
+    through create_app and through the daemon's run_foreground (the two places that build it)."""
+    import socket as socket_mod
+
+    from switchboard.broker import app as app_mod
+    from switchboard.broker import daemon
+    from switchboard.broker.peer import AllowAllHumans, ProcessPeerPolicy
+
+    paths = Paths.from_home(tmp_path / "home")
+    paths.home.mkdir(mode=0o700)
+    paths.config.write_text(toml)
+    cfg = load(paths)
+
+    pol = app_mod.default_peer_policy(cfg)
+    assert type(pol) is ProcessPeerPolicy and pol.allow_ssh_cli is want
+    assert type(app_mod.default_peer_policy(cfg, test_trust_uds=True)) is AllowAllHumans
+    built = app_mod.create_app(paths, cfg).state.broker.peer_policy
+    assert type(built) is ProcessPeerPolicy and built.allow_ssh_cli is want
+
+    # run_foreground, stopped right after it built its policy
+    seen: list[object] = []
+
+    class Built(Exception):
+        pass
+
+    def fake_create_app(paths: Paths, cfg: Config, policy: object, *a: object, **kw: object) -> None:
+        seen.append(policy)
+        raise Built
+
+    listener = socket_mod.socket(socket_mod.AF_INET, socket_mod.SOCK_STREAM)
+    monkeypatch.setattr(app_mod, "create_app", fake_create_app)
+    monkeypatch.setattr(daemon, "setup_logging", lambda paths: None)
+    monkeypatch.setattr(daemon, "loopback_listener", lambda port: listener)
+    old_umask = os.umask(0o022)
+    os.umask(old_umask)
+    try:
+        for trust in (False, True):
+            with pytest.raises(Built):
+                daemon.run_foreground(paths, cfg, port=0, test_trust_uds=trust, announce=False)
+    finally:
+        os.umask(old_umask)  # run_foreground sets 077
+        listener.close()
+    assert type(seen[0]) is ProcessPeerPolicy and seen[0].allow_ssh_cli is want
+    assert type(seen[1]) is AllowAllHumans

@@ -411,14 +411,26 @@ def subproc_broker(tmp_home: Path) -> Iterator[SubprocBroker]:
 def human_cli_denied_here() -> bool:
     """True when the production peer check would refuse ``human_cli`` to this
     pytest process (and so to the CLI children it starts): it runs under an
-    agent harness such as Claude Code, or its chain can't be fully verified.
-    Uses the exact policy the broker uses, so the two never disagree."""
+    agent harness such as Claude Code or an ssh login, or its chain can't be
+    fully verified. Uses the exact policy the broker uses, so the two never disagree."""
+    return human_cli_denial_word() is not None
+
+
+def human_cli_denial_word() -> str | None:
+    """None when the production peer check would grant ``human_cli`` to this pytest
+    process (and so to the CLI children it starts); else a word the refusal
+    message contains: "ssh" when pytest runs under an ssh login or relay
+    (DESIGN.md §27.5.7), "agent" when it runs under an agent harness such as
+    Claude Code or its chain can't be fully verified."""
     from switchboard.broker import proc
     from switchboard.broker.peer import Peer, ProcessPeerPolicy
 
     me = proc.info(os.getpid())
     peer = Peer(pid=os.getpid(), uid=os.getuid(), start=me.start if me else None)
-    return not ProcessPeerPolicy().human_cli_allowed(peer)
+    pol = ProcessPeerPolicy()
+    if pol.human_cli_allowed(peer):
+        return None
+    return "ssh" if pol.refusal(peer) else "agent"
 
 
 def has_controlling_tty() -> bool:
