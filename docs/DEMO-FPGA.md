@@ -2,7 +2,7 @@
 
 The desktop runs the FPGA toolchain ([Vivado or Quartus, version]) and the switchboard broker. A remote machine next to it, for example a Raspberry Pi or a Linux box, is wired to the board over JTAG and UART. A Claude Code session on each machine joins `#fpga`. The desktop agent (`vivado`) builds a bitstream and pushes it. The remote agent (`bench`) verifies it, flashes it, tests the UART and reports. You steer from the web UI.
 
-Everything is local. The link is SSH from the desktop to the remote machine ([README, "Remote members over SSH"](../README.md#remote-members-over-ssh), [DESIGN.md §27](DESIGN.md#27-remote-members-over-ssh-m8)); switchboard moves no files. Values in `[brackets]` are your bench's: fill them in before recording.
+Everything is local. The link is SSH from the desktop to the remote machine ([REMOTE.md](REMOTE.md), [DESIGN.md §27](DESIGN.md#27-remote-members-over-ssh-m8)); switchboard moves no files. Values in `[brackets]` are your bench's: fill them in before recording.
 
 No board, or no Pi? [§7](#7-the-fake-remote-machine-no-board-no-pi) runs the whole thing against a container on your desktop.
 
@@ -27,7 +27,7 @@ No board, or no Pi? [§7](#7-the-fake-remote-machine-no-board-no-pi) runs the wh
 
 ## 3. One-time setup
 
-1. **Pair the machines** (README, "Remote members over SSH"):
+1. **Pair the machines** ([REMOTE.md](REMOTE.md)):
    - desktop: `ssh [user]@[remote host] true` once, and check the host key fingerprint it shows against the remote's own (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` there);
    - desktop: `switchboard remote add fpga-pi [user]@[remote host] --rooms '#fpga'` (prints a token);
    - remote: `switchboard remote accept '…token…' --from [desktop IP]` (shows the `authorized_keys` line, asks, writes it with a backup);
