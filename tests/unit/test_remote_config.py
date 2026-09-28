@@ -65,11 +65,20 @@ def test_parse_and_validate() -> None:
         assert word in str(ei.value), (text, ei.value)
 
 
-def test_rooms_required() -> None:
-    for rooms in ("", "rooms = []\n", 'rooms = "#x"\n'):
+def test_rooms_default_to_any_room_and_must_be_a_list() -> None:
+    def entry(rooms: str):
+        return parse_remotes(f'[remote.a]\nhost = "h"\nuser = "alice"\n{rooms}', test_mode=False)["a"]
+
+    for rooms in ("", 'rooms = ["*"]\n', 'rooms = ["#x", "*"]\n'):
+        e = entry(rooms)
+        assert e.rooms == ("*",)
+        assert e.allows_room("#x") and e.allows_room("#nour-sprint-grooming")
+    e = entry('rooms = ["#x", "#y"]\n')
+    assert e.allows_room("#x") and e.allows_room("#y") and not e.allows_room("#z")
+    for rooms in ("rooms = []\n", 'rooms = "#x"\n'):
         with pytest.raises(RemoteConfigError) as ei:
-            parse_remotes(f'[remote.a]\nhost = "h"\nuser = "alice"\n{rooms}', test_mode=False)
-        assert "rooms is required" in str(ei.value)
+            entry(rooms)
+        assert "rooms must list" in str(ei.value) and '["*"]' in str(ei.value)
 
 
 def test_exec_transport_needs_test_mode() -> None:
