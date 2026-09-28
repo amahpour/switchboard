@@ -470,7 +470,7 @@ class Engine:
             return []
         m = self.store.get_membership(b.membership_id)
         if m is None:
-            return []
+            return []  # pragma: no cover - membership rows are never deleted
         if peer_mark is not None:
             self.store.mark_peer_batch(m.id, peer_mark)
         self._event("confirm", room_id=m.room_id, membership_id=m.id,
@@ -504,10 +504,10 @@ class Engine:
         push = is_push_path(cur.path)
         b = self.store.expire_batch(batch_id, reason, state=state, push=push and count_failure)
         if b is None:
-            return []
+            return []  # pragma: no cover - checked offered just above, in this same synchronous call
         m = self.store.get_membership(b.membership_id)
         if m is None:
-            return []
+            return []  # pragma: no cover - membership rows are never deleted
         self._event("expire" if state == "expired" else "cancel", room_id=m.room_id,
                     membership_id=m.id, participant_id=m.participant_id, batch_id=b.id,
                     path=b.path, reason=reason)
@@ -553,7 +553,7 @@ class Engine:
         parks until the human's next prompt in that session (§9.4)."""
         p = self.store.get_participant(m.participant_id)
         if p is None:
-            return []
+            return []  # pragma: no cover - participant rows are never deleted
         n = p.unconfirmed_followups + 1
         self.store.update_participant(p.id, unconfirmed_followups=n)
         limit = self.cfg.cursor.max_unconfirmed_followups
@@ -824,7 +824,7 @@ class Engine:
         out: list[Action] = []
         room = self.store.room_by_id(msg.room_id)
         if room is None:
-            return []
+            return []  # pragma: no cover - room rows are never deleted
         if msg.sender_kind == "agent" and rules.hop_tripped(room):
             out += self.pause_room(room.id, "loop guard", event="loop_guard",
                                    notice=f"loop guard: {room.hop_count} agent messages in a row"
@@ -892,7 +892,7 @@ class Engine:
         elif m is not None and not self._unpaused_memberships(m.participant_id):
             out += self.release_parks(m.participant_id, "paused")  # the rooms left are all paused
         self._unpark(membership_id)
-        for b in self.store.offered_batches(membership_id):
+        for b in self.store.offered_batches(membership_id):  # pragma: no cover - callers end it in the store first
             self.hook_acks.pop(b.id, None)
             self.pull_deadlines.pop(b.id, None)
         for bid in list(self.peer_marks):  # the store cancelled this member's offers
@@ -1292,7 +1292,7 @@ class Engine:
         m = self.store.get_membership(b.membership_id)
         p = self.store.get_participant(m.participant_id) if m is not None else None
         if m is None or p is None:
-            return None
+            return None  # pragma: no cover - membership and participant rows are never deleted
         return self.adapter(p).expire_due(p, b, now)
 
     # ================================================================== tick
@@ -1386,7 +1386,7 @@ class Engine:
                 if v is not None:
                     verdicts.setdefault(v, []).append(it.message_id)
             if not verdicts:
-                continue
+                continue  # pragma: no cover - watch_items picked only due items (float rounding at the edge aside)
             if verdicts.get("done"):
                 self.store.watchdog_done(m.id, verdicts["done"], keep_count=False)
             ids = verdicts.get("remind", [])

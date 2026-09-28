@@ -69,9 +69,10 @@ jobs:
       UV_PYTHON_PREFERENCE: only-managed
       # The ratchet: combined line coverage may not drop below this. It started at
       # floor(93.64%, the combined figure when coverage came in) - 3, so work in flight
-      # isn't blocked. Raise it as coverage improves (README, "Coverage"); never lower
-      # it to get a PR through.
-      COVERAGE_FLOOR: "90"
+      # isn't blocked. Then floor(96.63%, macOS with the delivery, adapter, broker, hook
+      # and installer coverage tests) - 3, as M8 was still landing. Raise it as coverage
+      # improves (README, "Coverage"); never lower it to get a PR through.
+      COVERAGE_FLOOR: "93"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
         with:
