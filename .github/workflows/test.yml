@@ -1,4 +1,5 @@
-# The default test suite (no live agent CLIs, no perf timings) on Linux and macOS.
+# The default test suite (no live agent CLIs, no perf timings) on Linux and macOS,
+# with line coverage combined across both and published as the README badge.
 name: test
 
 on:
@@ -39,5 +40,114 @@ jobs:
         if: runner.os == 'Linux'
         run: command -v lsof || (sudo apt-get update && sudo apt-get install -y --no-install-recommends lsof)
       - run: uv sync --frozen
-      # pyproject's addopts deselect `live` (real agent CLIs) and `perf` (timing targets)
-      - run: uv run --frozen pytest -q -p no:cacheprovider
+      # pyproject's addopts deselect `live` (real agent CLIs) and `perf` (timing targets).
+      # --cov measures this process and ([tool.coverage.run] patch) its Python children.
+      - run: uv run --frozen pytest -q -p no:cacheprovider --cov --cov-report=term
+      - name: Keep this OS's coverage data for the combine job
+        run: |
+          mkdir coverage-data
+          mv .coverage "coverage-data/.coverage.${{ matrix.os }}"   # pytest-cov's merge of this run
+          # a child that exited after pytest-cov merged leaves its own .coverage.<host>.<pid>.<n>
+          for f in .coverage.*; do if [ -e "$f" ]; then mv "$f" coverage-data/; fi; done
+          ls -la coverage-data
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: coverage-data-${{ matrix.os }}
+          path: coverage-data/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+  # Combines both OSes' data, prints the report, enforces the ratchet and writes the
+  # shields.io endpoint JSON. Read-only: only the `badge` job below can push.
+  coverage:
+    name: coverage (combined)
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      UV_PYTHON_PREFERENCE: only-managed
+      # The ratchet: combined line coverage may not drop below this. Raise it as
+      # coverage improves (README, "Coverage"); never lower it to get a PR through.
+      COVERAGE_FLOOR: "90"
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
+        with:
+          version: "0.7.13"
+          python-version: "3.13"
+      - run: uv sync --frozen
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          pattern: coverage-data-*
+          path: coverage-data
+          merge-multiple: true
+      - name: Combine
+        run: |
+          ls -la coverage-data
+          uv run --frozen coverage combine coverage-data
+      - name: Report (fails under the ratchet)
+        run: uv run --frozen coverage report --fail-under="$COVERAGE_FLOOR"
+      - name: Badge JSON (shields.io endpoint)
+        run: |
+          uv run --frozen coverage json -o coverage-full.json
+          uv run --frozen python - <<'EOF'
+          import json, math
+          pct = json.load(open("coverage-full.json"))["totals"]["percent_covered"]
+          whole = math.floor(pct)  # never round up to a coverage the code doesn't have
+          color = next(c for floor, c in ((95, "brightgreen"), (90, "green"), (80, "yellowgreen"),
+                                          (70, "yellow"), (60, "orange"), (0, "red")) if whole >= floor)
+          badge = {"schemaVersion": 1, "label": "coverage", "message": f"{whole}%", "color": color}
+          json.dump(badge, open("coverage.json", "w"))
+          print(f"combined line coverage {pct:.2f}% -> badge {badge}")
+          EOF
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: coverage-badge
+          path: coverage.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # Push to main only: commits coverage.json to the orphan `badges` branch (created
+  # on first use), which the README badge reads through shields.io.
+  badge:
+    name: publish badge
+    needs: coverage
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: coverage-badge
+          path: badge-in
+      - name: Commit coverage.json to the badges branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          b64=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$b64"
+          auth="AUTHORIZATION: basic $b64"   # the way actions/checkout authenticates; never stored in a config
+          remote="https://github.com/${GITHUB_REPOSITORY}.git"
+          git init -q -b badges badges && cd badges
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git -c http.extraheader="$auth" ls-remote --exit-code --heads "$remote" badges >/dev/null; then
+            git -c http.extraheader="$auth" fetch -q --depth 1 "$remote" badges
+            git checkout -q -B badges FETCH_HEAD
+          else
+            rc=$?; [ "$rc" -eq 2 ] || exit "$rc"   # 2: no badges branch yet, so start it (orphan: none of main's history)
+          fi
+          cp ../badge-in/coverage.json coverage.json
+          git add coverage.json
+          if git diff --cached --quiet; then
+            echo "coverage.json unchanged"; exit 0
+          fi
+          git commit -q -m "coverage: $(python3 -c 'import json; print(json.load(open("coverage.json"))["message"])') (${GITHUB_SHA::7})"
+          git -c http.extraheader="$auth" push -q "$remote" HEAD:refs/heads/badges
+          cat coverage.json

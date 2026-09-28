@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Coverage in CI:** line coverage of the Linux and macOS test runs, combined, with a floor that only goes up and a README badge (README, "Development").
+
 ## 0.2.0 (2026-09-27)
 
 The first public release, and a new name: this project was called yakroom until 0.2.0. Every name moved with it: the `switchboard` command, `http://switchboard.localhost:7419`, `~/.switchboard`, `SWITCHBOARD_*` settings and the `mcp__switchboard__*` tools.

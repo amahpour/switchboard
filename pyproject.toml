@@ -18,7 +18,7 @@ dependencies = [
 switchboard = "switchboard.cli:main"
 
 [dependency-groups]
-dev = ["pytest", "pytest-asyncio", "httpx", "hatchling"]   # exact versions frozen in the committed uv.lock
+dev = ["pytest", "pytest-asyncio", "pytest-cov", "coverage", "httpx", "hatchling"]   # exact versions frozen in the committed uv.lock
 
 [build-system]
 requires = ["hatchling"]
@@ -39,3 +39,26 @@ markers = [
     "perf: strict timing targets (run once per milestone commit)",
 ]
 addopts = "-m 'not live and not perf'"
+# pytest-cov turns this ResourceWarning (ignored by default) back on. A recorded warning
+# keeps its sqlite3.Connection, and so its files, open until the run ends: over 1,024
+# fds by the unit tests, past what select() takes. Keep it off, as it is without --cov.
+filterwarnings = ["ignore:unclosed database in <sqlite3.Connection object at:ResourceWarning"]
+
+[tool.coverage.run]
+source = ["switchboard"]
+relative_files = true
+parallel = true
+patch = ["subprocess"]
+
+[tool.coverage.paths]
+source = ["src/switchboard", "*/src/switchboard"]
+
+[tool.coverage.report]
+show_missing = true
+precision = 2
+skip_covered = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    'if __name__ == "__main__":',
+]

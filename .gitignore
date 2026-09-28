@@ -16,3 +16,8 @@ tests/live/_runs/
 .ruff_cache/
 dist/
 build/
+.coverage
+.coverage.*
+coverage-data/
+coverage*.json
+htmlcov/
