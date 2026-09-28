@@ -316,7 +316,7 @@ Workflow: `uv python pin 3.13`, `uv sync`, `uv run pytest`. Pin fastmcp exactly 
 | `mcp [--harness test --test-session KEY --ack next_call\|immediate\|never]` | – | stdio MCP server; the harness is detected at runtime (§6.2) |
 | `hook --harness H --event E` | – | debug: `os.execv` of the installed hook copy |
 | `report --room '#build' [--since ISO\|--last 2h] [--json] [--out FILE]` | anon | §12.6 |
-| `remote add <name> <[user@]host> --rooms …` / `accept '<token>'` / `remove <name>` / `doctor` | – (files and ssh on this machine; `remove` on the desktop also `remote.remove`) | §27.8 |
+| `remote add <name> <[user@]host> [--rooms …]` / `accept '<token>'` / `remove <name>` / `doctor` | – (files and ssh on this machine; `remove` on the desktop also `remote.remove`) | §27.8 |
 | `remote enable\|disable <name>` / `remote status [name] [--json]` | human_cli / anon | §27.5.8; the web UI's Enable and Disable buttons are the same consent (§5.5) |
 | `satellite --home H --name N [--test-mode]` | – | hidden: sshd's forced command on the remote (§27.4.8) |
 
@@ -2100,7 +2100,7 @@ UPDATE meta SET value='2' WHERE key='schema_version';
 uv tool install git+https://github.com/amahpour/switchboard@v0.3.0   # same version on both machines
 switchboard stop && switchboard start          # the v1→v2 migration runs once; switchboard.db.v1.bak is written first
 ssh alice@fpga-pi.local true             # by hand, once: accept and check the Pi's host key
-switchboard remote add fpga-pi alice@fpga-pi.local --rooms '#fpga'
+switchboard remote add fpga-pi alice@fpga-pi.local --rooms '#fpga'   # --rooms is optional: default any room
 ```
 `remote add` resolves `alice@fpga-pi.local` with `ssh -G` (the owner's config is read here only, never at runtime) and refuses `ProxyJump`/`ProxyCommand`; validates host (`^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$` or an IP literal), user (`^[a-z_][a-z0-9_-]{0,31}$`) and port; generates the key; pins the host key; writes `remotes.toml`:
 ```toml
@@ -2108,7 +2108,7 @@ switchboard remote add fpga-pi alice@fpga-pi.local --rooms '#fpga'
 host = "fpga-pi.local"
 user = "alice"
 port = 22
-rooms = ["#fpga"]                                   # required; the only rooms Pi members may join
+rooms = ["#fpga"]                                   # the only rooms Pi members may join; ["*"] (the default, rooms left out) = any room
 harnesses = ["claude", "codex", "cursor", "devin"]
 max_members = 8
 end_after_s = 900
@@ -2378,3 +2378,5 @@ Filled in while building, one bullet per deviation from §27.1–§27.15 or deci
   - **Tests made honest** (correctness review). G2 in T2 is two parametrized cases instead of a loop that never ran; the PID-namespace test skips, saying why, when the bench's pid happens to exist on the desk container (a desk-side probe of it would then be indistinguishable), instead of passing on a weaker check.
   - **Deferred:** (1) RTT changes after the first pong still reach the page only through its 20 s `GET /api/remotes` (state changes are pushed at once). (2) The satellite's `hook_state` is still free text up to 200 characters in the protocol; the broker cleans it rather than the validator pinning its shapes, so a newer satellite can word it differently. (3) The CLI's `remote enable` names no destination or hash before it consents (`remote status --json` has them, and `remote add` printed them). (4) The PID-namespace test can skip on a pid collision rather than forcing a pid that is free on desk.
 - **Found in CI** (the PR's first Linux run): `test_member_and_message_host_fields` waited for the `remotes` frame naming `bench` only after reading the two message frames, and dropped every frame it read on the way. When a liveness tick published that frame before the messages (a slower runner), the wait timed out. The test now keeps the frames it reads (`recv_kept`) and looks for the leave's frame only among those read after the join's. Reproduced by sleeping 3 s after the joins: the old test failed, the new one passes.
+
+- **Any room by default (after 0.3.0):** the owner found the per-remote room list a nuisance: a new room needed a config edit and a fresh `remote enable`. `remotes.toml` now accepts `rooms = ["*"]` (any room), which is also the default when `rooms` is left out or `remote add` gets no `--rooms`. Listing rooms still limits a remote as before. With `"*"`, link notices go only to the rooms that machine's members are in, and the welcome frame names the existing rooms (up to 64), because the frame format allows room names only. So satellites on 0.3.0 need no update.

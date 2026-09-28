@@ -693,7 +693,7 @@ def _describe_key(e: AkEntry) -> str:
     return f"{e.fingerprint or e.keytype}{f' ({c})' if c else ''}"
 
 
-def add(paths: Paths, name: str, dest: str, *, rooms: Sequence[str], port: int | None = None,
+def add(paths: Paths, name: str, dest: str, *, rooms: Sequence[str] | None = None, port: int | None = None,
         harnesses: Sequence[str] | None = None, ssh_config: str | None = None, known_hosts: str | None = None,
         authorized_keys: Path | None = None, label: str | None = None, out: TextIO | None = None) -> int:
     """``switchboard remote add <name> <[user@]host> --rooms …`` on the desktop (§27.8.1)."""
@@ -703,9 +703,7 @@ def add(paths: Paths, name: str, dest: str, *, rooms: Sequence[str], port: int |
     user, host = split_dest(dest)
     if port is not None and not 1 <= port <= 65535:
         raise PairingError("--port must be 1..65535")
-    room_list = [r.strip() for spec in rooms for r in spec.split(",") if r.strip()]
-    if not room_list:
-        raise PairingError("--rooms is required: the only rooms this remote's members may join, e.g. '#fpga'")
+    room_list = [r.strip() for spec in (rooms or []) for r in spec.split(",") if r.strip()] or ["*"]
     hs = None
     if harnesses:
         hs = [h.strip() for spec in harnesses for h in spec.split(",") if h.strip()]
@@ -771,7 +769,8 @@ def add(paths: Paths, name: str, dest: str, *, rooms: Sequence[str], port: int |
     problem = ssh_files_problem(paths, name)
     if problem:  # pragma: no cover - just written
         raise PairingError(problem)
-    print(f"added remote {name}: {entry.user}@{entry.host} port {entry.port}, rooms {', '.join(entry.rooms)}",
+    shown = "any room" if "*" in entry.rooms else "rooms " + ", ".join(entry.rooms)
+    print(f"added remote {name}: {entry.user}@{entry.host} port {entry.port}, {shown}",
           file=out)
     print(f"pinned its host key {key_fingerprint(f'{ktype} {kblob}')} ({ktype}, from {kfile}):"
           " compare it with what `remote accept` prints there", file=out)

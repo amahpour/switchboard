@@ -191,7 +191,7 @@ Install the same switchboard version on both machines. Then, once:
 ```bash
 # this machine (the desktop): ssh there by hand first and check its host key fingerprint
 ssh alice@fpga-pi.local true
-switchboard remote add fpga-pi alice@fpga-pi.local --rooms '#fpga'
+switchboard remote add fpga-pi alice@fpga-pi.local     # add --rooms '#fpga' to limit it to some rooms
 #   pins the host key you accepted, makes the link key remotes/fpga-pi/id_ed25519 and prints a token
 # the remote machine: register switchboard with its harness as usual, then accept the token
 switchboard install claude
@@ -204,7 +204,7 @@ switchboard remote doctor               # and `switchboard remote doctor` on the
 
 From then on the link comes up by itself at every `switchboard start`, and you start agent sessions on the remote machine as usual (`ssh` there, `claude`, "join switchboard room #fpga as bench").
 
-- **Only the rooms you name.** Members from that machine may join only the rooms in `--rooms` (at most `max_members`, default 8, at once), and only the harnesses you allow (`--harnesses`, default all four). Narrowing either in `remotes.toml` ends the members it no longer allows at once; any edit of the entry or its key files needs `remote enable` again.
+- **Any room, unless you limit it.** By default, members from that machine may join any room (`rooms = ["*"]` in `remotes.toml`). `--rooms '#a,#b'` limits them to those rooms. Either way at most `max_members` (default 8) join at once, and only the harnesses you allow (`--harnesses`, default all four). Narrowing either in `remotes.toml` ends the members it no longer allows at once; any edit of the entry or its key files needs `remote enable` again.
 - **What the remote machine can do:** its agents join, read, `wait()`, post and pass in those rooms, and its hooks report their own sessions, all through the satellite. **What it can't:** post as you, run a slash command, get a sign-in link, stop the broker, create or read other rooms, or act for a member on another machine: the link carries agent and hook calls only, whatever the remote sends. A remote agent's text reaches the others marked `host=fpga-pi`, as peer text.
 - **The link key can only start the satellite.** `remote accept` writes `restrict[,from="…"],command="<python> -I -m switchboard satellite --home … --name fpga-pi"`: no shell, no pty, no forwarding of any kind (the suite checks `-L`, `-R`, `-W`, `-tt` and another command against a real sshd). Use `--from` with this machine's address when it has a fixed lease.
 - **This machine's ssh setup never reaches the link.** The link runs `/usr/bin/ssh -F /dev/null` with only its own key, no agent, and the remote's host key pinned under `switchboard-fpga-pi`; `remote add` reads your ssh config and `known_hosts` once, and refuses `ProxyJump`/`ProxyCommand`. switchboard never writes your `~/.ssh` on this machine.

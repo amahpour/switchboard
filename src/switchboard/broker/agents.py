@@ -467,7 +467,7 @@ class AgentService:
             # the allowlists hold for every call, not only at join: a membership its remote no
             # longer allows (the manager ends those at reload) never works over the link (§27.5.2)
             link = getattr(conn, "link", None)
-            if link is None or room.name not in link.entry.rooms:
+            if link is None or not link.entry.allows_room(room.name):
                 raise ServiceError("forbidden", f"members on {p.host} may no longer use {room.name}"
                                                 " (the rooms of its remotes.toml entry on the desktop)")
             if p.harness != mc.ident.harness:
@@ -490,7 +490,7 @@ class AgentService:
                 wanted = normalize_room(raw_room)
             except ValueError:
                 wanted = ""
-            if link is None or wanted not in link.entry.rooms:
+            if link is None or not link.entry.allows_room(wanted):
                 allowed = ", ".join(link.entry.rooms) if link is not None else "none"
                 raise ServiceError("forbidden", f"members on {host} may join only {allowed}"
                                                 " (the rooms of its remotes.toml entry on the desktop)")
