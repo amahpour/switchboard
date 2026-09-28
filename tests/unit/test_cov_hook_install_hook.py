@@ -51,7 +51,15 @@ def received(b: socket.socket) -> list[dict[str, Any]]:
     fails the test if it never does)."""
     b.settimeout(2)
     buf = b""
-    while chunk := b.recv(65536):
+    while True:
+        try:
+            chunk = b.recv(65536)
+        except ConnectionResetError:
+            # Linux reports a close with our reply still unread as a reset, after
+            # handing over everything the hook sent: that is the close too
+            break
+        if not chunk:
+            break
         buf += chunk
     b.close()
     return [json.loads(line) for line in buf.splitlines()]
