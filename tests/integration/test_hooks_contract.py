@@ -352,6 +352,12 @@ def quiet_broker(no_sweep: None, broker: InProcBroker) -> InProcBroker:
 
 
 def test_a_codex_thread_cannot_be_taken_over_from_another_process(quiet_broker: InProcBroker) -> None:
+    """A live thread can't be taken over, and once A is gone B resumes it (DESIGN.md §6.3).
+
+    This test pins the ordering where B's join lands before the liveness sweep ends
+    A's session: B takes over the still-active membership ("You rejoined"). The other
+    ordering (the sweep ends A first, B joins fresh with "You joined") is the next test.
+    """
     broker = quiet_broker
     a = FakeClaude(broker, as_harness="codex")
     b = FakeClaude(broker, as_harness="codex")

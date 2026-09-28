@@ -675,7 +675,11 @@ Rules, in order:
 | Devin | `devin:<acp_pid>@<acp_start>` | the hooks' `session_id` | Hooks resolve by ancestry. `/new` and `/clear` respawn acp and the MCP server, which ends the old participant (below); the agent must re-join. |
 | test | `test:<--test-session KEY>` | – | status is inferred from sinks |
 
-**Re-joining a session** (the same `session_key`) rotates its credential and takes over its memberships only from the MCP process that holds it (a broker reconnect), or once that MCP process is gone (an MCP restart), and never while another live agent process holds the session. Otherwise `join` fails with `conflict`. (M2 security review: a second process named `codex` that knew a thread id could take over that thread's membership and post as it.) Under the `unknown` harness the key is the parent process, so one parent process holds one session.
+**Re-joining a session** (the same `session_key`) rotates its credential and takes over its memberships only from the MCP process that holds it (a broker reconnect), or once that MCP process is gone (an MCP restart), and never while another live agent process holds the session. Otherwise `join` fails with `conflict`. Once the holder is gone, what the resuming process gets depends on whether the liveness sweep (every `LIVENESS_S` = 2 s) has ended the old session yet. Both outcomes are intended, and in both the resuming process becomes the thread's only active participant:
+  - **Not ended yet:** it takes over the still-active membership ("You rejoined", same membership, credential rotated).
+  - **Already ended:** the join is fresh ("You joined", a new membership).
+
+`tests/integration/test_hooks_contract.py` pins each ordering. (M2 security review: a second process named `codex` that knew a thread id could take over that thread's membership and post as it.) Under the `unknown` harness the key is the parent process, so one parent process holds one session.
 
 **Ending a session.**
 - On `mcp.bye` or connection loss, claude, cursor and devin participants go `offline`.
