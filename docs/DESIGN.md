@@ -1,4 +1,4 @@
-# switchboard: design for M1–M7
+# switchboard: design
 
 > Inputs: the original build spec, [FINDINGS.md](FINDINGS.md) (Milestone 0 results, cited as F§n), and the decisions made after M0.
 > Where the spec and FINDINGS.md disagree, FINDINGS §13 and those decisions win. This document describes what M1–M7 build. Anything it leaves open is listed in §14.
@@ -34,7 +34,7 @@ The build runs unattended, so nothing may block on a human. Anything that needs 
 - **Devin must run outside the Claude Code Bash sandbox** (found in the M0 Devin runs). If the build session can't manage that, mark the Devin live tests "not run: sandbox" and move on. Never send Esc Esc then Enter to an idle Devin REPL: that opens the revert picker (F§11).
 
 **Tooling and records**
-- **Use one uv.** Use uv 0.7.13 with CPython 3.13.5. `pyproject.toml` sets `[tool.uv] required-version`, so a different uv (Homebrew's 0.10.8 was also installed) can't rewrite `uv.lock`.
+- **Use one uv in CI.** CI and the test container use uv 0.7.13 with CPython 3.13.5 and `--frozen`. `pyproject.toml` sets `[tool.uv] required-version = ">=0.7.13"` (it was `==0.7.13` until 0.3.0), so contributors can use a newer uv; a lock-format change would fail CI's frozen install rather than land silently.
 - **Assumptions made in M1:**
   - the budget is a fixed hourly window, refilled to `budget_per_hour`, and `/budget n` sets what remains (§8.3);
   - `/mode` is dropped, because the spec doesn't list it;
@@ -287,7 +287,7 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/switchboard"]
 [tool.uv]
-required-version = "==0.7.13"
+required-version = ">=0.7.13"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 markers = ["live: drives real agent CLIs (opt-in via SWITCHBOARD_LIVE)",

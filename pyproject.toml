@@ -36,7 +36,7 @@ build-backend = "hatchling.build"
 packages = ["src/switchboard"]
 
 [tool.uv]
-required-version = "==0.7.13"
+required-version = ">=0.7.13"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
