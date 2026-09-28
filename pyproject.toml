@@ -49,6 +49,7 @@ source = ["switchboard"]
 relative_files = true
 parallel = true
 patch = ["subprocess"]
+core = "sysmon"    # sys.monitoring: about a third of ctrace's overhead on this suite (line coverage only)
 
 [tool.coverage.paths]
 source = ["src/switchboard", "*/src/switchboard"]
