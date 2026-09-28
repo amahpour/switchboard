@@ -38,6 +38,24 @@ def recv_until(ws: Any, pred: Any, timeout: float = 10.0) -> dict[str, Any]:
             return f
 
 
+def recv_kept(ws: Any, seen: list[dict[str, Any]], pred: Any, since: int = 0,
+              timeout: float = 10.0) -> dict[str, Any]:
+    """``recv_until`` that keeps every frame it reads in ``seen`` and first looks at the
+    ones from ``since`` on, so waiting for one kind of frame never drops another that
+    came first (the ``remotes`` event for a join can come before that room's messages)."""
+    for f in seen[since:]:
+        if pred(f):
+            return f
+    deadline = time.monotonic() + timeout
+    while True:
+        left = deadline - time.monotonic()
+        assert left > 0, "timed out waiting for a frame"
+        f = json.loads(ws.recv(timeout=left))
+        seen.append(f)
+        if pred(f):
+            return f
+
+
 def remotes_frame(state: str, reason: str | None = None) -> Any:
     def pred(f: dict[str, Any]) -> bool:
         if f.get("t") != "remotes":
@@ -276,15 +294,16 @@ async def test_member_and_message_host_fields(up_link: FakeLink) -> None:
     try:
         ws.send(json.dumps({"t": "hello", "rooms": ["#fpga"], "after": {}}))
         recv_until(ws, lambda f: f.get("t") == "members")
+        seen: list[dict[str, Any]] = []  # every frame from here on: the remotes event may come first
         async with FakeAgent(up_link.pi, "bench") as pi_agent, FakeAgent(up_link.desk, "vivado") as desk_agent:
             assert (await pi_agent.join("#fpga", "bench"))["ok"]
             assert (await desk_agent.join("#fpga", "vivado"))["ok"]
             assert (await pi_agent.say("#fpga", "result: 3f9a1c2b7d10 flash=ok"))["ok"]
             assert (await desk_agent.say("#fpga", "artifact: blinky/top.bit"))["ok"]
             # the WebSocket's message frames carry the sender's host
-            f = recv_until(ws, lambda fr: fr.get("t") == "msg" and fr["msg"]["text"].startswith("result:"))
+            f = recv_kept(ws, seen, lambda fr: fr.get("t") == "msg" and fr["msg"]["text"].startswith("result:"))
             assert f["msg"]["from"] == "bench" and f["msg"]["host"] == NAME
-            f = recv_until(ws, lambda fr: fr.get("t") == "msg" and fr["msg"]["text"].startswith("artifact:"))
+            f = recv_kept(ws, seen, lambda fr: fr.get("t") == "msg" and fr["msg"]["text"].startswith("artifact:"))
             assert f["msg"]["from"] == "vivado" and f["msg"]["host"] is None
             # and so do the REST members and history
             members = {m["name"]: m for m in web.get("/api/rooms/fpga/members").json()["members"]}
@@ -299,11 +318,14 @@ async def test_member_and_message_host_fields(up_link: FakeLink) -> None:
             # the remotes panel names the remote's members
             wait_for(lambda: web.get("/api/remotes").json()["remotes"][0]["members"] == ["bench"],
                      what="the panel's members")
-            recv_until(ws, lambda fr: fr.get("t") == "remotes" and fr["remotes"][0]["members"] == ["bench"])
+            recv_kept(ws, seen, lambda fr: fr.get("t") == "remotes" and fr["remotes"][0]["members"] == ["bench"])
             # and when it leaves the room, the panel hears that too (a member that only goes
-            # offline stays listed: it is still in the room)
+            # offline stays listed: it is still in the room). Only frames read after this
+            # point count: one from before bench's join also lists no members.
+            mark = len(seen)
             assert (await pi_agent.leave("#fpga"))["ok"]
-            recv_until(ws, lambda fr: fr.get("t") == "remotes" and fr["remotes"][0]["members"] == [])
+            recv_kept(ws, seen, lambda fr: fr.get("t") == "remotes" and fr["remotes"][0]["members"] == [],
+                      since=mark)
     finally:
         ws.close()
         web.close()
