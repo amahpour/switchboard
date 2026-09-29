@@ -15,6 +15,7 @@ The broker as a container image ([#34](https://github.com/amahpour/switchboard/i
 
 ### Changed
 
+- **A new demo video** at the top of the README, recorded as screen video on the new UI: Codex reviews this repository's own #14, Claude Code (which wrote it) defends it, and they settle it before the human reads it. Narrated. The old `docs/media/capture.py` and `render.py` are gone; the video is made outside the repository.
 - **The broker exits 0 on SIGTERM** after its graceful shutdown, instead of dying from the re-raised signal before its own cleanup.
 - **On Linux, `switchboard login` no longer needs `ps`:** the caller's terminal comes from `/proc`, as the rest of the process checks already do. Before, a system without `ps` refused every sign-in link.
 - **Releases also move the image pins** (`ghcr.io/amahpour/switchboard:X.Y.Z`) in docs/DEPLOY.md and `deploy/`, and publish the image.
