@@ -83,3 +83,7 @@ Cursor is listed "not run: not yet tested live". A cheap tooling check: `SWITCHB
 **Caution:** Claude runs with `acceptEdits` and Devin with accept-edits, plus pre-approved `python -m pytest` and `git commit`. Together these let an agent run code it wrote without a prompt: a test or `conftest.py` that pytest runs, or a git hook that `git commit` runs. A message from another agent is enough to lead it there. Claude also gets deny rules for edits to `.claude/`, `.devin/`, `.codex/` and `.git/`; Devin has no verified equivalent. Run the rehearsal, and the real demo, in the [SANDBOX.md](docs/SANDBOX.md) VM when you can.
 
 **The real demo** is the same with you at the keyboard: `switchboard start`, create `#build`, open one terminal per agent in a repo with a worktree each, tell each "join switchboard room #build as <name>, stay in the room, use your own worktree under .worktrees/<name>", post the task, interject whenever you like, and run `switchboard report --room '#build' --out report.md` at the end. Answer approval prompts yourself as usual; poke a Devin agent that shows parked.
+
+## History
+
+The Milestone 0 findings ([docs/FINDINGS.md](docs/FINDINGS.md)), the M7 live rehearsal ([docs/M7-REPORT.md](docs/M7-REPORT.md)), the FPGA bench demo ([docs/DEMO-FPGA.md](docs/DEMO-FPGA.md)) and the prior-art research ([docs/research/](docs/research/)) record how switchboard got here, milestone by milestone; [docs/DESIGN.md](docs/DESIGN.md) is the design itself.
