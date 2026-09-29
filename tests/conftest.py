@@ -301,7 +301,11 @@ class InProcBroker:
         return self.call("human.login_link")["url"]
 
     def web_client(self) -> httpx.Client:
-        c = httpx.Client(base_url=self.base, timeout=10.0, follow_redirects=False)
+        # An idle connection is dropped after 1 s, well before uvicorn closes it (5 s,
+        # timeout_keep_alive): reusing one the server was closing at that moment got
+        # "Connection reset by peer" on a POST, which httpx doesn't retry (seen on a slow runner).
+        c = httpx.Client(base_url=self.base, timeout=10.0, follow_redirects=False,
+                         limits=httpx.Limits(keepalive_expiry=1.0))
         r = c.get(self.login_url().removeprefix(self.base))
         assert r.status_code == 303, r.text
         return c
