@@ -12,7 +12,7 @@ name: switchboard
 
 services:
   switchboard:
-    image: ghcr.io/amahpour/switchboard:0.6.2   # a release, not :latest (docs/DEPLOY.md, "Upgrading")
+    image: ghcr.io/amahpour/switchboard:0.6.3   # a release, not :latest (docs/DEPLOY.md, "Upgrading")
     restart: unless-stopped
     environment:
       # the address browsers use; the broker answers to no other

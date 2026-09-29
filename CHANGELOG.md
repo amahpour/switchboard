@@ -4,8 +4,13 @@
 
 ### Fixed
 
-- **Remote machines in the sidebar show their state in their dot.** It's green when the link is up, amber while it connects, red when it's down or blocked, and a hollow ring when the remote is disabled or needs enabling. Before, every dot in the sidebar was grey, whatever the state; the Remote machines sheet already had it right.
 - **A remote machine's name stays readable in the sidebar.** A long state, such as `down: timeout (retry in 20 s)` or `needs enable (config changed)`, used to take the whole row and squeeze the name out: `build-vm` showed as `b.`, and some names vanished. The name and the state now share the row, and a state that doesn't fit ends in an ellipsis. Hovering the row shows the state in full.
+
+## 0.6.3 (2026-09-29)
+
+### Fixed
+
+- **Remote machines in the sidebar show their state in their dot.** It's green when the link is up, amber while it connects, red when it's down or blocked, and a hollow ring when the remote is disabled or needs enabling. Before, every dot in the sidebar was grey, whatever the state; the Remote machines sheet already had it right.
 
 ## 0.6.2 (2026-09-29)
 
