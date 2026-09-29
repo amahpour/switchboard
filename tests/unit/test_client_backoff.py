@@ -162,13 +162,14 @@ async def test_eof_fails_a_call_made_while_the_hello_is_in_flight(sock_dir: Path
         await conn.close()
 
 
-def gaps(fb: FakeBroker) -> list[float]:
-    """Seconds from each connection's close to the next connect."""
-    return [fb.opened[i + 1] - fb.closed[i] for i in range(len(fb.opened) - 1)]
-
-
-async def test_backoff_resets_only_after_answered_hello(sock_dir: Path) -> None:
+# The two tests below check the delays the client asks asyncio.sleep for (SleepRecorder),
+# not the gaps a clock measures between connections: on a loaded CI runner a 0.1 s gap
+# once measured 0.55 s. The fake broker's own holds (0.3 s, 0.2 s, 2.1 s) stay real, since
+# the client decides from them whether a connection was healthy.
+async def test_backoff_resets_only_after_answered_hello(sock_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = sock_dir / "b.sock"
+    rec = SleepRecorder()
+    monkeypatch.setattr(client_mod, "asyncio", rec)
 
     async def script(n: int, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         if n in (1, 2, 5, 6):
@@ -189,19 +190,17 @@ async def test_backoff_resets_only_after_answered_hello(sock_dir: Path) -> None:
         conn.start()
         await until(lambda: len(fb.opened) >= 7, 10.0)
         await conn.close()
-    g = gaps(fb)[:6]
-    # 0.1, 0.2: doubling while nothing answers
-    assert 0.08 <= g[0] < g[1], g
-    # after a long connection whose hello was never answered: still doubling (0.4), not reset
-    assert g[2] >= 0.3, g
-    # after an answered hello: back to the first step (0.1; 0.8 without the reset)
-    assert g[3] < 0.5, g
-    # and doubling again from there: 0.1, then 0.2
-    assert g[4] >= 0.08 and g[5] >= 0.15, g
+    # 0.1, 0.2: doubling while nothing answers; 0.4 after the long connection whose hello was
+    # never answered (doubling, not reset); 0.1 after the answered hello (0.8 without the
+    # reset); then 0.1, 0.2: doubling again from the first step
+    assert rec.delays[:6] == [0.1, 0.2, 0.4, 0.1, 0.1, 0.2], rec.delays
 
 
-async def test_backoff_resets_after_a_2s_connection_without_hello(sock_dir: Path) -> None:
+async def test_backoff_resets_after_a_2s_connection_without_hello(sock_dir: Path,
+                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
     path = sock_dir / "b.sock"
+    rec = SleepRecorder()
+    monkeypatch.setattr(client_mod, "asyncio", rec)
 
     async def script(n: int, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         if n in (1, 2, 3, 5):
@@ -216,9 +215,9 @@ async def test_backoff_resets_after_a_2s_connection_without_hello(sock_dir: Path
         conn.start()
         await until(lambda: len(fb.opened) >= 6, 10.0)
         await conn.close()
-    g = gaps(fb)[:5]
-    assert g[2] >= 0.3, g  # 0.1, 0.2, 0.4: short connections double
-    assert g[3] < 0.5, g  # a 2 s connection resets (0.8 without the reset)
+    # 0.1, 0.2, 0.4: short connections double; a 2 s connection resets (0.8 without the
+    # reset); then 0.1 again after the next short one
+    assert rec.delays[:5] == [0.1, 0.2, 0.4, 0.1, 0.1], rec.delays
 
 
 class SleepRecorder:

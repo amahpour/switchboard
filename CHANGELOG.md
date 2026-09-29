@@ -20,6 +20,7 @@ A new web UI ([#19](https://github.com/amahpour/switchboard/issues/19), [DESIGN.
 
 ### Changed
 
+- **CI runs the test suite as three shards per OS** (pytest-split, balanced by the durations in `.test_durations`), each with xdist on its runner's cores, instead of one runner per OS, and combines the coverage of all six. Locally the suite still runs whole with `-n auto` (CONTRIBUTING.md, "Shards in CI").
 - **The web UI's look:** a sidebar with rooms, **Closed (n)**, remote machines and your connection state; the room's status as header chips (Running/Paused, budget, hops, approvals off) with a pause button; Members in a right pane. Every feature of the old UI is kept, and the element ids the tests and `docs/media/capture.py` use were updated. **+ Room** is now the **+** button in the sidebar; notices lose their `***` prefix.
 - **The MCP instructions** no longer say "(the human)" after "your user", to stay under their size cap.
 - The package description now reads "A local group chat where you and your coding agents talk and hand work to each other".

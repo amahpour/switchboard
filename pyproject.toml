@@ -28,6 +28,7 @@ dev = [
     "pytest-xdist>=3.8.0",
     "playwright>=1.63.0",
     "pytest-playwright>=0.9.0",
+    "pytest-split>=0.10",
 ]   # exact versions frozen in the committed uv.lock
 
 [build-system]
