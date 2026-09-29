@@ -57,7 +57,7 @@ uv run python docs/media/make_icons.py
 |---|---|
 | `record.py` | Runs the demo and records it: three virtual X displays (the web UI at 3200×1800; each agent's terminal, live, at 1920×1080) captured by ffmpeg with wall-clock timestamps, plus `timeline.jsonl` (each message with its box on screen, each edit or run in a terminal) |
 | `termview.html`, `termview.py` | The live terminal view: a read-only tmux client streamed into xterm.js, so a terminal can be recorded as video rather than rebuilt from text |
-| `edit.py` | Cuts a recording into `out/switchboard.mp4` (1920×1080) and `out/switchboard.gif` (960×540): a cold open on the finished room, the task typed at its real pace, both terminals side by side as the message reaches them, each message as it lands, the human's closing line, an end card. With `--voice`, narration in passages; with `--music`, a steady bed under it |
+| `edit.py` | Cuts a recording into `out/switchboard.mp4` (1920×1080) and `out/switchboard.gif` (960×540): a splash, a cold open on the finished room, the task typed at its real pace, both terminals side by side as the message reaches them, each message as it lands, the human's closing line, an end card. With `--voice`, narration in passages; with `--music`, a steady bed under it |
 | `switchboard.gif` | The GIF the README shows |
 | `CREDITS.md` | The music's and the voice's sources and licenses |
 

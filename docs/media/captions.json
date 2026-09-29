@@ -24,7 +24,10 @@
   },
   "final": {
    "text": "That was one conversation. What you put them on next is up to you.",
-   "through": "end"
+   "through": "final"
+  },
+  "card": {
+   "text": "It's open source. Go check it out, or clone it now. The link's on screen."
   }
  }
 }

@@ -12,9 +12,9 @@
 
 ![In a switchboard room, Codex reviews a pull request that Claude Code wrote: it finds a bug, Claude checks the code and concedes, Codex requests changes, and the human accepts the verdict](docs/media/switchboard.gif)
 
-The same run as a video, with narration (39 s). A code review is one example: the same room does hand-offs, `/catchup` and agents on other machines.
+The same run as a video, with narration (46 s). A code review is one example: the same room does hand-offs, `/catchup` and agents on other machines.
 
-https://github.com/user-attachments/assets/52f661ac-b389-4db0-b618-a6c0ad8f3d30
+https://github.com/user-attachments/assets/f2f152ed-d1ca-44bf-af6f-22e85f78f198
 
 > [!WARNING]
 > switchboard is built for red-team testing with approvals turned off. In a room, any message, including one from another agent, can make such an agent run commands without asking. Run it in a sandbox, and read [SECURITY.md](SECURITY.md) before you let one in.

@@ -24,6 +24,7 @@ from typing import Callable
 from PIL import Image, ImageDraw, ImageFont
 
 W, H, FPS = 1920, 1080, 30
+CRF = 22               # keeps a 45 s cut under GitHub's 10 MB
 GIF_W, GIF_FPS = 960, 12
 FONTS = "/usr/share/fonts/truetype/"
 SANS = FONTS + "noto/NotoSans-Regular.ttf"
@@ -202,6 +203,33 @@ def draw_badge(img: Image.Image, text: str, alpha: float = 1.0) -> None:
     d.text((x1 - tw - 18, y0 + 8), text, font=f, fill=INK_2 + (int(255 * alpha),))
 
 
+ICON = Path(__file__).resolve().parents[2] / "src" / "switchboard" / "web" / "static" / "apple-touch-icon.png"
+
+
+def splash(u: float) -> Image.Image:
+    """The opening card: the tab icon, the name and the tagline, fading in from black."""
+    img = Image.new("RGB", (W, H), BG)
+    d = ImageDraw.Draw(img)
+    icon = Image.open(ICON).convert("RGBA")
+    size = 200
+    icon = icon.resize((size, size), Image.LANCZOS)
+    f = font(SANS_B, 120)
+    name = "switchboard"
+    tw = d.textlength(name, font=f)
+    gap = 44
+    x0 = (W - (size + gap + tw)) / 2
+    y = H / 2 - 60
+    img.paste(icon, (int(x0), int(y - size / 2)), icon)
+    d.text((x0 + size + gap, y - 120 * 0.72), name, font=f, fill=INK)
+    f2 = font(SANS, 46)
+    t2 = "Your coding agents, in one group chat."
+    d.text(((W - d.textlength(t2, font=f2)) / 2, y + 120), t2, font=f2, fill=INK_2)
+    fade = ease(min(u / 0.18, 1.0))
+    if fade < 1.0:
+        img = Image.blend(Image.new("RGB", (W, H), (0, 0, 0)), img, fade)
+    return img
+
+
 def end_card(tag: str) -> Image.Image:
     img = Image.new("RGB", (W, H), BG)
     d = ImageDraw.Draw(img)
@@ -238,6 +266,7 @@ class Shot:
     caption: str = ""
     badge: str = ""
     top: bool = False          # the caption goes at the top (it would hide what's below)
+    name: str = ""             # the beat's key in captions.json (for the narration)
 
 
 def play(shots: list[Shot], fps: int, fade: float = 0.25, caption_size: int = 50):
@@ -430,22 +459,25 @@ def mp4_shots(rec: Rec, tag: str, caps: dict[str, str]) -> list[Shot]:
     cam = chat_camera(rec, with_composer=True)
     shots: list[Shot] = []
 
-    # 1. cold open: the whole app at the end of the exchange, still (long enough for the music
-    #    to come in before the first spoken line)
+    # 0. the splash, over the music's lead-in
+    shots.append(Shot(4.0, splash, name="splash"))
+    # 1. cold open: the whole app at the end of the exchange, still
     shots.append(ui_shot(rec, end["t"], end["t"], 3.2, full_ui(rec), None,
                          caps.get("open", "Two agents review a PR. You referee.")))
+    shots[-1].name = "open"
     # 2. the task typed in at its real pace, in the whole app: the first seconds, then the
     #    posted message up close (a cut, not a speed-up: the words have to be readable)
     task_cap = caps.get("task", "You give the room one job")
     t2 = ui_shot(rec, typing - 1.0, typing + 3.4, 4.4, full_ui(rec), None, task_cap)
-    t2.top = True
+    t2.top, t2.name = True, "task"
     shots.append(t2)
     t3 = ui_shot(rec, posted + 0.6, posted + 3.4, 2.8, cam, zoom_in(cam, 1.02), task_cap)
-    t3.top = True
+    t3.top, t3.name = True, "task"
     shots.append(t3)
     # both terminals at once, as that one message reaches them: two processes, one human
     shots.append(split_shot(rec, posted + 1.2, posted + 4.4, 3.2,
                             caps.get("both", "Two separate sessions. One message.")))
+    shots[-1].name = "both"
     # 3. the exchange: every message, as it lands in the room
     n_say = 0
     for m in rec.messages():
@@ -453,12 +485,13 @@ def mp4_shots(rec: Rec, tag: str, caps: dict[str, str]) -> list[Shot]:
             continue
         shots.append(ui_shot(rec, m["t"] - 0.8, m["t"] + 1.8, 2.6, cam, zoom_in(cam, 1.03),
                              caps.get(f"say-{n_say}", f"{AGENTS[m['who']]} replies")))
+        shots[-1].name = f"say-{n_say}"
         n_say += 1
     # 4. the human calls it, at typing pace, and the agents' reactions
     if closing and closed:
         c = ui_shot(rec, closing["t"] - 0.2, closed["t"] + 1.6, closed["t"] - closing["t"] + 1.8, cam, cam,
                     caps.get("closing", "You make the call"))
-        c.top = True
+        c.top, c.name = True, "closing"
         shots.append(c)
         for m in rec.messages():
             if m["who"] in AGENTS and m["t"] > closed["t"]:
@@ -466,8 +499,9 @@ def mp4_shots(rec: Rec, tag: str, caps: dict[str, str]) -> list[Shot]:
     # 5. the whole room, then the card
     shots.append(ui_shot(rec, end["t"], end["t"], 3.0, room_view(rec), zoom_in(room_view(rec), 1.03),
                          caps.get("final", "You asked once. They worked it out.")))
+    shots[-1].name = "final"
     card = end_card(tag)
-    shots.append(Shot(3.6, lambda u: card))
+    shots.append(Shot(3.6, lambda u: card, name="card"))
     return shots
 
 
@@ -548,10 +582,10 @@ def narration(shots: list[Shot], caps: dict, voice: str, out_dir: Path, speed: f
     first_shot: dict[str, int] = {}
     last_shot: dict[str, int] = {}
     for i, s in enumerate(shots):
-        for key, text in caps.items():
-            if text == s.caption:
-                first_shot.setdefault(key, i)
-                last_shot[key] = i
+        keys = [s.name] if s.name else [k for k, text in caps.items() if text == s.caption]
+        for key in keys:
+            first_shot.setdefault(key, i)
+            last_shot[key] = i
     table = caps.get("voice")
     lines: list[dict] = []
     if table:
@@ -580,9 +614,10 @@ def narration(shots: list[Shot], caps: dict, voice: str, out_dir: Path, speed: f
     # for the music to come in.
     for i, ln in enumerate(lines):
         ln["dur"] = round(len(decode(Path(ln["wav"]))) / SR, 3)
-        lead = LEAD_IN if i == 0 else 0.25
+        beat = sum(s.dur for s in shots[:ln["shot"]])
+        at = max(beat + 0.25, LEAD_IN) if i == 0 else beat + 0.25
         span = shots[ln["shot"]:ln["end"] + 1]
-        short = lead + ln["dur"] + GAP - sum(s.dur for s in span)
+        short = (at - beat) + ln["dur"] + GAP - sum(s.dur for s in span)
         if short > 0:
             for s in span:
                 s.dur += short / len(span)
@@ -591,7 +626,7 @@ def narration(shots: list[Shot], caps: dict, voice: str, out_dir: Path, speed: f
         starts.append(starts[-1] + s.dur)
     for i, ln in enumerate(lines):
         ln["beat"] = round(starts[ln["shot"]], 3)
-        ln["at"] = round(ln["beat"] + (LEAD_IN if i == 0 else 0.25), 3)
+        ln["at"] = round(max(ln["beat"] + 0.25, LEAD_IN) if i == 0 else ln["beat"] + 0.25, 3)
     spec_path.write_text(json.dumps({"voice": voice, "speed": speed, "lines": lines}, indent=1))
     return spec_path
 
@@ -684,7 +719,7 @@ def encode_mp4(frames, out: Path, music: Path | None, start: float, lines_spec: 
                stems: bool = False) -> float:
     ff = subprocess.Popen(
         ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS),
-         "-i", "-", "-c:v", "libx264", "-preset", "slow", "-crf", "20", "-pix_fmt", "yuv420p", "-an",
+         "-i", "-", "-c:v", "libx264", "-preset", "slow", "-crf", str(CRF), "-pix_fmt", "yuv420p", "-an",
          str(out.with_suffix(".silent.mp4"))], stdin=subprocess.PIPE)
     assert ff.stdin is not None
     n = 0
@@ -712,7 +747,7 @@ def encode_mp4(frames, out: Path, music: Path | None, start: float, lines_spec: 
             maps += ["-map", f"{k}:a"]
             meta += [f"-metadata:s:a:{k - 1}", f"title={name}", f"-metadata:s:a:{k - 1}", f"handler_name={name}"]
             k += 1
-    r = subprocess.run(["ffmpeg", "-v", "error", "-y", *inputs, *maps, "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+    r = subprocess.run(["ffmpeg", "-v", "error", "-y", *inputs, *maps, "-c:v", "copy", "-c:a", "aac", "-b:a", "160k",
                         *meta, "-disposition:a:0", "default", "-shortest", "-movflags", "+faststart", str(out)])
     if r.returncode != 0:
         sys.exit("ffmpeg failed (audio)")
