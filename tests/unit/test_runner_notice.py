@@ -17,6 +17,8 @@ import pytest
 
 from conftest import FakeClock
 from engine_world import World
+from switchboard import db
+from switchboard.broker.commands import Actor
 from switchboard.broker.hub import Hub, Subscriber
 from switchboard.broker.service import BrokerInfo, RoomService, message_dict
 from switchboard.config import Config
@@ -147,3 +149,18 @@ def test_the_web_ui_styles_the_room_line_as_a_warning() -> None:
     # the status bar: hops n/limit, or a warning when the guard is off (kept visible when narrow)
     assert "'hops ' + s.hop_count + '/' + s.hop_limit" in js and "'loop guard off ⚠'" in js
     assert "#st-hops:not(.bad) { display: none; }" in css
+
+
+def test_a_notice_for_a_closed_or_deleted_room_is_dropped(w: World, svc: RoomService, runner: Runner,
+                                                          rec: Rec) -> None:
+    """§28: nobody reads a closed room, and a gone room's notice is no broker-wide news."""
+    other = svc.create_room("#gone")
+    svc.store.delete_room(other.id, name="#gone", created_at=other.created_at, expect_counts=db.row_counts(svc.store.con, db.TABLES), event={})
+    svc.close_room(svc.room("#build"), Actor(role="human", via="web"))
+    before = len(w.store.history(w.room.id))
+    rec.items.clear()
+    runner.execute([Notice(w.room.id, "warn", "for the closed room"), Notice(other.id, "info", "for the gone room"),
+                    Notice(w.room.id, "info", "transient", persist=False)])
+    assert rec.items == [] and len(w.store.history(w.room.id)) == before
+    runner.execute([Notice(None, "warn", "still broker-wide")])
+    assert lines_with(rec, "still broker-wide") == [("notice", None, {"level": "warn", "text": "still broker-wide"})]

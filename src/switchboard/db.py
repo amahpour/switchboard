@@ -20,6 +20,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from switchboard.models import Room, room_slug
+
 log = logging.getLogger("switchboard.db")
 
 SCHEMA_VERSION = 2
@@ -237,10 +239,10 @@ def integrity_ok(con: sqlite3.Connection) -> str | None:
     return None if rows == ["ok"] else "; ".join(rows[:5])
 
 
-def _create_backup_file(path: Path) -> Path:
+def _create_backup_file(path: Path, what: str = "migration backup") -> Path:
     """A new, empty 0600 file: ``path``, else the first free ``path.<epoch>``,
     ``path.<epoch>-<n>``. ``O_EXCL`` (and ``O_NOFOLLOW``): an existing file or link
-    is never opened, so a backup is never overwritten."""
+    is never opened, so a backup is never overwritten. ``what`` names it in the error."""
     stamp = int(time.time())
     names = [path, path.with_name(f"{path.name}.{stamp}")]
     names += [path.with_name(f"{path.name}.{stamp}-{n}") for n in range(1, 1000)]
@@ -252,29 +254,33 @@ def _create_backup_file(path: Path) -> Path:
         os.close(fd)
         os.chmod(cand, 0o600)  # whatever the umask
         return cand
-    raise SchemaError(f"no free name for the migration backup next to {path.name}")
+    raise SchemaError(f"no free name for the {what} next to {path.name}")
 
 
-def backup_verified(con: sqlite3.Connection, backup_to: str | os.PathLike) -> tuple[Path, dict[str, int]]:
+def backup_verified(con: sqlite3.Connection, backup_to: str | os.PathLike, *,
+                    tables: tuple[str, ...] = V1_TABLES,
+                    what: str = "migration backup") -> tuple[Path, dict[str, int]]:
     """Copy the database with the sqlite3 backup API into a new 0600 file (never
     overwriting one: see ``_create_backup_file``) and check the copy: ``integrity_check``
-    and the row count of every version-1 table equal to the source's. The copy is a
-    single self-contained file (rollback journal, no ``-wal``). Returns (path, counts)."""
-    dest = _create_backup_file(Path(backup_to))
+    and the row count of every table in ``tables`` (the version-1 ones for a migration,
+    all of them before a room delete, §28.6) equal to the source's. The copy is a
+    single self-contained file (rollback journal, no ``-wal``). ``what`` names it in
+    the errors. Returns (path, counts)."""
+    dest = _create_backup_file(Path(backup_to), what)
     try:
-        src_counts = row_counts(con)
+        src_counts = row_counts(con, tables)
         bcon = sqlite3.connect(str(dest), isolation_level=None)
         try:
             con.backup(bcon)
             bcon.execute("PRAGMA journal_mode=DELETE")
             bad = integrity_ok(bcon)
             if bad is not None:
-                raise SchemaError(f"the migration backup {dest.name} failed its integrity check: {bad}")
-            got = row_counts(bcon)
+                raise SchemaError(f"the {what} {dest.name} failed its integrity check: {bad}")
+            got = row_counts(bcon, tables)
         finally:
             bcon.close()
         if got != src_counts:
-            raise SchemaError(f"the migration backup {dest.name} does not match the database"
+            raise SchemaError(f"the {what} {dest.name} does not match the database"
                               f" (rows {got} != {src_counts})")
     except BaseException:
         # a bad copy is not a backup; the name stays taken only by a good one
@@ -351,6 +357,15 @@ def backup_path_for(db_path: str | os.PathLike) -> Path:
     """``<db>.v1.bak`` next to the database: where the v1 -> v2 migration backs it up."""
     p = Path(db_path)
     return p.with_name(p.name + ".v1.bak")
+
+
+def delete_backup_path(db_path: str | os.PathLike, room: Room) -> Path:
+    """``<db>.delete-<name>-<id>.bak`` next to the database: where ``switchboard rooms
+    delete`` backs it up before deleting ``room`` (DESIGN.md §28.6), e.g.
+    ``switchboard.db.delete-build-7.bak``. Taken already: ``.<epoch>``, then
+    ``.<epoch>-<n>`` (``_create_backup_file``)."""
+    p = Path(db_path)
+    return p.with_name(f"{p.name}.delete-{room_slug(room.display_name)}-{room.id}.bak")
 
 
 def open_db(path: str | os.PathLike) -> sqlite3.Connection:

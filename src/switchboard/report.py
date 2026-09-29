@@ -244,19 +244,22 @@ def _stats(xs: list[float]) -> dict[str, Any]:
 def build(con: sqlite3.Connection, room_name: str, *, since: float | None = None,
           now: float | None = None) -> dict[str, Any]:
     """The report for ``room_name`` as a JSON-able dict (``render_markdown`` prints it)."""
-    from switchboard.models import InvalidName, normalize_room
+    from switchboard.models import InvalidName, display_room, room_ref, split_closed
+    from switchboard.store import Ambiguous, NotFound, Store
 
     db = _Db(con)
     now = time.time() if now is None else now
+    # a closed room's full name, else an open room of that name, else the one closed room
+    # that had it (DESIGN.md §28.5); SELECTs only, on the query-only connection
     try:
-        name = normalize_room(room_name)
+        rid = Store(con).resolve_room(room_name).id
     except InvalidName as e:
         raise ReportError(str(e)) from None
-    rows = db.q("SELECT * FROM rooms WHERE name=?", name)
-    if not rows:
-        raise ReportError(f"no room {name}")
-    room = rows[0]
-    rid = room["id"]
+    except Ambiguous as e:
+        raise ReportError(f"{e}; give the full name of the one to report on") from None
+    except NotFound:
+        raise ReportError(f"no room {room_ref(room_name)}") from None
+    room = db.q("SELECT * FROM rooms WHERE id=?", rid)[0]
     start = max(since, room["created_at"]) if since is not None else room["created_at"]
 
     # members of the room (a participant may have left and joined again: one row per membership)
@@ -488,8 +491,15 @@ def build(con: sqlite3.Connection, room_name: str, *, since: float | None = None
 
     humans = sum(1 for r in msgs.values() if r["sender_kind"] == "human" and r["kind"] == "chat")
     agent_msgs = sum(1 for r in msgs.values() if r["sender_kind"] == "agent" and r["kind"] == "chat")
+    closed = None
+    if split_closed(room["name"]) is not None:
+        close_ev = [e for e in room_all if e["kind"] == "room_close"]
+        last = _data(close_ev[-1]["data"]) if close_ev else {}
+        closed = {"name": room["name"], "at": iso(close_ev[-1]["ts"]) if close_ev else None,
+                  "by": _safe(last.get("by")) if isinstance(last.get("by"), str) else None}
     return {
-        "room": room["name"],
+        "room": display_room(room["name"]),
+        "closed": closed,
         "window": {"start": iso(start), "end": iso(end), "minutes": round((end - start) / 60.0, 1)},
         "settings": {
             "budget_per_hour": room["budget_per_hour"],
@@ -619,14 +629,16 @@ def _lat_cells(r: dict[str, Any]) -> list[str]:
 def render_markdown(rep: dict[str, Any], *, title: str | None = None) -> str:
     w, s, t = rep["window"], rep["settings"], rep["traffic"]
     L: list[str] = []
-    L.append(f"# {title or 'switchboard report: ' + rep['room']}")
+    c = rep.get("closed")
+    L.append(f"# {title or 'switchboard report: ' + rep['room'] + (' (closed)' if c else '')}")
     L.append("")
     L.append(f"Room `{rep['room']}`, {w['start']} to {w['end']} ({w['minutes']} min, UTC). "
              f"{t['members']} agent membership(s); {t['human_messages']} message(s) from the human, "
              f"{t['agent_messages']} from agents, {t['passes']} pass(es). Budget {s['budget_remaining_at_end']}"
              f"/{s['budget_per_hour']} left at the end, hop limit {s['hop_limit']}"
              + (" (loop guard off)" if s["hop_limit"] == 0 else "")
-             + (f", paused at the end ({s['paused_reason']})." if s["paused_at_end"] else "."))
+             + (f", paused at the end ({s['paused_reason']})." if s["paused_at_end"] else ".")
+             + (f" Closed {c['at'] or 'n/a'} by {c['by'] or 'n/a'} (internal name `{c['name']}`)." if c else ""))
     L.append("")
     L.append("## Latency: message sent to the recipient")
     L.append("")

@@ -11,6 +11,10 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 ROOM_RE = re.compile(r"^#[a-z0-9][a-z0-9_-]{0,31}$")
+# A closed room keeps its row under ``#<name>~closed-<its id>`` (DESIGN.md §28.2). '~' is
+# outside ROOM_RE, so the name is free again and nothing an agent, an MCP call, a web route
+# or remotes.toml names can reach it. Use it with fullmatch only (a trailing '\n' must fail).
+CLOSED_ROOM_RE = re.compile(r"(#[a-z0-9][a-z0-9_-]{0,31})~closed-([1-9][0-9]{0,18})")
 SCREEN_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,23}$")
 # A remote host's name (DESIGN.md §27.5.1): the config name of a remote in remotes.toml.
 # It never contains '@' or ':', so it can't be confused with a session key's parts.
@@ -57,6 +61,36 @@ def normalize_room(name: str) -> str:
 
 def room_slug(name: str) -> str:
     return name[1:] if name.startswith("#") else name
+
+
+def closed_room_name(name: str, room_id: int) -> str:
+    """The name a closed room keeps (DESIGN.md §28.2): ``'#build', 7 -> '#build~closed-7'``.
+    Its own id makes it unique, so ``UNIQUE(name)`` never blocks a close."""
+    out = f"{name}~closed-{room_id}"
+    if split_closed(out) != (name, room_id):
+        raise ValueError(f"not an open room name and id: {name!r}, {room_id!r}")
+    return out
+
+
+def split_closed(name: str) -> tuple[str, int] | None:
+    """``(base, id)`` for a closed room's name, None for any other string."""
+    m = CLOSED_ROOM_RE.fullmatch(name) if isinstance(name, str) else None
+    return (m.group(1), int(m.group(2))) if m else None
+
+
+def display_room(name: str) -> str:
+    """The name people see: a closed room's base name, an open name unchanged."""
+    s = split_closed(name)
+    return s[0] if s else name
+
+
+def room_ref(ref: str) -> str:
+    """A room the human typed (``report --room``, ``rooms delete``; DESIGN.md §28.5): a closed
+    room's full name as is (lower-cased), else ``normalize_room`` (which raises InvalidName)."""
+    n = ref.strip().lower() if isinstance(ref, str) else ref
+    if split_closed(n) is not None:
+        return n
+    return normalize_room(ref)
 
 
 def valid_host(host: str) -> bool:
@@ -125,6 +159,15 @@ class Room:
     @property
     def slug(self) -> str:
         return room_slug(self.name)
+
+    @property
+    def closed(self) -> bool:
+        """Closed by ``/close`` (DESIGN.md §28): its name is ``#<name>~closed-<id>``."""
+        return split_closed(self.name) is not None
+
+    @property
+    def display_name(self) -> str:
+        return display_room(self.name)
 
     @property
     def budget_reset_at(self) -> float:

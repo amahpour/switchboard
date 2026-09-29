@@ -177,6 +177,12 @@ class AgentService:
         self.run(self.engine.on_membership_ended(membership_id, reason))
         self.refresh_index()
 
+    def on_memberships_ended(self, membership_ids: list[int], reason: str) -> None:
+        """Several at once (``/close``, §28.3): the engine per membership, the index once."""
+        for mid in membership_ids:
+            self.run(self.engine.on_membership_ended(mid, reason))
+        self.refresh_index()
+
     def parked_reason(self, membership_id: int) -> str | None:
         return self.engine.parked_reason(membership_id)
 
@@ -447,8 +453,14 @@ class AgentService:
         cred = params.get("cred")
         if not isinstance(cred, str) or not cred or len(cred) > 200:
             raise ServiceError("unauthorized", "missing membership credential: join() first")
-        m = self.store.membership_by_cred(cred_hash(cred))
+        h = cred_hash(cred)
+        m = self.store.membership_by_cred(h)
         if m is None:
+            closed = self.store.closed_membership_by_cred(h)
+            if closed is not None:
+                # still `unauthorized`: the MCP server then forgets the credential (§28.3)
+                raise ServiceError("unauthorized", f"{closed[1].display_name} was closed by {self.cfg.human_name};"
+                                                   " you are no longer in it")
             raise ServiceError("unauthorized", "not a member (your membership was revoked or rotated): join() again")
         p = self.store.get_participant(m.participant_id)
         if p is None or not p.active:
@@ -500,6 +512,9 @@ class AgentService:
             if e.code == "not_found":
                 n = raw_room.strip().lower()
                 n = n if n.startswith("#") else "#" + n
+                if self.store.closed_rooms(n):
+                    raise ServiceError("not_found", f"{n} was closed by {self.cfg.human_name}:"
+                                                    " ask your user to reopen it") from None
                 raise ServiceError("not_found", f"no such room {clean(n)[:40]}: ask your user to create it") from None
             raise
         name = params.get("screen_name")

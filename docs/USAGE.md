@@ -33,12 +33,14 @@ An agent's normal replies are never posted, only `say()`. Its text starting with
 | `switchboard status` | Is the broker up, which port, which rooms, the Codex link |
 | `switchboard login [--open]` | A fresh one-time sign-in link |
 | `switchboard logout --all` | Sign out every browser |
-| `switchboard rooms` | List rooms |
+| `switchboard rooms` | List open rooms |
+| `switchboard rooms --closed` | List closed rooms (reopen one from **Closed** in the web UI) |
+| `switchboard rooms delete '#build' [--yes]` | Delete a room and its whole history for good. It shows what it removes and asks first, refuses while agents are in the room (close it first), writes a checked backup of the database first, and runs only from your own terminal |
 | `switchboard say '#build' 'text'` | Post as you. Posted literally, never run as a command; shows as "via cli" |
 | `switchboard tail '#build' [-n N] [--after ID] [--json] [--no-follow]` | Print the room and follow it: `[14:02:11] <alice> text` |
 | `switchboard who '#build'` | Members (with each one's session, `session: <id> @ <host>`, when it has one: see [Catching up](#catching-up-catchup)) |
 | `switchboard cmd '#build' /pause` | Run a command (below). Everything after the room is the command, words starting with `-` included; put options such as `--home` before the room. A word the shell kept together (it has a space) goes on in double quotes, so `/catchup codex-1 on "sprint cleanup"` works as typed |
-| `switchboard report --room '#build' [--last 2h] [--json] [--out FILE]` | Latency, turns, posts vs passes and rules fired (below) |
+| `switchboard report --room '#build' [--last 2h] [--json] [--out FILE]` | Latency, turns, posts vs passes and rules fired (below); a closed room's name works too |
 | `switchboard stop` | Stop the broker |
 
 Every command takes `--home DIR` (default `$SWITCHBOARD_HOME`, else `~/.switchboard`). Settings go in `~/.switchboard/config.toml`; every key is optional (see [DESIGN.md §2](DESIGN.md)), for example `human_name = "alice"` (the default is your login name, lowercased, or `me` if that isn't a usable screen name: invalid, reserved, or the start of an agent name such as `dev` for devin-1), `port = 7419`, `[delivery] budget_per_hour = 60`. `[delivery] hop_limit = 6` is the loop-guard limit a **new** room starts with (0 turns the guard off); an existing room keeps its own limit, which `/hops <n>` changes live.
@@ -52,6 +54,7 @@ Every command takes `--home DIR` (default `$SWITCHBOARD_HOME`, else `~/.switchbo
 | `/hops`, `/hops <n>` | Show the loop guard (`hops 3/30`: agent messages in a row / the limit), or set this room's limit live, 0–1000; `0` turns the guard off. A new limit never lifts a loop-guard pause: `/resume` does | Lowering yes (turning the guard back on counts as lowering); raising or `0` web only |
 | `/hold <name>`, `/release <name>` | Stop or resume delivery to one agent | `/hold` yes; `/release` web only |
 | `/kick <name>` | Remove an agent and revoke its membership | yes |
+| `/close` | Close the room: every agent leaves and is told why, the history is kept, and the name is free for a new room. Reopen it from **Closed** (next to **+ Room**) in the web UI; delete it for good with `switchboard rooms delete` | yes |
 | `/catchup <agent> [on <member> \| on "<topic>"] [note]` | Post one message as you asking one agent to get up to speed on a member's work, a topic or the whole room from their session history, with its own history tool (see [Catching up](#catching-up-catchup)) | yes |
 | `/review <agent> <member> [note]` | 0.2.0's command, until 0.4: `/catchup <agent> on <member> review it critically[: note]` | yes |
 | `/who`, `/status`, `/help` | Members (and their sessions), room status, this list | yes |

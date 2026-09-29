@@ -187,6 +187,18 @@ class Hub:
         if settings is not None:
             self.room_settings(room, settings)
 
+    def drop_room(self, room: str) -> None:
+        """``room`` was closed or deleted (DESIGN.md §28): nobody follows that name any more,
+        and its debounced members/settings frames are cancelled. A room created again under
+        the name never streams into an old web page or ``tail``: web pages subscribe again
+        after the ``rooms`` frame, an old ``tail`` goes quiet after the close notice."""
+        for sub in self.subs:
+            sub.rooms.discard(room)
+        for pending in (self._members_pending, self._settings_pending):
+            h = pending.pop(room, None)
+            if h is not None:
+                h.cancel()
+
     # sessions --------------------------------------------------------------
     def close_sessions(self, sid_hash: str | None = None) -> int:
         """Close WebSockets of one session (or of all sessions when None)."""

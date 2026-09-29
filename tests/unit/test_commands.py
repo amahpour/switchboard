@@ -95,12 +95,12 @@ def test_required_roles(svc: RoomService) -> None:
     room = svc.room("#build")  # budget 60
     need = {t: required_role(parse_command(t), room) for t in
             ["/pause", "/resume", "/kick a", "/budget", "/budget 10", "/budget 60", "/budget 61",
-             "/hold a", "/release a", "/who", "/status", "/help"]}
+             "/hold a", "/release a", "/who", "/status", "/help", "/close"]}
     assert need == {
         "/pause": "human_cli", "/resume": "human", "/kick a": "human_cli", "/budget": "human_cli",
         "/budget 10": "human_cli", "/budget 60": "human_cli", "/budget 61": "human",
         "/hold a": "human_cli", "/release a": "human", "/who": "human_cli", "/status": "human_cli",
-        "/help": "human_cli",
+        "/help": "human_cli", "/close": "human_cli",
     }
 
 

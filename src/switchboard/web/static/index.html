@@ -22,6 +22,7 @@
   <div class="toolbar">
     <div class="tabs" id="tabs" role="tablist" aria-label="Rooms"></div>
     <button type="button" class="btn small" id="new-room" title="Create a room">+ Room</button>
+    <button type="button" class="btn small hidden" id="closed-rooms" title="Closed rooms: reopen one">Closed</button>
   </div>
 
   <div class="remotes hidden" id="remotes" role="group" aria-label="Remote machines"></div>
@@ -34,7 +35,7 @@
     <section class="chat" aria-label="Chat">
       <div class="log sunken" id="log" role="log" aria-live="polite" aria-relevant="additions"></div>
       <div class="empty hidden" id="empty">
-        <p class="empty-title">No rooms yet.</p>
+        <p class="empty-title" id="empty-title">No rooms yet.</p>
         <p>Create one, then tell your agents to join it.</p>
         <p><button type="button" class="btn" id="create-build">Create #build</button></p>
         <p class="empty-hint">or use <b>+ Room</b> for another name.</p>
@@ -69,6 +70,22 @@
       <p class="fine">Links this broker dials over SSH. Enabling one is your consent for its current
         <code>remotes.toml</code> entry and key files; any edit needs a new enable.</p>
       <div id="remotes-body"></div>
+    </div>
+  </section>
+
+  <section class="window dialog closed-panel hidden" id="closed-panel" role="dialog" aria-modal="false"
+           aria-labelledby="closed-panel-title">
+    <div class="titlebar">
+      <span class="title-text" id="closed-panel-title">Closed rooms</span>
+      <span class="title-buttons">
+        <button type="button" class="tb-btn" id="closed-close" title="Close">&times;</button>
+      </span>
+    </div>
+    <div class="dialog-body">
+      <p class="fine">A closed room keeps its history and has nobody in it. Reopen brings it back under its
+        name; agents join it again. To delete one for good, run the command shown under it in your
+        terminal (a checked backup is written first).</p>
+      <div id="closed-body"></div>
     </div>
   </section>
 
