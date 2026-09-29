@@ -24,7 +24,8 @@ def test_wheel_contents(tmp_path: Path) -> None:
     names = zipfile.ZipFile(whl).namelist()
     assert "switchboard/__init__.py" in names
     assert "switchboard/hook/switchboard_hook.py" in names
-    for f in ("index.html", "login.html", "app.js", "md.js", "style.css"):
+    for f in ("index.html", "login.html", "app.js", "md.js", "style.css", "favicon.svg", "favicon-32.png",
+              "apple-touch-icon.png"):
         assert f"switchboard/web/static/{f}" in names
     assert not [n for n in names if n.startswith("tests/") or "/tests/" in n or "conftest" in n]
     assert not [n for n in names if "codex_trust" in n or n.endswith(".db")]

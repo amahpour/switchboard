@@ -31,9 +31,16 @@ def err(r: httpx.Response) -> tuple[int, str, str]:
 
 
 # ------------------------------------------------------------------- REST
-def test_favicon_is_empty(broker: InProcBroker) -> None:
+def test_favicon_is_the_32_px_icon(broker: InProcBroker) -> None:
     r = httpx.get(broker.base + "/favicon.ico")  # no session needed
-    assert r.status_code == 204 and r.content == b""
+    assert r.status_code == 200 and r.headers["content-type"] == "image/png"
+    assert r.content.startswith(b"\x89PNG\r\n\x1a\n") and r.content[16:24] == (32).to_bytes(4, "big") * 2
+    assert r.headers["cache-control"] == "no-cache"
+    for path, kind in (("/static/favicon.svg", "image/svg+xml"), ("/static/favicon-32.png", "image/png"),
+                       ("/static/apple-touch-icon.png", "image/png")):
+        r = httpx.get(broker.base + path)  # the sign-in page links them too: no session needed
+        assert r.status_code == 200 and r.headers["content-type"].startswith(kind), path
+        assert "script-src 'self'" in r.headers["content-security-policy"], path
 
 
 def test_request_bodies_are_checked(broker: InProcBroker, web: httpx.Client) -> None:

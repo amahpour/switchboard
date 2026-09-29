@@ -1,4 +1,4 @@
-# Media: UI and CLI screenshots, and the getting-started video
+# Media: UI and CLI screenshots, the tab icon, and the getting-started video
 
 ## The UI screenshots (`ui/`)
 
@@ -40,6 +40,14 @@ uv run python docs/media/cli_shots.py --out /tmp/cli-shots
 
 - **Real commands against seeded data.** It uses the same isolation and seeded broker as `ui_shots.py` (`tests/ui_world.py`). Then, in-process with `--color always`, it runs `status`, `who '#build'`, `tail '#build'`, `remote status` and `report` against that broker, and `install all --dry-run` / `uninstall all --dry-run` against a throwaway user home. The PATH holds stub `claude`, `codex` and `devin` commands and no Cursor CLI, so Cursor shows as skipped. The install diff shows `/opt/switchboard/bin/python3` as the interpreter the hooks run, not this checkout's venv. `/hold` and `/release` fire once so the report has a rule to colour.
 - **Rendered, not captured from a terminal.** Each output's colour codes become styled HTML: html-escaped text, the 8 basic colours plus bold and dim. Any other escape code stops the run. The HTML sits in a window titled with the command and is shot with Playwright's Chromium at DPR 2. Every command is shot in dark; `tail` and `install` also in light; and `install` once more with `--color never` (`install-plain-dark.png`), for a before/after.
+
+## The tab icon (`make_icons.py`)
+
+`src/switchboard/web/static/favicon.svg` is the tab icon: the sidebar's own glyph (three nodes and the line that joins them, drawn inline in `index.html` and `login.html`) at 1.5x on the accent-blue tile. A test checks that it holds exactly the sidebar's shapes. `make_icons.py` renders `favicon-32.png` (transparent corners) and `apple-touch-icon.png` (180 px, square and opaque: iOS rounds the corners itself) from it in Playwright's Chromium. Re-run it whenever `favicon.svg` changes, and commit the three files together:
+
+```bash
+uv run python docs/media/make_icons.py
+```
 
 ## The getting-started video
 
