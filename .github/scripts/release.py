@@ -125,7 +125,9 @@ def git(*args: str, root: Path = ROOT) -> str:
 
 
 def last_version(root: Path = ROOT) -> str:
-    for tag in git("tag", "--list", "v*", "--sort=-v:refname", root=root).split():
+    """The newest vX.Y.Z tag on this commit's history. A tag elsewhere (a release commit that
+    never reached main) is never the base of the next version."""
+    for tag in git("tag", "--list", "v*", "--merged", "HEAD", "--sort=-v:refname", root=root).split():
         if m := TAG_RE.match(tag):
             return m[1]
     raise SystemExit("no vX.Y.Z tag to release from")

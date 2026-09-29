@@ -148,6 +148,20 @@ def test_nothing_is_released_when_main_moved_on(tmp_path: Path, capsys: pytest.C
     assert 'version = "0.4.0"' in (repo / "pyproject.toml").read_text()
 
 
+def test_a_tag_off_main_is_not_the_last_release(tmp_path: Path) -> None:
+    """A release commit whose push to main was refused, but whose tag got out (before the push
+    was atomic), must not be the base of the next release."""
+    repo = make_repo(tmp_path)
+    git(repo, "commit", "-q", "--allow-empty", "-m", "feat: x (#39)")
+    base = git(repo, "rev-parse", "HEAD").strip()
+    git(repo, "commit", "-q", "--allow-empty", "-m", "release: v0.5.0")
+    git(repo, "tag", "v0.5.0")                           # the stray tag...
+    git(repo, "checkout", "-q", "-B", "main", base)      # ...off main, which moved on without it
+    git(repo, "commit", "-q", "--allow-empty", "-m", "docs: y (#38)")
+    assert rel.last_version(repo) == "0.4.0"
+    assert [s for s, _ in rel.commits_since("0.4.0", repo)] == ["docs: y (#38)", "feat: x (#39)"]
+
+
 def test_a_missing_tag_or_version_stops_the_release(tmp_path: Path) -> None:
     repo = make_repo(tmp_path)
     git(repo, "tag", "-d", "v0.4.0")

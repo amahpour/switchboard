@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A release can't leave a tag off `main` any more.** The release job pushes `main` and the new tag with `git push --atomic`, so they land together or not at all. When another merge lands while the job runs, it pushes nothing and says so, and that merge's run releases both. Before, `main` was refused but the tag went out anyway: `v0.6.0` first pointed at a release commit that never reached `main`, and had to be deleted by hand. `release.py` also counts only tags on `main`'s history as the last release.
+
 ## 0.6.0 (2026-09-29)
 
 The broker as a container image ([#34](https://github.com/amahpour/switchboard/issues/34), [docs/DEPLOY.md](docs/DEPLOY.md), [DESIGN.md §30](docs/DESIGN.md#30-the-container-image-and-the-public-url-34)). It runs on a server behind the platform's HTTPS: Render, Kubernetes, or a VM with Caddy. For now that's you in the browser; your agents join a hosted broker with #24.
