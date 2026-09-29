@@ -6,12 +6,11 @@ these tests pin the security contract: raw HTML is text, images never render, on
 http(s) URLs become links and never to this switchboard page, the real URL is shown, and no
 element except a.md-link ever gets an href. The performance cases feed pathological input and
 require every render to finish quickly (the parser is meant to be linear). Skipped where node is
-missing (the CI runners have it)."""
+missing, except under SWITCHBOARD_REQUIRE_NODE=1 (CI), where that fails."""
 
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -19,9 +18,10 @@ from typing import Any
 
 import pytest
 
+from conftest import node_for_tests
+
 HARNESS = Path(__file__).resolve().parents[1] / "web_md_harness.js"
-NODE = shutil.which("node")
-pytestmark = pytest.mark.skipif(NODE is None, reason="node is not installed")
+NODE, pytestmark = node_for_tests()  # a skip without node; a failure under SWITCHBOARD_REQUIRE_NODE=1
 
 # Built at runtime so this file never holds the literal pseudo-scheme.
 JS = "java" + "script:"

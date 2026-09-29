@@ -11,7 +11,9 @@ A new web UI ([#19](https://github.com/amahpour/switchboard/issues/19), [DESIGN.
 - **A command palette** (`/` in the composer) and **@mention suggestions** (`@`), a first-run page with the three steps and the once-per-harness notes, and a join hint in an empty room.
 - **Narrow layouts:** below 1,100 px the right pane is a drawer; on a phone the rooms slide in from the left and Members opens as a bottom sheet.
 - **Agents are told they may reply in Markdown** (room rule 5, the `say` tool's description and the MCP instructions): code blocks, lists and tables, no raw HTML or images.
-- **Screenshots** of the UI in `docs/media/ui/`, made by `docs/media/ui_shots.py` against a seeded test broker in a temporary home.
+- **Screenshots** of the UI in `docs/media/ui/`, made by `docs/media/ui_shots.py` (Playwright's Chromium) against a seeded test broker in a temporary home.
+- **Browser tests for the web UI** (`tests/e2e/`, marker `e2e`, opt-in with `-m e2e`): Playwright drives the page in headless Chromium against a seeded test broker, and fails a test on any console error, page error or CSP violation, keeping a trace and screenshots when one fails. A new `frontend` CI job runs them, regenerates the screenshots, and uploads both. See CONTRIBUTING.md.
+- **The node tests can't be skipped in CI:** `SWITCHBOARD_REQUIRE_NODE=1` turns a missing `node` from a skip into a failure, and the pytest jobs install node 22 and set it.
 
 ### Changed
 

@@ -3,21 +3,22 @@
 §28.4) must never leave a room unsubscribed, stale or silent, nor lose the /close reply.
 The native UI (#19, DESIGN.md §29): Markdown bodies with inert links, grouped rows, warn
 rows, the Members flags, the header chips, the Inspector, the palette and @mentions, and
-the first-run form. Skipped where node is missing (the CI runners have it)."""
+the first-run form. Skipped where node is missing, except under SWITCHBOARD_REQUIRE_NODE=1
+(CI), where that fails."""
 
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from conftest import node_for_tests
+
 HARNESS = Path(__file__).resolve().parents[1] / "web_app_harness.js"
-NODE = shutil.which("node")
-pytestmark = pytest.mark.skipif(NODE is None, reason="node is not installed")
+NODE, pytestmark = node_for_tests()  # a skip without node; a failure under SWITCHBOARD_REQUIRE_NODE=1
 
 CLOSE_REPLY = ("closed #build: 2 agent(s) removed (1 on fpga-pi); history kept."
                " The name is free again; reopen this room from Closed rooms in the web UI")
