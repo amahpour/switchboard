@@ -14,7 +14,9 @@ permissions:
 
 concurrency:
   group: test-${{ github.ref }}
-  cancel-in-progress: true
+  # a newer push to a PR cancels its older run; on main runs queue instead, so a release
+  # (the `release` job) is never cut off halfway
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -199,6 +201,47 @@ jobs:
           path: coverage.json
           if-no-files-found: error
           retention-days: 7
+
+  # Every merge to main is a release (issue #33; CONTRIBUTING.md, "Releases"). Once the tests,
+  # the two-host run, the frontend and the coverage ratchet have passed, .github/scripts/release.py
+  # bumps the version (a patch; a minor for `feat:` or a breaking change) in pyproject.toml,
+  # __init__.py and uv.lock, turns the CHANGELOG's Unreleased section into the release notes and
+  # moves the install pins. This job then commits "release: vX.Y.Z" to main, tags it and
+  # publishes the GitHub Release. A push made with GITHUB_TOKEN starts no workflow, so the
+  # release commit neither re-runs CI nor releases itself. If another merge landed meanwhile,
+  # nothing is released here: that merge's run releases both.
+  release:
+    name: release
+    needs: [coverage, twohost, frontend]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          fetch-depth: 0   # every tag, and origin/main as it is now
+      - name: Work out the release and apply it to the tree
+        id: cut
+        run: python3 .github/scripts/release.py --notes "$RUNNER_TEMP/release-notes.md"
+      - name: Commit, tag, push and publish
+        if: steps.cut.outputs.released == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.cut.outputs.version }}
+        run: |
+          set -eu
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -qam "release: v$VERSION"
+          git tag -a "v$VERSION" -m "switchboard $VERSION"
+          git push origin "HEAD:refs/heads/main" "refs/tags/v$VERSION"
+          gh release create "v$VERSION" --verify-tag --title "switchboard $VERSION" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" --latest
 
   # Push to main only: commits coverage.json to the orphan `badges` branch (created
   # on first use), which the README badge reads through shields.io.

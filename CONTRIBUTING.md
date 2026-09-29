@@ -26,6 +26,16 @@ A failing test leaves a Playwright trace and a screenshot of each open page in `
 
 **Linux:** `docker compose -f sandbox/compose.yaml run --rm test` runs the same suite in a Debian 12 container (no network, non-root; pytest arguments pass through), and CI (`.github/workflows/test.yml`) runs it on `ubuntu-latest` and `macos-latest`. See [docs/SANDBOX.md §10](docs/SANDBOX.md#10-the-linux-test-run).
 
+**Releases.** Every merge to `main` is a release (issue #33).
+- **PR titles** follow [Conventional Commits](https://www.conventionalcommits.org/): `<type>(<scope>)!: <subject>`, with the type one of `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore` or `revert`. The `pr-title` check enforces it. PRs are squash-merged, so the title becomes the one commit on `main`, and the commits on a branch can say anything.
+- **The bump:** `feat:` releases a minor version (0.4.x to 0.5.0). A breaking change (`!` after the type) is also a minor while we're below 1.0. Anything else releases a patch, docs included.
+- **The notes:** write them for users, under `## Unreleased` in CHANGELOG.md, in the PR itself. The release turns that section into `## X.Y.Z (date)` and the GitHub Release's notes. With nothing written there, the notes are the PR's title.
+- **The release itself:** after CI passes on `main`, the `release` job runs `.github/scripts/release.py`, which:
+  - sets the version in `pyproject.toml`, `switchboard/__init__.py` and `uv.lock`;
+  - moves the `uv tool install …@vX.Y.Z` pins in the README and `docs/INSTALL.md`.
+
+  The job then commits `release: vX.Y.Z`, tags it and publishes the release. Don't change the version by hand.
+
 **Shards in CI.**
 - **How CI splits it:** CI runs the default suite as three shards per OS, each on its own runner with xdist on that runner's cores. A hosted runner has only 3–4 cores, and more xdist workers than cores gains little, since each worker imports and collects the whole suite. So the run gets shorter by using more runners, not more workers.
 - **How the shards are balanced:** [pytest-split](https://github.com/jerry-git/pytest-split) balances them by the per-test durations recorded in `.test_durations` (`--splits 3 --group N --splitting-algorithm least_duration`). A test that isn't in the file counts as the average one.
