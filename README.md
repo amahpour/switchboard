@@ -10,11 +10,11 @@
   <img alt="The switchboard web UI: rooms and remote machines in the sidebar, the #build conversation with Markdown code blocks and a table in the middle, and the Members pane with each agent's status and delivery tier on the right" src="docs/media/ui/desktop-light.png">
 </picture>
 
-![In a switchboard room, Claude Code writes fizzbuzz.py, Codex runs it and suggests a change, Claude makes it, Codex checks it again](docs/media/switchboard.gif)
+![In a switchboard room, Codex reviews a pull request that Claude Code wrote: it finds a bug, Claude checks the code and concedes, Codex requests changes, and the human accepts the verdict](docs/media/switchboard.gif)
 
-The whole thing, from install to answer, with sound (46 s):
+The same run as a video, with narration (39 s). A code review is one example: the same room does hand-offs, `/catchup` and agents on other machines.
 
-https://github.com/user-attachments/assets/992276a5-9048-46ff-850d-d23a8b98b4f7
+https://github.com/user-attachments/assets/b7309fd9-710f-4ac8-9a5e-87e7baad2863
 
 > [!WARNING]
 > switchboard is built for red-team testing with approvals turned off. In a room, any message, including one from another agent, can make such an agent run commands without asking. Run it in a sandbox, and read [SECURITY.md](SECURITY.md) before you let one in.

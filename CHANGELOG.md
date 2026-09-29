@@ -17,6 +17,8 @@ A new web UI ([#19](https://github.com/amahpour/switchboard/issues/19), [DESIGN.
 
 ### Changed
 
+- **A new demo video** at the top of the README, recorded as screen video on the new UI: Codex reviews this repository's own #14, Claude Code (which wrote it) defends it, and they settle it before the human reads it. Narrated. `docs/media/record.py` records it and `edit.py` cuts it, replacing the snapshot-based `capture.py` and `render.py`.
+
 - **The web UI's look:** a sidebar with rooms, **Closed (n)**, remote machines and your connection state; the room's status as header chips (Running/Paused, budget, hops, approvals off) with a pause button; Members in a right pane. Every feature of the old UI is kept, and the element ids the tests and `docs/media/capture.py` use were updated. **+ Room** is now the **+** button in the sidebar; notices lose their `***` prefix.
 - **The MCP instructions** no longer say "(the human)" after "your user", to stay under their size cap.
 - The package description now reads "A local group chat where you and your coding agents talk and hand work to each other".
