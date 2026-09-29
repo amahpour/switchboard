@@ -517,3 +517,159 @@ def test_keyboard_tab_walk_shows_a_focus_ring(ui: UI) -> None:
     assert set(seen) == {"input", "pane-toggle", "member"}, f"the Tab walk reached only {sorted(seen)}"
     for key, f in seen.items():
         assert f["visible"] and f["ring"], f"{key} has no visible focus ring: {f}"
+
+
+# ------------------------------------------------------------------ focus (review findings)
+ACTIVE_FOCUS_KEY = "() => document.activeElement ? (document.activeElement.dataset.focus || document.activeElement.id" \
+                   " || document.activeElement.tagName) : null"
+
+
+def member_row(page: Page, name: str) -> Any:
+    return page.locator(f'#buddy-list .member[data-name="{name}"]')
+
+
+def test_inspector_re_renders_keep_focus(ui: UI) -> None:
+    """A members frame (here: another tab holding codex-1) re-renders the Inspector. Focus stays
+    on the heading after the detail fetch, on a catch-up menu item and on the red Kick button,
+    and the menu's arrow keys still work afterwards (they went dead with focus on <body>)."""
+    page = ui.open()
+    held = member_row(page, "codex-1")
+
+    def members_frame(text: str) -> None:
+        ui.world.command("build", text)
+        if text.startswith("/hold"):
+            expect(held).to_contain_text("held")
+        else:
+            expect(held).not_to_contain_text("held")
+
+    try:
+        with page.expect_response(lambda r: r.url.endswith("/api/rooms/build/members/claude-1")):
+            member_row(page, "claude-1").click()
+        expect(page.locator("#insp-body code.sess")).to_have_count(1)  # the detail landed and re-rendered
+        expect(page.locator("#insp-name")).to_be_focused()
+
+        # the catch-up menu: the second item keeps focus through a re-render, and ArrowDown moves on
+        page.click("#insp-catchup")
+        items = page.locator("#catchup-menu .menu-item")
+        expect(items.first).to_be_focused()
+        page.keyboard.press("ArrowDown")
+        expect(items.nth(1)).to_be_focused()
+        members_frame("/hold codex-1")
+        expect(page.locator("#catchup-menu")).to_be_visible()
+        expect(items.nth(1)).to_be_focused()
+        page.keyboard.press("ArrowDown")
+        expect(items.nth(2)).to_be_focused()
+        page.keyboard.press("Escape")
+        expect(page.locator("#insp-catchup")).to_be_focused()
+
+        # the kick confirm: Tab to the red Kick button, re-render, it is still focused; Esc backs out
+        page.click("#insp-kick")
+        expect(page.locator("#kick-confirm")).to_be_visible()
+        page.keyboard.press("Tab")
+        do_kick = page.locator("#kick-confirm .btn-danger")
+        expect(do_kick).to_be_focused()
+        members_frame("/release codex-1")
+        expect(do_kick).to_be_focused()
+        page.keyboard.press("Escape")
+        expect(page.locator("#kick-confirm")).to_be_hidden()
+        expect(page.locator("#insp-kick")).to_be_focused()
+        expect(member_row(page, "claude-1")).to_have_count(1)  # nothing was kicked
+    finally:
+        ui.world.command("build", "/release codex-1")
+
+
+def test_focus_moves_to_a_neighbour_when_the_inspected_agent_goes(ui: UI) -> None:
+    """A kick from the Inspector focuses the row that takes the kicked one's place; a kick from
+    elsewhere while the Inspector has focus does the same; with no agent left, the Members
+    heading gets it. Focus never drops to <body>."""
+    ui.world.create_room("#e2e-focus")
+    ui.world.add_agents("#e2e-focus", ("ag-1", "ag-2", "ag-3"))
+    page = ui.open(room="e2e-focus")
+    expect(page.locator("#buddy-list .member")).to_have_count(3)
+
+    # 1. Kick from the Inspector's confirm (by keyboard): ag-3 takes ag-2's place
+    member_row(page, "ag-2").click()
+    expect(page.locator("#insp-name")).to_contain_text("ag-2")
+    page.click("#insp-kick")
+    page.keyboard.press("Tab")
+    expect(page.locator("#kick-confirm .btn-danger")).to_be_focused()
+    page.keyboard.press("Enter")
+    expect(member_row(page, "ag-2")).to_have_count(0)  # the members frame landed
+    expect(page.locator("#pane")).not_to_have_class(cls("inspecting"))
+    expect(member_row(page, "ag-3")).to_be_focused()
+
+    # 2. ag-3 (last in the list) is kicked from elsewhere while focus is on its Hold button
+    member_row(page, "ag-3").click()
+    expect(page.locator("#insp-name")).to_contain_text("ag-3")
+    page.locator("#insp-hold").focus()
+    ui.world.command("e2e-focus", "/kick ag-3")
+    expect(page.locator("#pane")).not_to_have_class(cls("inspecting"))
+    expect(member_row(page, "ag-1")).to_be_focused()
+
+    # 3. the last agent goes: the Members heading
+    member_row(page, "ag-1").click()
+    page.locator("#insp-hold").focus()
+    ui.world.command("e2e-focus", "/kick ag-1")
+    expect(page.locator("#buddy-list .member")).to_have_count(0)
+    expect(page.locator("#members-title")).to_be_focused()
+
+
+def test_phone_members_sheet_takes_focus_and_gives_it_back(ui: UI) -> None:
+    """At phone width the members sheet is a modal dialog: opening it focuses the first row and
+    makes the page behind it inert; the scrim returns focus to the pill."""
+    page = ui.open(**PHONE)
+    page.locator("#buddy-toggle").focus()
+    page.keyboard.press("Enter")
+    expect(page.locator("#app")).to_have_class(cls("sheet-open"))
+    expect(member_row(page, "claude-1")).to_be_focused()
+    assert page.evaluate("[document.getElementById('main').inert, document.getElementById('sidebar').inert]") == [True, True]
+    page.keyboard.press("Tab")
+    assert page.evaluate("document.getElementById('pane').contains(document.activeElement)"), \
+        page.evaluate(ACTIVE_FOCUS_KEY)
+    page.locator("#scrim").click(position={"x": 195, "y": 60})  # above the sheet
+    expect(page.locator("#app")).not_to_have_class(cls("sheet-open"))
+    expect(page.locator("#buddy-toggle")).to_be_focused()
+    assert page.evaluate("document.getElementById('main').inert") is False
+
+
+def test_phone_closed_sheet_gives_focus_to_the_rooms_toggle(ui: UI) -> None:
+    """The Closed button sits in the rooms drawer, which closes (and hides) when the sheet opens,
+    so closing the sheet focuses the Rooms toggle instead of losing focus."""
+    page = ui.open(**PHONE)
+    page.click("#rooms-toggle")
+    page.click("#closed-rooms")
+    expect(page.locator("#closed-panel")).to_be_visible()
+    expect(page.locator("#closed-close")).to_be_focused()
+    expect(page.locator("#sidebar")).to_be_hidden()  # visibility:hidden once the slide is over
+    page.keyboard.press("Escape")
+    expect(page.locator("#closed-panel")).to_be_hidden()
+    expect(page.locator("#rooms-toggle")).to_be_focused()
+
+
+def test_a_catchup_entry_keeps_the_draft_and_esc_brings_it_back(ui: UI) -> None:
+    page = ui.open()
+    box = page.locator("#input")
+    box.fill("a half-written note")
+    member_row(page, "claude-1").click()
+    page.click("#insp-catchup")
+    page.locator("#catchup-menu .menu-item", has_text="The whole room").click()
+    expect(box).to_have_value("/catchup claude-1")
+    expect(box).to_be_focused()
+    expect(page.locator("#log")).to_contain_text("Your draft is kept")
+    page.keyboard.press("Escape")
+    expect(box).to_have_value("a half-written note")
+    box.fill("")  # nothing is sent
+
+
+def test_empty_room_copy_keeps_its_icon(ui: UI) -> None:
+    """The join hint's Copy button changes only its label: it used to lose its icon for good."""
+    ui.world.create_room("#e2e-copy")  # a room of its own: nobody in it and nothing said
+    page = ui.open(room="e2e-copy", permissions=["clipboard-read", "clipboard-write"])
+    copy = page.locator("#copy-join")
+    expect(copy).to_be_visible()
+    copy.click()
+    expect(copy.locator("span")).to_have_text("Copied")
+    expect(copy.locator("svg")).to_have_count(1)
+    assert page.evaluate("navigator.clipboard.readText()") == page.locator("#join-line").inner_text()
+    expect(copy.locator("span")).to_have_text("Copy")  # after COPIED_MS
+    expect(copy.locator("svg")).to_have_count(1)

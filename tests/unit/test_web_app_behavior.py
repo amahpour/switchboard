@@ -163,6 +163,16 @@ def test_the_inspector_actions_use_the_command_path() -> None:
     assert texts(out) == ["/holdok", "/kickok"]
 
 
+def test_a_catchup_entry_keeps_the_draft_and_gives_it_back_after_the_command() -> None:
+    out = run("catchup_keeps_the_draft")
+    assert out["filled"] == "/catchup claude-1"
+    assert out["refilled"] == '/catchup claude-1 on ""'
+    assert out["commands"] == ['/catchup claude-1 on ""']
+    assert out["afterSend"] == "half-written note to codex-1"  # the draft is back
+    assert out["said"] == ["hello"] and out["afterPlain"] == ""
+    assert "Your draft is kept: it comes back after this command is sent (or press Esc)." in texts(out)
+
+
 def test_a_typed_kick_asks_first_and_declining_gives_the_text_back() -> None:
     out = run("kick_typed_declined")
     assert out["commands"] == [] and out["input"] == "/kick codex-1"

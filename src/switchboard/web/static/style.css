@@ -1170,6 +1170,8 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
   background: var(--pane-bg);
 }
 .pane-head h2 { font-size: 13px; font-weight: 600; }
+/* a focus target only (tabindex=-1: focus lands here when the last agent's row goes away) */
+.pane-head h2:focus { outline: none; }
 .pane-head .muted { font-size: 12px; }
 .insp-head { padding: 0 12px 0 8px; }
 .back-btn {

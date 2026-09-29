@@ -534,6 +534,33 @@ const SCENARIOS = {
                            inspecting: w.$('pane').classList.contains('inspecting') });
   },
 
+  // A catch-up entry fills the composer but keeps the message being written: the draft comes
+  // back once the command has gone out (review finding: it used to be overwritten for good).
+  async catchup_keeps_the_draft() {
+    const { w, ws } = await buildRoom(MEMBERS);
+    w.server.details['build/claude-1'] = { room: '#build', member: MEMBERS[0], session: { id: null, why: 'x' }, queued: [], timeline: [] };
+    const input = w.$('input');
+    type(w, 'half-written note to codex-1');
+    click(memberButton(w, 'claude-1'));
+    await settle();
+    const item = function (label) {
+      return findAll(w.$('insp-body'), function (n) { return n.classList.contains('menu-item') && n.textContent.indexOf(label) === 0; })[0];
+    };
+    click(item('The whole room'));
+    const filled = input.value;
+    // a second pick while the command is in the composer must not stash the command as the draft
+    click(item('A topic…'));
+    const refilled = input.value;
+    w.$('composer').dispatch('submit', { preventDefault() {} });
+    await settle();
+    const afterSend = input.value;
+    // a plain message sent next does not bring anything back
+    await send(w, 'hello');
+    await settle();
+    return report(w, ws, { filled: filled, refilled: refilled, afterSend: afterSend, afterPlain: input.value,
+                           commands: w.server.commands, said: w.server.said });
+  },
+
   // /kick typed in the composer asks first; declining gives the text back.
   async kick_typed_declined() {
     const { w, ws } = await buildRoom(MEMBERS);

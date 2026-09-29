@@ -72,6 +72,8 @@
     rowRefs: new Map(),  // member name -> its row button, for focus on "back"
     pop: null,         // composer popover: { kind: 'palette'|'mentions', items, sel, start }
     sheetOpener: null, // the control that opened the Closed or Remotes sheet (focus returns to it)
+    sheetOpenerKey: null, // its data-focus key, to find it again if renderChips rebuilt it
+    draft: null,       // composer text a catch-up entry replaced; it comes back after the command (fillComposer)
   };
 
   // ------------------------------------------------------------ helpers
@@ -844,13 +846,56 @@
     $('buddy-toggle').setAttribute('aria-expanded', String(sheet));
     $('rooms-toggle').setAttribute('aria-expanded', String(nav));
     const pane = $('pane');
-    if (sheet && phone()) {
+    const modal = sheet && phone();
+    if (modal) {
       pane.setAttribute('role', 'dialog');
       pane.setAttribute('aria-modal', 'true');
     } else {
       unsetAttr(pane, 'role');
       unsetAttr(pane, 'aria-modal');
     }
+    // aria-modal only tells assistive tech; inert makes it true for Tab and clicks as well: while
+    // the phone sheet is open, the page behind the scrim takes no focus (Esc and the scrim close it)
+    $('main').inert = modal;
+    $('sidebar').inert = modal;
+  }
+
+  // Is keyboard focus somewhere inside `box`? (activeElement is null in the node harness.)
+  function hasFocusIn(box) {
+    const f = document.activeElement;
+    return !!f && f !== box && typeof box.contains === 'function' && box.contains(f);
+  }
+
+  // Focus n and report whether it took: a node that is hidden (visibility or display), inert or
+  // no longer in the page refuses focus without an error, and the caller then picks another.
+  function tryFocus(n) {
+    if (!n || typeof n.focus !== 'function') return false;
+    n.focus();
+    return document.activeElement === n;
+  }
+
+  // The first thing to focus in the pane's visible view: the Inspector's heading, else the first
+  // member row, else the Members heading (tabindex=-1 in index.html).
+  function focusPaneStart() {
+    if (state.inspect && tryFocus(state.insp.name)) return;
+    const first = state.rowRefs && state.rowRefs.size ? state.rowRefs.values().next().value : null;
+    if (tryFocus(first)) return;
+    tryFocus($('members-title'));
+  }
+
+  // After an agent's row went away (a kick, a leave) with focus in the pane: focus the row that
+  // took its place in the list (the next one, or the previous one when it was last), else the
+  // Members heading, else the composer, so focus never drops to <body>. `idx` is the gone row's
+  // index in the list it was in; `gone` its name, skipped if that row is still on screen.
+  function focusNear(idx, gone) {
+    const r = activeRoom();
+    const rest = (r ? r.members : []).filter(function (x) { return x.name !== gone; });
+    if (rest.length) {
+      const next = rest[Math.max(0, Math.min(idx, rest.length - 1))];
+      if (tryFocus(state.rowRefs.get(next.name))) return;
+    }
+    if (tryFocus($('members-title'))) return;
+    $('input').focus();
   }
 
   function showPane() {
@@ -917,9 +962,13 @@
     fetchDetail();
   }
 
-  // back to Members; focus the agent's row when asked (the back button, Esc)
+  // Back to Members. Focus goes to the agent's row when asked (the back button, Esc), and also
+  // whenever focus was inside the pane: the Inspector view is about to be hidden, and focus
+  // left on a node in it would drop to <body>. If the agent's row is gone (it left or was
+  // kicked), its neighbour gets focus instead (focusNear).
   function closeInspector(focus) {
     const was = state.inspect;
+    const inPane = hasFocusIn($('pane'));
     state.inspect = null;
     state.detail = null;
     state.inspSeq += 1;  // a response still in flight is dropped
@@ -928,10 +977,9 @@
     setPaneView(false);
     markSel();
     renderBuddies();
-    if (focus) {
+    if (focus || inPane) {
       const row = was ? state.rowRefs.get(was.name) : null;
-      if (row) row.focus();
-      else $('insp-back').focus();
+      if (!tryFocus(row)) focusNear(was && was.idx >= 0 ? was.idx : 0, was ? was.name : '');
     }
   }
 
@@ -1029,6 +1077,7 @@
     const dm = (d && d.member) || {};
     const who = label(m.name, m.host);
     const idx = r.members.indexOf(m);
+    ins.idx = idx;  // where its row is, for focusNear() once the row is gone
     $('insp-pos').textContent = 'Agent ' + (idx + 1) + ' of ' + r.members.length;
     const focused = focusKey(body);
     const scroll = body.scrollTop;
@@ -1039,6 +1088,9 @@
     const nameH = el('h2', null, who);
     nameH.id = 'insp-name';
     nameH.tabIndex = -1;
+    // every focusable node rebuilt here carries a data-focus key, so a re-render (the detail
+    // fetch, a members frame, a refetch) puts focus back on the same control (refocus below)
+    nameH.dataset.focus = 'name';
     const flag = approvalsFlag(m);
     if (flag) nameH.append(flag);
     refs.name = nameH;
@@ -1222,6 +1274,7 @@
     function item(text, shown, fill, caretBack) {
       const b = btn('menu-item');
       b.setAttribute('role', 'menuitem');
+      b.dataset.focus = 'menu:' + fill;  // the command: stable when the member list re-renders
       b.append(el('span', null, text), el('code', null, shown));
       b.addEventListener('click', function () {
         setMenu(false);
@@ -1267,12 +1320,15 @@
     cancel.dataset.focus = 'kick-cancel';
     cancel.addEventListener('click', function () { setConfirm(false); });
     const doKick = btn('btn-danger', 'Kick');
+    doKick.dataset.focus = 'kick-do';
     doKick.addEventListener('click', function () {
       const name = m.name;
+      const at = r.members.indexOf(m);
       closeInspector(false);
       submitText('/kick ' + name, { confirmed: true });
-      const rowRef = state.rowRefs.get(name);
-      if (rowRef) rowRef.focus();
+      // the kicked agent's row goes away with the next members frame, so focus the row that
+      // takes its place now; renderBuddies keeps it focused across that re-render
+      focusNear(at, name);
     });
     const btns = el('div', 'dialog-buttons');
     btns.append(cancel, doKick);
@@ -1310,9 +1366,15 @@
   }
 
   // put a command in the composer for the human to finish and send (nothing is sent here);
-  // caretBack > 0 leaves the caret that many characters before the end (inside the quotes)
+  // caretBack > 0 leaves the caret that many characters before the end (inside the quotes).
+  // A message the human was writing is not thrown away: it is kept in state.draft and comes
+  // back into the composer once the command has gone out, or on Esc (restoreDraft). Setting
+  // value from script also clears the textarea's own undo, so Ctrl+Z could not bring it back.
   function fillComposer(text, caretBack) {
     const input = $('input');
+    const had = String(input.value || '');
+    if (had.trim() && had.trim()[0] !== '/' && !state.draft) state.draft = had;
+    if (narrow()) setSheet(false);  // first: the phone sheet makes the composer inert while open
     input.value = text;
     autoGrow();
     input.focus();
@@ -1320,7 +1382,20 @@
       const at = text.length - (caretBack || 0);
       input.setSelectionRange(at, at);
     }
-    if (narrow()) setSheet(false);
+    if (state.draft) renderLocal('Your draft is kept: it comes back after this command is sent (or press Esc).');
+  }
+
+  // put a kept draft back in the composer (see fillComposer); true if there was one
+  function restoreDraft() {
+    const d = state.draft;
+    if (!d) return false;
+    state.draft = null;
+    const input = $('input');
+    input.value = d;
+    autoGrow();
+    input.focus();
+    if (typeof input.setSelectionRange === 'function') input.setSelectionRange(d.length, d.length);
+    return true;
   }
 
   // ----------------------------------------------------- composer popovers
@@ -1705,11 +1780,13 @@
     return f && box.contains(f) && f.dataset ? f.dataset.focus || null : null;
   }
 
+  // focus the node in box whose data-focus is key; true if it took focus
   function refocus(box, key) {
-    if (!key) return;
+    if (!key) return false;
     for (const n of box.querySelectorAll('[data-focus]')) {
-      if (n.dataset.focus === key) { n.focus(); return; }
+      if (n.dataset.focus === key) return tryFocus(n);
     }
+    return false;
   }
 
   function byRemote(box, cls) {
@@ -1867,16 +1944,27 @@
 
   function openSheet(id) {
     state.sheetOpener = document.activeElement || null;
+    state.sheetOpenerKey = state.sheetOpener && state.sheetOpener.dataset ? state.sheetOpener.dataset.focus || null : null;
     for (const other of ['remotes-panel', 'closed-panel']) if (other !== id) $(other).classList.add('hidden');
     $(id).classList.remove('hidden');
     setNav(false);
   }
 
+  // Focus goes back to the opener if it can still take it. It can't when the phone's rooms
+  // drawer closed as the sheet opened (the opener sits in the now hidden drawer), when
+  // renderChips rebuilt the remote rows meanwhile, or when the Closed button went away (the last
+  // closed room was reopened elsewhere). Then: the Rooms toggle on a phone, a rebuilt remote row
+  // with the same key, else the composer.
   function closeSheet(id) {
     $(id).classList.add('hidden');
     const back = state.sheetOpener;
+    const key = state.sheetOpenerKey;
     state.sheetOpener = null;
-    if (back && typeof back.focus === 'function') back.focus();
+    state.sheetOpenerKey = null;
+    if (tryFocus(back)) return;
+    if (phone() && tryFocus($('rooms-toggle'))) return;
+    if (key && refocus($('remotes'), key)) return;
+    $('input').focus();
   }
 
   function openRemotes() {
@@ -2093,6 +2181,8 @@
       $('input').focus();
       return;
     }
+    // in the composer, with a draft a catch-up entry replaced: Esc puts the draft back
+    if (state.draft && document.activeElement === $('input') && restoreDraft()) return;
     for (const id of ['closed-panel', 'remotes-panel']) {
       if (!$(id).classList.contains('hidden')) return closeSheet(id);
     }
@@ -2120,10 +2210,19 @@
       input.value = '';
       input.rows = 1;
       closePop();
+      // a draft that a catch-up entry replaced comes back once this command has gone out
+      const draft = text[0] === '/' ? state.draft : null;
+      if (draft) state.draft = null;
       submitText(text).then(function (ok) {
         if (!ok && !input.value) {
           input.value = text;  // give a failed message back
           autoGrow();
+          if (draft && !state.draft) state.draft = draft;  // and keep the draft for the retry
+        } else if (draft && !state.draft) {
+          state.draft = draft;
+          // back in the composer, unless something new was typed meanwhile: then it waits for
+          // Esc or the next command
+          if (!input.value) restoreDraft();
         }
       });
       input.focus();
@@ -2192,10 +2291,12 @@
     });
     $('new-room-name').addEventListener('input', updateWelcome);
     $('copy-join').addEventListener('click', function () {
+      // only the label changes: textContent on the button itself would drop its copy icon
       const b = $('copy-join');
+      const lbl = b.querySelector('span');
       clipboardWrite($('join-line').textContent).then(function () {
-        b.textContent = 'Copied';
-        setTimeout(function () { b.textContent = 'Copy'; }, COPIED_MS);
+        lbl.textContent = 'Copied';
+        setTimeout(function () { lbl.textContent = 'Copy'; }, COPIED_MS);
       }, function () {});
     });
 
@@ -2212,11 +2313,24 @@
       if (r) submitText(r.settings && r.settings.paused ? '/resume' : '/pause');
     });
     $('pane-toggle').addEventListener('click', togglePane);
-    $('buddy-toggle').addEventListener('click', function () { setSheet(!$('app').classList.contains('sheet-open')); });
+    $('buddy-toggle').addEventListener('click', function () {
+      const open = !$('app').classList.contains('sheet-open');
+      setSheet(open);
+      // at 760 px and below the sheet is a modal dialog: focus moves into it (setOverlay makes
+      // the page behind inert, so focus left on the pill would have nowhere to go)
+      if (open) focusPaneStart();
+    });
     $('rooms-toggle').addEventListener('click', function () { setNav(!$('app').classList.contains('nav-open')); });
+    // The scrim closes the drawer or sheet it covers for. Clicking it already moved focus to
+    // <body>, so focus goes to the toggle that opens what was closed, as Esc does.
     $('scrim').addEventListener('click', function () {
+      const app = $('app');
+      const nav = app.classList.contains('nav-open');
+      const sheet = app.classList.contains('sheet-open');
       setNav(false);
       setSheet(false);
+      if (nav) $('rooms-toggle').focus();
+      else if (sheet) (phone() ? $('buddy-toggle') : $('pane-toggle')).focus();
     });
     $('insp-back').addEventListener('click', function () { closeInspector(true); });
 

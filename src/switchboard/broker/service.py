@@ -184,10 +184,16 @@ def _sender_label(name: str, host: str | None) -> str:
     return f"{name}@{host}" if host else name
 
 
+# The status sources a real turn end writes: the engine's Stop and Interrupt hooks set the
+# member idle with ``f"hook:{E}"``. The ``stop:*`` sources (engine.STOP_BUSY_SRCS: followup,
+# block, rearm) are the opposite: switchboard kept the turn going and marked the agent busy.
+TURN_END_SRCS = frozenset({"hook:Stop", "hook:Interrupt"})
+
+
 def _last_seen(t: dict[str, Any]) -> tuple[float | None, str | None]:
     """The member's newest sign of life and what it was: ``said`` (its last say()),
-    ``passed`` (a pass() in this room), ``turn ended`` (a Stop hook was the last status
-    report), else ``seen``. ``(None, None)`` when nothing is known."""
+    ``passed`` (a pass() in this room), ``turn ended`` (a Stop or Interrupt hook was the last
+    status report, ``TURN_END_SRCS``), else ``seen``. ``(None, None)`` when nothing is known."""
     seen, said, passed = t.get("last_seen"), t.get("last_say_at"), t.get("last_pass_at")
     known = [x for x in (seen, said, passed) if x is not None]
     if not known:
@@ -198,7 +204,7 @@ def _last_seen(t: dict[str, Any]) -> tuple[float | None, str | None]:
     if passed is not None and passed == top:
         return top, "passed"
     src = t.get("status_src")
-    if isinstance(src, str) and src.startswith("stop") and seen == top:
+    if src in TURN_END_SRCS and seen == top:
         return top, "turn ended"
     return top, "seen"
 

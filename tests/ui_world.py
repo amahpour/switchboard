@@ -232,6 +232,7 @@ class UIWorld:
         self._stop: asyncio.Event | None = None
         self._ready = threading.Event()
         self._error: BaseException | None = None
+        self._extra: list[Any] = []  # agents add_agents() joined later; closed with the others
         # a signed-in client for the helpers below, made before any browser opens: every sign-in
         # posts a live "new web login" notice, which an open page would show in its log
         self.web: httpx.Client | None = None
@@ -297,7 +298,7 @@ class UIWorld:
             self._error = e
         finally:
             self._ready.set()
-            for a in agents.values():
+            for a in [*agents.values(), *self._extra]:
                 await a.close()
 
     # ------------------------------------------------------------ helpers
@@ -321,3 +322,31 @@ class UIWorld:
 
     def create_room(self, name: str) -> dict[str, Any]:
         return self.post("/api/rooms", {"name": name})
+
+    def add_agents(self, room: str, names: tuple[str, ...]) -> None:
+        """Join more scripted test agents to ``room`` (which must exist), in order, for a test
+        that kicks or loses members without touching #build's four. They run on the agents'
+        loop and close with the others in ``stop()``. Joining a ``--harness test`` agent needs
+        test mode, so the broker is in it only while they join (as during the seeding)."""
+        from fakes.fake_agent import FakeAgent
+
+        b = self.broker
+        loop = self._loop
+        assert loop is not None, "UIWorld is not started"
+
+        def test_mode_on() -> None:
+            b.state.test_mode = True
+            b.state.info.test_mode = True
+
+        async def join_all() -> None:
+            for n in names:
+                a = FakeAgent(self.home, f"extra-{n}")
+                self._extra.append(a)
+                await a.start()
+                await a.join(room, n)
+
+        b.on_loop(test_mode_on)
+        try:
+            asyncio.run_coroutine_threadsafe(join_all(), loop).result(60)
+        finally:
+            not_test_mode(b)

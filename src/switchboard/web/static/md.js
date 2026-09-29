@@ -21,6 +21,9 @@
  *     say). A refused link is inert text plus a "link blocked" pill that says why;
  *   - shows the real, normalized URL beside every link text, so "[CI run](https://evil.example)"
  *     cannot hide where it goes, and an IDN look-alike host shows as its xn-- form;
+ *   - refuses URLs with a user name or password (https://github.com@evil.example/): the part
+ *     before '@' can make the shown URL read as a trusted host while the browser goes to the
+ *     host after it;
  *   - opens links in a new tab with rel="noopener noreferrer nofollow" and no referrer.
  *   The static lint (tests/unit/test_web_static_lint.py) pins the single link path and bans the
  *   HTML sinks, so a later edit cannot quietly add another way in.
@@ -53,8 +56,10 @@
  *   Inlines, one left-to-right scan:
  *     \ + ASCII punctuation is that character, literal. `code spans` (a run of n backticks
  *     closed by the next run of exactly n). [text](url "title") links, with no link inside a
- *     link. <http(s)://...> autolinks, and bare http(s):// URLs in text (trailing punctuation
- *     and an unbalanced ')' stay text). *em*, _em_, **strong**, __strong__ by CommonMark's
+ *     link. <http(s)://...> autolinks, and bare http(s):// URLs (trailing punctuation and an
+ *     unbalanced ')' stay text). A bare URL is taken whole by the same scan, before emphasis,
+ *     code spans or mentions can see its characters, so `.../__init__.py`, `/a*b*c` and
+ *     `/@types/node` stay inside it. *em*, _em_, **strong**, __strong__ by CommonMark's
  *     flanking rules, except that '_' needs a non-alphanumeric neighbour outside, so
  *     snake_case_name stays literal. @name becomes a highlighted mention only when the broker
  *     listed it in the message's mentions (the same pattern as delivery/rules.py MENTION_RE),
@@ -87,6 +92,7 @@
 
   const TITLE_SCHEME = 'Not a link: only http(s) URLs are followed';
   const TITLE_LOCAL = 'Not a link: links to this switchboard page are never followed';
+  const TITLE_CREDS = 'Not a link: a URL with a user name or password can hide its real host';
 
   const ASCII_PUNCT = '!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~';
   const URL_TRAIL = '.,;:!?*_';        // trimmed from the end of a bare URL
@@ -514,8 +520,57 @@
     return s.slice(k, k + word.length).toLowerCase() === word;
   }
 
+  // A bare http(s):// URL starting at s[k], or null. The caller has checked that no letter or
+  // digit comes right before it. It runs inside the inline scan, ahead of the emphasis, code
+  // span, mention and bracket handlers, so none of them can cut a URL short: `__init__.py`,
+  // `a*b*c` and `/@types/node` stay part of it. The run ends at whitespace, at one of URL_STOP,
+  // at a backslash that escapes nothing (a backslash before other ASCII punctuation keeps that
+  // character, as it would in text) and, while a '[' is open (inBracket), at ']', so
+  // "[https://a.example](https://b.example)" is still a link to b. Then trailing punctuation
+  // (URL_TRAIL) and a ')' with no '(' to match come off the end, and are scanned again as
+  // ordinary text, so "(see https://x.y/z)." and "*https://x.y/z*" work. Linear: each character
+  // is looked at once here, and when nothing is left after the trim every character past the
+  // scheme was trailing punctuation, so no other URL can start inside the run.
+  // Returns {url, end}: the URL (escapes resolved) and the index in s just past it.
+  function bareUrl(s, k, inBracket) {
+    const m = s.startsWith('https://', k) ? 8 : s.startsWith('http://', k) ? 7 : 0;
+    if (!m) return null;
+    const chars = [];  // the URL so far, one character per entry
+    const ends = [];   // ends[j]: the index in s just past chars[j] (an escape is 2 long)
+    for (let q = k; q < k + m; q++) { chars.push(s[q]); ends.push(q + 1); }
+    let opens = 0;
+    let closes = 0;
+    let e = k + m;
+    while (e < s.length) {
+      let c = s[e];
+      let next = e + 1;
+      if (c === '\\') {
+        const x = s[e + 1];
+        if (!isAsciiPunct(x) || URL_STOP.indexOf(x) >= 0) break;
+        c = x;
+        next = e + 2;
+      } else if (isSpace(c) || URL_STOP.indexOf(c) >= 0 || (inBracket && c === ']')) {
+        break;
+      }
+      if (c === '(') opens++;
+      else if (c === ')') closes++;
+      chars.push(c);
+      ends.push(next);
+      e = next;
+    }
+    let len = chars.length;
+    while (len > m) {
+      const c = chars[len - 1];
+      if (URL_TRAIL.indexOf(c) >= 0) len--;
+      else if (c === ')' && closes > opens) { len--; closes--; }
+      else break;
+    }
+    if (len <= m) return null;
+    return { url: chars.slice(0, len).join(''), end: ends[len - 1] };
+  }
+
   // One inline scan over s (see GRAMMAR, Inlines). Returns a tree of plain objects:
-  // {t:'text', v, raw?} {t:'br'} {t:'code', v} {t:'mention', v} {t:'strong'|'em', c}
+  // {t:'text', v} {t:'br'} {t:'code', v} {t:'mention', v} {t:'strong'|'em', c}
   // {t:'link', c, url, bad}. Nodes live in a doubly linked list while scanning so emphasis and
   // links can wrap a stretch in O(1) relinking; `d` is a node's inline nesting depth, and a
   // {t:'group', c} (emphasis past MAX_NEST) is dissolved again by finish().
@@ -594,6 +649,17 @@
     while (i < n) {
       const ch = s[i];
 
+      // A bare URL, before anything else can take its characters (see bareUrl).
+      if (ch === 'h' && !isAlnum(s[i - 1])) {
+        const u = bareUrl(s, i, brackets.length > 0);
+        if (u) {
+          flush();
+          add({ t: 'link', c: [{ t: 'text', v: u.url }], url: u.url, bad: false });
+          i = u.end;
+          continue;
+        }
+      }
+
       if (ch === '\\') {
         if (isAsciiPunct(s[i + 1])) { buf += s[i + 1]; i += 2; }
         else if (s[i + 1] === '\n') i++;  // a hard break: the newline below becomes <br>
@@ -664,10 +730,10 @@
         brackets.pop();
         if (b.image) {
           // Images are never rendered: the whole source stays literal, and nothing inside it
-          // (a nested link, a bare URL) becomes a link.
+          // (a nested link, a bare URL) becomes a link: what was built for it is dropped.
           cutAfter(b.node.prev);
           delims.length = b.bottom;
-          add({ t: 'text', v: s.slice(b.pos, d.end), raw: true });
+          add({ t: 'text', v: s.slice(b.pos, d.end) });
         } else {
           processEmphasis(b.bottom);
           delims.length = b.bottom;
@@ -720,12 +786,12 @@
     processEmphasis(0);
     const all = [];
     for (let x = head.next; x; x = x.next) all.push(x);
-    return finish(all, false);
+    return finish(all);
   }
 
-  // Linked nodes -> clean tree: leftover delimiters become text, neighbouring text merges, and
-  // bare URLs in text outside links become links.
-  function finish(arr, inLink) {
+  // Linked nodes -> clean tree: leftover delimiters become text and neighbouring text merges.
+  // (Bare URLs are links already: the scan takes them whole, see bareUrl.)
+  function finish(arr) {
     const out = [];
     for (const n of arr) {
       let m;
@@ -733,67 +799,24 @@
         if (!n.len) continue;
         m = { t: 'text', v: n.ch.repeat(n.len) };
       } else if (n.t === 'group') {
-        for (const g of finish(n.c, inLink)) push(out, g);
+        for (const g of finish(n.c)) push(out, g);
         continue;
       } else if (n.t === 'strong' || n.t === 'em') {
-        m = { t: n.t, c: finish(n.c, inLink) };
+        m = { t: n.t, c: finish(n.c) };
       } else if (n.t === 'link') {
-        m = { t: 'link', c: finish(n.c, true), url: n.url, bad: n.bad };
+        m = { t: 'link', c: finish(n.c), url: n.url, bad: n.bad };
       } else {
-        m = { t: n.t, v: n.v, raw: !!n.raw };
+        m = { t: n.t, v: n.v };
       }
       push(out, m);
     }
-    if (inLink) return out;
-    const linked = [];
-    for (const m of out) {
-      if (m.t === 'text' && !m.raw) linked.push.apply(linked, linkify(m.v));
-      else linked.push(m);
-    }
-    return linked;
+    return out;
   }
 
   function push(out, m) {
     const last = out[out.length - 1];
-    if (m.t === 'text' && !m.raw && last && last.t === 'text' && !last.raw) last.v += m.v;
+    if (m.t === 'text' && last && last.t === 'text') last.v += m.v;
     else out.push(m);
-  }
-
-  // Bare http(s):// URLs in one text run.
-  function linkify(v) {
-    const out = [];
-    let from = 0;
-    let k = v.indexOf('http');
-    while (k >= 0) {
-      const m = v.startsWith('https://', k) ? 8 : v.startsWith('http://', k) ? 7 : 0;
-      if (m && (k === 0 || !isAlnum(v[k - 1]))) {
-        let e = k + m;
-        while (e < v.length && URL_STOP.indexOf(v[e]) < 0 && !isSpace(v[e])) e++;
-        let opens = 0;
-        let closes = 0;
-        for (let q = k; q < e; q++) {
-          if (v[q] === '(') opens++;
-          else if (v[q] === ')') closes++;
-        }
-        while (e > k + m) {
-          const c = v[e - 1];
-          if (URL_TRAIL.indexOf(c) >= 0) e--;
-          else if (c === ')' && closes > opens) { e--; closes--; }
-          else break;
-        }
-        if (e > k + m) {
-          if (k > from) out.push({ t: 'text', v: v.slice(from, k) });
-          const url = v.slice(k, e);
-          out.push({ t: 'link', c: [{ t: 'text', v: url }], url: url, bad: false });
-          from = e;
-          k = v.indexOf('http', e);
-          continue;
-        }
-      }
-      k = v.indexOf('http', k + 1);
-    }
-    if (from < v.length) out.push({ t: 'text', v: v.slice(from) });
-    return out;
   }
 
   function plainText(nodes) {
@@ -812,6 +835,9 @@
     let u;
     try { u = new URL(String(raw).trim()); } catch (e) { return { ok: false, why: 'relative' }; }
     if (!(u.protocol === 'http:' || u.protocol === 'https:')) return { ok: false, why: 'scheme' };
+    // userinfo (https://github.com@evil.example/): the text before '@' reads like a host, in the
+    // link text and in the md-url span, while the browser goes to the host after it. Refused.
+    if (u.username || u.password) return { ok: false, why: 'credentials' };
     const h = u.hostname.toLowerCase().replace(/\.$/, '');
     if (!h) return { ok: false, why: 'invalid' };
     if (h === 'localhost' || h.endsWith('.localhost') || h === '[::1]' || h === '0.0.0.0' ||
@@ -840,7 +866,7 @@
   }
 
   function blocked(textNodes, why) {
-    const title = why === 'local' ? TITLE_LOCAL : TITLE_SCHEME;
+    const title = why === 'local' ? TITLE_LOCAL : why === 'credentials' ? TITLE_CREDS : TITLE_SCHEME;
     const span = el('span', 'md-blocked');
     span.title = title;
     for (const t of textNodes) span.append(t);

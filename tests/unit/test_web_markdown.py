@@ -32,6 +32,7 @@ ALLOWED_TAGS = {
 }
 TITLE_SCHEME = "Not a link: only http(s) URLs are followed"
 TITLE_LOCAL = "Not a link: links to this switchboard page are never followed"
+TITLE_CREDS = "Not a link: a URL with a user name or password can hide its real host"
 
 
 # ------------------------------------------------------------------ helpers
@@ -384,6 +385,51 @@ def test_bare_urls_keep_balanced_parens_and_skip_link_text() -> None:
     assert hrefs == ["https://en.wikipedia.org/wiki/Foo_(bar)", "https://b.example/"]
 
 
+@pytest.mark.parametrize(("src", "url", "mentions"), [
+    # Review finding: bare URLs used to be found only in the text left over after emphasis, code
+    # spans and mentions had taken their pieces, so each of these linked somewhere else.
+    ("see https://github.com/python/cpython/blob/main/Lib/__init__.py ok",
+     "https://github.com/python/cpython/blob/main/Lib/__init__.py", ()),
+    ("https://www.npmjs.com/package/@types/node", "https://www.npmjs.com/package/@types/node", ("types",)),
+    ("https://x.com/a*b*c", "https://x.com/a*b*c", ()),
+    ("https://x.com/a_b_/c`d", "https://x.com/a_b_/c", ()),  # a backtick ends it (URL_STOP)
+    ("https://x.y/a\\_b", "https://x.y/a_b", ()),  # an escape inside keeps its character
+])
+def test_a_bare_url_is_taken_whole_before_inline_markup(src: str, url: str, mentions: tuple[str, ...]) -> None:
+    tree = render(src, mentions=mentions)
+    [a] = by_tag(tree, "a")
+    assert a["href"] == url and a["text"] == url
+    assert not by_tag(tree, "strong") and not by_tag(tree, "em") and not by_cls(tree, "md-mention")
+    assert not by_cls(tree, "md-url")  # the visible text is the whole URL
+
+
+def test_emphasis_around_a_bare_url_still_wraps_it() -> None:
+    tree = render("*https://x.y/z* and **https://x.y/w**, (see https://x.y/v).")
+    assert [a["href"] for a in by_tag(tree, "a")] == ["https://x.y/z", "https://x.y/w", "https://x.y/v"]
+    [em] = by_tag(tree, "em")
+    [strong] = by_tag(tree, "strong")
+    assert [c["tag"] for c in em["children"]][:1] == ["a"] and [c["tag"] for c in strong["children"]][:1] == ["a"]
+    assert tree["text"].endswith("https://x.y/v\u2197).")
+
+
+@pytest.mark.parametrize("url", [
+    "https://a@b.example/",
+    "https://github.com%2Fx@evil.example/",
+    "https://github.com%2Famahpour%2Fswitchboard%2Factions@evil.example/",
+    "https://user:secret@example.com/x",
+    "https://:secret@example.com/",
+])
+def test_urls_with_a_user_name_or_password_are_blocked(url: str) -> None:
+    """Review finding: userinfo makes the shown URL start with a trusted-looking host while the
+    browser goes to the host after the '@'. Refused on every path: a link, an autolink, bare."""
+    for src in (f"[CI run]({url})", f"<{url}>", f"see {url} ok"):
+        tree = render(src)
+        assert blocked(tree)["title"] == TITLE_CREDS, src
+        assert not by_cls(tree, "md-url")
+    [v] = harness([{"fn": "safeUrl", "raw": url, "localHost": ""}])
+    assert v == {"ok": False, "why": "credentials"}
+
+
 def test_idn_host_shows_its_punycode_form() -> None:
     tree = render("https://еxample.com")  # Cyrillic е
     [url] = by_cls(tree, "md-url")
@@ -439,6 +485,10 @@ PATHOLOGICAL = {
     "code_runs": "`a``b```c" * 2000,
     "deep_pair": "*" * 9999 + "a" + "*" * 9999,
     "deep_many": ("*" * 32 + "a ") * 250 + ("a" + "*" * 32 + " ") * 250,
+    # bare URLs are scanned inside the inline pass: one long run, and runs trimmed to nothing
+    "bare_url_run": "https://x.y/" * 1600,
+    "bare_url_trimmed": "https://.)*" * 1800,
+    "bare_url_in_brackets": "[https://a.b/" * 1500,
 }
 
 

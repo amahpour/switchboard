@@ -20,9 +20,11 @@ from typing import Any
 import httpx
 import pytest
 
-from conftest import InProcBroker
+from conftest import FakeClock, InProcBroker
+from engine_world import World
 from fakes.fake_agent import FakeAgent
 from switchboard.broker.service import _last_seen
+from switchboard.delivery.engine import STOP_BUSY_SRCS
 from switchboard.config import Config
 
 FAST = Config(human_name="alice").with_delivery(quiet_s=0.0, max_hold_s=0.0)
@@ -240,5 +242,23 @@ def test_last_seen_names_the_newest_sign_of_life() -> None:
     assert _last_seen({}) == (None, None)
     assert _last_seen({"last_seen": 5.0, "last_say_at": 5.0, "last_pass_at": 1.0}) == (5.0, "said")
     assert _last_seen({"last_seen": 3.0, "last_say_at": 1.0, "last_pass_at": 3.0}) == (3.0, "passed")
-    assert _last_seen({"last_seen": 9.0, "last_say_at": 1.0, "status_src": "stop:hook"}) == (9.0, "turn ended")
+    # a turn end is what the engine writes for a Stop or an Interrupt hook (set_status, "hook:{E}")
+    assert _last_seen({"last_seen": 9.0, "last_say_at": 1.0, "status_src": "hook:Stop"}) == (9.0, "turn ended")
+    assert _last_seen({"last_seen": 9.0, "status_src": "hook:Interrupt"}) == (9.0, "turn ended")
+    # review finding: the stop:* sources mean switchboard kept the turn going (busy), not an end
+    for src in STOP_BUSY_SRCS:
+        assert _last_seen({"last_seen": 9.0, "status_src": src}) == (9.0, "seen")
     assert _last_seen({"last_seen": 9.0, "status_src": "hook:PreToolUse"}) == (9.0, "seen")
+
+
+@pytest.mark.parametrize("event", ["Stop", "Interrupt"])
+def test_a_real_turn_end_reads_turn_ended(tmp_path: Path, clock: FakeClock, event: str) -> None:
+    """Review finding: the label keyed on ``stop*`` sources, which the engine writes only when it
+    keeps a turn going. Drive the engine's own hook path and feed what it stored to _last_seen."""
+    w = World(tmp_path, clock)
+    p, _m = w.agent("claude-1", harness="claude", status="busy", hooks=True)
+    clock.advance(5)
+    w.hook(p, event)
+    got = w.p(p)
+    assert got.status == "idle" and got.status_src == f"hook:{event}"
+    assert _last_seen({"last_seen": got.last_seen, "status_src": got.status_src}) == (got.last_seen, "turn ended")
