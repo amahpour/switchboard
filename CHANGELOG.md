@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed
+
+- **The README, rewritten** around what switchboard is for: the video is the hero (no GIF), a "Why a room" section, the security note next to Quickstart, a "Run it for a team" section for the container image and remote machines, and a "Works with" table in place of the version status. Project history moved to CONTRIBUTING.md.
+
+
 ## 0.6.1 (2026-09-29)
 
 ### Fixed
