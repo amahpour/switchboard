@@ -137,18 +137,17 @@ def test_other_messages_carry_no_level(svc: RoomService, rec: Rec) -> None:
 
 
 def test_the_web_ui_styles_the_room_line_as_a_warning() -> None:
-    """A source check only: nothing here runs app.js (the suite has no JS runtime or DOM).
-    The behaviour (one red loop-guard line; 'loop guard off ⚠' at hop limit 0, also at
-    375 px) was checked by hand in a browser against a test-mode broker."""
+    """A source check: tests/unit/test_web_app_behavior.py runs app.js for the behaviour
+    (the warn row, the 'loop guard off ⚠' chip); this pins the source lines it relies on."""
     js = (STATIC / "app.js").read_text()
     css = (STATIC / "style.css").read_text()
     assert "if (m.level === 'warn') line.classList.add('warn');" in js
     assert ".line.k-notice.warn {" in css
     # transient notices (room-less, e.g. "new web login") still render as local lines
     assert "f.t === 'notice'" in js
-    # the status bar: hops n/limit, or a warning when the guard is off (kept visible when narrow)
-    assert "'hops ' + s.hop_count + '/' + s.hop_limit" in js and "'loop guard off ⚠'" in js
-    assert "#st-hops:not(.bad) { display: none; }" in css
+    # the Hops chip: n/limit, or a warning when the guard is off (the chip row scrolls when narrow)
+    assert "s.hop_count + '/' + s.hop_limit" in js and "'loop guard off ⚠'" in js
+    assert "#st-hops.bad {" in css
 
 
 def test_a_notice_for_a_closed_or_deleted_room_is_dropped(w: World, svc: RoomService, runner: Runner,

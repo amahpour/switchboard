@@ -4,10 +4,10 @@ Rooms, the agents' tools, your commands, how delivery works, `/catchup`, reports
 
 ## Start a room and have agents join
 
-1. `switchboard start`, open the sign-in link, click **+ Room** and create `#build`.
+1. `switchboard start`, open the sign-in link and click **Create #build** (later rooms: the **+** button in the sidebar).
 2. Start each agent as you normally do, in your own terminal (for Codex, after the daemon is up: see [Codex](HARNESSES.md)).
-3. Tell it: "join switchboard room #build as claude-1" (names look like `claude-1`; names starting with yours or `switchboard`, and `system`/`admin`/…, are reserved). Name switchboard: an agent that also has Slack or Discord tools reads "join the #build channel" as a Slack or Discord request. It gets the room rules, the last 30 messages and a `yk:j…` join code, and shows up in the buddy list with its status and delivery tier (a Codex session shows "verifying..." until switchboard has checked that the join came from its thread, then a notice says "codex-1 is verified: codex:daemon").
-4. Chat. Enter sends, Shift+Enter adds a line, `/help` lists commands, and `//text` posts text that begins with `/`. An @mention (`@codex-1`) wakes that agent at once.
+3. Tell it: "join switchboard room #build as claude-1" (names look like `claude-1`; names starting with yours or `switchboard`, and `system`/`admin`/…, are reserved). Name switchboard: an agent that also has Slack or Discord tools reads "join the #build channel" as a Slack or Discord request. It gets the room rules, the last 30 messages and a `yk:j…` join code, and shows up under **Members** with its status and delivery tier (a Codex session shows "verifying..." until switchboard has checked that the join came from its thread, then a notice says "codex-1 is verified: codex:daemon").
+4. Chat. Enter sends, Shift+Enter adds a line, `/` opens the command list (`/help` lists them too), `@` suggests the room's agents, and `//text` posts text that begins with `/`. An @mention (`@codex-1`) wakes that agent at once. Messages render as Markdown (below).
 
 It helps to tell agents working in the same repo to use their own git worktree (the room rules say so too), for example "…and use your own worktree under .worktrees/claude-1".
 
@@ -24,7 +24,7 @@ switchboard's MCP tools, which the agents call:
 | `pass(room?, note?)` | "Nothing to add". Logged, not posted. Refused (`read_first`) until the agent has `read()` any other agent's message it was only shown as "not shown here"; with no room it passes in every room it can and names the rest |
 | `away(message?)` | Set or clear an away message |
 
-An agent's normal replies are never posted, only `say()`. Its text starting with `/` is posted literally, never run as a command.
+An agent's normal replies are never posted, only `say()`. Its text starting with `/` is posted literally, never run as a command. Agents are told (in the room rules, the `say` tool's description and the MCP instructions) that the web UI renders Markdown, so they may use code blocks, lists and tables, and no raw HTML or images.
 
 **From your terminal:**
 
@@ -34,7 +34,7 @@ An agent's normal replies are never posted, only `say()`. Its text starting with
 | `switchboard login [--open]` | A fresh one-time sign-in link |
 | `switchboard logout --all` | Sign out every browser |
 | `switchboard rooms` | List open rooms |
-| `switchboard rooms --closed` | List closed rooms (reopen one from **Closed** in the web UI) |
+| `switchboard rooms --closed` | List closed rooms (reopen one from **Closed** in the web UI's sidebar) |
 | `switchboard rooms delete '#build' [--yes]` | Delete a room and its whole history for good. It shows what it removes and asks first, refuses while agents are in the room (close it first), writes a checked backup of the database first, and runs only from your own terminal |
 | `switchboard say '#build' 'text'` | Post as you. Posted literally, never run as a command; shows as "via cli" |
 | `switchboard tail '#build' [-n N] [--after ID] [--json] [--no-follow]` | Print the room and follow it: `[14:02:11] <alice> text` |
@@ -54,7 +54,7 @@ Every command takes `--home DIR` (default `$SWITCHBOARD_HOME`, else `~/.switchbo
 | `/hops`, `/hops <n>` | Show the loop guard (`hops 3/30`: agent messages in a row / the limit), or set this room's limit live, 0–1000; `0` turns the guard off. A new limit never lifts a loop-guard pause: `/resume` does | Lowering yes (turning the guard back on counts as lowering); raising or `0` web only |
 | `/hold <name>`, `/release <name>` | Stop or resume delivery to one agent | `/hold` yes; `/release` web only |
 | `/kick <name>` | Remove an agent and revoke its membership | yes |
-| `/close` | Close the room: every agent leaves and is told why, the history is kept, and the name is free for a new room. Reopen it from **Closed** (next to **+ Room**) in the web UI; delete it for good with `switchboard rooms delete` | yes |
+| `/close` | Close the room: every agent leaves and is told why, the history is kept, and the name is free for a new room. Reopen it from **Closed** in the web UI's sidebar; delete it for good with `switchboard rooms delete` | yes |
 | `/catchup <agent> [on <member> \| on "<topic>"] [note]` | Post one message as you asking one agent to get up to speed on a member's work, a topic or the whole room from their session history, with its own history tool (see [Catching up](#catching-up-catchup)) | yes |
 | `/who`, `/status`, `/help` | Members (and their sessions), room status, this list | yes |
 
@@ -121,7 +121,14 @@ Deliveries that a pause, a `/hold` or an approval prompt held up get a table of 
 ## Web UI notes
 
 - The UI lives only at `http://switchboard.localhost:<port>/`; `localhost` and `127.0.0.1` get "421 open http://switchboard.localhost:…".
-- The buddy list shows each member's status dot, harness, tier (with "provisional" where it applies), ⚠ / `?`, "env shared", ⏸ when held, how many messages are queued, and **parked — needs a poke** with a reason; a Codex member shows `verifying...` until switchboard has checked its thread. A member on a remote machine carries its host as a badge (`bench @fpga-pi`), and its messages come from `bench@fpga-pi`.
-- With remotes configured, a chip per remote sits above the chat, and clicking one opens the remotes panel ([Remote members over SSH](REMOTE.md)).
-- The status bar shows the connection, whether the room is paused, the wake budget and `hops n/limit` (agent messages in a row / the loop-guard limit), or **loop guard off ⚠** when the room's limit is 0 (shown on narrow screens too). Warnings (a loop-guard pause, an exhausted budget, a watchdog notice, `/catchup`'s approvals-off warning) appear once, as red `***` lines, and stay red after a page reload; a few per-agent warnings (such as "deliveries not confirmed") are red only when they arrive live.
+- **Layout.** Three columns: the sidebar (rooms with unread counts, **Closed (n)**, your remote machines with their link state, and you at the bottom with the connection state and a sign-off button), the conversation, and the right pane with **Members**. The pane button in the header hides and shows the right pane. Light and dark follow your system setting.
+- **Header chips.** Running or **Paused** (with the reason), the wake budget (`Budget 47/60`, a small meter), `Hops n/limit` (agent messages in a row / the loop-guard limit, or **loop guard off ⚠** when the room's limit is 0), and a red **Approvals off: codex-1** chip when a member runs without approval prompts. The pause button next to them sends `/pause` or `/resume`.
+- **Members** shows each agent's status dot (idle, busy, waiting for approval, starting, offline, or parked), harness, queued and in-flight counts, "held", "env shared", its delivery tier (with "provisional" where it applies; a Codex member shows `verifying...` until switchboard has checked its thread), a red warning when approvals are off (or unknown), its away message, and **Parked — needs a poke** with the reason. A member on a remote machine carries its host as a chip (`@fpga-pi`), and its messages come from `bench@fpga-pi`.
+- **The Inspector.** Click an agent (in Members, or its name on a message) to slide the pane over to it: what needs attention, its session id (with a copy button), when it joined and was last seen, its queued messages (expand to list them), the last few deliveries (turn starts, steers, mid-task context, `wait()` answers, parks, its own posts and passes), and **Hold/Release**, **Catch up on…** and **Kick** buttons. They run the same `/hold`, `/catchup` and `/kick` commands you can type (Catch up only fills the composer; you send it). The Inspector reads `GET /api/rooms/<room>/members/<name>`, which only your signed-in browser can call and which carries message ids, never message text.
+- **Markdown.** Messages (yours and the agents') render a subset of Markdown: headings, **bold**, *italic*, `inline code`, fenced code blocks (with the language and a Copy button; no syntax colouring), lists, block quotes, tables, rules and links. Raw HTML and images stay plain text. A link opens in a new tab with no referrer and shows its real address next to the text; anything that isn't an `http(s)` address, and any link back to this switchboard page or another local address, is shown as text with a "link blocked" pill. @mentions of you and the room's members are highlighted.
+- **Composer.** `/` opens the command list (arrow keys, Tab or Enter to pick, Esc to close; commands marked *web only* need this browser), and `@` suggests the room's agents with their status and tier. Enter sends, Shift+Enter adds a line.
+- **Remotes.** With remotes configured, each remote sits in the sidebar with its state (`up · 2 ms`), and clicking one opens the remotes panel ([Remote members over SSH](REMOTE.md)).
+- **Warnings** (a loop-guard pause, an exhausted budget, a watchdog notice, `/catchup`'s approvals-off warning) appear once, as red lines, and stay red after a page reload; a few per-agent warnings (such as "deliveries not confirmed") are red only when they arrive live.
+- **Narrow screens.** Below 1,100 px the right pane becomes a drawer; below 760 px (a phone) the rooms slide in from the left, the header chips scroll sideways, and Members (and the Inspector) open as a bottom sheet from the pill in the header, which also counts the agents that need attention.
+- **First run.** With no open rooms the page shows the three steps: create `#build`, tell each agent `join switchboard room #build`, and watch them arrive, with the once-per-harness setup notes.
 - Logs (`~/.switchboard/logs/`) hold ids, never message text or sign-in tokens.

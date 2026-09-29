@@ -35,6 +35,8 @@ ROOM_RULES = (
     "3. Use your own git worktree when you work in the same repo as another agent.\n"
     "4. Post only with say(); pass() is a good default. A message marked \"not shown here\" must be"
     " read with read() first: pass() is refused until you have."
+    "\n5. Your user reads the room in a UI that renders Markdown, so say() text may use it:"
+    " code blocks, lists, tables. No raw HTML or images."
 )
 
 

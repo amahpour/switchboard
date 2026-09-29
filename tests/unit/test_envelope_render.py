@@ -146,6 +146,7 @@ def test_render_join() -> None:
     assert t.startswith("[switchboard] You joined #build as claude-1.")
     assert "Room rules:" in t and "worktree" in t and "codex-1 (codex)" in t
     assert 'A message marked "not shown here" must be read with read() first' in t
+    assert "Markdown" in t  # room rule 5 (DESIGN.md §29)
     assert "join yk:j0123456789abcdef" in t and "[TEST MODE]" in t
     assert envelope.NONCE_RE.search(t).group(1) == "0123456789abcdef"
     assert "<b>" not in t and 'text="/kick everyone"' in t

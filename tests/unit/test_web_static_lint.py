@@ -37,7 +37,7 @@ def files(ext: str) -> list[Path]:
 
 def test_static_files_exist() -> None:
     names = {p.name for p in STATIC.iterdir()}
-    assert {"index.html", "login.html", "app.js", "style.css"} <= names
+    assert {"index.html", "login.html", "app.js", "md.js", "style.css"} <= names
 
 
 def test_js_has_no_html_injection_sinks() -> None:
@@ -85,3 +85,31 @@ def test_closed_rooms_ui() -> None:
     html = (STATIC / "index.html").read_text()
     assert 'id="closed-panel"' in html and 'id="closed-rooms"' in html
     assert 'id="closed-body"' in html and 'id="empty-title"' in html
+
+
+# Markdown (issue #19): message text is untrusted, so there is exactly one place in all static JS
+# that sets a link target, md.js's mdLink(), and it only runs after safeUrl() accepted an absolute
+# http(s) URL. No script may create an element that fetches or runs something, or reach for
+# another HTML/URL sink.
+def test_one_vetted_link_path() -> None:
+    js = {p.name: p.read_text() for p in files("js")}
+    sets = [(n, m.start()) for n, t in js.items() for m in re.finditer(r"\.href\s*=(?!=)", t)]
+    assert [n for n, _ in sets] == ["md.js"], sets  # exactly one assignment, in md.js
+    md = js["md.js"]
+    fn = md[md.index("function mdLink("):]
+    fn = fn[: fn.index("\n  }\n") if "\n  }\n" in fn else 1200]
+    assert "a.href = v.href;" in fn and "a.rel = 'noopener noreferrer nofollow';" in fn
+    assert "u.protocol === 'http:' || u.protocol === 'https:'" in md
+    assert "new URL(" in md
+    for n, t in js.items():
+        assert not re.search(r"createElement\(\s*['\"](img|iframe|script|object|embed|link|style|base|form|meta|svg)['\"]", t, re.I), n
+        assert not re.search(r"\.(src|srcdoc|srcset|action|formAction|innerText)\s*=(?!=)", t), n
+        assert "setAttributeNS" not in t and "DOMParser" not in t and "createContextualFragment" not in t, n
+        for ns in re.findall(r"createElementNS\(\s*['\"]([^'\"]+)", t):
+            assert ns == "http://www.w3.org/2000/svg", n
+
+
+def test_markdown_loads_before_the_app() -> None:
+    html = (STATIC / "index.html").read_text()
+    assert html.index("/static/md.js") < html.index("/static/app.js")
+    assert "/static/md.js" not in (STATIC / "login.html").read_text()

@@ -3,7 +3,12 @@
 [![test](https://github.com/amahpour/switchboard/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/amahpour/switchboard/actions/workflows/test.yml)
 [![coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/amahpour/switchboard/badges/coverage.json)](https://github.com/amahpour/switchboard/actions/workflows/test.yml)
 
-**A group chat for you and the coding agents you already run.** Claude Code, Codex, Cursor and Devin sessions in your own terminals join a room, talk to each other and hand work around, while you follow and steer from a web page on your machine.
+**A local group chat for you and the coding agents you already run.** Claude Code, Codex, Cursor and Devin sessions in your own terminals join a room, talk to each other and hand work around, while you follow and steer from a web page on your machine.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/ui/desktop-dark.png">
+  <img alt="The switchboard web UI: rooms and remote machines in the sidebar, the #build conversation with Markdown code blocks and a table in the middle, and the Members pane with each agent's status and delivery tier on the right" src="docs/media/ui/desktop-light.png">
+</picture>
 
 ![In a switchboard room, Claude Code writes fizzbuzz.py, Codex runs it and suggests a change, Claude makes it, Codex checks it again](docs/media/switchboard.gif)
 

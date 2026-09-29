@@ -51,6 +51,7 @@ DEMO = Path("/tmp/sb-demo")
 ALICE = DEMO / "alice"            # the throwaway HOME
 PROJECT = ALICE / "project"       # the repo the agents work in
 CODEX_SOCK = DEMO / "cx.sock"     # the private Codex app-server (short: sun_path)
+MAC_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"  # when no chrome is on PATH
 TERM_W, TERM_H = 84, 26
 VIEW_W, VIEW_H, DPR = 860, 540, 2
 TASK = ("@claude-1 write fizzbuzz.py (1 to 15). @codex-1 run it and tell @claude-1 one thing to improve. "
@@ -186,7 +187,8 @@ class Demo:
         self.path = os.environ.get("PATH", "/usr/bin:/bin")
         self.claude = shutil.which("claude") or sys.exit("claude is not on PATH")
         self.codex = os.path.realpath(shutil.which("codex") or sys.exit("codex is not on PATH"))
-        self.chrome = shutil.which("google-chrome") or shutil.which("chromium") or sys.exit("no Chrome")
+        self.chrome = (shutil.which("google-chrome") or shutil.which("chromium")
+                       or next((p for p in [MAC_CHROME] if os.path.exists(p)), None) or sys.exit("no Chrome"))
         uv = shutil.which("uv") or sys.exit("uv is not on PATH")
         self.tmux = Tmux("media", self.path)
         self.rec = Recorder(build, self.tmux)
@@ -321,12 +323,12 @@ class Demo:
         assert self.cdp is not None
         self.cdp.call("Page.navigate", url=link)
         wait(lambda: self.js("document.getElementById('st-conn') && "
-                             "document.getElementById('st-conn').textContent") == "online", 20, "the web UI")
+                             "document.getElementById('st-conn').textContent") == "Connected", 20, "the web UI")
         time.sleep(0.8)
         self.shot("signed-in")
         time.sleep(0.6)
         self.js("document.getElementById('create-build').click()")
-        wait(lambda: self.js("[...document.querySelectorAll('#tabs [role=tab]')]"
+        wait(lambda: self.js("[...document.querySelectorAll('#tabs .room')]"
                              ".some(t => t.textContent.includes('#build'))"), 10, "#build")
         time.sleep(0.8)
         self.shot("room")
@@ -472,9 +474,9 @@ class Demo:
 
     # --------------------------------------------------------- scene: talk
     def chat(self) -> list[dict[str, str]]:
+        # every chat row (a grouped continuation too) carries its sender in data-from (#19)
         return self.js("[...document.querySelectorAll('#log .line.k-chat')].map(l => ({"
-                       "who: (l.querySelector('.nick-human, .nick-agent') || {}).textContent || '',"
-                       "text: l.textContent}))") or []
+                       "who: l.dataset.from || '', text: l.textContent}))") or []
 
     def scene_talk(self, max_s: float) -> None:
         self.rec.scene = "task"
@@ -518,7 +520,7 @@ class Demo:
                 else:
                     prompt_since.pop(pane, None)
             agents = {m["who"].strip("<> ") for m in msgs if "alice" not in m["who"]}
-            paused = "PAUSED" in (self.js("document.getElementById('st-state').textContent") or "")
+            paused = "Paused" in (self.js("document.getElementById('st-state').textContent") or "")
             if paused or ({"claude-1", "codex-1"} <= agents and self.idle("claude") and self.idle("codex")
                           and time.monotonic() - quiet_since > 20):
                 break

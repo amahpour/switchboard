@@ -88,6 +88,18 @@ def sanitize_env(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempP
     monkeypatch.setattr(switchboard.config, "getpass", types.SimpleNamespace(getuser=lambda: TEST_HUMAN))
 
 
+# Each test phase's report ("setup", "call", "teardown"), kept on the item, so a fixture's
+# teardown can tell whether its test failed (tests/e2e saves a trace and a screenshot then).
+PHASE_REPORTS = pytest.StashKey[dict[str, pytest.TestReport]]()
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]) -> Iterator[pytest.TestReport]:
+    rep = yield
+    item.stash.setdefault(PHASE_REPORTS, {})[rep.when] = rep
+    return rep
+
+
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
     sanitize_env(monkeypatch, tmp_path_factory)
@@ -111,6 +123,21 @@ def child_env(home: str | os.PathLike | None = None, **extra: str) -> dict[str, 
         env["COVERAGE_PROCESS_CONFIG"] = os.environ["COVERAGE_PROCESS_CONFIG"]
     env.update(extra)
     return env
+
+
+def node_for_tests() -> tuple[str | None, pytest.MarkDecorator]:
+    """The ``node`` binary for the web UI's node tests (tests/unit/test_web_app_behavior.py,
+    test_web_markdown.py) and the ``pytestmark`` for their modules.
+
+    Without node those tests are skipped, so a machine without it still runs the rest. CI sets
+    ``SWITCHBOARD_REQUIRE_NODE=1`` (and installs node): there a missing node fails the
+    collection instead, so the tests can never be skipped by accident."""
+    node = shutil.which("node")
+    if node is None and os.environ.get("SWITCHBOARD_REQUIRE_NODE") == "1":
+        pytest.fail("node is not on PATH, and SWITCHBOARD_REQUIRE_NODE=1 says the web UI's node tests "
+                    "must run: install node (22 in CI) or unset the variable", pytrace=False)
+    return node, pytest.mark.skipif(node is None, reason="node is not installed "
+                                    "(SWITCHBOARD_REQUIRE_NODE=1 makes this an error)")
 
 
 def make_tmp_home() -> Path:

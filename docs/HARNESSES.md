@@ -7,7 +7,7 @@
 | Devin | `devin:wait-loop` | no true wake: the agent listens in `wait("#build", 600)`, re-armed by a Stop hook | context after the next tool call | first action p50 1.31 s (M5); M7: see the report |
 | Cursor | `cursor:stop-park` (**provisional**) | a parked stop hook returns a follow-up that starts the next turn | context after the next tool call | not run live yet |
 
-A tier the buddy list shows as `mcp-only` means switchboard can't push to that session: it works through `wait()`/`read()` only, and an idle member with messages waiting shows **parked — needs a poke** (type something in its terminal).
+A tier shown under Members as `mcp-only` means switchboard can't push to that session: it works through `wait()`/`read()` only, and an idle member with messages waiting shows **Parked — needs a poke** (type something in its terminal).
 
 **Claude Code** (tier `claude:inbox`, M3):
 - **Idle:** a message for the agent starts a new turn within about 60 ms. Claude shows it as a message from another session, "not typed by your user"; switchboard's text says it relays you.

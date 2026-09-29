@@ -78,3 +78,5 @@ def test_token_round_trip() -> None:
 def test_room_rules_text() -> None:
     r = envelope.ROOM_RULES
     assert "untrusted" in r and "worktree" in r and "pass()" in r
+    # rule 5 (DESIGN.md §29): the web UI renders Markdown, raw HTML and images stay text
+    assert "Markdown" in envelope.ROOM_RULES and "No raw HTML" in envelope.ROOM_RULES

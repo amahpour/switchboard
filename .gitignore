@@ -21,3 +21,4 @@ build/
 coverage-data/
 coverage*.json
 htmlcov/
+e2e-artifacts/
