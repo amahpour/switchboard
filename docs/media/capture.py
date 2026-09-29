@@ -53,13 +53,18 @@ PROJECT = ALICE / "project"       # the repo the agents work in
 CODEX_SOCK = DEMO / "cx.sock"     # the private Codex app-server (short: sun_path)
 TERM_W, TERM_H = 84, 26
 VIEW_W, VIEW_H, DPR = 860, 540, 2
-TASK = ("@claude-1 please add input validation to parse_port (a port is 1 to 65535, anything else raises "
-        "ValueError), then ask codex-1 to review it. Keep your messages short.")
+TASK = ("@claude-1 @codex-1 parse_port needs input validation. claude-1: implement it in portparse.py. "
+        "codex-1: write stdlib unittest tests in test_portparse.py and run them. Agree on the exact rules here "
+        "first, then work it out between you until the tests pass. Both of you work in this checkout.")
 TOKEN_RE = re.compile(r"(login\?t=)[A-Za-z0-9_-]+")
 ANSI_RE = re.compile(r"\x1b\[[0-9;:]*[A-Za-z]")
 CODEX_READY = "Ask Codex to do anything"
-# with accept-edits, Claude may not edit any harness's project config or git's own files (as in m7_demo.py)
-CLAUDE_DENY = ["Edit(.claude/**)", "Edit(.devin/**)", "Edit(.codex/**)", "Edit(.git/**)"]
+# with accept-edits, Claude may not edit any harness's project config or git's own files (as in m7_demo.py),
+# and may run only the tests and read-only git
+CLAUDE_DENY = ["Edit(.claude/**)", "Edit(.devin/**)", "Edit(.codex/**)", "Edit(.git/**)", "Bash(git diff --output:*)"]
+CLAUDE_BASH_ALLOW = ["Bash(python3 -m unittest:*)", "Bash(python -m unittest:*)", "Bash(git diff:*)",
+                     "Bash(git status:*)", "Bash(git log:*)"]
+APPROVAL = re.compile(r"(Do you want to proceed|Would you like to run|Allow command|approve this|\[y/n\])", re.I)
 
 PORTPARSE = '''"""Parse a TCP port from user input."""
 
@@ -232,7 +237,9 @@ class Demo:
         sb.mkdir(mode=0o700)
         (sb / "config.toml").write_text(
             f'human_name = "alice"\n[claude]\nsessions_dir = "{REAL_HOME}/.claude/sessions"\n'
-            f'[codex]\ncontrol_socket = "{CODEX_SOCK}"\nbin = "{self.codex}"\n')
+            f'[codex]\ncontrol_socket = "{CODEX_SOCK}"\nbin = "{self.codex}"\n'
+            # a longer back-and-forth than the loop guard's default of 6 agent messages in a row
+            '[delivery]\nhop_limit = 14\n')
         os.chmod(sb / "config.toml", 0o600)
 
     def bash(self, name: str, env: dict[str, str], cwd: Path, rcfile: Path | None = None) -> None:
@@ -344,11 +351,11 @@ class Demo:
         pa = self.print_args("claude")
         (self.build / "mcp.json").write_text(json.dumps(profiles.claude_mcp_config(pa)))
         settings = profiles.claude_settings(pa, None)
-        settings["permissions"] = {"allow": [], "deny": list(profiles.TEST_DENY) + CLAUDE_DENY}
+        settings["permissions"] = {"allow": list(CLAUDE_BASH_ALLOW), "deny": list(profiles.TEST_DENY) + CLAUDE_DENY}
         (self.build / "settings.json").write_text(json.dumps(settings))
         argv = [str(self.bin / "claude"), "--model", self.claude_model, "--setting-sources", "project,local",
                 "--strict-mcp-config", "--permission-mode", "acceptEdits",
-                "--allowedTools", ",".join(profiles.SWITCHBOARD_TOOLS),
+                "--allowedTools", ",".join(profiles.SWITCHBOARD_TOOLS + CLAUDE_BASH_ALLOW),
                 "--mcp-config", str(self.build / "mcp.json"), "--settings", str(self.build / "settings.json")]
         # the viewer sees "claude"; the flags that keep your own config out stay in this function
         rc = self.build / "claude-rc.sh"
@@ -484,7 +491,7 @@ class Demo:
         assert self.cdp is not None
         for i, ch in enumerate(TASK):
             self.cdp.call("Input.insertText", text=ch)
-            if i % 4 == 3:
+            if i % 6 == 5:
                 self.shot("typing")
         self.shot("typed")
         time.sleep(0.6)
@@ -493,22 +500,39 @@ class Demo:
                           windowsVirtualKeyCode=13, nativeVirtualKeyCode=13)
         self.rec.mark("posted")
         self.rec.scene = "talk"
-        seen = 0
+        seen, last_shot = 0, 0.0
         quiet_since = time.monotonic()
         deadline = time.monotonic() + max_s
+        prompt_since: dict[str, float] = {}
         while time.monotonic() < deadline:
             msgs = self.chat()
-            agents = [m for m in msgs if "alice" not in m["who"]]
             if len(msgs) != seen:
+                for m in msgs[seen:]:
+                    self.rec.mark("message", who=m["who"].strip("<> "))
                 seen = len(msgs)
                 quiet_since = time.monotonic()
-                if msgs:
-                    self.rec.mark("message", who=msgs[-1]["who"])
-            self.shot("talk")
-            both = {"claude-1", "codex-1"} <= {a["who"].strip("<> ") for a in agents}
-            if both and self.idle("claude") and self.idle("codex") and time.monotonic() - quiet_since > 12:
+                self.shot("talk")
+                last_shot = time.monotonic()
+            elif time.monotonic() - last_shot > 2.0:
+                self.shot("talk")
+                last_shot = time.monotonic()
+            for pane in ("claude", "codex"):
+                # an approval prompt is never answered yes: declined with Esc after 10 s, as tests/live does
+                if APPROVAL.search(self.screen(pane)):
+                    prompt_since.setdefault(pane, time.monotonic())
+                    if time.monotonic() - prompt_since[pane] > 10:
+                        self.tmux.key(pane, "Escape")
+                        self.rec.mark("declined", pane=pane)
+                        prompt_since.pop(pane)
+                else:
+                    prompt_since.pop(pane, None)
+            agents = {m["who"].strip("<> ") for m in msgs if "alice" not in m["who"]}
+            paused = "PAUSED" in (self.js("document.getElementById('st-state').textContent") or "")
+            if paused or ({"claude-1", "codex-1"} <= agents and self.idle("claude") and self.idle("codex")
+                          and time.monotonic() - quiet_since > 20):
                 break
-            time.sleep(0.8)
+            time.sleep(0.5)
+        (self.build / "chat.json").write_text(json.dumps(self.chat(), indent=1))
         for _ in range(4):
             self.shot("end")
             time.sleep(0.5)
@@ -559,7 +583,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--build", type=Path, required=True, help="where to write timeline.jsonl and shots/")
     ap.add_argument("--claude-model", default="sonnet", help="Claude model for claude-1 (default: sonnet)")
-    ap.add_argument("--talk-s", type=float, default=240, help="the longest the agents may talk (s)")
+    ap.add_argument("--talk-s", type=float, default=480, help="the longest the agents may talk (s)")
     args = ap.parse_args()
     args.build.mkdir(parents=True, exist_ok=True)
     demo = Demo(args.build.resolve(), args.claude_model)

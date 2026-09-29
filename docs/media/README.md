@@ -1,11 +1,11 @@
 # The getting-started video
 
-`switchboard.gif` at the top of the README, and a longer MP4 with music, are made from a real run: switchboard installed from the release tag, a real Claude Code session and a real Codex session joining a room, and the web UI. You ask claude-1 for a change; it makes the change and asks codex-1 for a review in the room; codex-1 is woken by that message, reviews the change and answers. Nothing is mocked or redrawn. The terminal frames are drawn from the screens that were recorded, cell for cell, and the browser frames are screenshots. The additions are framing, captions, title cards and a colour theme for plain terminal text (the text itself never changes); waits are shortened.
+`switchboard.gif` at the top of the README, and a longer MP4 with music, are made from a real run: switchboard installed from the release tag, a real Claude Code session and a real Codex session joining a room, and the web UI. You give them one job: claude-1 implements input validation, codex-1 writes and runs the tests, and they agree the rules in the room first. From there they work it out between them (proposals, a correction that points at the other's message, the code, the tests, both running the tests) while each is woken by the other's messages. Nothing is mocked or redrawn. The terminal frames are drawn from the screens that were recorded, cell for cell, and the browser frames are screenshots. The additions are framing, captions, title cards and a colour theme for plain terminal text (the text itself never changes); waits are shortened.
 
 | File | What it does |
 |---|---|
 | `capture.py` | Runs the demo and records every terminal screen and browser screenshot, with times, into a build directory |
-| `render.py` | Turns a capture into `out/switchboard.mp4` (1280×720, with the music) and `out/switchboard.gif` (the two agents at work, 960×540) |
+| `render.py` | Turns a capture into `out/switchboard.mp4` (1280×720, with the music) and `out/switchboard.gif` (the conversation, 960×540). It tells the conversation in order: each agent message in the room, and each edit and test run it finds in an agent's recorded terminal |
 | `switchboard.gif` | The GIF the README shows |
 | `CREDITS.md` | The music's source and license |
 
@@ -23,7 +23,7 @@ cp /tmp/sb-media/out/switchboard.gif docs/media/
 
 Then upload `/tmp/sb-media/out/switchboard.mp4` by dragging it into the README editor on github.com (or a PR description). GitHub turns it into a `github.com/user-attachments/…` link that plays inline, up to 10 MB on a free plan. The music track itself isn't committed (see [CREDITS.md](CREDITS.md)).
 
-Re-record when the CLI's output, the web UI or the release tag changes (`TAG` in `capture.py`; `render.py` reads it from the capture). The agents' words differ from run to run.
+Re-record when the CLI's output, the web UI or the release tag changes (`TAG` in `capture.py`; `render.py` reads it from the capture). The agents' words differ from run to run, so the captions under their messages are generic ("claude-1 replies in the room") unless the build directory has a `captions.json`, written after watching the capture, such as `{"say-0": "codex-1 proposes the rules"}` (keys `say-<n>` for the n-th agent message, `final`).
 
 ## What `capture.py` touches
 

@@ -57,6 +57,7 @@ TOP = (12, 12, 848, 262)
 CHAT = (12, 84, 600, 500)
 LOG = (18, 90, 596, 212)
 FINAL = (18, 202, 598, 338)
+CHAT_LOG = (14, 86, 598, 444)      # the chat log, above the composer
 
 
 @lru_cache(maxsize=None)
@@ -72,6 +73,7 @@ class Capture:
     shots: list[tuple[float, str, str]] = field(default_factory=list)
     marks: dict[str, float] = field(default_factory=dict)
     messages: list[tuple[float, str]] = field(default_factory=list)
+    captions: dict[str, str] = field(default_factory=dict)
     chat_box: tuple[float, float, float, float] | None = None
     scenes: dict[str, tuple[float, float]] = field(default_factory=dict)
     dpr: int = 2
@@ -83,6 +85,8 @@ class Capture:
         meta = json.loads((build / "meta.json").read_text())
         c.dpr = meta["view"][2]
         c.tag = meta["tag"]
+        if (build / "captions.json").exists():   # a recording's own captions, written after watching it
+            c.captions = json.loads((build / "captions.json").read_text())
         for line in (build / "timeline.jsonl").read_text().splitlines():
             r = json.loads(line)
             t, scene = r["t"], r["scene"]
@@ -118,6 +122,9 @@ class Capture:
 
     def last(self, label: str) -> float:
         return [s[0] for s in self.shots if s[2] == label][-1]
+
+    def caption(self, key: str, default: str) -> str:
+        return self.captions.get(key, default)
 
     def when(self, pane: str, pattern: str, after: float = 0.0) -> float:
         rx = re.compile(pattern)
@@ -506,10 +513,49 @@ def end_card(tag: str, _t: float) -> Image.Image:
 
 
 
-def build_scenes(c: Capture) -> list[Scene]:
-    sc = []
-    sc.append(Scene("title", 2.6, title_card("switchboard", "a group chat for you and your coding agents",
-                                             "Claude Code · Codex · Cursor · Devin")))
+# work worth showing in an agent's own terminal, as its harness prints it: (pattern, caption)
+WORK = {
+    # (the tool bullet blinks while a call runs, so it may be missing from a frame)
+    "claude": [(re.compile(r"^(?:[●⏺]\s*)?Update\((\S+?)\)$"), "{who} edits {0} in its own session"),
+               (re.compile(r"^(?:[●⏺]\s*)?Write\((\S+?)\)$"), "{who} writes {0} in its own session"),
+               (re.compile(r"^(?:[●⏺]\s*)?Bash\((python3? -m (?:unittest|pytest)\b[^)]*)\)"), "{who} runs the tests")],
+    "codex": [(re.compile(r"^(?:•\s*)?Added (\S+) \(\+\d+ -\d+\)"), "{who} writes {0} in its own session"),
+              (re.compile(r"^(?:•\s*)?Edited (\S+) \(\+\d+ -\d+\)"), "{who} edits {0} in its own session"),
+              (re.compile(r"^(?:•\s*)?Ran (python3? -m (?:unittest|pytest)\b.*)"), "{who} runs the tests")],
+}
+
+
+def work_events(c: Capture, after: float) -> list[tuple[float, str, str, float]]:
+    """(time, agent, caption, how long it stays on screen, at most 0.9 s) for each edit or
+    test run, from the first time its line shows."""
+    out: list[tuple[float, str, str, float]] = []
+    for pane, who in (("claude", "claude-1"), ("codex", "codex-1")):
+        seen: set[str] = set()
+        for t, text in c.terms.get(pane, []):
+            if t <= after:
+                continue
+            for line in strip(text).split("\n"):
+                for rx, cap in WORK[pane]:
+                    s = line.strip().lstrip("●⏺• ")
+                    m = rx.match(line.strip())
+                    if m and s not in seen:
+                        seen.add(s)
+                        shown = [u for u, x in c.terms[pane] if t <= u <= t + 0.9 and s in strip(x)]
+                        out.append((t, who, cap.format(*m.groups(), who=who), max(shown) - t))
+    # two events of one agent within 3 s show as one: a test run over an edit
+    out.sort()
+    merged: list[tuple[float, str, str, float]] = []
+    for ev in out:
+        if merged and merged[-1][1] == ev[1] and ev[0] - merged[-1][0] < 3:
+            if "runs the tests" in ev[2]:
+                merged[-1] = ev
+            continue
+        merged.append(ev)
+    return merged
+
+
+def build_scenes(c: Capture, gif: bool = False) -> list[Scene]:
+    """The MP4's scenes; with gif, only the conversation, told through the room."""
     area = (140, 24, W - 140, H - CAPTION_H - 20)
 
     def term_scene(pane: str, title: str, tmap: Callable[[float], float], step: str, text: str,
@@ -533,81 +579,90 @@ def build_scenes(c: Capture) -> list[Scene]:
         a, b = c.scenes[scene]
         return max(t for t, _ in c.terms[pane] if a <= t <= b)
 
-    # 1-3: install, register, start, in one terminal
-    t_start = c.marks["start"]
-    t_typed = c.when("term", r"switchboard@v\d", t_start)
-    t_inst = c.when("term", r"Installed 1 executable", t_start)
-    sc.append(Scene("install", 3.4, term_scene("term", "Terminal", timemap(
-        [(0, t_start), (1.5, t_typed + 0.4), (2.6, t_inst), (3.4, t_inst + 0.1)]),
-        "1", "Install switchboard from GitHub")))
-    r0, _ = c.scenes["register"]
-    t_ask = c.when("term", r"Apply\? \[y/N\]\s*$", r0)
-    t_sum = c.when("term", r"summary:", t_ask)
-    t_reg = last_frame("term", "register")
-    sc.append(Scene("register", 5.0, term_scene("term", "Terminal", timemap(
-        [(0, r0), (0.9, t_ask - 0.2), (1.9, t_ask), (3.1, t_ask + 1.9), (3.7, t_sum), (5.0, t_reg)]),
-        "2", "Register it with your agents: it shows the diff and asks first")))
-    s0, _ = c.scenes["start"]
-    t_link = c.when("term", r"login\?t=", s0)
-    sc.append(Scene("start", 2.6, term_scene("term", "Terminal", timemap(
-        [(0, s0), (1.0, t_link), (2.6, t_link + 0.2)]),
-        "3", "Start it: it prints a one-time sign-in link")))
+    tail = lambda scr, _t: follow(scr, 22)  # noqa: E731
+    titles = {"claude": "Terminal — Claude Code", "codex": "Terminal — Codex"}
+    sc: list[Scene] = []
+    if not gif:
+        sc.append(Scene("title", 2.4, title_card("switchboard", "a group chat for you and your coding agents",
+                                                 "Claude Code · Codex · Cursor · Devin")))
+        # 1-4: install, register, start, sign in: quickly
+        t_start = c.marks["start"]
+        t_typed = c.when("term", r"switchboard@v\d", t_start)
+        t_inst = c.when("term", r"Installed 1 executable", t_start)
+        sc.append(Scene("install", 2.6, term_scene("term", "Terminal", timemap(
+            [(0, t_start), (1.2, t_typed + 0.4), (2.1, t_inst), (2.6, t_inst + 0.1)]),
+            "1", "Install switchboard from GitHub")))
+        r0, _ = c.scenes["register"]
+        t_ask = c.when("term", r"Apply\? \[y/N\]\s*$", r0)
+        t_sum = c.when("term", r"summary:", t_ask)
+        sc.append(Scene("register", 3.4, term_scene("term", "Terminal", timemap(
+            [(0, r0), (0.6, t_ask - 0.2), (1.5, t_ask), (2.1, t_ask + 1.9), (2.6, t_sum),
+             (3.4, last_frame("term", "register"))]),
+            "2", "Register it with your agents: it shows the diff and asks first")))
+        s0, _ = c.scenes["start"]
+        t_link = c.when("term", r"login\?t=", s0)
+        sc.append(Scene("start", 2.0, term_scene("term", "Terminal", timemap(
+            [(0, s0), (0.8, t_link), (2.0, t_link + 0.2)]),
+            "3", "Start it and open the sign-in link")))
+        t_in, t_room = c.first("signed-in"), c.first("room")
+        sc.append(Scene("signin", 2.0, lambda t: browser(
+            c.shot(t_in if t < 0.9 else t_room, ("signed-in", "room")), WINDOW, "4", "Create a room")))
+        # 5: the two agents join, each from its own terminal
+        a_ready = c.marks["claude-ready"]
+        a_typed = c.when("claude", r"❯ join switchboard room #build as claude-1", a_ready)
+        sc.append(Scene("join-claude", 2.6, term_scene("claude", titles["claude"], timemap(
+            [(0, a_ready), (1.0, a_typed + 0.3), (2.6, last_frame("claude", "join-claude"))]),
+            "5", "Tell your agents to join: Claude Code…", window=tail)))
+        x_ready = c.marks["codex-ready"]
+        x_typed = c.when("codex", r"join switchboard room #build as codex-1", x_ready)
+        sc.append(Scene("join-codex", 2.6, term_scene("codex", titles["codex"], timemap(
+            [(0, x_ready), (1.0, x_typed + 0.3), (2.6, last_frame("codex", "join-codex"))]),
+            "5", "…and Codex, each in its own terminal", window=tail)))
 
-    # 4: sign in, create #build
-    t_in, t_room = c.first("signed-in"), c.first("room")
-    sc.append(Scene("signin", 2.8, lambda t: browser(
-        c.shot(t_in if t < 1.3 else t_room, ("signed-in", "room")), WINDOW, "4", "Open the link and create a room")))
-
-    # 5-6: the two agents join, each in its own terminal
-    a_ready = c.marks["claude-ready"]
-    a_typed = c.when("claude", r"❯ join switchboard room #build as claude-1", a_ready)
-    sc.append(Scene("join-claude", 3.6, term_scene("claude", "Terminal — Claude Code", timemap(
-        [(0, a_ready), (1.3, a_typed + 0.3), (3.6, last_frame("claude", "join-claude"))]),
-        "5", "Tell Claude Code to join the room", window=lambda scr, _t: follow(scr, 22))))
-    x_ready = c.marks["codex-ready"]
-    x_typed = c.when("codex", r"join switchboard room #build as codex-1", x_ready)
-    sc.append(Scene("join-codex", 3.6, term_scene("codex", "Terminal — Codex", timemap(
-        [(0, x_ready), (1.3, x_typed + 0.3), (3.6, last_frame("codex", "join-codex"))]),
-        "6", "…and Codex, in another terminal", window=lambda scr, _t: follow(scr, 22))))
-    sc.append(Scene("joined", 2.0, lambda t: browser(
-        c.shot(c.last("joined"), ("joined",)), TOP, "6", "Both are in the room, each in its own session")))
-
-    # 7: alice asks claude-1 for a change and a review from codex-1
+    # 6: the task
     typing = [s for s in c.shots if s[2] in ("typing", "typed")]
     posted = c.marks["posted"]
+    task_s = 2.2 if gif else 2.8
 
     def task(t: float) -> Image.Image:
-        i = min(int(t / 2.4 * len(typing)), len(typing) - 1)
-        return browser(c.build / typing[i][1], CHAT, "7", "Ask one agent for a change and the other for a review")
-    sc.append(Scene("task", 2.8, task))
+        i = min(int(t / (task_s - 0.3) * len(typing)), len(typing) - 1)
+        return browser(c.build / typing[i][1], CHAT, "6", "Give them a job to do together")
+    sc.append(Scene("task", task_s, task))
 
-    # 8: claude-1 is woken, makes the change and asks codex-1 in the room
-    msgs = [(t, w) for t, w in c.messages if "alice" not in w]
-    t_claude = next(t for t, w in msgs if "claude-1" in w)
-    t_codex = next(t for t, w in msgs if "codex-1" in w)
-    sc.append(Scene("claude", 4.6, term_scene("claude", "Terminal — Claude Code", timemap(
-        [(0, posted + 0.4), (1.2, posted + 0.4 + (t_claude - posted) * 0.35), (3.8, t_claude), (4.6, t_claude + 0.6)]),
-        "8", "Claude Code is woken, makes the change and asks codex-1", window=lambda scr, _t: follow(scr, 22))))
-    sc.append(Scene("ui-claude", 1.8, lambda t: browser(
-        c.shot(t_claude + 0.9, ("talk",)), CHAT, "8", "Claude Code is woken, makes the change and asks codex-1")))
+    # 7: the conversation, in order: each agent message in the room and, in the MP4, the work
+    # each agent does in its own session (edits and test runs, found in its recorded terminal)
+    msgs = [(t, w) for t, w in c.messages if t > posted and w in ("claude-1", "codex-1")]
+    events: list[tuple[float, str, str, str]] = [(t, "say", w, "") for t, w in msgs]
+    if not gif:
+        events += [(t, "work", w, what) for t, w, what, _ in work_events(c, posted)]
+    hold = {t: h for t, _, _, h in work_events(c, posted)} if not gif else {}
+    events.sort()
+    say_s, work_s = (2.2, 2.6) if not gif else (1.9, 0.0)
+    n_say = 0
+    for k, (t_ev, kind, who, what) in enumerate(events):
+        pane = "claude" if who == "claude-1" else "codex"
+        if kind == "work":
+            # hold on the moment the edit or the test run shows
+            sc.append(Scene(f"work-{k}", work_s, term_scene(pane, titles[pane], timemap(
+                [(0, t_ev - 0.1), (0.3, t_ev), (work_s * 0.9, t_ev + hold[t_ev]), (work_s, t_ev + hold[t_ev] + 0.05)]),
+                "7", c.caption(f"work-{t_ev:.1f}", what), window=tail)))
+            continue
 
-    # 9: codex-1 is woken by claude-1's message, reviews the change and answers
-    sc.append(Scene("codex", 4.4, term_scene("codex", "Terminal — Codex", timemap(
-        [(0, t_claude + 0.2), (3.4, t_codex), (4.4, t_codex + 1.4)]),
-        "9", "Codex is woken by that message, reviews the change and replies", window=lambda scr, _t: follow(scr, 22))))
+        def say(t: float, t_ev: float = t_ev, text: str = c.caption(f"say-{n_say}", f"{who} replies in the room")
+                ) -> Image.Image:
+            return browser(c.shot(t_ev + 0.9, ("talk",)), CHAT_LOG, "7", text)
+        sc.append(Scene(f"say-{k}", say_s, say))
+        n_say += 1
 
     t_end = c.marks["end"]
 
     def final(t: float) -> Image.Image:
-        u = min(t / 1.4, 1.0)
-        return browser(c.shot(t_end, ("end", "talk")), lerp_box(CHAT, c.chat_box or FINAL, u), "10",
-                       "Your agents hand work to each other, and you see all of it")
-    sc.append(Scene("final", 3.6, final))
-    sc.append(Scene("end", 3.6, lambda t: end_card(c.tag, t)))
+        return browser(c.shot(t_end, ("end", "talk")), CHAT_LOG, "8",
+                       c.caption("final", "Two agents, two harnesses, one room: and you see all of it"))
+    sc.append(Scene("final", 3.0, final))
+    if not gif:
+        sc.append(Scene("end", 3.4, lambda t: end_card(c.tag, t)))
     return sc
-
-
-GIF_SCENES = ("task", "claude", "ui-claude", "codex", "final")
 
 
 # ------------------------------------------------------------------ output
@@ -650,7 +705,7 @@ def encode_mp4(scenes: list[Scene], out: Path, music: Path | None, start: float 
         sys.exit("ffmpeg failed (mp4)")
 
 
-def encode_gif(scenes: list[Scene], out: Path, only: tuple[str, ...]) -> None:
+def encode_gif(scenes: list[Scene], out: Path) -> None:
     gh = int(H * GIF_W / W) // 2 * 2
     ff = subprocess.Popen(
         ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{GIF_W}x{gh}",
@@ -658,7 +713,7 @@ def encode_gif(scenes: list[Scene], out: Path, only: tuple[str, ...]) -> None:
          "split[a][b];[a]palettegen=max_colors=96:stats_mode=diff[p];[b][p]paletteuse=dither=none:diff_mode=rectangle",
          "-loop", "0", str(out)], stdin=subprocess.PIPE)
     assert ff.stdin is not None
-    for img in frames(scenes, GIF_FPS, only):
+    for img in frames(scenes, GIF_FPS):
         ff.stdin.write(img.resize((GIF_W, gh), Image.LANCZOS).tobytes())
     ff.stdin.close()
     if ff.wait() != 0:
@@ -686,7 +741,7 @@ def main() -> None:
     encode_mp4(scenes, out / f"{args.name}.mp4", args.music, args.music_start)
     made = [f"{args.name}.mp4"]
     if not args.no_gif:
-        encode_gif(scenes, out / f"{args.name}.gif", GIF_SCENES)
+        encode_gif(build_scenes(c, gif=True), out / f"{args.name}.gif")
         made.append(f"{args.name}.gif")
     for f in made:
         print(f"{out / f}: {(out / f).stat().st_size / 1e6:.1f} MB")
