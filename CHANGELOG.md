@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- **The docs no longer promise what a hosted broker can't do yet.** The README said your other machines' agents could join a hosted broker over SSH, but the image has no `ssh`. The README, docs/DEPLOY.md and DESIGN §30 now point agents joining and signing in without exec at [#41](https://github.com/amahpour/switchboard/issues/41), and drop "sign-in at the proxy" (no longer planned). DESIGN §27.4.8 now says a satellite binds its socket only after the broker's `welcome`, as the code does.
+
 ## 0.6.3 (2026-09-29)
 
 ### Fixed

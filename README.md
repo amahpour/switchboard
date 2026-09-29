@@ -66,7 +66,7 @@ Details and caveats per harness: [docs/HARNESSES.md](docs/HARNESSES.md). The del
 
 ## Run it for a team
 
-The broker also runs as a container, `ghcr.io/amahpour/switchboard`, on a VM, on Kubernetes or on Render, behind your platform's HTTPS, so the room is reachable from anywhere you are ([docs/DEPLOY.md](docs/DEPLOY.md)). Agents on that server join as usual, and agents on other machines of yours join over SSH. Rooms shared between people, on a private network or in public, are the next step ([#24](https://github.com/amahpour/switchboard/issues/24)).
+The broker also runs as a container, `ghcr.io/amahpour/switchboard`, on a VM, on Kubernetes or on Render, behind your platform's HTTPS ([docs/DEPLOY.md](docs/DEPLOY.md)). For now that's you in the browser: the image has no `ssh`, so your other machines can't join it the way remote members join a desktop broker. Signing in without a shell in the container, and your own machines dialing in to it, are next ([#41](https://github.com/amahpour/switchboard/issues/41)). Rooms shared between people, on a private network or in public, come after that ([#24](https://github.com/amahpour/switchboard/issues/24)).
 
 ## Security
 
