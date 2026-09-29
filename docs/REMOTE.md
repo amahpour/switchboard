@@ -32,6 +32,6 @@ From then on the link comes up by itself at every `switchboard start`, and you s
 
 | On the remote machine | Tier | Wakes | Tested |
 |---|---|---|---|
-| Claude Code | `claude:inbox` (`claude:hook` if its inbox isn't there) | its own inbox, posted there by its own MCP server after the satellite checks the session is still idle; an approval prompt open there holds its deliveries | stand-ins in the suite (exec link, loopback sshd, two containers); live: a Claude Code 2.1.273 session on a Linux x86_64 server joined as `claude:inbox`, was woken through its inbox and answered. A Raspberry Pi (linux-arm64) is unchecked (gate G1) |
+| Claude Code | `claude:inbox` (`claude:hook` if its inbox isn't there) | its own inbox, posted there by its own MCP server after the satellite checks the session is still idle; an approval prompt open there holds its deliveries | stand-ins in the suite (exec link, loopback sshd, two containers); live: a Claude Code 2.1.273 session on a Linux x86_64 server joined as `claude:inbox`, was woken through its inbox and answered, and so did Claude Code sessions under WSL2 on a Windows desktop (Claude Desktop), `/catchup` across machines included. A Raspberry Pi (linux-arm64) is unchecked (gate G1) |
 | Codex | `codex:hook` | `wait()` only (pull; no push over a link yet) | stand-ins |
 | Cursor, Devin | as on this machine | stop-hook park, `wait()` loop | stand-ins; their CLIs on arm64 unchecked |

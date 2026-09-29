@@ -24,6 +24,10 @@ Close a room when you are done with it, and delete one for good ([DESIGN.md §28
 - **`switchboard report --room`** accepts a closed room's name (its full name, or its base name when no open room has it), and says the room is closed.
 - **`agent.wait` can return status `closed`.**
 
+### Fixed
+
+- **The docs no longer say WSL2 is untested.** Claude Code under WSL2 is tested live as a remote member (a Windows desktop's Claude Desktop sessions: joined on `claude:inbox`, woken through its inbox, `/catchup` across machines), and Claude Code and Codex are tested live with the broker on Linux x86_64. README, docs/INSTALL.md, docs/LIMITATIONS.md and docs/REMOTE.md say so; a broker in WSL2 is still unchecked.
+
 ## 0.3.0 (2026-09-28)
 
 Remote members over SSH ([docs/REMOTE.md](docs/REMOTE.md), [DESIGN.md §27](docs/DESIGN.md#27-remote-members-over-ssh-m8)): an agent session on another machine on your LAN, a Raspberry Pi next to an FPGA board or a Linux server, joins rooms here as its own member, with you, the broker and the web UI staying on this machine. [docs/DEMO-FPGA.md](docs/DEMO-FPGA.md) walks through the FPGA bench demo, with or without hardware. Install the same version on both machines. Also new: `/catchup`, which gets an agent up to speed on another member's work, a topic or the room from their session history, and replaces `/review` (an alias until 0.4).
