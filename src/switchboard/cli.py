@@ -65,22 +65,73 @@ def _hhmmss(ts: float) -> str:
     return time.strftime("%H:%M:%S", time.localtime(ts))
 
 
-def format_line(msg: dict[str, Any]) -> str:
-    """``[14:02:11] <alice> text`` (control characters stripped for the terminal)."""
-    ts = _hhmmss(msg.get("ts") or 0)
+def format_line(msg: dict[str, Any], paint: Any = None) -> str:
+    """``[14:02:11] <alice> text`` (control characters stripped for the terminal).
+
+    With a ``colors.Paint`` that is on, only switchboard's framing is coloured
+    (issue #28): the time dim, the nick by who sent it (you bold, each agent its
+    own colour, the system dim), join/leave lines and notices dim, warning notices
+    red. Colour goes around the cleaned text and is never taken from it.
+    """
+    from switchboard.colors import PLAIN
+
+    p = paint or PLAIN
+    ts = p.dim(f"[{_hhmmss(msg.get('ts') or 0)}]")
     name = _clean(str(msg.get("from", "?")))
     text = _clean(str(msg.get("text", "")))
     kind = msg.get("kind", "chat")
     if kind == "join":
-        line = f"[{ts}] * {name} {text or 'joined'}"
+        line = f"{ts} " + p.dim(f"* {name} {text or 'joined'}")
     elif kind == "leave":
-        line = f"[{ts}] * {name} {text or 'left'}"
+        line = f"{ts} " + p.dim(f"* {name} {text or 'left'}")
     elif kind == "notice":
-        line = f"[{ts}] -!- {text}"
+        line = f"{ts} " + _notice(p, text, msg.get("level"))
     else:
-        tag = " (via cli)" if msg.get("via") == "cli" else ""
-        line = f"[{ts}] <{name}>{tag} {text}"
+        tag = p.dim(" (via cli)") if msg.get("via") == "cli" else ""
+        line = f"{ts} <{p.nick(name, str(msg.get('sender_kind') or 'agent'))}>{tag} {text}"
     return line.replace("\n", "\n" + " " * 11)
+
+
+def _notice(p: Any, text: str, level: Any) -> str:
+    """A ``-!-`` notice line: red for a warning (as the web UI shows it), dim otherwise."""
+    body = f"-!- {text}"
+    return p.bad(body) if level == "warn" else p.dim(body)
+
+
+def _state(p: Any, word: str) -> str:
+    """A state word, coloured by what it says: up/ok/active green, blocked/failed red,
+    off/offline dim, and anything that needs a look (down, paused, parked, needs
+    enable, connecting) yellow."""
+    key = word.lower().rstrip(":,")
+    if key in ("up", "ok", "online", "active", "idle", "running", "clean"):
+        return p.ok(word)
+    if key in ("blocked", "failed", "fail", "error"):
+        return p.bad(word)
+    if key in ("off", "offline", "disabled", "starting"):
+        return p.dim(word)
+    return p.warn(word)
+
+
+def _lead(p: Any, text: str) -> str:
+    """``text`` with its first word coloured as a state (``up since 10:25``, ``ok (1 copy)``)."""
+    word, sep, rest = text.partition(" ")
+    return _state(p, word) + sep + rest
+
+
+def _remote_line(p: Any, info: dict[str, Any]) -> str:
+    """``describe(info)``, cleaned, with its state word coloured. The state is found
+    after the remote's own name (remote names can't hold a colon, §27.2), so
+    nothing the remote reported is ever matched or coloured."""
+    from switchboard.remote.describe import describe
+
+    line = _clean(describe(info))
+    head = _clean(str(info.get("name", ""))) + ": "
+    if line.startswith(head):
+        rest = line[len(head):]
+        for word in ("needs enable", "up", "down", "blocked", "disabled", str(info.get("state") or "")):
+            if word and rest.startswith(word) and rest[len(word):len(word) + 1] in ("", " ", ":", ","):
+                return head + _state(p, word) + rest[len(word):]
+    return line
 
 
 # ------------------------------------------------------------------ commands
@@ -163,22 +214,25 @@ def cmd_status(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(st, indent=2))
         return EXIT_OK
+    from switchboard.colors import for_args
+
+    p = for_args(args)
     up = int(st.get("uptime_s", 0))
-    print(f"switchboard {st['version']} running: pid {st['pid']}, up {up // 3600}h{up % 3600 // 60:02d}m")
-    print(f"  web UI  {st['url']}  ({st.get('web_clients', 0)} browser tab(s) connected)")
+    print(f"switchboard {st['version']} {p.ok('running')}: pid {st['pid']}, up {up // 3600}h{up % 3600 // 60:02d}m")
+    print(f"  web UI  {p.link(str(st['url']))}  ({st.get('web_clients', 0)} browser tab(s) connected)")
     print(f"  home    {st['home']}")
-    print(f"  hooks   {st['hooks']}")
-    print(f"  codex   {st['codex_link']}")
+    print(f"  hooks   {_lead(p, str(st['hooks']))}")
+    print(f"  codex   {_lead(p, str(st['codex_link']))}")
     if st.get("test_mode"):
-        print("  TEST MODE")
+        print("  " + p.warn("TEST MODE"))
     rooms = st.get("rooms", [])
     closed = st.get("closed_rooms", 0)
     if not rooms:
         print("  rooms   none open" if closed else "  rooms   none yet (create one in the web UI)")
     for r in rooms:
-        state = f"paused ({r['paused_reason']})" if r["paused"] else "active"
+        state = p.warn(f"paused ({r['paused_reason']})") if r["paused"] else p.ok("active")
         limit = r.get("hop_limit")
-        hops = (f"{r['hop_count']}, loop guard off" if limit == 0
+        hops = (f"{r['hop_count']}, {p.warn('loop guard off')}" if limit == 0
                 else f"{r['hop_count']}" if limit is None else f"{r['hop_count']}/{limit}")
         print(
             f"  {r['name']}: {state}, {r['members']} agent(s), budget "
@@ -186,12 +240,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         )
     if closed:
         print(f"  closed  {closed} room(s) (switchboard rooms --closed)")
-    remotes = st.get("remotes") or []
-    if remotes:
-        from switchboard.remote.describe import describe
-
-        for info in remotes:
-            print(f"  remote  {_clean(describe(info))}")
+    for info in st.get("remotes") or []:
+        print(f"  remote  {_remote_line(p, info)}")
     return EXIT_OK
 
 
@@ -341,34 +391,42 @@ def cmd_who(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(res, indent=2))
         return EXIT_OK
+    from switchboard.colors import for_args
+
+    p = for_args(args)
     members = res["members"]
-    print(f"{res['room']}: {res['human']} (you, human) + {len(members)} agent(s)")
+    print(f"{p.bold(res['room'])}: {p.nick(res['human'], 'human')} (you, human) + {len(members)} agent(s)")
     for m in members:
         flags = []
         if m["approval_mode"] == "bypass":
-            flags.append("⚠")
+            flags.append(p.bad("⚠"))
         elif m["approval_mode"] == "unknown":
-            flags.append("?")
+            flags.append(p.warn("?"))
         if m["env_leak"]:
-            flags.append("env shared")
+            flags.append(p.warn("env shared"))
         if m["held"]:
-            flags.append("held")
+            flags.append(p.warn("held"))
         if m["queued"]:
             flags.append(f"{m['queued']} queued")
         if m["parked"]:
-            flags.append("parked — needs a poke")
+            flags.append(p.warn("parked — needs a poke"))
         if m.get("session"):
-            flags.append(f"session: {_clean(m['session'])}")
+            flags.append(p.dim(f"session: {_clean(m['session'])}"))
         away = f'  away: "{_clean(m["away"])}"' if m.get("away") else ""
         tier = tier_label(m.get("tier"), m.get("tier_note"))
-        name = _clean(m["name"]) + (f"@{_clean(m['host'])}" if m.get("host") else "")
-        print(f"  {name}  {m['harness']}  {m['status']}  {tier}  {' '.join(flags)}{away}".rstrip())
+        name = p.nick(_clean(m["name"])) + (p.dim(f"@{_clean(m['host'])}") if m.get("host") else "")
+        status = {"idle": p.ok, "waiting-approval": p.warn, "offline": p.dim, "starting": p.dim}.get(
+            m["status"], str)(m["status"])
+        print(f"  {name}  {m['harness']}  {status}  {tier}  {' '.join(flags)}{away}".rstrip())
     return EXIT_OK
 
 
 def cmd_tail(args: argparse.Namespace) -> int:
     from switchboard.mcp.client import BrokerDown, Stream
 
+    from switchboard.colors import for_args
+
+    p = for_args(args)
     params: dict[str, Any] = {"room": args.room, "follow": not args.no_follow, "limit": args.lines}
     if args.after is not None:
         params["after"] = args.after
@@ -378,7 +436,7 @@ def cmd_tail(args: argparse.Namespace) -> int:
         if args.json:
             print(json.dumps(msg, ensure_ascii=False), flush=True)
         else:
-            print(format_line(msg), flush=True)
+            print(format_line(msg, p), flush=True)
 
     with Stream(_paths(args).sock) as s:
         res = s.call("room.tail", params)
@@ -405,7 +463,7 @@ def cmd_tail(args: argparse.Namespace) -> int:
                     last = m["id"]
                     emit(m)
                 elif push.get("push") == "notice" and not args.json:
-                    print(f"-!- {_clean(str(data.get('text', '')))}", flush=True)
+                    print(_notice(p, _clean(str(data.get("text", ""))), data.get("level")), flush=True)
         except BrokerDown:
             print("switchboard: the broker went away", file=sys.stderr)
             return EXIT_DOWN
@@ -466,7 +524,13 @@ def cmd_report(args: argparse.Namespace) -> int:
     except sqlite3.Error as e:  # e.g. "database is locked" after the timeout, or an unexpected schema
         print(f"switchboard: can't read the switchboard database: {e}", file=sys.stderr)
         return EXIT_ERR
-    out = json.dumps(rep, indent=2) + "\n" if args.json else report.render_markdown(rep)
+    if args.json:
+        out = json.dumps(rep, indent=2) + "\n"
+    else:
+        from switchboard.colors import PLAIN, for_args
+
+        # a file gets plain markdown; the terminal gets headings and fired rules coloured
+        out = report.render_markdown(rep, paint=PLAIN if args.out else for_args(args))
     if args.out:
         try:
             with open(args.out, "w", encoding="utf-8") as f:
@@ -526,7 +590,9 @@ def _pairing(args: argparse.Namespace) -> int:
             findings = pairing.doctor_desktop(paths, ak_path=akp, ssh_dir=ssh_dir, allow_ssh_cli=allow,
                                               status=lambda: _remote_status(args))
             print(f"switchboard remote doctor (desktop home {paths.home}):")
-        return pairing.print_findings(findings, sys.stdout)
+        from switchboard.colors import for_args
+
+        return pairing.print_findings(findings, sys.stdout, paint=for_args(args))
     except (pairing.PairingError, InstallError) as e:
         print(f"switchboard remote {args.remote_cmd}: {e}", file=sys.stderr)
         return EXIT_ERR
@@ -554,20 +620,21 @@ def cmd_remote(args: argparse.Namespace) -> int:
     """``switchboard remote add|accept|enable|disable|status|remove|doctor`` (DESIGN.md
     §27.5.8, §27.8, §27.11). On a satellite home only ``accept``, ``remove`` and
     ``doctor`` run; the rest belong to the desktop."""
-    from switchboard.remote.describe import describe
+    from switchboard.colors import for_args
 
     if args.remote_cmd in ("add", "accept", "remove", "doctor"):
         return _pairing(args)
     if _satellite_home(args):
         return on_desktop(args)
+    p = for_args(args)
     if args.remote_cmd == "enable":
         # the broker dials and waits up to 15 s for the link to come up or fail
         res = _call(args, "remote.enable", {"name": args.name}, timeout=30.0)
-        print(_clean(res.get("text") or describe(res)))
+        print(_clean(res["text"]) if res.get("text") else _remote_line(p, res))
         return EXIT_OK if res.get("state") == "up" else EXIT_ERR
     if args.remote_cmd == "disable":
         res = _call(args, "remote.disable", {"name": args.name})
-        print(_clean(res.get("text") or describe(res)))
+        print(_clean(res["text"]) if res.get("text") else _remote_line(p, res))
         return EXIT_OK
     params = {"name": args.name} if args.name else {}
     res = _call(args, "remote.status", params)
@@ -575,11 +642,11 @@ def cmd_remote(args: argparse.Namespace) -> int:
         print(json.dumps(res, indent=2))
         return EXIT_OK
     if res.get("config_error"):
-        print(f"remotes.toml: {_clean(res['config_error'])}")
+        print(f"{p.bad('remotes.toml:')} {_clean(res['config_error'])}")
     if not res.get("remotes"):
         print("no remotes (none in remotes.toml)")
     for info in res.get("remotes", []):
-        print(_clean(describe(info)))
+        print(_remote_line(p, info))
     return EXIT_OK
 
 
@@ -610,15 +677,25 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
 
 # -------------------------------------------------------------------- parser
 def build_parser() -> argparse.ArgumentParser:
+    from switchboard.colors import MODES
+
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument(
         "--home",
         default=argparse.SUPPRESS,
         help="switchboard home (default: $SWITCHBOARD_HOME or ~/.switchboard)",
     )
+    # SUPPRESS, like --home, so the flag works before or after the verb (colors.for_args
+    # reads a missing one as auto)
+    common.add_argument(
+        "--color",
+        choices=MODES,
+        default=argparse.SUPPRESS,
+        help="colour the output: auto (a terminal, unless NO_COLOR is set; the default), always or never",
+    )
     p = argparse.ArgumentParser(
         prog="switchboard",
-        description="A 90s-style hangout for you and your coding agents.",
+        description="A local group chat where you and your coding agents talk and hand work to each other.",
         parents=[common],
     )
     p.add_argument("--version", action="version", version=_version())

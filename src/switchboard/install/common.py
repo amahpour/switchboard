@@ -46,6 +46,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
 
+from switchboard.colors import PLAIN, Paint, for_args
+
 MASK_RE = re.compile(r"token|key|secret|pass|auth|env|url", re.IGNORECASE)
 _UNSAFE_PATH_CHARS = set("'\"$`\\\n\r")
 
@@ -533,7 +535,8 @@ def editable_install() -> bool:
     return bool((info.get("dir_info") or {}).get("editable"))
 
 
-def confirm(yes: bool, stdin: TextIO | None = None, stdout: TextIO | None = None) -> bool:
+def confirm(yes: bool, stdin: TextIO | None = None, stdout: TextIO | None = None,
+            paint: Paint | None = None) -> bool:
     if yes:
         return True
     stdin = stdin or sys.stdin
@@ -541,7 +544,7 @@ def confirm(yes: bool, stdin: TextIO | None = None, stdout: TextIO | None = None
     if not (hasattr(stdin, "isatty") and stdin.isatty()):
         print("switchboard: no terminal to confirm on; re-run with --yes to apply", file=sys.stderr)
         return False
-    stdout.write("Apply? [y/N] ")
+    stdout.write((paint or PLAIN).prompt("Apply? [y/N]") + " ")
     stdout.flush()
     return stdin.readline().strip().lower() in ("y", "yes")
 
@@ -553,47 +556,80 @@ def tilde(path: Path, user_home: Path) -> str:
         return str(path)
 
 
-def render_plan(plan: Plan, out: TextIO) -> None:
-    print(f"{plan.title or f'switchboard {plan.verb} {plan.harness}'}:", file=out)
+def _diff_line(p: Paint, line: str) -> str:
+    """One diff line for the terminal: ``safe_text`` first (a value read from a config
+    file can't bring its own escape codes), then coloured by switchboard's marker."""
+    line = safe_text(line)
+    mark = line[:4]
+    if mark == "  + ":
+        return p.added(line)
+    if mark == "  - ":
+        return p.removed(line)
+    if mark in ("  ~ ", "  ! "):  # moved or re-ordered: nothing lost, but worth a look
+        return p.warn(line)
+    return line
+
+
+def _note(p: Paint, text: str) -> str:
+    return p.warn("note:") + " " + p.dim(text)
+
+
+def _status(p: Paint, text: str) -> str:
+    """A run's status in the output and the summary: an error red, a skip dim."""
+    if text.startswith("error"):
+        return p.bad(text)
+    if text.startswith("skipped"):
+        return p.dim(text)
+    return text
+
+
+def render_plan(plan: Plan, out: TextIO, paint: Paint | None = None) -> None:
+    """The diff for one plan. Colour (issue #28) marks only switchboard's framing:
+    headers bold, added lines green, removed red, moved yellow, notes and "no
+    changes" dim."""
+    p = paint or PLAIN
+    print(p.heading(f"{plan.title or f'switchboard {plan.verb} {plan.harness}'}:"), file=out)
     same = plan.unchanged_text
     any_change = False
     for e in plan.edits:
         if isinstance(e, Missing):
-            print(f"{e.label}: not there, skipped", file=out)
+            print(p.dim(f"{e.label}: not there, skipped"), file=out)
         elif isinstance(e, PurgeEdit):
             if e.problem:
-                print(f"{e.label}: kept ({e.problem})", file=out)
+                print(p.warn(f"{e.label}: kept ({e.problem})"), file=out)
             elif e.blocked_by:
-                print(f"{e.label}: kept (still used by {', '.join(e.blocked_by)})", file=out)
+                print(p.dim(f"{e.label}: kept (still used by {', '.join(e.blocked_by)})"), file=out)
             elif not e.files:
-                print(f"{e.label}: no hook copies", file=out)
+                print(p.dim(f"{e.label}: no hook copies"), file=out)
             else:
                 any_change = True
-                print(f"{e.label} (delete {len(e.files)} hook cop{'y' if len(e.files) == 1 else 'ies'}):", file=out)
+                print(p.heading(f"{e.label} (delete {len(e.files)} hook cop{'y' if len(e.files) == 1 else 'ies'}):"),
+                      file=out)
                 for f in e.files:
-                    print(f"  - {f.name}", file=out)
+                    print(_diff_line(p, f"  - {f.name}"), file=out)
         elif isinstance(e, FileEdit):
             if not e.changed:
-                print(f"{e.label}: {same}", file=out)
+                print(p.dim(f"{e.label}: {same}"), file=out)
                 continue
             any_change = True
             verb = "create" if e.before is None else "update"
-            print(f"{e.label} ({verb}{'' if e.before is None else ', with a backup'}):", file=out)
+            print(p.heading(f"{e.label} ({verb}{'' if e.before is None else ', with a backup'}):"), file=out)
             for line in e.display:
-                print(line, file=out)
+                print(_diff_line(p, line), file=out)
         else:
             if not e.changed:
-                print(f"{e.display}: {same}", file=out)
+                print(p.dim(f"{safe_text(e.display)}: {same}"), file=out)
                 continue
             any_change = True
-            print(f"$ {e.display}" + (f"   # {e.note}" if e.note else ""), file=out)
+            print(p.dim("$") + " " + p.bold(safe_text(e.display)) + (p.dim(f"   # {e.note}") if e.note else ""),
+                  file=out)
     for n in plan.notes:
-        print(f"note: {n}", file=out)
+        print(_note(p, n), file=out)
     if not any_change:
-        print(same, file=out)
+        print(p.dim(same), file=out)
 
 
-def apply_purge(e: PurgeEdit, out: TextIO) -> None:
+def apply_purge(e: PurgeEdit, out: TextIO, paint: Paint | None = None) -> None:
     n = 0
     for f in e.files:
         try:
@@ -601,25 +637,26 @@ def apply_purge(e: PurgeEdit, out: TextIO) -> None:
             n += 1
         except FileNotFoundError:
             pass
-    print(f"deleted {n} hook cop{'y' if n == 1 else 'ies'} from {e.label}", file=out)
+    print((paint or PLAIN).ok("deleted") + f" {n} hook cop{'y' if n == 1 else 'ies'} from {e.label}", file=out)
 
 
-def apply_plan(plan: Plan, *, run_commands: bool, out: TextIO) -> int:
+def apply_plan(plan: Plan, *, run_commands: bool, out: TextIO, paint: Paint | None = None) -> int:
     """File edits first (they can't fail half-way), then harness commands in
     order. A failed command stops the commands after it (an add after a failed
     remove would fail too) but never the file edits, and makes the result 1."""
+    p = paint or PLAIN
     for e in plan.edits:
         if isinstance(e, FileEdit) and e.changed:
             b = backup(e.path)
             atomic_write(e.path, e.after, e.mode)
-            print(f"wrote {e.label}" + (f" (backup {b.name})" if b else ""), file=out)
+            print(p.ok("wrote") + f" {e.label}" + (f" (backup {b.name})" if b else ""), file=out)
         elif isinstance(e, PurgeEdit) and e.changed:
-            apply_purge(e, out)
+            apply_purge(e, out, p)
     for e in plan.edits:
         if not isinstance(e, CommandEdit) or not e.changed:
             continue
         if not run_commands:
-            print(f"skipped (--user-home): {e.display}", file=out)
+            print(p.dim(f"skipped (--user-home): {safe_text(e.display)}"), file=out)
             continue
         try:
             r = subprocess.run(e.argv, capture_output=True, text=True)
@@ -630,7 +667,7 @@ def apply_plan(plan: Plan, *, run_commands: bool, out: TextIO) -> int:
             print(f"switchboard: `{' '.join(e.argv[:3])} ...` failed ({why}); any file edits"
                   f" above were applied. Run it yourself:\n  {e.display}", file=sys.stderr)
             return 1
-        print(f"ran: {e.display}", file=out)
+        print(p.ok("ran:") + " " + p.dim(safe_text(e.display)), file=out)
     return 0
 
 
@@ -683,25 +720,27 @@ def _unchanged(plan: Plan) -> str:
     return plan.unchanged_text
 
 
-def _summary(runs: list[_Run], verb: str, *, applied: bool, out: TextIO, run_commands: bool = True) -> None:
+def _summary(runs: list[_Run], verb: str, *, applied: bool, out: TextIO, run_commands: bool = True,
+             paint: Paint | None = None) -> None:
+    p = paint or PLAIN
     done = {"install": "installed", "uninstall": "removed"}[verb]
     would = {"install": "would change", "uninstall": "would remove"}[verb]
-    print("summary:", file=out)
+    print(p.heading("summary:"), file=out)
     for r in runs:
         if r.plan is None:
-            s = r.status
+            s = _status(p, r.status)
         elif not r.plan.changed:
-            s = _unchanged(r.plan)
+            s = p.dim(_unchanged(r.plan))
         elif not applied:
-            s = would
+            s = p.warn(would)
         elif r.rc == 0:
-            s = "deleted" if r.name == "hook copies" else done
+            s = p.ok("deleted" if r.name == "hook copies" else done)
             if not run_commands and any(isinstance(e, CommandEdit) and e.changed for e in r.plan.edits):
-                s += " (files only: harness commands aren't run with --user-home)"
+                s += p.dim(" (files only: harness commands aren't run with --user-home)")
         elif any(isinstance(e, FileEdit) and e.changed for e in r.plan.edits):
-            s = "files written, but a harness command failed (see above)"
+            s = p.bad("files written, but a harness command failed (see above)")
         else:
-            s = "a harness command failed (see above)"
+            s = p.bad("a harness command failed (see above)")
         print(f"  {r.name}: {s}", file=out)
 
 
@@ -709,19 +748,20 @@ def _finish(runs: list[_Run], args: argparse.Namespace, *, verb: str, many: bool
             out: TextIO, trailer: list[str] | None = None, prepare: Any = None,
             check_editable: bool = False) -> int:
     """Render every section, then one confirmation, then apply each changed plan."""
+    p = for_args(args, out)  # colour only when ``out`` is a terminal (or --color always)
     for r in runs:
         if r.plan is not None:
-            render_plan(r.plan, out)
+            render_plan(r.plan, out, p)
         else:
-            print(f"switchboard {verb} {r.name}: {r.status}", file=out)
+            print(p.heading(f"switchboard {verb} {r.name}:") + " " + _status(p, r.status), file=out)
     changed = any(r.plan is not None and r.plan.changed for r in runs)
     if changed:
         for n in trailer or []:
-            print(f"note: {n}", file=out)
+            print(_note(p, n), file=out)
     failed = any(r.error for r in runs)
     if args.dry_run or not changed:
         if many:
-            _summary(runs, verb, applied=False, out=out)
+            _summary(runs, verb, applied=False, out=out, paint=p)
         return 1 if failed else 0
     if check_editable and editable_install() and not args.allow_editable:
         print(
@@ -731,18 +771,18 @@ def _finish(runs: list[_Run], args: argparse.Namespace, *, verb: str, many: bool
             file=sys.stderr,
         )
         return 1
-    if not confirm(args.yes, stdin, out):
-        print("not applied", file=out)
+    if not confirm(args.yes, stdin, out, p):
+        print(p.warn("not applied"), file=out)
         return 1
     if prepare is not None:
         prepare()
     rc = 1 if failed else 0
     for r in runs:
         if r.plan is not None and r.plan.changed:
-            r.rc = apply_plan(r.plan, run_commands=not args.user_home, out=out)
+            r.rc = apply_plan(r.plan, run_commands=not args.user_home, out=out, paint=p)
             rc = rc or r.rc
     if many:
-        _summary(runs, verb, applied=True, out=out, run_commands=not args.user_home)
+        _summary(runs, verb, applied=True, out=out, run_commands=not args.user_home, paint=p)
     return rc
 
 

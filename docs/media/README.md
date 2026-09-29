@@ -1,4 +1,4 @@
-# Media: UI screenshots and the getting-started video
+# Media: UI and CLI screenshots, and the getting-started video
 
 ## The UI screenshots (`ui/`)
 
@@ -29,6 +29,17 @@ It drives headless Chromium through Playwright (a dev dependency): run `uv run p
 | `login-light.png` | the sign-in page |
 
 Re-run it whenever the UI changes, and look at every picture before committing them.
+
+## The CLI screenshots (`cli_shots.py`)
+
+`cli_shots.py` shows the CLI's coloured output ([#28](https://github.com/amahpour/switchboard/issues/28)) as terminal windows. It is for pull-request previews (see [CLAUDE.md](../../CLAUDE.md)) and is run by hand; the pictures aren't committed here.
+
+```bash
+uv run python docs/media/cli_shots.py --out /tmp/cli-shots
+```
+
+- **Real commands against seeded data.** It uses the same isolation and seeded broker as `ui_shots.py` (`tests/ui_world.py`). Then, in-process with `--color always`, it runs `status`, `who '#build'`, `tail '#build'`, `remote status` and `report` against that broker, and `install all --dry-run` / `uninstall all --dry-run` against a throwaway user home. The PATH holds stub `claude`, `codex` and `devin` commands and no Cursor CLI, so Cursor shows as skipped. The install diff shows `/opt/switchboard/bin/python3` as the interpreter the hooks run, not this checkout's venv. `/hold` and `/release` fire once so the report has a rule to colour.
+- **Rendered, not captured from a terminal.** Each output's colour codes become styled HTML: html-escaped text, the 8 basic colours plus bold and dim. Any other escape code stops the run. The HTML sits in a window titled with the command and is shot with Playwright's Chromium at DPR 2. Every command is shot in dark; `tail` and `install` also in light; and `install` once more with `--color never` (`install-plain-dark.png`), for a before/after.
 
 ## The getting-started video
 

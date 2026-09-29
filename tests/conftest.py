@@ -83,6 +83,9 @@ def sanitize_env(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempP
     fake_home = tmp_path_factory.mktemp("home")
     monkeypatch.setenv("HOME", str(fake_home))
     monkeypatch.delenv("SWITCHBOARD_HOME", raising=False)
+    # the CLI's colour switches (issue #28): output is plain unless a test asks for colour
+    for k in ("NO_COLOR", "FORCE_COLOR", "CLICOLOR_FORCE"):
+        monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("SWITCHBOARD_TEST", "1")
     # Only switchboard.config's view of the login name: getpass itself stays real.
     monkeypatch.setattr(switchboard.config, "getpass", types.SimpleNamespace(getuser=lambda: TEST_HUMAN))

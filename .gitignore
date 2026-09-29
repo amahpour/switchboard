@@ -22,3 +22,5 @@ coverage-data/
 coverage*.json
 htmlcov/
 e2e-artifacts/
+# CLI screenshots are PR previews, kept on the design-assets branch (CLAUDE.md)
+docs/media/cli/
