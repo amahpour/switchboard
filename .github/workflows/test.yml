@@ -1,6 +1,6 @@
-# The default test suite (no live agent CLIs, no perf timings) on Linux and macOS,
-# with line coverage combined across both and published as the README badge, and the
-# web UI in a real browser (Playwright, the `frontend` job).
+# The default test suite (no live agent CLIs, no perf timings) on Linux and macOS, split
+# into three shards per OS, with line coverage combined across all of them and published as
+# the README badge, and the web UI in a real browser (Playwright, the `frontend` job).
 name: test
 
 on:
@@ -18,11 +18,17 @@ concurrency:
 
 jobs:
   test:
-    name: pytest (${{ matrix.os }})
+    name: pytest (${{ matrix.os }}, ${{ matrix.shard }}/3)
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        # Three runners per OS, each running a third of the suite with xdist on its cores. A
+        # hosted runner has only 3-4 cores, and more xdist workers than cores doesn't pay (each
+        # worker imports and collects the whole suite), so more runners is what shortens the run.
+        # pytest-split balances the thirds by the durations in .test_durations (CONTRIBUTING.md);
+        # `--splits` below must match this list's length. Locally, run the suite whole (-n auto).
+        shard: [1, 2, 3]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
@@ -56,18 +62,23 @@ jobs:
       - run: uv sync --frozen
       # pyproject's addopts deselect `live` (real agent CLIs) and `perf` (timing targets).
       # --cov measures this process and ([tool.coverage.run] patch) its Python children.
-      # -n auto: pytest-xdist runs the suite on every core (about 3x faster); pytest-cov merges the workers
-      - run: uv run --frozen pytest -q -p no:cacheprovider -n auto --cov --cov-report=term
-      - name: Keep this OS's coverage data for the combine job
+      # -n auto: pytest-xdist runs this shard on every core; pytest-cov merges the workers.
+      # --splits/--group: this runner's third of the suite (pytest-split, least_duration balances
+      # the recorded durations; a test not in .test_durations counts as the average one).
+      - run: >-
+          uv run --frozen pytest -q -p no:cacheprovider -n auto
+          --splits 3 --group ${{ matrix.shard }} --splitting-algorithm least_duration
+          --cov --cov-report=term
+      - name: Keep this shard's coverage data for the combine job
         run: |
           mkdir coverage-data
-          mv .coverage "coverage-data/.coverage.${{ matrix.os }}"   # pytest-cov's merge of this run
+          mv .coverage "coverage-data/.coverage.${{ matrix.os }}-${{ matrix.shard }}"   # pytest-cov's merge of this run
           # a child that exited after pytest-cov merged leaves its own .coverage.<host>.<pid>.<n>
           for f in .coverage.*; do if [ -e "$f" ]; then mv "$f" coverage-data/; fi; done
           ls -la coverage-data
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: coverage-data-${{ matrix.os }}
+          name: coverage-data-${{ matrix.os }}-${{ matrix.shard }}
           path: coverage-data/
           include-hidden-files: true
           if-no-files-found: error
@@ -134,7 +145,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # Combines both OSes' data, prints the report, enforces the ratchet and writes the
+  # Combines every shard's data (both OSes), prints the report, enforces the ratchet and writes the
   # shields.io endpoint JSON. Read-only: only the `badge` job below can push.
   coverage:
     name: coverage (combined)
