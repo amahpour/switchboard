@@ -71,10 +71,14 @@ class ReportError(Exception):
 
 
 def _safe(v: Any) -> Any:
-    """Free-form strings from the database, scrubbed of paths and email addresses."""
+    """Free-form strings from the database, scrubbed of paths and email addresses, and
+    of control characters (``envelope.clean``: a model name a hook reported can't carry
+    terminal escapes into the printed report, coloured or not)."""
     if not isinstance(v, str):
         return v
-    return _EMAIL_RE.sub("<email>", _PATH_RE.sub("<path>", v))
+    from switchboard.envelope import clean
+
+    return _EMAIL_RE.sub("<email>", _PATH_RE.sub("<path>", clean(v)))
 
 
 def pctl(xs: list[float], q: int) -> float | None:
@@ -615,6 +619,9 @@ def _parked_spells(park_ev: list[sqlite3.Row], start: float, end: float) -> dict
 
 
 # ---------------------------------------------------------------- markdown
+_HEADING_RE = re.compile(r"#{1,6} ")  # a markdown heading line (render_markdown's own)
+
+
 def _row(cells: list[Any]) -> str:
     return "| " + " | ".join("" if c is None else str(c) for c in cells) + " |"
 
@@ -626,7 +633,12 @@ def _lat_cells(r: dict[str, Any]) -> list[str]:
     return [str(r["n"]), fmt_s(p50), fmt_s(p95), fmt_s(mx)]
 
 
-def render_markdown(rep: dict[str, Any], *, title: str | None = None) -> str:
+def render_markdown(rep: dict[str, Any], *, title: str | None = None, paint: Any = None) -> str:
+    """The report as markdown. With a ``colors.Paint`` that is on (the terminal, issue #28),
+    headings are bold and each rule that fired stands out; a file or a pipe gets plain text."""
+    from switchboard.colors import PLAIN
+
+    p = paint or PLAIN
     w, s, t = rep["window"], rep["settings"], rep["traffic"]
     L: list[str] = []
     c = rep.get("closed")
@@ -728,32 +740,37 @@ def render_markdown(rep: dict[str, Any], *, title: str | None = None) -> str:
     L.append("## Rules that fired")
     L.append("")
     r = rep["rules"]
+
+    def rule(name: str, count: Any, detail: str = "") -> None:
+        fired = str(count) not in ("0", "0, 0")
+        L.append(_row([p.warn(name) if fired else name, count, detail]))
+
     L.append(_row(["rule", "count", "detail"]))
     L.append(_row(["---"] * 3))
-    L.append(_row(["loop guard (room paused after the hop limit)", r["loop_guard"], ""]))
-    L.append(_row(["budget exhausted", r["budget_exhausted"], ""]))
-    L.append(_row(["rate limit (say refused)", r["rate_limited"], ""]))
-    L.append(_row(["read first (pass refused: a stub not read yet)", r.get("pass_refused", 0), ""]))
-    L.append(_row(["watchdog reminders", r["watchdog_remind"], ""]))
-    L.append(_row(["watchdog notices to the human", sum(r["watchdog_escalate"].values()),
-                   ", ".join(f"{k} {v}" for k, v in r["watchdog_escalate"].items())]))
-    L.append(_row(["re-deliver once (seen, not answered)", r["redeliver"], ""]))
-    L.append(_row(["offers expired", sum(r["expired"].values()),
-                   ", ".join(f"`{k}` {v}" for k, v in r["expired"].items())]))
-    L.append(_row(["offers cancelled by a pause", sum(r["cancelled_by_pause"].values()),
-                   ", ".join(f"`{k}` {v}" for k, v in r["cancelled_by_pause"].items())]))
-    L.append(_row(["/pause", r["pause"], ""]))
-    L.append(_row(["/resume", r["resume"], ""]))
-    L.append(_row(["/budget n", r["budget_set"], ""]))
-    L.append(_row(["/hops n (hop limit changed)", r.get("hops_set", 0), ""]))
-    L.append(_row(["/hold, /release", f"{r['hold']}, {r['release']}", ""]))
-    L.append(_row(["/kick", r["kick"], ""]))
-    L.append(_row(["/catchup (catch-up requests posted, /review included)", r.get("catchup", 0), ""]))
-    L.append(_row(["approval holds (a prompt was open)", r["approval_holds"], ""]))
-    L.append(_row(["Codex holds (a TUI left the daemon)", r["codex_holds"], ""]))
-    L.append(_row(["Devin re-arms", r["rearm"], ""]))
-    L.append(_row(["parked (needs a poke)", r["parked"], ""]))
-    L.append(_row(["Cursor parks", r["cursor_parks"], f"degraded {r['degraded']}"]))
+    rule("loop guard (room paused after the hop limit)", r["loop_guard"])
+    rule("budget exhausted", r["budget_exhausted"])
+    rule("rate limit (say refused)", r["rate_limited"])
+    rule("read first (pass refused: a stub not read yet)", r.get("pass_refused", 0))
+    rule("watchdog reminders", r["watchdog_remind"])
+    rule("watchdog notices to the human", sum(r["watchdog_escalate"].values()),
+         ", ".join(f"{k} {v}" for k, v in r["watchdog_escalate"].items()))
+    rule("re-deliver once (seen, not answered)", r["redeliver"])
+    rule("offers expired", sum(r["expired"].values()),
+         ", ".join(f"`{k}` {v}" for k, v in r["expired"].items()))
+    rule("offers cancelled by a pause", sum(r["cancelled_by_pause"].values()),
+         ", ".join(f"`{k}` {v}" for k, v in r["cancelled_by_pause"].items()))
+    rule("/pause", r["pause"])
+    rule("/resume", r["resume"])
+    rule("/budget n", r["budget_set"])
+    rule("/hops n (hop limit changed)", r.get("hops_set", 0))
+    rule("/hold, /release", f"{r['hold']}, {r['release']}")
+    rule("/kick", r["kick"])
+    rule("/catchup (catch-up requests posted, /review included)", r.get("catchup", 0))
+    rule("approval holds (a prompt was open)", r["approval_holds"])
+    rule("Codex holds (a TUI left the daemon)", r["codex_holds"])
+    rule("Devin re-arms", r["rearm"])
+    rule("parked (needs a poke)", r["parked"])
+    rule("Cursor parks", r["cursor_parks"], f"degraded {r['degraded']}")
     L.append("")
     L.append("## Stalls and approval prompts")
     L.append("")
@@ -769,4 +786,4 @@ def render_markdown(rep: dict[str, Any], *, title: str | None = None) -> str:
             L.append(_row([sp["name"], sp["at"], fmt_s(sp["seconds"]), sp["ended_by"] or "still open",
                            "**stalled**" if sp["seconds"] > STALL_S else ""]))
     L.append("")
-    return "\n".join(L)
+    return "\n".join(p.heading(x) if _HEADING_RE.match(x) else x for x in L)

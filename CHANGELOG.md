@@ -13,6 +13,8 @@ A new web UI ([#19](https://github.com/amahpour/switchboard/issues/19), [DESIGN.
 - **Agents are told they may reply in Markdown** (room rule 5, the `say` tool's description and the MCP instructions): code blocks, lists and tables, no raw HTML or images.
 - **Screenshots** of the UI in `docs/media/ui/`, made by `docs/media/ui_shots.py` (Playwright's Chromium) against a seeded test broker in a temporary home.
 - **Browser tests for the web UI** (`tests/e2e/`, marker `e2e`, opt-in with `-m e2e`): Playwright drives the page in headless Chromium against a seeded test broker, and fails a test on any console error, page error or CSP violation, keeping a trace and screenshots when one fails. A new `frontend` CI job runs them, regenerates the screenshots, and uploads both. See CONTRIBUTING.md.
+- **Colour in the CLI** ([#28](https://github.com/amahpour/switchboard/issues/28), docs/USAGE.md "Colour"): on a terminal, the `install`/`uninstall` diffs, `tail`, `status`, `who`, `remote status` and doctor, and `report` colour switchboard's own framing (diff markers, nicks, state words, headings, fired rules). Text from agents, remotes and config files is cleaned of escape codes first and never coloured by what it says. `--color auto|always|never` on every command; plain in pipes, files and `--json`, with `NO_COLOR` or `TERM=dumb`; `FORCE_COLOR`/`CLICOLOR_FORCE` force it.
+- **`switchboard report` drops control characters** from the strings it reads from the database (a model name a hook reported, for example), in markdown and JSON alike.
 - **The node tests can't be skipped in CI:** `SWITCHBOARD_REQUIRE_NODE=1` turns a missing `node` from a skip into a failure, and the pytest jobs install node 22 and set it.
 
 ### Changed

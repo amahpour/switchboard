@@ -1144,10 +1144,17 @@ def probe(dest: str, agent_sock: str | None = None) -> Finding:
     return Finding("ok", f"ssh {target} true failed here (exit {r.returncode}): no shell on the desktop from {how}")
 
 
-def print_findings(findings: list[Finding], out: TextIO) -> int:
+def print_findings(findings: list[Finding], out: TextIO, paint: Any = None) -> int:
+    """``remote doctor``'s findings, one per line; with a ``colors.Paint`` that is on,
+    the level word is coloured (ok green, WARN yellow, FAIL red, a note dim)."""
+    from switchboard.colors import PLAIN
+
+    p = paint or PLAIN
     for x in findings:
-        print(f"  {x.level:<4}  {x.text}", file=out)
+        style = {"OK": p.ok, "WARN": p.warn, "FAIL": p.bad}.get(x.level.upper(), p.dim)
+        print(f"  {style(x.level)}{' ' * max(0, 4 - len(x.level))}  {x.text}", file=out)
     bad = [x for x in findings if x.level in ("WARN", "FAIL")]
     fails = sum(1 for x in bad if x.level == "FAIL")
-    print(f"{'clean' if not bad else f'{len(bad) - fails} warning(s), {fails} failure(s)'}", file=out)
+    summary = f"{len(bad) - fails} warning(s), {fails} failure(s)"
+    print(p.ok("clean") if not bad else p.bad(summary) if fails else p.warn(summary), file=out)
     return 0 if not bad else 1

@@ -43,6 +43,14 @@ An agent's normal replies are never posted, only `say()`. Its text starting with
 | `switchboard report --room '#build' [--last 2h] [--json] [--out FILE]` | Latency, turns, posts vs passes and rules fired (below); a closed room's name works too |
 | `switchboard stop` | Stop the broker |
 
+**Colour.** On a terminal, switchboard colours its own framing so the output is easy to scan:
+- `install` and `uninstall` diffs: added lines green, removed red, file headers bold, and notes and unchanged files dim;
+- `tail`: your nick bold, each agent a colour of its own (the same on every run), the system dim, and warnings red;
+- `status`, `who` and `remote status`: state words (`up` and `idle` green; `down`, `parked`, `paused` and `needs enable` yellow; `blocked` red) and links;
+- `report`: headings, and each rule that fired.
+
+It never colours text from agents, remote machines or config files: that text is cleaned of escape codes first, and colour only ever wraps around it. Colour is off in a pipe or a file, with `--json`, when `NO_COLOR` is set (see [no-color.org](https://no-color.org)) and for `TERM=dumb`. `FORCE_COLOR` or `CLICOLOR_FORCE` turns it on in a pipe, and every command takes `--color auto|always|never` to decide yourself. It uses the basic terminal colours plus bold and dim, with no backgrounds, so it reads on dark and light themes.
+
 Every command takes `--home DIR` (default `$SWITCHBOARD_HOME`, else `~/.switchboard`). Settings go in `~/.switchboard/config.toml`; every key is optional (see [DESIGN.md §2](DESIGN.md)), for example `human_name = "alice"` (the default is your login name, lowercased, or `me` if that isn't a usable screen name: invalid, reserved, or the start of an agent name such as `dev` for devin-1), `port = 7419`, `[delivery] budget_per_hour = 60`. `[delivery] hop_limit = 6` is the loop-guard limit a **new** room starts with (0 turns the guard off); an existing room keeps its own limit, which `/hops <n>` changes live.
 
 **Commands** (web UI, or `switchboard cmd`):
