@@ -215,8 +215,8 @@ def end_card(tag: str) -> Image.Image:
     t2b = "The Claude Code, Codex, Devin and Cursor sessions you already run  ·  on your own machines  ·  self-hosted"
     d.text(((W - d.textlength(t2b, font=f2b)) / 2, 470), t2b, font=f2b, fill=INK_2)
     mono = font(MONO, 36)
-    lines = [f"uv tool install git+https://github.com/amahpour/switchboard@{tag}", "switchboard install all",
-             "switchboard start"]
+    lines = ["uv tool install git+https://github.com/amahpour/switchboard" + (f"@{tag}" if tag else ""),
+             "switchboard install all", "switchboard start"]
     bw = max(d.textlength("$ " + ln, font=mono) for ln in lines) + 80
     bx, by = (W - bw) / 2, 570
     d.rounded_rectangle((bx, by, bx + bw, by + 60 * len(lines) + 50), radius=18, fill=(26, 29, 33))
@@ -725,7 +725,9 @@ def main() -> None:
     ap.add_argument("--build", type=Path, required=True)
     ap.add_argument("--music", type=Path, help="a music track for the MP4 (see CREDITS.md)")
     ap.add_argument("--music-start", type=float, default=0.0)
-    ap.add_argument("--tag", default="", help="the release tag the end card installs (default: this version)")
+    ap.add_argument("--tag", default="none",
+                    help="the release tag the end card's install line pins: a tag, 'version' for this checkout's, "
+                         "or 'none' (the default: every merge to main is a release, so the card names none)")
     ap.add_argument("--name", default="switchboard")
     ap.add_argument("--no-mp4", action="store_true")
     ap.add_argument("--no-gif", action="store_true")
@@ -736,8 +738,8 @@ def main() -> None:
     args = ap.parse_args()
     rec = Rec.load(args.build)
     caps = json.loads((args.build / "captions.json").read_text()) if (args.build / "captions.json").exists() else {}
-    tag = args.tag
-    if not tag:
+    tag = "" if args.tag == "none" else args.tag
+    if args.tag == "version":
         from switchboard import __version__
         tag = f"v{__version__}"
     out = args.build / "out"
