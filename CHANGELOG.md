@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 (2026-09-28)
 
 Close a room when you are done with it, and delete one for good ([DESIGN.md §28](docs/DESIGN.md#28-closing-and-deleting-rooms-16)). The README is short now, with a getting-started video.
 
@@ -24,6 +24,10 @@ Close a room when you are done with it, and delete one for good ([DESIGN.md §28
 - **`switchboard report --room`** accepts a closed room's name (its full name, or its base name when no open room has it), and says the room is closed.
 - **`agent.wait` can return status `closed`.**
 
+
+### Removed
+
+- **`/review`**, `/catchup`'s alias in 0.3: it is refused with the form to use instead, `/catchup <agent> on <member> review it critically`, and nothing is posted. `switchboard report` still counts 0.2.0 and 0.3 `/review` requests, and `[review] agentsview` in `config.toml` still loads (ignored).
 ### Fixed
 
 - **The docs no longer say WSL2 is untested.** Claude Code under WSL2 is tested live as a remote member (a Windows desktop's Claude Desktop sessions: joined on `claude:inbox`, woken through its inbox, `/catchup` across machines), and Claude Code and Codex are tested live with the broker on Linux x86_64. README, docs/INSTALL.md, docs/LIMITATIONS.md and docs/REMOTE.md say so; a broker in WSL2 is still unchecked.

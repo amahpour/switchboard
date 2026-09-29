@@ -30,9 +30,6 @@ THIS_MACHINE = "this machine"  # the same, as the human sees it (/who, the reply
 EMPTY = "–"  # an absent topic or note
 BLOCK_TITLE = "catch-up request (switchboard)"
 HEADINGS = ("Doing", "Decided", "Open questions", "Conflicts with my work", "Next step")
-# /review <reviewer> <author> [note] is /catchup <reviewer> on <author> + this note (until 0.4)
-REVIEW_NOTE = "review it critically"
-REVIEW_DEPRECATED = "/review is now /catchup; the alias goes away in 0.4"
 
 # Harnesses whose session ids a session-history tool can know. Test and unknown sessions have none.
 _HISTORY_HARNESSES = frozenset({"claude", "codex", "cursor", "devin"})
@@ -173,11 +170,6 @@ def request_text(agent: str, mode: str, subjects: Sequence[Handle], *, since: fl
     lines.append(f"  topic: {topic or EMPTY}")
     lines.append(f"  note: {note or EMPTY}")
     return "\n".join(lines)
-
-
-def review_note(note: str) -> str:
-    """The note ``/review <reviewer> <author> [note]`` becomes."""
-    return f"{REVIEW_NOTE}: {note}" if note else REVIEW_NOTE
 
 
 def approvals_warning(name: str, approval_mode: str) -> str | None:

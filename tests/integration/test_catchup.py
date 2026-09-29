@@ -203,27 +203,14 @@ async def test_a_held_agent_keeps_the_request_queued(broker: InProcBroker, claud
         assert ids_in(got["text"]) == [msg["id"]]
 
 
-async def test_review_is_an_alias(broker: InProcBroker, claude: FakeClaude) -> None:
+async def test_review_was_removed_in_0_4(broker: InProcBroker, claude: FakeClaude) -> None:
+    """0.3's /review alias is gone: it is refused with the /catchup form to use, and nothing is posted."""
     async with FakeAgent(broker.home, "ag") as ag:
         await ag.join("#build", "reviewer")
-        t = ag.wait_task("#build", 20)
-        await until_waiting(broker, "reviewer")
         r = web_cmd(broker, "/review reviewer claude-1 focus on the error paths")
-        assert r.status_code == 200, r.text
-        lines = r.json()["text"].splitlines()
-        assert lines[0] == "/review is now /catchup; the alias goes away in 0.4"
-        assert lines[1].startswith("asked reviewer to catch up on claude-1's work since ")
-        [msg] = human_chat(broker)
-        assert "  note: review it critically: focus on the error paths" in msg["text"].splitlines()
-        # the same request as /catchup with that note
-        assert web_cmd(broker, "/catchup reviewer on claude-1 review it critically: focus on the error"
-                               " paths").status_code == 200
-        assert human_chat(broker)[-1]["text"] == msg["text"]
-        got = await asyncio.wait_for(t, 5)
-        assert ids_in(got["text"])[0] == msg["id"] and "to_you=yes" in got["text"]
-        assert subject_delivery_rows(broker, "claude-1") == 0
-        [e1, _e2] = catchup_events(broker)
-        assert '"alias": "review"' in e1[0]
+        assert r.status_code == 400
+        assert "/review was removed in 0.4: use /catchup <agent> on <member> review it critically" in r.text
+        assert human_chat(broker) == [] and catchup_events(broker) == []
 
 
 async def test_a_codex_subject_through_the_uds(broker: InProcBroker) -> None:
