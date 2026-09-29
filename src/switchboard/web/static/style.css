@@ -182,7 +182,7 @@ body {
 .chip.st-blocked { background: #ffd0d0; }
 .chip.st-disabled { color: #404040; }
 
-.window.dialog.remotes-panel {
+.window.dialog.remotes-panel, .window.dialog.closed-panel {
   position: fixed;
   top: 56px;
   left: 50%;
@@ -191,7 +191,12 @@ body {
   max-height: calc(100vh - 80px);
   z-index: 20;
 }
-.remotes-panel .dialog-body { overflow-y: auto; }
+.remotes-panel .dialog-body, .closed-panel .dialog-body { overflow-y: auto; }
+.closed-card { margin: 6px 0 10px; padding: 6px 8px; border: 1px solid var(--lo); background: #f4f4f4; }
+.closed-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.closed-name { font-weight: bold; font-size: 14px; }
+.closed-card .fine code { overflow-wrap: anywhere; }
+.closed-result.bad { color: var(--human); font-weight: bold; }
 .remote-card { margin: 6px 0 10px; padding: 6px 8px; border: 1px solid var(--lo); background: #f4f4f4; }
 .remote-head { display: flex; align-items: center; gap: 6px; }
 .remote-name { font-weight: bold; font-size: 14px; }

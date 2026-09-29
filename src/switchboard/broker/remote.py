@@ -53,7 +53,7 @@ from switchboard.broker.peer import Peer
 from switchboard.broker.rpc import Conn
 from switchboard.broker.service import ServiceError
 from switchboard.envelope import clean
-from switchboard.models import Room, valid_host
+from switchboard.models import ROOM_RE, Room, valid_host
 from switchboard.paths import Paths
 from switchboard.remote import proto
 from switchboard.remote.config import (
@@ -423,10 +423,12 @@ class RemoteLink:
 
     def _welcome_rooms(self) -> list[str]:
         """The rooms named in the welcome frame (the satellite only shows them). With ``"*"``
-        the existing rooms, since the frame format allows room names only (at most 64)."""
+        the open rooms, since the frame format allows room names only (at most 64). A closed
+        room's name fails ROOM_RE and a satellite refuses the whole frame (``bad_rooms``):
+        ``list_rooms`` leaves them out, and the filter is a second guard (§28.8)."""
         if ANY_ROOM not in self.entry.rooms:
             return list(self.entry.rooms)
-        return [r.name for r in self.st.store.list_rooms()][:64]
+        return [r.name for r in self.st.store.list_rooms() if ROOM_RE.fullmatch(r.name)][:64]
 
     def notice(self, text: str, level: str = "info") -> None:
         """A notice in each of the remote's rooms that exists."""

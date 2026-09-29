@@ -182,6 +182,58 @@ def test_command_roles_over_uds_without_trust(tmp_home: Path) -> None:
         b.stop()
 
 
+def test_login_refusal_texts(tmp_home: Path) -> None:
+    """``login`` without the terminal: room.delete names itself; human.login_link keeps its
+    own wording (§28.6). The refusal comes before the handler, so nothing is looked up."""
+    from switchboard.broker.peer import PeerPolicy
+
+    class CliNoTty(PeerPolicy):
+        def human_cli_allowed(self, peer) -> bool:  # type: ignore[override]
+            return peer.uid == os.getuid()
+
+    b = InProcBroker(tmp_home, policy=CliNoTty()).start()
+    try:
+        with pytest.raises(RpcError) as e:
+            b.call("room.delete", {"room": "#build", "dry_run": True})
+        assert e.value.code == "forbidden"
+        assert e.value.message == ("room.delete must come from a terminal you typed in"
+                                   " (not an agent's shell, nor a script without a terminal)")
+        with pytest.raises(RpcError) as e:
+            b.call("human.login_link")
+        assert e.value.code == "forbidden"
+        assert e.value.message == ("login links are only issued to a terminal you typed in:"
+                                   " run `switchboard login` there")
+    finally:
+        b.stop()
+
+
+def test_room_delete_params_and_room_list_closed(broker: InProcBroker) -> None:
+    """room.delete without the plan's room_id is refused; room.list reports closed rooms."""
+    with pytest.raises(RpcError) as e:
+        broker.call("room.delete", {"room": "#build"})
+    assert e.value.code == "bad_request" and e.value.message == "room_id is required: run the plan first"
+    with pytest.raises(RpcError) as e:
+        broker.call("room.delete", {"dry_run": True})
+    assert e.value.code == "bad_request" and e.value.message == "room is required"
+    with pytest.raises(RpcError) as e:
+        broker.call("room.delete", {"room": "#nope", "dry_run": True})
+    assert e.value.code == "not_found" and e.value.message == "no such room: #nope"
+    web = broker.web_client()
+    web.post("/api/rooms", json={"name": "#build"}, headers=broker.write_headers())
+    lst = broker.call("room.list")
+    assert lst["closed"] == 0 and [(r["name"], type(r["id"])) for r in lst["rooms"]] == [("#build", int)]
+    assert broker.call("human.command", {"room": "#build", "text": "/close"})["ok"]
+    assert broker.call("room.list") == {"rooms": [], "closed": 1}
+    got = broker.call("room.list", {"closed": True})
+    assert got["closed"] == 1 and [r["display"] for r in got["rooms"]] == ["#build"]
+    assert broker.call("sys.status")["closed_rooms"] == 1
+    plan = broker.call("room.delete", {"room": "#build", "dry_run": True})
+    assert plan["state"] == "closed" and plan["closed_by"] == "alice"
+    res = broker.call("room.delete", {"room": "#build", "room_id": plan["room_id"]})
+    assert res["removed"]["rooms"] == 1 and Path(res["backup"]).exists()
+    assert broker.call("room.list", {"closed": True}) == {"rooms": [], "closed": 0}
+
+
 def test_second_broker_on_the_same_home_refuses_to_start(broker: InProcBroker) -> None:
     other = InProcBroker(broker.home)
     with pytest.raises(RuntimeError, match="failed to start"):

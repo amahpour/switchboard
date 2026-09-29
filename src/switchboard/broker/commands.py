@@ -5,7 +5,8 @@ authenticated web session. An agent's ``say("/pause")`` is stored literally
 and never parsed. Commands that reduce activity need ``human_cli``; commands
 that raise it need ``human`` (the web session, or test trust). ``/catchup``
 (§26, and ``/review``, its alias until 0.4) posts one chat message as the human,
-so it needs what ``switchboard say`` needs: ``human_cli``.
+so it needs what ``switchboard say`` needs: ``human_cli``. ``/close`` (§28.3) ends every
+membership, so it reduces activity: ``human_cli``.
 """
 
 from __future__ import annotations
@@ -37,6 +38,8 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
   /hold <name>        stop delivering to one agent (messages stay queued)
   /release <name>     resume delivery to a held agent (web only)
   /kick <name>        remove an agent and revoke its membership
+  /close              close this room: every agent leaves, the history is kept;
+                      reopen it from Closed rooms in the web UI
   /catchup <agent> [on <member> | on "<topic>"] [note]
                       one agent gets up to speed from the others' session
                       history, with its own tool (e.g. AgentsView):
@@ -51,7 +54,7 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
   /help               this list
   //text              post text that starts with a single /"""
 
-_NO_ARGS = frozenset({"pause", "resume", "who", "status", "help"})
+_NO_ARGS = frozenset({"pause", "resume", "who", "status", "help", "close"})
 _ONE_NAME = frozenset({"kick", "hold", "release"})
 _ONE_NUMBER = {"budget": MAX_BUDGET, "hops": MAX_HOPS}  # /name [n], 0 <= n <= max
 KNOWN = _NO_ARGS | _ONE_NAME | set(_ONE_NUMBER) | {"catchup", "review"}
@@ -60,6 +63,7 @@ _STATIC_ROLES = {
     "pause": "human_cli",
     "resume": "human",
     "kick": "human_cli",
+    "close": "human_cli",  # every agent leaves: it reduces activity, like /kick (§28.3)
     "hold": "human_cli",
     "release": "human",
     "who": "human_cli",
@@ -103,6 +107,9 @@ class Result:
     members_changed: bool = False
     event: str | None = None
     event_data: dict = field(default_factory=dict)
+    # the command published everything itself (/close): ``RoomService.command`` returns the
+    # reply at once, since its post-processing would publish under the renamed room
+    done: bool = False
 
 
 def parse_command(text: str) -> Command:
@@ -414,6 +421,8 @@ def apply(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
     room = store.refill_budget(room.id)
     check_role(cmd, room, actor)
     name = cmd.name
+    if name == "close":
+        return Result(True, svc.close_room(room, actor), done=True)
     if name == "help":
         return Result(True, HELP_TEXT)
     if name == "who":

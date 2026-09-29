@@ -10,6 +10,10 @@ Remote links (§27.11): ``GET /api/remotes`` is every remote's state;
 reconnect and Disable buttons, the web session's equivalents of the human-only
 ``switchboard remote enable|disable`` (consent for exactly the current config,
 recorded as ``via web``). A ``remotes`` WebSocket event carries every change.
+
+Closed rooms (§28): ``GET /api/rooms`` lists open rooms (each with its ``id``) and
+the ``closed`` count; ``GET /api/closed-rooms`` lists closed ones; ``POST
+/api/closed-rooms/{id}/reopen`` is the web UI's Reopen button.
 """
 
 from __future__ import annotations
@@ -45,6 +49,7 @@ WS_MAX_ROOMS = 64
 WS_BACKLOG = 500
 BAD_TOKEN_EVENT_S = 60.0
 HASH_RE = re.compile(r"[0-9a-f]{64}")  # a remote's config_hash (sha256 hex)
+ROOM_ID_RE = re.compile(r"[1-9][0-9]{0,18}")  # a room id in /api/closed-rooms/{rid}/reopen
 
 
 class _StaticFiles(StaticFiles):
@@ -180,7 +185,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
     async def list_rooms(request: Request) -> Response:
         if session(request) is None:
             return unauthorized()
-        return _ok({"rooms": state.service.rooms()})
+        return _ok({"rooms": state.service.rooms(), "closed": state.store.count_closed_rooms()})
 
     @app.post("/api/rooms")
     async def create_room(request: Request) -> Response:
@@ -249,6 +254,27 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 raise ServiceError("bad_request", "text is required")
             res = state.service.command(slug, text, Actor(role="human", via="web"))
             return _ok(res)
+        except ServiceError as e:
+            return _svc_err(e)
+
+    # ------------------------------------------------------- closed rooms
+    # Not under /api/rooms/{slug}: a room named #closed must not clash (§28).
+    @app.get("/api/closed-rooms")
+    async def closed_rooms(request: Request) -> Response:
+        if session(request) is None:
+            return unauthorized()
+        return _ok({"rooms": state.service.closed_room_dicts()})
+
+    @app.post("/api/closed-rooms/{rid}/reopen")
+    async def reopen_room(request: Request, rid: str) -> Response:
+        if session(request) is None:
+            return unauthorized()
+        try:
+            await _json_body(request)
+            if not ROOM_ID_RE.fullmatch(rid):
+                raise ServiceError("bad_request", "bad room id")
+            room = state.service.reopen_room(int(rid), via="web")
+            return _ok({"room": state.service.room_dict(room)})
         except ServiceError as e:
             return _svc_err(e)
 

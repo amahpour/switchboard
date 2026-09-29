@@ -172,8 +172,9 @@ def cmd_status(args: argparse.Namespace) -> int:
     if st.get("test_mode"):
         print("  TEST MODE")
     rooms = st.get("rooms", [])
+    closed = st.get("closed_rooms", 0)
     if not rooms:
-        print("  rooms   none yet (create one in the web UI)")
+        print("  rooms   none open" if closed else "  rooms   none yet (create one in the web UI)")
     for r in rooms:
         state = f"paused ({r['paused_reason']})" if r["paused"] else "active"
         limit = r.get("hop_limit")
@@ -183,6 +184,8 @@ def cmd_status(args: argparse.Namespace) -> int:
             f"  {r['name']}: {state}, {r['members']} agent(s), budget "
             f"{r['budget_remaining']}/{r['budget_per_hour']}, hops {hops}"
         )
+    if closed:
+        print(f"  closed  {closed} room(s) (switchboard rooms --closed)")
     remotes = st.get("remotes") or []
     if remotes:
         from switchboard.remote.describe import describe
@@ -215,17 +218,71 @@ def cmd_logout(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _ymdhm(ts: float | None) -> str:
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)) if ts is not None else "at an unknown time"
+
+
 def cmd_rooms(args: argparse.Namespace) -> int:
+    if getattr(args, "rooms_cmd", None) == "delete":
+        return cmd_rooms_delete(args)
+    if args.closed:
+        res = _call(args, "room.list", {"closed": True})
+        if args.json:
+            print(json.dumps(res["rooms"], indent=2))
+            return EXIT_OK
+        if not res["rooms"]:
+            print("no closed rooms")
+        for r in res["rooms"]:
+            print(f"{r['name']}  was {r['display']}, closed {_ymdhm(r.get('closed_at'))}"
+                  f" by {_clean(r.get('closed_by') or '?')}, {r['messages']} message(s)")
+        return EXIT_OK
     res = _call(args, "room.list")
     if args.json:
         print(json.dumps(res["rooms"], indent=2))
         return EXIT_OK
+    closed = res.get("closed", 0)
     if not res["rooms"]:
-        print("no rooms yet (create one in the web UI)")
+        print(f"no open rooms ({closed} closed: switchboard rooms --closed)" if closed
+              else "no rooms yet (create one in the web UI)")
+        return EXIT_OK
     for r in res["rooms"]:
         s = r["settings"]
         flag = "  [paused]" if s["paused"] else ""
         print(f"{r['name']}  {r['members']} agent(s){flag}")
+    if closed:
+        print(f"({closed} closed: switchboard rooms --closed)")
+    return EXIT_OK
+
+
+def _removed(c: dict[str, int]) -> str:
+    return (f"{c['rooms']} room, {c['messages']} message(s), {c['memberships']} membership(s),"
+            f" {c['deliveries']} delivery row(s), {c['batches']} batch(es), {c['events']} event(s)")
+
+
+def cmd_rooms_delete(args: argparse.Namespace) -> int:
+    """``switchboard rooms delete ROOM`` (DESIGN.md §28.6): the broker plans it (a dry run,
+    refused while the room has members), you confirm, then the broker writes a checked
+    backup and deletes the room pinned by the plan's id. The CLI never opens the database."""
+    if _satellite_home(args):
+        return on_desktop(args)
+    from switchboard.install import common
+
+    plan = _call(args, "room.delete", {"room": args.room, "dry_run": True}, timeout=30.0)
+    print(f"switchboard rooms delete {plan['name']}:")
+    if plan.get("state") == "closed":
+        print(f"  {plan['name']}: was {plan['display']}, closed {_ymdhm(plan.get('closed_at'))}"
+              f" by {_clean(plan.get('closed_by') or '?')}")
+    else:
+        print(f"  {plan['name']}: open, no agents, created {_ymdhm(plan.get('created_at'))}")
+    print(f"  removes {_removed(plan['counts'])}")
+    print(f"  a checked backup of the whole database is written first: {plan['backup']}")
+    print("  this can't be undone, except by restoring that backup")
+    if not common.confirm(args.yes):
+        print("not applied")
+        return EXIT_ERR
+    res = _call(args, "room.delete", {"room": args.room, "room_id": plan["room_id"]}, timeout=120.0)
+    print(f"deleted {res['name']}: {_removed(res['removed'])}")
+    print(f"backup: {res['backup']} (0600, checked); it still holds the room: remove it once you no longer need it")
     return EXIT_OK
 
 
@@ -586,8 +643,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--all", action="store_true", help="revoke every web session")
     s.set_defaults(func=cmd_logout)
 
-    s = sub.add_parser("rooms", parents=[common], help="list rooms")
+    s = sub.add_parser("rooms", parents=[common], help="list rooms (--closed: closed ones); rooms delete ROOM")
     s.add_argument("--json", action="store_true")
+    s.add_argument("--closed", action="store_true", help="list closed rooms (reopen them in the web UI)")
+    rs = s.add_subparsers(dest="rooms_cmd", metavar="ACTION")  # optional: bare `rooms` lists
+    d = rs.add_parser("delete", parents=[common], help="delete a room and its history for good (after a checked backup)")
+    d.add_argument("room", help="'#build', or a closed room's full name '#build~closed-7' (quote it)")
+    d.add_argument("--yes", action="store_true", help="apply without asking")
     s.set_defaults(func=cmd_rooms)
 
     s = sub.add_parser("create", parents=[common], help="create a room (needs the web session)")

@@ -115,6 +115,10 @@ class Runner:
     def _notice(self, a: Notice) -> None:
         st = self.state
         room = st.store.room_by_id(a.room_id) if a.room_id is not None else None
+        if a.room_id is not None and (room is None or room.closed):
+            # its room was deleted or closed (§28): nobody reads it, and it is no broker-wide news
+            log.info("notice for room %s dropped (closed or deleted): %s", a.room_id, a.text)
+            return
         if room is not None and a.persist:
             # The room message is the one line clients show; it carries the level
             # for styling. A second, transient frame would print the notice twice.
