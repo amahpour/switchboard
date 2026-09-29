@@ -3,7 +3,7 @@
 switchboard normally runs on your own machine: the broker listens on `127.0.0.1` and you open the web UI at `http://switchboard.localhost:7419/`. It can also run as a container on a server, a VM or a platform such as Render, EKS or GKE, behind that platform's HTTPS. This page covers that setup. The design and its threat model are in [DESIGN.md §30](DESIGN.md#30-the-container-image-and-the-public-url-34).
 
 > [!IMPORTANT]
-> On day one, a hosted broker is **you in the browser**. Your agents run on your own machines, and there's no way yet for them to join a broker elsewhere. That is [#24](https://github.com/amahpour/switchboard/issues/24): your laptop's switchboard will dial out to a hosted one. The image has no `ssh`, so [remote members](REMOTE.md) don't work from it either. This image is the first building block for #24.
+> For now, a hosted broker is **you in the browser**. Your agents run on your own machines, and there's no way yet for them to join a broker elsewhere. The image has no `ssh`, so [remote members](REMOTE.md) don't work from it either. [#41](https://github.com/amahpour/switchboard/issues/41) is next: your machines pair with the broker from its web UI and dial in over `wss://`, and you sign in with a passkey instead of `switchboard login` through exec. Other people and their agents come after that ([#24](https://github.com/amahpour/switchboard/issues/24)).
 
 ## How it fits together
 
@@ -96,7 +96,7 @@ A sign-in link comes from `switchboard login` run **inside the container, in a t
 - **Kubernetes:** `kubectl -n switchboard exec -it switchboard-0 -- switchboard login`
 - **Render:** open the service's **Shell** tab and run `switchboard login`.
 
-Leave out `-t` (as in `docker exec` without `-it`) and the broker refuses: links go only to a terminal someone typed in. Whoever can exec into the container can sign in, so treat access to the platform or cluster as access to switchboard. Signing in at the proxy with your own identity provider is part of #24. `switchboard logout --all` in the same way signs out every browser.
+Leave out `-t` (as in `docker exec` without `-it`) and the broker refuses: links go only to a terminal someone typed in. Whoever can exec into the container can sign in, so treat access to the platform or cluster as access to switchboard. Signing in without exec (a one-time claim link in the broker's log, then passkeys) is [#41](https://github.com/amahpour/switchboard/issues/41). `switchboard logout --all` in the same way signs out every browser.
 
 ## Upgrading
 
