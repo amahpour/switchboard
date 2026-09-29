@@ -78,7 +78,10 @@ def _ok(data: Any) -> JSONResponse:
     return JSONResponse(data, headers=NO_STORE)
 
 
-def _set_cookie(resp: Response, sid: str) -> None:
+def _set_cookie(resp: Response, sid: str, *, secure: bool) -> None:
+    """The session cookie. ``secure`` is the web origin's (``state.web_origin.secure``), on every
+    call: a refresh without it would replace an https page's Secure cookie with one a plain-http
+    request to the same name would carry."""
     resp.set_cookie(
         COOKIE_NAME,
         sid,
@@ -86,6 +89,7 @@ def _set_cookie(resp: Response, sid: str) -> None:
         path="/",
         httponly=True,
         samesite="strict",
+        secure=secure,  # behind a public https:// URL (DESIGN.md §30), never sent over plain http
     )
 
 
@@ -119,6 +123,12 @@ def install(app: FastAPI, state: "BrokerState") -> None:
 
     app.mount("/static", _StaticFiles(directory=STATIC_DIR, html=False), name="static")
 
+    # A platform's health check (DESIGN.md §30): "ok" and nothing else, with no session and, in
+    # HostOriginGuard, no Host check (the checker probes the container's own address).
+    @app.api_route("/healthz", methods=["GET", "HEAD"], include_in_schema=False)
+    async def healthz() -> Response:
+        return Response("ok\n", media_type="text/plain", headers=NO_STORE)
+
     # the tab icon for a browser that asks the old way (a JSON response opened in a tab, or a
     # browser that ignores <link rel="icon">): the 32 px PNG, which browsers accept at .ico
     @app.get("/favicon.ico", include_in_schema=False)
@@ -149,7 +159,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         state.store.add_event("login", data={"what": "session", "via": "web"})
         state.hub.notice(None, "warn", "new web login")
         resp = RedirectResponse("/", status_code=303, headers=NO_STORE)
-        _set_cookie(resp, sid)
+        _set_cookie(resp, sid, secure=state.web_origin.secure)
         return resp
 
     @app.post("/logout", include_in_schema=False)
@@ -169,7 +179,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             n = state.sessions.revoke(request.cookies.get(COOKIE_NAME))
             state.hub.close_sessions(h)
         resp = _ok({"ok": True, "revoked": n})
-        resp.delete_cookie(COOKIE_NAME, path="/", httponly=True, samesite="strict")
+        resp.delete_cookie(COOKIE_NAME, path="/", httponly=True, samesite="strict", secure=state.web_origin.secure)
         return resp
 
     # --------------------------------------------------------------- api
@@ -186,7 +196,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             }
         )
         # Slide the browser cookie along with the server-side session.
-        _set_cookie(resp, request.cookies.get(COOKIE_NAME) or "")
+        _set_cookie(resp, request.cookies.get(COOKIE_NAME) or "", secure=state.web_origin.secure)
         return resp
 
     @app.get("/api/rooms")

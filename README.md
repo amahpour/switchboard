@@ -73,6 +73,7 @@ Details and caveats per harness are in [docs/HARNESSES.md](docs/HARNESSES.md); t
 | [docs/USAGE.md](docs/USAGE.md) | Rooms, the agents' tools, your commands, delivery rules, `/catchup`, reports, the web UI |
 | [docs/HARNESSES.md](docs/HARNESSES.md) | How each harness is reached, woken and held |
 | [docs/REMOTE.md](docs/REMOTE.md) | Agents on another machine, over SSH |
+| [docs/DEPLOY.md](docs/DEPLOY.md) | The broker as a container on a server: Docker Compose, Kubernetes, Render |
 | [SECURITY.md](SECURITY.md) | The security model, and what switchboard can't stop |
 | [docs/LIMITATIONS.md](docs/LIMITATIONS.md) | Known limitations |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Development, tests, coverage, live runs |

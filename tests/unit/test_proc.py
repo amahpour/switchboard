@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import fcntl
 import os
+import pty
 import subprocess
 import sys
 import time
@@ -119,3 +121,46 @@ def test_ancestry_to_root_reaches_pid_1() -> None:
 def test_ps_is_called_by_absolute_path() -> None:
     ps = proc.ps_bin()
     assert ps is not None and os.path.isabs(ps)
+
+
+def test_linux_tty_names() -> None:
+    """What `ps -o tty=` prints, from /proc's tty_nr (the container image has no ps: docs/DEPLOY.md)."""
+    def dev(major: int, minor: int) -> int:  # the kernel's new_encode_dev
+        return (minor & 0xFF) | (major << 8) | ((minor & ~0xFF) << 12)
+
+    assert proc.linux_tty_name(34816) == "pts/0"  # `docker exec -t`'s pty
+    assert proc.linux_tty_name(dev(136, 5)) == "pts/5"
+    assert proc.linux_tty_name(dev(136, 300)) == "pts/300"
+    assert proc.linux_tty_name(dev(137, 3)) == "pts/259"
+    assert proc.linux_tty_name(dev(4, 2)) == "tty2"
+    assert proc.linux_tty_name(dev(4, 64)) == "ttyS0"
+    assert proc.linux_tty_name(dev(5, 1)) == "tty?5:1"
+
+
+def test_tty_of_a_process_in_a_terminal() -> None:
+    """A session leader whose controlling terminal is a pty: tty() names it as ps does (on Linux
+    from /proc alone), and a process in a new session without one has none."""
+    master, slave = pty.openpty()
+    code = ("import fcntl, sys, termios, time; fcntl.ioctl(0, termios.TIOCSCTTY, 0); "
+            "sys.stdout.write('ready\\n'); sys.stdout.flush(); time.sleep(30)")
+    child = subprocess.Popen([sys.executable, "-c", code], stdin=slave, stdout=slave, stderr=slave,
+                             start_new_session=True, close_fds=True)
+    os.close(slave)
+    try:
+        fcntl.fcntl(master, fcntl.F_SETFL, fcntl.fcntl(master, fcntl.F_GETFL) | os.O_NONBLOCK)
+        seen, deadline = b"", time.time() + 10
+        while b"ready" not in seen and time.time() < deadline:
+            try:
+                seen += os.read(master, 1024)
+            except BlockingIOError:
+                time.sleep(0.02)
+        assert b"ready" in seen
+        name = proc.tty(child.pid)
+        assert name and ("pts/" in name or name.startswith("tty")), name
+        ps = proc._run_ps(["-o", "tty=", "-p", str(child.pid)]).strip()
+        if ps:  # a runner or a desktop with ps: the same name
+            assert name == ps
+    finally:
+        child.kill()
+        child.wait()
+        os.close(master)

@@ -1,0 +1,6 @@
+# Caddy for deploy/compose/compose.yaml: https for $SWITCHBOARD_DOMAIN (a Let's Encrypt
+# certificate, renewed by Caddy), plain http redirected to it, and everything, the UI's
+# WebSocket included, passed to the broker with the browser's Host and Origin untouched.
+{$SWITCHBOARD_DOMAIN} {
+	reverse_proxy switchboard:7419
+}

@@ -44,10 +44,10 @@ SNIFF_BYTES = 8192  # a NUL byte in here means binary
 
 # Example or placeholder user names allowed after /Users/, /home/ and -Users- (compared lowercased).
 # "dev" and "pi" are the two-host containers' users (sandbox/Dockerfile.twohost; pi was Raspberry
-# Pi OS's default user).
+# Pi OS's default user); "switchboard" is the published image's user (Dockerfile).
 FAKE_NAMES = frozenset(
     {"someone", "x", "me", "you", "runner", "user", "username", "name", "shared", "example", "alice", "bob",
-     "dev", "pi", "linuxbrew"}
+     "dev", "pi", "linuxbrew", "switchboard"}
 )
 
 PATTERNS = (

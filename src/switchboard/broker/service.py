@@ -79,6 +79,7 @@ class BrokerInfo:
     started_at: float = field(default_factory=time.time)
     test_mode: bool = False
     home: str = ""
+    url: str = ""  # the web UI's address, as browsers reach it
     hook_state: str = "not checked"
     codex_link: str = "not started"
 
@@ -819,7 +820,7 @@ class RoomService:
             "version": __version__,
             "pid": self.info.pid,
             "port": self.info.port,
-            "url": f"http://switchboard.localhost:{self.info.port}/",
+            "url": self.info.url or f"http://switchboard.localhost:{self.info.port}/",
             "uptime_s": round(now - self.info.started_at, 1),
             "home": self.info.home,
             "rooms": rooms,

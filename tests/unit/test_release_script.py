@@ -68,6 +68,12 @@ def test_update_pins() -> None:
     text = "uv tool install git+https://github.com/amahpour/switchboard@v0.4.0   # comment\n"
     assert rel.update_pins(text, "0.4.1") == text.replace("@v0.4.0", "@v0.4.1")
     assert rel.update_pins("git+https://github.com/other/switchboard@v0.4.0", "9.9.9").endswith("@v0.4.0")
+    # the image (issue #34): the examples and docs/DEPLOY.md name a release, never :latest
+    image = "    image: ghcr.io/amahpour/switchboard:0.4.0   # a release\n"
+    assert rel.update_pins(image, "0.5.0") == image.replace(":0.4.0", ":0.5.0")
+    for other in ("ghcr.io/amahpour/switchboard:latest", "ghcr.io/other/switchboard:0.4.0",
+                  "ghcr.io/amahpour/switchboard:0.4.0-rc1", "python:3.13-slim"):
+        assert rel.update_pins(other, "0.5.0") == other  # not a release pin of this image
 
 
 # ------------------------------------------------------------------ a real repo
@@ -90,6 +96,8 @@ def make_repo(tmp_path: Path) -> Path:
     pin = "uv tool install git+https://github.com/amahpour/switchboard@v0.4.0\n"
     (repo / "README.md").write_text(pin)
     (repo / "docs" / "INSTALL.md").write_text(pin)
+    (repo / "deploy" / "compose").mkdir(parents=True)
+    (repo / "deploy" / "compose" / "compose.yaml").write_text("    image: ghcr.io/amahpour/switchboard:0.4.0\n")
     git(repo, "init", "-q", "-b", "main")
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "chore: start")
@@ -111,6 +119,7 @@ def test_a_release_on_a_real_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     lock = (repo / "uv.lock").read_text()
     assert 'name = "switchboard"\nversion = "0.5.0"' in lock and 'name = "other"\nversion = "1.0"' in lock
     assert "@v0.5.0" in (repo / "README.md").read_text() and "@v0.5.0" in (repo / "docs/INSTALL.md").read_text()
+    assert ":0.5.0\n" in (repo / "deploy/compose/compose.yaml").read_text()  # the image pin
     assert notes.read_text() == "Intro.\n\n### Added\n\n- A thing.\n"
     assert "## Unreleased\n\n## 0.5.0 (2026-09-29)\n" in (repo / "CHANGELOG.md").read_text()
 

@@ -20,7 +20,7 @@ from switchboard import db
 from switchboard.adapters import build_adapters
 from switchboard.broker import web
 from switchboard.broker.agents import AgentService
-from switchboard.broker.auth import UI_HOST, HostOriginGuard, LoginTokens, SecurityHeaders, Sessions
+from switchboard.broker.auth import HostOriginGuard, LoginTokens, SecurityHeaders, Sessions, WebOrigin
 from switchboard.broker.hosts import HostViews
 from switchboard.broker.hub import Hub, WsSubscriber
 from switchboard.broker.peer import AllowAllHumans, PeerPolicy, ProcessPeerPolicy
@@ -50,6 +50,8 @@ class BrokerState:
     clock: Clock
     info: BrokerInfo
     login_tokens: LoginTokens
+    # where browsers reach the web UI (DESIGN.md §30): switchboard.localhost:<port>, or --public-url
+    web_origin: WebOrigin = None  # type: ignore[assignment]
     # every probe about a participant goes through its host's view (DESIGN.md §27.5.6)
     hosts: HostViews = None  # type: ignore[assignment]
     store: Store = None  # type: ignore[assignment]
@@ -68,7 +70,7 @@ class BrokerState:
 
     @property
     def base_url(self) -> str:
-        return f"http://{UI_HOST}:{self.port}"
+        return self.web_origin.origin
 
     @property
     def origin(self) -> str:
@@ -98,10 +100,13 @@ def create_app(
     *,
     port: int | None = None,
     clock: Clock | None = None,
+    web_origin: WebOrigin | None = None,
 ) -> FastAPI:
-    """Build the broker app. ``port`` is the real bound TCP port (default cfg.port)."""
+    """Build the broker app. ``port`` is the real bound TCP port (default cfg.port);
+    ``web_origin`` is where browsers reach it (default ``http://switchboard.localhost:<port>``)."""
     clock = clock or SystemClock()
     port = cfg.port if port is None else port
+    web_origin = web_origin or WebOrigin.local(port)
     state = BrokerState(
         paths=paths,
         cfg=cfg,
@@ -109,8 +114,10 @@ def create_app(
         peer_policy=peer_policy or default_peer_policy(cfg),
         test_mode=test_mode,
         clock=clock,
-        info=BrokerInfo(port=port, test_mode=test_mode, home=str(paths.home), started_at=clock.now()),
+        info=BrokerInfo(port=port, test_mode=test_mode, home=str(paths.home), started_at=clock.now(),
+                        url=web_origin.origin + "/"),
         login_tokens=LoginTokens(clock),
+        web_origin=web_origin,
         hosts=HostViews(cfg.claude.sessions_dir, clock),
     )
 
@@ -192,8 +199,8 @@ def create_app(
     app.state.broker = state
     web.install(app, state)
     # Added last = outermost: SecurityHeaders wraps the guard's own 421/403 replies.
-    app.add_middleware(HostOriginGuard, port=port)
-    app.add_middleware(SecurityHeaders, port=port)
+    app.add_middleware(HostOriginGuard, origin=web_origin)
+    app.add_middleware(SecurityHeaders, origin=web_origin)
     return app
 
 

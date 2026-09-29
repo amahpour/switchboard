@@ -1,0 +1,110 @@
+# Publishes the container image (issue #34; docs/DEPLOY.md) for one release: built from its tag
+# for linux/amd64 and linux/arm64 (arm64 under QEMU) and pushed to ghcr.io/amahpour/switchboard
+# as <version>, with a provenance attestation and an SBOM. `latest` moves too when this is the
+# newest release, so a rebuild of an older one never moves it back.
+#
+# test.yml's `publish-image` job calls this after every release. Run it by hand (Actions >
+# image > Run workflow, or `gh workflow run image.yml -f version=X.Y.Z`) to rebuild a release's
+# image, for example after a security fix in the base image; the tag stays the same.
+name: image
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "the release to publish: X.Y.Z (built from the tag vX.Y.Z)"
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "the release to publish: X.Y.Z (built from the tag vX.Y.Z)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: publish ghcr.io/amahpour/switchboard:${{ inputs.version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check the version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::not a version: $VERSION (X.Y.Z, without the v)"; exit 1
+          fi
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          ref: v${{ inputs.version }}
+          fetch-depth: 0   # every tag, to tell whether this is the newest release
+          persist-credentials: false
+      - name: Is this the newest release? (only it moves `latest`)
+        id: tag
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          newest=$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          if [ "$newest" = "v$VERSION" ]; then latest=true; else latest=false; fi
+          echo "newest release: $newest; latest -> $latest"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"   # the release commit, not the merge
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tags, labels and annotations
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6.2.0
+        env:
+          # on the multi-arch index too, where GHCR reads the package's description
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+        with:
+          images: ghcr.io/amahpour/switchboard
+          tags: |
+            type=raw,value=${{ inputs.version }}
+            type=raw,value=latest,enable=${{ steps.tag.outputs.latest }}
+          labels: |
+            org.opencontainers.image.version=${{ inputs.version }}
+            org.opencontainers.image.revision=${{ steps.tag.outputs.revision }}
+          annotations: |
+            org.opencontainers.image.version=${{ inputs.version }}
+            org.opencontainers.image.revision=${{ steps.tag.outputs.revision }}
+      - name: Build and push (linux/amd64, linux/arm64)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=image
+      - name: Summary
+        env:
+          VERSION: ${{ inputs.version }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          {
+            echo "### ghcr.io/amahpour/switchboard:$VERSION"
+            echo
+            echo '```'
+            echo "$TAGS"
+            echo '```'
+            echo
+            echo "docs/DEPLOY.md says how to run it."
+          } >> "$GITHUB_STEP_SUMMARY"
