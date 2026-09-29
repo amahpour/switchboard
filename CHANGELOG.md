@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.0 (2026-09-29)
+
 The broker as a container image ([#34](https://github.com/amahpour/switchboard/issues/34), [docs/DEPLOY.md](docs/DEPLOY.md), [DESIGN.md §30](docs/DESIGN.md#30-the-container-image-and-the-public-url-34)). It runs on a server behind the platform's HTTPS: Render, Kubernetes, or a VM with Caddy. For now that's you in the browser; your agents join a hosted broker with #24.
 
 ### Added
