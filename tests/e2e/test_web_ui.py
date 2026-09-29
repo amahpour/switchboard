@@ -305,6 +305,49 @@ def test_color_scheme_follows_the_system(ui: UI, scheme: str, other: str) -> Non
     assert bg2 == rgb(token2) and bg2 != bg, (bg, bg2)
 
 
+# The dot (.remote-state::before) of the row or card head at sel, which is the seeded fpga-pi's
+# (the only remote, never enabled: disabled), and of a clone of it in each of the other states.
+REMOTE_DOTS = """([sel, states]) => {
+  const dot = e => {
+    const s = getComputedStyle(e.querySelector('.remote-state'), '::before');
+    return {bg: s.backgroundColor, ring: s.boxShadow};
+  };
+  const real = document.querySelector(sel);
+  const out = {disabled: dot(real)};
+  for (const st of states) {
+    const c = real.cloneNode(true);
+    c.classList.replace('st-disabled', 'st-' + st);
+    real.after(c);
+    out[st] = dot(c);
+    c.remove();
+  }
+  return out;
+}"""
+
+# each state's dot colour token; a disabled remote's dot is a hollow ring instead
+DOT_COLOUR = {"up": "green", "connecting": "busy", "down": "danger", "error": "danger", "blocked": "danger"}
+
+
+def test_remote_dots_show_their_state(ui: UI) -> None:
+    """A remote's dot takes its state's colour, in the sidebar and in the remotes sheet: green
+    when up, amber when connecting, red when down or blocked, a hollow ring when disabled. The
+    sidebar's base rule used to outweigh the state rules, so every dot there was grey."""
+    page = ui.open(room=None)
+    tok = {k: rgb(page.evaluate(f"getComputedStyle(document.documentElement).getPropertyValue('--{k}')"))
+           for k in ("green", "busy", "danger", "muted")}
+
+    def check(sel: str) -> None:
+        expect(page.locator(sel)).to_have_class(cls("st-disabled"))
+        dots = page.evaluate(REMOTE_DOTS, [sel, list(DOT_COLOUR)])
+        assert dots.pop("disabled") == {"bg": "rgba(0, 0, 0, 0)", "ring": f"{tok['muted']} 0px 0px 0px 1.5px inset"}, sel
+        assert dots == {st: {"bg": tok[k], "ring": "none"} for st, k in DOT_COLOUR.items()}, sel
+
+    check("#remotes .remote")  # the sidebar row
+    page.click("#remotes .remote")
+    expect(page.locator("#remotes-panel")).to_be_visible()
+    check("#remotes-body .remote-head")  # the sheet's card
+
+
 def test_phone_layout_drawer_and_members_sheet(ui: UI) -> None:
     page = ui.open(**PHONE)
     app = page.locator("#app")
