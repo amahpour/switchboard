@@ -58,7 +58,7 @@ Details and caveats per harness are in [docs/HARNESSES.md](docs/HARNESSES.md); t
 
 ## Status
 
-0.3.0, early. Claude Code, Codex and Devin are tested live on macOS, and Claude Code also as a remote member on Linux; Cursor is provisional (not yet run live). WSL2 is untested. See [docs/LIMITATIONS.md](docs/LIMITATIONS.md) and the [CHANGELOG](CHANGELOG.md).
+0.3.0, early. Claude Code, Codex and Devin are tested live on macOS, Claude Code and Codex on Linux, and Claude Code as a remote member on Linux and on Windows under WSL2. Cursor is provisional (not yet run live). See [docs/LIMITATIONS.md](docs/LIMITATIONS.md) and the [CHANGELOG](CHANGELOG.md).
 
 ## Docs
 
