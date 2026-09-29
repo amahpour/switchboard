@@ -1,5 +1,6 @@
-# Build-context filter for the repo root: the sandbox/Dockerfile.test context and
-# sandbox/Dockerfile's named context switchboard-src (docs/SANDBOX.md). An allowlist:
+# Build-context filter for the repo root: the Dockerfile (the published image, docs/DEPLOY.md),
+# the sandbox/Dockerfile.test context and sandbox/Dockerfile's named context switchboard-src
+# (docs/SANDBOX.md). An allowlist:
 # only what the build and the test suite need goes in, so gitignored local files
 # (logs, databases, target/, node_modules/, .env files) never reach an image.
 *
@@ -11,6 +12,8 @@
 !README.md
 !LICENSE
 !sandbox/run-tests.sh
+# the published image's `switchboard` (Dockerfile)
+!deploy/image/switchboard.sh
 # the two-host image (sandbox/Dockerfile.twohost): the remote's entrypoint and the bench stand-ins
 !sandbox/twohost/entrypoint-pi.sh
 !sandbox/twohost/bench/

@@ -26,7 +26,7 @@ import tempfile
 import threading
 import time
 import types
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +85,9 @@ def sanitize_env(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempP
     monkeypatch.delenv("SWITCHBOARD_HOME", raising=False)
     # the CLI's colour switches (issue #28): output is plain unless a test asks for colour
     for k in ("NO_COLOR", "FORCE_COLOR", "CLICOLOR_FORCE"):
+        monkeypatch.delenv(k, raising=False)
+    # `start`'s container settings (issue #34): a broker listens on loopback unless a test says so
+    for k in ("SWITCHBOARD_PORT", "SWITCHBOARD_LISTEN", "SWITCHBOARD_PUBLIC_URL"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("SWITCHBOARD_TEST", "1")
     # Only switchboard.config's view of the login name: getpass itself stays real.
@@ -192,6 +195,7 @@ class InProcBroker:
         policy: Any = None,
         test_mode: bool = True,
         clock: Any = None,
+        web_origin: Any = None,
     ):
         from switchboard.broker.peer import AllowAllHumans
         from switchboard.paths import Paths
@@ -207,6 +211,7 @@ class InProcBroker:
         self.policy = policy if policy is not None else AllowAllHumans()
         self.test_mode = test_mode
         self.clock = clock
+        self.web_origin = web_origin  # a broker.auth.WebOrigin: a public URL (DESIGN.md §30)
         self.port = 0
         self.app: Any = None
         self.server: Any = None
@@ -224,7 +229,8 @@ class InProcBroker:
         self.port = tcp.getsockname()[1]
         self.tcp = tcp
         self.app = create_app(
-            self.paths, self.cfg, self.policy, self.test_mode, port=self.port, clock=self.clock
+            self.paths, self.cfg, self.policy, self.test_mode, port=self.port, clock=self.clock,
+            web_origin=self.web_origin,
         )
         self.server = uvicorn.Server(
             uvicorn.Config(
@@ -361,13 +367,14 @@ def ws_connect(broker: InProcBroker, cookie: str | None, *, origin: str | None =
 class SubprocBroker:
     """``python -m switchboard start --foreground --test-mode`` in a child process."""
 
-    def __init__(self, home: Path, *, trust: bool = True, test_mode: bool = True):
+    def __init__(self, home: Path, *, trust: bool = True, test_mode: bool = True, args: Sequence[str] = ()):
         from switchboard.paths import Paths
 
         self.home = Path(home)
         self.paths = Paths.from_home(home)
         self.trust = trust
         self.test_mode = test_mode
+        self.args = list(args)  # more `start` flags (--public-url, --log-stdout: issue #34)
         self.proc: subprocess.Popen[bytes] | None = None
         self.port = 0
         self.pid = 0
@@ -376,7 +383,8 @@ class SubprocBroker:
     def start(self) -> "SubprocBroker":
         from switchboard.mcp.client import ping
 
-        cmd = [sys.executable, "-m", "switchboard", "start", "--foreground", "--home", str(self.home), "--port", "0"]
+        cmd = [sys.executable, "-m", "switchboard", "start", "--foreground", "--home", str(self.home), "--port", "0",
+               *self.args]
         if self.test_mode:
             cmd.append("--test-mode")
             if self.trust:

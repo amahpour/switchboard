@@ -24,6 +24,19 @@ A failing test leaves a Playwright trace and a screenshot of each open page in `
 
 **Coverage.** `uv run pytest --cov` adds line coverage of `src/switchboard` (settings in `pyproject.toml`, `[tool.coverage.*]`) and lists the missed lines of each file; add `--cov-report=html` for a browsable `htmlcov/`. It also measures the Python processes the tests start (the broker, `switchboard mcp`, CLI runs): coverage's `patch = ["subprocess"]` hands them its settings in `COVERAGE_PROCESS_CONFIG`, which `child_env()` in `tests/conftest.py` passes on. The hook script is the exception: harnesses run it as `python -I -S`, which skips the `site` start-up that coverage hooks into, so only the tests that call it in-process count for it. CI uploads each OS's data, and the `coverage` job combines Linux and macOS, prints the report and fails when the total drops below `COVERAGE_FLOOR` in `.github/workflows/test.yml`. That floor is a ratchet: raise it as coverage improves, never lower it to get a change through. Cover code with a test that checks what it does, not one that only runs it. `# pragma: no cover` is kept for code that can't run in CI (paths that need a real agent CLI, an OS CI doesn't run, guards for states the code never creates), and each one says why in the same comment. On pushes to `main` only, the `badge` job (the one job with write access) commits the shields.io endpoint file `coverage.json` to the orphan `badges` branch, which the coverage badge above reads.
 
+**The container image** (`Dockerfile`, [docs/DEPLOY.md](docs/DEPLOY.md)) has tests of its own in `tests/image/` (marker `image`, opt-in, Docker and Playwright's Chromium needed). They start the image the way a platform does, behind Caddy terminating TLS with a certificate from its own CA, and check:
+- that it runs as its unprivileged user and passes `/healthz` and Docker's health check;
+- a sign-in link from `docker exec -t`, the Secure cookie, and the UI in Chromium over https and wss;
+- that `docker stop` exits 0 and the data survives a restart;
+- a root-owned disk (Render), and an fsGroup volume under the Kubernetes manifest's securityContext.
+
+```bash
+docker build -t switchboard:dev .
+SWITCHBOARD_IMAGE=switchboard:dev uv run pytest -m image tests/image   # about 20 seconds; unset, it builds switchboard:test itself
+```
+
+The UI's screenshot lands in `e2e-artifacts/image/`. CI's `image` job builds the image for linux/amd64 on every PR (with the build cache), runs these, and uploads the screenshot as `image-artifacts`.
+
 **Linux:** `docker compose -f sandbox/compose.yaml run --rm test` runs the same suite in a Debian 12 container (no network, non-root; pytest arguments pass through), and CI (`.github/workflows/test.yml`) runs it on `ubuntu-latest` and `macos-latest`. See [docs/SANDBOX.md §10](docs/SANDBOX.md#10-the-linux-test-run).
 
 **Releases.** Every merge to `main` is a release (issue #33).
@@ -32,9 +45,11 @@ A failing test leaves a Playwright trace and a screenshot of each open page in `
 - **The notes:** write them for users, under `## Unreleased` in CHANGELOG.md, in the PR itself. The release turns that section into `## X.Y.Z (date)` and the GitHub Release's notes. With nothing written there, the notes are the PR's title.
 - **The release itself:** after CI passes on `main`, the `release` job runs `.github/scripts/release.py`, which:
   - sets the version in `pyproject.toml`, `switchboard/__init__.py` and `uv.lock`;
-  - moves the `uv tool install …@vX.Y.Z` pins in the README and `docs/INSTALL.md`.
+  - moves the `uv tool install …@vX.Y.Z` pins in the README and `docs/INSTALL.md`;
+  - moves the `ghcr.io/amahpour/switchboard:X.Y.Z` pins in `docs/DEPLOY.md` and the examples in `deploy/`.
 
   The job then commits `release: vX.Y.Z`, tags it and publishes the release. Don't change the version by hand.
+- **The image:** after the release, the `publish-image` job (`.github/workflows/image.yml`) builds the new tag for linux/amd64 and linux/arm64. It pushes `ghcr.io/amahpour/switchboard:X.Y.Z`, plus `:latest` if it's the newest release, with a provenance attestation and an SBOM. To rebuild a release's image, for a base-image fix for example, run `gh workflow run image.yml -f version=X.Y.Z`.
 
 **Shards in CI.**
 - **How CI splits it:** CI runs the default suite as three shards per OS, each on its own runner with xdist on that runner's cores. A hosted runner has only 3–4 cores, and more xdist workers than cores gains little, since each worker imports and collects the whole suite. So the run gets shorter by using more runners, not more workers.

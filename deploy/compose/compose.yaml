@@ -1,0 +1,45 @@
+# switchboard on one machine with Docker Compose (docs/DEPLOY.md): the broker, and Caddy in
+# front of it terminating TLS with a certificate from Let's Encrypt for your domain. Any VM with
+# Docker and a DNS name pointing at it, ports 80 and 443 open.
+#
+#   export SWITCHBOARD_DOMAIN=sb.example.com
+#   docker compose -f deploy/compose/compose.yaml up -d
+#   docker compose -f deploy/compose/compose.yaml exec switchboard switchboard login
+#
+# The broker's data is the `switchboard-data` volume (/data in the container). One broker per
+# volume: its lock refuses a second one, so never scale this service past 1.
+name: switchboard
+
+services:
+  switchboard:
+    image: ghcr.io/amahpour/switchboard:0.5.0   # a release, not :latest (docs/DEPLOY.md, "Upgrading")
+    restart: unless-stopped
+    environment:
+      # the address browsers use; the broker answers to no other
+      SWITCHBOARD_PUBLIC_URL: https://${SWITCHBOARD_DOMAIN:?set SWITCHBOARD_DOMAIN to your DNS name}
+    volumes:
+      - switchboard-data:/data
+    # no `ports:`: only Caddy reaches it, over this project's network
+    stop_grace_period: 20s
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    environment:
+      SWITCHBOARD_DOMAIN: ${SWITCHBOARD_DOMAIN:?set SWITCHBOARD_DOMAIN to your DNS name}
+    ports:
+      - "80:80"        # Let's Encrypt's HTTP challenge, and the redirect to https
+      - "443:443"
+      - "443:443/udp"  # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data        # the certificates: keep them, or Let's Encrypt's rate limits bite
+      - caddy-config:/config
+    depends_on:
+      switchboard:
+        condition: service_healthy
+
+volumes:
+  switchboard-data:
+  caddy-data:
+  caddy-config:

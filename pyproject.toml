@@ -51,8 +51,9 @@ markers = [
     "ssh: a real OpenSSH link through a user-level sshd on loopback (skipped without /usr/sbin/sshd)",
     "twohost: two hosts in containers, sandbox/twohost (opt-in: -m twohost; needs Docker)",
     "e2e: the web UI in a real browser through Playwright, tests/e2e (opt-in: -m e2e; needs `playwright install chromium`)",
+    "image: the container image behind a TLS proxy, tests/image (opt-in: -m image; needs Docker and Playwright's Chromium)",
 ]
-addopts = "-m 'not live and not perf and not twohost and not e2e'"
+addopts = "-m 'not live and not perf and not twohost and not e2e and not image'"
 # pytest-cov turns this ResourceWarning (ignored by default) back on. A recorded warning
 # keeps its sqlite3.Connection, and so its files, open until the run ends: over 1,024
 # fds by the unit tests, past what select() takes. Keep it off, as it is without --cov.

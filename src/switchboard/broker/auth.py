@@ -8,9 +8,13 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
+import re
 import secrets
+import urllib.parse
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
 from switchboard.clock import Clock, SystemClock
@@ -21,6 +25,10 @@ SESSION_TTL_S = 12 * 3600
 LOGIN_TTL_S = 300
 UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 UI_HOST = "switchboard.localhost"
+# paths a platform's health checker may GET without the UI's Host (it probes the container's own
+# address): they answer "ok" and nothing else
+OPEN_PATHS = frozenset({"/healthz"})
+_DNS_NAME_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*")
 
 Scope = dict[str, Any]
 Receive = Callable[[], Awaitable[dict[str, Any]]]
@@ -96,10 +104,75 @@ def _header(scope: Scope, name: bytes) -> str | None:
     return None
 
 
-def csp(port: int) -> str:
+@dataclass(frozen=True)
+class WebOrigin:
+    """Where browsers reach the web UI (DESIGN.md §30): the ``Host`` they send, the ``Origin``
+    of their requests, and whether it is https (then the session cookie is ``Secure`` and the
+    WebSocket is ``wss``). By default it is ``http://switchboard.localhost:<port>``; with
+    ``--public-url`` it is that URL, served behind a proxy that terminates TLS."""
+
+    scheme: str
+    host: str  # as browsers send it in Host: the name, and the port when it isn't the default
+
+    @classmethod
+    def local(cls, port: int) -> WebOrigin:
+        return cls("http", f"{UI_HOST}:{port}")
+
+    @classmethod
+    def parse(cls, url: str) -> WebOrigin:
+        """A public URL, which must be an origin only: ``https://<name>[:<port>]``. Plain http
+        is accepted only for a local test host (localhost, ``*.localhost``, ``*.test``, 127.0.0.1),
+        never for a name other machines use: the session cookie and sign-in links would cross
+        the network in the clear."""
+        try:
+            u = urllib.parse.urlsplit(url.strip())
+            port = u.port
+        except ValueError as e:
+            raise ValueError(f"not a URL: {e}") from None
+        if u.scheme not in ("http", "https"):
+            raise ValueError("it must start with https:// (or http:// for a local test host)")
+        if u.username or u.password or u.query or u.fragment or u.path not in ("", "/"):
+            raise ValueError("it is an origin only: the scheme, the host and a port if needed, no path")
+        name = (u.hostname or "").lower()
+        if not name or not (_DNS_NAME_RE.fullmatch(name) or _is_ipv4(name)):
+            raise ValueError("its host must be a DNS name or an IPv4 address")
+        if port == 0:
+            raise ValueError("port 0 is not an address browsers can use")
+        if u.scheme == "http" and not _local_test_host(name):
+            raise ValueError("plain http:// is only for a local test host; use https:// behind a proxy that "
+                             "terminates TLS")
+        default = 443 if u.scheme == "https" else 80
+        return cls(u.scheme, name if port in (None, default) else f"{name}:{port}")
+
+    @property
+    def origin(self) -> str:
+        return f"{self.scheme}://{self.host}"
+
+    @property
+    def ws(self) -> str:
+        return f"{'wss' if self.scheme == 'https' else 'ws'}://{self.host}"
+
+    @property
+    def secure(self) -> bool:
+        return self.scheme == "https"
+
+
+def _is_ipv4(name: str) -> bool:
+    try:
+        ipaddress.IPv4Address(name)
+    except ValueError:
+        return False
+    return True
+
+
+def _local_test_host(name: str) -> bool:
+    return name in ("localhost", "127.0.0.1") or name.endswith((".localhost", ".test"))
+
+
+def csp(origin: WebOrigin) -> str:
     return (
         "default-src 'self'; script-src 'self'; style-src 'self'; "
-        f"connect-src 'self' ws://{UI_HOST}:{port}; img-src 'self'; object-src 'none'; "
+        f"connect-src 'self' {origin.ws}; img-src 'self'; object-src 'none'; "
         "base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
     )
 
@@ -107,10 +180,10 @@ def csp(port: int) -> str:
 class SecurityHeaders:
     """Adds CSP, nosniff, no-referrer (and a few friends) to every HTTP response."""
 
-    def __init__(self, app: ASGIApp, port: int):
+    def __init__(self, app: ASGIApp, origin: WebOrigin):
         self.app = app
         self.headers = [
-            (b"content-security-policy", csp(port).encode()),
+            (b"content-security-policy", csp(origin).encode()),
             (b"x-content-type-options", b"nosniff"),
             (b"referrer-policy", b"no-referrer"),
             (b"x-frame-options", b"DENY"),
@@ -136,18 +209,18 @@ class SecurityHeaders:
 class HostOriginGuard:
     """Pure ASGI guard for http and websocket scopes.
 
-    - ``Host`` must be exactly ``switchboard.localhost:<port>``, else 421 (http) or
-      a handshake refused with close code 1008, which the server sends as 403
-      (websocket).
-    - Unsafe http methods also need ``Origin == http://switchboard.localhost:<port>``
-      and ``X-Switchboard: 1``, else 403. (The session cookie is checked by routes.)
+    - ``Host`` must be exactly the UI's (``switchboard.localhost:<port>``, or the public URL's
+      host), else 421 (http) or a handshake refused with close code 1008, which the server
+      sends as 403 (websocket). The one exception is a GET or HEAD of ``OPEN_PATHS``
+      (``/healthz``), which a platform's health checker sends to the container's own address.
+    - Unsafe http methods also need ``Origin`` to be the UI's origin and ``X-Switchboard: 1``,
+      else 403. (The session cookie is checked by routes.)
     """
 
-    def __init__(self, app: ASGIApp, port: int):
+    def __init__(self, app: ASGIApp, origin: WebOrigin):
         self.app = app
-        self.port = port
-        self.host = f"{UI_HOST}:{port}"
-        self.origin = f"http://{UI_HOST}:{port}"
+        self.host = origin.host
+        self.origin = origin.origin
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         kind = scope["type"]
@@ -155,11 +228,13 @@ class HostOriginGuard:
             await self.app(scope, receive, send)
             return
         host = _header(scope, b"host")
-        if host != self.host:
+        health = (kind == "http" and scope.get("path") in OPEN_PATHS
+                  and scope.get("method", "GET").upper() in ("GET", "HEAD"))
+        if host != self.host and not health:
             if kind == "http":
-                await _plain(send, 421, f"open http://{self.host}/\n")
+                await _plain(send, 421, f"open {self.origin}/\n")
             else:
-                await _refuse_ws(scope, send, 421, f"open http://{self.host}/\n")  # -> 403
+                await _refuse_ws(scope, send, 421, f"open {self.origin}/\n")  # -> 403
             return
         if kind == "http" and scope.get("method", "GET").upper() in UNSAFE_METHODS:
             if _header(scope, b"origin") != self.origin or _header(scope, b"x-switchboard") != "1":
