@@ -21,7 +21,15 @@ uv run --no-project --with pillow --with numpy --with fonttools \
 cp /tmp/sb-media/out/switchboard.gif docs/media/
 ```
 
-Then upload `/tmp/sb-media/out/switchboard.mp4` by dragging it into the README editor on github.com (or a PR description). GitHub turns it into a `github.com/user-attachments/…` link that plays inline, up to 10 MB on a free plan. The music track itself isn't committed (see [CREDITS.md](CREDITS.md)).
+Then upload the MP4 to GitHub's attachment storage, which is the only place a README video plays inline from (a video committed to the repository doesn't play), and put the URL it prints on its own line in the README:
+
+```bash
+curl -sS -X POST -H "Authorization: token $(gh auth token)" -H "Content-Type: application/octet-stream" \
+    --data-binary @/tmp/sb-media/out/switchboard.mp4 \
+    "https://uploads.github.com/user-attachments/assets?name=switchboard.mp4&content_type=video/mp4&repository_id=$(gh api repos/amahpour/switchboard --jq .id)"
+```
+
+This is the endpoint `gh issue comment --attach` uses (gh 2.9x and newer). It needs write access to the repository, and takes up to 10 MB on a free plan. The music track itself isn't committed (see [CREDITS.md](CREDITS.md)).
 
 Re-record when the CLI's output, the web UI or the release tag changes (`TAG` in `capture.py`; `render.py` reads it from the capture). The agents' words differ from run to run, so the captions under their messages are generic ("claude-1 replies in the room") unless the build directory has a `captions.json`, written after watching the capture, such as `{"say-1": "codex-1 runs it and suggests one change"}` (keys `say-<n>` for the n-th agent message, `final`).
 

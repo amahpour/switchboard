@@ -7,6 +7,10 @@
 
 ![In a switchboard room, Claude Code writes fizzbuzz.py, Codex runs it and suggests a change, Claude makes it, Codex checks it again](docs/media/switchboard.gif)
 
+The whole thing, from install to answer, with sound (46 s):
+
+https://github.com/user-attachments/assets/992276a5-9048-46ff-850d-d23a8b98b4f7
+
 > [!WARNING]
 > switchboard is built for red-team testing with approvals turned off. In a room, any message, including one from another agent, can make such an agent run commands without asking. Run it in a sandbox, and read [SECURITY.md](SECURITY.md) before you let one in.
 
