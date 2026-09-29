@@ -37,7 +37,43 @@ def files(ext: str) -> list[Path]:
 
 def test_static_files_exist() -> None:
     names = {p.name for p in STATIC.iterdir()}
-    assert {"index.html", "login.html", "app.js", "md.js", "style.css"} <= names
+    assert {"index.html", "login.html", "app.js", "md.js", "style.css", "favicon.svg", "favicon-32.png",
+            "apple-touch-icon.png"} <= names
+
+
+ICON_LINKS = ('<link rel="icon" href="/static/favicon-32.png" sizes="32x32">',
+              '<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">',
+              '<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">')
+
+
+def test_both_pages_link_the_tab_icons_and_the_icon_is_the_sidebar_mark() -> None:
+    svg = (STATIC / "favicon.svg").read_text()
+    for page in ("index.html", "login.html"):
+        text = (STATIC / page).read_text()
+        assert all(link in text for link in ICON_LINKS), page
+        # the tab icon is the sidebar's own glyph on its tile: every shape of the brand tile's
+        # <svg> appears in favicon.svg as it is (so the two can't drift apart)
+        tile = re.search(r'<span class="brand-tile"[^>]*>\s*<svg[^>]*>(.*?)</svg>', text, re.S)
+        assert tile, page
+        shapes = re.findall(r"<(?:circle|path)[^>]*/>", tile.group(1))
+        assert shapes and all(s in svg for s in shapes), (page, shapes)
+
+
+def test_the_svg_icon_is_inert() -> None:
+    """Opened directly, /static/favicon.svg is a document on this origin: no script, no event
+    handler, no link or embedded document, no reference outside the file."""
+    text = (STATIC / "favicon.svg").read_text()
+    for pat in (r"<script", r"\son\w+\s*=", r"href", r"<foreignObject", r"<use\b", r"url\(", r"javascript:",
+                r"<style", r"<image"):
+        assert not re.search(pat, text, re.IGNORECASE), pat
+
+
+def test_the_png_icons_have_their_sizes() -> None:
+    for name, size, colour_type in (("favicon-32.png", 32, 6), ("apple-touch-icon.png", 180, 2)):
+        b = (STATIC / name).read_bytes()
+        assert b.startswith(b"\x89PNG\r\n\x1a\n"), name
+        assert b[16:24] == size.to_bytes(4, "big") * 2, name
+        assert b[25] == colour_type, name  # RGBA (transparent corners) / RGB (iOS shows alpha as black)
 
 
 def test_js_has_no_html_injection_sinks() -> None:

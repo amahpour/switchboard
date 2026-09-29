@@ -119,9 +119,12 @@ def install(app: FastAPI, state: "BrokerState") -> None:
 
     app.mount("/static", _StaticFiles(directory=STATIC_DIR, html=False), name="static")
 
+    # the tab icon for a browser that asks the old way (a JSON response opened in a tab, or a
+    # browser that ignores <link rel="icon">): the 32 px PNG, which browsers accept at .ico
     @app.get("/favicon.ico", include_in_schema=False)
     async def favicon() -> Response:
-        return Response(status_code=204)
+        return FileResponse(STATIC_DIR / "favicon-32.png", media_type="image/png",
+                            headers={"Cache-Control": "no-cache"})
 
     # Bad-token hits need no auth, so they are rate-limited before they touch
     # the database: at most one event per BAD_TOKEN_EVENT_S, with a count.
