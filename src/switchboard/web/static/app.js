@@ -1795,6 +1795,11 @@
     return out;
   }
 
+  // a row's tooltip: its state in full (a long one ends in an ellipsis in the row) and what a click does
+  function chipTitle(r) {
+    return 'Remote machine ' + r.name + ' (' + chipText(r) + '): open the remotes panel';
+  }
+
   // the sidebar's Remote machines rows (button.remote.st-<state>); the dot is CSS (::before)
   function renderChips() {
     const bar = $('remotes');
@@ -1804,7 +1809,10 @@
       const texts = byRemote(bar, 'remote-state');
       for (const r of state.remotes) {
         const t = texts.get(r.name);
-        if (t) t.textContent = chipText(r);
+        if (t) {
+          t.textContent = chipText(r);
+          t.parentNode.title = chipTitle(r);
+        }
       }
       return;
     }
@@ -1815,7 +1823,7 @@
     for (const r of state.remotes) {
       const b = btn('remote st-' + r.state);
       b.dataset.focus = 'chip:' + r.name;
-      b.title = 'Remote machine ' + r.name + ': open the remotes panel';
+      b.title = chipTitle(r);
       const t = el('span', 'remote-state', chipText(r));
       t.dataset.remote = r.name;
       b.append(icon('server'), el('span', 'remote-name', r.name), t);

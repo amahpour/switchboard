@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A remote machine's name stays readable in the sidebar.** A long state, such as `down: timeout (retry in 20 s)` or `needs enable (config changed)`, used to take the whole row and squeeze the name out: `build-vm` showed as `b.`, and some names vanished. The name and the state now share the row, and a state that doesn't fit ends in an ellipsis. Hovering the row shows the state in full.
+
 ## 0.6.2 (2026-09-29)
 
 ### Changed
