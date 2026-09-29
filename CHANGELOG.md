@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.0 (2026-09-29)
+
 A new web UI ([#19](https://github.com/amahpour/switchboard/issues/19), [DESIGN.md §29](docs/DESIGN.md#29-the-native-web-ui-and-the-inspector-19)): a native-looking three-column layout in light and dark, Markdown in messages, and an Inspector for each agent.
 
 ### Added
