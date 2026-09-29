@@ -189,17 +189,18 @@ class Store:
                for t, where, n in self._ROOM_ROWS}
         return {t: got[t] for t in ROOM_DELETE_TABLES}
 
-    def delete_room(self, room_id: int, *, name: str, expect_counts: dict[str, int],
+    def delete_room(self, room_id: int, *, name: str, created_at: float, expect_counts: dict[str, int],
                     event: dict[str, Any]) -> dict[str, int]:
         """Delete a room and every row that names it, in one transaction (DESIGN.md §28.6):
-        only while it is still ``name``, has no active membership (on any host, online or
+        only while it is still ``name`` and ``created_at`` (ids may be reused, so a room
+        re-created after a delete can have the same id and name), has no active membership (on any host, online or
         not) and the database still has the row counts its backup was checked against
         (``expect_counts``, every table). Then the foreign keys and every table's count
         are checked again; any failure rolls it all back. Records ``room_delete`` with
         ``room_id`` NULL (ids may be reused). Returns the rows removed per table."""
         with db.tx(self.con):
             room = self.room_by_id(room_id)
-            if room is None or room.name != name:
+            if room is None or room.name != name or room.created_at != created_at:
                 raise Conflict(f"{name} changed since the plan")
             members = self.room_memberships(room_id)
             if members:

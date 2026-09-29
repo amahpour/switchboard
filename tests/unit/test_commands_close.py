@@ -265,6 +265,44 @@ def test_delete_an_empty_open_room(svc: RoomService, tmp_path: Path) -> None:  #
     assert svc.rooms() == [] and web.rooms == set()
 
 
+def test_delete_is_refused_when_the_planned_closed_room_was_reopened(
+    svc: RoomService, tmp_path: Path  # noqa: F811
+) -> None:
+    """A reopen keeps the id and only changes the name: the pin must catch it, or the room the
+    human just reopened would go although the plan showed a closed one."""
+    room = svc.room("#build")
+    svc.command("#build", "/close", WEB)
+    plan = delete(svc, "#build", tmp_path, dry_run=True)
+    assert (plan["state"], plan["name"]) == ("closed", f"#build~closed-{room.id}")
+    svc.reopen_room(room.id)
+    assert svc.store.resolve_room("#build").id == plan["room_id"]  # the same id, open again
+    with pytest.raises(ServiceError) as e:
+        delete(svc, "#build", tmp_path, room_id=plan["room_id"], name=plan["name"], created_at=plan["created_at"])
+    assert (e.value.code, e.value.message) == (
+        "conflict", f"#build~closed-{room.id} changed since the plan (reopened, deleted or re-created);"
+                    " run the command again")
+    assert svc.room("#build").id == room.id  # still there, open
+    assert not list(tmp_path.glob("*.delete-*"))
+
+
+def test_delete_is_refused_for_a_re_created_room_that_reused_the_id(
+    svc: RoomService, clock: Any, tmp_path: Path  # noqa: F811
+) -> None:
+    """Room ids have no AUTOINCREMENT: deleting the highest one frees it for the next room.
+    A stale plan for the deleted room must not delete the new one."""
+    old = svc.create_room("#z")
+    plan = delete(svc, "#z", tmp_path, dry_run=True)
+    pin = {"room_id": plan["room_id"], "name": plan["name"], "created_at": plan["created_at"]}
+    delete(svc, "#z", tmp_path, **pin)
+    clock.advance(5)
+    new = svc.create_room("#z")
+    assert new.id == old.id and new.name == old.name  # the id came back
+    with pytest.raises(ServiceError) as e:
+        delete(svc, "#z", tmp_path, **pin)
+    assert e.value.code == "conflict" and e.value.message.startswith("#z changed since the plan")
+    assert svc.room("#z").created_at == new.created_at
+
+
 def test_delete_backup_or_store_failure_deletes_nothing(
     svc: RoomService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch  # noqa: F811
 ) -> None:

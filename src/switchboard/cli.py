@@ -262,7 +262,8 @@ def _removed(c: dict[str, int]) -> str:
 def cmd_rooms_delete(args: argparse.Namespace) -> int:
     """``switchboard rooms delete ROOM`` (DESIGN.md §28.6): the broker plans it (a dry run,
     refused while the room has members), you confirm, then the broker writes a checked
-    backup and deletes the room pinned by the plan's id. The CLI never opens the database."""
+    backup and deletes the room pinned by the plan's id, name and creation time. The CLI never
+    opens the database."""
     if _satellite_home(args):
         return on_desktop(args)
     from switchboard.install import common
@@ -280,7 +281,9 @@ def cmd_rooms_delete(args: argparse.Namespace) -> int:
     if not common.confirm(args.yes):
         print("not applied")
         return EXIT_ERR
-    res = _call(args, "room.delete", {"room": args.room, "room_id": plan["room_id"]}, timeout=120.0)
+    # pinned to the room the plan showed: a reopen keeps its id, a re-create can reuse it
+    pin = {"room_id": plan["room_id"], "name": plan["name"], "created_at": plan["created_at"]}
+    res = _call(args, "room.delete", {"room": args.room, **pin}, timeout=120.0)
     print(f"deleted {res['name']}: {_removed(res['removed'])}")
     print(f"backup: {res['backup']} (0600, checked); it still holds the room: remove it once you no longer need it")
     return EXIT_OK

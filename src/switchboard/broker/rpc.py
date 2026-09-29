@@ -503,15 +503,23 @@ def build_methods(state: "BrokerState") -> dict[str, MethodSpec]:
         return svc().command(_str(p, "room"), _str(p, "text"), actor_for(conn))
 
     async def room_delete(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
-        # §28.6: {room, dry_run: true} -> the plan; {room, room_id} -> backup, then delete.
-        # Synchronous: nothing awaits between the backup and the delete.
+        # §28.6: {room, dry_run: true} -> the plan; {room, room_id, name, created_at} (the
+        # plan's pin) -> backup, then delete. Synchronous: nothing awaits between the two.
         ref = _str(p, "room")
         dry_run = p.get("dry_run") is True
         room_id = _opt_int(p, "room_id")
-        if not dry_run and room_id is None:
-            raise RpcError("bad_request", "room_id is required: run the plan first")
+        name = p.get("name")
+        created_at = p.get("created_at")
+        if not dry_run and (
+            room_id is None
+            or not isinstance(name, str)
+            or isinstance(created_at, bool)
+            or not isinstance(created_at, (int, float))
+        ):
+            raise RpcError("bad_request", "room_id, name and created_at are required: run the plan first")
         return svc().delete_room(ref, dry_run=dry_run, room_id=room_id, db_path=state.paths.db,
-                                 chain=state.peer_policy.describe(conn.peer))
+                                 chain=state.peer_policy.describe(conn.peer),
+                                 name=None if dry_run else name, created_at=None if dry_run else created_at)
 
     async def human_login_link(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
         token = state.login_tokens.mint()

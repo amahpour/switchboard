@@ -50,6 +50,7 @@ WS_BACKLOG = 500
 BAD_TOKEN_EVENT_S = 60.0
 HASH_RE = re.compile(r"[0-9a-f]{64}")  # a remote's config_hash (sha256 hex)
 ROOM_ID_RE = re.compile(r"[1-9][0-9]{0,18}")  # a room id in /api/closed-rooms/{rid}/reopen
+MAX_ROOM_ID = 2**63 - 1  # SQLite's INTEGER: 19 digits can be more (OverflowError, not 400)
 
 
 class _StaticFiles(StaticFiles):
@@ -271,7 +272,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return unauthorized()
         try:
             await _json_body(request)
-            if not ROOM_ID_RE.fullmatch(rid):
+            if not ROOM_ID_RE.fullmatch(rid) or int(rid) > MAX_ROOM_ID:
                 raise ServiceError("bad_request", "bad room id")
             room = state.service.reopen_room(int(rid), via="web")
             return _ok({"room": state.service.room_dict(room)})

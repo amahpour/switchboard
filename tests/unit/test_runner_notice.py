@@ -155,7 +155,7 @@ def test_a_notice_for_a_closed_or_deleted_room_is_dropped(w: World, svc: RoomSer
                                                           rec: Rec) -> None:
     """§28: nobody reads a closed room, and a gone room's notice is no broker-wide news."""
     other = svc.create_room("#gone")
-    svc.store.delete_room(other.id, name="#gone", expect_counts=db.row_counts(svc.store.con, db.TABLES), event={})
+    svc.store.delete_room(other.id, name="#gone", created_at=other.created_at, expect_counts=db.row_counts(svc.store.con, db.TABLES), event={})
     svc.close_room(svc.room("#build"), Actor(role="human", via="web"))
     before = len(w.store.history(w.room.id))
     rec.items.clear()

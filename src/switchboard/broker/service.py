@@ -375,11 +375,14 @@ class RoomService:
         return room
 
     def delete_room(self, ref: str, *, dry_run: bool, room_id: int | None, db_path: Any,
-                    chain: str | None) -> dict[str, Any]:
+                    chain: str | None, name: str | None = None,
+                    created_at: float | None = None) -> dict[str, Any]:
         """``switchboard rooms delete`` (DESIGN.md §28.6): the plan (``dry_run``), or, pinned by
-        the plan's ``room_id``, a checked backup of the whole database and then the delete in
-        one transaction. Refused while the room has members. Synchronous: nothing runs
-        between the backup and the delete."""
+        the plan's ``room_id``, ``name`` and ``created_at``, a checked backup of the whole
+        database and then the delete in one transaction. The id alone is not enough: a
+        reopen keeps it (only the name changes), and a room re-created after a delete can
+        reuse it (only ``created_at`` differs). Refused while the room has members.
+        Synchronous: nothing runs between the backup and the delete."""
         try:
             room = self.store.resolve_room(ref)
         except InvalidName as e:
@@ -393,9 +396,14 @@ class RoomService:
             ) from None
         except NotFound as e:
             raise ServiceError("not_found", str(e)) from None
-        if room_id is not None and room.id != room_id:
+        if room_id is not None and (
+            room.id != room_id
+            or (name is not None and room.name != name)
+            or (created_at is not None and room.created_at != created_at)
+        ):
             raise ServiceError(
-                "conflict", f"{room.name} changed since the plan (reopened, deleted or re-created); run the command again"
+                "conflict",
+                f"{name or room.name} changed since the plan (reopened, deleted or re-created); run the command again",
             )
         members = self.store.members(room.id)
         if members:
@@ -425,7 +433,8 @@ class RoomService:
         except (db.SchemaError, OSError, sqlite3.Error) as e:
             raise ServiceError("internal", f"the backup failed ({e}); nothing was deleted") from None
         try:
-            removed = self.store.delete_room(room.id, name=room.name, expect_counts=counts, event={
+            removed = self.store.delete_room(room.id, name=room.name, created_at=room.created_at,
+                                             expect_counts=counts, event={
                 "room_id": room.id,
                 "name": room.name,
                 "display": room.display_name,

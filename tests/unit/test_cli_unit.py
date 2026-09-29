@@ -167,7 +167,9 @@ def test_rooms_delete_yes_applies_the_plans_room_id(monkeypatch: pytest.MonkeyPa
         "deleted #scratch: 1 room, 2 message(s), 0 membership(s), 0 delivery row(s), 0 batch(es), 1 event(s)",
         "backup: /h/switchboard.db.delete-scratch-12.bak (0600, checked); it still holds the room:"
         " remove it once you no longer need it"]
-    assert c.calls[1] == ("room.delete", {"room": "scratch", "room_id": 12}, 120.0)
+    # pinned to the room the plan showed: its id, full name and creation time
+    assert c.calls[1] == ("room.delete", {"room": "scratch", "room_id": 12, "name": "#scratch",
+                                          "created_at": plan["created_at"]}, 120.0)
 
 
 def test_rooms_delete_on_a_satellite_home(monkeypatch: pytest.MonkeyPatch,

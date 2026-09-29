@@ -17,7 +17,7 @@
 
   const state = {
     me: null,          // { human, test_mode, version, port }
-    rooms: new Map(),  // name -> { name, slug, id, lastId, msgs: [], members: [], settings: {}, unread: 0 }
+    rooms: new Map(),  // name -> { name, slug, id, createdAt, lastId, msgs: [], members: [], settings: {}, unread: 0 }
     closed: 0,         // how many closed rooms there are (GET /api/rooms), for the Closed button
     closedRooms: [],   // GET /api/closed-rooms, as the Closed panel shows it
     active: null,
@@ -128,6 +128,7 @@
     line.append(el('span', 'ts', '[' + hhmmss(Date.now() / 1000) + ']'), ' ', el('span', 'text', text));
     if (body) line.append(el('pre', 'cmd-out', body));
     const log = $('log');
+    log.classList.remove('hidden');  // with no room left, the log still shows this line
     const stick = nearBottom(log);
     log.append(line);
     if (stick) log.scrollTop = log.scrollHeight;
@@ -322,8 +323,9 @@
     ws.addEventListener('open', function () {
       state.wsOpen = true;
       state.backoff = 500;
-      // a close, reopen, create or delete missed while the socket was down: resync, then hello all
-      loadRooms(true).catch(function () {});
+      // a close, reopen, create or delete missed while the socket was down: resync, then hello all.
+      // The new socket follows nothing until a hello: if the resync fails, hello the tabs we have.
+      loadRooms(true).catch(function () { hello(Array.from(state.rooms.keys())); });
       if (!$('closed-panel').classList.contains('hidden')) loadClosed().catch(function () {});
       loadRemotes().catch(function () {});  // the events missed while the socket was down
       renderStatus();
@@ -377,7 +379,9 @@
     } else if (f.t === 'notice') {
       if (!f.room || f.room === state.active) renderLocal('*** ' + f.text, f.level === 'warn');
     } else if (f.t === 'rooms') {
-      loadRooms().catch(function () {});
+      // hello every tab, not only new ones: a close drops this page's subscription, and a
+      // reopen (same id, same name) may land before this listing, so nothing looks changed
+      loadRooms(true).catch(function () { hello(Array.from(state.rooms.keys())); });
       if (!$('closed-panel').classList.contains('hidden')) loadClosed().catch(function () {});
     } else if (f.t === 'remotes') {
       setRemotes(f.remotes || [], f.config_error || null);
@@ -746,8 +750,11 @@
       if (text.startsWith('//')) {
         await api('POST', path + '/say', { text: text.slice(1) });
       } else if (text.startsWith('/')) {
+        const verb = text.split(/\s+/)[0];
         const res = await api('POST', path + '/command', { text: text });
-        renderLocal(text.split(/\s+/)[0], !res.ok, res.text);
+        // a done /close prunes this tab, and the new view would wipe the reply: prune first
+        if (res.ok && verb.toLowerCase() === '/close') await loadRooms().catch(function () {});
+        renderLocal(verb, !res.ok, res.text);
       } else {
         await api('POST', path + '/say', { text: text });
         // "/catchup" inside a sentence is only text to the agents: say how to run it
@@ -818,27 +825,34 @@
   }
 
   // --------------------------------------------------------------- boot
-  // The open rooms, from the broker. A tab whose room is gone, or was closed and re-created
-  // under the same name (another id), is dropped; a replaced room starts over at lastId 0.
-  // helloAll (a reconnect) subscribes every room again from its lastId.
+  // The open rooms, from the broker. A tab whose room is gone, or was replaced under the same
+  // name (another id, or the same id reused after a delete: another created_at), is dropped;
+  // a replaced room starts over at lastId 0. helloAll (a reconnect, a rooms frame) subscribes
+  // every room again from its lastId. The log is redrawn only when the active room changed,
+  // so local lines (a command's reply) survive a listing that changed nothing on screen.
   async function loadRooms(helloAll) {
     const data = await api('GET', '/api/rooms');
     state.closed = data.closed || 0;
     const listed = new Map();
     for (const r of data.rooms) listed.set(r.name, r);
+    const gone = new Set();
     for (const [name, r] of Array.from(state.rooms)) {
       const l = listed.get(name);
-      if (!l || l.id !== r.id) state.rooms.delete(name);
+      if (!l || l.id !== r.id || l.created_at !== r.createdAt) {
+        state.rooms.delete(name);
+        gone.add(name);
+      }
     }
     const fresh = [];
     for (const l of data.rooms) {
       if (!state.rooms.has(l.name)) fresh.push(l.name);
       const r = room(l.name);
       r.id = l.id;
+      r.createdAt = l.created_at;
       r.settings = l.settings || {};
     }
     const was = state.active;
-    const pruned = was !== null && !state.rooms.has(was);
+    const pruned = was !== null && gone.has(was);  // a replaced active room counts as pruned
     if (pruned) state.active = null;
     renderTabs();
     renderClosedButton();
@@ -849,7 +863,8 @@
       selectRoom(state.rooms.has(want) ? want : Array.from(state.rooms.keys()).sort()[0]);
     } else {
       if (pruned) history.replaceState(null, '', location.pathname);  // nothing left to point at
-      renderLog();
+      // redraw only a view that is out of date: local lines (a command's reply) stay
+      if (pruned || $('empty').classList.contains('hidden') === (state.rooms.size === 0)) renderLog();
       renderBuddies();
       renderStatus();
     }

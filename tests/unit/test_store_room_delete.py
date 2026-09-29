@@ -77,7 +77,8 @@ def two(store: Store) -> tuple[Room, Room, list[int], list[int]]:
 
 
 def delete(store: Store, r: Room, **kw: Any) -> dict[str, int]:
-    args: dict[str, Any] = {"name": r.name, "expect_counts": db.row_counts(store.con, db.TABLES),
+    args: dict[str, Any] = {"name": r.name, "created_at": r.created_at,
+                            "expect_counts": db.row_counts(store.con, db.TABLES),
                             "event": {"room_id": r.id, "name": r.name, "backup": "y.db.delete-x.bak", "chain": "cli"}}
     args.update(kw)
     return store.delete_room(r.id, **args)
@@ -148,6 +149,15 @@ def test_refused_while_anyone_is_in_the_room(store: Store, two, who: str) -> Non
     assert snapshot(store.con) == before
 
 
+def test_refused_for_another_room_under_the_same_id_and_name(store: Store) -> None:
+    """ids are reused after a delete, so the id and name alone could name a re-created room."""
+    r = store.create_room("#scratch", "alice", 60, 6)
+    before = snapshot(store.con)
+    with pytest.raises(Conflict, match="#scratch changed since the plan"):
+        delete(store, r, created_at=r.created_at + 1)
+    assert snapshot(store.con) == before
+
+
 def test_refused_when_the_counts_moved_since_the_backup(store: Store, two) -> None:
     a, _, _, _ = two
     counts = db.row_counts(store.con, db.TABLES)
@@ -164,7 +174,7 @@ def test_refused_when_the_room_changed_since_the_plan(store: Store, two) -> None
     with pytest.raises(Conflict, match="changed since the plan"):
         delete(store, a, name=closed_room_name(a.name, a.id))  # planned as closed, still open
     with pytest.raises(Conflict, match="changed since the plan"):
-        store.delete_room(9999, name="#gone", expect_counts={}, event={})
+        store.delete_room(9999, name="#gone", created_at=0.0, expect_counts={}, event={})
     assert snapshot(store.con) == before
 
 

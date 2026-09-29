@@ -208,10 +208,11 @@ def test_login_refusal_texts(tmp_home: Path) -> None:
 
 
 def test_room_delete_params_and_room_list_closed(broker: InProcBroker) -> None:
-    """room.delete without the plan's room_id is refused; room.list reports closed rooms."""
+    """room.delete without the plan's pin is refused; room.list reports closed rooms."""
     with pytest.raises(RpcError) as e:
         broker.call("room.delete", {"room": "#build"})
-    assert e.value.code == "bad_request" and e.value.message == "room_id is required: run the plan first"
+    assert e.value.code == "bad_request" and e.value.message == (
+        "room_id, name and created_at are required: run the plan first")
     with pytest.raises(RpcError) as e:
         broker.call("room.delete", {"dry_run": True})
     assert e.value.code == "bad_request" and e.value.message == "room is required"
@@ -229,7 +230,8 @@ def test_room_delete_params_and_room_list_closed(broker: InProcBroker) -> None:
     assert broker.call("sys.status")["closed_rooms"] == 1
     plan = broker.call("room.delete", {"room": "#build", "dry_run": True})
     assert plan["state"] == "closed" and plan["closed_by"] == "alice"
-    res = broker.call("room.delete", {"room": "#build", "room_id": plan["room_id"]})
+    res = broker.call("room.delete", {"room": "#build", "room_id": plan["room_id"], "name": plan["name"],
+                                      "created_at": plan["created_at"]})
     assert res["removed"]["rooms"] == 1 and Path(res["backup"]).exists()
     assert broker.call("room.list", {"closed": True}) == {"rooms": [], "closed": 0}
 

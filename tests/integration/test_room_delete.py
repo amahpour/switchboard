@@ -57,6 +57,11 @@ def rpc_err(b: InProcBroker, params: dict[str, Any]) -> RpcError:
     return ei.value
 
 
+def pin(plan: dict[str, Any]) -> dict[str, Any]:
+    """What the CLI sends to apply a plan: the room it showed (id, full name, creation time)."""
+    return {"room_id": plan["room_id"], "name": plan["name"], "created_at": plan["created_at"]}
+
+
 def q(path: Path, sql: str, *args: Any) -> list[tuple[Any, ...]]:
     con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
     try:
@@ -124,17 +129,22 @@ async def test_plan_refusals_close_then_delete(broker: InProcBroker, capsys: pyt
     assert plan["counts"] == room_rows(dbp, 1, mids)
     assert plan["counts"]["rooms"] == 1 and plan["counts"]["messages"] >= 4 and plan["counts"]["deliveries"] >= 1
     # a stale pin: conflict, nothing deleted
-    e = rpc_err(b, {"room": "#build", "room_id": 99})
+    e = rpc_err(b, {"room": "#build", **pin(plan), "room_id": 99})
     assert e.code == "conflict" and "#build~closed-1 changed since the plan" in e.message
     e = rpc_err(b, {"room": "#build"})
-    assert e.code == "bad_request" and "room_id is required" in e.message
+    assert e.code == "bad_request" and "room_id, name and created_at are required" in e.message
+    for drop in ("name", "created_at"):
+        e = rpc_err(b, {"room": "#build", **{k: v for k, v in pin(plan).items() if k != drop}})
+        assert e.code == "bad_request" and "are required: run the plan first" in e.message
+    e = rpc_err(b, {"room": "#build", **pin(plan), "created_at": True})
+    assert e.code == "bad_request"
     assert room_rows(dbp, 1, mids)["rooms"] == 1
 
     ws = ws_connect(b, cookie_of(b.web))
     try:
         ws.send(json.dumps({"t": "hello", "rooms": ["#other"], "after": {}}))
         recv_until(ws, lambda f: f.get("t") == "members")
-        res = b.call("room.delete", {"room": "#build", "room_id": 1}, timeout=60)
+        res = b.call("room.delete", {"room": "#build", **pin(plan)}, timeout=60)
         assert (res["room_id"], res["name"], res["display"]) == (1, "#build~closed-1", "#build")
         assert res["removed"] == plan["counts"] and Path(res["backup"]) == backup
         frames = recv_until(ws, lambda f: f.get("t") == "notice" and "deleted via cli" in f.get("text", ""))
@@ -178,7 +188,7 @@ def test_ambiguous_names_and_delete_by_full_name(broker: InProcBroker) -> None:
                          " give the full name of the one to delete")
     plan = b.call("room.delete", {"room": "#build~closed-1", "dry_run": True})
     assert plan["room_id"] == 1
-    assert b.call("room.delete", {"room": "#build~closed-1", "room_id": 1}, timeout=60)["room_id"] == 1
+    assert b.call("room.delete", {"room": "#build~closed-1", **pin(plan)}, timeout=60)["room_id"] == 1
     assert [r["name"] for r in b.call("room.list", {"closed": True})["rooms"]] == ["#build~closed-3"]
     e = rpc_err(b, {"room": "#nope", "dry_run": True})
     assert e.code == "not_found" and "no such room: #nope" in e.message
@@ -190,7 +200,7 @@ def test_an_empty_open_room_is_deleted_directly(broker: InProcBroker) -> None:
     b = broker
     plan = b.call("room.delete", {"room": "#other", "dry_run": True})
     assert (plan["state"], plan["closed_at"], plan["closed_by"]) == ("open", None, None)
-    b.call("room.delete", {"room": "#other", "room_id": plan["room_id"]}, timeout=60)
+    b.call("room.delete", {"room": "#other", **pin(plan)}, timeout=60)
     assert [r["name"] for r in b.web.get("/api/rooms").json()["rooms"]] == ["#build"]
 
 
@@ -198,11 +208,33 @@ def test_a_failed_backup_deletes_nothing(broker: InProcBroker, monkeypatch: pyte
     b = broker
     close(b, "build")
     before = room_rows(b.paths.db, 1, [])
+    plan = b.call("room.delete", {"room": "#build", "dry_run": True})
 
     def boom(*a: Any, **k: Any) -> Any:
         raise db.SchemaError("disk said no")
 
     monkeypatch.setattr(db, "backup_verified", boom)
-    e = rpc_err(b, {"room": "#build", "room_id": 1})
+    e = rpc_err(b, {"room": "#build", **pin(plan)})
     assert e.code == "internal" and e.message == "the backup failed (disk said no); nothing was deleted"
     assert room_rows(b.paths.db, 1, []) == before and before["rooms"] == 1
+
+
+def test_a_reopen_or_re_create_between_plan_and_apply_deletes_nothing(broker: InProcBroker) -> None:
+    """The plan showed a closed #build; the web panel reopened it (same id, name back to #build)
+    before the confirm. Then: #other deleted and re-created, which reuses its id."""
+    b = broker
+    close(b, "build")
+    plan = b.call("room.delete", {"room": "#build", "dry_run": True})
+    assert (plan["state"], plan["name"]) == ("closed", "#build~closed-1")
+    web_post(b, "/api/closed-rooms/1/reopen", {})
+    e = rpc_err(b, {"room": "#build", **pin(plan)})
+    assert e.code == "conflict" and e.message == (
+        "#build~closed-1 changed since the plan (reopened, deleted or re-created); run the command again")
+    assert [r["name"] for r in b.call("room.list")["rooms"]] == ["#build", "#other"]
+    stale = b.call("room.delete", {"room": "#other", "dry_run": True})
+    b.call("room.delete", {"room": "#other", **pin(stale)}, timeout=60)
+    assert create(b, "#other") == stale["room_id"]  # the id came back
+    e = rpc_err(b, {"room": "#other", **pin(stale)})
+    assert e.code == "conflict" and "#other changed since the plan" in e.message
+    assert [r["name"] for r in b.call("room.list")["rooms"]] == ["#build", "#other"]
+    assert not list(b.paths.db.parent.glob("*.delete-build-*"))

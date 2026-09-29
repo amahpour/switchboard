@@ -198,7 +198,10 @@ def test_reopen_route_security(broker: InProcBroker) -> None:
     assert b.web.post("/api/closed-rooms/1/reopen", json={}, headers=no_x).status_code == 403
     bad_origin = {**h, "Origin": "http://evil.example"}
     assert b.web.post("/api/closed-rooms/1/reopen", json={}, headers=bad_origin).status_code == 403
-    for rid in ("0", "01", "-1", "x", "1" * 20):
+    # 19 digits pass the pattern, but above 2**63-1 sqlite3 can't bind them (a 500 before)
+    for rid in ("0", "01", "-1", "x", "1" * 20, str(2**63), "9" * 19):
         r = b.web.post(f"/api/closed-rooms/{rid}/reopen", json={}, headers=h)
         assert r.status_code == 400 and "bad room id" in r.text, (rid, r.text)
+    r = b.web.post(f"/api/closed-rooms/{2**63 - 1}/reopen", json={}, headers=h)
+    assert r.status_code == 404 and "no closed room with id" in r.text, r.text
     assert b.web.get("/api/closed-rooms").json()["rooms"][0]["name"] == "#build~closed-1"
