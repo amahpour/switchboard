@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.3 (2026-09-29)
+
 ### Fixed
 
 - **Remote machines in the sidebar show their state in their dot.** It's green when the link is up, amber while it connects, red when it's down or blocked, and a hollow ring when the remote is disabled or needs enabling. Before, every dot in the sidebar was grey, whatever the state; the Remote machines sheet already had it right.
