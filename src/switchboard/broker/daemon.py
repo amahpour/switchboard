@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import ipaddress
 import logging
 import logging.handlers
 import os
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from switchboard import db
+from switchboard.broker.auth import WebOrigin
 from switchboard.config import Config
 from switchboard.mcp.client import BrokerDown, RpcError, call_sync, ping
 from switchboard.paths import Paths, test_mode_refusal
@@ -27,6 +29,8 @@ STOP_WAIT_S = 10.0
 # Env vars a daemonized broker must not inherit from the terminal that started it.
 _DROP_ENV_PREFIXES = ("CLAUDE_CODE_MESSAGING_", "CLAUDE_CODE_SESSION_ID")
 _DROP_ENV = frozenset({"CLAUDECODE"})
+# the default listen address (guardrail 9): the only one that needs no --public-url
+LOOPBACK = "127.0.0.1"
 
 
 class DaemonError(Exception):
@@ -34,12 +38,19 @@ class DaemonError(Exception):
 
 
 # ------------------------------------------------------------------ helpers
-def setup_logging(paths: Paths, level: int = logging.INFO) -> None:
-    """Rotating 5 MB x 3 log at logs/broker.log (0600). Ids only, never message text."""
+def setup_logging(paths: Paths, level: int = logging.INFO, *, stdout: bool = False) -> None:
+    """Rotating 5 MB x 3 log at logs/broker.log (0600). Ids only, never message text.
+
+    ``stdout`` (``start --foreground --log-stdout``, the container image) writes the same
+    records to stdout instead, for the platform's log collector (docs/DEPLOY.md)."""
     os.umask(0o077)
-    handler = logging.handlers.RotatingFileHandler(
-        paths.log, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
-    )
+    handler: logging.Handler
+    if stdout:
+        handler = logging.StreamHandler(sys.stdout)
+    else:
+        handler = logging.handlers.RotatingFileHandler(
+            paths.log, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+        )
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     root = logging.getLogger()
     for h in list(root.handlers):
@@ -83,8 +94,44 @@ def _broker_env() -> dict[str, str]:
 
 
 # --------------------------------------------------------------- foreground
+def web_settings(listen: str, public_url: str) -> WebOrigin | None:
+    """Check ``--listen`` and ``--public-url`` (DESIGN.md §30): the parsed public origin, or None
+    for the default (``switchboard.localhost`` on the bound port). A ValueError says why not.
+
+    Loopback stays the default (guardrail 9). Any other listen address needs a public URL, so the
+    Host, Origin, CSP and cookie rules always name the one address browsers use, and the broker
+    is meant to sit behind a proxy that terminates TLS (a platform's router, Caddy, an ingress).
+    127.0.0.1 is the only address without one: ``switchboard.localhost`` resolves there and
+    nowhere else.
+    """
+    try:
+        ipaddress.IPv4Address(listen)
+    except ValueError:
+        raise ValueError(f"--listen must be an IPv4 address, such as 127.0.0.1 or 0.0.0.0 (not {listen!r})") from None
+    try:
+        origin = WebOrigin.parse(public_url) if public_url else None
+    except ValueError as e:
+        raise ValueError(f"--public-url {public_url!r}: {e}") from None
+    if listen != LOOPBACK and origin is None:
+        raise ValueError(f"listening on {listen} needs --public-url: the https:// address browsers use, "
+                         "served by a proxy that terminates TLS")
+    return origin
+
+
+def tcp_listener(host: str, port: int) -> socket.socket:
+    """The broker's TCP socket on ``host`` (``--listen``; see ``loopback_listener``)."""
+    tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP)
+    try:
+        tcp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        tcp.bind((host, port))
+    except OSError:
+        tcp.close()
+        raise
+    return tcp
+
+
 def loopback_listener(port: int) -> socket.socket:
-    """The broker's TCP socket, bound to 127.0.0.1 only.
+    """The broker's TCP socket, bound to 127.0.0.1 only (the default).
 
     ``proto=IPPROTO_TCP`` matters on Linux: asyncio sets TCP_NODELAY only on
     sockets whose ``proto`` is IPPROTO_TCP, which a Linux accepted socket takes
@@ -97,7 +144,7 @@ def loopback_listener(port: int) -> socket.socket:
     tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP)
     try:
         tcp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        tcp.bind(("127.0.0.1", port))
+        tcp.bind((LOOPBACK, port))
     except OSError:
         tcp.close()
         raise
@@ -109,6 +156,9 @@ def run_foreground(
     cfg: Config,
     *,
     port: int | None = None,
+    listen: str | None = None,
+    public_url: str | None = None,
+    log_stdout: bool = False,
     test_mode: bool = False,
     test_trust_uds: bool = False,
     announce: bool = True,
@@ -117,6 +167,13 @@ def run_foreground(
 
     from switchboard.broker.app import create_app, default_peer_policy
 
+    listen = cfg.listen if listen is None else listen
+    public_url = cfg.public_url if public_url is None else public_url
+    try:
+        public = web_settings(listen, public_url)
+    except ValueError as e:
+        print(f"switchboard: {e}", file=sys.stderr)
+        return 1
     os.umask(0o077)
     paths.ensure()
     lock_fd = os.open(paths.lockfile, os.O_RDWR | os.O_CREAT, 0o600)
@@ -127,7 +184,7 @@ def run_foreground(
         print("switchboard: another broker already runs from this home", file=sys.stderr)
         return 1
     try:
-        setup_logging(paths)
+        setup_logging(paths, stdout=log_stdout)
         # Create the database, or migrate a version-1 one (after a verified backup,
         # DESIGN.md §27.6), here: under the single-instance lock and before anything
         # listens, with a refusal on stderr (broker.out, which `switchboard start`
@@ -140,13 +197,15 @@ def run_foreground(
             return 1
         want = cfg.port if port is None else port
         try:
-            tcp = loopback_listener(want)
+            tcp = loopback_listener(want) if listen == LOOPBACK else tcp_listener(listen, want)
         except OSError as e:
-            print(f"switchboard: can't listen on 127.0.0.1:{want}: {e.strerror}", file=sys.stderr)
+            print(f"switchboard: can't listen on {listen}:{want}: {e.strerror}", file=sys.stderr)
             return 1
         actual = tcp.getsockname()[1]
+        origin = public or WebOrigin.local(actual)
         _write_pidfile(paths)
-        app = create_app(paths, cfg, default_peer_policy(cfg, test_trust_uds), test_mode, port=actual)
+        app = create_app(paths, cfg, default_peer_policy(cfg, test_trust_uds), test_mode, port=actual,
+                         web_origin=origin)
         server = uvicorn.Server(
             uvicorn.Config(
                 app,
@@ -164,13 +223,19 @@ def run_foreground(
         app.state.broker.shutdown_cb = lambda: setattr(server, "should_exit", True)
         if announce:
             print(
-                f"switchboard broker pid {os.getpid()} on http://switchboard.localhost:{actual}/"
+                f"switchboard broker pid {os.getpid()} on {origin.origin}/"
+                + (f" (listening on {listen}:{actual})" if listen != LOOPBACK else "")
                 + (" (TEST MODE)" if test_mode else ""),
                 flush=True,
             )
+        # SIGTERM (`docker stop`, a platform's redeploy) stops the broker as `switchboard stop`
+        # does. uvicorn catches it, shuts down gracefully, then raises it again for the handler
+        # it replaced; with this no-op there, the cleanup below runs and the exit status is 0.
+        previous = signal.signal(signal.SIGTERM, lambda signum, frame: None)
         try:
             asyncio.run(server.serve(sockets=[tcp]))
         finally:
+            signal.signal(signal.SIGTERM, previous)
             tcp.close()
         return 0 if server.started else 1
     finally:
@@ -188,6 +253,8 @@ def start(
     paths: Paths,
     *,
     port: int | None = None,
+    listen: str | None = None,
+    public_url: str | None = None,
     test_mode: bool = False,
     test_trust_uds: bool = False,
     out: Any = None,
@@ -195,9 +262,9 @@ def start(
     out = out or sys.stdout
     alive = ping(paths.sock)
     if alive:
+        url = alive.get("url") or f"http://switchboard.localhost:{alive.get('port')}/"
         print(
-            f"switchboard is already running (pid {alive.get('pid')}) at "
-            f"http://switchboard.localhost:{alive.get('port')}/\n"
+            f"switchboard is already running (pid {alive.get('pid')}) at {url}\n"
             "Run `switchboard login` for a new sign-in link.",
             file=out,
         )
@@ -207,6 +274,10 @@ def start(
     cmd = [sys.executable, "-I", "-m", "switchboard", "start", "--foreground", "--home", str(paths.home)]
     if port is not None:
         cmd += ["--port", str(port)]
+    if listen is not None:
+        cmd += ["--listen", listen]
+    if public_url is not None:
+        cmd += ["--public-url", public_url]
     if test_mode:
         cmd.append("--test-mode")
         if test_trust_uds:
@@ -237,7 +308,7 @@ def start(
         print("switchboard: the broker did not start. Last lines of its output:", file=sys.stderr)
         print(_tail(paths.out_log), file=sys.stderr)
         return 1
-    url = f"http://switchboard.localhost:{info['port']}/"
+    url = info.get("url") or f"http://switchboard.localhost:{info['port']}/"
     print(f"switchboard is running (pid {info['pid']}) at {url}", file=out)
     if info.get("test_mode"):
         print("TEST MODE", file=out)

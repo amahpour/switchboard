@@ -2,9 +2,23 @@
 
 ## Unreleased
 
+The broker as a container image ([#34](https://github.com/amahpour/switchboard/issues/34), [docs/DEPLOY.md](docs/DEPLOY.md), [DESIGN.md §30](docs/DESIGN.md#30-the-container-image-and-the-public-url-34)). It runs on a server behind the platform's HTTPS: Render, Kubernetes, or a VM with Caddy. For now that's you in the browser; your agents join a hosted broker with #24.
+
+### Added
+
+- **`ghcr.io/amahpour/switchboard`**, published with every release as `<version>` and `latest`, for linux/amd64 and linux/arm64, with a provenance attestation and an SBOM. It runs the broker as an unprivileged user (uid 10001) under tini, keeps its data on a `/data` volume, logs to stdout, and stops cleanly on `docker stop`. Started as root, as on Render, whose disks belong to root, it only makes its home on the volume its user's, then drops to that user.
+- **`switchboard start --listen ADDR --public-url URL`** (or `SWITCHBOARD_LISTEN` and `SWITCHBOARD_PUBLIC_URL`, or `listen` and `public_url` in config.toml), for a broker behind a proxy that terminates TLS. The public URL, `https://` and an origin only, becomes the one host the broker answers to and the one origin it accepts writes from. It also sets the WebSocket address in the CSP, makes the session cookie `Secure`, and appears in sign-in links and `switchboard status`. Nothing changes by default: listening on anything but `127.0.0.1` needs the public URL, and a bad setting stops the broker before it touches its home.
+- **`GET /healthz`** answers `ok` for platform health checks: no sign-in, no data, any Host.
+- **`start --log-stdout`** (with `--foreground`) and `SWITCHBOARD_PORT` for `--port`, for containers.
+- **Deployment examples** in `deploy/`: Docker Compose with Caddy and Let's Encrypt, a Kubernetes StatefulSet with an Ingress, and a Render Blueprint. docs/DEPLOY.md covers running, signing in with `docker exec -it … switchboard login`, upgrading, backups and health checks.
+- **Tests of the image** (`tests/image`, marker `image`): behind a TLS-terminating proxy with sign-in and the UI over https in Chromium, a clean stop and restart, and the volumes Render and Kubernetes mount. A new `image` CI job runs them on every PR, and the release waits for it.
+
 ### Changed
 
 - **A new demo video** at the top of the README, recorded as screen video on the new UI: Codex reviews this repository's own #14, Claude Code (which wrote it) defends it, and they settle it before the human reads it. Narrated. `docs/media/record.py` records it and `edit.py` cuts it, replacing the snapshot-based `capture.py` and `render.py`.
+- **The broker exits 0 on SIGTERM** after its graceful shutdown, instead of dying from the re-raised signal before its own cleanup.
+- **On Linux, `switchboard login` no longer needs `ps`:** the caller's terminal comes from `/proc`, as the rest of the process checks already do. Before, a system without `ps` refused every sign-in link.
+- **Releases also move the image pins** (`ghcr.io/amahpour/switchboard:X.Y.Z`) in docs/DEPLOY.md and `deploy/`, and publish the image.
 
 ## 0.5.0 (2026-09-29)
 

@@ -317,13 +317,28 @@ def argv(pid: int, start: float) -> str:
     return argv_many([ProcInfo(pid=pid, ppid=0, start=start, uid=-1)]).get(pid, "")
 
 
+def linux_tty_name(dev: int) -> str:
+    """The name ``ps -o tty=`` gives Linux's tty device number ``dev`` (``/proc/<pid>/stat``'s
+    tty_nr): ``pts/3``, ``tty2``, ``ttyS0``; another device as ``tty?<major>:<minor>``."""
+    major = (dev >> 8) & 0xFFF
+    minor = (dev & 0xFF) | ((dev >> 12) & 0xFFF00)
+    if 136 <= major <= 143:  # Unix98 pseudo-terminals: an ssh login, a terminal window, `docker exec -t`
+        return f"pts/{(major - 136) * 256 + minor}"
+    if major == 4:
+        return f"tty{minor}" if minor < 64 else f"ttyS{minor - 64}"
+    return f"tty?{major}:{minor}"
+
+
 def tty(pid: int) -> str | None:
-    """The controlling terminal of ``pid`` (e.g. 'ttys003'), or None."""
+    """The controlling terminal of ``pid`` (e.g. 'ttys003', 'pts/0'), or None."""
     p = info(pid)
     if p is None:
         return None
     if p.tty_dev is None and sys.platform == "darwin":
         return None  # proc_pidinfo says there is no controlling tty
+    if sys.platform.startswith("linux") and _linux_procfs():
+        # /proc's tty_nr, without ps (a slim container image has none: docs/DEPLOY.md)
+        return linux_tty_name(p.tty_dev) if p.tty_dev else None
     out = _run_ps(["-o", "tty=", "-p", str(pid)]).strip()
     if not out or out.startswith("?"):
         return None

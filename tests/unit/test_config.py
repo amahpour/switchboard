@@ -178,7 +178,7 @@ def test_security_reaches_the_broker_policy(tmp_path: Path, monkeypatch: pytest.
 
     listener = socket_mod.socket(socket_mod.AF_INET, socket_mod.SOCK_STREAM)
     monkeypatch.setattr(app_mod, "create_app", fake_create_app)
-    monkeypatch.setattr(daemon, "setup_logging", lambda paths: None)
+    monkeypatch.setattr(daemon, "setup_logging", lambda *a, **k: None)
     monkeypatch.setattr(daemon, "loopback_listener", lambda port: listener)
     old_umask = os.umask(0o022)
     os.umask(old_umask)

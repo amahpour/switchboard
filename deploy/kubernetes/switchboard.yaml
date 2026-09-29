@@ -1,0 +1,125 @@
+# switchboard on Kubernetes (docs/DEPLOY.md): EKS, GKE, AKS or any cluster with a default
+# StorageClass and an ingress controller that terminates TLS.
+#
+#   kubectl create namespace switchboard
+#   kubectl -n switchboard apply -f deploy/kubernetes/switchboard.yaml    # after editing sb.example.com
+#   kubectl -n switchboard exec -it switchboard-0 -- switchboard login
+#
+# One broker, one volume: a StatefulSet with a single replica and a ReadWriteOnce claim.
+# Never scale it up; the broker's lock refuses a second one on the same volume, and several
+# brokers are a different design (issue #35). A StatefulSet replaces its one pod by stopping it
+# before starting the new one, which is what a Deployment's `Recreate` strategy would do.
+# The volume must be a block device (EBS, a GCE persistent disk, Azure Disk), never NFS or EFS:
+# SQLite's locking isn't reliable there.
+apiVersion: v1
+kind: Service
+metadata:
+  name: switchboard
+  labels:
+    app.kubernetes.io/name: switchboard
+spec:
+  selector:
+    app.kubernetes.io/name: switchboard
+  ports:
+    - name: http
+      port: 7419
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: switchboard
+  labels:
+    app.kubernetes.io/name: switchboard
+spec:
+  serviceName: switchboard
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: switchboard
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: switchboard
+    spec:
+      securityContext:
+        runAsUser: 10001        # the image's `switchboard` user, from the start
+        runAsGroup: 10001
+        runAsNonRoot: true
+        fsGroup: 10001          # makes the volume writable by that user...
+        fsGroupChangePolicy: OnRootMismatch   # ...without re-chmodding the broker's private home on every start
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: switchboard
+          image: ghcr.io/amahpour/switchboard:0.5.0   # a release, not :latest (docs/DEPLOY.md, "Upgrading")
+          env:
+            - name: SWITCHBOARD_PUBLIC_URL
+              value: https://sb.example.com      # the Ingress host below; the broker answers to no other
+          ports:
+            - name: http
+              containerPort: 7419
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            requests: {cpu: 100m, memory: 192Mi}
+            limits: {memory: 512Mi}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+---
+# Your ingress controller terminates TLS for the public URL and passes the browser's Host and
+# Origin through (ingress-nginx and most others do by default). The UI's WebSocket needs no
+# timeout annotation: the broker pings it every 20 seconds. The TLS secret is yours, or
+# cert-manager's (add its cluster-issuer annotation).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: switchboard
+  labels:
+    app.kubernetes.io/name: switchboard
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: ["sb.example.com"]
+      secretName: switchboard-tls
+  rules:
+    - host: sb.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: switchboard
+                port:
+                  name: http

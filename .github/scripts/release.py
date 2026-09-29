@@ -12,7 +12,9 @@ tests pass, CI runs this script on that commit. It:
 - turns CHANGELOG.md's "## Unreleased" section into "## X.Y.Z (date)" under a fresh, empty
   "## Unreleased", and writes that section to the notes file. With nothing under Unreleased,
   the notes are the commits' titles;
-- points the README's and docs/INSTALL.md's `uv tool install …@vX.Y.Z` lines at the new tag.
+- points the README's and docs/INSTALL.md's `uv tool install …@vX.Y.Z` lines at the new tag,
+  and the deployment examples' and docs/DEPLOY.md's `ghcr.io/amahpour/switchboard:X.Y.Z` at
+  the new image (which the `publish-image` job pushes after this release).
 
 The job then commits "release: vX.Y.Z", tags it and publishes the GitHub Release. If main has
 moved on since this commit (another merge landed), it releases nothing: that merge's own run
@@ -36,7 +38,9 @@ RELEASE_PREFIX = "release: "
 VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 TAG_RE = re.compile(r"^v(\d+\.\d+\.\d+)$")
 PIN_RE = re.compile(r"(git\+https://github\.com/amahpour/switchboard@)v\d+\.\d+\.\d+")
-PIN_FILES = ("README.md", "docs/INSTALL.md")
+IMAGE_PIN_RE = re.compile(r"(ghcr\.io/amahpour/switchboard:)\d+\.\d+\.\d+(?![\w.-])")
+PIN_FILES = ("README.md", "docs/INSTALL.md", "docs/DEPLOY.md", "deploy/compose/compose.yaml",
+             "deploy/kubernetes/switchboard.yaml", "deploy/render/render.yaml")
 
 
 # ------------------------------------------------------------------ pure parts
@@ -111,7 +115,8 @@ def set_version(root: Path, version: str) -> None:
 
 
 def update_pins(text: str, version: str) -> str:
-    return PIN_RE.sub(rf"\g<1>v{version}", text)
+    """The install pins (``…switchboard@vX.Y.Z``) and the image pins (``…/switchboard:X.Y.Z``)."""
+    return IMAGE_PIN_RE.sub(rf"\g<1>{version}", PIN_RE.sub(rf"\g<1>v{version}", text))
 
 
 # ------------------------------------------------------------------ git

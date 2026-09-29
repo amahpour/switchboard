@@ -1,0 +1,30 @@
+# switchboard on Render (docs/DEPLOY.md): a web service from the published image, with a
+# persistent disk at /data. Put this file in a repository of yours as render.yaml (or point
+# the Blueprint at this path), then New > Blueprint. Render asks for SWITCHBOARD_PUBLIC_URL:
+# the service's https://<name>.onrender.com address, or your custom domain.
+#
+# Render's disks need a paid plan and one instance: a deploy stops the old instance before it
+# starts the new one, and the disk is snapshotted daily (kept 7 days or more). Its disk
+# belongs to root; the image starts as root only to hand its home on the disk to its own
+# unprivileged user, then runs as that user.
+#
+# Sign in from the service's Shell tab: `switchboard login`.
+services:
+  - type: web
+    name: switchboard
+    runtime: image
+    image:
+      url: ghcr.io/amahpour/switchboard:0.5.0   # a release, not :latest (docs/DEPLOY.md, "Upgrading")
+    plan: 0.5c-512mb        # the smallest paid plan; disks aren't available on the free one
+    region: oregon
+    numInstances: 1         # one broker per disk, always
+    healthCheckPath: /healthz
+    envVars:
+      - key: SWITCHBOARD_PUBLIC_URL
+        sync: false         # asked for when the Blueprint is created
+      - key: PORT
+        value: "7419"       # where Render sends traffic: the image's broker port
+    disk:
+      name: switchboard-data
+      mountPath: /data
+      sizeGB: 1

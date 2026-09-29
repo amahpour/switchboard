@@ -147,6 +147,9 @@ def cmd_start(args: argparse.Namespace) -> int:
     if args.test_trust_uds and not args.test_mode:
         print("switchboard: --test-trust-uds needs --test-mode", file=sys.stderr)
         return EXIT_USAGE
+    if args.log_stdout and not args.foreground:
+        print("switchboard: --log-stdout needs --foreground", file=sys.stderr)
+        return EXIT_USAGE
     if args.test_mode:
         why = daemon.check_test_mode(paths, _home_given(args))
         if why:
@@ -162,16 +165,27 @@ def cmd_start(args: argparse.Namespace) -> int:
             paths,
             cfg,
             port=args.port,
+            listen=args.listen,
+            public_url=args.public_url,
+            log_stdout=args.log_stdout,
             test_mode=args.test_mode,
             test_trust_uds=args.test_trust_uds,
         )
     try:
-        load(paths)
+        cfg = load(paths)
     except ConfigError as e:
         print(f"switchboard: config error: {e}", file=sys.stderr)
         return EXIT_ERR
+    # the broker checks these too; here a bad one fails now, not in the child's log
+    try:
+        daemon.web_settings(cfg.listen if args.listen is None else args.listen,
+                            cfg.public_url if args.public_url is None else args.public_url)
+    except ValueError as e:
+        print(f"switchboard: {e}", file=sys.stderr)
+        return EXIT_USAGE
     return daemon.start(
-        paths, port=args.port, test_mode=args.test_mode, test_trust_uds=args.test_trust_uds
+        paths, port=args.port, listen=args.listen, public_url=args.public_url, test_mode=args.test_mode,
+        test_trust_uds=args.test_trust_uds,
     )
 
 
@@ -676,6 +690,17 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
 
 
 # -------------------------------------------------------------------- parser
+def _port_number(text: str) -> int:
+    """``start --port`` (or ``SWITCHBOARD_PORT``): a TCP port, 0 for any free one."""
+    try:
+        port = int(text)
+    except ValueError:
+        port = -1
+    if not 0 <= port <= 65535:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a port number (0..65535)")
+    return port
+
+
 def build_parser() -> argparse.ArgumentParser:
     from switchboard.colors import MODES
 
@@ -703,7 +728,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("start", parents=[common], help="start the broker (daemonizes)")
     s.add_argument("--foreground", action="store_true", help="run in this process")
-    s.add_argument("--port", type=int, default=None, help="TCP port (default 7419; 0 = any)")
+    # a container sets --port, --listen and --public-url through the environment (docs/DEPLOY.md);
+    # config.toml's `port`, `listen` and `public_url` otherwise
+    s.add_argument("--port", type=_port_number, default=os.environ.get("SWITCHBOARD_PORT") or None,
+                   help="TCP port (default 7419; 0 = any; env SWITCHBOARD_PORT)")
+    s.add_argument("--listen", default=os.environ.get("SWITCHBOARD_LISTEN") or None, metavar="ADDR",
+                   help="listen on this IPv4 address (default 127.0.0.1; any other needs --public-url;"
+                        " env SWITCHBOARD_LISTEN)")
+    s.add_argument("--public-url", default=os.environ.get("SWITCHBOARD_PUBLIC_URL") or None, metavar="URL",
+                   help="the https:// address browsers use, behind a proxy that terminates TLS"
+                        " (env SWITCHBOARD_PUBLIC_URL)")
+    s.add_argument("--log-stdout", action="store_true",
+                   help="with --foreground: log to stdout instead of logs/broker.log (a container)")
     s.add_argument("--test-mode", action="store_true", help=argparse.SUPPRESS)
     s.add_argument("--test-trust-uds", action="store_true", help=argparse.SUPPRESS)
     s.set_defaults(func=cmd_start)

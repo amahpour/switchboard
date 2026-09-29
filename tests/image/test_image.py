@@ -1,0 +1,323 @@
+"""The container image (issue #34, docs/DEPLOY.md). Marker ``image``, opt-in; needs Docker, and
+Playwright's Chromium for the UI test.
+
+    docker build -t switchboard:dev .
+    SWITCHBOARD_IMAGE=switchboard:dev uv run pytest -m image tests/image   # unset: builds switchboard:test
+
+The CI job ``image`` builds the image and runs these. They start it the way a platform does:
+on a Docker network behind a proxy that terminates TLS (Caddy, with a certificate from its own
+local CA), with ``SWITCHBOARD_PUBLIC_URL=https://sb.test:<port>``. They check that the container
+runs as the unprivileged user, answers /healthz and Docker's health check, gives a sign-in link
+through ``docker exec``, serves the UI to Chromium over https with its WebSocket over wss, stops
+cleanly on ``docker stop`` and keeps its data across a restart. They also mount the two kinds
+of volume platforms give it: a disk that belongs to root (Render) and a Kubernetes volume with
+an ``fsGroup``. The UI's screenshot goes to ``$SWITCHBOARD_E2E_ARTIFACTS/image/`` (CI uploads it).
+"""
+
+from __future__ import annotations
+
+import http.client
+import json
+import os
+import re
+import shutil
+import socket
+import ssl
+import subprocess
+import time
+import urllib.request
+import uuid
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+pytestmark = pytest.mark.image
+
+ROOT = Path(__file__).resolve().parents[2]
+IMAGE = os.environ.get("SWITCHBOARD_IMAGE") or ""
+ARTIFACTS = Path(os.environ.get("SWITCHBOARD_E2E_ARTIFACTS") or ROOT / "e2e-artifacts") / "image"
+# the proxy in front (the tag and the digest, as the Dockerfile pins its bases)
+CADDY = "caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
+CADDY_ROOT = "/data/caddy/pki/authorities/local/root.crt"
+# The docker CLI's env, taken at import (before the suite's clean-env fixture moves HOME to a
+# temp dir, where the CLI finds neither its config nor its context): what it needs to reach
+# the daemon, and nothing of any harness (tests/twohost does the same).
+DOCKER_ENV = {k: v for k, v in os.environ.items()
+              if k in ("PATH", "HOME", "USER", "LANG", "TMPDIR", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME")
+              or k.startswith("DOCKER_") or k.startswith("BUILDX_")}
+WAIT_S = 30.0
+LINK_RE = re.compile(r"https://sb\.test:\d+/login\?t=[A-Za-z0-9_-]+")
+
+
+def docker(*args: str, check: bool = True, timeout: float = 120.0) -> subprocess.CompletedProcess[str]:
+    r = subprocess.run(["docker", *args], capture_output=True, text=True, timeout=timeout, env=DOCKER_ENV)
+    if check and r.returncode != 0:
+        raise AssertionError(f"docker {' '.join(args)} -> {r.returncode}:\n{r.stdout[-3000:]}{r.stderr[-3000:]}")
+    return r
+
+
+def docker_missing() -> str | None:
+    if shutil.which("docker") is None:
+        return "no docker"
+    try:
+        r = subprocess.run(["docker", "info", "--format", "{{.ServerVersion}}"], capture_output=True, text=True,
+                           timeout=20, env=DOCKER_ENV)
+        return None if r.returncode == 0 else "the docker daemon isn't running"
+    except (OSError, subprocess.TimeoutExpired):
+        return "docker doesn't answer"
+
+
+def free_port() -> int:
+    s = socket.socket()
+    try:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+    finally:
+        s.close()
+
+
+def wait_for(what: str, fn: Any, timeout: float = WAIT_S) -> Any:
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            got = fn()
+            if got:
+                return got
+        except Exception:
+            if time.monotonic() > deadline:
+                raise
+        if time.monotonic() > deadline:
+            raise AssertionError(f"timed out waiting for {what}")
+        time.sleep(0.25)
+
+
+class Pinned(http.client.HTTPSConnection):
+    """https to ``sb.test`` for real (SNI, Host, the certificate checked against Caddy's CA),
+    with the name resolved to 127.0.0.1 here instead of by DNS."""
+
+    def connect(self) -> None:
+        sock = socket.create_connection(("127.0.0.1", self.port), self.timeout)
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)  # type: ignore[attr-defined]
+
+
+# ------------------------------------------------------------------ the stack
+class Stack:
+    """The image behind Caddy on a network of their own, with a named volume for /data."""
+
+    def __init__(self, image: str, work: Path) -> None:
+        self.image = image
+        self.work = work
+        tag = uuid.uuid4().hex[:8]
+        self.net = f"sbimg-{tag}"
+        self.volume = f"sbimg-{tag}"
+        self.broker = f"sbimg-broker-{tag}"
+        self.caddy = f"sbimg-caddy-{tag}"
+        self.port = free_port()  # the proxy's, on this machine and in the public URL
+        self.public = f"https://sb.test:{self.port}"
+        self.ca = work / "caddy-root.crt"
+        self.direct = 0  # the broker's own port, published on 127.0.0.1 (a platform's health check)
+
+    def up(self) -> "Stack":
+        docker("network", "create", self.net)
+        docker("volume", "create", self.volume)
+        docker("run", "-d", "--name", self.broker, "--network", self.net, "--network-alias", "switchboard",
+               "-v", f"{self.volume}:/data", "-p", "127.0.0.1::7419",
+               "-e", f"SWITCHBOARD_PUBLIC_URL={self.public}", self.image)
+        self.direct = int(docker("port", self.broker, "7419/tcp").stdout.split(":")[-1])
+        caddyfile = self.work / "Caddyfile"
+        caddyfile.write_text(
+            "{\n\tadmin off\n\tauto_https disable_redirects\n\tskip_install_trust\n}\n\n"
+            f"https://sb.test:{self.port} {{\n\ttls internal\n\treverse_proxy switchboard:7419\n}}\n")
+        docker("create", "--name", self.caddy, "--network", self.net, "-p", f"127.0.0.1:{self.port}:{self.port}",
+               CADDY)
+        docker("cp", str(caddyfile), f"{self.caddy}:/etc/caddy/Caddyfile")
+        docker("start", self.caddy)
+        wait_for("Caddy's local CA", lambda: docker("cp", f"{self.caddy}:{CADDY_ROOT}", str(self.ca)))
+        wait_for("the broker's /healthz", lambda: self.healthz() == "ok\n")
+        wait_for("the proxy", lambda: self.https("GET", "/healthz")[0] == 200)
+        return self
+
+    def down(self) -> None:
+        for c in (self.caddy, self.broker):
+            docker("rm", "-f", "-v", c, check=False)
+        docker("volume", "rm", "-f", self.volume, check=False)
+        docker("network", "rm", self.net, check=False)
+
+    def healthz(self) -> str:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(f"http://127.0.0.1:{self.direct}/healthz", timeout=5) as r:
+            return r.read().decode()
+
+    def https(self, method: str, path: str, headers: dict[str, str] | None = None,
+              body: str | None = None) -> tuple[int, Any, str]:
+        c = Pinned("sb.test", self.port, context=ssl.create_default_context(cafile=str(self.ca)), timeout=10)
+        try:
+            c.request(method, path, body=body, headers=headers or {})
+            r = c.getresponse()
+            return r.status, r.headers, r.read().decode(errors="replace")
+        finally:
+            c.close()
+
+    def cli(self, *args: str, tty: bool = False) -> str:
+        """`switchboard …` in the container, as `docker exec` runs it (as root: the image's
+        switchboard drops to the unprivileged user)."""
+        return docker("exec", *(["-t"] if tty else []), self.broker, "switchboard", *args).stdout
+
+    def login_link(self) -> str:
+        m = LINK_RE.search(self.cli("login", tty=True))  # a sign-in link needs a terminal
+        assert m, "no sign-in link"
+        return m.group(0)
+
+    def session(self) -> str:
+        """A signed-in session's Cookie header, from a fresh link followed through the proxy."""
+        status, headers, _ = self.https("GET", self.login_link().removeprefix(self.public))
+        assert status == 303
+        return headers["set-cookie"].split(";")[0]
+
+    def create_room(self, cookie: str, name: str) -> None:
+        """Through the proxy, as the page does: rooms are created from a web session only
+        (`switchboard create` says so)."""
+        status, _, body = self.https("POST", "/api/rooms", {
+            "Cookie": cookie, "Origin": self.public, "X-Switchboard": "1", "Content-Type": "application/json",
+        }, json.dumps({"name": name}))
+        assert status == 200, body
+
+
+@pytest.fixture(scope="module")
+def image() -> str:
+    why = docker_missing()
+    if why:
+        pytest.skip(why)
+    if IMAGE:
+        docker("image", "inspect", IMAGE)
+        return IMAGE
+    docker("build", "-t", "switchboard:test", str(ROOT), timeout=1200.0)
+    return "switchboard:test"
+
+
+@pytest.fixture(scope="module")
+def stack(image: str, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stack]:
+    s = Stack(image, tmp_path_factory.mktemp("image"))
+    try:
+        yield s.up()
+    except BaseException:
+        print(docker("logs", s.broker, check=False).stdout[-3000:])
+        raise
+    finally:
+        s.down()
+
+
+# ----------------------------------------------------------------------- tests
+def test_it_refuses_to_start_without_a_public_url(image: str) -> None:
+    r = docker("run", "--rm", image, check=False)
+    assert r.returncode == 1
+    assert "listening on 0.0.0.0 needs --public-url" in r.stderr
+
+
+def test_it_runs_as_the_unprivileged_user_and_answers_health_checks(stack: Stack) -> None:
+    # every process of the container (tini, the broker) runs as the switchboard user
+    pids = docker("exec", stack.broker, "sh", "-c",
+                  "for p in /proc/[0-9]*; do [ \"${p#/proc/}\" = $$ ] || grep -H '^Uid:' $p/status; done").stdout
+    uids = re.findall(r"^/proc/(\d+)/status:Uid:\s+(\d+)", pids, re.M)
+    assert ("1", "10001") in uids and all(uid == "10001" for pid, uid in uids if pid != "1") and len(uids) >= 2
+    # its home: the user's own and private, on the volume
+    assert docker("exec", stack.broker, "stat", "-c", "%u %a", "/data/switchboard").stdout.split() == ["10001", "700"]
+    # /healthz on the container's own port, with no Host of the public URL; and Docker's check
+    assert stack.healthz() == "ok\n"
+    wait_for("Docker's health check",
+             lambda: docker("inspect", "-f", "{{.State.Health.Status}}", stack.broker).stdout.strip() == "healthy",
+             timeout=60.0)
+    # anything else at the container's own address is refused (only the public URL's Host)
+    try:
+        urllib.request.build_opener(urllib.request.ProxyHandler({})).open(f"http://127.0.0.1:{stack.direct}/")
+        raise AssertionError("the UI answered without the public URL's Host")
+    except urllib.error.HTTPError as e:
+        assert e.code == 421 and e.read().decode() == f"open {stack.public}/\n"
+
+
+def test_sign_in_and_the_ui_over_https(stack: Stack, playwright: Any) -> None:
+    """Through the proxy: the page, its CSP (wss to the public URL only), a one-time link that
+    sets a Secure cookie, then the real UI in Chromium, connected over wss, with a message."""
+    status, headers, body = stack.https("GET", "/")
+    assert status == 200 and "switchboard login" in body
+    assert f"connect-src 'self' wss://sb.test:{stack.port};" in headers["content-security-policy"]
+    link = stack.login_link()
+    assert link.startswith(f"{stack.public}/login?t=")
+    status, headers, _ = stack.https("GET", link.removeprefix(stack.public))
+    assert status == 303
+    cookie = [p.strip().lower() for p in headers["set-cookie"].split(";")]
+    assert "secure" in cookie and "httponly" in cookie and "samesite=strict" in cookie
+
+    problems: list[str] = []
+    browser = playwright.chromium.launch(args=["--host-resolver-rules=MAP sb.test 127.0.0.1"])
+    try:
+        # Caddy's local CA isn't in Chromium's trust store; the check above verified the chain
+        ctx = browser.new_context(ignore_https_errors=True, viewport={"width": 1280, "height": 760},
+                                  timezone_id="UTC", locale="en-US")
+        page = ctx.new_page()
+        page.on("console", lambda m: problems.append(f"console {m.type}: {m.text}") if m.type == "error" else None)
+        page.on("pageerror", lambda e: problems.append(f"page error: {e}"))
+        page.goto(stack.login_link())
+        page.wait_for_selector("#st-conn:text-is('Connected')", timeout=15_000)
+        assert page.url == f"{stack.public}/"
+        created = page.evaluate("""async () => (await fetch('/api/rooms', {method: 'POST',
+            headers: {'X-Switchboard': '1', 'Content-Type': 'application/json'},
+            body: JSON.stringify({name: '#smoke'})})).status""")
+        assert created == 200  # the browser's own Origin, the public one, passed the check
+        stack.cli("say", "#smoke", "hello from **inside the container**: this page came through the proxy over https")
+        page.click('#tabs .room[data-room="#smoke"]')
+        page.wait_for_selector("#log .line.k-chat:has-text('inside the container')", timeout=15_000)
+        ARTIFACTS.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(ARTIFACTS / "ui-over-https.png"))
+        ctx.close()
+    finally:
+        browser.close()
+    assert not problems, problems
+
+
+def test_a_clean_stop_and_the_data_across_a_restart(stack: Stack) -> None:
+    stack.create_room(stack.session(), "#kept")
+    t0 = time.monotonic()
+    docker("stop", "-t", "10", stack.broker)
+    assert time.monotonic() - t0 < 8  # stopped by SIGTERM, not killed at the timeout
+    assert docker("inspect", "-f", "{{.State.ExitCode}}", stack.broker).stdout.strip() == "0"
+    assert "broker stopped" in docker("logs", stack.broker).stdout
+    docker("start", stack.broker)
+    stack.direct = int(docker("port", stack.broker, "7419/tcp").stdout.split(":")[-1])
+    wait_for("the restarted broker", lambda: stack.healthz() == "ok\n")
+    assert "#kept" in stack.cli("rooms")
+
+
+@pytest.mark.parametrize("platform", ["render", "kubernetes"])
+def test_the_volumes_platforms_mount(image: str, platform: str) -> None:
+    """A Render disk is root's (0755): the container starts as root and makes its home in it.
+    A Kubernetes volume with fsGroup 10001 is root:10001, 2770, and the pod runs as 10001 from
+    the start (with the manifest's securityContext): the broker makes its home itself. Either
+    way it starts twice (a redeploy)."""
+    tag = uuid.uuid4().hex[:8]
+    vol, name = f"sbimg-{platform}-{tag}", f"sbimg-{platform}-{tag}"
+    mode = "0:0 755" if platform == "render" else "0:10001 2770"
+    owner, perms = mode.split()
+    try:
+        docker("volume", "create", vol)
+        docker("run", "--rm", "-v", f"{vol}:/data", "--entrypoint", "sh", image, "-c",
+               f"chown {owner} /data && chmod {perms} /data")
+        # Kubernetes as deploy/kubernetes/switchboard.yaml runs it: the user from the start, a
+        # read-only root filesystem with /tmp an emptyDir, no capabilities, no privilege escalation
+        user = [] if platform == "render" else [
+            "--user", "10001:10001", "--read-only", "--tmpfs", "/tmp", "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges"]
+        for boot in (1, 2):
+            docker("run", "-d", "--name", name, *user, "-v", f"{vol}:/data",
+                   "-e", "SWITCHBOARD_PUBLIC_URL=https://sb.example.com", image)
+            wait_for(f"boot {boot}", lambda: "broker up" in docker("logs", name).stdout)
+            got = docker("exec", name, "stat", "-c", "%u %a", "/data/switchboard").stdout.split()
+            assert got[0] == "10001" and got[1] in ("700", "2700"), got  # 2700: the fsGroup's setgid, inherited
+            docker("stop", "-t", "10", name)
+            assert docker("inspect", "-f", "{{.State.ExitCode}}", name).stdout.strip() == "0"
+            docker("rm", name)
+    finally:
+        docker("rm", "-f", name, check=False)
+        docker("volume", "rm", "-f", vol, check=False)

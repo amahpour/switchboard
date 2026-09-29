@@ -112,6 +112,10 @@ class SecurityCfg:
 class Config:
     human_name: str = field(default_factory=default_human_name)
     port: int = 7419
+    # the web UI's listen address and public URL (DESIGN.md §30; `start --listen/--public-url`):
+    # loopback and http://switchboard.localhost:<port> unless both are set
+    listen: str = "127.0.0.1"
+    public_url: str = ""
     delivery: DeliveryCfg = field(default_factory=DeliveryCfg)
     claude: ClaudeCfg = field(default_factory=ClaudeCfg)
     codex: CodexCfg = field(default_factory=CodexCfg)
@@ -178,7 +182,7 @@ def _section(cls: type, data: Any, where: str) -> Any:
 
 def from_dict(data: dict[str, Any]) -> Config:
     top = {k: v for k, v in data.items() if k not in _SECTIONS}
-    unknown = sorted(set(top) - {"human_name", "port"})
+    unknown = sorted(set(top) - {"human_name", "port", "listen", "public_url"})
     if unknown:
         raise ConfigError(f"unknown top-level key(s): {', '.join(unknown)}")
     kwargs: dict[str, Any] = {}
@@ -192,6 +196,11 @@ def from_dict(data: dict[str, Any]) -> Config:
         if isinstance(port, bool) or not isinstance(port, int) or not (0 <= port <= 65535):
             raise ConfigError("port must be an integer in 0..65535")
         kwargs["port"] = port
+    for key in ("listen", "public_url"):  # checked when the broker starts (daemon.web_settings)
+        if key in top:
+            if not isinstance(top[key], str):
+                raise ConfigError(f"{key} must be a string")
+            kwargs[key] = top[key]
     for key, cls in _SECTIONS.items():
         if key in data:
             kwargs[key] = _section(cls, data[key], key)

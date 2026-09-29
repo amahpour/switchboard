@@ -422,6 +422,7 @@ def build_methods(state: "BrokerState") -> dict[str, MethodSpec]:
             "version": __version__,
             "pid": state.info.pid,
             "port": state.info.port,
+            "url": state.info.url,
             "test_mode": state.test_mode,
         }
 
