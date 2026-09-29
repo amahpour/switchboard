@@ -160,3 +160,93 @@ def test_readonly_connection_cannot_write(tmp_path: Path) -> None:
     assert ro.execute("SELECT COUNT(*) FROM rooms").fetchone()[0] == 0
     with pytest.raises(sqlite3.OperationalError):
         ro.execute("INSERT INTO meta VALUES('x','y')")
+
+
+# ------------------------------------------ the pre-delete backup (DESIGN.md §28.6)
+def _room(name: str, rid: int):
+    from switchboard.models import Room
+
+    return Room(id=rid, name=name, created_at=0.0, created_by="alice", paused=False, paused_reason=None,
+                budget_per_hour=60, budget_remaining=60, budget_window_start=0.0, budget_notice_window=None,
+                hop_count=0, hop_limit=6, last_msg_at=None)
+
+
+def _with_remote(p: Path) -> sqlite3.Connection:
+    con = db.open_db(p)
+    con.execute("INSERT INTO remotes(name, config_hash) VALUES('fpga-pi', ?)", ("0" * 64,))
+    return con
+
+
+def test_delete_backup_path(tmp_path: Path) -> None:
+    p = tmp_path / "switchboard.db"
+    assert db.delete_backup_path(p, _room("#build~closed-7", 7)) == tmp_path / "switchboard.db.delete-build-7.bak"
+    assert db.delete_backup_path(str(p), _room("#a_b-c", 3)) == tmp_path / "switchboard.db.delete-a_b-c-3.bak"
+
+
+def test_backup_of_every_table(tmp_path: Path) -> None:
+    con = _with_remote(tmp_path / "switchboard.db")
+    to = db.delete_backup_path(tmp_path / "switchboard.db", _room("#build~closed-7", 7))
+    dest, counts = db.backup_verified(con, to, tables=db.TABLES, what="pre-delete backup")
+    assert dest == to and tuple(counts) == db.TABLES and counts["remotes"] == 1
+    assert (os.stat(dest).st_mode & 0o777) == 0o600
+    b = sqlite3.connect(dest)
+    assert b.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+    assert db.integrity_ok(b) is None and db.row_counts(b, db.TABLES) == counts
+    b.close()
+    # the default is still the version-1 tables (the migration's two-argument call)
+    _, v1 = db.backup_verified(con, tmp_path / "v1.bak")
+    assert tuple(v1) == db.V1_TABLES
+
+
+def test_pre_delete_backup_is_never_overwritten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    con = _with_remote(tmp_path / "switchboard.db")
+    monkeypatch.setattr(db.time, "time", lambda: 1_790_000_000.0)
+    to = db.delete_backup_path(tmp_path / "switchboard.db", _room("#build", 7))
+    to.write_bytes(b"kept")
+    got = [db.backup_verified(con, to, tables=db.TABLES, what="pre-delete backup")[0] for _ in range(2)]
+    assert [g.name for g in got] == ["switchboard.db.delete-build-7.bak.1790000000",
+                                     "switchboard.db.delete-build-7.bak.1790000000-1"]
+    assert to.read_bytes() == b"kept"
+
+
+def test_backup_errors_name_what_it_is(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    con = _with_remote(tmp_path / "switchboard.db")
+    to = tmp_path / "switchboard.db.delete-build-7.bak"
+    kw = {"tables": db.TABLES, "what": "pre-delete backup"}
+    # the copy fails its integrity check
+    with monkeypatch.context() as m:
+        m.setattr(db, "integrity_ok", lambda c: "row 3 missing from index")
+        with pytest.raises(db.SchemaError, match=r"^the pre-delete backup switchboard\.db\.delete-build-7\.bak"
+                                                 r" failed its integrity check: row 3 missing from index$"):
+            db.backup_verified(con, to, **kw)
+    assert not to.exists()  # a bad copy is not left behind as a backup
+    # the copy's counts differ (the second row_counts call is the copy's)
+    real, calls = db.row_counts, {"n": 0}
+
+    def counts(c: sqlite3.Connection, tables: tuple[str, ...] = db.V1_TABLES) -> dict[str, int]:
+        calls["n"] += 1
+        out = real(c, tables)
+        if calls["n"] == 2:
+            out["remotes"] -= 1
+        return out
+
+    with monkeypatch.context() as m:
+        m.setattr(db, "row_counts", counts)
+        with pytest.raises(db.SchemaError, match=r"^the pre-delete backup \S+ does not match the database"):
+            db.backup_verified(con, to, **kw)
+    assert not to.exists()
+    # every name is taken
+
+    def taken(*a: object, **k: object) -> int:
+        raise FileExistsError
+
+    with monkeypatch.context() as m:
+        m.setattr(db.os, "open", taken)
+        with pytest.raises(db.SchemaError, match=r"^no free name for the pre-delete backup next to"
+                                                 r" switchboard\.db\.delete-build-7\.bak$"):
+            db.backup_verified(con, to, **kw)
+    # the migration's wording is the default
+    with monkeypatch.context() as m:
+        m.setattr(db.os, "open", taken)
+        with pytest.raises(db.SchemaError, match="no free name for the migration backup"):
+            db.backup_verified(con, to)

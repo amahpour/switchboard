@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import asyncio
 
+import time
+
 from switchboard.broker import hub as H
 from switchboard.broker.hub import Hub, WsSubscriber
+from switchboard.broker.rpc import TailSubscriber
 
 
 def test_publish_only_to_subscribed_rooms() -> None:
@@ -87,3 +90,60 @@ def test_sender_stops_on_close_sentinel() -> None:
 
     sent, closed = asyncio.run(run())
     assert sent == ['{"t": "pong"}'] and closed == [1008]
+
+
+class _Conn:
+    """What a TailSubscriber writes to: an RPC connection's push queue."""
+
+    closed = False
+
+    def __init__(self) -> None:
+        self.pushed: list[tuple[str, dict]] = []
+
+    def push(self, kind: str, data: dict) -> None:
+        self.pushed.append((kind, data))
+
+
+def test_drop_room_unsubscribes_everyone_from_that_room() -> None:
+    """A closed or deleted room (DESIGN.md §28): a room created again under its name never
+    streams into an old web page or tail."""
+    h = Hub()
+    ws, other = WsSubscriber(), WsSubscriber()
+    ws.rooms, other.rooms = {"#build", "#lab"}, {"#lab"}
+    conn = _Conn()
+    tail = TailSubscriber(conn, "#build")  # type: ignore[arg-type]
+    for s in (ws, other, tail):
+        h.add(s)
+    assert h.message("#build", {"id": 1}) == 2
+    h.drop_room("#build")
+    assert ws.rooms == {"#lab"} and other.rooms == {"#lab"} and tail.rooms == set()
+    assert h.message("#build", {"id": 2}) == 0
+    assert h.message("#lab", {"id": 3}) == 2
+    assert [d["msg"]["id"] for _, d in conn.pushed] == [1]
+    assert not ws.closed and not tail.closed  # still connected, only quieter
+    assert h.notice(None, "warn", "#build deleted") == 3
+    h.drop_room("#nobody")  # unknown: nothing to do
+
+
+def test_drop_room_cancels_its_pending_frames() -> None:
+    async def run() -> tuple[list[str], list[str], dict, dict]:
+        h = Hub()
+        members: list[str] = []
+        settings: list[str] = []
+        h.set_members_source(lambda room: members.append(room) or [])
+        h.set_settings_source(lambda room: settings.append(room) or {})
+        h.members_changed("#build")
+        h.settings_changed("#build")
+        h.members_changed("#lab")  # scheduled after #build's, so it fires after them
+        handles = (h._members_pending["#build"], h._settings_pending["#build"])
+        h.drop_room("#build")
+        assert all(x.cancelled() for x in handles)
+        pending = (dict(h._members_pending), dict(h._settings_pending))
+        deadline = time.monotonic() + 5
+        while "#lab" not in members and time.monotonic() < deadline:
+            await asyncio.sleep(0.02)
+        return members, settings, *pending
+
+    members, settings, mp, sp = asyncio.run(run())
+    assert list(mp) == ["#lab"] and sp == {}
+    assert members == ["#lab"] and settings == []
