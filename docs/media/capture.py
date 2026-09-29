@@ -53,27 +53,19 @@ PROJECT = ALICE / "project"       # the repo the agents work in
 CODEX_SOCK = DEMO / "cx.sock"     # the private Codex app-server (short: sun_path)
 TERM_W, TERM_H = 84, 26
 VIEW_W, VIEW_H, DPR = 860, 540, 2
-TASK = ("@claude-1 @codex-1 parse_port needs input validation. claude-1: implement it in portparse.py. "
-        "codex-1: write stdlib unittest tests in test_portparse.py and run them. Agree on the exact rules here "
-        "first, then work it out between you until the tests pass. Both of you work in this checkout.")
+TASK = ("@claude-1 write fizzbuzz.py (1 to 15). @codex-1 run it and tell @claude-1 one thing to improve. "
+        "@claude-1 make that change, then @codex-1 check it. One short line per message.")
 TOKEN_RE = re.compile(r"(login\?t=)[A-Za-z0-9_-]+")
 ANSI_RE = re.compile(r"\x1b\[[0-9;:]*[A-Za-z]")
 CODEX_READY = "Ask Codex to do anything"
 # with accept-edits, Claude may not edit any harness's project config or git's own files (as in m7_demo.py),
-# and may run only the tests and read-only git
+# and may run only the script it writes and read-only git
 CLAUDE_DENY = ["Edit(.claude/**)", "Edit(.devin/**)", "Edit(.codex/**)", "Edit(.git/**)", "Bash(git diff --output:*)"]
-CLAUDE_BASH_ALLOW = ["Bash(python3 -m unittest:*)", "Bash(python -m unittest:*)", "Bash(git diff:*)",
+CLAUDE_BASH_ALLOW = ["Bash(python3 fizzbuzz.py:*)", "Bash(python fizzbuzz.py:*)", "Bash(git diff:*)",
                      "Bash(git status:*)", "Bash(git log:*)"]
 APPROVAL = re.compile(r"(Do you want to proceed|Would you like to run|Allow command|approve this|\[y/n\])", re.I)
 
-PORTPARSE = '''"""Parse a TCP port from user input."""
-
-
-def parse_port(text: str) -> int:
-    """Return the port number in ``text``, e.g. "8080" -> 8080."""
-    return int(text.strip())
-'''
-README = "# portparse\n\nA tiny library that parses TCP port numbers from user input.\n"
+README = "# fizzbuzz\n\nPractice project.\n"
 
 
 def log(*a: Any) -> None:
@@ -225,11 +217,10 @@ class Demo:
         self.bin.mkdir()
         (self.bin / "claude").symlink_to(os.path.realpath(self.claude))
         (self.bin / "codex").symlink_to(self.codex)
-        (PROJECT / "portparse.py").write_text(PORTPARSE)
         (PROJECT / "README.md").write_text(README)
         genv = clean_env(self.path, GIT_AUTHOR_NAME="alice", GIT_AUTHOR_EMAIL="alice@example.com",
                          GIT_COMMITTER_NAME="alice", GIT_COMMITTER_EMAIL="alice@example.com")
-        for cmd in (["git", "init", "-q"], ["git", "add", "-A"], ["git", "commit", "-qm", "portparse"]):
+        for cmd in (["git", "init", "-q"], ["git", "add", "-A"], ["git", "commit", "-qm", "fizzbuzz"]):
             subprocess.run(cmd, cwd=PROJECT, env=genv, check=True)
         # the broker reads Claude's session registry from your real Claude home, and talks to
         # the private Codex app-server, never your daemon
@@ -491,7 +482,7 @@ class Demo:
         assert self.cdp is not None
         for i, ch in enumerate(TASK):
             self.cdp.call("Input.insertText", text=ch)
-            if i % 6 == 5:
+            if i % 4 == 3:
                 self.shot("typing")
         self.shot("typed")
         time.sleep(0.6)

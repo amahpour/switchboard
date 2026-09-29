@@ -338,9 +338,19 @@ def neutral(c: tuple[int, int, int] | None) -> bool:
 
 
 def draw_terminal(img: Image.Image, box: tuple[int, int, int, int], screen: str, title: str,
-                  rows: tuple[int, int] | None = None, cols: int = 84) -> None:
-    """A terminal window at `box`, showing `rows` (start, end) of the recorded screen."""
+                  rows: tuple[int, int] | None = None, cols: int = 84, fit: bool = False) -> None:
+    """A terminal window at `box`, showing `rows` (start, end) of the recorded screen; with
+    `fit`, the window is only as tall as the lines it shows (at least 6), centred in `box`."""
     x0, y0, x1, y1 = box
+    if fit:
+        shown = screen.rstrip("\n").split("\n")
+        shown = shown[rows[0]:rows[1]] if rows is not None else shown
+        n = max(len([x for x in shown if strip(x).strip()]) + 1, 6)
+        size = max(10, int((x1 - x0 - 36) / cols / 0.6021))
+        h = 34 + 24 + n * int(size * 1.22)
+        y0 = y0 + max((y1 - y0 - h) // 2, 0)
+        y1 = y0 + h
+        box = (x0, y0, x1, y1)
     d = ImageDraw.Draw(img)
     d.rounded_rectangle(box, radius=10, fill=TERM_BG, outline=RULE, width=2)
     d.rounded_rectangle((x0, y0, x1, y0 + 34), radius=10, fill=TITLEBAR)
@@ -516,12 +526,16 @@ def end_card(tag: str, _t: float) -> Image.Image:
 # work worth showing in an agent's own terminal, as its harness prints it: (pattern, caption)
 WORK = {
     # (the tool bullet blinks while a call runs, so it may be missing from a frame)
-    "claude": [(re.compile(r"^(?:[●⏺]\s*)?Update\((\S+?)\)$"), "{who} edits {0} in its own session"),
-               (re.compile(r"^(?:[●⏺]\s*)?Write\((\S+?)\)$"), "{who} writes {0} in its own session"),
-               (re.compile(r"^(?:[●⏺]\s*)?Bash\((python3? -m (?:unittest|pytest)\b[^)]*)\)"), "{who} runs the tests")],
-    "codex": [(re.compile(r"^(?:•\s*)?Added (\S+) \(\+\d+ -\d+\)"), "{who} writes {0} in its own session"),
-              (re.compile(r"^(?:•\s*)?Edited (\S+) \(\+\d+ -\d+\)"), "{who} edits {0} in its own session"),
-              (re.compile(r"^(?:•\s*)?Ran (python3? -m (?:unittest|pytest)\b.*)"), "{who} runs the tests")],
+    "claude": [(re.compile(r"^(?:[●⏺]\s*)?Update\((\S+?)\)$"), "{who} edits {0}"),
+               (re.compile(r"^(?:[●⏺]\s*)?Write\((\S+?)\)$"), "{who} writes {0}"),
+               (re.compile(r"^(?:[●⏺]\s*)?Bash\(python3? -m (?:unittest|pytest)\b[^)]*\)"), "{who} runs the tests"),
+               (re.compile(r"^(?:[●⏺]\s*)?Bash\(python3? (\S+\.py)\b[^)]*\)"), "{who} runs {0}"),
+               # a long diff can push its Update(...) header off a short pane: its added lines still show
+               (re.compile(r"^\d+ \+\S"), "{who} makes the change")],
+    "codex": [(re.compile(r"^(?:•\s*)?Added (\S+) \(\+\d+ -\d+\)"), "{who} writes {0}"),
+              (re.compile(r"^(?:•\s*)?Edited (\S+) \(\+\d+ -\d+\)"), "{who} edits {0}"),
+              (re.compile(r"^(?:•\s*)?Ran python3? -m (?:unittest|pytest)\b.*"), "{who} runs the tests"),
+              (re.compile(r"^(?:•\s*)?Ran python3? (\S+\.py)\b.*"), "{who} runs {0}")],
 }
 
 
@@ -530,24 +544,30 @@ def work_events(c: Capture, after: float) -> list[tuple[float, str, str, float]]
     test run, from the first time its line shows."""
     out: list[tuple[float, str, str, float]] = []
     for pane, who in (("claude", "claude-1"), ("codex", "codex-1")):
-        seen: set[str] = set()
+        before: set[str] = set()           # matched lines on the previous screen
+        last: dict[str, float] = {}        # when each line last appeared
         for t, text in c.terms.get(pane, []):
-            if t <= after:
-                continue
+            now: set[str] = set()
             for line in strip(text).split("\n"):
                 for rx, cap in WORK[pane]:
-                    s = line.strip().lstrip("●⏺• ")
                     m = rx.match(line.strip())
-                    if m and s not in seen:
-                        seen.add(s)
+                    if not m:
+                        continue
+                    s = line.strip().lstrip("●⏺• ")
+                    now.add(s)
+                    # a line that just appeared (again, for a second run of the same command)
+                    if t > after and s not in before and t - last.get(s, -99.0) > 5:
                         shown = [u for u, x in c.terms[pane] if t <= u <= t + 0.9 and s in strip(x)]
                         out.append((t, who, cap.format(*m.groups(), who=who), max(shown) - t))
+                    if s not in before:
+                        last[s] = t
+            before = now
     # two events of one agent within 3 s show as one: a test run over an edit
     out.sort()
     merged: list[tuple[float, str, str, float]] = []
     for ev in out:
         if merged and merged[-1][1] == ev[1] and ev[0] - merged[-1][0] < 3:
-            if "runs the tests" in ev[2]:
+            if " runs " in ev[2]:
                 merged[-1] = ev
             continue
         merged.append(ev)
@@ -559,12 +579,12 @@ def build_scenes(c: Capture, gif: bool = False) -> list[Scene]:
     area = (140, 24, W - 140, H - CAPTION_H - 20)
 
     def term_scene(pane: str, title: str, tmap: Callable[[float], float], step: str, text: str,
-                   window: Callable[[str, float], tuple[int, int] | None] | None = None,
+                   window: Callable[[str, float], tuple[int, int] | None] | None = None, fit: bool = False,
                    ) -> Callable[[float], Image.Image]:
         def draw(t: float) -> Image.Image:
             img = canvas()
             scr = c.term(pane, tmap(t))
-            draw_terminal(img, area, scr, title, window(scr, t) if window else None)
+            draw_terminal(img, area, scr, title, window(scr, t) if window else None, fit=fit)
             caption(img, step, text)
             return img
         return draw
@@ -585,25 +605,36 @@ def build_scenes(c: Capture, gif: bool = False) -> list[Scene]:
     if not gif:
         sc.append(Scene("title", 2.4, title_card("switchboard", "a group chat for you and your coding agents",
                                                  "Claude Code · Codex · Cursor · Devin")))
-        # 1-4: install, register, start, sign in: quickly
+        # 1-3: install, register, start: each command as typed, then only the last lines it
+        # printed (uv's package list and install's diff scroll past unseen)
+        def from_line(pattern: str, n: int, before: int = 0) -> Callable[[str, float], tuple[int, int] | None]:
+            """Rows from the line matching `pattern` (and `before` rows above it), `n` in all."""
+            rx = re.compile(pattern)
+
+            def window(scr: str, _t: float) -> tuple[int, int] | None:
+                lines = [strip(x) for x in scr.rstrip("\n").split("\n")]
+                hit = next((i for i, x in enumerate(lines) if rx.search(x)), None)
+                return None if hit is None else (max(hit - before, 0), max(hit - before, 0) + n)
+            return window
+
         t_start = c.marks["start"]
         t_typed = c.when("term", r"switchboard@v\d", t_start)
         t_inst = c.when("term", r"Installed 1 executable", t_start)
         sc.append(Scene("install", 2.6, term_scene("term", "Terminal", timemap(
-            [(0, t_start), (1.2, t_typed + 0.4), (2.1, t_inst), (2.6, t_inst + 0.1)]),
-            "1", "Install switchboard from GitHub")))
+            [(0, t_start), (1.3, t_typed + 0.4), (1.35, t_inst), (2.6, t_inst + 0.1)]),
+            "1", "Install switchboard", window=from_line(r"Installed 1 executable", 3, before=1), fit=True)))
         r0, _ = c.scenes["register"]
-        t_ask = c.when("term", r"Apply\? \[y/N\]\s*$", r0)
-        t_sum = c.when("term", r"summary:", t_ask)
-        sc.append(Scene("register", 3.4, term_scene("term", "Terminal", timemap(
-            [(0, r0), (0.6, t_ask - 0.2), (1.5, t_ask), (2.1, t_ask + 1.9), (2.6, t_sum),
-             (3.4, last_frame("term", "register"))]),
-            "2", "Register it with your agents: it shows the diff and asks first")))
+        t_reg_typed = c.when("term", r"\$ switchboard install all", r0)
+        t_sum = last_frame("term", "register")
+        sc.append(Scene("register", 2.8, term_scene("term", "Terminal", timemap(
+            [(0, r0), (1.0, t_reg_typed + 0.3), (1.05, t_sum), (2.8, t_sum)]),
+            "2", "Register it with your agents (it shows the changes and asks first)",
+            window=from_line(r"^summary:", 6), fit=True)))
         s0, _ = c.scenes["start"]
         t_link = c.when("term", r"login\?t=", s0)
-        sc.append(Scene("start", 2.0, term_scene("term", "Terminal", timemap(
-            [(0, s0), (0.8, t_link), (2.0, t_link + 0.2)]),
-            "3", "Start it and open the sign-in link")))
+        sc.append(Scene("start", 2.2, term_scene("term", "Terminal", timemap(
+            [(0, s0), (0.9, t_link), (2.2, t_link + 0.2)]),
+            "3", "Start it and open the sign-in link", fit=True)))
         t_in, t_room = c.first("signed-in"), c.first("room")
         sc.append(Scene("signin", 2.0, lambda t: browser(
             c.shot(t_in if t < 0.9 else t_room, ("signed-in", "room")), WINDOW, "4", "Create a room")))

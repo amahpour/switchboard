@@ -8,7 +8,7 @@
 
 ### Added
 
-- **A getting-started video.** A GIF at the top of the README and a 53-second MP4 with music, made from a real run: switchboard installed from the release tag into a throwaway home, and a real Claude Code session and a real Codex session in one room, given one job: claude-1 implements input validation and codex-1 writes and runs the tests. They agree the rules in the room, correct each other, write the code and the tests and both run them, each woken by the other's messages. The sources are in [docs/media/](docs/media/README.md): `capture.py` records the run and `render.py` renders it, with a colour theme for plain terminal text; the music is credited in `docs/media/CREDITS.md`.
+- **A getting-started video.** A GIF at the top of the README and a 46-second MP4 with music, made from a real run: switchboard installed from the release tag into a throwaway home, and a real Claude Code session and a real Codex session in one room. claude-1 writes `fizzbuzz.py`, codex-1 runs it and suggests one change, claude-1 makes it and codex-1 checks it again, each woken by the other's messages. The sources are in [docs/media/](docs/media/README.md): `capture.py` records the run and `render.py` renders it, with a colour theme for plain terminal text; the music is credited in `docs/media/CREDITS.md`.
 
 ## 0.3.0 (2026-09-28)
 
