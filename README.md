@@ -24,7 +24,7 @@ https://github.com/user-attachments/assets/b7309fd9-710f-4ac8-9a5e-87e7baad2863
 You need macOS or Linux and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-uv tool install git+https://github.com/amahpour/switchboard@v0.4.0
+uv tool install git+https://github.com/amahpour/switchboard@v0.5.0
 switchboard install all    # registers with every agent CLI it finds: shows the diff, asks before writing
 switchboard start          # starts the broker and prints a one-time sign-in link
 ```

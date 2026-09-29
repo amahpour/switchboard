@@ -2,10 +2,17 @@
 
 ## Unreleased
 
+### Changed
+
+- **A new demo video** at the top of the README, recorded as screen video on the new UI: Codex reviews this repository's own #14, Claude Code (which wrote it) defends it, and they settle it before the human reads it. Narrated. `docs/media/record.py` records it and `edit.py` cuts it, replacing the snapshot-based `capture.py` and `render.py`.
+
+## 0.5.0 (2026-09-29)
+
 A new web UI ([#19](https://github.com/amahpour/switchboard/issues/19), [DESIGN.md §29](docs/DESIGN.md#29-the-native-web-ui-and-the-inspector-19)): a native-looking three-column layout in light and dark, Markdown in messages, and an Inspector for each agent.
 
 ### Added
 
+- **A tab icon.** The browser tab (and a phone's home screen) shows switchboard's mark, the sidebar's own glyph, on its blue tile. `favicon.svg` is the source; `docs/media/make_icons.py` makes the 32 px PNG and the 180 px Apple touch icon from it, and `/favicon.ico` now serves the 32 px icon instead of an empty answer.
 - **The Inspector.** Click an agent (in Members, or its name on a message) to see what needs attention (approvals off, parked, waiting for approval), its session id, when it joined and was last seen, its queued messages, its last few deliveries, and Hold/Release, Catch up on… and Kick buttons (the same commands you can type). It reads a new human-only, read-only route, `GET /api/rooms/{room}/members/{name}`, which returns message ids and times, never message text; the broadcast `members` frame is unchanged.
 - **Markdown in messages**, yours and the agents': headings, bold, italic, inline code, fenced code blocks with a Copy button, lists, block quotes, tables, rules and links. Raw HTML and images stay plain text; a link opens in a new tab with no referrer and shows its real address, and anything that isn't `http(s)`, carries a user name or password (`https://github.com@evil.example/`), or points back at this switchboard page or another local address, is shown as blocked text. A bare URL links whole, even with `__init__`, `*` or `@name` in it. A small renderer (`md.js`) builds DOM nodes only, with one vetted place that sets a link.
 - **A command palette** (`/` in the composer) and **@mention suggestions** (`@`), a first-run page with the three steps and the once-per-harness notes, and a join hint in an empty room.
@@ -13,12 +20,14 @@ A new web UI ([#19](https://github.com/amahpour/switchboard/issues/19), [DESIGN.
 - **Agents are told they may reply in Markdown** (room rule 5, the `say` tool's description and the MCP instructions): code blocks, lists and tables, no raw HTML or images.
 - **Screenshots** of the UI in `docs/media/ui/`, made by `docs/media/ui_shots.py` (Playwright's Chromium) against a seeded test broker in a temporary home.
 - **Browser tests for the web UI** (`tests/e2e/`, marker `e2e`, opt-in with `-m e2e`): Playwright drives the page in headless Chromium against a seeded test broker, and fails a test on any console error, page error or CSP violation, keeping a trace and screenshots when one fails. A new `frontend` CI job runs them, regenerates the screenshots, and uploads both. See CONTRIBUTING.md.
+- **Colour in the CLI** ([#28](https://github.com/amahpour/switchboard/issues/28), docs/USAGE.md "Colour"): on a terminal, the `install`/`uninstall` diffs, `tail`, `status`, `who`, `remote status` and doctor, and `report` colour switchboard's own framing (diff markers, nicks, state words, headings, fired rules). Text from agents, remotes and config files is cleaned of escape codes first and never coloured by what it says. `--color auto|always|never` on every command; plain in pipes, files and `--json`, with `NO_COLOR` or `TERM=dumb`; `FORCE_COLOR`/`CLICOLOR_FORCE` force it.
+- **`switchboard report` drops control characters** from the strings it reads from the database (a model name a hook reported, for example), in markdown and JSON alike.
 - **The node tests can't be skipped in CI:** `SWITCHBOARD_REQUIRE_NODE=1` turns a missing `node` from a skip into a failure, and the pytest jobs install node 22 and set it.
 
 ### Changed
 
-- **A new demo video** at the top of the README, recorded as screen video on the new UI: Codex reviews this repository's own #14, Claude Code (which wrote it) defends it, and they settle it before the human reads it. Narrated. `docs/media/record.py` records it and `edit.py` cuts it, replacing the snapshot-based `capture.py` and `render.py`.
-
+- **Every merge to `main` is a release** ([#33](https://github.com/amahpour/switchboard/issues/33)). PR titles follow Conventional Commits and PRs are squash-merged. `feat:` releases a minor version and anything else a patch. This Unreleased section becomes each release's notes, and a `release` job in CI sets the version, moves the install pins, tags and publishes. CONTRIBUTING.md, "Releases".
+- **CI runs the test suite as three shards per OS** (pytest-split, balanced by the durations in `.test_durations`), each with xdist on its runner's cores, instead of one runner per OS, and combines the coverage of all six. Locally the suite still runs whole with `-n auto` (CONTRIBUTING.md, "Shards in CI").
 - **The web UI's look:** a sidebar with rooms, **Closed (n)**, remote machines and your connection state; the room's status as header chips (Running/Paused, budget, hops, approvals off) with a pause button; Members in a right pane. Every feature of the old UI is kept, and the element ids the tests and `docs/media/capture.py` use were updated. **+ Room** is now the **+** button in the sidebar; notices lose their `***` prefix.
 - **The MCP instructions** no longer say "(the human)" after "your user", to stay under their size cap.
 - The package description now reads "A local group chat where you and your coding agents talk and hand work to each other".

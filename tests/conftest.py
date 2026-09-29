@@ -83,6 +83,9 @@ def sanitize_env(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempP
     fake_home = tmp_path_factory.mktemp("home")
     monkeypatch.setenv("HOME", str(fake_home))
     monkeypatch.delenv("SWITCHBOARD_HOME", raising=False)
+    # the CLI's colour switches (issue #28): output is plain unless a test asks for colour
+    for k in ("NO_COLOR", "FORCE_COLOR", "CLICOLOR_FORCE"):
+        monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("SWITCHBOARD_TEST", "1")
     # Only switchboard.config's view of the login name: getpass itself stays real.
     monkeypatch.setattr(switchboard.config, "getpass", types.SimpleNamespace(getuser=lambda: TEST_HUMAN))
@@ -298,7 +301,11 @@ class InProcBroker:
         return self.call("human.login_link")["url"]
 
     def web_client(self) -> httpx.Client:
-        c = httpx.Client(base_url=self.base, timeout=10.0, follow_redirects=False)
+        # An idle connection is dropped after 1 s, well before uvicorn closes it (5 s,
+        # timeout_keep_alive): reusing one the server was closing at that moment got
+        # "Connection reset by peer" on a POST, which httpx doesn't retry (seen on a slow runner).
+        c = httpx.Client(base_url=self.base, timeout=10.0, follow_redirects=False,
+                         limits=httpx.Limits(keepalive_expiry=1.0))
         r = c.get(self.login_url().removeprefix(self.base))
         assert r.status_code == 303, r.text
         return c
