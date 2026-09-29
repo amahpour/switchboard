@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.1 (2026-09-29)
+
 ### Fixed
 
 - **A release can't leave a tag off `main` any more.** The release job pushes `main` and the new tag with `git push --atomic`, so they land together or not at all. When another merge lands while the job runs, it pushes nothing and says so, and that merge's run releases both. Before, `main` was refused but the tag went out anyway: `v0.6.0` first pointed at a release commit that never reached `main`, and had to be deleted by hand. `release.py` also counts only tags on `main`'s history as the last release.
