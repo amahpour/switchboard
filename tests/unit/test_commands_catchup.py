@@ -5,7 +5,7 @@ session exactly (harness, the harness's own id, host) with one window start, and
 ordinary human chat message that @mentions the agent, with fixed rules and a fixed protocol
 first. The subjects get no delivery of it. switchboard never looks for or runs a
 session-history tool.
-``/review <reviewer> <author> [note]`` is its alias until 0.4.
+``/review``, its alias in 0.3, was removed in 0.4.
 """
 
 from __future__ import annotations
@@ -191,7 +191,6 @@ def test_an_unquoted_topic_is_a_member_name_error(svc: RoomService) -> None:
                                                 ' quotes: /catchup codex-1 on "sprint cleanup")')
     assert refused(svc, "/catchup codex-1 on claud-1").message == "no such member in #build: claud-1"
     assert refused(svc, "/catchup codex-1 on claude-2 pick it apart").message == "no such member in #build: claude-2"
-    assert refused(svc, "/review codex-1 sprint cleanup").message == "no such member in #build: sprint"
 
 
 def test_double_slash_catchup_is_literal_text(svc: RoomService) -> None:
@@ -205,7 +204,7 @@ def test_double_slash_catchup_is_literal_text(svc: RoomService) -> None:
     assert events(svc) == [] and notices(svc) == ["#build created by alice"]
 
 
-@pytest.mark.parametrize("text", ["/catchup codex-1 on claude-1", "/review codex-1 claude-1"])
+@pytest.mark.parametrize("text", ["/catchup codex-1 on claude-1", "/catchup codex-1"])
 def test_role_is_human_cli(svc: RoomService, text: str) -> None:
     room = svc.room("#build")
     cmd = parse_command(text)
@@ -228,7 +227,7 @@ def test_help_lists_catchup_with_the_four_examples() -> None:
     ]
     i = lines.index(examples[0])
     assert lines[i:i + 4] == examples
-    assert "  /review <agent> <member> [note]" in lines and "agentsview" not in HELP_TEXT
+    assert "/review" not in HELP_TEXT and "agentsview" not in HELP_TEXT
     # every example parses as what it says
     assert [parse_command(x.strip().split("  ")[0]).args[1] for x in examples] == ["member", "topic", "room", "member"]
     # none of /catchup's lines wraps in an 80-column terminal (`switchboard cmd '#room' /help`)
@@ -236,57 +235,13 @@ def test_help_lists_catchup_with_the_four_examples() -> None:
     assert max(len(x) for x in lines[start:i + 4]) < 80
 
 
-# --------------------------------------------------------------- the alias
-@pytest.mark.parametrize(
-    "text,args",
-    [
-        ("/review codex-1 claude-1", ("codex-1", "member", "claude-1", "review it critically")),
-        ("  /REVIEW @Codex-1 @claude-1  ", ("codex-1", "member", "claude-1", "review it critically")),
-        ("/review codex-1 claude-1 focus on   the parser",
-         ("codex-1", "member", "claude-1", "review it critically: focus on the parser")),
-        ("/review codex-1 claude-1 ​‮", ("codex-1", "member", "claude-1", "review it critically")),
-    ],
-)
-def test_parse_review(text: str, args: tuple[str, ...]) -> None:
-    c = parse_command(text)
-    assert (c.name, c.args) == ("review", args)
-
-
-@pytest.mark.parametrize(
-    "text,msg",
-    [
-        ("/review", "usage: /review <reviewer> <author> [note]"),
-        ("/review codex-1", "usage: /review <reviewer> <author> [note]"),
-        ("/review 1abc claude-1", "/review: not a valid screen name"),
-        ("/review claude-1 @Claude-1 please", "/review: the reviewer and the author must be two different members"),
-    ],
-)
-def test_parse_review_errors(text: str, msg: str) -> None:
+# ------------------------------------------------------- the old alias
+@pytest.mark.parametrize("text", ["/review codex-1 claude-1", "  /REVIEW @Codex-1 @claude-1 focus  ", "/review"])
+def test_review_was_removed_in_0_4_and_points_at_catchup(text: str) -> None:
     with pytest.raises(CommandError) as e:
         parse_command(text)
-    assert (e.value.code, e.value.message) == ("bad_request", msg)
-
-
-def test_review_is_an_alias_that_says_it_is_deprecated(svc: RoomService, clock: FakeClock) -> None:
-    rev = agent(svc, "codex-1", "codex", TID)
-    author = agent(svc, "claude-1", "claude", SID)
-    res = svc.command("#build", "/review codex-1 claude-1 check the parser", WEB)
-    lines = res["text"].splitlines()
-    assert lines[0] == "/review is now /catchup; the alias goes away in 0.4"
-    assert lines[1] == f"asked codex-1 to catch up on claude-1's work since {catchup.when(clock.now() - DAY)}; it got:"
-    [msg] = chat(svc)
-    h = handle("claude-1", "claude", SID)
-    assert msg.text == request("codex-1", "member", [h], clock.now() - DAY,
-                               note="review it critically: check the parser")
-    # the same request /catchup posts with that note
-    assert svc.command("#build", "/catchup codex-1 on claude-1 review it critically: check the parser",
-                       WEB)["ok"]
-    assert chat(svc)[-1].text == msg.text
-    assert set(deliveries(svc, msg.id)) == {rev} and author not in deliveries(svc, msg.id)
-    ev = events(svc)
-    assert [e.get("alias") for e in ev] == [None, "review"]  # newest first
-    assert ev[1] == {"via": "web", "agent": rev, "mode": "member", "subjects": [author], "with_id": 1,
-                     "message_id": msg.id, "alias": "review"}
+    assert (e.value.code, e.value.message) == (
+        "bad_request", "/review was removed in 0.4: use /catchup <agent> on <member> review it critically")
 
 
 # ---------------------------------------------------------- handle mapping
@@ -608,7 +563,7 @@ def test_members_must_be_in_the_room(svc: RoomService) -> None:
     agent(svc, "codex-1", "codex", TID)
     kicked = agent(svc, "claude-1", "claude", SID)
     for text, who in (("/catchup codex-9 on claude-1", "codex-9"), ("/catchup alice on claude-1", "alice"),
-                      ("/catchup codex-9", "codex-9"), ("/review codex-1 claude-9", "claude-9")):
+                      ("/catchup codex-9", "codex-9"), ("/catchup codex-1 on claude-9", "claude-9")):
         e = refused(svc, text)
         assert (e.code, e.message) == ("not_found", f"no such member in #build: {who}")
     svc.store.end_membership(kicked, "kick", kicked=True)
@@ -627,12 +582,6 @@ def test_a_note_that_does_not_fit_is_refused(svc: RoomService, clock: FakeClock)
                                                   f" at most {fits} fit in one message)")
     assert svc.command("#build", "/catchup codex-1 on claude-1 " + "n" * fits, WEB)["ok"]
     assert len(chat(svc)[-1].text) == svc.cfg.delivery.max_msg_chars  # never truncated, and fits exactly
-    # the alias counts only what the human typed as the note
-    review_base = request("codex-1", "member", [h], clock.now() - DAY, note="review it critically: x")
-    rfits = svc.cfg.delivery.max_msg_chars - (len(review_base) - 1)
-    e = refused(svc, "/review codex-1 claude-1 " + "n" * (rfits + 1))
-    assert e.message == f"/review: the note is too long ({rfits + 1} characters; at most {rfits} fit in one message)"
-    assert svc.command("#build", "/review codex-1 claude-1 " + "n" * rfits, WEB)["ok"]
 
 
 def test_a_limit_below_the_request_blames_the_limit(tmp_path: Path, clock: FakeClock) -> None:
@@ -645,9 +594,6 @@ def test_a_limit_below_the_request_blames_the_limit(tmp_path: Path, clock: FakeC
         e = refused(s, text)
         assert (e.code, e.message) == ("bad_request", f"/catchup: its request needs {need} characters, but"
                                                       " [delivery] max_msg_chars is 500")
-    need = len(request("codex-1", "member", [h], clock.now() - DAY, max_chars=500, note="review it critically"))
-    e = refused(s, "/review codex-1 claude-1")
-    assert e.message == f"/review: its request needs {need} characters, but [delivery] max_msg_chars is 500"
 
 
 def test_a_note_mentioning_a_subject_says_it_wont_get_it(svc: RoomService) -> None:
@@ -800,12 +746,12 @@ def test_cli_cmd_keeps_a_quoted_topic_and_dash_words(monkeypatch: pytest.MonkeyP
 
     assert run("--home", "/nonexistent", "cmd", "#build", "/catchup", "codex-1", "on", "claude-1", "check",
                "--from", "-n", "handling") == 0
-    assert run("cmd", "--home", "/nonexistent", "#build", "--", "review", "codex-1", "claude-1", "--limit") == 0
+    assert run("cmd", "--home", "/nonexistent", "#build", "--", "catchup", "codex-1", "on", "claude-1", "--limit") == 0
     assert run("cmd", "#build", "/catchup", "codex-1", "on", "sprint cleanup", "what we dropped") == 0
     assert run("cmd", "#build", '/catchup codex-1 on "sprint cleanup"') == 0  # one word: as it is
     assert run("cmd", "#build", "/catchup", "codex-1", "on", 'say "hi" now') == 0  # has a quote: as it is
     assert [x["text"] for x in sent] == ["/catchup codex-1 on claude-1 check --from -n handling",
-                                         "/review codex-1 claude-1 --limit",
+                                         "/catchup codex-1 on claude-1 --limit",
                                          '/catchup codex-1 on "sprint cleanup" "what we dropped"',
                                          '/catchup codex-1 on "sprint cleanup"',
                                          '/catchup codex-1 on say "hi" now']

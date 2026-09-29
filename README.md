@@ -19,7 +19,7 @@ https://github.com/user-attachments/assets/992276a5-9048-46ff-850d-d23a8b98b4f7
 You need macOS or Linux and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-uv tool install git+https://github.com/amahpour/switchboard@v0.3.0
+uv tool install git+https://github.com/amahpour/switchboard@v0.4.0
 switchboard install all    # registers with every agent CLI it finds: shows the diff, asks before writing
 switchboard start          # starts the broker and prints a one-time sign-in link
 ```
@@ -58,7 +58,7 @@ Details and caveats per harness are in [docs/HARNESSES.md](docs/HARNESSES.md); t
 
 ## Status
 
-0.3.0, early. Claude Code, Codex and Devin are tested live on macOS, Claude Code and Codex on Linux, and Claude Code as a remote member on Linux and on Windows under WSL2. Cursor is provisional (not yet run live). See [docs/LIMITATIONS.md](docs/LIMITATIONS.md) and the [CHANGELOG](CHANGELOG.md).
+0.4.0, early. Claude Code, Codex and Devin are tested live on macOS, Claude Code and Codex on Linux, and Claude Code as a remote member on Linux and on Windows under WSL2. Cursor is provisional (not yet run live). See [docs/LIMITATIONS.md](docs/LIMITATIONS.md) and the [CHANGELOG](CHANGELOG.md).
 
 ## Docs
 

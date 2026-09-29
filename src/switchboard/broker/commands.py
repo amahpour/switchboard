@@ -4,9 +4,9 @@ Reachable only through ``human.command`` over the UDS (peer-checked) or an
 authenticated web session. An agent's ``say("/pause")`` is stored literally
 and never parsed. Commands that reduce activity need ``human_cli``; commands
 that raise it need ``human`` (the web session, or test trust). ``/catchup``
-(§26, and ``/review``, its alias until 0.4) posts one chat message as the human,
-so it needs what ``switchboard say`` needs: ``human_cli``. ``/close`` (§28.3) ends every
-membership, so it reduces activity: ``human_cli``.
+(§26) posts one chat message as the human, so it needs what ``switchboard say``
+needs: ``human_cli`` (``/review``, its alias in 0.3, was removed in 0.4).
+``/close`` (§28.3) ends every membership, so it reduces activity: ``human_cli``.
 """
 
 from __future__ import annotations
@@ -47,8 +47,6 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
     /catchup codex-1 on "sprint cleanup"        on a topic, across the room
     /catchup codex-1                            on the room since it joined
     /catchup codex-1 on claude-1 pick it apart  plus a critical second opinion
-  /review <agent> <member> [note]
-                      old name of /catchup <agent> on <member> (until 0.4)
   /who                list members
   /status             room and delivery status
   /help               this list
@@ -57,7 +55,7 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
 _NO_ARGS = frozenset({"pause", "resume", "who", "status", "help", "close"})
 _ONE_NAME = frozenset({"kick", "hold", "release"})
 _ONE_NUMBER = {"budget": MAX_BUDGET, "hops": MAX_HOPS}  # /name [n], 0 <= n <= max
-KNOWN = _NO_ARGS | _ONE_NAME | set(_ONE_NUMBER) | {"catchup", "review"}
+KNOWN = _NO_ARGS | _ONE_NAME | set(_ONE_NUMBER) | {"catchup"}
 
 _STATIC_ROLES = {
     "pause": "human_cli",
@@ -70,8 +68,11 @@ _STATIC_ROLES = {
     "status": "human_cli",
     "help": "human_cli",
     "catchup": "human_cli",  # posts a human chat message, like `switchboard say`
-    "review": "human_cli",  # the /catchup alias
 }
+
+
+# /review was /catchup's alias in 0.3 (§26); a human who types it from habit gets the new form
+REVIEW_REMOVED = "/review was removed in 0.4: use /catchup <agent> on <member> review it critically"
 
 
 class CommandError(Exception):
@@ -122,13 +123,13 @@ def parse_command(text: str) -> Command:
     if not parts:
         raise CommandError("bad_request", "empty command; try /help")
     name, args = parts[0].lower(), tuple(parts[1:])
+    if name == "review":
+        raise CommandError("bad_request", REVIEW_REMOVED)
     if name not in KNOWN:
         raise CommandError("bad_request", f"unknown command /{name}; try /help")
     if name == "catchup":
         # parsed from the raw text: a quoted topic keeps its spaces
         return _parse_catchup(raw[1:].split(None, 1)[1] if args else "", raw)
-    if name == "review":
-        return _parse_review(args, raw)
     if name in _NO_ARGS and args:
         raise CommandError("bad_request", f"/{name} takes no arguments")
     if name in _ONE_NAME:
@@ -214,18 +215,6 @@ def _parse_catchup(text: str, raw: str) -> Command:
         raise CommandError("bad_request", "/catchup: an agent can't catch up on itself; name another member")
     note = catchup.clean_text(parts[1]) if len(parts) > 1 else ""
     return Command(name="catchup", args=(agent, "member", member, note), raw=raw)
-
-
-def _parse_review(args: tuple[str, ...], raw: str) -> Command:
-    """``/review <reviewer> <author> [note...]``, the alias of ``/catchup <reviewer> on <author>
-    review it critically[: note]`` (until 0.4). Same ``args`` as ``/catchup``."""
-    if len(args) < 2:
-        raise CommandError("bad_request", "usage: /review <reviewer> <author> [note]")
-    reviewer, author = _screen_name("review", args[0]), _screen_name("review", args[1])
-    if reviewer == author:
-        raise CommandError("bad_request", "/review: the reviewer and the author must be two different members")
-    note = catchup.review_note(catchup.clean_text(" ".join(args[2:])))
-    return Command(name="review", args=(reviewer, "member", author, note), raw=raw)
 
 
 def hops_raise(new: int, old: int) -> bool:
@@ -338,7 +327,7 @@ def _hops_set(room: Room, n: int, svc: "RoomService") -> Result:
 def _catchup(cmd: Command, room: Room, svc: "RoomService") -> Result:
     """Check the names, name each subject's session, and hand back the request to post
     (§26). Nothing is posted or recorded here: ``RoomService.command`` posts it as an
-    ordinary human message. Also ``/review`` (the alias), whose reply says so first."""
+    ordinary human message."""
     agent_name, mode, target, note = cmd.args
     members = svc.store.members(room.id)
     by_name = {m.name.lower(): m for m in members}
@@ -365,22 +354,16 @@ def _catchup(cmd: Command, room: Room, svc: "RoomService") -> Result:
                for m in subjects]
     topic = target if mode == "topic" else ""
     limit = svc.cfg.delivery.max_msg_chars
-    # the alias's fixed "review it critically" is part of what the request needs; the rest
-    # of the note is what the human typed
-    fixed, own = "", note
-    if cmd.name == "review":
-        fixed = catchup.REVIEW_NOTE
-        own = note[len(fixed) + 2:]  # after "review it critically: "; '' when there is none
-    base = catchup.request_text(agent.name, mode, handles, since=since, max_chars=limit, topic=topic, note=fixed)
+    base = catchup.request_text(agent.name, mode, handles, since=since, max_chars=limit, topic=topic, note="")
     text = catchup.request_text(agent.name, mode, handles, since=since, max_chars=limit, topic=topic, note=note)
     if len(base) > limit:
         raise CommandError("bad_request", f"/{cmd.name}: its request needs {len(base)} characters, but"
                                           f" [delivery] max_msg_chars is {limit}")
     if len(text) > limit:
-        fits = limit - (len(text) - len(own))
-        raise CommandError("bad_request", f"/{cmd.name}: the note is too long ({len(own)} characters;"
+        fits = limit - (len(text) - len(note))
+        raise CommandError("bad_request", f"/{cmd.name}: the note is too long ({len(note)} characters;"
                                           f" at most {fits} fit in one message)")
-    lines = [catchup.REVIEW_DEPRECATED] if cmd.name == "review" else []
+    lines: list[str] = []
     what = {"member": f"{subjects[0].name}'s work", "topic": f'"{topic}" across {len(handles)} session(s)',
             "room": "what the room did"}[mode]
     lines.append(f"asked {agent.name} to catch up on {what} since {catchup.when(since)}; it got:")
@@ -398,8 +381,6 @@ def _catchup(cmd: Command, room: Room, svc: "RoomService") -> Result:
     data: dict[str, Any] = {"agent": agent.membership_id, "mode": mode,
                   "subjects": [m.membership_id for m in subjects],
                   "with_id": sum(1 for h in handles if h.sid)}
-    if cmd.name == "review":
-        data["alias"] = "review"
     return Result(
         True,
         "\n".join(lines),
@@ -474,7 +455,7 @@ def apply(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
             return Result(True, _hops_show(room, svc.cfg.human_name))
         # Never un-pauses: a room the loop guard paused still needs /resume.
         return _hops_set(room, int(cmd.args[0]), svc)
-    if name in ("catchup", "review"):
+    if name == "catchup":
         return _catchup(cmd, room, svc)
     # one-name commands
     target = cmd.args[0]
