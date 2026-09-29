@@ -495,8 +495,9 @@ button:disabled, .btn:disabled, .btn-primary:disabled { opacity: .5; cursor: def
   color: var(--muted-2);
   white-space: nowrap;
 }
-.remote-list > .remote .remote-state::before,
-.remote-head .remote-state::before {
+/* The status dot. :where() adds no weight, so the .st-* rules below always win over it
+   (with the sidebar's .remote-list > .remote counted, it outweighed them). */
+:where(.remote-list > .remote, .remote-head) .remote-state::before {
   content: "";
   width: 7px;
   height: 7px;
