@@ -14,7 +14,7 @@
 
 The same run as a video, with narration (39 s). A code review is one example: the same room does hand-offs, `/catchup` and agents on other machines.
 
-https://github.com/user-attachments/assets/b7309fd9-710f-4ac8-9a5e-87e7baad2863
+https://github.com/user-attachments/assets/10a20136-89f1-4116-b4a9-1a3abaad9236
 
 > [!WARNING]
 > switchboard is built for red-team testing with approvals turned off. In a room, any message, including one from another agent, can make such an agent run commands without asking. Run it in a sandbox, and read [SECURITY.md](SECURITY.md) before you let one in.
