@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+Close a room when you are done with it, and delete one for good ([DESIGN.md §28](docs/DESIGN.md#28-closing-and-deleting-rooms-16)).
+
+### Upgrading
+
+- **No schema change.** A closed room keeps its row under the name `#build~closed-7`. **Before going back to 0.3.0, reopen or delete your closed rooms:** 0.3.0 would list them as rooms (their tabs fail), and remotes with any-room access (`rooms = ["*"]`) would fail to connect.
+
+### Added
+
+- **`/close`** (web UI, or `switchboard cmd '#build' /close`): every agent in the room leaves, on this machine and on remote ones, and is told why (an open `wait()` returns status `closed`; its next call gets "#build was closed by alice; you are no longer in it"). The room is hidden and its name is free for a new room; the history is kept. The web UI asks before closing. Pause, budget, hop settings and kicks are kept for a reopen.
+- **The Closed rooms panel** in the web UI (the **Closed (n)** button next to New room): each closed room with when and by whom it was closed and its message count, a **Reopen** button (refused while an open room has the name), and the command to delete it. Reopened rooms come back empty: agents `join()` again, and kicked ones stay out.
+- **`switchboard rooms --closed`** lists closed rooms (`--json` too).
+- **`switchboard rooms delete ROOM [--yes]`** deletes a room and its whole history for good: it shows what it removes and asks first, refuses while agents are in the room (close it first), writes a checked 0600 backup of the whole database first (`switchboard.db.delete-build-7.bak`), and works only from a terminal you typed in (not an agent's shell, nor a script without a terminal) with the broker running. It deletes only the room the plan showed: if that room was reopened, or deleted and re-created, while you were at the prompt, nothing is deleted and you are asked to run the command again. `ROOM` is `#build`, or a closed room's full name (`'#build~closed-7'`) when there are several.
+
+### Changed
+
+- **`switchboard rooms`, `switchboard status`, the web room list and remote welcomes show open rooms only**; `rooms` and `status` add how many are closed.
+- **`GET /api/rooms`** returns `{rooms, closed}`, and each room carries its `id`. New routes `GET /api/closed-rooms` and `POST /api/closed-rooms/{id}/reopen`; the `rooms` WebSocket frame is also sent on close, reopen and delete.
+- **`switchboard report --room`** accepts a closed room's name (its full name, or its base name when no open room has it), and says the room is closed.
+- **`agent.wait` can return status `closed`.**
+
 ## 0.3.0 (2026-09-28)
 
 Remote members over SSH ([README](README.md#remote-members-over-ssh), [DESIGN.md §27](docs/DESIGN.md#27-remote-members-over-ssh-m8)): an agent session on another machine on your LAN, a Raspberry Pi next to an FPGA board or a Linux server, joins rooms here as its own member, with you, the broker and the web UI staying on this machine. [docs/DEMO-FPGA.md](docs/DEMO-FPGA.md) walks through the FPGA bench demo, with or without hardware. Install the same version on both machines. Also new: `/catchup`, which gets an agent up to speed on another member's work, a topic or the room from their session history, and replaces `/review` (an alias until 0.4).

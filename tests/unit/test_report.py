@@ -543,3 +543,87 @@ def test_report_reads_v1_and_v2(tmp_path: Path) -> None:
     # everything else reads the same as before the migration
     strip = [{k: v for k, v in a.items() if k != "host"} for a in rep2["agents"]]
     assert strip == [{k: v for k, v in a.items() if k != "host"} for a in rep1["agents"]]
+
+
+# ------------------------------------------------------ closed rooms (#16)
+def close_by_hand(w: World, room_id: int, *, by: str | None = "alice", event: bool = True) -> str:
+    """What ``/close`` leaves in the database: members ended with reason ``closed``, a
+    ``room_close`` event and the row renamed ``#x~closed-<id>`` (DESIGN.md §28.2)."""
+    from switchboard.models import closed_room_name
+
+    room = w.store.room_by_id(room_id)
+    assert room is not None
+    mids = [m.membership_id for m in w.store.members(room_id)]
+    for mid in mids:
+        w.store.end_membership(mid, "closed", keep_cred=True)
+    closed = closed_room_name(room.name, room.id)
+    if event:
+        w.store.add_event("room_close", room_id=room_id,
+                          data={"name": room.name, "closed_name": closed, "members": mids,
+                                **({"by": by} if by is not None else {})})
+    w.store.rename_room(room_id, closed, expect=room.name)
+    return closed
+
+
+def test_a_closed_room_by_its_base_name(w: World, clock: FakeClock) -> None:
+    w.agent("claude-1")
+    w.human("hi")
+    clock.advance(5)
+    closed = close_by_hand(w, w.room.id)
+    rep = build(w)
+    assert rep["room"] == "#build"
+    assert rep["closed"] == {"name": closed, "at": report.iso(clock.now()), "by": "alice"}
+    assert row(rep["agents"], name="claude-1")["status_now"] == "left (closed)"
+    md = report.render_markdown(rep)
+    assert md.startswith("# switchboard report: #build (closed)\n")
+    assert f" Closed {rep['closed']['at']} by alice (internal name `{closed}`)." in md
+    # by its full name, too; an open room has no closed block
+    assert report.build(w.store.con, closed, now=clock.now())["closed"]["name"] == closed
+    w.store.create_room("#other", "alice", 10, 3)
+    rep_open = report.build(w.store.con, "#other", now=clock.now())
+    assert rep_open["closed"] is None
+    md_open = report.render_markdown(rep_open)
+    assert "(closed)" not in md_open and "internal name" not in md_open
+
+
+def test_a_closed_room_without_its_close_event(w: World, clock: FakeClock) -> None:
+    close_by_hand(w, w.room.id, event=False)
+    rep = build(w)
+    assert rep["closed"]["at"] is None and rep["closed"]["by"] is None
+    assert " Closed n/a by n/a (internal name `#build~closed-" in report.render_markdown(rep)
+
+
+def test_two_closed_rooms_with_one_name_are_ambiguous(w: World) -> None:
+    first = close_by_hand(w, w.room.id)
+    again = w.store.create_room("#build", "alice", 10, 3)
+    second = close_by_hand(w, again.id)
+    with pytest.raises(report.ReportError) as e:
+        build(w)
+    assert f"{second}, {first}" in str(e.value) and "full name" in str(e.value)
+    assert report.build(w.store.con, first)["closed"]["name"] == first
+
+
+def test_an_open_room_wins_over_a_closed_one(w: World, clock: FakeClock) -> None:
+    old = close_by_hand(w, w.room.id)
+    new = w.store.create_room("#build", "alice", 10, 3)
+    rep = build(w)
+    assert rep["room"] == "#build" and rep["closed"] is None
+    assert report.build(w.store.con, old, now=clock.now())["closed"]["name"] == old
+    assert w.store.get_room("#build") == new
+    with pytest.raises(report.ReportError, match="no room #build~closed-99"):
+        report.build(w.store.con, "#build~closed-99")
+
+
+def test_cli_reports_a_closed_room(tmp_path: Path, clock: FakeClock, capsys: pytest.CaptureFixture[str]) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    w = World(home, clock)
+    closed = close_by_hand(w, w.room.id)
+    w.store.con.close()
+    (home / "y.db").rename(home / "switchboard.db")
+    assert main(["report", "--room", "#build", "--home", str(home)]) == 0
+    out = capsys.readouterr().out
+    assert "# switchboard report: #build (closed)" in out and closed in out
+    assert main(["report", "--room", closed.upper(), "--home", str(home), "--json"]) == 0
+    got = json.loads(capsys.readouterr().out)
+    assert got["room"] == "#build" and got["closed"]["name"] == closed

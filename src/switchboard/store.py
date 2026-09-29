@@ -16,6 +16,7 @@ from switchboard import db
 from switchboard.clock import Clock, SystemClock
 from switchboard.models import (
     LOCAL_HOST,
+    ROOM_RE,
     WATCHDOG_DONE,
     Batch,
     Event,
@@ -26,11 +27,16 @@ from switchboard.models import (
     Participant,
     RemoteRow,
     Room,
+    room_ref,
+    split_closed,
     valid_host,
 )
 from switchboard.models import session_key as make_session_key
 
 OPEN_DELIVERY_STATES = ("pending", "offered", "in_context")
+# What deleting a room removes (DESIGN.md §28.6): the keys of ``room_delete_counts`` and
+# of ``delete_room``'s result. Participants are never deleted.
+ROOM_DELETE_TABLES = ("rooms", "messages", "memberships", "deliveries", "batches", "events")
 CONFIG_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 REASON_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 
@@ -45,6 +51,15 @@ class Conflict(StoreError):
 
 class NotFound(StoreError):
     pass
+
+
+class Ambiguous(StoreError):
+    """A room reference that names several closed rooms (``resolve_room``): ``names``,
+    newest first."""
+
+    def __init__(self, message: str, names: list[str]):
+        super().__init__(message)
+        self.names = names
 
 
 class Store:
@@ -79,9 +94,132 @@ class Store:
         r = self.con.execute("SELECT * FROM rooms WHERE id=?", (room_id,)).fetchone()
         return Room.from_row(r) if r else None
 
-    def list_rooms(self) -> list[Room]:
-        rows = self.con.execute("SELECT * FROM rooms ORDER BY name").fetchall()
+    def list_rooms(self, *, closed: bool = False) -> list[Room]:
+        """The open rooms by name; with ``closed``, the closed ones instead, newest first
+        (DESIGN.md §28.2: only a closed room's name contains '~')."""
+        if closed:
+            rows = self.con.execute("SELECT * FROM rooms WHERE instr(name, '~')>0 ORDER BY id DESC").fetchall()
+        else:
+            rows = self.con.execute("SELECT * FROM rooms WHERE instr(name, '~')=0 ORDER BY name").fetchall()
         return [Room.from_row(r) for r in rows]
+
+    def count_closed_rooms(self) -> int:
+        return int(self.con.execute("SELECT COUNT(*) FROM rooms WHERE instr(name, '~')>0").fetchone()[0])
+
+    def closed_rooms(self, base: str) -> list[Room]:
+        """The closed rooms that were ``base`` (an open room's name), newest first. ``substr``,
+        not LIKE: '_' in a room name is a LIKE wildcard."""
+        prefix = base + "~closed-"
+        rows = self.con.execute(
+            "SELECT * FROM rooms WHERE substr(name, 1, ?)=? ORDER BY id DESC", (len(prefix), prefix)
+        ).fetchall()
+        out = [Room.from_row(r) for r in rows]
+        return [r for r in out if r.closed and r.display_name == base]
+
+    def resolve_room(self, ref: str) -> Room:
+        """A room the human named (``report --room``, ``rooms delete``; DESIGN.md §28.5): a
+        closed room's full name is that room; else an open room of that name wins; else
+        the one closed room that had it. Several: Ambiguous. Raises InvalidName, NotFound."""
+        n = room_ref(ref)
+        room = self.get_room(n)
+        if room is not None:
+            return room  # a closed room's full name, or an open room (which wins)
+        if split_closed(n) is None:
+            closed = self.closed_rooms(n)
+            if len(closed) == 1:
+                return closed[0]
+            if closed:
+                names = [r.name for r in closed]
+                raise Ambiguous(f"{n} names {len(names)} closed rooms: {', '.join(names)}", names)
+        raise NotFound(f"no such room: {n}")
+
+    def rename_room(self, room_id: int, new_name: str, *, expect: str) -> Room:
+        """Close (``#x`` -> ``#x~closed-<id>``) or reopen a room, if it is still named
+        ``expect``: else Conflict (as when ``new_name`` is taken)."""
+        if not (ROOM_RE.fullmatch(new_name) or split_closed(new_name)):
+            raise ValueError(f"not a room name: {new_name!r}")
+        with db.tx(self.con):
+            try:
+                n = self.con.execute(
+                    "UPDATE rooms SET name=? WHERE id=? AND name=?", (new_name, room_id, expect)
+                ).rowcount
+            except sqlite3.IntegrityError:
+                raise Conflict(f"{new_name} already exists") from None
+            if n != 1:
+                raise Conflict(f"room {room_id} is not {expect}")
+            return self._room_or_raise(room_id)
+
+    def reopen_room(self, room_id: int) -> Room:
+        """A closed room gets its name back (DESIGN.md §28.4), and the credentials /close kept
+        (for its error text only) are cleared. NotFound unless the room exists and is closed;
+        Conflict while an open room holds the name. Nobody is re-added."""
+        with db.tx(self.con):
+            room = self.room_by_id(room_id)
+            if room is None or not room.closed:
+                raise NotFound(f"no closed room with id {room_id}")
+            if self.get_room(room.display_name) is not None:
+                raise Conflict(f"{room.display_name} is taken by an open room")
+            got = self.rename_room(room_id, room.display_name, expect=room.name)
+            self.con.execute(
+                "UPDATE memberships SET cred_hash=NULL WHERE room_id=? AND left_reason='closed'", (room_id,)
+            )
+        return got
+
+    def latest_close_event(self, room_id: int) -> Event | None:
+        """The last ``room_close`` of this room: who closed it and when."""
+        evs = self.recent_events(room_id=room_id, kinds=["room_close"], limit=1)
+        return evs[0] if evs else None
+
+    # The rows deleting a room removes (DESIGN.md §28.6), in delete order: children first.
+    # ``deliveries`` and ``events`` have no foreign key, so nothing else would catch an orphan.
+    _ROOM_MEMBERSHIPS = "SELECT id FROM memberships WHERE room_id=?"
+    _ROOM_ROWS = (
+        ("deliveries", f"deliveries WHERE membership_id IN ({_ROOM_MEMBERSHIPS})"
+                       " OR message_id IN (SELECT id FROM messages WHERE room_id=?)", 2),
+        ("batches", f"batches WHERE membership_id IN ({_ROOM_MEMBERSHIPS})", 1),
+        ("events", f"events WHERE room_id=? OR membership_id IN ({_ROOM_MEMBERSHIPS})", 2),
+        ("messages", "messages WHERE room_id=?", 1),
+        ("memberships", "memberships WHERE room_id=?", 1),
+        ("rooms", "rooms WHERE id=?", 1),
+    )
+
+    def room_delete_counts(self, room_id: int) -> dict[str, int]:
+        """What ``delete_room`` would remove now, per table (``ROOM_DELETE_TABLES``)."""
+        got = {t: int(self.con.execute(f"SELECT COUNT(*) FROM {where}", (room_id,) * n).fetchone()[0])
+               for t, where, n in self._ROOM_ROWS}
+        return {t: got[t] for t in ROOM_DELETE_TABLES}
+
+    def delete_room(self, room_id: int, *, name: str, created_at: float, expect_counts: dict[str, int],
+                    event: dict[str, Any]) -> dict[str, int]:
+        """Delete a room and every row that names it, in one transaction (DESIGN.md §28.6):
+        only while it is still ``name`` and ``created_at`` (ids may be reused, so a room
+        re-created after a delete can have the same id and name), has no active membership (on any host, online or
+        not) and the database still has the row counts its backup was checked against
+        (``expect_counts``, every table). Then the foreign keys and every table's count
+        are checked again; any failure rolls it all back. Records ``room_delete`` with
+        ``room_id`` NULL (ids may be reused). Returns the rows removed per table."""
+        with db.tx(self.con):
+            room = self.room_by_id(room_id)
+            if room is None or room.name != name or room.created_at != created_at:
+                raise Conflict(f"{name} changed since the plan")
+            members = self.room_memberships(room_id)
+            if members:
+                raise Conflict(f"{name} has {len(members)} agent(s)")
+            before = db.row_counts(self.con, db.TABLES)
+            if before != expect_counts:
+                raise Conflict("the database changed while its backup was made")
+            removed: dict[str, int] = {}
+            for t, where, n in self._ROOM_ROWS:
+                removed[t] = self.con.execute(f"DELETE FROM {where}", (room_id,) * n).rowcount
+            if self.con.execute("PRAGMA foreign_key_check").fetchall():
+                raise StoreError(f"deleting {name} would leave rows that point at it")
+            after = db.row_counts(self.con, db.TABLES)
+            want = {t: before[t] - removed.get(t, 0) for t in db.TABLES}
+            if after != want:
+                raise StoreError(f"deleting {name} changed other rows ({after} != {want})")
+            removed = {t: removed[t] for t in ROOM_DELETE_TABLES}
+            self.add_event("room_delete", room_id=None, data={**event, "removed": removed})
+        return removed
 
     def _room_or_raise(self, room_id: int) -> Room:
         room = self.room_by_id(room_id)
@@ -320,14 +458,19 @@ class Store:
                 (int(held), now if held else None, membership_id),
             )
 
-    def end_membership(self, membership_id: int, reason: str, *, kicked: bool = False) -> None:
-        """Leave, kick or session end: revoke the credential and open deliveries."""
+    def end_membership(self, membership_id: int, reason: str, *, kicked: bool = False,
+                       keep_cred: bool = False) -> None:
+        """Leave, kick or session end: revoke the credential and open deliveries.
+        ``keep_cred`` (``/close``, DESIGN.md §28.2) keeps the hash so the broker can name the
+        closed room in the error; it never authorizes again (every lookup that does wants
+        ``left_at IS NULL``)."""
         now = self.clock.now()
         with db.tx(self.con):
             self.con.execute(
-                "UPDATE memberships SET left_at=?, left_reason=?, cred_hash=NULL,"
+                "UPDATE memberships SET left_at=?, left_reason=?,"
+                " cred_hash=CASE WHEN ? THEN cred_hash ELSE NULL END,"
                 " kicked=MAX(kicked, ?) WHERE id=? AND left_at IS NULL",
-                (now, reason, int(kicked), membership_id),
+                (now, reason, int(keep_cred), int(kicked), membership_id),
             )
             self.con.execute(
                 "UPDATE deliveries SET state='revoked' WHERE membership_id=?"
@@ -800,6 +943,20 @@ class Store:
             "SELECT * FROM memberships WHERE cred_hash=? AND left_at IS NULL", (cred_hash,)
         ).fetchone()
         return Membership.from_row(r) if r else None
+
+    def closed_membership_by_cred(self, cred_hash: str) -> tuple[Membership, Room] | None:
+        """The membership ``/close`` ended with this credential, and its room while that is
+        still closed: only to name the room in the error (it authorizes nothing)."""
+        r = self.con.execute(
+            "SELECT * FROM memberships WHERE cred_hash=? AND left_at IS NOT NULL AND left_reason='closed'"
+            " ORDER BY id DESC LIMIT 1",
+            (cred_hash,),
+        ).fetchone()
+        if r is None:
+            return None
+        m = Membership.from_row(r)
+        room = self.room_by_id(m.room_id)
+        return (m, room) if room is not None and room.closed else None
 
     def participant_memberships(self, participant_id: int) -> list[Membership]:
         rows = self.con.execute(

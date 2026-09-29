@@ -360,9 +360,15 @@ class RpcServer:
             why = pol.refusal(peer)
             if why:
                 raise RpcError("forbidden", f"{method} {why}")
+            if method == "human.login_link":
+                raise RpcError(
+                    "forbidden",
+                    "login links are only issued to a terminal you typed in: run `switchboard login` there",
+                )
             raise RpcError(
                 "forbidden",
-                "login links are only issued to a terminal you typed in: run `switchboard login` there",
+                f"{method} must come from a terminal you typed in (not an agent's shell,"
+                " nor a script without a terminal)",
             )
         raise RpcError("forbidden", f"{method}: role {role} not available")
 
@@ -429,7 +435,11 @@ def build_methods(state: "BrokerState") -> dict[str, MethodSpec]:
         return {}
 
     async def room_list(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
-        return {"rooms": svc().rooms()}
+        # ``closed: true``: the closed rooms instead (switchboard rooms --closed, §28.4)
+        n = state.store.count_closed_rooms()
+        if p.get("closed") is True:
+            return {"rooms": svc().closed_room_dicts(), "closed": n}
+        return {"rooms": svc().rooms(), "closed": n}
 
     async def room_who(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
         room = svc().room(_str(p, "room"))
@@ -491,6 +501,25 @@ def build_methods(state: "BrokerState") -> dict[str, MethodSpec]:
 
     async def human_command(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
         return svc().command(_str(p, "room"), _str(p, "text"), actor_for(conn))
+
+    async def room_delete(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
+        # §28.6: {room, dry_run: true} -> the plan; {room, room_id, name, created_at} (the
+        # plan's pin) -> backup, then delete. Synchronous: nothing awaits between the two.
+        ref = _str(p, "room")
+        dry_run = p.get("dry_run") is True
+        room_id = _opt_int(p, "room_id")
+        name = p.get("name")
+        created_at = p.get("created_at")
+        if not dry_run and (
+            room_id is None
+            or not isinstance(name, str)
+            or isinstance(created_at, bool)
+            or not isinstance(created_at, (int, float))
+        ):
+            raise RpcError("bad_request", "room_id, name and created_at are required: run the plan first")
+        return svc().delete_room(ref, dry_run=dry_run, room_id=room_id, db_path=state.paths.db,
+                                 chain=state.peer_policy.describe(conn.peer),
+                                 name=None if dry_run else name, created_at=None if dry_run else created_at)
 
     async def human_login_link(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
         token = state.login_tokens.mint()
@@ -580,6 +609,8 @@ def build_methods(state: "BrokerState") -> dict[str, MethodSpec]:
         "room.history": MethodSpec("anon", room_history),
         "room.tail": MethodSpec("anon", room_tail),
         "room.create": MethodSpec("human", room_create),
+        # human plus a terminal you typed in (§28.6); never over a link (REMOTE_METHODS)
+        "room.delete": MethodSpec("login", room_delete),
         "human.say": MethodSpec("human_cli", human_say),
         "human.command": MethodSpec("human_cli", human_command),
         "human.login_link": MethodSpec("login", human_login_link),

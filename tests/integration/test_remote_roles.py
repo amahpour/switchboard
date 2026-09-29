@@ -19,7 +19,7 @@ from switchboard.remote.satellite import ON_DESKTOP
 
 FORBIDDEN = ["sys.stop", "sys.status", "sys.ping", "human.say", "human.command", "human.login_link",
              "human.logout_all", "room.create", "room.list", "room.who", "room.history", "room.tail",
-             "remote.enable"]
+             "remote.enable", "room.delete"]
 PARAMS: dict[str, dict[str, Any]] = {
     "human.say": {"room": "#fpga", "text": "I am the human now"},
     "human.command": {"room": "#fpga", "text": "/pause"},
@@ -28,6 +28,7 @@ PARAMS: dict[str, dict[str, Any]] = {
     "room.history": {"room": "#fpga"},
     "room.tail": {"room": "#fpga"},
     "remote.enable": {"name": "fpga-pi"},
+    "room.delete": {"room": "#fpga"},
 }
 
 
@@ -112,10 +113,11 @@ def test_methods_forbidden_over_link(link: FakeLink, method: str) -> None:
     assert link.status()["state"] == "up"
 
 
-@pytest.mark.parametrize("verb", ["say", "cmd", "login", "logout", "stop", "create"])
+@pytest.mark.parametrize("verb", ["say", "cmd", "login", "logout", "stop", "create", "delete"])
 def test_pi_cli_human_verbs_print_desktop_message(link: FakeLink, verb: str) -> None:
     args = {"say": ["say", "#fpga", "hi"], "cmd": ["cmd", "#fpga", "/pause"], "login": ["login"],
-            "logout": ["logout", "--all"], "stop": ["stop"], "create": ["create", "#x"]}[verb]
+            "logout": ["logout", "--all"], "stop": ["stop"], "create": ["create", "#x"],
+            "delete": ["rooms", "delete", "#fpga", "--yes"]}[verb]
     r = link.pi_cli(*args)
     assert r.returncode == 1 and "run this on the desktop (desk)" in r.stderr, (r.stdout, r.stderr)
     assert link.status()["state"] == "up"

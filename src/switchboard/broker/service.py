@@ -10,12 +10,13 @@ from __future__ import annotations
 import dataclasses
 import logging
 import os
+import sqlite3
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from switchboard import __version__
+from switchboard import __version__, db
 from switchboard.broker import catchup
 from switchboard.broker import commands as cmds
 from switchboard.broker.commands import Actor, CommandError
@@ -24,8 +25,17 @@ from switchboard.clock import Clock, SystemClock
 from switchboard.config import Config
 from switchboard.delivery.rules import parse_mentions
 from switchboard.envelope import clean
-from switchboard.models import InvalidName, Member, Message, Room, normalize_room, tier_label
-from switchboard.store import Conflict, Store
+from switchboard.models import (
+    InvalidName,
+    Member,
+    Message,
+    Room,
+    closed_room_name,
+    display_room,
+    normalize_room,
+    tier_label,
+)
+from switchboard.store import Ambiguous, Conflict, NotFound, Store, StoreError
 
 log = logging.getLogger("switchboard.service")
 
@@ -75,6 +85,8 @@ class DeliveryHooks(Protocol):
     def on_command(self, room: Room, name: str, membership_id: int | None) -> None: ...
 
     def on_membership_ended(self, membership_id: int, reason: str) -> None: ...
+
+    def on_memberships_ended(self, membership_ids: list[int], reason: str) -> None: ...
 
     def parked_reason(self, membership_id: int) -> str | None: ...
 
@@ -166,6 +178,10 @@ class RoomService:
             raise ServiceError("bad_request", str(e)) from None
         room = self.store.get_room(n)
         if room is None:
+            if self.store.closed_rooms(n):
+                raise ServiceError(
+                    "not_found", f"no such room: {n} (it is closed: reopen it from Closed rooms in the web UI)"
+                )
             raise ServiceError("not_found", f"no such room: {n}")
         return room
 
@@ -184,6 +200,7 @@ class RoomService:
 
     def room_dict(self, room: Room) -> dict[str, Any]:
         return {
+            "id": room.id,  # a room closed and re-created keeps its name, not its id (§28.4)
             "name": room.name,
             "slug": room.slug,
             "created_at": room.created_at,
@@ -194,6 +211,26 @@ class RoomService:
 
     def rooms(self) -> list[dict[str, Any]]:
         return [self.room_dict(r) for r in self.store.list_rooms()]
+
+    def closed_room_dicts(self) -> list[dict[str, Any]]:
+        """The closed rooms, newest first (the web's Closed rooms panel, ``switchboard rooms
+        --closed``; DESIGN.md §28.4)."""
+        out = []
+        for r in self.store.list_rooms(closed=True):
+            ev = self.store.latest_close_event(r.id)
+            out.append(
+                {
+                    "id": r.id,
+                    "name": r.name,
+                    "display": r.display_name,
+                    "created_at": r.created_at,
+                    "closed_at": ev.ts if ev is not None else None,
+                    "closed_by": ev.data.get("by") if ev is not None else None,
+                    "messages": self.store.count_messages(r.id),
+                    "reopenable": self.store.get_room(r.display_name) is None,
+                }
+            )
+        return out
 
     def history(self, name: str, after: int | None = None, limit: int = 100) -> list[dict[str, Any]]:
         room = self.room(name)
@@ -242,8 +279,184 @@ class RoomService:
         self.store.add_event("room_create", room_id=room.id)
         self._post(room, sender_name="switchboard", sender_kind="system", via="system",
                    kind="notice", text=f"{n} created by {self.cfg.human_name}")
-        self.hub.rooms_changed([r.name for r in self.store.list_rooms()])
+        self.rooms_changed()
         return room
+
+    def rooms_changed(self) -> None:
+        """Tell web clients the open rooms changed (create, close, reopen, delete)."""
+        self.hub.rooms_changed([r.name for r in self.store.list_rooms()])
+
+    def close_room(self, room: Room, actor: Actor) -> str:
+        """``/close`` (DESIGN.md §28.3): every member leaves (reason ``closed``, not kicked, the
+        credential kept only to name the room in its error), the leave lines and a notice are
+        stored, and the room is renamed ``#name~closed-<id>``, all in one transaction. The
+        lines are published after COMMIT under the old name, which subscribers follow;
+        then nobody follows it any more. Synchronous: nothing else runs in between."""
+        if room.closed:  # defensive: room() never returns a closed room
+            raise ServiceError("conflict", f"{room.display_name} is already closed")
+        members = self.store.members(room.id)
+        new = closed_room_name(room.name, room.id)
+        human = self.cfg.human_name
+        audit = self._audit_suffix(actor)
+        posted: list[Message] = []
+        with db.tx(self.store.con):
+            for m in members:
+                self.store.end_membership(m.membership_id, "closed", keep_cred=True)
+                posted.append(self.store.insert_message(
+                    room.id,
+                    sender_name=m.name,
+                    sender_kind="agent",
+                    sender_harness=m.harness,
+                    sender_membership_id=m.membership_id,
+                    via="system",
+                    kind="leave",
+                    text=f"left ({room.name} closed)",
+                    sender_host=m.host or None,
+                ))
+            posted.append(self.store.insert_message(
+                room.id,
+                sender_name="switchboard",
+                sender_kind="system",
+                via="system",
+                kind="notice",
+                text=f"{room.name} closed by {human}{audit}: {len(members)} agent(s) removed; the history is kept",
+            ))
+            self.store.add_event("room_close", room_id=room.id, data={
+                "name": room.name,
+                "closed_name": new,
+                "by": human,
+                "via": actor.via,
+                "chain": actor.chain,
+                "members": [m.membership_id for m in members],
+            })
+            self.store.rename_room(room.id, new, expect=room.name)
+        for msg in posted:
+            self.hub.message(room.name, message_dict(msg))
+        self.hub.drop_room(room.name)
+        if self.delivery is not None:
+            self.delivery.on_memberships_ended([m.membership_id for m in members], "closed")
+        self.rooms_changed()
+        hosts: dict[str, int] = {}
+        for m in members:
+            if m.host:
+                hosts[m.host] = hosts.get(m.host, 0) + 1
+        extra = " (" + ", ".join(f"{n} on {h}" for h, n in sorted(hosts.items())) + ")" if hosts else ""
+        log.info("%s closed via %s: %d member(s) ended", room.name, actor.via, len(members))
+        return (f"closed {room.name}: {len(members)} agent(s) removed{extra}; history kept."
+                " The name is free again; reopen this room from Closed rooms in the web UI")
+
+    def reopen_room(self, room_id: int, via: str = "web") -> Room:
+        """A closed room gets its name back (DESIGN.md §28.4). Nobody is re-added: former
+        members join() again, and kicked ones are still refused."""
+        human = self.cfg.human_name
+        with db.tx(self.store.con):
+            before = self.store.room_by_id(room_id)
+            try:
+                room = self.store.reopen_room(room_id)
+            except NotFound:
+                raise ServiceError("not_found", f"no closed room with id {room_id}") from None
+            except Conflict:
+                assert before is not None  # reopen_room raised NotFound for a missing room
+                raise ServiceError(
+                    "conflict",
+                    f"{before.display_name} is taken by an open room: close or delete that room first,"
+                    " then reopen this one",
+                ) from None
+            msg = self.store.insert_message(
+                room.id, sender_name="switchboard", sender_kind="system", via="system", kind="notice",
+                text=f"{room.name} reopened by {human} (via {via}); agents join() it again",
+            )
+            assert before is not None
+            self.store.add_event("room_reopen", room_id=room.id, data={
+                "name": room.name, "from": before.name, "by": human, "via": via,
+            })
+        self.hub.message(room.name, message_dict(msg))
+        self.rooms_changed()
+        return room
+
+    def delete_room(self, ref: str, *, dry_run: bool, room_id: int | None, db_path: Any,
+                    chain: str | None, name: str | None = None,
+                    created_at: float | None = None) -> dict[str, Any]:
+        """``switchboard rooms delete`` (DESIGN.md §28.6): the plan (``dry_run``), or, pinned by
+        the plan's ``room_id``, ``name`` and ``created_at``, a checked backup of the whole
+        database and then the delete in one transaction. The id alone is not enough: a
+        reopen keeps it (only the name changes), and a room re-created after a delete can
+        reuse it (only ``created_at`` differs). Refused while the room has members.
+        Synchronous: nothing runs between the backup and the delete."""
+        try:
+            room = self.store.resolve_room(ref)
+        except InvalidName as e:
+            raise ServiceError("bad_request", f"{e} (or a closed room's full name, e.g. #build~closed-7)") from None
+        except Ambiguous as e:
+            n = display_room(e.names[0])
+            raise ServiceError(
+                "bad_request",
+                f"{n} names {len(e.names)} closed rooms: {', '.join(e.names)};"
+                " give the full name of the one to delete",
+            ) from None
+        except NotFound as e:
+            raise ServiceError("not_found", str(e)) from None
+        if room_id is not None and (
+            room.id != room_id
+            or (name is not None and room.name != name)
+            or (created_at is not None and room.created_at != created_at)
+        ):
+            raise ServiceError(
+                "conflict",
+                f"{name or room.name} changed since the plan (reopened, deleted or re-created); run the command again",
+            )
+        members = self.store.members(room.id)
+        if members:
+            labels = ", ".join(member_label(m) for m in members)
+            raise ServiceError(
+                "conflict",
+                f"{room.display_name} has {len(members)} agent(s) ({labels}): close it first"
+                f" (/close in the web UI, or switchboard cmd '{room.display_name}' /close)",
+            )
+        ev = self.store.latest_close_event(room.id) if room.closed else None
+        backup = db.delete_backup_path(db_path, room)
+        plan = {
+            "room_id": room.id,
+            "name": room.name,
+            "display": room.display_name,
+            "state": "closed" if room.closed else "open",
+            "created_at": room.created_at,
+            "closed_at": ev.ts if ev is not None else None,
+            "closed_by": ev.data.get("by") if ev is not None else None,
+            "counts": self.store.room_delete_counts(room.id),
+            "backup": str(backup),
+        }
+        if dry_run:
+            return plan
+        try:
+            dest, counts = db.backup_verified(self.store.con, backup, tables=db.TABLES, what="pre-delete backup")
+        except (db.SchemaError, OSError, sqlite3.Error) as e:
+            raise ServiceError("internal", f"the backup failed ({e}); nothing was deleted") from None
+        try:
+            removed = self.store.delete_room(room.id, name=room.name, created_at=room.created_at,
+                                             expect_counts=counts, event={
+                "room_id": room.id,
+                "name": room.name,
+                "display": room.display_name,
+                "backup": dest.name,
+                "chain": chain,
+            })
+        except Conflict as e:
+            raise ServiceError("conflict", f"{e}; nothing was deleted (backup: {dest.name})") from None
+        except (StoreError, sqlite3.Error) as e:
+            raise ServiceError("internal", f"{e}; nothing was deleted (backup: {dest.name})") from None
+        if not room.closed:
+            self.hub.drop_room(room.name)
+        self.rooms_changed()
+        self.hub.notice(None, "warn", f"{room.name} deleted via cli ({chain}); backup {dest.name}")
+        log.warning("%s (room %d) deleted via cli (%s): %s; backup %s", room.name, room.id, chain, removed, dest)
+        return {
+            "room_id": room.id,
+            "name": room.name,
+            "display": room.display_name,
+            "removed": removed,
+            "backup": str(dest),
+        }
 
     def _post(self, room: Room, *, level: str | None = None, **kw: Any) -> Message:
         """Persist, then publish. Every broker-side message goes through here.
@@ -326,6 +539,10 @@ class RoomService:
             result = cmds.apply(cmd, room, actor, self)
         except CommandError as e:
             raise ServiceError(e.code, e.message) from None
+        if result.done:
+            # /close published everything itself; the steps below would publish under the
+            # room's new name (§28.3)
+            return {"ok": result.ok, "text": result.text}
         posted: Message | None = None
         if result.post is not None:
             # /catchup: one ordinary human chat message (every delivery rule applies); a refusal
@@ -469,6 +686,7 @@ class RoomService:
             "uptime_s": round(now - self.info.started_at, 1),
             "home": self.info.home,
             "rooms": rooms,
+            "closed_rooms": self.store.count_closed_rooms(),
             "members": self.store.count_active_members(),
             "web_clients": self.hub.ws_count(),
             "codex_link": self.info.codex_link,

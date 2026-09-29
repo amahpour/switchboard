@@ -19,7 +19,7 @@ from test_devin_adapter import devin
 from switchboard.adapters.cursor import FOLLOWUP_CONFIRM_S
 from switchboard.config import Config
 from switchboard.delivery.engine import TAINTED_GENS_MAX
-from switchboard.models import HookEvent, Notice, Push, ResolveSink, Snapshot
+from switchboard.models import HookEvent, Notice, Push, ResolveSink, Snapshot, closed_room_name
 
 
 @pytest.fixture
@@ -344,3 +344,50 @@ def test_the_parked_escalation_skips_a_paused_room_or_a_held_member(w: World, cl
     [n] = [a for a in w.engine.watchdog() if isinstance(a, Notice)]
     assert "cursor-1 is parked" in n.text and f"#{msg.id}" in n.text
     assert w.store.count_events("watchdog_escalate") == 1
+
+
+# ------------------------------------------------------------ /close (§28.3)
+def close(w: World, *membership_ids: int) -> None:
+    """What ``RoomService.close_room`` does: end each membership keeping its credential,
+    rename the room, then tell the engine."""
+    for mid in membership_ids:
+        w.store.end_membership(mid, "closed", keep_cred=True)
+    w.store.rename_room(w.room.id, closed_room_name("#build", w.room.id), expect="#build")
+    for mid in membership_ids:
+        w.actions += w.engine.on_membership_ended(mid, "closed")
+
+
+def test_a_close_resolves_an_open_wait_with_the_rooms_display_name(w: World) -> None:
+    p, m = w.agent("bot")
+    sink, acts = w.engine.open_wait(w.p(p), w.m(m), "w1", 50)
+    w.actions += acts
+    close(w, m.id)
+    assert w.store.room_by_id(w.room.id).name == f"#build~closed-{w.room.id}"
+    assert w.resolved(sink.id) == [{
+        "status": "closed",
+        "text": f"[switchboard] #build was closed by {w.cfg.human_name}; you are no longer in it.",
+    }]
+    ended = w.store.get_membership(m.id)
+    assert ended.left_reason == "closed" and not ended.kicked
+
+
+def test_a_close_names_this_room_when_the_room_row_is_gone(w: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    p, m = w.agent("bot")
+    sink, acts = w.engine.open_wait(w.p(p), w.m(m), "w1", 50)
+    w.actions += acts
+    w.store.end_membership(m.id, "closed", keep_cred=True)
+    monkeypatch.setattr(w.store, "room_by_id", lambda rid: None)
+    w.actions += w.engine.on_membership_ended(m.id, "closed")
+    assert w.resolved(sink.id) == [{
+        "status": "closed",
+        "text": f"[switchboard] this room was closed by {w.cfg.human_name}; you are no longer in it.",
+    }]
+
+
+def test_a_close_releases_the_parks_of_a_session_with_no_room_left(w: World) -> None:
+    p, m = cursor(w, status="idle")
+    s, _acts = w.engine.open_park(w.p(p), cursor_stop(), 60)
+    assert w.engine.sinks.parks_for(p.id) == [s]
+    close(w, m.id)
+    assert w.engine.sinks.parks_for(p.id) == []
+    assert park_result(w, s.id) == {}

@@ -62,6 +62,7 @@ from switchboard.models import (
     ResolveSink,
     Room,
     Snapshot,
+    display_room,
 )
 from switchboard.store import Store
 
@@ -478,7 +479,7 @@ class Engine:
             return []
         m = self.store.get_membership(b.membership_id)
         if m is None:
-            return []  # pragma: no cover - membership rows are never deleted
+            return []  # pragma: no cover - membership rows are deleted only with a room without members (§28)
         if peer_mark is not None:
             self.store.mark_peer_batch(m.id, peer_mark)
         self._event("confirm", room_id=m.room_id, membership_id=m.id,
@@ -518,7 +519,7 @@ class Engine:
             return []  # pragma: no cover - checked offered just above, in this same synchronous call
         m = self.store.get_membership(b.membership_id)
         if m is None:
-            return []  # pragma: no cover - membership rows are never deleted
+            return []  # pragma: no cover - membership rows are deleted only with a room without members (§28)
         self._event("expire" if state == "expired" else "cancel", room_id=m.room_id,
                     membership_id=m.id, participant_id=m.participant_id, batch_id=b.id,
                     path=b.path, reason=reason)
@@ -835,7 +836,7 @@ class Engine:
         out: list[Action] = []
         room = self.store.room_by_id(msg.room_id)
         if room is None:
-            return []  # pragma: no cover - room rows are never deleted
+            return []  # pragma: no cover - a room is deleted only without members (§28)
         if msg.sender_kind == "agent" and rules.hop_tripped(room):
             out += self.pause_room(room.id, "loop guard", event="loop_guard",
                                    notice=f"loop guard: {room.hop_count} agent messages in a row"
@@ -896,6 +897,12 @@ class Engine:
         status = "kicked" if reason == "kick" else "left"
         text = ("[switchboard] you were removed from the room by your user." if reason == "kick"
                 else "[switchboard] you are no longer in this room.")
+        if reason == "closed":
+            # /close (§28.3): the room is already renamed #name~closed-<id>; name it as people saw it
+            room = self.store.room_by_id(m.room_id) if m is not None else None
+            status = "closed"
+            text = (f"[switchboard] {display_room(room.name) if room is not None else 'this room'}"
+                    f" was closed by {self.cfg.human_name}; you are no longer in it.")
         for s in self.sinks.for_membership(membership_id):
             out.append(self._close_sink(s, {"status": status, "text": text}, reason))
         if m is not None and not self.store.participant_memberships(m.participant_id):
@@ -1303,7 +1310,7 @@ class Engine:
         m = self.store.get_membership(b.membership_id)
         p = self.store.get_participant(m.participant_id) if m is not None else None
         if m is None or p is None:
-            return None  # pragma: no cover - membership and participant rows are never deleted
+            return None  # pragma: no cover - membership rows are deleted only with a room without members (§28), participant rows never
         return self.adapter(p).expire_due(p, b, now)
 
     # ================================================================== tick

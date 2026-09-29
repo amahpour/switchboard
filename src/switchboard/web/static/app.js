@@ -17,7 +17,9 @@
 
   const state = {
     me: null,          // { human, test_mode, version, port }
-    rooms: new Map(),  // name -> { name, slug, lastId, msgs: [], members: [], settings: {}, unread: 0 }
+    rooms: new Map(),  // name -> { name, slug, id, createdAt, lastId, msgs: [], members: [], settings: {}, unread: 0 }
+    closed: 0,         // how many closed rooms there are (GET /api/rooms), for the Closed button
+    closedRooms: [],   // GET /api/closed-rooms, as the Closed panel shows it
     active: null,
     ws: null,
     wsOpen: false,
@@ -126,6 +128,7 @@
     line.append(el('span', 'ts', '[' + hhmmss(Date.now() / 1000) + ']'), ' ', el('span', 'text', text));
     if (body) line.append(el('pre', 'cmd-out', body));
     const log = $('log');
+    log.classList.remove('hidden');  // with no room left, the log still shows this line
     const stick = nearBottom(log);
     log.append(line);
     if (stick) log.scrollTop = log.scrollHeight;
@@ -320,7 +323,10 @@
     ws.addEventListener('open', function () {
       state.wsOpen = true;
       state.backoff = 500;
-      hello(Array.from(state.rooms.keys()));
+      // a close, reopen, create or delete missed while the socket was down: resync, then hello all.
+      // The new socket follows nothing until a hello: if the resync fails, hello the tabs we have.
+      loadRooms(true).catch(function () { hello(Array.from(state.rooms.keys())); });
+      if (!$('closed-panel').classList.contains('hidden')) loadClosed().catch(function () {});
       loadRemotes().catch(function () {});  // the events missed while the socket was down
       renderStatus();
       clearInterval(state.pingTimer);
@@ -356,19 +362,27 @@
     state.ws.send(JSON.stringify({ t: 'hello', rooms: names, after: after }));
   }
 
+  // Frames for a room that is not open here (closed, deleted, or not listed yet) are dropped:
+  // only loadRooms() adds a tab, so a late frame never brings back a ghost tab.
   function onFrame(f) {
-    if (f.t === 'msg' && f.room && f.msg) {
-      appendMsg(room(f.room), f.msg);
-    } else if (f.t === 'members' && f.room) {
-      room(f.room).members = f.members || [];
+    const r = f.room ? state.rooms.get(f.room) : null;
+    if (f.t === 'msg' && f.msg) {
+      if (r) appendMsg(r, f.msg);
+    } else if (f.t === 'members') {
+      if (!r) return;
+      r.members = f.members || [];
       if (f.room === state.active) renderBuddies();
-    } else if (f.t === 'room' && f.room) {
-      room(f.room).settings = f.settings || {};
+    } else if (f.t === 'room') {
+      if (!r) return;
+      r.settings = f.settings || {};
       if (f.room === state.active) renderStatus();
     } else if (f.t === 'notice') {
       if (!f.room || f.room === state.active) renderLocal('*** ' + f.text, f.level === 'warn');
     } else if (f.t === 'rooms') {
-      loadRooms().catch(function () {});
+      // hello every tab, not only new ones: a close drops this page's subscription, and a
+      // reopen (same id, same name) may land before this listing, so nothing looks changed
+      loadRooms(true).catch(function () { hello(Array.from(state.rooms.keys())); });
+      if (!$('closed-panel').classList.contains('hidden')) loadClosed().catch(function () {});
     } else if (f.t === 'remotes') {
       setRemotes(f.remotes || [], f.config_error || null);
     }
@@ -645,6 +659,78 @@
     }
   }
 
+  // ------------------------------------------------------- closed rooms
+  function renderClosedButton() {
+    const b = $('closed-rooms');
+    b.textContent = 'Closed (' + state.closed + ')';
+    b.classList.toggle('hidden', state.closed === 0);
+    $('empty-title').textContent = state.closed > 0 ? 'No open rooms.' : 'No rooms yet.';
+  }
+
+  function closedCard(c) {
+    const card = el('div', 'closed-card');
+    const head = el('div', 'closed-head');
+    head.append(el('span', 'closed-name', c.display),
+      el('span', 'fine', 'closed' + (c.closed_at ? ' ' + when(c.closed_at) : '') + (c.closed_by ? ' by ' + c.closed_by : '')));
+    card.append(head);
+    const facts = el('div', 'fine');
+    facts.append(c.messages + ' message(s) · ', el('code', null, c.name));
+    card.append(facts);
+    const out = el('div', 'fine closed-result');
+    const btns = el('div', 'dialog-buttons');
+    const b = el('button', 'btn', 'Reopen');
+    b.type = 'button';
+    b.disabled = !c.reopenable;
+    b.title = c.reopenable
+      ? 'bring ' + c.display + ' back under its name; agents join() it again'
+      : c.display + ' is taken by an open room: close or delete that one first';
+    b.addEventListener('click', function () { reopenRoom(c, b, out); });
+    btns.append(b);
+    card.append(btns);
+    const del = el('div', 'fine');
+    del.append('delete for good: ', el('code', null, "switchboard rooms delete '" + c.name + "'"));
+    card.append(del, out);
+    return card;
+  }
+
+  function renderClosedPanel() {
+    const body = $('closed-body');
+    body.replaceChildren();
+    if (!state.closedRooms.length) body.append(el('p', null, 'No closed rooms.'));
+    for (const c of state.closedRooms) body.append(closedCard(c));
+  }
+
+  async function loadClosed() {
+    const data = await api('GET', '/api/closed-rooms');
+    state.closedRooms = data.rooms || [];
+    renderClosedPanel();
+  }
+
+  function openClosed() {
+    $('closed-panel').classList.remove('hidden');
+    renderClosedPanel();
+    loadClosed().catch(function (e) {
+      $('closed-body').replaceChildren(el('p', 'remote-error', String(e.message || e)));
+    });
+    $('closed-close').focus();
+  }
+
+  async function reopenRoom(c, btn, out) {
+    btn.disabled = true;
+    out.classList.remove('bad');
+    out.textContent = 'reopening ' + c.display + '…';
+    try {
+      const res = await api('POST', '/api/closed-rooms/' + encodeURIComponent(String(c.id)) + '/reopen', {});
+      await loadRooms();
+      selectRoom(res.room.name);
+      $('closed-panel').classList.add('hidden');
+    } catch (e) {
+      btn.disabled = !c.reopenable;
+      out.textContent = String(e.message || e);
+      out.classList.add('bad');
+    }
+  }
+
   // -------------------------------------------------------------- input
   const CATCHUP_HINT = 'Commands run only at the start of a message, and agents can\u2019t run them. ' +
     'To catch an agent up, send: /catchup <agent> on <member> (or on "<topic>"; /help lists every form).';
@@ -655,13 +741,20 @@
       $('create-build').focus();
       return false;
     }
+    // /close removes every agent and the tab: ask first (false gives the text back)
+    if (text.split(/\s+/)[0].toLowerCase() === '/close' &&
+        !window.confirm('Close ' + r.name + '? ' + r.members.length + ' agent(s) leave it and its tab goes away; ' +
+                        'the history is kept and you can reopen it from Closed rooms.')) return false;
     const path = '/api/rooms/' + encodeURIComponent(r.slug);
     try {
       if (text.startsWith('//')) {
         await api('POST', path + '/say', { text: text.slice(1) });
       } else if (text.startsWith('/')) {
+        const verb = text.split(/\s+/)[0];
         const res = await api('POST', path + '/command', { text: text });
-        renderLocal(text.split(/\s+/)[0], !res.ok, res.text);
+        // a done /close prunes this tab, and the new view would wipe the reply: prune first
+        if (res.ok && verb.toLowerCase() === '/close') await loadRooms().catch(function () {});
+        renderLocal(verb, !res.ok, res.text);
       } else {
         await api('POST', path + '/say', { text: text });
         // "/catchup" inside a sentence is only text to the agents: say how to run it
@@ -716,8 +809,13 @@
       location.replace('/');
     });
     $('remotes-close').addEventListener('click', function () { $('remotes-panel').classList.add('hidden'); });
+    $('closed-rooms').addEventListener('click', openClosed);
+    $('closed-close').addEventListener('click', function () { $('closed-panel').classList.add('hidden'); });
     document.addEventListener('keydown', function (ev) {
-      if (ev.key === 'Escape') $('remotes-panel').classList.add('hidden');
+      if (ev.key === 'Escape') {
+        $('remotes-panel').classList.add('hidden');
+        $('closed-panel').classList.add('hidden');
+      }
     });
     const toggle = $('buddy-toggle');
     toggle.addEventListener('click', function () {
@@ -727,22 +825,50 @@
   }
 
   // --------------------------------------------------------------- boot
-  async function loadRooms() {
+  // The open rooms, from the broker. A tab whose room is gone, or was replaced under the same
+  // name (another id, or the same id reused after a delete: another created_at), is dropped;
+  // a replaced room starts over at lastId 0. helloAll (a reconnect, a rooms frame) subscribes
+  // every room again from its lastId. The log is redrawn only when the active room changed,
+  // so local lines (a command's reply) survive a listing that changed nothing on screen.
+  async function loadRooms(helloAll) {
     const data = await api('GET', '/api/rooms');
-    const fresh = [];
-    for (const r of data.rooms) {
-      if (!state.rooms.has(r.name)) fresh.push(r.name);
-      room(r.name).settings = r.settings || {};
+    state.closed = data.closed || 0;
+    const listed = new Map();
+    for (const r of data.rooms) listed.set(r.name, r);
+    const gone = new Set();
+    for (const [name, r] of Array.from(state.rooms)) {
+      const l = listed.get(name);
+      if (!l || l.id !== r.id || l.created_at !== r.createdAt) {
+        state.rooms.delete(name);
+        gone.add(name);
+      }
     }
+    const fresh = [];
+    for (const l of data.rooms) {
+      if (!state.rooms.has(l.name)) fresh.push(l.name);
+      const r = room(l.name);
+      r.id = l.id;
+      r.createdAt = l.created_at;
+      r.settings = l.settings || {};
+    }
+    const was = state.active;
+    const pruned = was !== null && gone.has(was);  // a replaced active room counts as pruned
+    if (pruned) state.active = null;
     renderTabs();
-    if (fresh.length) hello(fresh);
+    renderClosedButton();
+    const names = helloAll ? Array.from(state.rooms.keys()) : fresh;
+    if (names.length) hello(names);
     if (!state.active && state.rooms.size) {
       const want = '#' + decodeURIComponent(location.hash.replace(/^#/, ''));
       selectRoom(state.rooms.has(want) ? want : Array.from(state.rooms.keys()).sort()[0]);
     } else {
-      renderLog();
+      if (pruned) history.replaceState(null, '', location.pathname);  // nothing left to point at
+      // redraw only a view that is out of date: local lines (a command's reply) stay
+      if (pruned || $('empty').classList.contains('hidden') === (state.rooms.size === 0)) renderLog();
+      renderBuddies();
       renderStatus();
     }
+    if (pruned) renderLocal('*** ' + was + ' is no longer open (closed or deleted); Closed rooms can reopen a closed room');
     return fresh;
   }
 

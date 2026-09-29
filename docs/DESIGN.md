@@ -90,6 +90,7 @@ $SWITCHBOARD_HOME/                0700
   config.toml                     0600  (optional; defaults below)
   switchboard.db, -wal, -shm      0600
   switchboard.db.v1.bak           0600  written once, by the schema v1→v2 migration (§27.6); never overwritten
+  switchboard.db.delete-<room>-<id>.bak  0600  one per `switchboard rooms delete`, checked, never overwritten (§28.6)
   hooks/                          0700
     switchboard_hook-<sha12>.py   0444  content-addressed copy of src/switchboard/hook/switchboard_hook.py
   run/                            0700
@@ -373,9 +374,10 @@ CREATE TABLE memberships(
   id INTEGER PRIMARY KEY, room_id INTEGER NOT NULL REFERENCES rooms(id),
   participant_id INTEGER NOT NULL REFERENCES participants(id),
   screen_name TEXT NOT NULL COLLATE NOCASE,              -- ^[a-z][a-z0-9_-]{0,23}$, reserved names §6.1
-  cred_hash TEXT,                                        -- sha256(cred); NULL = revoked
+  cred_hash TEXT,                                        -- sha256(cred); NULL = revoked; kept (never valid)
+                                                         -- on a membership /close ended (§28)
   joined_at REAL NOT NULL, join_msg_id INTEGER NOT NULL, -- deliveries only for ids > join_msg_id
-  left_at REAL, left_reason TEXT,                        -- leave|kick|session_end
+  left_at REAL, left_reason TEXT,                        -- leave|kick|session_end|closed
   kicked INTEGER NOT NULL DEFAULT 0,
   held INTEGER NOT NULL DEFAULT 0, held_at REAL,         -- /hold
   cursor_id INTEGER NOT NULL DEFAULT 0,                  -- highest id with every delivery <= it confirmed;
@@ -435,6 +437,8 @@ CREATE TABLE remotes(                                     -- v2: the owner's con
 
 **Humans and rooms.** The human is not a membership. Human messages have `sender_membership_id NULL` and `sender_kind='human'`, and deliveries are created only for agent memberships. Rooms are created only by the human (`room.create`, web or test trust). An agent joining a missing room gets `not_found` with the text "ask your user to create #x".
 
+**Closed and deleted rooms (§28).** `/close` keeps a room's row and renames it `#name~closed-<id>` (`~` is outside the room-name pattern), so the name is free again and nothing addressed by name reaches it; `list_rooms()` returns open rooms only. Its memberships are ended with `left_reason='closed'`. `switchboard rooms delete` is the only way rows of `rooms`, `messages`, `memberships`, `deliveries`, `batches` or `events` are ever deleted: a room with no members, with all its rows in those tables, in one transaction after a checked backup. Participants are never deleted.
+
 **Holds are columns:**
 - human hold: `memberships.held`;
 - approval hold: `participants.status='waiting-approval'`;
@@ -442,7 +446,7 @@ CREATE TABLE remotes(                                     -- v2: the owner's con
 
 The engine checks all three before every offer (§8.2).
 
-**Event kinds** (audit trail, and the source for the M7 report): `msg join leave kick hold release pause resume budget_set budget_exhausted loop_guard hop_limit_set rate_limited pass pass_refused status turn_start first_action offer posted confirm expire requeue watchdog_remind watchdog_escalate bind tier codex_link login hook_hash`.
+**Event kinds** (audit trail, and the source for the M7 report): `msg join leave kick hold release pause resume budget_set budget_exhausted loop_guard hop_limit_set rate_limited pass pass_refused status turn_start first_action offer posted confirm expire requeue watchdog_remind watchdog_escalate bind tier codex_link login hook_hash room_close room_reopen room_delete` (§28.2; `room_delete` has `room_id` NULL).
 
 **Restart semantics.** On startup:
 - every `offered` batch becomes `expired` (reason `restart`), and its deliveries go back to `pending` with `attempts+1`;
@@ -482,9 +486,11 @@ Roles:
 | `sys.ping` | anon | → `{version, pid, test_mode}` |
 | `sys.status` | anon | → broker summary |
 | `sys.stop` | human_cli | → `{}`, then graceful shutdown |
-| `room.list` / `room.who` / `room.history` | anon | `room`, `after`, `limit` → rows |
+| `room.list` | anon | `{closed?}` → `{rooms, closed}`: the open rooms (each with `id`), or with `closed: true` the closed ones newest first; `closed` is the number of closed rooms (§28.4) |
+| `room.who` / `room.history` | anon | `room`, `after`, `limit` → rows |
 | `room.tail` | anon | `room`, `after?`, `limit` (default 20, 0 = none), `follow` (default true) → `{messages, following, more}`, then pushes `{"push":"message", …}`. Without `after`: the newest `limit`. With `after`: the oldest `limit` after it, and `more` says to page on with `room.history`. |
 | `room.create` | human | `name` |
+| `room.delete` | login (human_cli + TTY) | `{room, dry_run: true}` → the plan; `{room, room_id, name, created_at}` (the plan's pin) → `{room_id, name, display, removed, backup}` (§28.6) |
 | `human.say` | human_cli | `room`, `text` → `{id}`. Literal text, `via='cli'`, never parsed as a command. |
 | `human.command` | human_cli or human (per command, §10) | `room`, `text` (`/…`) → `{ok, text}` |
 | `human.login_link` | human_cli + TTY | → `{url}`; posts a `login` event and a UI notice |
@@ -497,7 +503,7 @@ Roles:
 | `agent.leave`, `agent.pass`, `agent.away`, `agent.who` | member | |
 | `agent.say` | member | `{cred, text, reply_to?}` → `{posted_id \| null, reason?, retry_after_s?, unread_text, batch_id?}` |
 | `agent.read` | member | `{cred, limit}` → `{text, batch_id?, count, more}` |
-| `agent.wait` | member | `{cred, timeout_s, wait_id}` → `{status: messages\|timeout\|paused\|kicked\|superseded, text?, batch_id?}` |
+| `agent.wait` | member | `{cred, timeout_s, wait_id}` → `{status: messages\|timeout\|paused\|kicked\|left\|closed\|superseded, text?, batch_id?}` |
 | `agent.unwait` | member | `{cred, wait_id}`: sent when the harness cancels the call |
 | `hook.event` | hook | §7 → `{out: null \| {kind: context\|continue, text}, batch_id?, ack?}` |
 | `hook.ack` | hook | `{batch_id, ack}`; `ack` is the 128-bit nonce returned only in that hook's reply |
@@ -581,13 +587,17 @@ The peer check stops the easy route, an agent's Bash running `switchboard cmd /b
 REST (`{slug}` is the room name without `#`):
 - `GET /login`, `POST /logout`
 - `GET /api/me`
-- `GET|POST /api/rooms`
+- `GET|POST /api/rooms`: `GET` returns `{rooms, closed}`, the open rooms (each with its `id`) and the number of closed ones (§28.4)
+- `GET /api/closed-rooms`: `{rooms}`, the closed rooms newest first, each with `id`, `name`, `display`, `created_at`, `closed_at`, `closed_by`, `messages`, `reopenable` (§28.4)
+- `POST /api/closed-rooms/{id}/reopen`: the Closed panel's **Reopen** (`id` must fullmatch `^[1-9][0-9]{0,18}$`, else 400; 404 when there is no such closed room, 409 when an open room has its name) → `{room}`. The `/api/closed-rooms` prefix keeps clear of a room slug `closed`
 - `GET /api/rooms/{slug}/messages?after=&limit=`
 - `GET /api/rooms/{slug}/members`
 - `POST /api/rooms/{slug}/say {text}`
 - `POST /api/rooms/{slug}/command {text}`
 - `GET /api/remotes`: every remote link's state, as `remote.status` has it (with `text`), plus this broker's `version` (M8f, §27.11)
 - `POST /api/remotes/{name}/enable {config_hash}` and `POST /api/remotes/{name}/disable`: the remotes panel's **Enable / reconnect** and **Disable** buttons, the web session's `remote.enable`/`remote.disable` (consent recorded `via web`; enable is the same long poll, up to 15 s). Like every unsafe method they need the exact Origin and `X-Switchboard: 1`; a name must be a whole remote name (`^[a-z][a-z0-9-]{0,23}$`, `fullmatch`, else 400) and be in `remotes.toml` (else 404). Enable's body carries the `config_hash` the panel showed: without one it is 400, and if the entry or its key files changed since (another hash) it is 409 and nothing is consented to (§27.16 M8f)
+
+A **Closed** button next to New room (hidden while no room is closed) opens the Closed rooms panel: each closed room with when and by whom, its message count, its internal name, **Reopen**, and the `switchboard rooms delete` command to delete it for good (§28.4).
 
 `app.js` sends input that starts with a single `/` to `/command`. Input starting with `//` goes to `/say` with one `/` removed.
 
@@ -598,7 +608,7 @@ REST (`{slug}` is the room name without `#`):
 - `{"t":"members","room":…,"members":[{name,harness,status,tier,tier_note,away,approval_mode,env_leak,held,queued,inflight,parked,parked_reason,host}]}`: a full snapshot, debounced to 200 ms (`host`: `""` on this machine)
 - `{"t":"room","room":…,"settings":{paused,paused_reason,budget_remaining,budget_per_hour,hop_count,hop_limit,test_mode}}`
 - `{"t":"notice","room":…,"level":"info|warn","text":…}` (`room` is null for broker-wide notices such as "new web login"; transient only: a notice that is also a room message goes out once, as the `msg` frame, §22)
-- `{"t":"rooms","rooms":[…]}` when a room is created (added in M1), so open tabs can subscribe with another `hello`
+- `{"t":"rooms","rooms":[…]}` when a room is created (added in M1), closed, reopened or deleted (§28), so open tabs can subscribe with another `hello` (the page sends one for every tab on each such frame), and the page reloads its room list, prunes tabs by id and `created_at` and refreshes an open Closed panel
 - `{"t":"remotes","remotes":[…],"config_error":…}`: every remote's state, as `GET /api/remotes`, whenever a link's state, its first RTT, the remote's hooks report, a host's member names or the set of remotes changes, or `remotes.toml` stops parsing; debounced to 200 ms (M8f); never on an idle link's liveness ticks; to browsers only, never to UDS tails
 - `{"t":"pong"}`
 
@@ -1141,6 +1151,7 @@ MCP command (the same for every harness): `["<python>","-I","-m","switchboard","
 | `/pause` | Sets `rooms.paused`; pause actions (§8.5) | human_cli | service + engine |
 | `/resume` | Clears `paused` and `paused_reason`, resets `hop_count`, re-evaluates | human | service + engine |
 | `/kick <name>` | Sets `left_at`, `kicked=1`, `cred_hash=NULL`. Deliveries become `revoked`, sinks resolve `kicked`, a notice is posted. A re-join by the same participant is refused. | human_cli | service.join, rpc auth |
+| `/close` | Ends every membership (reason `closed`, not kicked, credential kept for the error), posts leave lines and a notice, renames the room `#name~closed-<id>`, hides it; sinks resolve `closed` (§28.3) | human_cli | service + engine |
 | `/budget` | Shows `remaining/per_hour` and the reset time | human_cli | – |
 | `/budget n` | Sets `budget_remaining=n` (n ≥ 0) | human_cli if n ≤ current, else human | rules |
 | `/hops` | Shows `hop_count/hop_limit` (or "loop guard off" at 0) and whether the room is paused by the loop guard | human_cli | – |
@@ -1420,6 +1431,8 @@ Built from `messages`, `batches`, `deliveries`, `events` and `participants`:
 - the model per participant.
 
 Output is markdown, or JSON with `--json`. It contains no message text and no absolute paths.
+
+`--room` resolves by the §28.5 rules, so it also takes a closed room's full name (`#build~closed-7`), or its base name when no open room has it. A closed room's report says so: a `closed` block (`name`, `at`, `by`) in JSON, and `(closed)` in the markdown header (§28.7).
 
 ---
 
@@ -2072,7 +2085,7 @@ CREATE TABLE remotes(
   blocked_at REAL, blocked_reason TEXT, last_up_at REAL);
 UPDATE meta SET value='2' WHERE key='schema_version';
 ```
-- **Backup first.** Before any `ALTER`, `migrate()` copies the database with the sqlite3 backup API to `<home>/switchboard.db.v1.bak` (0600; never overwritten: an existing one gets a `.<epoch>` suffix), checks `PRAGMA integrity_check` and row counts on the copy, then runs every statement above in one `BEGIN IMMEDIATE`. Any failure rolls back and leaves a v1 database; the broker refuses to start with the error. Afterwards `integrity_check` and per-table row counts must match.
+- **Backup first.** Before any `ALTER`, `migrate()` copies the database with the sqlite3 backup API to `<home>/switchboard.db.v1.bak` (0600; never overwritten: an existing one gets a `.<epoch>` suffix, then `.<epoch>-<n>`), checks `PRAGMA integrity_check` and row counts on the copy, then runs every statement above in one `BEGIN IMMEDIATE`. Any failure rolls back and leaves a v1 database; the broker refuses to start with the error. Afterwards `integrity_check` and per-table row counts must match.
 - **Downgrade.** A 0.2.0 (or older) broker refuses a v2 database ("schema version 2 is not supported"); restore `switchboard.db.v1.bak` to go back.
 - `Participant.host` and `Member.host` default to `''`; `store._PARTICIPANT_COLS` (`store.py:495-500`) and the members query gain `host`. `switchboard report` reads v1 and v2 (it opens query-only and never migrates).
 - Remote rows keep Pi pids in `agent_pid`/`mcp_pid`: their meaning is "pid on `host`".
@@ -2379,4 +2392,121 @@ Filled in while building, one bullet per deviation from §27.1–§27.15 or deci
   - **Deferred:** (1) RTT changes after the first pong still reach the page only through its 20 s `GET /api/remotes` (state changes are pushed at once). (2) The satellite's `hook_state` is still free text up to 200 characters in the protocol; the broker cleans it rather than the validator pinning its shapes, so a newer satellite can word it differently. (3) The CLI's `remote enable` names no destination or hash before it consents (`remote status --json` has them, and `remote add` printed them). (4) The PID-namespace test can skip on a pid collision rather than forcing a pid that is free on desk.
 - **Found in CI** (the PR's first Linux run): `test_member_and_message_host_fields` waited for the `remotes` frame naming `bench` only after reading the two message frames, and dropped every frame it read on the way. When a liveness tick published that frame before the messages (a slower runner), the wait timed out. The test now keeps the frames it reads (`recv_kept`) and looks for the leave's frame only among those read after the join's. Reproduced by sleeping 3 s after the joins: the old test failed, the new one passes.
 
-- **Any room by default (after 0.3.0):** the owner found the per-remote room list a nuisance: a new room needed a config edit and a fresh `remote enable`. `remotes.toml` now accepts `rooms = ["*"]` (any room), which is also the default when `rooms` is left out or `remote add` gets no `--rooms`. Listing rooms still limits a remote as before. With `"*"`, link notices go only to the rooms that machine's members are in, and the welcome frame names the existing rooms (up to 64), because the frame format allows room names only. So satellites on 0.3.0 need no update.
+- **Any room by default (after 0.3.0):** the owner found the per-remote room list a nuisance: a new room needed a config edit and a fresh `remote enable`. `remotes.toml` now accepts `rooms = ["*"]` (any room), which is also the default when `rooms` is left out or `remote add` gets no `--rooms`. Listing rooms still limits a remote as before. With `"*"`, link notices go only to the rooms that machine's members are in, and the welcome frame names the open rooms (up to 64; closed ones never, §28.8), because the frame format allows room names only. So satellites on 0.3.0 need no update.
+
+---
+
+## 28. Closing and deleting rooms (#16)
+
+The human can close a room (`/close`), reopen it from the web UI, and delete it for good from a terminal (`switchboard rooms delete`). There is no schema change, no link-protocol change and no MCP-server change.
+
+### 28.1 What and why
+Before #16 a room lived forever: its agents could only be kicked one by one, and its name stayed taken. Removing one is not a plain `DELETE`:
+- a room's id is referenced by memberships, messages, deliveries, batches and events, and foreign keys are ON (§4);
+- its members may be on remote machines (§27), with links up or down;
+- room names are unique, and agents, remotes and the web UI all address rooms by name.
+
+So there are two steps. **Close** ends every membership, keeps the history and frees the name; it is cheap and can be undone (reopen). **Delete** removes a room that has no members, with all its rows, after a checked backup; it can be undone only by restoring that backup.
+
+### 28.2 The closed marker
+- **The name.** A closed room keeps its row and is renamed `#<name>~closed-<id>` (its own `rooms.id`, so the name is unique). `~` is outside `ROOM_RE`, so `UNIQUE(name)` frees `#name` for a new room, and no agent, MCP call, web route, `remotes.toml` entry or `normalize_room` path can address a closed room. Human tools reach one only through `room_ref` (§28.5). `models.split_closed`, `display_room`, `Room.closed` and `Room.display_name` read the marker; `CLOSED_ROOM_RE` is always used with `fullmatch`.
+- **No schema v3.** A `closed_at` column (or a separate table) was considered and rejected: a 0.3.0 broker would refuse the database, and every upgrade would need a migration plus a backup (§27.6) for one flag. The name, the memberships and the events carry everything.
+- **`list_rooms()` returns open rooms only** (`instr(name,'~')=0`), which every caller before #16 wanted: the room list, `status`, the web UI and the remote welcome. `list_rooms(closed=True)` and `count_closed_rooms()` serve the Closed views.
+- **Memberships.** Close ends them with `left_reason='closed'`, `kicked=0`, and keeps `cred_hash`. A kept hash never authorizes anything: `membership_by_cred` and `rotate_cred` require `left_at IS NULL`. It only lets the broker tell the agent which room was closed (§28.3). Reopen clears it.
+- **Events** (who and when come from here; `events_kind_ts` finds them):
+  - `room_close`, with `room_id`: `{name, closed_name, by, via, chain, members: [membership ids]}`;
+  - `room_reopen`, with `room_id`: `{name, from, by, via}`;
+  - `room_delete`, with **`room_id` NULL**, because ids can be reused (§28.10): `{room_id, name, display, removed: {…}, backup: <basename>, chain}`.
+
+### 28.3 `/close`
+**Role:** `human_cli`, by the §10 rule: it reduces activity, like `/kick` and `/pause`. It takes no arguments (`/close x` is refused). An agent's `say("/close")` is stored as literal text, and a link can't call `human.*`.
+
+**Steps** (`RoomService.close_room`, synchronous, no `await`):
+1. Collect the active memberships (every host, online or offline), the new name, the human's name and the CLI audit suffix.
+2. In one transaction: for each member, `end_membership(…, "closed", keep_cred=True)` and a leave line `left (#build closed)` under the member's name; one notice `#build closed by alice (via web): 2 agent(s) removed; the history is kept` (over the CLI: `(via cli: zsh ← Terminal)`; it is also the CLI audit line); the `room_close` event; `rename_room(…, expect=old name)`.
+3. After COMMIT: publish the leave and notice frames under the **old** name, then `hub.drop_room(old)`, then `on_memberships_ended(ids, "closed")` (the engine per membership, one `refresh_index`, so each remote gets its `watch`), then the `rooms` frame.
+4. Reply: `closed #build: 2 agent(s) removed (1 on fpga-pi); history kept. The name is free again; reopen this room from Closed rooms in the web UI`.
+
+**Why the frames go out after COMMIT, under the old name.** `hub.message` publishes at once, so posting through `_post` inside the transaction would publish lines a rollback could take back. Subscribers (web pages, `switchboard tail`) follow the room by its old name, and after the rename nothing else could reach them. The order is leave and notice frames, then `rooms`; a members or settings debounce that fires after the rename finds nothing to publish. `drop_room` unsubscribes every subscriber from the old name, so a re-created `#build` never streams into an old page or an old `tail`: pages subscribe again after the `rooms` frame, and an old `tail` goes quiet after the notice. `RoomService.command` returns straight after `close_room` (`Result.done`), because its usual post-processing would publish under the renamed room.
+
+**What agents see** (local and remote members alike):
+
+| When | What the agent gets |
+|---|---|
+| An open `wait` at close time | `{"status": "closed", "text": "[switchboard] #build was closed by alice; you are no longer in it."}`, through its local sink, or as an `out` frame over its link |
+| Its next call with the old credential | `unauthorized`: `#build was closed by alice; you are no longer in it`. `_member` checks `closed_membership_by_cred` before the generic error (and before the remote allowlist). The MCP server then forgets the credential, as for any `unauthorized` |
+| `join('#build')` with only a closed `#build` | `not_found`: `#build was closed by alice: ask your user to reopen it` |
+| `join('#build~closed-7')` | `bad_request` from `normalize_room`, as for any bad name |
+| An idle push-only agent (Claude inbox, Codex, Cursor park) | nothing until its next call: close sends no wake (§28.10) |
+| A remote member whose link is down at close | its membership is ended in the database whatever the link state; after reconnect its next call gets the closed error |
+
+The human's lookups (`switchboard say`, `who`, `tail`, `cmd`, the web routes) answer `no such room: #build (it is closed: reopen it from Closed rooms in the web UI)`. The runner drops an engine notice for a room that is closed or gone, instead of turning it into a broker-wide notice. No error code, remote method or MCP text is new.
+
+**What stays.** Pause, budget and hop settings are untouched and survive a reopen. Kicks from before the close still hold (`was_kicked` is keyed by room id). An empty room can be closed.
+
+### 28.4 Reopen and the Closed rooms panel
+Web only, with a web session (`human`):
+- `GET /api/rooms` returns `{rooms, closed}`; each open room carries its `id` and `created_at`, so the page can prune a tab whose room was replaced under the same name: closed and re-created (another id), or deleted and re-created with its id reused (another `created_at`, §28.10). A pruned active room gets the line `*** #build is no longer open (closed or deleted); …`, also when the new room keeps the tab. The page resyncs with `loadRooms(true)` on every WebSocket open **and every `rooms` frame**, which sends `hello` for every tab: a close drops the page's subscription (`hub.drop_room`), and a reopen keeps the id and name, so a listing served after the reopen looks unchanged. If that listing fails, the page still sends `hello` for the tabs it has. The log is redrawn only when the active room changed (or the no-rooms view toggles), so a command's reply is not wiped by a listing; after a done `/close` the page reloads its rooms before it shows the reply, so the reply lands in the view that follows (with no room left, the log stays visible for it). A **Closed (n)** button appears when n > 0.
+- `GET /api/closed-rooms` lists closed rooms newest first: `id`, internal `name`, `display`, `created_at`, `closed_at` and `closed_by` (from the last `room_close` event), `messages`, `reopenable`.
+- `POST /api/closed-rooms/{id}/reopen` (Origin and `X-Switchboard: 1` as for every write; `id` fullmatches `^[1-9][0-9]{0,18}$` and is at most 2^63−1, SQLite's largest integer, else 400). In one transaction: rename the room back, clear the kept `cred_hash` of its closed memberships, post `#build reopened by alice (via web); agents join() it again`, add `room_reopen`. Then the notice and `rooms` frames go out.
+- **Conflict rule.** An open room with the same name wins: reopen is 409, `#build is taken by an open room: close or delete that room first, then reopen this one` (the panel disables Reopen and says so). An id that is not a closed room is 404, `no closed room with id 12`.
+- **Nobody is re-added.** Former members call `join()` again; agents kicked before the close are still refused.
+- **No `/reopen` command.** A closed room has no tab, `command()` resolves rooms through `svc.room()` (open rooms only), and closing the last room disables the composer. The panel is the one place that lists closed rooms, so the button lives there.
+- **CLI, read-only** (`anon`, like `room.list`): `switchboard rooms --closed` prints `#build~closed-7  was #build, closed 2026-09-28 14:02 by alice, 412 message(s)` per room (`--json` for the list). `switchboard rooms` and `status` add the closed count (`(2 closed: switchboard rooms --closed)`).
+
+The web UI asks before a `/close` from the composer: how many agents leave, that the tab goes away, and that the history is kept and the room can be reopened.
+
+### 28.5 Room references
+`switchboard report --room` and `switchboard rooms delete` take a room reference, resolved by `store.resolve_room` after `room_ref` (strip, lower-case; a closed name passes as is, anything else through `normalize_room`):
+1. A closed name (`#build~closed-7`): that exact row, or `no such room`.
+2. An open room with that name: that room. An open room always wins.
+3. Otherwise the closed rooms with that base name: exactly one is used; several is an error listing them newest first (`#build names 2 closed rooms: #build~closed-9, #build~closed-4; give the full name of the one to delete`); none is `no such room`.
+
+Closed rooms are matched with `substr`, not `LIKE`, because `_` is a `LIKE` wildcard.
+
+### 28.6 `switchboard rooms delete`
+`switchboard rooms delete ROOM [--yes]` removes a room and its history for good.
+
+- **Role `login`:** human_cli plus a controlling TTY on the caller (§5.2). An agent's shell fails the peer chain, a script without a terminal fails the TTY check, and a link gets `forbidden` (not in `REMOTE_METHODS`). The refusal reads `room.delete must come from a terminal you typed in (not an agent's shell, nor a script without a terminal)`; `human.login_link` keeps its own text, and the SSH refusal still comes first.
+- **Plan, then apply, pinned to the planned room.** The CLI first calls `room.delete {room, dry_run: true}` and prints the plan: the room (closed: when and by whom; open: `open, no agents` and its creation time), the rows it removes per table, the backup path, and that it can't be undone except by restoring that backup. After `confirm` (or `--yes`) it calls `room.delete {room, room_id, name, created_at}` with the plan's id, full name and creation time (all three required, else `bad_request`). The id alone is not enough: a reopen keeps the id and only changes the name (`#build~closed-7` → `#build`), and a room re-created after a delete can get the same id and name back (§28.10), so only `created_at` tells it apart. If the reference now resolves to a room that differs in any of the three, the apply is refused: `#build~closed-7 changed since the plan (reopened, deleted or re-created); run the command again`. `store.delete_room` checks the name and `created_at` again inside its transaction.
+- **No members.** A room with any active membership (remote and offline ones count) is refused, in the plan too, so you are never asked to confirm something that will fail: `#build has 2 agent(s) (claude-1, bench@fpga-pi): close it first (/close in the web UI, or switchboard cmd '#build' /close)`. An open room with no members may be deleted directly; a closed room never has members.
+- **Only through a running broker.** With the broker down the CLI exits 3, as every broker command does. It never opens the database itself: that would skip the peer check, which runs in the broker, and leave the broker's in-memory state stale.
+- **The backup.** Before deleting, the broker copies the whole database with the sqlite3 backup API to `<db>.delete-<name>-<id>.bak` (for example `switchboard.db.delete-build-7.bak`), 0600, never overwriting an existing file (`.<epoch>`, then `.<epoch>-<n>`), and checks it: `integrity_check` and the row counts of all ten tables against the live database (`backup_verified(…, tables=TABLES, what="pre-delete backup")`; the migration's two-argument call is unchanged). A failure answers `the backup failed (<why>); nothing was deleted`.
+- **The delete,** in one transaction (`store.delete_room`):
+  1. the row still exists under the planned name, and has no members (checked again);
+  2. the row counts of every table equal the backup's (nothing was written in between);
+  3. delete, in this order: deliveries (of its memberships or its messages), batches (of its memberships; `batches.membership_id` has a foreign key to memberships), events (of the room or its memberships), messages, memberships, the room;
+  4. `PRAGMA foreign_key_check` returns nothing, each of the six tables lost exactly the deleted rows, and every other table is unchanged; otherwise the transaction rolls back;
+  5. add `room_delete` with `room_id` NULL and the removed counts.
+  Participants are never deleted. A failed check answers `conflict` or `internal` with `…; nothing was deleted (backup: <file>)`. `deliveries` and `events` have no foreign key, so leaving them out would have left orphans silently.
+- **Afterwards:** `hub.drop_room` for an open room, the `rooms` frame, a broker-wide warning `#build~closed-7 deleted via cli (zsh ← Terminal); backup switchboard.db.delete-build-7.bak`, and a log line.
+- **Output:** `deleted #build~closed-7: 1 room, 412 message(s), …`, then the backup path, `(0600, checked)`, and that it still holds the room: remove it once you no longer need it.
+
+The handler is synchronous: nothing awaits between the backup and the delete.
+
+### 28.7 Report on closed rooms
+`switchboard report --room` resolves by §28.5, using only SELECTs on its query-only connection, so v1 and v2 files still work. For a closed room, `rep["room"]` is the display name and `rep["closed"]` is `{name, at, by}` from the last `room_close` event (`None` for an open room). The markdown header reads `# switchboard report: #build (closed)` and the room line adds when, by whom and the internal name. Members show `left (closed)`.
+
+### 28.8 Remote links and compatibility
+- **The welcome lists open rooms only.** With `rooms = ["*"]`, `_welcome_rooms` names every room the broker lists, and a 0.3.0 satellite rejects any name that fails `ROOM_RE` with `bad_rooms`, after which the link reconnects in a loop. `list_rooms()` returns open rooms, and `_welcome_rooms` also keeps only names that fullmatch `ROOM_RE`, as a second guard.
+- **No protocol change.** No frame, method, field or `LINK_PROTO` change. `out` payloads are only checked to be a dict, so the `closed` status and the new error text reach 0.3.0 satellites and remote MCP servers unchanged. `enforce`, `sweep`, `end_members` and `_notice_rooms` iterate active memberships only.
+- **Allowlists match by name.** A remote that lists `#build` may join a re-created or reopened `#build`.
+- **Stale satellite status.** A satellite's own `status` room list stays as the welcome had it until its next reconnect. Cosmetic.
+- **Downgrade.** There is no schema change, so 0.3.0 opens the database, but it does not know the marker: it lists closed rooms as rooms (their tabs then get 400, since the name fails `ROOM_RE`), and links with `rooms = ["*"]` fail with `bad_rooms` on every welcome. **Reopen or delete closed rooms before going back to 0.3.0.**
+
+### 28.9 Races
+- **One event loop.** Close, reopen and delete each run in one synchronous step; no thread touches the database. A `join`, `say` or `wait` lands before the step (close then ends it) or after it (and sees the closed state).
+- **A push in flight** (a Claude inbox post, a Codex turn): its batch is cancelled and its deliveries revoked, as for `/kick`; the agent's reply gets the closed error.
+- **Frame order.** Leave and notice frames for `#build` go out before the `rooms` frame (§28.3).
+- **A join, reopen or re-create between delete's plan and apply:** the apply is pinned by room id, full name and `created_at`, and the member check runs again inside the transaction.
+- **A write between the backup and the delete:** none can come from the broker (no `await` in between); the row-count check catches one from another process.
+- **Double actions.** A second `/close` finds no room. Reopen and create are serialized; the loser gets 409. Reopening a deleted id is 404.
+- **A report during a delete** reads a consistent before or after snapshot (WAL).
+
+### 28.10 Known limits
+- Close does not wake idle agents: a wake would spend budget, and close revokes their deliveries. They learn at their next call.
+- Deleted text stays in SQLite free pages and the WAL until they are reused or checkpointed, and in the backup by design. There is no `VACUUM`.
+- The event loop is blocked while the backup is copied and checked (a large database takes a noticeable moment).
+- Each delete leaves a full copy of the database, which the output tells you to remove once you no longer need it.
+- `rooms.id` and `memberships.id` have no AUTOINCREMENT, so deleting the highest one lets the next row reuse its id (hence `room_delete` keeps `room_id` in its data and NULL in the column, and delete's pin and the page's tab pruning also compare `created_at`).
+- `events.room_id` and `batches.membership_id` have no index, so a delete scans those tables.
