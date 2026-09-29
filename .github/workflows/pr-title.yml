@@ -1,0 +1,25 @@
+# A PR's title becomes its squash commit on main, and the release reads it (issue #33;
+# CONTRIBUTING.md, "Releases"): `feat:` releases a minor version, anything else a patch.
+# This check keeps titles in the Conventional Commits form, e.g. `fix(cli): …`.
+name: pr-title
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  title:
+    name: conventional PR title
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          persist-credentials: false
+      # the title arrives through the environment, never pasted into the script (it's untrusted text)
+      - env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: python3 .github/scripts/release.py --check-title "$TITLE"

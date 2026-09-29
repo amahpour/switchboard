@@ -20,6 +20,7 @@ A new web UI ([#19](https://github.com/amahpour/switchboard/issues/19), [DESIGN.
 
 ### Changed
 
+- **Every merge to `main` is a release** ([#33](https://github.com/amahpour/switchboard/issues/33)). PR titles follow Conventional Commits and PRs are squash-merged. `feat:` releases a minor version and anything else a patch. This Unreleased section becomes each release's notes, and a `release` job in CI sets the version, moves the install pins, tags and publishes. CONTRIBUTING.md, "Releases".
 - **CI runs the test suite as three shards per OS** (pytest-split, balanced by the durations in `.test_durations`), each with xdist on its runner's cores, instead of one runner per OS, and combines the coverage of all six. Locally the suite still runs whole with `-n auto` (CONTRIBUTING.md, "Shards in CI").
 - **The web UI's look:** a sidebar with rooms, **Closed (n)**, remote machines and your connection state; the room's status as header chips (Running/Paused, budget, hops, approvals off) with a pause button; Members in a right pane. Every feature of the old UI is kept, and the element ids the tests and `docs/media/capture.py` use were updated. **+ Room** is now the **+** button in the sidebar; notices lose their `***` prefix.
 - **The MCP instructions** no longer say "(the human)" after "your user", to stay under their size cap.
