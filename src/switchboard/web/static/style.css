@@ -295,6 +295,7 @@ button:disabled, .btn:disabled, .btn-primary:disabled { opacity: .5; cursor: def
   font-weight: 500;
   white-space: nowrap;
 }
+.pill .ic { width: 12px; height: 12px; }
 
 .badge {
   display: inline-flex;
@@ -1071,6 +1072,10 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 .pal-head > :first-child { font-size: 13px; font-weight: 600; color: var(--fg); }
 .pal-head > :last-child:not(:first-child):not(:nth-child(2)) { margin-left: auto; }
 .pal-foot { bottom: 0; border-top: 1px solid var(--line); font-size: 11.5px; }
+.pal-foot .pal-tip { margin-left: auto; }
+.pal-key { display: inline-flex; align-items: center; gap: 5px; }
+.pal-key .ic { width: 13px; height: 13px; }
+#mentions .pal-head > :last-child { margin-left: auto; }
 .pal-group { display: flex; flex-direction: column; gap: 1px; padding: 4px 6px; }
 .pal-group > :first-child:not(.pal-item) { padding: 6px 8px 2px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
 .pal-item {
@@ -1271,8 +1276,10 @@ button.member:hover, .member[aria-current="true"] { background: var(--row-sel); 
   row-gap: 0;
   align-items: center;
 }
-.insp-id > .avatar { grid-row: 1 / span 3; align-self: start; margin-top: 2px; }
+.insp-id > .avatar { grid-row: 1; align-self: center; }
 .insp-id > :not(.avatar) { grid-column: 2; }
+/* tier, host and Held chips span the pane under the avatar (InspectorStates.dc), so they rarely wrap */
+.insp-id > .insp-chips { grid-column: 1 / -1; margin-top: 10px; }
 #insp-name, .insp-id h2 {
   display: flex;
   align-items: center;
@@ -1286,7 +1293,9 @@ button.member:hover, .member[aria-current="true"] { background: var(--row-sel); 
 .insp-id h2:focus { outline: none; }
 .insp-id h2 .flag-approvals .ic { width: 15px; height: 15px; }
 .insp-status { margin-top: 1px; font-size: 12.5px; color: var(--muted-2); }
-.insp-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.insp-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.insp-chips .host-chip, .insp-chips .chip-held { padding: 0 6px; }  /* tier + "This machine" + Held fit in 264 px */
+.group-label .group-count { font-weight: 400; }     /* "Delivery · last 5": the count is lighter */
 
 .insp-attn, .insp-details, .insp-timeline { display: flex; flex-direction: column; gap: 8px; }
 
@@ -1315,6 +1324,31 @@ button.member:hover, .member[aria-current="true"] { background: var(--row-sel); 
   font-size: 11.5px;
   overflow-wrap: anywhere;
 }
+/* Parked note (InspectorStates.dc #1): "Poke it" sits under a hairline; the command is one line
+   in a box with its copy button, ellipsized when long (the title and the copy carry the full text). */
+.note .poke { margin-top: 8px; padding-top: 8px; border-top: 1px solid color-mix(in srgb, currentColor 22%, transparent); }
+.poke-cmd {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 4px 4px 4px 9px;
+  border: 1px solid var(--code-border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.note .poke-cmd code {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.poke-cmd .copy-btn { flex-shrink: 0; color: var(--muted-2); }
 .note-danger { background: var(--danger-bg); color: var(--danger); }
 .note-amber { background: var(--amber-bg); color: var(--amber-fg); }
 .note-muted { background: var(--chip-bg); color: var(--ink-2); }
@@ -1326,7 +1360,7 @@ button.member:hover, .member[aria-current="true"] { background: var(--row-sel); 
   font-size: 12.5px;
 }
 .insp-facts dt, .insp-facts dd { margin: 0; padding: 7px 0; border-bottom: 1px solid var(--line); }
-.insp-facts dt { color: var(--muted-2); }
+.insp-facts dt { display: flex; align-items: center; color: var(--muted-2); }  /* level with a dd that holds a button */
 .insp-facts dd { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .insp-facts dd > span:has(> .sess) { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
 .insp-facts > dt:nth-last-of-type(1), .insp-facts > dd:nth-last-of-type(1) { border-bottom: 0; }
@@ -1433,6 +1467,10 @@ button.member:hover, .member[aria-current="true"] { background: var(--row-sel); 
 .insp-actions > div:not(.menu):not(.confirm):not(.note) { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .insp-actions .btn { width: 100%; min-width: 0; height: 34px; padding: 0 10px; }
 .insp-actions .btn[aria-pressed="true"] { background: var(--btn-on); }
+/* "Catch up on…" carries two icons in half of 264 px: tighter gap and a smaller chevron keep the
+   chevron off the border (Chosen.dc) */
+.insp-actions .btn[aria-haspopup="menu"] { gap: 5px; padding: 0 8px; }
+.insp-actions .btn[aria-haspopup="menu"] .ic-chev-down { width: 12px; height: 12px; }
 .insp-actions .btn-danger-ghost { justify-content: flex-start; padding: 0 8px; font-weight: 500; }
 .insp-actions > .fine { margin: 0; }
 
@@ -1548,10 +1586,25 @@ button.member:hover, .member[aria-current="true"] { background: var(--row-sel); 
 .remote-error, .remote-result.bad, .closed-result.bad { color: var(--danger); font-weight: 500; }
 .remote-detail { font-size: 12px; color: var(--muted-2); }
 .closed-card .fine code { overflow-wrap: anywhere; }
+.closed-delete { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
+.closed-card .closed-delete .cmd-block {
+  display: block;
+  padding: 7px 10px;
+  border: 1px solid var(--code-border);
+  border-radius: 6px;
+  background: var(--pre-bg);
+  color: var(--fg);
+  font: 12px/1.5 var(--mono);
+  overflow-wrap: anywhere;
+}
 .dialog-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }
 .closed-card .dialog-buttons .btn:not(:disabled) { border-color: transparent; background: var(--accent); color: var(--accent-fg); }
 
 /* ==== 13. First run (spec 1.8) ======================================================= */
+/* With no open room there is nobody to list and nowhere to send: Welcome.dc shows only the steps,
+   under a "Get started" title. app.js sets .no-rooms on #app. */
+.app.no-rooms #pane, .app.no-rooms #composer, .app.no-rooms #pane-toggle, .app.no-rooms #buddy-toggle,
+.app.no-rooms .head-divider, .app.no-rooms .head-hash, .app.no-rooms #scrim { display: none; }
 .welcome {
   position: absolute;
   inset: 0;
@@ -1562,9 +1615,9 @@ button.member:hover, .member[aria-current="true"] { background: var(--row-sel); 
 }
 .welcome-inner {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
-  gap: 40px;
-  max-width: 1120px;
+  grid-template-columns: minmax(0, 1fr) 340px;   /* Welcome.dc: ~690 px of steps, a 340 px harness column */
+  gap: 44px;
+  max-width: 1080px;
   margin: 0 auto;
 }
 .welcome-title { font-size: 24px; font-weight: 650; letter-spacing: -.02em; line-height: 1.25; }

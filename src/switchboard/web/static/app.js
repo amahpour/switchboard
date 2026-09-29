@@ -67,7 +67,7 @@
     detail: null,      // { room, name, data } from GET /api/rooms/{slug}/members/{name}
     inspSeq: 0,        // only the newest detail response is applied
     inspTimer: null,
-    inspUi: null,      // { menu, confirm, queueOpen, copied }
+    inspUi: null,      // { menu, confirm, queueOpen, copied, pokeCopied }
     insp: {},          // references to Inspector nodes built here (ids are not looked up)
     rowRefs: new Map(),  // member name -> its row button, for focus on "back"
     pop: null,         // composer popover: { kind: 'palette'|'mentions', items, sel, start }
@@ -132,6 +132,13 @@
   function has(v) { return v !== null && v !== undefined; }
 
   function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
+
+  // A fixed-width local stamp, "2026-09-28 13:40" (Composer.dc's Closed rooms card).
+  function stamp(ts) {
+    const d = new Date(ts * 1000);
+    const p2 = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) + ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes());
+  }
 
   function harnessOf(h) { return HARNESS[h] || HARNESS.unknown; }
 
@@ -200,6 +207,7 @@
     kick: circ(6.5, 5, 2.5) + 'M1.5 13.5c.4-2.4 2.3-3.8 5-3.8 1.2 0 2.2.3 3 .8M11 10l3.5 3.5M14.5 10 11 13.5',
     close: 'M4 4l8 8M12 4l-8 8',
     terminal: 'M3 4.5 6.5 8 3 11.5M8.5 11.5H13',
+    browser: rr(2, 3, 12, 10, 1.5) + 'M2 6.2h12',   // "web only": needs this signed-in browser
   };
 
   function icon(name) {
@@ -499,6 +507,8 @@
     const r = activeRoom();
     const noRooms = state.rooms.size === 0;
     $('empty').classList.toggle('hidden', !noRooms);
+    // first run (Welcome.dc): no members pane and no composer, only the Welcome steps
+    $('app').classList.toggle('no-rooms', noRooms);
     log.classList.toggle('hidden', noRooms);
     const input = $('input');
     input.disabled = noRooms;
@@ -603,7 +613,7 @@
     const base = state.active ? 'switchboard — ' + state.active : 'switchboard';
     document.title = (unread ? '(' + unread + ') ' : '') + base;
     const r = activeRoom();
-    $('room-title').textContent = r ? r.name.replace(/^#/, '') : '';
+    $('room-title').textContent = r ? r.name.replace(/^#/, '') : (state.rooms.size ? '' : 'Get started');
     $('room-sub').textContent = r && state.me ? state.me.human + ' and ' + plural(r.members.length, 'agent', 'agents') : '';
   }
 
@@ -720,7 +730,9 @@
     chip.replaceChildren();
     chip.classList.toggle('hidden', !bypass.length && !unknown.length);
     if (bypass.length) {
-      chip.append(icon('warn'), el('span', null, 'Approvals off: ' + bypass.join(', ')));
+      const t = el('span');
+      t.append(el('span', 'wide-only', 'Approvals off: '), bypass.join(', '));
+      chip.append(icon('warn'), t);
       chip.title = 'approvals are off in this session: room messages can make it act without asking';
     } else if (unknown.length) {
       chip.append(icon('warn'), el('span', null, 'Approval mode unknown: ' + unknown.join(', ')));
@@ -894,7 +906,7 @@
     state.inspect = { room: r.name, name: m.name, host: m.host || '' };
     if (!same) {
       state.detail = null;
-      state.inspUi = { menu: false, confirm: false, queueOpen: false, copied: false };
+      state.inspUi = { menu: false, confirm: false, queueOpen: false, copied: false, pokeCopied: false };
     }
     setPaneView(true);
     showPane();
@@ -1040,8 +1052,9 @@
       chips.append(h);
     }
     const idText = el('div');
-    idText.append(nameH, el('p', 'insp-status', statusWord(m) + since + ' · ' + harnessOf(m.harness)[1]), chips);
-    id.append(withDot(avatar(m.harness, 'agent', m.name, 'lg'), m), idText);
+    idText.append(nameH, el('p', 'insp-status', statusWord(m) + since + ' · ' + harnessOf(m.harness)[1]));
+    // the chips get the pane's full width (InspectorStates.dc), so tier + host + Held fit on one row
+    id.append(withDot(avatar(m.harness, 'agent', m.name, 'lg'), m), idText, chips);
 
     // 2. needs attention
     const attn = el('section', 'insp-attn');
@@ -1053,8 +1066,26 @@
       notes.push(note('danger', 'warn', 'Approval mode unknown', [' Treat it like approvals off.']));
     }
     if (m.parked) {
-      const poke = el('p');
-      poke.append(el('strong', null, 'Poke it:'), ' type in its own terminal: ', el('code', null, 'read ' + r.name + ' and go back to wait()'));
+      const pokeCmd = 'read ' + r.name + ' and go back to wait()';
+      const poke = el('div', 'poke');
+      const cmdBox = el('div', 'poke-cmd');
+      const copy = btn('copy-btn');
+      copy.dataset.focus = 'copy-poke';
+      const lbl = ui.pokeCopied ? 'Command copied' : 'Copy the command';
+      copy.setAttribute('aria-label', lbl);
+      copy.title = lbl;
+      copy.append(icon(ui.pokeCopied ? 'check' : 'copy'));
+      copy.addEventListener('click', function () {
+        clipboardWrite(pokeCmd).then(function () {
+          ui.pokeCopied = true;
+          renderInspector();
+          setTimeout(function () { ui.pokeCopied = false; renderInspector(); }, COPIED_MS);
+        }, function () {});
+      });
+      const cmdCode = el('code', null, pokeCmd);
+      cmdCode.title = pokeCmd;  // the box ellipsizes a long room name; the title and the copy keep it whole
+      cmdBox.append(cmdCode, copy);
+      poke.append(el('strong', null, 'Poke it:'), ' type this in its own terminal', cmdBox);
       const rest = [' ' + (m.parked_reason ? m.parked_reason + '.' : ''), poke];
       if (m.queued) rest.push(el('p', null, plural(m.queued, 'message is', 'messages are') + ' waiting.'));
       notes.push(note('amber', 'hourglass', 'Parked — needs a poke', rest));
@@ -1134,7 +1165,9 @@
     const tl = el('section', 'insp-timeline');
     tl.setAttribute('aria-label', 'Delivery history');
     const events = (d && d.timeline) || [];
-    tl.append(el('div', 'group-label', 'Delivery' + (events.length ? ' · last ' + events.length : '')));
+    const tlLabel = el('div', 'group-label', 'Delivery');
+    if (events.length) tlLabel.append(el('span', 'group-count', ' · last ' + events.length));
+    tl.append(tlLabel);
     if (!d) tl.append(el('p', 'muted', 'loading…'));
     else if (!events.length) tl.append(el('p', 'muted', 'No deliveries yet.'));
     else {
@@ -1390,6 +1423,24 @@
     const input = $('input');
     unsetAttr(input, 'aria-activedescendant');
     input.setAttribute('aria-expanded', 'false');
+    popHint(null);
+  }
+
+  // While a popover is open, the composer says what Enter does (Composer.dc): the palette runs the
+  // highlighted command ("Run"), the mention list picks the highlighted agent.
+  function popHint(text, run) {
+    $('composer-hint').classList.toggle('hidden', !!text);
+    const h = $('pop-hint');
+    h.textContent = text || '';
+    h.classList.toggle('hidden', !text);
+    $('send-label').textContent = run ? 'Run' : 'Send';
+  }
+
+  // the palette head's legend for the "web only" pills, with the same browser glyph (Composer.dc)
+  function webOnlyKey() {
+    const k = el('span', 'muted pal-key');
+    k.append(icon('browser'), 'web only = needs this signed-in browser');
+    return k;
   }
 
   function renderPop() {
@@ -1403,7 +1454,7 @@
     if (p.kind === 'palette') {
       const head = el('div', 'pal-head');
       head.append(el('strong', null, 'Commands'), el('span', 'muted', p.items.length + ' match “/' + p.prefix + '”'),
-        el('span', 'muted', 'web only = needs this signed-in browser'));
+        webOnlyKey());
       box.append(head);
       let group = null;
       let g = null;
@@ -1421,7 +1472,11 @@
         o.setAttribute('role', 'option');
         o.setAttribute('aria-selected', String(i === p.sel));
         o.append(el('span', 'pal-cmd', '/' + c.cmd), el('span', 'pal-args', c.args), el('span', 'pal-desc', cmdDesc(c)));
-        if (c.pill) o.append(el('span', 'pill', c.pill));
+        if (c.pill) {
+          const pill = el('span', 'pill');
+          pill.append(icon('browser'), c.pill);
+          o.append(pill);
+        }
         if (i === p.sel) {
           // the usage line only when it says more than the command itself (/pause has no arguments)
           if (c.usage && c.usage !== '/' + c.cmd) o.append(el('code', 'pal-usage', c.usage));
@@ -1432,8 +1487,11 @@
         g.append(o);
       });
       const foot = el('div', 'pal-foot');
-      foot.append(el('kbd', 'kbd', '↑'), ' ', el('kbd', 'kbd', '↓'), ' move · ', el('kbd', 'kbd', 'Tab'), ' complete · ',
-        el('kbd', 'kbd', 'Esc'), ' close · ', el('code', null, '//text'), ' posts text that begins with /');
+      foot.append(el('kbd', 'kbd', '↑'), el('kbd', 'kbd', '↓'), ' move ', el('kbd', 'kbd', 'Tab'), ' complete ',
+        el('kbd', 'kbd', 'Esc'), ' close');
+      const tip = el('span', 'pal-tip');
+      tip.append(el('code', null, '//text'), ' posts text that begins with /');
+      foot.append(tip);
       box.append(foot);
     } else {
       const head = el('div', 'pal-head');
@@ -1450,7 +1508,8 @@
         if (m.host) nl.append(hostChip(m, false));
         const flag = approvalsFlag(m);
         if (flag) nl.append(flag);
-        main.append(nl, el('span', 'm-status', statusWord(m) + ' · ' + harnessOf(m.harness)[1]));
+        nl.append(el('span', 'm-status', statusWord(m) + ' · ' + harnessOf(m.harness)[1]));
+        main.append(nl);
         if (m.approval_mode === 'bypass') main.append(el('span', 'm-warn', 'Approvals off: what it reads can steer it'));
         if (m.parked) main.append(el('span', 'm-warn', 'Parked — needs a poke'));
         o.append(withDot(avatar(m.harness, 'agent', m.name), m), main, tierChip(m));
@@ -1464,6 +1523,9 @@
     input.setAttribute('aria-controls', p.kind);
     input.setAttribute('aria-expanded', 'true');
     input.setAttribute('aria-activedescendant', optionId(p, p.sel));
+    const cur = p.items[p.sel];
+    if (p.kind === 'palette') popHint('Enter runs the highlighted command', true);
+    else popHint(cur ? 'Tab or Enter picks ' + cur.name : 'No agent matches', false);
     if (selected && typeof selected.scrollIntoView === 'function') selected.scrollIntoView({ block: 'nearest' });
   }
 
@@ -1891,8 +1953,8 @@
     head.append(icon('hash'), el('span', 'closed-name', String(c.display).replace(/^#/, '')));
     card.append(head);
     const facts = el('div', 'fine');
-    facts.append('closed' + (c.closed_at ? ' ' + when(c.closed_at) : '') + (c.closed_by ? ' by ' + c.closed_by : '') +
-      ' · ' + c.messages + ' message(s) · ', el('code', null, c.name));
+    facts.append('closed' + (c.closed_at ? ' ' + stamp(c.closed_at) : '') + (c.closed_by ? ' by ' + c.closed_by : '') +
+      ' · ' + plural(c.messages, 'message', 'messages') + ' · ', el('code', null, c.name));
     card.append(facts);
     const out = el('div', 'fine closed-result');
     const btns = el('div', 'dialog-buttons');
@@ -1905,7 +1967,8 @@
     btns.append(b, el('span', 'fine', c.reopenable ? 'Agents join() it again.' : 'The name is taken by an open room.'));
     card.append(btns);
     const del = el('div', 'fine');
-    del.append('Delete for good, from your own terminal: ', el('code', null, "switchboard rooms delete '" + c.name + "'"));
+    del.className = 'fine closed-delete';
+    del.append('Delete for good, from your own terminal:', el('code', 'cmd-block', "switchboard rooms delete '" + c.name + "'"));
     card.append(del, out);
     return card;
   }
