@@ -1,7 +1,7 @@
 [project]
 name = "switchboard"
 version = "0.4.0"
-description = "A 90s-style local hangout where you and your coding agents talk and hand work to each other"
+description = "A local group chat where you and your coding agents talk and hand work to each other"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"

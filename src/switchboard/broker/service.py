@@ -1,7 +1,7 @@
 """RoomService: the broker's room operations (DESIGN.md §3, §10).
 
-The human side: rooms, history, the buddy list, human messages and
-commands. Agent operations live in ``broker/agents.py`` (AgentService) and
+The human side: rooms, history, the member list (and one member's detail, for
+the web UI's Inspector), human messages and commands. Agent operations live in ``broker/agents.py`` (AgentService) and
 plug into the same persist-then-publish flow through ``self.delivery``.
 """
 
@@ -26,6 +26,11 @@ from switchboard.config import Config
 from switchboard.delivery.rules import parse_mentions
 from switchboard.envelope import clean
 from switchboard.models import (
+    CONTINUE_PATHS,
+    HOOK_PATHS,
+    PRIO_LABEL,
+    PULL_PATHS,
+    SCREEN_NAME_RE,
     InvalidName,
     Member,
     Message,
@@ -35,6 +40,7 @@ from switchboard.models import (
     normalize_room,
     tier_label,
 )
+from switchboard.report import _safe
 from switchboard.store import Ambiguous, Conflict, NotFound, Store, StoreError
 
 log = logging.getLogger("switchboard.service")
@@ -148,6 +154,55 @@ def member_label(m: Member) -> str:
     return f"{m.name}@{m.host}" if m.host else m.name
 
 
+# ------------------------------------------------------ the Inspector (§29)
+# ``RoomService.member_detail`` answers the web UI's GET /api/rooms/{slug}/members/{name}.
+# It is human-only (the web session) and read-only. Security reasoning:
+#  - Events carry engine-internal ``data`` (reasons, statuses, ids). Nothing of it is passed
+#    through: each timeline entry is rebuilt from a per-kind whitelist of plain numbers,
+#    known path names and scrubbed, capped strings (``report._safe``: paths and emails out).
+#  - No message text ever leaves here: queued items and ``said`` entries are ids only, and
+#    the browser resolves them against the history it already shows the human.
+#  - The session id is shown to the human only, as in /who (``session_handles``).
+TIMELINE_LIMIT = 6
+QUEUED_LIMIT = 50
+# every delivery path the engine and the adapters use (models.py, report.py); anything else
+# is reported as "other" rather than echoed
+KNOWN_PATHS = frozenset({"inbox", "turn_start", "queue", "steer"}) | PULL_PATHS | HOOK_PATHS | CONTINUE_PATHS
+
+
+def _num(v: Any) -> int | float | None:
+    """A plain number from event data, else None (bools and strings are not numbers here)."""
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _text(v: Any, cap: int) -> str | None:
+    """A free-form string from event data or the participant row: scrubbed and capped."""
+    return clean(_safe(v))[:cap] if isinstance(v, str) else None
+
+
+def _sender_label(name: str, host: str | None) -> str:
+    return f"{name}@{host}" if host else name
+
+
+def _last_seen(t: dict[str, Any]) -> tuple[float | None, str | None]:
+    """The member's newest sign of life and what it was: ``said`` (its last say()),
+    ``passed`` (a pass() in this room), ``turn ended`` (a Stop hook was the last status
+    report), else ``seen``. ``(None, None)`` when nothing is known."""
+    seen, said, passed = t.get("last_seen"), t.get("last_say_at"), t.get("last_pass_at")
+    known = [x for x in (seen, said, passed) if x is not None]
+    if not known:
+        return None, None
+    top = max(known)
+    if said is not None and said == top:
+        return top, "said"
+    if passed is not None and passed == top:
+        return top, "passed"
+    src = t.get("status_src")
+    if isinstance(src, str) and src.startswith("stop") and seen == top:
+        return top, "turn ended"
+    return top, "seen"
+
+
 class RoomService:
     def __init__(
         self,
@@ -249,6 +304,82 @@ class RoomService:
         for m in rows:
             why = self.delivery.parked_reason(m.membership_id)
             out.append(dataclasses.replace(m, parked=why is not None, parked_reason=why) if why else m)
+        return out
+
+    def member_detail(self, room_name: str, name: str) -> dict[str, Any]:
+        """One member for the web UI's Inspector (DESIGN.md §29): its ``member_dict`` plus
+        times, its session id (human-only), its queued message ids, its delivery counts and
+        the last few delivery events. Read-only; nothing here is published or stored, and
+        ``member_dict`` (the broadcast ``members`` frame) is unchanged."""
+        room = self.room(room_name)
+        n = name.strip().lower().lstrip("@")
+        if not SCREEN_NAME_RE.fullmatch(n):
+            raise ServiceError("bad_request", "not a valid screen name")
+        m = next((x for x in self.member_rows(room.id) if x.name.lower() == n), None)
+        if m is None:
+            raise ServiceError("not_found", f"{n} is not in {room.name}")
+        t = self.store.member_times(m.membership_id) or {}
+        last_seen, what = _last_seen(t)
+        sid, why = catchup.session_id(self.store.get_participant(m.participant_id), self.cfg)
+        return {
+            "room": room.name,
+            "member": {
+                **member_dict(m),
+                # scrubbed here too: the Inspector shows it in full, in a note box
+                "parked_reason": _text(m.parked_reason, 200),
+                "joined_at": m.joined_at,
+                "held_at": t.get("held_at"),
+                "status_at": t.get("status_at"),
+                "status_src": _text(t.get("status_src"), 40),
+                "last_seen": last_seen,
+                "last_seen_what": what,
+            },
+            "session": {"id": sid, "why": why, "where": m.host or catchup.THIS_MACHINE},
+            "queued": [
+                {"id": mid, "prio": PRIO_LABEL.get(prio, "chatter")}
+                for mid, prio in self.store.pending_deliveries(m.membership_id, QUEUED_LIMIT)
+            ],
+            "counts": self.store.membership_delivery_counts(m.membership_id),
+            "timeline": [
+                self._timeline_entry(m, e)
+                for e in self.store.member_timeline(m.membership_id, since=m.joined_at, limit=TIMELINE_LIMIT)
+            ],
+        }
+
+    def _timeline_entry(self, m: Member, e: dict[str, Any]) -> dict[str, Any]:
+        """One Inspector timeline row, rebuilt field by field from a per-kind whitelist
+        (DESIGN.md §29): the event's own ``data`` is never passed through."""
+        kind, d = e["kind"], e["data"]
+        out: dict[str, Any] = {"ts": e["ts"], "kind": kind}
+        path = d.get("path")
+        path = path if isinstance(path, str) and path in KNOWN_PATHS else "other"
+        if kind == "offer":
+            ids = [i for i in d.get("ids") or [] if isinstance(i, int) and not isinstance(i, bool)][:20]
+            senders = self.store.offer_senders(m.membership_id, ids)
+            labels: list[str] = []
+            for _prio, sname, shost in senders:
+                lab = _sender_label(sname, shost)
+                if lab not in labels:
+                    labels.append(lab)
+            top = max((p for p, _n, _h in senders), default=None)
+            out.update(path=path, n=_num(d.get("n")), counted=bool(d.get("counted")),
+                       prio=PRIO_LABEL.get(top, "chatter") if top is not None else None, **{"from": labels[:3]})
+        elif kind in ("expire", "cancel"):
+            out.update(path=path, reason=_text(d.get("reason"), 200))
+        elif kind == "parked":
+            out.update(reason=_text(d.get("reason"), 200))
+        elif kind == "unparked":
+            out.update(seconds=_num(d.get("seconds")))
+        elif kind == "rearm":
+            out.update(n=_num(d.get("n")))
+        elif kind == "requeue":
+            reason = d.get("reason")
+            out.update(reason="redeliver" if reason == "redeliver" else _text(reason, 200), n=_num(d.get("n")))
+        elif kind in ("watchdog_remind", "watchdog_escalate"):
+            out.update(n=_num(d.get("n")), why=_text(d.get("why"), 40))
+        elif kind == "said":
+            out.update(id=e["id"])
+        # "pass": the kind and the time say it all
         return out
 
     def _members_snapshot(self, room_name: str) -> list[dict[str, Any]] | None:

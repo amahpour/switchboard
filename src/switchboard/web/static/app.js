@@ -1,13 +1,43 @@
-// switchboard web UI. Vanilla JS, no build step.
-// Rendering uses textContent only; the page never holds a token.
+// switchboard web UI ("A · Native", issue #19). Vanilla JS, no build step, one IIFE.
+//
+// Security model (DESIGN.md §5.5, §12.1, §29):
+// - Every node is built with createElement / textContent. No HTML strings are ever parsed,
+//   so text from agents (or remote machines) can never become markup or script.
+// - Chat bodies go through md.js (window.SBMarkdown.render), which builds a DOM fragment
+//   from a small Markdown subset. md.js owns the only link path in the static JS (http(s)
+//   only, never this switchboard page). This file never sets a link target itself.
+// - Icons are inline SVG built with createElementNS (SVG namespace only) and a fixed path
+//   table below; no icon data ever comes from the network.
+// - The page never holds a token: the session is an HttpOnly cookie, and every write
+//   carries the X-Switchboard header (the broker's CSRF check).
+// - Nothing is kept in browser storage; all state lives in memory for this page view.
+//
+// Test harness contract (tests/web_app_harness.js runs this file in node against a tiny
+// fake DOM): the boot, msg, members, room, rooms, notice, send and command paths use only
+// getElementById, createElement, createDocumentFragment, className/classList, dataset,
+// textContent, append, replaceChildren, setAttribute, addEventListener, focus,
+// requestSubmit and plain property sets. Anything else (createElementNS, navigator,
+// matchMedia, querySelector, closest, scrollIntoView, ...) is feature-checked or used
+// only from click handlers.
 'use strict';
 
 (function () {
   const $ = (id) => document.getElementById(id);
-  const HARNESS_LETTER = { claude: 'C', codex: 'X', cursor: 'U', devin: 'D', test: 'T', unknown: '?' };
   const MAX_LINES = 2000;
+  const CONT_WINDOW_S = 300;       // a same-sender message within 5 minutes is a continuation row
+  const REFETCH_MS = 800;          // Inspector refetch debounce
+  const COPIED_MS = 1600;          // how long "Copied" / "Session id copied" shows
 
-  // blocked(reason) in a header chip: a few words; the panel has the whole story (DESIGN.md §27.11)
+  // harness key -> [avatar monogram, display name]
+  const HARNESS = {
+    claude: ['CC', 'Claude Code'], codex: ['CX', 'Codex'], devin: ['DV', 'Devin'],
+    cursor: ['CU', 'Cursor'], test: ['TS', 'Test'], unknown: ['??', 'Unknown'],
+  };
+  const STATUS_WORD = {
+    starting: 'Starting', idle: 'Idle', busy: 'Busy', 'waiting-approval': 'Waiting for approval', offline: 'Offline',
+  };
+
+  // blocked(reason) on a remote row: a few words; the panel has the whole story (DESIGN.md §27.11)
   const BLOCK_SHORT = {
     host_key: 'host key changed', auth: 'key refused', files: 'key files', proto: 'version mismatch',
     name: 'wrong name', shell_noise: 'shell prints text', replaced: 'link taken over', local_broker: 'broker there',
@@ -18,8 +48,8 @@
   const state = {
     me: null,          // { human, test_mode, version, port }
     rooms: new Map(),  // name -> { name, slug, id, createdAt, lastId, msgs: [], members: [], settings: {}, unread: 0 }
-    closed: 0,         // how many closed rooms there are (GET /api/rooms), for the Closed button
-    closedRooms: [],   // GET /api/closed-rooms, as the Closed panel shows it
+    closed: 0,         // how many closed rooms there are (GET /api/rooms), for the Closed row
+    closedRooms: [],   // GET /api/closed-rooms, as the Closed sheet shows it
     active: null,
     ws: null,
     wsOpen: false,
@@ -29,8 +59,19 @@
     remotesAt: 0,      // when that snapshot arrived (ms), for the retry countdowns
     remotesError: null,
     enabling: new Set(),  // remotes whose Enable is in flight (a long poll)
-    chipsKey: null,    // remotesKey() of the chips and the panel as rendered
+    chipsKey: null,    // remotesKey() of the sidebar rows and the sheet as rendered
     panelKey: null,
+    sendQueue: null,   // sends (typed or from the Inspector) go out one at a time, in order
+    // Inspector: which agent, the latest member-detail GET, and its UI toggles
+    inspect: null,     // { room, name } or null (the pane shows Members)
+    detail: null,      // { room, name, data } from GET /api/rooms/{slug}/members/{name}
+    inspSeq: 0,        // only the newest detail response is applied
+    inspTimer: null,
+    inspUi: null,      // { menu, confirm, queueOpen, copied }
+    insp: {},          // references to Inspector nodes built here (ids are not looked up)
+    rowRefs: new Map(),  // member name -> its row button, for focus on "back"
+    pop: null,         // composer popover: { kind: 'palette'|'mentions', items, sel, start }
+    sheetOpener: null, // the control that opened the Closed or Remotes sheet (focus returns to it)
   };
 
   // ------------------------------------------------------------ helpers
@@ -41,14 +82,26 @@
     return e;
   }
 
+  function btn(cls, text) {
+    const b = el('button', cls, text);
+    b.type = 'button';
+    return b;
+  }
+
+  // removeAttribute where the DOM has it (the harness's fake DOM does not)
+  function unsetAttr(e, k) {
+    if (typeof e.removeAttribute === 'function') e.removeAttribute(k);
+    else e.setAttribute(k, '');
+  }
+
   function pad2(n) { return (n < 10 ? '0' : '') + n; }
 
   // `bench@fpga-pi` for a member or sender on a remote machine, the plain name on this one
   function label(name, host) { return host ? name + '@' + host : name; }
 
-  function hhmmss(ts) {
+  function hhmm(ts) {
     const d = new Date(ts * 1000);
-    return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+    return pad2(d.getHours()) + ':' + pad2(d.getMinutes());
   }
 
   function dayKey(ts) {
@@ -57,9 +110,112 @@
   }
 
   function dayLabel(ts) {
-    return new Date(ts * 1000).toDateString();
+    const now = Date.now() / 1000;
+    if (dayKey(ts) === dayKey(now)) return 'Today';
+    if (dayKey(ts) === dayKey(now - 86400)) return 'Yesterday';
+    return new Date(ts * 1000).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
   }
 
+  // "Today, 14:02" / "Yesterday, 09:10" / "Mon, Sep 28, 14:02"
+  function dayTime(ts) { return dayLabel(ts) + ', ' + hhmm(ts); }
+
+  function timeEl(ts, cls) {
+    const t = el('time', cls, hhmm(ts));
+    const d = new Date(ts * 1000);
+    t.dateTime = d.toISOString();
+    t.title = d.toLocaleString();
+    return t;
+  }
+
+  function when(ts) { return ts ? new Date(ts * 1000).toLocaleString() : null; }
+
+  function has(v) { return v !== null && v !== undefined; }
+
+  function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
+
+  function harnessOf(h) { return HARNESS[h] || HARNESS.unknown; }
+
+  function mq(q) {
+    try { return typeof window.matchMedia === 'function' && window.matchMedia(q).matches; } catch (e) { return false; }
+  }
+  function narrow() { return mq('(max-width: 1100px)'); }  // the pane is an overlay (drawer or sheet)
+  function phone() { return mq('(max-width: 760px)'); }    // rooms drawer, bottom sheet
+
+  function clipboardWrite(text) {
+    if (typeof navigator === 'undefined' || !navigator.clipboard || !navigator.clipboard.writeText) {
+      return Promise.reject(new Error('no clipboard'));
+    }
+    return navigator.clipboard.writeText(text);
+  }
+
+  // The first line of a message, markup stripped (md.js), for reply lines, the queue and the timeline.
+  function firstLine(text, max) {
+    const md = window.SBMarkdown;
+    if (md && typeof md.firstLine === 'function') {
+      try { return md.firstLine(String(text || ''), max); } catch (e) { /* fall through */ }
+    }
+    const line = String(text || '').split('\n').find(function (l) { return l.trim(); }) || '';
+    return line.length > max ? line.slice(0, max - 1) + '…' : line;
+  }
+
+  // ---------------------------------------------------------------- icons
+  // A fixed table of 16x16 stroke icons (paths from the approved mockups). Stroke and fill
+  // come from CSS (`.ic`). Built with the SVG namespace only; without createElementNS (the
+  // node harness) an icon is an empty span.ic.ic-<name>. An icon never has text content.
+  function rr(x, y, w, h, r) {  // a rounded rectangle as path data
+    const iw = w - 2 * r;
+    const ih = h - 2 * r;
+    const a = 'a' + r + ' ' + r + ' 0 0 1 ';
+    return 'M' + (x + r) + ' ' + y + 'h' + iw + a + r + ' ' + r + 'v' + ih + a + (-r) + ' ' + r +
+      'h' + (-iw) + a + (-r) + ' ' + (-r) + 'v' + (-ih) + a + r + ' ' + (-r) + 'z';
+  }
+  function circ(cx, cy, r) {
+    return 'M' + (cx - r) + ' ' + cy + 'a' + r + ' ' + r + ' 0 1 0 ' + 2 * r + ' 0a' + r + ' ' + r + ' 0 1 0 ' + (-2 * r) + ' 0';
+  }
+  const ICONS = {
+    hash: 'M6 2.5 4.8 13.5M11.2 2.5 10 13.5M2.8 6h11M2.2 10h11',
+    plus: 'M8 3v10M3 8h10',
+    archive: 'M2 3.5h12v3H2zM3 6.5v6h10v-6M6.5 9h3',
+    server: rr(2.5, 3, 11, 4.5, 1.2) + rr(2.5, 8.5, 11, 4.5, 1.2) + 'M5 5.25h.01M5 10.75h.01',
+    laptop: rr(3, 3.5, 10, 7, 1.2) + 'M1.5 12.5h13',
+    'chev-left': 'M10 3 5 8l5 5',
+    'chev-right': 'm6 3.5 4.5 4.5L6 12.5',
+    'chev-down': 'm4 6 4 4 4-4',
+    pause: 'M5.5 3.5v9M10.5 3.5v9',
+    play: 'M5 3.5v9l7-4.5-7-4.5Z',
+    sidebar: rr(2, 3, 12, 10, 2) + 'M10 3v10',
+    people: circ(6, 5, 2.5) + 'M1.5 13.5c.4-2.4 2.3-3.8 4.5-3.8s4.1 1.4 4.5 3.8M10.5 2.7a2.5 2.5 0 0 1 0 4.6M12 9.9c1.4.5 2.3 1.7 2.5 3.6',
+    at: circ(8, 8, 2.5) + 'M10.5 8v1a2 2 0 0 0 4 0V8a6.5 6.5 0 1 0-2.6 5.2',
+    slash: rr(2, 2, 12, 12, 3) + 'M9.8 5 6.2 11',
+    'arrow-up': 'M8 13V3M3.5 7.5 8 3l4.5 4.5',
+    logout: 'M6 3H3.5v10H6M9.5 5 12.5 8l-3 3M12.5 8H6',
+    copy: rr(5.5, 5.5, 8, 8, 1.5) + 'M10.5 3.5V3a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h.5',
+    check: 'm3.5 8.5 3 3 6-7',
+    reply: 'M13.5 12.5V8.5a3 3 0 0 0-3-3H5.5M8 3 5.5 5.5 8 8',
+    door: 'M3.5 14V2.5h8V14M1.5 14h13M9 8.5h.01',
+    info: circ(8, 8, 6) + 'M8 7.3V11M8 5h.01',
+    warn: 'M8 2.3 14.6 13.6H1.4L8 2.3ZM8 6.6v3.2M8 11.8h.01',
+    hourglass: 'M4.5 2.5h7M4.5 13.5h7M5.5 2.5c0 3 5 3 5 5.5s-5 2.5-5 5.5M10.5 2.5c0 3-5 3-5 5.5s5 2.5 5 5.5',
+    history: 'M2.5 8a5.5 5.5 0 1 0 1.7-4M2.5 2.5V5.5h3M8 5.5V8l2 1.5',
+    kick: circ(6.5, 5, 2.5) + 'M1.5 13.5c.4-2.4 2.3-3.8 5-3.8 1.2 0 2.2.3 3 .8M11 10l3.5 3.5M14.5 10 11 13.5',
+    close: 'M4 4l8 8M12 4l-8 8',
+    terminal: 'M3 4.5 6.5 8 3 11.5M8.5 11.5H13',
+  };
+
+  function icon(name) {
+    if (typeof document.createElementNS !== 'function') return el('span', 'ic ic-' + name);
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('class', 'ic ic-' + name);
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('focusable', 'false');
+    const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    p.setAttribute('d', ICONS[name] || '');
+    svg.append(p);
+    return svg;
+  }
+
+  // ------------------------------------------------------------------ api
   async function api(method, path, body) {
     const opts = { method: method, credentials: 'same-origin', cache: 'no-store', headers: {} };
     if (method !== 'GET') {
@@ -74,7 +230,11 @@
       location.replace('/');
       throw new Error('signed out');
     }
-    if (!r.ok) throw new Error((data && data.message) || r.statusText || ('HTTP ' + r.status));
+    if (!r.ok) {
+      const err = new Error((data && data.message) || r.statusText || ('HTTP ' + r.status));
+      err.status = r.status;  // the Inspector tells a departed member (404) from a hiccup
+      throw err;
+    }
     return data;
   }
 
@@ -87,45 +247,236 @@
     return r;
   }
 
+  function activeRoom() { return state.active ? state.rooms.get(state.active) || null : null; }
+
+  function memberOf(r, name, host) {
+    if (!r) return null;
+    return r.members.find(function (m) { return m.name === name && (m.host || '') === (host || ''); }) || null;
+  }
+
   function nearBottom(log) {
     return log.scrollHeight - log.scrollTop - log.clientHeight < 40;
   }
 
-  // ---------------------------------------------------------- rendering
+  // The log shrinks when a band appears above it (approvals off, paused, test mode) or the
+  // composer grows; the browser keeps scrollTop, so the newest rows would slide out of view.
+  // Remember whether the reader was at the end (updated on every scroll) and, when the log's
+  // box changes size, pin it back to the end. Feature-checked: the node harness has no
+  // ResizeObserver, and the page works without it (it just no longer re-pins).
+  function keepLogPinned() {
+    const log = $('log');
+    if (typeof ResizeObserver !== 'function' || !log.addEventListener) return;
+    let pinned = true;
+    log.addEventListener('scroll', function () { pinned = nearBottom(log); }, { passive: true });
+    new ResizeObserver(function () {
+      if (pinned) log.scrollTop = log.scrollHeight;
+    }).observe(log);
+  }
+
+  // ---------------------------------------------------- shared small parts
+  function avatar(harness, kind, name, extra) {
+    let a;
+    if (kind === 'human') a = el('span', 'avatar human', (name || '?').charAt(0).toUpperCase());
+    else if (kind === 'system') a = el('span', 'avatar sys', '⚙');
+    else a = el('span', 'avatar h-' + (HARNESS[harness] ? harness : 'unknown'), harnessOf(harness)[0]);
+    if (extra) for (const c of extra.split(' ')) if (c) a.classList.add(c);
+    a.setAttribute('aria-hidden', 'true');
+    return a;
+  }
+
+  function statusKey(m) { return m.parked ? 'parked' : m.status; }
+
+  function statusWord(m) { return m.parked ? 'Parked' : (STATUS_WORD[m.status] || m.status || ''); }
+
+  function withDot(av, m) {
+    const d = el('span', 'dot s-' + statusKey(m));
+    d.title = statusWord(m);
+    av.append(d);
+    return av;
+  }
+
+  function approvalsFlag(m) {
+    if (m.approval_mode === 'bypass') {
+      const f = el('span', 'flag-approvals');
+      f.setAttribute('role', 'img');
+      f.setAttribute('aria-label', 'approvals off');
+      f.title = 'approvals are off in this session: room messages can make it act without asking';
+      f.append(icon('warn'));
+      return f;
+    }
+    if (m.approval_mode === 'unknown') {
+      const f = el('span', 'flag-unknown', '?');
+      f.title = 'approval mode unknown: treat like approvals off';
+      return f;
+    }
+    return null;
+  }
+
+  // a Codex thread proof still running reads "verifying...", as in /who (models.tier_label)
+  function tierChip(m) {
+    const t = m.tier_note === 'verifying...' ? m.tier_note
+      : (m.tier || 'no tier yet') + (m.tier_note ? ' (' + m.tier_note + ')' : '');
+    const c = el('code', 'tier', t);
+    c.title = 'delivery tier: how switchboard wakes this agent';
+    return c;
+  }
+
+  function remoteByName(name) { return state.remotes.find(function (x) { return x.name === name; }) || null; }
+
+  // the host chip: "@fpga-pi" in lists, "fpga-pi · up 2 ms" in the Inspector, "This machine" locally
+  function hostChip(m, long) {
+    if (!m.host) {
+      const c = el('span', 'host-chip local');
+      c.append(icon('laptop'), 'This machine');
+      c.title = 'runs on this machine';
+      return c;
+    }
+    const rem = remoteByName(m.host);
+    const c = el('span', 'host-chip remote');
+    c.append(icon('server'), long ? m.host + (rem ? ' · ' + chipText(rem) : '') : '@' + m.host);
+    c.title = 'runs on ' + m.host + ', a remote machine: its text may quote what that machine saw';
+    if (rem && rem.state !== 'up') c.classList.add('bad');
+    return c;
+  }
+
+  // ------------------------------------------------------------- log rows
   function mentionsMe(m) {
     if (!state.me || m.sender_kind === 'human') return false;
     const me = state.me.human.toLowerCase();
     return (m.mentions || []).indexOf(me) >= 0;
   }
 
-  function renderMsg(m) {
+  // Markdown for every sender (human messages too), via md.js; plain text if md.js is missing.
+  function mdBody(text, mentions) {
+    const box = el('div', 'msg-text md');
+    const md = window.SBMarkdown;
+    if (md && typeof md.render === 'function') {
+      try {
+        const lower = (mentions || []).map(function (x) { return String(x).toLowerCase(); });
+        box.append(md.render(String(text || ''), { mentions: lower, localHost: location.hostname || '' }));
+        return box;
+      } catch (e) { box.replaceChildren(); }
+    }
+    box.textContent = String(text || '');
+    box.classList.add('md-plain');  // white-space: pre-wrap
+    return box;
+  }
+
+  // Is m a continuation of prev: same sender, host and kind, within 5 minutes, same day, no reply.
+  function isCont(prev, m) {
+    return !!(prev && prev.kind === 'chat' && m.kind === 'chat' && !m.reply_to &&
+      prev.from === m.from && (prev.host || '') === (m.host || '') && prev.sender_kind === m.sender_kind &&
+      m.ts - prev.ts >= 0 && m.ts - prev.ts < CONT_WINDOW_S && dayKey(prev.ts) === dayKey(m.ts));
+  }
+
+  function inspectedLabel() {
+    const ins = state.inspect;
+    if (!ins || ins.room !== state.active) return null;
+    const m = memberOf(activeRoom(), ins.name, ins.host);
+    return m ? label(m.name, m.host) : null;
+  }
+
+  function replyLine(r, m) {
+    const parent = r.msgs.find(function (x) { return x.id === m.reply_to; });
+    if (!parent) return null;  // not loaded: the reply line is omitted
+    const b = btn('reply-to');
+    b.title = 'Jump to the message it replies to';
+    const g = el('span', 'reply-gutter');
+    g.append(icon('reply'));
+    b.append(g, avatar(parent.harness, parent.sender_kind, parent.from, 'mini'),
+      el('span', 'reply-nick', label(parent.from, parent.host)),
+      el('span', 'reply-snippet', firstLine(parent.text, 80)));
+    b.addEventListener('click', function () { jumpTo(parent.id); });
+    return b;
+  }
+
+  // click-driven only: scroll to a loaded row and flash it
+  function jumpTo(id) {
+    const log = $('log');
+    if (typeof log.querySelector !== 'function') return;
+    const row = log.querySelector('[data-id="' + String(Number(id)) + '"]');
+    if (!row) return;
+    if (typeof row.scrollIntoView === 'function') row.scrollIntoView({ block: 'center' });
+    row.classList.add('flash');
+    setTimeout(function () { row.classList.remove('flash'); }, 1200);
+  }
+
+  function chatRow(r, m, prev) {
+    const who = label(m.from, m.host);
+    const line = el('article', 'line k-chat');
+    line.dataset.id = String(m.id);
+    line.dataset.from = who;
+    if (mentionsMe(m)) line.classList.add('mention');
+    if (m.sender_kind === 'agent' && inspectedLabel() === who) line.classList.add('sel');
+    if (isCont(prev, m)) {
+      line.classList.add('cont');
+      line.append(timeEl(m.ts, 'ts gutter'), mdBody(m.text, m.mentions));
+      return line;
+    }
+    const reply = m.reply_to ? replyLine(r, m) : null;
+    if (reply) {
+      line.classList.add('has-reply');
+      line.append(reply);
+    }
+    line.append(avatar(m.harness, m.sender_kind, m.from));
+    const body = el('div', 'msg-body');
+    const head = el('div', 'msg-head');
+    let nick;
+    if (m.sender_kind === 'agent') {
+      nick = btn('nick nick-agent', m.from);
+      nick.title = 'Open ' + who + ' in the inspector';
+      nick.addEventListener('click', function () { openInspector(m.from, m.host || ''); });
+    } else {
+      nick = el('span', 'nick nick-human' + (m.sender_kind === 'system' ? ' nick-system' : ''), m.from);
+    }
+    if (m.host) nick.append(el('span', 'host-tag', '@' + m.host));
+    head.append(nick);
+    const cur = m.sender_kind === 'agent' ? memberOf(r, m.from, m.host) : null;
+    const flag = cur ? approvalsFlag(cur) : null;
+    if (flag) head.append(flag);
+    if (m.sender_kind === 'agent') head.append(el('span', 'harness-name', harnessOf(m.harness)[1]));
+    if (m.via === 'cli') head.append(el('span', 'via', 'via cli'));
+    head.append(timeEl(m.ts, 'ts'));
+    body.append(head, mdBody(m.text, m.mentions));
+    line.append(body);
+    return line;
+  }
+
+  // One log row for a message. `live` is true when appendMsg adds it as it arrives:
+  // only then is a warning announced (role=alert); history renders as role=note.
+  function renderMsg(r, m, prev, live) {
+    if (m.kind === 'chat') return chatRow(r, m, prev);
     const line = el('div', 'line k-' + m.kind);
     line.dataset.id = String(m.id);
-    line.append(el('span', 'ts', '[' + hhmmss(m.ts) + ']'), ' ');
-    if (m.kind === 'chat') {
-      const cls = m.sender_kind === 'human' ? 'nick-human' : (m.sender_kind === 'agent' ? 'nick-agent' : 'nick-system');
-      if (m.sender_kind === 'agent' && m.harness) {
-        const b = el('span', 'harness', HARNESS_LETTER[m.harness] || '?');
-        b.title = m.harness;
-        line.append(b);
-      }
-      line.append(el('span', 'nick ' + cls, '<' + label(m.from, m.host) + '>'), ' ', el('span', 'text', m.text));
-      if (m.via === 'cli') line.append(el('span', 'via', 'via cli'));
-      if (mentionsMe(m)) line.classList.add('mention');
-    } else if (m.kind === 'join' || m.kind === 'leave') {
-      line.append(el('span', 'door', m.kind === 'join' ? '\u{1F6AA}→ ' : '←\u{1F6AA} '),
-        el('span', 'text', label(m.from, m.host) + ' ' + (m.text || (m.kind === 'join' ? 'joined' : 'left'))));
+    line.setAttribute('role', 'note');
+    const text = el('span', 'text');
+    if (m.kind === 'join' || m.kind === 'leave') {
+      text.append(el('strong', null, label(m.from, m.host)), ' ' + (m.text || (m.kind === 'join' ? 'joined' : 'left')));
+      line.append(icon('door'), text);
     } else {
-      line.append(el('span', 'text', '*** ' + m.text));
       // A warn notice (loop guard, budget, watchdog) arrives once, as this room line.
       if (m.level === 'warn') line.classList.add('warn');
+      const warn = line.classList.contains('warn');
+      // the row's own warning icon replaces a leading "⚠" in the broker's text (no doubled glyph)
+      text.textContent = warn ? String(m.text || '').replace(/^\u26a0\ufe0f?\s*/, '') : m.text;
+      if (warn && live) line.setAttribute('role', 'alert');
+      line.append(icon(warn ? 'warn' : (/parked/i.test(m.text || '') ? 'hourglass' : 'info')), text);
     }
     return line;
   }
 
+  function dayRow(ts) {
+    const d = el('div', 'line day', dayLabel(ts));
+    d.setAttribute('role', 'separator');
+    return d;
+  }
+
+  // A client-only line: a command's reply (in pre.cmd-out), an error, a notice for this page.
+  // Its textContent is exactly text + body (the time is in its title, not on screen).
   function renderLocal(text, isError, body) {
     const line = el('div', 'line local' + (isError ? ' error' : ''));
-    line.append(el('span', 'ts', '[' + hhmmss(Date.now() / 1000) + ']'), ' ', el('span', 'text', text));
+    line.title = new Date().toLocaleTimeString();
+    line.append(icon(isError ? 'warn' : 'terminal'), el('span', 'text', text));
     if (body) line.append(el('pre', 'cmd-out', body));
     const log = $('log');
     log.classList.remove('hidden');  // with no room left, the log still shows this line
@@ -134,29 +485,42 @@
     if (stick) log.scrollTop = log.scrollHeight;
   }
 
+  // #room-empty: the active room has nobody in it and no chat yet
+  function updateRoomEmpty() {
+    const r = activeRoom();
+    const show = !!r && r.members.length === 0 && !r.msgs.some(function (m) { return m.kind === 'chat'; });
+    $('room-empty').classList.toggle('hidden', !show);
+    if (r) $('join-line').textContent = 'join switchboard room ' + r.name;
+  }
+
   function renderLog() {
     const log = $('log');
     log.replaceChildren();
-    const r = state.active ? state.rooms.get(state.active) : null;
+    const r = activeRoom();
     const noRooms = state.rooms.size === 0;
     $('empty').classList.toggle('hidden', !noRooms);
     log.classList.toggle('hidden', noRooms);
     const input = $('input');
     input.disabled = noRooms;
     $('send').disabled = noRooms;
-    input.placeholder = noRooms
-      ? 'Create a room first: click "Create #build" above.'
-      : 'Type a message. Enter sends, Shift+Enter adds a line. /help lists commands.';
+    $('cmd-btn').disabled = noRooms;
+    $('mention-btn').disabled = noRooms;
+    input.placeholder = noRooms ? 'Create a room first.'
+      : 'Message ' + (state.active || '') + ' — @ to mention, / for commands';
+    updateRoomEmpty();
     if (!r) return;
     let lastDay = null;
+    let prev = null;
     const frag = document.createDocumentFragment();
     for (const m of r.msgs) {
       const k = dayKey(m.ts);
       if (k !== lastDay) {
-        frag.append(el('div', 'day', dayLabel(m.ts)));
+        frag.append(dayRow(m.ts));
         lastDay = k;
+        prev = null;
       }
-      frag.append(renderMsg(m));
+      frag.append(renderMsg(r, m, prev, false));
+      prev = m;
     }
     log.append(frag);
     log.scrollTop = log.scrollHeight;
@@ -175,25 +539,61 @@
     }
     const log = $('log');
     const stick = nearBottom(log);
-    if (!prev || dayKey(prev.ts) !== dayKey(m.ts)) log.append(el('div', 'day', dayLabel(m.ts)));
-    log.append(renderMsg(m));
+    const newDay = !prev || dayKey(prev.ts) !== dayKey(m.ts);
+    if (newDay) log.append(dayRow(m.ts));
+    // group only under the row just above (a local line in between starts a new group)
+    const kids = log.children;
+    const last = kids.length ? kids[kids.length - 1] : null;
+    const above = !newDay && prev && last && last.dataset && last.dataset.id === String(prev.id) ? prev : null;
+    log.append(renderMsg(r, m, above, true));
+    if (m.kind === 'chat') updateRoomEmpty();
     if (stick) log.scrollTop = log.scrollHeight;
   }
 
+  // mark the inspected agent's chat rows (.sel) without redrawing the log
+  function markSel() {
+    const who = inspectedLabel();
+    const r = activeRoom();
+    for (const row of $('log').children) {
+      if (!row.classList || !row.classList.contains('k-chat')) continue;
+      let on = false;
+      if (who && row.dataset.from === who) {
+        const id = Number(row.dataset.id);
+        const m = r ? r.msgs.find(function (x) { return x.id === id; }) : null;
+        on = !!m && m.sender_kind === 'agent';  // a human named like an agent is never marked
+      }
+      row.classList.toggle('sel', on);
+    }
+  }
+
+  // ------------------------------------------------------- sidebar, title
   function renderTabs() {
     const tabs = $('tabs');
     tabs.replaceChildren();
     const names = Array.from(state.rooms.keys()).sort();
+    let total = 0;
     for (const name of names) {
       const r = state.rooms.get(name);
-      const b = el('button', 'tab', name);
-      b.type = 'button';
-      b.setAttribute('role', 'tab');
-      b.setAttribute('aria-selected', String(name === state.active));
-      if (r.unread > 0 && name !== state.active) b.append(el('span', 'badge', r.unread > 99 ? '99+' : r.unread));
-      b.addEventListener('click', function () { selectRoom(name); });
+      const b = btn('room');
+      b.dataset.room = name;
+      b.title = name;
+      if (name === state.active) b.setAttribute('aria-current', 'page');
+      b.append(icon('hash'), el('span', 'room-name', name.replace(/^#/, '')));
+      if (r.unread > 0 && name !== state.active) {
+        total += r.unread;
+        const badge = el('span', 'badge', r.unread > 99 ? '99+' : r.unread);
+        badge.setAttribute('aria-label', r.unread + ' unread');
+        b.append(badge);
+      }
+      b.addEventListener('click', function () {
+        setNav(false);
+        selectRoom(name);
+      });
       tabs.append(b);
     }
+    const rb = $('rooms-badge');
+    rb.textContent = total > 99 ? '99+' : String(total);
+    rb.classList.toggle('hidden', total === 0);
     updateTitle();
   }
 
@@ -201,43 +601,49 @@
     let unread = 0;
     state.rooms.forEach(function (r) { if (r.name !== state.active) unread += r.unread; });
     const base = state.active ? 'switchboard — ' + state.active : 'switchboard';
-    $('title').textContent = base;
     document.title = (unread ? '(' + unread + ') ' : '') + base;
+    const r = activeRoom();
+    $('room-title').textContent = r ? r.name.replace(/^#/, '') : '';
+    $('room-sub').textContent = r && state.me ? state.me.human + ' and ' + plural(r.members.length, 'agent', 'agents') : '';
   }
 
-  function buddyRow(m) {
-    const li = el('li', 'buddy');
-    const row = el('div', 'row');
-    const dot = el('span', 'dot s-' + m.status);
-    dot.title = m.status;
-    const hl = el('span', 'hl', HARNESS_LETTER[m.harness] || '?');
-    hl.title = m.harness;
-    row.append(dot, hl, el('span', 'name', m.name));
-    if (m.host) {
-      const h = el('span', 'host', '@' + m.host);
-      h.title = 'runs on ' + m.host + ', a remote machine: its text may quote what that machine saw';
-      row.append(h);
+  // ------------------------------------------------------------- members
+  function memberRow(m) {
+    const li = el('li');
+    const b = btn('member');
+    b.dataset.name = m.name;
+    b.dataset.focus = 'member:' + m.name;
+    b.title = 'Open ' + label(m.name, m.host) + ' in the inspector';
+    const ins = state.inspect;
+    if (ins && ins.room === state.active && ins.name === m.name) b.setAttribute('aria-current', 'true');
+    const main = el('span', 'm-main');
+    const nameLine = el('span', 'm-name-line');
+    nameLine.append(el('span', 'm-name', m.name));
+    if (m.host) nameLine.append(hostChip(m, false));
+    const flag = approvalsFlag(m);
+    if (flag) nameLine.append(flag);
+    let st = statusWord(m) + ' · ' + harnessOf(m.harness)[1];
+    if (m.queued) st += ' · ' + m.queued + ' queued';
+    if (m.inflight) st += ' · ' + m.inflight + ' in flight';
+    if (m.held) st += ' · held';
+    if (m.env_leak) st += ' · env shared';
+    const chips = el('span', 'm-chips');
+    chips.append(tierChip(m));
+    main.append(nameLine, el('span', 'm-status', st), chips);
+    if (m.approval_mode === 'bypass') main.append(el('span', 'm-warn', 'Approvals off: what it reads can steer it'));
+    else if (m.approval_mode === 'unknown') main.append(el('span', 'm-warn', 'Approval mode unknown: treat like approvals off'));
+    if (m.away) main.append(el('span', 'm-away', 'Away: ' + m.away));
+    if (m.parked) {
+      const p = el('span', 'm-parked');
+      p.append(icon('hourglass'), el('strong', null, 'Parked — needs a poke.'), m.parked_reason ? ' ' + m.parked_reason : '');
+      main.append(p);
     }
-    if (m.approval_mode === 'bypass') {
-      const f = el('span', 'flag warn', '⚠');
-      f.title = 'approvals are off in this session: room messages can make it act without asking';
-      row.append(f);
-    } else if (m.approval_mode === 'unknown') {
-      const f = el('span', 'flag warn', '?');
-      f.title = 'approval mode unknown: treat like ⚠';
-      row.append(f);
-    }
-    if (m.env_leak) row.append(el('span', 'flag', 'env shared'));
-    if (m.held) row.append(el('span', 'flag', '⏸ held'));
-    if (m.queued) row.append(el('span', 'flag', m.queued + ' queued'));
-    if (m.inflight) row.append(el('span', 'flag', m.inflight + ' in flight'));
-    li.append(row);
-    // a Codex thread proof still running reads "verifying...", as in /who (models.tier_label)
-    const tier = m.tier_note === 'verifying...' ? m.tier_note
-      : (m.tier || 'no tier yet') + (m.tier_note ? ' (' + m.tier_note + ')' : '');
-    li.append(el('div', 'sub', m.status + ' · ' + tier));
-    if (m.away) li.append(el('div', 'away', 'away: ' + m.away));
-    if (m.parked) li.append(el('div', 'parked', 'parked — needs a poke' + (m.parked_reason ? ' (' + m.parked_reason + ')' : '')));
+    const chev = icon('chev-right');
+    chev.classList.add('m-chev');
+    b.append(withDot(avatar(m.harness, 'agent', m.name), m), main, chev);
+    b.addEventListener('click', function () { openInspector(m.name, m.host || ''); });
+    state.rowRefs.set(m.name, b);
+    li.append(b);
     return li;
   }
 
@@ -245,57 +651,143 @@
     const me = $('buddy-me');
     me.replaceChildren();
     if (state.me) {
-      const li = el('li', 'buddy');
-      const row = el('div', 'row');
-      row.append(el('span', 'dot s-human'), el('span', 'name me', state.me.human), el('span', 'sub', '(you)'));
+      const li = el('li');
+      const row = el('div', 'member me');
+      const av = avatar(null, 'human', state.me.human);
+      av.append(el('span', 'dot s-human'));
+      const main = el('span', 'm-main');
+      const nl = el('span', 'm-name-line');
+      nl.append(el('span', 'm-name', state.me.human));
+      main.append(nl, el('span', 'm-status', 'Human · online'));
+      row.append(av, main);
       li.append(row);
       me.append(li);
+      $('me-name').textContent = state.me.human;
+      $('me-avatar').textContent = state.me.human.charAt(0).toUpperCase();
     }
     const list = $('buddy-list');
+    const focused = focusKey(list);
     list.replaceChildren();
-    const r = state.active ? state.rooms.get(state.active) : null;
+    state.rowRefs = new Map();
+    const r = activeRoom();
     const members = r ? r.members : [];
     $('agents-title').textContent = 'Agents (' + members.length + ')';
+    $('members-count').textContent = String(members.length + (state.me ? 1 : 0));
     if (!members.length) {
-      list.append(el('li', 'buddy sub', 'nobody yet — ask an agent to join ' + (state.active || 'a room')));
+      list.append(el('li', 'member-empty', 'Nobody yet. Ask an agent to join ' + (state.active || 'a room') + '.'));
     }
-    for (const m of members) list.append(buddyRow(m));
+    for (const m of members) list.append(memberRow(m));
+    refocus(list, focused);
     const bypass = members.some(function (m) { return m.approval_mode === 'bypass'; });
     const prompting = members.some(function (m) { return m.approval_mode === 'prompting'; });
     $('banner-bridge').classList.toggle('hidden', !(bypass && prompting));
+    renderApprovalsChip(members);
+    renderBuddyPill(members);
+    updateTitle();
+  }
+
+  // narrow: the Members pill (people icon, count, and a red badge for agents needing attention)
+  function renderBuddyPill(members) {
+    const total = members.length + (state.me ? 1 : 0);
+    $('buddy-count').textContent = String(total);
+    const need = [];
+    for (const m of members) {
+      if (m.approval_mode === 'bypass') need.push(m.name + ' (approvals off)');
+      else if (m.approval_mode === 'unknown') need.push(m.name + ' (approval mode unknown)');
+      if (m.parked) need.push(m.name + ' (parked)');
+    }
+    const alert = $('buddy-alert');
+    alert.textContent = String(need.length);
+    alert.classList.toggle('hidden', need.length === 0);
+    const says = need.length ? 'Needs attention: ' + need.join(', ') : '';
+    alert.setAttribute('aria-label', says);
+    $('buddy-toggle').setAttribute('aria-label', 'Members (' + total + ')' + (says ? '. ' + says : ''));
+  }
+
+  // --------------------------------------------------------- header chips
+  function meter(n, of) {
+    const w = of > 0 ? Math.max(0, Math.min(10, Math.round(10 * n / of))) : 0;
+    const m = el('span', 'meter');
+    m.setAttribute('aria-hidden', 'true');
+    m.append(el('span', 'meter-fill w' + w));
+    return m;
+  }
+
+  function renderApprovalsChip(members) {
+    const chip = $('st-approvals');
+    const bypass = members.filter(function (m) { return m.approval_mode === 'bypass'; }).map(function (m) { return label(m.name, m.host); });
+    const unknown = members.filter(function (m) { return m.approval_mode === 'unknown'; }).map(function (m) { return label(m.name, m.host); });
+    chip.replaceChildren();
+    chip.classList.toggle('hidden', !bypass.length && !unknown.length);
+    if (bypass.length) {
+      chip.append(icon('warn'), el('span', null, 'Approvals off: ' + bypass.join(', ')));
+      chip.title = 'approvals are off in this session: room messages can make it act without asking';
+    } else if (unknown.length) {
+      chip.append(icon('warn'), el('span', null, 'Approval mode unknown: ' + unknown.join(', ')));
+      chip.title = 'approval mode unknown: treat like approvals off';
+    }
   }
 
   function renderStatus() {
-    const r = state.active ? state.rooms.get(state.active) : null;
+    const r = activeRoom();
     const s = (r && r.settings) || {};
     const conn = $('st-conn');
-    conn.textContent = state.wsOpen ? 'online' : 'reconnecting…';
+    conn.textContent = state.wsOpen ? 'Connected' : 'Reconnecting…';
     conn.classList.toggle('bad', !state.wsOpen);
+    $('status-chips').classList.toggle('hidden', !r);
+    $('pause-toggle').classList.toggle('hidden', !r);
+
     const st = $('st-state');
     const paused = $('banner-paused');
+    const pt = $('pause-toggle');
+    st.replaceChildren(el('span', 'dot'));
     if (r && s.paused) {
-      st.textContent = 'PAUSED';
+      st.append('Paused');
       st.classList.add('bad');
-      paused.textContent = '⏸ ' + r.name + ' is paused (' + (s.paused_reason || 'paused') + '). No agent wakes until /resume.';
+      st.title = s.paused_reason || 'paused';
+      paused.replaceChildren(icon('pause'),
+        el('span', null, r.name + ' is paused (' + (s.paused_reason || 'paused') + '). No agent wakes until /resume.'));
       paused.classList.remove('hidden');
+      pt.replaceChildren(icon('play'));
+      pt.setAttribute('aria-label', 'Resume room');
+      pt.title = 'Resume: wake agents again (web only)';
     } else {
-      st.textContent = r ? 'active' : '';
+      st.append('Running');
       st.classList.remove('bad');
+      st.title = 'Not paused: agents are woken as messages arrive';
       paused.classList.add('hidden');
+      pt.replaceChildren(icon('pause'));
+      pt.setAttribute('aria-label', 'Pause room');
+      pt.title = 'Pause: stop every agent wake until you resume';
     }
-    $('st-budget').textContent = r && s.budget_per_hour !== undefined ? 'budget ' + s.budget_remaining + '/' + s.budget_per_hour : '';
+
+    const budget = $('st-budget');
+    budget.replaceChildren();
+    const hasBudget = !!r && s.budget_per_hour !== undefined;
+    budget.classList.toggle('hidden', !hasBudget);
+    if (hasBudget) {
+      const left = Number(s.budget_remaining) || 0;
+      const per = Number(s.budget_per_hour) || 0;
+      budget.append(el('span', 'chip-label', 'Budget'), meter(left, per), el('span', 'chip-num', left + '/' + per));
+      budget.classList.toggle('bad', left <= 0);                       // empty: danger fill
+      budget.classList.toggle('low', left > 0 && per > 0 && left / per < 0.2);  // under 20%: amber fill
+      budget.title = 'Wake budget: wakes left this hour';
+    }
+
     const hops = $('st-hops');
+    hops.replaceChildren();
     const guardOff = !!(r && s.hop_limit === 0);
+    hops.classList.toggle('hidden', !r || s.hop_limit === undefined);
     if (!r || s.hop_limit === undefined) {
-      hops.textContent = '';
       hops.title = '';
     } else if (guardOff) {
       hops.textContent = 'loop guard off ⚠';
       hops.title = 'hop limit 0: agents may message each other without limit (' + s.hop_count +
         ' in a row now). /hops <n> turns the loop guard back on.';
     } else {
-      hops.textContent = 'hops ' + s.hop_count + '/' + s.hop_limit;
-      hops.title = 'agent messages in a row with none from you / the loop guard limit. /hops <n> changes it.';
+      hops.append(el('span', 'chip-label', 'Hops'), meter(s.hop_count, s.hop_limit),
+        el('span', 'chip-num', s.hop_count + '/' + s.hop_limit));
+      hops.title = 'Loop guard: agent messages in a row with none from you / the limit. /hops n changes it.';
     }
     hops.classList.toggle('bad', guardOff);
     $('banner-test').classList.toggle('hidden', !(state.me && state.me.test_mode));
@@ -303,16 +795,719 @@
 
   function selectRoom(name) {
     if (!state.rooms.has(name)) return;
+    if (state.inspect && state.inspect.room !== name) closeInspector(false);
+    closePop();
     state.active = name;
     state.rooms.get(name).unread = 0;
     if (location.hash !== '#' + state.rooms.get(name).slug) {
       history.replaceState(null, '', '#' + state.rooms.get(name).slug);
     }
+    $('palette').setAttribute('aria-label', 'Commands for ' + name);
+    $('mentions').setAttribute('aria-label', 'Agents in ' + name);
     renderTabs();
     renderLog();
     renderBuddies();
     renderStatus();
     $('input').focus();
+  }
+
+  // ------------------------------------------------ pane, drawers, sheets
+  // Desktop (> 1100 px): the pane is a column; #app.pane-closed hides it.
+  // 761–1100 px: the pane is an overlay drawer; <= 760 px: a bottom sheet. Both open with
+  // #app.sheet-open. <= 760 px the sidebar is a drawer too: #app.nav-open. #scrim shows
+  // under any open overlay.
+  function setOverlay() {
+    const app = $('app');
+    const isNarrow = narrow();
+    if (!isNarrow) app.classList.remove('sheet-open');
+    if (!phone()) app.classList.remove('nav-open');
+    const sheet = app.classList.contains('sheet-open');
+    const nav = app.classList.contains('nav-open');
+    $('scrim').classList.toggle('hidden', !(sheet || nav));
+    const shown = isNarrow ? sheet : !app.classList.contains('pane-closed');
+    const pt = $('pane-toggle');
+    pt.setAttribute('aria-pressed', String(shown));
+    pt.setAttribute('aria-label', shown ? 'Hide members' : 'Show members');
+    pt.title = shown ? 'Hide members' : 'Show members';
+    $('buddy-toggle').setAttribute('aria-expanded', String(sheet));
+    $('rooms-toggle').setAttribute('aria-expanded', String(nav));
+    const pane = $('pane');
+    if (sheet && phone()) {
+      pane.setAttribute('role', 'dialog');
+      pane.setAttribute('aria-modal', 'true');
+    } else {
+      unsetAttr(pane, 'role');
+      unsetAttr(pane, 'aria-modal');
+    }
+  }
+
+  function showPane() {
+    if (narrow()) $('app').classList.add('sheet-open');
+    else $('app').classList.remove('pane-closed');
+    setOverlay();
+  }
+
+  function setSheet(open) {
+    $('app').classList.toggle('sheet-open', !!open);
+    if (open) $('app').classList.remove('nav-open');
+    setOverlay();
+  }
+
+  function setNav(open) {
+    $('app').classList.toggle('nav-open', !!open);
+    if (open) $('app').classList.remove('sheet-open');
+    setOverlay();
+  }
+
+  function togglePane() {
+    const app = $('app');
+    if (narrow()) setSheet(!app.classList.contains('sheet-open'));
+    else {
+      app.classList.toggle('pane-closed');
+      setOverlay();
+    }
+  }
+
+  // ------------------------------------------------------------ Inspector
+  function inspectedMember() {
+    const ins = state.inspect;
+    if (!ins) return null;
+    const r = state.rooms.get(ins.room);
+    return r ? r.members.find(function (m) { return m.name === ins.name; }) || null : null;
+  }
+
+  function setPaneView(inspecting) {
+    $('pane').classList.toggle('inspecting', inspecting);
+    $('members-view').classList.toggle('offscreen', inspecting);
+    $('inspector').classList.toggle('offscreen', !inspecting);
+  }
+
+  function openInspector(name, host) {
+    const r = activeRoom();
+    if (!r) return;
+    const m = memberOf(r, name, host) || r.members.find(function (x) { return x.name === name; });
+    if (!m) {
+      renderLocal(label(name, host) + ' is not in ' + r.name, true);
+      return;
+    }
+    const same = state.inspect && state.inspect.room === r.name && state.inspect.name === m.name;
+    state.inspect = { room: r.name, name: m.name, host: m.host || '' };
+    if (!same) {
+      state.detail = null;
+      state.inspUi = { menu: false, confirm: false, queueOpen: false, copied: false };
+    }
+    setPaneView(true);
+    showPane();
+    markSel();
+    renderBuddies();
+    renderInspector();
+    if (state.insp.name) state.insp.name.focus();
+    fetchDetail();
+  }
+
+  // back to Members; focus the agent's row when asked (the back button, Esc)
+  function closeInspector(focus) {
+    const was = state.inspect;
+    state.inspect = null;
+    state.detail = null;
+    state.inspSeq += 1;  // a response still in flight is dropped
+    clearTimeout(state.inspTimer);
+    state.inspTimer = null;
+    setPaneView(false);
+    markSel();
+    renderBuddies();
+    if (focus) {
+      const row = was ? state.rowRefs.get(was.name) : null;
+      if (row) row.focus();
+      else $('insp-back').focus();
+    }
+  }
+
+  function fetchDetail() {
+    const ins = state.inspect;
+    if (!ins) return;
+    const r = state.rooms.get(ins.room);
+    if (!r) return;
+    const seq = ++state.inspSeq;
+    api('GET', '/api/rooms/' + encodeURIComponent(r.slug) + '/members/' + encodeURIComponent(ins.name)).then(function (d) {
+      if (seq !== state.inspSeq || !state.inspect || state.inspect.name !== ins.name || state.inspect.room !== ins.room) return;
+      state.detail = { room: ins.room, name: ins.name, data: d || {} };
+      renderInspector();
+    }, function (e) {
+      if (seq !== state.inspSeq) return;
+      if (e && e.status === 404) memberLeft(ins);
+    });
+  }
+
+  function scheduleRefetch() {
+    clearTimeout(state.inspTimer);
+    state.inspTimer = setTimeout(function () {
+      state.inspTimer = null;
+      fetchDetail();
+    }, REFETCH_MS);
+  }
+
+  function memberLeft(ins) {
+    if (!state.inspect || state.inspect.name !== ins.name || state.inspect.room !== ins.room) return;
+    closeInspector(false);
+    if (ins.room === state.active) renderLocal(label(ins.name, ins.host) + ' left ' + ins.room);
+  }
+
+  function fact(dl, k, v) {
+    const dd = el('dd');
+    if (typeof v === 'string') dd.textContent = v;
+    else dd.append(v);
+    dl.append(el('dt', null, k), dd);
+    return dd;
+  }
+
+  function note(kind, ic, title, rest) {
+    const n = el('div', 'note note-' + kind);
+    const body = el('div');
+    body.append(el('strong', null, title));
+    for (const x of rest) body.append(x);
+    n.append(icon(ic), body);
+    return n;
+  }
+
+  // delivery timeline entry -> [label, detail, dot] (the whitelist is the broker's, §4.2)
+  function timelineRow(e, r) {
+    const from = (e.from || []).join(', ');
+    const fromText = e.n ? e.n + ' from ' + from : (from ? 'from ' + from : '');
+    if (e.kind === 'offer') {
+      const p = e.path;
+      if (p === 'inbox' || p === 'turn_start' || p === 'queue') {
+        return ['Turn start', p + ': ' + (e.n || 0) + ' from ' + from, 'tl-turn'];
+      }
+      if (p === 'steer') return ['Steer', fromText, 'tl-steer'];
+      if (p === 'hook_ctx' || p === 'hook_ups') return ['Mid-task', fromText, 'tl-steer'];
+      if (p === 'wait') return ['wait() answered', fromText, 'tl-turn'];
+      if (p === 'read' || p === 'say') return ['Pulled', fromText, 'tl-other'];
+      if (p === 'stop_followup' || p === 'stop_block') return ['Re-armed', 'Stop asked it to continue', 'tl-other'];
+      return ['Offered', fromText, 'tl-other'];
+    }
+    if (e.kind === 'expire') return ['Expired', e.reason || '', 'tl-other'];
+    if (e.kind === 'cancel') return ['Cancelled', '', 'tl-other'];
+    if (e.kind === 'parked') return ['Parked', e.reason || '', 'tl-parked'];
+    if (e.kind === 'unparked') return ['Unparked', has(e.seconds) ? 'after ' + Math.round(e.seconds) + 's' : '', 'tl-other'];
+    if (e.kind === 'rearm') return ['Re-armed', '', 'tl-other'];
+    if (e.kind === 'requeue') return ['Offered again', has(e.n) ? String(e.n) : '', 'tl-other'];
+    if (e.kind === 'watchdog_remind') return ['Watchdog', 'reminded', 'tl-other'];
+    if (e.kind === 'watchdog_escalate') return ['Watchdog', 'told you', 'tl-other'];
+    if (e.kind === 'pass') return ['Passed', 'called pass()', 'tl-other'];
+    if (e.kind === 'said') {
+      const msg = r ? r.msgs.find(function (x) { return x.id === e.id; }) : null;
+      return ['Said', msg ? firstLine(msg.text, 60) : '', 'tl-said'];
+    }
+    return [String(e.kind || ''), '', 'tl-other'];
+  }
+
+  function renderInspector() {
+    const ins = state.inspect;
+    const body = $('insp-body');
+    if (!ins) return;
+    const r = state.rooms.get(ins.room);
+    const m = inspectedMember();
+    if (!r || !m) {
+      memberLeft(ins);
+      return;
+    }
+    const ui = state.inspUi;
+    const d = state.detail && state.detail.room === ins.room && state.detail.name === ins.name ? state.detail.data : null;
+    const dm = (d && d.member) || {};
+    const who = label(m.name, m.host);
+    const idx = r.members.indexOf(m);
+    $('insp-pos').textContent = 'Agent ' + (idx + 1) + ' of ' + r.members.length;
+    const focused = focusKey(body);
+    const scroll = body.scrollTop;
+    const refs = {};
+
+    // 1. identity
+    const id = el('div', 'insp-id');
+    const nameH = el('h2', null, who);
+    nameH.id = 'insp-name';
+    nameH.tabIndex = -1;
+    const flag = approvalsFlag(m);
+    if (flag) nameH.append(flag);
+    refs.name = nameH;
+    const since = has(dm.status_at) && !m.parked ? ' since ' + hhmm(dm.status_at) : '';
+    const chips = el('div', 'insp-chips');
+    chips.append(tierChip(m), hostChip(m, true));
+    if (m.held) {
+      const h = el('span', 'chip-held');
+      h.append(icon('pause'), 'Held');
+      h.title = 'Delivery is held: messages wait until you release it';
+      chips.append(h);
+    }
+    const idText = el('div');
+    idText.append(nameH, el('p', 'insp-status', statusWord(m) + since + ' · ' + harnessOf(m.harness)[1]), chips);
+    id.append(withDot(avatar(m.harness, 'agent', m.name, 'lg'), m), idText);
+
+    // 2. needs attention
+    const attn = el('section', 'insp-attn');
+    attn.setAttribute('aria-label', 'Needs attention');
+    const notes = [];
+    if (m.approval_mode === 'bypass') {
+      notes.push(note('danger', 'warn', 'Approvals off', [' What it reads (tool output, web pages) can steer it. Room messages can make it act without asking.']));
+    } else if (m.approval_mode === 'unknown') {
+      notes.push(note('danger', 'warn', 'Approval mode unknown', [' Treat it like approvals off.']));
+    }
+    if (m.parked) {
+      const poke = el('p');
+      poke.append(el('strong', null, 'Poke it:'), ' type in its own terminal: ', el('code', null, 'read ' + r.name + ' and go back to wait()'));
+      const rest = [' ' + (m.parked_reason ? m.parked_reason + '.' : ''), poke];
+      if (m.queued) rest.push(el('p', null, plural(m.queued, 'message is', 'messages are') + ' waiting.'));
+      notes.push(note('amber', 'hourglass', 'Parked — needs a poke', rest));
+    }
+    if (m.status === 'waiting-approval') {
+      notes.push(note('amber', 'hourglass', 'Waiting for approval', [' It is asking in its own terminal.']));
+    }
+    if (m.env_leak) {
+      notes.push(note('muted', 'info', 'Environment shared', [' It runs with the Codex daemon’s environment.']));
+    }
+    if (notes.length) attn.append(el('div', 'group-label', 'Needs attention'), ...notes);
+
+    // 3. details
+    const details = el('section', 'insp-details');
+    details.setAttribute('aria-label', 'Details');
+    const dl = el('dl', 'insp-facts');
+    if (!d) {
+      fact(dl, 'Session', el('span', 'muted', 'loading…'));
+    } else if (d.session && d.session.id) {
+      const sid = String(d.session.id);
+      const box = el('span');
+      const code = el('code', 'sess', sid.length > 12 ? sid.slice(0, 4) + '…' + sid.slice(-4) : sid);
+      code.title = sid;
+      const copy = btn('copy-btn');
+      copy.dataset.focus = 'copy-session';
+      const lbl = ui.copied ? 'Session id copied' : 'Copy session id';
+      copy.setAttribute('aria-label', lbl);
+      copy.title = lbl;
+      copy.append(icon(ui.copied ? 'check' : 'copy'));
+      copy.addEventListener('click', function () {
+        clipboardWrite(sid).then(function () {
+          ui.copied = true;
+          renderInspector();
+          setTimeout(function () { ui.copied = false; renderInspector(); }, COPIED_MS);
+        }, function () {});
+      });
+      box.append(code, copy);
+      fact(dl, 'Session', box);
+    } else {
+      fact(dl, 'Session', el('span', 'muted', (d.session && d.session.why) || 'none'));
+    }
+    fact(dl, 'Joined', has(dm.joined_at) ? dayTime(dm.joined_at) : '—');
+    const what = dm.last_seen_what === 'seen' ? 'status' : dm.last_seen_what;
+    fact(dl, 'Last seen', has(dm.last_seen) ? hhmm(dm.last_seen) + (what ? ' · ' + what : '') : '—');
+    const queued = m.queued || 0;
+    const queueList = el('ol', 'insp-queue' + (ui.queueOpen && queued ? '' : ' hidden'));
+    queueList.id = 'insp-queue';
+    if (!queued) {
+      fact(dl, 'Queued', 'None');
+    } else {
+      const qb = btn('queue-toggle' + (ui.queueOpen ? ' open' : ''));
+      qb.dataset.focus = 'queue';
+      qb.setAttribute('aria-expanded', String(!!ui.queueOpen));
+      qb.setAttribute('aria-controls', 'insp-queue');
+      qb.append(plural(queued, 'message', 'messages'), icon('chev-down'));
+      qb.addEventListener('click', function () { ui.queueOpen = !ui.queueOpen; renderInspector(); });
+      fact(dl, 'Queued', qb);
+      for (const q of (d && d.queued) || []) {
+        const msg = r.msgs.find(function (x) { return x.id === q.id; });
+        const li = el('li');
+        if (msg) {
+          li.append(timeEl(msg.ts), el('span', 'q-from', label(msg.from, msg.host)), el('span', 'q-text', firstLine(msg.text, 80)));
+        } else {
+          li.append(el('span'), el('span', 'q-text', 'message #' + q.id + ' (not loaded)'));
+        }
+        queueList.append(li);
+      }
+      if (!d) queueList.append(el('li', 'muted', 'loading…'));
+    }
+    if (m.inflight) fact(dl, 'In flight', plural(m.inflight, 'message', 'messages'));
+    if (m.away) fact(dl, 'Away', m.away);
+    const qNote = el('p', 'fine' + (ui.queueOpen && queued ? '' : ' hidden'),
+      'Peer messages wait while it is busy and go out as one batch when it is idle.');
+    details.append(el('div', 'group-label', 'Details'), dl, queueList, qNote);
+
+    // 4. delivery timeline
+    const tl = el('section', 'insp-timeline');
+    tl.setAttribute('aria-label', 'Delivery history');
+    const events = (d && d.timeline) || [];
+    tl.append(el('div', 'group-label', 'Delivery' + (events.length ? ' · last ' + events.length : '')));
+    if (!d) tl.append(el('p', 'muted', 'loading…'));
+    else if (!events.length) tl.append(el('p', 'muted', 'No deliveries yet.'));
+    else {
+      const ol = el('ol', 'timeline');
+      for (const e of events) {
+        const row = timelineRow(e, r);
+        const li = el('li', 'tl ' + row[2]);
+        const txt = el('span', 'tl-text');
+        txt.append(el('strong', null, row[0]));
+        if (row[1]) txt.append(' ', el('span', null, row[1]));
+        li.append(has(e.ts) ? timeEl(e.ts) : el('span'), el('span', 'tl-dot'), txt);
+        ol.append(li);
+      }
+      tl.append(ol);
+    }
+
+    // 5. actions: the same command path as the composer, so the reply shows in the log
+    const actions = el('div', 'insp-actions');
+    const row = el('div', 'insp-row');
+    const hold = btn('btn');
+    hold.id = 'insp-hold';
+    hold.dataset.focus = 'hold';
+    hold.setAttribute('aria-pressed', String(!!m.held));
+    if (m.held) {
+      hold.append(icon('play'), 'Release');
+      hold.title = 'Release: resume delivery to ' + m.name + ' (web only)';
+    } else {
+      hold.append(icon('pause'), 'Hold');
+      hold.title = 'Hold: stop delivery to ' + m.name + '; messages wait until you release it';
+    }
+    hold.addEventListener('click', function () { submitText((m.held ? '/release ' : '/hold ') + m.name); });
+    const cu = btn('btn');
+    cu.id = 'insp-catchup';
+    cu.dataset.focus = 'catchup';
+    cu.setAttribute('aria-haspopup', 'menu');
+    cu.setAttribute('aria-expanded', String(!!ui.menu));
+    cu.setAttribute('aria-controls', 'catchup-menu');
+    cu.title = '/catchup ' + m.name + ' on a member, a topic or the room';
+    cu.append(icon('history'), 'Catch up on…', icon('chev-down'));
+    cu.addEventListener('click', function () { setMenu(!ui.menu); });
+    row.append(hold, cu);
+    refs.hold = hold;
+    refs.catchup = cu;
+
+    const menu = el('div', 'menu' + (ui.menu ? '' : ' hidden'));
+    menu.id = 'catchup-menu';
+    menu.setAttribute('role', 'menu');
+    menu.setAttribute('aria-label', 'Catch ' + m.name + ' up on');
+    menu.append(el('div', 'group-label', 'Catch ' + m.name + ' up on'));
+    const items = [];
+    // shown: the command as the row shows it; fill: what goes in the composer; caretBack: see fillComposer
+    function item(text, shown, fill, caretBack) {
+      const b = btn('menu-item');
+      b.setAttribute('role', 'menuitem');
+      b.append(el('span', null, text), el('code', null, shown));
+      b.addEventListener('click', function () {
+        setMenu(false);
+        fillComposer(fill, caretBack);
+      });
+      items.push(b);
+      menu.append(b);
+    }
+    // commands take bare screen names; the labels keep bench@fpga-pi
+    for (const o of r.members) {
+      if (o.name === m.name) continue;
+      const c = '/catchup ' + m.name + ' on ' + o.name;
+      item(label(o.name, o.host) + '’s work', c, c, 0);
+    }
+    item('A topic…', '/catchup ' + m.name + ' on "…"', '/catchup ' + m.name + ' on ""', 1);
+    item('The whole room', '/catchup ' + m.name, '/catchup ' + m.name, 0);
+    if (m.approval_mode === 'bypass') {
+      menu.append(el('p', 'note note-danger', m.name + ' has approvals off: session text it reads can steer it. Prefer an agent that prompts.'));
+    }
+    menu.addEventListener('keydown', function (ev) {  // arrow keys move between items
+      const i = items.indexOf(document.activeElement);
+      if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        const n = items.length;
+        items[((i < 0 ? -1 : i) + (ev.key === 'ArrowDown' ? 1 : n - 1) + n) % n].focus();
+      }
+    });
+    refs.menu = menu;
+    refs.menuItems = items;
+
+    const kick = btn('btn-danger-ghost');
+    kick.id = 'insp-kick';
+    kick.dataset.focus = 'kick';
+    kick.title = '/kick ' + m.name + ': remove it and revoke its membership';
+    kick.append(icon('kick'), 'Kick ' + m.name);
+    kick.addEventListener('click', function () { setConfirm(true); });
+    refs.kick = kick;
+    const confirm = el('div', 'confirm' + (ui.confirm ? '' : ' hidden'));
+    confirm.id = 'kick-confirm';
+    confirm.setAttribute('role', 'group');
+    confirm.setAttribute('aria-label', 'Confirm kick');
+    const cancel = btn('btn', 'Cancel');
+    cancel.dataset.focus = 'kick-cancel';
+    cancel.addEventListener('click', function () { setConfirm(false); });
+    const doKick = btn('btn-danger', 'Kick');
+    doKick.addEventListener('click', function () {
+      const name = m.name;
+      closeInspector(false);
+      submitText('/kick ' + name, { confirmed: true });
+      const rowRef = state.rowRefs.get(name);
+      if (rowRef) rowRef.focus();
+    });
+    const btns = el('div', 'dialog-buttons');
+    btns.append(cancel, doKick);
+    confirm.append(el('span', null, 'Kick ' + m.name + ' from ' + r.name + '? It is removed and its membership revoked.'), btns);
+    refs.confirm = confirm;
+    refs.cancel = cancel;
+    const fine = el('p', 'fine');
+    fine.append('Same as ', el('code', null, '/hold'), ', ', el('code', null, '/catchup'), ' and ', el('code', null, '/kick'), ' in the composer.');
+    actions.append(menu, row, kick, confirm, fine);
+
+    body.replaceChildren(id);
+    if (notes.length) body.append(attn);
+    body.append(details, tl, actions);
+    body.scrollTop = scroll;
+    state.insp = refs;
+    refocus(body, focused);
+  }
+
+  function setMenu(open) {
+    if (!state.inspUi) return;
+    state.inspUi.menu = !!open;
+    if (open) state.inspUi.confirm = false;
+    renderInspector();
+    if (open && state.insp.menuItems && state.insp.menuItems.length) state.insp.menuItems[0].focus();
+    else if (!open && state.insp.catchup) state.insp.catchup.focus();
+  }
+
+  function setConfirm(open) {
+    if (!state.inspUi) return;
+    state.inspUi.confirm = !!open;
+    if (open) state.inspUi.menu = false;
+    renderInspector();
+    if (open && state.insp.cancel) state.insp.cancel.focus();
+    else if (!open && state.insp.kick) state.insp.kick.focus();
+  }
+
+  // put a command in the composer for the human to finish and send (nothing is sent here);
+  // caretBack > 0 leaves the caret that many characters before the end (inside the quotes)
+  function fillComposer(text, caretBack) {
+    const input = $('input');
+    input.value = text;
+    autoGrow();
+    input.focus();
+    if (typeof input.setSelectionRange === 'function') {
+      const at = text.length - (caretBack || 0);
+      input.setSelectionRange(at, at);
+    }
+    if (narrow()) setSheet(false);
+  }
+
+  // ----------------------------------------------------- composer popovers
+  // The slash palette. Commands take bare screen names (the broker's _screen_name): the UI
+  // never writes bench@fpga-pi into a command. The /help reply stays the authority.
+  const COMMANDS = [
+    { group: 'Room', cmd: 'pause', args: '', desc: 'Freeze every agent wake in {room}', pill: '', usage: '/pause',
+      detail: 'Open wait() calls return “paused”; read() still works.' },
+    { group: 'Room', cmd: 'resume', args: '', desc: 'Unfreeze wakes; also resets the loop guard', pill: 'web only', usage: '/resume',
+      detail: 'Raises agent activity, so it needs this signed-in browser.' },
+    { group: 'Room', cmd: 'budget', args: '[n]', desc: 'Show or set wakes left this hour', pill: 'raise: web only',
+      usage: '/budget   /budget <n>', detail: 'Lowering works from anywhere; raising needs this browser.', live: 'budget' },
+    { group: 'Room', cmd: 'hops', args: '[n]', desc: 'Show or set the loop-guard limit', pill: 'raise: web only',
+      usage: '/hops   /hops <n>   (0–1000, 0 turns it off)', detail: 'A new limit never lifts a loop-guard pause: /resume does.', live: 'hops' },
+    { group: 'Room', cmd: 'close', args: '', desc: 'Close the room; the history is kept', pill: '', usage: '/close',
+      detail: 'Asks first. Reopen it from Closed rooms.' },
+    { group: 'Agents', cmd: 'hold', args: '<name>', desc: 'Stop delivery to one agent', pill: '', usage: '/hold <name>',
+      detail: 'Nothing is dropped: held messages go out on /release.' },
+    { group: 'Agents', cmd: 'release', args: '<name>', desc: 'Resume delivery to a held agent', pill: 'web only', usage: '/release <name>',
+      detail: 'Raises agent activity, so it needs this signed-in browser.' },
+    { group: 'Agents', cmd: 'kick', args: '<name>', desc: 'Remove an agent and revoke its membership', pill: '', usage: '/kick <name>',
+      detail: 'Asks first. Removes it from {room} and revokes its membership.' },
+    { group: 'Agents', cmd: 'catchup', args: '<agent> [on …]', desc: 'Get one agent up to speed from session history', pill: '',
+      usage: '/catchup <agent> [on <member> | on "<topic>"] [note]',
+      detail: 'e.g. /catchup bench on claude-1 — the member being read is not woken.' },
+    { group: 'Info', cmd: 'who', args: '', desc: 'Members, their sessions and hosts', pill: '', usage: '/who',
+      detail: 'Shows session: <id> @ <host> for each member that has one.' },
+    { group: 'Info', cmd: 'status', args: '', desc: 'Room status: paused, budget, hops', pill: '', usage: '/status',
+      detail: 'Paused or running, the wake budget and the loop guard, as a reply.' },
+    { group: 'Info', cmd: 'help', args: '', desc: 'List every command', pill: '', usage: '/help',
+      detail: 'Lists every command as a reply in the room.' },
+  ];
+
+  function cmdDesc(c) {
+    const r = activeRoom();
+    const s = (r && r.settings) || {};
+    let d = c.desc.replace('{room}', r ? r.name : 'the room');
+    if (c.live === 'budget' && s.budget_per_hour !== undefined) d += ' · ' + s.budget_remaining + '/' + s.budget_per_hour;
+    if (c.live === 'hops' && s.hop_limit !== undefined) d += ' · ' + s.hop_count + '/' + s.hop_limit;
+    return d;
+  }
+
+  function autoGrow() {
+    const input = $('input');
+    const lines = String(input.value).split('\n').length;
+    input.rows = Math.max(1, Math.min(8, lines));
+  }
+
+  // What should be open for the text before the caret: the palette, the mention list, or nothing.
+  function updatePopover() {
+    const input = $('input');
+    const v = String(input.value);
+    const r = activeRoom();
+    if (!r) return closePop();
+    if (/^\/[a-z]*$/.test(v) && !v.startsWith('//')) {
+      const pre = v.slice(1);
+      const items = COMMANDS.filter(function (c) { return c.cmd.startsWith(pre); });
+      if (!items.length) return closePop();
+      openPop({ kind: 'palette', items: items, sel: keepSel('palette', items), prefix: pre });
+      return;
+    }
+    const caret = typeof input.selectionStart === 'number' ? input.selectionStart : v.length;
+    const mm = /(^|[\s(])@([a-z0-9_-]{0,23})$/.exec(v.slice(0, caret));
+    if (mm) {
+      const pre = mm[2];
+      const items = r.members.filter(function (m) { return m.name.startsWith(pre); });
+      if (!items.length) return closePop();
+      openPop({ kind: 'mentions', items: items, sel: keepSel('mentions', items), start: caret - pre.length - 1, end: caret });
+      return;
+    }
+    closePop();
+  }
+
+  // keep the highlighted row across keystrokes when it is still listed
+  function keepSel(kind, items) {
+    const p = state.pop;
+    if (!p || p.kind !== kind) return 0;
+    const cur = p.items[p.sel];
+    const i = items.indexOf(cur);
+    return i < 0 ? 0 : i;
+  }
+
+  function optionId(p, i) { return (p.kind === 'palette' ? 'pal-' + p.items[i].cmd : 'men-' + p.items[i].name); }
+
+  function openPop(p) {
+    state.pop = p;
+    const other = p.kind === 'palette' ? 'mentions' : 'palette';
+    $(other).classList.add('hidden');
+    $(other).replaceChildren();
+    renderPop();
+  }
+
+  function closePop() {
+    if (!state.pop) return;
+    state.pop = null;
+    for (const id of ['palette', 'mentions']) {
+      $(id).classList.add('hidden');
+      $(id).replaceChildren();
+    }
+    const input = $('input');
+    unsetAttr(input, 'aria-activedescendant');
+    input.setAttribute('aria-expanded', 'false');
+  }
+
+  function renderPop() {
+    const p = state.pop;
+    if (!p) return;
+    const box = $(p.kind);
+    const r = activeRoom();
+    box.replaceChildren();
+    box.classList.remove('hidden');
+    let selected = null;
+    if (p.kind === 'palette') {
+      const head = el('div', 'pal-head');
+      head.append(el('strong', null, 'Commands'), el('span', 'muted', p.items.length + ' match “/' + p.prefix + '”'),
+        el('span', 'muted', 'web only = needs this signed-in browser'));
+      box.append(head);
+      let group = null;
+      let g = null;
+      p.items.forEach(function (c, i) {
+        if (c.group !== group) {
+          group = c.group;
+          g = el('div', 'pal-group');
+          g.setAttribute('role', 'group');
+          g.setAttribute('aria-label', group);
+          g.append(el('div', 'group-label', group));
+          box.append(g);
+        }
+        const o = el('div', 'pal-item');
+        o.id = optionId(p, i);
+        o.setAttribute('role', 'option');
+        o.setAttribute('aria-selected', String(i === p.sel));
+        o.append(el('span', 'pal-cmd', '/' + c.cmd), el('span', 'pal-args', c.args), el('span', 'pal-desc', cmdDesc(c)));
+        if (c.pill) o.append(el('span', 'pill', c.pill));
+        if (i === p.sel) {
+          // the usage line only when it says more than the command itself (/pause has no arguments)
+          if (c.usage && c.usage !== '/' + c.cmd) o.append(el('code', 'pal-usage', c.usage));
+          o.append(el('span', 'pal-detail', c.detail.replace('{room}', r ? r.name : 'the room')));
+          selected = o;
+        }
+        bindOption(o, i);
+        g.append(o);
+      });
+      const foot = el('div', 'pal-foot');
+      foot.append(el('kbd', 'kbd', '↑'), ' ', el('kbd', 'kbd', '↓'), ' move · ', el('kbd', 'kbd', 'Tab'), ' complete · ',
+        el('kbd', 'kbd', 'Esc'), ' close · ', el('code', null, '//text'), ' posts text that begins with /');
+      box.append(foot);
+    } else {
+      const head = el('div', 'pal-head');
+      head.append(el('strong', null, 'Agents in ' + (r ? r.name : '')), el('span', 'muted', String(p.items.length)));
+      box.append(head);
+      p.items.forEach(function (m, i) {
+        const o = el('div', 'pal-item mention-opt');
+        o.id = optionId(p, i);
+        o.setAttribute('role', 'option');
+        o.setAttribute('aria-selected', String(i === p.sel));
+        const main = el('span', 'm-main');
+        const nl = el('span', 'm-name-line');
+        nl.append(el('span', 'm-name', m.name));
+        if (m.host) nl.append(hostChip(m, false));
+        const flag = approvalsFlag(m);
+        if (flag) nl.append(flag);
+        main.append(nl, el('span', 'm-status', statusWord(m) + ' · ' + harnessOf(m.harness)[1]));
+        if (m.approval_mode === 'bypass') main.append(el('span', 'm-warn', 'Approvals off: what it reads can steer it'));
+        if (m.parked) main.append(el('span', 'm-warn', 'Parked — needs a poke'));
+        o.append(withDot(avatar(m.harness, 'agent', m.name), m), main, tierChip(m));
+        if (i === p.sel) selected = o;
+        bindOption(o, i);
+        box.append(o);
+      });
+      box.append(el('div', 'pal-foot', 'An @mention wakes that agent at once.'));
+    }
+    const input = $('input');
+    input.setAttribute('aria-controls', p.kind);
+    input.setAttribute('aria-expanded', 'true');
+    input.setAttribute('aria-activedescendant', optionId(p, p.sel));
+    if (selected && typeof selected.scrollIntoView === 'function') selected.scrollIntoView({ block: 'nearest' });
+  }
+
+  function bindOption(o, i) {
+    // mousedown keeps the focus in the textarea; the click picks the row
+    o.addEventListener('mousedown', function (ev) { ev.preventDefault(); });
+    o.addEventListener('click', function () {
+      if (!state.pop) return;
+      state.pop.sel = i;
+      choosePop();
+    });
+  }
+
+  function movePop(delta) {
+    const p = state.pop;
+    const n = p.items.length;
+    p.sel = (p.sel + delta + n) % n;
+    renderPop();
+  }
+
+  // Tab / Enter / click on a row: complete it (or run an argument-less command)
+  function choosePop() {
+    const p = state.pop;
+    if (!p) return;
+    const input = $('input');
+    if (p.kind === 'palette') {
+      const c = p.items[p.sel];
+      closePop();
+      if (c.args) {
+        input.value = '/' + c.cmd + ' ';
+        input.focus();
+      } else {
+        input.value = '/' + c.cmd;
+        $('composer').requestSubmit();
+      }
+      return;
+    }
+    const m = p.items[p.sel];
+    const v = String(input.value);
+    const ins = '@' + m.name + ' ';
+    input.value = v.slice(0, p.start) + ins + v.slice(p.end);
+    closePop();
+    input.focus();
+    if (typeof input.setSelectionRange === 'function') input.setSelectionRange(p.start + ins.length, p.start + ins.length);
   }
 
   // ---------------------------------------------------------- websocket
@@ -363,23 +1558,37 @@
   }
 
   // Frames for a room that is not open here (closed, deleted, or not listed yet) are dropped:
-  // only loadRooms() adds a tab, so a late frame never brings back a ghost tab.
+  // only loadRooms() adds a room row, so a late frame never brings back a ghost room.
   function onFrame(f) {
     const r = f.room ? state.rooms.get(f.room) : null;
+    const ins = state.inspect;
     if (f.t === 'msg' && f.msg) {
-      if (r) appendMsg(r, f.msg);
+      if (!r) return;
+      appendMsg(r, f.msg);
+      // the inspected agent spoke: its Last seen and timeline changed
+      if (ins && ins.room === f.room && f.msg.from === ins.name && (f.msg.host || '') === (ins.host || '')) scheduleRefetch();
     } else if (f.t === 'members') {
       if (!r) return;
       r.members = f.members || [];
-      if (f.room === state.active) renderBuddies();
+      if (f.room === state.active) {
+        renderBuddies();
+        updateRoomEmpty();
+      }
+      if (ins && ins.room === f.room) {
+        if (!inspectedMember()) memberLeft(ins);
+        else {
+          renderInspector();  // at once from member_dict; the detail follows
+          scheduleRefetch();
+        }
+      }
     } else if (f.t === 'room') {
       if (!r) return;
       r.settings = f.settings || {};
       if (f.room === state.active) renderStatus();
     } else if (f.t === 'notice') {
-      if (!f.room || f.room === state.active) renderLocal('*** ' + f.text, f.level === 'warn');
+      if (!f.room || f.room === state.active) renderLocal(f.text, f.level === 'warn');
     } else if (f.t === 'rooms') {
-      // hello every tab, not only new ones: a close drops this page's subscription, and a
+      // hello every room, not only new ones: a close drops this page's subscription, and a
       // reopen (same id, same name) may land before this listing, so nothing looks changed
       loadRooms(true).catch(function () { hello(Array.from(state.rooms.keys())); });
       if (!$('closed-panel').classList.contains('hidden')) loadClosed().catch(function () {});
@@ -399,14 +1608,12 @@
 
   function fmtMs(ms) { return ms < 10 ? ms.toFixed(1) : String(Math.round(ms)); }
 
-  function has(v) { return v !== null && v !== undefined; }
-
   function needsEnable(r) {
     return r.state === 'blocked' || (r.state === 'disabled' && r.reason !== 'removed');
   }
 
   function chipText(r) {
-    if (r.state === 'up') return 'up ' + (has(r.rtt_ms) ? fmtMs(r.rtt_ms) + ' ms' : '');
+    if (r.state === 'up') return 'up' + (has(r.rtt_ms) ? ' · ' + fmtMs(r.rtt_ms) + ' ms' : '');
     if (r.state === 'connecting') return 'connecting…';
     if (r.state === 'down') {
       const left = retryLeft(r);
@@ -419,8 +1626,8 @@
   }
 
   // Everything a render shows except the numbers that tick (the RTT, the retry countdown):
-  // when only those changed, the chips and the panel update them in place, so the focus
-  // and a selection in the panel survive the 20 s refresh.
+  // when only those changed, the rows and the sheet update them in place, so the focus
+  // and a selection in the sheet survive the 20 s refresh.
   function remotesKey() {
     return JSON.stringify([state.remotesError, Array.from(state.enabling).sort(), state.remotes.map(function (r) {
       const c = Object.assign({}, r);
@@ -449,11 +1656,13 @@
     return out;
   }
 
+  // the sidebar's Remote machines rows (button.remote.st-<state>); the dot is CSS (::before)
   function renderChips() {
     const bar = $('remotes');
     const key = remotesKey();
     if (key === state.chipsKey) {
-      const texts = byRemote(bar, 'chip-text');
+      if (!state.remotes.length) return;
+      const texts = byRemote(bar, 'remote-state');
       for (const r of state.remotes) {
         const t = texts.get(r.name);
         if (t) t.textContent = chipText(r);
@@ -463,23 +1672,22 @@
     state.chipsKey = key;
     const focused = focusKey(bar);
     bar.replaceChildren();
-    bar.classList.toggle('hidden', state.remotes.length === 0 && !state.remotesError);
+    $('remotes-section').classList.toggle('hidden', state.remotes.length === 0 && !state.remotesError);
     for (const r of state.remotes) {
-      const b = el('button', 'chip st-' + r.state);
-      b.type = 'button';
+      const b = btn('remote st-' + r.state);
       b.dataset.focus = 'chip:' + r.name;
-      b.title = 'remote machine ' + r.name + ': open the remotes panel';
-      const t = el('span', 'chip-text', chipText(r));
+      b.title = 'Remote machine ' + r.name + ': open the remotes panel';
+      const t = el('span', 'remote-state', chipText(r));
       t.dataset.remote = r.name;
-      b.append(el('span', 'chip-name', r.name), el('span', 'chip-dot', '●'), t);
+      b.append(icon('server'), el('span', 'remote-name', r.name), t);
       b.addEventListener('click', openRemotes);
       bar.append(b);
     }
     if (state.remotesError) {
-      const b = el('button', 'chip st-blocked', 'remotes.toml: not read');
-      b.type = 'button';
+      const b = btn('remote st-error');
       b.dataset.focus = 'chip:config';
       b.title = state.remotesError;
+      b.append(icon('server'), el('span', 'remote-name', 'remotes.toml'), el('span', 'remote-state', 'not read'));
       b.addEventListener('click', openRemotes);
       bar.append(b);
     }
@@ -493,14 +1701,13 @@
     return dd;
   }
 
-  function when(ts) { return ts ? new Date(ts * 1000).toLocaleString() : null; }
-
   function remoteCard(r) {
     const card = el('div', 'remote-card');
     const head = el('div', 'remote-head');
     const st = el('span', 'remote-state', chipText(r));
     st.dataset.remote = r.name;
-    head.append(el('span', 'chip-dot st-' + r.state, '●'), el('span', 'remote-name', r.name), st);
+    head.append(icon('server'), el('span', 'remote-name', r.name), st);
+    head.classList.add('st-' + r.state);
     card.append(head);
     const dl = el('dl', 'remote-facts');
     kv(dl, 'State', r.state + (r.reason ? ' (' + r.reason + ')' : '') + (r.since ? ' since ' + when(r.since) : ''));
@@ -527,12 +1734,11 @@
     if (r.detail) {
       // text the remote machine may have printed (ssh's last line): data, shown to you only
       card.append(el('div', 'fine', 'Last line from the link (the remote may have written it):'),
-        el('pre', 'cmd-out', r.detail));
+        el('pre', 'cmd-out remote-detail', r.detail));
     }
     const btns = el('div', 'dialog-buttons');
     if (needsEnable(r) || state.enabling.has(r.name)) {
-      const b = el('button', 'btn', state.enabling.has(r.name) ? 'Dialing…' : (r.state === 'blocked' ? 'Enable / reconnect' : 'Enable'));
-      b.type = 'button';
+      const b = btn('btn btn-primary', state.enabling.has(r.name) ? 'Dialing…' : (r.state === 'blocked' ? 'Enable / reconnect' : 'Enable'));
       b.dataset.focus = 'enable:' + r.name;
       b.disabled = state.enabling.has(r.name);
       b.title = 'consent to this remote\'s current config (the destination and host key above) and dial it now (the same as `switchboard remote enable ' + r.name + '`)';
@@ -540,8 +1746,7 @@
       btns.append(b);
     }
     if (r.enabled && (r.state === 'up' || r.state === 'connecting' || r.state === 'down')) {
-      const d = el('button', 'btn', 'Disable');
-      d.type = 'button';
+      const d = btn('btn', 'Disable');
       d.dataset.focus = 'disable:' + r.name;
       d.title = 'stop dialing ' + r.name + ' (its members go offline)';
       d.addEventListener('click', function () { disableRemote(r.name); });
@@ -598,8 +1803,22 @@
     setRemotes(data.remotes || [], data.config_error || null);
   }
 
+  function openSheet(id) {
+    state.sheetOpener = document.activeElement || null;
+    for (const other of ['remotes-panel', 'closed-panel']) if (other !== id) $(other).classList.add('hidden');
+    $(id).classList.remove('hidden');
+    setNav(false);
+  }
+
+  function closeSheet(id) {
+    $(id).classList.add('hidden');
+    const back = state.sheetOpener;
+    state.sheetOpener = null;
+    if (back && typeof back.focus === 'function') back.focus();
+  }
+
   function openRemotes() {
-    $('remotes-panel').classList.remove('hidden');
+    openSheet('remotes-panel');
     state.panelKey = null;  // it was not kept current while closed
     renderRemotesPanel();
     loadRemotes().catch(function () {});
@@ -661,34 +1880,32 @@
 
   // ------------------------------------------------------- closed rooms
   function renderClosedButton() {
-    const b = $('closed-rooms');
-    b.textContent = 'Closed (' + state.closed + ')';
-    b.classList.toggle('hidden', state.closed === 0);
+    $('closed-label').textContent = 'Closed (' + state.closed + ')';
+    $('closed-rooms').classList.toggle('hidden', state.closed === 0);
     $('empty-title').textContent = state.closed > 0 ? 'No open rooms.' : 'No rooms yet.';
   }
 
   function closedCard(c) {
     const card = el('div', 'closed-card');
     const head = el('div', 'closed-head');
-    head.append(el('span', 'closed-name', c.display),
-      el('span', 'fine', 'closed' + (c.closed_at ? ' ' + when(c.closed_at) : '') + (c.closed_by ? ' by ' + c.closed_by : '')));
+    head.append(icon('hash'), el('span', 'closed-name', String(c.display).replace(/^#/, '')));
     card.append(head);
     const facts = el('div', 'fine');
-    facts.append(c.messages + ' message(s) · ', el('code', null, c.name));
+    facts.append('closed' + (c.closed_at ? ' ' + when(c.closed_at) : '') + (c.closed_by ? ' by ' + c.closed_by : '') +
+      ' · ' + c.messages + ' message(s) · ', el('code', null, c.name));
     card.append(facts);
     const out = el('div', 'fine closed-result');
     const btns = el('div', 'dialog-buttons');
-    const b = el('button', 'btn', 'Reopen');
-    b.type = 'button';
+    const b = btn('btn btn-primary', 'Reopen');
     b.disabled = !c.reopenable;
     b.title = c.reopenable
       ? 'bring ' + c.display + ' back under its name; agents join() it again'
       : c.display + ' is taken by an open room: close or delete that one first';
     b.addEventListener('click', function () { reopenRoom(c, b, out); });
-    btns.append(b);
+    btns.append(b, el('span', 'fine', c.reopenable ? 'Agents join() it again.' : 'The name is taken by an open room.'));
     card.append(btns);
     const del = el('div', 'fine');
-    del.append('delete for good: ', el('code', null, "switchboard rooms delete '" + c.name + "'"));
+    del.append('Delete for good, from your own terminal: ', el('code', null, "switchboard rooms delete '" + c.name + "'"));
     card.append(del, out);
     return card;
   }
@@ -707,7 +1924,7 @@
   }
 
   function openClosed() {
-    $('closed-panel').classList.remove('hidden');
+    openSheet('closed-panel');
     renderClosedPanel();
     loadClosed().catch(function (e) {
       $('closed-body').replaceChildren(el('p', 'remote-error', String(e.message || e)));
@@ -715,8 +1932,8 @@
     $('closed-close').focus();
   }
 
-  async function reopenRoom(c, btn, out) {
-    btn.disabled = true;
+  async function reopenRoom(c, b, out) {
+    b.disabled = true;
     out.classList.remove('bad');
     out.textContent = 'reopening ' + c.display + '…';
     try {
@@ -725,26 +1942,31 @@
       selectRoom(res.room.name);
       $('closed-panel').classList.add('hidden');
     } catch (e) {
-      btn.disabled = !c.reopenable;
+      b.disabled = !c.reopenable;
       out.textContent = String(e.message || e);
       out.classList.add('bad');
     }
   }
 
   // -------------------------------------------------------------- input
-  const CATCHUP_HINT = 'Commands run only at the start of a message, and agents can\u2019t run them. ' +
+  const CATCHUP_HINT = 'Commands run only at the start of a message, and agents can’t run them. ' +
     'To catch an agent up, send: /catchup <agent> on <member> (or on "<topic>"; /help lists every form).';
 
-  async function send(text) {
+  // opts.confirmed: the Inspector already asked about a /kick
+  async function send(text, opts) {
     const r = state.active ? state.rooms.get(state.active) : null;
     if (!r) {
       $('create-build').focus();
       return false;
     }
-    // /close removes every agent and the tab: ask first (false gives the text back)
+    // /close removes every agent and the room row: ask first (false gives the text back)
     if (text.split(/\s+/)[0].toLowerCase() === '/close' &&
         !window.confirm('Close ' + r.name + '? ' + r.members.length + ' agent(s) leave it and its tab goes away; ' +
                         'the history is kept and you can reopen it from Closed rooms.')) return false;
+    // /kick removes an agent and revokes its membership: ask first too
+    const words = text.split(/\s+/);
+    if (words[0].toLowerCase() === '/kick' && words[1] && !(opts && opts.confirmed) &&
+        !window.confirm('Kick ' + words[1] + ' from ' + r.name + '? It is removed and its membership revoked.')) return false;
     const path = '/api/rooms/' + encodeURIComponent(r.slug);
     try {
       if (text.startsWith('//')) {
@@ -752,7 +1974,7 @@
       } else if (text.startsWith('/')) {
         const verb = text.split(/\s+/)[0];
         const res = await api('POST', path + '/command', { text: text });
-        // a done /close prunes this tab, and the new view would wipe the reply: prune first
+        // a done /close prunes this room, and the new view would wipe the reply: prune first
         if (res.ok && verb.toLowerCase() === '/close') await loadRooms().catch(function () {});
         renderLocal(verb, !res.ok, res.text);
       } else {
@@ -767,6 +1989,13 @@
     }
   }
 
+  // queue a send behind the ones in flight; resolves to whether it went out
+  function submitText(text, opts) {
+    const p = state.sendQueue.then(function () { return send(text, opts); });
+    state.sendQueue = p.then(function () {}, function () {});
+    return p;
+  }
+
   async function createRoom(name) {
     try {
       const res = await api('POST', '/api/rooms', { name: name });
@@ -779,53 +2008,175 @@
     }
   }
 
+  // the Welcome form's room name, without a leading '#'
+  function welcomeName() {
+    return String($('new-room-name').value || '').trim().replace(/^#+/, '');
+  }
+
+  function updateWelcome() {
+    const name = welcomeName() || 'build';
+    $('create-build').textContent = 'Create #' + name;
+    $('join-preview').textContent = 'join switchboard room #' + name;
+  }
+
+  // Esc closes the topmost thing: catch-up menu, kick confirm, composer popover, a sheet,
+  // the narrow drawer or sheet, then the Inspector. Focus goes back to what opened it.
+  function onEscape() {
+    const ui = state.inspUi;
+    if (state.inspect && ui && ui.menu) return setMenu(false);
+    if (state.inspect && ui && ui.confirm) return setConfirm(false);
+    if (state.pop) {
+      closePop();
+      $('input').focus();
+      return;
+    }
+    for (const id of ['closed-panel', 'remotes-panel']) {
+      if (!$(id).classList.contains('hidden')) return closeSheet(id);
+    }
+    const app = $('app');
+    if (app.classList.contains('nav-open')) {
+      setNav(false);
+      $('rooms-toggle').focus();
+      return;
+    }
+    if (app.classList.contains('sheet-open')) {
+      setSheet(false);
+      (phone() ? $('buddy-toggle') : $('pane-toggle')).focus();
+      return;
+    }
+    if (state.inspect) closeInspector(true);
+  }
+
   function bindInput() {
     const input = $('input');
-    let queue = Promise.resolve();  // sends go out one at a time, in order
+    state.sendQueue = Promise.resolve();  // sends go out one at a time, in order
     $('composer').addEventListener('submit', function (ev) {
       ev.preventDefault();
       const text = input.value.replace(/\s+$/, '');
       if (!text.trim()) return;
       input.value = '';
-      queue = queue.then(function () { return send(text); }).then(function (ok) {
-        if (!ok && !input.value) input.value = text;  // give a failed message back
+      input.rows = 1;
+      closePop();
+      submitText(text).then(function (ok) {
+        if (!ok && !input.value) {
+          input.value = text;  // give a failed message back
+          autoGrow();
+        }
       });
       input.focus();
     });
     input.addEventListener('keydown', function (ev) {
+      // the popover (palette or mentions) takes the keys first
+      if (state.pop) {
+        if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+          ev.preventDefault();
+          movePop(ev.key === 'ArrowDown' ? 1 : -1);
+          return;
+        }
+        if (ev.key === 'Tab' || (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing)) {
+          ev.preventDefault();
+          choosePop();
+          return;
+        }
+        if (ev.key === 'Escape') {
+          ev.preventDefault();
+          if (typeof ev.stopPropagation === 'function') ev.stopPropagation();
+          closePop();
+          return;
+        }
+      }
       if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
         ev.preventDefault();
         $('composer').requestSubmit();
       }
     });
+    input.addEventListener('input', function () {
+      autoGrow();
+      updatePopover();
+    });
+    input.addEventListener('click', updatePopover);
+    input.addEventListener('blur', closePop);
+    $('cmd-btn').addEventListener('click', function () {
+      if (!input.value) input.value = '/';
+      input.focus();
+      updatePopover();
+    });
+    $('mention-btn').addEventListener('click', function () {
+      const v = String(input.value);
+      const at = typeof input.selectionStart === 'number' ? input.selectionStart : v.length;
+      const before = v.slice(0, at);
+      const ins = (before && !/[\s(]$/.test(before) ? ' ' : '') + '@';
+      input.value = before + ins + v.slice(at);
+      input.focus();
+      if (typeof input.setSelectionRange === 'function') input.setSelectionRange(at + ins.length, at + ins.length);
+      updatePopover();
+    });
+
     $('new-room').addEventListener('click', function () {
       const name = window.prompt('New room name (for example #build):', '#');
       if (!name || name === '#') return;
       createRoom(name);
     });
-    $('create-build').addEventListener('click', function () { createRoom('#build'); });
+    // first run: the Welcome form creates the room named in its field ("Create #build" by default)
+    $('create-form').addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      const name = welcomeName();
+      if (!name) {
+        $('new-room-name').focus();
+        return;
+      }
+      createRoom('#' + name);
+    });
+    $('new-room-name').addEventListener('input', updateWelcome);
+    $('copy-join').addEventListener('click', function () {
+      const b = $('copy-join');
+      clipboardWrite($('join-line').textContent).then(function () {
+        b.textContent = 'Copied';
+        setTimeout(function () { b.textContent = 'Copy'; }, COPIED_MS);
+      }, function () {});
+    });
+
     $('logout').addEventListener('click', async function () {
       try { await api('POST', '/logout', {}); } catch (e) { /* already signed out */ }
       location.replace('/');
     });
-    $('remotes-close').addEventListener('click', function () { $('remotes-panel').classList.add('hidden'); });
+    $('remotes-close').addEventListener('click', function () { closeSheet('remotes-panel'); });
     $('closed-rooms').addEventListener('click', openClosed);
-    $('closed-close').addEventListener('click', function () { $('closed-panel').classList.add('hidden'); });
+    $('closed-close').addEventListener('click', function () { closeSheet('closed-panel'); });
+
+    $('pause-toggle').addEventListener('click', function () {
+      const r = activeRoom();
+      if (r) submitText(r.settings && r.settings.paused ? '/resume' : '/pause');
+    });
+    $('pane-toggle').addEventListener('click', togglePane);
+    $('buddy-toggle').addEventListener('click', function () { setSheet(!$('app').classList.contains('sheet-open')); });
+    $('rooms-toggle').addEventListener('click', function () { setNav(!$('app').classList.contains('nav-open')); });
+    $('scrim').addEventListener('click', function () {
+      setNav(false);
+      setSheet(false);
+    });
+    $('insp-back').addEventListener('click', function () { closeInspector(true); });
+
     document.addEventListener('keydown', function (ev) {
-      if (ev.key === 'Escape') {
-        $('remotes-panel').classList.add('hidden');
-        $('closed-panel').classList.add('hidden');
-      }
+      if (ev.key === 'Escape') onEscape();
     });
-    const toggle = $('buddy-toggle');
-    toggle.addEventListener('click', function () {
-      const open = $('buddies').classList.toggle('open');
-      toggle.setAttribute('aria-expanded', String(open));
+    // a click outside the catch-up menu closes it (click-driven: closest is fine here)
+    document.addEventListener('click', function (ev) {
+      const ui = state.inspUi;
+      if (!state.inspect || !ui || !ui.menu) return;
+      const t = ev.target;
+      if (t && typeof t.closest === 'function' && t.closest('#catchup-menu, #insp-catchup')) return;
+      ui.menu = false;
+      renderInspector();
     });
+    if (typeof window.addEventListener === 'function') window.addEventListener('resize', setOverlay);
+    setPaneView(false);
+    setOverlay();
+    updateWelcome();
   }
 
   // --------------------------------------------------------------- boot
-  // The open rooms, from the broker. A tab whose room is gone, or was replaced under the same
+  // The open rooms, from the broker. A room whose room is gone, or was replaced under the same
   // name (another id, or the same id reused after a delete: another created_at), is dropped;
   // a replaced room starts over at lastId 0. helloAll (a reconnect, a rooms frame) subscribes
   // every room again from its lastId. The log is redrawn only when the active room changed,
@@ -854,6 +2205,7 @@
     const was = state.active;
     const pruned = was !== null && gone.has(was);  // a replaced active room counts as pruned
     if (pruned) state.active = null;
+    if (state.inspect && gone.has(state.inspect.room)) closeInspector(false);
     renderTabs();
     renderClosedButton();
     const names = helloAll ? Array.from(state.rooms.keys()) : fresh;
@@ -868,23 +2220,26 @@
       renderBuddies();
       renderStatus();
     }
-    if (pruned) renderLocal('*** ' + was + ' is no longer open (closed or deleted); Closed rooms can reopen a closed room');
+    if (pruned) renderLocal(was + ' is no longer open (closed or deleted); Closed rooms can reopen a closed room');
     return fresh;
   }
 
   async function boot() {
     bindInput();
+    keepLogPinned();
     try {
       state.me = await api('GET', '/api/me');
     } catch (e) {
       return;
     }
+    // the brand's tooltip names the running version (§1.2); plain text, no markup
+    if (state.me && state.me.version) $('brand-name').setAttribute('title', 'switchboard ' + state.me.version);
     renderBuddies();
     await loadRooms();
     renderStatus();
     await loadRemotes().catch(function () {});
     connect();
-    // the chips' countdowns tick; RTTs refresh (a state change arrives at once, by the socket)
+    // the rows' countdowns tick; RTTs refresh (a state change arrives at once, by the socket)
     setInterval(function () {
       if (state.remotes.some(function (r) { return r.state === 'down'; })) {
         renderChips();

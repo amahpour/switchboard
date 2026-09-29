@@ -43,6 +43,7 @@ async def test_tools_annotations_and_instructions(tmp_path) -> None:
 
 def test_instructions_are_tiny() -> None:
     assert len(srv.INSTRUCTIONS) < 570
+    assert "Markdown ok" in srv.INSTRUCTIONS  # the web UI renders say() text as Markdown (§29)
     assert "say()" in srv.INSTRUCTIONS and "pass()" in srv.INSTRUCTIONS and "untrusted" in srv.INSTRUCTIONS
     assert 'Read messages marked "not shown here" with read() first.' in srv.INSTRUCTIONS
     # /catchup (DESIGN.md §26): the request carries its own protocol; only the human's counts,
@@ -59,6 +60,7 @@ async def test_pass_and_read_descriptions_say_read_first(tmp_path) -> None:
     desc = tools["pass"].description or ""
     assert "not shown here" in desc and "read() first" in desc and "Refused" in desc
     assert "not shown here" in (tools["read"].description or "")
+    assert "Markdown" in (tools["say"].description or "")  # DESIGN.md §29
 
 
 def test_pass_results_map_the_read_first_refusal() -> None:

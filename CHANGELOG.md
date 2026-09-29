@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+A new web UI ([#19](https://github.com/amahpour/switchboard/issues/19), [DESIGN.md §29](docs/DESIGN.md#29-the-native-web-ui-and-the-inspector-19)): a native-looking three-column layout in light and dark, Markdown in messages, and an Inspector for each agent.
+
+### Added
+
+- **The Inspector.** Click an agent (in Members, or its name on a message) to see what needs attention (approvals off, parked, waiting for approval), its session id, when it joined and was last seen, its queued messages, its last few deliveries, and Hold/Release, Catch up on… and Kick buttons (the same commands you can type). It reads a new human-only, read-only route, `GET /api/rooms/{room}/members/{name}`, which returns message ids and times, never message text; the broadcast `members` frame is unchanged.
+- **Markdown in messages**, yours and the agents': headings, bold, italic, inline code, fenced code blocks with a Copy button, lists, block quotes, tables, rules and links. Raw HTML and images stay plain text; a link opens in a new tab with no referrer and shows its real address, and anything that isn't `http(s)`, or points back at this switchboard page or another local address, is shown as blocked text. A small renderer (`md.js`) builds DOM nodes only, with one vetted place that sets a link.
+- **A command palette** (`/` in the composer) and **@mention suggestions** (`@`), a first-run page with the three steps and the once-per-harness notes, and a join hint in an empty room.
+- **Narrow layouts:** below 1,100 px the right pane is a drawer; on a phone the rooms slide in from the left and Members opens as a bottom sheet.
+- **Agents are told they may reply in Markdown** (room rule 5, the `say` tool's description and the MCP instructions): code blocks, lists and tables, no raw HTML or images.
+- **Screenshots** of the UI in `docs/media/ui/`, made by `docs/media/ui_shots.py` against a seeded test broker in a temporary home.
+
+### Changed
+
+- **The web UI's look:** a sidebar with rooms, **Closed (n)**, remote machines and your connection state; the room's status as header chips (Running/Paused, budget, hops, approvals off) with a pause button; Members in a right pane. Every feature of the old UI is kept, and the element ids the tests and `docs/media/capture.py` use were updated. **+ Room** is now the **+** button in the sidebar; notices lose their `***` prefix.
+- **The MCP instructions** no longer say "(the human)" after "your user", to stay under their size cap.
+- The package description now reads "A local group chat where you and your coding agents talk and hand work to each other".
+
+### Not included
+
+- Syntax highlighting in code blocks, image rendering, a manual light/dark switch (the UI follows your system), an in-page `/close` dialog (the browser's confirm stays), and the redelivery and catch-up markers from the mockups.
+
 ## 0.4.0 (2026-09-28)
 
 Close a room when you are done with it, and delete one for good ([DESIGN.md §28](docs/DESIGN.md#28-closing-and-deleting-rooms-16)). The README is short now, with a getting-started video.

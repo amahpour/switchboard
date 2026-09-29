@@ -490,6 +490,80 @@ class Store:
         ).fetchall()
         return {r[0]: r[1] for r in rows}
 
+    # --------------------------------------------- member detail (the Inspector, §29)
+    # Read-only queries behind the web UI's Inspector (GET /api/rooms/{slug}/members/{name}).
+    # None of them selects message text: the Inspector shows ids and times, and the browser
+    # resolves ids against the history it already holds. RoomService.member_detail whitelists
+    # every field before it leaves the broker.
+    def member_times(self, membership_id: int) -> dict[str, Any] | None:
+        """One membership's clock facts: ``joined_at`` and ``held_at`` (the membership), the
+        participant's ``status_at``, ``status_src``, ``last_seen`` and ``last_say_at``, and
+        ``last_pass_at`` (its newest ``pass`` event in this membership). None if no such row."""
+        r = self.con.execute(
+            "SELECT m.joined_at, m.held_at, p.status_at, p.status_src, p.last_seen, p.last_say_at,"
+            " (SELECT MAX(e.ts) FROM events e WHERE e.kind='pass' AND e.membership_id=m.id)"
+            "   AS last_pass_at"
+            " FROM memberships m JOIN participants p ON p.id=m.participant_id WHERE m.id=?",
+            (membership_id,),
+        ).fetchone()
+        return {k: r[k] for k in r.keys()} if r is not None else None
+
+    def pending_deliveries(self, membership_id: int, limit: int = 50) -> list[tuple[int, int]]:
+        """``(message_id, prio)`` of the member's queued (pending) deliveries, oldest first."""
+        rows = self.con.execute(
+            "SELECT message_id, prio FROM deliveries WHERE membership_id=? AND state='pending'"
+            " ORDER BY message_id LIMIT ?",
+            (membership_id, limit),
+        ).fetchall()
+        return [(int(r[0]), int(r[1])) for r in rows]
+
+    # The events the Inspector's delivery timeline shows (the delivery engine's and pass()).
+    TIMELINE_EVENT_KINDS = (
+        "offer", "expire", "cancel", "parked", "unparked", "rearm", "requeue",
+        "watchdog_remind", "watchdog_escalate", "pass",
+    )
+
+    def member_timeline(self, membership_id: int, since: float, limit: int = 6) -> list[dict[str, Any]]:
+        """The newest ``limit`` delivery events of a membership since ``since``, plus its own
+        chat messages as ``said`` entries (id and time only, never text), oldest first.
+        Each entry: ``{"ts", "kind", "data": dict, "id": message id for 'said' else None}``.
+        The caller whitelists ``data``: it is engine-internal and never leaves as is."""
+        kinds = self.TIMELINE_EVENT_KINDS
+        rows = self.con.execute(
+            "SELECT ts, kind, data, NULL AS mid, id AS ord FROM events"
+            f" WHERE membership_id=? AND ts>=? AND kind IN ({','.join('?' * len(kinds))})"
+            " UNION ALL"
+            " SELECT ts, 'said', '{}', id, id FROM messages"
+            " WHERE room_id=(SELECT room_id FROM memberships WHERE id=?)"
+            "   AND sender_membership_id=? AND kind='chat' AND ts>=?"
+            " ORDER BY ts DESC, ord DESC LIMIT ?",
+            (membership_id, since, *kinds, membership_id, membership_id, since, limit),
+        ).fetchall()
+        out = []
+        for r in reversed(rows):
+            try:
+                data = json.loads(r["data"]) if r["data"] else {}
+            except ValueError:  # pragma: no cover - the broker writes events as JSON only
+                data = {}
+            out.append({"ts": r["ts"], "kind": r["kind"], "data": data if isinstance(data, dict) else {},
+                        "id": r["mid"]})
+        return out
+
+    def offer_senders(self, membership_id: int, message_ids: Sequence[int]) -> list[tuple[int, str, str | None]]:
+        """``(prio, sender_name, sender_host)`` of the member's deliveries of these messages,
+        in id order (the Inspector's "from" list of an offer). At most 20 ids are looked up."""
+        ids = [int(i) for i in message_ids][:20]
+        if not ids:
+            return []
+        rows = self.con.execute(
+            "SELECT d.prio, m.sender_name, m.sender_host FROM deliveries d"
+            " JOIN messages m ON m.id=d.message_id"
+            f" WHERE d.membership_id=? AND d.message_id IN ({','.join('?' * len(ids))})"
+            " ORDER BY d.message_id",
+            (membership_id, *ids),
+        ).fetchall()
+        return [(int(r[0]), r[1], r[2]) for r in rows]
+
     def batch_expiry_counts(self, membership_id: int) -> dict[str, int]:
         rows = self.con.execute(
             "SELECT COALESCE(expire_reason, '?'), COUNT(*) FROM batches"

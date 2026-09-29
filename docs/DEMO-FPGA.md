@@ -8,14 +8,14 @@ No board, or no Pi? [§7](#7-the-fake-remote-machine-no-board-no-pi) runs the wh
 
 ## 1. What the video shows (target 2–3 minutes cut, about 10 minutes raw)
 
-1. The web UI: `#fpga`, the buddy list with `vivado` and `bench @fpga-pi`, and the link chip `fpga-pi ● up 2 ms` above the chat (click it for the remotes panel: state, RTT, both versions, the remote's hooks, clock skew).
+1. The web UI: `#fpga`, Members with `vivado` and `bench` (with its `@fpga-pi` chip), and `fpga-pi · up · 2 ms` under Remote machines in the sidebar (click it for the remotes panel: state, RTT, both versions, the remote's hooks, clock skew).
 2. You type: `@vivado build blinky with the UART echo at 115200 and hand it to @bench`.
 3. vivado builds. Speed this part up in the edit. It pushes the file, then posts `artifact: blinky/top.bit sha256:… size:… board:[board]`.
 4. bench wakes by itself within a fraction of a second. Its status goes idle → busy. It checks the hash and asks to run `openFPGALoader`.
 5. The UI shows `bench` waiting-approval, and deliveries to it are held. You approve in the remote machine's terminal, on camera.
 6. The LEDs change; the UART test prints `PASS 12/12`. bench posts `result: 3f9a1c2b7d10 pull=skip verify=ok flash=ok uart=pass(12/12) t=41s`.
 7. You steer: `@vivado reverse the LED pattern`. Second cycle.
-8. Optional: unplug the remote machine's Ethernet. The chip goes to `down`, bench goes offline. Plug it back in: the chip comes back `up`, bench is back, and a message you sent meanwhile arrives.
+8. Optional: unplug the remote machine's Ethernet. Its sidebar row goes to `down`, bench goes offline. Plug it back in: the row comes back `up`, bench is back, and a message you sent meanwhile arrives.
 9. End on `switchboard report --room '#fpga' --last 30m`.
 
 ## 2. Hardware and software
@@ -41,7 +41,7 @@ No board, or no Pi? [§7](#7-the-fake-remote-machine-no-board-no-pi) runs the wh
 
 ## 4. Before recording (checklist)
 
-- [ ] `switchboard remote status` shows `fpga-pi: up`, the same version on both machines, and remote hooks ok; the web UI's chip says `fpga-pi ● up`.
+- [ ] `switchboard remote status` shows `fpga-pi: up`, the same version on both machines, and remote hooks ok; the web UI's sidebar says `fpga-pi · up`.
 - [ ] In the web UI, `/hops` in `#fpga` is at least 20 (`/hops 30`). Each build → result cycle is two agent messages.
 - [ ] `openFPGALoader --detect` on the remote sees the board; the UART device exists.
 - [ ] Both Claude sessions are in the default (prompting) mode. Decide what the remote may run without asking (e.g. `sha256sum`, `ls`); put it in `~/bench/.claude/settings.json` yourself. switchboard never writes it.
@@ -87,7 +87,7 @@ The hand-off lines are plain chat text (DESIGN.md §27.9); switchboard doesn't p
 | | you | approve in the remote's terminal |
 | +20 s | bench | flash, UART test, posts `result: … uart=pass(12/12)` |
 | | you | `@vivado reverse the LED pattern` → second cycle |
-| optional | you | unplug and replug the remote's Ethernet (chip down/up; bench offline → back; a message sent meanwhile is delivered) |
+| optional | you | unplug and replug the remote's Ethernet (sidebar row down/up; bench offline → back; a message sent meanwhile is delivered) |
 | end | you | `switchboard report --room '#fpga' --last 30m` |
 
 ## 7. The fake remote machine (no board, no Pi)

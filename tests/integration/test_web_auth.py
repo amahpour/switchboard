@@ -197,6 +197,27 @@ def test_docs_are_off_and_headers_present(broker: InProcBroker, web: httpx.Clien
         assert r.headers["referrer-policy"] == "no-referrer"
 
 
+def test_markdown_script_is_served_under_the_csp(broker: InProcBroker, web: httpx.Client) -> None:
+    """The native UI (DESIGN.md §29): md.js is a same-origin static script under the same CSP,
+    loaded by the signed-in page only; styles come from style.css alone (no inline style)."""
+    r = web.get("/static/md.js")
+    assert r.status_code == 200 and "SBMarkdown" in r.text
+    csp = r.headers["content-security-policy"]
+    assert "script-src 'self'" in csp and "style-src 'self'" in csp and "unsafe-inline" not in csp
+    assert "unsafe-eval" not in csp
+    page = web.get("/").text
+    assert "/static/md.js" in page and page.index("/static/md.js") < page.index("/static/app.js")
+    login = httpx.get(broker.base + "/").text
+    assert "md.js" not in login and "app.js" not in login
+    for r in (web.get("/"), httpx.get(broker.base + "/")):
+        assert "unsafe-inline" not in r.headers["content-security-policy"]
+
+
+def test_member_detail_needs_a_session(broker: InProcBroker) -> None:
+    c = httpx.Client(base_url=broker.base)
+    assert c.get("/api/rooms/build/members/claude-1").status_code == 401
+
+
 # ----------------------------------------------------------------- logout
 def test_logout_and_logout_all(broker: InProcBroker) -> None:
     a, b, c = broker.web_client(), broker.web_client(), broker.web_client()

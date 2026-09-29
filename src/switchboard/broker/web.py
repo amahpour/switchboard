@@ -11,6 +11,10 @@ reconnect and Disable buttons, the web session's equivalents of the human-only
 ``switchboard remote enable|disable`` (consent for exactly the current config,
 recorded as ``via web``). A ``remotes`` WebSocket event carries every change.
 
+The Inspector (§29): ``GET /api/rooms/{slug}/members/{name}`` is one member's detail
+(times, session id, queued ids, delivery counts, a short delivery timeline) for the human's
+web session. Read-only, and never message text.
+
 Closed rooms (§28): ``GET /api/rooms`` lists open rooms (each with its ``id``) and
 the ``closed`` count; ``GET /api/closed-rooms`` lists closed ones; ``POST
 /api/closed-rooms/{id}/reopen`` is the web UI's Reopen button.
@@ -227,6 +231,19 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                     "settings": state.service.settings(room),
                 }
             )
+        except ServiceError as e:
+            return _svc_err(e)
+
+    # The Inspector (§29): one member's detail for the human's web session. A GET, not a
+    # WebSocket frame: it is read on demand for the one agent the human is looking at, so the
+    # broadcast ``members`` frame (and ``switchboard tail``) stays as small as it was. It
+    # writes nothing, publishes nothing and carries no message text (ids and times only).
+    @app.get("/api/rooms/{slug}/members/{name}")
+    async def member_detail(request: Request, slug: str, name: str) -> Response:
+        if session(request) is None:
+            return unauthorized()
+        try:
+            return _ok(state.service.member_detail(slug, name))
         except ServiceError as e:
             return _svc_err(e)
 
