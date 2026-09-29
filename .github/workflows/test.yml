@@ -266,7 +266,7 @@ jobs:
       group: release
       cancel-in-progress: false
     outputs:
-      released: ${{ steps.cut.outputs.released }}
+      released: ${{ steps.publish.outputs.released }}   # "true" only once main, the tag and the Release are out
       version: ${{ steps.cut.outputs.version }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
@@ -276,6 +276,7 @@ jobs:
         id: cut
         run: python3 .github/scripts/release.py --notes "$RUNNER_TEMP/release-notes.md"
       - name: Commit, tag, push and publish
+        id: publish
         if: steps.cut.outputs.released == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -286,9 +287,20 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -qam "release: v$VERSION"
           git tag -a "v$VERSION" -m "switchboard $VERSION"
-          git push origin "HEAD:refs/heads/main" "refs/tags/v$VERSION"
+          # --atomic: main and the tag land together or not at all. Without it, a merge that
+          # landed while this job ran had main's update rejected and the tag pushed anyway: a
+          # tag on a commit that isn't on main (v0.6.0, the first time).
+          if ! git push --atomic origin "HEAD:refs/heads/main" "refs/tags/v$VERSION"; then
+            git fetch -q origin main
+            if [ "$(git rev-parse origin/main)" != "$GITHUB_SHA" ]; then
+              echo "::notice::main moved on while this job ran; the newer merge's run releases both"
+              exit 0
+            fi
+            exit 1   # something else refused the push: say so
+          fi
           gh release create "v$VERSION" --verify-tag --title "switchboard $VERSION" \
             --notes-file "$RUNNER_TEMP/release-notes.md" --latest
+          echo "released=true" >> "$GITHUB_OUTPUT"
 
   # After a release: its image, built from the new tag for linux/amd64 and linux/arm64 and pushed
   # to ghcr.io/amahpour/switchboard as <version> (and `latest`, when it is the newest release),
