@@ -23,7 +23,8 @@ concurrency:
 jobs:
   # What the PR changes (.github/scripts/ci_scope.py): the test jobs below run unless every
   # file is docs, or the PR is a release PR (`release: vX.Y.Z`, changing only what a release
-  # writes). A manual run always tests.
+  # writes). A manual run always tests. It fails a PR that edits CHANGELOG.md: only a release
+  # writes it, and a PR's notes go in changes/<name>.md.
   changes:
     name: what changed
     runs-on: ubuntu-latest

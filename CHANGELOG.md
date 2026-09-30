@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
 ## 0.6.5 (2026-09-30)
 

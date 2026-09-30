@@ -51,19 +51,39 @@ def test_next_version() -> None:
 CHANGELOG = "# Changelog\n\n## Unreleased\n\nIntro.\n\n### Added\n\n- A thing.\n\n## 0.4.0 (2026-09-28)\n\nOld.\n"
 
 
-def test_cut_changelog_moves_unreleased_under_the_version() -> None:
-    text, notes = rel.cut_changelog(CHANGELOG, "0.4.1", "2026-09-29", ["fix: x"])
+def test_cut_changelog_gathers_the_notes_above_the_last_release() -> None:
+    # an old-style Unreleased section is gathered, and goes
+    text, notes = rel.cut_changelog(CHANGELOG, "0.4.1", "2026-09-29", [], ["fix: x"])
     assert notes == "Intro.\n\n### Added\n\n- A thing.\n"
-    assert text == ("# Changelog\n\n## Unreleased\n\n## 0.4.1 (2026-09-29)\n\nIntro.\n\n### Added\n\n- A thing.\n\n"
+    assert text == ("# Changelog\n\n## 0.4.1 (2026-09-29)\n\nIntro.\n\n### Added\n\n- A thing.\n\n"
                     "## 0.4.0 (2026-09-28)\n\nOld.\n")
-    # nothing written under Unreleased: the commits' titles are the notes
-    text2, notes2 = rel.cut_changelog(text, "0.4.2", "2026-09-30", ["docs: typo (#33)"])
-    assert notes2 == "- docs: typo (#33)\n"
-    assert text2.startswith("# Changelog\n\n## Unreleased\n\n## 0.4.2 (2026-09-30)\n\n- docs: typo (#33)\n\n## 0.4.1")
-    with pytest.raises(SystemExit):
-        rel.cut_changelog("# Changelog\n", "1.0.0", "d", [])
+    # notes files (changes/*.md) go in above the last release
+    text2, notes2 = rel.cut_changelog(text, "0.4.2", "2026-09-30", ["### Fixed\n\n- B.\n"], ["fix: b (#34)"])
+    assert notes2 == "### Fixed\n\n- B.\n"
+    assert text2.startswith("# Changelog\n\n## 0.4.2 (2026-09-30)\n\n### Fixed\n\n- B.\n\n## 0.4.1 (2026-09-29)")
+    # no notes at all: the commits' titles are the notes
+    text3, notes3 = rel.cut_changelog(text2, "0.4.3", "2026-09-30", [], ["docs: typo (#33)"])
+    assert notes3 == "- docs: typo (#33)\n"
+    assert text3.startswith("# Changelog\n\n## 0.4.3 (2026-09-30)\n\n- docs: typo (#33)\n\n## 0.4.2")
+    # a first release goes at the end of the preamble
+    first, _ = rel.cut_changelog("# Changelog\n\nIntro.\n", "1.0.0", "d", ["- One.\n"], [])
+    assert first == "# Changelog\n\nIntro.\n\n## 1.0.0 (d)\n\n- One.\n"
     with pytest.raises(SystemExit):  # never a second section for the same version
-        rel.cut_changelog(text2, "0.4.2", "2026-10-01", [])
+        rel.cut_changelog(text3, "0.4.3", "2026-10-01", [], [])
+
+
+def test_gather_notes_puts_each_heading_once_in_order() -> None:
+    a = "The big one.\n\n### Fixed\n\n- A fix.\n\n### Added\n\n- A feature.\n"
+    b = "### Added\n\n- Another feature.\n- And a third.\n\n### Deprecated\n\n- Old flag.\n"
+    c = "### Fixed\n\nA paragraph, not a bullet.\n"
+    assert rel.gather_notes(["", a, b, "\n", c]) == (
+        "The big one.\n\n"
+        "### Added\n\n- A feature.\n- Another feature.\n- And a third.\n\n"   # one list across files
+        "### Fixed\n\n- A fix.\n\nA paragraph, not a bullet.\n\n"             # HEADING_ORDER first...
+        "### Deprecated\n\n- Old flag.")                                        # ...then the rest, as seen
+    assert rel.gather_notes(["### Fixed\n\n", "  \n"]) == ""  # empty files and headings add nothing
+    assert rel.is_release_file("changes/a.md") and rel.is_release_file("uv.lock")
+    assert not rel.is_release_file("changes/a.txt") and not rel.is_release_file("src/switchboard/cli.py")
 
 
 def test_update_pins() -> None:
@@ -123,7 +143,7 @@ def test_a_release_on_a_real_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert "@v0.5.0" in (repo / "README.md").read_text() and "@v0.5.0" in (repo / "docs/INSTALL.md").read_text()
     assert ":0.5.0\n" in (repo / "deploy/compose/compose.yaml").read_text()  # the image pin
     assert notes.read_text() == "Intro.\n\n### Added\n\n- A thing.\n"
-    assert "## Unreleased\n\n## 0.5.0 (2026-09-29)\n" in (repo / "CHANGELOG.md").read_text()
+    assert (repo / "CHANGELOG.md").read_text().startswith("# Changelog\n\n## 0.5.0 (2026-09-29)\n\nIntro.")
 
     # what CI does next: commit and tag; then a docs-only merge with nothing under Unreleased
     git(repo, "commit", "-qam", "release: v0.5.0")
@@ -181,7 +201,7 @@ def test_the_script_needs_an_action() -> None:
 
 # ------------------------------------------------------------------ release PRs (#46)
 def test_notes_for_reads_a_release_back_out_of_the_changelog() -> None:
-    text, notes = rel.cut_changelog(CHANGELOG, "0.4.1", "2026-09-29", [])
+    text, notes = rel.cut_changelog(CHANGELOG, "0.4.1", "2026-09-29", [], [])
     assert rel.notes_for(text, "0.4.1") == notes == "Intro.\n\n### Added\n\n- A thing.\n"
     assert rel.notes_for(text, "0.4.0") == "Old.\n"  # the last section runs to the end
     with pytest.raises(SystemExit):
@@ -234,6 +254,11 @@ def remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]
 
 def test_open_pr_cuts_the_release_on_a_branch_and_leaves_the_checkout_alone(remote: tuple[Path, Path]) -> None:
     repo, origin = remote
+    (repo / "changes").mkdir()
+    (repo / "changes" / "colour.md").write_text("### Added\n\n- Colour.\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "docs: a note for the colour (#30)")
+    git(repo, "push", "-q", "origin", "main")
     git(repo, "switch", "-q", "-c", "my-work")  # the caller's own branch, mid-edit
     (repo / "README.md").write_text("an edit in progress\n")
 
@@ -243,6 +268,8 @@ def test_open_pr_cuts_the_release_on_a_branch_and_leaves_the_checkout_alone(remo
     assert 'version = "0.5.0"' in shown
     assert git(origin, "log", "-1", "--format=%s", "release/v0.5.0").strip() == "release: v0.5.0"
     assert "## 0.5.0 (2026-09-30)" in git(origin, "show", "release/v0.5.0:CHANGELOG.md")
+    assert "- Colour." in git(origin, "show", "release/v0.5.0:CHANGELOG.md")
+    assert "changes/colour.md" not in git(origin, "ls-tree", "-r", "--name-only", "release/v0.5.0")  # gathered
     assert git(origin, "rev-parse", "release/v0.5.0^") == git(origin, "rev-parse", "main")  # from origin/main
     log = (repo.parent / "gh.log").read_text().splitlines()
     assert log[0].startswith("pr list --state open")
@@ -271,3 +298,22 @@ def test_open_pr_with_nothing_to_release(remote: tuple[Path, Path], capsys: pyte
     assert capsys.readouterr().out.endswith("nothing to release: no PR opened\n")
     assert git(origin, "for-each-ref", "--format=%(refname:short)", "refs/heads").split() == ["main"]
     assert len(git(repo, "worktree", "list").splitlines()) == 1
+
+
+def test_a_release_gathers_the_notes_files_and_deletes_them(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    (repo / "changes").mkdir()
+    (repo / "changes" / "README.md").write_text("# How to write these\n\n### Fixed\n\n- Not a note.\n")
+    (repo / "changes" / "zeta.md").write_text("### Fixed\n\n- Zeta, added first.\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "fix: zeta (#40)")
+    (repo / "changes" / "alpha.md").write_text("### Fixed\n\n- Alpha, added second.\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "fix: alpha (#41)")
+
+    assert rel.release(repo, tmp_path / "notes.md", "2026-09-30") == "0.4.1"
+    notes = (tmp_path / "notes.md").read_text()
+    # the old Unreleased text first, then the files in the order they were added (not by name)
+    assert notes == "Intro.\n\n### Added\n\n- A thing.\n\n### Fixed\n\n- Zeta, added first.\n- Alpha, added second.\n"
+    assert "## 0.4.1 (2026-09-30)\n\n" + notes in (repo / "CHANGELOG.md").read_text()
+    assert sorted(p.name for p in (repo / "changes").iterdir()) == ["README.md"]  # gathered, the README stays
