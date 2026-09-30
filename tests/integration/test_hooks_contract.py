@@ -294,8 +294,18 @@ def test_a_nested_sessions_hooks_are_not_credited_to_the_outer_session(broker: I
     """`claude -p` run from a joined Claude's Bash fires the same user-level hooks.
     They must not claim the outer member's context, flip its status or re-key it."""
     claude.tool("join", room="#build", screen_name="claude-1")
+    # The outer turn is running (its Bash runs the nested session), so its registry says
+    # busy, as a real session's does. Left at the fake's "idle", the broker ends the turn
+    # as an Esc (no Stop hook, §9.2) 1 s after its first registry read when that read came
+    # after the last hook: the nested hooks below took that long on a slow runner.
+    claude.set_registry("busy")
     claude.hook(fixture("UserPromptSubmit"))
     mid = say(broker, "for the outer session only")
+    # with the registry busy, only a hook credited to the member changes these
+    # (hooks_seen_at: every credited hook does)
+    keys = ("status", "status_src", "boundary_seq", "gen", "session_id", "approval_mode", "hooks_seen_at")
+    before = {k: part(broker)[k] for k in keys}
+    assert before["status"] == "busy" and before["session_id"] == SID
     d = Path(tempfile.mkdtemp(prefix="yk-nest-", dir="/tmp"))
     try:
         nested = d / "claude"  # argv ends in /claude: another Claude session in between
@@ -305,7 +315,7 @@ def test_a_nested_sessions_hooks_are_not_credited_to_the_outer_session(broker: I
             payload = fixture(name, session_id=other)
             assert run_hook_as(claude, "claude", payload, payload["hook_event_name"], wrap=str(nested)) == ""
         p = part(broker)
-        assert p["status"] == "busy" and p["session_id"] == SID and state(broker, mid) == "pending"
+        assert {k: p[k] for k in keys} == before and state(broker, mid) == "pending"
         # the outer session's own hook still gets it
         out = json.loads(claude.hook(fixture("PostToolUse_bash")))
         assert ids_in(out["hookSpecificOutput"]["additionalContext"]) == [mid]
