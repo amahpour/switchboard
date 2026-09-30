@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed
+
+- **A release is a pull request now, and `main` takes only pull requests** ([#46](https://github.com/amahpour/switchboard/issues/46)). `python3 .github/scripts/release.py --open-pr` opens a `release: vX.Y.Z` PR with the new version, the CHANGELOG and the install and image pins. Merging it tags the release and publishes it and its image. Changes collect under Unreleased until then. Before, every merge was a release that CI pushed straight to `main`.
+- **CI runs only on pull requests.** A docs-only PR or a release PR skips the test suite and runs only the tree scan. One check, `CI`, sums up the rest, and `main`'s ruleset requires it.
+
 ### Fixed
 
 - **A remote machine's name stays readable in the sidebar.** A long state, such as `down: timeout (retry in 20 s)` or `needs enable (config changed)`, used to take the whole row and squeeze the name out: `build-vm` showed as `b.`, and some names vanished. The name and the state now share the row, and a state that doesn't fit ends in an ellipsis. Hovering the row shows the state in full.

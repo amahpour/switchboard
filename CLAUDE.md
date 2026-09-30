@@ -14,3 +14,17 @@ Where the images go:
 - **Previews** go on the `design-assets` branch under `pr-<number>/`, not on the PR's own branch, so `main` doesn't carry them.
 - **Links** use the commit SHA, so they keep working after the branch is deleted: `https://raw.githubusercontent.com/amahpour/switchboard/<sha>/pr-<number>/<file>.png`.
 - **Images the docs themselves use** (the README, `docs/USAGE.md`) live under `docs/media/` in the PR itself.
+
+## Main takes only pull requests
+
+A ruleset on `main` refuses direct pushes, force pushes and deletion, from everyone. A PR merges once its `CI` and `conventional PR title` checks pass: `gh pr merge --squash`, or `gh pr merge --auto --squash` to merge as soon as they do. A docs-only PR skips the tests ([CONTRIBUTING.md](CONTRIBUTING.md), "CI").
+
+## Releases
+
+A release is a pull request ([CONTRIBUTING.md](CONTRIBUTING.md), "Releases"). When the maintainer asks for one:
+
+1. Run `python3 .github/scripts/release.py --open-pr` from any clean checkout. It opens a `release: vX.Y.Z` PR from a fresh `origin/main` without touching your checkout, and prints the PR's URL. If it says another release PR is open, ask whether to merge or close that one.
+2. Merge it with `gh pr merge <url> --auto --squash`. The merge tags the release and publishes it and the image (`.github/workflows/release.yml`).
+3. Check that it went out: `gh run list --workflow release.yml --limit 1` and `gh release view vX.Y.Z`. Report the release's link.
+
+Never set the version, or edit a released CHANGELOG section, by hand.
