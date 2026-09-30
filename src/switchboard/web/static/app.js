@@ -2178,9 +2178,18 @@
     return dl;
   }
 
-  function approvalCard(m) {
-    const card = el('div', 'machine-card st-pending');
+  // a machine's card: focusable (not in the tab order), so opening the sheet at it can move the
+  // focus there, and a re-render finds it again by its key
+  function cardFor(m, cls) {
+    const card = el('div', 'machine-card ' + cls);
     card.dataset.machine = m.name;
+    card.dataset.focus = 'card:' + m.name;
+    card.tabIndex = -1;
+    return card;
+  }
+
+  function approvalCard(m) {
+    const card = cardFor(m, 'st-pending');
     card.append(machineHead(m, 'laptop', m.name, machineChip(m)));
     card.append(withCode('p', 'fine', m.dialed_in
       ? 'It dialed in and is waiting for you. Until you approve it, its agents reach no room.'
@@ -2339,8 +2348,7 @@
 
   function machineCard(m) {
     const s = machineState(m);
-    const card = el('div', 'machine-card st-' + s);
-    card.dataset.machine = m.name;
+    const card = cardFor(m, 'st-' + s);
     card.append(machineHead(m, 'laptop', m.name, machineChip(m)));
     const dl = el('dl', 'remote-facts');
     const what = { up: 'up', connecting: 'connecting', blocked: 'refused each time it dials (' + (m.reason || '?') + ')',
@@ -2566,7 +2574,6 @@
       for (const c of body.getElementsByClassName('machine-card')) {
         if (c.dataset.machine !== name) continue;
         if (typeof c.scrollIntoView === 'function') c.scrollIntoView({ block: 'nearest' });
-        c.tabIndex = -1;
         if (tryFocus(c)) return;
       }
     } else {
