@@ -381,3 +381,33 @@ def test_leave_stops_the_dialer_and_forgets_the_pairing(d: DialIn) -> None:
     assert not (d.machine / "satellite.toml").exists() and not (d.machine / "link" / linkkey.MACHINE_KEY).exists()
     assert d.dialers[0].wait(10) == 0
     d.wait_machine(lambda m: m["state"] != "up", what="down")
+
+
+def test_the_web_ui_lists_live_codes_and_cancels_one(d: DialIn) -> None:
+    code = d.code()
+    got = d.api("GET", "/api/machines").json()
+    assert [c["name"] for c in got["codes"]] == ["work-laptop"] and got["codes"][0]["expires_in_s"] > 590
+    # cancelling needs a session and no passkey check (it only takes access away)
+    assert httpx.post(f"{d.origin}/api/machines/work-laptop/cancel", json={}, headers={"Origin": d.origin,
+                      "X-Switchboard": "1"}).status_code == 401
+    assert d.api("POST", "/api/machines/work-laptop/cancel").json() == {"name": "work-laptop", "cancelled": True}
+    assert d.api("GET", "/api/machines").json()["codes"] == []
+    assert pair(d, {"code": code, "key": linkkey.b64u(os.urandom(32))}).status_code == 403
+    assert d.api("POST", "/api/machines/Bad Name/cancel").status_code == 400
+    assert events(d, "code_cancelled") == [{"what": "code_cancelled", "name": "work-laptop"}]
+
+
+def test_a_machine_refused_at_each_dial_says_why(d: DialIn) -> None:
+    """A test-mode machine and a broker that no longer is: each dial is refused, and the web UI
+    shows why and what to do (not "offline, it redials by itself")."""
+    d.linked()
+    link = d.b.state.remotes.machines["work-laptop"]
+
+    def off() -> None:
+        d.b.state.test_mode = False
+        link._abort(link.attempt, __import__("switchboard.broker.remote", fromlist=["x"]).LinkClosed("down", "eof"))
+
+    d.b.on_loop(off)
+    m = d.wait_machine(lambda m: m["reason"] == "test_mode", what="refused")
+    assert m["state"] == "down" and m["hint"] == "the machine runs in test mode and this broker doesn't"
+

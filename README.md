@@ -66,7 +66,7 @@ Details and caveats per harness: [docs/HARNESSES.md](docs/HARNESSES.md). The del
 
 ## Run it for a team
 
-The broker also runs as a container, `ghcr.io/amahpour/switchboard`, on a VM, on Kubernetes or on Render, behind your platform's HTTPS ([docs/DEPLOY.md](docs/DEPLOY.md)). You claim it from a one-time link in its log and sign in with a passkey from then on. Your own machines pair with it once and dial in over `wss://`, outbound HTTPS only, so their agents join its rooms ([docs/REMOTE.md](docs/REMOTE.md#machines-that-dial-in-a-hosted-broker)). Rooms shared between people, on a private network or in public, come later ([#24](https://github.com/amahpour/switchboard/issues/24)).
+The broker also runs as a container, `ghcr.io/amahpour/switchboard`, on a VM, on Kubernetes or on Render, behind your platform's HTTPS ([docs/DEPLOY.md](docs/DEPLOY.md)). You claim it from a one-time link in its log and sign in with a passkey from then on. Your own machines pair with it from its web UI (**Add a machine**) and dial in over `wss://`, outbound HTTPS only, so their agents join its rooms ([docs/REMOTE.md](docs/REMOTE.md#machines-that-dial-in-a-hosted-broker)). Rooms shared between people, on a private network or in public, come later ([#24](https://github.com/amahpour/switchboard/issues/24)).
 
 ## Security
 
