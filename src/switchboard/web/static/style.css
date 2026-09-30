@@ -513,6 +513,13 @@ button:disabled, .btn:disabled, .btn-primary:disabled { opacity: .5; cursor: def
 .st-down .remote-state,
 .st-error .remote-state,
 .st-blocked .remote-state { color: var(--danger); }
+/* A sidebar row gives its name and its state half the width each, and whatever one doesn't need
+   to the other: a long state (down with a countdown, blocked) ends in an ellipsis instead of
+   squeezing the name out. The row's title has the state in full. */
+.remote-list > .remote .remote-name,
+.remote-list > .remote .remote-state { flex: 1 1 0; min-width: 0; max-width: max-content; }
+.remote-list > .remote .remote-state { display: block; margin-left: auto; overflow: hidden; text-overflow: ellipsis; }
+.remote-list > .remote .remote-state::before { display: inline-block; margin-right: 5px; vertical-align: middle; }
 
 .side-foot {
   display: flex;

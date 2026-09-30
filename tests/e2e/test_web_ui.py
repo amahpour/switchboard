@@ -529,6 +529,74 @@ def test_close_a_room_then_reopen_it(ui: UI) -> None:
     expect(page.locator("#closed-panel")).to_be_hidden()
 
 
+# A sidebar row per case, cloned from the seeded fpga-pi's with a name, a state and the text
+# chipText() gives it: the name's and the state's [shown, full] widths, how far the state's
+# right edge sits inside the row's padding (negative: it spills out) and its text-overflow.
+REMOTE_ROWS = """(cases) => {
+  const real = document.querySelector('#remotes .remote');
+  return cases.map(([name, st, text]) => {
+    const c = real.cloneNode(true);
+    c.className = 'remote st-' + st;
+    c.querySelector('.remote-name').textContent = name;
+    c.querySelector('.remote-state').textContent = text;
+    real.after(c);
+    const n = c.querySelector('.remote-name'), s = c.querySelector('.remote-state');
+    const inside = c.getBoundingClientRect().right - parseFloat(getComputedStyle(c).paddingRight)
+                   - s.getBoundingClientRect().right;
+    const out = {name: [n.clientWidth, n.scrollWidth], state: [s.clientWidth, s.scrollWidth], inside: inside,
+                 overflow: getComputedStyle(s).textOverflow};
+    c.remove();
+    return out;
+  });
+}"""
+
+LONG_STATES = [("scope-pi", "down", "down: timeout (retry in 20 s)"),
+               ("build-vm", "blocked", "blocked: forced command failed"),
+               ("dev-box-west", "disabled", "needs enable (config changed)")]
+
+
+@pytest.mark.parametrize("size", ["desktop", "phone"])
+def test_a_long_remote_state_leaves_the_name_readable(ui: UI, size: str) -> None:
+    """A sidebar row gives its name and its state half its width each, and whatever one doesn't
+    need to the other. A long state (down with a countdown, blocked, a changed config) used to
+    take the whole row and squeeze the name to nothing; now it ends in an ellipsis."""
+    page = ui.open(room=None, **(PHONE if size == "phone" else {}))
+    expect(page.locator("#remotes .remote")).to_have_count(1)
+    rows = page.evaluate(REMOTE_ROWS, [*LONG_STATES, ("gpu-box", "up", "up · 14 ms"),
+                                       ("fpga-bench-lab-02", "down", "down: timeout (retry in 20 s)")])
+    *long, short, both = rows
+    for (name, _, text), r in zip(LONG_STATES, long):
+        assert r["name"][0] >= r["name"][1] - 1, f"{size}: {name} is cut to {r['name']} px next to {text!r}"
+    assert all(r["inside"] >= -0.5 and r["overflow"] == "ellipsis" for r in rows), rows  # nothing spills out
+    assert short["name"][0] >= short["name"][1] - 1 and short["state"][0] >= short["state"][1] - 1, short
+    assert abs(short["inside"]) < 0.5, short  # a short state keeps to the right edge
+    assert abs(both["name"][0] - both["state"][0]) <= 2, both  # a long name and a long state: half each
+
+
+def test_a_remote_rows_title_has_its_whole_state(ui: UI) -> None:
+    """The row's title has the state in full, since the row may end it in an ellipsis, and it
+    ticks with the retry countdown as the row's text does. /api/remotes answers with fpga-pi
+    down (the seeded world's is never enabled); no state change sends a remotes frame here."""
+    ctx = ui.context()
+    down = {"name": "fpga-pi", "state": "down", "reason": "timeout", "retry_in_s": 30, "rtt_ms": None}
+    ctx.route("**/api/remotes", lambda route: route.fulfill(json={"remotes": [down], "config_error": None}))
+    page = ctx.new_page()
+    page.goto(ui.world.broker.login_url())
+    expect(page.locator("#st-conn")).to_have_text("Connected")
+    row = page.locator("#remotes .remote")
+    expect(row).to_have_class(cls("st-down"))
+
+    def title_and_text() -> tuple[str, str]:
+        t, s = row.evaluate("r => [r.title, r.querySelector('.remote-state').textContent]")
+        assert re.fullmatch(r"down: timeout \(retry in \d+ s\)", s), s
+        assert t == f"Remote machine fpga-pi ({s}): open the remotes panel", (t, s)
+        return t, s
+
+    _, first = title_and_text()
+    expect(row.locator(".remote-state")).not_to_have_text(first)  # the countdown ticks every second
+    title_and_text()
+
+
 FOCUS_RING = """() => {
   const e = document.activeElement;
   if (!e || e === document.body) return null;
