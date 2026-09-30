@@ -26,6 +26,12 @@ signed-in browser, pass a fresh passkey check); ``POST /api/passkeys/begin`` and
 ``/api/passkeys`` add a passkey to a session that passed one; ``GET /api/auth/state``
 tells the sign-in page what applies. None of these need a session but the last two;
 all of them are Origin-checked like every write, and rate-limited on failure.
+
+Machines that dial in (§31.7): ``POST /link/pair`` (a pairing code, sent by ``switchboard
+remote join``: no session, and an Origin is refused), the ``/link`` WebSocket (no Origin, a
+signed handshake), and the owner's ``GET /api/machines``, ``POST /api/machines/pair``,
+``/api/machines/{name}/approve`` and ``/remove``. Making a code and approving need a passkey
+check in the last five minutes, as adding a passkey does.
 """
 
 from __future__ import annotations
@@ -418,6 +424,89 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         # for the sign-in page (no session): what applies here, and nothing about the owner
         return _ok({"hosted": state.web_origin.public, "claimed": state.store.owner_handle() is not None,
                     "passkeys": passkeys_on(), "claim": claim_open()})
+
+    # ---------------------------------------------- machines that dial in (§31.7)
+    @app.post("/link/pair", include_in_schema=False)
+    async def link_pair(request: Request) -> Response:
+        # sent by `switchboard remote join`, never by a browser: an Origin is refused outright
+        if request.headers.get("origin") is not None:
+            return _err(403, "forbidden", "this route takes no browser requests")
+        m = state.machines
+        if m is None:
+            return _err(404, "not_found", "this broker takes no machines that dial in (a hosted broker with"
+                                          " passkeys does)")
+        try:
+            body = await _json_body(request)
+        except ServiceError as e:
+            return _svc_err(e)
+        status, data = m.pair(body)
+        return JSONResponse(data, status_code=status, headers=NO_STORE)
+
+    @app.websocket("/link")
+    async def link_ws(ws: WebSocket) -> None:
+        m = state.machines
+        if m is None or ws.headers.get("origin") is not None:  # never a browser
+            await ws.close(code=1008)
+            return
+        await m.serve(ws)
+
+    def owner(request: Request, fresh: bool) -> JSONResponse | None:
+        """Why the owner's machine routes refuse this request, or None: a session, a broker that
+        takes machines, and (to make a code or approve) a passkey check in the last 5 minutes."""
+        h = session(request)
+        if h is None:
+            return unauthorized()
+        if state.machines is None:
+            return _err(404, "not_found", "machines dial in only to a hosted broker with passkeys")
+        if fresh and not state.fresh_check(h):
+            return _err(403, "reauth", "confirm it's you with a passkey first")
+        return None
+
+    @app.get("/api/machines")
+    async def machines_list(request: Request) -> Response:
+        if session(request) is None:
+            return unauthorized()
+        m = state.machines
+        if m is None:
+            return _ok({"hosted": False, "machines": []})
+        return _ok({"hosted": True, "machines": m.summary(), "broker_fingerprint": m.fingerprint})
+
+    @app.post("/api/machines/pair")
+    async def machines_pair(request: Request) -> Response:
+        no = owner(request, True)
+        if no is not None:
+            return no
+        try:
+            body = await _json_body(request)
+            return _ok(state.machines.mint(body.get("name")))
+        except ServiceError as e:
+            return _svc_err(e)
+
+    @app.post("/api/machines/{name}/approve")
+    async def machines_approve(request: Request, name: str) -> Response:
+        no = owner(request, True)
+        if no is not None:
+            return no
+        try:
+            await _json_body(request)
+            if not valid_host(name):
+                raise ServiceError("bad_request", "machine names look like work-laptop")
+            return _ok(state.machines.approve(name, "web"))
+        except ServiceError as e:
+            return _svc_err(e)
+
+    @app.post("/api/machines/{name}/remove")
+    async def machines_remove(request: Request, name: str) -> Response:
+        no = owner(request, False)  # removing only takes access away
+        if no is not None:
+            return no
+        try:
+            await _json_body(request)
+            if not valid_host(name):
+                raise ServiceError("bad_request", "machine names look like work-laptop")
+            return _ok(await state.machines.remove(name, "web"))
+        except ServiceError as e:
+            return _svc_err(e)
 
     # --------------------------------------------------------------- api
     @app.get("/api/me")

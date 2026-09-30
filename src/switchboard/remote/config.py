@@ -46,7 +46,10 @@ END_AFTER_MAX_S = 30 * 24 * 3600
 TRANSPORTS = ("ssh", "exec")
 ANY_ROOM = "*"  # rooms = ["*"]: this host's members may join any room (the default)
 _KEYS = frozenset({"host", "user", "port", "rooms", "harnesses", "max_members", "end_after_s", "transport", "home"})
-_SAT_KEYS = frozenset({"name", "desktop", "key_fingerprint", "accepted_at"})
+_SAT_KEYS = frozenset({"name", "desktop", "key_fingerprint", "accepted_at", "transport", "broker_url", "broker_key"})
+SAT_TRANSPORTS = ("ssh", "wss")  # the desktop dials this home over ssh; or this home dials its broker (§31.7)
+_URL_RE = re.compile(r"^https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$")
+_B64U_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")  # 32 bytes in base64url, no padding
 LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
@@ -398,12 +401,22 @@ def entry_hash(paths: Paths, entry: RemoteEntry) -> str:
 # ------------------------------------------------------------- satellite.toml
 @dataclass(frozen=True)
 class SatelliteConf:
-    """A satellite home's ``satellite.toml`` (written by ``switchboard remote accept``)."""
+    """A satellite home's ``satellite.toml``: written by ``switchboard remote accept`` (the
+    desktop dials this home over ssh) or by ``switchboard remote join`` (this home dials its
+    broker, DESIGN.md §31.7: ``transport = "wss"``, with the broker's URL and its pinned key)."""
 
     name: str
     desktop: str = ""  # a label for the desktop, for messages on the Pi
     key_fingerprint: str = ""
     accepted_at: float | None = None
+    transport: str = "ssh"
+    broker_url: str = ""  # wss: the broker's public URL (an origin)
+    broker_key: str = ""  # wss: the broker's Ed25519 public key, base64url, pinned at `remote join`
+
+    @property
+    def dials(self) -> bool:
+        """This home dials its broker (``remote join``), rather than being dialed over ssh."""
+        return self.transport == "wss"
 
 
 def read_satellite_conf(paths: Paths) -> SatelliteConf:
@@ -429,8 +442,21 @@ def read_satellite_conf(paths: Paths) -> SatelliteConf:
     at = data.get("accepted_at")
     if at is not None and (isinstance(at, bool) or not isinstance(at, (int, float))):
         raise RemoteConfigError("satellite.toml: accepted_at must be a number")
+    transport = data.get("transport", "ssh")
+    if transport not in SAT_TRANSPORTS:
+        raise RemoteConfigError('satellite.toml: transport must be "ssh" or "wss"')
+    url = data.get("broker_url", "")
+    bkey = data.get("broker_key", "")
+    if transport == "wss":
+        if not isinstance(url, str) or not _URL_RE.fullmatch(url):
+            raise RemoteConfigError("satellite.toml: broker_url must be the broker's https:// address")
+        if not isinstance(bkey, str) or not _B64U_KEY_RE.fullmatch(bkey):
+            raise RemoteConfigError("satellite.toml: broker_key must be the broker's key (base64url)")
+    elif url or bkey:
+        raise RemoteConfigError('satellite.toml: broker_url and broker_key are only for transport = "wss"')
     return SatelliteConf(name=name, desktop=desktop, key_fingerprint=fp,
-                         accepted_at=float(at) if at is not None else None)
+                         accepted_at=float(at) if at is not None else None,
+                         transport=transport, broker_url=url, broker_key=bkey)
 
 
 def _toml_str(s: str) -> str:
@@ -438,8 +464,9 @@ def _toml_str(s: str) -> str:
 
 
 def write_satellite_conf(paths: Paths, name: str, desktop: str = "", key_fp: str = "",
-                         accepted_at: float | None = None) -> Path:
-    """Write ``satellite.toml`` atomically, 0600."""
+                         accepted_at: float | None = None, *, broker_url: str = "", broker_key: str = "") -> Path:
+    """Write ``satellite.toml`` atomically, 0600. With ``broker_url`` (``remote join``), a home
+    that dials that broker (``transport = "wss"``), pinning ``broker_key``."""
     if not valid_host(name):
         raise RemoteConfigError(f"not a remote name: {name!r}")
     if desktop and not LABEL_RE.fullmatch(desktop):
@@ -449,6 +476,12 @@ def write_satellite_conf(paths: Paths, name: str, desktop: str = "", key_fp: str
             f"desktop = {_toml_str(desktop)}\n"
             f"key_fingerprint = {_toml_str(key_fp)}\n"
             f"accepted_at = {at!r}\n")
+    if broker_url:
+        if not _URL_RE.fullmatch(broker_url) or not _B64U_KEY_RE.fullmatch(broker_key):
+            raise RemoteConfigError("not a broker URL and key")
+        text += (f'transport = "wss"\n'
+                 f"broker_url = {_toml_str(broker_url)}\n"
+                 f"broker_key = {_toml_str(broker_key)}\n")
     target = paths.satellite_conf
     tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -471,3 +504,12 @@ def satellite_desktop(paths: Paths) -> str:
         return read_satellite_conf(paths).desktop or "the desktop"
     except (OSError, RemoteConfigError):
         return "the desktop"
+
+
+def dialing_home(paths: Paths) -> SatelliteConf | None:
+    """This home's ``satellite.toml`` if it dials its broker (``remote join``), else None."""
+    try:
+        conf = read_satellite_conf(paths)
+    except (OSError, RemoteConfigError):
+        return None
+    return conf if conf.dials else None

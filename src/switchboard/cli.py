@@ -47,9 +47,21 @@ def _desktop(args: argparse.Namespace) -> str:
     return satellite_desktop(_paths(args))
 
 
+def _dialing(args: argparse.Namespace) -> Any:
+    """This home's satellite.toml if it dials its broker (``remote join``, DESIGN.md §31.7)."""
+    from switchboard.remote.config import dialing_home
+
+    return dialing_home(_paths(args))
+
+
 def on_desktop(args: argparse.Namespace) -> int:
     """A human verb on a satellite home: the broker, the web UI and the human's
     authority are on the desktop, never here."""
+    conf = _dialing(args)
+    if conf is not None:
+        print(f"switchboard: use the broker's web UI ({conf.broker_url}): this machine dials it; the broker and"
+              " the web UI run there", file=sys.stderr)
+        return EXIT_ERR
     print(f"switchboard: run this on the desktop ({_desktop(args)}): this is a satellite home;"
           " the broker and the web UI run there", file=sys.stderr)
     return EXIT_ERR
@@ -141,6 +153,8 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     paths = _paths(args)
     if _satellite_home(args):
+        if _dialing(args) is not None:
+            return cmd_start_dialer(args)
         print(f"switchboard: this is a satellite home: the broker runs on {_desktop(args)}, which dials this"
               " machine (`switchboard remote status` there)", file=sys.stderr)
         return EXIT_ERR
@@ -189,10 +203,32 @@ def cmd_start(args: argparse.Namespace) -> int:
     )
 
 
+def cmd_start_dialer(args: argparse.Namespace) -> int:
+    """``switchboard start`` on a home that dials its broker: its dialer (DESIGN.md §31.7)."""
+    from switchboard.broker import daemon
+
+    paths = _paths(args)
+    if args.test_mode:
+        why = daemon.check_test_mode(paths, _home_given(args))
+        if why:
+            print(f"switchboard: {why}", file=sys.stderr)
+            return EXIT_USAGE
+    if args.foreground:
+        from switchboard.remote import dialer
+
+        return dialer.main(paths, test_mode=args.test_mode, log_stdout=args.log_stdout)
+    if args.log_stdout:
+        print("switchboard: --log-stdout needs --foreground", file=sys.stderr)
+        return EXIT_USAGE
+    return daemon.start_dialer(paths, test_mode=args.test_mode)
+
+
 def cmd_stop(args: argparse.Namespace) -> int:
     from switchboard.broker import daemon
 
     if _satellite_home(args):
+        if _dialing(args) is not None:
+            return daemon.stop_dialer(_paths(args))
         return on_desktop(args)
     return daemon.stop(_paths(args))
 
@@ -223,6 +259,12 @@ def cmd_satellite_status(args: argparse.Namespace) -> int:
 
 def cmd_status(args: argparse.Namespace) -> int:
     if _satellite_home(args):
+        if _dialing(args) is not None:
+            from switchboard.remote.join import status_lines
+
+            for line in status_lines(_paths(args)):
+                print(line)
+            return EXIT_OK
         return cmd_satellite_status(args)
     st = _call(args, "sys.status")
     if args.json:
@@ -256,7 +298,23 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(f"  closed  {closed} room(s) (switchboard rooms --closed)")
     for info in st.get("remotes") or []:
         print(f"  remote  {_remote_line(p, info)}")
+    for m in st.get("machines") or []:
+        print(f"  machine {_machine_line(p, m)}")
     return EXIT_OK
+
+
+def _machine_line(p: Any, m: dict[str, Any]) -> str:
+    """A machine that dials in (§31.7), for ``switchboard status``."""
+    name = _clean(str(m.get("name", "?")))
+    state = str(m.get("state") or "?")
+    if state == "pending":
+        what = "waiting for approval" if m.get("dialed_in") else "paired, not approved"
+        return f"{name}: {p.warn('pending')} ({what}), key {m.get('key_fp') or '?'}"
+    if state == "up":
+        rtt = m.get("rtt_ms")
+        return f"{name}: {p.ok('up')}{f' {rtt:.0f} ms' if isinstance(rtt, (int, float)) else ''} (wss)"
+    reason = _clean(str(m.get("reason") or ""))
+    return f"{name}: {_state(p, state)}{f' ({reason})' if reason else ''} (wss)"
 
 
 def cmd_login(args: argparse.Namespace) -> int:
@@ -569,7 +627,16 @@ def _pairing(args: argparse.Namespace) -> int:
     paths = _paths(args)
     sat = _satellite_home(args)
     ak = Path(args.authorized_keys).expanduser() if getattr(args, "authorized_keys", None) else None
+    dialing = _dialing(args) is not None
     try:
+        if dialing and args.remote_cmd in ("remove", "doctor"):
+            from switchboard.remote import join
+
+            if args.remote_cmd == "remove":
+                return join.leave(paths, args.name, yes=args.yes)
+            for line in join.status_lines(paths):
+                print(line)
+            return EXIT_OK
         if args.remote_cmd == "add":
             if sat:
                 return on_desktop(args)
@@ -638,6 +705,8 @@ def cmd_remote(args: argparse.Namespace) -> int:
 
     if args.remote_cmd in ("add", "accept", "remove", "doctor"):
         return _pairing(args)
+    if args.remote_cmd == "join":
+        return cmd_remote_join(args)
     if _satellite_home(args):
         return on_desktop(args)
     p = for_args(args)
@@ -662,6 +731,26 @@ def cmd_remote(args: argparse.Namespace) -> int:
     for info in res.get("remotes", []):
         print(_remote_line(p, info))
     return EXIT_OK
+
+
+def cmd_remote_join(args: argparse.Namespace) -> int:
+    """``switchboard remote join <url> <code>`` (DESIGN.md §31.7)."""
+    from switchboard.remote import join
+
+    paths = _paths(args)
+    if args.test_mode:
+        from switchboard.broker import daemon
+
+        why = daemon.check_test_mode(paths, _home_given(args))
+        if why:
+            print(f"switchboard remote join: {why}", file=sys.stderr)
+            return EXIT_USAGE
+    try:
+        return join.join(paths, args.url, args.code, home_given=_home_given(args), test_mode=args.test_mode,
+                         start=not args.no_start)
+    except join.JoinError as e:
+        print(f"switchboard remote join: {e}", file=sys.stderr)
+        return EXIT_ERR
 
 
 def cmd_satellite(args: argparse.Namespace) -> int:
@@ -840,7 +929,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_mcp)
 
     s = sub.add_parser("remote", parents=[common],
-                       help="remote members over ssh: pair (add/accept), enable, disable, status, remove, doctor")
+                       help="remote members: over ssh (add/accept, enable, disable, status, remove, doctor), or a"
+                            " machine that dials a hosted broker (join)")
     rsub = s.add_subparsers(dest="remote_cmd", metavar="ACTION", required=True)
     r = rsub.add_parser("add", parents=[common],
                         help="desktop: pair a remote (link key, pinned host key, remotes.toml) and print its token")
@@ -877,6 +967,12 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--ssh-dir", default=None, help="desktop: where this machine's own public keys are (default ~/.ssh)")
     r.add_argument("--probe-desktop", default=None, metavar="DEST",
                    help="remote: also try `ssh DEST true` (a shell on the desktop from here is a warning)")
+    r = rsub.add_parser("join", parents=[common],
+                        help="this machine: pair with a hosted broker (a code from its web UI), then dial it")
+    r.add_argument("url", help="the broker's address, e.g. https://sb.example.com")
+    r.add_argument("code", help="the pairing code from the web UI (Add a machine), e.g. 7KQ4-M2XD-9HVA")
+    r.add_argument("--no-start", action="store_true", help="pair only; start the dialer later with `switchboard start`")
+    r.add_argument("--test-mode", action="store_true", help=argparse.SUPPRESS)
     r = rsub.add_parser("enable", parents=[common], help="consent to this remote's current config and dial it")
     r.add_argument("name")
     r = rsub.add_parser("disable", parents=[common], help="stop dialing a remote (its members go offline)")

@@ -66,9 +66,10 @@ class Subscriber:
 
 class WsSubscriber(Subscriber):
     """A browser WebSocket. Frames are the §5.5 server->client shapes, plus ``remotes``:
-    every remote link's state, for the header chips and the remotes panel (§27.11)."""
+    every remote link's state, for the header chips and the remotes panel (§27.11), and
+    ``machines``: every machine that dials in (§31.7)."""
 
-    kinds: frozenset[str] = Subscriber.kinds | {"remotes"}
+    kinds: frozenset[str] = Subscriber.kinds | {"remotes", "machines"}
 
     def __init__(self) -> None:
         super().__init__()
@@ -76,7 +77,9 @@ class WsSubscriber(Subscriber):
         self.q = asyncio.Queue(maxsize=WS_QUEUE_MAX)
 
     def format(self, kind: str, room: str | None, data: dict[str, Any]) -> Any:
-        return {"t": kind, "room": room, **data} if kind not in ("rooms", "remotes") else {"t": kind, **data}
+        if kind in ("rooms", "remotes", "machines"):
+            return {"t": kind, **data}
+        return {"t": kind, "room": room, **data}
 
     async def run_sender(self, send_text: Callable[[str], Any], close: Callable[[int], Any]) -> None:
         try:

@@ -63,6 +63,9 @@ ALLOWED: dict[tuple[str, str], str] = {
                                                         " registry file in this home's sessions dir (M8d)",
     ("remote/satellite.py", "exposure"): "the satellite's own ancestors (sshd's session process), which hold"
                                          " the far ends of its stdio (M8e)",
+    # the dialer (§31.7) runs on the machine that dials in and looks only at its own pidfile
+    ("remote/dialer.py", "running_pid"): "the pidfile's dialer process, on the machine it runs on",
+    ("remote/dialer.py", "main"): "the dialer's own start time, for its pidfile",
 }
 
 

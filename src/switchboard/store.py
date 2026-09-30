@@ -24,6 +24,7 @@ from switchboard.models import (
     Member,
     Membership,
     Message,
+    MachineRow,
     Participant,
     PasskeyRow,
     RemoteRow,
@@ -905,6 +906,58 @@ class Store:
         self._remote_name(name)
         with db.tx(self.con):
             return self.con.execute("DELETE FROM remotes WHERE name=?", (name,)).rowcount == 1
+
+    # ------------------------------------------------------ machines (§31.7)
+    # A machine that dials in: pending from its pairing until the owner approves it, approved
+    # until Remove (which forgets its key; the row stays, so a name keeps its history). A code
+    # made for a removed machine's name pairs a new key under it, pending again.
+    def machine(self, name: str) -> MachineRow | None:
+        r = self.con.execute("SELECT * FROM link_machines WHERE name=?", (name,)).fetchone()
+        return MachineRow.from_row(r) if r else None
+
+    def machines(self, *, removed: bool = False) -> list[MachineRow]:
+        sql = "SELECT * FROM link_machines" + ("" if removed else " WHERE removed_at IS NULL") + " ORDER BY name"
+        return [MachineRow.from_row(r) for r in self.con.execute(sql)]
+
+    def machine_pair(self, name: str, key: bytes, key_fp: str, facts: dict[str, Any]) -> MachineRow:
+        """A machine paired with a code: a new pending row, or a removed one's name again."""
+        if not valid_host(name) or len(key) != 32:
+            raise ValueError("a machine needs a name like work-laptop and a 32-byte key")
+        now = self.clock.now()
+        with db.tx(self.con):
+            old = self.machine(name)
+            if old is not None and not old.removed:
+                raise Conflict(f"{name} is paired already: remove it first")
+            self.con.execute("DELETE FROM link_machines WHERE name=?", (name,))
+            self.con.execute(
+                "INSERT INTO link_machines(name, key, key_fp, facts, created_at) VALUES(?,?,?,?,?)",
+                (name, key, key_fp, json.dumps(facts, sort_keys=True), now),
+            )
+        got = self.machine(name)
+        assert got is not None
+        return got
+
+    def machine_approve(self, name: str, via: str) -> bool:
+        """The owner approved a pending machine. False if it isn't pending."""
+        if via not in ("cli", "web"):
+            raise ValueError(f"approved via {via!r}")
+        now = self.clock.now()
+        with db.tx(self.con):
+            return self.con.execute(
+                "UPDATE link_machines SET approved_at=?, approved_via=? WHERE name=? AND approved_at IS NULL"
+                " AND removed_at IS NULL", (now, via, name)).rowcount == 1
+
+    def machine_remove(self, name: str) -> bool:
+        """Remove: the key is forgotten (a connection with it is refused from now on)."""
+        now = self.clock.now()
+        with db.tx(self.con):
+            return self.con.execute(
+                "UPDATE link_machines SET removed_at=?, key=X'', key_fp='' WHERE name=? AND removed_at IS NULL",
+                (now, name)).rowcount == 1
+
+    def machine_seen(self, name: str, t: float) -> None:
+        with db.tx(self.con):
+            self.con.execute("UPDATE link_machines SET last_seen_at=? WHERE name=? AND removed_at IS NULL", (t, name))
 
     # ============================================================ M2: agents
     # ----------------------------------------------------------- participants

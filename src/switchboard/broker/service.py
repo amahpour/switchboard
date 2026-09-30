@@ -229,6 +229,7 @@ class RoomService:
         self.delivery: DeliveryHooks | None = None
         # The remote hosts' links (broker/remote.py RemoteManager), once they run.
         self.remotes: Any = None
+        self.machines: Any = None  # the machines that dial in (§31.7), on a hosted broker
         hub.set_members_source(self._members_snapshot)
         hub.set_settings_source(self._settings_snapshot)
 
@@ -831,4 +832,5 @@ class RoomService:
             "hooks": self.info.hook_state,
             "test_mode": self.info.test_mode,
             "remotes": self.remotes.summary() if self.remotes is not None else [],
+            "machines": self.machines.summary() if self.machines is not None else [],
         }

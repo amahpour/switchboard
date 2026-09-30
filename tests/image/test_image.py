@@ -9,7 +9,9 @@ on a Docker network behind a proxy that terminates TLS (Caddy, with a certificat
 local CA), with ``SWITCHBOARD_PUBLIC_URL=https://sb.test:<port>``. They check that the container
 runs as the unprivileged user, answers /healthz and Docker's health check, prints one claim link
 in its log and is claimed from it in Chromium with a passkey (a virtual authenticator) and
-signed in to again with it, with no ``docker exec`` anywhere (issue #41), gives a sign-in link
+signed in to again with it, with no ``docker exec`` anywhere (issue #41), takes a second
+container of the same image as a machine that pairs with a code, dials ``wss://`` through the
+proxy and has a stand-in agent talk in a room, until Remove stops its dialer, gives a sign-in link
 through ``docker exec`` too, serves the UI to Chromium over https with its WebSocket over wss,
 stops cleanly on ``docker stop`` and keeps its data (and its owner) across a restart. They also
 mount the two kinds of volume platforms give it: a disk that belongs to root (Render) and a
@@ -59,8 +61,10 @@ AUTHENTICATOR = {"protocol": "ctap2", "transport": "internal", "hasResidentKey":
                  "isUserVerified": True, "automaticPresenceSimulation": True}
 
 
-def docker(*args: str, check: bool = True, timeout: float = 120.0) -> subprocess.CompletedProcess[str]:
-    r = subprocess.run(["docker", *args], capture_output=True, text=True, timeout=timeout, env=DOCKER_ENV)
+def docker(*args: str, check: bool = True, timeout: float = 120.0, stdin: str | None = None
+           ) -> subprocess.CompletedProcess[str]:
+    r = subprocess.run(["docker", *args], capture_output=True, text=True, timeout=timeout, env=DOCKER_ENV,
+                       input=stdin)
     if check and r.returncode != 0:
         raise AssertionError(f"docker {' '.join(args)} -> {r.returncode}:\n{r.stdout[-3000:]}{r.stderr[-3000:]}")
     return r
@@ -138,8 +142,9 @@ class Stack:
         caddyfile.write_text(
             "{\n\tadmin off\n\tauto_https disable_redirects\n\tskip_install_trust\n}\n\n"
             f"https://sb.test:{self.port} {{\n\ttls internal\n\treverse_proxy switchboard:7419\n}}\n")
-        docker("create", "--name", self.caddy, "--network", self.net, "-p", f"127.0.0.1:{self.port}:{self.port}",
-               CADDY)
+        # `sb.test` on this network is the proxy: a machine container dials the public URL through it
+        docker("create", "--name", self.caddy, "--network", self.net, "--network-alias", "sb.test",
+               "-p", f"127.0.0.1:{self.port}:{self.port}", CADDY)
         docker("cp", str(caddyfile), f"{self.caddy}:/etc/caddy/Caddyfile")
         docker("start", self.caddy)
         wait_for("Caddy's local CA", lambda: docker("cp", f"{self.caddy}:{CADDY_ROOT}", str(self.ca)))
@@ -182,6 +187,7 @@ class Stack:
         """Every claim link the container has printed, from its log (no exec)."""
         return [m.group(1) for m in CLAIM_RE.finditer(docker("logs", self.broker).stdout)]
 
+
     def session(self) -> str:
         """A signed-in session's Cookie header, from a fresh link followed through the proxy."""
         status, headers, _ = self.https("GET", self.login_link().removeprefix(self.public))
@@ -195,6 +201,52 @@ class Stack:
             "Cookie": cookie, "Origin": self.public, "X-Switchboard": "1", "Content-Type": "application/json",
         }, json.dumps({"name": name}))
         assert status == 200, body
+
+
+class Owner:
+    """The owner's browser, through the proxy over https: the public Origin on writes, and the
+    (Secure) cookies kept by hand."""
+
+    def __init__(self, stack: Stack):
+        self.s = stack
+        self.cookies: dict[str, str] = {}
+
+    def call(self, method: str, path: str, body: Any = None) -> tuple[int, Any]:
+        h = {"Cookie": "; ".join(f"{k}={v}" for k, v in self.cookies.items())} if self.cookies else {}
+        if method != "GET":
+            h.update({"Origin": self.s.public, "X-Switchboard": "1", "Content-Type": "application/json"})
+        status, headers, text = self.s.https(method, path, h, json.dumps(body or {}) if method != "GET" else None)
+        for sc in headers.get_all("set-cookie") or []:
+            name, _, value = sc.split(";")[0].partition("=")
+            if "max-age=0" in sc.lower():
+                self.cookies.pop(name, None)
+            else:
+                self.cookies[name] = value
+        try:
+            return status, json.loads(text)
+        except ValueError:
+            return status, text
+
+
+# the stand-in agent on the machine: a scripted MCP client (the mcp package is in the image)
+AGENT = """
+import asyncio, json, sys
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+async def main():
+    params = StdioServerParameters(command="/opt/switchboard/bin/switchboard",
+                                   args=["mcp", "--home", sys.argv[1]])
+    async with stdio_client(params) as (r, w):
+        async with ClientSession(r, w) as s:
+            await s.initialize()
+            for tool, args in (("join", {"room": "#lab", "screen_name": "bench"}),
+                               ("say", {"room": "#lab", "text": "hello over wss, through the proxy"})):
+                res = await s.call_tool(tool, args)
+                print(json.dumps({"tool": tool, "error": res.is_error, "text": res.content[0].text[:200]}))
+
+asyncio.run(main())
+"""
 
 
 @pytest.fixture(scope="module")
@@ -276,6 +328,63 @@ def test_claim_it_from_the_log_and_sign_in_with_a_passkey(stack: Stack, playwrig
     assert not problems, problems
     assert len(stack.claim_lines()) == 1  # nothing more was printed once claimed
     assert "switchboard claimed with a passkey" in docker("logs", stack.broker).stdout
+
+
+def test_a_machine_dials_in_through_the_proxy(image: str, tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Issue #41 part 2 as a platform runs it: a fresh broker, claimed with a passkey over https;
+    a second container of the same image as a machine that trusts the proxy's CA through its
+    system store (``update-ca-certificates``, which truststore reads); ``remote join`` with a
+    code from the API, which starts the dialer; approve; the machine's agent posts in a room
+    over ``wss://`` through the proxy; Remove, and the dialer stops for good."""
+    from fakes.fake_authenticator import SoftAuthenticator
+
+    s = Stack(image, tmp_path_factory.mktemp("dialin")).up()
+    machine = f"sbimg-machine-{uuid.uuid4().hex[:8]}"
+    try:
+        owner = Owner(s)
+        auth = SoftAuthenticator("sb.test", s.public)
+        token = s.claim_lines()[0].split("#t=", 1)[1]
+        status, got = owner.call("POST", "/api/setup/begin", {"token": token})
+        assert status == 200, got
+        status, got = owner.call("POST", "/api/setup/finish", {"credential": auth.register(got["options"]),
+                                                               "name": "laptop"})
+        assert status == 200, got
+        assert owner.call("POST", "/api/rooms", {"name": "#lab"})[0] == 200
+        status, got = owner.call("POST", "/api/machines/pair", {"name": "work-laptop"})
+        assert status == 200, got
+        code = got["code"]
+        assert got["join"] == f"switchboard remote join {s.public} {code}"
+
+        docker("run", "-d", "--name", machine, "--network", s.net, "--entrypoint", "sleep", image, "infinity")
+        docker("cp", str(s.ca), f"{machine}:/usr/local/share/ca-certificates/sb-test-ca.crt")
+        docker("exec", machine, "update-ca-certificates")
+        r = docker("exec", machine, "switchboard", "remote", "join", s.public, code, "--home", "/data/machine")
+        assert "This machine's key: SHA256:" in r.stdout and "Paired as work-laptop" in r.stdout, r.stdout
+        assert "switchboard dialer running" in r.stdout, r.stdout
+        fp = r.stdout.split("This machine's key: ", 1)[1].split()[0]
+        status, got = owner.call("GET", "/api/machines")
+        [m] = got["machines"]
+        assert m["key_fp"] == fp and m["state"] == "pending"
+        wait_for("the machine dialed in", lambda: owner.call("GET", "/api/machines")[1]["machines"][0]["dialed_in"])
+        assert owner.call("POST", "/api/machines/work-laptop/approve")[0] == 200
+        wait_for("the link up", lambda: owner.call("GET", "/api/machines")[1]["machines"][0]["state"] == "up")
+
+        out = docker("exec", "-i", "-u", "switchboard", machine, "/opt/switchboard/bin/python", "-", "/data/machine",
+                     stdin=AGENT).stdout
+        assert '"error": false' in out and '"error": true' not in out, out
+        status, got = owner.call("GET", "/api/rooms/lab/messages")
+        said = [(x["from"], x.get("host"), x["text"]) for x in got["messages"] if x["kind"] == "chat"]
+        assert said == [("bench", "work-laptop", "hello over wss, through the proxy")]
+
+        assert owner.call("POST", "/api/machines/work-laptop/remove")[0] == 200
+        wait_for("the dialer stopped", lambda: "stopped (removed)" in docker(
+            "exec", machine, "switchboard", "status", "--home", "/data/machine").stdout)
+        cmdlines = docker("exec", machine, "sh", "-c",
+                          "for f in /proc/[0-9]*/cmdline; do tr '\\000' ' ' < $f; echo; done").stdout
+        assert "start --foreground" not in cmdlines  # the dialer is gone
+    finally:
+        docker("rm", "-f", machine, check=False)
+        s.down()
 
 
 def test_it_refuses_to_start_without_a_public_url(image: str) -> None:

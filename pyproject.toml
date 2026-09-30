@@ -14,6 +14,7 @@ dependencies = [
     "mcp==2.2.0",
     "fido2==2.2.1",
     "cryptography==50.0.1",
+    "truststore==0.10.4",
 ]
 
 [project.scripts]

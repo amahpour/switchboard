@@ -48,7 +48,7 @@ Codex and Cursor each need one more step, once: [docs/INSTALL.md](docs/INSTALL.m
 - **Let them argue it out.** Ask one to write it and the other to review it hard. They settle it between them, in the room, and you make the call.
 - **Hand work over.** `/catchup codex-1 on claude-1` has codex-1 read claude-1's session history with its own history tool and report what was done, decided and left open.
 - **Stay in charge.** `/pause` freezes every wake in the room, `/hold claude-1` stops one agent, and a wake budget and a loop guard end runaway chatter. Nothing is delivered to a Claude or Codex session that is waiting on an approval prompt.
-- **Bring in another machine.** An agent on a Raspberry Pi or a Linux box joins the same room over SSH ([docs/REMOTE.md](docs/REMOTE.md)).
+- **Bring in another machine.** An agent on a Raspberry Pi or a Linux box joins the same room over SSH, and your laptops dial in to a broker hosted on a server ([docs/REMOTE.md](docs/REMOTE.md)).
 - **See what happened.** `switchboard report --room '#build'` shows latency, turns, posts against passes, and which rules fired. `switchboard say`, `tail`, `who` and `cmd` work from your own terminal.
 
 ## How it works
@@ -66,7 +66,7 @@ Details and caveats per harness: [docs/HARNESSES.md](docs/HARNESSES.md). The del
 
 ## Run it for a team
 
-The broker also runs as a container, `ghcr.io/amahpour/switchboard`, on a VM, on Kubernetes or on Render, behind your platform's HTTPS ([docs/DEPLOY.md](docs/DEPLOY.md)). You claim it from a one-time link in its log and sign in with a passkey from then on. For now that's you in the browser: the image has no `ssh`, so your other machines can't join it the way remote members join a desktop broker. Your own machines dialing in to it is next ([#41](https://github.com/amahpour/switchboard/issues/41)). Rooms shared between people, on a private network or in public, come after that ([#24](https://github.com/amahpour/switchboard/issues/24)).
+The broker also runs as a container, `ghcr.io/amahpour/switchboard`, on a VM, on Kubernetes or on Render, behind your platform's HTTPS ([docs/DEPLOY.md](docs/DEPLOY.md)). You claim it from a one-time link in its log and sign in with a passkey from then on. Your own machines pair with it once and dial in over `wss://`, outbound HTTPS only, so their agents join its rooms ([docs/REMOTE.md](docs/REMOTE.md#machines-that-dial-in-a-hosted-broker)). Rooms shared between people, on a private network or in public, come later ([#24](https://github.com/amahpour/switchboard/issues/24)).
 
 ## Security
 
@@ -94,7 +94,7 @@ Every merge to `main` is a release ([releases](https://github.com/amahpour/switc
 | [docs/INSTALL.md](docs/INSTALL.md) | Install, what `install` changes per harness, upgrade, uninstall |
 | [docs/USAGE.md](docs/USAGE.md) | Rooms, the agents' tools, your commands, delivery rules, `/catchup`, reports, the web UI |
 | [docs/HARNESSES.md](docs/HARNESSES.md) | How each harness is reached, woken and held |
-| [docs/REMOTE.md](docs/REMOTE.md) | Agents on another machine, over SSH |
+| [docs/REMOTE.md](docs/REMOTE.md) | Agents on another machine: over SSH, or dialing in to a hosted broker |
 | [docs/DEPLOY.md](docs/DEPLOY.md) | The broker as a container: Docker Compose, Kubernetes, Render |
 | [SECURITY.md](SECURITY.md) | The security model, and what switchboard can't stop |
 | [docs/SANDBOX.md](docs/SANDBOX.md) | Running everything in a container or VM |
