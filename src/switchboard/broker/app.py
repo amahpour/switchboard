@@ -25,6 +25,7 @@ from switchboard.broker.agents import AgentService
 from switchboard.broker.auth import HostOriginGuard, LoginTokens, SecurityHeaders, Sessions, WebOrigin
 from switchboard.broker.hosts import HostViews
 from switchboard.broker.hub import Hub, WsSubscriber
+from switchboard.broker.passwords import SignInLimiter
 from switchboard.broker.passkeys import (
     CLAIM_TTL_S,
     FRESH_CHECK_S,
@@ -88,19 +89,26 @@ class BrokerState:
     claim_out: Callable[[str], None] = field(default_factory=lambda: lambda line: print(line, flush=True))
     sealer: Sealer = None  # type: ignore[assignment]
     used_challenges: UsedChallenges = None  # type: ignore[assignment]
-    # per web session (its id hash): when it last passed a passkey check, and until when the
-    # claim's own session may add its backup passkey without one (§31.4)
+    # per web session (its id hash): when it last passed a passkey or password check, and
+    # until when the claim's own session may add its backup passkey without one (§31.4)
     passkey_checks: dict[str, float] = field(default_factory=dict)
     claim_grace: dict[str, float] = field(default_factory=dict)
+    # failed password sign-ins (§32.4)
+    signin: SignInLimiter = None  # type: ignore[assignment]
+
+    @property
+    def hosted(self) -> bool:
+        """Behind a public URL (§30): people sign in with a password or a passkey (§32)."""
+        return self.web_origin is not None and self.web_origin.public
 
     def unclaimed(self) -> bool:
         """No owner yet: nobody claimed this broker and it has no passkey."""
         return self.store.owner_handle() is None and self.store.passkey_count() == 0
 
     def fresh_check(self, sid_hash: str) -> bool:
-        """The session passed a passkey check in the last FRESH_CHECK_S, or it is the claim's
-        own session within its grace: what adding a passkey (and, §31.6, pairing or approving
-        a machine) needs, so a stolen session can't make itself permanent."""
+        """The session passed a passkey or password check in the last FRESH_CHECK_S, or it is
+        the claim's own session within its grace: what adding a passkey or pairing or approving
+        a machine needs (§31.6), so a stolen session can't make itself permanent."""
         now = self.clock.now()
         return (now - self.passkey_checks.get(sid_hash, float("-inf")) <= FRESH_CHECK_S
                 or self.claim_grace.get(sid_hash, 0.0) > now)
@@ -169,6 +177,7 @@ def create_app(
         hosts=HostViews(cfg.claude.sessions_dir, clock),
         sealer=Sealer(clock),
         used_challenges=UsedChallenges(clock),
+        signin=SignInLimiter(clock),
     )
 
     @contextlib.asynccontextmanager
@@ -216,7 +225,7 @@ def create_app(
         state.remotes = RemoteManager(state)
         await state.remotes.start()
         state.service.remotes = state.remotes
-        if state.webauthn is not None:
+        if state.hosted and state.web_origin.secure_context():
             from switchboard.broker.machines import MachineManager
 
             state.machines = MachineManager(state)
@@ -300,25 +309,30 @@ def _owner_start(state: BrokerState, reset_owner: str | None) -> None:
                         " back to pending; this can't be undone", RESET_OWNER_ENV, got["passkeys"], got["sessions"],
                         got["machines_pending"])
             state.store.add_event("login", data={"what": "owner_reset", **got})
-    if state.webauthn is not None and state.unclaimed():
+    if origin.public and state.unclaimed():
+        # passwords work wherever the broker is hosted; passkeys only where WebAuthn can (§32.4)
         state.claim = ClaimTokens(state.clock)
 
 
 def _announce_claim(state: BrokerState) -> None:
-    """One line on stdout (the container's log): the claim link, its token after ``#`` so no
-    server ever receives it in a URL. Never through the log (``broker.log`` keeps no secrets);
-    in test mode also in ``run/test-claim-link``, for the suite."""
+    """One line on stdout (the container's log, which a deploy tool shows): the admin's one-time
+    password (§32.4), and the same as a link, the password after ``#`` so no server ever
+    receives it in a URL. Never through the log (``broker.log`` keeps no secrets); in test
+    mode the link also goes to ``run/test-claim-link``, for the suite."""
     claim = state.claim
     if claim is None:
         return
     token = claim.mint()
-    url = f"{state.web_origin.origin}/setup#t={token}"
+    origin = state.web_origin.origin
+    url = f"{origin}/setup#t={token}"
     minutes = int(claim.ttl_s // 60)
-    state.claim_out(f"switchboard isn't set up yet. Claim it (link works once, for {minutes} min): {url}")
+    state.claim_out(f"switchboard isn't set up yet. Sign in at {origin} as admin with the one-time password {token}"
+                    f" (it works once, for {minutes} min), then choose your own password or passkey."
+                    f" Or open {url}")
     if state.test_mode:
         _write_test_file(state.paths.test_claim_link, url)
-    log.warning("no owner yet: a claim link is on stdout (it works once, for %d min; a new one each time it"
-                " expires, until the broker is claimed)", minutes)
+    log.warning("no admin yet: a one-time password is on stdout (it works once, for %d min; a new one each time"
+                " it expires, until someone signs in with it)", minutes)
 
 
 async def _claim_loop(state: BrokerState) -> None:

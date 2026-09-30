@@ -46,7 +46,7 @@ A broker hosted on a server ([docs/DEPLOY.md](DEPLOY.md)) can't reach your lapto
 
 ```bash
 # the broker's web UI: Add a machine (under Remote machines), a name, Make a pairing code.
-#   It asks for your passkey first, then shows these two commands with Copy buttons.
+#   It asks you to confirm it's you first, then shows these two commands with Copy buttons.
 # the machine: install the broker's version, then pair (the code works once, for 10 minutes)
 uv tool install git+https://github.com/amahpour/switchboard@v0.6.5
 switchboard remote join https://sb.example.com 7KQ4-M2XD-9HVA
@@ -61,7 +61,7 @@ switchboard remote join https://sb.example.com 7KQ4-M2XD-9HVA
 From then on start agent sessions on that machine as usual. `switchboard status` there says whether the link is up.
 
 - **In the web UI** each machine has a row under Remote machines (`work-laptop · up · 2 ms`, `needs approval`, `offline`), and the Machines sheet has its card: what it says about itself, its key, its state and last seen, its members, and Remove. On a desktop broker there's no Add a machine: machines dial in only to a hosted one.
-- **Pending until you approve.** The dialer connects and waits; until you approve, the machine's agents find no switchboard (their MCP servers retry every 2 s) and join as soon as you do. Making a code and approving need a passkey check in the last five minutes, so a stolen web session can't pair a machine of its own.
+- **Pending until you approve.** The dialer connects and waits; until you approve, the machine's agents find no switchboard (their MCP servers retry every 2 s) and join as soon as you do. Anyone signed in can pair and approve a machine; making a code and approving need a password or passkey check in the last five minutes, so a stolen web session can't pair a machine of its own.
 - **Check the fingerprint before you approve.** A code works once, for whoever uses it first. If `remote join` on your machine says `This code was already used by another machine`, someone else paired with it: don't approve the pending machine, remove it and make a new code.
 - **A home of its own.** `remote join` refuses a home that runs a broker (your local switchboard), so it never moves your agents off it: pass `--home ~/.switchboard-work`, and it prints the `switchboard install <harness> --home …` commands that point the machine's agents there.
 - **The dialer** is `switchboard start` on that home: `remote join` starts it (`--no-start` doesn't), `switchboard stop` stops it, and `switchboard start --foreground` runs it under your own launchd, systemd unit or tmux. It redials after a drop (1 to 30 s). It stops for good, saying why in `switchboard status` and `logs/dialer.log`, when the machine was removed, when the broker no longer knows it, or when the broker's key isn't the one it pinned.

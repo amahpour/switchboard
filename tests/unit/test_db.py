@@ -28,7 +28,8 @@ def test_open_creates_full_schema_with_wal(tmp_path: Path) -> None:
     assert con.isolation_level is None
     tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert EXPECTED_TABLES <= tables
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 3  # v2 since M8b (§27.6), v3 since #41 (§31.2)
+    # v2 since M8b (§27.6), v3 since #41 (§31.2), v4 since #61 (§32.2)
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 4
     indexes = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='index'")}
     assert {"memberships_active_name", "memberships_active_part", "messages_room_id",
             "deliveries_open", "events_kind_ts"} <= indexes

@@ -3,7 +3,7 @@
 switchboard normally runs on your own machine: the broker listens on `127.0.0.1` and you open the web UI at `http://switchboard.localhost:7419/`. It can also run as a container on a server, a VM or a platform such as Render, EKS or GKE, behind that platform's HTTPS. This page covers that setup. The design and its threat model are in [DESIGN.md §30](DESIGN.md#30-the-container-image-and-the-public-url-34).
 
 > [!IMPORTANT]
-> A hosted broker is **you**: you claim it from a link in its log and sign in with a passkey ([Signing in](#signing-in)), and your own machines dial in to it over `wss://` so their agents join its rooms ([Machines that dial in](REMOTE.md#machines-that-dial-in-a-hosted-broker)). The image has no `ssh`, so [remote members over SSH](REMOTE.md#over-ssh) don't work from it. Other people and their agents come later ([#24](https://github.com/amahpour/switchboard/issues/24)).
+> A hosted broker is **your team's**: you set it up with a one-time password from its log, add people from its admin section, and everyone signs in with a password or a passkey ([Signing in](#signing-in)). Everyone's machines dial in to it over `wss://`, so their agents join its rooms ([Machines that dial in](REMOTE.md#machines-that-dial-in-a-hosted-broker)), and every agent takes every person's messages as its user's. The image has no `ssh`, so [remote members over SSH](REMOTE.md#over-ssh) don't work from it.
 
 ## How it fits together
 
@@ -27,7 +27,7 @@ docker run -d --name switchboard -p 127.0.0.1:7419:7419 -v switchboard:/data \
 docker logs switchboard
 ```
 
-Open the claim link the log prints and create a passkey (browsers treat `*.localhost` as a secure context, so passkeys work here over plain http). Plain `http://` is accepted only for a local test host (`localhost`, `127.0.0.1`, `*.localhost` or `*.test`), and `-p 127.0.0.1:…` keeps the port off your network. For anything other machines reach, use `https://` behind a proxy, as below.
+Sign in as `admin` with the one-time password the log prints, then choose your own password or a passkey (browsers treat `*.localhost` as a secure context, so passkeys work here over plain http). Plain `http://` is accepted only for a local test host (`localhost`, `127.0.0.1`, `*.localhost` or `*.test`), and `-p 127.0.0.1:…` keeps the port off your network. For anything other machines reach, use `https://` behind a proxy, as below.
 
 ## Settings
 
@@ -39,11 +39,12 @@ The image sets everything but the public URL.
 | `SWITCHBOARD_LISTEN` | `0.0.0.0` | The IPv4 address the broker listens on. Anything but `127.0.0.1` needs the public URL. |
 | `SWITCHBOARD_PORT` | `7419` | The port it listens on. |
 | `SWITCHBOARD_HOME` | `/data/switchboard` | Its data: the database, logs and config.toml, on the `/data` volume. |
-| `SWITCHBOARD_RESET_OWNER` | (unset) | Recovery: set it to a new value and restart to forget the owner and every passkey and session ([Signing in](#signing-in)). It acts once per value. |
+| `SWITCHBOARD_HUMAN_NAME` | (unset: `me`) | The admin's name in the rooms. The admin signs in as it, or as `admin`. |
+| `SWITCHBOARD_RESET_OWNER` | (unset) | Recovery: set it to a new value and restart to forget the admin, everyone else, and every password, passkey and session ([Signing in](#signing-in)). It acts once per value. |
 
 They are the environment versions of `switchboard start --public-url`, `--listen` and `--port`. `config.toml` can also set `public_url` and `listen`, and a flag or variable wins over it. The container runs `switchboard start --foreground --log-stdout`: logs go to stdout, where the platform collects them, instead of `logs/broker.log`.
 
-Your name in the room is `me` unless you set it. Add `human_name` to `config.toml` in the home, then restart the container:
+The admin's name in the rooms is `me` unless you set it: `SWITCHBOARD_HUMAN_NAME` in the deployment (the Kubernetes and Compose files have it), or `human_name` in `config.toml` in the home, then restart the container:
 
 ```bash
 docker exec -u switchboard switchboard sh -c 'echo "human_name = \"ari\"" >> "$SWITCHBOARD_HOME/config.toml"'
@@ -61,7 +62,7 @@ Each example pins a release (`ghcr.io/amahpour/switchboard:0.8.0`). Every releas
 ```bash
 export SWITCHBOARD_DOMAIN=sb.example.com
 docker compose -f deploy/compose/compose.yaml up -d
-docker compose -f deploy/compose/compose.yaml logs switchboard    # the claim link
+docker compose -f deploy/compose/compose.yaml logs switchboard    # the admin's one-time password
 ```
 
 ### Kubernetes (EKS, GKE, AKS)
@@ -71,7 +72,7 @@ docker compose -f deploy/compose/compose.yaml logs switchboard    # the claim li
 ```bash
 kubectl create namespace switchboard
 kubectl -n switchboard apply -f deploy/kubernetes/switchboard.yaml
-kubectl -n switchboard logs switchboard-0    # the claim link
+kubectl -n switchboard logs switchboard-0    # the admin's one-time password
 ```
 
 What the manifest relies on:
@@ -83,7 +84,7 @@ What the manifest relies on:
 
 ### Render
 
-[deploy/render/render.yaml](../deploy/render/render.yaml) is a Blueprint: a web service from the published image, with a 1 GB disk at `/data`. Put it in a repository of yours as `render.yaml` (or point the Blueprint at its path), then choose **New > Blueprint**. Render asks for `SWITCHBOARD_PUBLIC_URL`: the service's `https://<name>.onrender.com` address, or your custom domain. The claim link is in the service's **Logs** tab.
+[deploy/render/render.yaml](../deploy/render/render.yaml) is a Blueprint: a web service from the published image, with a 1 GB disk at `/data`. Put it in a repository of yours as `render.yaml` (or point the Blueprint at its path), then choose **New > Blueprint**. Render asks for `SWITCHBOARD_PUBLIC_URL`: the service's `https://<name>.onrender.com` address, or your custom domain. The admin's one-time password is in the service's **Logs** tab.
 
 Render's disks need a paid plan and allow only one instance. A deploy stops the old instance before it starts the new one, and Render snapshots the disk daily and keeps each snapshot at least 7 days. Render's router ends TLS and redirects plain HTTP to HTTPS before it reaches the broker. `PORT=7419` in the Blueprint tells Render which port to send traffic to.
 
@@ -91,38 +92,44 @@ The disk belongs to root, so the container starts as root. Its `switchboard` com
 
 ## Signing in
 
-A fresh broker has no owner. Until it does, it prints one line in its log:
+The sign-in page offers three ways in: your **name and password**, a **passkey** (Touch ID, Face ID, Windows Hello, your phone or a security key), and **SSO**, which is shown as coming soon.
+
+A fresh broker has no admin. Until it does, it prints one line in its log:
 
 ```
-switchboard isn't set up yet. Claim it (link works once, for 60 min): https://sb.example.com/setup#t=…
+switchboard isn't set up yet. Sign in at https://sb.example.com as admin with the one-time password 7KQ4-M2XD-9HVA-3JNP (it works once, for 60 min), then choose your own password or passkey. Or open https://sb.example.com/setup#t=…
 ```
 
-1. **Claim it.** Open the newest such line from wherever you read the container's logs (`docker logs`, `kubectl logs`, your deploy tool's logs view, Render's Logs tab) and create a passkey: Touch ID, Face ID, Windows Hello, your phone or a security key. That makes the broker yours and signs that browser in. Setup then suggests a **backup passkey** from your phone or a security key; take it, since a managed laptop may block passkey sync and a backup is how you get back in without a reset.
-2. **From then on**, the sign-in page has one button, **Sign in with a passkey**. On another device, the browser's QR flow uses the passkey on your phone. The key button next to sign-off in the app opens the Passkeys sheet: add a passkey (it asks for one of yours first, unless you used one in the last five minutes), or **Sign out everywhere**, which signs every browser out and keeps your passkeys.
-3. **Once claimed, no link is ever printed again.** Upgrades and restarts keep you as the owner: the owner and the passkeys live in the database on the volume, with your rooms. Only a brand-new, empty volume is unclaimed.
+1. **Set it up.** Take the newest such line from wherever you read the container's logs (your deploy tool's logs view, `kubectl logs`, `docker logs`, Render's Logs tab), sign in as `admin` with that one-time password, and choose your own password, or a passkey instead. That makes you the admin and signs that browser in. The link in the same line does the same without typing.
+2. **Add people** from **Admin > People** in the sidebar. Type someone's name (the one they'll have in the rooms) and send them the invite it shows: the address, their name and a one-time password, good for 7 days. They sign in with it and choose their own password or a passkey. You see the one-time password once; **New one-time password** makes another (and signs them out everywhere, for a forgotten password), and **Remove** signs them out everywhere at once and ends their password and passkeys. Their messages stay.
+3. **From then on**, everyone signs in with their name and password, or a passkey. The key button next to sign-off in the app opens the Sign-in sheet: change your password, add a passkey (both ask you to confirm it's you first, unless you did in the last five minutes), or **Sign out everywhere**, which signs out every browser you're signed in to and nobody else.
+4. **Once set up, no one-time password is ever printed again.** Upgrades and restarts keep the admin and everyone else: people, passwords and passkeys live in the database on the volume, with your rooms. Only a brand-new, empty volume isn't set up.
 
-What to know about the link:
+Everyone signed in is equal apart from the admin section: they post under their own name, run every room command, pair and approve their machines, and **every agent takes every person's messages as its user's** (`kind=human`). That fits a team on a private network; don't hand out invites to people you wouldn't let steer your agents.
 
-- **It works once and expires.** A fresh line is printed every hour until the broker is claimed, and after a restart; use the newest. The token is after `#`, which browsers never send to a server, so it can't land in a proxy's access log.
-- **Anyone who can read the logs during that window could claim first**: a read-only role in your deploy tool, or a log service the logs ship to. You would know at once, because the newest link would say it was already used, and you would get an empty broker back with the reset below. Bots can't read your logs.
-- **Passkeys need a name and a secure context.** They are on behind an `https://` public URL whose host is a DNS name (or `http://` on `*.localhost`, for a try on your machine). Behind `http://…test` or a public URL that is an IP address the broker says so in its log, prints no claim link, and you sign in through the shell (below).
+What to know about the admin's one-time password:
 
-**If you lose every passkey**, set `SWITCHBOARD_RESET_OWNER` to a new value (today's date, say) in the deployment and restart. The broker deletes every passkey and session, forgets the owner, and prints a fresh claim link. It acts **once per value** and ignores that value from then on, so leaving the variable set is harmless across restarts and pod moves; to reset again, change it. This is the one step that needs ops access, and it can't be undone.
+- **It works once and expires.** A fresh line is printed every hour until someone uses it, and after a restart; use the newest. In the link it is after `#`, which browsers never send to a server, so it can't land in a proxy's access log.
+- **Anyone who can read the logs during that window could set it up first**: a read-only role in your deploy tool, or a log service the logs ship to. You would know at once, because the newest one would say it was already used, and you would get an empty broker back with the reset below. Bots can't read your logs.
+- **Wrong passwords slow down.** After 5 wrong ones for a name in 15 minutes, that name waits 30 s before the next try, doubling up to 15 minutes; a flood of wrong ones pauses every password sign-in for 10 s.
+- **Passkeys need a name and a secure context.** They are on behind an `https://` public URL whose host is a DNS name (or `http://` on `*.localhost`, for a try on your machine). Behind `http://…test` or a public URL that is an IP address the broker says so in its log, and everyone uses passwords.
 
-**The shell still signs in.** `switchboard login` run **inside the container, in a terminal**, prints a one-time link as it always did, before or after the claim:
+**If you lose your password and every passkey**, set `SWITCHBOARD_RESET_OWNER` to a new value (today's date, say) in the deployment and restart. The broker forgets the admin and everyone else, deletes every password, passkey and session, and prints a fresh one-time password. It acts **once per value** and ignores that value from then on, so leaving the variable set is harmless across restarts and pod moves; to reset again, change it. This is the one step that needs ops access, and it can't be undone.
+
+**The shell still signs in, as the admin.** `switchboard login` run **inside the container, in a terminal**, prints a one-time link as it always did, before or after setup:
 
 - **Docker:** `docker exec -it switchboard switchboard login`
 - **Compose:** `docker compose -f deploy/compose/compose.yaml exec switchboard switchboard login`
 - **Kubernetes:** `kubectl -n switchboard exec -it switchboard-0 -- switchboard login`
 - **Render:** open the service's **Shell** tab and run `switchboard login`.
 
-Leave out `-t` (as in `docker exec` without `-it`) and the broker refuses: links go only to a terminal someone typed in. Whoever can exec into the container can sign in and could read its database anyway, so treat access to the platform or cluster as access to switchboard. A session from the shell can't add a passkey on its own: only your passkeys can. `switchboard logout --all` in the same way signs out every browser.
+Leave out `-t` (as in `docker exec` without `-it`) and the broker refuses: links go only to a terminal someone typed in. Whoever can exec into the container can sign in and could read its database anyway, so treat access to the platform or cluster as access to switchboard. A session from the shell can't add a passkey or change the password on its own: only your password or passkeys can confirm that. `switchboard logout --all` in the same way signs out every browser, everyone's.
 
 ## Upgrading
 
 1. Change the image tag in your compose file, manifest or Blueprint to the new release (the [CHANGELOG](../CHANGELOG.md) lists them), and deploy.
 2. The platform stops the old container and starts the new one. The broker shuts down cleanly on SIGTERM (`docker stop`) and exits 0.
-3. If the new release changes the database's schema, the broker migrates it on start, after a verified backup copy next to it (`switchboard.db.v2.bak` for the passkeys release, [DESIGN.md §27.6](DESIGN.md), [§31.2](DESIGN.md)). An older release refuses a newer database, so a rollback past a schema change means restoring a backup. The owner and the passkeys are in the database, so an upgrade keeps them.
+3. If the new release changes the database's schema, the broker migrates it on start, after a verified backup copy next to it (`switchboard.db.v2.bak` for the passkeys release, `switchboard.db.v3.bak` for the people release, [DESIGN.md §27.6](DESIGN.md), [§31.2](DESIGN.md), [§32.2](DESIGN.md)). An older release refuses a newer database, so a rollback past a schema change means restoring a backup. The admin, people, passwords and passkeys are in the database, so an upgrade keeps them.
 
 Pin releases rather than `:latest`, so an upgrade happens when you choose.
 
@@ -144,7 +151,7 @@ To restore, stop the broker, put the copy at `$SWITCHBOARD_HOME/switchboard.db` 
 ## Health checks and logs
 
 - **`GET /healthz`** answers `ok` with status 200. It needs no sign-in, returns no data, and accepts any Host, so platforms can probe the container's own address. The image's Docker `HEALTHCHECK` calls it, and so do the Kubernetes probes and Render's `healthCheckPath`.
-- **Logs** are on stdout: `docker logs switchboard`, `kubectl logs switchboard-0`, or Render's Logs tab. They hold ids, never message text. The claim link is the one secret ever printed there, and it works once and expires. Pairing codes never appear there.
+- **Logs** are on stdout: `docker logs switchboard`, `kubectl logs switchboard-0`, or Render's Logs tab. They hold ids, never message text. The admin's one-time password is the one secret ever printed there, and it works once and expires. The people's one-time passwords never appear there. Pairing codes never appear there.
 
 ## The image
 

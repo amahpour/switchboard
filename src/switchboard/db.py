@@ -5,8 +5,10 @@ Connections use ``isolation_level=None``: Python's default transaction mode
 silently loses updates on read-then-write (FINDINGS §10 S5).
 
 Schema versions: 1 (0.1.0 and 0.2.0), 2 (remote members: ``participants.host``,
-``messages.sender_host``, the ``remotes`` table) and 3 (a hosted broker's owner, §31:
-``passkeys``, ``web_sessions.via``, ``link_machines``, and the owner's rows in ``meta``).
+``messages.sender_host``, the ``remotes`` table), 3 (a hosted broker's owner, §31:
+``passkeys``, ``web_sessions.via``, ``link_machines``, and the owner's rows in ``meta``)
+and 4 (people, §32: ``people``, a person on passkeys, web sessions, machines and
+messages, where NULL is the owner).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -26,7 +28,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -90,7 +92,8 @@ CREATE TABLE messages(
   via TEXT NOT NULL CHECK(via IN ('web','cli','mcp','system')),
   kind TEXT NOT NULL DEFAULT 'chat' CHECK(kind IN ('chat','join','leave','notice')),
   text TEXT NOT NULL, reply_to INTEGER, mentions TEXT NOT NULL DEFAULT '[]',
-  sender_host TEXT);
+  sender_host TEXT,
+  sender_person_id INTEGER);
 CREATE INDEX messages_room_id ON messages(room_id, id);
 
 CREATE TABLE batches(
@@ -124,7 +127,8 @@ CREATE INDEX events_kind_ts ON events(kind, ts);
 
 CREATE TABLE web_sessions(id_hash TEXT PRIMARY KEY, created_at REAL NOT NULL,
   last_seen REAL NOT NULL, expires_at REAL NOT NULL,
-  via TEXT);
+  via TEXT,
+  person_id INTEGER);
 
 CREATE TABLE remotes(
   name TEXT PRIMARY KEY, config_hash TEXT NOT NULL,
@@ -135,7 +139,8 @@ CREATE TABLE passkeys(
   credential_id BLOB PRIMARY KEY, public_key BLOB NOT NULL,
   sign_count INTEGER NOT NULL DEFAULT 0,
   name TEXT NOT NULL, aaguid TEXT,
-  created_at REAL NOT NULL, last_used_at REAL);
+  created_at REAL NOT NULL, last_used_at REAL,
+  person_id INTEGER);
 
 CREATE TABLE link_machines(
   name TEXT PRIMARY KEY, key BLOB NOT NULL, key_fp TEXT NOT NULL,
@@ -143,7 +148,15 @@ CREATE TABLE link_machines(
   rooms TEXT NOT NULL DEFAULT '["*"]',
   harnesses TEXT NOT NULL DEFAULT '["claude","codex","cursor","devin"]',
   created_at REAL NOT NULL, approved_at REAL, approved_via TEXT CHECK(approved_via IN ('cli','web')),
-  removed_at REAL, last_seen_at REAL);
+  removed_at REAL, last_seen_at REAL,
+  person_id INTEGER);
+
+CREATE TABLE people(
+  id INTEGER PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE,
+  handle BLOB NOT NULL UNIQUE,
+  password_hash TEXT, must_reset INTEGER NOT NULL DEFAULT 1, password_expires_at REAL,
+  created_at REAL NOT NULL, removed_at REAL);
+CREATE UNIQUE INDEX people_active_name ON people(name) WHERE removed_at IS NULL;
 """
 
 TABLES = (
@@ -159,11 +172,13 @@ TABLES = (
     "remotes",
     "passkeys",
     "link_machines",
+    "people",
 )
 # the tables of a version-1 database (0.1.0, 0.2.0) and of a version-2 one (0.3.0 to 0.6.5):
 # the rows a migration must keep
 V1_TABLES = TABLES[:9]
 V2_TABLES = TABLES[:10]
+V3_TABLES = TABLES[:12]
 
 # v1 -> v2 (DESIGN.md §27.6): one BEGIN IMMEDIATE, after a verified backup. The
 # columns land at the end of their tables, where the fresh schema above puts them too.
@@ -196,12 +211,30 @@ V2_TO_V3 = (
     " removed_at REAL, last_seen_at REAL)",
     "UPDATE meta SET value='3' WHERE key='schema_version'",
 )
+# v3 -> v4 (DESIGN.md §32.2): the same machinery. A person on every passkey, web session,
+# machine and human message, NULL for the owner (so every existing row stays the owner's
+# and none is rewritten); ``people`` are the others, each with a password that starts as a
+# one-time password (``must_reset``) and passkeys of their own.
+V3_TO_V4 = (
+    "ALTER TABLE messages ADD COLUMN sender_person_id INTEGER",
+    "ALTER TABLE web_sessions ADD COLUMN person_id INTEGER",
+    "ALTER TABLE passkeys ADD COLUMN person_id INTEGER",
+    "ALTER TABLE link_machines ADD COLUMN person_id INTEGER",
+    "CREATE TABLE people("
+    " id INTEGER PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE,"
+    " handle BLOB NOT NULL UNIQUE,"
+    " password_hash TEXT, must_reset INTEGER NOT NULL DEFAULT 1, password_expires_at REAL,"
+    " created_at REAL NOT NULL, removed_at REAL)",
+    "CREATE UNIQUE INDEX people_active_name ON people(name) WHERE removed_at IS NULL",
+    "UPDATE meta SET value='4' WHERE key='schema_version'",
+)
 
 
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
     the tables the step adds). Read from the module at run time, never cached."""
-    all_steps = {1: (2, V1_TO_V2, ("remotes",)), 2: (3, V2_TO_V3, ("passkeys", "link_machines"))}
+    all_steps = {1: (2, V1_TO_V2, ("remotes",)), 2: (3, V2_TO_V3, ("passkeys", "link_machines")),
+                 3: (4, V3_TO_V4, ("people",))}
     out = []
     v = frm
     while v < SCHEMA_VERSION:
@@ -217,6 +250,8 @@ def tables_of(version: int) -> tuple[str, ...]:
         return V1_TABLES
     if version == 2:
         return V2_TABLES
+    if version == 3:
+        return V3_TABLES
     return TABLES
 
 

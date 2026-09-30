@@ -25,8 +25,9 @@ The 21 outputs: desktop-{light,dark}, markdown-{light,dark}, palette-light, ment
 closed-light, remotes-light, inspector-light, inspector-remote-light, inspector-dark-parked,
 phone-light, phone-dark-sheet, welcome-light and login-light, plus, from a hosted broker
 (``tests/ui_world.py``'s ``HostedWorld``, with Chromium's virtual authenticators as the
-passkeys; issue #41): claim-light, claim-backup-light, signin-passkey-light,
-signin-passkey-phone-dark, passkeys-light and passkeys-dark, and from a second one at
+passkeys; issues #41 and #61): signin-setup-light, setup-light, people-light, people-dark,
+passkeys-light, passkeys-dark, confirm-light, signin-light, setup-person-light and
+signin-phone-dark, and from a second one at
 ``http://localhost:<port>``, with test machines that dial in (``tests/fakes/fake_machine.py``:
 made-up facts, the real dialer): machines-pairing-light, machines-pairing-dark,
 machines-approve-light, machines-approve-dark, machines-up-light and machines-phone-dark (all
@@ -294,50 +295,111 @@ def device(ctx: Any, page: Any) -> tuple[Any, str]:
 
 
 def shoot_hosted(browser: Any, out: Path, world: Any) -> None:
-    """A hosted broker's owner (issue #41): the claim page, the backup step, the sign-in page
-    with its passkey button (desktop light, phone dark) and the passkeys sheet (light, dark)."""
+    """A hosted broker (issues #41, #61): the sign-in page before it's set up, Choose how you'll
+    sign in, the People sheet with an invite to send (light, dark), the Sign-in sheet (light,
+    dark), Confirm it's you, the sign-in page's three ways in, a teammate's own Choose page, and
+    the sign-in page on a phone (dark). The invite's address reads https://sb.example.com."""
     from playwright.sync_api import expect
 
-    base = {"timezone_id": "UTC", "color_scheme": "light", "locale": "en-US"}
+    base = {"timezone_id": "UTC", "color_scheme": "light", "locale": "en-US", "reduced_motion": "reduce"}
     origin = world.origin
+    one_time = world.claim_link().split("#t=", 1)[1]
+    admin_pw, bob_pw = "correct horse battery", "bob's own secret 1"
+
+    def as_deployed(p: Any) -> None:
+        p.evaluate(PEOPLE_AS_DEPLOYED_JS, [origin, AS_DEPLOYED])
+
     ctx = browser.new_context(**base, **DESKTOP)
     ctx.set_default_timeout(WAIT_MS)
     try:
         page = ctx.new_page()
         virtual_authenticator(ctx, page)
-        page.goto(world.claim_link())
-        expect(page.locator("#step-claim")).to_be_visible()
-        page.fill("#claim-name", "MacBook Pro")
-        shot(page, out, "claim-light.png")
-        page.click("#claim-btn")
-        expect(page.locator("#step-backup")).to_be_visible()
-        shot(page, out, "claim-backup-light.png")
-        page.click("#skip-btn")
+        page.goto(origin + "/")
+        expect(page.locator("#login-first")).to_be_visible()
+        shot(page, out, "signin-setup-light.png")
+        page.fill("#signin-password", one_time)
+        page.click("#password-btn")
+        expect(page.locator("#step-choose")).to_be_visible()
+        shot(page, out, "setup-light.png")
+        page.fill("#new-password", admin_pw)
+        page.fill("#new-password-2", admin_pw)
+        page.click("#password-btn")
         connected(page)
+        page.click("#open-people")
+        expect(page.locator("#people-panel")).to_be_visible()
+        page.fill("#person-name", "bob")
+        page.click("#person-add")
+        expect(page.locator("#copy-invite")).to_be_visible()
+        invite = page.locator("#invite-text").inner_text()
+        bob_otp = invite.split("one-time password ", 1)[1].split(" ", 1)[0]
+        as_deployed(page)
+        page.mouse.move(1, 1)  # nothing drawn hovered
+        page.evaluate("document.activeElement && document.activeElement.blur()")
+        shot(page, out, "people-light.png")
+        page.emulate_media(color_scheme="dark")
+        shot(page, out, "people-dark.png")
+        page.emulate_media(color_scheme="light")
+        page.click("#invite-done")
+        page.keyboard.press("Escape")
         page.click("#passkeys")
         expect(page.locator("#passkeys-panel")).to_be_visible()
         page.fill("#passkey-name", "iPhone")
-        page.mouse.move(1, 1)  # off the key button, so it isn't drawn hovered
+        page.mouse.move(1, 1)
         shot(page, out, "passkeys-light.png")
         page.emulate_media(color_scheme="dark")
         shot(page, out, "passkeys-dark.png")
         page.emulate_media(color_scheme="light")
         page.keyboard.press("Escape")
+        # the admin's check ran out: adding someone asks for the password first
+        b = world.broker
+        b.on_loop(lambda: b.state.passkey_checks.clear())
+        page.click("#open-people")
+        page.fill("#person-name", "carol")
+        page.click("#person-add")
+        expect(page.locator("#confirm-dialog")).to_be_visible()
+        shot(page, out, "confirm-light.png")
+        page.click("#confirm-cancel")
+        page.keyboard.press("Escape")
         page.click("#logout")
+        expect(page.locator("#login-choose")).to_be_visible()
         expect(page.locator("#passkey-btn")).to_be_visible()
-        shot(page, out, "signin-passkey-light.png")
+        page.evaluate("document.activeElement && document.activeElement.blur()")
+        shot(page, out, "signin-light.png")
     finally:
         ctx.close()
+
+    bob_ctx = browser.new_context(**base, **DESKTOP)
+    bob_ctx.set_default_timeout(WAIT_MS)
+    try:
+        bob = bob_ctx.new_page()
+        bob.goto(origin + "/")
+        bob.fill("#signin-name", "bob")
+        bob.fill("#signin-password", bob_otp)
+        bob.click("#password-btn")
+        expect(bob.locator("#step-choose")).to_be_visible()
+        bob.fill("#new-password", bob_pw)
+        bob.fill("#new-password-2", bob_pw)
+        shot(bob, out, "setup-person-light.png")
+    finally:
+        bob_ctx.close()
 
     phone_ctx = browser.new_context(**{**base, "color_scheme": "dark"}, **PHONE)
     phone_ctx.set_default_timeout(WAIT_MS)
     try:
         ph = phone_ctx.new_page()
         ph.goto(origin + "/")
-        expect(ph.locator("#passkey-btn")).to_be_visible()
-        shot(ph, out, "signin-passkey-phone-dark.png")
+        expect(ph.locator("#login-choose")).to_be_visible()
+        ph.evaluate("document.activeElement && document.activeElement.blur()")
+        shot(ph, out, "signin-phone-dark.png")
     finally:
         phone_ctx.close()
+
+
+# the People sheet's text as a deployment shows it: the test broker's origin in the invite
+PEOPLE_AS_DEPLOYED_JS = """([from, to]) => {
+  const w = document.createTreeWalker(document.getElementById('people-body'), NodeFilter.SHOW_TEXT);
+  for (let n = w.nextNode(); n; n = w.nextNode()) n.nodeValue = n.nodeValue.split(from).join(to);
+}"""
 
 
 # -------------------------------------------------------- the machines' shots
@@ -366,8 +428,8 @@ def shoot_machines(browser: Any, out: Path, world: Any) -> None:
         page = ctx.new_page()
         cdp, laptop = device(ctx, page)
         page.goto(world.claim_link())
-        page.fill("#claim-name", "MacBook Pro")
-        page.click("#claim-btn")
+        expect(page.locator("#step-choose")).to_be_visible()
+        page.click("#passkey-btn")  # set up with a passkey instead of a password (§32.4)
         expect(page.locator("#step-backup")).to_be_visible()
         page.click("#skip-btn")
         connected(page)

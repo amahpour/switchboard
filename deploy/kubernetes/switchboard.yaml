@@ -57,6 +57,8 @@ spec:
           env:
             - name: SWITCHBOARD_PUBLIC_URL
               value: https://sb.example.com      # the Ingress host below; the broker answers to no other
+            - name: SWITCHBOARD_HUMAN_NAME
+              value: alice                       # the admin's name in the rooms (sign in as it, or as admin)
           ports:
             - name: http
               containerPort: 7419

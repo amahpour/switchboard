@@ -1801,7 +1801,7 @@ body.login {
 .passkey-head { display: flex; align-items: center; gap: 8px; }
 .passkey-head .ic { width: 15px; height: 15px; color: var(--muted); flex-shrink: 0; }
 .passkey-title { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; }
-.passkey-count { flex-shrink: 0; font-size: 11.5px; color: var(--muted-2); }
+.passkey-count, .password-state { flex-shrink: 0; font-size: 11.5px; color: var(--muted-2); }
 .passkey-add { display: flex; flex-direction: column; gap: 6px; margin: 0; }
 .passkey-row { display: flex; align-items: center; gap: 8px; }
 .passkey-row input { flex: 1; min-width: 0; height: 32px; }
@@ -2058,3 +2058,85 @@ body.login {
     scroll-behavior: auto !important;
   }
 }
+
+/* ==== 14b. The three ways in (login.html, DESIGN.md §32.4) ============================= */
+/* a password first; then "or" and the other two, a passkey and SSO (coming soon), full width */
+.login-first {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--side-border);
+  border-radius: 8px;
+  background: var(--side-bg);
+  font-size: 13px;
+}
+.login-first code, .setup-step .fine code {
+  padding: 0 4px;
+  border: 1px solid var(--code-border);
+  border-radius: 4px;
+  background: var(--code-bg);
+}
+.setup-form label + input + label { margin-top: 4px; }
+.login-or {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.login-or::before, .login-or::after { content: ""; flex: 1 1 0; border-top: 1px solid var(--side-border); }
+.login-alt { display: flex; flex-direction: column; gap: 8px; }
+.login-alt .btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: 34px;
+  padding: 0 16px;
+  font-size: 13.5px;
+}
+.login-alt .btn .ic { width: 15px; height: 15px; flex: none; }
+.login-alt .btn:disabled { opacity: 1; color: var(--muted); cursor: not-allowed; }
+.login-alt .soon {
+  padding: 1px 7px;
+  border: 1px solid var(--side-border);
+  border-radius: 999px;
+  background: var(--side-bg);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+
+/* ==== 14c. People and passwords in the app (index.html, DESIGN.md §32) ================= */
+/* the People sheet: as wide as Machines, for the invite text on few lines */
+#people-panel { width: min(640px, calc(100vw - 32px)); }
+.person-card .remote-head { align-items: center; }
+.person-card .avatar { flex: none; }
+.person-chip { height: 22px; padding: 0 9px; border-radius: 11px; font-size: 11.5px; font-weight: 600; }
+.person-chip.pending { background: var(--amber-bg); color: var(--amber-fg); }
+.person-chip.bad { background: var(--danger-bg); color: var(--danger); }
+.invite-card { border-color: var(--accent); }
+.invite-card:focus { outline: none; }
+.invite-card:focus-visible { box-shadow: 0 0 0 3px var(--focus); }
+.sheet-body .invite-text code { white-space: pre-wrap; }
+.invite-text { align-items: flex-start; }
+.invite-text .copy-btn { margin-top: 2px; }
+/* the Sign-in sheet's password form: two fields, the second with the button on its row */
+#password-form label + input { margin-bottom: 4px; }
+/* Confirm it's you (a password check before a change): a small modal card */
+.dialog-spacer { flex: 1 1 auto; }
+.confirm-dialog {
+  width: min(380px, calc(100vw - 32px));
+  padding: 20px 22px 18px;
+  border: 1px solid var(--menu-border);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: var(--menu-shadow);
+}
+.confirm-dialog::backdrop { background: rgba(0, 0, 0, .28); }
+.confirm-dialog h2 { margin: 0 0 2px; font-size: 16px; font-weight: 650; }
+.confirm-dialog .setup-form { gap: 8px; }
+.confirm-dialog .dialog-buttons { margin-top: 6px; flex-wrap: nowrap; }
+.confirm-dialog .dialog-buttons .btn, .confirm-dialog .dialog-buttons .btn-primary { height: 32px; }

@@ -80,11 +80,12 @@ class Sessions:
         self.store = store
         self.ttl_s = ttl_s
 
-    def create(self, via: str = "login-link") -> str:
+    def create(self, via: str = "login-link", person_id: int | None = None) -> str:
         """A new session; ``via`` says how it was made (``login-link``, ``claim``,
-        ``passkey:<name>``), for the later sessions list (§31.2)."""
+        ``passkey:<name>``, ``password``, ``one-time``), for the later sessions list (§31.2);
+        ``person_id`` whose it is (None: the owner, §32.2)."""
         sid = secrets.token_urlsafe(32)
-        self.store.web_session_create(sha256_hex(sid), self.ttl_s, via)
+        self.store.web_session_create(sha256_hex(sid), self.ttl_s, via, person_id)
         return sid
 
     def check(self, sid: str | None) -> str | None:

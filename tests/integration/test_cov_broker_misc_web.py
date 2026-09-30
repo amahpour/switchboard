@@ -157,6 +157,8 @@ def ws_endpoint(hub: Hub) -> Any:
         origin=ORIGIN,
         sessions=types.SimpleNamespace(check=lambda sid: "sid-hash" if sid == "good" else None),
         hub=hub,
+        store=types.SimpleNamespace(web_session_person=lambda h: None),  # the owner's session (§32)
+        cfg=types.SimpleNamespace(human_name="alice"),
     )
     app = FastAPI()
     webmod.install(app, state)  # type: ignore[arg-type]

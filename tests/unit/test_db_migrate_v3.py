@@ -70,25 +70,25 @@ def test_fixture_is_a_v2_database_with_rows_in_every_table(tmp_path: Path) -> No
     con.close()
 
 
-def test_fresh_db_is_v3(tmp_path: Path) -> None:
+def test_a_fresh_db_has_what_v3_added(tmp_path: Path) -> None:
     con = db.open_db(tmp_path / "switchboard.db")
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 3
+    assert db.schema_version(con) == db.SCHEMA_VERSION >= 3  # v4 since #61 (§32.2)
     via = {c[1]: c for c in columns(con, "web_sessions")}["via"]
     assert via[2] == "TEXT" and via[3] == 0  # nullable: a session made before schema 3 has none
     tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert set(NEW_TABLES) <= tables and tables == set(db.TABLES) | {"sqlite_sequence"}
-    assert db.tables_of(1) == db.V1_TABLES and db.tables_of(2) == db.V2_TABLES and db.tables_of(3) == db.TABLES
+    assert db.tables_of(1) == db.V1_TABLES and db.tables_of(2) == db.V2_TABLES and db.tables_of(3) == db.V3_TABLES
     assert backups(tmp_path / "switchboard.db") == []
 
 
-def test_v2_fixture_migrates_to_v3(tmp_path: Path) -> None:
+def test_v2_fixture_migrates_through_v3(tmp_path: Path) -> None:
     p = tmp_path / "switchboard.db"
     original = make_v2(p)
     src = sqlite3.connect(p)
     before = db.row_counts(src, V2_TABLES)
     src.close()
     con = db.open_db(p)
-    assert db.schema_version(con) == 3
+    assert db.schema_version(con) == db.SCHEMA_VERSION
     assert db.integrity_ok(con) is None
     assert db.row_counts(con, V2_TABLES) == before
     assert db.row_counts(con, NEW_TABLES) == {"passkeys": 0, "link_machines": 0}
@@ -130,7 +130,7 @@ def test_the_backup_is_written_before_the_first_statement(tmp_path: Path) -> Non
     con.set_trace_callback(None)
     con.close()
     alters = [ok for sql, ok in seen if sql.lstrip().upper().startswith(("ALTER", "CREATE TABLE"))]
-    assert len(alters) == 3 and all(alters)
+    assert len(alters) == 3 + 5 and all(alters)  # v2 -> v3, then v3 -> v4 (§32.2)
     assert dump(bak) == original
     c = sqlite3.connect(bak)
     assert c.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
@@ -151,7 +151,7 @@ def test_failed_migration_leaves_v2_intact(tmp_path: Path, monkeypatch: pytest.M
     assert dump(bak) == original
     monkeypatch.undo()
     con = db.open_db(p)
-    assert db.schema_version(con) == 3
+    assert db.schema_version(con) == db.SCHEMA_VERSION
     assert len(backups(p)) == 2
 
 
@@ -168,13 +168,13 @@ def test_migration_needs_a_backup_path(tmp_path: Path) -> None:
     p = tmp_path / "switchboard.db"
     original = make_v2(p)
     con = db.connect(p)
-    with pytest.raises(db.SchemaError, match="schema version 2 needs a migration to version 3, and a migration"):
+    with pytest.raises(db.SchemaError, match="schema version 2 needs a migration to version 4, and a migration"):
         db.migrate(con)
     con.close()
     assert dump(p) == original and backups(p) == []
 
 
-def test_v3_reopens_without_migrating(tmp_path: Path) -> None:
+def test_a_migrated_v2_reopens_without_migrating(tmp_path: Path) -> None:
     p = tmp_path / "switchboard.db"
     make_v2(p)
     db.open_db(p).close()
@@ -183,7 +183,7 @@ def test_v3_reopens_without_migrating(tmp_path: Path) -> None:
     seen: list[str] = []
     con = db.connect(p)
     con.set_trace_callback(seen.append)
-    assert db.migrate(con, backup_to=db.backup_path_for(p, 2)) == 3
+    assert db.migrate(con, backup_to=db.backup_path_for(p, 2)) == db.SCHEMA_VERSION
     con.set_trace_callback(None)
     con.close()
     assert not [s for s in seen if s.lstrip().upper().startswith(("ALTER", "CREATE", "UPDATE", "INSERT"))]
@@ -196,7 +196,7 @@ def test_the_v1_fixture_takes_both_steps_after_one_backup(tmp_path: Path) -> Non
     p = tmp_path / "switchboard.db"
     original = make_v1(p)
     con = db.open_db(p)
-    assert db.schema_version(con) == 3
+    assert db.schema_version(con) == db.SCHEMA_VERSION
     assert db.row_counts(con, ("remotes", *NEW_TABLES)) == {"remotes": 0, "passkeys": 0, "link_machines": 0}
     assert "via" in {c[1] for c in columns(con, "web_sessions")}
     con.close()

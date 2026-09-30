@@ -17,6 +17,8 @@ services:
     environment:
       # the address browsers use; the broker answers to no other
       SWITCHBOARD_PUBLIC_URL: https://${SWITCHBOARD_DOMAIN:?set SWITCHBOARD_DOMAIN to your DNS name}
+      # the admin's name in the rooms (sign in as it, or as admin); unset, it is `me`
+      SWITCHBOARD_HUMAN_NAME: ${SWITCHBOARD_HUMAN_NAME:-}
     volumes:
       - switchboard-data:/data
     # no `ports:`: only Caddy reaches it, over this project's network

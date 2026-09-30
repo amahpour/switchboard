@@ -191,3 +191,21 @@ def test_security_reaches_the_broker_policy(tmp_path: Path, monkeypatch: pytest.
         listener.close()
     assert type(seen[0]) is ProcessPeerPolicy and seen[0].allow_ssh_cli is want
     assert type(seen[1]) is AllowAllHumans
+
+
+def test_the_human_name_from_the_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A deployment's manifest names its admin (DESIGN.md §32.4): SWITCHBOARD_HUMAN_NAME wins
+    over config.toml and the login name; a bad one is refused like a bad human_name."""
+    from switchboard.config import HUMAN_NAME_ENV, ConfigError, load
+    from switchboard.paths import Paths
+
+    paths = Paths.from_home(tmp_path)
+    monkeypatch.setenv(HUMAN_NAME_ENV, "ari")
+    assert load(paths).human_name == "ari"
+    paths.config.write_text('human_name = "bob"\n')
+    assert load(paths).human_name == "ari"
+    monkeypatch.setenv(HUMAN_NAME_ENV, "")
+    assert load(paths).human_name == "bob"
+    monkeypatch.setenv(HUMAN_NAME_ENV, "Not A Name")
+    with pytest.raises(ConfigError, match=HUMAN_NAME_ENV):
+        load(paths)

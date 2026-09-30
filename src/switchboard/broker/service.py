@@ -614,10 +614,12 @@ class RoomService:
             self.delivery.on_message(msg)
         return msg
 
-    def human_say(self, name: str, text: str, via: str, *, skip: tuple[int, ...] = ()) -> Message:
-        """A message from the human. Posted literally, never parsed as a command.
+    def human_say(self, name: str, text: str, via: str, *, skip: tuple[int, ...] = (),
+                  person: tuple[str, int | None] | None = None) -> Message:
+        """A message from a human. Posted literally, never parsed as a command.
         ``skip``: memberships that get no delivery of it (only ``/catchup`` passes any: its
-        subjects, §26)."""
+        subjects, §26). ``person``: who, on a hosted broker with people (§32): their name
+        and id (None: the owner); by default the owner, ``human_name``."""
         room = self.room(name)
         if not isinstance(text, str):
             raise ServiceError("bad_request", "text must be a string")
@@ -633,12 +635,13 @@ class RoomService:
         mentions = parse_mentions(text, self.mention_names(room))
         msg = self._post(
             room,
-            sender_name=self.cfg.human_name,
+            sender_name=person[0] if person is not None else self.cfg.human_name,
             sender_kind="human",
             via=via,
             text=text,
             mentions=mentions,
             skip_memberships=skip,
+            sender_person_id=person[1] if person is not None else None,
         )
         before = room.hop_count
         if before:
@@ -649,8 +652,12 @@ class RoomService:
     def mention_names(self, room: Room) -> list[str]:
         """Names an @mention can address: active members, plus the human (for UI highlighting;
         the human has no delivery rows)."""
-        return self.store.active_names(room.id) + [self.cfg.human_name]
+        return self.store.active_names(room.id) + self.people_names()
 
+
+    def people_names(self) -> list[str]:
+        """The humans (§32): the owner, then everyone the owner added on a hosted broker."""
+        return [self.cfg.human_name] + [p.name for p in self.store.people()]
     def post_notice(self, room: Room, text: str, level: str | None = None) -> Message:
         return self._post(room, sender_name="switchboard", sender_kind="system",
                           via="system", kind="notice", text=text, level=level)
@@ -686,7 +693,8 @@ class RoomService:
         if result.post is not None:
             # /catchup: one ordinary human chat message (every delivery rule applies); a refusal
             # here (too long, empty) leaves nothing posted or recorded
-            posted = self.human_say(room.name, result.post, via=actor.via, skip=result.post_skip)
+            posted = self.human_say(room.name, result.post, via=actor.via, skip=result.post_skip,
+                                    person=(actor.who(self.cfg.human_name), actor.person_id))
         room = self.store.room_by_id(room.id) or room
         audit = self._audit_suffix(actor)
         if result.event:
@@ -695,7 +703,7 @@ class RoomService:
                 data["message_id"] = posted.id
             self.store.add_event(result.event, room_id=room.id, data=data)
         if result.notice:
-            self.post_notice(room, f"{self.cfg.human_name} {result.notice}{audit}")
+            self.post_notice(room, f"{actor.who(self.cfg.human_name)} {result.notice}{audit}")
         elif actor.via == "cli":
             # Every command issued over the CLI leaves an audit line (§10).
             self.post_notice(room, f"/{cmd.name} by {self.cfg.human_name}{audit}")

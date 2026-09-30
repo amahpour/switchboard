@@ -54,8 +54,10 @@ DOCKER_ENV = {k: v for k, v in os.environ.items()
               or k.startswith("DOCKER_") or k.startswith("BUILDX_")}
 WAIT_S = 30.0
 LINK_RE = re.compile(r"https://sb\.test:\d+/login\?t=[A-Za-z0-9_-]+")
-CLAIM_RE = re.compile(r"switchboard isn't set up yet\. Claim it \(link works once, for 60 min\): "
-                      r"(https://sb\.test:\d+/setup#t=[A-Za-z0-9_-]+)")
+# the admin's one-time password and the same as a link (DESIGN.md §32.4): the link is group 1
+CLAIM_RE = re.compile(r"switchboard isn't set up yet\. Sign in at https://sb\.test:\d+ as admin with the one-time"
+                      r" password [0-9A-Z-]+ \(it works once, for 60 min\), then choose your own password or passkey\."
+                      r" Or open (https://sb\.test:\d+/setup#t=[0-9A-Z-]+)")
 # Chromium's virtual authenticator: a platform passkey with user verification (issue #41)
 AUTHENTICATOR = {"protocol": "ctap2", "transport": "internal", "hasResidentKey": True, "hasUserVerification": True,
                  "isUserVerified": True, "automaticPresenceSimulation": True}
@@ -275,17 +277,19 @@ def stack(image: str, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stac
 
 # ----------------------------------------------------------------------- tests
 def test_claim_it_from_the_log_and_sign_in_with_a_passkey(stack: Stack, playwright: Any) -> None:
-    """The first thing that happens to a fresh deployment (issue #41): the log holds one claim
-    link, opened in Chromium through the proxy; a passkey (a virtual authenticator) claims the
-    broker; signing off and signing in again uses the passkey. No ``docker exec`` anywhere."""
+    """The first thing that happens to a fresh deployment (issues #41, #61): the log holds one
+    one-time password and its link, opened in Chromium through the proxy; a passkey (a virtual
+    authenticator) instead of a password sets the broker up; signing off and signing in again
+    uses the passkey. No ``docker exec`` anywhere."""
     links = stack.claim_lines()
     assert len(links) == 1 and links[0].startswith(f"{stack.public}/setup#t=")
     logs = docker("logs", stack.broker).stdout
-    assert "no owner yet: a claim link is on stdout" in logs
+    assert "no admin yet: a one-time password is on stdout" in logs
     status, _, body = stack.https("GET", "/setup")
-    assert status == 200 and "Claim this switchboard" in body
+    assert status == 200 and "Choose how you&rsquo;ll sign in" in body
     status, _, body = stack.https("GET", "/api/auth/state")
-    assert status == 200 and json.loads(body) == {"hosted": True, "claimed": False, "passkeys": False, "claim": True}
+    assert status == 200 and json.loads(body) == {"hosted": True, "claimed": False, "passkeys": False, "claim": True,
+                                                  "passkeys_work": True, "password": True, "sso": "coming soon"}
 
     problems: list[str] = []
     browser = playwright.chromium.launch(args=["--host-resolver-rules=MAP sb.test 127.0.0.1"])
@@ -299,19 +303,20 @@ def test_claim_it_from_the_log_and_sign_in_with_a_passkey(stack: Stack, playwrig
         cdp.send("WebAuthn.enable", {"enableUI": False})
         cdp.send("WebAuthn.addVirtualAuthenticator", {"options": AUTHENTICATOR})
         page.goto(links[0])
-        page.wait_for_selector("#step-claim:visible", timeout=15_000)
-        assert page.url == f"{stack.public}/setup"  # the token left the address bar
-        page.fill("#claim-name", "MacBook Pro")
-        page.click("#claim-btn")
-        page.wait_for_selector("#step-backup:visible", timeout=15_000)
+        page.wait_for_selector("#step-choose:visible", timeout=15_000)
+        assert page.url == f"{stack.public}/setup"  # the one-time password left the address bar
+        page.click("#passkey-btn")  # a passkey instead of a password
+        page.wait_for_selector("#step-backup:visible, #setup-error:visible", timeout=15_000)
+        error = page.locator("#setup-error")
+        assert not error.is_visible(), f"the passkey setup failed: {error.text_content()}"
         ARTIFACTS.mkdir(parents=True, exist_ok=True)
         page.screenshot(path=str(ARTIFACTS / "claimed.png"))
         page.click("#skip-btn")
         page.wait_for_selector("#st-conn:text-is('Connected')", timeout=15_000)
         assert page.url == f"{stack.public}/"
         # signed in by the claim, with a Secure cookie; the claim link is spent
-        assert json.loads(stack.https("GET", "/api/auth/state")[2]) == {"hosted": True, "claimed": True,
-                                                                          "passkeys": True, "claim": False}
+        got = json.loads(stack.https("GET", "/api/auth/state")[2])
+        assert (got["claimed"], got["passkeys"], got["claim"]) == (True, True, False)
         assert stack.https("GET", "/setup")[0] == 303
         # sign off, then in again with the passkey
         page.click("#logout")

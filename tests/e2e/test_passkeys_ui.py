@@ -1,8 +1,8 @@
-"""A hosted broker's owner in a real browser (issue #41, DESIGN.md §31): the claim page from
-the log link, the backup passkey, the passkeys sheet, sign out, and signing in with a
-passkey. Marker ``e2e``, opt-in, like tests/e2e/test_web_ui.py, whose ``UI`` fixture class is
-reused (every page watched for console errors, page errors and CSP violations; a trace and
-screenshots kept on failure).
+"""A hosted broker's owner in a real browser (issues #41 and #61, DESIGN.md §31, §32): the setup
+page from the log link (its one-time password), a passkey instead of a password, the backup
+passkey, the Sign-in sheet, sign out, and signing in with a passkey. Marker ``e2e``, opt-in,
+like tests/e2e/test_web_ui.py, whose ``UI`` fixture class is reused (every page watched for
+console errors, page errors and CSP violations; a trace and screenshots kept on failure).
 
 The broker is an in-process test-mode broker behind ``http://sb.localhost:<port>``: a plain-http
 public URL that browsers treat as a secure context, which Chromium resolves to loopback itself.
@@ -12,7 +12,6 @@ CTAP2, internal, resident keys, user verification), one per "device".
 
 from __future__ import annotations
 
-import re
 import shutil
 from collections.abc import Iterator
 from typing import Any
@@ -103,37 +102,34 @@ def test_claim_backup_sheet_sign_out_and_sign_in(ui: UI, hosted: InProcBroker) -
     page = ctx.new_page()
     devices = Devices(ctx, page)
 
-    # a link with no token in it: the bad-link step at once, and no request carried anything
+    # a link with no one-time password in it: the bad-link step at once, and no request carried it
     open_link(page, origin + "/setup#t=bad")
     expect(page.locator("#step-bad")).to_be_visible()
-    expect(page.locator("#step-claim")).to_be_hidden()
+    expect(page.locator("#step-choose")).to_be_hidden()
     assert page.url == origin + "/setup"
-    # a well-formed token that isn't the one: the broker refuses it, and the page says so
-    open_link(page, origin + "/setup#t=not-the-real-token-at-all-000000000000")
-    expect(page.locator("#step-claim")).to_be_visible()
-    page.click("#claim-btn")
+    # a well-formed one that isn't the one: the broker refuses it, and the page says so
+    open_link(page, origin + "/setup#t=NOT0-THE0-REAL-0NE0")
     expect(page.locator("#step-bad")).to_be_visible()
     assert hosted.state.claim is not None and hosted.state.claim.active  # the real one is untouched
     # Chromium logs the refused request as a console error (delivered a moment after the DOM
     # changed): that one is expected, nothing else is
     page.wait_for_timeout(300)
-    assert ui.problems and all("403" in p and "/api/setup/begin" in p for p in ui.problems), ui.problems
+    assert ui.problems and all("403" in p and "/api/signin/password" in p for p in ui.problems), ui.problems
     ui.problems.clear()
 
-    # the real link: the token leaves the address bar at once, and the claim step shows
+    # the real link: its one-time password leaves the address bar at once, and the choice shows
     laptop = devices.add()
     open_link(page, link)
-    expect(page.locator("#step-claim")).to_be_visible()
+    expect(page.locator("#step-choose")).to_be_visible()
     assert page.url == origin + "/setup"
     assert page.evaluate("location.hash") == ""
-    expect(page.locator("#claim-name")).to_have_value(re.compile(r".+"))  # a default from the platform
-    page.fill("#claim-name", "MacBook Pro")
-    page.click("#claim-btn")
+    expect(page.locator("#choose-lead")).to_contain_text("You’re the admin of this switchboard")
+    page.click("#passkey-btn")  # a passkey instead of a password
     expect(page.locator("#step-backup")).to_be_visible()
-    expect(page.locator("#backup-lead")).to_contain_text('yours (passkey "MacBook Pro")')
+    expect(page.locator("#backup-lead")).to_contain_text('set up (passkey "')
     assert len(devices.credentials(laptop)) == 1
     st = hosted.state
-    assert st.claim is None and [p.name for p in st.store.passkeys()] == ["MacBook Pro"]
+    assert st.claim is None and len(st.store.passkeys()) == 1 and st.store.owner_password_hash() is None
     assert not hosted.paths.test_claim_link.exists()
 
     # the backup passkey, on another device (the laptop's authenticator would refuse: excluded)
@@ -143,7 +139,7 @@ def test_claim_backup_sheet_sign_out_and_sign_in(ui: UI, hosted: InProcBroker) -
     page.click("#backup-btn")
     expect(page.locator("#st-conn")).to_have_text("Connected")  # the app, signed in by the claim
     assert page.url == origin + "/"
-    assert [p.name for p in st.store.passkeys()] == ["MacBook Pro", "iPhone"]
+    assert [p.name for p in st.store.passkeys()][1:] == ["iPhone"]
     assert len(devices.credentials(phone)) == 1
 
     # the passkeys sheet: the count, Add a passkey (fresh from the claim: no check asked), on a
@@ -169,11 +165,13 @@ def test_claim_backup_sheet_sign_out_and_sign_in(ui: UI, hosted: InProcBroker) -
     expect(page.locator("#st-conn")).to_have_text("Connected")
     assert page.url == origin + "/"
 
-    # sign off this browser: the sign-in page offers the passkey button, not the terminal text
+    # sign off this browser: the sign-in page offers the three ways in, not the terminal text
     page.click("#logout")
     expect(page.locator("#passkey-btn")).to_be_visible()
+    expect(page.locator("#password-form")).to_be_visible()
+    expect(page.locator("#sso-btn")).to_be_disabled()
     expect(page.locator("#login-cli")).to_be_hidden()
-    expect(page.locator("#login-claim")).to_be_hidden()
+    expect(page.locator("#login-first")).to_be_hidden()
     assert "login?t=" not in page.content()
 
     # sign in with the phone's passkey (the only authenticator still attached)
@@ -181,7 +179,8 @@ def test_claim_backup_sheet_sign_out_and_sign_in(ui: UI, hosted: InProcBroker) -
     expect(page.locator("#st-conn")).to_have_text("Connected")
     assert page.url == origin + "/"
     rows = {p.name: p for p in st.store.passkeys()}
-    assert rows["iPhone"].last_used_at is not None and rows["MacBook Pro"].last_used_at is None
+    assert rows["iPhone"].last_used_at is not None
+    assert [p.last_used_at for p in st.store.passkeys() if p.name not in ("iPhone", "YubiKey")] == [None]
     assert rows["iPhone"].sign_count >= 1  # Chromium's virtual authenticator counts
 
     # Sign out everywhere, then back in

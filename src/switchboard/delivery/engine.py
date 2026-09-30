@@ -161,6 +161,18 @@ class Engine:
     def parked_reason(self, membership_id: int) -> str | None:
         return self.parked.get(membership_id)
 
+    # the humans (DESIGN.md §32): the owner, and on a hosted broker everyone the owner added
+    def _humans(self) -> list[str]:
+        return [self.cfg.human_name] + [p.name for p in self.store.people()]
+
+    def _whose(self) -> str:
+        humans = self._humans()
+        return f"{humans[0]}'s" if len(humans) == 1 else "people's"
+
+    def _a_human(self) -> str:
+        humans = self._humans()
+        return humans[0] if len(humans) == 1 else "a person"
+
     def _snap(self, room_ids: Iterable[int]) -> list[Action]:
         return [Snapshot(r) for r in sorted(set(room_ids))]
 
@@ -329,7 +341,7 @@ class Engine:
         return [
             Notice(room.id, "warn",
                    f"the wake budget for this hour is used up: agents now wake only for "
-                   f"{self.cfg.human_name}'s messages. Raise it with /budget <n> in the web UI."),
+                   f"{self._whose()} messages. Raise it with /budget <n> in the web UI."),
             Snapshot(room.id),
         ]
 
@@ -840,7 +852,7 @@ class Engine:
         if msg.sender_kind == "agent" and rules.hop_tripped(room):
             out += self.pause_room(room.id, "loop guard", event="loop_guard",
                                    notice=f"loop guard: {room.hop_count} agent messages in a row"
-                                          f" with no message from {self.cfg.human_name}. {room.name}"
+                                          f" with no message from {self._a_human()}. {room.name}"
                                           " is paused; /resume in the web UI to continue."
                                           f" /hops <n> changes the limit (now {room.hop_limit}).")
         out += self.evaluate_room(room.id)
@@ -1264,7 +1276,7 @@ class Engine:
                 pairs.append((room.name, m.screen_name))
         if not pairs:
             return None
-        return HookOut("context", envelope.render_reminder(pairs, self.cfg.human_name))
+        return HookOut("context", envelope.render_reminder(pairs, self._humans()))
 
     def _claim_context(self, p: Participant, path: str) -> tuple[HookOut | None, list[Action]]:
         """Mid-task priority items for the model, as hook context (one room per hook call)."""

@@ -6,10 +6,12 @@ creating a passkey claims the broker, and from then on only the owner's passkeys
 in. Everything WebAuthn is done by ``python-fido2``'s ``Fido2Server``; this module holds
 what sits around it:
 
-- ``ClaimTokens``: the one claim token at a time: 32 random bytes whose SHA-256 alone is
-  kept, compared in constant time, spent by the claim, rotated every ``CLAIM_TTL_S``
-  while the broker stays unclaimed. The claim ceremony (a registration in progress) is
-  bound to the token, one at a time, for ``CEREMONY_TTL_S``.
+- ``ClaimTokens``: the one claim token at a time, the owner's one-time password (§32.4):
+  16 Crockford characters (80 bits, ``passwords.one_time_password``) whose SHA-256 alone
+  is kept, compared in constant time as typed (``normalize_one_time``), spent by the
+  claim, rotated every ``CLAIM_TTL_S`` while the broker stays unclaimed. The claim
+  ceremony (the owner choosing a password or registering a passkey) is bound to the
+  token, one at a time, for ``CEREMONY_TTL_S``.
 - ``Sealer``: the sign-in ceremony's state (the challenge, the user-verification
   requirement) travels in a cookie sealed with an HMAC key the broker makes at start,
   with its expiry inside: nothing is kept on the server before a sign-in succeeds.
@@ -33,6 +35,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from switchboard.broker.auth import WebOrigin
+from switchboard.broker.passwords import normalize_one_time, one_time_password
 from switchboard.clock import Clock, SystemClock
 
 CLAIM_TTL_S = 3600.0  # a claim link lives an hour, then a fresh one is printed
@@ -60,9 +63,11 @@ class ClaimTokens:
         self._ceremony: tuple[bytes, Any, float] | None = None
 
     def mint(self) -> str:
-        """A fresh token; the old one dies."""
-        tok = secrets.token_urlsafe(32)
-        self._hash = hashlib.sha256(tok.encode()).digest()
+        """A fresh token (a one-time password, as it is printed); the old one dies."""
+        tok = one_time_password()
+        canon = normalize_one_time(tok)
+        assert canon is not None
+        self._hash = hashlib.sha256(canon.encode()).digest()
         self._expires = self.clock.now() + self.ttl_s
         self._ceremony = None
         self.issued += 1
@@ -76,11 +81,12 @@ class ClaimTokens:
         return max(0.0, self._expires - self.clock.now()) if self._hash is not None else 0.0
 
     def check(self, token: Any) -> bool:
-        """Whether ``token`` is the live one (constant time); nothing is spent."""
-        if not isinstance(token, str) or not 20 <= len(token) <= 256 or not self.active:
+        """Whether ``token`` (as typed) is the live one (constant time); nothing is spent."""
+        canon = normalize_one_time(token)
+        if canon is None or not self.active:
             return False
         assert self._hash is not None
-        return hmac.compare_digest(hashlib.sha256(token.encode()).digest(), self._hash)
+        return hmac.compare_digest(hashlib.sha256(canon.encode()).digest(), self._hash)
 
     def spend(self) -> None:
         """The claim succeeded: no token, no ceremony, ever again from this object."""

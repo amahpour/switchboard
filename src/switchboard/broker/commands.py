@@ -94,6 +94,13 @@ class Actor:
     role: str  # 'human' or 'human_cli'
     via: str  # 'web' or 'cli'
     chain: str | None = None  # short process chain for CLI callers
+    # who, on a hosted broker with people (§32): their name and id (None: the owner, and
+    # every CLI caller, whose name is ``human_name``)
+    name: str | None = None
+    person_id: int | None = None
+
+    def who(self, human_name: str) -> str:
+        return self.name or human_name
 
 
 @dataclass
@@ -413,7 +420,7 @@ def apply(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
     if name == "pause":
         if room.paused:
             return Result(True, f"{room.name} is already paused ({room.paused_reason or 'by you'})")
-        store.set_paused(room.id, True, "paused by " + svc.cfg.human_name)
+        store.set_paused(room.id, True, "paused by " + actor.who(svc.cfg.human_name))
         return Result(
             True,
             f"{room.name} paused: no agent wakes until /resume",
