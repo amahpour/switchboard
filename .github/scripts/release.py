@@ -12,8 +12,9 @@ from origin/main, in a temporary worktree (the checkout it runs from is never to
 - picks the bump: a minor for `feat:` or a breaking change (`!` or `BREAKING CHANGE`), a patch
   for anything else. Below 1.0 a breaking change is a minor too;
 - writes the new version into pyproject.toml, switchboard/__init__.py and uv.lock;
-- turns CHANGELOG.md's "## Unreleased" section into "## X.Y.Z (date)" under a fresh, empty
-  "## Unreleased". With nothing under Unreleased, the notes are the commits' titles;
+- gathers the notes files in changes/ (one per PR, changes/README.md) into a "## X.Y.Z (date)"
+  section of CHANGELOG.md, each heading once, and deletes them. An old-style "## Unreleased"
+  section is gathered too. With no notes at all, the notes are the commits' titles;
 - points the README's and docs/INSTALL.md's `uv tool install …@vX.Y.Z` lines at the new tag,
   and the deployment examples' and docs/DEPLOY.md's `ghcr.io/amahpour/switchboard:X.Y.Z` at
   the new image;
@@ -49,7 +50,16 @@ IMAGE_PIN_RE = re.compile(r"(ghcr\.io/amahpour/switchboard:)\d+\.\d+\.\d+(?![\w.
 VERSION_FILES = ("pyproject.toml", "src/switchboard/__init__.py", "uv.lock")
 PIN_FILES = ("README.md", "docs/INSTALL.md", "docs/DEPLOY.md", "deploy/compose/compose.yaml",
              "deploy/kubernetes/switchboard.yaml", "deploy/render/render.yaml")
-RELEASE_FILES = (*VERSION_FILES, "CHANGELOG.md", *PIN_FILES)  # all a release PR may change
+RELEASE_FILES = (*VERSION_FILES, "CHANGELOG.md", *PIN_FILES)  # with the notes files, all a release PR changes
+CHANGES_DIR = "changes"   # a PR's notes: changes/<name>.md (changes/README.md)
+# a release's headings in this order; any other heading follows them, in the order first seen
+HEADING_ORDER = ("Upgrading", "Added", "Changed", "Removed", "Fixed", "Known limitations", "Not included")
+
+
+def is_release_file(path: str) -> bool:
+    """A file a release PR may change: the version, CHANGELOG.md, the pins, and the notes files
+    it gathers (and deletes)."""
+    return path in RELEASE_FILES or (path.startswith(f"{CHANGES_DIR}/") and path.endswith(".md"))
 
 
 # ------------------------------------------------------------------ pure parts
@@ -92,22 +102,57 @@ def next_version(current: str, kind: str, *, breaking_major: bool = False) -> st
     return f"{major}.{minor}.{patch + 1}"
 
 
-def cut_changelog(text: str, version: str, date: str, fallback: list[str]) -> tuple[str, str]:
-    """(the new CHANGELOG, this release's notes). The Unreleased section becomes the release's
-    section; a fresh, empty Unreleased goes above it."""
-    head = "## Unreleased\n"
+def split_notes(text: str) -> tuple[str, list[tuple[str, str]]]:
+    """(the text above the first `### ` heading, [(heading, the text under it), ...])."""
+    parts = re.split(r"(?m)^### +(.+?)[ \t]*\n", text if text.endswith("\n") else text + "\n")
+    rest = parts[1:]
+    return parts[0].strip("\n"), [(rest[i].strip(), rest[i + 1].strip("\n")) for i in range(0, len(rest), 2)]
+
+
+def join_md(chunks: list[str]) -> str:
+    """Markdown chunks one after another; bullets from several files make one list."""
+    out = ""
+    for chunk in (c.strip("\n") for c in chunks):
+        if not chunk.strip():
+            continue
+        if out:
+            one_list = chunk.startswith("- ") and out.rsplit("\n", 1)[-1].startswith(("- ", "  "))
+            out += "\n" if one_list else "\n\n"
+        out += chunk
+    return out
+
+
+def gather_notes(texts: list[str]) -> str:
+    """One release's notes from its notes files: the texts above their first heading, then each
+    heading once (HEADING_ORDER first) with every file's text under it, in the files' order."""
+    intros: list[str] = []
+    sections: dict[str, list[str]] = {}
+    for text in texts:
+        intro, secs = split_notes(text)
+        intros.append(intro)
+        for heading, body in secs:
+            sections.setdefault(heading, []).append(body)
+    order = [h for h in HEADING_ORDER if h in sections] + [h for h in sections if h not in HEADING_ORDER]
+    parts = [join_md(intros)] + [f"### {h}\n\n{body}" for h in order if (body := join_md(sections[h]))]
+    return "\n\n".join(p for p in parts if p)
+
+
+def cut_changelog(text: str, version: str, date: str, notes_files: list[str],
+                  fallback: list[str]) -> tuple[str, str]:
+    """(the new CHANGELOG, this release's notes). The notes files' texts, and an old-style
+    "## Unreleased" section's (which goes), become "## X.Y.Z (date)" above the last release."""
     if f"\n## {version} (" in text:
         raise SystemExit(f"CHANGELOG.md already has a {version} section")
-    start = text.find(head)
-    if start < 0:
-        raise SystemExit("CHANGELOG.md has no '## Unreleased' section")
-    body_start = start + len(head)
-    nxt = text.find("\n## ", body_start)
-    end = len(text) if nxt < 0 else nxt + 1
-    body = text[body_start:end].strip("\n")
-    notes = body if body.strip() else "\n".join(f"- {line}" for line in fallback)
-    section = f"## Unreleased\n\n## {version} ({date})\n\n{notes}\n\n"
-    return text[:start] + section + text[end:].lstrip("\n"), notes + "\n"
+    unreleased = ""
+    if m := re.search(r"(?m)^## Unreleased[ \t]*\n", text):   # the one shared section, before changes/
+        nxt = text.find("\n## ", m.end() - 1)
+        end = len(text) if nxt < 0 else nxt + 1
+        unreleased, text = text[m.end():end], text[:m.start()] + text[end:]
+    notes = gather_notes([unreleased, *notes_files]) or "\n".join(f"- {line}" for line in fallback)
+    section = f"## {version} ({date})\n\n{notes}\n\n"
+    if first := re.search(r"(?m)^## ", text):
+        return text[:first.start()] + section + text[first.start():], notes + "\n"
+    return text.rstrip("\n") + "\n\n" + section.rstrip("\n") + "\n", notes + "\n"
 
 
 def notes_for(text: str, version: str) -> str:
@@ -174,6 +219,16 @@ def commits_since(version: str, root: Path = ROOT) -> list[tuple[str, str]]:
     return [(p[0], p[1] if len(p) > 1 else "") for p in pairs]
 
 
+def notes_files(root: Path = ROOT) -> list[Path]:
+    """changes/*.md but its README, in the order they were added (for a name used again, its
+    latest addition); files git doesn't know yet come last, by name."""
+    folder = root / CHANGES_DIR
+    files = [p for p in folder.glob("*.md") if p.name != "README.md"] if folder.is_dir() else []
+    added = git("log", "--reverse", "--diff-filter=A", "--format=", "--name-only", "--", CHANGES_DIR, root=root)
+    rank = {name: i for i, name in enumerate(line.strip() for line in added.splitlines() if line.strip())}
+    return sorted(files, key=lambda p: (rank.get(f"{CHANGES_DIR}/{p.name}", len(rank)), p.name))
+
+
 def behind_main(root: Path = ROOT) -> bool:
     """True when origin/main has moved past this checkout (another merge landed)."""
     try:
@@ -207,8 +262,12 @@ def release(root: Path, notes_path: Path, today: str) -> str | None:
     version = next_version(current, kind, breaking_major=breaking)
     set_version(root, version)
     fallback = [s for s, _ in commits if not s.startswith(RELEASE_PREFIX)]
-    changelog, notes = cut_changelog((root / "CHANGELOG.md").read_text(), version, today, fallback)
+    files = notes_files(root)
+    changelog, notes = cut_changelog((root / "CHANGELOG.md").read_text(), version, today,
+                                     [p.read_text() for p in files], fallback)
     (root / "CHANGELOG.md").write_text(changelog)
+    for p in files:
+        p.unlink()   # gathered into the release (`git commit -a` records the deletions)
     for rel in PIN_FILES:
         p = root / rel
         if p.exists():

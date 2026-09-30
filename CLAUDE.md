@@ -19,6 +19,10 @@ Where the images go:
 
 A ruleset on `main` refuses direct pushes, force pushes and deletion, from everyone. A PR merges once its `CI` and `conventional PR title` checks pass: `gh pr merge --squash`, or `gh pr merge --auto --squash` to merge as soon as they do. A docs-only PR skips the tests ([CONTRIBUTING.md](CONTRIBUTING.md), "CI").
 
+## Release notes go in `changes/`
+
+Put a PR's notes for users in a new file, `changes/<branch-name>.md`, under the CHANGELOG's headings ([changes/README.md](changes/README.md)). Never edit CHANGELOG.md: only a release writes it, and CI fails a PR that does.
+
 ## Releases
 
 A release is a pull request ([CONTRIBUTING.md](CONTRIBUTING.md), "Releases"). When the maintainer asks for one:

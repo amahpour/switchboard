@@ -44,6 +44,26 @@ def test_a_release_pr_skips_the_tests() -> None:
     assert runs_tests(release_files, "chore: bump the version")      # the title makes it a release PR
     assert runs_tests([*release_files, "src/switchboard/cli.py"], "release: v0.7.0")  # and nothing else in it
     assert runs_tests(release_files, "release: v0.7.0 and a fix")
+    # the notes files it gathers (and deletes) belong to a release PR too
+    assert not runs_tests([*release_files, "changes/sidebar-names.md", "changes/ci.md"], "release: v0.7.0")
+    assert not runs_tests(["changes/sidebar-names.md"], "fix(web): x")  # a note alone is docs
+
+
+@pytest.mark.parametrize(("title", "ok"), [
+    ("fix(web): keep names visible", False),         # a PR's notes go in changes/<name>.md
+    ("release: v0.7.0", True),                        # a release writes it
+    ("docs(changelog): fix 0.6.2's notes", True),     # fixing notes that are out, on purpose
+    ("docs: typo", False),
+])
+def test_only_a_release_edits_the_changelog(title: str, ok: bool, capsys: pytest.CaptureFixture[str],
+                                            monkeypatch: pytest.MonkeyPatch) -> None:
+    files = ["CHANGELOG.md", "src/switchboard/cli.py"]
+    assert (scope_mod.changelog_problem(files, title) is None) is ok
+    assert scope_mod.changelog_problem(["README.md"], title) is None
+    monkeypatch.setattr(sys, "stdin", io.StringIO("\n".join(files) + "\n"))
+    assert scope_mod.main(["--title", title]) == (0 if ok else 1)
+    if not ok:
+        assert "::error file=CHANGELOG.md::" in capsys.readouterr().out
 
 
 def test_the_cli_writes_the_decision_for_the_workflow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
