@@ -377,3 +377,76 @@ def _sigterm_fallback(paths: Paths, pf: tuple[int, float] | None, out: Any) -> i
         time.sleep(0.1)
     print("switchboard: the broker did not exit after SIGTERM", file=sys.stderr)
     return 1
+
+
+# ------------------------------------------------------------- the dialer (§31.7)
+DIALER_START_WAIT_S = 8.0
+
+
+def start_dialer(paths: Paths, *, test_mode: bool = False, out: Any = None) -> int:
+    """``switchboard start`` on a home that dials its broker: the dialer, in the background
+    (``start --foreground`` in a new session, its output in ``logs/dialer.out``). Waits until
+    it has said where it stands (connecting, waiting for approval, up) or stopped."""
+    from switchboard.remote.dialer import read_state, running_pid
+
+    out = out or sys.stdout
+    pid = running_pid(paths)
+    if pid is not None:
+        st = read_state(paths) or {}
+        print(f"switchboard: the dialer already runs (pid {pid}): {st.get('state', '?')}", file=out)
+        return 0
+    os.umask(0o077)
+    paths.ensure()
+    cmd = [sys.executable, "-I", "-m", "switchboard", "start", "--foreground", "--home", str(paths.home)]
+    if test_mode:
+        cmd.append("--test-mode")
+    log_file = paths.logs_dir / "dialer.out"
+    fd = os.open(log_file, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        # the one spawn site of a machine's dialer: this very command, detached, no shell
+        child = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=fd, stderr=fd, start_new_session=True,
+                                 env=_broker_env(), cwd="/")
+    finally:
+        os.close(fd)
+    deadline = time.monotonic() + DIALER_START_WAIT_S
+    st: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        st = read_state(paths)
+        if st is not None and st.get("pid") == child.pid and st.get("state") not in (None, "starting"):
+            break
+        if child.poll() is not None:
+            break
+        time.sleep(0.1)
+    if child.poll() is not None and child.returncode not in (None, 0):
+        st = read_state(paths) or {}
+        if st.get("state") == "stopped" and st.get("message"):
+            print(f"switchboard: the dialer stopped: {st['message']}", file=sys.stderr)
+        else:
+            print("switchboard: the dialer did not start. Last lines of its output:", file=sys.stderr)
+            print(_tail(log_file), file=sys.stderr)
+        return 1
+    state = (st or {}).get("state", "starting")
+    reason = (st or {}).get("reason")
+    print(f"switchboard dialer running (pid {child.pid}): {state}{f' ({reason})' if reason else ''}", file=out)
+    return 0
+
+
+def stop_dialer(paths: Paths, out: Any = None) -> int:
+    """``switchboard stop`` on a home that dials its broker: SIGTERM to the dialer recorded in its
+    pidfile (the same pid, start time and ``switchboard start`` argv), then wait."""
+    from switchboard.remote.dialer import running_pid
+
+    out = out or sys.stdout
+    pid = running_pid(paths)
+    if pid is None:
+        print("switchboard: the dialer is not running", file=out)
+        return 0
+    os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + STOP_WAIT_S
+    while time.monotonic() < deadline:
+        if running_pid(paths) is None:
+            print("switchboard dialer stopped", file=out)
+            return 0
+        time.sleep(0.1)
+    print("switchboard: the dialer did not exit after SIGTERM", file=sys.stderr)
+    return 1

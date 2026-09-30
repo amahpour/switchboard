@@ -76,6 +76,8 @@ class BrokerState:
     agents: AgentService = None  # type: ignore[assignment]
     # the remote hosts' links (DESIGN.md §27.4); None until the RPC server listens
     remotes: RemoteManager | None = None
+    # the machines that dial in (DESIGN.md §31.7): a hosted broker with passkeys only
+    machines: Any = None
     shutdown_cb: Callable[[], None] | None = None
     recovery: dict[str, int] = field(default_factory=dict)
     tasks: list[asyncio.Task[Any]] = field(default_factory=list)
@@ -214,10 +216,19 @@ def create_app(
         state.remotes = RemoteManager(state)
         await state.remotes.start()
         state.service.remotes = state.remotes
+        if state.webauthn is not None:
+            from switchboard.broker.machines import MachineManager
+
+            state.machines = MachineManager(state)
+            await state.machines.start()
+            state.service.machines = state.machines
         log.info("broker up: pid %d port %d test_mode %s", os.getpid(), port, test_mode)
         try:
             yield
         finally:
+            if state.machines is not None:
+                with contextlib.suppress(Exception):
+                    await state.machines.stop()
             if state.remotes is not None:
                 # every link's child is killed and reaped; remote members go offline
                 with contextlib.suppress(Exception):

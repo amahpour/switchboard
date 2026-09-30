@@ -162,7 +162,9 @@ def test_unauthenticated_api_is_401(broker: InProcBroker) -> None:
 
 
 def test_no_unauthenticated_write_routes(broker: InProcBroker) -> None:
-    """Enumerate every route: each unsafe method refuses a cookie-less request."""
+    """Enumerate every route: each unsafe method refuses a cookie-less request. POST /link/pair is
+    the one route a pairing code authenticates (DESIGN.md §31.7): it refuses any request with an
+    Origin (a browser's), and on a broker that takes no machines it is 404 without one."""
     from starlette.routing import Mount, Route, WebSocketRoute
 
     c = httpx.Client(base_url=broker.base)
@@ -183,6 +185,8 @@ def test_no_unauthenticated_write_routes(broker: InProcBroker) -> None:
             r = c.post(route.path + "/app.js", headers=broker.write_headers())
             assert r.status_code in (401, 403, 405)
     assert checked >= 4  # POST /logout, /api/rooms, say, command
+    r = c.post("/link/pair", json={"code": "x", "key": "y"})  # no Origin: the guard lets it through, the route decides
+    assert r.status_code == 404 and r.json()["error"] == "not_found"
 
 
 def test_docs_are_off_and_headers_present(broker: InProcBroker, web: httpx.Client) -> None:

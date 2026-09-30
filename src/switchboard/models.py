@@ -320,6 +320,48 @@ class PasskeyRow:
         return cls(**{k: r[k] for k in r.keys()})
 
 
+@dataclass(frozen=True)
+class MachineRow:
+    """A ``link_machines`` row (DESIGN.md §31.7): a machine that dials in. Pending from its
+    pairing until the owner approves it; approved until Remove, which forgets its key."""
+
+    name: str
+    key: bytes
+    key_fp: str
+    facts: dict[str, Any]
+    rooms: list[str]
+    harnesses: list[str]
+    created_at: float
+    approved_at: float | None
+    approved_via: str | None
+    removed_at: float | None
+    last_seen_at: float | None
+
+    @classmethod
+    def from_row(cls, r: sqlite3.Row) -> "MachineRow":
+        d = {k: r[k] for k in r.keys()}
+        for k, default in (("facts", {}), ("rooms", ["*"]), ("harnesses", [])):
+            try:
+                v = json.loads(d[k] or "null")
+            except ValueError:
+                v = None
+            d[k] = v if isinstance(v, type(default)) else default
+        d["key"] = bytes(d["key"] or b"")
+        return cls(**d)
+
+    @property
+    def removed(self) -> bool:
+        return self.removed_at is not None
+
+    @property
+    def approved(self) -> bool:
+        return self.approved_at is not None and self.removed_at is None
+
+    @property
+    def pending(self) -> bool:
+        return self.approved_at is None and self.removed_at is None
+
+
 # --------------------------------------------------------------------- agents
 RESERVED_NAMES = frozenset({"system", "user", "human", "admin", "root"})
 PULL_PATHS = frozenset({"wait", "read", "say"})

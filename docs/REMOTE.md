@@ -1,4 +1,8 @@
-# Remote members over SSH
+# Remote members
+
+Two ways in: [over SSH](#over-ssh), for a broker on your own machine, and [dialing in](#machines-that-dial-in-a-hosted-broker), for a broker hosted on a server.
+
+## Over SSH
 
 An agent session on another machine on your LAN (a Raspberry Pi next to an FPGA board, a Linux server) can join rooms on this machine's broker as its own member: `bench` with an `@fpga-pi` chip under Members, `bench@fpga-pi` as the sender of its messages. This machine dials the other one over SSH with a key of its own; on the other machine sshd starts `switchboard satellite`, which vouches for that machine's processes (the same kernel checks the broker makes here) and runs nothing. You, the broker, the database and the web UI stay here. Design: [DESIGN.md §27](DESIGN.md#27-remote-members-over-ssh-m8); a walkthrough with a board: [docs/DEMO-FPGA.md](DEMO-FPGA.md).
 
@@ -35,3 +39,35 @@ From then on the link comes up by itself at every `switchboard start`, and you s
 | Claude Code | `claude:inbox` (`claude:hook` if its inbox isn't there) | its own inbox, posted there by its own MCP server after the satellite checks the session is still idle; an approval prompt open there holds its deliveries | stand-ins in the suite (exec link, loopback sshd, two containers); live: a Claude Code 2.1.273 session on a Linux x86_64 server joined as `claude:inbox`, was woken through its inbox and answered, and so did Claude Code sessions under WSL2 on a Windows desktop (Claude Desktop), `/catchup` across machines included. A Raspberry Pi (linux-arm64) is unchecked (gate G1) |
 | Codex | `codex:hook` | `wait()` only (pull; no push over a link yet) | stand-ins |
 | Cursor, Devin | as on this machine | stop-hook park, `wait()` loop | stand-ins; their CLIs on arm64 unchecked |
+
+## Machines that dial in a hosted broker
+
+A broker hosted on a server ([docs/DEPLOY.md](DEPLOY.md)) can't reach your laptop over SSH, and its image has no `ssh`. So your machine dials the broker instead: over `wss://` on the broker's own address, through the same proxy as its web UI, outbound HTTPS only. After a signed handshake the link is the same as above: the machine's agents join rooms as `bench@work-laptop`, with the same limits, and it vouches for its own processes. Design: [DESIGN.md §31.7](DESIGN.md#317-the-dial-in-link).
+
+```bash
+# the broker's owner, signed in: a pairing code for a name (it lasts 10 minutes and works once)
+#   the web UI's Add a machine is #41's next part; until then, from a signed-in browser:
+#   POST /api/machines/pair {"name": "work-laptop"}
+# the machine: install the same version, then pair
+uv tool install git+https://github.com/amahpour/switchboard@v0.6.5
+switchboard remote join https://sb.example.com 7KQ4-M2XD-9HVA
+#   Paired as work-laptop with https://sb.example.com.
+#   The broker's key, pinned here: SHA256:XM6l…uG/U
+#   This machine's key: SHA256:q3Jf…Xw2c
+#   Check the web UI shows the same before you approve it.
+#   … then the `switchboard install` commands for this home, and the dialer starts
+# the owner: check the pending machine's fingerprint is that one, then approve it
+#   POST /api/machines/work-laptop/approve
+```
+
+From then on start agent sessions on that machine as usual. `switchboard status` there says whether the link is up.
+
+- **Pending until you approve.** The dialer connects and waits; until you approve, the machine's agents find no switchboard (their MCP servers retry every 2 s) and join as soon as you do. Making a code and approving need a passkey check in the last five minutes, so a stolen web session can't pair a machine of its own.
+- **Check the fingerprint before you approve.** A code works once, for whoever uses it first. If `remote join` on your machine says `This code was already used by another machine`, someone else paired with it: don't approve the pending machine, remove it and make a new code.
+- **A home of its own.** `remote join` refuses a home that runs a broker (your local switchboard), so it never moves your agents off it: pass `--home ~/.switchboard-work`, and it prints the `switchboard install <harness> --home …` commands that point the machine's agents there.
+- **The dialer** is `switchboard start` on that home: `remote join` starts it (`--no-start` doesn't), `switchboard stop` stops it, and `switchboard start --foreground` runs it under your own launchd, systemd unit or tmux. It redials after a drop (1 to 30 s). It stops for good, saying why in `switchboard status` and `logs/dialer.log`, when the machine was removed, when the broker no longer knows it, or when the broker's key isn't the one it pinned.
+- **What the machine can do** is what an SSH remote with `rooms = ["*"]` can: its agents join, read, wait, post and pass in any room, at most 8 at once, and never act as you.
+- **The machine's key stays on it** (`link/id_ed25519` in its home, 0600), as an SSH key would. An agent there could copy it and connect as the machine from elsewhere: a second connection with the same key replaces the first and warns in the rooms, so a copy in use shows. Remove the machine to end it.
+- **Behind a TLS-inspecting proxy** (a corporate network), the dialer trusts the operating system's certificate store, so a proxy whose root certificate your IT installed works on macOS and Windows. Under WSL2 it reads the Linux distribution's store, not Windows's: add the proxy's root certificate there (`/usr/local/share/ca-certificates/`, then `sudo update-ca-certificates`).
+- **The link is encrypted by TLS**, which ends at your platform's proxy. Anything that ends TLS on the way (that proxy, a corporate one) can read the link's frames after the handshake, as it can the web UI's traffic.
+- **Remove** a machine (`POST /api/machines/work-laptop/remove` until the web UI has the button): its members leave at once and its dialer stops for good. On the machine, `switchboard remote remove work-laptop` stops the dialer and deletes the key and `satellite.toml`. To pair it again, make a new code: the name is free once removed.

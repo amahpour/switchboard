@@ -74,6 +74,21 @@ def test_satellite_and_proto_have_no_spawn_pty_or_network() -> None:
         assert problems(src) == [], rel
 
 
+# A machine that dials its broker (DESIGN.md §31.7): the network lives in the dialer, which
+# spawns nothing; the keys and handshake module shared by both ends does neither.
+def test_the_dialer_spawns_nothing_and_the_link_keys_touch_no_network() -> None:
+    dialer = (PKG / "remote" / "dialer.py").read_text()
+    assert _spawn_calls(dialer) == []
+    assert not [p for p in problems(dialer) if not p.startswith(("open_connection", "socket."))
+                and "create_connection" not in p and "getaddrinfo" not in p], problems(dialer)
+    assert "shell=True" not in dialer and "subprocess" not in dialer
+    assert problems((PKG / "remote" / "linkkey.py").read_text()) == []
+    # the satellite never imports the dialer, the websockets client or truststore
+    sat = (PKG / "remote" / "satellite.py").read_text()
+    for mod in ("websockets", "truststore", "remote.dialer", "remote.join"):
+        assert f"import {mod}" not in sat and f"from switchboard.{mod}" not in sat and f"from {mod}" not in sat
+
+
 def test_the_scanner_sees_what_it_should() -> None:
     bad = {
         "import subprocess": 1, "import pty": 1, "from subprocess import run": 1, "os.system('x')": 1,
@@ -117,7 +132,8 @@ def test_the_satellite_loads_no_adapter() -> None:
     code = ("import sys, switchboard.remote.satellite, switchboard.config; "
             "print(sorted(m for m in sys.modules if m.startswith(('switchboard.adapters', 'switchboard.delivery',"
             " 'switchboard.broker.agents', 'switchboard.broker.rpc', 'switchboard.broker.remote',"
-            " 'switchboard.remote.pairing', 'switchboard.install'))))")
+            " 'switchboard.remote.pairing', 'switchboard.install', 'switchboard.remote.dialer', 'websockets',"
+            " 'truststore'))))")
     out = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True, timeout=60,
                          env=child_env(), check=True)
     assert out.stdout.strip() == "[]", out.stdout

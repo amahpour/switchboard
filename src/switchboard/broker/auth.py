@@ -28,6 +28,10 @@ UI_HOST = "switchboard.localhost"
 # paths a platform's health checker may GET without the UI's Host (it probes the container's own
 # address): they answer "ok" and nothing else
 OPEN_PATHS = frozenset({"/healthz"})
+# the one write route a pairing code authenticates, sent by `switchboard remote join` (never a
+# browser: the route refuses any request that has an Origin), so it needs neither Origin nor
+# X-Switchboard here; its Host is checked as everywhere (DESIGN.md §31.7)
+CODE_PATHS = frozenset({"/link/pair"})
 _DNS_NAME_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*")
 
 Scope = dict[str, Any]
@@ -232,7 +236,8 @@ class HostOriginGuard:
       sends as 403 (websocket). The one exception is a GET or HEAD of ``OPEN_PATHS``
       (``/healthz``), which a platform's health checker sends to the container's own address.
     - Unsafe http methods also need ``Origin`` to be the UI's origin and ``X-Switchboard: 1``,
-      else 403. (The session cookie is checked by routes.)
+      else 403. (The session cookie is checked by routes.) The one exception is ``CODE_PATHS``
+      (``POST /link/pair``), which a pairing code authenticates and which refuses an Origin.
     """
 
     def __init__(self, app: ASGIApp, origin: WebOrigin):
@@ -254,7 +259,8 @@ class HostOriginGuard:
             else:
                 await _refuse_ws(scope, send, 421, f"open {self.origin}/\n")  # -> 403
             return
-        if kind == "http" and scope.get("method", "GET").upper() in UNSAFE_METHODS:
+        if kind == "http" and scope.get("method", "GET").upper() in UNSAFE_METHODS \
+                and scope.get("path") not in CODE_PATHS:
             if _header(scope, b"origin") != self.origin or _header(scope, b"x-switchboard") != "1":
                 await _json(send, 403, {"error": "forbidden", "message": "bad origin"})
                 return

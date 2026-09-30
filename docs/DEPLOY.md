@@ -3,19 +3,20 @@
 switchboard normally runs on your own machine: the broker listens on `127.0.0.1` and you open the web UI at `http://switchboard.localhost:7419/`. It can also run as a container on a server, a VM or a platform such as Render, EKS or GKE, behind that platform's HTTPS. This page covers that setup. The design and its threat model are in [DESIGN.md §30](DESIGN.md#30-the-container-image-and-the-public-url-34).
 
 > [!IMPORTANT]
-> For now, a hosted broker is **you in the browser**: you claim it from a link in its log and sign in with a passkey ([Signing in](#signing-in)). Your agents run on your own machines, and there's no way yet for them to join a broker elsewhere. The image has no `ssh`, so [remote members](REMOTE.md) don't work from it either. The rest of [#41](https://github.com/amahpour/switchboard/issues/41) is next: your machines pair with the broker from its web UI and dial in over `wss://`. Other people and their agents come after that ([#24](https://github.com/amahpour/switchboard/issues/24)).
+> A hosted broker is **you**: you claim it from a link in its log and sign in with a passkey ([Signing in](#signing-in)), and your own machines dial in to it over `wss://` so their agents join its rooms ([Machines that dial in](REMOTE.md#machines-that-dial-in-a-hosted-broker)). The image has no `ssh`, so [remote members over SSH](REMOTE.md#over-ssh) don't work from it. Other people and their agents come later ([#24](https://github.com/amahpour/switchboard/issues/24)).
 
 ## How it fits together
 
 ```
 browser ──https──▶ the platform's proxy (TLS ends here) ──http──▶ container :7419 ──▶ /data volume
-                    Render's router, Caddy, an ingress             the broker          SQLite
+your machines ─wss─▶ Render's router, Caddy, an ingress             the broker          SQLite
 ```
 
 - **One container, one volume, one broker.** The broker takes a lock in its data directory, and a second broker on the same volume refuses to start. Never run more than one replica. Several brokers behind one address are a different design ([#35](https://github.com/amahpour/switchboard/issues/35)).
 - **The volume is a real disk:** a Render disk, EBS, a GCE persistent disk, a Docker volume. Never NFS or EFS, where SQLite's locking isn't reliable.
 - **The public URL is the only address.** You tell the broker the `https://` address browsers use. It then answers only to that host, accepts writes only from that origin, marks its session cookie `Secure`, and puts that address in the sign-in links. Requests for any other host get `421`. The one exception is `GET /healthz`, which answers `ok` to anyone (platforms probe the container's own address) and nothing else.
 - **TLS is the proxy's job.** The broker speaks plain HTTP on port 7419 inside the container. It never reads `X-Forwarded-*` headers: the public URL you configure decides the scheme and the host, so a forged header can't change them.
+- **WebSockets pass through the proxy:** the web UI's (`/ws`) and your machines' links (`/link`). Every proxy above does that by default. Don't put request buffering on them: a machine's link is a long-lived WebSocket that the broker pings every 2 seconds.
 
 ## Try it on your machine
 
@@ -77,7 +78,7 @@ What the manifest relies on:
 
 - **The pod runs as uid 10001 from the start**, with a read-only root filesystem, no capabilities and `/tmp` as an `emptyDir`. `fsGroup: 10001` makes the volume writable. `fsGroupChangePolicy: OnRootMismatch` stops Kubernetes from re-chmodding the broker's private home on every start; without it, the broker would refuse its own directory.
 - **Replacing the pod is stop-then-start.** A StatefulSet with one replica stops its pod before it starts the new one, as a Deployment's `Recreate` strategy would.
-- **The Ingress passes the browser's Host and Origin through**, which ingress-nginx and most controllers do by default. The UI's WebSocket needs no timeout annotation, because the broker pings it every 20 seconds.
+- **The Ingress passes the browser's Host and Origin through**, which ingress-nginx and most controllers do by default. The WebSockets need no timeout annotation, because the broker pings the UI's every 20 seconds and a machine's link every 2.
 - **Use a block-storage class** (the default on EKS, GKE and AKS), not an NFS or EFS one.
 
 ### Render
@@ -143,7 +144,7 @@ To restore, stop the broker, put the copy at `$SWITCHBOARD_HOME/switchboard.db` 
 ## Health checks and logs
 
 - **`GET /healthz`** answers `ok` with status 200. It needs no sign-in, returns no data, and accepts any Host, so platforms can probe the container's own address. The image's Docker `HEALTHCHECK` calls it, and so do the Kubernetes probes and Render's `healthCheckPath`.
-- **Logs** are on stdout: `docker logs switchboard`, `kubectl logs switchboard-0`, or Render's Logs tab. They hold ids, never message text. The claim link is the one secret ever printed there, and it works once and expires.
+- **Logs** are on stdout: `docker logs switchboard`, `kubectl logs switchboard-0`, or Render's Logs tab. They hold ids, never message text. The claim link is the one secret ever printed there, and it works once and expires. Pairing codes never appear there.
 
 ## The image
 

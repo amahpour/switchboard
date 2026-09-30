@@ -1066,6 +1066,9 @@ class RemoteManager:
     def __init__(self, state: "BrokerState"):
         self.state = state
         self.links: dict[str, RemoteLink] = {}
+        # the approved machines that dial in (DESIGN.md §31.7, broker/machines.py): their links
+        # are passive, and they are not in remotes.toml
+        self.machines: dict[str, RemoteLink] = {}
         self.config_error: str | None = None
         self._stamp: tuple[tuple[int, int] | None, ...] | None = None
         self._task: asyncio.Task[None] | None = None
@@ -1144,6 +1147,10 @@ class RemoteManager:
                 self.changed()  # the page's "remotes.toml: not read" chip
             return
         self.config_error = None
+        for name in [n for n in entries if n in self.machines]:
+            # a machine that dials in has this name: its members are that machine's
+            log.warning("remotes.toml: [remote.%s] is ignored: a machine that dials in has that name", name)
+            del entries[name]
         for name, entry in entries.items():
             h = entry_hash(self.state.paths, entry)
             link = self.links.get(name)
@@ -1208,7 +1215,7 @@ class RemoteManager:
         for p in self.state.store.joined_participants():
             if not p.host or p.host in doomed:
                 continue
-            link = self.links.get(p.host)
+            link = self.links.get(p.host) or self.machines.get(p.host)
             if link is None:
                 if self.config_error is not None:
                     continue  # a remotes.toml that doesn't parse ends nobody
@@ -1295,7 +1302,7 @@ class RemoteManager:
     def refresh_watch(self) -> None:
         """A host's joined set may have changed: its ``watch``; and the web UI's event, only
         when a host's member names did change (this runs on every liveness tick)."""
-        for link in self.links.values():
+        for link in [*self.links.values(), *self.machines.values()]:
             link.refresh_watch()
         members = {name: tuple(link.members()) for name, link in self.links.items()}
         if members != self._members_seen:

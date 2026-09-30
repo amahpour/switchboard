@@ -40,6 +40,14 @@ no pty and no network socket (``tests/unit/test_satellite_static.py``).
 - **End.** stdin EOF, 10 s without a ping, a ``refuse``, or SIGTERM: ``bye``
   (``replaced`` when the replace marker names a newer satellite), close every
   local connection, unlink the socket if it is still ours, exit.
+- **Two parts** (DESIGN.md §31.7). The process start (``main``: the checks, ``harden()``,
+  stdio hygiene, the locks, the signal handlers) runs once; ``Satellite.run_session`` runs
+  one link over a reader and writer it is given (hello, welcome, the socket bound after the
+  welcome and unlinked at the end), with no effect on fds, locks or signals. Over ssh the
+  forced command runs the start, then one session over its stdio. A machine that dials its
+  broker runs the start once in its dialer (``remote/dialer.py``, dialer mode: no
+  ``SSH_CONNECTION``), then a session per connection. This module still opens no network
+  socket: the dialer does, and hands each session one end of a socketpair.
 
 Test mode only: ``SWITCHBOARD_TEST_PID_SHIFT`` is added to every pid reported and
 subtracted from every pid received (a desktop probe of a remote pid then hits no
@@ -175,9 +183,11 @@ def exposure(ids: frozenset[tuple[int, int]], proc_root: str = "/proc") -> list[
     return sorted(found)
 
 
-def start_refusal(paths: Paths, name: str, *, test_mode: bool, environ: Any, fds: tuple[int, int] = (0, 1)
-                  ) -> str | None:
-    """Why this satellite may not start, or None."""
+def start_refusal(paths: Paths, name: str, *, test_mode: bool, environ: Any, fds: tuple[int, int] = (0, 1),
+                  dialer: bool = False) -> str | None:
+    """Why this satellite may not start, or None. ``dialer``: inside a machine's dialer
+    (§31.7), which has no ssh connection and no stdio link: the home must be one that dials
+    its broker. Over ssh, such a home is refused (its satellite runs only in its dialer)."""
     try:
         conf = read_satellite_conf(paths)
     except FileNotFoundError:
@@ -186,12 +196,19 @@ def start_refusal(paths: Paths, name: str, *, test_mode: bool, environ: Any, fds
         return str(e)
     if conf.name != name:
         return f"satellite.toml names {conf.name}, not {name}"
+    if dialer and not conf.dials:
+        return "this home is dialed over ssh by its desktop (satellite.toml has no broker_url)"
+    if not dialer and conf.dials:
+        return ("this home dials its broker (satellite.toml: transport = \"wss\"): its satellite runs only in"
+                " its dialer, `switchboard start` there")
     if test_mode:
         why = test_mode_refusal(paths, home_given=True)
         if why:
             return why
-    elif not environ.get("SSH_CONNECTION"):
+    elif not dialer and not environ.get("SSH_CONNECTION"):
         return "the satellite runs only as an ssh forced command (SSH_CONNECTION is not set)"
+    if dialer:
+        return None  # no stdio link to check
     for fd in fds:
         try:
             if os.isatty(fd):
@@ -423,6 +440,7 @@ class Satellite:
         self.bye_why: str | None = None
         self._tasks: list[asyncio.Task[Any]] = []
         self.frame_log = frame_log  # test mode only
+        self.refused: str | None = None  # the broker's refuse reason, if it ended the last session
 
     def _log_frame(self, way: str, data: bytes) -> None:
         if self.frame_log:
@@ -653,6 +671,7 @@ class Satellite:
             self.send(proto.pong(f["n"]))
         elif t == "refuse":
             log.warning("the broker refused this link: %s", f["why"])
+            self.refused = f["why"]
             self.stop("shutdown")
         elif t == "welcome":
             log.warning("a second welcome; ending")
@@ -840,12 +859,44 @@ class Satellite:
         return reader
 
     async def run(self, in_fd: int, out_fd: int) -> int:
+        """The ssh path: the link over the forced command's stdio, with this process's signal
+        handlers, as one session."""
         loop = asyncio.get_running_loop()
-        self.done = asyncio.Event()
-        self.welcomed = asyncio.Event()
         reader = await self._open_link(in_fd, out_fd)
+        writer = self.writer
+        assert writer is not None
         for sig, why in ((signal.SIGTERM, None), (signal.SIGINT, None), (signal.SIGHUP, "eof")):
             loop.add_signal_handler(sig, self._on_signal, why)
+        await self.run_session(reader, writer)
+        return 0
+
+    def _reset_link(self) -> None:
+        """A new session starts with no connection, watch, welcome or socket of an earlier one."""
+        self.conns = {}
+        self.watch_n = None
+        self.watched = []
+        self.claude = {}
+        self.welcome = None
+        self.link_up_at = None
+        self.server = None
+        self.sock_ino = None
+        self.writer = None
+        self.done = None
+        self.bye_why = None
+        self.refused = None
+        self._tasks = []
+        self.last_ping = time.monotonic()
+
+    async def run_session(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> str:
+        """One link over ``reader`` and ``writer`` (DESIGN.md §31.7): hello; after the welcome, the
+        home's socket is bound; at the end ``bye``, every local connection closed and the socket
+        unlinked. Nothing here touches this process's fds, locks or signal handlers. Returns why
+        it ended: the broker's refuse reason, else the bye's."""
+        loop = asyncio.get_running_loop()
+        self._reset_link()
+        self.writer = writer
+        self.done = asyncio.Event()
+        self.welcomed = asyncio.Event()
         self.hook_state = hook_state_text(self.paths)
         self.send(proto.hello(version=__version__, name=self.name, now=self.now(), hook_state=self.hook_state,
                               test_mode=self.test_mode, harden=self.harden_state, proto=self.link_proto))
@@ -868,7 +919,7 @@ class Satellite:
                 await self.done.wait()
         finally:
             await self.shutdown()
-        return 0
+        return self.refused or self.bye_why or "shutdown"
 
     def _on_signal(self, why: str | None) -> None:
         if why is None:  # SIGTERM: a newer satellite taking over names itself in the replace marker

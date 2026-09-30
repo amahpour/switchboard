@@ -1722,6 +1722,7 @@ dependencies = [
     { name = "fido2" },
     { name = "mcp" },
     { name = "starlette" },
+    { name = "truststore" },
     { name = "uvicorn" },
     { name = "websockets" },
 ]
@@ -1748,6 +1749,7 @@ requires-dist = [
     { name = "fido2", specifier = "==2.2.1" },
     { name = "mcp", specifier = "==2.2.0" },
     { name = "starlette", specifier = "==1.7.0" },
+    { name = "truststore", specifier = "==0.10.4" },
     { name = "uvicorn", specifier = "==0.53.0" },
     { name = "websockets", specifier = "==17.1" },
 ]

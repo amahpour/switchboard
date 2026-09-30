@@ -30,6 +30,7 @@ A failing test leaves a Playwright trace and a screenshot of each open page in `
 - a sign-in link from `docker exec -t`, the Secure cookie, and the UI in Chromium over https and wss;
 - that `docker stop` exits 0 and the data (the owner included) survives a restart;
 - a root-owned disk (Render), and an fsGroup volume under the Kubernetes manifest's securityContext.
+- a second container of the image pairing as a machine through the proxy with `remote join` and a code from the API, approved, its stand-in agent posting in a room over `wss://`, then Remove stopping its dialer.
 
 ```bash
 docker build -t switchboard:dev .
