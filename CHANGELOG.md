@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.5 (2026-09-30)
+
 ### Changed
 
 - **A release is a pull request now, and `main` takes only pull requests** ([#46](https://github.com/amahpour/switchboard/issues/46)). `python3 .github/scripts/release.py --open-pr` opens a `release: vX.Y.Z` PR with the new version, the CHANGELOG and the install and image pins. Merging it tags the release and publishes it and its image. Changes collect under Unreleased until then. Before, every merge was a release that CI pushed straight to `main`.
