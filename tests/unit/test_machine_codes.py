@@ -42,3 +42,19 @@ def test_facts_are_short_clean_claims() -> None:
     assert clean_facts(raw) == {"hostname": "box one", "os": "Linux " + "x" * 74, "version": "0.7.0",
                                 "harnesses": ["claude", "codex"]}
     assert clean_facts("not a dict") == {} and clean_facts({"harnesses": "claude"}) == {}
+
+
+def test_the_web_ui_lists_unused_codes_and_cancels_one() -> None:
+    clock = FakeClock()
+    codes = PairingCodes(clock)
+    a = codes.mint("work-laptop")
+    codes.mint("lab-pc")
+    clock.advance(60)
+    assert codes.unused() == [{"name": "lab-pc", "expires_in_s": PAIR_TTL_S - 60},
+                              {"name": "work-laptop", "expires_in_s": PAIR_TTL_S - 60}]
+    assert codes.cancel("lab-pc") and not codes.cancel("lab-pc")
+    assert [c["name"] for c in codes.unused()] == ["work-laptop"]
+    assert codes.use(a, "SHA256:a") == ("ok", "work-laptop")
+    assert codes.unused() == [] and not codes.cancel("work-laptop")  # a used code isn't cancelled...
+    assert codes.use(a, "SHA256:b") == ("used", "work-laptop")  # ...so a second machine still hears "used"
+

@@ -221,19 +221,33 @@ class HostedWorld:
     authenticators, added by the caller (tests/e2e/test_passkeys_ui.py, docs/media/ui_shots.py).
     """
 
-    def __init__(self, *, keep: bool = False) -> None:
+    def __init__(self, *, keep: bool = False, host: str = "sb.localhost", test_mode: bool = False) -> None:
         self.keep = keep
+        self.host = host  # "localhost" when a machine's dialer (another process) must resolve it too
+        self.test_mode = test_mode  # kept on: a test machine's dialer (a test-mode satellite) may link
         self.home = make_tmp_home()
         self.b: InProcBroker | None = None
 
     def start(self) -> HostedWorld:
         from switchboard.broker.auth import WebOrigin
 
-        self.b = InProcBroker(self.home, web_origin=lambda port: WebOrigin.parse(f"http://sb.localhost:{port}")).start()
+        host = self.host
+        self.b = InProcBroker(self.home, web_origin=lambda port: WebOrigin.parse(f"http://{host}:{port}")).start()
         b = self.b
         b.on_loop(lambda: b.state.service.create_room("#build"))  # the broker answers only to its public host
-        not_test_mode(b)  # its claim link is written already; no TEST MODE band in the pictures
+        if not self.test_mode:
+            not_test_mode(b)  # its claim link is written already; no TEST MODE band in the pictures
         return self
+
+    def set_test_mode(self, on: bool) -> None:
+        """For the pictures: a page loaded with test mode off shows no TEST MODE band, and a test
+        machine's dialer (a test-mode satellite) links only while it's on."""
+
+        def flip() -> None:
+            self.broker.state.test_mode = on
+            self.broker.state.info.test_mode = on
+
+        self.broker.on_loop(flip)
 
     def stop(self) -> None:
         if self.b is not None:

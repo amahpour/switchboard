@@ -484,7 +484,7 @@ button:disabled, .btn:disabled, .btn-primary:disabled { opacity: .5; cursor: def
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.room-closed { color: var(--muted-2); }
+.room-closed, .room-add { color: var(--muted-2); }
 
 .remote-state {
   display: inline-flex;
@@ -509,7 +509,9 @@ button:disabled, .btn:disabled, .btn-primary:disabled { opacity: .5; cursor: def
 .st-down .remote-state::before,
 .st-error .remote-state::before,
 .st-blocked .remote-state::before { background: var(--danger); }
-.st-disabled .remote-state::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
+.st-disabled .remote-state::before,
+.st-offline .remote-state::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
+.st-pending .remote-state::before { background: var(--busy); }
 .st-down .remote-state,
 .st-error .remote-state,
 .st-blocked .remote-state { color: var(--danger); }
@@ -1772,8 +1774,8 @@ body.login {
 .setup-step { display: flex; flex-direction: column; gap: 12px; }
 .setup-step h1:focus { outline: none; }
 .setup-form { display: flex; flex-direction: column; gap: 8px; }
-.setup-form label, .passkey-add label { font-size: 13px; font-weight: 600; }
-.setup-form input, .passkey-add input {
+.setup-form label, .passkey-add label, .machine-add label { font-size: 13px; font-weight: 600; }
+.setup-form input, .passkey-add input, .machine-add input {
   height: 34px;
   padding: 0 10px;
   border: 1px solid var(--input-border);
@@ -1782,7 +1784,7 @@ body.login {
   color: var(--fg);
   font-size: 13.5px;
 }
-.setup-form input:focus, .passkey-add input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus); }
+.setup-form input:focus, .passkey-add input:focus, .machine-add input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus); }
 .passkey-add input { height: 32px; }
 /* the Passkeys sheet (index.html, §31.4): cards like the Remote machines sheet's */
 .passkey-card {
@@ -1806,6 +1808,82 @@ body.login {
 .passkey-row .btn-primary { flex-shrink: 0; }
 .passkey-result.bad { color: var(--danger); font-weight: 500; }
 .passkey-result:empty { display: none; }
+/* the Machines sheet (index.html, §31.8): machines that dial in. The same cards as the
+   Passkeys sheet; a pending machine's card is edged in amber until it's approved or rejected. */
+.machine-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--side-border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.machine-card + .machine-card { margin-top: 10px; }
+.machine-card.st-pending { border-color: var(--busy); }
+.machine-card:focus { outline: none; }
+.machine-card:focus-visible { box-shadow: 0 0 0 3px var(--focus); }
+.machine-card > p { margin: 0; }
+.machine-card .remote-head { flex-wrap: nowrap; gap: 8px; }
+.machine-card .remote-head .ic { flex-shrink: 0; }
+.machine-card .remote-name { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; }
+.machine-card .remote-state { flex-shrink: 0; }
+.machine-card .remote-facts { font-size: 12.5px; }
+.machine-card .remote-facts dd.remote-keys { font-size: 12px; }
+/* wide enough for the pairing commands on one line each */
+#machines-panel { width: min(640px, calc(100vw - 32px)); }
+.machine-card .dialog-buttons .btn, .machine-card .dialog-buttons .btn-primary { min-width: 88px; }
+.machine-add { display: flex; flex-direction: column; gap: 6px; margin: 0; }
+.machine-row { display: flex; align-items: center; gap: 8px; }
+.machine-row input { flex: 1; min-width: 0; height: 32px; }
+.machine-row .btn-primary { flex-shrink: 0; }
+.machine-step { margin: 0; font-size: 12.5px; color: var(--muted-2); }
+.machine-step b { color: var(--fg); font-weight: 600; }
+.machine-cmd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 4px 5px 4px 10px;
+  border: 1px solid var(--code-border);
+  border-radius: 6px;
+  background: var(--pre-bg);
+}
+.sheet-body .machine-cmd code {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font: 12px/1.5 var(--mono);
+  overflow-wrap: anywhere;
+}
+.machine-cmd .copy-btn { margin-left: 0; }
+.machine-cmd .nowrap { white-space: nowrap; }
+.machine-wait { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted-2); }
+.machine-wait .pulse { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: var(--busy); animation: sb-pulse 1.4s ease-in-out infinite; }
+.machine-wait.expired .pulse { background: var(--danger); animation: none; }
+.machine-wait.expired { color: var(--danger); }
+.machine-left { flex-shrink: 0; margin-left: auto; font-variant-numeric: tabular-nums; }
+.machine-wait .btn-danger-ghost { flex-shrink: 0; height: 26px; margin-left: auto; padding: 0 8px; font-size: 12px; }
+@keyframes sb-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+.machine-label { margin: 0; font-size: 12px; font-weight: 600; color: var(--muted-2); }
+.sheet-body .machine-fp {
+  display: block;
+  padding: 7px 10px;
+  border: 1px solid var(--code-border);
+  border-radius: 6px;
+  background: var(--pre-bg);
+  color: var(--fg);
+  font: 12.5px/1.5 var(--mono);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.machine-check { display: flex; align-items: flex-start; gap: 7px; margin: 0; font-size: 12.5px; }
+.machine-check .ic { width: 14px; height: 14px; flex-shrink: 0; margin-top: 1px; color: var(--amber-ink); }
+.machine-result.bad { color: var(--danger); font-weight: 500; }
+.machine-result:empty { display: none; }
 
 /* ==== 15. Narrow widths (spec 1.9) =================================================== */
 
@@ -1960,6 +2038,9 @@ body.login {
   .insp-body { margin: -14px -16px -14px; padding: 14px 16px 14px; }
 
   .sheet { top: max(16px, env(safe-area-inset-top)); max-height: calc(100vh - 32px); }
+  .machine-row, .passkey-row { flex-direction: column; align-items: stretch; }
+  .machine-row input, .passkey-row input { flex: 0 0 auto; height: 40px; }
+  .machine-row .btn-primary, .passkey-row .btn-primary { height: 40px; }
 
   .welcome { padding: 24px 16px 32px; }
   .welcome-title { font-size: 21px; }

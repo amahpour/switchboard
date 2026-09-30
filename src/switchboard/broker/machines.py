@@ -139,6 +139,21 @@ class PairingCodes:
         self.purge()
         return next((c for c in self._codes.values() if c.name == name and c.used_fp is None), None)
 
+    def unused(self) -> list[dict[str, Any]]:
+        """The live codes nobody used yet, as the web UI lists them: a name and the seconds left."""
+        self.purge()
+        now = self.clock.now()
+        return sorted(({"name": c.name, "expires_in_s": round(c.expires - now, 1)}
+                       for c in self._codes.values() if c.used_fp is None), key=lambda d: d["name"])
+
+    def cancel(self, name: str) -> bool:
+        """The owner gave up on a code: an unused one for ``name`` dies (a used one stays
+        remembered, so a second machine trying it still hears "used")."""
+        hs = [h for h, c in self._codes.items() if c.name == name and c.used_fp is None]
+        for h in hs:
+            del self._codes[h]
+        return bool(hs)
+
     def drop(self, name: str) -> None:
         for h in [h for h, c in self._codes.items() if c.name == name]:
             del self._codes[h]
@@ -303,6 +318,8 @@ class MachineLink(RemoteLink):
         return [self.key_fp] if self.key_fp else []
 
     def hint(self) -> str | None:
+        if self.state in ("blocked", "down") and self.reason in MACHINE_HINTS:
+            return MACHINE_HINTS[self.reason]  # refused at each dial until it's fixed on the machine
         if self.state == "down" and self.reason == "waiting":
             return "waiting for it to dial in: its dialer runs `switchboard start` there"
         if self.state == "down":
@@ -470,7 +487,7 @@ class MachineManager:
         if hub is None:
             return
         try:
-            hub.publish("machines", None, {"machines": self.summary()})
+            hub.publish("machines", None, {"machines": self.summary(), "codes": self.codes.unused()})
         except Exception:
             log.exception("machines event failed")
 
@@ -507,6 +524,14 @@ class MachineManager:
                 "broker_fingerprint": self.fingerprint,
                 "install": f"uv tool install {INSTALL_URL}@v{__version__}",
                 "join": f"switchboard remote join {origin} {code}"}
+
+    def cancel(self, name: str) -> dict[str, Any]:
+        """Forget the unused pairing code for ``name`` (the web UI's Cancel)."""
+        dropped = self.codes.cancel(name)
+        if dropped:
+            self.state.store.add_event("machine", data={"what": "code_cancelled", "name": name})
+            self.changed()
+        return {"name": name, "cancelled": dropped}
 
     def approve(self, name: str, via: str = "web") -> dict[str, Any]:
         row = self.state.store.machine(name)
@@ -569,8 +594,8 @@ class MachineManager:
                                                           " the web UI (Add a machine)"}
         if outcome == "used":
             self._failed("used_code")
-            self.state.hub.notice(None, "warn", f"a second machine tried {name}'s pairing code: if your machine says"
-                                                " the code was already used, remove the pending machine and make a"
+            self.state.hub.notice(None, "warn", f"a second machine tried {name}'s pairing code. If your machine says"
+                                                " the code was already used, reject the pending machine and make a"
                                                 " new code")
             return 409, {"error": "used", "message": "This code was already used by another machine. Don't approve the"
                                                       " pending machine: remove it in the web UI and make a new code."}
@@ -580,8 +605,8 @@ class MachineManager:
             return 409, {"error": "conflict", "message": f"{name} is paired already: remove it in the web UI first"}
         self.state.store.add_event("machine", data={"what": "paired", "name": name, "key": fp})
         log.warning("machine %s paired (key %s), waiting for approval", name, fp)
-        self.state.hub.notice(None, "warn", f"{name} paired with the key {fp}: check that it matches what `remote join`"
-                                            " printed on your machine, then approve it in the web UI")
+        self.state.hub.notice(None, "warn", f"{name} paired, with the key {fp}. Before you approve it, check that"
+                                            " this is the key remote join printed on your machine")
         self.changed()
         return 200, {"name": name, "fingerprint": fp, "broker_key": linkkey.b64u(self.bkey),
                      "broker_fingerprint": self.fingerprint, "link_url": self.link_url}

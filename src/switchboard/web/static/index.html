@@ -57,6 +57,12 @@
     <div class="side-section hidden" id="remotes-section" aria-labelledby="remotes-label">
       <div class="side-label" id="remotes-label">Remote machines</div>
       <div class="remote-list" id="remotes" role="group" aria-label="Remote machines"></div>
+      <div class="remote-list" id="machines" role="group" aria-label="Machines that dial in"></div>
+      <button type="button" class="room room-add hidden" id="add-machine" aria-haspopup="dialog"
+              aria-controls="machines-panel" title="Add a machine: pair it with a code, then approve it">
+        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>
+        <span class="room-name">Add a machine</span>
+      </button>
     </div>
 
     <div class="side-spacer"></div>
@@ -309,6 +315,20 @@
       <p class="fine">Links this broker dials over SSH. Enabling one is your consent for its current
         <code>remotes.toml</code> entry and key files; any edit needs a new enable.</p>
       <div id="remotes-body"></div>
+    </div>
+  </section>
+
+  <section class="sheet hidden" id="machines-panel" role="dialog" aria-modal="false" aria-labelledby="machines-panel-title">
+    <div class="sheet-head">
+      <h2 id="machines-panel-title">Machines</h2>
+      <button type="button" class="icon-btn" id="machines-close" aria-label="Close" title="Close">
+        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+      </button>
+    </div>
+    <div class="sheet-body">
+      <p class="fine">Your machines dial this switchboard over <code>wss://</code>, outbound HTTPS only, and their
+        agents join its rooms as <code>name@machine</code>. They can never act as you.</p>
+      <div id="machines-body"></div>
     </div>
   </section>
 

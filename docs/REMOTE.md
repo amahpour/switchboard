@@ -45,10 +45,9 @@ From then on the link comes up by itself at every `switchboard start`, and you s
 A broker hosted on a server ([docs/DEPLOY.md](DEPLOY.md)) can't reach your laptop over SSH, and its image has no `ssh`. So your machine dials the broker instead: over `wss://` on the broker's own address, through the same proxy as its web UI, outbound HTTPS only. After a signed handshake the link is the same as above: the machine's agents join rooms as `bench@work-laptop`, with the same limits, and it vouches for its own processes. Design: [DESIGN.md §31.7](DESIGN.md#317-the-dial-in-link).
 
 ```bash
-# the broker's owner, signed in: a pairing code for a name (it lasts 10 minutes and works once)
-#   the web UI's Add a machine is #41's next part; until then, from a signed-in browser:
-#   POST /api/machines/pair {"name": "work-laptop"}
-# the machine: install the same version, then pair
+# the broker's web UI: Add a machine (under Remote machines), a name, Make a pairing code.
+#   It asks for your passkey first, then shows these two commands with Copy buttons.
+# the machine: install the broker's version, then pair (the code works once, for 10 minutes)
 uv tool install git+https://github.com/amahpour/switchboard@v0.6.5
 switchboard remote join https://sb.example.com 7KQ4-M2XD-9HVA
 #   Paired as work-laptop with https://sb.example.com.
@@ -56,12 +55,12 @@ switchboard remote join https://sb.example.com 7KQ4-M2XD-9HVA
 #   This machine's key: SHA256:q3Jf…Xw2c
 #   Check the web UI shows the same before you approve it.
 #   … then the `switchboard install` commands for this home, and the dialer starts
-# the owner: check the pending machine's fingerprint is that one, then approve it
-#   POST /api/machines/work-laptop/approve
+# the web UI: the machine's card shows its key; check it's that one, then Approve
 ```
 
 From then on start agent sessions on that machine as usual. `switchboard status` there says whether the link is up.
 
+- **In the web UI** each machine has a row under Remote machines (`work-laptop · up · 2 ms`, `needs approval`, `offline`), and the Machines sheet has its card: what it says about itself, its key, its state and last seen, its members, and Remove. On a desktop broker there's no Add a machine: machines dial in only to a hosted one.
 - **Pending until you approve.** The dialer connects and waits; until you approve, the machine's agents find no switchboard (their MCP servers retry every 2 s) and join as soon as you do. Making a code and approving need a passkey check in the last five minutes, so a stolen web session can't pair a machine of its own.
 - **Check the fingerprint before you approve.** A code works once, for whoever uses it first. If `remote join` on your machine says `This code was already used by another machine`, someone else paired with it: don't approve the pending machine, remove it and make a new code.
 - **A home of its own.** `remote join` refuses a home that runs a broker (your local switchboard), so it never moves your agents off it: pass `--home ~/.switchboard-work`, and it prints the `switchboard install <harness> --home …` commands that point the machine's agents there.
@@ -70,4 +69,4 @@ From then on start agent sessions on that machine as usual. `switchboard status`
 - **The machine's key stays on it** (`link/id_ed25519` in its home, 0600), as an SSH key would. An agent there could copy it and connect as the machine from elsewhere: a second connection with the same key replaces the first and warns in the rooms, so a copy in use shows. Remove the machine to end it.
 - **Behind a TLS-inspecting proxy** (a corporate network), the dialer trusts the operating system's certificate store, so a proxy whose root certificate your IT installed works on macOS and Windows. Under WSL2 it reads the Linux distribution's store, not Windows's: add the proxy's root certificate there (`/usr/local/share/ca-certificates/`, then `sudo update-ca-certificates`).
 - **The link is encrypted by TLS**, which ends at your platform's proxy. Anything that ends TLS on the way (that proxy, a corporate one) can read the link's frames after the handshake, as it can the web UI's traffic.
-- **Remove** a machine (`POST /api/machines/work-laptop/remove` until the web UI has the button): its members leave at once and its dialer stops for good. On the machine, `switchboard remote remove work-laptop` stops the dialer and deletes the key and `satellite.toml`. To pair it again, make a new code: the name is free once removed.
+- **Remove** a machine on its card: its members leave at once and its dialer stops for good. On the machine, `switchboard remote remove work-laptop` stops the dialer and deletes the key and `satellite.toml`. To pair it again, make a new code: the name is free once removed.

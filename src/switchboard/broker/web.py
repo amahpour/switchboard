@@ -30,8 +30,8 @@ all of them are Origin-checked like every write, and rate-limited on failure.
 Machines that dial in (§31.7): ``POST /link/pair`` (a pairing code, sent by ``switchboard
 remote join``: no session, and an Origin is refused), the ``/link`` WebSocket (no Origin, a
 signed handshake), and the owner's ``GET /api/machines``, ``POST /api/machines/pair``,
-``/api/machines/{name}/approve`` and ``/remove``. Making a code and approving need a passkey
-check in the last five minutes, as adding a passkey does.
+``/api/machines/{name}/approve``, ``/remove`` and ``/cancel`` (a code). Making a code and
+approving need a passkey check in the last five minutes, as adding a passkey does.
 """
 
 from __future__ import annotations
@@ -469,7 +469,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         m = state.machines
         if m is None:
             return _ok({"hosted": False, "machines": []})
-        return _ok({"hosted": True, "machines": m.summary(), "broker_fingerprint": m.fingerprint})
+        return _ok({"hosted": True, "machines": m.summary(), "codes": m.codes.unused(),
+                    "broker_fingerprint": m.fingerprint})
 
     @app.post("/api/machines/pair")
     async def machines_pair(request: Request) -> Response:
@@ -492,6 +493,19 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             if not valid_host(name):
                 raise ServiceError("bad_request", "machine names look like work-laptop")
             return _ok(state.machines.approve(name, "web"))
+        except ServiceError as e:
+            return _svc_err(e)
+
+    @app.post("/api/machines/{name}/cancel")
+    async def machines_cancel(request: Request, name: str) -> Response:
+        no = owner(request, False)  # forgetting a code only takes access away
+        if no is not None:
+            return no
+        try:
+            await _json_body(request)
+            if not valid_host(name):
+                raise ServiceError("bad_request", "machine names look like work-laptop")
+            return _ok(state.machines.cancel(name))
         except ServiceError as e:
             return _svc_err(e)
 

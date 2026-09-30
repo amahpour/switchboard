@@ -73,6 +73,19 @@
     pop: null,         // composer popover: { kind: 'palette'|'mentions', items, sel, start }
     sheetOpener: null, // the control that opened the Closed, Remotes or Passkeys sheet (focus returns to it)
     passkeyBusy: false, // an Add a passkey ceremony is under way
+    // machines that dial in (a hosted broker, §31.8): GET /api/machines and the `machines` event
+    machinesHosted: false,
+    machines: [],
+    machineCodes: [],  // the live codes nobody used yet: [{ name, expires_in_s }]
+    machinesAt: 0,     // when that list arrived (ms): what's left of those codes
+    pairing: null,     // the code this page made: { name, code, install, join, expiresAt (ms) }
+    codeBusy: false,   // making a code (a passkey check may come first)
+    machineBusy: new Map(),  // machine name -> 'approve' | 'remove', while that request runs
+    machineDraft: '',  // the name typed in Add a machine, kept across renders
+    copiedCmd: null,   // which pairing command was just copied ('install' | 'join')
+    focusAfter: null,  // a data-focus key to move to at the next render (the new approval card)
+    machinesKey: null, // machinesKey() of the sheet as rendered
+    machineRowsKey: null,
     sheetOpenerKey: null, // its data-focus key, to find it again if renderChips rebuilt it
     draft: null,       // composer text a catch-up entry replaced; it comes back after the command (fillComposer)
   };
@@ -245,6 +258,7 @@
     if (!r.ok) {
       const err = new Error((data && data.message) || r.statusText || ('HTTP ' + r.status));
       err.status = r.status;  // the Inspector tells a departed member (404) from a hiccup
+      err.code = data && data.error;  // 'reauth': a passkey check first (withFreshCheck)
       throw err;
     }
     return data;
@@ -1662,6 +1676,7 @@
       loadRooms(true).catch(function () { hello(Array.from(state.rooms.keys())); });
       if (!$('closed-panel').classList.contains('hidden')) loadClosed().catch(function () {});
       loadRemotes().catch(function () {});  // the events missed while the socket was down
+      if (state.machinesHosted) loadMachines().catch(function () {});
       renderStatus();
       clearInterval(state.pingTimer);
       state.pingTimer = setInterval(function () {
@@ -1733,6 +1748,8 @@
       if (!$('closed-panel').classList.contains('hidden')) loadClosed().catch(function () {});
     } else if (f.t === 'remotes') {
       setRemotes(f.remotes || [], f.config_error || null);
+    } else if (f.t === 'machines') {
+      setMachines(f.machines || [], f.codes || []);
     }
   }
 
@@ -1821,7 +1838,7 @@
     state.chipsKey = key;
     const focused = focusKey(bar);
     bar.replaceChildren();
-    $('remotes-section').classList.toggle('hidden', state.remotes.length === 0 && !state.remotesError);
+    renderRemotesSection();
     for (const r of state.remotes) {
       const b = btn('remote st-' + r.state);
       b.dataset.focus = 'chip:' + r.name;
@@ -1952,7 +1969,7 @@
     setRemotes(data.remotes || [], data.config_error || null);
   }
 
-  const SHEETS = ['remotes-panel', 'closed-panel', 'passkeys-panel'];
+  const SHEETS = ['remotes-panel', 'machines-panel', 'closed-panel', 'passkeys-panel'];
 
   function openSheet(id) {
     state.sheetOpener = document.activeElement || null;
@@ -1976,6 +1993,7 @@
     if (tryFocus(back)) return;
     if (phone() && tryFocus($('rooms-toggle'))) return;
     if (key && refocus($('remotes'), key)) return;
+    if (key && refocus($('machines'), key)) return;
     $('input').focus();
   }
 
@@ -2038,6 +2056,524 @@
     } catch (e) {
       remoteResult(name, String(e.message || e), true);
     }
+  }
+
+  // ------------------------------------------------------------ machines
+  // Machines that dial in (DESIGN.md §31.8), on a hosted broker only: their rows under Remote
+  // machines and Add a machine in the sidebar, and the Machines sheet. In the sheet, top down: a
+  // pending machine's approval card (what it says about itself, shown as its own claims, and its
+  // key's fingerprint to compare with what `remote join` printed there); Add a machine (a name,
+  // then the two commands with Copy buttons, a countdown and "waiting for … to dial in"); and each
+  // approved machine's card (state, last seen, Remove). Making a code and approving need a passkey
+  // check in the last five minutes: withFreshCheck asks for a passkey once, then tries again.
+  const MACHINE_NAME = /^[a-z][a-z0-9-]{0,23}$/;
+  // why a machine's link was refused, each time it dials, until that's fixed on the machine
+  const MACHINE_REFUSED = new Set(['proto', 'name', 'test_mode']);
+
+  function machineState(m) {
+    if (m.state === 'pending') return 'pending';
+    if (m.state === 'blocked' || (m.state === 'down' && MACHINE_REFUSED.has(m.reason))) return 'blocked';
+    if (m.state === 'up' || m.state === 'connecting') return m.state;
+    return 'offline';  // its dialer isn't connected: the machine is off, asleep or out of reach
+  }
+
+  function machineChip(m) {
+    const s = machineState(m);
+    if (s === 'pending') return 'needs approval';
+    if (s === 'up') return 'up' + (has(m.rtt_ms) ? ' · ' + fmtMs(m.rtt_ms) + ' ms' : '');
+    if (s === 'connecting') return 'connecting…';
+    if (s === 'blocked') return 'refused: ' + (BLOCK_SHORT[m.reason] || m.reason || '?');
+    return 'offline';
+  }
+
+  // when a machine was last heard from: "just now", "4 min ago", "3 h ago", then a date
+  function ago(ts) {
+    if (!ts) return null;
+    const s = Math.max(0, Date.now() / 1000 - ts);
+    if (s < 45) return 'just now';
+    if (s < 5400) return Math.max(1, Math.round(s / 60)) + ' min ago';
+    if (s < 129600) return Math.round(s / 3600) + ' h ago';
+    return stamp(ts);
+  }
+
+  function mmss(s) { return Math.floor(s / 60) + ':' + pad2(s % 60); }
+
+  function pairingLeft() {
+    const p = state.pairing;
+    return p ? Math.max(0, Math.ceil((p.expiresAt - Date.now()) / 1000)) : 0;
+  }
+
+  // text whose `quoted` parts are code, into e (a new element with withCode)
+  function fillCode(e, text) {
+    String(text).split('`').forEach(function (part, i) {
+      if (part) e.append(i % 2 ? el('code', null, part) : part);
+    });
+    return e;
+  }
+
+  function withCode(tag, cls, text) { return fillCode(el(tag, cls), text); }
+
+  // the Remote machines section: ssh remotes, machines that dial in, or Add a machine
+  function renderRemotesSection() {
+    $('remotes-section').classList.toggle('hidden',
+      state.remotes.length === 0 && !state.remotesError && !state.machinesHosted);
+    $('add-machine').classList.toggle('hidden', !state.machinesHosted);
+  }
+
+  // the sidebar's rows, as the ssh remotes' (button.remote.st-<state>, the dot from CSS)
+  function renderMachineRows() {
+    renderRemotesSection();
+    const box = $('machines');
+    const key = JSON.stringify(state.machines.map(function (m) { return [m.name, machineState(m), machineChip(m)]; }));
+    if (key === state.machineRowsKey) return;
+    state.machineRowsKey = key;
+    const focused = focusKey(box);
+    box.replaceChildren();
+    for (const m of state.machines) {
+      const b = btn('remote st-' + machineState(m));
+      b.dataset.focus = 'machine:' + m.name;
+      b.title = 'Machine ' + m.name + ' (' + machineChip(m) + '): open Machines';
+      b.append(icon('laptop'), el('span', 'remote-name', m.name), el('span', 'remote-state', machineChip(m)));
+      b.addEventListener('click', function () { openMachines(m.name); });
+      box.append(b);
+    }
+    refocus(box, focused);
+  }
+
+  // Everything the sheet shows except what ticks (the countdown, last seen, the RTT): when only
+  // those changed, tickMachines updates them in place and the focus stays put.
+  function machinesKey() {
+    const p = state.pairing;
+    return JSON.stringify([p && [p.name, p.code, pairingLeft() === 0], state.codeBusy, state.copiedCmd,
+      Array.from(state.machineBusy.entries()).sort(), state.machineCodes.map(function (c) { return c.name; }),
+      state.machines.map(function (m) {
+        const c = Object.assign({}, m);
+        c.rtt_ms = has(m.rtt_ms);
+        delete c.last_seen;
+        return c;
+      })]);
+  }
+
+  function machineHead(m, iconName, title, chip) {
+    const head = el('div', 'remote-head');
+    head.append(icon(iconName), el('span', 'remote-name', title));
+    if (chip) head.append(el('span', 'remote-state', chip));
+    return head;
+  }
+
+  function machineResultLine(id) {
+    const out = el('div', 'fine machine-result');
+    out.id = 'machine-result-' + id;
+    return out;
+  }
+
+  // what a machine said about itself when it paired: its own claims, as text
+  function claimFacts(f) {
+    const dl = el('dl', 'remote-facts');
+    f = f || {};
+    kv(dl, 'Host name', f.hostname);
+    kv(dl, 'System', [f.os, f.arch].filter(Boolean).join(' · ') || null);
+    kv(dl, 'switchboard', f.version);
+    kv(dl, 'Harnesses', (f.harnesses || []).join(', ') || null);
+    return dl;
+  }
+
+  function approvalCard(m) {
+    const card = el('div', 'machine-card st-pending');
+    card.dataset.machine = m.name;
+    card.append(machineHead(m, 'laptop', m.name, machineChip(m)));
+    card.append(withCode('p', 'fine', m.dialed_in
+      ? 'It dialed in and is waiting for you. Until you approve it, its agents reach no room.'
+      : 'It paired, and its dialer isn\'t connected: `switchboard start` there starts it. You can approve it first.'));
+    const facts = claimFacts(m.facts);
+    if (facts.childNodes.length) card.append(el('p', 'machine-label', 'What it says about itself'), facts);
+    card.append(el('p', 'machine-label', 'Its key'), el('code', 'machine-fp', m.key_fp));
+    const check = el('p', 'machine-check');
+    check.append(icon('warn'), withCode('span', null,
+      'Check this matches what `remote join` printed on your machine. If it doesn\'t, reject it: someone else used the code.'));
+    card.append(check);
+    const busy = state.machineBusy.get(m.name);
+    const btns = el('div', 'dialog-buttons');
+    const ok = btn('btn-primary', busy === 'approve' ? 'Approving…' : 'Approve');
+    ok.dataset.focus = 'approve:' + m.name;
+    ok.disabled = !!busy;
+    ok.title = (state.me && state.me.fresh ? '' : 'asks for one of your passkeys first, then ') +
+      'lets ' + m.name + ' in: its agents can join rooms';
+    ok.addEventListener('click', function () { approveMachine(m.name); });
+    const no = btn('btn', busy === 'remove' ? 'Rejecting…' : 'Reject');
+    no.dataset.focus = 'reject:' + m.name;
+    no.disabled = !!busy;
+    no.title = 'forget ' + m.name + ' and its key: its dialer stops for good';
+    no.addEventListener('click', function () { removeMachine(m.name, true); });
+    btns.append(ok, no);
+    card.append(btns, machineResultLine(m.name));
+    return card;
+  }
+
+  function stepLine(n, text) {
+    const p = el('p', 'machine-step');
+    p.append(el('b', null, n + '.'), ' ' + text);
+    return p;
+  }
+
+  // a command and its Copy button. The command wraps where it must; with keepLast, its last
+  // word (the pairing code, typed by hand as often as it's pasted) never breaks
+  function cmdBox(text, key, keepLast) {
+    const box = el('div', 'machine-cmd');
+    const code = el('code');
+    const cut = keepLast ? text.lastIndexOf(' ') + 1 : text.length;
+    code.append(text.slice(0, cut));
+    if (cut < text.length) code.append(el('span', 'nowrap', text.slice(cut)));
+    code.id = 'pair-' + key;
+    const copy = btn('copy-btn');
+    copy.dataset.focus = 'copy:' + key;
+    const copied = state.copiedCmd === key;
+    const lbl = copied ? 'Copied' : 'Copy the command';
+    copy.setAttribute('aria-label', lbl);
+    copy.title = lbl;
+    copy.append(icon(copied ? 'check' : 'copy'));
+    copy.addEventListener('click', function () {
+      clipboardWrite(text).then(function () {
+        state.copiedCmd = key;
+        renderMachinesPanel();
+        setTimeout(function () {
+          if (state.copiedCmd !== key) return;
+          state.copiedCmd = null;
+          renderMachinesPanel();
+        }, COPIED_MS);
+      }, function () {});
+    });
+    box.append(code, copy);
+    return box;
+  }
+
+  // the code this page made: the two commands, the countdown, "waiting for … to dial in"
+  function pairingCard(p) {
+    const left = pairingLeft();
+    const card = el('div', 'machine-card');
+    card.append(machineHead(null, 'plus', 'Add ' + p.name, null));
+    card.append(stepLine('1', 'Install switchboard on ' + p.name + ', if it isn\'t there yet:'), cmdBox(p.install, 'install'),
+      stepLine('2', 'Pair it with this switchboard. The code works once:'), cmdBox(p.join, 'join', true));
+    const wait = el('div', 'machine-wait' + (left ? '' : ' expired'));
+    const t = el('span', 'machine-left', left ? mmss(left) + ' left' : '');
+    t.id = 'pair-left';
+    wait.append(el('span', 'pulse'), el('span', null, left ? 'Waiting for ' + p.name + ' to dial in…'
+      : 'The code expired before a machine used it.'), t);
+    card.append(wait);
+    const btns = el('div', 'dialog-buttons');
+    if (!left) {
+      const again = btn('btn-primary', state.codeBusy ? 'Waiting…' : 'Make a new code');
+      again.dataset.focus = 'pair-again';
+      again.disabled = state.codeBusy;
+      again.addEventListener('click', function () { makeCode(p.name); });
+      btns.append(again);
+    }
+    const cancel = btn('btn', 'Cancel');
+    cancel.dataset.focus = 'pair-cancel';
+    cancel.title = left ? 'the code stops working now' : 'back to Add a machine';
+    cancel.addEventListener('click', function () { cancelCode(p.name); });
+    btns.append(cancel);
+    card.append(btns, machineResultLine('pair'));
+    return card;
+  }
+
+  function agentsAs(typed) {
+    const n = String(typed || '').trim().toLowerCase();
+    return 'Lowercase letters, digits and dashes. Its agents show up as bench@' + (MACHINE_NAME.test(n) ? n : 'work-laptop') + '.';
+  }
+
+  function addCard() {
+    const card = el('div', 'machine-card');
+    card.append(machineHead(null, 'plus', 'Add a machine', null));
+    card.append(el('p', 'fine', 'Name it, and run the two commands you get on it. Once it dials in, you approve it here.'));
+    const form = el('form', 'machine-add');
+    form.id = 'machine-add';
+    form.setAttribute('autocomplete', 'off');
+    const label = el('label', null, 'Its name');
+    label.htmlFor = 'machine-name';
+    const row = el('div', 'machine-row');
+    const input = el('input');
+    input.type = 'text';
+    input.id = 'machine-name';
+    input.name = 'name';
+    input.maxLength = 24;
+    input.spellcheck = false;
+    input.setAttribute('autocapitalize', 'none');
+    input.placeholder = 'work-laptop';
+    input.value = state.machineDraft;
+    input.dataset.focus = 'machine-name';
+    const hint = el('p', 'fine', agentsAs(state.machineDraft));
+    input.addEventListener('input', function () {
+      state.machineDraft = input.value;
+      hint.textContent = agentsAs(input.value);
+    });
+    const go = btn('btn-primary', state.codeBusy ? 'Waiting…' : 'Make a pairing code');
+    go.type = 'submit';
+    go.id = 'machine-pair-btn';
+    go.disabled = state.codeBusy;
+    go.title = (state.me && state.me.fresh ? '' : 'asks for one of your passkeys first, then ') +
+      'makes a code that works once, for 10 minutes';
+    row.append(input, go);
+    form.append(label, row, hint);
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      makeCode(input.value);
+    });
+    card.append(form);
+    // codes made elsewhere (another tab, before a reload) that no machine used yet
+    for (const c of state.machineCodes) {
+      const left = c.expires_in_s - (Date.now() - state.machinesAt) / 1000;
+      if (left <= 0) continue;
+      const line = el('div', 'machine-wait');
+      const cancel = btn('btn-danger-ghost', 'Cancel it');
+      cancel.dataset.focus = 'cancel:' + c.name;
+      cancel.title = 'the code for ' + c.name + ' stops working now';
+      cancel.addEventListener('click', function () { cancelCode(c.name); });
+      line.append(el('span', 'pulse'), el('span', null, 'A code for ' + c.name + ' works for ' +
+        Math.max(1, Math.ceil(left / 60)) + ' more min.'), cancel);
+      card.append(line);
+    }
+    card.append(machineResultLine('add'));
+    return card;
+  }
+
+  function machineCard(m) {
+    const s = machineState(m);
+    const card = el('div', 'machine-card st-' + s);
+    card.dataset.machine = m.name;
+    card.append(machineHead(m, 'laptop', m.name, machineChip(m)));
+    const dl = el('dl', 'remote-facts');
+    const what = { up: 'up', connecting: 'connecting', blocked: 'refused each time it dials (' + (m.reason || '?') + ')',
+                   offline: 'offline: its dialer isn\'t connected' }[s];
+    kv(dl, 'State', what + (m.since && s !== 'offline' ? ' since ' + stamp(m.since) : ''));
+    if (m.hint) {
+      const todo = kv(dl, 'What to do', ' ');
+      todo.textContent = '';
+      fillCode(todo, m.hint);
+    }
+    if (s !== 'up') kv(dl, 'Last seen', ago(m.last_seen) || 'never', 'machine-seen').dataset.machine = m.name;
+    if (s === 'up' && has(m.rtt_ms)) kv(dl, 'RTT', fmtMs(m.rtt_ms) + ' ms');
+    kv(dl, 'Transport', 'wss: it dials in' + (m.test_mode ? ' (test mode)' : ''));
+    kv(dl, 'Key', m.key_fp, 'remote-keys');
+    const f = m.facts || {};
+    kv(dl, 'Says it is', [f.hostname, f.os, f.arch].filter(Boolean).join(' · ') || null);
+    if (m.version) kv(dl, 'Versions', 'switchboard ' + m.version + ' there, ' + (state.me ? state.me.version : '?') + ' here');
+    const members = m.members || [];
+    kv(dl, 'Members', (members.length ? members.join(', ') : 'none') + ' (max ' + (m.max_members || 8) + ')');
+    kv(dl, 'Approved', m.approved_at ? 'via ' + (m.approved_via || '?') + ' on ' + stamp(m.approved_at) : null);
+    card.append(dl);
+    if (m.detail) {
+      card.append(el('div', 'fine', 'Last line from the link (the machine may have written it):'),
+        el('pre', 'cmd-out remote-detail', m.detail));
+    }
+    const busy = state.machineBusy.get(m.name);
+    const btns = el('div', 'dialog-buttons');
+    const rm = btn('btn', busy === 'remove' ? 'Removing…' : 'Remove');
+    rm.dataset.focus = 'remove:' + m.name;
+    rm.disabled = !!busy;
+    rm.title = 'forget ' + m.name + ': its agents leave every room at once and its dialer stops for good';
+    rm.addEventListener('click', function () { removeMachine(m.name, false); });
+    btns.append(rm);
+    card.append(btns, machineResultLine(m.name));
+    return card;
+  }
+
+  function renderMachinesPanel(force) {
+    const body = $('machines-body');
+    if ($('machines-panel').classList.contains('hidden')) return;
+    const key = machinesKey();
+    if (!force && key === state.machinesKey) {
+      tickMachines();
+      return;
+    }
+    state.machinesKey = key;
+    const focused = focusKey(body);
+    const f = document.activeElement;
+    const inSheet = !f || f === document.body || $('machines-panel').contains(f);
+    const results = {};  // a result line survives a re-render
+    for (const n of body.querySelectorAll('.machine-result')) results[n.id] = [n.textContent, n.classList.contains('bad')];
+    body.replaceChildren();
+    const note = machineResultLine('note');
+    body.append(note);
+    for (const m of state.machines) if (m.state === 'pending') body.append(approvalCard(m));
+    body.append(state.pairing ? pairingCard(state.pairing) : addCard());
+    for (const m of state.machines) if (m.state !== 'pending') body.append(machineCard(m));
+    for (const id of Object.keys(results)) {
+      const n = document.getElementById(id);
+      if (n) {
+        n.textContent = results[id][0];
+        n.classList.toggle('bad', results[id][1]);
+      }
+    }
+    const after = state.focusAfter;
+    state.focusAfter = null;
+    if (after && inSheet && refocus(body, after)) return;
+    if (focused && !refocus(body, focused)) tryFocus($('machines-close'));
+  }
+
+  function tickMachines() {
+    const t = document.getElementById('pair-left');
+    const left = pairingLeft();
+    if (t && left) t.textContent = mmss(left) + ' left';
+    for (const n of $('machines-body').getElementsByClassName('machine-seen')) {
+      const m = state.machines.find(function (x) { return x.name === n.dataset.machine; });
+      if (m && machineState(m) !== 'up') n.textContent = ago(m.last_seen) || 'never';
+    }
+  }
+
+  function setMachines(list, codes) {
+    const p = state.pairing;
+    state.machines = list;
+    state.machinesAt = Date.now();
+    state.machineCodes = codes.filter(function (c) { return !p || c.name !== p.name; });
+    // the machine this page made a code for has paired: its approval card takes the pairing's place
+    if (p && list.some(function (m) { return m.name === p.name; })) {
+      state.pairing = null;
+      state.copiedCmd = null;
+      state.focusAfter = 'approve:' + p.name;
+    }
+    renderMachineRows();
+    renderMachinesPanel();
+  }
+
+  async function loadMachines() {
+    const data = await api('GET', '/api/machines');
+    state.machinesHosted = !!data.hosted;
+    setMachines(data.machines || [], data.codes || []);
+  }
+
+  function machineResult(id, text, bad) {
+    const n = document.getElementById('machine-result-' + id);
+    if (n) {
+      n.textContent = text;
+      n.classList.toggle('bad', !!bad);
+    }
+  }
+
+  // A request that needs a passkey check in the last five minutes. It asks the broker first
+  // (GET /api/me's fresh), so the usual case sends no request that is refused (a browser logs
+  // those as errors), and asks for one of the owner's passkeys (window.SBWebAuthn) if needed.
+  // Refused anyway ('reauth': the five minutes ran out in between), it checks once more.
+  async function freshCheck() {
+    const w = window.SBWebAuthn;
+    if (!w) throw new Error('this page can\'t ask for a passkey');
+    if (!w.supported()) throw new Error('this browser can\'t use passkeys');
+    await w.signIn();
+    if (state.me) state.me.fresh = true;
+  }
+
+  async function withFreshCheck(call) {
+    let me = null;
+    try { me = await api('GET', '/api/me'); } catch (e) { me = null; }
+    if (me) state.me = me;
+    if (me && !me.fresh) await freshCheck();
+    try {
+      return await call();
+    } catch (e) {
+      if (e.code !== 'reauth') throw e;
+      await freshCheck();
+      return call();
+    }
+  }
+
+  async function makeCode(raw) {
+    const name = String(raw || '').trim().toLowerCase();
+    const where = state.pairing ? 'pair' : 'add';
+    if (!MACHINE_NAME.test(name)) {
+      machineResult(where, 'A name looks like work-laptop: a letter first, then letters, digits or dashes, at most 24.', true);
+      return;
+    }
+    if (state.codeBusy) return;
+    state.codeBusy = true;
+    renderMachinesPanel();
+    machineResult(where, '');
+    machineResult('note', '');
+    try {
+      const res = await withFreshCheck(function () { return api('POST', '/api/machines/pair', { name: name }); });
+      state.codeBusy = false;
+      state.machineDraft = '';
+      state.pairing = { name: res.name, code: res.code, install: res.install, join: res.join,
+                        expiresAt: Date.now() + res.expires_in_s * 1000 };
+      state.machineCodes = state.machineCodes.filter(function (c) { return c.name !== res.name; });
+      state.focusAfter = 'copy:install';
+      renderMachinesPanel(true);
+    } catch (e) {
+      state.codeBusy = false;
+      renderMachinesPanel(true);
+      machineResult(where, String(e.message || e), true);
+    }
+  }
+
+  async function cancelCode(name) {
+    if (state.pairing && state.pairing.name === name) {
+      state.pairing = null;
+      state.copiedCmd = null;
+      state.machineDraft = name;
+    }
+    state.machineCodes = state.machineCodes.filter(function (c) { return c.name !== name; });
+    state.focusAfter = 'machine-name';
+    renderMachinesPanel(true);
+    try { await api('POST', '/api/machines/' + encodeURIComponent(name) + '/cancel', {}); } catch (e) { /* it expires anyway */ }
+  }
+
+  async function approveMachine(name) {
+    if (state.machineBusy.has(name)) return;
+    machineResult('note', '');
+    state.machineBusy.set(name, 'approve');
+    renderMachinesPanel();
+    try {
+      await withFreshCheck(function () { return api('POST', '/api/machines/' + encodeURIComponent(name) + '/approve', {}); });
+      state.machineBusy.delete(name);
+      await loadMachines().catch(function () {});
+      renderMachinesPanel(true);
+    } catch (e) {
+      state.machineBusy.delete(name);
+      renderMachinesPanel(true);
+      machineResult(name, String(e.message || e), true);
+    }
+  }
+
+  async function removeMachine(name, pending) {
+    const q = pending
+      ? 'Reject ' + name + '? Its key is forgotten and its dialer stops for good. To pair it again, make a new code.'
+      : 'Remove ' + name + '? Its agents leave every room at once, and its dialer stops for good. To bring it back, pair it again with a new code.';
+    if (!window.confirm(q)) return;
+    machineResult('note', '');
+    state.machineBusy.set(name, 'remove');
+    renderMachinesPanel();
+    try {
+      const res = await api('POST', '/api/machines/' + encodeURIComponent(name) + '/remove', {});
+      state.machineBusy.delete(name);
+      await loadMachines().catch(function () {});
+      renderMachinesPanel(true);
+      machineResult('note', (pending ? 'Rejected ' : 'Removed ') + name +
+        (res && res.ended ? ': ' + plural(res.ended, 'member', 'members') + ' left the rooms.' : '.'), false);
+      tryFocus($('machines-close'));
+    } catch (e) {
+      state.machineBusy.delete(name);
+      renderMachinesPanel(true);
+      machineResult(name, String(e.message || e), true);
+    }
+  }
+
+  // name: the machine whose card to show (a sidebar row), or null for Add a machine
+  function openMachines(name) {
+    openSheet('machines-panel');
+    renderMachinesPanel(true);
+    loadMachines().catch(function () {});
+    const body = $('machines-body');
+    if (name) {
+      for (const c of body.getElementsByClassName('machine-card')) {
+        if (c.dataset.machine !== name) continue;
+        if (typeof c.scrollIntoView === 'function') c.scrollIntoView({ block: 'nearest' });
+        c.tabIndex = -1;
+        if (tryFocus(c)) return;
+      }
+    } else {
+      if (tryFocus(document.getElementById('machine-name'))) return;
+      if (refocus(body, 'copy:install')) return;
+    }
+    $('machines-close').focus();
   }
 
   // ------------------------------------------------------------ passkeys
@@ -2431,6 +2967,8 @@
       location.replace('/');
     });
     $('remotes-close').addEventListener('click', function () { closeSheet('remotes-panel'); });
+    $('add-machine').addEventListener('click', function () { openMachines(null); });
+    $('machines-close').addEventListener('click', function () { closeSheet('machines-panel'); });
     $('passkeys').addEventListener('click', openPasskeys);
     $('passkeys-close').addEventListener('click', function () { closeSheet('passkeys-panel'); });
     $('closed-rooms').addEventListener('click', openClosed);
@@ -2539,12 +3077,15 @@
     }
     // the brand's tooltip names the running version (§1.2); plain text, no markup
     if (state.me && state.me.version) $('brand-name').setAttribute('title', 'switchboard ' + state.me.version);
-    // the passkeys sheet: a hosted broker where passkeys work (§31.4)
+    // the passkeys sheet and machines that dial in: a hosted broker where passkeys work (§31.4, §31.8)
     $('passkeys').classList.toggle('hidden', !(state.me && state.me.hosted));
+    state.machinesHosted = !!(state.me && state.me.hosted);
+    renderRemotesSection();
     renderBuddies();
     await loadRooms();
     renderStatus();
     await loadRemotes().catch(function () {});
+    if (state.machinesHosted) await loadMachines().catch(function () {});
     connect();
     // the rows' countdowns tick; RTTs refresh (a state change arrives at once, by the socket)
     setInterval(function () {
@@ -2554,6 +3095,11 @@
       }
     }, 1000);
     setInterval(function () { if (state.remotes.length) loadRemotes().catch(function () {}); }, 20000);
+    if (state.machinesHosted) {
+      // the pairing's countdown and the last-seen times tick; the RTTs refresh with the list
+      setInterval(function () { renderMachinesPanel(); }, 1000);
+      setInterval(function () { if (state.machines.length) loadMachines().catch(function () {}); }, 20000);
+    }
     // Keep the sliding session (and its cookie) fresh while the page is open.
     setInterval(function () { api('GET', '/api/me').catch(function () {}); }, 30 * 60 * 1000);
   }

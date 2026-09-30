@@ -83,7 +83,8 @@ function makeWorld(rooms) {
         e.id = id;
         // as index.html starts them
         if (['empty', 'closed-panel', 'remotes-panel', 'closed-rooms', 'room-empty', 'palette', 'mentions', 'scrim',
-             'remotes-section', 'catchup-menu', 'kick-confirm', 'insp-queue'].includes(id)) e.classList.add('hidden');
+             'remotes-section', 'catchup-menu', 'kick-confirm', 'insp-queue', 'machines-panel', 'passkeys-panel',
+             'add-machine'].includes(id)) e.classList.add('hidden');
         byId.set(id, e);
       }
       return byId.get(id);

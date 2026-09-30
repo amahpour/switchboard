@@ -343,6 +343,8 @@ def test_remote_dots_show_their_state(ui: UI) -> None:
         assert dots == {st: {"bg": tok[k], "ring": "none"} for st, k in DOT_COLOUR.items()}, sel
 
     check("#remotes .remote")  # the sidebar row
+    expect(page.locator("#add-machine")).to_be_hidden()  # a desktop broker takes no machines that dial in
+    expect(page.locator("#machines .remote")).to_have_count(0)
     page.click("#remotes .remote")
     expect(page.locator("#remotes-panel")).to_be_visible()
     check("#remotes-body .remote-head")  # the sheet's card

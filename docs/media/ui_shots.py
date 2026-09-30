@@ -26,7 +26,12 @@ closed-light, remotes-light, inspector-light, inspector-remote-light, inspector-
 phone-light, phone-dark-sheet, welcome-light and login-light, plus, from a hosted broker
 (``tests/ui_world.py``'s ``HostedWorld``, with Chromium's virtual authenticators as the
 passkeys; issue #41): claim-light, claim-backup-light, signin-passkey-light,
-signin-passkey-phone-dark, passkeys-light and passkeys-dark (all .png).
+signin-passkey-phone-dark, passkeys-light and passkeys-dark, and from a second one at
+``http://localhost:<port>``, with test machines that dial in (``tests/fakes/fake_machine.py``:
+made-up facts, the real dialer): machines-pairing-light, machines-pairing-dark,
+machines-approve-light, machines-approve-dark, machines-up-light and machines-phone-dark (all
+.png). In those, the pairing command's ``http://localhost:<port>`` reads ``https://sb.example.com``,
+the address a real deployment shows.
 
 Every wait has a deadline (Playwright's auto-waiting ``expect`` and ``wait_for_function``); a
 timeout exits non-zero. The agents, both brokers and the browser are stopped in ``finally``;
@@ -278,10 +283,14 @@ AUTHENTICATOR = {"protocol": "ctap2", "transport": "internal", "hasResidentKey":
 
 def virtual_authenticator(ctx: Any, page: Any) -> Any:
     """A passkey device for ``page``: Chromium's virtual authenticator, through CDP."""
+    return device(ctx, page)[0]
+
+
+def device(ctx: Any, page: Any) -> tuple[Any, str]:
+    """``virtual_authenticator``, with the authenticator's id (to copy its passkeys)."""
     cdp = ctx.new_cdp_session(page)
     cdp.send("WebAuthn.enable", {"enableUI": False})
-    cdp.send("WebAuthn.addVirtualAuthenticator", {"options": AUTHENTICATOR})
-    return cdp
+    return cdp, cdp.send("WebAuthn.addVirtualAuthenticator", {"options": AUTHENTICATOR})["authenticatorId"]
 
 
 def shoot_hosted(browser: Any, out: Path, world: Any) -> None:
@@ -331,6 +340,114 @@ def shoot_hosted(browser: Any, out: Path, world: Any) -> None:
         phone_ctx.close()
 
 
+# -------------------------------------------------------- the machines' shots
+AS_DEPLOYED = "https://sb.example.com"
+
+# the sheet's text as a deployment shows it: the test broker's origin in the pairing command
+AS_DEPLOYED_JS = """([from, to]) => {
+  const w = document.createTreeWalker(document.getElementById('machines-body'), NodeFilter.SHOW_TEXT);
+  for (let n = w.nextNode(); n; n = w.nextNode()) n.nodeValue = n.nodeValue.split(from).join(to);
+}"""
+
+
+def shoot_machines(browser: Any, out: Path, world: Any) -> None:
+    """Machines that dial in (issue #41 part 3): a pairing under way beside a machine that is up,
+    the approval card of the one that dialed in with the code, both up, and a phone."""
+    from playwright.sync_api import expect
+
+    from fakes.fake_machine import TestMachine
+
+    origin = world.origin
+    base = {"timezone_id": "UTC", "color_scheme": "light", "locale": "en-US", "reduced_motion": "reduce"}
+    machines: list[Any] = []
+    ctx = browser.new_context(**base, **DESKTOP)
+    ctx.set_default_timeout(WAIT_MS)
+    try:
+        page = ctx.new_page()
+        cdp, laptop = device(ctx, page)
+        page.goto(world.claim_link())
+        page.fill("#claim-name", "MacBook Pro")
+        page.click("#claim-btn")
+        expect(page.locator("#step-backup")).to_be_visible()
+        page.click("#skip-btn")
+        connected(page)
+        world.set_test_mode(True)  # the page has no TEST MODE band; the test machines may link now
+
+        def add(name: str) -> str:
+            page.fill("#machine-name", name)
+            page.click("#machine-pair-btn")
+            expect(page.locator("#pair-join")).to_be_visible()
+            return page.locator("#pair-join").inner_text().split()[-1]
+
+        def dial_in(name: str, code: str, facts: dict[str, Any]) -> None:
+            m = TestMachine(origin, facts=facts)
+            machines.append(m)
+            m.pair(code)
+            m.start()
+            card = page.locator(f'.machine-card.st-pending[data-machine="{name}"]')
+            expect(card).to_contain_text("It dialed in")
+
+        def up(name: str) -> None:
+            page.click(f'[data-focus="approve:{name}"]')
+            expect(page.locator(f'#machines .remote.st-up[data-focus="machine:{name}"]')).to_be_visible()
+
+        def as_deployed(p: Any) -> None:
+            p.evaluate(AS_DEPLOYED_JS, [origin, AS_DEPLOYED])
+            p.mouse.move(1, 1)
+
+        page.click("#add-machine")
+        expect(page.locator("#machines-panel")).to_be_visible()
+        dial_in("lab-pc", add("lab-pc"), {"hostname": "lab-pc", "os": "Ubuntu 24.04", "arch": "x86_64",
+                                          "version": "0.6.5", "harnesses": ["claude", "codex"]})
+        up("lab-pc")
+        code = add("work-laptop")
+        as_deployed(page)
+        shot(page, out, "machines-pairing-light.png")
+        page.emulate_media(color_scheme="dark")
+        shot(page, out, "machines-pairing-dark.png")
+        page.emulate_media(color_scheme="light")
+        dial_in("work-laptop", code, {"hostname": "work-laptop", "os": "macOS 15.6", "arch": "arm64",
+                                      "version": "0.6.5", "harnesses": ["claude", "codex"]})
+        page.mouse.move(1, 1)
+        shot(page, out, "machines-approve-light.png")
+        page.emulate_media(color_scheme="dark")
+        shot(page, out, "machines-approve-dark.png")
+        page.emulate_media(color_scheme="light")
+        up("work-laptop")
+        page.locator('.machine-card[data-machine="work-laptop"]').scroll_into_view_if_needed()
+        page.mouse.move(1, 1)
+        shot(page, out, "machines-up-light.png")
+
+        # a phone: the same passkey (copied to its own authenticator), the rooms drawer, the sheet
+        creds = cdp.send("WebAuthn.getCredentials", {"authenticatorId": laptop})["credentials"]
+        ph_ctx = browser.new_context(**{**base, "color_scheme": "dark"}, **PHONE)
+        ph_ctx.set_default_timeout(WAIT_MS)
+        try:
+            ph = ph_ctx.new_page()
+            pcdp, phone = device(ph_ctx, ph)
+            for c in creds:  # ahead of the counter the broker saw
+                pcdp.send("WebAuthn.addCredential", {"authenticatorId": phone,
+                                                     "credential": {**c, "signCount": c.get("signCount", 0) + 100}})
+            ph.goto(origin + "/")
+            ph.click("#passkey-btn")
+            connected(ph)
+            ph.click("#rooms-toggle")
+            ph.click("#add-machine")
+            expect(ph.locator("#machines-panel")).to_be_visible()
+            ph.fill("#machine-name", "build-box")
+            ph.click("#machine-pair-btn")
+            expect(ph.locator("#pair-join")).to_be_visible()
+            as_deployed(ph)
+            ph.locator("#pair-join").scroll_into_view_if_needed()
+            shot(ph, out, "machines-phone-dark.png")
+        finally:
+            ph_ctx.close()
+    finally:
+        ctx.close()
+        for m in machines:
+            m.close()
+
+
 # -------------------------------------------------------------------- main
 def run(args: argparse.Namespace, pw: Any) -> None:
     from ui_world import HostedWorld, UIWorld
@@ -339,21 +456,27 @@ def run(args: argparse.Namespace, pw: Any) -> None:
     out.mkdir(parents=True, exist_ok=True)
     world = UIWorld(keep=args.keep)
     hosted = HostedWorld(keep=args.keep)
+    # a second hosted broker, for the machines that dial in: behind localhost, which their
+    # dialers (other processes) resolve too
+    fleet = HostedWorld(keep=args.keep, host="localhost")
     try:
         world.start()
         hosted.start()
+        fleet.start()
         env = {**os.environ, "TZ": "UTC", "HOME": REAL_HOME or os.environ["HOME"]}
         browser = pw.chromium.launch(executable_path=args.chrome or None, env=env)
         try:
             shoot(browser, out, world)
             shoot_hosted(browser, out, hosted)
+            shoot_machines(browser, out, fleet)
         finally:
             browser.close()
     finally:
+        fleet.stop()
         hosted.stop()
         world.stop()
         if args.keep:
-            print(f"kept: {world.home} {world.home2} {hosted.home}", file=sys.stderr)
+            print(f"kept: {world.home} {world.home2} {hosted.home} {fleet.home}", file=sys.stderr)
 
 
 def main() -> None:
