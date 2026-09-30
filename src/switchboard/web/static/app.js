@@ -2049,15 +2049,23 @@
     const body = $('passkeys-body');
     if ($('passkeys-panel').classList.contains('hidden')) return;
     const me = state.me || {};
-    body.replaceChildren();
     const n = me.passkeys || 0;
-    body.append(el('p', null, n ? plural(n, 'passkey', 'passkeys') + ' can sign in here.'
-      : 'No passkey yet: this switchboard is signed in to with `switchboard login`.'));
+    body.replaceChildren();
+
+    // your passkeys, and adding one: a name and the button on one row
+    const card = el('div', 'passkey-card');
+    const head = el('div', 'passkey-head');
+    head.append(icon('key'), el('span', 'passkey-title', 'Your passkeys'),
+      el('span', 'passkey-count', n ? plural(n, 'passkey', 'passkeys') : 'none yet'));
+    card.append(head);
+    card.append(el('p', 'fine', n ? 'Any of them signs this switchboard in.'
+      : 'None yet: this switchboard is signed in to with `switchboard login`.'));
     const form = el('form', 'passkey-add');
     form.id = 'passkey-add';
     form.setAttribute('autocomplete', 'off');
     const label = el('label', null, 'Name the new passkey');
     label.htmlFor = 'passkey-name';
+    const row = el('div', 'passkey-row');
     const input = el('input');
     input.type = 'text';
     input.id = 'passkey-name';
@@ -2065,27 +2073,36 @@
     input.maxLength = 40;
     input.spellcheck = false;
     input.placeholder = 'phone, security key, this Mac';
-    const add = btn('btn btn-primary', state.passkeyBusy ? 'Waiting for your passkey…' : 'Add a passkey');
+    const add = btn('btn btn-primary', state.passkeyBusy ? 'Waiting…' : 'Add a passkey');
     add.type = 'submit';
     add.id = 'passkey-add-btn';
     add.disabled = state.passkeyBusy || !me.hosted;
     add.title = me.fresh ? 'register a new passkey for this switchboard'
       : 'asks for one of your passkeys first, then registers the new one';
-    form.append(label, input, add);
+    row.append(input, add);
+    form.append(label, row);
     form.addEventListener('submit', function (ev) {
       ev.preventDefault();
       addPasskey((input.value || '').trim() || 'passkey');
     });
-    body.append(form);
+    card.append(form);
     const out = el('div', 'fine passkey-result');
     out.id = 'passkey-result';
-    body.append(out);
-    const all = el('div', 'passkey-all');
-    all.append(el('p', 'fine', 'Signed in somewhere you no longer trust? Every browser is signed out; your passkeys stay.'));
+    card.append(out);
+    body.append(card);
+
+    // every browser signed out; the passkeys stay
+    const all = el('div', 'passkey-card');
+    const head2 = el('div', 'passkey-head');
+    head2.append(icon('logout'), el('span', 'passkey-title', 'Sign out everywhere'));
+    all.append(head2);
+    all.append(el('p', 'fine', 'Signed in somewhere you no longer trust? Every browser is signed out, this one included; your passkeys stay.'));
+    const btns = el('div', 'dialog-buttons');
     const so = btn('btn', 'Sign out everywhere');
     so.id = 'logout-all';
     so.addEventListener('click', logoutEverywhere);
-    all.append(so);
+    btns.append(so);
+    all.append(btns);
     body.append(all);
   }
 

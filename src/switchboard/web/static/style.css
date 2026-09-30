@@ -1760,9 +1760,12 @@ body.login {
   border-radius: 4px;
   background: var(--code-bg);
 }
-.login-card > div { display: flex; flex-direction: column; gap: 12px; }  /* the sign-in page's variants */
+/* the sign-in page's variants (login.html: the terminal, a passkey, the claim), spaced like the card */
+.login-variant { display: flex; flex-direction: column; gap: 12px; }
 .login-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .login-actions .btn, .login-actions .btn-primary { height: 34px; padding: 0 16px; font-size: 13.5px; }
+/* the passkey pages' actions span the card: one button its full width, two sharing it evenly */
+.login-actions.stretch > * { flex: 1 1 0; min-width: 0; }
 .login-error { margin: 0; color: var(--danger); font-weight: 500; }
 .login-error:empty { display: none; }
 /* the claim page (setup.html, §31.3): one step at a time, a name for the passkey */
@@ -1780,13 +1783,29 @@ body.login {
   font-size: 13.5px;
 }
 .setup-form input:focus, .passkey-add input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus); }
-/* the passkeys sheet (index.html, §31.4) */
-.passkey-add { display: flex; flex-direction: column; gap: 8px; margin: 4px 0; }
-.passkey-add .btn-primary { align-self: flex-start; }
+.passkey-add input { height: 32px; }
+/* the Passkeys sheet (index.html, §31.4): cards like the Remote machines sheet's */
+.passkey-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--side-border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.passkey-card + .passkey-card { margin-top: 10px; }
+.passkey-card > p { margin: 0; }
+.passkey-head { display: flex; align-items: center; gap: 8px; }
+.passkey-head .ic { width: 15px; height: 15px; color: var(--muted); flex-shrink: 0; }
+.passkey-title { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; }
+.passkey-count { flex-shrink: 0; font-size: 11.5px; color: var(--muted-2); }
+.passkey-add { display: flex; flex-direction: column; gap: 6px; margin: 0; }
+.passkey-row { display: flex; align-items: center; gap: 8px; }
+.passkey-row input { flex: 1; min-width: 0; height: 32px; }
+.passkey-row .btn-primary { flex-shrink: 0; }
 .passkey-result.bad { color: var(--danger); font-weight: 500; }
 .passkey-result:empty { display: none; }
-.passkey-all { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
-.passkey-all .btn { align-self: flex-start; }
 
 /* ==== 15. Narrow widths (spec 1.9) =================================================== */
 

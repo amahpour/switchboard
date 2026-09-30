@@ -232,6 +232,7 @@ class HostedWorld:
         self.b = InProcBroker(self.home, web_origin=lambda port: WebOrigin.parse(f"http://sb.localhost:{port}")).start()
         b = self.b
         b.on_loop(lambda: b.state.service.create_room("#build"))  # the broker answers only to its public host
+        not_test_mode(b)  # its claim link is written already; no TEST MODE band in the pictures
         return self
 
     def stop(self) -> None:

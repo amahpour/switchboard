@@ -308,6 +308,7 @@ def shoot_hosted(browser: Any, out: Path, world: Any) -> None:
         page.click("#passkeys")
         expect(page.locator("#passkeys-panel")).to_be_visible()
         page.fill("#passkey-name", "iPhone")
+        page.mouse.move(1, 1)  # off the key button, so it isn't drawn hovered
         shot(page, out, "passkeys-light.png")
         page.emulate_media(color_scheme="dark")
         shot(page, out, "passkeys-dark.png")

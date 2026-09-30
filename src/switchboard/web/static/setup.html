@@ -41,7 +41,7 @@
       <label for="claim-name">Name this passkey</label>
       <input type="text" id="claim-name" name="name" maxlength="40" autocomplete="off" spellcheck="false"
              placeholder="MacBook Pro">
-      <div class="login-actions">
+      <div class="login-actions stretch">
         <button type="submit" class="btn-primary" id="claim-btn">Create a passkey</button>
       </div>
     </form>
@@ -59,7 +59,7 @@
       <label for="backup-name">Name the backup</label>
       <input type="text" id="backup-name" name="name" maxlength="40" autocomplete="off" spellcheck="false"
              value="phone or security key">
-      <div class="login-actions">
+      <div class="login-actions stretch">
         <a class="btn" id="skip-btn" href="/">Skip for now</a>
         <button type="submit" class="btn-primary" id="backup-btn">Add a backup passkey</button>
       </div>
@@ -74,7 +74,7 @@
     <p class="fine">If the newest link says it was already used and that wasn&rsquo;t you, someone who can
       read the log claimed it first. Set <code>SWITCHBOARD_RESET_OWNER</code> to a new value and restart
       the broker: it forgets the owner and prints a fresh link (docs/DEPLOY.md).</p>
-    <div class="login-actions"><a class="btn-primary" href="/">Go to the sign-in page</a></div>
+    <div class="login-actions stretch"><a class="btn-primary" href="/">Go to the sign-in page</a></div>
   </section>
 
   <!-- no WebAuthn here -->

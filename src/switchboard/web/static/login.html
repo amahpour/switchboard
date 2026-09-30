@@ -34,7 +34,7 @@
   <h1 id="login-title">Sign in this browser</h1>
 
   <!-- the desktop (and a hosted broker before login.js has asked): the one-time link -->
-  <div id="login-cli">
+  <div class="login-variant" id="login-cli">
     <p>This browser isn&rsquo;t signed in. In your own terminal, run:</p>
     <pre class="login-cmd"><code>switchboard login</code></pre>
     <p>and open the link it prints. Each link works once, for 5 minutes.</p>
@@ -45,17 +45,17 @@
   </div>
 
   <!-- a hosted broker whose owner has a passkey -->
-  <div class="hidden" id="login-passkey">
+  <div class="login-variant hidden" id="login-passkey">
     <p>This browser isn&rsquo;t signed in. Use one of your passkeys: Touch&nbsp;ID, Face&nbsp;ID,
       Windows&nbsp;Hello, your phone or a security key.</p>
-    <div class="login-actions">
+    <div class="login-actions stretch">
       <button type="button" class="btn-primary" id="passkey-btn">Sign in with a passkey</button>
     </div>
     <p class="fine">On another device, the browser offers a QR code to use the passkey on your phone.</p>
   </div>
 
   <!-- a hosted broker nobody has claimed yet -->
-  <div class="hidden" id="login-claim">
+  <div class="login-variant hidden" id="login-claim">
     <p>This switchboard hasn&rsquo;t been claimed yet. Open the claim link from the broker&rsquo;s log
       (your deploy tool&rsquo;s logs view, Render&rsquo;s Logs tab, <code>docker compose logs</code>) and
       create your first passkey there.</p>

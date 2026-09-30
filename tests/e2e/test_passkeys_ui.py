@@ -74,6 +74,19 @@ class Devices:
     def credentials(self, authenticator_id: str) -> list[dict[str, Any]]:
         return self.cdp.send("WebAuthn.getCredentials", {"authenticatorId": authenticator_id})["credentials"]
 
+    def put_away(self, authenticator_id: str) -> list[dict[str, Any]]:
+        """Detach a device, keeping its passkeys: with two attached, Chromium may pick either one."""
+        creds = self.credentials(authenticator_id)
+        self.remove(authenticator_id)
+        return creds
+
+    def bring_back(self, creds: list[dict[str, Any]], transport: str = "internal") -> str:
+        """Attach a device again with the passkeys ``put_away`` kept."""
+        aid = self.add(transport)
+        for c in creds:
+            self.cdp.send("WebAuthn.addCredential", {"authenticatorId": aid, "credential": c})
+        return aid
+
 
 def open_link(page: Page, url: str) -> None:
     """Open a claim link as a fresh navigation (setup.js leaves the page at /setup, so a second
@@ -133,17 +146,21 @@ def test_claim_backup_sheet_sign_out_and_sign_in(ui: UI, hosted: InProcBroker) -
     assert [p.name for p in st.store.passkeys()] == ["MacBook Pro", "iPhone"]
     assert len(devices.credentials(phone)) == 1
 
-    # the passkeys sheet: the count, Add a passkey (fresh from the claim: no check asked)
+    # the passkeys sheet: the count, Add a passkey (fresh from the claim: no check asked), on a
+    # security key while the phone is put away (with both attached, Chromium may pick the phone,
+    # whose passkey is excluded)
     expect(page.locator("#passkeys")).to_be_visible()
     page.click("#passkeys")
     expect(page.locator("#passkeys-panel")).to_be_visible()
-    expect(page.locator("#passkeys-body")).to_contain_text("2 passkeys can sign in here.")
+    expect(page.locator("#passkeys-body .passkey-count")).to_have_text("2 passkeys")
+    phone_creds = devices.put_away(phone)
     key = devices.add("usb")
     page.fill("#passkey-name", "YubiKey")
     page.click("#passkey-add-btn")
     expect(page.locator("#passkey-result")).to_have_text('added "YubiKey"')
-    expect(page.locator("#passkeys-body")).to_contain_text("3 passkeys can sign in here.")
+    expect(page.locator("#passkeys-body .passkey-count")).to_have_text("3 passkeys")
     devices.remove(key)  # the key is unplugged again
+    phone = devices.bring_back(phone_creds)
     page.keyboard.press("Escape")
     expect(page.locator("#passkeys-panel")).to_be_hidden()
 
