@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- **The docs no longer promise what a hosted broker can't do yet.** The README said your other machines' agents could join a hosted broker over SSH, but the image has no `ssh`. The README, docs/DEPLOY.md and DESIGN §30 now point agents joining and signing in without exec at [#41](https://github.com/amahpour/switchboard/issues/41), and drop "sign-in at the proxy" (no longer planned). DESIGN §27.4.8 now says a satellite binds its socket only after the broker's `welcome`, as the code does.
+
 ### Fixed
 
 - **A remote machine's name stays readable in the sidebar.** A long state, such as `down: timeout (retry in 20 s)` or `needs enable (config changed)`, used to take the whole row and squeeze the name out: `build-vm` showed as `b.`, and some names vanished. The name and the state now share the row, and a state that doesn't fit ends in an ellipsis. Hovering the row shows the state in full.
