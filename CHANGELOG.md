@@ -2,6 +2,30 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.7.0 (2026-09-30)
+
+### Upgrading
+
+- **The database moves to schema version 3.** The broker migrates it on its first start, after a verified backup next to it (`switchboard.db.v2.bak`, never overwritten), as the 0.3.0 migration did. Nothing else changes for a desktop broker.
+
+### Added
+
+- **A hosted broker is claimed from a link in its log, and signed in to with passkeys from then on.** A fresh broker behind a public URL prints one line in its log, `switchboard isn't set up yet. Claim it (link works once, for 60 min): https://…/setup#t=…`. Open it and create a passkey (Touch ID, Face ID, Windows Hello, your phone or a security key): the broker is yours, the browser is signed in, and setup suggests a backup passkey. The sign-in page then has one button, Sign in with a passkey. No `docker exec` needed; the shell's `switchboard login` keeps working too. The link works once, a fresh one is printed every hour until the broker is claimed, and once it is, none is printed again: the owner lives in the database on the volume, so upgrades keep it. `docs/DEPLOY.md`, "Signing in".
+- **The Passkeys sheet.** A key button next to sign-off in the web UI of a hosted broker: add a passkey (it asks for one of yours first, unless you used one in the last five minutes, so a stolen session can't make itself permanent), and Sign out everywhere, which signs every browser out and keeps your passkeys.
+- **`SWITCHBOARD_RESET_OWNER`.** Lost every passkey? Set it to a new value and restart: the broker forgets the owner, every passkey and every session, and prints a fresh claim link. It acts once per value, so leaving it set is harmless across restarts and pod moves.
+- **Your machines dial in to a hosted broker.** A broker on a server can't reach your laptop over SSH, so the laptop dials it: `switchboard remote join https://sb.example.com <code>` pairs the machine with a single-use code from the broker's owner, prints the machine's key fingerprint to check before approving, and starts a dialer that connects over `wss://` through the broker's own HTTPS address. Once the owner approves it, the machine's agents join rooms as `bench@work-laptop`, exactly as remote members over SSH do, with the same limits. `switchboard start`, `stop` and `status` run the dialer on that home (`--foreground` for launchd, systemd or tmux), it redials after a drop, and it stops for good when the machine is removed. `docs/REMOTE.md`, "Machines that dial in a hosted broker".
+- **The broker's side of it:** `POST /link/pair` (authenticated by the code, refused to browsers) and the `/link` WebSocket (a signed handshake that pins both keys), and `GET /api/machines`, `POST /api/machines/pair`, `/approve` and `/remove` for the owner. Making a code and approving need a passkey check in the last five minutes.
+- **Add a machine in the web UI.** On a hosted broker, Remote machines in the sidebar lists your machines that dial in, with **Add a machine** under them. Name the machine, and the Machines sheet shows the two commands to run on it, with Copy buttons and a countdown. Once it dials in, its card shows what it says about itself and its key's fingerprint, to compare with what `remote join` printed there, and you **Approve** or **Reject** it. Each machine's card shows its state, last seen, its members and **Remove**. Making a code and approving ask for one of your passkeys first, unless you used one in the last five minutes. `docs/REMOTE.md`, "Machines that dial in a hosted broker".
+- **Cancel a pairing code** before it's used, from the same sheet (`POST /api/machines/{name}/cancel`). A code that was already used stays remembered, so a second machine trying it still hears that it was used.
+
+### Changed
+
+- **Release notes go in a file of their own now, `changes/<name>.md`, not in CHANGELOG.md.** Each pull request adds one, so parallel PRs no longer conflict over the CHANGELOG, and a rebase can't quietly file a PR's notes under a release that's already out. Cutting a release gathers the files into CHANGELOG.md and deletes them, and CI fails a PR that edits CHANGELOG.md directly ([changes/README.md](https://github.com/amahpour/switchboard/blob/main/changes/README.md)).
+- **`switchboard login` sessions say how they were made.** Web sessions record `login-link`, `claim` or `passkey:<name>` (for the sessions list to come).
+- **The dialer trusts the operating system's certificate store** (the new `truststore` dependency), so a corporate TLS-inspection proxy whose root certificate is installed there works on macOS and Windows. Under WSL2, add it to the Linux distribution's store.
+- **A machine refused at every dial says why.** A machine whose switchboard version (or test mode) doesn't match the broker's shows `refused: version mismatch` and what to do, instead of looking offline.
+- **The pairing notice** in the rooms no longer shows backticks, and says to check the key before approving.
+
 ## 0.6.5 (2026-09-30)
 
 ### Changed
