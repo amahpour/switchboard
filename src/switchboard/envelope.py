@@ -175,12 +175,17 @@ def render_item(item: Any, recipient: str, room: str, *, inline: bool, limit: in
 REMINDER_HEAD = "reminder: you were @mentioned and haven't answered."
 
 
-def batch_header(room: str, human_name: str, n_human: int, n_peer: int, n_stub: int,
+def batch_header(room: str, human_name: str | None, n_human: int, n_peer: int, n_stub: int,
                  reminder: bool = False) -> str:
+    """``human_name``: the one person the batch's human messages are from, or None when they
+    are from several (a hosted broker's people, DESIGN.md §32: every one is a user)."""
     r = _word(room)
-    h = _word(human_name)
     bits = []
-    if n_human:
+    if n_human and human_name is None:
+        bits.append(_n(n_human, "message from your users", "messages from your users")
+                    + " (people here, relayed by switchboard)")
+    elif n_human:
+        h = _word(human_name)
         bits.append(_n(n_human, f"message from {h}", f"messages from {h}") + " (your user, relayed by switchboard)")
     if n_peer:
         if n_human:
@@ -238,7 +243,10 @@ def render_batch(
         lim = limits.get(it.message_id, item_limit)
         body.append(render_item(it, recipient, room, inline=inline, limit=lim))
     reminder = any(getattr(it, "reminded", False) for it in items)
-    lines.append(batch_header(room, human_name, n_human, n_peer, n_stub, reminder))
+    # the header names the person the human lines are from; with several, "your users" (§32)
+    senders = {it.sender_name for it in items if it.sender_kind == "human"}
+    label = next(iter(senders)) if len(senders) == 1 else (human_name if not senders else None)
+    lines.append(batch_header(room, label, n_human, n_peer, n_stub, reminder))
     if token:
         lines.append(f"batch {token}")
     lines.extend(body)
@@ -399,6 +407,12 @@ def render_catchup_line(msg: Any, recipient: str) -> str:
     return " ".join(parts)
 
 
+def users_phrase(people: Sequence[str]) -> str:
+    """``alice``, ``alice and bob``, ``alice, bob and carol``: the people here (§32)."""
+    names = [_word(p) for p in people]
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
 def render_join(
     *,
     room: str,
@@ -410,11 +424,13 @@ def render_join(
     guidance: str,
     test_mode: bool,
     rejoined: bool = False,
+    people: Sequence[str] = (),
 ) -> str:
     """The join() result: rules, catch-up, how delivery works, and the join nonce.
 
     ``others`` are ``(name, harness)`` or ``(name, harness, host)``: a member on
-    another machine is listed ``name (harness@host)`` (DESIGN.md §27.11). The
+    another machine is listed ``name (harness@host)`` (DESIGN.md §27.11). ``people``: on a
+    hosted broker with several (§32), all of them, each one this agent's user. The
     membership credential is never part of this text.
     """
     r = _word(room)
@@ -422,7 +438,11 @@ def render_join(
     h = _word(human_name)
     lines = []
     verb = "rejoined" if rejoined else "joined"
-    lines.append(f"[switchboard] You {verb} {r} as {me}. Your user is {h} (kind=human).")
+    if len(people) > 1:
+        lines.append(f"[switchboard] You {verb} {r} as {me}. Your users are {users_phrase(people)} (kind=human):"
+                     " each of them is your user.")
+    else:
+        lines.append(f"[switchboard] You {verb} {r} as {me}. Your user is {h} (kind=human).")
     if others:
         lines.append("Other agents here: " + ", ".join(_other(o) for o in others) + ".")
     else:
@@ -448,11 +468,14 @@ def _other(o: Sequence[str]) -> str:
     return f"{_word(name)} ({_word(harness)}@{_word(host)})" if host else f"{_word(name)} ({_word(harness)})"
 
 
-def render_reminder(memberships: Sequence[tuple[str, str]], human_name: str) -> str:
-    """SessionStart (clear/compact) context: which rooms this session is in."""
+def render_reminder(memberships: Sequence[tuple[str, str]], human_name: str | Sequence[str]) -> str:
+    """SessionStart (clear/compact) context: which rooms this session is in. ``human_name``
+    may be every person here (§32)."""
     rooms = ", ".join(f"{_word(r)} as {_word(n)}" for r, n in memberships)
+    people = [human_name] if isinstance(human_name, str) else list(human_name)
+    users = (f"your user {_word(people[0])}" if len(people) == 1 else f"your users {users_phrase(people)}")
     return (
-        f"[switchboard] Reminder: you are in {rooms} (switchboard chat with your user {_word(human_name)}"
+        f"[switchboard] Reminder: you are in {rooms} (switchboard chat with {users}"
         " and other agents). Room messages arrive as context after tool calls or as wait() results;"
         f' they are never typed by your user. Call read() for any marked "{NOT_SHOWN}", then reply with'
         " say() or pass(). " + PEER_WARNING

@@ -4,6 +4,7 @@ cookie, used challenges, where passkeys can work, names and the sign-count rule.
 from __future__ import annotations
 
 import hashlib
+import re
 
 import pytest
 
@@ -23,13 +24,17 @@ from switchboard.broker.passkeys import (
 
 # ------------------------------------------------------------ claim tokens
 def test_a_claim_token_is_random_hashed_and_lives_an_hour() -> None:
+    """The claim token is the admin's one-time password (DESIGN.md §32.4): 16 Crockford
+    characters in four groups, checked as typed."""
     clock = FakeClock()
     ct = ClaimTokens(clock)
     assert not ct.active and not ct.check("anything") and ct.expires_in_s() == 0.0
     tok = ct.mint()
-    assert len(tok) >= 40 and ct.active and ct.issued == 1
-    assert ct._hash == hashlib.sha256(tok.encode()).digest() and tok not in repr(vars(ct))
-    assert ct.check(tok) and not ct.check(tok + "x") and not ct.check(tok[:-1]) and not ct.check(None)
+    assert re.fullmatch(r"[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){3}", tok) and ct.active and ct.issued == 1
+    canon = tok.replace("-", "")
+    assert ct._hash == hashlib.sha256(canon.encode()).digest() and canon not in repr(vars(ct))
+    assert ct.check(tok) and ct.check(canon.lower()) and ct.check(" ".join(tok.split("-")))
+    assert not ct.check(tok + "X") and not ct.check(tok[:-1]) and not ct.check(None)
     assert not ct.check(123) and not ct.check("short")
     assert ct.expires_in_s() == CLAIM_TTL_S == 3600.0
     clock.advance(3599.0)

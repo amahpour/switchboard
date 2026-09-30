@@ -65,6 +65,15 @@
       </button>
     </div>
 
+    <div class="side-section hidden" id="admin-section" aria-labelledby="admin-label">
+      <div class="side-label" id="admin-label">Admin</div>
+      <button type="button" class="room room-add" id="open-people" aria-haspopup="dialog" aria-controls="people-panel"
+              title="People: add someone, give a new one-time password, remove someone">
+        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="6" cy="5" r="2.5"/><path d="M1.5 13.5c.4-2.4 2.3-3.8 4.5-3.8s4.1 1.4 4.5 3.8M10.5 2.7a2.5 2.5 0 0 1 0 4.6M12 9.9c1.4.5 2.3 1.7 2.5 3.6"/></svg>
+        <span class="room-name" id="people-label">People</span>
+      </button>
+    </div>
+
     <div class="side-spacer"></div>
 
     <div class="side-foot">
@@ -74,7 +83,7 @@
         <span class="conn" id="st-conn">Connecting&hellip;</span>
       </div>
       <button type="button" class="icon-btn hidden" id="passkeys" aria-haspopup="dialog" aria-controls="passkeys-panel"
-              aria-label="Passkeys" title="Passkeys: add one, or sign out everywhere">
+              aria-label="Sign-in" title="Sign-in: your password and passkeys, or sign out everywhere">
         <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="5.5" cy="8" r="3"/><path d="M8.5 8h5.5M12 8v2.5M14 8v1.5"/></svg>
       </button>
       <button type="button" class="icon-btn" id="logout" aria-label="Sign off this browser" title="Sign off this browser">
@@ -334,17 +343,51 @@
 
   <section class="sheet hidden" id="passkeys-panel" role="dialog" aria-modal="false" aria-labelledby="passkeys-panel-title">
     <div class="sheet-head">
-      <h2 id="passkeys-panel-title">Passkeys</h2>
+      <h2 id="passkeys-panel-title">Sign-in</h2>
       <button type="button" class="icon-btn" id="passkeys-close" aria-label="Close" title="Close">
         <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
       </button>
     </div>
     <div class="sheet-body">
-      <p class="fine">Your passkeys sign this switchboard in: Touch ID, Face ID, Windows Hello, a phone or a security
-        key. Adding one asks for a passkey first, unless you used one in the last five minutes.</p>
+      <p class="fine">How you sign in to this switchboard: your password, your passkeys (Touch ID, Face ID, Windows
+        Hello, a phone or a security key), or both. Changing either asks you to confirm it&rsquo;s you first, unless
+        you did in the last five minutes.</p>
       <div id="passkeys-body"></div>
     </div>
   </section>
+
+  <section class="sheet hidden" id="people-panel" role="dialog" aria-modal="false" aria-labelledby="people-panel-title">
+    <div class="sheet-head">
+      <h2 id="people-panel-title">People</h2>
+      <button type="button" class="icon-btn" id="people-close" aria-label="Close" title="Close">
+        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+      </button>
+    </div>
+    <div class="sheet-body">
+      <p class="fine">Everyone here signs in with their own name, and a password or a passkey. They post under their
+        own name, pair their own machines, and every agent takes their messages as its user&rsquo;s. Only you can add
+        or remove people.</p>
+      <div id="people-body"></div>
+    </div>
+  </section>
+
+  <dialog class="confirm-dialog" id="confirm-dialog" aria-labelledby="confirm-title">
+    <form class="setup-form" id="confirm-form" method="dialog" autocomplete="on">
+      <h2 id="confirm-title">Confirm it&rsquo;s you</h2>
+      <p class="fine" id="confirm-lead">Type your password to go on.</p>
+      <input type="text" id="confirm-user" name="username" autocomplete="username" class="sr-only" tabindex="-1"
+             aria-hidden="true" readonly>
+      <label for="confirm-password">Password</label>
+      <input type="password" id="confirm-password" name="password" autocomplete="current-password" maxlength="256">
+      <p class="login-error hidden" id="confirm-error" role="alert"></p>
+      <div class="dialog-buttons">
+        <button type="button" class="btn hidden" id="confirm-passkey">Use a passkey</button>
+        <span class="dialog-spacer"></span>
+        <button type="button" class="btn" id="confirm-cancel">Cancel</button>
+        <button type="submit" class="btn-primary" id="confirm-ok">Confirm</button>
+      </div>
+    </form>
+  </dialog>
 
   <section class="sheet hidden" id="closed-panel" role="dialog" aria-modal="false" aria-labelledby="closed-panel-title">
     <div class="sheet-head">

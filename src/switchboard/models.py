@@ -189,6 +189,7 @@ class Message:
     reply_to: int | None
     mentions: list[str] = field(default_factory=list)
     sender_host: str | None = None  # the remote host of an agent sender (schema v2); None on this machine
+    sender_person_id: int | None = None  # a human sender other than the owner (schema v4, §32.2)
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "Message":
@@ -210,6 +211,7 @@ class Message:
             reply_to=r["reply_to"],
             mentions=list(mentions),
             sender_host=r["sender_host"] if "sender_host" in r.keys() else None,
+            sender_person_id=r["sender_person_id"] if "sender_person_id" in r.keys() else None,
         )
 
 
@@ -314,10 +316,40 @@ class PasskeyRow:
     aaguid: str | None
     created_at: float
     last_used_at: float | None
+    person_id: int | None = None  # whose (schema 4, §32.2): None is the owner's
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "PasskeyRow":
         return cls(**{k: r[k] for k in r.keys()})
+
+
+@dataclass(frozen=True)
+class PersonRow:
+    """A ``people`` row (DESIGN.md §32.2): someone other than the owner, added by the owner in
+    the admin section. They sign in with their name and a password (the first one is a
+    one-time password the owner hands them, ``must_reset`` until they choose their own) or a
+    passkey of their own (``handle`` is their WebAuthn user id). A removed person keeps the
+    row, so their messages keep their name, and loses their password, passkeys and sessions."""
+
+    id: int
+    name: str
+    handle: bytes
+    password_hash: str | None
+    must_reset: bool
+    password_expires_at: float | None  # a one-time password's end; None once they chose their own
+    created_at: float
+    removed_at: float | None
+
+    @classmethod
+    def from_row(cls, r: sqlite3.Row) -> "PersonRow":
+        d = {k: r[k] for k in r.keys()}
+        d["handle"] = bytes(d["handle"] or b"")
+        d["must_reset"] = bool(d["must_reset"])
+        return cls(**d)
+
+    @property
+    def active(self) -> bool:
+        return self.removed_at is None
 
 
 @dataclass(frozen=True)
@@ -336,6 +368,7 @@ class MachineRow:
     approved_via: str | None
     removed_at: float | None
     last_seen_at: float | None
+    person_id: int | None = None  # who paired it (schema 4, §32.2): None is the owner
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "MachineRow":

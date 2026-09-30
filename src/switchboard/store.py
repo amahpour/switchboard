@@ -27,6 +27,7 @@ from switchboard.models import (
     MachineRow,
     Participant,
     PasskeyRow,
+    PersonRow,
     RemoteRow,
     Room,
     room_ref,
@@ -298,6 +299,7 @@ class Store:
         mentions: Iterable[str] = (),
         skip_memberships: Iterable[int] = (),
         sender_host: str | None = None,
+        sender_person_id: int | None = None,
     ) -> Message:
         """Persist a message and its per-recipient delivery rows in one transaction.
 
@@ -306,6 +308,8 @@ class Store:
         join/leave/notice messages are never delivered to agents. ``skip_memberships``
         get no delivery row either (the subjects of a ``/catchup`` request, §26).
         ``sender_host`` is a remote agent sender's host (§27.6); None on this machine.
+        ``sender_person_id`` is a human sender other than the owner (§32.2); every person
+        is a human to every agent, so it changes nothing about the deliveries.
         """
         if sender_host is not None and not valid_host(sender_host):
             raise ValueError(f"not a host name: {sender_host!r}")
@@ -315,8 +319,8 @@ class Store:
         with db.tx(self.con):
             cur = self.con.execute(
                 "INSERT INTO messages(room_id, ts, sender_membership_id, sender_name,"
-                " sender_harness, sender_kind, via, kind, text, reply_to, mentions, sender_host)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                " sender_harness, sender_kind, via, kind, text, reply_to, mentions, sender_host,"
+                " sender_person_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     room_id,
                     now,
@@ -330,6 +334,7 @@ class Store:
                     reply_to,
                     json.dumps(mentions_l),
                     sender_host,
+                    sender_person_id,
                 ),
             )
             mid = cur.lastrowid
@@ -620,16 +625,38 @@ class Store:
         return [Event.from_row(r) for r in self.con.execute(sql, args).fetchall()]
 
     # ------------------------------------------------------------ web sessions
-    def web_session_create(self, id_hash: str, ttl_s: float, via: str | None = None) -> None:
+    def web_session_create(self, id_hash: str, ttl_s: float, via: str | None = None,
+                           person_id: int | None = None) -> None:
         """``via`` (schema 3, DESIGN.md §31.2): how the session was made, ``login-link``,
-        ``claim`` or ``passkey:<name>``."""
+        ``claim``, ``passkey:<name>`` or ``password``. ``person_id`` (schema 4, §32.2): whose
+        it is, None for the owner (and for everyone on a desktop broker)."""
         now = self.clock.now()
         with db.tx(self.con):
             self.con.execute(
-                "INSERT INTO web_sessions(id_hash, created_at, last_seen, expires_at, via)"
-                " VALUES(?,?,?,?,?)",
-                (id_hash, now, now, now + ttl_s, via),
+                "INSERT INTO web_sessions(id_hash, created_at, last_seen, expires_at, via, person_id)"
+                " VALUES(?,?,?,?,?,?)",
+                (id_hash, now, now, now + ttl_s, via, person_id),
             )
+
+    def web_session_person(self, id_hash: str) -> int | None:
+        """Whose session this is: a person's id, or None for the owner."""
+        r = self.con.execute("SELECT person_id FROM web_sessions WHERE id_hash=?", (id_hash,)).fetchone()
+        return int(r[0]) if r and r[0] is not None else None
+
+    def web_sessions_of(self, person_id: int | None) -> list[str]:
+        """The id hashes of one person's sessions (None: the owner's)."""
+        if person_id is None:
+            rows = self.con.execute("SELECT id_hash FROM web_sessions WHERE person_id IS NULL").fetchall()
+        else:
+            rows = self.con.execute("SELECT id_hash FROM web_sessions WHERE person_id=?", (person_id,)).fetchall()
+        return [str(r[0]) for r in rows]
+
+    def web_session_delete_person(self, person_id: int | None) -> list[str]:
+        """Sign one person out everywhere (None: the owner): their sessions' id hashes."""
+        with db.tx(self.con):
+            gone = self.web_sessions_of(person_id)
+            self.con.executemany("DELETE FROM web_sessions WHERE id_hash=?", [(h,) for h in gone])
+        return gone
 
     def web_session_via(self, id_hash: str) -> str | None:
         r = self.con.execute("SELECT via FROM web_sessions WHERE id_hash=?", (id_hash,)).fetchone()
@@ -723,27 +750,33 @@ class Store:
         (whoever held the broker may have paired one), and ``applied`` (the hash of the
         SWITCHBOARD_RESET_OWNER value acted on) is recorded, so the same value never resets
         again. Returns what it removed or changed."""
+        now = self.clock.now()
         with db.tx(self.con):
             n_keys = self.con.execute("DELETE FROM passkeys").rowcount
             n_sess = self.con.execute("DELETE FROM web_sessions").rowcount
             n_mach = self.con.execute("UPDATE link_machines SET approved_at=NULL, approved_via=NULL"
                                       " WHERE removed_at IS NULL AND approved_at IS NOT NULL").rowcount
+            # everyone else was added by the old owner: the new owner adds them again
+            n_people = self.con.execute("UPDATE people SET removed_at=?, password_hash=NULL, must_reset=0,"
+                                        " password_expires_at=NULL WHERE removed_at IS NULL", (now,)).rowcount
+            self.meta_delete("owner_password")
             self.meta_delete("owner_handle")
             self.meta_delete("owner_claimed_at")
             self.meta_set("reset_owner_applied", applied)
-        return {"passkeys": n_keys, "sessions": n_sess, "machines_pending": n_mach}
+        return {"passkeys": n_keys, "sessions": n_sess, "machines_pending": n_mach, "people": n_people}
 
     # --------------------------------------------------------------- passkeys
     def passkey_add(self, credential_id: bytes, public_key: bytes, name: str, aaguid: str | None,
-                    sign_count: int = 0) -> PasskeyRow:
+                    sign_count: int = 0, person_id: int | None = None) -> PasskeyRow:
+        """``person_id``: whose passkey (None: the owner's)."""
         if not credential_id or len(credential_id) > 1023 or not public_key:
             raise ValueError("a passkey needs a credential id and a public key")
         now = self.clock.now()
         with db.tx(self.con):
             self.con.execute(
-                "INSERT INTO passkeys(credential_id, public_key, sign_count, name, aaguid, created_at)"
-                " VALUES(?,?,?,?,?,?)",
-                (credential_id, public_key, int(sign_count), name, aaguid, now),
+                "INSERT INTO passkeys(credential_id, public_key, sign_count, name, aaguid, created_at, person_id)"
+                " VALUES(?,?,?,?,?,?,?)",
+                (credential_id, public_key, int(sign_count), name, aaguid, now, person_id),
             )
         got = self.passkey(credential_id)
         assert got is not None
@@ -757,7 +790,17 @@ class Store:
         return [PasskeyRow.from_row(r) for r in self.con.execute("SELECT * FROM passkeys ORDER BY created_at, name")]
 
     def passkey_count(self) -> int:
+        """Everyone's: whether anyone can sign in with a passkey here."""
         return int(self.con.execute("SELECT COUNT(*) FROM passkeys").fetchone()[0])
+
+    def passkeys_of(self, person_id: int | None) -> list[PasskeyRow]:
+        """One person's passkeys (None: the owner's)."""
+        if person_id is None:
+            rows = self.con.execute("SELECT * FROM passkeys WHERE person_id IS NULL ORDER BY created_at, name")
+        else:
+            rows = self.con.execute("SELECT * FROM passkeys WHERE person_id=? ORDER BY created_at, name",
+                                    (person_id,))
+        return [PasskeyRow.from_row(r) for r in rows]
 
     def passkey_used(self, credential_id: bytes, sign_count: int) -> bool:
         """A sign-in with this passkey succeeded now: its last use and the counter it sent."""
@@ -767,6 +810,88 @@ class Store:
                 "UPDATE passkeys SET sign_count=?, last_used_at=? WHERE credential_id=?",
                 (int(sign_count), now, credential_id),
             ).rowcount == 1
+
+    # ----------------------------------------------------------------- people
+    # Everyone but the owner (DESIGN.md §32): the owner adds them by name in the admin
+    # section, with a one-time password to hand over. A removed person keeps their row, so
+    # their messages keep their name, and loses their password, passkeys and sessions at once.
+    def person(self, person_id: int) -> PersonRow | None:
+        r = self.con.execute("SELECT * FROM people WHERE id=?", (person_id,)).fetchone()
+        return PersonRow.from_row(r) if r else None
+
+    def person_named(self, name: str) -> PersonRow | None:
+        """The active person with this name (any case)."""
+        r = self.con.execute("SELECT * FROM people WHERE name=? AND removed_at IS NULL", (name,)).fetchone()
+        return PersonRow.from_row(r) if r else None
+
+    def person_by_handle(self, handle: bytes) -> PersonRow | None:
+        r = self.con.execute("SELECT * FROM people WHERE handle=?", (handle,)).fetchone()
+        return PersonRow.from_row(r) if r else None
+
+    def people(self) -> list[PersonRow]:
+        """The active people, in the order they were added."""
+        return [PersonRow.from_row(r) for r in
+                self.con.execute("SELECT * FROM people WHERE removed_at IS NULL ORDER BY created_at, id")]
+
+    def person_add(self, name: str, handle: bytes, one_time_hash: str, ttl_s: float) -> PersonRow:
+        """A new person with a one-time password (its hash), good for ``ttl_s``. Raises
+        ValueError when an active person has that name already."""
+        if len(handle) != 16:
+            raise ValueError("a person's handle is 16 bytes")
+        now = self.clock.now()
+        with db.tx(self.con):
+            if self.person_named(name) is not None:
+                raise ValueError("that name is taken")
+            cur = self.con.execute(
+                "INSERT INTO people(name, handle, password_hash, must_reset, password_expires_at, created_at)"
+                " VALUES(?,?,?,1,?,?)", (name, handle, one_time_hash, now + ttl_s, now))
+            pid = int(cur.lastrowid or 0)
+        got = self.person(pid)
+        assert got is not None
+        return got
+
+    def person_one_time_password(self, person_id: int, one_time_hash: str, ttl_s: float) -> list[str] | None:
+        """The owner's reset: a new one-time password replaces the person's password, and
+        their sessions end (they sign in with it and choose a new one; their passkeys stay).
+        Returns the ended sessions' id hashes, or None if there is no such active person."""
+        now = self.clock.now()
+        with db.tx(self.con):
+            if self.con.execute("UPDATE people SET password_hash=?, must_reset=1, password_expires_at=?"
+                                " WHERE id=? AND removed_at IS NULL",
+                                (one_time_hash, now + ttl_s, person_id)).rowcount != 1:
+                return None
+            return self.web_session_delete_person(person_id)
+
+    def person_set_password(self, person_id: int, password_hash: str | None) -> bool:
+        """The person chose their own password (or, with None, a passkey instead of one):
+        the one-time password is gone and nothing is left to reset."""
+        with db.tx(self.con):
+            return self.con.execute("UPDATE people SET password_hash=?, must_reset=0, password_expires_at=NULL"
+                                    " WHERE id=? AND removed_at IS NULL", (password_hash, person_id)).rowcount == 1
+
+    def person_remove(self, person_id: int) -> list[str] | None:
+        """In one transaction: the person is removed, their password and passkeys deleted and
+        their sessions ended. Returns the ended sessions' id hashes, or None if there was no
+        such active person."""
+        now = self.clock.now()
+        with db.tx(self.con):
+            if self.con.execute("UPDATE people SET removed_at=?, password_hash=NULL, must_reset=0,"
+                                " password_expires_at=NULL WHERE id=? AND removed_at IS NULL",
+                                (now, person_id)).rowcount != 1:
+                return None
+            self.con.execute("DELETE FROM passkeys WHERE person_id=?", (person_id,))
+            return self.web_session_delete_person(person_id)
+
+    # ------------------------------------------------------- the owner's password
+    def owner_password_hash(self) -> str | None:
+        return self.meta_get("owner_password")
+
+    def set_owner_password(self, password_hash: str | None) -> None:
+        with db.tx(self.con):
+            if password_hash is None:
+                self.meta_delete("owner_password")
+            else:
+                self.meta_set("owner_password", password_hash)
 
     # --------------------------------------------------------------- recovery
     def recover_on_start(

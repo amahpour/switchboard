@@ -46,7 +46,7 @@
   };
 
   const state = {
-    me: null,          // { human, test_mode, version, port, hosted, passkeys, fresh }
+    me: null,          // { human, admin, test_mode, version, port, hosted, signin, passkeys, password, fresh }
     rooms: new Map(),  // name -> { name, slug, id, createdAt, lastId, msgs: [], members: [], settings: {}, unread: 0 }
     closed: 0,         // how many closed rooms there are (GET /api/rooms), for the Closed row
     closedRooms: [],   // GET /api/closed-rooms, as the Closed sheet shows it
@@ -88,6 +88,13 @@
     machineRowsKey: null,
     sheetOpenerKey: null, // its data-focus key, to find it again if renderChips rebuilt it
     draft: null,       // composer text a catch-up entry replaced; it comes back after the command (fillComposer)
+    // people (a hosted broker, §32): the admin section's list, and the one-time password just made
+    people: [],
+    peopleDraft: '',   // the name typed in Add someone, kept across renders
+    peopleBusy: new Map(),  // person id (or 'add') -> what is running for them
+    invite: null,      // { id, name, password, invite } to send, until Done
+    copiedInvite: false,
+    passwordBusy: false,
   };
 
   // ------------------------------------------------------------ helpers
@@ -1969,7 +1976,7 @@
     setRemotes(data.remotes || [], data.config_error || null);
   }
 
-  const SHEETS = ['remotes-panel', 'machines-panel', 'closed-panel', 'passkeys-panel'];
+  const SHEETS = ['remotes-panel', 'machines-panel', 'closed-panel', 'passkeys-panel', 'people-panel'];
 
   function openSheet(id) {
     state.sheetOpener = document.activeElement || null;
@@ -2458,16 +2465,95 @@
     }
   }
 
-  // A request that needs a passkey check in the last five minutes. It asks the broker first
-  // (GET /api/me's fresh), so the usual case sends no request that is refused (a browser logs
-  // those as errors), and asks for one of the owner's passkeys (window.SBWebAuthn) if needed.
-  // Refused anyway ('reauth': the five minutes ran out in between), it checks once more.
-  async function freshCheck() {
+  // A request that needs a password or passkey check in the last five minutes (§32.4). It asks
+  // the broker first (GET /api/me's fresh), so the usual case sends no request that is refused
+  // (a browser logs those as errors). If one is needed: the Confirm it's you dialog, for your
+  // password (POST /api/signin/check), with Use a passkey beside it when you have one; with no
+  // password, your passkey at once (window.SBWebAuthn). Refused anyway ('reauth': the five
+  // minutes ran out in between), it checks once more.
+  function passkeysHere() {
     const w = window.SBWebAuthn;
-    if (!w) throw new Error('this page can\'t ask for a passkey');
-    if (!w.supported()) throw new Error('this browser can\'t use passkeys');
-    await w.signIn();
+    return !!(w && w.supported() && state.me && state.me.hosted && state.me.passkeys);
+  }
+
+  async function freshCheck() {
+    const me = state.me || {};
+    if (me.password) {
+      await askPassword();
+    } else {
+      const w = window.SBWebAuthn;
+      if (!w) throw new Error('this page can\'t ask for a passkey');
+      if (!w.supported()) throw new Error('this browser can\'t use passkeys');
+      await w.signIn();
+    }
     if (state.me) state.me.fresh = true;
+  }
+
+  // the Confirm it's you dialog: resolves once the broker took your password (or your passkey),
+  // rejects if you cancel
+  function askPassword() {
+    const dlg = $('confirm-dialog');
+    const input = $('confirm-password');
+    const err = $('confirm-error');
+    const ok = $('confirm-ok');
+    const pk = $('confirm-passkey');
+    $('confirm-user').value = (state.me && state.me.human) || '';
+    input.value = '';
+    err.textContent = '';
+    err.classList.add('hidden');
+    pk.classList.toggle('hidden', !passkeysHere());
+    return new Promise(function (resolve, reject) {
+      let done = false;
+      function finish(fn, arg) {
+        if (done) return;
+        done = true;
+        $('confirm-form').removeEventListener('submit', onSubmit);
+        $('confirm-cancel').removeEventListener('click', onCancel);
+        pk.removeEventListener('click', onPasskey);
+        dlg.removeEventListener('cancel', onCancel);
+        if (dlg.open) dlg.close();
+        fn(arg);
+      }
+      function fail(e) {
+        ok.disabled = false;
+        pk.disabled = false;
+        err.textContent = String(e.message || e);
+        err.classList.remove('hidden');
+        input.value = '';
+        input.focus();
+      }
+      async function onSubmit(ev) {
+        ev.preventDefault();
+        ok.disabled = true;
+        try {
+          await api('POST', '/api/signin/check', { password: input.value });
+          finish(resolve);
+        } catch (e) {
+          fail(e);
+        }
+      }
+      async function onPasskey() {
+        pk.disabled = true;
+        try {
+          await window.SBWebAuthn.signIn();
+          finish(resolve);
+        } catch (e) {
+          fail(e);
+        }
+      }
+      function onCancel(ev) {
+        if (ev) ev.preventDefault();
+        finish(reject, new Error('cancelled'));
+      }
+      $('confirm-form').addEventListener('submit', onSubmit);
+      $('confirm-cancel').addEventListener('click', onCancel);
+      pk.addEventListener('click', onPasskey);
+      dlg.addEventListener('cancel', onCancel);
+      ok.disabled = false;
+      pk.disabled = false;
+      if (typeof dlg.showModal === 'function') dlg.showModal();
+      input.focus();
+    });
   }
 
   async function withFreshCheck(call) {
@@ -2583,17 +2669,102 @@
     $('machines-close').focus();
   }
 
-  // ------------------------------------------------------------ passkeys
-  // The passkeys sheet (DESIGN.md §31.4), on a hosted broker where passkeys work: how many
-  // there are, Add a passkey (window.SBWebAuthn: a fresh passkey check first unless this
-  // session had one in the last five minutes), and Sign out everywhere. The full list, with
-  // removing one, comes later.
+  // ------------------------------------------------------------ sign-in
+  // The Sign-in sheet (DESIGN.md §31.4, §32.4), on a hosted broker: your password (set or
+  // change it), your passkeys where they work (how many, Add a passkey), and Sign out
+  // everywhere. Changing either needs a check in the last five minutes (withFreshCheck).
+  function passwordCard(me) {
+    const card = el('div', 'passkey-card');
+    card.id = 'password-card';
+    const head = el('div', 'passkey-head');
+    head.append(icon('key'), el('span', 'passkey-title', 'Your password'),
+      el('span', 'password-state', me.password ? 'set' : 'none'));
+    card.append(head);
+    card.append(el('p', 'fine', me.password ? 'You sign in with your name, ' + me.human + ', and this password.'
+      : 'None yet: you sign in with a passkey. Set one to sign in anywhere with your name, ' + me.human + '.'));
+    const form = el('form', 'passkey-add');
+    form.id = 'password-form';
+    form.setAttribute('autocomplete', 'on');
+    const user = el('input', 'sr-only');
+    user.type = 'text';
+    user.name = 'username';
+    user.autocomplete = 'username';
+    user.value = me.human || '';
+    user.tabIndex = -1;
+    user.readOnly = true;
+    user.setAttribute('aria-hidden', 'true');
+    const l1 = el('label', null, me.password ? 'New password' : 'Password');
+    l1.htmlFor = 'new-password';
+    const p1 = el('input');
+    p1.type = 'password';
+    p1.id = 'new-password';
+    p1.autocomplete = 'new-password';
+    p1.maxLength = 256;
+    const l2 = el('label', null, 'Type it again');
+    l2.htmlFor = 'new-password-2';
+    const row = el('div', 'passkey-row');
+    const p2 = el('input');
+    p2.type = 'password';
+    p2.id = 'new-password-2';
+    p2.autocomplete = 'new-password';
+    p2.maxLength = 256;
+    const save = btn('btn btn-primary', state.passwordBusy ? 'Saving…' : (me.password ? 'Change' : 'Set password'));
+    save.type = 'submit';
+    save.id = 'password-save';
+    save.disabled = state.passwordBusy;
+    row.append(p2, save);
+    form.append(user, l1, p1, l2, row);
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      setPassword(p1.value, p2.value);
+    });
+    card.append(form);
+    const out = el('div', 'fine passkey-result');
+    out.id = 'password-result';
+    card.append(out);
+    return card;
+  }
+
+  function passwordResult(text, bad) {
+    const n = document.getElementById('password-result');
+    if (n) {
+      n.textContent = text;
+      n.classList.toggle('bad', !!bad);
+    }
+  }
+
+  async function setPassword(a, b) {
+    if (state.passwordBusy) return;
+    if (a !== b) {
+      passwordResult('The two passwords are not the same.', true);
+      return;
+    }
+    state.passwordBusy = true;
+    renderPasskeysPanel();
+    try {
+      await withFreshCheck(function () { return api('POST', '/api/me/password', { password: a }); });
+      state.passwordBusy = false;
+      if (state.me) state.me.password = true;
+      renderPasskeysPanel();
+      passwordResult('Saved. Sign in with it from now on.', false);
+    } catch (e) {
+      state.passwordBusy = false;
+      renderPasskeysPanel();
+      passwordResult(String(e.message || e), true);
+    }
+  }
+
   function renderPasskeysPanel() {
     const body = $('passkeys-body');
     if ($('passkeys-panel').classList.contains('hidden')) return;
     const me = state.me || {};
     const n = me.passkeys || 0;
     body.replaceChildren();
+    if (me.signin) body.append(passwordCard(me));
+    if (!me.hosted) {
+      body.append(signOutCard());
+      return;
+    }
 
     // your passkeys, and adding one: a name and the button on one row
     const card = el('div', 'passkey-card');
@@ -2601,8 +2772,8 @@
     head.append(icon('key'), el('span', 'passkey-title', 'Your passkeys'),
       el('span', 'passkey-count', n ? plural(n, 'passkey', 'passkeys') : 'none yet'));
     card.append(head);
-    card.append(el('p', 'fine', n ? 'Any of them signs this switchboard in.'
-      : 'None yet: this switchboard is signed in to with `switchboard login`.'));
+    card.append(el('p', 'fine', n ? 'Any of them signs you in, instead of your password.'
+      : 'None yet. A passkey signs you in with Touch ID, Windows Hello, your phone or a security key.'));
     const form = el('form', 'passkey-add');
     form.id = 'passkey-add';
     form.setAttribute('autocomplete', 'off');
@@ -2621,7 +2792,7 @@
     add.id = 'passkey-add-btn';
     add.disabled = state.passkeyBusy || !me.hosted;
     add.title = me.fresh ? 'register a new passkey for this switchboard'
-      : 'asks for one of your passkeys first, then registers the new one';
+      : 'asks you to confirm it\'s you first, then registers the new one';
     row.append(input, add);
     form.append(label, row);
     form.addEventListener('submit', function (ev) {
@@ -2634,19 +2805,24 @@
     card.append(out);
     body.append(card);
 
-    // every browser signed out; the passkeys stay
+    body.append(signOutCard());
+  }
+
+  // every browser you're signed in to signed out; your password and passkeys stay
+  function signOutCard() {
     const all = el('div', 'passkey-card');
     const head2 = el('div', 'passkey-head');
     head2.append(icon('logout'), el('span', 'passkey-title', 'Sign out everywhere'));
     all.append(head2);
-    all.append(el('p', 'fine', 'Signed in somewhere you no longer trust? Every browser is signed out, this one included; your passkeys stay.'));
+    all.append(el('p', 'fine', 'Signed in somewhere you no longer trust? Every browser you\'re signed in to is signed'
+      + ' out, this one included. Your password and passkeys stay, and nobody else is signed out.'));
     const btns = el('div', 'dialog-buttons');
     const so = btn('btn', 'Sign out everywhere');
     so.id = 'logout-all';
     so.addEventListener('click', logoutEverywhere);
     btns.append(so);
     all.append(btns);
-    body.append(all);
+    return all;
   }
 
   function passkeyResult(text, bad) {
@@ -2682,7 +2858,7 @@
   }
 
   async function logoutEverywhere() {
-    if (!window.confirm('Sign out every browser, this one included? Your passkeys stay; `switchboard login` and your passkeys sign in again.')) return;
+    if (!window.confirm('Sign out every browser you\'re signed in to, this one included? Your password and passkeys stay.')) return;
     try { await api('POST', '/logout', { all: true }); } catch (e) { /* already signed out */ }
     location.replace('/');
   }
@@ -2695,6 +2871,236 @@
       renderPasskeysPanel();
     }, function () {});
     $('passkeys-close').focus();
+  }
+
+  // --------------------------------------------------------------- people
+  // The admin section (DESIGN.md §32.3), for the admin on a hosted broker: Add someone (a name:
+  // a one-time password to send them, shown once, with the invite text and a Copy button), and
+  // everyone here with how they sign in, a New one-time password (a reset) and Remove.
+  const PERSON_NAME = /^[a-z][a-z0-9_-]{0,23}$/;
+  const SIGN_IN_TEXT = {
+    admin: 'the admin', password: 'signs in with a password', passkey: 'signs in with a passkey',
+    'one-time': 'hasn\'t signed in yet: one-time password', expired: 'one-time password expired',
+  };
+
+  async function loadPeople() {
+    const data = await api('GET', '/api/people');
+    state.people = data.people || [];
+    renderPeoplePanel();
+  }
+
+  function peopleResult(id, text, bad) {
+    const n = document.getElementById('people-result-' + id);
+    if (n) {
+      n.textContent = text;
+      n.classList.toggle('bad', !!bad);
+    }
+  }
+
+  function inviteCard(inv) {
+    const card = el('div', 'machine-card invite-card');
+    card.tabIndex = -1;
+    card.dataset.focus = 'invite';
+    const head = el('div', 'remote-head');
+    head.append(icon('check'), el('span', 'remote-name', 'Send this to ' + inv.name));
+    card.append(head);
+    card.append(el('p', 'machine-step', 'It\'s the only time you\'ll see this one-time password. It works for 7 days,'
+      + ' and only until ' + inv.name + ' chooses their own password or passkey.'));
+    const box = el('div', 'machine-cmd invite-text');
+    const code = el('code', null, inv.invite);
+    code.id = 'invite-text';
+    const copy = btn('copy-btn');
+    copy.id = 'copy-invite';
+    copy.dataset.focus = 'copy:invite';
+    const lbl = state.copiedInvite ? 'Copied' : 'Copy the invite';
+    copy.setAttribute('aria-label', lbl);
+    copy.title = lbl;
+    copy.append(icon(state.copiedInvite ? 'check' : 'copy'));
+    copy.addEventListener('click', function () {
+      clipboardWrite(inv.invite).then(function () {
+        state.copiedInvite = true;
+        renderPeoplePanel();
+        setTimeout(function () {
+          state.copiedInvite = false;
+          renderPeoplePanel();
+        }, COPIED_MS);
+      }, function () {});
+    });
+    box.append(code, copy);
+    card.append(box);
+    const btns = el('div', 'dialog-buttons');
+    const done = btn('btn', 'Done');
+    done.id = 'invite-done';
+    done.addEventListener('click', function () {
+      state.invite = null;
+      state.copiedInvite = false;
+      renderPeoplePanel();
+      tryFocus(document.getElementById('person-name'));
+    });
+    btns.append(done);
+    card.append(btns);
+    return card;
+  }
+
+  function addPersonCard() {
+    const card = el('div', 'machine-card');
+    const head = el('div', 'remote-head');
+    head.append(icon('plus'), el('span', 'remote-name', 'Add someone'));
+    card.append(head);
+    const form = el('form', 'machine-add');
+    form.setAttribute('autocomplete', 'off');
+    const label = el('label', null, 'Their name in the rooms');
+    label.htmlFor = 'person-name';
+    const row = el('div', 'machine-row');
+    const input = el('input');
+    input.type = 'text';
+    input.id = 'person-name';
+    input.maxLength = 24;
+    input.spellcheck = false;
+    input.autocapitalize = 'none';
+    input.placeholder = 'sam';
+    input.value = state.peopleDraft;
+    input.addEventListener('input', function () { state.peopleDraft = input.value; });
+    const busy = state.peopleBusy.get('add');
+    const add = btn('btn btn-primary', busy ? 'Adding…' : 'Add');
+    add.type = 'submit';
+    add.id = 'person-add';
+    add.disabled = !!busy;
+    add.title = state.me && state.me.fresh ? 'makes a one-time password to send them'
+      : 'asks you to confirm it\'s you first, then makes a one-time password to send them';
+    row.append(input, add);
+    form.append(label, row);
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      addPerson(input.value);
+    });
+    card.append(form);
+    card.append(el('p', 'machine-step', 'They sign in with that name and a one-time password you send them, then'
+      + ' choose their own password or a passkey.'));
+    const out = el('div', 'fine machine-result');
+    out.id = 'people-result-add';
+    card.append(out);
+    return card;
+  }
+
+  function personCard(p) {
+    const card = el('div', 'machine-card person-card');
+    card.tabIndex = -1;
+    card.dataset.focus = 'person:' + (p.id === null ? 'admin' : p.id);
+    const head = el('div', 'remote-head');
+    const av = el('span', 'avatar human sm', (p.name || '?').charAt(0).toUpperCase());
+    av.setAttribute('aria-hidden', 'true');
+    head.append(av, el('span', 'remote-name', p.name));
+    if (p.admin) head.append(el('span', 'chip person-chip', 'admin'));
+    else if (p.sign_in === 'one-time' || p.sign_in === 'expired') {
+      head.append(el('span', 'chip person-chip' + (p.sign_in === 'expired' ? ' bad' : ' pending'),
+        p.sign_in === 'expired' ? 'expired' : 'invited'));
+    }
+    card.append(head);
+    const bits = [SIGN_IN_TEXT[p.sign_in] || p.sign_in];
+    if (!p.admin && p.passkeys && p.sign_in !== 'passkey') bits.push(plural(p.passkeys, 'passkey', 'passkeys'));
+    if (p.admin) bits.push(p.password ? 'password' : 'no password', plural(p.passkeys || 0, 'passkey', 'passkeys'));
+    card.append(el('p', 'machine-step', bits.join(' · ')));
+    if (!p.admin) {
+      const btns = el('div', 'dialog-buttons');
+      const busy = state.peopleBusy.get(p.id);
+      const again = btn('btn', busy === 'reset' ? 'Making one…' : 'New one-time password');
+      again.disabled = !!busy;
+      again.title = 'signs ' + p.name + ' out everywhere, and makes a one-time password to send them';
+      again.addEventListener('click', function () { resetPerson(p); });
+      const rm = btn('btn', busy === 'remove' ? 'Removing…' : 'Remove');
+      rm.disabled = !!busy;
+      rm.addEventListener('click', function () { removePerson(p); });
+      btns.append(again, rm);
+      card.append(btns);
+      const out = el('div', 'fine machine-result');
+      out.id = 'people-result-' + p.id;
+      card.append(out);
+    }
+    return card;
+  }
+
+  function renderPeoplePanel() {
+    const body = $('people-body');
+    if ($('people-panel').classList.contains('hidden')) return;
+    const focused = focusKey(body);
+    const f = document.activeElement;
+    const typing = f && f.id === 'person-name';
+    body.replaceChildren();
+    if (state.invite) body.append(inviteCard(state.invite));
+    body.append(addPersonCard());
+    for (const p of state.people) body.append(personCard(p));
+    if (typing) tryFocus(document.getElementById('person-name'));
+    else if (focused) refocus(body, focused);
+  }
+
+  async function addPerson(raw) {
+    const name = String(raw || '').trim().toLowerCase();
+    if (!PERSON_NAME.test(name)) {
+      peopleResult('add', 'A name looks like bob or bob-k: a letter first, then letters, digits, _ or -, at most 24.', true);
+      return;
+    }
+    if (state.peopleBusy.get('add')) return;
+    state.peopleBusy.set('add', 'add');
+    renderPeoplePanel();
+    try {
+      const res = await withFreshCheck(function () { return api('POST', '/api/people', { name: name }); });
+      state.peopleBusy.delete('add');
+      state.peopleDraft = '';
+      state.invite = { id: res.person.id, name: res.person.name, password: res.password, invite: res.invite };
+      await loadPeople().catch(function () {});
+      renderPeoplePanel();
+      tryFocus(document.getElementById('copy-invite'));
+    } catch (e) {
+      state.peopleBusy.delete('add');
+      renderPeoplePanel();
+      peopleResult('add', String(e.message || e), true);
+    }
+  }
+
+  async function resetPerson(p) {
+    if (!window.confirm('Give ' + p.name + ' a new one-time password? They are signed out everywhere, and their'
+        + ' password stops working. Their passkeys still sign them in.')) return;
+    state.peopleBusy.set(p.id, 'reset');
+    renderPeoplePanel();
+    try {
+      const res = await withFreshCheck(function () { return api('POST', '/api/people/' + p.id + '/password', {}); });
+      state.peopleBusy.delete(p.id);
+      state.invite = { id: p.id, name: p.name, password: res.password, invite: res.invite };
+      await loadPeople().catch(function () {});
+      renderPeoplePanel();
+      tryFocus(document.getElementById('copy-invite'));
+    } catch (e) {
+      state.peopleBusy.delete(p.id);
+      renderPeoplePanel();
+      peopleResult(p.id, String(e.message || e), true);
+    }
+  }
+
+  async function removePerson(p) {
+    if (!window.confirm('Remove ' + p.name + '? They are signed out everywhere at once, and their password and'
+        + ' passkeys stop working. Their messages stay.')) return;
+    state.peopleBusy.set(p.id, 'remove');
+    renderPeoplePanel();
+    try {
+      await api('POST', '/api/people/' + p.id + '/remove', {});
+      state.peopleBusy.delete(p.id);
+      if (state.invite && state.invite.id === p.id) state.invite = null;
+      await loadPeople().catch(function () {});
+      renderPeoplePanel();
+      tryFocus($('people-close'));
+    } catch (e) {
+      state.peopleBusy.delete(p.id);
+      renderPeoplePanel();
+      peopleResult(p.id, String(e.message || e), true);
+    }
+  }
+
+  function openPeople() {
+    openSheet('people-panel');
+    renderPeoplePanel();
+    loadPeople().catch(function () {});
+    if (!tryFocus(document.getElementById('person-name'))) $('people-close').focus();
   }
 
   // ------------------------------------------------------- closed rooms
@@ -2978,6 +3384,8 @@
     $('machines-close').addEventListener('click', function () { closeSheet('machines-panel'); });
     $('passkeys').addEventListener('click', openPasskeys);
     $('passkeys-close').addEventListener('click', function () { closeSheet('passkeys-panel'); });
+    $('open-people').addEventListener('click', openPeople);
+    $('people-close').addEventListener('click', function () { closeSheet('people-panel'); });
     $('closed-rooms').addEventListener('click', openClosed);
     $('closed-close').addEventListener('click', function () { closeSheet('closed-panel'); });
 
@@ -3084,9 +3492,11 @@
     }
     // the brand's tooltip names the running version (§1.2); plain text, no markup
     if (state.me && state.me.version) $('brand-name').setAttribute('title', 'switchboard ' + state.me.version);
-    // the passkeys sheet and machines that dial in: a hosted broker where passkeys work (§31.4, §31.8)
-    $('passkeys').classList.toggle('hidden', !(state.me && state.me.hosted));
-    state.machinesHosted = !!(state.me && state.me.hosted);
+    // the Sign-in sheet and machines that dial in: a hosted broker (§31.4, §31.8, §32); the
+    // admin section: its admin (§32.3)
+    $('passkeys').classList.toggle('hidden', !(state.me && (state.me.hosted || state.me.signin)));
+    $('admin-section').classList.toggle('hidden', !(state.me && state.me.admin));
+    state.machinesHosted = !!(state.me && (state.me.hosted || state.me.signin));
     renderRemotesSection();
     renderBuddies();
     await loadRooms();

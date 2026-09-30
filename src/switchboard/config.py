@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import getpass
+import os
 import re
 import tomllib
 from dataclasses import dataclass, field
@@ -207,14 +208,27 @@ def from_dict(data: dict[str, Any]) -> Config:
     return Config(**kwargs)
 
 
+# the human's name from the environment: a deployment's manifest names its admin (§32.4),
+# where the container's own user (``switchboard``) would make it ``me``
+HUMAN_NAME_ENV = "SWITCHBOARD_HUMAN_NAME"
+
+
 def load(paths: Paths) -> Config:
-    """Read ``$SWITCHBOARD_HOME/config.toml`` if it exists; defaults otherwise."""
+    """Read ``$SWITCHBOARD_HOME/config.toml`` if it exists; defaults otherwise. A non-empty
+    ``SWITCHBOARD_HUMAN_NAME`` sets ``human_name`` over both."""
     try:
         raw = paths.config.read_bytes()
     except FileNotFoundError:
-        return Config()
-    try:
-        data = tomllib.loads(raw.decode("utf-8"))
-    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
-        raise ConfigError(f"{paths.config}: {e}") from None
-    return from_dict(data)
+        cfg = Config()
+    else:
+        try:
+            data = tomllib.loads(raw.decode("utf-8"))
+        except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
+            raise ConfigError(f"{paths.config}: {e}") from None
+        cfg = from_dict(data)
+    env = os.environ.get(HUMAN_NAME_ENV, "").strip()
+    if env:
+        if not SCREEN_NAME_RE.match(env):
+            raise ConfigError(f"{HUMAN_NAME_ENV} must match ^[a-z][a-z0-9_-]{{0,23}}$")
+        cfg = cfg.replace(human_name=env)
+    return cfg

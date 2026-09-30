@@ -29,9 +29,19 @@ all of them are Origin-checked like every write, and rate-limited on failure.
 
 Machines that dial in (§31.7): ``POST /link/pair`` (a pairing code, sent by ``switchboard
 remote join``: no session, and an Origin is refused), the ``/link`` WebSocket (no Origin, a
-signed handshake), and the owner's ``GET /api/machines``, ``POST /api/machines/pair``,
-``/api/machines/{name}/approve``, ``/remove`` and ``/cancel`` (a code). Making a code and
-approving need a passkey check in the last five minutes, as adding a passkey does.
+signed handshake), and ``GET /api/machines``, ``POST /api/machines/pair``,
+``/api/machines/{name}/approve``, ``/remove`` and ``/cancel`` (a code), for anyone signed in.
+Making a code and approving need a passkey or password check in the last five minutes, as
+adding a passkey does.
+
+People (§32): everyone but the owner signs in with a name and a password, or a passkey of
+their own. ``POST /api/signin/password`` signs in (the owner's one-time password from the
+log starts the claim instead; a person's one-time password gives a session that may only
+choose its own password or passkey, ``POST /api/me/password``); ``POST /api/signin/check``
+is a password check for a signed-in browser. The owner's admin section: ``GET /api/people``,
+``POST /api/people`` (a name: a one-time password to hand over), ``/api/people/{id}/password``
+(a new one) and ``/remove``. Everyone signed in posts under their own name, and every
+person is a human to every agent.
 """
 
 from __future__ import annotations
@@ -51,8 +61,17 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from switchboard import __version__, db
 from switchboard.broker.auth import COOKIE_NAME, SESSION_TTL_S, sha256_hex
+from switchboard.broker import people
 from switchboard.broker.commands import Actor
 from switchboard.broker.passkeys import CEREMONY_TTL_S, CLAIM_GRACE_S, clean_name, sign_count_ok
+from switchboard.broker.passwords import (
+    DUMMY_HASH,
+    hash_password,
+    normalize_one_time,
+    one_time_password,
+    password_problem,
+    verify_password,
+)
 from switchboard.broker.hub import WsSubscriber
 from switchboard.broker.service import ServiceError, message_dict
 from switchboard.models import InvalidName, normalize_room, valid_host
@@ -139,16 +158,27 @@ async def _json_body(request: Request) -> dict[str, Any]:
 
 
 def install(app: FastAPI, state: "BrokerState") -> None:
+    def who(request: Request) -> people.Who | None:
+        """Whoever this request's session is, if it's a live one (a removed person's is not),
+        even one that must choose its own password first."""
+        return people.who_of(state, state.sessions.check(request.cookies.get(COOKIE_NAME)))
+
     def session(request: Request) -> str | None:
-        return state.sessions.check(request.cookies.get(COOKIE_NAME))
+        """The session's id hash, for a session that may use the app: signed in, and not
+        still on a one-time password."""
+        w = who(request)
+        return w.h if w is not None and not w.must_reset else None
 
     def unauthorized() -> JSONResponse:
+        if state.hosted:
+            return _err(401, "unauthorized", "not signed in: sign in again")
         return _err(401, "unauthorized", "not signed in: run `switchboard login` in your terminal")
 
     # ------------------------------------------------------------- pages
     @app.get("/", include_in_schema=False)
     async def index(request: Request) -> Response:
-        page = "index.html" if session(request) else "login.html"
+        w = who(request)
+        page = "login.html" if w is None else ("setup.html" if w.must_reset else "index.html")
         return FileResponse(STATIC_DIR / page, media_type="text/html", headers=NO_STORE)
 
     app.mount("/static", _StaticFiles(directory=STATIC_DIR, html=False), name="static")
@@ -202,8 +232,12 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         except ServiceError as e:
             return _svc_err(e)
         if body.get("all") is True:
-            n = state.sessions.revoke_all()
-            state.hub.close_sessions(None)
+            # everywhere this person is signed in, and nobody else (§32)
+            w = who(request)
+            gone = state.store.web_session_delete_person(w.person_id if w is not None else None)
+            for g in gone:
+                state.hub.close_sessions(g)
+            n = len(gone)
             state.store.add_event("login", data={"what": "logout_all", "via": "web", "revoked": n})
         else:
             n = state.sessions.revoke(request.cookies.get(COOKIE_NAME))
@@ -236,34 +270,102 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         return state.web_origin.secure
 
     @app.get("/setup", include_in_schema=False)
-    async def setup_page() -> Response:
-        # the claim page while there is no owner; once claimed, or on a desktop, just the app
-        if not claim_open():
+    async def setup_page(request: Request) -> Response:
+        # choosing how you'll sign in (§32.4): the admin while the broker isn't set up, or anyone
+        # on a one-time password; otherwise, and on a desktop, just the app
+        w = who(request)
+        if not claim_open() and not (w is not None and w.must_reset):
             return RedirectResponse("/", status_code=303, headers=NO_STORE)
         return FileResponse(STATIC_DIR / "setup.html", media_type="text/html", headers=NO_STORE)
 
+    @app.get("/api/setup/state")
+    async def setup_state(request: Request) -> Response:
+        """For setup.html (no session needed): ``reset`` for a session on a one-time password,
+        ``claim`` for a browser in the claim's ceremony, ``link`` while the broker isn't set up
+        (the page has the log's link, and signs in with its one-time password), else ``none``."""
+        pk = state.webauthn is not None
+        w = who(request)
+        if w is not None and w.must_reset:
+            return _ok({"mode": "reset", "human": w.name, "passkeys_work": pk})
+        if claim_ceremony(request) is not None:
+            return _ok({"mode": "claim", "human": state.cfg.human_name, "passkeys_work": pk})
+        return _ok({"mode": "link" if claim_open() else "none", "passkeys_work": pk})
+
+    def start_claim(resp: JSONResponse) -> JSONResponse:
+        """Bind a claim ceremony to this browser: the one-time password (or the log's link)
+        was right, and the owner now chooses a password or a passkey (§32.4). The owner's
+        WebAuthn user id is made now and kept only in the ceremony until the claim."""
+        claim = state.claim
+        assert claim is not None
+        cid = secrets.token_urlsafe(32)
+        claim.bind(cid, {"fido": None, "handle": secrets.token_bytes(16).hex()})
+        _set_ceremony(resp, SETUP_COOKIE, cid, secure=secure())
+        return resp
+
+    def claim_ceremony(request: Request) -> dict[str, Any] | None:
+        claim = state.claim
+        return claim.ceremony(request.cookies.get(SETUP_COOKIE)) if claim is not None and claim.active else None
+
     @app.post("/api/setup/begin")
     async def setup_begin(request: Request) -> Response:
+        """A passkey for the claim: with the log's link (its token), or in the ceremony a
+        sign-in with the one-time password started."""
         try:
             body = await _json_body(request)
         except ServiceError as e:
             return _svc_err(e)
         claim, wa = state.claim, state.webauthn
-        if claim is None or wa is None or not claim.active or not claim.check(body.get("token")):
-            failed("bad_claim")
-            return _err(403, "bad_claim", "This claim link is invalid, expired or already used. Open the newest one"
-                                          " in the broker's log.")
+        if wa is None:
+            return _err(403, "no_passkeys", "passkeys don't work at this address; choose a password")
         cid = request.cookies.get(SETUP_COOKIE)
-        if claim.ceremony_busy(cid):
-            return _err(409, "busy", "Someone is claiming this switchboard from another browser right now. If that"
-                                     " isn't you, wait five minutes and try again; if it was, use that browser.")
-        # the owner's WebAuthn user id, made now and kept only in the ceremony until the claim
-        handle = secrets.token_bytes(16)
-        options, fstate = wa.register_options(handle, state.cfg.human_name, [])
-        cid = secrets.token_urlsafe(32)
-        claim.bind(cid, {"fido": fstate, "handle": handle.hex()})
+        cer = claim_ceremony(request)
+        if cer is None:
+            if claim is None or not claim.active or not claim.check(body.get("token")):
+                failed("bad_claim")
+                return _err(403, "bad_claim", "This one-time password is wrong, expired or already used. Use the"
+                                              " newest one in the broker's log.")
+            if claim.ceremony_busy(cid):
+                return _err(409, "busy", "Someone is setting up this switchboard from another browser right now."
+                                         " If that isn't you, wait five minutes and try again; if it was, use that"
+                                         " browser.")
+            cid = secrets.token_urlsafe(32)
+            cer = {"fido": None, "handle": secrets.token_bytes(16).hex()}
+        assert claim is not None and cid is not None
+        options, fstate = wa.register_options(bytes.fromhex(cer["handle"]), state.cfg.human_name, [])
+        claim.bind(cid, {**cer, "fido": fstate})
         resp = _ok({"options": options, "human": state.cfg.human_name})
         _set_ceremony(resp, SETUP_COOKIE, cid, secure=secure())
+        return resp
+
+    @app.post("/api/setup/password")
+    async def setup_password(request: Request) -> Response:
+        """The claim with a password: the owner's own, chosen in the ceremony a sign-in with
+        the one-time password started."""
+        try:
+            body = await _json_body(request)
+        except ServiceError as e:
+            return _svc_err(e)
+        claim, cer = state.claim, claim_ceremony(request)
+        if claim is None or cer is None:
+            failed("bad_claim")
+            return _err(403, "no_ceremony", "No setup is in progress in this browser (it takes five minutes at"
+                                            " most): sign in with the one-time password again.")
+        why = password_problem(body.get("password"), state.cfg.human_name)
+        if why is not None:
+            return _err(400, "bad_password", why)
+        with db.tx(state.store.con):  # the owner and their password, or neither
+            state.store.claim_owner(bytes.fromhex(cer["handle"]))
+            state.store.set_owner_password(hash_password(body["password"]))
+        claim.spend()
+        state.claimed()
+        sid = state.sessions.create("claim")
+        state.passkey_checks[sha256_hex(sid)] = state.clock.now()  # choosing it is a check
+        state.store.add_event("login", data={"what": "claim", "via": "web", "with": "password"})
+        state.hub.notice(None, "warn", "switchboard set up (with a password)")
+        log.warning("switchboard set up: the admin chose a password")
+        resp = _ok({"ok": True, "human": state.cfg.human_name})
+        _set_cookie(resp, sid, secure=secure())
+        _drop_cookie(resp, SETUP_COOKIE, secure=secure())
         return resp
 
     @app.post("/api/setup/finish")
@@ -274,10 +376,10 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return _svc_err(e)
         claim, wa = state.claim, state.webauthn
         cer = claim.ceremony(request.cookies.get(SETUP_COOKIE)) if claim is not None else None
-        if cer is None or wa is None:
+        if cer is None or wa is None or cer.get("fido") is None:
             failed("bad_claim")
-            return _err(403, "no_ceremony", "No claim is in progress in this browser (it takes five minutes at"
-                                            " most): open the claim link again.")
+            return _err(403, "no_ceremony", "No setup is in progress in this browser (it takes five minutes at"
+                                            " most): sign in with the one-time password again.")
         try:
             reg = wa.register_finish(cer["fido"], body.get("credential"))
         except ValueError as e:
@@ -344,58 +446,77 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         if not state.used_challenges.add(st["challenge"]):
             failed("bad_passkey")
             return _err(403, "replay", "this sign-in was already used")
+        person = state.store.person(row.person_id) if row.person_id is not None else None
+        if row.person_id is not None and (person is None or not person.active):  # pragma: no cover - deleted with them
+            return _err(403, "bad_credential", "unknown passkey")
         state.store.passkey_used(cred_id, count)
         now = state.clock.now()
-        h = session(request)
-        resp = _ok({"ok": True, "name": row.name, "reauth": h is not None})
-        if h is not None:
-            # a signed-in browser confirming it's the owner: a fresh check for this session, no new session
-            state.passkey_checks[h] = now
+        w = who(request)
+        if person is not None and person.must_reset:
+            # their passkey proves it's them: a one-time password the admin gave them since is not needed
+            state.store.person_set_password(person.id, None)
+        name = person.name if person is not None else state.cfg.human_name
+        resp = _ok({"ok": True, "name": row.name, "reauth": w is not None, "human": name})
+        if w is not None and w.person_id == row.person_id:
+            # a signed-in browser confirming it's them: a fresh check for this session, no new session
+            state.passkey_checks[w.h] = now
             state.store.add_event("login", data={"what": "passkey_check", "passkey": row.name})
         else:
-            sid = state.sessions.create(f"passkey:{row.name}")
+            sid = state.sessions.create(f"passkey:{row.name}", person_id=row.person_id)
             state.passkey_checks[sha256_hex(sid)] = now
-            state.store.add_event("login", data={"what": "session", "via": "passkey", "passkey": row.name})
-            state.hub.notice(None, "warn", f'new web login (passkey "{row.name}")')
+            state.store.add_event("login", data={"what": "session", "via": "passkey", "passkey": row.name,
+                                                 "person": name})
+            state.hub.notice(None, "warn", f'new web login: {name} (passkey "{row.name}")')
             _set_cookie(resp, sid, secure=secure())
         _drop_cookie(resp, PASSKEY_COOKIE, secure=secure())
         return resp
 
-    def add_refused(request: Request) -> tuple[str | None, JSONResponse | None]:
-        """The session that may add a passkey now, or why not: signed in, passkeys possible
-        here, the broker claimed, and a passkey check in the last five minutes (or the
+    def add_refused(request: Request) -> tuple[people.Who | None, JSONResponse | None]:
+        """The session that may add a passkey now, or why not: signed in (a session still on a
+        one-time password may: a passkey instead of a password), passkeys possible here, the
+        broker set up, and a passkey or password check in the last five minutes (or the
         claim's own grace)."""
-        h = session(request)
-        if h is None:
+        w = who(request)
+        if w is None:
             return None, unauthorized()
         if state.webauthn is None:
-            return None, _err(403, "no_passkeys", "passkeys need a public https:// URL (docs/DEPLOY.md)")
+            return None, _err(403, "no_passkeys",
+                              "passkeys need a public https:// URL with a DNS name (docs/DEPLOY.md)")
         if state.store.owner_handle() is None:
-            return None, _err(409, "unclaimed", "claim this switchboard from the link in its log first")
-        if not state.fresh_check(h):
-            return None, _err(403, "reauth", "confirm it's you with a passkey first")
-        return h, None
+            return None, _err(409, "unclaimed", "set this switchboard up with the one-time password in its log first")
+        if not state.fresh_check(w.h):
+            return None, _err(403, "reauth", "confirm it's you first")
+        return w, None
+
+    def handle_of(w: people.Who) -> bytes:
+        if w.person_id is None:
+            handle = state.store.owner_handle()
+            assert handle is not None
+            return handle
+        p = state.store.person(w.person_id)
+        assert p is not None
+        return p.handle
 
     @app.post("/api/passkeys/begin")
     async def passkeys_begin(request: Request) -> Response:
-        h, no = add_refused(request)
+        w, no = add_refused(request)
         if no is not None:
             return no
+        assert w is not None
         wa = state.webauthn
         assert wa is not None
-        handle = state.store.owner_handle()
-        assert handle is not None
-        options, fstate = wa.register_options(handle, state.cfg.human_name,
-                                              [pk.credential_id for pk in state.store.passkeys()])
+        options, fstate = wa.register_options(handle_of(w), w.name,
+                                              [pk.credential_id for pk in state.store.passkeys_of(w.person_id)])
         resp = _ok({"options": options})
         _set_ceremony(resp, ADD_COOKIE, state.sealer.seal(fstate, CEREMONY_TTL_S), secure=secure())
         return resp
 
     @app.post("/api/passkeys")
     async def passkeys_add(request: Request) -> Response:
-        h, no = add_refused(request)
+        w, no = add_refused(request)
         if no is not None:
             return no
+        assert w is not None
         try:
             body = await _json_body(request)
         except ServiceError as e:
@@ -412,18 +533,218 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         if state.store.passkey(reg.credential_id) is not None:
             return _err(409, "conflict", "that passkey is registered already")
         name = clean_name(body.get("name"))
-        state.store.passkey_add(reg.credential_id, reg.public_key, name, reg.aaguid, reg.sign_count)
-        state.store.add_event("login", data={"what": "passkey_added", "passkey": name})
-        state.hub.notice(None, "info", f'passkey added ("{name}")')
-        resp = _ok({"ok": True, "name": name, "passkeys": state.store.passkey_count()})
+        with db.tx(state.store.con):
+            state.store.passkey_add(reg.credential_id, reg.public_key, name, reg.aaguid, reg.sign_count,
+                                    person_id=w.person_id)
+            if w.must_reset and w.person_id is not None:
+                state.store.person_set_password(w.person_id, None)  # a passkey instead of a password
+        state.store.add_event("login", data={"what": "passkey_added", "passkey": name, "person": w.name})
+        state.hub.notice(None, "info", f'passkey added by {w.name} ("{name}")')
+        resp = _ok({"ok": True, "name": name, "passkeys": len(state.store.passkeys_of(w.person_id))})
         _drop_cookie(resp, ADD_COOKIE, secure=secure())
         return resp
 
+    # ---------------------------------------------------------- passwords (§32.4)
+    @app.post("/api/signin/password")
+    async def signin_password(request: Request) -> Response:
+        """A name and a password. The owner's one-time password from the log starts the claim
+        (``next: setup``); a person's one-time password gives a session that must choose its
+        own first (``next: setup``); anything else that's right is a session (``next: app``)."""
+        try:
+            body = await _json_body(request)
+        except ServiceError as e:
+            return _svc_err(e)
+        if not state.hosted:
+            return _err(403, "no_passwords", "this switchboard signs in with `switchboard login`")
+        raw, pw = body.get("name"), body.get("password")
+        name = raw.strip().lower()[:40] if isinstance(raw, str) else ""
+        wait = state.signin.wait_s(name)
+        if wait > 0:
+            return _err(429, "slow_down", f"too many wrong tries: wait {int(wait) + 1} s and try again")
+        now = state.clock.now()
+        resp: JSONResponse | None = None
+        if name and people.is_owner_name(state, name):
+            if state.claim is not None and state.claim.active and state.claim.check(pw):
+                if state.claim.ceremony_busy(request.cookies.get(SETUP_COOKIE)):
+                    return _err(409, "busy", "Someone is setting up this switchboard from another browser right now.")
+                state.signin.ok(name)
+                return start_claim(_ok({"ok": True, "next": "setup", "human": state.cfg.human_name,
+                                        "passkeys": state.webauthn is not None}))
+            if verify_password(pw, state.store.owner_password_hash()):
+                resp = signed_in(None, state.cfg.human_name, "password", now)
+        elif name:
+            person = state.store.person_named(name)
+            if person is not None and person.must_reset:
+                typed = normalize_one_time(pw) or pw
+                if verify_password(typed, person.password_hash):
+                    if person.password_expires_at is not None and now >= person.password_expires_at:
+                        state.signin.failed(name)
+                        return _err(403, "expired", "this one-time password has expired: ask the admin for a new one")
+                    resp = signed_in(person.id, person.name, "one-time", now, reset=True)
+            elif person is not None and verify_password(pw, person.password_hash):
+                resp = signed_in(person.id, person.name, "password", now)
+            else:
+                verify_password(pw, DUMMY_HASH)  # as long as a real check: the time says nothing about names
+        if resp is None:
+            state.signin.failed(name or "?")
+            failed("bad_password")
+            return _err(403, "bad_password", "wrong name or password")
+        state.signin.ok(name)
+        return resp
+
+    def signed_in(person_id: int | None, name: str, via: str, now: float, *, reset: bool = False) -> JSONResponse:
+        sid = state.sessions.create(via, person_id=person_id)
+        state.passkey_checks[sha256_hex(sid)] = now  # a password just typed is a fresh check
+        state.store.add_event("login", data={"what": "session", "via": via, "person": name})
+        state.hub.notice(None, "warn", f"new web login: {name}" + (" (one-time password)" if reset else ""))
+        resp = _ok({"ok": True, "next": "setup" if reset else "app", "human": name,
+                    "passkeys": state.webauthn is not None})
+        _set_cookie(resp, sid, secure=secure())
+        return resp
+
+    @app.post("/api/signin/check")
+    async def signin_check(request: Request) -> Response:
+        """A signed-in browser confirms it's them with their password: a fresh check, as a
+        passkey gives one (to add a passkey, add a person, pair or approve a machine)."""
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        try:
+            body = await _json_body(request)
+        except ServiceError as e:
+            return _svc_err(e)
+        wait = state.signin.wait_s(w.name)
+        if wait > 0:
+            return _err(429, "slow_down", f"too many wrong tries: wait {int(wait) + 1} s and try again")
+        stored = (state.store.owner_password_hash() if w.person_id is None
+                  else getattr(state.store.person(w.person_id), "password_hash", None))
+        if not verify_password(body.get("password"), stored):
+            state.signin.failed(w.name)
+            failed("bad_password")
+            return _err(403, "bad_password", "wrong password")
+        state.signin.ok(w.name)
+        state.passkey_checks[w.h] = state.clock.now()
+        state.store.add_event("login", data={"what": "password_check", "person": w.name})
+        return _ok({"ok": True})
+
+    @app.post("/api/me/password")
+    async def my_password(request: Request) -> Response:
+        """Choose your own password: right after a one-time password, or later to change it
+        (a password or passkey check in the last five minutes)."""
+        w = who(request)
+        if w is None or not state.hosted:
+            return unauthorized()
+        if not w.must_reset and not state.fresh_check(w.h):
+            return _err(403, "reauth", "confirm it's you first")
+        try:
+            body = await _json_body(request)
+        except ServiceError as e:
+            return _svc_err(e)
+        why = password_problem(body.get("password"), w.name)
+        if why is not None:
+            return _err(400, "bad_password", why)
+        hashed = hash_password(body["password"])
+        if w.person_id is None:
+            state.store.set_owner_password(hashed)
+        else:
+            state.store.person_set_password(w.person_id, hashed)
+        state.store.add_event("login", data={"what": "password_set", "person": w.name})
+        return _ok({"ok": True})
+
+    # ---------------------------------------------------------- the admin section (§32.3)
+    def admin(request: Request, fresh: bool) -> tuple[people.Who | None, JSONResponse | None]:
+        w = who(request)
+        if w is None or w.must_reset:
+            return None, unauthorized()
+        if not state.hosted:
+            return None, _err(404, "not_found", "people sign in to a hosted switchboard only")
+        if not w.owner:
+            return None, _err(403, "forbidden", "only the admin manages people")
+        if fresh and not state.fresh_check(w.h):
+            return None, _err(403, "reauth", "confirm it's you first")
+        return w, None
+
+    @app.get("/api/people")
+    async def people_list(request: Request) -> Response:
+        _w, no = admin(request, False)
+        if no is not None:
+            return no
+        return _ok({"people": people.summary(state), "origin": state.web_origin.origin})
+
+    @app.post("/api/people")
+    async def people_add(request: Request) -> Response:
+        w, no = admin(request, True)  # a new way in: a fresh check, as pairing a machine
+        if no is not None:
+            return no
+        assert w is not None
+        try:
+            body = await _json_body(request)
+        except ServiceError as e:
+            return _svc_err(e)
+        why = people.name_problem(state, body.get("name"))
+        if why is not None:
+            return _err(400, "bad_name", why)
+        name = body["name"].strip().lower()
+        one_time = one_time_password()
+        try:
+            p = state.store.person_add(name, secrets.token_bytes(16), hash_password(normalize_one_time(one_time) or ""),
+                                       people.ONE_TIME_TTL_S)
+        except ValueError as e:
+            return _err(409, "conflict", str(e))
+        state.store.add_event("people", data={"what": "add", "person": name, "by": w.name})
+        state.hub.notice(None, "info", f"{name} added by {w.name}")
+        return _ok({"person": next(x for x in people.summary(state) if x["id"] == p.id), "password": one_time,
+                    "invite": people.invite_text(state.web_origin.origin, name, one_time)})
+
+    @app.post("/api/people/{pid}/password")
+    async def people_password(request: Request, pid: str) -> Response:
+        w, no = admin(request, True)
+        if no is not None:
+            return no
+        assert w is not None
+        try:
+            await _json_body(request)
+        except ServiceError as e:
+            return _svc_err(e)
+        p = state.store.person(int(pid)) if ROOM_ID_RE.fullmatch(pid) and int(pid) <= MAX_ROOM_ID else None
+        if p is None or not p.active:
+            return _err(404, "not_found", "no such person")
+        one_time = one_time_password()
+        gone = state.store.person_one_time_password(p.id, hash_password(normalize_one_time(one_time) or ""),
+                                                    people.ONE_TIME_TTL_S)
+        for g in gone or []:
+            state.hub.close_sessions(g)
+        state.store.add_event("people", data={"what": "one_time_password", "person": p.name, "by": w.name})
+        state.hub.notice(None, "info", f"{w.name} gave {p.name} a new one-time password")
+        return _ok({"person": next(x for x in people.summary(state) if x["id"] == p.id), "password": one_time,
+                    "invite": people.invite_text(state.web_origin.origin, p.name, one_time)})
+
+    @app.post("/api/people/{pid}/remove")
+    async def people_remove(request: Request, pid: str) -> Response:
+        w, no = admin(request, False)  # removing only takes access away
+        if no is not None:
+            return no
+        assert w is not None
+        try:
+            await _json_body(request)
+        except ServiceError as e:
+            return _svc_err(e)
+        p = state.store.person(int(pid)) if ROOM_ID_RE.fullmatch(pid) and int(pid) <= MAX_ROOM_ID else None
+        if p is None or not p.active:
+            return _err(404, "not_found", "no such person")
+        gone = state.store.person_remove(p.id) or []
+        for g in gone:
+            state.hub.close_sessions(g)
+        state.store.add_event("people", data={"what": "remove", "person": p.name, "by": w.name, "sessions": len(gone)})
+        state.hub.notice(None, "warn", f"{p.name} removed by {w.name}: signed out everywhere")
+        return _ok({"ok": True, "sessions": len(gone)})
+
     @app.get("/api/auth/state")
     async def auth_state() -> Response:
-        # for the sign-in page (no session): what applies here, and nothing about the owner
+        # for the sign-in page (no session): what applies here, and nothing about anyone
         return _ok({"hosted": state.web_origin.public, "claimed": state.store.owner_handle() is not None,
-                    "passkeys": passkeys_on(), "claim": claim_open()})
+                    "passkeys": passkeys_on(), "passkeys_work": state.webauthn is not None, "claim": claim_open(),
+                    "password": state.hosted, "sso": "coming soon"})
 
     # ---------------------------------------------- machines that dial in (§31.7)
     @app.post("/link/pair", include_in_schema=False)
@@ -451,15 +772,16 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         await m.serve(ws)
 
     def owner(request: Request, fresh: bool) -> JSONResponse | None:
-        """Why the owner's machine routes refuse this request, or None: a session, a broker that
-        takes machines, and (to make a code or approve) a passkey check in the last 5 minutes."""
+        """Why the machine routes refuse this request, or None: a session (anyone signed in,
+        §32), a broker that takes machines, and (to make a code or approve) a passkey or
+        password check in the last 5 minutes."""
         h = session(request)
         if h is None:
             return unauthorized()
         if state.machines is None:
-            return _err(404, "not_found", "machines dial in only to a hosted broker with passkeys")
+            return _err(404, "not_found", "machines dial in only to a hosted broker behind https")
         if fresh and not state.fresh_check(h):
-            return _err(403, "reauth", "confirm it's you with a passkey first")
+            return _err(403, "reauth", "confirm it's you first")
         return None
 
     @app.get("/api/machines")
@@ -525,19 +847,24 @@ def install(app: FastAPI, state: "BrokerState") -> None:
     # --------------------------------------------------------------- api
     @app.get("/api/me")
     async def me(request: Request) -> Response:
-        h = session(request)
-        if h is None:
+        w = who(request)
+        if w is None or w.must_reset:
             return unauthorized()
+        has_password = (state.store.owner_password_hash() is not None if w.person_id is None
+                        else getattr(state.store.person(w.person_id), "password_hash", None) is not None)
         resp = _ok(
             {
-                "human": state.cfg.human_name,
+                "human": w.name,
+                "admin": w.owner and state.hosted,  # the admin section (§32.3)
                 "version": __version__,
                 "test_mode": state.test_mode,
                 "port": state.info.port,
                 # the passkeys sheet (§31.4): shown behind a public URL where passkeys work
                 "hosted": state.webauthn is not None,
-                "passkeys": state.store.passkey_count(),
-                "fresh": state.fresh_check(h),
+                "signin": state.hosted,  # passwords and people (§32)
+                "passkeys": len(state.store.passkeys_of(w.person_id)),
+                "password": has_password,
+                "fresh": state.fresh_check(w.h),
             }
         )
         # Slide the browser cookie along with the server-side session.
@@ -581,10 +908,12 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return unauthorized()
         try:
             room = state.service.room(slug)
+            w = who(request)
             return _ok(
                 {
                     "room": room.name,
-                    "human": state.cfg.human_name,
+                    "human": w.name if w is not None else state.cfg.human_name,
+                    "people": people.names(state) if state.hosted else [state.cfg.human_name],
                     "members": state.service.members(room.name),
                     "settings": state.service.settings(room),
                 }
@@ -607,28 +936,31 @@ def install(app: FastAPI, state: "BrokerState") -> None:
 
     @app.post("/api/rooms/{slug}/say")
     async def say(request: Request, slug: str) -> Response:
-        if session(request) is None:
+        w = who(request)
+        if w is None or w.must_reset:
             return unauthorized()
         try:
             body = await _json_body(request)
             text = body.get("text")
             if not isinstance(text, str):
                 raise ServiceError("bad_request", "text is required")
-            msg = state.service.human_say(slug, text, via="web")
+            msg = state.service.human_say(slug, text, via="web", person=(w.name, w.person_id))
             return _ok({"id": msg.id})
         except ServiceError as e:
             return _svc_err(e)
 
     @app.post("/api/rooms/{slug}/command")
     async def command(request: Request, slug: str) -> Response:
-        if session(request) is None:
+        w = who(request)
+        if w is None or w.must_reset:
             return unauthorized()
         try:
             body = await _json_body(request)
             text = body.get("text")
             if not isinstance(text, str):
                 raise ServiceError("bad_request", "text is required")
-            res = state.service.command(slug, text, Actor(role="human", via="web"))
+            res = state.service.command(slug, text, Actor(role="human", via="web", name=w.name,
+                                                          person_id=w.person_id))
             return _ok(res)
         except ServiceError as e:
             return _svc_err(e)
@@ -703,10 +1035,11 @@ def install(app: FastAPI, state: "BrokerState") -> None:
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket) -> None:
         origin_ok = ws.headers.get("origin") == state.origin
-        sid_hash = state.sessions.check(ws.cookies.get(COOKIE_NAME)) if origin_ok else None
-        if not origin_ok or sid_hash is None:
+        w = people.who_of(state, state.sessions.check(ws.cookies.get(COOKIE_NAME))) if origin_ok else None
+        if not origin_ok or w is None or w.must_reset:
             await ws.close(code=1008)
             return
+        sid_hash = w.h
         await ws.accept()
         sub = WsSubscriber()
         sub.sid_hash = sid_hash

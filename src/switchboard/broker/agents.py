@@ -673,7 +673,7 @@ class AgentService:
             room=room.name, screen_name=m.screen_name, human_name=self.cfg.human_name,
             others=others, catchup=catchup, nonce=nonce,
             guidance=adapter.join_guidance(p, room.name), test_mode=self.state.test_mode,
-            rejoined=rejoined,
+            rejoined=rejoined, people=self.svc.people_names(),
         )
         self.run(self.engine.evaluate(m.id) + [Snapshot(room.id)])
         return {
@@ -701,8 +701,10 @@ class AgentService:
     def who(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
         _p, _m, room = self._member(conn, params)
         rows = self.svc.member_rows(room.id)
-        lines = [f"[switchboard] {room.name}: {envelope._word(self.cfg.human_name)} (your user, kind=human)"
-                 f" and {len(rows)} agent(s)"]
+        humans = self.svc.people_names()
+        who = (f"{envelope._word(humans[0])} (your user, kind=human)" if len(humans) == 1
+               else f"{envelope.users_phrase(humans)} (your users, kind=human)")
+        lines = [f"[switchboard] {room.name}: {who} and {len(rows)} agent(s)"]
         for x in rows:
             bits = [f"- {envelope._word(x.name)}", f"harness={x.harness}"]
             if x.host:

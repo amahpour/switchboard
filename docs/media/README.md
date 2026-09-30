@@ -27,9 +27,12 @@ It drives headless Chromium through Playwright (a dev dependency): run `uv run p
 | `welcome-light.png` | the first-run page (a second broker with no rooms) |
 | `phone-light.png`, `phone-dark-sheet.png` | a phone, and its Members sheet |
 | `login-light.png` | the sign-in page |
-| `claim-light.png`, `claim-backup-light.png` | a hosted broker's claim page from the link in its log, and the backup-passkey step (issue #41) |
-| `signin-passkey-light.png`, `signin-passkey-phone-dark.png` | the sign-in page once the owner has a passkey, on a desktop and on a phone |
-| `passkeys-light.png`, `passkeys-dark.png` | the Passkeys sheet |
+| `signin-setup-light.png`, `setup-light.png` | a hosted broker's sign-in page before it's set up (the admin's one-time password is in its log), and Choose how you'll sign in (issues #41, #61) |
+| `people-light.png`, `people-dark.png` | the admin's People sheet, with the invite to send someone new |
+| `passkeys-light.png`, `passkeys-dark.png` | the Sign-in sheet: your password, your passkeys, sign out everywhere |
+| `confirm-light.png` | Confirm it's you, before adding someone once the last check ran out |
+| `signin-light.png`, `signin-phone-dark.png` | the sign-in page's three ways in (a password, a passkey, SSO coming soon), on a desktop and on a phone |
+| `setup-person-light.png` | a teammate choosing their own password after their one-time password |
 
 Re-run it whenever the UI changes, and look at every picture before committing them.
 

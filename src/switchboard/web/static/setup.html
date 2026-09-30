@@ -1,12 +1,14 @@
 <!doctype html>
 <!--
-  switchboard: the claim page (DESIGN.md §31.3), served at /setup while a hosted broker has no owner.
+  switchboard: choosing how you'll sign in (DESIGN.md §32.4), served at /setup (and at "/" for a
+  session still on a one-time password).
 
-  The claim link the broker printed in its log ends in #t=<token>. The browser never sends the
-  part after # to any server, so the token can't land in a proxy's access log; setup.js reads
-  it, removes it from the address bar at once, and sends it in the body of the request that
-  registers the first passkey, which spends it. Same rules as index.html: no inline script,
-  style or event handler; every link is same-origin (tests/unit/test_web_static_lint.py).
+  Two people land here. The admin, right after signing in with the one-time password from the
+  broker's log, or from the link in the same log line: its #t=<password> never reaches any
+  server in a URL, and setup.js removes it from the address bar at once. And anyone else,
+  right after signing in with the one-time password the admin gave them. Either way they
+  choose their own password, or a passkey instead. Same rules as index.html: no inline
+  script, style or event handler; every link is same-origin (tests/unit/test_web_static_lint.py).
 -->
 <html lang="en">
 <head>
@@ -14,7 +16,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="light dark">
-<title>switchboard &mdash; Claim it</title>
+<title>switchboard &mdash; Choose how you&rsquo;ll sign in</title>
 <link rel="stylesheet" href="/static/style.css">
 <link rel="icon" href="/static/favicon-32.png" sizes="32x32">
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
@@ -31,28 +33,39 @@
     <span class="brand-name">switchboard</span>
   </div>
 
-  <!-- 1. the claim: the link's token plus a new passkey make this switchboard yours -->
-  <section class="setup-step" id="step-claim" aria-labelledby="setup-title">
-    <h1 id="setup-title">Claim this switchboard</h1>
-    <p>You opened the claim link from the broker&rsquo;s log. Create a passkey to make this switchboard
-      yours: Touch&nbsp;ID, Face&nbsp;ID, Windows&nbsp;Hello, your phone or a security key. From then on
-      only your passkeys sign in.</p>
-    <form class="setup-form" id="claim-form" autocomplete="off">
-      <label for="claim-name">Name this passkey</label>
-      <input type="text" id="claim-name" name="name" maxlength="40" autocomplete="off" spellcheck="false"
-             placeholder="MacBook Pro">
+  <!-- 1. choose: your own password, or a passkey instead -->
+  <section class="setup-step hidden" id="step-choose" aria-labelledby="setup-title">
+    <h1 id="setup-title">Choose how you&rsquo;ll sign in</h1>
+    <p id="choose-lead">Your one-time password worked. Now choose your own password, or a passkey instead.</p>
+    <form class="setup-form" id="password-form" autocomplete="on">
+      <input type="text" id="setup-user" name="username" autocomplete="username" class="sr-only"
+             tabindex="-1" aria-hidden="true" readonly>
+      <label for="new-password">New password</label>
+      <input type="password" id="new-password" name="new-password" autocomplete="new-password" minlength="10"
+             maxlength="256" required aria-describedby="password-rules">
+      <label for="new-password-2">Type it again</label>
+      <input type="password" id="new-password-2" name="new-password-2" autocomplete="new-password" minlength="10"
+             maxlength="256" required>
+      <p class="fine" id="password-rules">At least 10 characters. A few words you&rsquo;ll remember work well.</p>
       <div class="login-actions stretch">
-        <button type="submit" class="btn-primary" id="claim-btn">Create a passkey</button>
+        <button type="submit" class="btn-primary" id="password-btn">Save and sign in</button>
       </div>
     </form>
-    <p class="fine">The link works once, for 60 minutes; the broker prints a fresh one in its log every hour
-      until it is claimed.</p>
+    <div class="login-or" id="choose-or" aria-hidden="true"><span>or</span></div>
+    <div class="login-alt" id="choose-alt">
+      <button type="button" class="btn" id="passkey-btn">
+        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="5.5" cy="8" r="3"/><path d="M8.5 8h5.5M12 8v2.5M14 8v1.5"/></svg>
+        <span>Use a passkey instead</span>
+      </button>
+    </div>
+    <p class="fine" id="choose-fine">A passkey signs you in with Touch&nbsp;ID, Face&nbsp;ID, Windows&nbsp;Hello, your
+      phone or a security key. You can add one, or change your password, later from the key button.</p>
   </section>
 
-  <!-- 2. a backup passkey: a managed laptop may block passkey sync -->
+  <!-- 2. the admin chose a passkey: a backup, since a managed laptop may block passkey sync -->
   <section class="setup-step hidden" id="step-backup" aria-labelledby="backup-title">
     <h1 id="backup-title">Add a backup passkey</h1>
-    <p id="backup-lead">This switchboard is yours, and this browser is signed in.</p>
+    <p id="backup-lead">This switchboard is set up, and this browser is signed in.</p>
     <p>Add a second passkey from your phone or a security key. A managed laptop may block passkey sync,
       and a backup is how you get back in without a reset.</p>
     <form class="setup-form" id="backup-form" autocomplete="off">
@@ -66,21 +79,15 @@
     </form>
   </section>
 
-  <!-- the link is invalid, expired or already used -->
+  <!-- the one-time password (or its link) is wrong, expired or already used -->
   <section class="setup-step hidden" id="step-bad" aria-labelledby="bad-title">
-    <h1 id="bad-title">This claim link doesn&rsquo;t work</h1>
-    <p>It is invalid, expired or already used. A claim link works once, for 60 minutes, and the broker
-      prints a fresh one in its log every hour until it is claimed: open the newest one.</p>
-    <p class="fine">If the newest link says it was already used and that wasn&rsquo;t you, someone who can
-      read the log claimed it first. Set <code>SWITCHBOARD_RESET_OWNER</code> to a new value and restart
-      the broker: it forgets the owner and prints a fresh link (docs/DEPLOY.md).</p>
+    <h1 id="bad-title">This one-time password doesn&rsquo;t work</h1>
+    <p>It is wrong, expired or already used. The admin&rsquo;s one-time password works once, for 60 minutes, and
+      the broker prints a fresh one in its log every hour until someone uses it: use the newest one.</p>
+    <p class="fine">If the newest one says it was already used and that wasn&rsquo;t you, someone who can read the
+      log set this switchboard up first. Set <code>SWITCHBOARD_RESET_OWNER</code> to a new value and restart the
+      broker: it forgets the admin and prints a fresh one-time password (docs/DEPLOY.md).</p>
     <div class="login-actions stretch"><a class="btn-primary" href="/">Go to the sign-in page</a></div>
-  </section>
-
-  <!-- no WebAuthn here -->
-  <section class="setup-step hidden" id="step-unsupported" aria-labelledby="unsupported-title">
-    <h1 id="unsupported-title">This browser can&rsquo;t create passkeys</h1>
-    <p>Open the same link in a current Chrome, Edge, Safari or Firefox, over https.</p>
   </section>
 
   <p class="login-error hidden" id="setup-error" role="alert"></p>

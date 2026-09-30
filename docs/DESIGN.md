@@ -2635,6 +2635,8 @@ Your own machines' agents joining a hosted broker, and signing in without exec (
 
 ## 31. A hosted broker you use from the web UI alone (#41)
 
+*Since §32 (#61), the owner is the admin of a team: the claim link is also a one-time password, and everyone else signs in too.*
+
 §30 put the broker behind a platform's HTTPS, and left two gaps: signing in needed a shell inside the container (`docker exec … switchboard login`), and no agent could join it, since remote links (§27) go from the broker out over SSH, which a hosted broker can't do to a laptop behind a router. #41 closes both for **one owner**, you and your own machines, in three changes, each usable on its own: the owner and their passkeys (§31.2 to §31.6, this section as first written); the dial-in link, where a machine of yours pairs from its command line and dials `wss://<public URL>/link` (§31.7, its PR adds it); and the machines in the web UI (§31.8, its PR). Other people and their agents stay in #24. Everything happens in the web UI, apart from reading one line in the container's log, once.
 
 ### 31.1 Goals and non-goals
@@ -2754,3 +2756,64 @@ On a hosted broker (a public URL where passkeys work: `GET /api/me`'s `hosted`),
 - **The bridges are socketpairs,** on both ends: the broker's `MachineLink` and the machine's satellite read and write a stream exactly as they do over ssh, and each WebSocket text message carries one frame. A message with a newline, or longer than a frame, ends the link.
 - **The pictures' machines** (`tests/fakes/fake_machine.py`) pair as `remote join` does, but say what the test chooses about themselves, so no picture shows the host that made it.
 - **`truststore` on WSL2** reads the Linux distribution's store, not Windows's: behind a TLS-inspection proxy, add its root certificate there (`/usr/local/share/ca-certificates/`, then `update-ca-certificates`), as the image test does in its machine container.
+
+## 32. People: a team on one hosted broker (#61)
+
+§31 made a hosted broker usable from the web UI alone, for **one owner**. This section lets a team share it: the owner (now called the admin) adds people by name, everyone signs in with a password or a passkey of their own, and everyone's machines dial in. It is the MVP of #61 for a team on a private network (a company VPC reached over a VPN), deployed by its admin through a GitOps tool.
+
+### 32.1 Goals and the trust model
+- **Everyone answers to everyone.** Every signed-in person is a human in every room: their messages are `kind=human` to every agent, they post under their own name, run every room command and pair, approve or remove machines. #61's design sketch split agents by owner (only its own person's messages as its user's); for this deployment the admin chose the opposite, "a safe space, not a SaaS", and that split is not built. Nothing in the delivery rules changes: a person's message is a human message.
+- **The admin section is the admin's.** Adding people, a new one-time password for someone, and removing someone.
+- **Three ways in** on the sign-in page: a name and a password, a passkey, and SSO shown as coming soon.
+- **A one-time password, then your own.** The admin's first password is printed once in the log (the claim, §31.3, now a password rather than only a link); everyone else's first one comes from the admin. Either way, the first sign-in with it can do nothing but choose a password of their own, or a passkey instead.
+- **Not in this version:** SSO (OIDC), per-room membership, roles beyond admin and everyone else, per-person budgets, each agent answering to one person (#61's sketch, if a deployment wants it later).
+
+### 32.2 Data model (schema v4)
+```sql
+ALTER TABLE messages ADD COLUMN sender_person_id INTEGER;    -- a human sender who isn't the admin
+ALTER TABLE web_sessions ADD COLUMN person_id INTEGER;       -- whose session; NULL: the admin
+ALTER TABLE passkeys ADD COLUMN person_id INTEGER;           -- whose passkey; NULL: the admin
+ALTER TABLE link_machines ADD COLUMN person_id INTEGER;      -- who paired it (kept for later; not set yet)
+CREATE TABLE people(
+  id INTEGER PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE,
+  handle BLOB NOT NULL UNIQUE,                               -- their WebAuthn user id (16 random bytes)
+  password_hash TEXT, must_reset INTEGER NOT NULL DEFAULT 1, password_expires_at REAL,
+  created_at REAL NOT NULL, removed_at REAL);
+CREATE UNIQUE INDEX people_active_name ON people(name) WHERE removed_at IS NULL;
+UPDATE meta SET value='4' WHERE key='schema_version';
+```
+- **NULL is the admin**, so the migration rewrites no row: every existing passkey, session and message stays the admin's. The admin has no `people` row; their password's hash is `meta.owner_password` (their WebAuthn handle stays `meta.owner_handle`), and their name is `human_name`. On a desktop broker every session is NULL, as before.
+- The same machinery as §27.6 and §31.2: a verified 0600 backup (`switchboard.db.v3.bak`), one transaction, the checks. Tested on a dump written by 0.7.0's own store (`tests/fixtures/db/v0_7_0.sql`).
+- **A removed person** keeps their row, so their messages keep their name; their password, passkeys and sessions are deleted in the same transaction. The name is free again.
+
+### 32.3 The admin section
+- **People** under **Admin** in the sidebar, for the admin only (`GET /api/me`'s `admin`). The sheet: **Add someone** (a name, like a screen name: `^[a-z][a-z0-9_-]{0,23}$`, not reserved, not the admin's, not taken), then **Send this to bob**: the invite text with a Copy button, shown once (the address, their name and a one-time password good for 7 days). Then everyone with how they sign in (`password`, `passkey`, `one-time`, `expired`), **New one-time password** (a reset: their password stops working, their sessions end, their passkeys stay) and **Remove**.
+- **Routes:** `GET /api/people`; `POST /api/people {name}` and `POST /api/people/{id}/password` (a fresh check, §32.4: each gives someone a way in); `POST /api/people/{id}/remove` (no check: it only takes access away). All refuse anyone but the admin (403) and a desktop broker (404). Each writes a `people` event and a notice in every room.
+
+### 32.4 Signing in
+- **Passwords.** The standard library's scrypt (n=2^14, r=8, p=1, a 16-byte salt), stored as `scrypt$…`, compared in constant time (`broker/passwords.py`). A chosen password: at least 10 characters, at most 256, more than two different characters, not the name, not shaped like a one-time password.
+- **One-time passwords.** 16 Crockford base32 characters in four groups (80 bits), read back as typed (any case, with or without dashes, I and L for 1, O for 0). The admin's is the claim token (§31.3): only its SHA-256 is kept, in memory, spent by the claim, a new one every hour while unclaimed. A person's is scrypt-hashed in their row with `must_reset` and `password_expires_at` (7 days).
+- **`POST /api/signin/password {name, password}`.** The admin's name is `human_name` or `admin`. The admin's one-time password starts the claim's ceremony (a cookie, as a passkey claim's) and answers `next: setup`; `/setup` then offers **Choose how you'll sign in**: `POST /api/setup/password` (the claim with a password) or `/api/setup/begin` and `/finish` (with a passkey, as in §31.3, now also without the token when the ceremony is bound). A person's one-time password gives a session whose person `must_reset`: every other route answers it 401, `/` and `/setup` serve the Choose page, and `POST /api/me/password` or adding a passkey clears it (a passkey instead clears the one-time password too). An expired one answers `expired`. Anything else wrong is "wrong name or password", after a real scrypt check against a dummy hash for an unknown name, so the time says nothing about names.
+- **The limiter** (`SignInLimiter`, in memory): after 5 failures for a name in 15 minutes, that name waits 30 s, doubling to 15 minutes, before its next try (429, `slow_down`); more than 100 failures a minute over all names pause every password sign-in for 10 s. A success clears the name.
+- **Passkeys** are as in §31.4, per person: `/api/passkeys/begin` registers with the signed-in person's handle and excludes only their passkeys; `/api/passkey/finish` signs in whoever's passkey it is (a person's passkey clears a pending one-time password: it proves it's them).
+- **The fresh check** (§31.4) is a passkey **or** a password: `POST /api/signin/check {password}` for a signed-in browser. The app's **Confirm it's you** dialog asks for the password (with **Use a passkey** beside it when there is one); someone with no password gets their passkey at once. It guards adding a passkey, changing a password, adding someone, a new one-time password, and pairing or approving a machine.
+- **Sign out everywhere** ends that person's sessions only; `switchboard logout --all` from the container's shell still ends everyone's.
+- **SSO** is a disabled button, "Coming soon" (`GET /api/auth/state`'s `sso`).
+- **Where passwords work:** any hosted broker, passkeys or not (an IP address or plain `http://…test` gets passwords only). Machines dial in behind any public URL that is a secure context.
+- **The admin's name** is `human_name`: `SWITCHBOARD_HUMAN_NAME` in the deployment sets it over `config.toml` (a container's own user would make it `me`).
+
+### 32.5 What agents see
+- **Every person is a user.** The join text says `Your users are alice and bob (kind=human): each of them is your user.` when there is more than one person (as before with one); `who()` lists them the same way; a batch's header names the person its human lines are from, or "your users" when several; the SessionStart reminder names them all. Room rule 1 is unchanged: every person's message is `kind=human`.
+- **Delivery is unchanged**: a person's message is prio 2 for every recipient, resets the loop guard and wakes past an exhausted budget like the admin's. The budget and loop-guard notices name "people's messages" and "a person" once there is more than one.
+- `@mentions` of people are recognized like the admin's (`mention_names`).
+
+### 32.6 Threat model (a delta to §31.6)
+- **Anyone added is trusted with every agent.** That is the design choice of §32.1: an invite is a key to steer everyone's agents, approvals-off ones included. Remove someone and they are out at once (their sessions end; their WebSockets close).
+- **A one-time password is a bearer secret until it's used**: shown once to the admin, 7 days, and useless after its person chose their own. The admin's is in the log for an hour at a time, as the claim link was.
+- **Passwords can be guessed online**, which passkeys can't: the limiter slows that per name and overall, and a password needs 10 characters. They are never logged; only their scrypt hashes are stored.
+- **A stolen session can't make itself permanent**: adding a passkey, changing the password, adding someone and pairing a machine all need a check in the last five minutes, and a session on a one-time password can do nothing but choose its own.
+
+### 32.7 Tests
+- **Unit:** the v3→v4 migration on the 0.7.0 dump (`test_db_migrate_v4.py`; the older migration tests now expect the current version), passwords and the limiter's rules, the one-time claim token (`test_passkey_pieces.py`), `SWITCHBOARD_HUMAN_NAME` (`test_config.py`).
+- **Integration** (`test_people.py`, the broker behind `https://sb.example.com` as in `test_passkeys.py`): the admin's setup with the one-time password then a password, or a passkey instead; a person's one-time password, the forced choice and everything it's refused meanwhile; everyone equal but for the admin section; an agent seeing two users and a batch from bob; a new one-time password; removal; expiry; the limiter; a passkey instead of a password; names; the fresh check; sign out everywhere per person; the desktop unchanged. `test_passkeys.py` follows the claim's new wording.
+- **Browser** (`tests/e2e/test_people_ui.py`, `test_passkeys_ui.py`, `test_machines_ui.py`), and the image test through Caddy: the three ways in, setup, the People sheet with the invite and Copy, bob's first sign-in, Confirm it's you.

@@ -2,12 +2,13 @@
 <!--
   switchboard: the page a browser without a session sees at "/".
 
-  Signing in happens outside the browser on a desktop: `switchboard login` in the user's own
-  terminal prints a one-time link. This page never carries a token and never offers a form to
-  type one into. On a hosted broker (DESIGN.md §31.4) login.js asks GET /api/auth/state and,
-  when the owner has a passkey, shows one button, Sign in with a passkey; while the broker is
-  unclaimed it points at the claim link in the broker's log. Same rules as index.html: no inline
-  script, style or event handler; every link is same-origin (tests/unit/test_web_static_lint.py).
+  On a desktop, signing in happens outside the browser: `switchboard login` in the user's own
+  terminal prints a one-time link, and this page shows only that. On a hosted broker
+  (DESIGN.md §32.4) login.js asks GET /api/auth/state and shows the three ways in: a name and
+  a password (the admin's first one is the one-time password in the broker's log; everyone
+  else's first one is a one-time password from the admin), a passkey, and SSO, which is shown
+  as coming soon. Same rules as index.html: no inline script, style or event handler; every
+  link is same-origin (tests/unit/test_web_static_lint.py).
 -->
 <html lang="en">
 <head>
@@ -44,23 +45,35 @@
     <div class="login-actions"><a class="btn-primary" href="/">Try again</a></div>
   </div>
 
-  <!-- a hosted broker whose owner has a passkey -->
-  <div class="login-variant hidden" id="login-passkey">
-    <p>This browser isn&rsquo;t signed in. Use one of your passkeys: Touch&nbsp;ID, Face&nbsp;ID,
-      Windows&nbsp;Hello, your phone or a security key.</p>
-    <div class="login-actions stretch">
-      <button type="button" class="btn-primary" id="passkey-btn">Sign in with a passkey</button>
+  <!-- a hosted broker: a password, a passkey, or (coming soon) SSO -->
+  <div class="login-variant hidden" id="login-choose">
+    <p class="login-first hidden" id="login-first">Setting this switchboard up? Sign in as <code>admin</code> with the
+      one-time password from the broker&rsquo;s log (your deploy tool&rsquo;s logs view, <code>kubectl logs</code>,
+      <code>docker compose logs</code>).</p>
+    <form class="setup-form" id="password-form" autocomplete="on">
+      <label for="signin-name">Name</label>
+      <input type="text" id="signin-name" name="username" autocomplete="username" autocapitalize="none"
+             spellcheck="false" maxlength="40" required>
+      <label for="signin-password">Password</label>
+      <input type="password" id="signin-password" name="password" autocomplete="current-password" maxlength="256"
+             required>
+      <div class="login-actions stretch">
+        <button type="submit" class="btn-primary" id="password-btn">Sign in</button>
+      </div>
+    </form>
+    <div class="login-or" aria-hidden="true"><span>or</span></div>
+    <div class="login-alt">
+      <button type="button" class="btn" id="passkey-btn">
+        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="5.5" cy="8" r="3"/><path d="M8.5 8h5.5M12 8v2.5M14 8v1.5"/></svg>
+        <span>Sign in with a passkey</span>
+      </button>
+      <button type="button" class="btn" id="sso-btn" disabled aria-describedby="sso-soon">
+        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 13.5h11M3.5 13.5V6l4.5-3 4.5 3v7.5"/><path d="M6.5 13.5v-3h3v3"/></svg>
+        <span>Sign in with SSO</span>
+        <span class="soon" id="sso-soon">Coming soon</span>
+      </button>
     </div>
-    <p class="fine">On another device, the browser offers a QR code to use the passkey on your phone.</p>
-  </div>
-
-  <!-- a hosted broker nobody has claimed yet -->
-  <div class="login-variant hidden" id="login-claim">
-    <p>This switchboard hasn&rsquo;t been claimed yet. Open the claim link from the broker&rsquo;s log
-      (your deploy tool&rsquo;s logs view, Render&rsquo;s Logs tab, <code>docker compose logs</code>) and
-      create your first passkey there.</p>
-    <p class="fine">The link works once, for 60 minutes; a fresh one is printed every hour until the
-      broker is claimed.</p>
+    <p class="fine" id="login-forgot">Forgot your password? Ask your admin for a new one-time password.</p>
   </div>
 
   <p class="login-error hidden" id="login-error" role="alert"></p>
