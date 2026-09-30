@@ -58,6 +58,11 @@ def backups(path: Path) -> list[Path]:
     return sorted(path.parent.glob(path.name + ".v1.bak*"))
 
 
+# Since schema 3 (DESIGN.md §31.2) a version-1 file migrates through both steps in one go,
+# after one backup of the version-1 file: every check below on the copy and the rows is as it
+# was, and the result is the current schema.
+
+
 def test_fixture_is_a_v1_database_with_rows_in_every_table(tmp_path: Path) -> None:
     p = tmp_path / "switchboard.db"
     make_v1(p)
@@ -68,9 +73,9 @@ def test_fixture_is_a_v1_database_with_rows_in_every_table(tmp_path: Path) -> No
     con.close()
 
 
-def test_fresh_db_is_v2(tmp_path: Path) -> None:
+def test_fresh_db_has_the_v2_columns(tmp_path: Path) -> None:
     con = db.open_db(tmp_path / "switchboard.db")
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 2
+    assert db.schema_version(con) == db.SCHEMA_VERSION
     host = {c[1]: c for c in columns(con, "participants")}["host"]
     assert host[2] == "TEXT" and host[3] == 1 and host[4] == "''"  # NOT NULL DEFAULT ''
     assert "sender_host" in {c[1] for c in columns(con, "messages")}
@@ -80,17 +85,18 @@ def test_fresh_db_is_v2(tmp_path: Path) -> None:
     assert backups(tmp_path / "switchboard.db") == []  # nothing to back up
 
 
-def test_v1_fixture_migrates_to_v2(tmp_path: Path) -> None:
+def test_v1_fixture_migrates_to_the_current_schema(tmp_path: Path) -> None:
     p = tmp_path / "switchboard.db"
     make_v1(p)
     src = sqlite3.connect(p)
     before = db.row_counts(src, V1_TABLES)
     src.close()
     con = db.open_db(p)
-    assert db.schema_version(con) == 2
+    assert db.schema_version(con) == db.SCHEMA_VERSION
     assert db.integrity_ok(con) is None
     assert db.row_counts(con, V1_TABLES) == before
-    assert db.row_counts(con, ("remotes",)) == {"remotes": 0}
+    assert db.row_counts(con, ("remotes", "passkeys", "link_machines")) == {"remotes": 0, "passkeys": 0,
+                                                                            "link_machines": 0}
     # the migrated schema is the fresh one: same columns in the same order, same indexes
     fresh = db.open_db(tmp_path / "fresh.db")
     for t in db.TABLES:
@@ -108,7 +114,7 @@ def test_v1_fixture_migrates_to_v2(tmp_path: Path) -> None:
 def test_backup_written_before_alter_and_equal(tmp_path: Path) -> None:
     p = tmp_path / "switchboard.db"
     original = make_v1(p)
-    bak = db.backup_path_for(p)
+    bak = db.backup_path_for(p, 1)
     assert bak == tmp_path / "switchboard.db.v1.bak"
     seen: list[tuple[str, bool]] = []
     con = db.connect(p)
@@ -121,7 +127,7 @@ def test_backup_written_before_alter_and_equal(tmp_path: Path) -> None:
     assert alters and all(alters)
     assert (os.stat(bak).st_mode & 0o777) == 0o600
     assert dump(bak) == original  # the v1 database exactly as it was
-    assert version(bak) == 1 and version(p) == 2
+    assert version(bak) == 1 and version(p) == db.SCHEMA_VERSION
     # one self-contained file: rollback journal, no -wal or -shm left beside it
     c = sqlite3.connect(bak)
     assert c.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
@@ -144,7 +150,7 @@ def test_backup_is_0600_whatever_the_umask(tmp_path: Path) -> None:
 def test_existing_backup_not_overwritten(tmp_path: Path) -> None:
     p = tmp_path / "switchboard.db"
     original = make_v1(p)
-    keep = db.backup_path_for(p)
+    keep = db.backup_path_for(p, 1)
     keep.write_bytes(b"an older backup the owner kept")
     db.open_db(p).close()
     assert keep.read_bytes() == b"an older backup the owner kept"
@@ -158,7 +164,7 @@ def test_backup_name_taken_twice_gets_a_counter(tmp_path: Path, monkeypatch: pyt
     p = tmp_path / "switchboard.db"
     make_v1(p)
     monkeypatch.setattr(db.time, "time", lambda: 1_790_000_000.0)
-    db.backup_path_for(p).write_bytes(b"one")
+    db.backup_path_for(p, 1).write_bytes(b"one")
     (tmp_path / "switchboard.db.v1.bak.1790000000").write_bytes(b"two")
     db.open_db(p).close()
     assert (tmp_path / "switchboard.db.v1.bak").read_bytes() == b"one"
@@ -170,7 +176,7 @@ def test_a_link_at_the_backup_name_is_never_followed(tmp_path: Path) -> None:
     p = tmp_path / "switchboard.db"
     original = make_v1(p)
     target = tmp_path / "elsewhere.db"
-    db.backup_path_for(p).symlink_to(target)  # dangling: O_CREAT alone would create the target
+    db.backup_path_for(p, 1).symlink_to(target)  # dangling: O_CREAT alone would create the target
     db.open_db(p).close()
     assert not target.exists()
     [bak] = [b for b in backups(p) if not b.is_symlink()]
@@ -206,7 +212,7 @@ def test_failed_migration_leaves_v1_intact(tmp_path: Path, monkeypatch: pytest.M
     # fixed: the next start migrates, and backs up again under a new name
     monkeypatch.undo()
     con = db.open_db(p)
-    assert db.schema_version(con) == 2
+    assert db.schema_version(con) == db.SCHEMA_VERSION
     assert len(backups(p)) == 2
 
 
@@ -217,8 +223,8 @@ def test_a_write_between_backup_and_migration_refuses(tmp_path: Path, monkeypatc
     original = make_v1(p)
     real = db.backup_verified
 
-    def backup_then_write(con: sqlite3.Connection, to: Path) -> tuple[Path, dict[str, int]]:
-        out = real(con, to)
+    def backup_then_write(con: sqlite3.Connection, to: Path, **kw: Any) -> tuple[Path, dict[str, int]]:
+        out = real(con, to, **kw)
         other = sqlite3.connect(p, isolation_level=None)
         other.execute("INSERT INTO events(ts, kind) VALUES(1.0, 'late')")
         other.close()
@@ -261,19 +267,20 @@ def test_migration_needs_a_backup_path(tmp_path: Path) -> None:
     assert dump(p) == original and backups(p) == []
 
 
-def test_v3_refused(tmp_path: Path) -> None:
+def test_a_newer_schema_is_refused(tmp_path: Path) -> None:
     p = tmp_path / "switchboard.db"
     db.open_db(p).close()
+    newer = db.SCHEMA_VERSION + 1
     con = sqlite3.connect(p)
-    con.execute("UPDATE meta SET value='3' WHERE key='schema_version'")
+    con.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(newer),))
     con.commit()
     con.close()
-    with pytest.raises(db.SchemaError, match="schema version 3 is not supported"):
+    with pytest.raises(db.SchemaError, match=f"schema version {newer} is not supported"):
         db.open_db(p)
-    assert version(p) == 3 and backups(p) == []
+    assert version(p) == newer and backups(p) == []
 
 
-def test_v2_reopens_without_migrating(tmp_path: Path) -> None:
+def test_a_migrated_db_reopens_without_migrating(tmp_path: Path) -> None:
     p = tmp_path / "switchboard.db"
     make_v1(p)
     db.open_db(p).close()
@@ -282,7 +289,7 @@ def test_v2_reopens_without_migrating(tmp_path: Path) -> None:
     seen: list[str] = []
     con = db.connect(p)
     con.set_trace_callback(seen.append)
-    assert db.migrate(con, backup_to=db.backup_path_for(p)) == 2
+    assert db.migrate(con, backup_to=db.backup_path_for(p, 1)) == db.SCHEMA_VERSION
     con.set_trace_callback(None)
     con.close()
     assert not [s for s in seen if s.lstrip().upper().startswith(("ALTER", "CREATE", "UPDATE", "INSERT"))]
@@ -324,7 +331,7 @@ def test_the_broker_migrates_under_its_lock_before_it_listens(tmp_path: Path, mo
     original = make_v1(p)
     assert _run_foreground(tmp_path, monkeypatch, "port taken") == 1
     assert "port taken" in capsys.readouterr().err
-    assert version(p) == 2  # migrated before the listener was even asked for
+    assert version(p) == db.SCHEMA_VERSION  # migrated before the listener was even asked for
     [bak] = backups(p)
     assert bak.name == "switchboard.db.v1.bak" and dump(bak) == original
 
@@ -348,7 +355,7 @@ def test_a_second_broker_never_migrates(tmp_path: Path, monkeypatch: pytest.Monk
     finally:
         os.close(fd)
     assert _run_foreground(tmp_path, monkeypatch, "port taken") == 1  # the lock is free: now it migrates
-    assert version(p) == 2 and len(backups(p)) == 1
+    assert version(p) == db.SCHEMA_VERSION and len(backups(p)) == 1
 
 
 @pytest.mark.parametrize("case", ["v3", "failed_migration"])
@@ -360,10 +367,10 @@ def test_a_refused_database_is_reported_on_stderr(tmp_path: Path, monkeypatch: p
     if case == "v3":
         db.open_db(p).close()
         c = sqlite3.connect(p)
-        c.execute("UPDATE meta SET value='3' WHERE key='schema_version'")
+        c.execute("UPDATE meta SET value='99' WHERE key='schema_version'")
         c.commit()
         c.close()
-        want = "schema version 3 is not supported"
+        want = "schema version 99 is not supported"
     else:
         make_v1(p)
         monkeypatch.setattr(db, "V1_TO_V2", (*db.V1_TO_V2[:2], "CREATE INDEX x ON no_such_table(y)"))

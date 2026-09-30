@@ -7,11 +7,14 @@ Playwright's Chromium for the UI test.
 The CI job ``image`` builds the image and runs these. They start it the way a platform does:
 on a Docker network behind a proxy that terminates TLS (Caddy, with a certificate from its own
 local CA), with ``SWITCHBOARD_PUBLIC_URL=https://sb.test:<port>``. They check that the container
-runs as the unprivileged user, answers /healthz and Docker's health check, gives a sign-in link
-through ``docker exec``, serves the UI to Chromium over https with its WebSocket over wss, stops
-cleanly on ``docker stop`` and keeps its data across a restart. They also mount the two kinds
-of volume platforms give it: a disk that belongs to root (Render) and a Kubernetes volume with
-an ``fsGroup``. The UI's screenshot goes to ``$SWITCHBOARD_E2E_ARTIFACTS/image/`` (CI uploads it).
+runs as the unprivileged user, answers /healthz and Docker's health check, prints one claim link
+in its log and is claimed from it in Chromium with a passkey (a virtual authenticator) and
+signed in to again with it, with no ``docker exec`` anywhere (issue #41), gives a sign-in link
+through ``docker exec`` too, serves the UI to Chromium over https with its WebSocket over wss,
+stops cleanly on ``docker stop`` and keeps its data (and its owner) across a restart. They also
+mount the two kinds of volume platforms give it: a disk that belongs to root (Render) and a
+Kubernetes volume with an ``fsGroup``. The UI's screenshots go to
+``$SWITCHBOARD_E2E_ARTIFACTS/image/`` (CI uploads them).
 """
 
 from __future__ import annotations
@@ -49,6 +52,11 @@ DOCKER_ENV = {k: v for k, v in os.environ.items()
               or k.startswith("DOCKER_") or k.startswith("BUILDX_")}
 WAIT_S = 30.0
 LINK_RE = re.compile(r"https://sb\.test:\d+/login\?t=[A-Za-z0-9_-]+")
+CLAIM_RE = re.compile(r"switchboard isn't set up yet\. Claim it \(link works once, for 60 min\): "
+                      r"(https://sb\.test:\d+/setup#t=[A-Za-z0-9_-]+)")
+# Chromium's virtual authenticator: a platform passkey with user verification (issue #41)
+AUTHENTICATOR = {"protocol": "ctap2", "transport": "internal", "hasResidentKey": True, "hasUserVerification": True,
+                 "isUserVerified": True, "automaticPresenceSimulation": True}
 
 
 def docker(*args: str, check: bool = True, timeout: float = 120.0) -> subprocess.CompletedProcess[str]:
@@ -170,6 +178,10 @@ class Stack:
         assert m, "no sign-in link"
         return m.group(0)
 
+    def claim_lines(self) -> list[str]:
+        """Every claim link the container has printed, from its log (no exec)."""
+        return [m.group(1) for m in CLAIM_RE.finditer(docker("logs", self.broker).stdout)]
+
     def session(self) -> str:
         """A signed-in session's Cookie header, from a fresh link followed through the proxy."""
         status, headers, _ = self.https("GET", self.login_link().removeprefix(self.public))
@@ -210,6 +222,62 @@ def stack(image: str, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stac
 
 
 # ----------------------------------------------------------------------- tests
+def test_claim_it_from_the_log_and_sign_in_with_a_passkey(stack: Stack, playwright: Any) -> None:
+    """The first thing that happens to a fresh deployment (issue #41): the log holds one claim
+    link, opened in Chromium through the proxy; a passkey (a virtual authenticator) claims the
+    broker; signing off and signing in again uses the passkey. No ``docker exec`` anywhere."""
+    links = stack.claim_lines()
+    assert len(links) == 1 and links[0].startswith(f"{stack.public}/setup#t=")
+    logs = docker("logs", stack.broker).stdout
+    assert "no owner yet: a claim link is on stdout" in logs
+    status, _, body = stack.https("GET", "/setup")
+    assert status == 200 and "Claim this switchboard" in body
+    status, _, body = stack.https("GET", "/api/auth/state")
+    assert status == 200 and json.loads(body) == {"hosted": True, "claimed": False, "passkeys": False, "claim": True}
+
+    problems: list[str] = []
+    browser = playwright.chromium.launch(args=["--host-resolver-rules=MAP sb.test 127.0.0.1"])
+    try:
+        ctx = browser.new_context(ignore_https_errors=True, viewport={"width": 1280, "height": 760},
+                                  timezone_id="UTC", locale="en-US")
+        page = ctx.new_page()
+        page.on("console", lambda m: problems.append(f"console {m.type}: {m.text}") if m.type == "error" else None)
+        page.on("pageerror", lambda e: problems.append(f"page error: {e}"))
+        cdp = ctx.new_cdp_session(page)
+        cdp.send("WebAuthn.enable", {"enableUI": False})
+        cdp.send("WebAuthn.addVirtualAuthenticator", {"options": AUTHENTICATOR})
+        page.goto(links[0])
+        page.wait_for_selector("#step-claim:visible", timeout=15_000)
+        assert page.url == f"{stack.public}/setup"  # the token left the address bar
+        page.fill("#claim-name", "MacBook Pro")
+        page.click("#claim-btn")
+        page.wait_for_selector("#step-backup:visible", timeout=15_000)
+        ARTIFACTS.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(ARTIFACTS / "claimed.png"))
+        page.click("#skip-btn")
+        page.wait_for_selector("#st-conn:text-is('Connected')", timeout=15_000)
+        assert page.url == f"{stack.public}/"
+        # signed in by the claim, with a Secure cookie; the claim link is spent
+        assert json.loads(stack.https("GET", "/api/auth/state")[2]) == {"hosted": True, "claimed": True,
+                                                                          "passkeys": True, "claim": False}
+        assert stack.https("GET", "/setup")[0] == 303
+        # sign off, then in again with the passkey
+        page.click("#logout")
+        page.wait_for_selector("#passkey-btn:visible", timeout=15_000)
+        page.screenshot(path=str(ARTIFACTS / "sign-in-passkey.png"))
+        page.click("#passkey-btn")
+        page.wait_for_selector("#st-conn:text-is('Connected'), #login-error:visible", timeout=15_000)
+        error = page.locator("#login-error")
+        assert not error.is_visible(), f"the passkey sign-in failed: {error.text_content()}"
+        assert page.url == f"{stack.public}/"
+        ctx.close()
+    finally:
+        browser.close()
+    assert not problems, problems
+    assert len(stack.claim_lines()) == 1  # nothing more was printed once claimed
+    assert "switchboard claimed with a passkey" in docker("logs", stack.broker).stdout
+
+
 def test_it_refuses_to_start_without_a_public_url(image: str) -> None:
     r = docker("run", "--rm", image, check=False)
     assert r.returncode == 1
@@ -288,6 +356,9 @@ def test_a_clean_stop_and_the_data_across_a_restart(stack: Stack) -> None:
     stack.direct = int(docker("port", stack.broker, "7419/tcp").stdout.split(":")[-1])
     wait_for("the restarted broker", lambda: stack.healthz() == "ok\n")
     assert "#kept" in stack.cli("rooms")
+    # the owner lives on the volume: still claimed, and no new claim link (issue #41)
+    assert len(stack.claim_lines()) == 1
+    assert json.loads(stack.https("GET", "/api/auth/state")[2])["claimed"] is True
 
 
 @pytest.mark.parametrize("platform", ["render", "kubernetes"])

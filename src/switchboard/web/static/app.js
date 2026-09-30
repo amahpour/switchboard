@@ -46,7 +46,7 @@
   };
 
   const state = {
-    me: null,          // { human, test_mode, version, port }
+    me: null,          // { human, test_mode, version, port, hosted, passkeys, fresh }
     rooms: new Map(),  // name -> { name, slug, id, createdAt, lastId, msgs: [], members: [], settings: {}, unread: 0 }
     closed: 0,         // how many closed rooms there are (GET /api/rooms), for the Closed row
     closedRooms: [],   // GET /api/closed-rooms, as the Closed sheet shows it
@@ -71,7 +71,8 @@
     insp: {},          // references to Inspector nodes built here (ids are not looked up)
     rowRefs: new Map(),  // member name -> its row button, for focus on "back"
     pop: null,         // composer popover: { kind: 'palette'|'mentions', items, sel, start }
-    sheetOpener: null, // the control that opened the Closed or Remotes sheet (focus returns to it)
+    sheetOpener: null, // the control that opened the Closed, Remotes or Passkeys sheet (focus returns to it)
+    passkeyBusy: false, // an Add a passkey ceremony is under way
     sheetOpenerKey: null, // its data-focus key, to find it again if renderChips rebuilt it
     draft: null,       // composer text a catch-up entry replaced; it comes back after the command (fillComposer)
   };
@@ -210,6 +211,7 @@
     close: 'M4 4l8 8M12 4l-8 8',
     terminal: 'M3 4.5 6.5 8 3 11.5M8.5 11.5H13',
     browser: rr(2, 3, 12, 10, 1.5) + 'M2 6.2h12',   // "web only": needs this signed-in browser
+    key: circ(5.5, 8, 3) + 'M8.5 8h5.5M12 8v2.5M14 8v1.5',
   };
 
   function icon(name) {
@@ -1950,10 +1952,12 @@
     setRemotes(data.remotes || [], data.config_error || null);
   }
 
+  const SHEETS = ['remotes-panel', 'closed-panel', 'passkeys-panel'];
+
   function openSheet(id) {
     state.sheetOpener = document.activeElement || null;
     state.sheetOpenerKey = state.sheetOpener && state.sheetOpener.dataset ? state.sheetOpener.dataset.focus || null : null;
-    for (const other of ['remotes-panel', 'closed-panel']) if (other !== id) $(other).classList.add('hidden');
+    for (const other of SHEETS) if (other !== id) $(other).classList.add('hidden');
     $(id).classList.remove('hidden');
     setNav(false);
   }
@@ -2034,6 +2038,120 @@
     } catch (e) {
       remoteResult(name, String(e.message || e), true);
     }
+  }
+
+  // ------------------------------------------------------------ passkeys
+  // The passkeys sheet (DESIGN.md §31.4), on a hosted broker where passkeys work: how many
+  // there are, Add a passkey (window.SBWebAuthn: a fresh passkey check first unless this
+  // session had one in the last five minutes), and Sign out everywhere. The full list, with
+  // removing one, comes later.
+  function renderPasskeysPanel() {
+    const body = $('passkeys-body');
+    if ($('passkeys-panel').classList.contains('hidden')) return;
+    const me = state.me || {};
+    const n = me.passkeys || 0;
+    body.replaceChildren();
+
+    // your passkeys, and adding one: a name and the button on one row
+    const card = el('div', 'passkey-card');
+    const head = el('div', 'passkey-head');
+    head.append(icon('key'), el('span', 'passkey-title', 'Your passkeys'),
+      el('span', 'passkey-count', n ? plural(n, 'passkey', 'passkeys') : 'none yet'));
+    card.append(head);
+    card.append(el('p', 'fine', n ? 'Any of them signs this switchboard in.'
+      : 'None yet: this switchboard is signed in to with `switchboard login`.'));
+    const form = el('form', 'passkey-add');
+    form.id = 'passkey-add';
+    form.setAttribute('autocomplete', 'off');
+    const label = el('label', null, 'Name the new passkey');
+    label.htmlFor = 'passkey-name';
+    const row = el('div', 'passkey-row');
+    const input = el('input');
+    input.type = 'text';
+    input.id = 'passkey-name';
+    input.name = 'name';
+    input.maxLength = 40;
+    input.spellcheck = false;
+    input.placeholder = 'phone, security key, this Mac';
+    const add = btn('btn btn-primary', state.passkeyBusy ? 'Waiting…' : 'Add a passkey');
+    add.type = 'submit';
+    add.id = 'passkey-add-btn';
+    add.disabled = state.passkeyBusy || !me.hosted;
+    add.title = me.fresh ? 'register a new passkey for this switchboard'
+      : 'asks for one of your passkeys first, then registers the new one';
+    row.append(input, add);
+    form.append(label, row);
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      addPasskey((input.value || '').trim() || 'passkey');
+    });
+    card.append(form);
+    const out = el('div', 'fine passkey-result');
+    out.id = 'passkey-result';
+    card.append(out);
+    body.append(card);
+
+    // every browser signed out; the passkeys stay
+    const all = el('div', 'passkey-card');
+    const head2 = el('div', 'passkey-head');
+    head2.append(icon('logout'), el('span', 'passkey-title', 'Sign out everywhere'));
+    all.append(head2);
+    all.append(el('p', 'fine', 'Signed in somewhere you no longer trust? Every browser is signed out, this one included; your passkeys stay.'));
+    const btns = el('div', 'dialog-buttons');
+    const so = btn('btn', 'Sign out everywhere');
+    so.id = 'logout-all';
+    so.addEventListener('click', logoutEverywhere);
+    btns.append(so);
+    all.append(btns);
+    body.append(all);
+  }
+
+  function passkeyResult(text, bad) {
+    const n = document.getElementById('passkey-result');
+    if (n) {
+      n.textContent = text;
+      n.classList.toggle('bad', !!bad);
+    }
+  }
+
+  async function addPasskey(name) {
+    if (state.passkeyBusy || !window.SBWebAuthn) return;
+    if (!window.SBWebAuthn.supported()) {
+      passkeyResult('this browser can\'t create passkeys', true);
+      return;
+    }
+    state.passkeyBusy = true;
+    renderPasskeysPanel();
+    try {
+      const res = await window.SBWebAuthn.addPasskey(name);
+      state.passkeyBusy = false;
+      if (state.me) {
+        state.me.passkeys = res.passkeys;
+        state.me.fresh = true;
+      }
+      renderPasskeysPanel();
+      passkeyResult('added "' + res.name + '"', false);
+    } catch (e) {
+      state.passkeyBusy = false;
+      renderPasskeysPanel();
+      passkeyResult(String(e.message || e), true);
+    }
+  }
+
+  async function logoutEverywhere() {
+    if (!window.confirm('Sign out every browser, this one included? Your passkeys stay; `switchboard login` and your passkeys sign in again.')) return;
+    try { await api('POST', '/logout', { all: true }); } catch (e) { /* already signed out */ }
+    location.replace('/');
+  }
+
+  function openPasskeys() {
+    openSheet('passkeys-panel');
+    renderPasskeysPanel();
+    api('GET', '/api/me').then(function (me) {
+      state.me = me;
+      renderPasskeysPanel();
+    }, function () {});
+    $('passkeys-close').focus();
   }
 
   // ------------------------------------------------------- closed rooms
@@ -2191,7 +2309,7 @@
     }
     // in the composer, with a draft a catch-up entry replaced: Esc puts the draft back
     if (state.draft && document.activeElement === $('input') && restoreDraft()) return;
-    for (const id of ['closed-panel', 'remotes-panel']) {
+    for (const id of SHEETS) {
       if (!$(id).classList.contains('hidden')) return closeSheet(id);
     }
     const app = $('app');
@@ -2313,6 +2431,8 @@
       location.replace('/');
     });
     $('remotes-close').addEventListener('click', function () { closeSheet('remotes-panel'); });
+    $('passkeys').addEventListener('click', openPasskeys);
+    $('passkeys-close').addEventListener('click', function () { closeSheet('passkeys-panel'); });
     $('closed-rooms').addEventListener('click', openClosed);
     $('closed-close').addEventListener('click', function () { closeSheet('closed-panel'); });
 
@@ -2419,6 +2539,8 @@
     }
     // the brand's tooltip names the running version (§1.2); plain text, no markup
     if (state.me && state.me.version) $('brand-name').setAttribute('title', 'switchboard ' + state.me.version);
+    // the passkeys sheet: a hosted broker where passkeys work (§31.4)
+    $('passkeys').classList.toggle('hidden', !(state.me && state.me.hosted));
     renderBuddies();
     await loadRooms();
     renderStatus();

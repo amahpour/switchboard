@@ -21,9 +21,12 @@ What it does:
   second sign-in would post a live "new web login" notice into the open page's log); the
   Welcome view and the sign-in page use contexts of their own.
 
-The 15 outputs: desktop-{light,dark}, markdown-{light,dark}, palette-light, mention-light,
+The 21 outputs: desktop-{light,dark}, markdown-{light,dark}, palette-light, mention-light,
 closed-light, remotes-light, inspector-light, inspector-remote-light, inspector-dark-parked,
-phone-light, phone-dark-sheet, welcome-light and login-light (all .png).
+phone-light, phone-dark-sheet, welcome-light and login-light, plus, from a hosted broker
+(``tests/ui_world.py``'s ``HostedWorld``, with Chromium's virtual authenticators as the
+passkeys; issue #41): claim-light, claim-backup-light, signin-passkey-light,
+signin-passkey-phone-dark, passkeys-light and passkeys-dark (all .png).
 
 Every wait has a deadline (Playwright's auto-waiting ``expect`` and ``wait_for_function``); a
 timeout exits non-zero. The agents, both brokers and the browser are stopped in ``finally``;
@@ -268,25 +271,89 @@ def shoot(browser: Any, out: Path, world: Any) -> None:
         anon.close()
 
 
+# ---------------------------------------------------------- the hosted shots
+AUTHENTICATOR = {"protocol": "ctap2", "transport": "internal", "hasResidentKey": True, "hasUserVerification": True,
+                 "isUserVerified": True, "automaticPresenceSimulation": True}
+
+
+def virtual_authenticator(ctx: Any, page: Any) -> Any:
+    """A passkey device for ``page``: Chromium's virtual authenticator, through CDP."""
+    cdp = ctx.new_cdp_session(page)
+    cdp.send("WebAuthn.enable", {"enableUI": False})
+    cdp.send("WebAuthn.addVirtualAuthenticator", {"options": AUTHENTICATOR})
+    return cdp
+
+
+def shoot_hosted(browser: Any, out: Path, world: Any) -> None:
+    """A hosted broker's owner (issue #41): the claim page, the backup step, the sign-in page
+    with its passkey button (desktop light, phone dark) and the passkeys sheet (light, dark)."""
+    from playwright.sync_api import expect
+
+    base = {"timezone_id": "UTC", "color_scheme": "light", "locale": "en-US"}
+    origin = world.origin
+    ctx = browser.new_context(**base, **DESKTOP)
+    ctx.set_default_timeout(WAIT_MS)
+    try:
+        page = ctx.new_page()
+        virtual_authenticator(ctx, page)
+        page.goto(world.claim_link())
+        expect(page.locator("#step-claim")).to_be_visible()
+        page.fill("#claim-name", "MacBook Pro")
+        shot(page, out, "claim-light.png")
+        page.click("#claim-btn")
+        expect(page.locator("#step-backup")).to_be_visible()
+        shot(page, out, "claim-backup-light.png")
+        page.click("#skip-btn")
+        connected(page)
+        page.click("#passkeys")
+        expect(page.locator("#passkeys-panel")).to_be_visible()
+        page.fill("#passkey-name", "iPhone")
+        page.mouse.move(1, 1)  # off the key button, so it isn't drawn hovered
+        shot(page, out, "passkeys-light.png")
+        page.emulate_media(color_scheme="dark")
+        shot(page, out, "passkeys-dark.png")
+        page.emulate_media(color_scheme="light")
+        page.keyboard.press("Escape")
+        page.click("#logout")
+        expect(page.locator("#passkey-btn")).to_be_visible()
+        shot(page, out, "signin-passkey-light.png")
+    finally:
+        ctx.close()
+
+    phone_ctx = browser.new_context(**{**base, "color_scheme": "dark"}, **PHONE)
+    phone_ctx.set_default_timeout(WAIT_MS)
+    try:
+        ph = phone_ctx.new_page()
+        ph.goto(origin + "/")
+        expect(ph.locator("#passkey-btn")).to_be_visible()
+        shot(ph, out, "signin-passkey-phone-dark.png")
+    finally:
+        phone_ctx.close()
+
+
 # -------------------------------------------------------------------- main
 def run(args: argparse.Namespace, pw: Any) -> None:
-    from ui_world import UIWorld
+    from ui_world import HostedWorld, UIWorld
 
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     world = UIWorld(keep=args.keep)
+    hosted = HostedWorld(keep=args.keep)
     try:
         world.start()
+        hosted.start()
         env = {**os.environ, "TZ": "UTC", "HOME": REAL_HOME or os.environ["HOME"]}
         browser = pw.chromium.launch(executable_path=args.chrome or None, env=env)
         try:
             shoot(browser, out, world)
+            shoot_hosted(browser, out, hosted)
         finally:
             browser.close()
     finally:
+        hosted.stop()
         world.stop()
         if args.keep:
-            print(f"kept: {world.home} {world.home2}", file=sys.stderr)
+            print(f"kept: {world.home} {world.home2} {hosted.home}", file=sys.stderr)
 
 
 def main() -> None:

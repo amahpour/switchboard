@@ -25,6 +25,7 @@ from switchboard.models import (
     Membership,
     Message,
     Participant,
+    PasskeyRow,
     RemoteRow,
     Room,
     room_ref,
@@ -618,14 +619,20 @@ class Store:
         return [Event.from_row(r) for r in self.con.execute(sql, args).fetchall()]
 
     # ------------------------------------------------------------ web sessions
-    def web_session_create(self, id_hash: str, ttl_s: float) -> None:
+    def web_session_create(self, id_hash: str, ttl_s: float, via: str | None = None) -> None:
+        """``via`` (schema 3, DESIGN.md §31.2): how the session was made, ``login-link``,
+        ``claim`` or ``passkey:<name>``."""
         now = self.clock.now()
         with db.tx(self.con):
             self.con.execute(
-                "INSERT INTO web_sessions(id_hash, created_at, last_seen, expires_at)"
-                " VALUES(?,?,?,?)",
-                (id_hash, now, now, now + ttl_s),
+                "INSERT INTO web_sessions(id_hash, created_at, last_seen, expires_at, via)"
+                " VALUES(?,?,?,?,?)",
+                (id_hash, now, now, now + ttl_s, via),
             )
+
+    def web_session_via(self, id_hash: str) -> str | None:
+        r = self.con.execute("SELECT via FROM web_sessions WHERE id_hash=?", (id_hash,)).fetchone()
+        return r[0] if r else None
 
     def web_session_touch(self, id_hash: str, ttl_s: float) -> bool:
         """True when the session exists and hasn't expired; slides its expiry."""
@@ -671,6 +678,94 @@ class Store:
 
     def web_session_count(self) -> int:
         return int(self.con.execute("SELECT COUNT(*) FROM web_sessions").fetchone()[0])
+
+    # ------------------------------------------------------------------- meta
+    def meta_get(self, key: str) -> str | None:
+        r = self.con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return str(r[0]) if r else None
+
+    def meta_set(self, key: str, value: str) -> None:
+        with db.tx(self.con):
+            self.con.execute("INSERT INTO meta(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET"
+                             " value=excluded.value", (key, value))
+
+    def meta_delete(self, key: str) -> None:
+        with db.tx(self.con):
+            self.con.execute("DELETE FROM meta WHERE key=?", (key,))
+
+    # ---------------------------------------------------------- the owner (§31)
+    # A hosted broker has one owner: whoever claimed it (DESIGN.md §31.3). ``owner_handle``
+    # is WebAuthn's user id for that one owner (16 random bytes, hex in ``meta``); the
+    # passkeys are the owner's. ``reset_owner`` is SWITCHBOARD_RESET_OWNER, once per value.
+    def owner_handle(self) -> bytes | None:
+        v = self.meta_get("owner_handle")
+        return bytes.fromhex(v) if v else None
+
+    def owner_claimed_at(self) -> float | None:
+        v = self.meta_get("owner_claimed_at")
+        return float(v) if v else None
+
+    def claim_owner(self, handle: bytes) -> None:
+        if len(handle) != 16:
+            raise ValueError("an owner handle is 16 bytes")
+        now = self.clock.now()
+        with db.tx(self.con):
+            self.meta_set("owner_handle", handle.hex())
+            self.meta_set("owner_claimed_at", repr(now))
+
+    def reset_owner_applied(self) -> str | None:
+        return self.meta_get("reset_owner_applied")
+
+    def reset_owner(self, applied: str) -> dict[str, int]:
+        """The owner reset (DESIGN.md §31.5), in one transaction: every passkey and web
+        session is deleted, the owner is cleared, every paired machine goes back to pending
+        (whoever held the broker may have paired one), and ``applied`` (the hash of the
+        SWITCHBOARD_RESET_OWNER value acted on) is recorded, so the same value never resets
+        again. Returns what it removed or changed."""
+        with db.tx(self.con):
+            n_keys = self.con.execute("DELETE FROM passkeys").rowcount
+            n_sess = self.con.execute("DELETE FROM web_sessions").rowcount
+            n_mach = self.con.execute("UPDATE link_machines SET approved_at=NULL, approved_via=NULL"
+                                      " WHERE removed_at IS NULL AND approved_at IS NOT NULL").rowcount
+            self.meta_delete("owner_handle")
+            self.meta_delete("owner_claimed_at")
+            self.meta_set("reset_owner_applied", applied)
+        return {"passkeys": n_keys, "sessions": n_sess, "machines_pending": n_mach}
+
+    # --------------------------------------------------------------- passkeys
+    def passkey_add(self, credential_id: bytes, public_key: bytes, name: str, aaguid: str | None,
+                    sign_count: int = 0) -> PasskeyRow:
+        if not credential_id or len(credential_id) > 1023 or not public_key:
+            raise ValueError("a passkey needs a credential id and a public key")
+        now = self.clock.now()
+        with db.tx(self.con):
+            self.con.execute(
+                "INSERT INTO passkeys(credential_id, public_key, sign_count, name, aaguid, created_at)"
+                " VALUES(?,?,?,?,?,?)",
+                (credential_id, public_key, int(sign_count), name, aaguid, now),
+            )
+        got = self.passkey(credential_id)
+        assert got is not None
+        return got
+
+    def passkey(self, credential_id: bytes) -> PasskeyRow | None:
+        r = self.con.execute("SELECT * FROM passkeys WHERE credential_id=?", (credential_id,)).fetchone()
+        return PasskeyRow.from_row(r) if r else None
+
+    def passkeys(self) -> list[PasskeyRow]:
+        return [PasskeyRow.from_row(r) for r in self.con.execute("SELECT * FROM passkeys ORDER BY created_at, name")]
+
+    def passkey_count(self) -> int:
+        return int(self.con.execute("SELECT COUNT(*) FROM passkeys").fetchone()[0])
+
+    def passkey_used(self, credential_id: bytes, sign_count: int) -> bool:
+        """A sign-in with this passkey succeeded now: its last use and the counter it sent."""
+        now = self.clock.now()
+        with db.tx(self.con):
+            return self.con.execute(
+                "UPDATE passkeys SET sign_count=?, last_used_at=? WHERE credential_id=?",
+                (int(sign_count), now, credential_id),
+            ).rowcount == 1
 
     # --------------------------------------------------------------- recovery
     def recover_on_start(

@@ -8,7 +8,7 @@
 # belongs to root; the image starts as root only to hand its home on the disk to its own
 # unprivileged user, then runs as that user.
 #
-# Sign in from the service's Shell tab: `switchboard login`.
+# Sign in: open the claim link from the service's Logs tab (docs/DEPLOY.md, "Signing in").
 services:
   - type: web
     name: switchboard

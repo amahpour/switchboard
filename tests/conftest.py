@@ -211,7 +211,9 @@ class InProcBroker:
         self.policy = policy if policy is not None else AllowAllHumans()
         self.test_mode = test_mode
         self.clock = clock
-        self.web_origin = web_origin  # a broker.auth.WebOrigin: a public URL (DESIGN.md §30)
+        # a broker.auth.WebOrigin: a public URL (DESIGN.md §30); or a callable of the bound port,
+        # for a public URL that must name it (http://sb.localhost:<port>, the e2e passkey tests)
+        self.web_origin = web_origin
         self.port = 0
         self.app: Any = None
         self.server: Any = None
@@ -228,9 +230,10 @@ class InProcBroker:
         tcp = loopback_listener(self.port)  # the broker's own socket; a restart keeps its port (and Origin)
         self.port = tcp.getsockname()[1]
         self.tcp = tcp
+        origin = self.web_origin(self.port) if callable(self.web_origin) else self.web_origin
         self.app = create_app(
             self.paths, self.cfg, self.policy, self.test_mode, port=self.port, clock=self.clock,
-            web_origin=self.web_origin,
+            web_origin=origin,
         )
         self.server = uvicorn.Server(
             uvicorn.Config(

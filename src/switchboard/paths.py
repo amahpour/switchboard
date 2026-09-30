@@ -96,6 +96,12 @@ class Paths:
         return self.run_dir / "test-login-token"
 
     @property
+    def test_claim_link(self) -> Path:
+        """Test mode only: the current claim link of an unclaimed hosted broker (§31.3), so
+        a test reads it from here instead of the broker's stdout."""
+        return self.run_dir / "test-claim-link"
+
+    @property
     def test_marker(self) -> Path:
         return self.home / TEST_MARKER
 

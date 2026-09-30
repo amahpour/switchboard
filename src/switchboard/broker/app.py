@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 import os
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
@@ -23,6 +25,15 @@ from switchboard.broker.agents import AgentService
 from switchboard.broker.auth import HostOriginGuard, LoginTokens, SecurityHeaders, Sessions, WebOrigin
 from switchboard.broker.hosts import HostViews
 from switchboard.broker.hub import Hub, WsSubscriber
+from switchboard.broker.passkeys import (
+    CLAIM_TTL_S,
+    FRESH_CHECK_S,
+    ClaimTokens,
+    Sealer,
+    UsedChallenges,
+    WebAuthn,
+    passkeys_unavailable,
+)
 from switchboard.broker.peer import AllowAllHumans, PeerPolicy, ProcessPeerPolicy
 from switchboard.broker.remote import RemoteManager
 from switchboard.broker.rpc import RpcServer
@@ -38,6 +49,7 @@ from switchboard.store import Store
 log = logging.getLogger("switchboard.broker")
 
 MAINTENANCE_S = 60.0
+RESET_OWNER_ENV = "SWITCHBOARD_RESET_OWNER"
 
 
 @dataclass
@@ -67,6 +79,35 @@ class BrokerState:
     shutdown_cb: Callable[[], None] | None = None
     recovery: dict[str, int] = field(default_factory=dict)
     tasks: list[asyncio.Task[Any]] = field(default_factory=list)
+    # the owner of a hosted broker (DESIGN.md §31): passkeys work behind a public URL that is a
+    # secure context with a DNS name (else None); the claim link lives while there is no owner
+    webauthn: WebAuthn | None = None
+    claim: ClaimTokens | None = None
+    claim_out: Callable[[str], None] = field(default_factory=lambda: lambda line: print(line, flush=True))
+    sealer: Sealer = None  # type: ignore[assignment]
+    used_challenges: UsedChallenges = None  # type: ignore[assignment]
+    # per web session (its id hash): when it last passed a passkey check, and until when the
+    # claim's own session may add its backup passkey without one (§31.4)
+    passkey_checks: dict[str, float] = field(default_factory=dict)
+    claim_grace: dict[str, float] = field(default_factory=dict)
+
+    def unclaimed(self) -> bool:
+        """No owner yet: nobody claimed this broker and it has no passkey."""
+        return self.store.owner_handle() is None and self.store.passkey_count() == 0
+
+    def fresh_check(self, sid_hash: str) -> bool:
+        """The session passed a passkey check in the last FRESH_CHECK_S, or it is the claim's
+        own session within its grace: what adding a passkey (and, §31.6, pairing or approving
+        a machine) needs, so a stolen session can't make itself permanent."""
+        now = self.clock.now()
+        return (now - self.passkey_checks.get(sid_hash, float("-inf")) <= FRESH_CHECK_S
+                or self.claim_grace.get(sid_hash, 0.0) > now)
+
+    def claimed(self) -> None:
+        """The claim succeeded: no claim link from now on."""
+        self.claim = None
+        with contextlib.suppress(FileNotFoundError):
+            self.paths.test_claim_link.unlink()
 
     @property
     def base_url(self) -> str:
@@ -101,10 +142,15 @@ def create_app(
     port: int | None = None,
     clock: Clock | None = None,
     web_origin: WebOrigin | None = None,
+    reset_owner: str | None = None,
 ) -> FastAPI:
     """Build the broker app. ``port`` is the real bound TCP port (default cfg.port);
-    ``web_origin`` is where browsers reach it (default ``http://switchboard.localhost:<port>``)."""
+    ``web_origin`` is where browsers reach it (default ``http://switchboard.localhost:<port>``);
+    ``reset_owner`` is ``SWITCHBOARD_RESET_OWNER`` (§31.5; read from the environment when
+    not given)."""
     clock = clock or SystemClock()
+    if reset_owner is None:
+        reset_owner = os.environ.get(RESET_OWNER_ENV) or None
     port = cfg.port if port is None else port
     web_origin = web_origin or WebOrigin.local(port)
     state = BrokerState(
@@ -119,6 +165,8 @@ def create_app(
         login_tokens=LoginTokens(clock),
         web_origin=web_origin,
         hosts=HostViews(cfg.claude.sessions_dir, clock),
+        sealer=Sealer(clock),
+        used_challenges=UsedChallenges(clock),
     )
 
     @contextlib.asynccontextmanager
@@ -138,6 +186,7 @@ def create_app(
         write_hook_copy(paths)
         _refresh_hook_state(state)
         state.sessions = Sessions(state.store)
+        _owner_start(state, reset_owner)
         state.hub = Hub()
         state.service = RoomService(state.store, state.hub, cfg, state.info, clock)
         state.engine = Engine(state.store, clock, cfg, build_adapters(cfg), SinkRegistry(),
@@ -153,6 +202,9 @@ def create_app(
             raise
         if test_mode:
             _write_test_token(state)
+        if state.claim is not None:
+            _announce_claim(state)
+            state.tasks.append(asyncio.create_task(_claim_loop(state)))
         state.tasks.append(asyncio.create_task(_maintenance(state)))
         state.tasks.append(asyncio.create_task(state.runner.run()))
         state.tasks.append(asyncio.create_task(state.agents.liveness_loop()))
@@ -185,8 +237,9 @@ def create_app(
             with contextlib.suppress(Exception):
                 con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             con.close()
-            with contextlib.suppress(FileNotFoundError):
-                paths.test_login_token.unlink()
+            for f in (paths.test_login_token, paths.test_claim_link):
+                with contextlib.suppress(FileNotFoundError):
+                    f.unlink()
             log.info("broker stopped")
 
     app = FastAPI(
@@ -204,14 +257,67 @@ def create_app(
     return app
 
 
-def _write_test_token(state: BrokerState) -> None:
-    tok = state.login_tokens.mint()
-    p = state.paths.test_login_token
+def _write_test_file(p: Path, text: str) -> None:
     tmp = p.with_name(p.name + ".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
-        f.write(tok)
+        f.write(text)
     os.replace(tmp, p)
+
+
+def _write_test_token(state: BrokerState) -> None:
+    _write_test_file(state.paths.test_login_token, state.login_tokens.mint())
+
+
+# ---------------------------------------------------------- the owner (§31)
+def _owner_start(state: BrokerState, reset_owner: str | None) -> None:
+    """At start: passkeys are on behind a public URL where they can work; the owner reset
+    (``SWITCHBOARD_RESET_OWNER``) is applied once per value; and while there is no owner, a
+    claim link is made (printed by the lifespan, then a fresh one every hour)."""
+    origin = state.web_origin
+    if origin.public:
+        why = passkeys_unavailable(origin)
+        if why:
+            log.warning("passkeys are off: %s. Sign in with `switchboard login` in the container's shell", why)
+        else:
+            state.webauthn = WebAuthn(origin)
+    if reset_owner:
+        applied = hashlib.sha256(reset_owner.encode("utf-8")).hexdigest()
+        if state.store.reset_owner_applied() != applied:
+            got = state.store.reset_owner(applied)
+            log.warning("owner reset (%s): %d passkey(s) and %d web session(s) deleted, %d paired machine(s)"
+                        " back to pending; this can't be undone", RESET_OWNER_ENV, got["passkeys"], got["sessions"],
+                        got["machines_pending"])
+            state.store.add_event("login", data={"what": "owner_reset", **got})
+    if state.webauthn is not None and state.unclaimed():
+        state.claim = ClaimTokens(state.clock)
+
+
+def _announce_claim(state: BrokerState) -> None:
+    """One line on stdout (the container's log): the claim link, its token after ``#`` so no
+    server ever receives it in a URL. Never through the log (``broker.log`` keeps no secrets);
+    in test mode also in ``run/test-claim-link``, for the suite."""
+    claim = state.claim
+    if claim is None:
+        return
+    token = claim.mint()
+    url = f"{state.web_origin.origin}/setup#t={token}"
+    minutes = int(claim.ttl_s // 60)
+    state.claim_out(f"switchboard isn't set up yet. Claim it (link works once, for {minutes} min): {url}")
+    if state.test_mode:
+        _write_test_file(state.paths.test_claim_link, url)
+    log.warning("no owner yet: a claim link is on stdout (it works once, for %d min; a new one each time it"
+                " expires, until the broker is claimed)", minutes)
+
+
+async def _claim_loop(state: BrokerState) -> None:
+    """A fresh claim link every ``CLAIM_TTL_S`` while the broker stays unclaimed: a read-only
+    role in a deploy tool can read logs but usually can't restart pods (§31.3)."""
+    while True:
+        await asyncio.sleep(CLAIM_TTL_S)
+        if state.claim is None:
+            return
+        _announce_claim(state)
 
 
 def _refresh_hook_state(state: BrokerState) -> None:
@@ -233,6 +339,12 @@ async def _maintenance(state: BrokerState) -> None:
             was_bad = bad
             state.store.web_session_purge()
             state.login_tokens.purge()
+            state.used_challenges.purge()
+            now = state.clock.now()
+            for k in [k for k, t in state.passkey_checks.items() if now - t > FRESH_CHECK_S]:
+                del state.passkey_checks[k]
+            for k in [k for k, t in state.claim_grace.items() if t <= now]:
+                del state.claim_grace[k]
             for sub in list(state.hub.subs):
                 if isinstance(sub, WsSubscriber) and sub.sid_hash and not state.store.web_session_valid(sub.sid_hash):
                     state.hub.remove(sub)

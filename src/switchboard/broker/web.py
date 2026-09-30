@@ -18,6 +18,14 @@ web session. Read-only, and never message text.
 Closed rooms (§28): ``GET /api/rooms`` lists open rooms (each with its ``id``) and
 the ``closed`` count; ``GET /api/closed-rooms`` lists closed ones; ``POST
 /api/closed-rooms/{id}/reopen`` is the web UI's Reopen button.
+
+The owner of a hosted broker (§31): ``GET /setup`` is the claim page while there is no
+owner; ``POST /api/setup/begin`` (the claim token) and ``/finish`` (the new passkey)
+claim it; ``POST /api/passkey/begin`` and ``/finish`` sign in with a passkey (or, for a
+signed-in browser, pass a fresh passkey check); ``POST /api/passkeys/begin`` and
+``/api/passkeys`` add a passkey to a session that passed one; ``GET /api/auth/state``
+tells the sign-in page what applies. None of these need a session but the last two;
+all of them are Origin-checked like every write, and rate-limited on failure.
 """
 
 from __future__ import annotations
@@ -26,6 +34,7 @@ import asyncio
 import json
 import logging
 import re
+import secrets
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -34,9 +43,10 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
-from switchboard import __version__
-from switchboard.broker.auth import COOKIE_NAME, SESSION_TTL_S
+from switchboard import __version__, db
+from switchboard.broker.auth import COOKIE_NAME, SESSION_TTL_S, sha256_hex
 from switchboard.broker.commands import Actor
+from switchboard.broker.passkeys import CEREMONY_TTL_S, CLAIM_GRACE_S, clean_name, sign_count_ok
 from switchboard.broker.hub import WsSubscriber
 from switchboard.broker.service import ServiceError, message_dict
 from switchboard.models import InvalidName, normalize_room, valid_host
@@ -52,6 +62,10 @@ MAX_BODY = 64 * 1024
 WS_MAX_ROOMS = 64
 WS_BACKLOG = 500
 BAD_TOKEN_EVENT_S = 60.0
+# the ceremony cookies (§31.3, §31.4): the claim's id, a sign-in's sealed state, an add's
+SETUP_COOKIE = "switchboard_setup"
+PASSKEY_COOKIE = "switchboard_passkey"
+ADD_COOKIE = "switchboard_passkey_add"
 HASH_RE = re.compile(r"[0-9a-f]{64}")  # a remote's config_hash (sha256 hex)
 ROOM_ID_RE = re.compile(r"[1-9][0-9]{0,18}")  # a room id in /api/closed-rooms/{rid}/reopen
 MAX_ROOM_ID = 2**63 - 1  # SQLite's INTEGER: 19 digits can be more (OverflowError, not 400)
@@ -91,6 +105,16 @@ def _set_cookie(resp: Response, sid: str, *, secure: bool) -> None:
         samesite="strict",
         secure=secure,  # behind a public https:// URL (DESIGN.md §30), never sent over plain http
     )
+
+
+def _set_ceremony(resp: Response, name: str, value: str, *, secure: bool) -> None:
+    """A ceremony cookie: HttpOnly, SameSite=Strict, Secure behind https, gone with the ceremony."""
+    resp.set_cookie(name, value, max_age=int(CEREMONY_TTL_S), path="/", httponly=True, samesite="strict",
+                    secure=secure)
+
+
+def _drop_cookie(resp: Response, name: str, *, secure: bool) -> None:
+    resp.delete_cookie(name, path="/", httponly=True, samesite="strict", secure=secure)
 
 
 async def _json_body(request: Request) -> dict[str, Any]:
@@ -155,7 +179,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 status_code=403,
                 headers=NO_STORE,
             )
-        sid = state.sessions.create()
+        sid = state.sessions.create("login-link")
         state.store.add_event("login", data={"what": "session", "via": "web"})
         state.hub.notice(None, "warn", "new web login")
         resp = RedirectResponse("/", status_code=303, headers=NO_STORE)
@@ -182,10 +206,224 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         resp.delete_cookie(COOKIE_NAME, path="/", httponly=True, samesite="strict", secure=state.web_origin.secure)
         return resp
 
+    # ----------------------------------------------------- the owner (§31)
+    def claim_open() -> bool:
+        return state.claim is not None and state.claim.active
+
+    def passkeys_on() -> bool:
+        return state.webauthn is not None and state.store.passkey_count() > 0
+
+    # failures need no session, so they are rate-limited like bad login tokens: one event per
+    # BAD_TOKEN_EVENT_S with a count, and the same log line at most that often
+    failures: dict[str, dict[str, float]] = {}
+
+    def failed(what: str) -> None:
+        f = failures.setdefault(what, {"n": 0, "last": float("-inf")})
+        f["n"] += 1
+        now = state.clock.now()
+        if now - f["last"] >= BAD_TOKEN_EVENT_S:
+            state.store.add_event("login", data={"what": what, "count": int(f["n"])})
+            log.warning("%s (%d since the last note)", what.replace("_", " "), int(f["n"]))
+            f["n"], f["last"] = 0, now
+
+    def secure() -> bool:
+        return state.web_origin.secure
+
+    @app.get("/setup", include_in_schema=False)
+    async def setup_page() -> Response:
+        # the claim page while there is no owner; once claimed, or on a desktop, just the app
+        if not claim_open():
+            return RedirectResponse("/", status_code=303, headers=NO_STORE)
+        return FileResponse(STATIC_DIR / "setup.html", media_type="text/html", headers=NO_STORE)
+
+    @app.post("/api/setup/begin")
+    async def setup_begin(request: Request) -> Response:
+        try:
+            body = await _json_body(request)
+        except ServiceError as e:
+            return _svc_err(e)
+        claim, wa = state.claim, state.webauthn
+        if claim is None or wa is None or not claim.active or not claim.check(body.get("token")):
+            failed("bad_claim")
+            return _err(403, "bad_claim", "This claim link is invalid, expired or already used. Open the newest one"
+                                          " in the broker's log.")
+        cid = request.cookies.get(SETUP_COOKIE)
+        if claim.ceremony_busy(cid):
+            return _err(409, "busy", "Someone is claiming this switchboard from another browser right now. If that"
+                                     " isn't you, wait five minutes and try again; if it was, use that browser.")
+        # the owner's WebAuthn user id, made now and kept only in the ceremony until the claim
+        handle = secrets.token_bytes(16)
+        options, fstate = wa.register_options(handle, state.cfg.human_name, [])
+        cid = secrets.token_urlsafe(32)
+        claim.bind(cid, {"fido": fstate, "handle": handle.hex()})
+        resp = _ok({"options": options, "human": state.cfg.human_name})
+        _set_ceremony(resp, SETUP_COOKIE, cid, secure=secure())
+        return resp
+
+    @app.post("/api/setup/finish")
+    async def setup_finish(request: Request) -> Response:
+        try:
+            body = await _json_body(request)
+        except ServiceError as e:
+            return _svc_err(e)
+        claim, wa = state.claim, state.webauthn
+        cer = claim.ceremony(request.cookies.get(SETUP_COOKIE)) if claim is not None else None
+        if cer is None or wa is None:
+            failed("bad_claim")
+            return _err(403, "no_ceremony", "No claim is in progress in this browser (it takes five minutes at"
+                                            " most): open the claim link again.")
+        try:
+            reg = wa.register_finish(cer["fido"], body.get("credential"))
+        except ValueError as e:
+            claim.drop_ceremony()  # the token stays usable until it expires
+            failed("bad_claim")
+            return _err(400, "bad_credential", f"the passkey could not be verified: {e}")
+        name = clean_name(body.get("name"))
+        with db.tx(state.store.con):  # the owner and the first passkey, or neither
+            state.store.claim_owner(bytes.fromhex(cer["handle"]))
+            state.store.passkey_add(reg.credential_id, reg.public_key, name, reg.aaguid, reg.sign_count)
+        claim.spend()
+        state.claimed()
+        now = state.clock.now()
+        sid = state.sessions.create("claim")
+        h = sha256_hex(sid)
+        state.passkey_checks[h] = now  # creating the passkey is a passkey check
+        state.claim_grace[h] = now + CLAIM_GRACE_S  # and the backup step needs no second one
+        state.store.add_event("login", data={"what": "claim", "via": "web", "passkey": name})
+        state.hub.notice(None, "warn", f'switchboard claimed (passkey "{name}")')
+        log.warning("switchboard claimed with a passkey named %r", name)
+        resp = _ok({"ok": True, "name": name, "human": state.cfg.human_name})
+        _set_cookie(resp, sid, secure=secure())
+        _drop_cookie(resp, SETUP_COOKIE, secure=secure())
+        return resp
+
+    @app.post("/api/passkey/begin")
+    async def passkey_begin(request: Request) -> Response:
+        # no session, and nothing kept on the server: the ceremony's state rides in a sealed cookie
+        wa = state.webauthn
+        if wa is None or not passkeys_on():
+            return _err(403, "no_passkeys", "no passkeys are set up here")
+        options, fstate = wa.auth_options()
+        resp = _ok({"options": options})
+        _set_ceremony(resp, PASSKEY_COOKIE, state.sealer.seal(fstate, CEREMONY_TTL_S), secure=secure())
+        return resp
+
+    @app.post("/api/passkey/finish")
+    async def passkey_finish(request: Request) -> Response:
+        try:
+            body = await _json_body(request)
+        except ServiceError as e:
+            return _svc_err(e)
+        wa = state.webauthn
+        if wa is None or not passkeys_on():
+            return _err(403, "no_passkeys", "no passkeys are set up here")
+        st = state.sealer.unseal(request.cookies.get(PASSKEY_COOKIE))
+        if st is None:
+            failed("bad_passkey")
+            return _err(403, "no_ceremony", "the sign-in took too long, or its cookie is missing: try again")
+        try:
+            cred_id, count = wa.auth_finish(st, state.store.passkeys(), body.get("credential"))
+        except ValueError as e:
+            failed("bad_passkey")
+            return _err(403, "bad_credential", f"the passkey could not be verified: {e}")
+        row = state.store.passkey(cred_id)
+        if row is None:  # pragma: no cover - auth_finish matched one of the rows just read
+            return _err(403, "bad_credential", "unknown passkey")
+        if not sign_count_ok(row.sign_count, count):
+            # WebAuthn §7.2: a counter that didn't grow may mean a cloned authenticator
+            failed("bad_passkey")
+            log.warning("passkey %r: signature counter %d after %d, refused", row.name, count, row.sign_count)
+            return _err(403, "sign_count", f'the passkey "{row.name}" sent a signature counter that did not grow;'
+                                           " if you did not just use it elsewhere, it may have been copied")
+        if not state.used_challenges.add(st["challenge"]):
+            failed("bad_passkey")
+            return _err(403, "replay", "this sign-in was already used")
+        state.store.passkey_used(cred_id, count)
+        now = state.clock.now()
+        h = session(request)
+        resp = _ok({"ok": True, "name": row.name, "reauth": h is not None})
+        if h is not None:
+            # a signed-in browser confirming it's the owner: a fresh check for this session, no new session
+            state.passkey_checks[h] = now
+            state.store.add_event("login", data={"what": "passkey_check", "passkey": row.name})
+        else:
+            sid = state.sessions.create(f"passkey:{row.name}")
+            state.passkey_checks[sha256_hex(sid)] = now
+            state.store.add_event("login", data={"what": "session", "via": "passkey", "passkey": row.name})
+            state.hub.notice(None, "warn", f'new web login (passkey "{row.name}")')
+            _set_cookie(resp, sid, secure=secure())
+        _drop_cookie(resp, PASSKEY_COOKIE, secure=secure())
+        return resp
+
+    def add_refused(request: Request) -> tuple[str | None, JSONResponse | None]:
+        """The session that may add a passkey now, or why not: signed in, passkeys possible
+        here, the broker claimed, and a passkey check in the last five minutes (or the
+        claim's own grace)."""
+        h = session(request)
+        if h is None:
+            return None, unauthorized()
+        if state.webauthn is None:
+            return None, _err(403, "no_passkeys", "passkeys need a public https:// URL (docs/DEPLOY.md)")
+        if state.store.owner_handle() is None:
+            return None, _err(409, "unclaimed", "claim this switchboard from the link in its log first")
+        if not state.fresh_check(h):
+            return None, _err(403, "reauth", "confirm it's you with a passkey first")
+        return h, None
+
+    @app.post("/api/passkeys/begin")
+    async def passkeys_begin(request: Request) -> Response:
+        h, no = add_refused(request)
+        if no is not None:
+            return no
+        wa = state.webauthn
+        assert wa is not None
+        handle = state.store.owner_handle()
+        assert handle is not None
+        options, fstate = wa.register_options(handle, state.cfg.human_name,
+                                              [pk.credential_id for pk in state.store.passkeys()])
+        resp = _ok({"options": options})
+        _set_ceremony(resp, ADD_COOKIE, state.sealer.seal(fstate, CEREMONY_TTL_S), secure=secure())
+        return resp
+
+    @app.post("/api/passkeys")
+    async def passkeys_add(request: Request) -> Response:
+        h, no = add_refused(request)
+        if no is not None:
+            return no
+        try:
+            body = await _json_body(request)
+        except ServiceError as e:
+            return _svc_err(e)
+        wa = state.webauthn
+        assert wa is not None
+        st = state.sealer.unseal(request.cookies.get(ADD_COOKIE))
+        if st is None:
+            return _err(403, "no_ceremony", "adding the passkey took too long, or its cookie is missing: try again")
+        try:
+            reg = wa.register_finish(st, body.get("credential"))
+        except ValueError as e:
+            return _err(400, "bad_credential", f"the passkey could not be verified: {e}")
+        if state.store.passkey(reg.credential_id) is not None:
+            return _err(409, "conflict", "that passkey is registered already")
+        name = clean_name(body.get("name"))
+        state.store.passkey_add(reg.credential_id, reg.public_key, name, reg.aaguid, reg.sign_count)
+        state.store.add_event("login", data={"what": "passkey_added", "passkey": name})
+        state.hub.notice(None, "info", f'passkey added ("{name}")')
+        resp = _ok({"ok": True, "name": name, "passkeys": state.store.passkey_count()})
+        _drop_cookie(resp, ADD_COOKIE, secure=secure())
+        return resp
+
+    @app.get("/api/auth/state")
+    async def auth_state() -> Response:
+        # for the sign-in page (no session): what applies here, and nothing about the owner
+        return _ok({"hosted": state.web_origin.public, "claimed": state.store.owner_handle() is not None,
+                    "passkeys": passkeys_on(), "claim": claim_open()})
+
     # --------------------------------------------------------------- api
     @app.get("/api/me")
     async def me(request: Request) -> Response:
-        if session(request) is None:
+        h = session(request)
+        if h is None:
             return unauthorized()
         resp = _ok(
             {
@@ -193,6 +431,10 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 "version": __version__,
                 "test_mode": state.test_mode,
                 "port": state.info.port,
+                # the passkeys sheet (§31.4): shown behind a public URL where passkeys work
+                "hosted": state.webauthn is not None,
+                "passkeys": state.store.passkey_count(),
+                "fresh": state.fresh_check(h),
             }
         )
         # Slide the browser cookie along with the server-side session.

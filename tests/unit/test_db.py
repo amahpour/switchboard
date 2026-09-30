@@ -28,7 +28,7 @@ def test_open_creates_full_schema_with_wal(tmp_path: Path) -> None:
     assert con.isolation_level is None
     tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert EXPECTED_TABLES <= tables
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 2  # schema v2 since M8b (DESIGN.md §27.6)
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 3  # v2 since M8b (§27.6), v3 since #41 (§31.2)
     indexes = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='index'")}
     assert {"memberships_active_name", "memberships_active_part", "messages_room_id",
             "deliveries_open", "events_kind_ts"} <= indexes
@@ -48,13 +48,15 @@ def test_schema_columns_match_design(tmp_path: Path) -> None:
     assert {"sender_membership_id", "sender_harness", "via", "kind", "mentions", "reply_to"} <= cols("messages")
     assert {"wake_kind", "wake_reason", "budget_counted", "turn_start_at", "first_action_at", "evidence"} <= cols("batches")
     assert {"prio", "mentioned", "offered_inline", "notified_at", "redelivered", "reminders"} <= cols("deliveries")
-    assert {"id_hash", "expires_at"} <= cols("web_sessions")
+    assert {"id_hash", "expires_at", "via"} <= cols("web_sessions")
+    assert {"credential_id", "public_key", "sign_count"} <= cols("passkeys")
+    assert {"name", "key", "key_fp", "approved_at", "removed_at"} <= cols("link_machines")
 
 
 def test_migrate_is_idempotent_and_refuses_unknown_version(tmp_path: Path) -> None:
     p = tmp_path / "y.db"
     con = db.open_db(p)
-    assert db.migrate(con) == 2
+    assert db.migrate(con) == db.SCHEMA_VERSION
     con.execute("UPDATE meta SET value='99' WHERE key='schema_version'")
     with pytest.raises(db.SchemaError):
         db.migrate(con)

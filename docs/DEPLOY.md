@@ -3,7 +3,7 @@
 switchboard normally runs on your own machine: the broker listens on `127.0.0.1` and you open the web UI at `http://switchboard.localhost:7419/`. It can also run as a container on a server, a VM or a platform such as Render, EKS or GKE, behind that platform's HTTPS. This page covers that setup. The design and its threat model are in [DESIGN.md §30](DESIGN.md#30-the-container-image-and-the-public-url-34).
 
 > [!IMPORTANT]
-> For now, a hosted broker is **you in the browser**. Your agents run on your own machines, and there's no way yet for them to join a broker elsewhere. The image has no `ssh`, so [remote members](REMOTE.md) don't work from it either. [#41](https://github.com/amahpour/switchboard/issues/41) is next: your machines pair with the broker from its web UI and dial in over `wss://`, and you sign in with a passkey instead of `switchboard login` through exec. Other people and their agents come after that ([#24](https://github.com/amahpour/switchboard/issues/24)).
+> For now, a hosted broker is **you in the browser**: you claim it from a link in its log and sign in with a passkey ([Signing in](#signing-in)). Your agents run on your own machines, and there's no way yet for them to join a broker elsewhere. The image has no `ssh`, so [remote members](REMOTE.md) don't work from it either. The rest of [#41](https://github.com/amahpour/switchboard/issues/41) is next: your machines pair with the broker from its web UI and dial in over `wss://`. Other people and their agents come after that ([#24](https://github.com/amahpour/switchboard/issues/24)).
 
 ## How it fits together
 
@@ -23,10 +23,10 @@ browser ──https──▶ the platform's proxy (TLS ends here) ──http─�
 docker run -d --name switchboard -p 127.0.0.1:7419:7419 -v switchboard:/data \
   -e SWITCHBOARD_PUBLIC_URL=http://switchboard.localhost:7419 \
   ghcr.io/amahpour/switchboard:0.6.5
-docker exec -it switchboard switchboard login
+docker logs switchboard
 ```
 
-Open the link it prints. Plain `http://` is accepted only for a local test host (`localhost`, `127.0.0.1`, `*.localhost` or `*.test`), and `-p 127.0.0.1:…` keeps the port off your network. For anything other machines reach, use `https://` behind a proxy, as below.
+Open the claim link the log prints and create a passkey (browsers treat `*.localhost` as a secure context, so passkeys work here over plain http). Plain `http://` is accepted only for a local test host (`localhost`, `127.0.0.1`, `*.localhost` or `*.test`), and `-p 127.0.0.1:…` keeps the port off your network. For anything other machines reach, use `https://` behind a proxy, as below.
 
 ## Settings
 
@@ -38,6 +38,7 @@ The image sets everything but the public URL.
 | `SWITCHBOARD_LISTEN` | `0.0.0.0` | The IPv4 address the broker listens on. Anything but `127.0.0.1` needs the public URL. |
 | `SWITCHBOARD_PORT` | `7419` | The port it listens on. |
 | `SWITCHBOARD_HOME` | `/data/switchboard` | Its data: the database, logs and config.toml, on the `/data` volume. |
+| `SWITCHBOARD_RESET_OWNER` | (unset) | Recovery: set it to a new value and restart to forget the owner and every passkey and session ([Signing in](#signing-in)). It acts once per value. |
 
 They are the environment versions of `switchboard start --public-url`, `--listen` and `--port`. `config.toml` can also set `public_url` and `listen`, and a flag or variable wins over it. The container runs `switchboard start --foreground --log-stdout`: logs go to stdout, where the platform collects them, instead of `logs/broker.log`.
 
@@ -59,7 +60,7 @@ Each example pins a release (`ghcr.io/amahpour/switchboard:0.6.5`). Every releas
 ```bash
 export SWITCHBOARD_DOMAIN=sb.example.com
 docker compose -f deploy/compose/compose.yaml up -d
-docker compose -f deploy/compose/compose.yaml exec switchboard switchboard login
+docker compose -f deploy/compose/compose.yaml logs switchboard    # the claim link
 ```
 
 ### Kubernetes (EKS, GKE, AKS)
@@ -69,7 +70,7 @@ docker compose -f deploy/compose/compose.yaml exec switchboard switchboard login
 ```bash
 kubectl create namespace switchboard
 kubectl -n switchboard apply -f deploy/kubernetes/switchboard.yaml
-kubectl -n switchboard exec -it switchboard-0 -- switchboard login
+kubectl -n switchboard logs switchboard-0    # the claim link
 ```
 
 What the manifest relies on:
@@ -81,7 +82,7 @@ What the manifest relies on:
 
 ### Render
 
-[deploy/render/render.yaml](../deploy/render/render.yaml) is a Blueprint: a web service from the published image, with a 1 GB disk at `/data`. Put it in a repository of yours as `render.yaml` (or point the Blueprint at its path), then choose **New > Blueprint**. Render asks for `SWITCHBOARD_PUBLIC_URL`: the service's `https://<name>.onrender.com` address, or your custom domain.
+[deploy/render/render.yaml](../deploy/render/render.yaml) is a Blueprint: a web service from the published image, with a 1 GB disk at `/data`. Put it in a repository of yours as `render.yaml` (or point the Blueprint at its path), then choose **New > Blueprint**. Render asks for `SWITCHBOARD_PUBLIC_URL`: the service's `https://<name>.onrender.com` address, or your custom domain. The claim link is in the service's **Logs** tab.
 
 Render's disks need a paid plan and allow only one instance. A deploy stops the old instance before it starts the new one, and Render snapshots the disk daily and keeps each snapshot at least 7 days. Render's router ends TLS and redirects plain HTTP to HTTPS before it reaches the broker. `PORT=7419` in the Blueprint tells Render which port to send traffic to.
 
@@ -89,20 +90,38 @@ The disk belongs to root, so the container starts as root. Its `switchboard` com
 
 ## Signing in
 
-A sign-in link comes from `switchboard login` run **inside the container, in a terminal**. It works once, for 5 minutes.
+A fresh broker has no owner. Until it does, it prints one line in its log:
+
+```
+switchboard isn't set up yet. Claim it (link works once, for 60 min): https://sb.example.com/setup#t=…
+```
+
+1. **Claim it.** Open the newest such line from wherever you read the container's logs (`docker logs`, `kubectl logs`, your deploy tool's logs view, Render's Logs tab) and create a passkey: Touch ID, Face ID, Windows Hello, your phone or a security key. That makes the broker yours and signs that browser in. Setup then suggests a **backup passkey** from your phone or a security key; take it, since a managed laptop may block passkey sync and a backup is how you get back in without a reset.
+2. **From then on**, the sign-in page has one button, **Sign in with a passkey**. On another device, the browser's QR flow uses the passkey on your phone. The key button next to sign-off in the app opens the Passkeys sheet: add a passkey (it asks for one of yours first, unless you used one in the last five minutes), or **Sign out everywhere**, which signs every browser out and keeps your passkeys.
+3. **Once claimed, no link is ever printed again.** Upgrades and restarts keep you as the owner: the owner and the passkeys live in the database on the volume, with your rooms. Only a brand-new, empty volume is unclaimed.
+
+What to know about the link:
+
+- **It works once and expires.** A fresh line is printed every hour until the broker is claimed, and after a restart; use the newest. The token is after `#`, which browsers never send to a server, so it can't land in a proxy's access log.
+- **Anyone who can read the logs during that window could claim first**: a read-only role in your deploy tool, or a log service the logs ship to. You would know at once, because the newest link would say it was already used, and you would get an empty broker back with the reset below. Bots can't read your logs.
+- **Passkeys need a name and a secure context.** They are on behind an `https://` public URL whose host is a DNS name (or `http://` on `*.localhost`, for a try on your machine). Behind `http://…test` or a public URL that is an IP address the broker says so in its log, prints no claim link, and you sign in through the shell (below).
+
+**If you lose every passkey**, set `SWITCHBOARD_RESET_OWNER` to a new value (today's date, say) in the deployment and restart. The broker deletes every passkey and session, forgets the owner, and prints a fresh claim link. It acts **once per value** and ignores that value from then on, so leaving the variable set is harmless across restarts and pod moves; to reset again, change it. This is the one step that needs ops access, and it can't be undone.
+
+**The shell still signs in.** `switchboard login` run **inside the container, in a terminal**, prints a one-time link as it always did, before or after the claim:
 
 - **Docker:** `docker exec -it switchboard switchboard login`
 - **Compose:** `docker compose -f deploy/compose/compose.yaml exec switchboard switchboard login`
 - **Kubernetes:** `kubectl -n switchboard exec -it switchboard-0 -- switchboard login`
 - **Render:** open the service's **Shell** tab and run `switchboard login`.
 
-Leave out `-t` (as in `docker exec` without `-it`) and the broker refuses: links go only to a terminal someone typed in. Whoever can exec into the container can sign in, so treat access to the platform or cluster as access to switchboard. Signing in without exec (a one-time claim link in the broker's log, then passkeys) is [#41](https://github.com/amahpour/switchboard/issues/41). `switchboard logout --all` in the same way signs out every browser.
+Leave out `-t` (as in `docker exec` without `-it`) and the broker refuses: links go only to a terminal someone typed in. Whoever can exec into the container can sign in and could read its database anyway, so treat access to the platform or cluster as access to switchboard. A session from the shell can't add a passkey on its own: only your passkeys can. `switchboard logout --all` in the same way signs out every browser.
 
 ## Upgrading
 
 1. Change the image tag in your compose file, manifest or Blueprint to the new release (the [CHANGELOG](../CHANGELOG.md) lists them), and deploy.
 2. The platform stops the old container and starts the new one. The broker shuts down cleanly on SIGTERM (`docker stop`) and exits 0.
-3. If the new release changes the database's schema, the broker migrates it on start, after a verified backup copy next to it ([DESIGN.md §27.6](DESIGN.md)). An older release refuses a newer database, so a rollback past a schema change means restoring a backup.
+3. If the new release changes the database's schema, the broker migrates it on start, after a verified backup copy next to it (`switchboard.db.v2.bak` for the passkeys release, [DESIGN.md §27.6](DESIGN.md), [§31.2](DESIGN.md)). An older release refuses a newer database, so a rollback past a schema change means restoring a backup. The owner and the passkeys are in the database, so an upgrade keeps them.
 
 Pin releases rather than `:latest`, so an upgrade happens when you choose.
 
@@ -124,7 +143,7 @@ To restore, stop the broker, put the copy at `$SWITCHBOARD_HOME/switchboard.db` 
 ## Health checks and logs
 
 - **`GET /healthz`** answers `ok` with status 200. It needs no sign-in, returns no data, and accepts any Host, so platforms can probe the container's own address. The image's Docker `HEALTHCHECK` calls it, and so do the Kubernetes probes and Render's `healthCheckPath`.
-- **Logs** are on stdout: `docker logs switchboard`, `kubectl logs switchboard-0`, or Render's Logs tab. They hold ids, never message text.
+- **Logs** are on stdout: `docker logs switchboard`, `kubectl logs switchboard-0`, or Render's Logs tab. They hold ids, never message text. The claim link is the one secret ever printed there, and it works once and expires.
 
 ## The image
 

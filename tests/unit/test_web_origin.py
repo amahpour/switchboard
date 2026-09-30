@@ -83,10 +83,10 @@ def test_what_is_not_a_public_url(url: str, why: str) -> None:
 # ------------------------------------------------------------ the two settings
 def test_web_settings() -> None:
     assert daemon.web_settings("127.0.0.1", "") is None  # the default: switchboard.localhost
-    assert daemon.web_settings("0.0.0.0", "https://sb.example.com") == WebOrigin("https", "sb.example.com")
-    assert daemon.web_settings("10.1.2.3", "https://sb.example.com:8443") == WebOrigin("https", "sb.example.com:8443")
+    assert daemon.web_settings("0.0.0.0", "https://sb.example.com") == WebOrigin("https", "sb.example.com", True)
+    assert daemon.web_settings("10.1.2.3", "https://sb.example.com:8443") == WebOrigin("https", "sb.example.com:8443", True)
     # loopback behind a proxy on the same machine (Caddy, a tunnel)
-    assert daemon.web_settings("127.0.0.1", "https://sb.example.com") == WebOrigin("https", "sb.example.com")
+    assert daemon.web_settings("127.0.0.1", "https://sb.example.com") == WebOrigin("https", "sb.example.com", True)
 
 
 @pytest.mark.parametrize("listen,url,why", [

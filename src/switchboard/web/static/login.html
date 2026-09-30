@@ -2,10 +2,12 @@
 <!--
   switchboard: the page a browser without a session sees at "/".
 
-  It loads only the stylesheet: no script at all, so there is nothing to attack before sign-in.
-  Signing in happens outside the browser: `switchboard login` in the user's own terminal prints a
-  one-time link. This page never carries a token and never offers a form to type one into.
-  Same rules as index.html: no inline script, style or event handler; every link is same-origin.
+  Signing in happens outside the browser on a desktop: `switchboard login` in the user's own
+  terminal prints a one-time link. This page never carries a token and never offers a form to
+  type one into. On a hosted broker (DESIGN.md §31.4) login.js asks GET /api/auth/state and,
+  when the owner has a passkey, shows one button, Sign in with a passkey; while the broker is
+  unclaimed it points at the claim link in the broker's log. Same rules as index.html: no inline
+  script, style or event handler; every link is same-origin (tests/unit/test_web_static_lint.py).
 -->
 <html lang="en">
 <head>
@@ -18,6 +20,8 @@
 <link rel="icon" href="/static/favicon-32.png" sizes="32x32">
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<script src="/static/webauthn.js" defer></script>
+<script src="/static/login.js" defer></script>
 </head>
 <body class="login">
 <main class="login-card" aria-labelledby="login-title">
@@ -28,11 +32,38 @@
     <span class="brand-name">switchboard</span>
   </div>
   <h1 id="login-title">Sign in this browser</h1>
-  <p>This browser isn&rsquo;t signed in. In your own terminal, run:</p>
-  <pre class="login-cmd"><code>switchboard login</code></pre>
-  <p>and open the link it prints. Each link works once, for 5 minutes.</p>
-  <p class="fine">If the broker isn&rsquo;t running yet, start it with <code>switchboard start</code>.</p>
-  <div class="login-actions"><a class="btn-primary" href="/">Try again</a></div>
+
+  <!-- the desktop (and a hosted broker before login.js has asked): the one-time link -->
+  <div class="login-variant" id="login-cli">
+    <p>This browser isn&rsquo;t signed in. In your own terminal, run:</p>
+    <pre class="login-cmd"><code>switchboard login</code></pre>
+    <p>and open the link it prints. Each link works once, for 5 minutes.</p>
+    <p class="fine">If the broker isn&rsquo;t running yet, start it with <code>switchboard start</code>.</p>
+    <p class="fine hidden" id="login-hosted">On a server, run it in the container&rsquo;s shell
+      (<code>docker exec -it</code>, <code>kubectl exec -it</code>, Render&rsquo;s Shell tab).</p>
+    <div class="login-actions"><a class="btn-primary" href="/">Try again</a></div>
+  </div>
+
+  <!-- a hosted broker whose owner has a passkey -->
+  <div class="login-variant hidden" id="login-passkey">
+    <p>This browser isn&rsquo;t signed in. Use one of your passkeys: Touch&nbsp;ID, Face&nbsp;ID,
+      Windows&nbsp;Hello, your phone or a security key.</p>
+    <div class="login-actions stretch">
+      <button type="button" class="btn-primary" id="passkey-btn">Sign in with a passkey</button>
+    </div>
+    <p class="fine">On another device, the browser offers a QR code to use the passkey on your phone.</p>
+  </div>
+
+  <!-- a hosted broker nobody has claimed yet -->
+  <div class="login-variant hidden" id="login-claim">
+    <p>This switchboard hasn&rsquo;t been claimed yet. Open the claim link from the broker&rsquo;s log
+      (your deploy tool&rsquo;s logs view, Render&rsquo;s Logs tab, <code>docker compose logs</code>) and
+      create your first passkey there.</p>
+    <p class="fine">The link works once, for 60 minutes; a fresh one is printed every hour until the
+      broker is claimed.</p>
+  </div>
+
+  <p class="login-error hidden" id="login-error" role="alert"></p>
 </main>
 </body>
 </html>

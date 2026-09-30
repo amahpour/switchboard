@@ -76,9 +76,11 @@ class Sessions:
         self.store = store
         self.ttl_s = ttl_s
 
-    def create(self) -> str:
+    def create(self, via: str = "login-link") -> str:
+        """A new session; ``via`` says how it was made (``login-link``, ``claim``,
+        ``passkey:<name>``), for the later sessions list (§31.2)."""
         sid = secrets.token_urlsafe(32)
-        self.store.web_session_create(sha256_hex(sid), self.ttl_s)
+        self.store.web_session_create(sha256_hex(sid), self.ttl_s, via)
         return sid
 
     def check(self, sid: str | None) -> str | None:
@@ -113,6 +115,8 @@ class WebOrigin:
 
     scheme: str
     host: str  # as browsers send it in Host: the name, and the port when it isn't the default
+    # a public URL (``--public-url``, a hosted broker: §30, §31) rather than the local default
+    public: bool = False
 
     @classmethod
     def local(cls, port: int) -> WebOrigin:
@@ -142,7 +146,7 @@ class WebOrigin:
             raise ValueError("plain http:// is only for a local test host; use https:// behind a proxy that "
                              "terminates TLS")
         default = 443 if u.scheme == "https" else 80
-        return cls(u.scheme, name if port in (None, default) else f"{name}:{port}")
+        return cls(u.scheme, name if port in (None, default) else f"{name}:{port}", True)
 
     @property
     def origin(self) -> str:
@@ -155,6 +159,20 @@ class WebOrigin:
     @property
     def secure(self) -> bool:
         return self.scheme == "https"
+
+    @property
+    def hostname(self) -> str:
+        """The host without its port: WebAuthn's relying-party id (§31.3)."""
+        return self.host.rsplit(":", 1)[0] if ":" in self.host else self.host
+
+    def secure_context(self) -> bool:
+        """Whether browsers treat this origin as a secure context, which WebAuthn needs:
+        https, or plain http only on ``localhost`` and ``*.localhost`` (not ``*.test``, not
+        an address)."""
+        if self.scheme == "https":
+            return True
+        name = self.hostname
+        return name == "localhost" or name.endswith(".localhost")
 
 
 def _is_ipv4(name: str) -> bool:

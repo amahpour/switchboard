@@ -301,6 +301,25 @@ class RemoteRow:
         return self.enabled_for(config_hash) and not self.blocked
 
 
+@dataclass(frozen=True)
+class PasskeyRow:
+    """A ``passkeys`` row (DESIGN.md §31.2): one of the owner's passkeys, as WebAuthn
+    registered it: the credential id, its COSE public key, the signature counter last seen,
+    the name the owner gave it and the authenticator's AAGUID."""
+
+    credential_id: bytes
+    public_key: bytes
+    sign_count: int
+    name: str
+    aaguid: str | None
+    created_at: float
+    last_used_at: float | None
+
+    @classmethod
+    def from_row(cls, r: sqlite3.Row) -> "PasskeyRow":
+        return cls(**{k: r[k] for k in r.keys()})
+
+
 # --------------------------------------------------------------------- agents
 RESERVED_NAMES = frozenset({"system", "user", "human", "admin", "root"})
 PULL_PATHS = frozenset({"wait", "read", "say"})
