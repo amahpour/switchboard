@@ -53,7 +53,7 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: switchboard
-          image: ghcr.io/amahpour/switchboard:0.7.0   # a release, not :latest (docs/DEPLOY.md, "Upgrading")
+          image: ghcr.io/amahpour/switchboard:0.8.0   # a release, not :latest (docs/DEPLOY.md, "Upgrading")
           env:
             - name: SWITCHBOARD_PUBLIC_URL
               value: https://sb.example.com      # the Ingress host below; the broker answers to no other

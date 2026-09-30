@@ -2,6 +2,12 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.8.0 (2026-09-30)
+
+### Added
+
+- **A Codex session on another machine is woken when it's idle, like one on the broker's own machine.** switchboard's MCP server on that machine starts the turn through that machine's Codex daemon, after checking that a Codex TUI is attached, that the thread is the one that joined, and that it isn't waiting on an approval or your input. Its tier is `codex:link`, and it no longer has to sit in `wait()`. It needs that machine's Codex daemon (`[codex] control_socket` in its switchboard home); without one it stays `codex:hook`, pull only, as before. Mid-task it still gets your messages as hook context, not a steer. `switchboard report` labels these wakes `codex:link`. (#63)
+
 ## 0.7.0 (2026-09-30)
 
 ### Upgrading
