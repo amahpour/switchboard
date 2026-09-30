@@ -183,6 +183,20 @@ def test_each_path_gets_its_label_and_tier(w: World, clock: FakeClock) -> None:
     assert {r["tier"] for r in rep["latency"]["by_tier"]} == {"codex:daemon", "cursor:stop-park"}
 
 
+def test_a_remote_codex_wake_reports_its_own_tier(w: World, clock: FakeClock) -> None:
+    """Issue #63: a remote Codex thread's wake has the ``turn_start`` path of a local one,
+    but it went through that machine's app-server, not this one's daemon."""
+    px, mx = w.agent("cx-pi", harness="codex", status="idle", hooks=True, host="fpga-pi")
+    w.store.update_participant(px.id, tier="codex:link")
+    a = quiet_msg(w, "task")
+    clock.advance(0.2)
+    b = offer(w, mx, [a], path="turn_start", kind="wake", wake_kind="idle_wake", reason="human", counted=True)
+    w.store.set_batch_times(b, turn_start_at=a.ts + 0.25)
+    w.store.confirm_batch(b, "link:turn/start")
+    r = row(build(w)["latency"]["detail"], path="turn_start", label="turn start")
+    assert (r["tier"], r["p50_ms"]) == ("codex:link", 250.0)
+
+
 def test_only_the_first_confirmed_batch_counts_per_recipient(w: World, clock: FakeClock) -> None:
     px, mx = w.agent("codex-1", harness="codex", status="idle", hooks=True)
     a = quiet_msg(w, "task")
