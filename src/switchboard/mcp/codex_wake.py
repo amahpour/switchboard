@@ -72,8 +72,11 @@ def usable_socket(path: str | None) -> str | None:
 
 def tui_attached(sock: str) -> bool:
     """Whether a Codex TUI (a human's session, not an app-server, ``exec`` or ``queue``
-    run) is connected to the control socket at ``sock``. Fails closed: no ``lsof``,
-    a failed run or an argv that can't be read all say no."""
+    run) is connected to the control socket at ``sock``, the configured path: ``lsof``
+    names a socket by the path it was bound with, which may be this one or where it
+    resolves (``/tmp`` is ``/private/tmp`` on macOS), so both are matched, as the
+    broker's own check does. Fails closed: no ``lsof``, a failed run or an argv that
+    can't be read all say no."""
     from switchboard.adapters.codex import _run_lsof, is_tui_argv, lsof_bin, parse_lsof, socket_peers
     from switchboard.broker import proc
 
@@ -108,7 +111,8 @@ async def wake(sock_path: str | None, thread_id: str, nonce: str, text: str, bat
     real = usable_socket(sock_path)
     if real is None:
         raise Refused(NO_DAEMON)
-    if not await asyncio.to_thread(tui_attached, real):
+    assert sock_path is not None  # usable_socket said yes
+    if not await asyncio.to_thread(tui_attached, sock_path):
         raise Refused(NO_TUI)
 
     async def go(r: CodexRpc) -> Any:

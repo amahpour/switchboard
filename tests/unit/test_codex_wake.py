@@ -121,6 +121,31 @@ def test_no_tui_or_no_daemon_means_no_wake(daemon: Any, tui: dict[str, bool], tm
     assert fake.calls("turn/start") == []
 
 
+def test_the_tui_check_matches_the_configured_path_and_where_it_resolves(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """lsof names a socket by the path it was bound with: on macOS a socket under /tmp
+    shows as /tmp/..., though it resolves to /private/tmp/... (a CI failure)."""
+    from switchboard.adapters import codex as cx
+    from switchboard.broker import proc
+
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    bound = str(link / "app-server-control.sock")  # as the app-server bound it
+    tui_pid = os.getpid() + 1
+    out = (f"p{os.getpid() + 2}\nf5\nd0xaaa\nn{bound}\n"  # the app-server's end
+           f"p{tui_pid}\nf7\nd0xbbb\nn->0xaaa\n")  # the TUI's end
+    monkeypatch.setattr(cx, "lsof_bin", lambda: "/usr/sbin/lsof")
+    monkeypatch.setattr(cx, "_run_lsof", lambda _bin: out)
+    monkeypatch.setattr(proc, "info", lambda pid: proc.ProcInfo(pid, 1, 100.0, os.getuid()) if pid == tui_pid else None)
+    monkeypatch.setattr(proc, "argv_many", lambda infos: {i.pid: "codex" for i in infos})
+    assert codex_wake.tui_attached(bound)
+    assert codex_wake.tui_attached(str(real / "app-server-control.sock")) is False  # only the resolved path
+    monkeypatch.setattr(proc, "argv_many", lambda infos: {i.pid: "codex app-server" for i in infos})
+    assert codex_wake.tui_attached(bound) is False  # an app-server client is not a TUI
+
+
 def test_an_rpc_error_is_a_refusal(daemon: Any, tui: dict[str, bool]) -> None:
     fake, sock = daemon
     fake.add_thread(TID)
