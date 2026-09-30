@@ -1,0 +1,121 @@
+# After each merge to main (issue #46; CONTRIBUTING.md, "Releases"). Nothing here runs the
+# tests: they ran on the PR (test.yml), and main takes only PRs whose `CI` check passed.
+# - `release`: when the merge is a release PR (`release: vX.Y.Z`, opened by
+#   `.github/scripts/release.py --open-pr`), tags that commit and publishes the GitHub Release
+#   with the version's CHANGELOG section; then `publish-image` publishes its image. A tag isn't
+#   covered by main's ruleset, so the built-in token is enough.
+# - `badge`: moves the README's coverage badge to the merged PR's combined coverage.
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: release
+    if: "startsWith(github.event.head_commit.message, 'release: v')"   # quoted: the ': ' would end a plain YAML value
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    outputs:
+      version: ${{ steps.publish.outputs.version }}   # set only once the tag and the Release are out
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+      - name: Tag the merge and publish the GitHub Release
+        id: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MESSAGE: ${{ github.event.head_commit.message }}   # through the environment, never pasted into the script
+        run: |
+          set -eu
+          title=$(printf '%s\n' "$MESSAGE" | head -n 1)
+          # the version the title names, which must be pyproject.toml's; empty for any other merge
+          version=$(python3 .github/scripts/release.py --merged "$title")
+          if [ -z "$version" ]; then echo "not a release PR: $title"; exit 0; fi
+          python3 .github/scripts/release.py --notes-for "$version" > "$RUNNER_TEMP/release-notes.md"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$version" -m "switchboard $version"
+          git push -q origin "refs/tags/v$version"
+          gh release create "v$version" --verify-tag --title "switchboard $version" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" --latest
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  # After a release: its image, built from the new tag for linux/amd64 and linux/arm64 and pushed
+  # to ghcr.io/amahpour/switchboard as <version> (and `latest`, when it is the newest release),
+  # with provenance and an SBOM (.github/workflows/image.yml, which can also be run by hand).
+  publish-image:
+    name: publish image
+    needs: release
+    if: needs.release.outputs.version != ''
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/image.yml
+    with:
+      version: ${{ needs.release.outputs.version }}
+
+  # The README's coverage badge: coverage.json from the merged PR's CI run, committed to the
+  # orphan `badges` branch (created on first use), which shields.io reads. A PR that skipped the
+  # tests (docs only, a release) has no coverage, and the badge stays where it was.
+  badge:
+    name: publish badge
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write        # the badges branch
+      actions: read          # the PR run's artifact
+      pull-requests: read    # which PR this merge was
+    steps:
+      - name: Find the merged PR's coverage
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          head=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" \
+            --jq '[.[] | select(.merged_at != null)][0].head.sha // ""')
+          if [ -z "$head" ]; then echo "no merged PR for $GITHUB_SHA"; exit 0; fi
+          run=$(gh run list -R "$GITHUB_REPOSITORY" --workflow test.yml --commit "$head" --event pull_request \
+            --status success --limit 1 --json databaseId --jq '.[0].databaseId // ""')
+          if [ -z "$run" ]; then echo "no passing CI run for $head"; exit 0; fi
+          if gh run download "$run" -R "$GITHUB_REPOSITORY" -n coverage-badge -D badge-in; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run $run has no coverage: that PR skipped the tests"
+          fi
+      - name: Commit coverage.json to the badges branch
+        if: steps.find.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          b64=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$b64"
+          auth="AUTHORIZATION: basic $b64"   # the way actions/checkout authenticates; never stored in a config
+          remote="https://github.com/${GITHUB_REPOSITORY}.git"
+          git init -q -b badges badges && cd badges
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git -c http.extraheader="$auth" ls-remote --exit-code --heads "$remote" badges >/dev/null; then
+            git -c http.extraheader="$auth" fetch -q --depth 1 "$remote" badges
+            git checkout -q -B badges FETCH_HEAD
+          else
+            rc=$?; [ "$rc" -eq 2 ] || exit "$rc"   # 2: no badges branch yet, so start it (orphan: none of main's history)
+          fi
+          cp ../badge-in/coverage.json coverage.json
+          git add coverage.json
+          if git diff --cached --quiet; then
+            echo "coverage.json unchanged"; exit 0
+          fi
+          git commit -q -m "coverage: $(python3 -c 'import json; print(json.load(open("coverage.json"))["message"])') (${GITHUB_SHA::7})"
+          git -c http.extraheader="$auth" push -q "$remote" HEAD:refs/heads/badges
+          cat coverage.json
