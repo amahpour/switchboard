@@ -1,0 +1,89 @@
+<!doctype html>
+<!--
+  switchboard: the claim page (DESIGN.md §31.3), served at /setup while a hosted broker has no owner.
+
+  The claim link the broker printed in its log ends in #t=<token>. The browser never sends the
+  part after # to any server, so the token can't land in a proxy's access log; setup.js reads
+  it, removes it from the address bar at once, and sends it in the body of the request that
+  registers the first passkey, which spends it. Same rules as index.html: no inline script,
+  style or event handler; every link is same-origin (tests/unit/test_web_static_lint.py).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<title>switchboard &mdash; Claim it</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="/static/favicon-32.png" sizes="32x32">
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<script src="/static/webauthn.js" defer></script>
+<script src="/static/setup.js" defer></script>
+</head>
+<body class="login">
+<main class="login-card" aria-labelledby="setup-title">
+  <div class="brand">
+    <span class="brand-tile" aria-hidden="true">
+      <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="4" cy="4" r="1.8"/><circle cx="12" cy="4" r="1.8"/><circle cx="12" cy="12" r="1.8"/><path d="M4 5.8V8a4 4 0 0 0 4 4h2.2M12 5.8v4.4"/></svg>
+    </span>
+    <span class="brand-name">switchboard</span>
+  </div>
+
+  <!-- 1. the claim: the link's token plus a new passkey make this switchboard yours -->
+  <section class="setup-step" id="step-claim" aria-labelledby="setup-title">
+    <h1 id="setup-title">Claim this switchboard</h1>
+    <p>You opened the claim link from the broker&rsquo;s log. Create a passkey to make this switchboard
+      yours: Touch&nbsp;ID, Face&nbsp;ID, Windows&nbsp;Hello, your phone or a security key. From then on
+      only your passkeys sign in.</p>
+    <form class="setup-form" id="claim-form" autocomplete="off">
+      <label for="claim-name">Name this passkey</label>
+      <input type="text" id="claim-name" name="name" maxlength="40" autocomplete="off" spellcheck="false"
+             placeholder="MacBook Pro">
+      <div class="login-actions">
+        <button type="submit" class="btn-primary" id="claim-btn">Create a passkey</button>
+      </div>
+    </form>
+    <p class="fine">The link works once, for 60 minutes; the broker prints a fresh one in its log every hour
+      until it is claimed.</p>
+  </section>
+
+  <!-- 2. a backup passkey: a managed laptop may block passkey sync -->
+  <section class="setup-step hidden" id="step-backup" aria-labelledby="backup-title">
+    <h1 id="backup-title">Add a backup passkey</h1>
+    <p id="backup-lead">This switchboard is yours, and this browser is signed in.</p>
+    <p>Add a second passkey from your phone or a security key. A managed laptop may block passkey sync,
+      and a backup is how you get back in without a reset.</p>
+    <form class="setup-form" id="backup-form" autocomplete="off">
+      <label for="backup-name">Name the backup</label>
+      <input type="text" id="backup-name" name="name" maxlength="40" autocomplete="off" spellcheck="false"
+             value="phone or security key">
+      <div class="login-actions">
+        <a class="btn" id="skip-btn" href="/">Skip for now</a>
+        <button type="submit" class="btn-primary" id="backup-btn">Add a backup passkey</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- the link is invalid, expired or already used -->
+  <section class="setup-step hidden" id="step-bad" aria-labelledby="bad-title">
+    <h1 id="bad-title">This claim link doesn&rsquo;t work</h1>
+    <p>It is invalid, expired or already used. A claim link works once, for 60 minutes, and the broker
+      prints a fresh one in its log every hour until it is claimed: open the newest one.</p>
+    <p class="fine">If the newest link says it was already used and that wasn&rsquo;t you, someone who can
+      read the log claimed it first. Set <code>SWITCHBOARD_RESET_OWNER</code> to a new value and restart
+      the broker: it forgets the owner and prints a fresh link (docs/DEPLOY.md).</p>
+    <div class="login-actions"><a class="btn-primary" href="/">Go to the sign-in page</a></div>
+  </section>
+
+  <!-- no WebAuthn here -->
+  <section class="setup-step hidden" id="step-unsupported" aria-labelledby="unsupported-title">
+    <h1 id="unsupported-title">This browser can&rsquo;t create passkeys</h1>
+    <p>Open the same link in a current Chrome, Edge, Safari or Firefox, over https.</p>
+  </section>
+
+  <p class="login-error hidden" id="setup-error" role="alert"></p>
+</main>
+</body>
+</html>

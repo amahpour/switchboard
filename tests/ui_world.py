@@ -212,6 +212,48 @@ async def seed(b: InProcBroker, agents: dict[str, Any]) -> None:
     not_test_mode(b)
 
 
+class HostedWorld:
+    """An unclaimed hosted broker (issue #41, DESIGN.md §31) for the claim page, the passkey
+    sign-in page and the passkeys sheet: a test-mode in-process broker behind
+    ``http://sb.localhost:<its port>``, a public URL browsers treat as a secure context (so
+    passkeys work over plain http, on loopback), with one room and no agents. Its claim link
+    is in ``run/test-claim-link``. The passkeys themselves are Chromium's virtual
+    authenticators, added by the caller (tests/e2e/test_passkeys_ui.py, docs/media/ui_shots.py).
+    """
+
+    def __init__(self, *, keep: bool = False) -> None:
+        self.keep = keep
+        self.home = make_tmp_home()
+        self.b: InProcBroker | None = None
+
+    def start(self) -> HostedWorld:
+        from switchboard.broker.auth import WebOrigin
+
+        self.b = InProcBroker(self.home, web_origin=lambda port: WebOrigin.parse(f"http://sb.localhost:{port}")).start()
+        b = self.b
+        b.on_loop(lambda: b.state.service.create_room("#build"))  # the broker answers only to its public host
+        return self
+
+    def stop(self) -> None:
+        if self.b is not None:
+            self.b.stop()
+            self.b = None
+        if not self.keep:
+            shutil.rmtree(self.home, ignore_errors=True)
+
+    @property
+    def broker(self) -> InProcBroker:
+        assert self.b is not None, "HostedWorld is not started"
+        return self.b
+
+    @property
+    def origin(self) -> str:
+        return self.broker.state.web_origin.origin
+
+    def claim_link(self) -> str:
+        return self.broker.paths.test_claim_link.read_text().strip()
+
+
 class UIWorld:
     """The seeded broker ``b``, the room-less broker ``empty`` and the four agents.
 

@@ -26,6 +26,7 @@
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <script src="/static/md.js" defer></script>
+<script src="/static/webauthn.js" defer></script>
 <script src="/static/app.js" defer></script>
 </head>
 <body>
@@ -66,6 +67,10 @@
         <span class="me-name" id="me-name"></span>
         <span class="conn" id="st-conn">Connecting&hellip;</span>
       </div>
+      <button type="button" class="icon-btn hidden" id="passkeys" aria-haspopup="dialog" aria-controls="passkeys-panel"
+              aria-label="Passkeys" title="Passkeys: add one, or sign out everywhere">
+        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="5.5" cy="8" r="3"/><path d="M8.5 8h5.5M12 8v2.5M14 8v1.5"/></svg>
+      </button>
       <button type="button" class="icon-btn" id="logout" aria-label="Sign off this browser" title="Sign off this browser">
         <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3H3.5v10H6"/><path d="M9.5 5 12.5 8l-3 3M12.5 8H6"/></svg>
       </button>
@@ -304,6 +309,20 @@
       <p class="fine">Links this broker dials over SSH. Enabling one is your consent for its current
         <code>remotes.toml</code> entry and key files; any edit needs a new enable.</p>
       <div id="remotes-body"></div>
+    </div>
+  </section>
+
+  <section class="sheet hidden" id="passkeys-panel" role="dialog" aria-modal="false" aria-labelledby="passkeys-panel-title">
+    <div class="sheet-head">
+      <h2 id="passkeys-panel-title">Passkeys</h2>
+      <button type="button" class="icon-btn" id="passkeys-close" aria-label="Close" title="Close">
+        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+      </button>
+    </div>
+    <div class="sheet-body">
+      <p class="fine">Your passkeys sign this switchboard in: Touch ID, Face ID, Windows Hello, a phone or a security
+        key. Adding one asks for a passkey first, unless you used one in the last five minutes.</p>
+      <div id="passkeys-body"></div>
     </div>
   </section>
 

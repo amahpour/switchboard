@@ -3,7 +3,7 @@
 #
 #   kubectl create namespace switchboard
 #   kubectl -n switchboard apply -f deploy/kubernetes/switchboard.yaml    # after editing sb.example.com
-#   kubectl -n switchboard exec -it switchboard-0 -- switchboard login
+#   kubectl -n switchboard logs switchboard-0    # the claim link (docs/DEPLOY.md)
 #
 # One broker, one volume: a StatefulSet with a single replica and a ReadWriteOnce claim.
 # Never scale it up; the broker's lock refuses a second one on the same volume, and several

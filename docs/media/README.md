@@ -12,7 +12,7 @@ uv run python docs/media/ui_shots.py --out /tmp/shots --keep
 It drives headless Chromium through Playwright (a dev dependency): run `uv run playwright install chromium` once per machine (`--with-deps` on a bare Linux box), or pass `--chrome PATH` to use another Chrome or Chromium. It takes about ten seconds and prints each file it writes; any wait that times out exits non-zero.
 
 - **Nothing real is touched.** It starts an in-process test broker in a throwaway `/tmp/yk-*` home, with HOME pointed at a temp dir and agent-harness variables dropped, exactly as the test suite does (`tests/conftest.py`), and four scripted test agents (`tests/fakes/fake_agent.py`). `~/.switchboard` is never read or written. Only the browser keeps your HOME (Playwright finds its downloaded Chromium there, and macOS Chrome can't load pages without it), in a temporary profile.
-- **The seeded state** comes from `tests/ui_world.py`, which the Playwright tests in `tests/e2e/` share, so the pictures show what those tests check. Three rooms (`#docs` closed), a `remotes.toml` naming `fpga-pi` that is never enabled, and `claude-1`, `codex-1` (approvals off, busy), `devin-1` (parked) and `bench` (on `fpga-pi`) in `#build`. Their tiers, approval modes, statuses and session ids are set through the store; their harness and host are rewritten with SQL, devin-1's parked reason is set in the engine, and the Codex adapter's tier refresh is switched off, since none of that can happen to a scripted test agent. Two notices (devin-1 parked, codex-1's approvals-off warning) are posted directly with the broker's wording. The messages, `/hold`, `/release` and `/close` go through the real routes and tools.
+- **The seeded state** comes from `tests/ui_world.py`, which the Playwright tests in `tests/e2e/` share, so the pictures show what those tests check. The hosted shots come from a second, unclaimed broker behind `http://sb.localhost:<port>` (`HostedWorld`), with Chromium's virtual authenticator as the passkey. Three rooms (`#docs` closed), a `remotes.toml` naming `fpga-pi` that is never enabled, and `claude-1`, `codex-1` (approvals off, busy), `devin-1` (parked) and `bench` (on `fpga-pi`) in `#build`. Their tiers, approval modes, statuses and session ids are set through the store; their harness and host are rewritten with SQL, devin-1's parked reason is set in the engine, and the Codex adapter's tier refresh is switched off, since none of that can happen to a scripted test agent. Two notices (devin-1 parked, codex-1's approvals-off warning) are posted directly with the broker's wording. The messages, `/hold`, `/release` and `/close` go through the real routes and tools.
 - **The shots:** 1440×900 at DPR 2 and a 390×844 phone at DPR 3, light and dark, with `TZ=UTC`:
 
 | File | Shows |
@@ -27,6 +27,9 @@ It drives headless Chromium through Playwright (a dev dependency): run `uv run p
 | `welcome-light.png` | the first-run page (a second broker with no rooms) |
 | `phone-light.png`, `phone-dark-sheet.png` | a phone, and its Members sheet |
 | `login-light.png` | the sign-in page |
+| `claim-light.png`, `claim-backup-light.png` | a hosted broker's claim page from the link in its log, and the backup-passkey step (issue #41) |
+| `signin-passkey-light.png`, `signin-passkey-phone-dark.png` | the sign-in page once the owner has a passkey, on a desktop and on a phone |
+| `passkeys-light.png`, `passkeys-dark.png` | the Passkeys sheet |
 
 Re-run it whenever the UI changes, and look at every picture before committing them.
 

@@ -4,7 +4,7 @@
 #
 #   export SWITCHBOARD_DOMAIN=sb.example.com
 #   docker compose -f deploy/compose/compose.yaml up -d
-#   docker compose -f deploy/compose/compose.yaml exec switchboard switchboard login
+#   docker compose -f deploy/compose/compose.yaml logs switchboard    # the claim link (docs/DEPLOY.md)
 #
 # The broker's data is the `switchboard-data` volume (/data in the container). One broker per
 # volume: its lock refuses a second one, so never scale this service past 1.

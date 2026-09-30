@@ -12,6 +12,8 @@ dependencies = [
     "websockets==17.1",
     "fastmcp==4.0.9",
     "mcp==2.2.0",
+    "fido2==2.2.1",
+    "cryptography==50.0.1",
 ]
 
 [project.scripts]

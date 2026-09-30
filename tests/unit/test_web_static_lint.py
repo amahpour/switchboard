@@ -37,8 +37,8 @@ def files(ext: str) -> list[Path]:
 
 def test_static_files_exist() -> None:
     names = {p.name for p in STATIC.iterdir()}
-    assert {"index.html", "login.html", "app.js", "md.js", "style.css", "favicon.svg", "favicon-32.png",
-            "apple-touch-icon.png"} <= names
+    assert {"index.html", "login.html", "setup.html", "app.js", "md.js", "webauthn.js", "login.js", "setup.js",
+            "style.css", "favicon.svg", "favicon-32.png", "apple-touch-icon.png"} <= names
 
 
 ICON_LINKS = ('<link rel="icon" href="/static/favicon-32.png" sizes="32x32">',
@@ -48,7 +48,7 @@ ICON_LINKS = ('<link rel="icon" href="/static/favicon-32.png" sizes="32x32">',
 
 def test_both_pages_link_the_tab_icons_and_the_icon_is_the_sidebar_mark() -> None:
     svg = (STATIC / "favicon.svg").read_text()
-    for page in ("index.html", "login.html"):
+    for page in ("index.html", "login.html", "setup.html"):
         text = (STATIC / page).read_text()
         assert all(link in text for link in ICON_LINKS), page
         # the tab icon is the sidebar's own glyph on its tile: every shape of the brand tile's
@@ -149,3 +149,22 @@ def test_markdown_loads_before_the_app() -> None:
     html = (STATIC / "index.html").read_text()
     assert html.index("/static/md.js") < html.index("/static/app.js")
     assert "/static/md.js" not in (STATIC / "login.html").read_text()
+
+
+# Passkeys (issue #41, DESIGN.md §31): the sign-in and claim pages load exactly two same-origin
+# scripts, the shared WebAuthn helper first; the app loads it too. No page holds a token, and
+# the helper is the one place that talks to navigator.credentials.
+def test_the_passkey_pages_load_only_their_scripts() -> None:
+    for page, own in (("login.html", "login.js"), ("setup.html", "setup.js")):
+        html = (STATIC / page).read_text()
+        scripts = re.findall(r'<script src="([^"]+)"', html)
+        assert scripts == ["/static/webauthn.js", f"/static/{own}"], page
+        assert "app.js" not in html and "md.js" not in html
+    html = (STATIC / "index.html").read_text()
+    assert html.index("/static/webauthn.js") < html.index("/static/app.js")
+    js = {p.name: p.read_text() for p in files("js")}
+    assert [n for n, t in js.items() if "navigator.credentials" in t] == ["webauthn.js"]
+    assert "'X-Switchboard'" in js["webauthn.js"] and "credentials: 'same-origin'" in js["webauthn.js"]
+    # the claim page reads the token after # and removes it from the address bar at once
+    assert "location.hash" in js["setup.js"] and "history.replaceState(null, '', location.pathname)" in js["setup.js"]
+    assert "setup#t=" not in "".join(js.values())

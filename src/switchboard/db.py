@@ -4,9 +4,11 @@ Every write path runs inside ``with tx(con):`` which issues ``BEGIN IMMEDIATE``.
 Connections use ``isolation_level=None``: Python's default transaction mode
 silently loses updates on read-then-write (FINDINGS §10 S5).
 
-Schema versions: 1 (0.1.0 and 0.2.0) and 2 (remote members: ``participants.host``,
-``messages.sender_host``, the ``remotes`` table). A version-1 database is migrated
-once, after a verified 0600 backup (``migrate``); a newer one is refused.
+Schema versions: 1 (0.1.0 and 0.2.0), 2 (remote members: ``participants.host``,
+``messages.sender_host``, the ``remotes`` table) and 3 (a hosted broker's owner, §31:
+``passkeys``, ``web_sessions.via``, ``link_machines``, and the owner's rows in ``meta``).
+An older database is migrated once, after a verified 0600 backup (``migrate``), through
+every step up to the current version in one transaction; a newer one is refused.
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -121,12 +123,27 @@ CREATE TABLE events(id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, room
 CREATE INDEX events_kind_ts ON events(kind, ts);
 
 CREATE TABLE web_sessions(id_hash TEXT PRIMARY KEY, created_at REAL NOT NULL,
-  last_seen REAL NOT NULL, expires_at REAL NOT NULL);
+  last_seen REAL NOT NULL, expires_at REAL NOT NULL,
+  via TEXT);
 
 CREATE TABLE remotes(
   name TEXT PRIMARY KEY, config_hash TEXT NOT NULL,
   enabled_at REAL, enabled_via TEXT CHECK(enabled_via IN ('cli','web')),
   blocked_at REAL, blocked_reason TEXT, last_up_at REAL);
+
+CREATE TABLE passkeys(
+  credential_id BLOB PRIMARY KEY, public_key BLOB NOT NULL,
+  sign_count INTEGER NOT NULL DEFAULT 0,
+  name TEXT NOT NULL, aaguid TEXT,
+  created_at REAL NOT NULL, last_used_at REAL);
+
+CREATE TABLE link_machines(
+  name TEXT PRIMARY KEY, key BLOB NOT NULL, key_fp TEXT NOT NULL,
+  facts TEXT NOT NULL DEFAULT '{}',
+  rooms TEXT NOT NULL DEFAULT '["*"]',
+  harnesses TEXT NOT NULL DEFAULT '["claude","codex","cursor","devin"]',
+  created_at REAL NOT NULL, approved_at REAL, approved_via TEXT CHECK(approved_via IN ('cli','web')),
+  removed_at REAL, last_seen_at REAL);
 """
 
 TABLES = (
@@ -140,9 +157,13 @@ TABLES = (
     "events",
     "web_sessions",
     "remotes",
+    "passkeys",
+    "link_machines",
 )
-# the tables of a version-1 database (0.1.0, 0.2.0): the rows a migration must keep
-V1_TABLES = TABLES[:-1]
+# the tables of a version-1 database (0.1.0, 0.2.0) and of a version-2 one (0.3.0 to 0.6.5):
+# the rows a migration must keep
+V1_TABLES = TABLES[:9]
+V2_TABLES = TABLES[:10]
 
 # v1 -> v2 (DESIGN.md §27.6): one BEGIN IMMEDIATE, after a verified backup. The
 # columns land at the end of their tables, where the fresh schema above puts them too.
@@ -156,6 +177,47 @@ V1_TO_V2 = (
     " blocked_at REAL, blocked_reason TEXT, last_up_at REAL)",
     "UPDATE meta SET value='2' WHERE key='schema_version'",
 )
+# v2 -> v3 (DESIGN.md §31.2): the same machinery. ``web_sessions.via`` says how a session was
+# made (a login link, the claim, a passkey); ``passkeys`` are the owner's; ``link_machines``
+# are the machines that dial in (the owner's rows in ``meta`` need no statement).
+V2_TO_V3 = (
+    "ALTER TABLE web_sessions ADD COLUMN via TEXT",
+    "CREATE TABLE passkeys("
+    " credential_id BLOB PRIMARY KEY, public_key BLOB NOT NULL,"
+    " sign_count INTEGER NOT NULL DEFAULT 0,"
+    " name TEXT NOT NULL, aaguid TEXT,"
+    " created_at REAL NOT NULL, last_used_at REAL)",
+    "CREATE TABLE link_machines("
+    " name TEXT PRIMARY KEY, key BLOB NOT NULL, key_fp TEXT NOT NULL,"
+    " facts TEXT NOT NULL DEFAULT '{}',"
+    " rooms TEXT NOT NULL DEFAULT '[\"*\"]',"
+    " harnesses TEXT NOT NULL DEFAULT '[\"claude\",\"codex\",\"cursor\",\"devin\"]',"
+    " created_at REAL NOT NULL, approved_at REAL, approved_via TEXT CHECK(approved_via IN ('cli','web')),"
+    " removed_at REAL, last_seen_at REAL)",
+    "UPDATE meta SET value='3' WHERE key='schema_version'",
+)
+
+
+def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
+    """The migration steps from schema ``frm`` up to the current one: (to, statements,
+    the tables the step adds). Read from the module at run time, never cached."""
+    all_steps = {1: (2, V1_TO_V2, ("remotes",)), 2: (3, V2_TO_V3, ("passkeys", "link_machines"))}
+    out = []
+    v = frm
+    while v < SCHEMA_VERSION:
+        to, stmts, new = all_steps[v]
+        out.append((to, stmts, new))
+        v = to
+    return out
+
+
+def tables_of(version: int) -> tuple[str, ...]:
+    """The tables a database of schema ``version`` has (the rows a migration keeps)."""
+    if version <= 1:
+        return V1_TABLES
+    if version == 2:
+        return V2_TABLES
+    return TABLES
 
 
 class SchemaError(RuntimeError):
@@ -290,48 +352,57 @@ def backup_verified(con: sqlite3.Connection, backup_to: str | os.PathLike, *,
     return dest, src_counts
 
 
-def _migrate_v1_to_v2(con: sqlite3.Connection, backup_to: str | os.PathLike | None) -> Path:
-    """Schema 1 -> 2 (DESIGN.md §27.6): a verified backup first, then every statement
-    in one ``BEGIN IMMEDIATE``, then ``integrity_check`` and the row counts again.
-    Any failure rolls back and leaves the version-1 database as it was."""
+def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: int) -> Path:
+    """Schema ``frm`` -> the current one (DESIGN.md §27.6, §31.2): a verified backup first,
+    then every step's statements in one ``BEGIN IMMEDIATE``, then ``integrity_check`` and
+    the row counts again: the old tables' rows are all still there and the new tables are
+    empty. Any failure rolls back and leaves the database as it was."""
     if backup_to is None:
-        raise SchemaError("schema version 1 needs a migration to version 2, and a migration needs a backup path")
-    dest, counts = backup_verified(con, backup_to)
-    log.warning("schema migration 1 -> 2: backup written to %s", dest.name)
+        raise SchemaError(f"schema version {frm} needs a migration to version {SCHEMA_VERSION}, and a migration"
+                          " needs a backup path")
+    kept = tables_of(frm)
+    dest, counts = backup_verified(con, backup_to, tables=kept)
+    log.warning("schema migration %d -> %d: backup written to %s", frm, SCHEMA_VERSION, dest.name)
     con.execute("BEGIN IMMEDIATE")
     try:
         v = schema_version(con)
-        if v != 1:
+        if v != frm:
             raise SchemaError(f"the database changed to schema version {v} during the migration")
-        if row_counts(con) != counts:
+        if row_counts(con, kept) != counts:
             raise SchemaError("the database changed while its migration backup was made; start again")
-        for stmt in V1_TO_V2:
-            con.execute(stmt)
+        added: list[str] = []
+        for to, stmts, new in _steps(frm):
+            for stmt in stmts:
+                con.execute(stmt)
+            if schema_version(con) != to:
+                raise SchemaError(f"the migration did not set schema version {to}")
+            added += new
         bad = integrity_ok(con)
         if bad is not None:
             raise SchemaError(f"integrity check failed after the migration: {bad}")
-        after = row_counts(con)
-        if after != counts or row_counts(con, ("remotes",)) != {"remotes": 0}:
+        after = row_counts(con, kept)
+        empty = {t: 0 for t in added}
+        if after != counts or row_counts(con, tuple(added)) != empty:
             raise SchemaError(f"row counts changed in the migration ({after} != {counts})")
-        if schema_version(con) != 2:
-            raise SchemaError("the migration did not set schema version 2")
+        if schema_version(con) != SCHEMA_VERSION:
+            raise SchemaError(f"the migration did not set schema version {SCHEMA_VERSION}")
     except BaseException as e:
         if con.in_transaction:  # SQLite may already have rolled back (a full disk, an I/O error)
             con.execute("ROLLBACK")
         if isinstance(e, SchemaError):
-            raise SchemaError(f"{e} (the database is unchanged, still schema version 1;"
+            raise SchemaError(f"{e} (the database is unchanged, still schema version {frm};"
                               f" backup: {dest.name})") from None
         if isinstance(e, sqlite3.Error):
-            raise SchemaError(f"migration to schema version 2 failed: {e} (the database is unchanged,"
-                              f" still schema version 1; backup: {dest.name})") from e
+            raise SchemaError(f"migration to schema version {SCHEMA_VERSION} failed: {e} (the database is"
+                              f" unchanged, still schema version {frm}; backup: {dest.name})") from e
         raise
     con.execute("COMMIT")
-    log.warning("schema migration 1 -> 2 done")
+    log.warning("schema migration %d -> %d done", frm, SCHEMA_VERSION)
     return dest
 
 
 def migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None = None) -> int:
-    """Create the full schema on an empty database, migrate a version-1 one (after a
+    """Create the full schema on an empty database, migrate an older one (after a
     verified backup to ``backup_to``, never overwritten), refuse unknown versions."""
     with tx(con):
         v = schema_version(con)
@@ -343,8 +414,8 @@ def migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None = None)
                 (str(SCHEMA_VERSION),),
             )
             return SCHEMA_VERSION
-    if v == 1:
-        _migrate_v1_to_v2(con, backup_to)
+    if 1 <= v < SCHEMA_VERSION:
+        _migrate(con, backup_to, v)
         v = schema_version(con)
     if v != SCHEMA_VERSION:
         raise SchemaError(
@@ -353,10 +424,11 @@ def migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None = None)
     return v
 
 
-def backup_path_for(db_path: str | os.PathLike) -> Path:
-    """``<db>.v1.bak`` next to the database: where the v1 -> v2 migration backs it up."""
+def backup_path_for(db_path: str | os.PathLike, version: int) -> Path:
+    """``<db>.v<version>.bak`` next to the database: where the migration of a schema-
+    ``version`` database backs it up first (``switchboard.db.v1.bak``, ``.v2.bak``)."""
     p = Path(db_path)
-    return p.with_name(p.name + ".v1.bak")
+    return p.with_name(f"{p.name}.v{version}.bak")
 
 
 def delete_backup_path(db_path: str | os.PathLike, room: Room) -> Path:
@@ -369,15 +441,16 @@ def delete_backup_path(db_path: str | os.PathLike, room: Room) -> Path:
 
 
 def open_db(path: str | os.PathLike) -> sqlite3.Connection:
-    """connect() + migrate() (a version-1 file is backed up to ``<db>.v1.bak`` first),
-    creating the file 0600."""
+    """connect() + migrate() (an older file is backed up to ``<db>.v<its version>.bak``
+    first), creating the file 0600."""
     p = Path(path)
     if not p.exists():
         fd = os.open(p, os.O_CREAT | os.O_RDWR, 0o600)
         os.close(fd)
     con = connect(p)
     try:
-        migrate(con, backup_to=backup_path_for(p))
+        v = schema_version(con)
+        migrate(con, backup_to=backup_path_for(p, v) if v else None)
     except BaseException:
         con.close()
         raise

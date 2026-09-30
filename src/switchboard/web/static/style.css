@@ -1760,7 +1760,33 @@ body.login {
   border-radius: 4px;
   background: var(--code-bg);
 }
-.login-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
+.login-card > div { display: flex; flex-direction: column; gap: 12px; }  /* the sign-in page's variants */
+.login-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.login-actions .btn, .login-actions .btn-primary { height: 34px; padding: 0 16px; font-size: 13.5px; }
+.login-error { margin: 0; color: var(--danger); font-weight: 500; }
+.login-error:empty { display: none; }
+/* the claim page (setup.html, §31.3): one step at a time, a name for the passkey */
+.setup-step { display: flex; flex-direction: column; gap: 12px; }
+.setup-step h1:focus { outline: none; }
+.setup-form { display: flex; flex-direction: column; gap: 8px; }
+.setup-form label, .passkey-add label { font-size: 13px; font-weight: 600; }
+.setup-form input, .passkey-add input {
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--input-border);
+  border-radius: 7px;
+  background: var(--input-bg);
+  color: var(--fg);
+  font-size: 13.5px;
+}
+.setup-form input:focus, .passkey-add input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus); }
+/* the passkeys sheet (index.html, §31.4) */
+.passkey-add { display: flex; flex-direction: column; gap: 8px; margin: 4px 0; }
+.passkey-add .btn-primary { align-self: flex-start; }
+.passkey-result.bad { color: var(--danger); font-weight: 500; }
+.passkey-result:empty { display: none; }
+.passkey-all { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
+.passkey-all .btn { align-self: flex-start; }
 
 /* ==== 15. Narrow widths (spec 1.9) =================================================== */
 
