@@ -63,6 +63,10 @@ ALLOWED: dict[tuple[str, str], str] = {
                                                         " registry file in this home's sessions dir (M8d)",
     ("remote/satellite.py", "exposure"): "the satellite's own ancestors (sshd's session process), which hold"
                                          " the far ends of its stdio (M8e)",
+    ("remote/satellite.py", "Satellite.last_mile"): "the Codex process a local MCP server was attested under,"
+                                                    " on its own machine, before relaying its wake (issue #63)",
+    # a remote Codex wake (issue #63) runs in the MCP server on the thread's own machine
+    ("mcp/codex_wake.py", "tui_attached"): "lsof peers of that machine's own Codex control socket",
     # the dialer (§31.7) runs on the machine that dials in and looks only at its own pidfile
     ("remote/dialer.py", "running_pid"): "the pidfile's dialer process, on the machine it runs on",
     ("remote/dialer.py", "main"): "the dialer's own start time, for its pidfile",

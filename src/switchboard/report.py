@@ -57,6 +57,7 @@ PATH_TIER = {
     "stop_followup": "cursor:stop-park",
     "stop_block": "devin:wait-loop",
 }
+LINK_EVIDENCE, LINK_TIER = "link:turn/start", "codex:link"
 PRIO_REASON = {2: "human", 1: "mention", 0: "chatter"}
 LABEL_ORDER = ("turn start", "first hook", "first action", "in context", "pulled")
 REASON_ORDER = ("human", "mention", "chatter")
@@ -347,8 +348,10 @@ def build(con: sqlite3.Connection, room_name: str, *, since: float | None = None
         if mem is None:
             continue
         ids = offer_ids.get(b["id"]) or last_batch.get(b["id"], [])
-        tier = PATH_TIER.get(b["path"]) or ("claude:inbox" if b["path"] == "inbox" else
-                                             _tier_at(tiers.get(mem.participant_id, []), b["created_at"], mem.tier))
+        # a remote Codex wake (issue #63) has the local turn/start's path but its own evidence
+        tier = (LINK_TIER if b["evidence"] == LINK_EVIDENCE else PATH_TIER.get(b["path"])) or (
+            "claude:inbox" if b["path"] == "inbox" else
+            _tier_at(tiers.get(mem.participant_id, []), b["created_at"], mem.tier))
         for mid_ in ids:
             key = (mem.membership_id, mid_)
             msg = msgs.get(mid_)

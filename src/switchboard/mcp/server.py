@@ -14,6 +14,12 @@ For a verified Claude session it is also the inbox transport (M3, §6.4):
 after every hello it attaches its broker connection as the session's push
 channel, and on ``push: deliver`` it posts the batch into its **parent's**
 inbox socket (``claude_inbox.post``, guarded) and answers ``mcp.posted``.
+
+For Codex on a remote machine (a satellite home, issue #63) it is the wake
+transport of the threads that joined through it: after every hello it offers
+its connection as their push channel (when this machine's Codex control socket
+is usable), and on ``push: deliver`` for one of those threads it starts a turn
+through that app-server (``mcp/codex_wake.py``) and answers ``mcp.posted``.
 """
 
 from __future__ import annotations
@@ -34,6 +40,7 @@ from mcp.types import ToolAnnotations
 
 from switchboard.adapters.testagent import ACK_MODES
 from switchboard.broker.peer import claude_registry_socket
+from switchboard.envelope import NONCE_RE
 from switchboard.mcp import claude_inbox
 from switchboard.mcp.client import DEFAULT_BACKOFF, BrokerConn, BrokerDown, RpcError
 from switchboard.mcp.identity import CLAUDE_ENV_PREFIX, detect, env_leak
@@ -115,6 +122,7 @@ class McpState:
         ack: str = "next_call",
         inbox_hold_s: float = 0.3,
         broker_down: str = BROKER_DOWN,
+        codex_sock: str | None = None,
     ):
         self.conn = conn
         self.broker_down = broker_down
@@ -136,6 +144,15 @@ class McpState:
         self.inbox: claude_inbox.InboxTarget | None = None
         self.inbox_hold_s = inbox_hold_s
         self.inbox_attached = False
+        # Codex on a remote machine (issue #63): this home's Codex control socket, set
+        # only on a satellite home (the broker wakes a Codex on its own machine itself);
+        # the threads that joined through this process, with their join nonce; the
+        # threads whose proof passed; whether the broker took this connection as their
+        # push channel
+        self.codex_sock = codex_sock
+        self.codex_threads: dict[str, str] = {}
+        self.codex_proven: set[str] = set()
+        self.codex_attached = False
         self._tasks: set[asyncio.Task[Any]] = set()
         conn.after_hello = self.after_hello
         conn.on_push = self.on_push
@@ -175,8 +192,14 @@ class McpState:
     # ---------------------------------------------------------- Claude inbox
     async def after_hello(self, result: dict[str, Any]) -> None:
         """After every (re)connect: offer this connection as the session's inbox
-        channel. The broker re-verifies everything; our guard must pass too."""
+        channel. The broker re-verifies everything; our guard must pass too. A Codex
+        server on a remote machine offers itself as its threads' wake channel instead,
+        when this machine's Codex control socket is there (issue #63)."""
         self.inbox_attached = False
+        self.codex_attached = False
+        if result.get("harness") == "codex":
+            await self.attach_codex()
+            return
         if result.get("harness") != "claude" or not claude_inbox.target_ok(self.inbox):
             return
         if not self.env_has_token():
@@ -187,12 +210,50 @@ class McpState:
     def env_has_token(self) -> bool:
         return claude_inbox.TOKEN_ENV in self.env
 
+    async def attach_codex(self) -> None:
+        """Codex on a remote machine: offer this connection as the wake channel of the
+        threads it serves, if this machine's Codex control socket is usable. The broker
+        takes it only over a link (a Codex on its own machine it wakes itself)."""
+        from switchboard.mcp import codex_wake
+
+        if codex_wake.usable_socket(self.codex_sock) is None:
+            return
+        res = await self.conn._call_now("mcp.attach", {"codex": True, "guard_ok": True}, 5.0)
+        self.codex_attached = bool(res.get("attached"))
+
     def on_push(self, obj: dict[str, Any]) -> None:
         if obj.get("push") != "deliver" or not isinstance(obj.get("data"), dict):
             return
-        t = asyncio.get_running_loop().create_task(self.deliver(obj["data"]))
+        fn = self.deliver_codex if self.harness == "codex" else self.deliver
+        t = asyncio.get_running_loop().create_task(fn(obj["data"]))
         self._tasks.add(t)
         t.add_done_callback(self._tasks.discard)
+
+    async def deliver_codex(self, data: dict[str, Any]) -> None:
+        """Start a turn in one of this server's own Codex threads (issue #63), then
+        report ``mcp.posted``: ``ok`` once the app-server took the ``turn/start``, else a
+        short refusal code (``mcp/codex_wake.py``)."""
+        from switchboard.mcp import codex_wake
+
+        bid = data.get("batch_id")
+        if not isinstance(bid, int) or isinstance(bid, bool):
+            return
+        text, tid = data.get("text"), data.get("thread_id")
+        res: dict[str, Any] = {"batch_id": bid, "ok": False}
+        nonce = self.codex_threads.get(tid) if isinstance(tid, str) else None
+        if not self.codex_attached:
+            res["err"] = "guard"
+        elif not isinstance(text, str) or not text.startswith("[switchboard]"):
+            res["err"] = "bad_text"
+        elif nonce is None:
+            res["err"] = "not_mine"  # not a thread that joined through this process
+        else:
+            try:
+                res["t_post"] = await codex_wake.wake(self.codex_sock, tid, nonce, text, bid, self.codex_proven)
+                res["ok"] = True
+            except codex_wake.Refused as e:
+                res["err"] = e.code
+        self.conn.notify("mcp.posted", res)
 
     async def deliver(self, data: dict[str, Any]) -> None:
         """Post one batch into the parent session, then report ``mcp.posted``."""
@@ -356,6 +417,11 @@ def build_server(st: McpState) -> FastMCP:
             return dumps(res)
         cred = res.pop("cred")
         st.creds[(tid, res["room"])] = cred
+        if st.harness == "codex" and tid:
+            # the thread's own join code, for its proof before a remote wake (issue #63)
+            got = NONCE_RE.search(str(res.get("text") or ""))
+            if got is not None:
+                st.codex_threads[tid] = got.group(1)
         return dumps({"ok": True, "room": res["room"], "screen_name": res["screen_name"],
                       "tier": res.get("tier"), "text": res["text"]})
 
@@ -539,6 +605,11 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError:
         cfg = Config()
     ppid = os.getppid()
+    from switchboard.remote.config import is_satellite_home
+
+    # a Codex thread on a remote machine is woken by this server, through this
+    # machine's Codex app-server (issue #63); on the broker's machine the broker does it
+    codex_sock = cfg.codex.control_socket if is_satellite_home(paths) else None
     st = McpState(
         BrokerConn(paths.sock, backoff=broker_backoff(paths)),
         env=env_view(),
@@ -550,6 +621,7 @@ def main(argv: list[str] | None = None) -> int:
         ack=args.ack,
         inbox_hold_s=cfg.claude.inbox_hold_s,
         broker_down=broker_down_text(paths),
+        codex_sock=codex_sock,
     )
     try:
         asyncio.run(serve(build_server(st), st))

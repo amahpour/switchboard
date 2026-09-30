@@ -90,6 +90,7 @@ class McpConn:
     test_session: str | None = None
     test_ack: str = "next_call"
     inbox_attached: bool = False  # Claude: this connection is the session's push channel
+    codex_attached: bool = False  # remote Codex (issue #63): this connection wakes its threads
 
     @property
     def harness(self) -> str:
@@ -294,6 +295,8 @@ class AgentService:
         conn.mcp = None
         if mc.inbox_attached:
             self._detach(conn, mc)
+        if mc.codex_attached:
+            self._detach_codex(conn, mc)
         acts: list[Action] = self.engine.close_conn_sinks(conn.id)
         for p in self.store.participants_by_mcp(mc.ident.host, mc.ident.mcp_pid, mc.ident.mcp_start):
             if p.harness == "codex" and p.host == LOCAL_HOST:
@@ -306,6 +309,39 @@ class AgentService:
     def _claude(self) -> Any:
         return self.engine.adapters.get("claude")
 
+    def _remote_codex(self) -> Any:
+        return self.engine.adapters.get("codex@remote")
+
+    def _attach_codex(self, conn: "Conn", mc: McpConn, params: dict[str, Any]) -> dict[str, Any]:
+        """``mcp.attach {codex: true}`` (issue #63): a Codex MCP server on a remote host
+        offers its link connection as the wake channel of the threads it serves (the
+        server found that machine's Codex control socket usable). Only over a link: a
+        Codex on this machine is woken by the broker itself (``CodexAdapter``)."""
+        why = None
+        if mc.harness != "codex":
+            why = "not a verified Codex session"
+        elif not _remote(conn):
+            why = "a Codex session on this machine is woken by the broker itself"
+        elif params.get("guard_ok") is not True:
+            why = "the MCP server's own check refused"
+        adapter = self._remote_codex()
+        if why is not None or adapter is None:
+            return {"attached": False, "reason": why or "no remote Codex adapter"}
+        if mc.codex_attached:  # a repeated hello on the same connection
+            return {"attached": True, "tier": "codex:link"}
+        adapter.attach(mc.ident.mcp_pid, mc.ident.mcp_start, conn, host=mc.ident.host)
+        mc.codex_attached = True
+        self.store.add_event("tier", data={"what": "attach", "harness": "codex"})
+        self._refresh_tiers(mc)
+        return {"attached": True, "tier": "codex:link"}
+
+    def _detach_codex(self, conn: "Conn", mc: McpConn) -> None:
+        adapter = self._remote_codex()
+        if adapter is not None:
+            adapter.detach(conn)
+        mc.codex_attached = False
+        self._refresh_tiers(mc)
+
     def attach(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
         """``mcp.attach``: make this verified Claude MCP connection its session's
         push channel (DESIGN.md §6.4, §9.2). Only a connection whose process is a
@@ -316,8 +352,11 @@ class AgentService:
         On a remote host (§27.5.6, §27.7) the same: the parent, registry and socket check
         is the one its satellite ran there (``facts.attest``), and the channel is keyed by
         ``(host, mcp pid)``. Frames to it carry ``chk`` for the satellite's last-mile
-        check (``ClaudeAdapter.send``)."""
+        check (``ClaudeAdapter.send``). A Codex server on a remote host attaches as its
+        threads' wake channel instead (``codex: true``, ``_attach_codex``)."""
         mc = self._mcp(conn)
+        if params.get("codex") is True:
+            return self._attach_codex(conn, mc, params)
         why = None
         if mc.harness != "claude" or not mc.ident.claude_socket:
             why = "not a verified Claude session"
@@ -365,9 +404,10 @@ class AgentService:
         ``no_chk``/``bad_chk`` (§27.5.6)."""
         mc = self._mcp(conn)
         bid = params.get("batch_id")
-        if not isinstance(bid, int) or isinstance(bid, bool) or not mc.inbox_attached:
+        if not isinstance(bid, int) or isinstance(bid, bool) or not (mc.inbox_attached or mc.codex_attached):
             return {}
-        adapter = self._claude()
+        # a remote Codex server's report of its wake (issue #63), else a Claude inbox post
+        adapter = self._remote_codex() if mc.codex_attached else self._claude()
         if adapter is None:
             return {}
         t = params.get("t_post")

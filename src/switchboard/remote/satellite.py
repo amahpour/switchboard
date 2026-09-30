@@ -37,6 +37,11 @@ no pty and no network socket (``tests/unit/test_satellite_static.py``).
   should never have sent), marked ``facts.lastmile`` and with a negative
   request id, whose answer it drops; the push is dropped. ``chk`` never
   reaches the MCP server.
+- **Codex** (issue #63). A ``deliver`` to a Codex MCP server is a wake of one of
+  its threads: relayed only if ``chk`` names the Codex process that server was
+  attested under (with ``want: idle``) and that process lives; the server then
+  reads its thread's status itself, through this machine's Codex app-server, and
+  starts the turn (``mcp/codex_wake.py``). This module still reads no Codex state.
 - **End.** stdin EOF, 10 s without a ping, a ``refuse``, or SIGTERM: ``bye``
   (``replaced`` when the replace marker names a newer satellite), close every
   local connection, unlink the socket if it is still ours, exit.
@@ -368,6 +373,10 @@ class LocalConn:
         # (this machine's pid, start, messaging socket), or None: the only session a
         # deliver push on this connection may be for (§27.5.6)
         self.agent: tuple[int, float, str] | None = None
+        # the Codex process (this machine's pid, start) this connection's MCP server was
+        # attested under, or None: a deliver push to a Codex server may be for its
+        # threads only (issue #63); their status is read by that server itself
+        self.codex: tuple[int, float] | None = None
 
     def send(self, obj: dict[str, Any]) -> bool:
         if self.closed:
@@ -579,6 +588,7 @@ class Satellite:
         facts: dict[str, Any] | None = None
         if method == "mcp.hello":
             lc.agent = None
+            lc.codex = None
             try:
                 a = self.attest(lc.peer, params)
             except McpRefused as e:
@@ -588,6 +598,9 @@ class Satellite:
             mine = self.in_pid(a["agent"][0]) if a["harness"] == "claude" and a["agent"] else None
             if mine is not None and a["claude_socket"]:
                 lc.agent = (mine, a["agent"][1], a["claude_socket"])
+            cx = self.in_pid(a["agent"][0]) if a["harness"] == "codex" and a["agent"] else None
+            if cx is not None:
+                lc.codex = (cx, a["agent"][1])
         elif method == "hook.event":
             ch = self.chain(lc.peer)
             if ch:
@@ -732,6 +745,9 @@ class Satellite:
         under, that Claude is watched and alive, and a read now says ``want``. This machine
         enforces the approval hold itself, whatever the desktop sends: nothing is ever
         posted into an approval prompt, and never into another session than ``chk`` names.
+        A Codex MCP server's wake (issue #63) is relayed only if ``chk`` names the Codex it
+        was attested under, with ``want: idle``, and that process lives; the server then
+        reads its thread's status itself before it starts the turn.
         Otherwise send a fresh ``reg`` (so the broker sees why), then this satellite's own
         ``mcp.posted {ok: false, err}`` for the batch, marked ``facts.lastmile``, and drop
         the push. ``err`` is ``stale_status`` for a status that changed after the broker's
@@ -739,8 +755,17 @@ class Satellite:
         never sends (counted, so a broker fault shows as failed deliveries)."""
         err = proto.STALE_STATUS
         a = lc.agent
+        cx = lc.codex
         if chk is None:
             err = proto.NO_CHK
+        elif a is None and cx is not None:
+            # a Codex MCP server (issue #63): only a wake for the Codex it was attested
+            # under, while that process lives; the thread's own status is read by that
+            # server just before its turn/start, on this machine (mcp/codex_wake.py)
+            if self.in_pid(chk["pid"]) != cx[0] or not proc.same_start(cx[1], chk["start"]) or chk["want"] != "idle":
+                err = proto.BAD_CHK
+            elif proc.alive(cx[0], cx[1]):
+                return True
         elif a is None or self.in_pid(chk["pid"]) != a[0] or not proc.same_start(a[1], chk["start"]):
             err = proto.BAD_CHK
         else:
