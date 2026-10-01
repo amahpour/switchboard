@@ -183,13 +183,6 @@
     return render(box, source, button).finally(function () { button.disabled = false; });
   }
 
-  document.addEventListener('keydown', function (ev) {
-    if (ev.key === 'Escape' && document.fullscreenElement &&
-        document.fullscreenElement.classList.contains('md-diagram')) {
-      document.exitFullscreen();
-    }
-  });
-
   // a diagram on show follows the system's light or dark scheme, as the page does
   try {
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {
