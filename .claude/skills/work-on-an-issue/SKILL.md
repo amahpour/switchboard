@@ -6,7 +6,7 @@ argument-hint: "<issue number, or what to do>"
 
 # Work on an issue
 
-The rules are in [AGENTS.md](../../../AGENTS.md); this is the order of work. It ends at a pull request the maintainer can review, never a merge.
+The rules are in [CLAUDE.md](../../../CLAUDE.md); this is the order of work. It ends at a pull request the maintainer can review, never a merge.
 
 1. **Read it whole.** `gh issue view <n> --comments`: the body, every comment, what it links. Unclear and the maintainer is here: ask. Unclear and nobody is: the most conservative reading, listed under **Assumptions** at the top of the pull request.
 

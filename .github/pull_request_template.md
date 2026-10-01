@@ -1,6 +1,6 @@
 <!-- Open with one or two sentences: what was wrong or missing, and what this does about it.
      Title: Conventional Commits (`fix(web): …`); it becomes the one squash commit on main.
-     Delete the comments, and a section that doesn't apply. AGENTS.md has the rules. -->
+     Delete the comments, and a section that doesn't apply. CLAUDE.md has the rules. -->
 
 ## What it does
 
