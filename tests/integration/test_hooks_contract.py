@@ -19,6 +19,7 @@ import pytest
 from conftest import InProcBroker
 from fakes.fake_agent import ids_in
 from fakes.fake_claude import SID, FakeClaude, fixture
+from fakes.fake_cli import fixture as cli_fixture
 from switchboard.config import Config
 from switchboard.envelope import TOKEN_RE
 from switchboard.install.common import hook_command
@@ -145,6 +146,33 @@ def test_bypass_payload_marks_the_member(broker: InProcBroker, claude: FakeClaud
     claude.hook(fixture("PostToolUse_bypass"))
     assert part(broker)["approval_mode"] == "bypass"
     assert wait_for(lambda: member(broker)["approval_mode"] == "bypass")
+
+
+@pytest.mark.parametrize("name", ["UserPromptSubmit_auto", "UserPromptSubmit_dontAsk"])
+def test_auto_and_dont_ask_payloads_show_approvals_on(broker: InProcBroker, claude: FakeClaude,
+                                                      name: str) -> None:
+    """Claude's Auto and Don't-ask modes (recorded, #73) run nothing that wasn't approved, by the
+    person or their allow rules, so Members shows approvals on. Before, both fell through to
+    "approval mode unknown", which Members and /catchup treat like approvals off."""
+    claude.tool("join", room="#build", screen_name="claude-1")
+    claude.hook(fixture(name))
+    assert part(broker)["approval_mode"] == "prompting"
+    assert wait_for(lambda: member(broker)["approval_mode"] == "prompting")
+
+
+@pytest.mark.parametrize("name,want", [("UserPromptSubmit_approve_for_me", "prompting"),
+                                       ("UserPromptSubmit_never", "bypass")])
+def test_recorded_codex_approval_policies(broker: InProcBroker, name: str, want: str) -> None:
+    """Codex 0.158's hooks report `default` under every approval policy but `never`, including
+    --approve-for-me (its automatic reviewer), and `bypassPermissions` under `never` (recorded, #73)."""
+    cx = FakeClaude(broker, as_harness="codex")
+    try:
+        assert cx.tool("join", meta={"threadId": "thread-A"}, room="#build", screen_name="codex-1")["ok"]
+        payload = cli_fixture("codex", name, sid="thread-A")
+        run_hook_as(cx, "codex", payload, payload["hook_event_name"])
+        assert q(broker, "SELECT approval_mode FROM participants WHERE harness='codex'")[0][0] == want
+    finally:
+        cx.close()
 
 
 def test_mid_task_priority_arrives_as_posttooluse_context_and_is_acked(broker: InProcBroker, claude: FakeClaude) -> None:

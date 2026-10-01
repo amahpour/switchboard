@@ -1479,10 +1479,12 @@ class Engine:
 
 
 BYPASS_MODES = frozenset({"bypassPermissions"})
-# Recorded or documented modes that still ask before running tools. Anything
-# else (e.g. an unrecorded Codex never-policy value, or a future mode) is
-# 'unknown', shown as "?" = treat like ⚠ (fail closed, §6.3).
-PROMPTING_MODES = frozenset({"default", "acceptEdits", "plan"})
+# Recorded modes that run nothing unapproved: Claude's auto too (a classifier
+# approves or blocks each call, and falls back to prompting after repeated
+# blocks), and dontAsk (denies what isn't pre-approved) (#73). Anything else
+# (a future mode, a value no recording has shown) is 'unknown', shown as "?"
+# = treat like ⚠ (fail closed, §6.3).
+PROMPTING_MODES = frozenset({"default", "acceptEdits", "plan", "auto", "dontAsk"})
 
 
 def is_push_path(path: str) -> bool:
