@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>The walkthrough: stop by stop</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;font:14px/1.5 -apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",sans-serif;color:#1d1d1f;-webkit-font-smoothing:antialiased}
+a{color:#0a5fcf;text-decoration:none}
+code{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:12px;background:#f0f0f3;border:1px solid #e4e4e9;border-radius:4px;padding:0 4px;color:#2b2b30}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:12px}
+.av{border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0;width:24px;height:24px;font-size:10px}
+.cc{background:#e4eaf5;color:#27457a}.cx{background:#e1ebfb;color:#1f4f9e}.dv{background:#e2f3e7;color:#1f6b3a}.hu{background:#ece6f7;color:#5a3d99}
+.stop{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;font-size:13px}
+.stop .n{width:22px;height:22px;border-radius:50%;background:#ececf0;color:#3c3c43;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0}
+.stop.done .n{background:#e6f4ea;color:#1f6b3a}
+.stop.cur{background:#e7eefb}.stop.cur .n{background:#0a64d8;color:#ffffff}
+.row{display:flex;min-height:22px;line-height:22px;white-space:pre;font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:12px}
+.ln{width:44px;text-align:right;color:#a0a0a8;padding-right:12px;flex-shrink:0}
+.sign{width:16px;color:#6b6b73;flex-shrink:0}
+.sec{display:flex;flex-direction:column;gap:4px}
+.sec h4{margin:0;font-size:11px;font-weight:600;color:#6b6b73;text-transform:uppercase;letter-spacing:.04em}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:8px 14px;border-radius:8px;border:1px solid #d6d6dc;background:#ffffff;font-size:13px;color:#1d1d1f;cursor:pointer;font:inherit}
+.btn.primary{background:#0a64d8;border-color:#0a64d8;color:#ffffff}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; display: flex; flex-direction: column; overflow: hidden; background: #ffffff">
+
+  <header style="height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 24px; border-bottom: 1px solid #e6e6ea; flex-shrink: 0; font-size: 13px">
+    <div style="width: 22px; height: 22px; border-radius: 6px; background: #0a64d8; display: flex; align-items: center; justify-content: center"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 11V6a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v5"/><circle cx="4" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/></svg></div>
+    <div><b>PR #212</b> <span style="color: #6b6b73">· Apply discount codes to the order total</span></div>
+    <div style="flex-grow: 1"></div>
+    <div style="display: flex; align-items: center; gap: 8px; color: #6b6b73"><span class="av cx">B</span>bob’s agent is walking you through it · 7 stops · about 6 minutes</div>
+  </header>
+
+  <div style="flex-grow: 1; display: flex; min-height: 0">
+    <nav style="width: 300px; flex-shrink: 0; background: #fafafb; border-right: 1px solid #e6e6ea; padding: 16px 10px; box-sizing: border-box; display: flex; flex-direction: column; gap: 2px">
+      <div style="font-size: 11px; font-weight: 600; color: #6b6b73; text-transform: uppercase; letter-spacing: .04em; padding: 0 12px 8px">The route</div>
+      <div class="stop done"><span class="n">1</span><div>Why: the newsletter codes didn’t work · issue #198</div></div>
+      <div class="stop done"><span class="n">2</span><div>Where a code is checked · <span class="mono" style="color: #6b6b73">discounts.py</span></div></div>
+      <div class="stop cur"><span class="n">3</span><div><b>The total, and where the discount lands</b> · <span class="mono" style="color: #6b6b73">total.py</span></div></div>
+      <div class="stop"><span class="n">4</span><div>Never below zero · <span class="mono" style="color: #6b6b73">total.py</span></div></div>
+      <div class="stop"><span class="n">5</span><div>Old orders are untouched · <span class="mono" style="color: #6b6b73">migrations/0031</span></div></div>
+      <div class="stop"><span class="n">6</span><div>The receipt email · <span class="mono" style="color: #6b6b73">receipt.html</span></div></div>
+      <div class="stop"><span class="n">7</span><div>What I’m not sure about, and what we left out</div></div>
+      <div style="flex-grow: 1"></div>
+      <div style="padding: 12px; font-size: 12px; color: #6b6b73; line-height: 1.5">The author’s agent chose the stops and the order. The reviewing agents’ objections sit at the stop they belong to. A stop with no objection is a 20-second read.</div>
+    </nav>
+
+    <main style="flex-grow: 1; min-width: 0; display: flex; justify-content: center; overflow: hidden">
+      <div style="width: 860px; padding: 26px 0 0; display: flex; flex-direction: column; gap: 18px">
+        <div style="display: flex; align-items: baseline; gap: 12px"><div style="font-size: 12px; color: #6b6b73">Stop 3 of 7</div><div style="font-size: 22px; font-weight: 700">The total, and where the discount lands</div></div>
+
+        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 28px">
+          <div class="sec"><h4>What changed here</h4><div>The order total now subtracts the discount from the subtotal, before tax is worked out. Two new lines; nothing else in this function moved.</div></div>
+          <div class="sec"><h4>Why</h4><div>The invoice spec, §3, says a discount reduces the taxable amount. The payment provider applies coupons the same way, so our receipt and theirs agree.</div></div>
+          <div class="sec"><h4>How I know it works</h4><div>Six test cases: a fixed amount, a percentage, two codes, no code. cara’s agent also tried 100% off and a code bigger than the cart (stop 4).</div></div>
+          <div class="sec"><h4>What I’m not sure about</h4><div>Whether “20% off your total” on the marketing page promised customers after tax. cara’s agent raised it (below). I built it before tax; the other way is four lines.</div></div>
+        </div>
+
+        <div class="mono" style="color: #6b6b73; background: #f7f7f9; padding: 4px 12px; border-radius: 6px 6px 0 0; border: 1px solid #ececef; border-bottom: 0">checkout/total.py · @@ -38,4 +38,6 @@</div>
+        <div style="border: 1px solid #ececef; border-radius: 0 0 6px 6px; overflow: hidden; margin-top: -18px">
+          <div class="row"><span class="ln">38</span><span class="sign"> </span><span>def order_total(cart, code=None):</span></div>
+          <div class="row"><span class="ln">39</span><span class="sign"> </span><span>    subtotal = sum(l.price * l.qty for l in cart.lines)</span></div>
+          <div class="row" style="background: #e4f1ea"><span class="ln">40</span><span class="sign" style="color: #1f6b3a">+</span><span>    if code:</span></div>
+          <div class="row" style="background: #e4f1ea"><span class="ln">41</span><span class="sign" style="color: #1f6b3a">+</span><span>        subtotal = max(subtotal - code.amount_for(subtotal), 0)</span></div>
+          <div class="row"><span class="ln">42</span><span class="sign"> </span><span>    tax = subtotal * cart.tax_rate</span></div>
+          <div class="row"><span class="ln">43</span><span class="sign"> </span><span>    return subtotal + tax</span></div>
+        </div>
+
+        <div style="border: 1px solid #f0c98a; background: #fffaf0; border-radius: 12px; padding: 12px 14px; display: flex; gap: 12px; align-items: flex-start">
+          <span class="av dv">C</span>
+          <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 8px">
+            <div><b>cara’s agent objects at this stop:</b> the marketing page says “20% off your total”, which a customer reads as after tax. On a $100 cart in a 10% state that is $22 off, not $20.</div>
+            <div style="display: flex; gap: 8px; align-items: center"><button class="btn primary">Keep it before tax</button><button class="btn">Change it to after tax</button><button class="btn">Ask bob’s agent…</button><span style="font-size: 12px; color: #6b6b73; margin-left: auto">Your answer is recorded at this stop.</span></div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <footer style="height: 60px; border-top: 1px solid #e6e6ea; display: flex; align-items: center; gap: 12px; padding: 0 24px; background: #fafafb; flex-shrink: 0">
+    <button class="btn">← Stop 2</button>
+    <div style="flex-grow: 1; display: flex; justify-content: center; gap: 6px"><span style="width: 8px; height: 8px; border-radius: 50%; background: #2e9d4e"></span><span style="width: 8px; height: 8px; border-radius: 50%; background: #2e9d4e"></span><span style="width: 8px; height: 8px; border-radius: 50%; background: #0a64d8"></span><span style="width: 8px; height: 8px; border-radius: 50%; background: #dcdce1"></span><span style="width: 8px; height: 8px; border-radius: 50%; background: #dcdce1"></span><span style="width: 8px; height: 8px; border-radius: 50%; background: #dcdce1"></span><span style="width: 8px; height: 8px; border-radius: 50%; background: #dcdce1"></span></div>
+    <span style="font-size: 12px; color: #6b6b73">→ or Space for the next stop</span>
+    <button class="btn primary">Stop 4 →</button>
+  </footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

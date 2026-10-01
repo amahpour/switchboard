@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>The live triage board</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;font:13px/1.45 -apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",sans-serif;color:#1d1d1f;-webkit-font-smoothing:antialiased}
+a{color:#0a5fcf;text-decoration:none}
+code{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:11px;background:#f0f0f3;border:1px solid #e4e4e9;border-radius:4px;padding:0 4px;color:#2b2b30}
+.av{border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0;width:22px;height:22px;font-size:9px}
+.cc{background:#e4eaf5;color:#27457a}.cx{background:#e1ebfb;color:#1f4f9e}.dv{background:#e2f3e7;color:#1f6b3a}.hu{background:#ece6f7;color:#5a3d99}
+.lane{display:flex;flex-direction:column;gap:10px;min-width:0}
+.lane h3{margin:0;font-size:11px;font-weight:600;color:#6b6b73;text-transform:uppercase;letter-spacing:.04em;display:flex;align-items:center;gap:8px}
+.lane h3 span{background:#ececf0;border-radius:999px;padding:0 7px;font-size:11px;color:#3c3c43}
+.card{border:1px solid #e6e6ea;border-radius:10px;background:#ffffff;padding:10px 12px;display:flex;flex-direction:column;gap:6px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.card .t{display:flex;align-items:center;gap:8px}
+.card .w{font-size:12px;color:#6b6b73;display:flex;align-items:center;gap:6px;min-width:0}
+.card .w span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.now{display:flex;align-items:center;gap:6px;font-size:12px;color:#0b57c4;background:#e7eefb;border-radius:6px;padding:4px 8px}
+.dot{width:7px;height:7px;border-radius:50%;background:#0a64d8;flex-shrink:0}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:6px 11px;border-radius:7px;border:1px solid #d6d6dc;background:#ffffff;font-size:12px;color:#1d1d1f;cursor:pointer;font:inherit}
+.btn.primary{background:#0a64d8;border-color:#0a64d8;color:#ffffff}.btn[disabled]{opacity:.45}
+.row{display:flex;min-height:21px;line-height:21px;white-space:pre;font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:11.5px}
+.ln{width:36px;text-align:right;color:#a0a0a8;padding-right:10px;flex-shrink:0}
+.sign{width:14px;color:#6b6b73;flex-shrink:0}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; display: flex; flex-direction: column; overflow: hidden; background: #fafafb">
+
+  <header style="height: 56px; display: flex; align-items: center; gap: 14px; padding: 0 24px; border-bottom: 1px solid #e6e6ea; background: #ffffff; flex-shrink: 0">
+    <div style="width: 22px; height: 22px; border-radius: 6px; background: #0a64d8; display: flex; align-items: center; justify-content: center"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 11V6a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v5"/><circle cx="4" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/></svg></div>
+    <div><b>PR #212</b> <span style="color: #6b6b73">· Apply discount codes to the order total · 38 min in</span></div>
+    <div style="flex-grow: 1"></div>
+    <div style="display: flex; align-items: center; gap: 14px; font-size: 12px; color: #3c3c43">
+      <span style="display: inline-flex; align-items: center; gap: 6px"><span class="av cc">A</span>alice’s agent <span style="color: #6b6b73">re-reading the marketing page</span></span>
+      <span style="display: inline-flex; align-items: center; gap: 6px"><span class="av cx">B</span>bob’s agent <span style="color: #6b6b73">editing receipt.html</span></span>
+      <span style="display: inline-flex; align-items: center; gap: 6px"><span class="av dv">C</span>cara’s agent <span style="color: #6b6b73">running the migration on a copy</span></span>
+    </div>
+    <button class="btn primary" disabled>Post · 1 needs a person, 2 in progress</button>
+  </header>
+
+  <!-- the person lane, on top, the only one you touch -->
+  <section style="margin: 16px 24px 0; border: 1px solid #f0c98a; background: #fffaf0; border-radius: 12px; padding: 12px 14px; display: flex; align-items: center; gap: 14px; flex-shrink: 0">
+    <div style="font-size: 11px; font-weight: 600; color: #7a4a00; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap">Needs a person · 1</div>
+    <div style="flex-grow: 1; min-width: 0; display: flex; align-items: center; gap: 12px">
+      <b>#5</b><div style="min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Does the discount come off before tax, or after tax? <span style="color: #6b6b73">cara’s agent vs bob’s agent · both rest · opened on the right</span></div>
+    </div>
+    <button class="btn primary">Before tax, as built</button><button class="btn">After tax</button><button class="btn">Ask finance</button>
+  </section>
+
+  <div style="flex-grow: 1; display: flex; gap: 18px; padding: 16px 24px 0; min-height: 0">
+    <!-- the lanes -->
+    <div style="flex-grow: 1; min-width: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px">
+      <div class="lane">
+        <h3>Raised <span>1</span></h3>
+        <div class="card"><div class="t"><b>#7</b><div class="w"><span><code>discounts.py:12</code></span></div></div><div>Codes are case-sensitive: <code>SAVE20</code> works, <code>save20</code> doesn’t</div><div class="w"><span class="av cc">A</span><span>alice’s agent, 11:21 · no owner yet</span></div></div>
+        <div style="font-size: 12px; color: #6b6b73; padding: 2px 4px">New findings land here. The author’s agent concedes or contests within a turn.</div>
+      </div>
+
+      <div class="lane">
+        <h3>In progress <span>2</span></h3>
+        <div class="card"><div class="t"><b>#3</b><div class="w"><span><code>migrations/0031</code></span></div></div><div>Old orders are untouched</div><div class="now"><span class="dot"></span>cara’s agent checking: migration on a copy · 4,812 orders</div></div>
+        <div class="card"><div class="t"><b>#4</b><div class="w"><span><code>emails/receipt.html</code></span></div></div><div>The receipt email shows the discount line</div><div class="now"><span class="dot"></span>bob’s agent fixing: editing the template · 3 min</div><div class="w"><span>conceded · alice’s agent found the old total in the email</span></div></div>
+      </div>
+
+      <div class="lane">
+        <h3>Settled <span>3</span></h3>
+        <div class="card" style="border-color: #cfe8d6"><div class="t"><b>#1</b><div class="w"><span><code>total.py:40</code></span></div><span style="margin-left: auto; font-size: 11px; color: #1f6b3a; font-weight: 600">checked</span></div><div>The total subtracts the discount</div><div class="w"><span class="av cc">A</span><span>alice’s agent · 6 test cases</span></div></div>
+        <div class="card" style="border-color: #cfe8d6"><div class="t"><b>#2</b><div class="w"><span><code>total.py:41</code></span></div><span style="margin-left: auto; font-size: 11px; color: #1f6b3a; font-weight: 600">checked</span></div><div>Never below zero</div><div class="w"><span class="av dv">C</span><span>cara’s agent · tried 100% off</span></div></div>
+        <div class="card" style="opacity: .6"><div class="t"><b>#6</b><span style="margin-left: auto; font-size: 11px; color: #55555c; font-weight: 600">dropped</span></div><div style="text-decoration: line-through">Gift cards as a kind of code</div><div class="w"><span class="av hu">A</span><span>alice · a separate change</span></div></div>
+      </div>
+
+      <div class="lane">
+        <h3>Posted <span>0</span></h3>
+        <div style="border: 1px dashed #d6d6dc; border-radius: 10px; padding: 14px 12px; font-size: 12px; color: #6b6b73; line-height: 1.5">Nothing until the board is settled and a person says post. Then each agent posts its own items to GitHub, once, in its own name.</div>
+      </div>
+    </div>
+
+    <!-- the card you clicked: its lines, and the argument -->
+    <aside style="width: 460px; flex-shrink: 0; background: #ffffff; border: 1px solid #e6e6ea; border-radius: 12px; display: flex; flex-direction: column; overflow: hidden">
+      <div style="padding: 12px 14px; border-bottom: 1px solid #ececef; display: flex; align-items: center; gap: 10px"><b>#5</b><div style="font-weight: 600">Before tax, or after?</div><div style="flex-grow: 1"></div><a href="#full" style="font-size: 12px">whole file</a><a href="#close" aria-label="Close" style="color: #6b6b73; font-size: 18px; line-height: 1">×</a></div>
+      <div style="padding: 10px 14px 0; font-size: 12px; color: #6b6b73; font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace">checkout/total.py · the lines this is about</div>
+      <div style="margin: 8px 14px 0; border: 1px solid #ececef; border-radius: 6px; overflow: hidden">
+        <div class="row"><span class="ln">38</span><span class="sign"> </span><span>def order_total(cart, code=None):</span></div>
+        <div class="row"><span class="ln">39</span><span class="sign"> </span><span>    subtotal = sum(l.price * l.qty for l in cart.lines)</span></div>
+        <div class="row" style="background: #e4f1ea; outline: 2px solid #d98a1c; outline-offset: -2px"><span class="ln">40</span><span class="sign" style="color: #1f6b3a">+</span><span>    if code:</span></div>
+        <div class="row" style="background: #e4f1ea; outline: 2px solid #d98a1c; outline-offset: -2px"><span class="ln">41</span><span class="sign" style="color: #1f6b3a">+</span><span>        subtotal = max(subtotal - code.amount_for(subtotal), 0)</span></div>
+        <div class="row"><span class="ln">42</span><span class="sign"> </span><span>    tax = subtotal * cart.tax_rate</span></div>
+        <div class="row"><span class="ln">43</span><span class="sign"> </span><span>    return subtotal + tax</span></div>
+      </div>
+      <div style="padding: 8px 14px 0; font-size: 12px; color: #6b6b73">The discount lands on line 41, before tax is worked out on line 42. “After tax” moves it below line 43.</div>
+      <div style="padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; flex-grow: 1">
+        <div style="display: flex; gap: 8px; align-items: flex-start"><span class="av dv">C</span><div><b>cara’s agent, against:</b> the marketing page says “20% off your total”. Customers read that as after tax. <a href="#s">screenshot</a></div></div>
+        <div style="display: flex; gap: 8px; align-items: flex-start"><span class="av cx">B</span><div><b>bob’s agent, for:</b> the invoice spec §3 says a discount reduces the taxable amount, and the payment provider applies coupons before tax. <a href="#spec">spec</a></div></div>
+        <div style="display: flex; gap: 8px; align-items: flex-start"><span class="av cc">A</span><div><b>alice’s agent, for:</b> after tax means charging tax on money the customer never paid; some states don’t allow it.</div></div>
+      </div>
+      <div style="padding: 12px 14px; border-top: 1px solid #ececef; display: flex; gap: 8px; flex-wrap: wrap"><button class="btn primary">Before tax, as built</button><button class="btn">After tax</button><button class="btn">Ask finance</button><button class="btn">Reply…</button></div>
+    </aside>
+  </div>
+
+  <footer style="padding: 12px 24px 16px; display: flex; align-items: center; gap: 16px; font-size: 12px; color: #6b6b73; flex-shrink: 0">
+    <span>Cards move on their own as the agents work. Click any card for its lines. You only ever act on the top lane.</span>
+    <div style="flex-grow: 1"></div>
+    <a href="#room">Open the room</a>
+  </footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

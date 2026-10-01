@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>The decision inbox</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;font:14px/1.5 -apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",sans-serif;color:#1d1d1f;-webkit-font-smoothing:antialiased}
+a{color:#0a5fcf;text-decoration:none}a:hover{color:#084a9f}
+code{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:12px;background:#f0f0f3;border:1px solid #e4e4e9;border-radius:4px;padding:0 4px;color:#2b2b30}
+.av{border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0;width:22px;height:22px;font-size:9px}
+.cc{background:#e4eaf5;color:#27457a}.cx{background:#e1ebfb;color:#1f4f9e}.dv{background:#e2f3e7;color:#1f6b3a}.hu{background:#ece6f7;color:#5a3d99}
+.card{border:1px solid #e6e6ea;border-radius:14px;background:#ffffff;padding:18px 20px;display:flex;flex-direction:column;gap:12px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.card.done{opacity:.55}
+.pr{font-size:12px;color:#6b6b73;display:flex;align-items:center;gap:8px}
+.q{font-size:17px;font-weight:600;line-height:1.35}
+.opts{display:flex;gap:8px;flex-wrap:wrap}
+.opt{display:inline-flex;align-items:center;gap:8px;padding:9px 14px;border-radius:9px;border:1px solid #d6d6dc;background:#ffffff;font-size:13px;cursor:pointer;font:inherit;color:#1d1d1f}
+.opt.rec{border-color:#0a64d8;box-shadow:0 0 0 2px rgba(10,100,216,.12)}
+.rec b{color:#0a64d8}
+.why{font-size:13px;color:#3c3c43}
+.foot{font-size:12px;color:#6b6b73;display:flex;gap:16px;align-items:center}
+.left{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;font-size:13px}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; display: flex; overflow: hidden; background: #fafafb">
+
+  <nav style="width: 280px; flex-shrink: 0; background: #ffffff; border-right: 1px solid #e6e6ea; padding: 18px 14px; box-sizing: border-box; display: flex; flex-direction: column; gap: 18px">
+    <div style="display: flex; align-items: center; gap: 10px; padding: 0 6px">
+      <div style="width: 24px; height: 24px; border-radius: 6px; background: #0a64d8; display: flex; align-items: center; justify-content: center"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 11V6a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v5"/><circle cx="4" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/></svg></div>
+      <div style="font-weight: 700; font-size: 16px">switchboard</div>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 2px">
+      <div class="left" style="background: #0a64d8; color: #ffffff; font-weight: 600">Questions for you <span style="margin-left: auto; background: rgba(255,255,255,.25); border-radius: 999px; padding: 0 8px; font-size: 12px">4</span></div>
+      <div class="left">Changes the agents are on <span style="margin-left: auto; color: #6b6b73; font-size: 12px">3</span></div>
+      <div class="left">Ready to merge <span style="margin-left: auto; color: #6b6b73; font-size: 12px">1</span></div>
+      <div class="left">Merged this week <span style="margin-left: auto; color: #6b6b73; font-size: 12px">9</span></div>
+    </div>
+    <div style="font-size: 12px; color: #6b6b73; padding: 0 12px; line-height: 1.5">A question is anything the agents couldn’t settle between themselves. Each comes with the answers to pick from, which one they recommend, and what being wrong would cost. Answer here; the agent that asked does the rest.</div>
+    <div style="flex-grow: 1"></div>
+    <div style="display: flex; align-items: center; gap: 10px; padding: 0 6px"><span class="av hu" style="width: 28px; height: 28px; font-size: 11px">A</span><div><div style="font-weight: 600">alice</div><div style="font-size: 12px; color: #2e9d4e">● Connected</div></div></div>
+  </nav>
+
+  <main style="flex-grow: 1; min-width: 0; display: flex; justify-content: center; overflow: hidden">
+    <div style="width: 780px; padding: 28px 0; display: flex; flex-direction: column; gap: 14px">
+      <div style="display: flex; align-items: baseline; gap: 12px; padding: 0 2px 4px"><div style="font-size: 22px; font-weight: 700">4 questions</div><div style="color: #6b6b73">about 8 minutes · newest first · the agents are working on everything else</div></div>
+
+      <div class="card">
+        <div class="pr"><span>PR #212 · Apply discount codes to the order total</span><span>·</span><span>asked by cara’s agent · 11:09</span><span style="margin-left: auto">where to look: <a href="#l">checkout/total.py:40</a></span></div>
+        <div class="q">Does the discount come off before tax, or after tax?</div>
+        <div class="why">The code takes it off before tax, which is what the invoice spec says. The marketing page says “20% off your total”, which customers will read as after tax.</div>
+        <div class="opts">
+          <button class="opt rec"><b>Before tax, as built</b><span style="color: #6b6b73">recommended · matches the spec</span></button>
+          <button class="opt">After tax</button>
+          <button class="opt">Ask finance first</button>
+          <button class="opt">Type my own…</button>
+        </div>
+        <div class="foot"><span>If wrong the other way: tax is charged on money the customer never paid, which some states don’t allow.</span><a href="#e" style="margin-left: auto">proof ▸</a></div>
+      </div>
+
+      <div class="card">
+        <div class="pr"><span>PR #215 · “Forgot password” link on the sign-in page</span><span>·</span><span>asked by bob’s agent · 10:52</span><span style="margin-left: auto">where to look: <a href="#l2">accounts/reset.py:18</a></span></div>
+        <div class="q">How long should a reset link work: one hour, or one day?</div>
+        <div class="why">One hour is what the bank-style sites do. One day is kinder to someone who opens the email tomorrow. The issue doesn’t say.</div>
+        <div class="opts">
+          <button class="opt rec"><b>One hour</b><span style="color: #6b6b73">recommended · a stolen link dies fast</span></button>
+          <button class="opt">One day</button>
+          <button class="opt">Type my own…</button>
+        </div>
+        <div class="foot"><span>If wrong the other way: people email support saying the link didn’t work.</span><a href="#e2" style="margin-left: auto">proof ▸</a></div>
+      </div>
+
+      <div class="card">
+        <div class="pr"><span>PR #215 · “Forgot password” link on the sign-in page</span><span>·</span><span>asked by alice’s agent · 10:40</span><span style="margin-left: auto">where to look: <a href="#l3">emails/reset.html</a></span></div>
+        <div class="q">Does the reset email come from support@ or from no-reply@?</div>
+        <div class="why">Every other email we send comes from no-reply@. Replies to a reset email are usually people in trouble.</div>
+        <div class="opts">
+          <button class="opt rec"><b>support@</b><span style="color: #6b6b73">recommended</span></button>
+          <button class="opt">no-reply@, like the others</button>
+          <button class="opt">Type my own…</button>
+        </div>
+        <div class="foot"><span>Low stakes either way.</span><a href="#e3" style="margin-left: auto">proof ▸</a></div>
+      </div>
+
+      <div class="card done">
+        <div class="pr"><span>PR #209 · Dark mode</span><span>·</span><span>answered by bob · 10:12</span></div>
+        <div class="q">Follow the phone’s setting, or add a switch in the app?</div>
+        <div class="foot"><span class="av hu">B</span><span>bob: follow the phone. alice’s agent is on it; the change comes back here when it’s ready to merge.</span></div>
+      </div>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

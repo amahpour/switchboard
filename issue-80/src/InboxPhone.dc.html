@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>The decision inbox on a phone</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;font:15px/1.45 -apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",sans-serif;color:#1d1d1f;-webkit-font-smoothing:antialiased}
+a{color:#0a5fcf;text-decoration:none}
+code{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:12px;background:#f0f0f3;border:1px solid #e4e4e9;border-radius:4px;padding:0 4px;color:#2b2b30}
+.opt{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:48px;padding:10px 14px;border-radius:10px;border:1px solid #d6d6dc;background:#ffffff;font-size:15px;cursor:pointer;font:inherit;color:#1d1d1f;text-align:left;width:100%;box-sizing:border-box}
+.opt.rec{border-color:#0a64d8;box-shadow:0 0 0 2px rgba(10,100,216,.12)}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; display: flex; flex-direction: column; overflow: hidden; background: #fafafb">
+  <header style="padding: 18px 20px 10px; display: flex; align-items: baseline; gap: 8px; flex-shrink: 0">
+    <div style="font-size: 22px; font-weight: 700">Questions</div><div style="color: #6b6b73; font-size: 13px">4 · about 8 min</div>
+    <div style="flex-grow: 1"></div>
+    <div style="font-size: 13px; color: #6b6b73">1 of 4</div>
+  </header>
+
+  <main style="flex-grow: 1; padding: 6px 16px 0; display: flex; flex-direction: column; gap: 12px; overflow: hidden">
+    <div style="border: 1px solid #e6e6ea; border-radius: 16px; background: #ffffff; padding: 18px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 1px 2px rgba(0,0,0,.04)">
+      <div style="font-size: 12px; color: #6b6b73">PR #212 · Discount codes · cara’s agent asks</div>
+      <div style="font-size: 19px; font-weight: 600; line-height: 1.3">Does the discount come off before tax, or after tax?</div>
+      <div style="font-size: 14px; color: #3c3c43">Built before tax, as the invoice spec says. The marketing page says “20% off your total”, which reads as after tax.</div>
+      <div style="display: flex; flex-direction: column; gap: 8px">
+        <button class="opt rec"><span><b style="color: #0a64d8">Before tax, as built</b><br><span style="font-size: 12px; color: #6b6b73">recommended · matches the spec</span></span><span style="color: #0a64d8">›</span></button>
+        <button class="opt"><span>After tax</span><span style="color: #6b6b73">›</span></button>
+        <button class="opt"><span>Ask finance first</span><span style="color: #6b6b73">›</span></button>
+        <button class="opt"><span>Type my own…</span><span style="color: #6b6b73">›</span></button>
+      </div>
+      <div style="font-size: 12px; color: #6b6b73">If wrong the other way: tax is charged on money the customer never paid.</div>
+      <div style="display: flex; gap: 14px; font-size: 13px"><a href="#e">Proof</a><a href="#l">total.py:40</a><a href="#skip" style="margin-left: auto; color: #6b6b73">Skip for now</a></div>
+    </div>
+
+    <div style="border: 1px solid #e6e6ea; border-radius: 16px; background: #ffffff; padding: 14px 18px; display: flex; flex-direction: column; gap: 4px; opacity: .8">
+      <div style="font-size: 12px; color: #6b6b73">PR #215 · Forgot password · bob’s agent asks</div>
+      <div style="font-size: 15px; font-weight: 600">How long should a reset link work: an hour, or a day?</div>
+    </div>
+    <div style="border: 1px solid #e6e6ea; border-radius: 16px; background: #ffffff; padding: 14px 18px; display: flex; flex-direction: column; gap: 4px; opacity: .6">
+      <div style="font-size: 12px; color: #6b6b73">PR #215 · alice’s agent asks</div>
+      <div style="font-size: 15px; font-weight: 600">Reset email from support@ or no-reply@?</div>
+    </div>
+  </main>
+
+  <footer style="padding: 12px 20px 26px; font-size: 12px; color: #6b6b73; text-align: center; flex-shrink: 0">The agents are on everything else. You’ll be told when a change is ready to merge.</footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

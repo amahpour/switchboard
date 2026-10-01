@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>The argument: for, against, verdict</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;font:13px/1.5 -apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",sans-serif;color:#1d1d1f;-webkit-font-smoothing:antialiased}
+a{color:#0a5fcf;text-decoration:none}a:hover{color:#084a9f}
+code{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:12px;background:#f0f0f3;border:1px solid #e4e4e9;border-radius:4px;padding:0 4px;color:#2b2b30}
+.av{border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0;width:24px;height:24px;font-size:10px}
+.cc{background:#e4eaf5;color:#27457a}.cx{background:#e1ebfb;color:#1f4f9e}.dv{background:#e2f3e7;color:#1f6b3a}.hu{background:#ece6f7;color:#5a3d99}
+.stamp{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:3px 9px;border-radius:5px;white-space:nowrap}
+.ok{background:#e6f4ea;color:#1f6b3a}.ask{background:#fff4e0;color:#7a4a00}.drop{background:#ececf0;color:#55555c}.fx{background:#e7eefb;color:#0b57c4}
+.row{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:9px}
+.turn{display:flex;gap:10px;align-items:flex-start}
+.turn .b{flex-grow:1;min-width:0;background:#ffffff;border:1px solid #e6e6ea;border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+.ev{font-size:12px;color:#6b6b73;display:flex;flex-wrap:wrap;gap:4px 12px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:8px 13px;border-radius:8px;border:1px solid #d6d6dc;background:#ffffff;font-size:13px;color:#1d1d1f;cursor:pointer;font:inherit}
+.btn.primary{background:#0a64d8;border-color:#0a64d8;color:#ffffff}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; display: flex; flex-direction: column; overflow: hidden; background: #ffffff">
+
+  <header style="height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 24px; border-bottom: 1px solid #e6e6ea; flex-shrink: 0">
+    <div style="width: 22px; height: 22px; border-radius: 6px; background: #0a64d8; display: flex; align-items: center; justify-content: center"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 11V6a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v5"/><circle cx="4" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/></svg></div>
+    <div><b>PR #212</b> <span style="color: #6b6b73">· Apply discount codes to the order total</span></div>
+    <div style="flex-grow: 1"></div>
+    <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #6b6b73"><span>For the change:</span><span class="av cx">B</span><span class="av cc">A</span><span style="margin-left: 8px">Against:</span><span class="av dv">C</span><span style="margin-left: 8px">The bench:</span><span class="av hu">A</span><span class="av hu">B</span><span class="av hu">C</span></div>
+  </header>
+
+  <div style="flex-grow: 1; display: flex; min-height: 0">
+    <!-- the docket -->
+    <nav style="width: 330px; flex-shrink: 0; background: #fafafb; border-right: 1px solid #e6e6ea; padding: 14px 10px; box-sizing: border-box; display: flex; flex-direction: column; gap: 2px">
+      <div style="font-size: 11px; font-weight: 600; color: #6b6b73; text-transform: uppercase; letter-spacing: .04em; padding: 0 12px 8px">Findings · 6 · 1 for the bench</div>
+      <div class="row" style="background: #fff4e0"><b>#5</b><div style="flex-grow: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">before tax, or after?</div><span class="stamp ask">contested</span></div>
+      <div class="row"><b>#1</b><div style="flex-grow: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">the total subtracts the discount</div><span class="stamp ok">checked</span></div>
+      <div class="row"><b>#2</b><div style="flex-grow: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">never below zero</div><span class="stamp ok">checked</span></div>
+      <div class="row"><b>#3</b><div style="flex-grow: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">old orders untouched</div><span class="stamp ok">checked</span></div>
+      <div class="row"><b>#4</b><div style="flex-grow: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">the receipt shows the discount line</div><span class="stamp fx">conceded · fixed</span></div>
+      <div class="row" style="opacity: .6"><b>#6</b><div style="flex-grow: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-decoration: line-through">gift cards as a kind of code</div><span class="stamp drop">dismissed</span></div>
+      <div style="flex-grow: 1"></div>
+      <div style="padding: 12px; font-size: 12px; color: #6b6b73; line-height: 1.5">A finding reaches the bench only when the two sides can’t settle it with evidence. Five of six never did: #4 was conceded and fixed on the spot.</div>
+    </nav>
+
+    <!-- the argument -->
+    <main style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; padding: 20px 24px; gap: 14px; overflow: hidden">
+      <div style="display: flex; align-items: center; gap: 12px"><b style="font-size: 18px">#5</b><div style="font-size: 18px; font-weight: 600">Does the discount come off before tax, or after tax?</div><div style="flex-grow: 1"></div><a href="#l" style="font-size: 12px; font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace">checkout/total.py:40</a></div>
+
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; flex-grow: 1; min-height: 0">
+        <div style="display: flex; flex-direction: column; gap: 10px">
+          <div style="font-size: 11px; font-weight: 600; color: #b3261e; text-transform: uppercase; letter-spacing: .04em">Against the change as built · cara’s agent</div>
+          <div class="turn"><span class="av dv">C</span><div class="b"><div>The marketing page says “20% off your total”. A customer reads “total” as the number at the bottom of the receipt, which is after tax. As built, SAVE20 on a $100 cart in a 10% state takes off $20, not $22.</div><div class="ev"><span>opened the page</span><span><a href="#s1">screenshot</a></span><span>· worked the example both ways</span></div></div></div>
+          <div class="turn"><span class="av dv">C</span><div class="b"><div>Support’s FAQ says “off your order”. That doesn’t settle it either way, which is why this is for a person.</div><div class="ev"><span>read the FAQ</span></div></div></div>
+          <div class="turn"><span class="av dv">C</span><div class="b"><div>Keeping it raised. Either way is a four-line change; the question is what we promised customers.</div></div></div>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 10px">
+          <div style="font-size: 11px; font-weight: 600; color: #1f6b3a; text-transform: uppercase; letter-spacing: .04em">For the change as built · bob’s agent, with alice’s agent</div>
+          <div class="turn"><span class="av cx">B</span><div class="b"><div>The invoice spec, §3: a discount reduces the taxable amount. That is before tax. The payment provider applies coupons the same way, so our receipts and theirs will agree.</div><div class="ev"><span>quoted the spec</span><span><a href="#spec">§3</a></span><span>· checked the provider’s docs</span></div></div></div>
+          <div class="turn"><span class="av cc">A</span><div class="b"><div>Agree. After tax means charging tax on money the customer never paid. Some states don’t allow that, and we sell in two of them.</div><div class="ev"><span>checked the two states’ rules</span></div></div></div>
+          <div class="turn"><span class="av cx">B</span><div class="b"><div>No further argument. If the bench wants after tax, I’ll change the page wording too, so they agree.</div></div></div>
+        </div>
+      </div>
+
+      <!-- the bench -->
+      <div style="border: 1px solid #f0c98a; background: #fffaf0; border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px">
+        <div style="display: flex; align-items: center; gap: 10px"><span class="stamp ask">your ruling</span><div>Both sides rest. cara, whose agent raised it, says she’d go with the spec but wants the marketing page fixed either way.</div></div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center">
+          <button class="btn primary">For: before tax, and fix the page wording</button>
+          <button class="btn">Against: after tax</button>
+          <button class="btn">Ask finance first</button>
+          <div style="flex-grow: 1"></div>
+          <span style="font-size: 12px; color: #6b6b73">Your ruling goes into the record. bob’s agent makes the change, if any.</span>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
