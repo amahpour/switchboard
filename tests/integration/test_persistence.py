@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
+
+import pytest
 
 from conftest import InProcBroker
 from switchboard import db
 from switchboard.broker import proc
+from switchboard.remote import satellite
 
 
 def seed_agents(dbpath: Path, room_name: str) -> dict[str, int]:
@@ -32,6 +36,32 @@ def seed_agents(dbpath: Path, room_name: str) -> dict[str, int]:
             ).lastrowid
     con.close()
     return ids
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="/proc btime: Linux")
+def test_restart_keeps_live_local_sessions_after_clock_step(
+    broker: InProcBroker, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A new broker must use the previous boot pin before deciding a live agent has ended."""
+    web = broker.web_client()
+    try:
+        assert web.post("/api/rooms", json={"name": "#build"}, headers=broker.write_headers()).status_code == 200
+    finally:
+        web.close()
+    broker.stop()
+    base = proc.read_linux_btime()
+    bid = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    satellite.boot_time(broker.paths, bid, base)
+    monkeypatch.setattr(proc, "_BTIME_PIN", base)
+    ids = seed_agents(broker.paths.db, "#build")
+    monkeypatch.setattr(proc, "_BTIME_PIN", None)  # the next broker is a fresh process
+    monkeypatch.setattr(proc, "read_linux_btime", lambda: base + 4.0)
+    monkeypatch.setattr(proc, "_linux_btime", lambda: base + 4.0)
+    broker.start()
+    assert broker.state.recovery["participants_ended"] == 0
+    room = broker.state.store.get_room("#build")
+    assert room is not None
+    assert {m.name for m in broker.state.store.members(room.id)} == set(ids)
 
 
 def test_history_pending_and_offers_survive_restart(broker: InProcBroker) -> None:

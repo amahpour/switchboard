@@ -43,10 +43,9 @@ def pi() -> Iterator[Path]:
         shutil.rmtree(d, ignore_errors=True)
 
 
-def me() -> tuple[int, float]:
-    # from /proc/stat's btime now, as the satellite just read it: the one this process cached
-    # at its first look has moved if the wall clock was stepped since (WSL2 does in a long run)
-    proc._linux_btime.cache_clear()
+def me(pi: Path) -> tuple[int, float]:
+    # Use the same home's boot pin as the satellite, even if btime steps between the two reads.
+    proc.pin_home_btime(Paths.from_home(pi))
     info = proc.info(os.getpid())
     assert info is not None
     return os.getpid(), info.start
@@ -95,7 +94,7 @@ def started(pi: Path) -> tuple[SatDriver, Client, int]:
     sat = SatDriver(pi)
     sat.welcome()
     wait_for(lambda: Paths.from_home(pi).sock.exists(), what="the Pi socket")
-    pid, start = me()
+    pid, start = me(pi)
     sat.send(proto.watch(1, [(pid, start)], [(pid, start, SOCK)]))
     client = Client(pi)
     c = sat.recv_type("open")["c"]
@@ -122,7 +121,7 @@ def deliver(bid: int = 7) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- the relay
 def test_reg_relays_status_and_ages_every_250ms(pi: Path) -> None:
-    pid, start = me()
+    pid, start = me(pi)
     write_reg(pi, pid, status="idle", statusUpdatedAt=int((time.time() - 5) * 1000))
     sat, client, _c = started(pi)
     try:
@@ -148,7 +147,7 @@ def test_reg_relays_status_and_ages_every_250ms(pi: Path) -> None:
 
 @pytest.mark.parametrize("bad", ["other_pid", "other_socket", "missing", "not_json"])
 def test_reg_is_null_for_a_file_that_is_not_this_session(pi: Path, bad: str) -> None:
-    pid, _start = me()
+    pid, _start = me(pi)
     if bad == "other_pid":
         write_reg(pi, pid, pid=pid + 1)
     elif bad == "other_socket":
@@ -165,7 +164,7 @@ def test_reg_is_null_for_a_file_that_is_not_this_session(pi: Path, bad: str) -> 
 
 
 def test_reg_is_null_for_a_dead_or_recycled_pid(pi: Path) -> None:
-    pid, start = me()
+    pid, start = me(pi)
     write_reg(pi, pid)
     sat = SatDriver(pi)
     try:
@@ -339,7 +338,7 @@ def test_last_mile_holds_whatever_the_desktop_sends(pi: Path, tmp_path: Path, ca
     the Claude this connection was attested under, never reaches the MCP server while its
     own session has a prompt open. Reported counted (``no_chk``/``bad_chk``): the broker
     never sends either, so it shows as failed deliveries there."""
-    other = me()
+    other = me(pi)
     write_reg(pi, other[0], status="idle")  # another watched Claude, idle
     sat, fc, c = attested(pi, tmp_path, others=(other,))
     client: Client | None = None
@@ -392,7 +391,7 @@ def test_a_malformed_registry_file_never_ends_the_link(pi: Path, bad: str) -> No
     """A registry file a same-user process wrote to trip the reader (security review, M8d):
     the link keeps answering pings, the relay keeps coming, the view is only what can be
     read (a status without a time, or nothing)."""
-    pid, start = me()
+    pid, start = me(pi)
     path = pi / "claude-sessions" / f"{pid}.json"
     if bad == "huge_int":
         path.write_text('{"pid": %d, "status": "idle", "statusUpdatedAt": %s}' % (pid, "9" * 400))

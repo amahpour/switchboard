@@ -184,6 +184,9 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         os.umask(0o077)
         paths.ensure()
+        from switchboard.broker import proc
+
+        proc.pin_home_btime(paths)  # recovery compares old process starts before ending any session
         if cfg.review.agentsview:
             # a 0.2.0 key: /catchup never looks for agentsview (DESIGN.md §26); once per start
             log.warning("config.toml: [review] agentsview is ignored since /catchup replaced /review;"
