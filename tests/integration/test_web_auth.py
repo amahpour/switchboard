@@ -168,11 +168,14 @@ def test_web_say_can_reply_to_a_message_in_its_room(broker: InProcBroker, web: h
     assert web.post("/api/rooms", json={"name": "#other"}, headers=h).status_code == 200
     original = web.post("/api/rooms/build/say", json={"text": "diagram"}, headers=h).json()["id"]
     foreign = web.post("/api/rooms/other/say", json={"text": "elsewhere"}, headers=h).json()["id"]
+    room = broker.state.service.room("build")
+    join_id = broker.state.store.insert_message(room.id, sender_name="diagram-agent", sender_kind="agent",
+                                                 via="mcp", kind="join", text="joined").id
     r = web.post("/api/rooms/build/say", json={"text": "please fix", "reply_to": original}, headers=h)
     assert r.status_code == 200, r.text
     messages = web.get("/api/rooms/build/messages").json()["messages"]
     assert next(m for m in messages if m["id"] == r.json()["id"])["reply_to"] == original
-    for bad in (True, "1", -1, foreign, 999999):
+    for bad in (True, "1", -1, foreign, 999999, 2**63, join_id):
         r = web.post("/api/rooms/build/say", json={"text": "bad", "reply_to": bad}, headers=h)
         assert r.status_code == 400, (bad, r.text)
 

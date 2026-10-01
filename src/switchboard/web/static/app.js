@@ -438,23 +438,15 @@
     if (m.sender_kind !== 'agent') return;
     line.addEventListener('diagramerror', function (ev) {
       const note = ev.target.querySelector('.md-diagram-error');
-      const error = String((ev.detail && ev.detail.error) || '').slice(0, 400);
-      if (!note || !error) return;
+      const diagnostic = String((ev.detail && ev.detail.diagnostic) || '');
+      if (!note || !diagnostic || !memberOf(r, m.from, m.host)) return;
       const ask = btn('md-copy md-ask-fix', 'Ask ' + m.from + ' to fix it');
       ask.addEventListener('click', async function () {
+        if (!memberOf(r, m.from, m.host)) { ask.remove(); return; }
         ask.disabled = true;
-        const runs = error.match(/`+/g) || [];
-        const fence = '`'.repeat(Math.max(3, ...runs.map(function (run) { return run.length + 1; })));
-        const text = '@' + m.from + ' Please fix this Mermaid diagram. Mermaid said:\n\n' +
-          fence + 'text\n' + error + '\n' + fence;
-        try {
-          await api('POST', '/api/rooms/' + encodeURIComponent(r.slug) + '/say',
-            { text: text, reply_to: m.id });
-          ask.textContent = 'Asked ' + m.from + ' to fix it';
-        } catch (e) {
-          ask.disabled = false;
-          renderLocal(String(e.message || e), true);
-        }
+        const text = '@' + m.from + ' Please fix this Mermaid diagram. Mermaid said: ' + diagnostic;
+        if (await submitText(text, { reply_to: m.id })) ask.textContent = 'Asked ' + m.from + ' to fix it';
+        else ask.disabled = false;
       });
       note.append(ask);
     });
@@ -3231,7 +3223,9 @@
         if (res.ok && verb.toLowerCase() === '/close') await loadRooms().catch(function () {});
         renderLocal(verb, !res.ok, res.text);
       } else {
-        await api('POST', path + '/say', { text: text });
+        const body = { text: text };
+        if (opts && opts.reply_to !== undefined) body.reply_to = opts.reply_to;
+        await api('POST', path + '/say', body);
         // "/catchup" inside a sentence is only text to the agents: say how to run it
         if (/(^|\s)\/(catchup|review)\b/i.test(text)) renderLocal('/catchup', false, CATCHUP_HINT);
       }

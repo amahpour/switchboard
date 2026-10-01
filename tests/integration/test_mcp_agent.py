@@ -219,6 +219,17 @@ async def test_say_returns_earlier_unread_and_is_rate_limited(broker: InProcBrok
         assert mine[0]["sender_kind"] == "agent" and mine[0]["via"] == "mcp" and mine[0]["harness"] == "test"
 
 
+async def test_say_rejects_reply_to_an_overflowing_id_or_join_line(broker: InProcBroker) -> None:
+    """Reply validation rejects SQLite overflow and non-chat ids on the agent path too."""
+    async with FakeAgent(broker.home, "k1") as a:
+        await a.join("#build", "tester")
+        messages = broker.web.get("/api/rooms/build/messages").json()["messages"]
+        join_id = next(m["id"] for m in messages if m["kind"] == "join" and m["from"] == "tester")
+        for bad in (2**63, join_id):
+            result = await a.say("#build", "bad reply", reply_to=bad)
+            assert result["ok"] is False and result["code"] == "bad_request", (bad, result)
+
+
 async def test_pass_is_logged_not_posted(broker: InProcBroker) -> None:
     async with FakeAgent(broker.home, "k1", ack="immediate") as a:
         await a.join("#build", "tester")

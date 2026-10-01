@@ -737,13 +737,7 @@ class AgentService:
             raise ServiceError("bad_request",
                                f"message too long ({len(text)} > {self.cfg.delivery.max_msg_chars} characters)")
         reply_to = params.get("reply_to")
-        target: Message | None = None
-        if reply_to is not None:
-            if isinstance(reply_to, bool) or not isinstance(reply_to, int):
-                raise ServiceError("bad_request", "reply_to must be a message id")
-            target = self.store.get_message(reply_to)
-            if target is None or target.room_id != room.id or target.kind != "chat":
-                raise ServiceError("bad_request", f"reply_to {reply_to} is not a message in {room.name}")
+        target = self.svc.reply_target(room, reply_to)
         now = self.state.clock.now()
         retry = self.engine.check_say(p, m, target)  # the rate limit (DESIGN.md §8.4)
         if retry is not None:
