@@ -434,11 +434,38 @@
     setTimeout(function () { row.classList.remove('flash'); }, 1200);
   }
 
+  function askToFixDiagram(r, m, line) {
+    if (m.sender_kind !== 'agent') return;
+    line.addEventListener('diagramerror', function (ev) {
+      const note = ev.target.querySelector('.md-diagram-error');
+      const error = String((ev.detail && ev.detail.error) || '').slice(0, 400);
+      if (!note || !error) return;
+      const ask = btn('md-copy md-ask-fix', 'Ask ' + m.from + ' to fix it');
+      ask.addEventListener('click', async function () {
+        ask.disabled = true;
+        const runs = error.match(/`+/g) || [];
+        const fence = '`'.repeat(Math.max(3, ...runs.map(function (run) { return run.length + 1; })));
+        const text = '@' + m.from + ' Please fix this Mermaid diagram. Mermaid said:\n\n' +
+          fence + 'text\n' + error + '\n' + fence;
+        try {
+          await api('POST', '/api/rooms/' + encodeURIComponent(r.slug) + '/say',
+            { text: text, reply_to: m.id });
+          ask.textContent = 'Asked ' + m.from + ' to fix it';
+        } catch (e) {
+          ask.disabled = false;
+          renderLocal(String(e.message || e), true);
+        }
+      });
+      note.append(ask);
+    });
+  }
+
   function chatRow(r, m, prev) {
     const who = label(m.from, m.host);
     const line = el('article', 'line k-chat');
     line.dataset.id = String(m.id);
     line.dataset.from = who;
+    askToFixDiagram(r, m, line);
     if (mentionsMe(m)) line.classList.add('mention');
     if (m.sender_kind === 'agent' && inspectedLabel() === who) line.classList.add('sel');
     if (isCont(prev, m)) {

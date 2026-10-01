@@ -161,6 +161,22 @@ def test_unauthenticated_api_is_401(broker: InProcBroker) -> None:
         assert c.post(path, json={}, headers=broker.write_headers()).status_code == 401, path
 
 
+def test_web_say_can_reply_to_a_message_in_its_room(broker: InProcBroker, web: httpx.Client) -> None:
+    """The browser's Ask to fix post keeps reply_to, and rejects foreign or malformed ids."""
+    h = broker.write_headers()
+    assert web.post("/api/rooms", json={"name": "#build"}, headers=h).status_code == 200
+    assert web.post("/api/rooms", json={"name": "#other"}, headers=h).status_code == 200
+    original = web.post("/api/rooms/build/say", json={"text": "diagram"}, headers=h).json()["id"]
+    foreign = web.post("/api/rooms/other/say", json={"text": "elsewhere"}, headers=h).json()["id"]
+    r = web.post("/api/rooms/build/say", json={"text": "please fix", "reply_to": original}, headers=h)
+    assert r.status_code == 200, r.text
+    messages = web.get("/api/rooms/build/messages").json()["messages"]
+    assert next(m for m in messages if m["id"] == r.json()["id"])["reply_to"] == original
+    for bad in (True, "1", -1, foreign, 999999):
+        r = web.post("/api/rooms/build/say", json={"text": "bad", "reply_to": bad}, headers=h)
+        assert r.status_code == 400, (bad, r.text)
+
+
 def test_no_unauthenticated_write_routes(broker: InProcBroker) -> None:
     """Enumerate every route: each unsafe method refuses a cookie-less request. POST /link/pair is
     the one route a pairing code authenticates (DESIGN.md §31.7): it refuses any request with an

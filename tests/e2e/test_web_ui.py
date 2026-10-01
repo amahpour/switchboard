@@ -22,6 +22,7 @@ On any failure the fixture saves a Playwright trace (open it with ``uv run playw
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import shutil
@@ -903,3 +904,36 @@ def test_a_broken_diagram_says_why_and_keeps_its_code(ui: UI) -> None:
     expect(box.locator(".md-pre-body")).to_be_visible()
     expect(box.locator(".md-diagram")).to_be_hidden()
     assert not box.evaluate(SHADOW_SVG)  # no "syntax error" drawing either
+
+
+def test_a_broken_agent_diagram_can_ask_its_sender_to_fix_it(ui: UI) -> None:
+    """A failed agent drawing offers one click to reply as the human with Mermaid's error;
+    the person's own broken drawing offers no such button."""
+    room = "e2e-agent-diagram"
+    ui.world.create_room(f"#{room}")
+    ui.world.add_agents(f"#{room}", ("diagram-agent",))
+    agent = ui.world._extra[-1]
+    loop = ui.world._loop
+    assert loop is not None
+    source = f"{FENCE}mermaid\nflowchart LR\n  A -->\n{FENCE}"
+    posted = asyncio.run_coroutine_threadsafe(agent.say(f"#{room}", source), loop).result(30)
+    original_id = int(posted["posted_id"])
+    ui.world.say(room, source)
+    page = ui.open(room=room)
+    agent_box = show(page)
+    ask = agent_box.get_by_role("button", name="Ask diagram-agent to fix it")
+    expect(ask).to_be_visible()
+    own_box = show(page, 1)
+    expect(own_box.get_by_role("button", name=re.compile("Ask .* to fix it"))).to_have_count(0)
+
+    with page.expect_response(lambda r: r.url.endswith(f"/api/rooms/{room}/say") and
+                              r.request.method == "POST") as sent:
+        ask.click()
+    body = sent.value.request.post_data_json
+    assert body["reply_to"] == original_id
+    assert body["text"].startswith("@diagram-agent ")
+    assert "Parse error on line 3" in body["text"] and "```" in body["text"]
+    reply = page.locator('#log .line.k-chat[data-from="alice"]', has_text="Please fix this Mermaid diagram")
+    expect(reply).to_have_count(1)
+    expect(reply).to_contain_text("Parse error on line 3")
+    expect(reply.locator(".reply-to")).to_contain_text("diagram-agent")

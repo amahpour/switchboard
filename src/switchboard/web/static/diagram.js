@@ -153,10 +153,12 @@
       shown.set(box, { source: source, button: button });
       button.textContent = 'Show code';
     }, function (err) {
+      const message = errorText(err);
       p.fig.shadowRoot.replaceChildren();
-      p.note.textContent = "Can't draw this diagram: " + errorText(err);
+      p.note.textContent = "Can't draw this diagram: " + message;
       box.classList.add('md-diagram-failed');
       showCode(box, button);
+      box.dispatchEvent(new CustomEvent('diagramerror', { bubbles: true, detail: { error: message } }));
     });
   }
 

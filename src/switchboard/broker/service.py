@@ -615,7 +615,7 @@ class RoomService:
         return msg
 
     def human_say(self, name: str, text: str, via: str, *, skip: tuple[int, ...] = (),
-                  person: tuple[str, int | None] | None = None) -> Message:
+                  person: tuple[str, int | None] | None = None, reply_to: int | None = None) -> Message:
         """A message from a human. Posted literally, never parsed as a command.
         ``skip``: memberships that get no delivery of it (only ``/catchup`` passes any: its
         subjects, §26). ``person``: who, on a hosted broker with people (§32): their name
@@ -632,6 +632,12 @@ class RoomService:
                 "bad_request",
                 f"message too long ({len(text)} > {self.cfg.delivery.max_msg_chars} characters)",
             )
+        if reply_to is not None:
+            if isinstance(reply_to, bool) or not isinstance(reply_to, int):
+                raise ServiceError("bad_request", "reply_to must be a message id")
+            target = self.store.get_message(reply_to)
+            if target is None or target.room_id != room.id:
+                raise ServiceError("bad_request", f"reply_to {reply_to} is not a message in {room.name}")
         mentions = parse_mentions(text, self.mention_names(room))
         msg = self._post(
             room,
@@ -639,6 +645,7 @@ class RoomService:
             sender_kind="human",
             via=via,
             text=text,
+            reply_to=reply_to,
             mentions=mentions,
             skip_memberships=skip,
             sender_person_id=person[1] if person is not None else None,
