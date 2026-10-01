@@ -1,6 +1,8 @@
 # Contributing
 
-The project was built in milestones: Milestone 0 tested what each harness can do, and Milestones 1–7 built the broker, the web UI, the CLI, the agent MCP server, the hooks, `switchboard install` / `uninstall`, the delivery engine, per-harness delivery and `switchboard report`; Milestone 8 added remote members over SSH. The milestones and their acceptance criteria are in [DESIGN.md §13](docs/DESIGN.md#13-milestones-and-acceptance-criteria), the Milestone 0 results in [docs/FINDINGS.md](docs/FINDINGS.md), and the M7 live rehearsal (Claude, Codex and Devin together in one room) in [docs/M7-REPORT.md](docs/M7-REPORT.md). Each change adds its release notes as a file in [`changes/`](changes/README.md), and updates the README or the docs it touches. A pull request that changes anything a person sees shows it: screenshots in its description, before and after, made with `docs/media/ui_shots.py` or `docs/media/cli_shots.py` (see [CLAUDE.md](CLAUDE.md) for where the images go).
+The project was built in milestones: Milestone 0 tested what each harness can do, and Milestones 1–7 built the broker, the web UI, the CLI, the agent MCP server, the hooks, `switchboard install` / `uninstall`, the delivery engine, per-harness delivery and `switchboard report`; Milestone 8 added remote members over SSH. The milestones and their acceptance criteria are in [DESIGN.md §13](docs/DESIGN.md#13-milestones-and-acceptance-criteria), the Milestone 0 results in [docs/FINDINGS.md](docs/FINDINGS.md), and the M7 live rehearsal (Claude, Codex and Devin together in one room) in [docs/M7-REPORT.md](docs/M7-REPORT.md). Each change adds its release notes as a file in [`changes/`](changes/README.md), and updates the README or the docs it touches. A pull request that changes anything a person sees shows it: screenshots in its description, before and after, made with `docs/media/ui_shots.py` or `docs/media/cli_shots.py` (see [AGENTS.md](AGENTS.md) for where the images go).
+
+**Changes come as pull requests,** from a branch here or from a fork, and the maintainer reviews and merges each one. If a coding agent writes yours, point it at [AGENTS.md](AGENTS.md): how a change lands, where the code and the tests live, and what has to be right. The same file is for people.
 
 ## Development
 
@@ -79,35 +81,6 @@ Tests that drive real agent CLIs are marked `live` and skipped by default. Each 
 - `tests/live/test_live_cursor.py` is opt-in (`SWITCHBOARD_LIVE=cursor`) and has not been run live yet;
 - `SWITCHBOARD_LIVE=demo … tests/live/m7_demo.py` is the M7 rehearsal (below);
 - `SWITCHBOARD_LIVE=fakepi uv run python tests/live/m8_demo.py --scripted` rehearses the FPGA bench demo against the fake remote container, and `SWITCHBOARD_LIVE=pi …` against your real remote machine with real Claude sessions ([docs/DEMO-FPGA.md](docs/DEMO-FPGA.md) §7, §10).
-
-## Working with agents
-
-Most changes here are written by coding agents and reviewed by the maintainer. The process is built so the review is of the change, not of whether the agent did what it said.
-
-- **The rules** are in [CLAUDE.md](CLAUDE.md) ([AGENTS.md](AGENTS.md) points other harnesses at it): the gates, what each label means, what only the maintainer says yes to, and that guards only tighten.
-- **The procedures** are skills in [`.claude/skills/`](.claude/skills/README.md), one per step: `groom-issues`, `work-on-an-issue`, `branch-audit`, `docstring-first-tests`, `overnight-run`, `merge-queue`, `close-out` and `recap`. `.agents/skills` is a symlink to the same directory, so there is one copy.
-- **Two programs decide what an agent's judgment shouldn't:**
-  - `python3 .github/scripts/check_issue_ready.py <issue>…` refuses an issue an agent would have to guess at. Readiness is the `build-ready` label plus a `Build-ready: verified against origin/main @ <sha> on <date>.` line in the issue, and both are absent until a grooming pass has checked the description against the code. The program also refuses an open question, a dependency that is still open, a named file that doesn't exist, and a named file that changed since the stamp.
-  - `python3 .github/scripts/check_pr_ready.py <pr>` refuses a pull request that isn't ready for review: the required checks on its head commit, a Verification section with real output or a picture, previews for a visible change, nothing unticked under Pre-merge checklist, and the notes file. Exit 2 means the checks are still running.
-- **The pull request template** (`.github/pull_request_template.md`) carries a checklist whose items apply to some changes only. Why each item is there is in [`.github/PR_CHECKLIST.md`](.github/PR_CHECKLIST.md). Delete the items that don't apply.
-
-Why it is shaped this way:
-
-- **A program where a program can decide.** "Is CI green?" has a wrong answer that looks right: the checks of the commit before. "Is this issue ready?" gets a yes from anyone who wants the queue full. An exit code doesn't want anything.
-- **Readiness is absent by default.** A label that marks what *isn't* ready lets everything unlabelled through. `build-ready` has to be earned, and a stamp makes it go stale when main moves.
-- **Evidence, not a report.** An agent's account of its work reads the same whether or not the work was done.
-- **A stop at review.** Agents open pull requests. The maintainer merges, releases, and touches anything that is running.
-
-**The labels**, created once (`gh label create` is safe to repeat with `--force`):
-
-```bash
-gh label create build-ready    --color 0e8a16 --description "Groomed and stamped: an agent may build it alone"
-gh label create in-progress    --color fbca04 --description "An agent is on it; its comment names the branch"
-gh label create needs-grooming --color d4c5f9 --description "Nobody has written the spec yet"
-gh label create needs-decision --color d93f0b --description "A decision for the maintainer, asked in a comment"
-gh label create blocked        --color b60205 --description "Waits on another issue: Blocked by #N"
-gh label create human-gated    --color 5319e7 --description "Its deliverable is an action only the maintainer takes"
-```
 
 ## The M7 rehearsal (a live demo with real agents)
 

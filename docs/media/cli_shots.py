@@ -2,7 +2,7 @@
 
     uv run python docs/media/cli_shots.py --out /tmp/cli-shots
 
-The pictures are pull-request previews (CLAUDE.md): they go on the ``design-assets`` branch, not in
+The pictures are pull-request previews (AGENTS.md): they go on the ``design-assets`` branch, not in
 this repository, so the default output folder, ``docs/media/cli/``, is git-ignored.
 
 Run by hand, never by pytest (nothing imports it). It needs Playwright's Chromium, once per
