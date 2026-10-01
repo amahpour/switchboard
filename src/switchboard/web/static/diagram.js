@@ -125,6 +125,13 @@
       fig = el('div', 'md-diagram');
       fig.attachShadow({ mode: 'open' });
       box.querySelector('.md-pre-head').after(fig);
+      if (typeof fig.requestFullscreen === 'function') {
+        const full = el('button', 'md-copy md-fullscreen');
+        full.type = 'button';
+        full.textContent = 'Full screen';
+        full.addEventListener('click', function () { fig.requestFullscreen().catch(function () {}); });
+        box.querySelector('.md-show-diagram').after(full);
+      }
     }
     let note = box.querySelector('.md-diagram-error');
     if (!note) {
@@ -146,6 +153,7 @@
   function render(box, source, button) {
     const p = parts(box);
     return draw(source).then(function (svg) {
+      svg.setAttribute('part', 'drawing');
       p.fig.shadowRoot.replaceChildren(svg);
       p.note.textContent = '';
       box.classList.remove('md-diagram-failed');
@@ -174,6 +182,13 @@
     button.textContent = 'Drawing…';
     return render(box, source, button).finally(function () { button.disabled = false; });
   }
+
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape' && document.fullscreenElement &&
+        document.fullscreenElement.classList.contains('md-diagram')) {
+      document.exitFullscreen();
+    }
+  });
 
   // a diagram on show follows the system's light or dark scheme, as the page does
   try {

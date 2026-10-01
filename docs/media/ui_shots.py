@@ -21,9 +21,11 @@ What it does:
   second sign-in would post a live "new web login" notice into the open page's log); the
   Welcome view and the sign-in page use contexts of their own.
 
-The 21 outputs: desktop-{light,dark}, markdown-{light,dark}, palette-light, mention-light,
+The outputs: desktop-{light,dark}, markdown-{light,dark}, palette-light, mention-light,
 closed-light, remotes-light, inspector-light, inspector-remote-light, inspector-dark-parked,
-phone-light, phone-dark-sheet, welcome-light and login-light, plus, from a hosted broker
+phone-light, phone-dark-sheet, welcome-light and login-light; diagram-{message-light,
+drawn-light,fullscreen-light,drawn-dark,fullscreen-dark,phone-light,phone-dark} for #86;
+and, from a hosted broker
 (``tests/ui_world.py``'s ``HostedWorld``, with Chromium's virtual authenticators as the
 passkeys; issues #41 and #61): signin-setup-light, setup-light, people-light, people-dark,
 passkeys-light, passkeys-dark, confirm-light, signin-light, setup-person-light and
@@ -275,6 +277,64 @@ def shoot(browser: Any, out: Path, world: Any) -> None:
         shot(p, out, "login-light.png")
     finally:
         anon.close()
+
+
+def shoot_diagram(browser: Any, out: Path, world: Any) -> None:
+    """A long diagram in its message and full screen, plus its phone layout (#86)."""
+    from playwright.sync_api import expect
+
+    world.create_room("#diagram-preview")
+    steps = "\n".join(f"  alice->>broker: step {n}" if n % 2 else
+                      f"  broker-->>alice: result {n}" for n in range(1, 16))
+    world.say("diagram-preview", f"```mermaid\nsequenceDiagram\n{steps}\n```")
+    base = {"timezone_id": "UTC", "color_scheme": "light", "locale": "en-US"}
+    desk = browser.new_context(**base, **DESKTOP)
+    desk.set_default_timeout(WAIT_MS)
+    try:
+        page = desk.new_page()
+        sign_in(page, world.broker)
+        page.locator('#tabs .room[data-room="#diagram-preview"]').click()
+        expect(page.locator("#room-title")).to_have_text("diagram-preview")
+        block = page.locator("#log .md-pre")
+        expect(block).to_have_count(1)
+        shot(page, out, "diagram-message-light.png")
+        block.locator("button.md-show-diagram").click()
+        expect(block.locator("button.md-show-diagram")).to_have_text("Show code")
+        expect(block.locator("button.md-fullscreen")).to_be_visible()
+        shot(page, out, "diagram-drawn-light.png")
+        block.locator("button.md-fullscreen").click()
+        page.wait_for_function("() => !!document.fullscreenElement?.classList.contains('md-diagram')")
+        shot(page, out, "diagram-fullscreen-light.png")
+        page.keyboard.press("Escape")
+        page.wait_for_function("() => document.fullscreenElement === null")
+        page.emulate_media(color_scheme="dark")
+        expect(block.locator(".md-diagram")).to_be_visible()
+        shot(page, out, "diagram-drawn-dark.png")
+        block.locator("button.md-fullscreen").click()
+        page.wait_for_function("() => !!document.fullscreenElement?.classList.contains('md-diagram')")
+        shot(page, out, "diagram-fullscreen-dark.png")
+        page.keyboard.press("Escape")
+        page.wait_for_function("() => document.fullscreenElement === null")
+
+        phone_ctx = browser.new_context(**base, **PHONE, storage_state=desk.storage_state())
+        phone_ctx.set_default_timeout(WAIT_MS)
+        try:
+            ph = phone_ctx.new_page()
+            ph.goto(world.broker.base + "/")
+            connected(ph)
+            ph.click("#rooms-toggle")
+            ph.locator('#tabs .room[data-room="#diagram-preview"]').click()
+            phone_block = ph.locator("#log .md-pre")
+            expect(phone_block).to_have_count(1)
+            phone_block.locator("button.md-show-diagram").click()
+            expect(phone_block.locator("button.md-show-diagram")).to_have_text("Show code")
+            shot(ph, out, "diagram-phone-light.png")
+            ph.emulate_media(color_scheme="dark")
+            shot(ph, out, "diagram-phone-dark.png")
+        finally:
+            phone_ctx.close()
+    finally:
+        desk.close()
 
 
 # ---------------------------------------------------------- the hosted shots
@@ -529,6 +589,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
         browser = pw.chromium.launch(executable_path=args.chrome or None, env=env)
         try:
             shoot(browser, out, world)
+            shoot_diagram(browser, out, world)
             shoot_hosted(browser, out, hosted)
             shoot_machines(browser, out, fleet)
         finally:
