@@ -44,6 +44,9 @@ def pi() -> Iterator[Path]:
 
 
 def me() -> tuple[int, float]:
+    # from /proc/stat's btime now, as the satellite just read it: the one this process cached
+    # at its first look has moved if the wall clock was stepped since (WSL2 does in a long run)
+    proc._linux_btime.cache_clear()
     info = proc.info(os.getpid())
     assert info is not None
     return os.getpid(), info.start
