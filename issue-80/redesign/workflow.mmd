@@ -1,0 +1,37 @@
+sequenceDiagram
+    actor H as Person
+    participant S as Switchboard
+    participant A as Author agent
+    participant R as Independent reviewer
+    participant G as GitHub
+
+    H->>S: Open a review
+    S->>A: Request explanation and claims
+    A->>S: Diagram, claims, evidence, revision
+    S->>R: Request independent checks
+    R->>S: Verdicts, findings, evidence
+    S-->>A: Findings needing a response
+    A->>S: Fix or concede, with evidence
+    S->>R: Recheck affected claims
+    R->>S: Results and remaining disagreement
+    S-->>H: Decision with both arguments
+    H->>S: Choose an outcome
+
+    alt More work or evidence required
+        S-->>A: Record the required work and owner
+        S-->>R: Request the next check
+        Note over H,S: Review stays open
+    else Record ready to post
+        S-->>H: Show exact drafts and owners
+        H->>S: Authorize these drafts
+        S-->>A: Post your description update
+        S-->>R: Post your batched review
+        A->>G: Update using own account
+        R->>G: Review using own account
+        G-->>A: Posting receipt
+        G-->>R: Posting receipt
+        A->>S: Record receipt
+        R->>S: Record receipt
+    end
+
+    Note over H,G: Merging remains the person's action
