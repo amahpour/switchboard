@@ -851,32 +851,67 @@ async def test_a_proof_clears_a_session_end_and_resyncs_the_status(
     assert ev.data == {"what": "running_again", "why": "thread proof"}
 
 
-async def test_a_proof_before_the_first_tui_check_is_announced_after_it(
-        w: World, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A proof that passes while the look after the join is still running would announce
-    "codex:daemon (detached?)" for a TUI nobody had looked for: the notice waits for the look."""
+async def held_proof(w: World, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, Callable[[], list[str]]]:
+    """A "verifying..." join whose thread proof passes before the first look for a TUI."""
     p, m = codex(w, proof=False, bind_nonce="n1")
     a = wire(w)
     attach(w)
     a.clients = None
     w.store.add_event("join", room_id=m.room_id, participant_id=p.id, membership_id=m.id,
                       data={"verifying": True})
-    join_result = {"type": "mcpToolCall", "server": "switchboard", "tool": "join", "status": "completed",
-                   "result": {"content": [{"type": "text", "text": "joined #build yk:jn1"}]}}
+    joins = [{"type": "mcpToolCall", "server": "switchboard", "tool": "join", "status": "completed",
+              "result": {"content": [{"type": "text", "text": f"joined #build yk:j{n}"}]}} for n in ("n1", "n2")]
 
     async def read(tid: str, include_turns: bool = False) -> dict[str, Any]:
-        return {"turns": [{"id": "t", "status": "completed", "items": [join_result]}]}
+        return {"turns": [{"id": "t", "status": "completed", "items": joins}]}
 
     def notices() -> list[str]:
         return [x.text for x in w.actions if isinstance(x, Notice)]
 
-    monkeypatch.setattr(a, "_read", read)
+    monkeypatch.setattr(CodexAdapter, "_read", lambda self, tid, include_turns=False: read(tid, include_turns))
     await a._prove(p.id, TID, "n1", (0.0,))
     assert w.p(p).thread_proof and notices() == []
+    return p, notices
+
+
+async def test_a_proof_before_the_first_tui_check_is_announced_after_it(
+        w: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A proof that passes while the look after the join is still running would announce
+    "codex:daemon (detached?)" for a TUI nobody had looked for: the notice waits for the look,
+    and goes out once."""
+    _p, notices = await held_proof(w, monkeypatch)
+    a = ad(w)
     a.refresh_tiers()  # not looked yet: still waiting
     assert notices() == []
     a.clients = Clients(True, w.clock.now(), 1, None)
     a.refresh_tiers()
+    a.refresh_tiers()
+    assert notices() == ["codex-1 is verified: codex:daemon"]
+
+
+async def test_a_held_notice_survives_a_broker_restart(w: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The broker restarts between the proof and the first look: the proof is saved and the
+    new adapter never proves it again, so a notice kept only in memory would be lost."""
+    _p, notices = await held_proof(w, monkeypatch)
+    w.engine.adapters["codex"] = CodexAdapter(ad(w).cfg)
+    a = wire(w)
+    attach(w)  # the first look after the restart
+    a.refresh_tiers()
+    a.refresh_tiers()
+    assert notices() == ["codex-1 is verified: codex:daemon"]
+
+
+async def test_a_held_notice_waits_for_the_next_proof_after_a_new_mcp_server(
+        w: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A join from a new MCP server resets the proof before the first look: the held notice
+    would say "verifying..." for a session that isn't proven. It goes out at the next proof."""
+    p, notices = await held_proof(w, monkeypatch)
+    a = ad(w)
+    w.store.update_participant(p.id, thread_proof=0, bind_nonce="n2")
+    a.clients = Clients(True, w.clock.now(), 1, None)
+    a.refresh_tiers()
+    assert notices() == []
+    await a._prove(p.id, TID, "n2", (0.0,))
     a.refresh_tiers()
     assert notices() == ["codex-1 is verified: codex:daemon"]
 

@@ -570,9 +570,9 @@ class CodexAdapter(Adapter):
         self._proofs: dict[int, asyncio.Task[Any]] = {}
         # participants whose first proof tries (PROOF_AT_S, after a join) still run: "verifying..."
         self._verifying: set[int] = set()
-        # passed proofs whose "is verified" notice waits for the first look for a TUI: the
-        # memberships to announce in, by participant
-        self._unannounced: dict[int, set[int]] = {}
+        # proofs that passed before the first look for a TUI hold their "is verified" notice
+        # (marked in their bind event, so a broker restart keeps it): posted after that look
+        self._held_notices = True
         self._proof_tries: dict[tuple[int, str], int] = {}
         self._main: list[asyncio.Task[Any]] = []
 
@@ -1490,9 +1490,11 @@ class CodexAdapter(Adapter):
                     continue
                 if join_proven(th, needle):
                     joined = self.st.store.joins_since_thread_proof(participant_id)
+                    held = bool(joined) and self.clients is None
                     self.st.store.update_participant(participant_id, thread_proof=1)
                     self.st.store.add_event("bind", participant_id=participant_id,
-                                            data={"what": "thread_proof", "ok": True, "attempt": n})
+                                            data={"what": "thread_proof", "ok": True, "attempt": n,
+                                                  **({"notice": "held"} if held else {})})
                     log.info("codex participant %d: thread proof ok (attempt %d)", participant_id, n)
                     o = self._rejoins.pop(participant_id, None)
                     if o is not None:  # a re-join after a daemon restart, now proven: the notice
@@ -1501,7 +1503,8 @@ class CodexAdapter(Adapter):
                         self._sync_status(tid)
                     self._verifying.discard(participant_id)
                     self.refresh_tiers()
-                    self._announce_verified(participant_id, joined)
+                    if not held:
+                        self._announce_verified(participant_id, joined)
                     return
             if report:
                 self.st.store.add_event("bind", participant_id=participant_id,
@@ -1519,12 +1522,7 @@ class CodexAdapter(Adapter):
         """A passed thread proof: one info notice with the tier it has now in each room whose
         join line said "verifying..." since the session's last passed proof (``joined``: nothing
         else says it moved on). None for a membership kept across an MCP or daemon restart:
-        its join was announced before. Before the first look for a TUI (the lsof after the
-        join, which a fast proof can beat) the tier would say "detached?" on no evidence, so
-        the notice waits for that look (``refresh_tiers``)."""
-        if joined and self.clients is None:
-            self._unannounced.setdefault(participant_id, set()).update(joined)
-            return
+        its join was announced before."""
         p = self.st.store.get_participant(participant_id)
         label = tier_label(p.tier, p.tier_note) if p is not None else "-"  # rows are never deleted
         self._run([Notice(m.room_id, "info", f"{m.screen_name} is verified: {label}")
@@ -1757,10 +1755,25 @@ class CodexAdapter(Adapter):
                 acts += engine.evaluate_participant(p.id)
                 acts += [Snapshot(m.room_id) for m in store.participant_memberships(p.id)]
         self._run(acts)
-        if self.clients is not None:
-            while self._unannounced:
-                self._announce_verified(*self._unannounced.popitem())
+        if self._held_notices and self.clients is not None:
+            self._post_held_notices(joined)
         self.st.info.codex_link = self.status_summary()
+
+    def _post_held_notices(self, joined: list[Participant]) -> None:
+        """After the first look for a TUI: the "is verified" notices of proofs that passed
+        before it (the lsof after the join, which a fast proof can beat), held so the tier
+        comes from a look rather than "detached?" on no evidence. Read from the events, so a
+        held notice survives a broker restart. A session whose proof was reset since (a join
+        from a new MCP server) waits for its next proof, which still finds those joins."""
+        self._held_notices = False
+        store = self.st.store
+        for p in joined:
+            if not p.thread_proof:
+                continue
+            ms = store.joins_since_thread_proof(p.id)
+            if ms:
+                store.add_event("bind", participant_id=p.id, data={"what": "verified_notice"})
+                self._announce_verified(p.id, ms)
 
     # ------------------------------------------------------------ start/stop
     async def start(self, runner: Any) -> None:
