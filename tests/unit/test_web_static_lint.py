@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -37,8 +38,8 @@ def files(ext: str) -> list[Path]:
 
 def test_static_files_exist() -> None:
     names = {p.name for p in STATIC.iterdir()}
-    assert {"index.html", "login.html", "setup.html", "app.js", "md.js", "webauthn.js", "login.js", "setup.js",
-            "style.css", "favicon.svg", "favicon-32.png", "apple-touch-icon.png"} <= names
+    assert {"index.html", "login.html", "setup.html", "app.js", "md.js", "diagram.js", "webauthn.js", "login.js",
+            "setup.js", "style.css", "favicon.svg", "favicon-32.png", "apple-touch-icon.png"} <= names
 
 
 ICON_LINKS = ('<link rel="icon" href="/static/favicon-32.png" sizes="32x32">',
@@ -125,8 +126,8 @@ def test_closed_rooms_ui() -> None:
 
 # Markdown (issue #19): message text is untrusted, so there is exactly one place in all static JS
 # that sets a link target, md.js's mdLink(), and it only runs after safeUrl() accepted an absolute
-# http(s) URL. No script may create an element that fetches or runs something, or reach for
-# another HTML/URL sink.
+# http(s) URL. No script may create an element that fetches or runs something (but the one script
+# below that loads Mermaid), or reach for another HTML/URL sink.
 def test_one_vetted_link_path() -> None:
     js = {p.name: p.read_text() for p in files("js")}
     sets = [(n, m.start()) for n, t in js.items() for m in re.finditer(r"\.href\s*=(?!=)", t)]
@@ -138,17 +139,54 @@ def test_one_vetted_link_path() -> None:
     assert "u.protocol === 'http:' || u.protocol === 'https:'" in md
     assert "new URL(" in md
     for n, t in js.items():
-        assert not re.search(r"createElement\(\s*['\"](img|iframe|script|object|embed|link|style|base|form|meta|svg)['\"]", t, re.I), n
-        assert not re.search(r"\.(src|srcdoc|srcset|action|formAction|innerText)\s*=(?!=)", t), n
+        assert not re.search(r"createElement\(\s*['\"](img|iframe|object|embed|link|style|base|form|meta|svg)['\"]", t, re.I), n
+        assert not re.search(r"\.(srcdoc|srcset|action|formAction|innerText)\s*=(?!=)", t), n
         assert "setAttributeNS" not in t and "DOMParser" not in t and "createContextualFragment" not in t, n
         for ns in re.findall(r"createElementNS\(\s*['\"]([^'\"]+)", t):
             assert ns == "http://www.w3.org/2000/svg", n
 
 
+# Mermaid diagrams (issue #57, DESIGN.md §33): the one script any static JS loads is the vendored
+# Mermaid, from diagram.js, when someone first asks for a diagram. Exactly one script element and
+# one src in all static JS, both in diagram.js, for one constant same-origin path. The file there
+# is the release that was vetted, unmodified, and nothing else under static/ escapes this lint.
+MERMAID = "vendor/mermaid/mermaid.min.js"
+MERMAID_SHA256 = "581ed7d74bd9048d0e3a91363927d72ef22942d7722546b27f7cc29e35390eb8"  # 11.17.2's dist file
+MERMAID_LICENSE_SHA256 = "ec9fb67dcb25eccc416ed56e1aab819222c805a2a4bfe4cb19e7556bf2ffde80"
+
+
+def test_the_one_script_load_is_the_vendored_mermaid() -> None:
+    js = {p.name: p.read_text() for p in files("js")}
+    made = [n for n, t in js.items() for _ in re.finditer(r"createElement\(\s*['\"]script['\"]", t, re.I)]
+    assert made == ["diagram.js"], made
+    srcs = [(n, m.group(0)) for n, t in js.items() for m in re.finditer(r"\w*\.src\s*=(?!=)[^;\n]*", t)]
+    assert srcs == [("diagram.js", "s.src = SRC")], srcs
+    d = js["diagram.js"]
+    assert d.count("const SRC = ") == 1 and f"const SRC = '/static/{MERMAID}';" in d
+    # strict, no HTML labels, and a diagram can't loosen either (or restyle itself) from its own config
+    assert "securityLevel: 'strict'" in d and "htmlLabels: false" in d and "secure: SECURE" in d
+    secure = d[d.index("const SECURE = ["):]
+    secure = secure[: secure.index("];")]
+    for key in ("securityLevel", "htmlLabels", "flowchart", "journey", "theme", "themeVariables", "themeCSS",
+                "fontFamily", "dompurifyConfig"):
+        assert f"'{key}'" in secure, key
+
+
+def test_the_vendored_mermaid_is_the_vetted_release() -> None:
+    nested = sorted(p.relative_to(STATIC).as_posix() for p in STATIC.rglob("*") if p.is_file() and p.parent != STATIC)
+    assert nested == ["vendor/mermaid/LICENSE", MERMAID], nested
+    assert hashlib.sha256((STATIC / MERMAID).read_bytes()).hexdigest() == MERMAID_SHA256
+    lic = STATIC / "vendor" / "mermaid" / "LICENSE"
+    assert hashlib.sha256(lic.read_bytes()).hexdigest() == MERMAID_LICENSE_SHA256
+
+
 def test_markdown_loads_before_the_app() -> None:
     html = (STATIC / "index.html").read_text()
     assert html.index("/static/md.js") < html.index("/static/app.js")
+    assert html.index("/static/diagram.js") < html.index("/static/app.js")
     assert "/static/md.js" not in (STATIC / "login.html").read_text()
+    for page in ("login.html", "setup.html"):
+        assert "diagram.js" not in (STATIC / page).read_text() and "mermaid" not in (STATIC / page).read_text()
 
 
 # Passkeys (issue #41, DESIGN.md §31): the sign-in and claim pages load exactly two same-origin

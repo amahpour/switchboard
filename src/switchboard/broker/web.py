@@ -60,7 +60,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from switchboard import __version__, db
-from switchboard.broker.auth import COOKIE_NAME, SESSION_TTL_S, sha256_hex
+from switchboard.broker.auth import COOKIE_NAME, SESSION_TTL_S, app_csp, sha256_hex
 from switchboard.broker import people
 from switchboard.broker.commands import Actor
 from switchboard.broker.passkeys import CEREMONY_TTL_S, CLAIM_GRACE_S, clean_name, sign_count_ok
@@ -179,7 +179,11 @@ def install(app: FastAPI, state: "BrokerState") -> None:
     async def index(request: Request) -> Response:
         w = who(request)
         page = "login.html" if w is None else ("setup.html" if w.must_reset else "index.html")
-        return FileResponse(STATIC_DIR / page, media_type="text/html", headers=NO_STORE)
+        # the app page alone allows inline styles, for Mermaid's drawings (§33); SecurityHeaders
+        # adds the strict CSP to everything else, this page's sign-in forms included
+        headers = NO_STORE if page != "index.html" else {**NO_STORE, "content-security-policy":
+                                                          app_csp(state.web_origin)}
+        return FileResponse(STATIC_DIR / page, media_type="text/html", headers=headers)
 
     app.mount("/static", _StaticFiles(directory=STATIC_DIR, html=False), name="static")
 

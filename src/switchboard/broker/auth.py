@@ -192,12 +192,20 @@ def _local_test_host(name: str) -> bool:
     return name in ("localhost", "127.0.0.1") or name.endswith((".localhost", ".test"))
 
 
-def csp(origin: WebOrigin) -> str:
+def csp(origin: WebOrigin, *, inline_styles: bool = False) -> str:
+    style = "style-src 'self' 'unsafe-inline'" if inline_styles else "style-src 'self'"
     return (
-        "default-src 'self'; script-src 'self'; style-src 'self'; "
+        f"default-src 'self'; script-src 'self'; {style}; "
         f"connect-src 'self' {origin.ws}; img-src 'self'; object-src 'none'; "
         "base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
     )
+
+
+def app_csp(origin: WebOrigin) -> str:
+    """The signed-in app page's CSP (DESIGN.md §33): the one page that draws ```mermaid
+    diagrams, whose styles are inline (diagram.js keeps each drawing's styles in a shadow root
+    of its own). Scripts stay 'self' only; every other response keeps ``csp``."""
+    return csp(origin, inline_styles=True)
 
 
 class SecurityHeaders:

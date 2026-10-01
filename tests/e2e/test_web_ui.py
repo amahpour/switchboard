@@ -786,3 +786,120 @@ def test_empty_room_copy_keeps_its_icon(ui: UI) -> None:
     assert page.evaluate("navigator.clipboard.readText()") == page.locator("#join-line").inner_text()
     expect(copy.locator("span")).to_have_text("Copy")  # after COPIED_MS
     expect(copy.locator("svg")).to_have_count(1)
+
+
+# ------------------------------------------------------------------ Mermaid diagrams (issue #57)
+FENCE = "```"
+FLOW = "flowchart LR\n  H[alice posts] --> B(broker)\n  B -->|idle| W[wake the agent]\n  B -->|busy| Q[queue]"
+SEQ = "sequenceDiagram\n  alice->>claude-1: review the parser\n  claude-1-->>alice: two nits"
+SHADOW_SVG = "(b) => { const f = b.querySelector('.md-diagram'); return !!(f && f.shadowRoot && f.shadowRoot.querySelector('svg')); }"
+MERMAID_SCRIPTS = "document.querySelectorAll('script[src=\"/static/vendor/mermaid/mermaid.min.js\"]').length"
+
+
+def diagram_room(ui: UI, name: str, *texts: str, **ctx: Any) -> Page:
+    """A room of its own with ``texts`` posted by the human, open in a fresh page."""
+    ui.world.create_room(f"#{name}")
+    for t in texts:
+        ui.world.say(name, t)
+    page = ui.open(room=name, **ctx)
+    expect(page.locator("#log .line.k-chat .md-pre")).to_have_count(len(texts))
+    return page
+
+
+def show(page: Page, n: int = 0) -> Any:
+    """Click the n-th "Show diagram" and wait until it has drawn (or failed); the block's box."""
+    box = page.locator("#log .md-pre").nth(n)
+    button = box.locator("button.md-show-diagram")
+    expect(button).to_have_text("Show diagram")
+    button.click()
+    expect(button).not_to_have_text(re.compile("Drawing"))
+    expect(button).to_be_enabled()
+    return box
+
+
+def test_a_mermaid_block_shows_its_diagram_on_click_and_its_code_again(ui: UI) -> None:
+    """A ```mermaid block shows as code with "Show diagram". Mermaid loads only then, once; the
+    drawing lands in the block's shadow root (no style of it reaches the page) and "Show code"
+    brings the code back. Copy copies the source either way (DESIGN.md §33)."""
+    page = diagram_room(ui, "e2e-diagram", f"{FENCE}mermaid\n{FLOW}\n{FENCE}", f"{FENCE}mermaid\n{SEQ}\n{FENCE}",
+                        permissions=["clipboard-read", "clipboard-write"])
+    assert page.evaluate(MERMAID_SCRIPTS) == 0 and page.evaluate("typeof window.mermaid") == "undefined"
+    styles_before = page.evaluate("document.querySelectorAll('style').length")
+    box = show(page)
+    expect(box.locator("button.md-show-diagram")).to_have_text("Show code")
+    expect(box).to_have_class(cls("md-showing-diagram"))
+    expect(box.locator(".md-diagram")).to_be_visible()
+    expect(box.locator(".md-pre-body")).to_be_hidden()
+    assert box.evaluate(SHADOW_SVG)
+    assert box.evaluate("(b) => b.querySelector('.md-diagram').shadowRoot.querySelector('svg style') !== null")
+    assert page.evaluate("document.querySelectorAll('style').length") == styles_before  # none in the page
+    assert page.evaluate("document.querySelectorAll('.md-diagram-stage').length") == 0
+    box.locator("button.md-copy", has_text="Copy").click()
+    assert page.evaluate("navigator.clipboard.readText()") == FLOW
+    box.locator("button.md-show-diagram").click()  # back to the code
+    expect(box.locator("button.md-show-diagram")).to_have_text("Show diagram")
+    expect(box.locator(".md-pre-body")).to_be_visible()
+    expect(box.locator(".md-diagram")).to_be_hidden()
+    second = show(page, 1)
+    assert second.evaluate(SHADOW_SVG)
+    assert page.evaluate(MERMAID_SCRIPTS) == 1  # loaded once, for both
+
+
+def test_a_diagram_follows_the_light_or_dark_scheme(ui: UI) -> None:
+    """A drawing uses the page's scheme, and one on show is redrawn when the scheme changes."""
+    page = diagram_room(ui, "e2e-diagram-dark", f"{FENCE}mermaid\n{FLOW}\n{FENCE}", color_scheme="dark")
+    box = show(page)
+    fill = "(b) => getComputedStyle(b.querySelector('.md-diagram').shadowRoot.querySelector('.node rect')).fill"
+    dark = box.evaluate(fill)
+    page.emulate_media(color_scheme="light")
+    page.wait_for_function(f"(prev) => ({fill})(document.querySelector('#log .md-pre')) !== prev", arg=dark)
+    light = box.evaluate(fill)
+    assert dark != light, (dark, light)
+    expect(box).to_have_class(cls("md-showing-diagram"))
+
+
+def test_a_hostile_diagram_cannot_reach_the_page(ui: UI) -> None:
+    """Diagram source is message text: it can't loosen Mermaid's settings from its own config,
+    run script, load anything, link anywhere or restyle the page. The fixture's watch fails the
+    test on any console error or CSP violation."""
+    hostile = (
+        '%%{init: {"securityLevel": "loose", "htmlLabels": true, "flowchart": {"htmlLabels": true},'
+        ' "theme": "forest", "themeCSS": "body { display: none }", "dompurifyConfig": {"ADD_TAGS": ["iframe"]}}}%%\n'
+        "flowchart TD\n"
+        '  A["<img src=x onerror=window.__pwned=1> <b>bold</b>"] --> B[next]\n'
+        '  click A "/logout" _self\n'
+        '  click B call alert(1)\n'
+        "  style A fill:#f00,stroke:#333")
+    page = diagram_room(ui, "e2e-diagram-hostile", f"{FENCE}mermaid\n{hostile}\n{FENCE}")
+    dialogs: list[str] = []
+    page.on("dialog", lambda d: (dialogs.append(d.message), d.dismiss()))
+    box = show(page)
+    assert box.evaluate(SHADOW_SVG)
+    root = "(b) => b.querySelector('.md-diagram').shadowRoot"
+    found = box.evaluate(f"(b) => {{ const r = ({root})(b); return {{"
+                         " unsafe: r.querySelectorAll('img, image, foreignObject, iframe, script, object, embed').length,"
+                         " links: r.querySelectorAll('[href], [*|href]').length,"
+                         " text: [...r.querySelectorAll('text')].map(t => t.textContent).join(' '),"
+                         " css: [...r.querySelectorAll('style')].map(s => s.textContent).join('') }; }")
+    assert found["unsafe"] == 0 and found["links"] == 0, found
+    assert '<img src="x"' in found["text"] and "onerror" not in found["text"]  # a label is text
+    assert "display: none" not in found["css"] and "#cde498" not in found["css"]  # no themeCSS, not forest
+    # clicking either node does nothing: no callback was bound (an alert() would have opened, and
+    # been recorded, before the click returned) and there is no href to follow (above)
+    for node in ("A", "B"):
+        clicked = box.evaluate(f"(b) => {{ const n = ({root})(b).querySelector('g.node[id*=\"-{node}-\"]');"
+                               " return !!n && n.dispatchEvent(new MouseEvent('click', {bubbles: true})); }")
+        assert clicked, node
+    assert dialogs == [] and page.evaluate("window.__pwned") is None
+    assert page.evaluate("fetch('/api/me').then(r => r.status)") == 200
+    expect(page.locator("#log")).to_be_visible()
+
+
+def test_a_broken_diagram_says_why_and_keeps_its_code(ui: UI) -> None:
+    page = diagram_room(ui, "e2e-diagram-broken", f"{FENCE}mermaid\nflowchart LR\n  A -->\n{FENCE}")
+    box = show(page)
+    expect(box.locator("button.md-show-diagram")).to_have_text("Show diagram")
+    expect(box.locator(".md-diagram-error")).to_contain_text("Can't draw this diagram: Parse error on line 3")
+    expect(box.locator(".md-pre-body")).to_be_visible()
+    expect(box.locator(".md-diagram")).to_be_hidden()
+    assert not box.evaluate(SHADOW_SVG)  # no "syntax error" drawing either

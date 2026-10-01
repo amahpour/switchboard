@@ -12,7 +12,7 @@ import pytest
 
 from switchboard import cli
 from switchboard.broker import daemon
-from switchboard.broker.auth import WebOrigin, csp
+from switchboard.broker.auth import WebOrigin, app_csp, csp
 from switchboard.config import ConfigError, from_dict
 from switchboard.paths import Paths
 
@@ -24,6 +24,16 @@ def test_the_default_is_switchboard_localhost_on_the_port() -> None:
         "http", "switchboard.localhost:7419", "http://switchboard.localhost:7419", "ws://switchboard.localhost:7419",
         False)
     assert "connect-src 'self' ws://switchboard.localhost:7419;" in csp(o)
+
+
+def test_only_the_app_csp_allows_inline_styles() -> None:
+    """Mermaid's drawings carry inline styles (DESIGN.md §33): the app page's CSP allows them, for
+    styles only. Scripts stay 'self', and the CSP every other response gets is unchanged."""
+    o = WebOrigin.local(7419)
+    assert "style-src 'self';" in csp(o) and "unsafe-inline" not in csp(o)
+    app = app_csp(o)
+    assert "script-src 'self'; style-src 'self' 'unsafe-inline';" in app
+    assert app.replace(" 'unsafe-inline'", "") == csp(o)  # nothing else differs
 
 
 @pytest.mark.parametrize("url,host", [

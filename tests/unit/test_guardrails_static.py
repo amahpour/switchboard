@@ -28,6 +28,11 @@ REQUIRED = [
     "updated_mcp_tool_output",
 ]
 PATTERNS = [re.compile(re.escape(s)) for s in REQUIRED] + [re.compile(r'"trust"\s*:\s*true', re.I)]
+# The vendored Mermaid (DESIGN.md §33) bundles KaTeX, whose option table documents KaTeX's own
+# command line, "-T, --trust": browser code, never part of anything switchboard sends a harness.
+# That one occurrence is allowed (the maintainer's yes, #57's pull request); any other hit in the
+# file, or a second one, still fails, and so does a Mermaid update that changes it.
+KNOWN_HITS = {"web/static/vendor/mermaid/mermaid.min.js": {'cli:"-T, --trust"': 1}}
 
 
 def source_files() -> list[Path]:
@@ -48,6 +53,9 @@ def test_no_forbidden_strings_outside_guardrails() -> None:
         if p.name == "guardrails.py":
             continue
         text = p.read_text(errors="replace")
+        for known, n in KNOWN_HITS.get(p.relative_to(SRC).as_posix(), {}).items():
+            assert text.count(known) == n, (p.name, known)
+            text = text.replace(known, "")
         for pat in PATTERNS:
             if pat.search(text):
                 hits.append(f"{p.relative_to(SRC)}: {pat.pattern}")

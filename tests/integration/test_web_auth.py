@@ -203,7 +203,8 @@ def test_docs_are_off_and_headers_present(broker: InProcBroker, web: httpx.Clien
 
 def test_markdown_script_is_served_under_the_csp(broker: InProcBroker, web: httpx.Client) -> None:
     """The native UI (DESIGN.md §29): md.js is a same-origin static script under the same CSP,
-    loaded by the signed-in page only; styles come from style.css alone (no inline style)."""
+    loaded by the signed-in page only. Only that page allows inline styles, for Mermaid's
+    drawings (§33); its scripts stay 'self' only, and every other response keeps the strict CSP."""
     r = web.get("/static/md.js")
     assert r.status_code == 200 and "SBMarkdown" in r.text
     csp = r.headers["content-security-policy"]
@@ -213,8 +214,20 @@ def test_markdown_script_is_served_under_the_csp(broker: InProcBroker, web: http
     assert "/static/md.js" in page and page.index("/static/md.js") < page.index("/static/app.js")
     login = httpx.get(broker.base + "/").text
     assert "md.js" not in login and "app.js" not in login
-    for r in (web.get("/"), httpx.get(broker.base + "/")):
-        assert "unsafe-inline" not in r.headers["content-security-policy"]
+    app = web.get("/").headers["content-security-policy"]
+    assert "script-src 'self'; style-src 'self' 'unsafe-inline';" in app and "unsafe-eval" not in app
+    assert app.count("unsafe-inline") == 1 and "frame-ancestors 'none'" in app
+    assert "unsafe-inline" not in httpx.get(broker.base + "/").headers["content-security-policy"]
+
+
+def test_the_diagram_scripts_are_static_files_under_the_strict_csp(broker: InProcBroker, web: httpx.Client) -> None:
+    """diagram.js and the vendored Mermaid it loads on a first "Show diagram" (§33) are plain
+    same-origin scripts; neither is served with the app page's inline-style allowance."""
+    for path, marker in (("/static/diagram.js", "SBDiagram"), ("/static/vendor/mermaid/mermaid.min.js", "mermaid")):
+        r = web.get(path)
+        assert r.status_code == 200 and marker in r.text[:200_000], path
+        assert r.headers["content-type"].startswith("text/javascript"), path
+        assert "unsafe-inline" not in r.headers["content-security-policy"], path
 
 
 def test_member_detail_needs_a_session(broker: InProcBroker) -> None:
