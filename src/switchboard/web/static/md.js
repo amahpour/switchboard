@@ -24,7 +24,9 @@
  *   - refuses URLs with a user name or password (https://github.com@evil.example/): the part
  *     before '@' can make the shown URL read as a trusted host while the browser goes to the
  *     host after it;
- *   - opens links in a new tab with rel="noopener noreferrer nofollow" and no referrer.
+ *   - opens links in a new tab with rel="noopener noreferrer nofollow" and no referrer;
+ *   - gives a ```mermaid code block a "Show diagram" button, when diagram.js (window.SBDiagram)
+ *     is loaded, which hands that file the block's raw text. md.js itself never draws a diagram.
  *   The static lint (tests/unit/test_web_static_lint.py) pins the single link path and bans the
  *   HTML sinks, so a later edit cannot quietly add another way in.
  *
@@ -981,7 +983,17 @@
         setTimeout(function () { btn.textContent = 'Copy'; }, 1600);
       }, function () {});
     });
-    head.append(lang, btn);
+    head.append(lang);
+    // a ```mermaid block can also be shown as its diagram, on request (diagram.js, issue #57)
+    const sb = window.SBDiagram;
+    if (b.lang.toLowerCase() === 'mermaid' && sb && typeof sb.toggle === 'function') {
+      const show = el('button', 'md-copy md-show-diagram');
+      show.type = 'button';
+      show.textContent = 'Show diagram';  // "Show code" while the diagram is on show
+      show.addEventListener('click', function () { sb.toggle(wrap, b.text, show); });
+      head.append(show);
+    }
+    head.append(btn);
     const pre = el('pre', 'md-pre-body');
     pre.tabIndex = 0;
     const code = el('code');

@@ -168,6 +168,39 @@ def test_fenced_code_with_language_label_and_copy_button() -> None:
     assert p["text"] == "after"
 
 
+def diagram_case(text: str, **extra: Any) -> dict[str, Any]:
+    [tree] = harness([{"text": text, "mentions": [], "localHost": "", "diagrams": True, **extra}])
+    assert_safe(tree)
+    return tree
+
+
+def test_a_mermaid_block_offers_its_diagram() -> None:
+    """A ```mermaid block keeps its code, label and Copy, and gains a "Show diagram" button that
+    hands the block, its raw source and the button to diagram.js (issue #57). md.js never draws."""
+    src = "flowchart LR\n  A[<b>raw</b>] --> B"
+    tree = diagram_case(f"```mermaid\n{src}\n```", click=True)
+    [pre] = top(tree)
+    [head, body] = pre["children"]
+    [lang, show, copy] = head["children"]
+    assert lang["text"] == "mermaid" and copy["text"] == "Copy" and classes(copy) == ["md-copy"]
+    assert show["tag"] == "button" and classes(show) == ["md-copy", "md-show-diagram"]
+    assert show["text"] == "Show diagram" and show["props"]["type"] == "button"
+    assert show["attrs"] == {}
+    assert body["children"][0]["text"] == src  # the code is still there, as text
+    assert tree["toggled"] == [{"box": "md-pre", "source": src, "button": "Show diagram"}]
+
+
+def test_only_mermaid_blocks_get_the_button_and_only_with_diagram_js() -> None:
+    def buttons(tree: dict[str, Any]) -> list[str]:
+        return [b["text"] for b in by_tag(tree, "button")]
+
+    assert buttons(diagram_case("```MerMaid\ngraph TD\n```")) == ["Show diagram", "Copy"]  # any case
+    assert buttons(diagram_case("```python\nprint(1)\n```")) == ["Copy"]
+    assert buttons(diagram_case("```\ngraph TD\n```")) == ["Copy"]  # no info word: "code"
+    assert buttons(diagram_case("`mermaid` and ```mermaid inline```")) == []
+    assert buttons(render("```mermaid\ngraph TD\n```")) == ["Copy"]  # no window.SBDiagram
+
+
 def test_unclosed_fence_runs_to_the_end_and_keeps_markup_raw() -> None:
     [pre] = top(render("~~~\n# not a heading\n\n**raw** <b>\n"))
     assert pre["children"][0]["children"][0]["text"] == "code"  # default label

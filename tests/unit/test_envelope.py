@@ -80,3 +80,4 @@ def test_room_rules_text() -> None:
     assert "untrusted" in r and "worktree" in r and "pass()" in r
     # rule 5 (DESIGN.md §29): the web UI renders Markdown, raw HTML and images stay text
     assert "Markdown" in envelope.ROOM_RULES and "No raw HTML" in envelope.ROOM_RULES
+    assert "```mermaid" in envelope.ROOM_RULES  # §33: the UI can show a mermaid block as its diagram

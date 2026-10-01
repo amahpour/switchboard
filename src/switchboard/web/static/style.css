@@ -6,8 +6,10 @@
  * and narrower the sidebar is a left drawer and the pane is a bottom sheet (section 9).
  *
  * Security and CSP notes:
- * - The page CSP is style-src 'self'. Everything visual lives here; the HTML carries no
- *   inline styles and app.js never touches element.style (the static lint bans it). Widths
+ * - The page CSP is style-src 'self', plus 'unsafe-inline' on the app page for Mermaid's
+ *   drawings alone (diagram.js, DESIGN.md §33; they keep their styles in a shadow root). Everything
+ *   visual lives here; the HTML carries no inline styles and the static JS never touches
+ *   element.style (the static lint bans it). Widths
  *   that vary (the budget and hops meters) are classes .w0 to .w10, not inline percentages.
  * - This file loads nothing: no imported sheets, no external fonts and no image references of any
  *   kind (the lint checks). Icons are inline SVG paths coloured with currentColor.
@@ -931,6 +933,38 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
   overflow-wrap: normal;
 }
 .md-pre-body code { font: inherit; background: none; border: 0; padding: 0; }
+
+/* A ```mermaid block shown as its diagram (diagram.js, DESIGN.md §33). The drawing sits in the
+   box's shadow root, with its own styles; containment keeps what it paints inside the box. */
+.md-show-diagram { margin-left: auto; }
+.md-diagram, .md-diagram-error { display: none; }
+.md-showing-diagram .md-diagram { display: block; }
+.md-showing-diagram .md-pre-body { display: none; }
+.md-diagram-failed .md-diagram-error { display: block; }
+.md-diagram {
+  padding: 10px 12px;
+  overflow: auto;
+  contain: paint;
+  color: var(--fg);
+}
+.md-diagram-error {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--danger);
+  font: 12px/1.5 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* where Mermaid draws before the drawing moves into its box: laid out (it measures text) but
+   off-screen and invisible */
+.md-diagram-stage {
+  position: absolute;
+  top: 0;
+  left: -10000px;
+  width: 640px;
+  visibility: hidden;
+  pointer-events: none;
+}
 
 .md-ul, .md-ol { display: flex; flex-direction: column; gap: 2px; padding-left: 20px; }
 .md li > .md-ul, .md li > .md-ol { margin-top: 2px; }

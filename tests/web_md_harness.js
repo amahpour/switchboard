@@ -3,6 +3,9 @@
 //
 // stdin: a JSON list of cases, each one of
 //   {text, mentions, localHost}          -> SBMarkdown.render(): the fragment as a tree, plus ms
+//   ... plus diagrams: true              -> with a stand-in window.SBDiagram (diagram.js) present;
+//       and click: true                  -> then click the first "Show diagram" button, and report
+//                                           what reached SBDiagram.toggle (`toggled`)
 //   {fn: 'firstLine', text, max}         -> SBMarkdown.firstLine()
 //   {fn: 'safeUrl', raw, localHost}      -> SBMarkdown.safeUrl()
 // stdout: a JSON list of results in the same order. Rendered nodes are
@@ -94,14 +97,32 @@ vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(MD, 'utf8'), ctx, { filename: 'md.js' });
 const MDAPI = ctx.window.SBMarkdown;
 
+function find(node, cls) {
+  if (node instanceof El && node.classList.contains(cls)) return node;
+  for (const c of (node.children || [])) {
+    const hit = c instanceof El ? find(c, cls) : null;
+    if (hit) return hit;
+  }
+  return null;
+}
+
 function run(c) {
   if (c.fn === 'firstLine') return { value: MDAPI.firstLine(c.text, c.max) };
   if (c.fn === 'safeUrl') return JSON.parse(JSON.stringify(MDAPI.safeUrl(c.raw, c.localHost)));
+  const toggled = [];
+  ctx.SBDiagram = c.diagrams ? {
+    toggle: function (box, source, button) { toggled.push({ box: box.className, source: source, button: button.textContent }); },
+  } : undefined;
   const t0 = process.hrtime.bigint();
   const frag = MDAPI.render(c.text, { mentions: c.mentions || [], localHost: c.localHost || '' });
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  if (c.click) {
+    const btn = find(frag, 'md-show-diagram');
+    if (btn) for (const f of (btn.listeners.click || [])) f();
+  }
   const tree = dump(frag);
   tree.ms = ms;
+  if (c.click) tree.toggled = toggled;
   return tree;
 }
 
