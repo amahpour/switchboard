@@ -570,6 +570,9 @@ class CodexAdapter(Adapter):
         self._proofs: dict[int, asyncio.Task[Any]] = {}
         # participants whose first proof tries (PROOF_AT_S, after a join) still run: "verifying..."
         self._verifying: set[int] = set()
+        # passed proofs whose "is verified" notice waits for the first look for a TUI: the
+        # memberships to announce in, by participant
+        self._unannounced: dict[int, set[int]] = {}
         self._proof_tries: dict[tuple[int, str], int] = {}
         self._main: list[asyncio.Task[Any]] = []
 
@@ -1516,7 +1519,12 @@ class CodexAdapter(Adapter):
         """A passed thread proof: one info notice with the tier it has now in each room whose
         join line said "verifying..." since the session's last passed proof (``joined``: nothing
         else says it moved on). None for a membership kept across an MCP or daemon restart:
-        its join was announced before."""
+        its join was announced before. Before the first look for a TUI (the lsof after the
+        join, which a fast proof can beat) the tier would say "detached?" on no evidence, so
+        the notice waits for that look (``refresh_tiers``)."""
+        if joined and self.clients is None:
+            self._unannounced.setdefault(participant_id, set()).update(joined)
+            return
         p = self.st.store.get_participant(participant_id)
         label = tier_label(p.tier, p.tier_note) if p is not None else "-"  # rows are never deleted
         self._run([Notice(m.room_id, "info", f"{m.screen_name} is verified: {label}")
@@ -1749,6 +1757,9 @@ class CodexAdapter(Adapter):
                 acts += engine.evaluate_participant(p.id)
                 acts += [Snapshot(m.room_id) for m in store.participant_memberships(p.id)]
         self._run(acts)
+        if self.clients is not None:
+            while self._unannounced:
+                self._announce_verified(*self._unannounced.popitem())
         self.st.info.codex_link = self.status_summary()
 
     # ------------------------------------------------------------ start/stop

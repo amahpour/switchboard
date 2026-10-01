@@ -851,6 +851,36 @@ async def test_a_proof_clears_a_session_end_and_resyncs_the_status(
     assert ev.data == {"what": "running_again", "why": "thread proof"}
 
 
+async def test_a_proof_before_the_first_tui_check_is_announced_after_it(
+        w: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A proof that passes while the look after the join is still running would announce
+    "codex:daemon (detached?)" for a TUI nobody had looked for: the notice waits for the look."""
+    p, m = codex(w, proof=False, bind_nonce="n1")
+    a = wire(w)
+    attach(w)
+    a.clients = None
+    w.store.add_event("join", room_id=m.room_id, participant_id=p.id, membership_id=m.id,
+                      data={"verifying": True})
+    join_result = {"type": "mcpToolCall", "server": "switchboard", "tool": "join", "status": "completed",
+                   "result": {"content": [{"type": "text", "text": "joined #build yk:jn1"}]}}
+
+    async def read(tid: str, include_turns: bool = False) -> dict[str, Any]:
+        return {"turns": [{"id": "t", "status": "completed", "items": [join_result]}]}
+
+    def notices() -> list[str]:
+        return [x.text for x in w.actions if isinstance(x, Notice)]
+
+    monkeypatch.setattr(a, "_read", read)
+    await a._prove(p.id, TID, "n1", (0.0,))
+    assert w.p(p).thread_proof and notices() == []
+    a.refresh_tiers()  # not looked yet: still waiting
+    assert notices() == []
+    a.clients = Clients(True, w.clock.now(), 1, None)
+    a.refresh_tiers()
+    a.refresh_tiers()
+    assert notices() == ["codex-1 is verified: codex:daemon"]
+
+
 # ------------------------------------------------------- daemon restarts
 def test_defer_end_is_codex_only_and_needs_the_broker_state(w: World) -> None:
     a = ad(w)
