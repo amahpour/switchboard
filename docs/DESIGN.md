@@ -703,7 +703,9 @@ Rules, in order:
 - Cursor spawns the MCP server twice per session, and the first instance exits after about 3.7 s (M0 Cursor runs). A hello followed by a bye with no membership changes no state.
 
 **`approval_mode`** comes only from verified hooks:
-- Claude and Codex `permission_mode == "bypassPermissions"` → `bypass`; the known prompting values `default`, `acceptEdits` and `plan` → `prompting`; **any other value → `unknown`** (fail closed; for example Claude's `dontAsk` or an unrecorded Codex value under `approval_policy=never`). Codex sends this field on every recorded event except SessionEnd.
+- Claude and Codex `permission_mode == "bypassPermissions"` → `bypass`; the recorded modes that run nothing unapproved, `default`, `acceptEdits`, `plan`, `auto` and `dontAsk` → `prompting`; **any other value → `unknown`** (fail closed: a future mode, or a value no recording has shown). Codex sends this field on every recorded event except SessionEnd.
+  - **Claude Code 2.1.273** reports `default` (shown as Manual; `--permission-mode manual` sends it too), `acceptEdits`, `plan`, `auto`, `dontAsk` and `bypassPermissions` (#73). Auto mode's classifier runs the calls it judges lower-risk and blocks the rest, and falls back to prompting after repeated blocks, so the approval hold still applies; Don't-ask mode denies whatever isn't pre-approved.
+  - **Codex 0.158** reports `bypassPermissions` under `approval_policy=never` (with a workspace-write sandbox too) and `default` under `untrusted`, `on-request`, a granular policy and `--approve-for-me` (on-request with Codex's automatic reviewer) (#73).
 - Cursor and Devin stay `unknown` unless a live contract shows a field.
 - The UI shows unknown as `?`, with a tooltip saying to treat it like ⚠.
 

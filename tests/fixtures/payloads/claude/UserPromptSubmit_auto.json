@@ -1,0 +1,11 @@
+{
+  "_source": "#73: live claude 2.1.273, `claude -p --model haiku --permission-mode auto` (the CLI's login had expired, so the turn stopped at the API call, after this hook)",
+  "_unverified": false,
+  "session_id": "00000000-0000-4000-8000-00000000c100",
+  "transcript_path": "/ws/transcript.jsonl",
+  "cwd": "/ws",
+  "prompt_id": "00000000-0000-4000-8000-00000000c101",
+  "permission_mode": "auto",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "Run the Bash command `echo ready`, then reply with one word: done."
+}

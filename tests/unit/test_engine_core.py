@@ -478,8 +478,12 @@ def test_a_wait_loop_gets_chatter_on_every_new_wait(w: World, clock: FakeClock) 
 
 @pytest.mark.parametrize("mode,want", [("bypassPermissions", "bypass"), ("default", "prompting"),
                                        ("acceptEdits", "prompting"), ("plan", "prompting"),
-                                       ("dontAsk", "unknown"), ("never", "unknown"), ("x-future", "unknown")])
+                                       ("auto", "prompting"), ("dontAsk", "prompting"),
+                                       ("never", "unknown"), ("x-future", "unknown")])
 def test_approval_mode_fails_closed_on_unknown_values(w: World, mode: str, want: str) -> None:
+    """Every mode Claude's and Codex's hooks report maps to what it means: Auto and Don't-ask run
+    nothing nobody approved, so they are approvals on, not "unknown" (#73). A value no recording
+    has shown is still unknown, shown like approvals off (§6.3)."""
     p, _m = w.agent("claude-1", harness="claude", status="busy", hooks=True)
     w.hook(p, "PostToolUse", ok=True, permission_mode=mode)
     assert w.p(p).approval_mode == want

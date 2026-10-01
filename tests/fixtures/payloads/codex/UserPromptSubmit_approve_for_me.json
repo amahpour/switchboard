@@ -1,0 +1,12 @@
+{
+  "_source": "#73: live codex-cli 0.158.0, private app-server, thread/start with approvalPolicy on-request and approvalsReviewer auto_review (what --approve-for-me sets), ephemeral",
+  "_unverified": false,
+  "session_id": "00000000-0000-4000-8000-00000000c100",
+  "turn_id": "00000000-0000-4000-8000-00000000c101",
+  "transcript_path": null,
+  "cwd": "/ws",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-6-luna",
+  "permission_mode": "default",
+  "prompt": "Reply with one word: ok."
+}

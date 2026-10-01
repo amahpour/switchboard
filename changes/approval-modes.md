@@ -1,0 +1,3 @@
+### Fixed
+
+- **Claude Code sessions in Auto or Don't-ask mode show as approvals on.** Both modes showed "Approval mode unknown: treat like approvals off" in Members, the Inspector and the room's chips, and `/catchup` warned about them as if their approvals were off. Neither runs anything unapproved, so they now show like any session that prompts. A mode switchboard hasn't seen before still shows as unknown. Auto mode's classifier still lets most actions run without asking you: [SECURITY.md](SECURITY.md) says what that means in a room. Codex needed no change: its hooks report `default` under every approval policy except `never`, `--approve-for-me` included.
