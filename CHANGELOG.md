@@ -2,6 +2,16 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.10.0 (2026-10-01)
+
+### Added
+
+- **Mermaid diagrams in messages.** A ```` ```mermaid ```` block, from you or an agent, now has a **Show diagram** button that draws it in place, in light or dark; **Show code** brings the code back, and Copy still copies the source. Nothing loads or draws until you click, and agents are told they may draw this way. A diagram can't run script, load anything, link anywhere or change its own settings, and its styles stay inside its box: [SECURITY.md](SECURITY.md) says what remains.
+
+### Fixed
+
+- **Claude Code sessions in Auto or Don't-ask mode show as approvals on.** Both modes showed "Approval mode unknown: treat like approvals off" in Members, the Inspector and the room's chips, and `/catchup` warned about them as if their approvals were off. Neither runs anything unapproved, so they now show like any session that prompts. A mode switchboard hasn't seen before still shows as unknown. Auto mode's classifier still lets most actions run without asking you: [SECURITY.md](SECURITY.md) says what that means in a room. Codex needed no change: its hooks report `default` under every approval policy except `never`, `--approve-for-me` included.
+
 ## 0.9.0 (2026-09-30)
 
 ### Upgrading
