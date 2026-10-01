@@ -6,6 +6,7 @@ and never parsed. Commands that reduce activity need ``human_cli``; commands
 that raise it need ``human`` (the web session, or test trust). ``/catchup``
 (§26) posts one chat message as the human, so it needs what ``switchboard say``
 needs: ``human_cli`` (``/review``, its alias in 0.3, was removed in 0.4).
+``/dossier`` (§33) posts a review protocol the same way.
 ``/close`` (§28.3) ends every membership, so it reduces activity: ``human_cli``.
 """
 
@@ -15,7 +16,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from switchboard.broker import catchup
+from switchboard.broker import catchup, dossier
 from switchboard.delivery.rules import parse_mentions
 from switchboard.models import SCREEN_NAME_RE, Room
 
@@ -40,6 +41,7 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
   /kick <name>        remove an agent and revoke its membership
   /close              close this room: every agent leaves, the history is kept;
                       reopen it from Closed rooms in the web UI
+  /dossier <pr-url>   post the review protocol for a pull or merge request
   /catchup <agent> [on <member> | on "<topic>"] [note]
                       one agent gets up to speed from the others' session
                       history, with its own tool (e.g. AgentsView):
@@ -55,7 +57,7 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
 _NO_ARGS = frozenset({"pause", "resume", "who", "status", "help", "close"})
 _ONE_NAME = frozenset({"kick", "hold", "release"})
 _ONE_NUMBER = {"budget": MAX_BUDGET, "hops": MAX_HOPS}  # /name [n], 0 <= n <= max
-KNOWN = _NO_ARGS | _ONE_NAME | set(_ONE_NUMBER) | {"catchup"}
+KNOWN = _NO_ARGS | _ONE_NAME | set(_ONE_NUMBER) | {"catchup", "dossier"}
 
 _STATIC_ROLES = {
     "pause": "human_cli",
@@ -68,6 +70,7 @@ _STATIC_ROLES = {
     "status": "human_cli",
     "help": "human_cli",
     "catchup": "human_cli",  # posts a human chat message, like `switchboard say`
+    "dossier": "human_cli",  # the room follows a protocol; the broker only posts it (§33)
 }
 
 
@@ -108,7 +111,7 @@ class Result:
     ok: bool
     text: str
     notice: str | None = None  # persisted room notice (state changes, CLI audit)
-    post: str | None = None  # a chat message to post as the human (/catchup)
+    post: str | None = None  # a chat message to post as the human (/catchup, /dossier)
     post_skip: tuple[int, ...] = ()  # memberships that get no delivery of ``post``
     warnings: tuple[str, ...] = ()  # warn-level room notices, posted after ``post``
     room_changed: bool = False
@@ -137,6 +140,10 @@ def parse_command(text: str) -> Command:
     if name == "catchup":
         # parsed from the raw text: a quoted topic keeps its spaces
         return _parse_catchup(raw[1:].split(None, 1)[1] if args else "", raw)
+    if name == "dossier":
+        if len(args) != 1 or not dossier.valid_url(args[0]):
+            raise CommandError("bad_request", dossier.USAGE)
+        return Command(name=name, args=args, raw=raw)
     if name in _NO_ARGS and args:
         raise CommandError("bad_request", f"/{name} takes no arguments")
     if name in _ONE_NAME:
@@ -401,6 +408,19 @@ def _catchup(cmd: Command, room: Room, svc: "RoomService") -> Result:
     )
 
 
+def _dossier(cmd: Command, room: Room, svc: "RoomService") -> Result:
+    """Compose one human message (§33). Every delivery rule still applies; no review state."""
+    text = dossier.request_text(cmd.args[0])
+    limit = svc.cfg.delivery.max_msg_chars
+    if len(text) > limit:
+        raise CommandError("bad_request", f"/dossier: its protocol needs {len(text)} characters, but"
+                                          f" [delivery] max_msg_chars is {limit}")
+    reply = f"{room.name}: posted the dossier protocol"
+    if room.paused:
+        reply += "; the request goes out after /resume"
+    return Result(True, reply, post=text, event="dossier")
+
+
 def apply(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
     """Run a parsed command. Role checks happen here too (defence in depth)."""
     store = svc.store
@@ -464,6 +484,8 @@ def apply(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
         return _hops_set(room, int(cmd.args[0]), svc)
     if name == "catchup":
         return _catchup(cmd, room, svc)
+    if name == "dossier":
+        return _dossier(cmd, room, svc)
     # one-name commands
     target = cmd.args[0]
     member = store.find_member(room.id, target)
