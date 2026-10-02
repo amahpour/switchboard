@@ -33,6 +33,7 @@ read() has shown it, then passes.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import json
 import logging
@@ -588,12 +589,20 @@ def test_the_threads_own_human_ends_the_hold(w: W) -> None:
     w.join()
     w.daemon_tier()
     other = _other_tui(w)
-    time.sleep(0.8)
+
+    async def check_clients() -> None:
+        await w.adapter.refresh_clients()
+        w.adapter.refresh_tiers()
+
+    assert w.b.loop is not None
+    asyncio.run_coroutine_threadsafe(check_clients(), w.b.loop).result(10)
+    assert w.adapter.clients is not None and w.adapter.clients.n == 2
     other.p.stdin.write(json.dumps({"op": "detach"}) + "\n")
     other.p.stdin.flush()
     assert other.recv()["detached"]
     try:
-        assert wait_for(lambda: w.tier() == ("codex:daemon", "detached?")), w.tier()
+        asyncio.run_coroutine_threadsafe(check_clients(), w.b.loop).result(10)
+        assert w.tier() == ("codex:daemon", "detached?")
         w.hook("UserPromptSubmit", prompt="typed by the human")  # no switchboard token: a human is there
         w.hook("Stop", stop_hook_active=False)
         assert wait_for(lambda: w.tier() == ("codex:daemon", None)), w.tier()
