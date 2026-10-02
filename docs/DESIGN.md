@@ -626,7 +626,7 @@ A `hello` subscribes the listed rooms (it is additive) and replays, per room, th
 The server sends a ping every 20 s.
 
 **UI** (vanilla JS, no build step; since #19 a native-looking three-column layout, §29). **Rendering builds DOM nodes (`createElement`, `textContent`); no HTML string is ever parsed, and there is no inline JS or CSS.** Message text goes through `md.js`, a small Markdown renderer that also builds nodes only (§29.3).
-- A sidebar with the rooms (unread counts), **Closed (n)**, the remote machines and the human's connection state; the conversation with day separators, grouped messages, join/leave lines and a "via cli" tag; a right pane with **Members** that slides over to the **Inspector** for one agent (§29.2, §29.5).
+- A sidebar with the rooms (unread counts), **Closed (n)**, the remote machines and the human's connection state; the conversation with day separators, grouped messages, join/leave lines, a "via cli" tag and a selectable `#id` with each chat message's time; a right pane with **Members** that slides over to the **Inspector** for one agent (§29.2, §29.5).
 - Members shows, per member:
   - a status dot, harness and tier (with a "provisional" tag where applicable), and away text;
   - an approvals-off warning for `approval_mode=bypass`, and "approval mode unknown: treat like approvals off";
