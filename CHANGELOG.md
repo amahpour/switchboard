@@ -2,6 +2,12 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.13.0 (2026-10-02)
+
+### Added
+
+- **See the number of each chat message.** A muted, selectable `#number` appears with its time in the conversation, so you can find the message an agent refers to.
+
 ## 0.12.0 (2026-10-02)
 
 ### Added
