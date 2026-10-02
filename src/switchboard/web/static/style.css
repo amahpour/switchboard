@@ -2211,3 +2211,48 @@ body.login {
 .confirm-dialog .setup-form { gap: 8px; }
 .confirm-dialog .dialog-buttons { margin-top: 6px; flex-wrap: nowrap; }
 .confirm-dialog .dialog-buttons .btn, .confirm-dialog .dialog-buttons .btn-primary { height: 32px; }
+
+/* Action, notice and New room dialogs share the same native modal and page palette. */
+.app-dialog {
+  width: min(440px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  padding: 0;
+  border: 1px solid var(--menu-border);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: var(--menu-shadow);
+}
+.app-dialog::backdrop { background: rgba(0, 0, 0, .42); }
+.app-dialog-form { display: flex; flex-direction: column; gap: 12px; padding: 22px 24px 20px; }
+.app-dialog h2 { margin: 0; font-size: 18px; line-height: 1.3; font-weight: 650; }
+.app-dialog-body { margin: 0; color: var(--muted-2); font-size: 13px; line-height: 1.5; }
+.app-dialog label { font-size: 12px; font-weight: 600; }
+.app-dialog input {
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--input-border);
+  border-radius: 7px;
+  background: var(--input-bg);
+  color: var(--fg);
+  font: 13px var(--font);
+}
+.app-dialog-error { min-height: 16px; margin: -6px 0 0; color: var(--danger); font-size: 12px; }
+.app-dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.app-dialog .btn:disabled, .app-dialog .btn-primary:disabled, .app-dialog .btn-danger:disabled {
+  opacity: .5;
+  cursor: default;
+}
+@media (max-width: 760px) {
+  .app-dialog {
+    width: 100%;
+    max-width: none;
+    max-height: calc(100dvh - 24px);
+    margin: auto 0 0;
+    border-radius: 16px 16px 0 0;
+    border-bottom: 0;
+  }
+  .app-dialog-form { padding: 22px 20px calc(20px + env(safe-area-inset-bottom)); }
+  .app-dialog-buttons { flex-direction: column-reverse; }
+  .app-dialog-buttons .btn, .app-dialog-buttons .btn-primary, .app-dialog-buttons .btn-danger { width: 100%; height: 40px; }
+}
