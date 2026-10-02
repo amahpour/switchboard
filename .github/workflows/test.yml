@@ -229,6 +229,7 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
+          build-args: BUILD_COMMIT=${{ github.sha }}
           load: true
           tags: switchboard:ci
           cache-from: type=gha,scope=image

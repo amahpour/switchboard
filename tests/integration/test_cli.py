@@ -15,11 +15,22 @@ from pathlib import Path
 import pytest
 
 from conftest import SubprocBroker, child_env, human_cli_denial_word
+from switchboard import __version__, build_info
 from switchboard.broker import proc
 from switchboard.mcp.client import ping
 from switchboard.paths import Paths
 
 RELAY = Path(__file__).resolve().parents[1] / "fakes" / "fake_relay.py"
+
+
+def test_status_names_the_running_brokers_commit(subproc_broker: SubprocBroker) -> None:
+    """Status gets the running broker's revision over RPC, not the CLI process's guess."""
+    want = build_info.commit()
+    assert want is not None
+    data = json.loads(subproc_broker.cli("status", "--json").stdout)
+    assert data["commit"] == want
+    text = subproc_broker.cli("status").stdout
+    assert text.startswith(f"switchboard {__version__} ({want[:7]}) running:")
 
 
 def test_say_tail_who_cmd_stop(subproc_broker: SubprocBroker) -> None:

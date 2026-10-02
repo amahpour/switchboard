@@ -16,7 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from switchboard import __version__, db
+from switchboard import __version__, build_info, db
 from switchboard.broker import catchup
 from switchboard.broker import commands as cmds
 from switchboard.broker.commands import Actor, CommandError
@@ -841,6 +841,7 @@ class RoomService:
             )
         return {
             "version": __version__,
+            "commit": build_info.commit(),
             "pid": self.info.pid,
             "port": self.info.port,
             "url": self.info.url or f"http://switchboard.localhost:{self.info.port}/",

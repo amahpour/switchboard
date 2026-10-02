@@ -59,7 +59,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
-from switchboard import __version__, db
+from switchboard import __version__, build_info, db
 from switchboard.broker.auth import COOKIE_NAME, SESSION_TTL_S, app_csp, sha256_hex
 from switchboard.broker import people
 from switchboard.broker.commands import Actor
@@ -861,6 +861,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 "human": w.name,
                 "admin": w.owner and state.hosted,  # the admin section (§32.3)
                 "version": __version__,
+                "commit": build_info.commit(),
                 "test_mode": state.test_mode,
                 "port": state.info.port,
                 # the passkeys sheet (§31.4): shown behind a public URL where passkeys work

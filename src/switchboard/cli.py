@@ -274,7 +274,10 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     p = for_args(args)
     up = int(st.get("uptime_s", 0))
-    print(f"switchboard {st['version']} {p.ok('running')}: pid {st['pid']}, up {up // 3600}h{up % 3600 // 60:02d}m")
+    from switchboard.build_info import version_text
+
+    print(f"{version_text(st['version'], st.get('commit'))} {p.ok('running')}: pid {st['pid']},"
+          f" up {up // 3600}h{up % 3600 // 60:02d}m")
     print(f"  web UI  {p.link(str(st['url']))}  ({st.get('web_clients', 0)} browser tab(s) connected)")
     print(f"  home    {st['home']}")
     print(f"  hooks   {_lead(p, str(st['hooks']))}")
@@ -998,8 +1001,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _version() -> str:
     from switchboard import __version__
+    from switchboard import build_info
 
-    return f"switchboard {__version__}"
+    return build_info.version_text(__version__, build_info.commit())
 
 
 def main(argv: list[str] | None = None) -> int:

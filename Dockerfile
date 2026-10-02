@@ -44,9 +44,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # ---------------------------------------------------------------- runtime
 FROM ${PYTHON_IMAGE}
+ARG BUILD_COMMIT=""
 LABEL org.opencontainers.image.title="switchboard" \
       org.opencontainers.image.description="A local group chat where you and your coding agents talk and hand work to each other: the broker and its web UI" \
       org.opencontainers.image.source="https://github.com/amahpour/switchboard" \
+      org.opencontainers.image.revision="${BUILD_COMMIT}" \
       org.opencontainers.image.licenses="MIT"
 # tini: PID 1. The `switchboard` user owns the data: /data, the volume, and the home in it.
 RUN apt-get update \
@@ -59,6 +61,7 @@ RUN apt-get update \
 COPY --from=build /opt/switchboard /opt/switchboard
 COPY --chmod=0755 deploy/image/switchboard.sh /usr/local/bin/switchboard
 ENV SWITCHBOARD_HOME=/data/switchboard \
+    SWITCHBOARD_BUILD_COMMIT=${BUILD_COMMIT} \
     SWITCHBOARD_LISTEN=0.0.0.0 \
     SWITCHBOARD_PORT=7419 \
     PYTHONUNBUFFERED=1 \

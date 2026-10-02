@@ -46,7 +46,7 @@
   };
 
   const state = {
-    me: null,          // { human, admin, test_mode, version, port, hosted, signin, passkeys, password, fresh }
+    me: null,          // { human, admin, test_mode, version, commit, port, hosted, signin, passkeys, password, fresh }
     rooms: new Map(),  // name -> { name, slug, id, createdAt, lastId, msgs: [], members: [], settings: {}, unread: 0 }
     closed: 0,         // how many closed rooms there are (GET /api/rooms), for the Closed row
     closedRooms: [],   // GET /api/closed-rooms, as the Closed sheet shows it
@@ -3511,8 +3511,17 @@
     } catch (e) {
       return;
     }
-    // the brand's tooltip names the running version (§1.2); plain text, no markup
-    if (state.me && state.me.version) $('brand-name').setAttribute('title', 'switchboard ' + state.me.version);
+    // Show the broker's build, with a release link and the full revision in the tooltip (§1.1).
+    if (state.me && state.me.version) {
+      const revision = state.me.commit;
+      const label = 'switchboard ' + state.me.version + (revision ? ' (' + revision.slice(0, 7) + ')' : '');
+      const url = 'https://github.com/amahpour/switchboard/releases/tag/v' + encodeURIComponent(state.me.version);
+      const release = window.SBMarkdown.externalLink(label, url, location.hostname);
+      release.id = 'running-release';
+      release.title = revision ? 'Git commit ' + revision : label;
+      $('running-release-foot').replaceChildren(release);
+      $('brand-name').setAttribute('title', label);
+    }
     // the Sign-in sheet and machines that dial in: a hosted broker (§31.4, §31.8, §32); the
     // admin section: its admin (§32.3)
     $('passkeys').classList.toggle('hidden', !(state.me && (state.me.hosted || state.me.signin)));

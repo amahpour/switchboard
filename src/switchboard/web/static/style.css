@@ -538,6 +538,14 @@ button:disabled, .btn:disabled, .btn-primary:disabled { opacity: .5; cursor: def
 .conn::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
 .conn.bad { color: var(--danger); }
 .conn.bad::before { background: var(--danger); }
+.running-release-foot { padding: 0 10px 2px; font-size: 11.5px; }
+.running-release-foot a {
+  display: block;
+  color: var(--muted-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* ==== 6. Conversation header and bands =============================================== */
 .conv-head {
