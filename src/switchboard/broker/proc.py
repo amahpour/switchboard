@@ -9,13 +9,18 @@ which may come from an agent's shell). A process is identified by
 from __future__ import annotations
 
 import ctypes
+import contextlib
+import math
 import os
+import re
 import struct
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from functools import lru_cache
+
+from switchboard.paths import Paths
 
 _PROC_PIDTBSDINFO = 3
 _BSDINFO_SIZE = 136
@@ -30,6 +35,7 @@ _NO_SPAWN = False
 # The satellite on Linux: the boot time its start times are computed from, fixed for the
 # whole boot (``pin_btime``), so a clock step doesn't change a process's start time.
 _BTIME_PIN: float | None = None
+BOOT_ID_RE = re.compile(r"^[0-9a-f-]{8,64}$")
 
 
 def set_no_spawn(on: bool = True) -> None:
@@ -134,6 +140,47 @@ def read_linux_btime() -> float:
             if line.startswith("btime "):
                 return float(line.split()[1])
     return 0.0
+
+
+def boot_time(paths: Paths, boot_id: str, current: float) -> float:
+    """This home's first btime reading for this boot, shared by all its processes.
+
+    /proc/stat's btime can move when WSL2 or NTP steps the wall clock. The boot id
+    distinguishes a clock step from a reboot, when old pidfiles must not match.
+    """
+    f = paths.run_dir / "boot_time"
+    try:
+        saved_id, saved = f.read_text(encoding="ascii").split()
+        v = float(saved)
+        if saved_id == boot_id and math.isfinite(v) and v >= 0:
+            return v
+    except (OSError, ValueError, UnicodeDecodeError):
+        pass
+    tmp = f.with_name(f".{f.name}.{os.getpid()}.tmp")
+    with contextlib.suppress(OSError):
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="ascii") as out:
+            out.write(f"{boot_id} {current!r}\n")
+        os.replace(tmp, f)
+    return current
+
+
+def pin_home_btime(paths: Paths) -> str:
+    """Use this home's pinned Linux boot time for every subsequent process probe."""
+    if not sys.platform.startswith("linux"):
+        return "none"
+    try:
+        with open("/proc/sys/kernel/random/boot_id", encoding="ascii") as f:
+            bid = f.read().strip()
+        now_btime = read_linux_btime()
+    except (OSError, ValueError, UnicodeDecodeError):
+        pin_btime(None)
+        return "no boot id"
+    if not BOOT_ID_RE.match(bid) or now_btime <= 0:
+        pin_btime(None)
+        return "no boot id"
+    pin_btime(boot_time(paths, bid, now_btime))
+    return "pinned"
 
 
 @lru_cache(maxsize=1)
