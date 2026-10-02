@@ -138,6 +138,13 @@
       fig = el('div', 'md-diagram');
       fig.attachShadow({ mode: 'open' });
       box.querySelector('.md-pre-head').after(fig);
+      if (typeof fig.requestFullscreen === 'function') {
+        const full = el('button', 'md-copy md-fullscreen');
+        full.type = 'button';
+        full.textContent = 'Full screen';
+        full.addEventListener('click', function () { fig.requestFullscreen().catch(function () {}); });
+        box.querySelector('.md-show-diagram').after(full);
+      }
     }
     let note = box.querySelector('.md-diagram-error');
     if (!note) {
@@ -159,6 +166,7 @@
   function render(box, source, button) {
     const p = parts(box);
     return draw(source).then(function (svg) {
+      svg.setAttribute('part', 'drawing');
       p.fig.shadowRoot.replaceChildren(svg);
       p.note.textContent = '';
       box.classList.remove('md-diagram-failed');

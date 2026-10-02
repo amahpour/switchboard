@@ -845,6 +845,24 @@ def test_a_mermaid_block_shows_its_diagram_on_click_and_its_code_again(ui: UI) -
     assert page.evaluate(MERMAID_SCRIPTS) == 1  # loaded once, for both
 
 
+def test_a_diagram_fills_the_screen_and_returns_drawn_after_exit(ui: UI) -> None:
+    """The Full screen button uses the diagram box, and exiting returns to the drawing."""
+    page = diagram_room(ui, "e2e-diagram-fullscreen", f"{FENCE}mermaid\n{FLOW}\n{FENCE}")
+    box = show(page)
+    full = box.get_by_role("button", name="Full screen")
+    expect(full).to_be_visible()
+    full.click()
+    page.wait_for_function("() => !!document.fullscreenElement?.classList.contains('md-diagram')")
+    assert box.evaluate("(b) => document.fullscreenElement === b.querySelector('.md-diagram')")
+    page.evaluate("() => document.exitFullscreen()")
+    page.wait_for_function("() => document.fullscreenElement === null")
+    expect(box).to_have_class(cls("md-showing-diagram"))
+    assert box.evaluate(SHADOW_SVG)
+    expect(full).to_be_visible()
+    box.locator("button.md-show-diagram").click()
+    expect(full).to_be_hidden()
+
+
 def test_a_diagram_follows_the_light_or_dark_scheme(ui: UI) -> None:
     """A drawing uses the page's scheme, and one on show is redrawn when the scheme changes."""
     page = diagram_room(ui, "e2e-diagram-dark", f"{FENCE}mermaid\n{FLOW}\n{FENCE}", color_scheme="dark")

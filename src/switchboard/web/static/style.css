@@ -937,6 +937,8 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 /* A ```mermaid block shown as its diagram (diagram.js, DESIGN.md §33). The drawing sits in the
    box's shadow root, with its own styles; containment keeps what it paints inside the box. */
 .md-show-diagram { margin-left: auto; }
+.md-fullscreen { display: none; }
+.md-showing-diagram .md-fullscreen { display: inline-flex; }
 .md-diagram, .md-diagram-error { display: none; }
 .md-showing-diagram .md-diagram { display: block; }
 .md-showing-diagram .md-pre-body { display: none; }
@@ -946,6 +948,22 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
   overflow: auto;
   contain: paint;
   color: var(--fg);
+}
+.md-diagram:fullscreen {
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: 100vw;
+  height: 100vh;
+  padding: 12px;
+  overflow: hidden;
+  background: var(--bg);
+}
+.md-diagram:fullscreen::part(drawing) {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
 }
 .md-diagram-error {
   padding: 6px 12px;
