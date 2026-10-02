@@ -402,6 +402,12 @@
       m.ts - prev.ts >= 0 && m.ts - prev.ts < CONT_WINDOW_S && dayKey(prev.ts) === dayKey(m.ts));
   }
 
+  function messageMeta(m, gutter) {
+    const meta = el('span', 'msg-meta' + (gutter ? ' gutter' : ''));
+    meta.append(timeEl(m.ts, 'ts'), el('span', 'msg-number', '#' + String(m.id)));
+    return meta;
+  }
+
   function inspectedLabel() {
     const ins = state.inspect;
     if (!ins || ins.room !== state.active) return null;
@@ -462,7 +468,7 @@
     if (m.sender_kind === 'agent' && inspectedLabel() === who) line.classList.add('sel');
     if (isCont(prev, m)) {
       line.classList.add('cont');
-      line.append(timeEl(m.ts, 'ts gutter'), mdBody(m.text, m.mentions));
+      line.append(messageMeta(m, true), mdBody(m.text, m.mentions));
       return line;
     }
     const reply = m.reply_to ? replyLine(r, m) : null;
@@ -488,7 +494,7 @@
     if (flag) head.append(flag);
     if (m.sender_kind === 'agent') head.append(el('span', 'harness-name', harnessOf(m.harness)[1]));
     if (m.via === 'cli') head.append(el('span', 'via', 'via cli'));
-    head.append(timeEl(m.ts, 'ts'));
+    head.append(messageMeta(m, false));
     body.append(head, mdBody(m.text, m.mentions));
     line.append(body);
     return line;

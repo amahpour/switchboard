@@ -223,6 +223,22 @@ def test_sidebar_shows_running_release_and_full_commit(ui: UI) -> None:
         assert me["commit"] in (release.get_attribute("title") or "")
 
 
+def test_chat_message_numbers_are_visible_by_their_times(ui: UI) -> None:
+    """Every chat ID is readable and selectable, including grouped rows and phone width."""
+    for options in ({}, PHONE):
+        page = ui.open(**options)
+        rows = page.locator("#log .line.k-chat")
+        expect(rows).to_have_count(8)
+        for row in rows.all():
+            number = row.locator(".msg-number")
+            expect(number).to_have_text("#" + str(row.get_attribute("data-id")))
+            expect(number).to_be_visible()
+            expect(row.locator(".msg-meta time")).to_have_count(1)
+            assert number.evaluate("el => getComputedStyle(el).userSelect") != "none"
+        assert page.locator("#log .line.k-chat.cont .msg-number").count() >= 1
+        no_horizontal_scroll(page)
+
+
 def test_app_loads_connected_with_rooms_members_and_chips(ui: UI) -> None:
     page = ui.context().new_page()
     resp = page.goto(ui.world.broker.login_url())
