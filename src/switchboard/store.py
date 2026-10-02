@@ -1101,8 +1101,10 @@ class Store:
         """The memberships this participant joined with a "verifying..." join line (``join``
         events with ``verifying: true``) after its last passed Codex thread proof (a ``bind``
         event with ``what: thread_proof, ok: true``): the joins no "is verified" notice followed
-        yet. Its ``thread_proof`` column is reset by a join from another MCP process; this
-        history isn't (DESIGN.md §9.3)."""
+        yet. A proof whose notice was held for the first look for a TUI (``notice: held``)
+        doesn't count until the notice went out (``what: verified_notice``). Its
+        ``thread_proof`` column is reset by a join from another MCP process; this history
+        isn't (DESIGN.md §9.3)."""
         rows = self.con.execute("SELECT * FROM events WHERE kind IN ('join', 'bind') AND participant_id=?"
                                 " ORDER BY id", (participant_id,)).fetchall()
         out: set[int] = set()
@@ -1110,7 +1112,8 @@ class Store:
             if e.kind == "join":
                 if e.data.get("verifying") is True and e.membership_id is not None:
                     out.add(e.membership_id)
-            elif e.data.get("what") == "thread_proof" and e.data.get("ok") is True:
+            elif (e.data.get("what") == "thread_proof" and e.data.get("ok") is True
+                  and e.data.get("notice") != "held") or e.data.get("what") == "verified_notice":
                 out.clear()
         return out
 
