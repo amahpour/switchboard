@@ -185,8 +185,9 @@ def test_claim_backup_sheet_sign_out_and_sign_in(ui: UI, hosted: InProcBroker) -
 
     # Sign out everywhere, then back in
     page.click("#passkeys")
-    page.once("dialog", lambda d: d.accept())
     page.click("#logout-all")
+    expect(page.locator("#app-dialog-title")).to_have_text("Sign out everywhere?")
+    page.click("#app-dialog-action")
     expect(page.locator("#passkey-btn")).to_be_visible()
     assert st.store.web_session_count() == 0
     page.click("#passkey-btn")

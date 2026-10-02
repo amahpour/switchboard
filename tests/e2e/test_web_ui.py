@@ -535,19 +535,23 @@ def test_close_a_room_then_reopen_it(ui: UI) -> None:
     open_room(page, "e2e-close")
     before = int(re.findall(r"\d+", page.locator("#closed-label").inner_text())[0])
 
-    # /close asks first (the native confirm); accepting it closes the room and drops its tab
-    asked: list[str] = []
-
-    def accept(dialog: Any) -> None:
-        asked.append(dialog.message)
-        dialog.accept()
-
-    page.once("dialog", accept)
-    page.locator("#input").focus()
-    page.keyboard.type("/close")
+    # /close uses the in-page dialog; Esc backs out and keeps the command to retry.
+    box = page.locator("#input")
+    box.fill("/close")
     page.keyboard.press("Enter")
+    dialog = page.locator("#app-dialog")
+    expect(dialog).to_be_visible()
+    expect(page.locator("#app-dialog-title")).to_have_text("Close #e2e-close?")
+    expect(page.locator("#app-dialog-body")).to_contain_text("You can reopen it from Closed.")
+    expect(page.locator("#app-dialog-cancel")).to_be_focused()
+    page.keyboard.press("Escape")
+    expect(dialog).to_be_hidden()
+    expect(box).to_have_value("/close")
+    expect(tab).to_be_visible()
+    page.keyboard.press("Enter")
+    expect(dialog).to_be_visible()
+    page.get_by_role("button", name="Close room").click()
     expect(tab).to_have_count(0)
-    assert asked and asked[0].startswith("Close #e2e-close?"), asked
     expect(page.locator("#closed-label")).to_have_text(f"Closed ({before + 1})")
 
     # the Closed rooms sheet lists it; Reopen brings it back under its name
@@ -561,6 +565,72 @@ def test_close_a_room_then_reopen_it(ui: UI) -> None:
     expect(page.locator("#closed-label")).to_have_text(f"Closed ({before})")
     page.keyboard.press("Escape")
     expect(page.locator("#closed-panel")).to_be_hidden()
+
+
+def test_new_room_dialog_validates_name_and_returns_focus(ui: UI) -> None:
+    """New room uses a modal form: names validate as typed and Cancel leaves no room."""
+    for suffix, options in (("desktop", {}), ("phone", PHONE)):
+        page = ui.open(room=None, **options)
+        if options:
+            page.click("#rooms-toggle")
+        new = page.locator("#new-room")
+        new.click()
+        dialog = page.locator("#app-dialog")
+        expect(dialog).to_be_visible()
+        bounds = dialog.bounding_box()
+        assert bounds is not None
+        if options:
+            assert abs(bounds["x"]) < 2 and abs(bounds["width"] - 390) < 2
+            assert abs(bounds["y"] + bounds["height"] - 844) < 2
+            action_box = page.locator("#app-dialog-action").bounding_box()
+            cancel_box = page.locator("#app-dialog-cancel").bounding_box()
+            assert action_box is not None and cancel_box is not None
+            assert action_box["y"] < cancel_box["y"]
+        expect(page.locator("#app-dialog-title")).to_have_text("New room")
+        name = page.locator("#app-dialog-name")
+        expect(name).to_be_focused()
+        name.fill("#build")
+        expect(page.locator("#app-dialog-error")).to_have_text("#build already exists. Pick another name.")
+        expect(page.locator("#app-dialog-action")).to_be_disabled()
+        room = "#e2e-dialog-" + suffix
+        name.fill(room)
+        expect(page.locator("#app-dialog-error")).to_be_empty()
+        expect(page.locator("#app-dialog-action")).to_be_enabled()
+        page.locator("#app-dialog-cancel").click()
+        expect(dialog).to_be_hidden()
+        expect(new).to_be_focused()
+        expect(page.locator(f'#tabs .room[data-room="{room}"]')).to_have_count(0)
+        new.click()
+        page.locator("#app-dialog-name").fill(room)
+        page.locator("#app-dialog-action").click()
+        expect(page.locator(f'#tabs .room[data-room="{room}"]')).to_have_count(1)
+        ui.world.command(room.removeprefix("#"), "/close")
+
+
+def test_typed_and_inspector_kick_use_the_same_dialog(ui: UI) -> None:
+    """Typed /kick and the Inspector button share the title, body, and safe Cancel focus."""
+    ui.world.create_room("#e2e-dialog-kick")
+    ui.world.add_agents("#e2e-dialog-kick", ("dialog-agent",))
+    page = ui.open(room="e2e-dialog-kick")
+    box = page.locator("#input")
+    box.fill("/kick dialog-agent")
+    page.keyboard.press("Enter")
+    dialog = page.locator("#app-dialog")
+    expect(dialog).to_be_visible()
+    title = page.locator("#app-dialog-title").inner_text()
+    body = page.locator("#app-dialog-body").inner_text()
+    expect(page.locator("#app-dialog-cancel")).to_be_focused()
+    page.keyboard.press("Escape")
+    expect(box).to_have_value("/kick dialog-agent")
+    expect(page.locator('#buddy-list .member[data-name="dialog-agent"]')).to_be_visible()
+    page.locator('#buddy-list .member[data-name="dialog-agent"]').click()
+    page.click("#insp-kick")
+    expect(dialog).to_be_visible()
+    expect(page.locator("#app-dialog-title")).to_have_text(title)
+    expect(page.locator("#app-dialog-body")).to_have_text(body)
+    expect(page.locator("#app-dialog-action")).to_have_text("Kick")
+    page.locator("#app-dialog-action").click()
+    expect(page.locator('#buddy-list .member[data-name="dialog-agent"]')).to_have_count(0)
 
 
 # A sidebar row per case, cloned from the seeded fpga-pi's with a name, a state and the text
@@ -707,16 +777,16 @@ def test_inspector_re_renders_keep_focus(ui: UI) -> None:
         page.keyboard.press("Escape")
         expect(page.locator("#insp-catchup")).to_be_focused()
 
-        # the kick confirm: Tab to the red Kick button, re-render, it is still focused; Esc backs out
+        # the shared kick dialog: Tab to Kick, re-render, focus stays in the modal; Esc backs out
         page.click("#insp-kick")
-        expect(page.locator("#kick-confirm")).to_be_visible()
+        expect(page.locator("#app-dialog")).to_be_visible()
         page.keyboard.press("Tab")
-        do_kick = page.locator("#kick-confirm .btn-danger")
+        do_kick = page.locator("#app-dialog-action")
         expect(do_kick).to_be_focused()
         members_frame("/release codex-1")
         expect(do_kick).to_be_focused()
         page.keyboard.press("Escape")
-        expect(page.locator("#kick-confirm")).to_be_hidden()
+        expect(page.locator("#app-dialog")).to_be_hidden()
         expect(page.locator("#insp-kick")).to_be_focused()
         expect(member_row(page, "claude-1")).to_have_count(1)  # nothing was kicked
     finally:
@@ -732,12 +802,12 @@ def test_focus_moves_to_a_neighbour_when_the_inspected_agent_goes(ui: UI) -> Non
     page = ui.open(room="e2e-focus")
     expect(page.locator("#buddy-list .member")).to_have_count(3)
 
-    # 1. Kick from the Inspector's confirm (by keyboard): ag-3 takes ag-2's place
+    # 1. Kick from the Inspector's dialog (by keyboard): ag-3 takes ag-2's place
     member_row(page, "ag-2").click()
     expect(page.locator("#insp-name")).to_contain_text("ag-2")
     page.click("#insp-kick")
     page.keyboard.press("Tab")
-    expect(page.locator("#kick-confirm .btn-danger")).to_be_focused()
+    expect(page.locator("#app-dialog-action")).to_be_focused()
     page.keyboard.press("Enter")
     expect(member_row(page, "ag-2")).to_have_count(0)  # the members frame landed
     expect(page.locator("#pane")).not_to_have_class(cls("inspecting"))

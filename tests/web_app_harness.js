@@ -67,6 +67,8 @@ class El {
   addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); }
   dispatch(t, ev) { for (const f of this.listeners[t] || []) f(ev || { preventDefault() {} }); }
   focus() {}
+  showModal() { this.open = true; }
+  close(value) { this.returnValue = value || ''; this.open = false; if (this.onclose) this.onclose(); }
   requestSubmit() { this.dispatch('submit', { preventDefault() {} }); }
 }
 
@@ -79,17 +81,18 @@ function makeWorld(rooms) {
     listeners: {},
     getElementById(id) {
       if (!byId.has(id)) {
-        const e = new El('div');
+        const e = new El(id === 'app-dialog' ? 'dialog' : 'div');
         e.id = id;
+        e.ownerDocument = document;
         // as index.html starts them
         if (['empty', 'closed-panel', 'remotes-panel', 'closed-rooms', 'room-empty', 'palette', 'mentions', 'scrim',
-             'remotes-section', 'catchup-menu', 'kick-confirm', 'insp-queue', 'machines-panel', 'passkeys-panel',
+             'remotes-section', 'catchup-menu', 'insp-queue', 'machines-panel', 'passkeys-panel',
              'add-machine'].includes(id)) e.classList.add('hidden');
         byId.set(id, e);
       }
       return byId.get(id);
     },
-    createElement(tag) { return new El(tag); },
+    createElement(tag) { const e = new El(tag); e.ownerDocument = document; return e; },
     createDocumentFragment() { return new El('#fragment'); },
     createTextNode(t) { const n = new El('#text'); n.own = String(t); return n; },
     addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); },
@@ -220,8 +223,7 @@ function makeWorld(rooms) {
   ctx.window = ctx;
   ctx.window.alert = function (m) { throw new Error('alert: ' + m); };
   ctx.window.prompt = function () { return null; };
-  ctx.window.confirmed = [];  // every window.confirm question, in order
-  ctx.window.confirm = function (q) { ctx.window.confirmed.push(q); return ctx.window.confirmAnswer !== false; };
+  ctx.window.confirm = function () { throw new Error('native confirm called'); };
   vm.createContext(ctx);
   // as index.html loads them: md.js (window.SBMarkdown) first, then app.js
   if (fs.existsSync(MD)) vm.runInContext(fs.readFileSync(MD, 'utf8'), ctx, { filename: 'md.js' });
@@ -526,12 +528,13 @@ const SCENARIOS = {
     click(byId('insp-hold'));
     await settle();
     click(byId('insp-kick'));
-    const confirm = findAll(w.$('insp-body'), function (n) { return n.id === 'kick-confirm'; })[0];
-    const confirmShown = !confirm.classList.contains('hidden');
-    const kick = findAll(confirm, function (n) { return n.tag === 'button' && n.textContent === 'Kick'; })[0];
+    await settle();
+    const confirm = w.$('app-dialog');
+    const confirmShown = confirm.open && confirm.textContent.includes('Kick claude-1 from #build?');
+    const kick = findAll(confirm, function (n) { return n.id === 'app-dialog-action'; })[0];
     click(kick);
     await settle();
-    return report(w, ws, { commands: w.server.commands, confirmShown: confirmShown, confirms: w.window.confirmed,
+    return report(w, ws, { commands: w.server.commands, confirmShown: confirmShown,
                            inspecting: w.$('pane').classList.contains('inspecting') });
   },
 
@@ -565,10 +568,14 @@ const SCENARIOS = {
   // /kick typed in the composer asks first; declining gives the text back.
   async kick_typed_declined() {
     const { w, ws } = await buildRoom(MEMBERS);
-    w.window.confirmAnswer = false;
     await send(w, '/kick codex-1');
     await settle();
-    return report(w, ws, { commands: w.server.commands, confirms: w.window.confirmed, input: w.$('input').value });
+    const dialog = w.$('app-dialog');
+    const title = findAll(dialog, function (n) { return n.id === 'app-dialog-title'; })[0].textContent;
+    const action = findAll(dialog, function (n) { return n.id === 'app-dialog-action'; })[0].textContent;
+    click(findAll(dialog, function (n) { return n.id === 'app-dialog-cancel'; })[0]);
+    await settle();
+    return report(w, ws, { commands: w.server.commands, title: title, action: action, input: w.$('input').value });
   },
 
   // The slash palette and @mention autocomplete complete without sending anything.
@@ -645,6 +652,8 @@ async function closeScenario(twoRooms, frameLate) {
     return { ok: true, text: CLOSE_REPLY };
   };
   await send(w, '/close');
+  await settle();
+  click(findAll(w.$('app-dialog'), function (n) { return n.id === 'app-dialog-action'; })[0]);
   await settle();
   if (frameLate) w.server.release('GET /api/rooms');  // the frame's listing lands last
   else w.server.release('POST /api/rooms/build/command');  // the command's answer lands last

@@ -179,8 +179,10 @@ def test_add_approve_and_remove_a_machine(ui: UI, hosted: InProcBroker, machines
     expect(up).to_be_focused()
 
     # Remove asks first; then the machine is gone, and its dialer stops for good
-    page.once("dialog", lambda d: d.accept())
     page.click('[data-focus="remove:work-laptop"]')
+    expect(page.locator("#app-dialog-title")).to_have_text("Remove work-laptop?")
+    expect(page.locator("#app-dialog-cancel")).to_be_focused()
+    page.click("#app-dialog-action")
     expect(page.locator("#machines .remote")).to_have_count(0)
     expect(page.locator("#machine-result-note")).to_have_text("Removed work-laptop.")
     assert m.proc is not None and m.proc.wait(15) == EXIT_FINAL
@@ -210,8 +212,9 @@ def test_cancel_reject_and_an_expired_code(ui: UI, hosted: InProcBroker, machine
     m.pair(pair_code(page))
     card = page.locator('.machine-card.st-pending[data-machine="lab-pc"]')
     expect(card).to_contain_text("its dialer isn't connected")
-    page.once("dialog", lambda d: d.accept())
     page.click('[data-focus="reject:lab-pc"]')
+    expect(page.locator("#app-dialog-title")).to_have_text("Reject lab-pc?")
+    page.click("#app-dialog-action")
     expect(card).to_have_count(0)
     expect(page.locator("#machine-result-note")).to_have_text("Rejected lab-pc.")
     assert hosted.state.store.machine("lab-pc").removed

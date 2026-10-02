@@ -67,7 +67,7 @@
     detail: null,      // { room, name, data } from GET /api/rooms/{slug}/members/{name}
     inspSeq: 0,        // only the newest detail response is applied
     inspTimer: null,
-    inspUi: null,      // { menu, confirm, queueOpen, copied, pokeCopied }
+    inspUi: null,      // { menu, queueOpen, copied, pokeCopied }
     insp: {},          // references to Inspector nodes built here (ids are not looked up)
     rowRefs: new Map(),  // member name -> its row button, for focus on "back"
     pop: null,         // composer popover: { kind: 'palette'|'mentions', items, sel, start }
@@ -109,6 +109,102 @@
     const b = el('button', cls, text);
     b.type = 'button';
     return b;
+  }
+
+  // One modal for actions, notices, and the New room form. The dialog's native close event
+  // handles both Esc and Cancel; every caller gets the same answer and focus goes back to its opener.
+  let dialogQueue = Promise.resolve();
+  function openDialog(options) {
+    const next = dialogQueue.then(function () {
+      return new Promise(function (resolve) {
+        const dlg = $('app-dialog');
+        const opener = document.activeElement;
+        const form = el('form', 'app-dialog-form');
+        form.noValidate = true;
+        const title = el('h2', null, options.title);
+        title.id = 'app-dialog-title';
+        form.append(title);
+        if (options.body) {
+          const body = el('p', 'app-dialog-body', options.body);
+          body.id = 'app-dialog-body';
+          form.append(body);
+        }
+        let name = null;
+        let validName = null;
+        if (options.kind === 'room') {
+          const label = el('label', null, 'Name');
+          label.setAttribute('for', 'app-dialog-name');
+          name = el('input');
+          name.id = 'app-dialog-name';
+          name.type = 'text';
+          name.autocomplete = 'off';
+          name.placeholder = '#build';
+          name.setAttribute('aria-describedby', 'app-dialog-error');
+          const error = el('p', 'app-dialog-error');
+          error.id = 'app-dialog-error';
+          error.setAttribute('role', 'status');
+          form.append(label, name, error);
+          validName = function () {
+            const value = String(name.value || '').trim().toLowerCase();
+            const room = value.startsWith('#') ? value : '#' + value;
+            const valid = /^#[a-z0-9][a-z0-9_-]{0,31}$/.test(room);
+            error.textContent = !value ? '' : !valid
+              ? 'Use a name like #build: letters, numbers, _ or -, up to 32 characters.'
+              : state.rooms.has(room) ? room + ' already exists. Pick another name.' : '';
+            action.disabled = !valid || state.rooms.has(room);
+            return action.disabled ? null : room;
+          };
+        }
+        const buttons = el('div', 'app-dialog-buttons');
+        const cancel = btn('btn', 'Cancel');
+        cancel.id = 'app-dialog-cancel';
+        const action = btn(options.danger ? 'btn-danger' : 'btn-primary', options.action);
+        action.id = 'app-dialog-action';
+        action.type = 'submit';
+        if (options.kind === 'notice') cancel.classList.add('hidden');
+        buttons.append(cancel, action);
+        form.append(buttons);
+        dlg.replaceChildren(form);
+        dlg.returnValue = 'cancel';
+        let answer = null;
+        dlg.onclose = function () {
+          dlg.onclose = null;
+          const returnTo = opener && opener.id === 'insp-kick' ? $('insp-kick') : opener;
+          if (returnTo && typeof returnTo.focus === 'function') returnTo.focus();
+          resolve(dlg.returnValue === 'action' ? answer : null);
+        };
+        cancel.addEventListener('click', function () { dlg.close('cancel'); });
+        action.addEventListener('click', function (ev) {
+          ev.preventDefault();
+          form.requestSubmit();
+        });
+        form.addEventListener('submit', function (ev) {
+          ev.preventDefault();
+          if (options.kind === 'room') {
+            answer = validName();
+            if (!answer) return;
+          } else answer = true;
+          dlg.close('action');
+        });
+        if (name) {
+          name.addEventListener('input', validName);
+          validName();
+        }
+        dlg.showModal();
+        (name || (options.danger ? cancel : action)).focus();
+      });
+    });
+    dialogQueue = next.then(function () {}, function () {});
+    return next;
+  }
+
+  function confirmDialog(title, body, action, danger) {
+    return openDialog({ title: title, body: body, action: action, danger: danger });
+  }
+
+  function confirmKick(name, room) {
+    return confirmDialog('Kick ' + name + ' from ' + room + '?',
+      'It is removed and its membership revoked.', 'Kick', true);
   }
 
   // removeAttribute where the DOM has it (the harness's fake DOM does not)
@@ -999,7 +1095,7 @@
     state.inspect = { room: r.name, name: m.name, host: m.host || '' };
     if (!same) {
       state.detail = null;
-      state.inspUi = { menu: false, confirm: false, queueOpen: false, copied: false, pokeCopied: false };
+      state.inspUi = { menu: false, queueOpen: false, copied: false, pokeCopied: false };
     }
     setPaneView(true);
     showPane();
@@ -1358,34 +1454,19 @@
     kick.dataset.focus = 'kick';
     kick.title = '/kick ' + m.name + ': remove it and revoke its membership';
     kick.append(icon('kick'), 'Kick ' + m.name);
-    kick.addEventListener('click', function () { setConfirm(true); });
-    refs.kick = kick;
-    const confirm = el('div', 'confirm' + (ui.confirm ? '' : ' hidden'));
-    confirm.id = 'kick-confirm';
-    confirm.setAttribute('role', 'group');
-    confirm.setAttribute('aria-label', 'Confirm kick');
-    const cancel = btn('btn', 'Cancel');
-    cancel.dataset.focus = 'kick-cancel';
-    cancel.addEventListener('click', function () { setConfirm(false); });
-    const doKick = btn('btn-danger', 'Kick');
-    doKick.dataset.focus = 'kick-do';
-    doKick.addEventListener('click', function () {
+    kick.addEventListener('click', async function () {
+      if (!await confirmKick(m.name, r.name)) return;
       const name = m.name;
       const at = r.members.indexOf(m);
       closeInspector(false);
       submitText('/kick ' + name, { confirmed: true });
-      // the kicked agent's row goes away with the next members frame, so focus the row that
-      // takes its place now; renderBuddies keeps it focused across that re-render
+      // The next members frame removes the row; focus its neighbour now.
       focusNear(at, name);
     });
-    const btns = el('div', 'dialog-buttons');
-    btns.append(cancel, doKick);
-    confirm.append(el('span', null, 'Kick ' + m.name + ' from ' + r.name + '? It is removed and its membership revoked.'), btns);
-    refs.confirm = confirm;
-    refs.cancel = cancel;
+    refs.kick = kick;
     const fine = el('p', 'fine');
     fine.append('Same as ', el('code', null, '/hold'), ', ', el('code', null, '/catchup'), ' and ', el('code', null, '/kick'), ' in the composer.');
-    actions.append(menu, row, kick, confirm, fine);
+    actions.append(menu, row, kick, fine);
 
     body.replaceChildren(id);
     if (notes.length) body.append(attn);
@@ -1398,19 +1479,9 @@
   function setMenu(open) {
     if (!state.inspUi) return;
     state.inspUi.menu = !!open;
-    if (open) state.inspUi.confirm = false;
     renderInspector();
     if (open && state.insp.menuItems && state.insp.menuItems.length) state.insp.menuItems[0].focus();
     else if (!open && state.insp.catchup) state.insp.catchup.focus();
-  }
-
-  function setConfirm(open) {
-    if (!state.inspUi) return;
-    state.inspUi.confirm = !!open;
-    if (open) state.inspUi.menu = false;
-    renderInspector();
-    if (open && state.insp.cancel) state.insp.cancel.focus();
-    else if (!open && state.insp.kick) state.insp.kick.focus();
   }
 
   // put a command in the composer for the human to finish and send (nothing is sent here);
@@ -2060,8 +2131,9 @@
     const r = state.remotes.find(function (x) { return x.name === name; });
     if (!r) return;
     if (r.state === 'blocked' && ASK_BEFORE_ENABLE.has(r.reason) &&
-        !window.confirm(name + ' is blocked (' + r.reason + '): ' + (r.hint || '') + '\n\nEnable it and dial ' +
-                        (r.dest || name) + ' again?')) return;
+        !await confirmDialog('Enable ' + name + '?',
+          'It is blocked (' + r.reason + '): ' + (r.hint || '') + ' Dial ' + (r.dest || name) + ' again.',
+          'Enable', false)) return;
     state.enabling.add(name);
     renderRemotesPanel();
     remoteResult(name, 'dialing ' + name + '…');
@@ -2080,7 +2152,8 @@
   }
 
   async function disableRemote(name) {
-    if (!window.confirm('Disable ' + name + '? Its members go offline until you enable it again.')) return;
+    if (!await confirmDialog('Disable ' + name + '?',
+      'Its members go offline until you enable it again.', 'Disable', true)) return;
     try {
       const res = await api('POST', '/api/remotes/' + encodeURIComponent(name) + '/disable', {});
       await loadRemotes().catch(function () {});
@@ -2653,10 +2726,10 @@
   }
 
   async function removeMachine(name, pending) {
-    const q = pending
-      ? 'Reject ' + name + '? Its key is forgotten and its dialer stops for good. To pair it again, make a new code.'
-      : 'Remove ' + name + '? Its agents leave every room at once, and its dialer stops for good. To bring it back, pair it again with a new code.';
-    if (!window.confirm(q)) return;
+    if (!await confirmDialog((pending ? 'Reject ' : 'Remove ') + name + '?', pending
+      ? 'Its key is forgotten and its dialer stops for good. To pair it again, make a new code.'
+      : 'Its agents leave every room at once, and its dialer stops for good. To bring it back, pair it again with a new code.',
+    pending ? 'Reject' : 'Remove', true)) return;
     machineResult('note', '');
     state.machineBusy.set(name, 'remove');
     renderMachinesPanel();
@@ -2883,7 +2956,8 @@
   }
 
   async function logoutEverywhere() {
-    if (!window.confirm('Sign out every browser you\'re signed in to, this one included? Your password and passkeys stay.')) return;
+    if (!await confirmDialog('Sign out everywhere?',
+      'Every browser, including this one, signs out. Your password and passkeys stay.', 'Sign out', true)) return;
     try { await api('POST', '/logout', { all: true }); } catch (e) { /* already signed out */ }
     location.replace('/');
   }
@@ -3084,8 +3158,9 @@
   }
 
   async function resetPerson(p) {
-    if (!window.confirm('Give ' + p.name + ' a new one-time password? They are signed out everywhere, and their'
-        + ' password stops working. Their passkeys still sign them in.')) return;
+    if (!await confirmDialog('Give ' + p.name + ' a new one-time password?',
+      'They are signed out everywhere, and their password stops working. Their passkeys still sign them in.',
+      'Reset password', true)) return;
     state.peopleBusy.set(p.id, 'reset');
     renderPeoplePanel();
     try {
@@ -3103,8 +3178,9 @@
   }
 
   async function removePerson(p) {
-    if (!window.confirm('Remove ' + p.name + '? They are signed out everywhere at once, and their password and'
-        + ' passkeys stop working. Their messages stay.')) return;
+    if (!await confirmDialog('Remove ' + p.name + '?',
+      'They are signed out everywhere at once, and their password and passkeys stop working. Their messages stay.',
+      'Remove', true)) return;
     state.peopleBusy.set(p.id, 'remove');
     renderPeoplePanel();
     try {
@@ -3212,12 +3288,13 @@
     }
     // /close removes every agent and the room row: ask first (false gives the text back)
     if (text.split(/\s+/)[0].toLowerCase() === '/close' &&
-        !window.confirm('Close ' + r.name + '? ' + r.members.length + ' agent(s) leave it and its tab goes away; ' +
-                        'the history is kept and you can reopen it from Closed rooms.')) return false;
+        !await confirmDialog('Close ' + r.name + '?',
+          plural(r.members.length, 'agent', 'agents') + ' leave it and its tab goes away. You can reopen it from Closed.',
+          'Close room', true)) return false;
     // /kick removes an agent and revokes its membership: ask first too
     const words = text.split(/\s+/);
     if (words[0].toLowerCase() === '/kick' && words[1] && !(opts && opts.confirmed) &&
-        !window.confirm('Kick ' + words[1] + ' from ' + r.name + '? It is removed and its membership revoked.')) return false;
+        !await confirmKick(words[1], r.name)) return false;
     const path = '/api/rooms/' + encodeURIComponent(r.slug);
     try {
       if (text.startsWith('//')) {
@@ -3257,7 +3334,8 @@
       $('input').focus();
     } catch (e) {
       if (state.rooms.size) renderLocal(String(e.message || e), true);
-      else window.alert(String(e.message || e));
+      else await openDialog({ kind: 'notice', title: 'Room not created',
+        body: String(e.message || e), action: 'Close' });
     }
   }
 
@@ -3272,12 +3350,12 @@
     $('join-preview').textContent = 'join switchboard room #' + name;
   }
 
-  // Esc closes the topmost thing: catch-up menu, kick confirm, composer popover, a sheet,
+  // Esc closes the topmost thing: a native dialog, catch-up menu, composer popover, a sheet,
   // the narrow drawer or sheet, then the Inspector. Focus goes back to what opened it.
   function onEscape() {
+    if ($('app-dialog').open || $('confirm-dialog').open) return;
     const ui = state.inspUi;
     if (state.inspect && ui && ui.menu) return setMenu(false);
-    if (state.inspect && ui && ui.confirm) return setConfirm(false);
     if (state.pop) {
       closePop();
       $('input').focus();
@@ -3376,10 +3454,9 @@
       updatePopover();
     });
 
-    $('new-room').addEventListener('click', function () {
-      const name = window.prompt('New room name (for example #build):', '#');
-      if (!name || name === '#') return;
-      createRoom(name);
+    $('new-room').addEventListener('click', async function () {
+      const name = await openDialog({ kind: 'room', title: 'New room', action: 'Create room' });
+      if (name) createRoom(name);
     });
     // first run: the Welcome form creates the room named in its field ("Create #build" by default)
     $('create-form').addEventListener('submit', function (ev) {
