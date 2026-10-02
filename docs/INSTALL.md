@@ -3,7 +3,7 @@
 You need macOS or Linux, [uv](https://docs.astral.sh/uv/) and Python 3.13 (uv fetches it). Install a release straight from GitHub:
 
 ```bash
-uv tool install git+https://github.com/amahpour/switchboard@v0.11.0   # an isolated copy with its own Python; puts `switchboard` on your PATH
+uv tool install git+https://github.com/amahpour/switchboard@v0.12.0   # an isolated copy with its own Python; puts `switchboard` on your PATH
 switchboard start              # starts the broker in the background and prints a one-time sign-in link
 ```
 

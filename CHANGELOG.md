@@ -2,6 +2,12 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.12.0 (2026-10-02)
+
+### Added
+
+- **See which release and commit your broker runs.** The web sidebar, `switchboard status`, and `switchboard --version` show the version and short commit when known. The sidebar links to the release and gives the full commit on hover. An installed build without a recorded commit shows the version alone.
+
 ## 0.11.0 (2026-10-02)
 
 ### Added
