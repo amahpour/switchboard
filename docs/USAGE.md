@@ -30,7 +30,7 @@ An agent's normal replies are never posted, only `say()`. Its text starting with
 
 | Command | What it does |
 |---|---|
-| `switchboard status` | Is the broker up, which port, which rooms, the Codex link |
+| `switchboard status` | Is the broker up, its version and build commit, which port, which rooms, the Codex link |
 | `switchboard login [--open]` | A fresh one-time sign-in link |
 | `switchboard logout --all` | Sign out every browser |
 | `switchboard rooms` | List open rooms |
@@ -50,6 +50,8 @@ An agent's normal replies are never posted, only `say()`. Its text starting with
 - `report`: headings, and each rule that fired.
 
 It never colours text from agents, remote machines or config files: that text is cleaned of escape codes first, and colour only ever wraps around it. Colour is off in a pipe or a file, with `--json`, when `NO_COLOR` is set (see [no-color.org](https://no-color.org)) and for `TERM=dumb`. `FORCE_COLOR` or `CLICOLOR_FORCE` turns it on in a pipe, and every command takes `--color auto|always|never` to decide yourself. It uses the basic terminal colours plus bold and dim, with no backgrounds, so it reads on dark and light themes.
+
+`switchboard --version` also shows the installed version and the first seven characters of its build commit when known. A package without recorded build information shows only the version.
 
 Every command takes `--home DIR` (default `$SWITCHBOARD_HOME`, else `~/.switchboard`). Settings go in `~/.switchboard/config.toml`; every key is optional (see [DESIGN.md §2](DESIGN.md)), for example `human_name = "alice"` (the default is your login name, lowercased, or `me` if that isn't a usable screen name: invalid, reserved, or the start of an agent name such as `dev` for devin-1), `port = 7419`, `[delivery] budget_per_hour = 60`. `[delivery] hop_limit = 6` is the loop-guard limit a **new** room starts with (0 turns the guard off); an existing room keeps its own limit, which `/hops <n>` changes live.
 
@@ -130,6 +132,7 @@ Deliveries that a pause, a `/hold` or an approval prompt held up get a table of 
 
 - The UI lives only at `http://switchboard.localhost:<port>/`; `localhost` and `127.0.0.1` get "421 open http://switchboard.localhost:…".
 - **Layout.** Three columns: the sidebar (rooms with unread counts, **Closed (n)**, your remote machines with their link state, and you at the bottom with the connection state and a sign-off button), the conversation, and the right pane with **Members**. The pane button in the header hides and shows the right pane. Light and dark follow your system setting.
+- **Running release.** The bottom of the sidebar shows the broker's version and short commit. Its link opens that version's GitHub Release; hover it for the full commit. When the build has no recorded commit, it shows the version alone.
 - **Header chips.** Running or **Paused** (with the reason), the wake budget (`Budget 47/60`, a small meter), `Hops n/limit` (agent messages in a row / the loop-guard limit, or **loop guard off ⚠** when the room's limit is 0), and a red **Approvals off: codex-1** chip when a member runs without approval prompts. The pause button next to them sends `/pause` or `/resume`.
 - **Members** shows each agent's status dot (idle, busy, waiting for approval, starting, offline, or parked), harness, queued and in-flight counts, "held", "env shared", its delivery tier (with "provisional" where it applies; a Codex member shows `verifying...` until switchboard has checked its thread), a red warning when approvals are off (or unknown), its away message, and **Parked — needs a poke** with the reason. A member on a remote machine carries its host as a chip (`@fpga-pi`), and its messages come from `bench@fpga-pi`.
 - **The Inspector.** Click an agent (in Members, or its name on a message) to slide the pane over to it: what needs attention, its session id (with a copy button), when it joined and was last seen, its queued messages (expand to list them), the last few deliveries (turn starts, steers, mid-task context, `wait()` answers, parks, its own posts and passes), and **Hold/Release**, **Catch up on…** and **Kick** buttons. They run the same `/hold`, `/catchup` and `/kick` commands you can type (Catch up only fills the composer; you send it). The Inspector reads `GET /api/rooms/<room>/members/<name>`, which only your signed-in browser can call and which carries message ids, never message text.

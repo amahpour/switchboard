@@ -867,6 +867,12 @@
     return out;
   }
 
+  // A first-party UI link also uses mdLink's one checked target assignment. Its destination is
+  // fixed by app.js, so the message-only external-link marker and visible URL are not needed.
+  function externalLink(label, raw, localHost) {
+    return mdLink([document.createTextNode(label)], raw, { localHost: localHost }, label)[0];
+  }
+
   function blocked(textNodes, why) {
     const title = why === 'local' ? TITLE_LOCAL : why === 'credentials' ? TITLE_CREDS : TITLE_SCHEME;
     const span = el('span', 'md-blocked');
@@ -1085,5 +1091,6 @@
     return out;
   }
 
-  window.SBMarkdown = Object.freeze({ render: render, firstLine: firstLine, safeUrl: safeUrl });
+  window.SBMarkdown = Object.freeze({ render: render, firstLine: firstLine, safeUrl: safeUrl,
+    externalLink: externalLink });
 })();

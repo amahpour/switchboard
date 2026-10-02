@@ -207,6 +207,22 @@ def test_problem_watch_catches_a_csp_violation(ui: UI) -> None:
     ui.problems.clear()
 
 
+def test_sidebar_shows_running_release_and_full_commit(ui: UI) -> None:
+    """The footer makes the broker build visible and links its release, even on a phone."""
+    for options in ({}, PHONE):
+        page = ui.open(room=None, **options)
+        me = page.evaluate("() => fetch('/api/me').then(r => r.json())")
+        assert re.fullmatch(r"[0-9a-f]{40}", me["commit"]), me
+        if options:
+            page.click("#rooms-toggle")
+        release = page.locator("#running-release")
+        expect(release).to_be_visible()
+        expect(release).to_have_text(f"switchboard {me['version']} ({me['commit'][:7]})")
+        expect(release).to_have_attribute(
+            "href", f"https://github.com/amahpour/switchboard/releases/tag/v{me['version']}")
+        assert me["commit"] in (release.get_attribute("title") or "")
+
+
 def test_app_loads_connected_with_rooms_members_and_chips(ui: UI) -> None:
     page = ui.context().new_page()
     resp = page.goto(ui.world.broker.login_url())

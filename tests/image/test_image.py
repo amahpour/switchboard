@@ -259,7 +259,8 @@ def image() -> str:
     if IMAGE:
         docker("image", "inspect", IMAGE)
         return IMAGE
-    docker("build", "-t", "switchboard:test", str(ROOT), timeout=1200.0)
+    revision = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip()
+    docker("build", "--build-arg", f"BUILD_COMMIT={revision}", "-t", "switchboard:test", str(ROOT), timeout=1200.0)
     return "switchboard:test"
 
 
@@ -276,6 +277,18 @@ def stack(image: str, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stac
 
 
 # ----------------------------------------------------------------------- tests
+def test_image_reports_its_revision_label(stack: Stack) -> None:
+    """The running broker's full commit and the installed CLI agree with the OCI revision."""
+    label = docker("image", "inspect", stack.image, "--format",
+                   '{{ index .Config.Labels "org.opencontainers.image.revision" }}').stdout.strip()
+    assert re.fullmatch(r"[0-9a-f]{40}", label), label
+    status = json.loads(stack.cli("status", "--json"))
+    assert status["commit"] == label
+    shown = docker("run", "--rm", "--network", "none", "--entrypoint", "/opt/switchboard/bin/switchboard",
+                   stack.image, "--version").stdout.strip()
+    assert shown.endswith(f"({label[:7]})"), shown
+
+
 def test_claim_it_from_the_log_and_sign_in_with_a_passkey(stack: Stack, playwright: Any) -> None:
     """The first thing that happens to a fresh deployment (issues #41, #61): the log holds one
     one-time password and its link, opened in Chromium through the proxy; a passkey (a virtual

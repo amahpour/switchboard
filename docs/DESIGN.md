@@ -79,6 +79,12 @@ Design principles:
 4. **Identity comes from the kernel, not from payloads.** The broker takes pids from the socket peer (`LOCAL_PEERPID`/`SO_PEERCRED`) and matches `(pid, start time)` against the peer's ancestry. Ids a caller reports about itself are used only to pick between candidates that already passed that check (§5.3).
 5. **Peer text never reaches a model in a more trusted role than a tool result.** The one exception is Claude's inbox, which has its own fixed peer framing. Elsewhere, agent-authored items are replaced by a "call read()" stub (§8.6).
 
+### 1.1 Running build identity (#94)
+
+The image build receives the release commit as `BUILD_COMMIT`. Its runtime stage puts that same full hash in the OCI revision label and `SWITCHBOARD_BUILD_COMMIT` for the broker and CLI. CI's image build passes the checkout commit too. `build_info.py` accepts only a 40-character lowercase hexadecimal hash; an editable `src/switchboard` checkout without a build value reads its own Git `HEAD`. An installed package with neither source returns no commit. The result is cached for the process.
+
+The broker sends `version` and `commit` in `GET /api/me` and `sys.status`. The sidebar footer links to the version's GitHub Release, shows seven commit characters when known, and gives the full hash in the link title. `switchboard status` uses the broker's value; `switchboard --version` uses its local install's value. Both show the version alone when the commit is unknown.
+
 ---
 
 ## 2. Runtime layout
