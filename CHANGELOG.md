@@ -2,6 +2,12 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.14.0 (2026-10-02)
+
+### Changed
+
+- **The web UI asks in its own dialogs.** Confirmations, New room and error notices now match the app in light and dark and on phones. Destructive actions start on Cancel, and a new room's name is checked as you type.
+
 ## 0.13.0 (2026-10-02)
 
 ### Added
