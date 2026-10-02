@@ -73,9 +73,7 @@ import itertools
 import json
 import logging
 import logging.handlers
-import math
 import os
-import re
 import signal
 import socket
 import stat
@@ -313,31 +311,7 @@ def replaced_by_other(paths: Paths, me: tuple[int, float]) -> bool:
     return other[1] + 0.011 >= me[1] and _is_satellite(*other)
 
 
-BOOT_ID_RE = re.compile(r"^[0-9a-f-]{8,64}$")
-
-
-def boot_time(paths: Paths, boot_id: str, current: float) -> float:
-    """The boot time this home's satellites compute start times from during boot
-    ``boot_id``: the first one's reading of /proc/stat's btime, kept in ``run/boot_time``.
-    btime moves when the wall clock is stepped (a Pi without an RTC syncing NTP, a WSL2
-    resume), and every reconnect starts a new satellite: without this, the same process
-    would get a new start time, so its watched pair would read as dead and its MCP server
-    as another process (§27.4.6)."""
-    f = paths.run_dir / "boot_time"
-    try:
-        saved_id, saved = f.read_text(encoding="ascii").split()
-        v = float(saved)
-        if saved_id == boot_id and math.isfinite(v) and v >= 0:
-            return v
-    except (OSError, ValueError, UnicodeDecodeError):
-        pass
-    tmp = f.with_name(f".{f.name}.{os.getpid()}.tmp")
-    with contextlib.suppress(OSError):
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="ascii") as out:
-            out.write(f"{boot_id} {current!r}\n")
-        os.replace(tmp, f)
-    return current
+boot_time = proc.boot_time  # the satellite and the broker share one pin per home and boot
 
 
 def pin_linux_clock(paths: Paths) -> str:
@@ -346,16 +320,7 @@ def pin_linux_clock(paths: Paths) -> str:
     if not sys.platform.startswith("linux"):
         return "none"
     proc.set_no_spawn()
-    try:
-        with open("/proc/sys/kernel/random/boot_id", encoding="ascii") as f:
-            bid = f.read().strip()
-        now_btime = proc.read_linux_btime()
-    except (OSError, ValueError, UnicodeDecodeError):
-        return "no boot id"
-    if not BOOT_ID_RE.match(bid) or now_btime <= 0:
-        return "no boot id"
-    proc.pin_btime(boot_time(paths, bid, now_btime))
-    return "pinned"
+    return proc.pin_home_btime(paths)
 
 
 # ----------------------------------------------------------- local clients

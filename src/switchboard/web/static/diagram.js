@@ -119,6 +119,19 @@
     return msg.length > MAX_ERROR ? msg.slice(0, MAX_ERROR - 1) + '…' : msg;
   }
 
+  function safeDiagnostic(err) {
+    const raw = String((err && (err.message || err.str)) || err || '').trim();
+    if (raw.startsWith('No diagram type detected matching given configuration for text:')) {
+      return 'Mermaid found no diagram type';
+    }
+    const line = raw.match(/(?:^|\n)Parse error on line ([1-9][0-9]{0,5})\b/);
+    if (!line) return 'Mermaid could not parse this diagram';
+    // Only parser token names may cross into a human post. The source line and `got` token do not.
+    const expected = Array.from(raw.matchAll(/(?:^|\n)Expecting ((?:'[A-Z][A-Z0-9_]*'(?:, )?)+), got /g)).pop();
+    return 'Parse error on line ' + line[1] +
+      (expected ? ': Expecting ' + expected[1].slice(0, 240) : '');
+  }
+
   function parts(box) {
     let fig = box.querySelector('.md-diagram');
     if (!fig) {
@@ -161,10 +174,13 @@
       shown.set(box, { source: source, button: button });
       button.textContent = 'Show code';
     }, function (err) {
+      const message = errorText(err);
       p.fig.shadowRoot.replaceChildren();
-      p.note.textContent = "Can't draw this diagram: " + errorText(err);
+      p.note.textContent = "Can't draw this diagram: " + message;
       box.classList.add('md-diagram-failed');
       showCode(box, button);
+      box.dispatchEvent(new CustomEvent('diagramerror',
+        { bubbles: true, detail: { diagnostic: safeDiagnostic(err) } }));
     });
   }
 

@@ -176,6 +176,9 @@ def run_foreground(
         return 1
     os.umask(0o077)
     paths.ensure()
+    from switchboard.broker import proc
+
+    proc.pin_home_btime(paths)  # before the pidfile records this process's start
     lock_fd = os.open(paths.lockfile, os.O_RDWR | os.O_CREAT, 0o600)
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -350,7 +353,7 @@ def stop(paths: Paths, out: Any = None) -> int:
         return _sigterm_fallback(paths, pf, out)
     deadline = time.monotonic() + STOP_WAIT_S
     while time.monotonic() < deadline:
-        if ping(paths.sock, timeout=0.5) is None and (pf is None or not _pid_matches(pf)):
+        if ping(paths.sock, timeout=0.5) is None and (pf is None or not _pid_matches(paths, pf)):
             print("switchboard stopped", file=out)
             return 0
         time.sleep(0.1)
@@ -358,20 +361,21 @@ def stop(paths: Paths, out: Any = None) -> int:
     return 1
 
 
-def _pid_matches(pf: tuple[int, float]) -> bool:
+def _pid_matches(paths: Paths, pf: tuple[int, float]) -> bool:
     from switchboard.broker import proc
 
+    proc.pin_home_btime(paths)
     return proc.alive(pf[0], pf[1])
 
 
 def _sigterm_fallback(paths: Paths, pf: tuple[int, float] | None, out: Any) -> int:
-    if pf is None or not _pid_matches(pf):
+    if pf is None or not _pid_matches(paths, pf):
         print("switchboard is not running", file=out)
         return 0
     os.kill(pf[0], signal.SIGTERM)
     deadline = time.monotonic() + STOP_WAIT_S
     while time.monotonic() < deadline:
-        if not _pid_matches(pf):
+        if not _pid_matches(paths, pf):
             print("switchboard stopped (SIGTERM)", file=out)
             return 0
         time.sleep(0.1)

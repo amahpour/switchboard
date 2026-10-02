@@ -121,6 +121,7 @@ def running_pid(paths: Paths) -> int | None:
         pid, start = int(pid_s), float(start_s)
     except (OSError, ValueError):
         return None
+    proc.pin_home_btime(paths)
     if not proc.alive(pid, start):
         return None
     words = proc.argv(pid, start).split()

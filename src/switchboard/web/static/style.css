@@ -973,6 +973,14 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.md-ask-fix {
+  display: block;
+  width: fit-content;
+  height: auto;
+  margin-top: 6px;
+  padding: 4px 8px;
+  color: var(--fg);
+}
 /* where Mermaid draws before the drawing moves into its box: laid out (it measures text) but
    off-screen and invisible */
 .md-diagram-stage {
