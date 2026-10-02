@@ -2,6 +2,17 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.11.0 (2026-10-02)
+
+### Added
+
+- **Ask an agent to fix a Mermaid diagram that fails to draw.** The error offers a one-click reply to a current member, @mentioning it with a safe diagnosis that never repeats the diagram source. Agents also receive a short warning about semicolons and punctuation in Mermaid labels when they join a room.
+- **Open a drawn Mermaid diagram full screen.** The Full screen button expands it to fit the browser window in light or dark mode. Esc returns to the still-drawn message. Browsers without element full-screen support keep the in-message diagram.
+
+### Fixed
+
+- **Keep a running dialer and live local sessions visible after a Linux clock step.** On WSL2 or another machine where `/proc/stat`'s boot time moves, `status`, `stop`, `start`, `remote remove` and `remote join` now check the same process start time the dialer recorded. A broker restart no longer ends live local sessions for that reason, and the broker's stop fallback still recognizes its pidfile.
+
 ## 0.10.0 (2026-10-01)
 
 ### Added
