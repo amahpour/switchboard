@@ -948,7 +948,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             text = body.get("text")
             if not isinstance(text, str):
                 raise ServiceError("bad_request", "text is required")
-            msg = state.service.human_say(slug, text, via="web", person=(w.name, w.person_id))
+            msg = state.service.human_say(slug, text, via="web", person=(w.name, w.person_id),
+                                          reply_to=body.get("reply_to"))
             return _ok({"id": msg.id})
         except ServiceError as e:
             return _svc_err(e)

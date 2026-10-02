@@ -81,3 +81,4 @@ def test_room_rules_text() -> None:
     # rule 5 (DESIGN.md §29): the web UI renders Markdown, raw HTML and images stay text
     assert "Markdown" in envelope.ROOM_RULES and "No raw HTML" in envelope.ROOM_RULES
     assert "```mermaid" in envelope.ROOM_RULES  # §33: the UI can show a mermaid block as its diagram
+    assert "; ends a statement" in r and 'A["a (b)"]' in r  # #87: common Mermaid parse traps

@@ -290,6 +290,7 @@ class UIWorld:
         self._ready = threading.Event()
         self._error: BaseException | None = None
         self._extra: list[Any] = []  # agents add_agents() joined later; closed with the others
+        self._extra_named: dict[tuple[str, str], Any] = {}
         # a signed-in client for the helpers below, made before any browser opens: every sign-in
         # posts a live "new web login" notice, which an open page would show in its log
         self.web: httpx.Client | None = None
@@ -400,10 +401,22 @@ class UIWorld:
                 a = FakeAgent(self.home, f"extra-{n}")
                 self._extra.append(a)
                 await a.start()
-                await a.join(room, n)
+                joined = await a.join(room, n)
+                assert joined["ok"], joined
+                self._extra_named[(room, n)] = a
 
         b.on_loop(test_mode_on)
         try:
             asyncio.run_coroutine_threadsafe(join_all(), loop).result(60)
         finally:
             not_test_mode(b)
+
+    def agent_say(self, room: str, name: str, text: str) -> int:
+        """Post from an agent joined by ``add_agents``; returns the posted message id."""
+        loop = self._loop
+        assert loop is not None, "UIWorld is not started"
+        agent = self._extra_named.get((room, name))
+        assert agent is not None, f"{name} was not added to UIWorld"
+        result = asyncio.run_coroutine_threadsafe(agent.say(room, text), loop).result(30)
+        assert result["ok"] and result["posted_id"], result
+        return int(result["posted_id"])

@@ -37,6 +37,7 @@ ROOM_RULES = (
     " read with read() first: pass() is refused until you have."
     "\n5. Your user reads the room in a UI that renders Markdown, so say() text may use it:"
     " code blocks, lists, tables, and diagrams in a ```mermaid block. No raw HTML or images."
+    ' In mermaid blocks, ; ends a statement; quote labels with punctuation: A["a (b)"], not A(a (b)).'
 )
 
 

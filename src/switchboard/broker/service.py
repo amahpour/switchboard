@@ -44,6 +44,7 @@ from switchboard.report import _safe
 from switchboard.store import Ambiguous, Conflict, NotFound, Store, StoreError
 
 log = logging.getLogger("switchboard.service")
+MAX_MESSAGE_ID = 2**63 - 1  # SQLite INTEGER; larger Python ints raise OverflowError at the query
 
 
 class ServiceError(Exception):
@@ -614,8 +615,19 @@ class RoomService:
             self.delivery.on_message(msg)
         return msg
 
+    def reply_target(self, room: Room, reply_to: Any) -> Message | None:
+        """Validate a reply id for both human and agent says before querying SQLite."""
+        if reply_to is None:
+            return None
+        if type(reply_to) is not int or not 0 < reply_to <= MAX_MESSAGE_ID:
+            raise ServiceError("bad_request", "reply_to must be a message id")
+        target = self.store.get_message(reply_to)
+        if target is None or target.room_id != room.id or target.kind != "chat":
+            raise ServiceError("bad_request", f"reply_to {reply_to} is not a message in {room.name}")
+        return target
+
     def human_say(self, name: str, text: str, via: str, *, skip: tuple[int, ...] = (),
-                  person: tuple[str, int | None] | None = None) -> Message:
+                  person: tuple[str, int | None] | None = None, reply_to: int | None = None) -> Message:
         """A message from a human. Posted literally, never parsed as a command.
         ``skip``: memberships that get no delivery of it (only ``/catchup`` passes any: its
         subjects, §26). ``person``: who, on a hosted broker with people (§32): their name
@@ -632,6 +644,7 @@ class RoomService:
                 "bad_request",
                 f"message too long ({len(text)} > {self.cfg.delivery.max_msg_chars} characters)",
             )
+        self.reply_target(room, reply_to)
         mentions = parse_mentions(text, self.mention_names(room))
         msg = self._post(
             room,
@@ -639,6 +652,7 @@ class RoomService:
             sender_kind="human",
             via=via,
             text=text,
+            reply_to=reply_to,
             mentions=mentions,
             skip_memberships=skip,
             sender_person_id=person[1] if person is not None else None,
