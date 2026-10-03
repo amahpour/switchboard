@@ -332,7 +332,8 @@ def test_claim_it_from_the_log_and_sign_in_with_a_passkey(stack: Stack, playwrig
         assert (got["claimed"], got["passkeys"], got["claim"]) == (True, True, False)
         assert stack.https("GET", "/setup")[0] == 303
         # sign off, then in again with the passkey
-        page.click("#logout")
+        page.click("#me-settings")
+        page.click("#settings-sign-out")
         page.wait_for_selector("#passkey-btn:visible", timeout=15_000)
         page.screenshot(path=str(ARTIFACTS / "sign-in-passkey.png"))
         page.click("#passkey-btn")
