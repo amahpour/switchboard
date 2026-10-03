@@ -32,6 +32,8 @@ dev = [
     "playwright>=1.63.0",
     "pytest-playwright>=0.9.0",
     "pytest-split>=0.10",
+    "ruff>=0.16.10",
+    "mypy>=2.4.0",
 ]   # exact versions frozen in the committed uv.lock
 
 [build-system]
@@ -43,6 +45,20 @@ packages = ["src/switchboard"]
 
 [tool.uv]
 required-version = ">=0.7.13"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 110
+
+[tool.ruff.lint]
+# Existing findings are pinned by file, rule and source in .lint-baseline.json.
+# New violations fail; the baseline may only shrink.
+select = ["E4", "E7", "E9", "E501", "F", "I", "B"]
+
+[tool.mypy]
+python_version = "3.13"
+files = ["src/switchboard"]
+show_error_codes = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

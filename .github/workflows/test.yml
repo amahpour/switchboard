@@ -1,5 +1,6 @@
 # Pull requests only (issue #46; CONTRIBUTING.md, "CI"): main takes only PRs whose `CI` check
-# passed, so nothing re-runs the tests after a merge. The default test suite (no live agent
+# passed, so nothing re-runs the tests after a merge. Lint and static analysis, the default
+# test suite (no live agent
 # CLIs, no perf timings) on Linux and macOS, split into three shards per OS, with line coverage
 # combined across all of them (the README badge, which release.yml publishes after the merge),
 # the web UI in a real browser (Playwright, the `frontend` job), and the container image behind
@@ -65,6 +66,29 @@ jobs:
           python-version: "3.13"
       - run: uv sync --frozen
       - run: uv run --frozen pytest -q -p no:cacheprovider tests/unit/test_tree_scan.py
+
+  lint:
+    name: lint and static analysis
+    needs: changes
+    if: needs.changes.outputs.tests == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      UV_PYTHON_PREFERENCE: only-managed
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
+        with:
+          version: "0.7.13"
+          python-version: "3.13"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: "22"
+      - run: uv sync --frozen
+      - run: uv run --frozen python scripts/lint.py --base HEAD^1
 
   test:
     needs: changes
@@ -302,11 +326,11 @@ jobs:
 
   # The check the ruleset on main requires (CONTRIBUTING.md, "CI"). A job skipped by its `if`
   # reports success, but a check that never starts leaves a PR waiting forever, so this job
-  # always runs and judges the rest: `what changed` passed, and then either every test job
+  # always runs and judges the rest: `what changed` passed, and then either lint and every test job
   # passed or (docs only, a release PR) the tree scan did.
   ci:
     name: CI
-    needs: [changes, docs, test, twohost, frontend, image, coverage]
+    needs: [changes, docs, lint, test, twohost, frontend, image, coverage]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -322,7 +346,7 @@ jobs:
           tests = needs["changes"].get("outputs", {}).get("tests")
           if needs["changes"]["result"] != "success" or tests not in ("true", "false"):
               sys.exit("`what changed` didn't decide whether to run the tests")
-          want = ("test", "twohost", "frontend", "image", "coverage") if tests == "true" else ("docs",)
+          want = ("lint", "test", "twohost", "frontend", "image", "coverage") if tests == "true" else ("docs",)
           if failed := [job for job in want if needs[job]["result"] != "success"]:
               sys.exit(f"not passed: {', '.join(failed)}")
           print("tests ran and passed" if tests == "true" else "tests skipped (docs only or a release PR); tree scan passed")

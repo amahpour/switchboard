@@ -9,6 +9,7 @@
 #   3. ssh <dest> <client of broker.sock>  the peer is the client itself, under an sshd login
 # The key here is an ordinary unrestricted one (forwarding allowed), as a key that opens a
 # shell on this machine would be. User-level sshd on 127.0.0.1; see lib.sh.
+# shellcheck source=tests/manual/m8/lib.sh
 . "$(dirname "$0")/lib.sh"
 export LAUNCHER=$$
 

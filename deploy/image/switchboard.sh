@@ -23,6 +23,8 @@ if [ "$$" = 1 ]; then
 fi
 
 if [ "$(id -u)" != 0 ]; then
+  # tini is either empty or the intentional two-word command prefix "/usr/bin/tini --".
+  # shellcheck disable=SC2086
   exec $tini "$real" "$@"
 fi
 
@@ -38,5 +40,7 @@ if [ "$$" = 1 ]; then
 fi
 
 export HOME=/home/switchboard USER=switchboard LOGNAME=switchboard
+# tini is the same optional command prefix on the privilege-dropping path.
+# shellcheck disable=SC2086
 exec setpriv --reuid=switchboard --regid=switchboard --init-groups --no-new-privs \
   --inh-caps=-all --bounding-set=-all -- $tini "$real" "$@"

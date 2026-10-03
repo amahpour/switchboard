@@ -370,7 +370,7 @@
       opts.body = JSON.stringify(body || {});
     }
     const r = await fetch(path, opts);
-    let data = null;
+    let data;
     try { data = await r.json(); } catch (e) { data = null; }
     if (r.status === 401) {
       location.replace('/');
@@ -2673,7 +2673,7 @@
   }
 
   async function withFreshCheck(call) {
-    let me = null;
+    let me;
     try { me = await api('GET', '/api/me'); } catch (e) { me = null; }
     if (me) state.me = me;
     if (me && !me.fresh) await freshCheck();
