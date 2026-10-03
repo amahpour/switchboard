@@ -8,7 +8,7 @@ Schema versions: 1 (0.1.0 and 0.2.0), 2 (remote members: ``participants.host``,
 ``messages.sender_host``, the ``remotes`` table), 3 (a hosted broker's owner, §31:
 ``passkeys``, ``web_sessions.via``, ``link_machines``, and the owner's rows in ``meta``)
 4 (people, §32: ``people``, a person on passkeys, web sessions, machines and
-messages, where NULL is the owner), and 5 (per-person preferences, §29.2).
+messages, where NULL is the owner), 5 (per-person preferences, §34) and 6 (text size, §34).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -28,7 +28,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -160,7 +160,8 @@ CREATE UNIQUE INDEX people_active_name ON people(name) WHERE removed_at IS NULL;
 
 CREATE TABLE preferences(
   person_id INTEGER PRIMARY KEY CHECK(person_id >= 0),
-  theme TEXT NOT NULL DEFAULT 'system' CHECK(theme IN ('system','light','dark')));
+  theme TEXT NOT NULL DEFAULT 'system' CHECK(theme IN ('system','light','dark')),
+  text_size TEXT NOT NULL DEFAULT 'default' CHECK(text_size IN ('small','default','large','larger')));
 """
 
 TABLES = (
@@ -244,12 +245,20 @@ V4_TO_V5 = (
     "UPDATE meta SET value='5' WHERE key='schema_version'",
 )
 
+# v5 -> v6 (#79): existing choices keep their theme; every person starts at the former size.
+V5_TO_V6 = (
+    "ALTER TABLE preferences ADD COLUMN text_size TEXT NOT NULL DEFAULT 'default'"
+    " CHECK(text_size IN ('small','default','large','larger'))",
+    "UPDATE meta SET value='6' WHERE key='schema_version'",
+)
+
 
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
     the tables the step adds). Read from the module at run time, never cached."""
     all_steps = {1: (2, V1_TO_V2, ("remotes",)), 2: (3, V2_TO_V3, ("passkeys", "link_machines")),
-                 3: (4, V3_TO_V4, ("people",)), 4: (5, V4_TO_V5, ("preferences",))}
+                 3: (4, V3_TO_V4, ("people",)), 4: (5, V4_TO_V5, ("preferences",)),
+                 5: (6, V5_TO_V6, ())}
     out = []
     v = frm
     while v < SCHEMA_VERSION:

@@ -2993,7 +2993,7 @@
       option.setAttribute('aria-pressed', String(value === current));
       option.addEventListener('click', async function () {
         if (value === (((state.me || {}).preferences || {}).theme || 'system')) return;
-        for (const button of choices.children) button.disabled = true;
+        for (const button of appearance.querySelectorAll('button')) button.disabled = true;
         try {
           const result = await api('PUT', '/api/me/preferences', { theme: value });
           state.me.preferences = result.preferences;
@@ -3006,7 +3006,7 @@
         } catch (e) {
           $('settings-error').textContent = String(e.message || e);
         } finally {
-          for (const button of choices.children) button.disabled = false;
+          for (const button of appearance.querySelectorAll('button')) button.disabled = false;
         }
       });
       choices.append(option);
@@ -3015,6 +3015,37 @@
     error.id = 'settings-error';
     error.setAttribute('role', 'alert');
     appearance.append(themeLabel, choices, error);
+
+    const sizeLabel = el('span', 'settings-label', 'Text size');
+    const sizeChoices = el('div', 'settings-theme-options settings-text-options');
+    sizeChoices.setAttribute('role', 'group');
+    sizeChoices.setAttribute('aria-label', 'Text size');
+    const currentSize = ((state.me || {}).preferences || {}).text_size || 'default';
+    for (const [value, label] of [['small', 'Small'], ['default', 'Default'], ['large', 'Large'],
+      ['larger', 'Larger']]) {
+      const option = btn('settings-theme-option', label);
+      option.id = 'settings-text-' + value;
+      option.setAttribute('aria-pressed', String(value === currentSize));
+      option.addEventListener('click', async function () {
+        if (value === (((state.me || {}).preferences || {}).text_size || 'default')) return;
+        for (const button of appearance.querySelectorAll('button')) button.disabled = true;
+        try {
+          const result = await api('PUT', '/api/me/preferences', { text_size: value });
+          state.me.preferences = result.preferences;
+          document.documentElement.dataset.textSize = result.preferences.text_size;
+          for (const button of sizeChoices.children) {
+            button.setAttribute('aria-pressed', String(button.id === 'settings-text-' + result.preferences.text_size));
+          }
+          $('settings-error').textContent = '';
+        } catch (e) {
+          $('settings-error').textContent = String(e.message || e);
+        } finally {
+          for (const button of appearance.querySelectorAll('button')) button.disabled = false;
+        }
+      });
+      sizeChoices.append(option);
+    }
+    appearance.append(sizeLabel, sizeChoices);
 
     const account = el('section', 'settings-section');
     account.append(el('h3', null, 'Account'));
@@ -3036,6 +3067,7 @@
 
   function openSettings() {
     const themeAtOpen = (((state.me || {}).preferences || {}).theme || 'system');
+    const sizeAtOpen = (((state.me || {}).preferences || {}).text_size || 'default');
     if (phone()) setNav(false);
     openDialog({ kind: 'settings', title: 'Settings', build: buildSettings });
     // A fresh count and check status may have changed in another tab.
@@ -3048,6 +3080,14 @@
         window.dispatchEvent(new Event('switchboard-theme-change'));
         for (const button of document.querySelectorAll('.settings-theme-option')) {
           button.setAttribute('aria-pressed', String(button.id === 'settings-theme-' + me.preferences.theme));
+        }
+      }
+      if ((((state.me || {}).preferences || {}).text_size || 'default') !== sizeAtOpen) {
+        me.preferences.text_size = state.me.preferences.text_size;
+      } else if (me.preferences.text_size !== sizeAtOpen) {
+        document.documentElement.dataset.textSize = me.preferences.text_size;
+        for (const button of document.querySelectorAll('.settings-text-options button')) {
+          button.setAttribute('aria-pressed', String(button.id === 'settings-text-' + me.preferences.text_size));
         }
       }
       state.me = me;
@@ -3675,6 +3715,7 @@
       return;
     }
     document.documentElement.dataset.theme = (state.me.preferences || {}).theme || 'system';
+    document.documentElement.dataset.textSize = (state.me.preferences || {}).text_size || 'default';
     // Show the broker's build, with a release link and the full revision in the tooltip (§1.1).
     if (state.me && state.me.version) {
       const revision = state.me.commit;

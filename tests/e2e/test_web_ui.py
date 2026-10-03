@@ -641,6 +641,37 @@ def test_settings_theme_follows_the_person_and_sign_out_moves_inside(ui: UI) -> 
     expect(other.locator("html")).to_have_attribute("data-theme", "system")
 
 
+def test_text_size_scales_the_whole_ui_and_survives_reload_on_a_phone(ui: UI) -> None:
+    """Larger text reaches the log, controls and Inspector, persists, and fits at phone width."""
+    page = ui.open()
+    selectors = ("body", "#tabs .room", "#log .line.k-chat", "#input", "#buddy-list .member")
+    sizes = {selector: page.locator(selector).first.evaluate("e => parseFloat(getComputedStyle(e).fontSize)")
+             for selector in selectors}
+    page.click("#me-settings")
+    page.click("#settings-text-larger")
+    expect(page.locator("html")).to_have_attribute("data-text-size", "larger")
+    for selector, before in sizes.items():
+        after = page.locator(selector).first.evaluate("e => parseFloat(getComputedStyle(e).fontSize)")
+        assert after >= before * 1.25, (selector, before, after)
+    assert page.locator("#room-title").evaluate("e => e.scrollWidth <= e.clientWidth + 1")
+    page.keyboard.press("Escape")
+    page.locator('#buddy-list .member[data-name="claude-1"]').click()
+    expect(page.locator("#insp-name")).to_contain_text("claude-1")
+    expect(page.locator("#insp-name")).to_be_visible()
+    assert page.locator("#insp-name").evaluate("e => parseFloat(getComputedStyle(e).fontSize)") >= 20
+    page.reload()
+    expect(page.locator("html")).to_have_attribute("data-text-size", "larger")
+
+    phone = ui.open(**PHONE)
+    expect(phone.locator("html")).to_have_attribute("data-text-size", "larger")
+    assert phone.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+    phone.click("#rooms-toggle")
+    phone.click("#me-settings")
+    expect(phone.locator("#settings-text-larger")).to_have_attribute("aria-pressed", "true")
+    phone.click("#settings-text-default")  # keep the shared seeded broker's next tests at their default
+    expect(phone.locator("html")).to_have_attribute("data-text-size", "default")
+
+
 def test_typed_and_inspector_kick_use_the_same_dialog(ui: UI) -> None:
     """Typed /kick and the Inspector button share the title, body, and safe Cancel focus."""
     ui.world.create_room("#e2e-dialog-kick")

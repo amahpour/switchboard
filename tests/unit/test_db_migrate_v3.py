@@ -130,7 +130,7 @@ def test_the_backup_is_written_before_the_first_statement(tmp_path: Path) -> Non
     con.set_trace_callback(None)
     con.close()
     alters = [ok for sql, ok in seen if sql.lstrip().upper().startswith(("ALTER", "CREATE TABLE"))]
-    assert len(alters) == 3 + 5 + 1 and all(alters)  # v2 -> v3, v3 -> v4, v4 -> v5
+    assert len(alters) == 3 + 5 + 1 + 1 and all(alters)  # v2 -> v3 -> v4 -> v5 -> v6
     assert dump(bak) == original
     c = sqlite3.connect(bak)
     assert c.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
@@ -168,7 +168,7 @@ def test_migration_needs_a_backup_path(tmp_path: Path) -> None:
     p = tmp_path / "switchboard.db"
     original = make_v2(p)
     con = db.connect(p)
-    with pytest.raises(db.SchemaError, match="schema version 2 needs a migration to version 5, and a migration"):
+    with pytest.raises(db.SchemaError, match="schema version 2 needs a migration to version 6, and a migration"):
         db.migrate(con)
     con.close()
     assert dump(p) == original and backups(p) == []

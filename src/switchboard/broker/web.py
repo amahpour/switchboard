@@ -186,9 +186,15 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         if page == "index.html":
             # The preference reaches <html> in the response, before CSS or app.js can paint.
             # It is an enum checked on write and by the schema, never text from a request.
-            theme = state.store.preferences(w.person_id)["theme"]
+            prefs = state.store.preferences(w.person_id)
             html = (STATIC_DIR / page).read_text(encoding="utf-8")
-            return Response(html.replace('data-theme="system"', f'data-theme="{theme}"', 1),
+            html = html.replace('data-theme="system"', f'data-theme="{prefs["theme"]}"', 1)
+            html = html.replace('data-text-size="default"', f'data-text-size="{prefs["text_size"]}"', 1)
+            return Response(html, media_type="text/html", headers=headers)
+        if page == "setup.html" and w is not None:
+            size = state.store.preferences(w.person_id)["text_size"]
+            html = (STATIC_DIR / page).read_text(encoding="utf-8")
+            return Response(html.replace('data-text-size="default"', f'data-text-size="{size}"', 1),
                             media_type="text/html", headers=headers)
         return FileResponse(STATIC_DIR / page, media_type="text/html", headers=headers)
 
@@ -287,6 +293,11 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         w = who(request)
         if not claim_open() and not (w is not None and w.must_reset):
             return RedirectResponse("/", status_code=303, headers=NO_STORE)
+        if w is not None:
+            size = state.store.preferences(w.person_id)["text_size"]
+            html = (STATIC_DIR / "setup.html").read_text(encoding="utf-8")
+            return Response(html.replace('data-text-size="default"', f'data-text-size="{size}"', 1),
+                            media_type="text/html", headers=NO_STORE)
         return FileResponse(STATIC_DIR / "setup.html", media_type="text/html", headers=NO_STORE)
 
     @app.get("/api/setup/state")
@@ -891,9 +902,13 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return unauthorized()
         try:
             body = await _json_body(request)
-            if set(body) != {"theme"} or body["theme"] not in ("system", "light", "dark"):
+            if not body or set(body) - {"theme", "text_size"}:
+                raise ServiceError("bad_request", "unknown preference")
+            if "theme" in body and body["theme"] not in ("system", "light", "dark"):
                 raise ServiceError("bad_request", "theme must be system, light or dark")
-            return _ok({"preferences": state.store.set_theme(w.person_id, body["theme"])})
+            if "text_size" in body and body["text_size"] not in ("small", "default", "large", "larger"):
+                raise ServiceError("bad_request", "text size must be small, default, large or larger")
+            return _ok({"preferences": state.store.set_preferences(w.person_id, body)})
         except ServiceError as e:
             return _svc_err(e)
 

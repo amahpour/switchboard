@@ -887,16 +887,23 @@ class Store:
     # Only the web route chooses the id, from its authenticated session.
     def preferences(self, person_id: int | None) -> dict[str, str]:
         key = person_id if person_id is not None else 0
-        row = self.con.execute("SELECT theme FROM preferences WHERE person_id=?", (key,)).fetchone()
-        return {"theme": row["theme"] if row else "system"}
+        row = self.con.execute("SELECT theme, text_size FROM preferences WHERE person_id=?", (key,)).fetchone()
+        return {"theme": row["theme"] if row else "system",
+                "text_size": row["text_size"] if row else "default"}
 
-    def set_theme(self, person_id: int | None, theme: str) -> dict[str, str]:
-        if theme not in ("system", "light", "dark"):
+    def set_preferences(self, person_id: int | None, changes: dict[str, str]) -> dict[str, str]:
+        if not changes or set(changes) - {"theme", "text_size"}:
+            raise ValueError("invalid preferences")
+        if "theme" in changes and changes["theme"] not in ("system", "light", "dark"):
             raise ValueError("invalid theme")
+        if "text_size" in changes and changes["text_size"] not in ("small", "default", "large", "larger"):
+            raise ValueError("invalid text size")
         key = person_id if person_id is not None else 0
         with db.tx(self.con):
-            self.con.execute("INSERT INTO preferences(person_id, theme) VALUES(?, ?)"
-                             " ON CONFLICT(person_id) DO UPDATE SET theme=excluded.theme", (key, theme))
+            saved = self.preferences(person_id) | changes
+            self.con.execute("INSERT INTO preferences(person_id, theme, text_size) VALUES(?, ?, ?)"
+                             " ON CONFLICT(person_id) DO UPDATE SET theme=excluded.theme,"
+                             " text_size=excluded.text_size", (key, saved["theme"], saved["text_size"]))
         return self.preferences(person_id)
 
     # ------------------------------------------------------- the owner's password
