@@ -2,6 +2,13 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.15.0 (2026-10-03)
+
+### Added
+
+- **Settings now holds your appearance and account controls.** Click your name to choose System, Light or Dark and manage sign-in or sign out. Your theme follows your account across browsers; Settings opens as a bottom sheet on a phone.
+- **Choose a text size in Settings.** Small, Default, Large and Larger apply across the web UI and follow your account to another browser. Default keeps the previous size; the sign-in page uses it until you sign in.
+
 ## 0.14.0 (2026-10-02)
 
 ### Changed
