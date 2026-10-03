@@ -2,6 +2,13 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.16.0 (2026-10-03)
+
+### Added
+
+- **Lint and static analysis run with the tests in CI.** Contributors can run the same checks with `uv run python scripts/lint.py`; `--fix` formats changed Python and fixes JavaScript where safe. Existing Python findings are recorded so new findings fail without a flag day.
+- **Custom room rules.** Save default guidance in Settings, then edit each room's copy from its header. Agents receive the current rules at join and with later deliveries, after switchboard's fixed rules. Room edits leave the defaults alone; changes to defaults affect only rooms created afterward.
+
 ## 0.15.0 (2026-10-03)
 
 ### Added
