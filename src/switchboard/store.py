@@ -21,10 +21,10 @@ from switchboard.models import (
     Batch,
     Event,
     Item,
+    MachineRow,
     Member,
     Membership,
     Message,
-    MachineRow,
     Participant,
     PasskeyRow,
     PersonRow,
@@ -72,7 +72,7 @@ class Store:
 
     # ------------------------------------------------------------------ rooms
     def create_room(
-        self, name: str, created_by: str, budget_per_hour: int, hop_limit: int
+        self, name: str, created_by: str, budget_per_hour: int, hop_limit: int, rules_text: str = ""
     ) -> Room:
         now = self.clock.now()
         with db.tx(self.con):
@@ -80,9 +80,9 @@ class Store:
                 raise Conflict(f"{name} already exists")
             cur = self.con.execute(
                 "INSERT INTO rooms(name, created_at, created_by, budget_per_hour,"
-                " budget_remaining, budget_window_start, hop_limit)"
-                " VALUES(?,?,?,?,?,?,?)",
-                (name, now, created_by, budget_per_hour, budget_per_hour, now, hop_limit),
+                " budget_remaining, budget_window_start, hop_limit, rules_text)"
+                " VALUES(?,?,?,?,?,?,?,?)",
+                (name, now, created_by, budget_per_hour, budget_per_hour, now, hop_limit, rules_text),
             )
             rid = cur.lastrowid
         room = self.room_by_id(rid)
@@ -93,6 +93,15 @@ class Store:
         r = self.con.execute("SELECT * FROM rooms WHERE name=?", (name,)).fetchone()
         return Room.from_row(r) if r else None
 
+    def set_room_rules(self, room_id: int, text: str) -> Room:
+        if not isinstance(text, str) or len(text) > 2000:
+            raise ValueError("room rules must be at most 2000 characters")
+        with db.tx(self.con):
+            self.con.execute("UPDATE rooms SET rules_text=? WHERE id=?", (text, room_id))
+        room = self.room_by_id(room_id)
+        assert room is not None
+        return room
+
     def room_by_id(self, room_id: int) -> Room | None:
         r = self.con.execute("SELECT * FROM rooms WHERE id=?", (room_id,)).fetchone()
         return Room.from_row(r) if r else None
@@ -101,7 +110,9 @@ class Store:
         """The open rooms by name; with ``closed``, the closed ones instead, newest first
         (DESIGN.md §28.2: only a closed room's name contains '~')."""
         if closed:
-            rows = self.con.execute("SELECT * FROM rooms WHERE instr(name, '~')>0 ORDER BY id DESC").fetchall()
+            rows = self.con.execute(
+                "SELECT * FROM rooms WHERE instr(name, '~')>0 ORDER BY id DESC"
+            ).fetchall()
         else:
             rows = self.con.execute("SELECT * FROM rooms WHERE instr(name, '~')=0 ORDER BY name").fetchall()
         return [Room.from_row(r) for r in rows]
@@ -177,8 +188,12 @@ class Store:
     # ``deliveries`` and ``events`` have no foreign key, so nothing else would catch an orphan.
     _ROOM_MEMBERSHIPS = "SELECT id FROM memberships WHERE room_id=?"
     _ROOM_ROWS = (
-        ("deliveries", f"deliveries WHERE membership_id IN ({_ROOM_MEMBERSHIPS})"
-                       " OR message_id IN (SELECT id FROM messages WHERE room_id=?)", 2),
+        (
+            "deliveries",
+            f"deliveries WHERE membership_id IN ({_ROOM_MEMBERSHIPS})"
+            " OR message_id IN (SELECT id FROM messages WHERE room_id=?)",
+            2,
+        ),
         ("batches", f"batches WHERE membership_id IN ({_ROOM_MEMBERSHIPS})", 1),
         ("events", f"events WHERE room_id=? OR membership_id IN ({_ROOM_MEMBERSHIPS})", 2),
         ("messages", "messages WHERE room_id=?", 1),
@@ -188,12 +203,21 @@ class Store:
 
     def room_delete_counts(self, room_id: int) -> dict[str, int]:
         """What ``delete_room`` would remove now, per table (``ROOM_DELETE_TABLES``)."""
-        got = {t: int(self.con.execute(f"SELECT COUNT(*) FROM {where}", (room_id,) * n).fetchone()[0])
-               for t, where, n in self._ROOM_ROWS}
+        got = {
+            t: int(self.con.execute(f"SELECT COUNT(*) FROM {where}", (room_id,) * n).fetchone()[0])
+            for t, where, n in self._ROOM_ROWS
+        }
         return {t: got[t] for t in ROOM_DELETE_TABLES}
 
-    def delete_room(self, room_id: int, *, name: str, created_at: float, expect_counts: dict[str, int],
-                    event: dict[str, Any]) -> dict[str, int]:
+    def delete_room(
+        self,
+        room_id: int,
+        *,
+        name: str,
+        created_at: float,
+        expect_counts: dict[str, int],
+        event: dict[str, Any],
+    ) -> dict[str, int]:
         """Delete a room and every row that names it, in one transaction (DESIGN.md §28.6):
         only while it is still ``name`` and ``created_at`` (ids may be reused, so a room
         re-created after a delete can have the same id and name), has no active membership (on any host, online or
@@ -233,9 +257,7 @@ class Store:
     def set_paused(self, room_id: int, paused: bool, reason: str | None = None) -> Room:
         with db.tx(self.con):
             if paused:
-                self.con.execute(
-                    "UPDATE rooms SET paused=1, paused_reason=? WHERE id=?", (reason, room_id)
-                )
+                self.con.execute("UPDATE rooms SET paused=1, paused_reason=? WHERE id=?", (reason, room_id))
             else:
                 self.con.execute(
                     "UPDATE rooms SET paused=0, paused_reason=NULL, hop_count=0 WHERE id=?",
@@ -247,9 +269,7 @@ class Store:
         if remaining < 0:
             raise ValueError("budget must be >= 0")
         with db.tx(self.con):
-            self.con.execute(
-                "UPDATE rooms SET budget_remaining=? WHERE id=?", (remaining, room_id)
-            )
+            self.con.execute("UPDATE rooms SET budget_remaining=? WHERE id=?", (remaining, room_id))
         return self._room_or_raise(room_id)
 
     def set_hop_limit(self, room_id: int, limit: int) -> Room:
@@ -350,22 +370,20 @@ class Store:
                         (now, room_id),
                     )
                 else:
-                    self.con.execute(
-                        "UPDATE rooms SET last_msg_at=? WHERE id=?", (now, room_id)
-                    )
+                    self.con.execute("UPDATE rooms SET last_msg_at=? WHERE id=?", (now, room_id))
                 rows = self.con.execute(
-                    "SELECT id, screen_name FROM memberships"
-                    " WHERE room_id=? AND left_at IS NULL",
+                    "SELECT id, screen_name FROM memberships WHERE room_id=? AND left_at IS NULL",
                     (room_id,),
                 ).fetchall()
                 for r in rows:
-                    if (sender_membership_id is not None and r["id"] == sender_membership_id) or r["id"] in skip:
+                    if (sender_membership_id is not None and r["id"] == sender_membership_id) or r[
+                        "id"
+                    ] in skip:
                         continue
                     mentioned = r["screen_name"].lower() in mentions_l
                     prio = 2 if sender_kind == "human" else (1 if mentioned else 0)
                     self.con.execute(
-                        "INSERT INTO deliveries(membership_id, message_id, prio, mentioned)"
-                        " VALUES(?,?,?,?)",
+                        "INSERT INTO deliveries(membership_id, message_id, prio, mentioned) VALUES(?,?,?,?)",
                         (r["id"], mid, prio, int(mentioned)),
                     )
         msg = self.get_message(mid)
@@ -381,8 +399,7 @@ class Store:
         limit = max(1, min(int(limit), 1000))
         if after is None:
             rows = self.con.execute(
-                "SELECT * FROM (SELECT * FROM messages WHERE room_id=? ORDER BY id DESC LIMIT ?)"
-                " ORDER BY id",
+                "SELECT * FROM (SELECT * FROM messages WHERE room_id=? ORDER BY id DESC LIMIT ?) ORDER BY id",
                 (room_id, limit),
             ).fetchall()
         else:
@@ -410,8 +427,7 @@ class Store:
     # ---------------------------------------------------- memberships (reads)
     def active_names(self, room_id: int) -> list[str]:
         rows = self.con.execute(
-            "SELECT screen_name FROM memberships WHERE room_id=? AND left_at IS NULL"
-            " ORDER BY joined_at",
+            "SELECT screen_name FROM memberships WHERE room_id=? AND left_at IS NULL ORDER BY joined_at",
             (room_id,),
         ).fetchall()
         return [r[0] for r in rows]
@@ -465,8 +481,9 @@ class Store:
                 (int(held), now if held else None, membership_id),
             )
 
-    def end_membership(self, membership_id: int, reason: str, *, kicked: bool = False,
-                       keep_cred: bool = False) -> None:
+    def end_membership(
+        self, membership_id: int, reason: str, *, kicked: bool = False, keep_cred: bool = False
+    ) -> None:
         """Leave, kick or session end: revoke the credential and open deliveries.
         ``keep_cred`` (``/close``, DESIGN.md §28.2) keeps the hash so the broker can name the
         closed room in the error; it never authorizes again (every lookup that does wants
@@ -526,8 +543,16 @@ class Store:
 
     # The events the Inspector's delivery timeline shows (the delivery engine's and pass()).
     TIMELINE_EVENT_KINDS = (
-        "offer", "expire", "cancel", "parked", "unparked", "rearm", "requeue",
-        "watchdog_remind", "watchdog_escalate", "pass",
+        "offer",
+        "expire",
+        "cancel",
+        "parked",
+        "unparked",
+        "rearm",
+        "requeue",
+        "watchdog_remind",
+        "watchdog_escalate",
+        "pass",
     )
 
     def member_timeline(self, membership_id: int, since: float, limit: int = 6) -> list[dict[str, Any]]:
@@ -552,11 +577,19 @@ class Store:
                 data = json.loads(r["data"]) if r["data"] else {}
             except ValueError:  # pragma: no cover - the broker writes events as JSON only
                 data = {}
-            out.append({"ts": r["ts"], "kind": r["kind"], "data": data if isinstance(data, dict) else {},
-                        "id": r["mid"]})
+            out.append(
+                {
+                    "ts": r["ts"],
+                    "kind": r["kind"],
+                    "data": data if isinstance(data, dict) else {},
+                    "id": r["mid"],
+                }
+            )
         return out
 
-    def offer_senders(self, membership_id: int, message_ids: Sequence[int]) -> list[tuple[int, str, str | None]]:
+    def offer_senders(
+        self, membership_id: int, message_ids: Sequence[int]
+    ) -> list[tuple[int, str, str | None]]:
         """``(prio, sender_name, sender_host)`` of the member's deliveries of these messages,
         in id order (the Inspector's "from" list of an offer). At most 20 ids are looked up."""
         ids = [int(i) for i in message_ids][:20]
@@ -580,9 +613,7 @@ class Store:
         return {r[0]: r[1] for r in rows}
 
     def count_active_members(self) -> int:
-        r = self.con.execute(
-            "SELECT COUNT(*) FROM memberships WHERE left_at IS NULL"
-        ).fetchone()
+        r = self.con.execute("SELECT COUNT(*) FROM memberships WHERE left_at IS NULL").fetchone()
         return int(r[0])
 
     # ----------------------------------------------------------------- events
@@ -625,8 +656,9 @@ class Store:
         return [Event.from_row(r) for r in self.con.execute(sql, args).fetchall()]
 
     # ------------------------------------------------------------ web sessions
-    def web_session_create(self, id_hash: str, ttl_s: float, via: str | None = None,
-                           person_id: int | None = None) -> None:
+    def web_session_create(
+        self, id_hash: str, ttl_s: float, via: str | None = None, person_id: int | None = None
+    ) -> None:
         """``via`` (schema 3, DESIGN.md §31.2): how the session was made, ``login-link``,
         ``claim``, ``passkey:<name>`` or ``password``. ``person_id`` (schema 4, §32.2): whose
         it is, None for the owner (and for everyone on a desktop broker)."""
@@ -648,7 +680,9 @@ class Store:
         if person_id is None:
             rows = self.con.execute("SELECT id_hash FROM web_sessions WHERE person_id IS NULL").fetchall()
         else:
-            rows = self.con.execute("SELECT id_hash FROM web_sessions WHERE person_id=?", (person_id,)).fetchall()
+            rows = self.con.execute(
+                "SELECT id_hash FROM web_sessions WHERE person_id=?", (person_id,)
+            ).fetchall()
         return [str(r[0]) for r in rows]
 
     def web_session_delete_person(self, person_id: int | None) -> list[str]:
@@ -666,9 +700,7 @@ class Store:
         """True when the session exists and hasn't expired; slides its expiry."""
         now = self.clock.now()
         with db.tx(self.con):
-            r = self.con.execute(
-                "SELECT expires_at FROM web_sessions WHERE id_hash=?", (id_hash,)
-            ).fetchone()
+            r = self.con.execute("SELECT expires_at FROM web_sessions WHERE id_hash=?", (id_hash,)).fetchone()
             if r is None:
                 return False
             if r[0] <= now:
@@ -682,9 +714,7 @@ class Store:
 
     def web_session_delete(self, id_hash: str) -> int:
         with db.tx(self.con):
-            return self.con.execute(
-                "DELETE FROM web_sessions WHERE id_hash=?", (id_hash,)
-            ).rowcount
+            return self.con.execute("DELETE FROM web_sessions WHERE id_hash=?", (id_hash,)).rowcount
 
     def web_session_delete_all(self) -> int:
         with db.tx(self.con):
@@ -693,15 +723,11 @@ class Store:
     def web_session_purge(self) -> int:
         now = self.clock.now()
         with db.tx(self.con):
-            return self.con.execute(
-                "DELETE FROM web_sessions WHERE expires_at<=?", (now,)
-            ).rowcount
+            return self.con.execute("DELETE FROM web_sessions WHERE expires_at<=?", (now,)).rowcount
 
     def web_session_valid(self, id_hash: str) -> bool:
         """Non-sliding check (used to drop WebSockets of expired or revoked sessions)."""
-        r = self.con.execute(
-            "SELECT expires_at FROM web_sessions WHERE id_hash=?", (id_hash,)
-        ).fetchone()
+        r = self.con.execute("SELECT expires_at FROM web_sessions WHERE id_hash=?", (id_hash,)).fetchone()
         return r is not None and r[0] > self.clock.now()
 
     def web_session_count(self) -> int:
@@ -714,8 +740,11 @@ class Store:
 
     def meta_set(self, key: str, value: str) -> None:
         with db.tx(self.con):
-            self.con.execute("INSERT INTO meta(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET"
-                             " value=excluded.value", (key, value))
+            self.con.execute(
+                "INSERT INTO meta(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET"
+                " value=excluded.value",
+                (key, value),
+            )
 
     def meta_delete(self, key: str) -> None:
         with db.tx(self.con):
@@ -754,11 +783,16 @@ class Store:
         with db.tx(self.con):
             n_keys = self.con.execute("DELETE FROM passkeys").rowcount
             n_sess = self.con.execute("DELETE FROM web_sessions").rowcount
-            n_mach = self.con.execute("UPDATE link_machines SET approved_at=NULL, approved_via=NULL"
-                                      " WHERE removed_at IS NULL AND approved_at IS NOT NULL").rowcount
+            n_mach = self.con.execute(
+                "UPDATE link_machines SET approved_at=NULL, approved_via=NULL"
+                " WHERE removed_at IS NULL AND approved_at IS NOT NULL"
+            ).rowcount
             # everyone else was added by the old owner: the new owner adds them again
-            n_people = self.con.execute("UPDATE people SET removed_at=?, password_hash=NULL, must_reset=0,"
-                                        " password_expires_at=NULL WHERE removed_at IS NULL", (now,)).rowcount
+            n_people = self.con.execute(
+                "UPDATE people SET removed_at=?, password_hash=NULL, must_reset=0,"
+                " password_expires_at=NULL WHERE removed_at IS NULL",
+                (now,),
+            ).rowcount
             self.meta_delete("owner_password")
             self.meta_delete("owner_handle")
             self.meta_delete("owner_claimed_at")
@@ -766,8 +800,15 @@ class Store:
         return {"passkeys": n_keys, "sessions": n_sess, "machines_pending": n_mach, "people": n_people}
 
     # --------------------------------------------------------------- passkeys
-    def passkey_add(self, credential_id: bytes, public_key: bytes, name: str, aaguid: str | None,
-                    sign_count: int = 0, person_id: int | None = None) -> PasskeyRow:
+    def passkey_add(
+        self,
+        credential_id: bytes,
+        public_key: bytes,
+        name: str,
+        aaguid: str | None,
+        sign_count: int = 0,
+        person_id: int | None = None,
+    ) -> PasskeyRow:
         """``person_id``: whose passkey (None: the owner's)."""
         if not credential_id or len(credential_id) > 1023 or not public_key:
             raise ValueError("a passkey needs a credential id and a public key")
@@ -787,7 +828,10 @@ class Store:
         return PasskeyRow.from_row(r) if r else None
 
     def passkeys(self) -> list[PasskeyRow]:
-        return [PasskeyRow.from_row(r) for r in self.con.execute("SELECT * FROM passkeys ORDER BY created_at, name")]
+        return [
+            PasskeyRow.from_row(r)
+            for r in self.con.execute("SELECT * FROM passkeys ORDER BY created_at, name")
+        ]
 
     def passkey_count(self) -> int:
         """Everyone's: whether anyone can sign in with a passkey here."""
@@ -796,20 +840,26 @@ class Store:
     def passkeys_of(self, person_id: int | None) -> list[PasskeyRow]:
         """One person's passkeys (None: the owner's)."""
         if person_id is None:
-            rows = self.con.execute("SELECT * FROM passkeys WHERE person_id IS NULL ORDER BY created_at, name")
+            rows = self.con.execute(
+                "SELECT * FROM passkeys WHERE person_id IS NULL ORDER BY created_at, name"
+            )
         else:
-            rows = self.con.execute("SELECT * FROM passkeys WHERE person_id=? ORDER BY created_at, name",
-                                    (person_id,))
+            rows = self.con.execute(
+                "SELECT * FROM passkeys WHERE person_id=? ORDER BY created_at, name", (person_id,)
+            )
         return [PasskeyRow.from_row(r) for r in rows]
 
     def passkey_used(self, credential_id: bytes, sign_count: int) -> bool:
         """A sign-in with this passkey succeeded now: its last use and the counter it sent."""
         now = self.clock.now()
         with db.tx(self.con):
-            return self.con.execute(
-                "UPDATE passkeys SET sign_count=?, last_used_at=? WHERE credential_id=?",
-                (int(sign_count), now, credential_id),
-            ).rowcount == 1
+            return (
+                self.con.execute(
+                    "UPDATE passkeys SET sign_count=?, last_used_at=? WHERE credential_id=?",
+                    (int(sign_count), now, credential_id),
+                ).rowcount
+                == 1
+            )
 
     # ----------------------------------------------------------------- people
     # Everyone but the owner (DESIGN.md §32): the owner adds them by name in the admin
@@ -830,8 +880,10 @@ class Store:
 
     def people(self) -> list[PersonRow]:
         """The active people, in the order they were added."""
-        return [PersonRow.from_row(r) for r in
-                self.con.execute("SELECT * FROM people WHERE removed_at IS NULL ORDER BY created_at, id")]
+        return [
+            PersonRow.from_row(r)
+            for r in self.con.execute("SELECT * FROM people WHERE removed_at IS NULL ORDER BY created_at, id")
+        ]
 
     def person_add(self, name: str, handle: bytes, one_time_hash: str, ttl_s: float) -> PersonRow:
         """A new person with a one-time password (its hash), good for ``ttl_s``. Raises
@@ -844,7 +896,9 @@ class Store:
                 raise ValueError("that name is taken")
             cur = self.con.execute(
                 "INSERT INTO people(name, handle, password_hash, must_reset, password_expires_at, created_at)"
-                " VALUES(?,?,?,1,?,?)", (name, handle, one_time_hash, now + ttl_s, now))
+                " VALUES(?,?,?,1,?,?)",
+                (name, handle, one_time_hash, now + ttl_s, now),
+            )
             pid = int(cur.lastrowid or 0)
         got = self.person(pid)
         assert got is not None
@@ -856,9 +910,14 @@ class Store:
         Returns the ended sessions' id hashes, or None if there is no such active person."""
         now = self.clock.now()
         with db.tx(self.con):
-            if self.con.execute("UPDATE people SET password_hash=?, must_reset=1, password_expires_at=?"
-                                " WHERE id=? AND removed_at IS NULL",
-                                (one_time_hash, now + ttl_s, person_id)).rowcount != 1:
+            if (
+                self.con.execute(
+                    "UPDATE people SET password_hash=?, must_reset=1, password_expires_at=?"
+                    " WHERE id=? AND removed_at IS NULL",
+                    (one_time_hash, now + ttl_s, person_id),
+                ).rowcount
+                != 1
+            ):
                 return None
             return self.web_session_delete_person(person_id)
 
@@ -866,8 +925,14 @@ class Store:
         """The person chose their own password (or, with None, a passkey instead of one):
         the one-time password is gone and nothing is left to reset."""
         with db.tx(self.con):
-            return self.con.execute("UPDATE people SET password_hash=?, must_reset=0, password_expires_at=NULL"
-                                    " WHERE id=? AND removed_at IS NULL", (password_hash, person_id)).rowcount == 1
+            return (
+                self.con.execute(
+                    "UPDATE people SET password_hash=?, must_reset=0, password_expires_at=NULL"
+                    " WHERE id=? AND removed_at IS NULL",
+                    (password_hash, person_id),
+                ).rowcount
+                == 1
+            )
 
     def person_remove(self, person_id: int) -> list[str] | None:
         """In one transaction: the person is removed, their password and passkeys deleted and
@@ -875,9 +940,14 @@ class Store:
         such active person."""
         now = self.clock.now()
         with db.tx(self.con):
-            if self.con.execute("UPDATE people SET removed_at=?, password_hash=NULL, must_reset=0,"
-                                " password_expires_at=NULL WHERE id=? AND removed_at IS NULL",
-                                (now, person_id)).rowcount != 1:
+            if (
+                self.con.execute(
+                    "UPDATE people SET removed_at=?, password_hash=NULL, must_reset=0,"
+                    " password_expires_at=NULL WHERE id=? AND removed_at IS NULL",
+                    (now, person_id),
+                ).rowcount
+                != 1
+            ):
                 return None
             self.con.execute("DELETE FROM passkeys WHERE person_id=?", (person_id,))
             return self.web_session_delete_person(person_id)
@@ -887,23 +957,35 @@ class Store:
     # Only the web route chooses the id, from its authenticated session.
     def preferences(self, person_id: int | None) -> dict[str, str]:
         key = person_id if person_id is not None else 0
-        row = self.con.execute("SELECT theme, text_size FROM preferences WHERE person_id=?", (key,)).fetchone()
-        return {"theme": row["theme"] if row else "system",
-                "text_size": row["text_size"] if row else "default"}
+        row = self.con.execute(
+            "SELECT theme, text_size, room_rules FROM preferences WHERE person_id=?", (key,)
+        ).fetchone()
+        return {
+            "theme": row["theme"] if row else "system",
+            "text_size": row["text_size"] if row else "default",
+            "room_rules": row["room_rules"] if row else "",
+        }
 
     def set_preferences(self, person_id: int | None, changes: dict[str, str]) -> dict[str, str]:
-        if not changes or set(changes) - {"theme", "text_size"}:
+        if not changes or set(changes) - {"theme", "text_size", "room_rules"}:
             raise ValueError("invalid preferences")
         if "theme" in changes and changes["theme"] not in ("system", "light", "dark"):
             raise ValueError("invalid theme")
         if "text_size" in changes and changes["text_size"] not in ("small", "default", "large", "larger"):
             raise ValueError("invalid text size")
+        if "room_rules" in changes and (
+            not isinstance(changes["room_rules"], str) or len(changes["room_rules"]) > 2000
+        ):
+            raise ValueError("room rules must be at most 2000 characters")
         key = person_id if person_id is not None else 0
         with db.tx(self.con):
             saved = self.preferences(person_id) | changes
-            self.con.execute("INSERT INTO preferences(person_id, theme, text_size) VALUES(?, ?, ?)"
-                             " ON CONFLICT(person_id) DO UPDATE SET theme=excluded.theme,"
-                             " text_size=excluded.text_size", (key, saved["theme"], saved["text_size"]))
+            self.con.execute(
+                "INSERT INTO preferences(person_id, theme, text_size, room_rules) VALUES(?, ?, ?, ?)"
+                " ON CONFLICT(person_id) DO UPDATE SET theme=excluded.theme,"
+                " text_size=excluded.text_size, room_rules=excluded.room_rules",
+                (key, saved["theme"], saved["text_size"], saved["room_rules"]),
+            )
         return self.preferences(person_id)
 
     # ------------------------------------------------------- the owner's password
@@ -918,9 +1000,7 @@ class Store:
                 self.meta_set("owner_password", password_hash)
 
     # --------------------------------------------------------------- recovery
-    def recover_on_start(
-        self, alive: Callable[[int, float | None], bool | None]
-    ) -> dict[str, int]:
+    def recover_on_start(self, alive: Callable[[int, float | None], bool | None]) -> dict[str, int]:
         """Restart semantics (§4): expire open offers, mark everyone offline,
         end participants whose agent process is gone.
 
@@ -931,8 +1011,7 @@ class Store:
         ended: list[tuple[int, int, str]] = []  # (room_id, membership_id, name)
         with db.tx(self.con):
             reverted = self.con.execute(
-                "UPDATE deliveries SET state='pending', attempts=attempts+1"
-                " WHERE state='offered'"
+                "UPDATE deliveries SET state='pending', attempts=attempts+1 WHERE state='offered'"
             ).rowcount
             expired = self.con.execute(
                 "UPDATE batches SET state='expired', expired_at=?, expire_reason='restart'"
@@ -954,9 +1033,7 @@ class Store:
                 if alive(p["agent_pid"], p["agent_start"]) is not False:
                     continue  # alive, or can't tell (None): never ended on a guess
                 n_ended += 1
-                self.con.execute(
-                    "UPDATE participants SET ended_at=? WHERE id=?", (now, p["id"])
-                )
+                self.con.execute("UPDATE participants SET ended_at=? WHERE id=?", (now, p["id"]))
                 for m in self.con.execute(
                     "SELECT id, room_id, screen_name FROM memberships"
                     " WHERE participant_id=? AND left_at IS NULL",
@@ -980,7 +1057,6 @@ class Store:
             "participants_offline": offline,
             "participants_ended": n_ended,
         }
-
 
     # ---------------------------------------------------------------- remotes
     # One row per remote that was ever enabled (DESIGN.md §27.6, §27.5.8): the broker
@@ -1025,9 +1101,12 @@ class Store:
         """``remote disable``: forget the consent (the row and its hash stay). False if no row."""
         self._remote_name(name)
         with db.tx(self.con):
-            return self.con.execute(
-                "UPDATE remotes SET enabled_at=NULL, enabled_via=NULL WHERE name=?", (name,)
-            ).rowcount == 1
+            return (
+                self.con.execute(
+                    "UPDATE remotes SET enabled_at=NULL, enabled_via=NULL WHERE name=?", (name,)
+                ).rowcount
+                == 1
+            )
 
     def set_remote_blocked(self, name: str, reason: str) -> bool:
         """The link needs the owner (``host_key``, ``auth``, ``replaced``, ...): no retry
@@ -1037,18 +1116,19 @@ class Store:
             raise ValueError(f"blocked reason {reason!r}")
         now = self.clock.now()
         with db.tx(self.con):
-            return self.con.execute(
-                "UPDATE remotes SET blocked_at=?, blocked_reason=? WHERE name=?", (now, reason, name)
-            ).rowcount == 1
+            return (
+                self.con.execute(
+                    "UPDATE remotes SET blocked_at=?, blocked_reason=? WHERE name=?", (now, reason, name)
+                ).rowcount
+                == 1
+            )
 
     def touch_remote_up(self, name: str) -> bool:
         """The link came up (a handshake completed) now."""
         self._remote_name(name)
         now = self.clock.now()
         with db.tx(self.con):
-            return self.con.execute(
-                "UPDATE remotes SET last_up_at=? WHERE name=?", (now, name)
-            ).rowcount == 1
+            return self.con.execute("UPDATE remotes SET last_up_at=? WHERE name=?", (now, name)).rowcount == 1
 
     def clear_remote(self, name: str) -> bool:
         """``remote remove``: drop the row (consent, block and history). False if none."""
@@ -1065,7 +1145,11 @@ class Store:
         return MachineRow.from_row(r) if r else None
 
     def machines(self, *, removed: bool = False) -> list[MachineRow]:
-        sql = "SELECT * FROM link_machines" + ("" if removed else " WHERE removed_at IS NULL") + " ORDER BY name"
+        sql = (
+            "SELECT * FROM link_machines"
+            + ("" if removed else " WHERE removed_at IS NULL")
+            + " ORDER BY name"
+        )
         return [MachineRow.from_row(r) for r in self.con.execute(sql)]
 
     def machine_pair(self, name: str, key: bytes, key_fp: str, facts: dict[str, Any]) -> MachineRow:
@@ -1092,32 +1176,69 @@ class Store:
             raise ValueError(f"approved via {via!r}")
         now = self.clock.now()
         with db.tx(self.con):
-            return self.con.execute(
-                "UPDATE link_machines SET approved_at=?, approved_via=? WHERE name=? AND approved_at IS NULL"
-                " AND removed_at IS NULL", (now, via, name)).rowcount == 1
+            return (
+                self.con.execute(
+                    "UPDATE link_machines SET approved_at=?, approved_via=? WHERE name=?"
+                    " AND approved_at IS NULL"
+                    " AND removed_at IS NULL",
+                    (now, via, name),
+                ).rowcount
+                == 1
+            )
 
     def machine_remove(self, name: str) -> bool:
         """Remove: the key is forgotten (a connection with it is refused from now on)."""
         now = self.clock.now()
         with db.tx(self.con):
-            return self.con.execute(
-                "UPDATE link_machines SET removed_at=?, key=X'', key_fp='' WHERE name=? AND removed_at IS NULL",
-                (now, name)).rowcount == 1
+            return (
+                self.con.execute(
+                    "UPDATE link_machines SET removed_at=?, key=X'', key_fp='' WHERE name=?"
+                    " AND removed_at IS NULL",
+                    (now, name),
+                ).rowcount
+                == 1
+            )
 
     def machine_seen(self, name: str, t: float) -> None:
         with db.tx(self.con):
-            self.con.execute("UPDATE link_machines SET last_seen_at=? WHERE name=? AND removed_at IS NULL", (t, name))
+            self.con.execute(
+                "UPDATE link_machines SET last_seen_at=? WHERE name=? AND removed_at IS NULL", (t, name)
+            )
 
     # ============================================================ M2: agents
     # ----------------------------------------------------------- participants
     _PARTICIPANT_COLS = frozenset(
         {
-            "session_id", "agent_pid", "agent_start", "mcp_pid", "mcp_start", "claude_socket",
-            "bind_state", "bind_nonce", "thread_proof", "status", "status_at", "status_src",
-            "tier", "tier_note", "approval_mode", "env_leak", "away", "boundary_seq", "gen",
-            "gen_tainted", "rearms_in_gen", "last_loop_count", "unconfirmed_followups",
-            "push_expiries", "hooks_seen_at", "last_say_at", "last_seen", "ended_at",
-            "session_key", "host",
+            "session_id",
+            "agent_pid",
+            "agent_start",
+            "mcp_pid",
+            "mcp_start",
+            "claude_socket",
+            "bind_state",
+            "bind_nonce",
+            "thread_proof",
+            "status",
+            "status_at",
+            "status_src",
+            "tier",
+            "tier_note",
+            "approval_mode",
+            "env_leak",
+            "away",
+            "boundary_seq",
+            "gen",
+            "gen_tainted",
+            "rearms_in_gen",
+            "last_loop_count",
+            "unconfirmed_followups",
+            "push_expiries",
+            "hooks_seen_at",
+            "last_say_at",
+            "last_seen",
+            "ended_at",
+            "session_key",
+            "host",
         }
     )
 
@@ -1127,8 +1248,10 @@ class Store:
         event with ``what: thread_proof, ok: true``): the joins no "is verified" notice followed
         yet. Its ``thread_proof`` column is reset by a join from another MCP process; this
         history isn't (DESIGN.md §9.3)."""
-        rows = self.con.execute("SELECT * FROM events WHERE kind IN ('join', 'bind') AND participant_id=?"
-                                " ORDER BY id", (participant_id,)).fetchall()
+        rows = self.con.execute(
+            "SELECT * FROM events WHERE kind IN ('join', 'bind') AND participant_id=? ORDER BY id",
+            (participant_id,),
+        ).fetchall()
         out: set[int] = set()
         for e in (Event.from_row(r) for r in rows):
             if e.kind == "join":
@@ -1189,9 +1312,7 @@ class Store:
         if "host" in fields:
             raise ValueError("a participant's host is set when it is created and never changes")
         sets = ", ".join(f"{k}=?" for k in fields)
-        self.con.execute(
-            f"UPDATE participants SET {sets} WHERE id=?", [*fields.values(), participant_id]
-        )
+        self.con.execute(f"UPDATE participants SET {sets} WHERE id=?", [*fields.values(), participant_id])
 
     def update_participant(self, participant_id: int, **fields: Any) -> Participant:
         with db.tx(self.con):
@@ -1226,9 +1347,7 @@ class Store:
             )
 
     def active_participants(self) -> list[Participant]:
-        rows = self.con.execute(
-            "SELECT * FROM participants WHERE ended_at IS NULL ORDER BY id"
-        ).fetchall()
+        rows = self.con.execute("SELECT * FROM participants WHERE ended_at IS NULL ORDER BY id").fetchall()
         return [Participant.from_row(r) for r in rows]
 
     def joined_participants(self) -> list[Participant]:
@@ -1256,8 +1375,11 @@ class Store:
             "SELECT * FROM participants WHERE ended_at IS NULL AND host=? AND mcp_pid=?", (host, mcp_pid)
         ).fetchall()
         out = [Participant.from_row(r) for r in rows]
-        return [p for p in out if p.mcp_start is not None and mcp_start is not None
-                and abs(p.mcp_start - mcp_start) < 0.011]
+        return [
+            p
+            for p in out
+            if p.mcp_start is not None and mcp_start is not None and abs(p.mcp_start - mcp_start) < 0.011
+        ]
 
     def end_participant(self, participant_id: int, reason: str = "session_end") -> list[Membership]:
         """End a session: leave every room, revoke creds and deliveries. Returns the ended memberships."""
@@ -1268,8 +1390,7 @@ class Store:
                 self.end_membership(m.id, reason)
                 ended.append(m)
             self.con.execute(
-                "UPDATE participants SET ended_at=?, status='offline', status_at=?, status_src=?"
-                " WHERE id=?",
+                "UPDATE participants SET ended_at=?, status='offline', status_at=?, status_src=? WHERE id=?",
                 (now, now, reason, participant_id),
             )
         return ended
@@ -1344,9 +1465,7 @@ class Store:
         return [Membership.from_row(r) for r in rows]
 
     def all_active_memberships(self) -> list[Membership]:
-        rows = self.con.execute(
-            "SELECT * FROM memberships WHERE left_at IS NULL ORDER BY id"
-        ).fetchall()
+        rows = self.con.execute("SELECT * FROM memberships WHERE left_at IS NULL ORDER BY id").fetchall()
         return [Membership.from_row(r) for r in rows]
 
     def rotate_cred(self, membership_id: int, cred_hash: str) -> None:
@@ -1356,9 +1475,7 @@ class Store:
                 (cred_hash, membership_id),
             )
 
-    def name_used_by_other(
-        self, room_id: int, name: str, participant_id: int, since: float
-    ) -> bool:
+    def name_used_by_other(self, room_id: int, name: str, participant_id: int, since: float) -> bool:
         """True if another participant held ``name`` in this room at any time since ``since``."""
         r = self.con.execute(
             "SELECT 1 FROM memberships WHERE room_id=? AND screen_name=? AND participant_id<>?"
@@ -1551,8 +1668,16 @@ class Store:
                     " state=CASE WHEN state='in_context' THEN 'pending' ELSE state END"
                     " WHERE membership_id=? AND message_id=? AND reminders<?"
                     " AND (state='in_context' OR (state='pending' AND notified_at IS NOT NULL))",
-                    (int(keep_count), WATCHDOG_DONE, WATCHDOG_DONE, int(keep_count), now, membership_id, mid,
-                     WATCHDOG_DONE),
+                    (
+                        int(keep_count),
+                        WATCHDOG_DONE,
+                        WATCHDOG_DONE,
+                        int(keep_count),
+                        now,
+                        membership_id,
+                        mid,
+                        WATCHDOG_DONE,
+                    ),
                 ).rowcount
         return n
 
@@ -1642,8 +1767,10 @@ class Store:
     def offered_batch_exists(self, participant_id: int, exclude_paths: Iterable[str] = ()) -> bool:
         """Any offered batch of this participant (any room) on a path not excluded."""
         ex = list(exclude_paths)
-        sql = ("SELECT 1 FROM batches b JOIN memberships m ON m.id=b.membership_id"
-               " WHERE m.participant_id=? AND b.state='offered'")
+        sql = (
+            "SELECT 1 FROM batches b JOIN memberships m ON m.id=b.membership_id"
+            " WHERE m.participant_id=? AND b.state='offered'"
+        )
         if ex:
             sql += f" AND b.path NOT IN ({','.join('?' * len(ex))})"
         r = self.con.execute(sql + " LIMIT 1", (participant_id, *ex)).fetchone()
@@ -1754,8 +1881,7 @@ class Store:
     def _advance_cursor(self, membership_id: int) -> None:
         """cursor_id = highest message id with every delivery <= it confirmed."""
         r = self.con.execute(
-            "SELECT MIN(message_id) FROM deliveries WHERE membership_id=?"
-            " AND state IN ('pending','offered')",
+            "SELECT MIN(message_id) FROM deliveries WHERE membership_id=? AND state IN ('pending','offered')",
             (membership_id,),
         ).fetchone()
         first_open = r[0]
@@ -1782,13 +1908,12 @@ class Store:
             room = self._room_or_raise(room_id)
             if room.budget_notice_window == window:
                 return False
-            self.con.execute(
-                "UPDATE rooms SET budget_notice_window=? WHERE id=?", (window, room_id)
-            )
+            self.con.execute("UPDATE rooms SET budget_notice_window=? WHERE id=?", (window, room_id))
         return True
 
-    def count_events(self, kind: str, *, room_id: int | None = None,
-                     participant_id: int | None = None) -> int:
+    def count_events(
+        self, kind: str, *, room_id: int | None = None, participant_id: int | None = None
+    ) -> int:
         sql = "SELECT COUNT(*) FROM events WHERE kind=?"
         args: list[Any] = [kind]
         if room_id is not None:

@@ -2359,6 +2359,21 @@ body.login {
 .settings-account { display: flex; flex-direction: column; gap: 10px; }
 .settings-account .passkey-card + .passkey-card { margin-top: 0; }
 .settings-section > #settings-sign-out { align-self: flex-start; }
+.rules-textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 126px;
+  padding: 10px 12px;
+  resize: vertical;
+  border: 1px solid var(--btn-border);
+  border-radius: 8px;
+  background: var(--input-bg);
+  color: var(--fg);
+  font: 400 calc(13px * var(--text-scale)) / 1.5 var(--font);
+}
+.rules-textarea:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.rules-count { align-self: flex-end; color: var(--muted); font-size: calc(11px * var(--text-scale)); }
+#settings-rules-save { align-self: flex-start; }
 @media (max-width: 760px) {
   .app-dialog {
     width: 100%;

@@ -17,9 +17,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import InProcBroker, child_env
 from fakes.fake_agent import FakeAgent, ids_in
+
 from switchboard.config import Config
 from switchboard.envelope import NONCE_RE, TOKEN_RE
 from switchboard.mcp.client import RpcError, Stream
@@ -94,14 +94,23 @@ def q(b: InProcBroker, sql: str, *args: Any) -> list[sqlite3.Row]:
 
 
 def states(b: InProcBroker, name: str) -> dict[int, str]:
-    rows = q(b, "SELECT d.message_id, d.state FROM deliveries d JOIN memberships m ON m.id=d.membership_id"
-                " WHERE m.screen_name=? AND m.left_at IS NULL", name)
+    rows = q(
+        b,
+        "SELECT d.message_id, d.state FROM deliveries d JOIN memberships m ON m.id=d.membership_id"
+        " WHERE m.screen_name=? AND m.left_at IS NULL",
+        name,
+    )
     return {r[0]: r[1] for r in rows}
 
 
 def hook(b: InProcBroker, params: dict[str, Any], ack: bool = False) -> dict[str, Any]:
-    r = subprocess.run([sys.executable, "-c", SEND_HOOK, str(b.paths.sock), json.dumps(params), "1" if ack else "0"],
-                       capture_output=True, text=True, env=child_env(), timeout=20)
+    r = subprocess.run(
+        [sys.executable, "-c", SEND_HOOK, str(b.paths.sock), json.dumps(params), "1" if ack else "0"],
+        capture_output=True,
+        text=True,
+        env=child_env(),
+        timeout=20,
+    )
     assert r.returncode == 0, r.stderr
     return json.loads(r.stdout)
 
@@ -195,6 +204,35 @@ async def test_read_with_next_call_ack_moves_on(broker: InProcBroker) -> None:
         assert r["count"] == 0
 
 
+async def test_room_rules_reach_an_agent_at_join_and_after_an_edit(broker: InProcBroker) -> None:
+    """A person can change the room's guidance and the next agent delivery carries it."""
+    headers = broker.write_headers()
+    assert (
+        broker.web.put(
+            "/api/rooms/build/rules", json={"text": "Use a worktree."}, headers=headers
+        ).status_code
+        == 200
+    )
+    async with FakeAgent(broker.home, "rules-agent") as agent:
+        joined = await agent.join("#build", "rules-agent")
+        assert joined["text"].index("1. Only messages with kind=human") < joined["text"].index(
+            "Use a worktree."
+        )
+        assert (
+            broker.web.put(
+                "/api/rooms/build/rules", json={"text": "Post a PR link."}, headers=headers
+            ).status_code
+            == 200
+        )
+        assert (
+            broker.web.post("/api/rooms/build/say", json={"text": "Ready?"}, headers=headers).status_code
+            == 200
+        )
+        read = await agent.read("#build")
+        assert "Post a PR link." in read["text"]
+        assert "Use a worktree." not in read["text"]
+
+
 async def test_say_returns_earlier_unread_and_is_rate_limited(broker: InProcBroker) -> None:
     async with FakeAgent(broker.home, "k1") as a:
         await a.join("#build", "tester")
@@ -266,7 +304,7 @@ async def test_wait_returns_on_a_human_message(broker: InProcBroker) -> None:
         dt = time.monotonic() - t0
         assert r["status"] == "messages" and ids_in(r["text"]) == [mid] and TOKEN_RE.search(r["text"])
         assert dt < 1.0, dt
-        print(f"wait wake latency {dt*1000:.1f} ms")
+        print(f"wait wake latency {dt * 1000:.1f} ms")
 
 
 async def test_wait_returns_paused_on_pause(broker: InProcBroker) -> None:
@@ -343,15 +381,39 @@ async def test_synthetic_posttooluse_confirms_and_foreign_tokens_do_not(broker: 
         rb = await b.read("#build")
         ta, tb = TOKEN_RE.search(ra["text"]), TOKEN_RE.search(rb["text"])
         # beta's hook presents alpha's token: nothing is confirmed
-        hook(broker, {"harness": "test", "event": "PostToolUse", "sid": "kb", "ok": True,
-                      "tokens": [[int(ta.group(1)), ta.group(2)]]})
+        hook(
+            broker,
+            {
+                "harness": "test",
+                "event": "PostToolUse",
+                "sid": "kb",
+                "ok": True,
+                "tokens": [[int(ta.group(1)), ta.group(2)]],
+            },
+        )
         assert states(broker, "alpha")[mid] == "offered"
-        hook(broker, {"harness": "test", "event": "PostToolUse", "sid": "ka", "ok": True,
-                      "tokens": [[int(ta.group(1)), ta.group(2)]]})
+        hook(
+            broker,
+            {
+                "harness": "test",
+                "event": "PostToolUse",
+                "sid": "ka",
+                "ok": True,
+                "tokens": [[int(ta.group(1)), ta.group(2)]],
+            },
+        )
         assert states(broker, "alpha")[mid] == "in_context"
         assert states(broker, "beta")[mid] == "offered"
-        hook(broker, {"harness": "test", "event": "PostToolUse", "sid": "kb", "ok": True,
-                      "tokens": [[int(tb.group(1)), tb.group(2)]]})
+        hook(
+            broker,
+            {
+                "harness": "test",
+                "event": "PostToolUse",
+                "sid": "kb",
+                "ok": True,
+                "tokens": [[int(tb.group(1)), tb.group(2)]],
+            },
+        )
         assert states(broker, "beta")[mid] == "in_context"
 
 
@@ -360,7 +422,7 @@ async def test_synthetic_hook_gets_priority_context_and_acks_it(broker: InProcBr
         await a.join("#build", "alpha")
         await b.join("#build", "beta")
         chatter = (await b.say("#build", "just chatting"))["posted_id"]
-        ment = (await b.say("#build", "@alpha your turn", reply_to=None))
+        ment = await b.say("#build", "@alpha your turn", reply_to=None)
         assert ment["reason"] == "rate_limited"  # beta just spoke
         hid = say(broker, "@alpha human here")
         res = hook(broker, {"harness": "test", "event": "PostToolUse", "sid": "ka", "ok": True}, ack=True)
@@ -368,7 +430,10 @@ async def test_synthetic_hook_gets_priority_context_and_acks_it(broker: InProcBr
         assert chatter not in ids_in(res["out"]["text"])  # mid-task: priority only
         assert states(broker, "alpha")[hid] == "in_context" and states(broker, "alpha")[chatter] == "pending"
         # no joined session above an unrelated process: inert
-        assert hook(broker, {"harness": "test", "event": "PostToolUse", "sid": "nope", "ok": True})["out"] is None
+        assert (
+            hook(broker, {"harness": "test", "event": "PostToolUse", "sid": "nope", "ok": True})["out"]
+            is None
+        )
 
 
 async def test_hooks_from_an_unjoined_process_are_inert(broker: InProcBroker) -> None:
@@ -399,8 +464,13 @@ async def test_a_stubbed_peer_message_must_be_read_before_pass(broker: InProcBro
         assert states(broker, "alpha")[mid] == "pending"  # a notified stub: read() only
         r = await a.pass_("#build")
         assert r["ok"] is False and r["code"] == "read_first"
-        assert r["error"].startswith('[switchboard] pass("#build") refused:') and 'Call read("#build") now' in r["error"]
-        assert r["rooms"] == [{"room": "#build", "ok": False, "code": "read_first", "unread": 1, "error": r["error"]}]
+        assert (
+            r["error"].startswith('[switchboard] pass("#build") refused:')
+            and 'Call read("#build") now' in r["error"]
+        )
+        assert r["rooms"] == [
+            {"room": "#build", "ok": False, "code": "read_first", "unread": 1, "error": r["error"]}
+        ]
         assert q(broker, "SELECT COUNT(*) FROM events WHERE kind='pass'")[0][0] == 0
         [row] = q(broker, "SELECT data FROM events WHERE kind='pass_refused'")
         assert json.loads(row[0]) == {"reason": "read_first", "n": 1, "ids": [mid]}
@@ -414,7 +484,10 @@ async def test_a_stubbed_peer_message_must_be_read_before_pass(broker: InProcBro
 
 
 async def test_pass_in_every_room_passes_where_it_can_and_names_the_rest(broker: InProcBroker) -> None:
-    assert broker.web.post("/api/rooms", json={"name": "#side"}, headers=broker.write_headers()).status_code == 200
+    assert (
+        broker.web.post("/api/rooms", json={"name": "#side"}, headers=broker.write_headers()).status_code
+        == 200
+    )
     async with FakeAgent(broker.home, "ka") as a, FakeAgent(broker.home, "kb") as b:
         await a.join("#build", "alpha")
         await a.join("#side", "alpha")
@@ -425,7 +498,9 @@ async def test_pass_in_every_room_passes_where_it_can_and_names_the_rest(broker:
         assert r["ok"] is False and r["code"] == "read_first"
         assert [x["room"] for x in r["rooms"]] == ["#build", "#side"]
         assert [x["ok"] for x in r["rooms"]] == [False, True]
-        assert r["text"].startswith("[switchboard] passed in #side (logged, not posted). [switchboard] pass(\"#build\") refused")
+        assert r["text"].startswith(
+            '[switchboard] passed in #side (logged, not posted). [switchboard] pass("#build") refused'
+        )
         await a.read("#build")
         r = await a.pass_()
         assert r["ok"] and [x["ok"] for x in r["rooms"]] == [True, True]
@@ -504,7 +579,10 @@ async def test_closing_the_mcp_server_marks_the_session_offline(broker: InProcBr
         await asyncio.sleep(0.05)
     assert row[0] == "offline"
     # the membership survives (a reconnect or re-join picks it up)
-    assert q(broker, "SELECT COUNT(*) FROM memberships WHERE screen_name='tester' AND left_at IS NULL")[0][0] == 1
+    assert (
+        q(broker, "SELECT COUNT(*) FROM memberships WHERE screen_name='tester' AND left_at IS NULL")[0][0]
+        == 1
+    )
 
 
 async def test_claude_like_env_never_touches_the_inbox_socket(broker: InProcBroker) -> None:
@@ -514,8 +592,12 @@ async def test_claude_like_env_never_touches_the_inbox_socket(broker: InProcBrok
     srv.bind(path)
     srv.listen(8)
     srv.setblocking(False)
-    env = {"CLAUDECODE": "1", "CLAUDE_CODE_MESSAGING_SOCKET": path,
-           "CLAUDE_CODE_MESSAGING_TOKEN": "tok-canary-123", "CLAUDE_CODE_SESSION_ID": "sess-1"}  # gitleaks:allow (fake canary)
+    env = {
+        "CLAUDECODE": "1",
+        "CLAUDE_CODE_MESSAGING_SOCKET": path,
+        "CLAUDE_CODE_MESSAGING_TOKEN": "tok-canary-123",
+        "CLAUDE_CODE_SESSION_ID": "sess-1",
+    }  # gitleaks:allow (fake canary)
     try:
         async with FakeAgent(broker.home, "k1", env=env) as a:
             await a.join("#build", "tester")
@@ -534,14 +616,20 @@ async def test_claude_like_env_never_touches_the_inbox_socket(broker: InProcBrok
         os.rmdir(d)
     [row] = q(broker, "SELECT harness, claude_socket FROM participants WHERE session_key='test:k1'")
     assert row[0] == "test" and row[1] is None
-    assert "tok-canary-123" not in (broker.home / "logs").joinpath("broker.log").read_text(errors="replace") \
-        if (broker.home / "logs" / "broker.log").exists() else True
+    assert (
+        "tok-canary-123" not in (broker.home / "logs").joinpath("broker.log").read_text(errors="replace")
+        if (broker.home / "logs" / "broker.log").exists()
+        else True
+    )
 
 
 async def test_broker_down_is_reported_plainly(tmp_home: Path) -> None:
     async with FakeAgent(tmp_home, "k1") as a:
         r = await a.join("#build", "tester")
-        assert r == {"ok": False, "error": "switchboard broker not running — ask your user to run: switchboard start"}
+        assert r == {
+            "ok": False,
+            "error": "switchboard broker not running — ask your user to run: switchboard start",
+        }
 
 
 async def test_non_test_broker_refuses_the_test_harness(tmp_home: Path) -> None:

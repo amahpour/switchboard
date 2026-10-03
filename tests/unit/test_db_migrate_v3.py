@@ -20,8 +20,18 @@ from switchboard import db
 from switchboard.store import Store
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "db" / "v0_6_5.sql"
-V2_TABLES = ("meta", "rooms", "participants", "memberships", "messages", "batches", "deliveries", "events",
-             "web_sessions", "remotes")
+V2_TABLES = (
+    "meta",
+    "rooms",
+    "participants",
+    "memberships",
+    "messages",
+    "batches",
+    "deliveries",
+    "events",
+    "web_sessions",
+    "remotes",
+)
 NEW_TABLES = ("passkeys", "link_machines")
 
 
@@ -77,7 +87,11 @@ def test_a_fresh_db_has_what_v3_added(tmp_path: Path) -> None:
     assert via[2] == "TEXT" and via[3] == 0  # nullable: a session made before schema 3 has none
     tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert set(NEW_TABLES) <= tables and tables == set(db.TABLES) | {"sqlite_sequence"}
-    assert db.tables_of(1) == db.V1_TABLES and db.tables_of(2) == db.V2_TABLES and db.tables_of(3) == db.V3_TABLES
+    assert (
+        db.tables_of(1) == db.V1_TABLES
+        and db.tables_of(2) == db.V2_TABLES
+        and db.tables_of(3) == db.V3_TABLES
+    )
     assert backups(tmp_path / "switchboard.db") == []
 
 
@@ -109,7 +123,10 @@ def test_v2_fixture_migrates_through_v3(tmp_path: Path) -> None:
     assert room is not None
     hosts = {m.name: m.host for m in store.members(room.id)}
     assert hosts["bench"] == "fpga-pi" and hosts["vivado"] == ""
-    assert [m.sender_host for m in store.history(room.id) if m.sender_name == "bench"] == ["fpga-pi", "fpga-pi"]
+    assert [m.sender_host for m in store.history(room.id) if m.sender_name == "bench"] == [
+        "fpga-pi",
+        "fpga-pi",
+    ]
     row = store.remote_row("fpga-pi")
     assert row is not None and row.enabled_via == "cli"
     # the old web session has no `via`; it is still a session
@@ -130,7 +147,7 @@ def test_the_backup_is_written_before_the_first_statement(tmp_path: Path) -> Non
     con.set_trace_callback(None)
     con.close()
     alters = [ok for sql, ok in seen if sql.lstrip().upper().startswith(("ALTER", "CREATE TABLE"))]
-    assert len(alters) == 3 + 5 + 1 + 1 and all(alters)  # v2 -> v3 -> v4 -> v5 -> v6
+    assert len(alters) == 3 + 5 + 1 + 1 + 2 and all(alters)  # v2 -> v3 -> v4 -> v5 -> v6 -> v7
     assert dump(bak) == original
     c = sqlite3.connect(bak)
     assert c.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
@@ -141,9 +158,13 @@ def test_failed_migration_leaves_v2_intact(tmp_path: Path, monkeypatch: pytest.M
     p = tmp_path / "switchboard.db"
     original = make_v2(p)
     bad = list(db.V2_TO_V3)
-    bad[2] = "CREATE TABLE link_machines(name TEXT REFERENCES no_such_table(x)) STRICT NONSENSE"  # after the ALTER
+    bad[2] = (
+        "CREATE TABLE link_machines(name TEXT REFERENCES no_such_table(x)) STRICT NONSENSE"  # after the ALTER
+    )
     monkeypatch.setattr(db, "V2_TO_V3", tuple(bad))
-    with pytest.raises(db.SchemaError, match="unchanged, still schema version 2; backup: switchboard.db.v2.bak"):
+    with pytest.raises(
+        db.SchemaError, match="unchanged, still schema version 2; backup: switchboard.db.v2.bak"
+    ):
         db.open_db(p)
     assert version(p) == 2
     assert dump(p) == original  # the ALTER and the passkeys table were rolled back too
@@ -168,7 +189,9 @@ def test_migration_needs_a_backup_path(tmp_path: Path) -> None:
     p = tmp_path / "switchboard.db"
     original = make_v2(p)
     con = db.connect(p)
-    with pytest.raises(db.SchemaError, match="schema version 2 needs a migration to version 6, and a migration"):
+    with pytest.raises(
+        db.SchemaError, match="schema version 2 needs a migration to version 7, and a migration"
+    ):
         db.migrate(con)
     con.close()
     assert dump(p) == original and backups(p) == []

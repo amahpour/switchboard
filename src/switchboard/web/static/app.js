@@ -141,6 +141,7 @@
         }
         let name = null;
         let validName = null;
+        let rulesInput = null;
         if (options.kind === 'room') {
           const label = el('label', null, 'Name');
           label.setAttribute('for', 'app-dialog-name');
@@ -164,6 +165,20 @@
             action.disabled = !valid || state.rooms.has(room);
             return action.disabled ? null : room;
           };
+        }
+        if (options.kind === 'rules') {
+          const label = el('label', null, 'Room rules');
+          label.setAttribute('for', 'app-dialog-rules');
+          rulesInput = el('textarea', 'rules-textarea');
+          rulesInput.id = 'app-dialog-rules';
+          rulesInput.maxLength = 2000;
+          rulesInput.value = options.initial || '';
+          const count = el('span', 'rules-count');
+          count.id = 'app-dialog-rules-count';
+          const updateCount = function () { count.textContent = rulesInput.value.length + ' / 2000'; };
+          rulesInput.addEventListener('input', updateCount);
+          updateCount();
+          form.append(label, rulesInput, count);
         }
         const buttons = el('div', 'app-dialog-buttons');
         const cancel = btn('btn', 'Cancel');
@@ -200,7 +215,8 @@
             if (options.kind === 'room') {
               answer = validName();
               if (!answer) return;
-            } else answer = true;
+            } else if (options.kind === 'rules') answer = rulesInput.value;
+            else answer = true;
             dlg.close('action');
           });
         }
@@ -209,7 +225,7 @@
           validName();
         }
         dlg.showModal();
-        (settings ? $('settings-close') : (name || (options.danger ? cancel : action))).focus();
+        (settings ? $('settings-close') : (name || rulesInput || (options.danger ? cancel : action))).focus();
       });
     });
     dialogQueue = next.then(function () {}, function () {});
@@ -388,7 +404,7 @@
   function room(name) {
     let r = state.rooms.get(name);
     if (!r) {
-      r = { name: name, slug: name.replace(/^#/, ''), lastId: 0, msgs: [], members: [], settings: {}, unread: 0 };
+      r = { name: name, slug: name.replace(/^#/, ''), lastId: 0, msgs: [], members: [], settings: {}, rules: '', unread: 0 };
       state.rooms.set(name, r);
     }
     return r;
@@ -912,6 +928,7 @@
     conn.classList.toggle('bad', !state.wsOpen);
     $('status-chips').classList.toggle('hidden', !r);
     $('pause-toggle').classList.toggle('hidden', !r);
+    $('room-rules').classList.toggle('hidden', !r);
 
     const st = $('st-state');
     const paused = $('banner-paused');
@@ -3047,6 +3064,39 @@
     }
     appearance.append(sizeLabel, sizeChoices);
 
+    const rules = el('section', 'settings-section');
+    rules.append(el('h3', null, 'Default room rules'),
+      el('p', 'fine', 'Copied into each room you create. Changing these does not change existing rooms.'));
+    const rulesLabel = el('label', 'settings-label', 'Rules');
+    rulesLabel.setAttribute('for', 'settings-room-rules');
+    const rulesInput = el('textarea', 'rules-textarea');
+    rulesInput.id = 'settings-room-rules';
+    rulesInput.maxLength = 2000;
+    rulesInput.value = (((state.me || {}).preferences || {}).room_rules || '');
+    const count = el('span', 'rules-count');
+    count.id = 'settings-rules-count';
+    const countRules = function () { count.textContent = rulesInput.value.length + ' / 2000'; };
+    rulesInput.addEventListener('input', function () { countRules(); $('settings-rules-status').textContent = ''; });
+    countRules();
+    const save = btn('btn-primary', 'Save defaults');
+    save.id = 'settings-rules-save';
+    const status = el('span', 'fine');
+    status.id = 'settings-rules-status';
+    status.setAttribute('role', 'status');
+    save.addEventListener('click', async function () {
+      save.disabled = true;
+      try {
+        const result = await api('PUT', '/api/me/preferences', { room_rules: rulesInput.value });
+        state.me.preferences = result.preferences;
+        status.textContent = 'Saved';
+        status.classList.remove('bad');
+      } catch (e) {
+        status.textContent = String(e.message || e);
+        status.classList.add('bad');
+      } finally { save.disabled = false; }
+    });
+    rules.append(rulesLabel, rulesInput, count, save, status);
+
     const account = el('section', 'settings-section');
     account.append(el('h3', null, 'Account'));
     if (state.me && (state.me.signin || state.me.hosted)) {
@@ -3062,12 +3112,13 @@
       location.replace('/');
     });
     account.append(signOut);
-    container.append(appearance, account);
+    container.append(appearance, rules, account);
   }
 
   function openSettings() {
     const themeAtOpen = (((state.me || {}).preferences || {}).theme || 'system');
     const sizeAtOpen = (((state.me || {}).preferences || {}).text_size || 'default');
+    const rulesAtOpen = (((state.me || {}).preferences || {}).room_rules || '');
     if (phone()) setNav(false);
     openDialog({ kind: 'settings', title: 'Settings', build: buildSettings });
     // A fresh count and check status may have changed in another tab.
@@ -3088,6 +3139,15 @@
         document.documentElement.dataset.textSize = me.preferences.text_size;
         for (const button of document.querySelectorAll('.settings-text-options button')) {
           button.setAttribute('aria-pressed', String(button.id === 'settings-text-' + me.preferences.text_size));
+        }
+      }
+      if ((((state.me || {}).preferences || {}).room_rules || '') !== rulesAtOpen) {
+        me.preferences.room_rules = state.me.preferences.room_rules;
+      } else if (me.preferences.room_rules !== rulesAtOpen) {
+        const input = $('settings-room-rules');
+        if (input && input.value === rulesAtOpen) {
+          input.value = me.preferences.room_rules;
+          $('settings-rules-count').textContent = input.value.length + ' / 2000';
         }
       }
       state.me = me;
@@ -3464,6 +3524,21 @@
     }
   }
 
+  async function openRoomRules() {
+    const r = activeRoom();
+    if (!r) return;
+    const text = await openDialog({ kind: 'rules', title: 'Rules for ' + r.name,
+      body: 'These add to switchboard’s five fixed rules. Agents see them at join and with each delivery.',
+      initial: r.rules, action: 'Save rules' });
+    if (text === null) return;
+    try {
+      const result = await api('PUT', '/api/rooms/' + encodeURIComponent(r.slug) + '/rules', { text: text });
+      r.rules = result.rules;
+    } catch (e) {
+      await openDialog({ kind: 'notice', title: 'Rules not saved', body: String(e.message || e), action: 'Close' });
+    }
+  }
+
   // the Welcome form's room name, without a leading '#'
   function welcomeName() {
     return String($('new-room-name').value || '').trim().replace(/^#+/, '');
@@ -3617,6 +3692,7 @@
       const r = activeRoom();
       if (r) submitText(r.settings && r.settings.paused ? '/resume' : '/pause');
     });
+    $('room-rules').addEventListener('click', openRoomRules);
     $('pane-toggle').addEventListener('click', togglePane);
     $('buddy-toggle').addEventListener('click', function () {
       const open = !$('app').classList.contains('sheet-open');
@@ -3683,6 +3759,7 @@
       r.id = l.id;
       r.createdAt = l.created_at;
       r.settings = l.settings || {};
+      r.rules = l.rules || '';
     }
     const was = state.active;
     const pruned = was !== null && gone.has(was);  // a replaced active room counts as pruned
