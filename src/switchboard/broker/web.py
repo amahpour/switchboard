@@ -60,9 +60,10 @@ from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from switchboard import __version__, build_info, db
-from switchboard.broker.auth import COOKIE_NAME, SESSION_TTL_S, app_csp, sha256_hex
 from switchboard.broker import people
+from switchboard.broker.auth import COOKIE_NAME, SESSION_TTL_S, app_csp, sha256_hex
 from switchboard.broker.commands import Actor
+from switchboard.broker.hub import WsSubscriber
 from switchboard.broker.passkeys import CEREMONY_TTL_S, CLAIM_GRACE_S, clean_name, sign_count_ok
 from switchboard.broker.passwords import (
     DUMMY_HASH,
@@ -72,7 +73,6 @@ from switchboard.broker.passwords import (
     password_problem,
     verify_password,
 )
-from switchboard.broker.hub import WsSubscriber
 from switchboard.broker.service import ServiceError, message_dict
 from switchboard.models import InvalidName, normalize_room, valid_host
 
@@ -134,8 +134,9 @@ def _set_cookie(resp: Response, sid: str, *, secure: bool) -> None:
 
 def _set_ceremony(resp: Response, name: str, value: str, *, secure: bool) -> None:
     """A ceremony cookie: HttpOnly, SameSite=Strict, Secure behind https, gone with the ceremony."""
-    resp.set_cookie(name, value, max_age=int(CEREMONY_TTL_S), path="/", httponly=True, samesite="strict",
-                    secure=secure)
+    resp.set_cookie(
+        name, value, max_age=int(CEREMONY_TTL_S), path="/", httponly=True, samesite="strict", secure=secure
+    )
 
 
 def _drop_cookie(resp: Response, name: str, *, secure: bool) -> None:
@@ -181,8 +182,11 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         page = "login.html" if w is None else ("setup.html" if w.must_reset else "index.html")
         # the app page alone allows inline styles, for Mermaid's drawings (§33); SecurityHeaders
         # adds the strict CSP to everything else, this page's sign-in forms included
-        headers = NO_STORE if page != "index.html" else {**NO_STORE, "content-security-policy":
-                                                          app_csp(state.web_origin)}
+        headers = (
+            NO_STORE
+            if page != "index.html"
+            else {**NO_STORE, "content-security-policy": app_csp(state.web_origin)}
+        )
         if page == "index.html":
             # The preference reaches <html> in the response, before CSS or app.js can paint.
             # It is an enum checked on write and by the schema, never text from a request.
@@ -194,8 +198,11 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         if page == "setup.html" and w is not None:
             size = state.store.preferences(w.person_id)["text_size"]
             html = (STATIC_DIR / page).read_text(encoding="utf-8")
-            return Response(html.replace('data-text-size="default"', f'data-text-size="{size}"', 1),
-                            media_type="text/html", headers=headers)
+            return Response(
+                html.replace('data-text-size="default"', f'data-text-size="{size}"', 1),
+                media_type="text/html",
+                headers=headers,
+            )
         return FileResponse(STATIC_DIR / page, media_type="text/html", headers=headers)
 
     app.mount("/static", _StaticFiles(directory=STATIC_DIR, html=False), name="static")
@@ -210,8 +217,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
     # browser that ignores <link rel="icon">): the 32 px PNG, which browsers accept at .ico
     @app.get("/favicon.ico", include_in_schema=False)
     async def favicon() -> Response:
-        return FileResponse(STATIC_DIR / "favicon-32.png", media_type="image/png",
-                            headers={"Cache-Control": "no-cache"})
+        return FileResponse(
+            STATIC_DIR / "favicon-32.png", media_type="image/png", headers={"Cache-Control": "no-cache"}
+        )
 
     # Bad-token hits need no auth, so they are rate-limited before they touch
     # the database: at most one event per BAD_TOKEN_EVENT_S, with a count.
@@ -260,7 +268,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             n = state.sessions.revoke(request.cookies.get(COOKIE_NAME))
             state.hub.close_sessions(h)
         resp = _ok({"ok": True, "revoked": n})
-        resp.delete_cookie(COOKIE_NAME, path="/", httponly=True, samesite="strict", secure=state.web_origin.secure)
+        resp.delete_cookie(
+            COOKIE_NAME, path="/", httponly=True, samesite="strict", secure=state.web_origin.secure
+        )
         return resp
 
     # ----------------------------------------------------- the owner (§31)
@@ -296,8 +306,11 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         if w is not None:
             size = state.store.preferences(w.person_id)["text_size"]
             html = (STATIC_DIR / "setup.html").read_text(encoding="utf-8")
-            return Response(html.replace('data-text-size="default"', f'data-text-size="{size}"', 1),
-                            media_type="text/html", headers=NO_STORE)
+            return Response(
+                html.replace('data-text-size="default"', f'data-text-size="{size}"', 1),
+                media_type="text/html",
+                headers=NO_STORE,
+            )
         return FileResponse(STATIC_DIR / "setup.html", media_type="text/html", headers=NO_STORE)
 
     @app.get("/api/setup/state")
@@ -326,7 +339,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
 
     def claim_ceremony(request: Request) -> dict[str, Any] | None:
         claim = state.claim
-        return claim.ceremony(request.cookies.get(SETUP_COOKIE)) if claim is not None and claim.active else None
+        return (
+            claim.ceremony(request.cookies.get(SETUP_COOKIE)) if claim is not None and claim.active else None
+        )
 
     @app.post("/api/setup/begin")
     async def setup_begin(request: Request) -> Response:
@@ -344,12 +359,20 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         if cer is None:
             if claim is None or not claim.active or not claim.check(body.get("token")):
                 failed("bad_claim")
-                return _err(403, "bad_claim", "This one-time password is wrong, expired or already used. Use the"
-                                              " newest one in the broker's log.")
+                return _err(
+                    403,
+                    "bad_claim",
+                    "This one-time password is wrong, expired or already used. Use the"
+                    " newest one in the broker's log.",
+                )
             if claim.ceremony_busy(cid):
-                return _err(409, "busy", "Someone is setting up this switchboard from another browser right now."
-                                         " If that isn't you, wait five minutes and try again; if it was, use that"
-                                         " browser.")
+                return _err(
+                    409,
+                    "busy",
+                    "Someone is setting up this switchboard from another browser right now."
+                    " If that isn't you, wait five minutes and try again; if it was, use that"
+                    " browser.",
+                )
             cid = secrets.token_urlsafe(32)
             cer = {"fido": None, "handle": secrets.token_bytes(16).hex()}
         assert claim is not None and cid is not None
@@ -370,8 +393,12 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         claim, cer = state.claim, claim_ceremony(request)
         if claim is None or cer is None:
             failed("bad_claim")
-            return _err(403, "no_ceremony", "No setup is in progress in this browser (it takes five minutes at"
-                                            " most): sign in with the one-time password again.")
+            return _err(
+                403,
+                "no_ceremony",
+                "No setup is in progress in this browser (it takes five minutes at"
+                " most): sign in with the one-time password again.",
+            )
         why = password_problem(body.get("password"), state.cfg.human_name)
         if why is not None:
             return _err(400, "bad_password", why)
@@ -400,8 +427,12 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         cer = claim.ceremony(request.cookies.get(SETUP_COOKIE)) if claim is not None else None
         if cer is None or wa is None or cer.get("fido") is None:
             failed("bad_claim")
-            return _err(403, "no_ceremony", "No setup is in progress in this browser (it takes five minutes at"
-                                            " most): sign in with the one-time password again.")
+            return _err(
+                403,
+                "no_ceremony",
+                "No setup is in progress in this browser (it takes five minutes at"
+                " most): sign in with the one-time password again.",
+            )
         try:
             reg = wa.register_finish(cer["fido"], body.get("credential"))
         except ValueError as e:
@@ -463,13 +494,19 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             # WebAuthn §7.2: a counter that didn't grow may mean a cloned authenticator
             failed("bad_passkey")
             log.warning("passkey %r: signature counter %d after %d, refused", row.name, count, row.sign_count)
-            return _err(403, "sign_count", f'the passkey "{row.name}" sent a signature counter that did not grow;'
-                                           " if you did not just use it elsewhere, it may have been copied")
+            return _err(
+                403,
+                "sign_count",
+                f'the passkey "{row.name}" sent a signature counter that did not grow;'
+                " if you did not just use it elsewhere, it may have been copied",
+            )
         if not state.used_challenges.add(st["challenge"]):
             failed("bad_passkey")
             return _err(403, "replay", "this sign-in was already used")
         person = state.store.person(row.person_id) if row.person_id is not None else None
-        if row.person_id is not None and (person is None or not person.active):  # pragma: no cover - deleted with them
+        if row.person_id is not None and (
+            person is None or not person.active
+        ):  # pragma: no cover - deleted with them
             return _err(403, "bad_credential", "unknown passkey")
         state.store.passkey_used(cred_id, count)
         now = state.clock.now()
@@ -486,8 +523,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         else:
             sid = state.sessions.create(f"passkey:{row.name}", person_id=row.person_id)
             state.passkey_checks[sha256_hex(sid)] = now
-            state.store.add_event("login", data={"what": "session", "via": "passkey", "passkey": row.name,
-                                                 "person": name})
+            state.store.add_event(
+                "login", data={"what": "session", "via": "passkey", "passkey": row.name, "person": name}
+            )
             state.hub.notice(None, "warn", f'new web login: {name} (passkey "{row.name}")')
             _set_cookie(resp, sid, secure=secure())
         _drop_cookie(resp, PASSKEY_COOKIE, secure=secure())
@@ -502,10 +540,13 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         if w is None:
             return None, unauthorized()
         if state.webauthn is None:
-            return None, _err(403, "no_passkeys",
-                              "passkeys need a public https:// URL with a DNS name (docs/DEPLOY.md)")
+            return None, _err(
+                403, "no_passkeys", "passkeys need a public https:// URL with a DNS name (docs/DEPLOY.md)"
+            )
         if state.store.owner_handle() is None:
-            return None, _err(409, "unclaimed", "set this switchboard up with the one-time password in its log first")
+            return None, _err(
+                409, "unclaimed", "set this switchboard up with the one-time password in its log first"
+            )
         if not state.fresh_check(w.h):
             return None, _err(403, "reauth", "confirm it's you first")
         return w, None
@@ -527,8 +568,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         assert w is not None
         wa = state.webauthn
         assert wa is not None
-        options, fstate = wa.register_options(handle_of(w), w.name,
-                                              [pk.credential_id for pk in state.store.passkeys_of(w.person_id)])
+        options, fstate = wa.register_options(
+            handle_of(w), w.name, [pk.credential_id for pk in state.store.passkeys_of(w.person_id)]
+        )
         resp = _ok({"options": options})
         _set_ceremony(resp, ADD_COOKIE, state.sealer.seal(fstate, CEREMONY_TTL_S), secure=secure())
         return resp
@@ -547,7 +589,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         assert wa is not None
         st = state.sealer.unseal(request.cookies.get(ADD_COOKIE))
         if st is None:
-            return _err(403, "no_ceremony", "adding the passkey took too long, or its cookie is missing: try again")
+            return _err(
+                403, "no_ceremony", "adding the passkey took too long, or its cookie is missing: try again"
+            )
         try:
             reg = wa.register_finish(st, body.get("credential"))
         except ValueError as e:
@@ -556,8 +600,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return _err(409, "conflict", "that passkey is registered already")
         name = clean_name(body.get("name"))
         with db.tx(state.store.con):
-            state.store.passkey_add(reg.credential_id, reg.public_key, name, reg.aaguid, reg.sign_count,
-                                    person_id=w.person_id)
+            state.store.passkey_add(
+                reg.credential_id, reg.public_key, name, reg.aaguid, reg.sign_count, person_id=w.person_id
+            )
             if w.must_reset and w.person_id is not None:
                 state.store.person_set_password(w.person_id, None)  # a passkey instead of a password
         state.store.add_event("login", data={"what": "passkey_added", "passkey": name, "person": w.name})
@@ -588,10 +633,20 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         if name and people.is_owner_name(state, name):
             if state.claim is not None and state.claim.active and state.claim.check(pw):
                 if state.claim.ceremony_busy(request.cookies.get(SETUP_COOKIE)):
-                    return _err(409, "busy", "Someone is setting up this switchboard from another browser right now.")
+                    return _err(
+                        409, "busy", "Someone is setting up this switchboard from another browser right now."
+                    )
                 state.signin.ok(name)
-                return start_claim(_ok({"ok": True, "next": "setup", "human": state.cfg.human_name,
-                                        "passkeys": state.webauthn is not None}))
+                return start_claim(
+                    _ok(
+                        {
+                            "ok": True,
+                            "next": "setup",
+                            "human": state.cfg.human_name,
+                            "passkeys": state.webauthn is not None,
+                        }
+                    )
+                )
             if verify_password(pw, state.store.owner_password_hash()):
                 resp = signed_in(None, state.cfg.human_name, "password", now)
         elif name:
@@ -601,7 +656,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 if verify_password(typed, person.password_hash):
                     if person.password_expires_at is not None and now >= person.password_expires_at:
                         state.signin.failed(name)
-                        return _err(403, "expired", "this one-time password has expired: ask the admin for a new one")
+                        return _err(
+                            403, "expired", "this one-time password has expired: ask the admin for a new one"
+                        )
                     resp = signed_in(person.id, person.name, "one-time", now, reset=True)
             elif person is not None and verify_password(pw, person.password_hash):
                 resp = signed_in(person.id, person.name, "password", now)
@@ -614,13 +671,21 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         state.signin.ok(name)
         return resp
 
-    def signed_in(person_id: int | None, name: str, via: str, now: float, *, reset: bool = False) -> JSONResponse:
+    def signed_in(
+        person_id: int | None, name: str, via: str, now: float, *, reset: bool = False
+    ) -> JSONResponse:
         sid = state.sessions.create(via, person_id=person_id)
         state.passkey_checks[sha256_hex(sid)] = now  # a password just typed is a fresh check
         state.store.add_event("login", data={"what": "session", "via": via, "person": name})
         state.hub.notice(None, "warn", f"new web login: {name}" + (" (one-time password)" if reset else ""))
-        resp = _ok({"ok": True, "next": "setup" if reset else "app", "human": name,
-                    "passkeys": state.webauthn is not None})
+        resp = _ok(
+            {
+                "ok": True,
+                "next": "setup" if reset else "app",
+                "human": name,
+                "passkeys": state.webauthn is not None,
+            }
+        )
         _set_cookie(resp, sid, secure=secure())
         return resp
 
@@ -638,8 +703,11 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         wait = state.signin.wait_s(w.name)
         if wait > 0:
             return _err(429, "slow_down", f"too many wrong tries: wait {int(wait) + 1} s and try again")
-        stored = (state.store.owner_password_hash() if w.person_id is None
-                  else getattr(state.store.person(w.person_id), "password_hash", None))
+        stored = (
+            state.store.owner_password_hash()
+            if w.person_id is None
+            else getattr(state.store.person(w.person_id), "password_hash", None)
+        )
         if not verify_password(body.get("password"), stored):
             state.signin.failed(w.name)
             failed("bad_password")
@@ -709,14 +777,23 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         name = body["name"].strip().lower()
         one_time = one_time_password()
         try:
-            p = state.store.person_add(name, secrets.token_bytes(16), hash_password(normalize_one_time(one_time) or ""),
-                                       people.ONE_TIME_TTL_S)
+            p = state.store.person_add(
+                name,
+                secrets.token_bytes(16),
+                hash_password(normalize_one_time(one_time) or ""),
+                people.ONE_TIME_TTL_S,
+            )
         except ValueError as e:
             return _err(409, "conflict", str(e))
         state.store.add_event("people", data={"what": "add", "person": name, "by": w.name})
         state.hub.notice(None, "info", f"{name} added by {w.name}")
-        return _ok({"person": next(x for x in people.summary(state) if x["id"] == p.id), "password": one_time,
-                    "invite": people.invite_text(state.web_origin.origin, name, one_time)})
+        return _ok(
+            {
+                "person": next(x for x in people.summary(state) if x["id"] == p.id),
+                "password": one_time,
+                "invite": people.invite_text(state.web_origin.origin, name, one_time),
+            }
+        )
 
     @app.post("/api/people/{pid}/password")
     async def people_password(request: Request, pid: str) -> Response:
@@ -732,14 +809,20 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         if p is None or not p.active:
             return _err(404, "not_found", "no such person")
         one_time = one_time_password()
-        gone = state.store.person_one_time_password(p.id, hash_password(normalize_one_time(one_time) or ""),
-                                                    people.ONE_TIME_TTL_S)
+        gone = state.store.person_one_time_password(
+            p.id, hash_password(normalize_one_time(one_time) or ""), people.ONE_TIME_TTL_S
+        )
         for g in gone or []:
             state.hub.close_sessions(g)
         state.store.add_event("people", data={"what": "one_time_password", "person": p.name, "by": w.name})
         state.hub.notice(None, "info", f"{w.name} gave {p.name} a new one-time password")
-        return _ok({"person": next(x for x in people.summary(state) if x["id"] == p.id), "password": one_time,
-                    "invite": people.invite_text(state.web_origin.origin, p.name, one_time)})
+        return _ok(
+            {
+                "person": next(x for x in people.summary(state) if x["id"] == p.id),
+                "password": one_time,
+                "invite": people.invite_text(state.web_origin.origin, p.name, one_time),
+            }
+        )
 
     @app.post("/api/people/{pid}/remove")
     async def people_remove(request: Request, pid: str) -> Response:
@@ -757,16 +840,26 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         gone = state.store.person_remove(p.id) or []
         for g in gone:
             state.hub.close_sessions(g)
-        state.store.add_event("people", data={"what": "remove", "person": p.name, "by": w.name, "sessions": len(gone)})
+        state.store.add_event(
+            "people", data={"what": "remove", "person": p.name, "by": w.name, "sessions": len(gone)}
+        )
         state.hub.notice(None, "warn", f"{p.name} removed by {w.name}: signed out everywhere")
         return _ok({"ok": True, "sessions": len(gone)})
 
     @app.get("/api/auth/state")
     async def auth_state() -> Response:
         # for the sign-in page (no session): what applies here, and nothing about anyone
-        return _ok({"hosted": state.web_origin.public, "claimed": state.store.owner_handle() is not None,
-                    "passkeys": passkeys_on(), "passkeys_work": state.webauthn is not None, "claim": claim_open(),
-                    "password": state.hosted, "sso": "coming soon"})
+        return _ok(
+            {
+                "hosted": state.web_origin.public,
+                "claimed": state.store.owner_handle() is not None,
+                "passkeys": passkeys_on(),
+                "passkeys_work": state.webauthn is not None,
+                "claim": claim_open(),
+                "password": state.hosted,
+                "sso": "coming soon",
+            }
+        )
 
     # ---------------------------------------------- machines that dial in (§31.7)
     @app.post("/link/pair", include_in_schema=False)
@@ -776,8 +869,11 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return _err(403, "forbidden", "this route takes no browser requests")
         m = state.machines
         if m is None:
-            return _err(404, "not_found", "this broker takes no machines that dial in (a hosted broker with"
-                                          " passkeys does)")
+            return _err(
+                404,
+                "not_found",
+                "this broker takes no machines that dial in (a hosted broker with passkeys does)",
+            )
         try:
             body = await _json_body(request)
         except ServiceError as e:
@@ -813,8 +909,14 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         m = state.machines
         if m is None:
             return _ok({"hosted": False, "machines": []})
-        return _ok({"hosted": True, "machines": m.summary(), "codes": m.codes.unused(),
-                    "broker_fingerprint": m.fingerprint})
+        return _ok(
+            {
+                "hosted": True,
+                "machines": m.summary(),
+                "codes": m.codes.unused(),
+                "broker_fingerprint": m.fingerprint,
+            }
+        )
 
     @app.post("/api/machines/pair")
     async def machines_pair(request: Request) -> Response:
@@ -872,8 +974,11 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         w = who(request)
         if w is None or w.must_reset:
             return unauthorized()
-        has_password = (state.store.owner_password_hash() is not None if w.person_id is None
-                        else getattr(state.store.person(w.person_id), "password_hash", None) is not None)
+        has_password = (
+            state.store.owner_password_hash() is not None
+            if w.person_id is None
+            else getattr(state.store.person(w.person_id), "password_hash", None) is not None
+        )
         resp = _ok(
             {
                 "human": w.name,
@@ -902,12 +1007,16 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return unauthorized()
         try:
             body = await _json_body(request)
-            if not body or set(body) - {"theme", "text_size"}:
+            if not body or set(body) - {"theme", "text_size", "room_rules"}:
                 raise ServiceError("bad_request", "unknown preference")
             if "theme" in body and body["theme"] not in ("system", "light", "dark"):
                 raise ServiceError("bad_request", "theme must be system, light or dark")
             if "text_size" in body and body["text_size"] not in ("small", "default", "large", "larger"):
                 raise ServiceError("bad_request", "text size must be small, default, large or larger")
+            if "room_rules" in body and (
+                not isinstance(body["room_rules"], str) or len(body["room_rules"]) > 2000
+            ):
+                raise ServiceError("bad_request", "room rules must be at most 2000 characters")
             return _ok({"preferences": state.store.set_preferences(w.person_id, body)})
         except ServiceError as e:
             return _svc_err(e)
@@ -920,15 +1029,30 @@ def install(app: FastAPI, state: "BrokerState") -> None:
 
     @app.post("/api/rooms")
     async def create_room(request: Request) -> Response:
-        if session(request) is None:
+        w = who(request)
+        if w is None or w.must_reset:
             return unauthorized()
         try:
             body = await _json_body(request)
             name = body.get("name")
             if not isinstance(name, str):
                 raise ServiceError("bad_request", "name is required")
-            room = state.service.create_room(name)
+            room = state.service.create_room(name, creator=w.name, person_id=w.person_id)
             return _ok({"room": state.service.room_dict(room)})
+        except ServiceError as e:
+            return _svc_err(e)
+
+    @app.put("/api/rooms/{slug}/rules")
+    async def set_room_rules(request: Request, slug: str) -> Response:
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        try:
+            body = await _json_body(request)
+            if set(body) != {"text"}:
+                raise ServiceError("bad_request", "text is required")
+            room = state.service.set_room_rules(slug, body["text"], w.name)
+            return _ok({"rules": room.rules_text})
         except ServiceError as e:
             return _svc_err(e)
 
@@ -985,8 +1109,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             text = body.get("text")
             if not isinstance(text, str):
                 raise ServiceError("bad_request", "text is required")
-            msg = state.service.human_say(slug, text, via="web", person=(w.name, w.person_id),
-                                          reply_to=body.get("reply_to"))
+            msg = state.service.human_say(
+                slug, text, via="web", person=(w.name, w.person_id), reply_to=body.get("reply_to")
+            )
             return _ok({"id": msg.id})
         except ServiceError as e:
             return _svc_err(e)
@@ -1001,8 +1126,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             text = body.get("text")
             if not isinstance(text, str):
                 raise ServiceError("bad_request", "text is required")
-            res = state.service.command(slug, text, Actor(role="human", via="web", name=w.name,
-                                                          person_id=w.person_id))
+            res = state.service.command(
+                slug, text, Actor(role="human", via="web", name=w.name, person_id=w.person_id)
+            )
             return _ok(res)
         except ServiceError as e:
             return _svc_err(e)
@@ -1058,7 +1184,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 # remotes.toml or the key files since then is a 409, never a silent consent
                 want = body.get("config_hash")
                 if not isinstance(want, str) or not HASH_RE.fullmatch(want):
-                    raise ServiceError("bad_request", "config_hash missing: reload the remotes panel and enable again")
+                    raise ServiceError(
+                        "bad_request", "config_hash missing: reload the remotes panel and enable again"
+                    )
                 # a long poll, as the CLI's: it dials and waits up to 15 s for the outcome
                 return _ok(await mgr.enable(name, via="web", actor="web session", expect_hash=want))
             return _ok(await mgr.disable(name, via="web"))
@@ -1166,8 +1294,14 @@ def _ws_hello(state: "BrokerState", sub: WsSubscriber, frame: dict[str, Any]) ->
             backlog = state.store.history(room.id, None, WS_BACKLOG)
             # Message ids are global across rooms: count this room's rows.
             skipped = state.store.count_messages(room.id, a or 0, backlog[0].id)
-            sub.offer({"t": "notice", "room": name, "level": "info",
-                       "text": f"{skipped} earlier message(s) not shown here; `switchboard tail` has them all"})
+            sub.offer(
+                {
+                    "t": "notice",
+                    "room": name,
+                    "level": "info",
+                    "text": f"{skipped} earlier message(s) not shown here; `switchboard tail` has them all",
+                }
+            )
         for m in backlog:
             sub.offer({"t": "msg", "room": name, "msg": message_dict(m)})
         sub.offer({"t": "room", "room": name, "settings": state.service.settings(room)})

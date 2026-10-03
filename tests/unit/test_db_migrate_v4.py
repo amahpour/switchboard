@@ -22,11 +22,27 @@ from switchboard import db
 from switchboard.store import Store
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "db" / "v0_7_0.sql"
-V3_TABLES = ("meta", "rooms", "participants", "memberships", "messages", "batches", "deliveries", "events",
-             "web_sessions", "remotes", "passkeys", "link_machines")
+V3_TABLES = (
+    "meta",
+    "rooms",
+    "participants",
+    "memberships",
+    "messages",
+    "batches",
+    "deliveries",
+    "events",
+    "web_sessions",
+    "remotes",
+    "passkeys",
+    "link_machines",
+)
 NEW_TABLES = ("people",)
-PERSON_COLUMNS = {"messages": "sender_person_id", "web_sessions": "person_id", "passkeys": "person_id",
-                  "link_machines": "person_id"}
+PERSON_COLUMNS = {
+    "messages": "sender_person_id",
+    "web_sessions": "person_id",
+    "passkeys": "person_id",
+    "link_machines": "person_id",
+}
 
 
 def make_v3(path: Path) -> list[str]:
@@ -77,7 +93,7 @@ def test_fixture_is_a_v3_database_with_rows_in_every_table(tmp_path: Path) -> No
 
 def test_fresh_db_keeps_the_v4_person_columns(tmp_path: Path) -> None:
     con = db.open_db(tmp_path / "switchboard.db")
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 6
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 7
     for t, col in PERSON_COLUMNS.items():
         c = {x[1]: x for x in columns(con, t)}[col]
         assert c[2] == "INTEGER" and c[3] == 0 and c[4] is None  # nullable, no default: NULL is the owner
@@ -127,7 +143,9 @@ def test_failed_migration_leaves_v3_intact(tmp_path: Path, monkeypatch: pytest.M
     bad = list(db.V3_TO_V4)
     bad[4] = "CREATE TABLE people(id INTEGER REFERENCES no_such_table(x)) STRICT NONSENSE"  # after the ALTERs
     monkeypatch.setattr(db, "V3_TO_V4", tuple(bad))
-    with pytest.raises(db.SchemaError, match="unchanged, still schema version 3; backup: switchboard.db.v3.bak"):
+    with pytest.raises(
+        db.SchemaError, match="unchanged, still schema version 3; backup: switchboard.db.v3.bak"
+    ):
         db.open_db(p)
     assert version(p) == 3 and dump(p) == original  # the ALTERs were rolled back too
     monkeypatch.undo()
