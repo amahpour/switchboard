@@ -317,6 +317,7 @@ def test_claim_it_from_the_log_and_sign_in_with_a_passkey(stack: Stack, playwrig
         cdp.send("WebAuthn.addVirtualAuthenticator", {"options": AUTHENTICATOR})
         page.goto(links[0])
         page.wait_for_selector("#step-choose:visible", timeout=15_000)
+        page.wait_for_url(f"{stack.public}/setup", timeout=15_000)
         assert page.url == f"{stack.public}/setup"  # the one-time password left the address bar
         page.click("#passkey-btn")  # a passkey instead of a password
         page.wait_for_selector("#step-backup:visible, #setup-error:visible", timeout=15_000)
