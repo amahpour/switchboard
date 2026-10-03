@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # Shared helpers for the M8 measurement scripts (README.md here). Sourced, not run.
 #
 # Everything lives in one throwaway work dir under /tmp (short, so Unix socket
@@ -13,7 +14,9 @@ SSHD_BIN="${SSHD_BIN:-/usr/sbin/sshd}"
 export PYTHONDONTWRITEBYTECODE=1
 [ -x "$PY" ] || { echo "no $PY: run 'uv sync' in the checkout first (or set PY)" >&2; exit 2; }
 [ -x "$SSHD_BIN" ] || { echo "no sshd at $SSHD_BIN (set SSHD_BIN)" >&2; exit 2; }
-command -v ssh >/dev/null && command -v ssh-keygen >/dev/null || { echo "needs ssh and ssh-keygen" >&2; exit 2; }
+if ! command -v ssh >/dev/null || ! command -v ssh-keygen >/dev/null; then
+  echo "needs ssh and ssh-keygen" >&2; exit 2
+fi
 
 W="$(mktemp -d /tmp/sb-m8-XXXXXX)"
 chmod 700 "$W"
@@ -83,7 +86,10 @@ start_sshd() {
   echo "[127.0.0.1]:$PORT $(cut -d' ' -f1,2 "$W/hk.pub")" > "$W/known_hosts"
   bg "$SSHD_BIN" -D -e -f "$W/sshd_config" 2>>"$W/sshd.log"
   wait_port "$PORT" || { echo "sshd did not start:" >&2; cat "$W/sshd.log" >&2; exit 1; }
+  # These variables are read by scripts that source this file.
+  # shellcheck disable=SC2034
   DEST="$(id -un)@127.0.0.1"
+  # shellcheck disable=SC2034
   SSH=(ssh -F /dev/null -i "$W/ck" -o IdentitiesOnly=yes -o IdentityAgent=none
        -o UserKnownHostsFile="$W/known_hosts" -o GlobalKnownHostsFile=/dev/null
        -o StrictHostKeyChecking=yes -o BatchMode=yes -o LogLevel=ERROR -p "$PORT")

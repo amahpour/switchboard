@@ -12,6 +12,8 @@ ipset create allowed hash:ip -exist
 # group= (empty) skips setgroups(), which needs CAP_SETGID; user=root skips setuid().
 { printf '%s\n' user=root group= listen-address=127.0.0.1 bind-interfaces \
     no-resolv no-hosts filter-AAAA log-queries log-facility=/var/log/switchboard-dns.log
+  # Each allowlist entry is one domain token, separated by whitespace.
+  # shellcheck disable=SC2013
   for d in $(sed 's/#.*//' /opt/sandbox/allowlist.txt); do
     echo "server=/$d/127.0.0.11"; echo "ipset=/$d/allowed"; done
 } > /etc/dnsmasq-switchboard.conf

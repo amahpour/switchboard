@@ -8,6 +8,7 @@
 #   3. the same key asks for a Unix-socket forward (-L), a stdio forward (-W), a pty (-tt)
 #      and another command: each refused (or replaced by the forced command)
 # User-level sshd on 127.0.0.1 with generated keys; see lib.sh.
+# shellcheck source=tests/manual/m8/lib.sh
 . "$(dirname "$0")/lib.sh"
 N="${N:-300}"
 
@@ -28,6 +29,8 @@ echo "== 3a. the key asks for a Unix-socket forward (-L): the channel is refused
 "$PY" -c 'import socket, sys; s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(1); import time; time.sleep(30)' "$W/b" &
 PIDS="$PIDS $!"
 wait_sock "$W/b"
+# bg passes this redirection to its SSH child, which must not consume this script's stdin.
+# shellcheck disable=SC2217
 bg "${SSH[@]}" -N -L "$W/l:$W/b" "$DEST" </dev/null
 if wait_sock "$W/l"; then
   "$PY" -c '
