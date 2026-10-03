@@ -1,0 +1,3 @@
+name: switchboard
+paths-ignore:
+  - src/switchboard/web/static/vendor/mermaid/**
