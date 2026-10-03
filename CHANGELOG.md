@@ -2,6 +2,12 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.16.1 (2026-10-03)
+
+### Added
+
+- **Security reports.** Pull requests and main now get downloadable CodeQL, Bandit, dependency, image, workflow and secret-scan reports. Findings are report-only; `uv run python scripts/security_scan.py` runs the fast checks locally before a pull request.
+
 ## 0.16.0 (2026-10-03)
 
 ### Added
