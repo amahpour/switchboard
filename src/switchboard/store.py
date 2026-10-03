@@ -882,6 +882,23 @@ class Store:
             self.con.execute("DELETE FROM passkeys WHERE person_id=?", (person_id,))
             return self.web_session_delete_person(person_id)
 
+    # ------------------------------------------------------------ preferences
+    # 0 is the owner (desktop or hosted); positive ids belong to the people table.
+    # Only the web route chooses the id, from its authenticated session.
+    def preferences(self, person_id: int | None) -> dict[str, str]:
+        key = person_id if person_id is not None else 0
+        row = self.con.execute("SELECT theme FROM preferences WHERE person_id=?", (key,)).fetchone()
+        return {"theme": row["theme"] if row else "system"}
+
+    def set_theme(self, person_id: int | None, theme: str) -> dict[str, str]:
+        if theme not in ("system", "light", "dark"):
+            raise ValueError("invalid theme")
+        key = person_id if person_id is not None else 0
+        with db.tx(self.con):
+            self.con.execute("INSERT INTO preferences(person_id, theme) VALUES(?, ?)"
+                             " ON CONFLICT(person_id) DO UPDATE SET theme=excluded.theme", (key, theme))
+        return self.preferences(person_id)
+
     # ------------------------------------------------------- the owner's password
     def owner_password_hash(self) -> str | None:
         return self.meta_get("owner_password")
