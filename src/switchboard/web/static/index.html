@@ -14,7 +14,7 @@
   - icons are inline <svg class="ic" aria-hidden="true"> with plain path data; no <use href>,
     no external sprite. Stroke and fill come from style.css.
 -->
-<html lang="en">
+<html lang="en" data-theme="system">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -78,17 +78,14 @@
     <div class="side-spacer"></div>
 
     <div class="side-foot">
-      <span class="avatar human sm" id="me-avatar" aria-hidden="true"></span>
-      <div class="me-text">
-        <span class="me-name" id="me-name"></span>
-        <span class="conn" id="st-conn">Connecting&hellip;</span>
-      </div>
-      <button type="button" class="icon-btn hidden" id="passkeys" aria-haspopup="dialog" aria-controls="passkeys-panel"
-              aria-label="Sign-in" title="Sign-in: your password and passkeys, or sign out everywhere">
-        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="5.5" cy="8" r="3"/><path d="M8.5 8h5.5M12 8v2.5M14 8v1.5"/></svg>
-      </button>
-      <button type="button" class="icon-btn" id="logout" aria-label="Sign off this browser" title="Sign off this browser">
-        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3H3.5v10H6"/><path d="M9.5 5 12.5 8l-3 3M12.5 8H6"/></svg>
+      <button type="button" class="me-settings" id="me-settings" aria-haspopup="dialog" aria-controls="app-dialog"
+              aria-label="Settings" title="Settings">
+        <span class="avatar human sm" id="me-avatar" aria-hidden="true"></span>
+        <span class="me-text">
+          <span class="me-name" id="me-name"></span>
+          <span class="conn" id="st-conn">Connecting&hellip;</span>
+        </span>
+        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg>
       </button>
     </div>
     <div class="running-release-foot" id="running-release-foot"></div>
@@ -340,21 +337,6 @@
       <p class="fine">Your machines dial this switchboard over <code>wss://</code>, outbound HTTPS only, and their
         agents join its rooms as <code>name@machine</code>. They can never act as you.</p>
       <div id="machines-body"></div>
-    </div>
-  </section>
-
-  <section class="sheet hidden" id="passkeys-panel" role="dialog" aria-modal="false" aria-labelledby="passkeys-panel-title">
-    <div class="sheet-head">
-      <h2 id="passkeys-panel-title">Sign-in</h2>
-      <button type="button" class="icon-btn" id="passkeys-close" aria-label="Close" title="Close">
-        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
-      </button>
-    </div>
-    <div class="sheet-body">
-      <p class="fine">How you sign in to this switchboard: your password, your passkeys (Touch ID, Face ID, Windows
-        Hello, a phone or a security key), or both. Changing either asks you to confirm it&rsquo;s you first, unless
-        you did in the last five minutes.</p>
-      <div id="passkeys-body"></div>
     </div>
   </section>
 

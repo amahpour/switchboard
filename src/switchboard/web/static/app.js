@@ -46,7 +46,7 @@
   };
 
   const state = {
-    me: null,          // { human, admin, test_mode, version, commit, port, hosted, signin, passkeys, password, fresh }
+    me: null,          // { human, admin, test_mode, version, commit, preferences, hosted, signin, passkeys, password, fresh }
     rooms: new Map(),  // name -> { name, slug, id, createdAt, lastId, msgs: [], members: [], settings: {}, unread: 0 }
     closed: 0,         // how many closed rooms there are (GET /api/rooms), for the Closed row
     closedRooms: [],   // GET /api/closed-rooms, as the Closed sheet shows it
@@ -119,11 +119,21 @@
       return new Promise(function (resolve) {
         const dlg = $('app-dialog');
         const opener = document.activeElement;
-        const form = el('form', 'app-dialog-form');
+        const settings = options.kind === 'settings';
+        const form = el(settings ? 'div' : 'form', 'app-dialog-form' + (settings ? ' settings-content' : ''));
         form.noValidate = true;
         const title = el('h2', null, options.title);
         title.id = 'app-dialog-title';
-        form.append(title);
+        if (settings) {
+          const head = el('div', 'settings-head');
+          const close = btn('icon-btn', 'Close');
+          close.id = 'settings-close';
+          close.setAttribute('aria-label', 'Close Settings');
+          close.addEventListener('click', function () { dlg.close('cancel'); });
+          head.append(title, close);
+          form.append(head);
+          options.build(form);
+        } else form.append(title);
         if (options.body) {
           const body = el('p', 'app-dialog-body', options.body);
           body.id = 'app-dialog-body';
@@ -162,36 +172,44 @@
         action.id = 'app-dialog-action';
         action.type = 'submit';
         if (options.kind === 'notice') cancel.classList.add('hidden');
-        buttons.append(cancel, action);
-        form.append(buttons);
+        if (!settings) {
+          buttons.append(cancel, action);
+          form.append(buttons);
+        }
         dlg.replaceChildren(form);
+        dlg.classList.toggle('app-dialog-settings', settings);
+        dlg.dataset.kind = options.kind || 'confirm';
         dlg.returnValue = 'cancel';
         let answer = null;
         dlg.onclose = function () {
           dlg.onclose = null;
-          const returnTo = opener && opener.id === 'insp-kick' ? $('insp-kick') : opener;
+          dlg.dataset.kind = '';
+          const returnTo = settings && phone() ? $('rooms-toggle')
+            : (opener && opener.id === 'insp-kick' ? $('insp-kick') : opener);
           if (returnTo && typeof returnTo.focus === 'function') returnTo.focus();
           resolve(dlg.returnValue === 'action' ? answer : null);
         };
-        cancel.addEventListener('click', function () { dlg.close('cancel'); });
-        action.addEventListener('click', function (ev) {
-          ev.preventDefault();
-          form.requestSubmit();
-        });
-        form.addEventListener('submit', function (ev) {
-          ev.preventDefault();
-          if (options.kind === 'room') {
-            answer = validName();
-            if (!answer) return;
-          } else answer = true;
-          dlg.close('action');
-        });
+        if (!settings) {
+          cancel.addEventListener('click', function () { dlg.close('cancel'); });
+          action.addEventListener('click', function (ev) {
+            ev.preventDefault();
+            form.requestSubmit();
+          });
+          form.addEventListener('submit', function (ev) {
+            ev.preventDefault();
+            if (options.kind === 'room') {
+              answer = validName();
+              if (!answer) return;
+            } else answer = true;
+            dlg.close('action');
+          });
+        }
         if (name) {
           name.addEventListener('input', validName);
           validName();
         }
         dlg.showModal();
-        (name || (options.danger ? cancel : action)).focus();
+        (settings ? $('settings-close') : (name || (options.danger ? cancel : action))).focus();
       });
     });
     dialogQueue = next.then(function () {}, function () {});
@@ -2072,7 +2090,7 @@
     setRemotes(data.remotes || [], data.config_error || null);
   }
 
-  const SHEETS = ['remotes-panel', 'machines-panel', 'closed-panel', 'passkeys-panel', 'people-panel'];
+  const SHEETS = ['remotes-panel', 'machines-panel', 'closed-panel', 'people-panel'];
 
   function openSheet(id) {
     state.sheetOpener = document.activeElement || null;
@@ -2838,31 +2856,28 @@
       return;
     }
     state.passwordBusy = true;
-    renderPasskeysPanel();
+    renderSettingsAccount();
     try {
       await withFreshCheck(function () { return api('POST', '/api/me/password', { password: a }); });
       state.passwordBusy = false;
       if (state.me) state.me.password = true;
-      renderPasskeysPanel();
+      renderSettingsAccount();
       passwordResult('Saved. Sign in with it from now on.', false);
     } catch (e) {
       state.passwordBusy = false;
-      renderPasskeysPanel();
+      renderSettingsAccount();
       passwordResult(String(e.message || e), true);
     }
   }
 
-  function renderPasskeysPanel() {
-    const body = $('passkeys-body');
-    if ($('passkeys-panel').classList.contains('hidden')) return;
+  function renderSettingsAccount() {
+    if (!$('app-dialog').open || $('app-dialog').dataset.kind !== 'settings') return;
+    const body = $('settings-account');
     const me = state.me || {};
     const n = me.passkeys || 0;
     body.replaceChildren();
     if (me.signin) body.append(passwordCard(me));
-    if (!me.hosted) {
-      body.append(signOutCard());
-      return;
-    }
+    if (!me.hosted) return;
 
     // your passkeys, and adding one: a name and the button on one row
     const card = el('div', 'passkey-card');
@@ -2938,7 +2953,7 @@
       return;
     }
     state.passkeyBusy = true;
-    renderPasskeysPanel();
+    renderSettingsAccount();
     try {
       const res = await window.SBWebAuthn.addPasskey(name);
       state.passkeyBusy = false;
@@ -2946,30 +2961,100 @@
         state.me.passkeys = res.passkeys;
         state.me.fresh = true;
       }
-      renderPasskeysPanel();
+      renderSettingsAccount();
       passkeyResult('added "' + res.name + '"', false);
     } catch (e) {
       state.passkeyBusy = false;
-      renderPasskeysPanel();
+      renderSettingsAccount();
       passkeyResult(String(e.message || e), true);
     }
   }
 
   async function logoutEverywhere() {
+    // The shared modal must close before its next confirmation can open.
+    if ($('app-dialog').open && $('app-dialog').dataset.kind === 'settings') $('app-dialog').close('cancel');
     if (!await confirmDialog('Sign out everywhere?',
       'Every browser, including this one, signs out. Your password and passkeys stay.', 'Sign out', true)) return;
     try { await api('POST', '/logout', { all: true }); } catch (e) { /* already signed out */ }
     location.replace('/');
   }
 
-  function openPasskeys() {
-    openSheet('passkeys-panel');
-    renderPasskeysPanel();
+  function buildSettings(container) {
+    const appearance = el('section', 'settings-section');
+    appearance.append(el('h3', null, 'Appearance'), el('p', 'fine', 'Choose how switchboard looks on every browser where you sign in.'));
+    const themeLabel = el('span', 'settings-label', 'Theme');
+    const choices = el('div', 'settings-theme-options');
+    choices.setAttribute('role', 'group');
+    choices.setAttribute('aria-label', 'Theme');
+    const current = ((state.me || {}).preferences || {}).theme || 'system';
+    for (const [value, label] of [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']]) {
+      const option = btn('settings-theme-option', label);
+      option.id = 'settings-theme-' + value;
+      option.setAttribute('aria-pressed', String(value === current));
+      option.addEventListener('click', async function () {
+        if (value === (((state.me || {}).preferences || {}).theme || 'system')) return;
+        for (const button of choices.children) button.disabled = true;
+        try {
+          const result = await api('PUT', '/api/me/preferences', { theme: value });
+          state.me.preferences = result.preferences;
+          document.documentElement.dataset.theme = result.preferences.theme;
+          window.dispatchEvent(new Event('switchboard-theme-change'));
+          for (const button of choices.children) {
+            button.setAttribute('aria-pressed', String(button.id === 'settings-theme-' + result.preferences.theme));
+          }
+          $('settings-error').textContent = '';
+        } catch (e) {
+          $('settings-error').textContent = String(e.message || e);
+        } finally {
+          for (const button of choices.children) button.disabled = false;
+        }
+      });
+      choices.append(option);
+    }
+    const error = el('p', 'app-dialog-error');
+    error.id = 'settings-error';
+    error.setAttribute('role', 'alert');
+    appearance.append(themeLabel, choices, error);
+
+    const account = el('section', 'settings-section');
+    account.append(el('h3', null, 'Account'));
+    if (state.me && (state.me.signin || state.me.hosted)) {
+      account.append(el('p', 'fine', 'Your password and passkeys. Changing either may ask you to confirm it’s you.'));
+    }
+    const signIn = el('div', 'settings-account');
+    signIn.id = 'settings-account';
+    account.append(signIn);
+    const signOut = btn('btn', 'Sign out');
+    signOut.id = 'settings-sign-out';
+    signOut.addEventListener('click', async function () {
+      try { await api('POST', '/logout', {}); } catch (e) { /* already signed out */ }
+      location.replace('/');
+    });
+    account.append(signOut);
+    container.append(appearance, account);
+  }
+
+  function openSettings() {
+    const themeAtOpen = (((state.me || {}).preferences || {}).theme || 'system');
+    if (phone()) setNav(false);
+    openDialog({ kind: 'settings', title: 'Settings', build: buildSettings });
+    // A fresh count and check status may have changed in another tab.
     api('GET', '/api/me').then(function (me) {
+      // A selection made while GET was in flight is newer than its response.
+      if ((((state.me || {}).preferences || {}).theme || 'system') !== themeAtOpen) {
+        me.preferences = state.me.preferences;
+      } else if (me.preferences.theme !== themeAtOpen) {
+        document.documentElement.dataset.theme = me.preferences.theme;
+        window.dispatchEvent(new Event('switchboard-theme-change'));
+        for (const button of document.querySelectorAll('.settings-theme-option')) {
+          button.setAttribute('aria-pressed', String(button.id === 'settings-theme-' + me.preferences.theme));
+        }
+      }
       state.me = me;
-      renderPasskeysPanel();
+      renderSettingsAccount();
     }, function () {});
-    $('passkeys-close').focus();
+    // openDialog starts on the next microtask, after the preceding modal closed.
+    Promise.resolve().then(renderSettingsAccount);
   }
 
   // --------------------------------------------------------------- people
@@ -3479,15 +3564,10 @@
       }, function () {});
     });
 
-    $('logout').addEventListener('click', async function () {
-      try { await api('POST', '/logout', {}); } catch (e) { /* already signed out */ }
-      location.replace('/');
-    });
+    $('me-settings').addEventListener('click', openSettings);
     $('remotes-close').addEventListener('click', function () { closeSheet('remotes-panel'); });
     $('add-machine').addEventListener('click', function () { openMachines(null); });
     $('machines-close').addEventListener('click', function () { closeSheet('machines-panel'); });
-    $('passkeys').addEventListener('click', openPasskeys);
-    $('passkeys-close').addEventListener('click', function () { closeSheet('passkeys-panel'); });
     $('open-people').addEventListener('click', openPeople);
     $('people-close').addEventListener('click', function () { closeSheet('people-panel'); });
     $('closed-rooms').addEventListener('click', openClosed);
@@ -3594,6 +3674,7 @@
     } catch (e) {
       return;
     }
+    document.documentElement.dataset.theme = (state.me.preferences || {}).theme || 'system';
     // Show the broker's build, with a release link and the full revision in the tooltip (§1.1).
     if (state.me && state.me.version) {
       const revision = state.me.commit;
@@ -3605,9 +3686,8 @@
       $('running-release-foot').replaceChildren(release);
       $('brand-name').setAttribute('title', label);
     }
-    // the Sign-in sheet and machines that dial in: a hosted broker (§31.4, §31.8, §32); the
+    // Sign-in controls live in Settings; machines that dial in belong to a hosted broker (§31.8).
     // admin section: its admin (§32.3)
-    $('passkeys').classList.toggle('hidden', !(state.me && (state.me.hosted || state.me.signin)));
     $('admin-section').classList.toggle('hidden', !(state.me && state.me.admin));
     state.machinesHosted = !!(state.me && (state.me.hosted || state.me.signin));
     renderRemotesSection();

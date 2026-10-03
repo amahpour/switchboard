@@ -7,8 +7,8 @@ silently loses updates on read-then-write (FINDINGS §10 S5).
 Schema versions: 1 (0.1.0 and 0.2.0), 2 (remote members: ``participants.host``,
 ``messages.sender_host``, the ``remotes`` table), 3 (a hosted broker's owner, §31:
 ``passkeys``, ``web_sessions.via``, ``link_machines``, and the owner's rows in ``meta``)
-and 4 (people, §32: ``people``, a person on passkeys, web sessions, machines and
-messages, where NULL is the owner).
+4 (people, §32: ``people``, a person on passkeys, web sessions, machines and
+messages, where NULL is the owner), and 5 (per-person preferences, §29.2).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -28,7 +28,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -157,6 +157,10 @@ CREATE TABLE people(
   password_hash TEXT, must_reset INTEGER NOT NULL DEFAULT 1, password_expires_at REAL,
   created_at REAL NOT NULL, removed_at REAL);
 CREATE UNIQUE INDEX people_active_name ON people(name) WHERE removed_at IS NULL;
+
+CREATE TABLE preferences(
+  person_id INTEGER PRIMARY KEY CHECK(person_id >= 0),
+  theme TEXT NOT NULL DEFAULT 'system' CHECK(theme IN ('system','light','dark')));
 """
 
 TABLES = (
@@ -173,12 +177,14 @@ TABLES = (
     "passkeys",
     "link_machines",
     "people",
+    "preferences",
 )
 # the tables of a version-1 database (0.1.0, 0.2.0) and of a version-2 one (0.3.0 to 0.6.5):
 # the rows a migration must keep
 V1_TABLES = TABLES[:9]
 V2_TABLES = TABLES[:10]
 V3_TABLES = TABLES[:12]
+V4_TABLES = TABLES[:13]
 
 # v1 -> v2 (DESIGN.md §27.6): one BEGIN IMMEDIATE, after a verified backup. The
 # columns land at the end of their tables, where the fresh schema above puts them too.
@@ -229,12 +235,21 @@ V3_TO_V4 = (
     "UPDATE meta SET value='4' WHERE key='schema_version'",
 )
 
+# v4 -> v5 (DESIGN.md §29.2): key 0 is the owner, positive ids are people. Defaults
+# are virtual until a person chooses a setting, so old databases need no rows rewritten.
+V4_TO_V5 = (
+    "CREATE TABLE preferences("
+    " person_id INTEGER PRIMARY KEY CHECK(person_id >= 0),"
+    " theme TEXT NOT NULL DEFAULT 'system' CHECK(theme IN ('system','light','dark')))",
+    "UPDATE meta SET value='5' WHERE key='schema_version'",
+)
+
 
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
     the tables the step adds). Read from the module at run time, never cached."""
     all_steps = {1: (2, V1_TO_V2, ("remotes",)), 2: (3, V2_TO_V3, ("passkeys", "link_machines")),
-                 3: (4, V3_TO_V4, ("people",))}
+                 3: (4, V3_TO_V4, ("people",)), 4: (5, V4_TO_V5, ("preferences",))}
     out = []
     v = frm
     while v < SCHEMA_VERSION:
@@ -252,6 +267,8 @@ def tables_of(version: int) -> tuple[str, ...]:
         return V2_TABLES
     if version == 3:
         return V3_TABLES
+    if version == 4:
+        return V4_TABLES
     return TABLES
 
 

@@ -77,6 +77,7 @@ function makeWorld(rooms) {
   const byId = new Map();
   const document = {
     title: '',
+    documentElement: new El('html'),
     activeElement: null,
     listeners: {},
     getElementById(id) {

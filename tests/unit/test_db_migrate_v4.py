@@ -75,15 +75,15 @@ def test_fixture_is_a_v3_database_with_rows_in_every_table(tmp_path: Path) -> No
     con.close()
 
 
-def test_fresh_db_is_v4(tmp_path: Path) -> None:
+def test_fresh_db_keeps_the_v4_person_columns(tmp_path: Path) -> None:
     con = db.open_db(tmp_path / "switchboard.db")
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 4
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 5
     for t, col in PERSON_COLUMNS.items():
         c = {x[1]: x for x in columns(con, t)}[col]
         assert c[2] == "INTEGER" and c[3] == 0 and c[4] is None  # nullable, no default: NULL is the owner
     tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert set(NEW_TABLES) <= tables and tables == set(db.TABLES) | {"sqlite_sequence"}
-    assert db.tables_of(3) == db.V3_TABLES and db.tables_of(4) == db.TABLES
+    assert db.tables_of(3) == db.V3_TABLES and db.tables_of(4) == db.V4_TABLES
     assert backups(tmp_path / "switchboard.db") == []
 
 
@@ -94,7 +94,7 @@ def test_v3_fixture_migrates_to_v4(tmp_path: Path) -> None:
     before = db.row_counts(src, V3_TABLES)
     src.close()
     con = db.open_db(p)
-    assert db.schema_version(con) == 4
+    assert db.schema_version(con) == db.SCHEMA_VERSION
     assert db.integrity_ok(con) is None
     assert db.row_counts(con, V3_TABLES) == before
     assert db.row_counts(con, NEW_TABLES) == {"people": 0}
@@ -132,7 +132,7 @@ def test_failed_migration_leaves_v3_intact(tmp_path: Path, monkeypatch: pytest.M
     assert version(p) == 3 and dump(p) == original  # the ALTERs were rolled back too
     monkeypatch.undo()
     con = db.open_db(p)
-    assert db.schema_version(con) == 4
+    assert db.schema_version(con) == db.SCHEMA_VERSION
     assert len(backups(p)) == 2
 
 
@@ -142,7 +142,7 @@ def test_the_v2_fixture_takes_both_steps_after_one_backup(tmp_path: Path) -> Non
     p = tmp_path / "switchboard.db"
     original = make_v2(p)
     con = db.open_db(p)
-    assert db.schema_version(con) == 4
+    assert db.schema_version(con) == db.SCHEMA_VERSION
     assert db.row_counts(con, NEW_TABLES) == {"people": 0}
     con.close()
     names = sorted(x.name for x in tmp_path.glob("switchboard.db.*.bak*"))

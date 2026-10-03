@@ -183,6 +183,13 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         # adds the strict CSP to everything else, this page's sign-in forms included
         headers = NO_STORE if page != "index.html" else {**NO_STORE, "content-security-policy":
                                                           app_csp(state.web_origin)}
+        if page == "index.html":
+            # The preference reaches <html> in the response, before CSS or app.js can paint.
+            # It is an enum checked on write and by the schema, never text from a request.
+            theme = state.store.preferences(w.person_id)["theme"]
+            html = (STATIC_DIR / page).read_text(encoding="utf-8")
+            return Response(html.replace('data-theme="system"', f'data-theme="{theme}"', 1),
+                            media_type="text/html", headers=headers)
         return FileResponse(STATIC_DIR / page, media_type="text/html", headers=headers)
 
     app.mount("/static", _StaticFiles(directory=STATIC_DIR, html=False), name="static")
@@ -870,11 +877,25 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 "passkeys": len(state.store.passkeys_of(w.person_id)),
                 "password": has_password,
                 "fresh": state.fresh_check(w.h),
+                "preferences": state.store.preferences(w.person_id),
             }
         )
         # Slide the browser cookie along with the server-side session.
         _set_cookie(resp, request.cookies.get(COOKIE_NAME) or "", secure=state.web_origin.secure)
         return resp
+
+    @app.put("/api/me/preferences")
+    async def set_preferences(request: Request) -> Response:
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        try:
+            body = await _json_body(request)
+            if set(body) != {"theme"} or body["theme"] not in ("system", "light", "dark"):
+                raise ServiceError("bad_request", "theme must be system, light or dark")
+            return _ok({"preferences": state.store.set_theme(w.person_id, body["theme"])})
+        except ServiceError as e:
+            return _svc_err(e)
 
     @app.get("/api/rooms")
     async def list_rooms(request: Request) -> Response:

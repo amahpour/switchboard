@@ -607,6 +607,40 @@ def test_new_room_dialog_validates_name_and_returns_focus(ui: UI) -> None:
         ui.world.command(room.removeprefix("#"), "/close")
 
 
+def test_settings_theme_follows_the_person_and_sign_out_moves_inside(ui: UI) -> None:
+    """Settings opens from the name, changes the first-paint theme across browsers, and signs out."""
+    page = ui.open()
+    page.click("#me-settings")
+    dialog = page.locator("#app-dialog")
+    expect(dialog).to_be_visible()
+    expect(page.locator("#app-dialog-title")).to_have_text("Settings")
+    page.click("#settings-theme-dark")
+    expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+    page.keyboard.press("Escape")
+    expect(dialog).to_be_hidden()
+    page.reload()
+    expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+    other = ui.open()
+    expect(other.locator("html")).to_have_attribute("data-theme", "dark")
+
+    phone = ui.open(**PHONE)
+    phone.click("#rooms-toggle")
+    phone.click("#me-settings")
+    modal = phone.locator("#app-dialog")
+    expect(modal).to_be_visible()
+    assert not phone.locator("#app").evaluate("e => e.classList.contains('nav-open')")
+    bounds = modal.bounding_box()
+    assert bounds is not None and abs(bounds["y"] + bounds["height"] - 844) < 2
+    phone.click("#settings-theme-light")
+    expect(phone.locator("html")).to_have_attribute("data-theme", "light")
+    phone.click("#settings-sign-out")
+    expect(phone.locator("#app-dialog")).to_be_hidden()
+    expect(phone.locator("#login-cli")).to_be_visible()
+    other.click("#me-settings")
+    other.click("#settings-theme-system")  # do not change the seeded world's later tests
+    expect(other.locator("html")).to_have_attribute("data-theme", "system")
+
+
 def test_typed_and_inspector_kick_use_the_same_dialog(ui: UI) -> None:
     """Typed /kick and the Inspector button share the title, body, and safe Cancel focus."""
     ui.world.create_room("#e2e-dialog-kick")
@@ -976,6 +1010,24 @@ def test_a_diagram_follows_the_light_or_dark_scheme(ui: UI) -> None:
     light = box.evaluate(fill)
     assert dark != light, (dark, light)
     expect(box).to_have_class(cls("md-showing-diagram"))
+
+
+def test_a_diagram_follows_the_saved_theme_instead_of_the_system(ui: UI) -> None:
+    """A Light system with Dark chosen in Settings redraws an open Mermaid diagram in Dark."""
+    page = diagram_room(ui, "e2e-diagram-choice", f"{FENCE}mermaid\n{FLOW}\n{FENCE}", color_scheme="light")
+    box = show(page)
+    fill = "(b) => getComputedStyle(b.querySelector('.md-diagram').shadowRoot.querySelector('.node rect')).fill"
+    light = box.evaluate(fill)
+    try:
+        page.click("#me-settings")
+        page.click("#settings-theme-dark")
+        expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+        page.wait_for_function(f"(prev) => ({fill})(document.querySelector('#log .md-pre')) !== prev", arg=light)
+        assert box.evaluate(fill) != light
+    finally:
+        if page.locator("#app-dialog").is_visible():
+            page.click("#settings-theme-system")
+            expect(page.locator("html")).to_have_attribute("data-theme", "system")
 
 
 def test_a_hostile_diagram_cannot_reach_the_page(ui: UI) -> None:
