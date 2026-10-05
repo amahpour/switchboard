@@ -1048,7 +1048,7 @@
   }
 
   function render(text, opts) {
-    const src = String(text == null ? '' : text);
+    const src = String(text === null || text === undefined ? '' : text);
     if (src.length > MAX_INPUT) return plainParagraph(src);
     const list = opts && Array.isArray(opts.mentions) ? opts.mentions : [];
     const o = {
@@ -1068,7 +1068,7 @@
   const NO_OPTS = { mentions: new Set(), localHost: '' };
 
   function firstLine(text, max) {
-    const src = String(text == null ? '' : text).slice(0, MAX_INPUT).replace(/\r\n?/g, '\n');
+    const src = String(text === null || text === undefined ? '' : text).slice(0, MAX_INPUT).replace(/\r\n?/g, '\n');
     let out = '';
     for (const line of src.split('\n')) {
       let t = trimST(line);

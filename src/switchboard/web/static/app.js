@@ -46,7 +46,7 @@
   };
 
   const state = {
-    me: null,          // { human, admin, test_mode, version, commit, port, hosted, signin, passkeys, password, fresh }
+    me: null,          // { human, admin, test_mode, version, commit, preferences, hosted, signin, passkeys, password, fresh }
     rooms: new Map(),  // name -> { name, slug, id, createdAt, lastId, msgs: [], members: [], settings: {}, unread: 0 }
     closed: 0,         // how many closed rooms there are (GET /api/rooms), for the Closed row
     closedRooms: [],   // GET /api/closed-rooms, as the Closed sheet shows it
@@ -67,7 +67,7 @@
     detail: null,      // { room, name, data } from GET /api/rooms/{slug}/members/{name}
     inspSeq: 0,        // only the newest detail response is applied
     inspTimer: null,
-    inspUi: null,      // { menu, confirm, queueOpen, copied, pokeCopied }
+    inspUi: null,      // { menu, queueOpen, copied, pokeCopied }
     insp: {},          // references to Inspector nodes built here (ids are not looked up)
     rowRefs: new Map(),  // member name -> its row button, for focus on "back"
     pop: null,         // composer popover: { kind: 'palette'|'mentions', items, sel, start }
@@ -109,6 +109,136 @@
     const b = el('button', cls, text);
     b.type = 'button';
     return b;
+  }
+
+  // One modal for actions, notices, and the New room form. The dialog's native close event
+  // handles both Esc and Cancel; every caller gets the same answer and focus goes back to its opener.
+  let dialogQueue = Promise.resolve();
+  function openDialog(options) {
+    const next = dialogQueue.then(function () {
+      return new Promise(function (resolve) {
+        const dlg = $('app-dialog');
+        const opener = document.activeElement;
+        const settings = options.kind === 'settings';
+        const form = el(settings ? 'div' : 'form', 'app-dialog-form' + (settings ? ' settings-content' : ''));
+        form.noValidate = true;
+        const title = el('h2', null, options.title);
+        title.id = 'app-dialog-title';
+        if (settings) {
+          const head = el('div', 'settings-head');
+          const close = btn('icon-btn', 'Close');
+          close.id = 'settings-close';
+          close.setAttribute('aria-label', 'Close Settings');
+          close.addEventListener('click', function () { dlg.close('cancel'); });
+          head.append(title, close);
+          form.append(head);
+          options.build(form);
+        } else form.append(title);
+        if (options.body) {
+          const body = el('p', 'app-dialog-body', options.body);
+          body.id = 'app-dialog-body';
+          form.append(body);
+        }
+        let name = null;
+        let validName = null;
+        let rulesInput = null;
+        if (options.kind === 'room') {
+          const label = el('label', null, 'Name');
+          label.setAttribute('for', 'app-dialog-name');
+          name = el('input');
+          name.id = 'app-dialog-name';
+          name.type = 'text';
+          name.autocomplete = 'off';
+          name.placeholder = '#build';
+          name.setAttribute('aria-describedby', 'app-dialog-error');
+          const error = el('p', 'app-dialog-error');
+          error.id = 'app-dialog-error';
+          error.setAttribute('role', 'status');
+          form.append(label, name, error);
+          validName = function () {
+            const value = String(name.value || '').trim().toLowerCase();
+            const room = value.startsWith('#') ? value : '#' + value;
+            const valid = /^#[a-z0-9][a-z0-9_-]{0,31}$/.test(room);
+            error.textContent = !value ? '' : !valid
+              ? 'Use a name like #build: letters, numbers, _ or -, up to 32 characters.'
+              : state.rooms.has(room) ? room + ' already exists. Pick another name.' : '';
+            action.disabled = !valid || state.rooms.has(room);
+            return action.disabled ? null : room;
+          };
+        }
+        if (options.kind === 'rules') {
+          const label = el('label', null, 'Room rules');
+          label.setAttribute('for', 'app-dialog-rules');
+          rulesInput = el('textarea', 'rules-textarea');
+          rulesInput.id = 'app-dialog-rules';
+          rulesInput.maxLength = 2000;
+          rulesInput.value = options.initial || '';
+          const count = el('span', 'rules-count');
+          count.id = 'app-dialog-rules-count';
+          const updateCount = function () { count.textContent = rulesInput.value.length + ' / 2000'; };
+          rulesInput.addEventListener('input', updateCount);
+          updateCount();
+          form.append(label, rulesInput, count);
+        }
+        const buttons = el('div', 'app-dialog-buttons');
+        const cancel = btn('btn', 'Cancel');
+        cancel.id = 'app-dialog-cancel';
+        const action = btn(options.danger ? 'btn-danger' : 'btn-primary', options.action);
+        action.id = 'app-dialog-action';
+        action.type = 'submit';
+        if (options.kind === 'notice') cancel.classList.add('hidden');
+        if (!settings) {
+          buttons.append(cancel, action);
+          form.append(buttons);
+        }
+        dlg.replaceChildren(form);
+        dlg.classList.toggle('app-dialog-settings', settings);
+        dlg.dataset.kind = options.kind || 'confirm';
+        dlg.returnValue = 'cancel';
+        let answer = null;
+        dlg.onclose = function () {
+          dlg.onclose = null;
+          dlg.dataset.kind = '';
+          const returnTo = settings && phone() ? $('rooms-toggle')
+            : (opener && opener.id === 'insp-kick' ? $('insp-kick') : opener);
+          if (returnTo && typeof returnTo.focus === 'function') returnTo.focus();
+          resolve(dlg.returnValue === 'action' ? answer : null);
+        };
+        if (!settings) {
+          cancel.addEventListener('click', function () { dlg.close('cancel'); });
+          action.addEventListener('click', function (ev) {
+            ev.preventDefault();
+            form.requestSubmit();
+          });
+          form.addEventListener('submit', function (ev) {
+            ev.preventDefault();
+            if (options.kind === 'room') {
+              answer = validName();
+              if (!answer) return;
+            } else if (options.kind === 'rules') answer = rulesInput.value;
+            else answer = true;
+            dlg.close('action');
+          });
+        }
+        if (name) {
+          name.addEventListener('input', validName);
+          validName();
+        }
+        dlg.showModal();
+        (settings ? $('settings-close') : (name || rulesInput || (options.danger ? cancel : action))).focus();
+      });
+    });
+    dialogQueue = next.then(function () {}, function () {});
+    return next;
+  }
+
+  function confirmDialog(title, body, action, danger) {
+    return openDialog({ title: title, body: body, action: action, danger: danger });
+  }
+
+  function confirmKick(name, room) {
+    return confirmDialog('Kick ' + name + ' from ' + room + '?',
+      'It is removed and its membership revoked.', 'Kick', true);
   }
 
   // removeAttribute where the DOM has it (the harness's fake DOM does not)
@@ -256,7 +386,7 @@
       opts.body = JSON.stringify(body || {});
     }
     const r = await fetch(path, opts);
-    let data = null;
+    let data;
     try { data = await r.json(); } catch (e) { data = null; }
     if (r.status === 401) {
       location.replace('/');
@@ -274,7 +404,7 @@
   function room(name) {
     let r = state.rooms.get(name);
     if (!r) {
-      r = { name: name, slug: name.replace(/^#/, ''), lastId: 0, msgs: [], members: [], settings: {}, unread: 0 };
+      r = { name: name, slug: name.replace(/^#/, ''), lastId: 0, msgs: [], members: [], settings: {}, rules: '', unread: 0 };
       state.rooms.set(name, r);
     }
     return r;
@@ -402,6 +532,12 @@
       m.ts - prev.ts >= 0 && m.ts - prev.ts < CONT_WINDOW_S && dayKey(prev.ts) === dayKey(m.ts));
   }
 
+  function messageMeta(m, gutter) {
+    const meta = el('span', 'msg-meta' + (gutter ? ' gutter' : ''));
+    meta.append(timeEl(m.ts, 'ts'), el('span', 'msg-number', '#' + String(m.id)));
+    return meta;
+  }
+
   function inspectedLabel() {
     const ins = state.inspect;
     if (!ins || ins.room !== state.active) return null;
@@ -462,7 +598,7 @@
     if (m.sender_kind === 'agent' && inspectedLabel() === who) line.classList.add('sel');
     if (isCont(prev, m)) {
       line.classList.add('cont');
-      line.append(timeEl(m.ts, 'ts gutter'), mdBody(m.text, m.mentions));
+      line.append(messageMeta(m, true), mdBody(m.text, m.mentions));
       return line;
     }
     const reply = m.reply_to ? replyLine(r, m) : null;
@@ -488,7 +624,7 @@
     if (flag) head.append(flag);
     if (m.sender_kind === 'agent') head.append(el('span', 'harness-name', harnessOf(m.harness)[1]));
     if (m.via === 'cli') head.append(el('span', 'via', 'via cli'));
-    head.append(timeEl(m.ts, 'ts'));
+    head.append(messageMeta(m, false));
     body.append(head, mdBody(m.text, m.mentions));
     line.append(body);
     return line;
@@ -792,6 +928,7 @@
     conn.classList.toggle('bad', !state.wsOpen);
     $('status-chips').classList.toggle('hidden', !r);
     $('pause-toggle').classList.toggle('hidden', !r);
+    $('room-rules').classList.toggle('hidden', !r);
 
     const st = $('st-state');
     const paused = $('banner-paused');
@@ -993,7 +1130,7 @@
     state.inspect = { room: r.name, name: m.name, host: m.host || '' };
     if (!same) {
       state.detail = null;
-      state.inspUi = { menu: false, confirm: false, queueOpen: false, copied: false, pokeCopied: false };
+      state.inspUi = { menu: false, queueOpen: false, copied: false, pokeCopied: false };
     }
     setPaneView(true);
     showPane();
@@ -1352,34 +1489,19 @@
     kick.dataset.focus = 'kick';
     kick.title = '/kick ' + m.name + ': remove it and revoke its membership';
     kick.append(icon('kick'), 'Kick ' + m.name);
-    kick.addEventListener('click', function () { setConfirm(true); });
-    refs.kick = kick;
-    const confirm = el('div', 'confirm' + (ui.confirm ? '' : ' hidden'));
-    confirm.id = 'kick-confirm';
-    confirm.setAttribute('role', 'group');
-    confirm.setAttribute('aria-label', 'Confirm kick');
-    const cancel = btn('btn', 'Cancel');
-    cancel.dataset.focus = 'kick-cancel';
-    cancel.addEventListener('click', function () { setConfirm(false); });
-    const doKick = btn('btn-danger', 'Kick');
-    doKick.dataset.focus = 'kick-do';
-    doKick.addEventListener('click', function () {
+    kick.addEventListener('click', async function () {
+      if (!await confirmKick(m.name, r.name)) return;
       const name = m.name;
       const at = r.members.indexOf(m);
       closeInspector(false);
       submitText('/kick ' + name, { confirmed: true });
-      // the kicked agent's row goes away with the next members frame, so focus the row that
-      // takes its place now; renderBuddies keeps it focused across that re-render
+      // The next members frame removes the row; focus its neighbour now.
       focusNear(at, name);
     });
-    const btns = el('div', 'dialog-buttons');
-    btns.append(cancel, doKick);
-    confirm.append(el('span', null, 'Kick ' + m.name + ' from ' + r.name + '? It is removed and its membership revoked.'), btns);
-    refs.confirm = confirm;
-    refs.cancel = cancel;
+    refs.kick = kick;
     const fine = el('p', 'fine');
     fine.append('Same as ', el('code', null, '/hold'), ', ', el('code', null, '/catchup'), ' and ', el('code', null, '/kick'), ' in the composer.');
-    actions.append(menu, row, kick, confirm, fine);
+    actions.append(menu, row, kick, fine);
 
     body.replaceChildren(id);
     if (notes.length) body.append(attn);
@@ -1392,19 +1514,9 @@
   function setMenu(open) {
     if (!state.inspUi) return;
     state.inspUi.menu = !!open;
-    if (open) state.inspUi.confirm = false;
     renderInspector();
     if (open && state.insp.menuItems && state.insp.menuItems.length) state.insp.menuItems[0].focus();
     else if (!open && state.insp.catchup) state.insp.catchup.focus();
-  }
-
-  function setConfirm(open) {
-    if (!state.inspUi) return;
-    state.inspUi.confirm = !!open;
-    if (open) state.inspUi.menu = false;
-    renderInspector();
-    if (open && state.insp.cancel) state.insp.cancel.focus();
-    else if (!open && state.insp.kick) state.insp.kick.focus();
   }
 
   // put a command in the composer for the human to finish and send (nothing is sent here);
@@ -1995,7 +2107,7 @@
     setRemotes(data.remotes || [], data.config_error || null);
   }
 
-  const SHEETS = ['remotes-panel', 'machines-panel', 'closed-panel', 'passkeys-panel', 'people-panel'];
+  const SHEETS = ['remotes-panel', 'machines-panel', 'closed-panel', 'people-panel'];
 
   function openSheet(id) {
     state.sheetOpener = document.activeElement || null;
@@ -2054,8 +2166,9 @@
     const r = state.remotes.find(function (x) { return x.name === name; });
     if (!r) return;
     if (r.state === 'blocked' && ASK_BEFORE_ENABLE.has(r.reason) &&
-        !window.confirm(name + ' is blocked (' + r.reason + '): ' + (r.hint || '') + '\n\nEnable it and dial ' +
-                        (r.dest || name) + ' again?')) return;
+        !await confirmDialog('Enable ' + name + '?',
+          'It is blocked (' + r.reason + '): ' + (r.hint || '') + ' Dial ' + (r.dest || name) + ' again.',
+          'Enable', false)) return;
     state.enabling.add(name);
     renderRemotesPanel();
     remoteResult(name, 'dialing ' + name + '…');
@@ -2074,7 +2187,8 @@
   }
 
   async function disableRemote(name) {
-    if (!window.confirm('Disable ' + name + '? Its members go offline until you enable it again.')) return;
+    if (!await confirmDialog('Disable ' + name + '?',
+      'Its members go offline until you enable it again.', 'Disable', true)) return;
     try {
       const res = await api('POST', '/api/remotes/' + encodeURIComponent(name) + '/disable', {});
       await loadRemotes().catch(function () {});
@@ -2576,7 +2690,7 @@
   }
 
   async function withFreshCheck(call) {
-    let me = null;
+    let me;
     try { me = await api('GET', '/api/me'); } catch (e) { me = null; }
     if (me) state.me = me;
     if (me && !me.fresh) await freshCheck();
@@ -2647,10 +2761,10 @@
   }
 
   async function removeMachine(name, pending) {
-    const q = pending
-      ? 'Reject ' + name + '? Its key is forgotten and its dialer stops for good. To pair it again, make a new code.'
-      : 'Remove ' + name + '? Its agents leave every room at once, and its dialer stops for good. To bring it back, pair it again with a new code.';
-    if (!window.confirm(q)) return;
+    if (!await confirmDialog((pending ? 'Reject ' : 'Remove ') + name + '?', pending
+      ? 'Its key is forgotten and its dialer stops for good. To pair it again, make a new code.'
+      : 'Its agents leave every room at once, and its dialer stops for good. To bring it back, pair it again with a new code.',
+    pending ? 'Reject' : 'Remove', true)) return;
     machineResult('note', '');
     state.machineBusy.set(name, 'remove');
     renderMachinesPanel();
@@ -2759,31 +2873,28 @@
       return;
     }
     state.passwordBusy = true;
-    renderPasskeysPanel();
+    renderSettingsAccount();
     try {
       await withFreshCheck(function () { return api('POST', '/api/me/password', { password: a }); });
       state.passwordBusy = false;
       if (state.me) state.me.password = true;
-      renderPasskeysPanel();
+      renderSettingsAccount();
       passwordResult('Saved. Sign in with it from now on.', false);
     } catch (e) {
       state.passwordBusy = false;
-      renderPasskeysPanel();
+      renderSettingsAccount();
       passwordResult(String(e.message || e), true);
     }
   }
 
-  function renderPasskeysPanel() {
-    const body = $('passkeys-body');
-    if ($('passkeys-panel').classList.contains('hidden')) return;
+  function renderSettingsAccount() {
+    if (!$('app-dialog').open || $('app-dialog').dataset.kind !== 'settings') return;
+    const body = $('settings-account');
     const me = state.me || {};
     const n = me.passkeys || 0;
     body.replaceChildren();
     if (me.signin) body.append(passwordCard(me));
-    if (!me.hosted) {
-      body.append(signOutCard());
-      return;
-    }
+    if (!me.hosted) return;
 
     // your passkeys, and adding one: a name and the button on one row
     const card = el('div', 'passkey-card');
@@ -2859,7 +2970,7 @@
       return;
     }
     state.passkeyBusy = true;
-    renderPasskeysPanel();
+    renderSettingsAccount();
     try {
       const res = await window.SBWebAuthn.addPasskey(name);
       state.passkeyBusy = false;
@@ -2867,29 +2978,183 @@
         state.me.passkeys = res.passkeys;
         state.me.fresh = true;
       }
-      renderPasskeysPanel();
+      renderSettingsAccount();
       passkeyResult('added "' + res.name + '"', false);
     } catch (e) {
       state.passkeyBusy = false;
-      renderPasskeysPanel();
+      renderSettingsAccount();
       passkeyResult(String(e.message || e), true);
     }
   }
 
   async function logoutEverywhere() {
-    if (!window.confirm('Sign out every browser you\'re signed in to, this one included? Your password and passkeys stay.')) return;
+    // The shared modal must close before its next confirmation can open.
+    if ($('app-dialog').open && $('app-dialog').dataset.kind === 'settings') $('app-dialog').close('cancel');
+    if (!await confirmDialog('Sign out everywhere?',
+      'Every browser, including this one, signs out. Your password and passkeys stay.', 'Sign out', true)) return;
     try { await api('POST', '/logout', { all: true }); } catch (e) { /* already signed out */ }
     location.replace('/');
   }
 
-  function openPasskeys() {
-    openSheet('passkeys-panel');
-    renderPasskeysPanel();
+  function buildSettings(container) {
+    const appearance = el('section', 'settings-section');
+    appearance.append(el('h3', null, 'Appearance'), el('p', 'fine', 'Choose how switchboard looks on every browser where you sign in.'));
+    const themeLabel = el('span', 'settings-label', 'Theme');
+    const choices = el('div', 'settings-theme-options');
+    choices.setAttribute('role', 'group');
+    choices.setAttribute('aria-label', 'Theme');
+    const current = ((state.me || {}).preferences || {}).theme || 'system';
+    for (const [value, label] of [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']]) {
+      const option = btn('settings-theme-option', label);
+      option.id = 'settings-theme-' + value;
+      option.setAttribute('aria-pressed', String(value === current));
+      option.addEventListener('click', async function () {
+        if (value === (((state.me || {}).preferences || {}).theme || 'system')) return;
+        for (const button of appearance.querySelectorAll('button')) button.disabled = true;
+        try {
+          const result = await api('PUT', '/api/me/preferences', { theme: value });
+          state.me.preferences = result.preferences;
+          document.documentElement.dataset.theme = result.preferences.theme;
+          window.dispatchEvent(new Event('switchboard-theme-change'));
+          for (const button of choices.children) {
+            button.setAttribute('aria-pressed', String(button.id === 'settings-theme-' + result.preferences.theme));
+          }
+          $('settings-error').textContent = '';
+        } catch (e) {
+          $('settings-error').textContent = String(e.message || e);
+        } finally {
+          for (const button of appearance.querySelectorAll('button')) button.disabled = false;
+        }
+      });
+      choices.append(option);
+    }
+    const error = el('p', 'app-dialog-error');
+    error.id = 'settings-error';
+    error.setAttribute('role', 'alert');
+    appearance.append(themeLabel, choices, error);
+
+    const sizeLabel = el('span', 'settings-label', 'Text size');
+    const sizeChoices = el('div', 'settings-theme-options settings-text-options');
+    sizeChoices.setAttribute('role', 'group');
+    sizeChoices.setAttribute('aria-label', 'Text size');
+    const currentSize = ((state.me || {}).preferences || {}).text_size || 'default';
+    for (const [value, label] of [['small', 'Small'], ['default', 'Default'], ['large', 'Large'],
+      ['larger', 'Larger']]) {
+      const option = btn('settings-theme-option', label);
+      option.id = 'settings-text-' + value;
+      option.setAttribute('aria-pressed', String(value === currentSize));
+      option.addEventListener('click', async function () {
+        if (value === (((state.me || {}).preferences || {}).text_size || 'default')) return;
+        for (const button of appearance.querySelectorAll('button')) button.disabled = true;
+        try {
+          const result = await api('PUT', '/api/me/preferences', { text_size: value });
+          state.me.preferences = result.preferences;
+          document.documentElement.dataset.textSize = result.preferences.text_size;
+          for (const button of sizeChoices.children) {
+            button.setAttribute('aria-pressed', String(button.id === 'settings-text-' + result.preferences.text_size));
+          }
+          $('settings-error').textContent = '';
+        } catch (e) {
+          $('settings-error').textContent = String(e.message || e);
+        } finally {
+          for (const button of appearance.querySelectorAll('button')) button.disabled = false;
+        }
+      });
+      sizeChoices.append(option);
+    }
+    appearance.append(sizeLabel, sizeChoices);
+
+    const rules = el('section', 'settings-section');
+    rules.append(el('h3', null, 'Default room rules'),
+      el('p', 'fine', 'Copied into each room you create. Changing these does not change existing rooms.'));
+    const rulesLabel = el('label', 'settings-label', 'Rules');
+    rulesLabel.setAttribute('for', 'settings-room-rules');
+    const rulesInput = el('textarea', 'rules-textarea');
+    rulesInput.id = 'settings-room-rules';
+    rulesInput.maxLength = 2000;
+    rulesInput.value = (((state.me || {}).preferences || {}).room_rules || '');
+    const count = el('span', 'rules-count');
+    count.id = 'settings-rules-count';
+    const countRules = function () { count.textContent = rulesInput.value.length + ' / 2000'; };
+    rulesInput.addEventListener('input', function () { countRules(); $('settings-rules-status').textContent = ''; });
+    countRules();
+    const save = btn('btn-primary', 'Save defaults');
+    save.id = 'settings-rules-save';
+    const status = el('span', 'fine');
+    status.id = 'settings-rules-status';
+    status.setAttribute('role', 'status');
+    save.addEventListener('click', async function () {
+      save.disabled = true;
+      try {
+        const result = await api('PUT', '/api/me/preferences', { room_rules: rulesInput.value });
+        state.me.preferences = result.preferences;
+        status.textContent = 'Saved';
+        status.classList.remove('bad');
+      } catch (e) {
+        status.textContent = String(e.message || e);
+        status.classList.add('bad');
+      } finally { save.disabled = false; }
+    });
+    rules.append(rulesLabel, rulesInput, count, save, status);
+
+    const account = el('section', 'settings-section');
+    account.append(el('h3', null, 'Account'));
+    if (state.me && (state.me.signin || state.me.hosted)) {
+      account.append(el('p', 'fine', 'Your password and passkeys. Changing either may ask you to confirm it’s you.'));
+    }
+    const signIn = el('div', 'settings-account');
+    signIn.id = 'settings-account';
+    account.append(signIn);
+    const signOut = btn('btn', 'Sign out');
+    signOut.id = 'settings-sign-out';
+    signOut.addEventListener('click', async function () {
+      try { await api('POST', '/logout', {}); } catch (e) { /* already signed out */ }
+      location.replace('/');
+    });
+    account.append(signOut);
+    container.append(appearance, rules, account);
+  }
+
+  function openSettings() {
+    const themeAtOpen = (((state.me || {}).preferences || {}).theme || 'system');
+    const sizeAtOpen = (((state.me || {}).preferences || {}).text_size || 'default');
+    const rulesAtOpen = (((state.me || {}).preferences || {}).room_rules || '');
+    if (phone()) setNav(false);
+    openDialog({ kind: 'settings', title: 'Settings', build: buildSettings });
+    // A fresh count and check status may have changed in another tab.
     api('GET', '/api/me').then(function (me) {
+      // A selection made while GET was in flight is newer than its response.
+      if ((((state.me || {}).preferences || {}).theme || 'system') !== themeAtOpen) {
+        me.preferences = state.me.preferences;
+      } else if (me.preferences.theme !== themeAtOpen) {
+        document.documentElement.dataset.theme = me.preferences.theme;
+        window.dispatchEvent(new Event('switchboard-theme-change'));
+        for (const button of document.querySelectorAll('.settings-theme-option')) {
+          button.setAttribute('aria-pressed', String(button.id === 'settings-theme-' + me.preferences.theme));
+        }
+      }
+      if ((((state.me || {}).preferences || {}).text_size || 'default') !== sizeAtOpen) {
+        me.preferences.text_size = state.me.preferences.text_size;
+      } else if (me.preferences.text_size !== sizeAtOpen) {
+        document.documentElement.dataset.textSize = me.preferences.text_size;
+        for (const button of document.querySelectorAll('.settings-text-options button')) {
+          button.setAttribute('aria-pressed', String(button.id === 'settings-text-' + me.preferences.text_size));
+        }
+      }
+      if ((((state.me || {}).preferences || {}).room_rules || '') !== rulesAtOpen) {
+        me.preferences.room_rules = state.me.preferences.room_rules;
+      } else if (me.preferences.room_rules !== rulesAtOpen) {
+        const input = $('settings-room-rules');
+        if (input && input.value === rulesAtOpen) {
+          input.value = me.preferences.room_rules;
+          $('settings-rules-count').textContent = input.value.length + ' / 2000';
+        }
+      }
       state.me = me;
-      renderPasskeysPanel();
+      renderSettingsAccount();
     }, function () {});
-    $('passkeys-close').focus();
+    // openDialog starts on the next microtask, after the preceding modal closed.
+    Promise.resolve().then(renderSettingsAccount);
   }
 
   // --------------------------------------------------------------- people
@@ -3078,8 +3343,9 @@
   }
 
   async function resetPerson(p) {
-    if (!window.confirm('Give ' + p.name + ' a new one-time password? They are signed out everywhere, and their'
-        + ' password stops working. Their passkeys still sign them in.')) return;
+    if (!await confirmDialog('Give ' + p.name + ' a new one-time password?',
+      'They are signed out everywhere, and their password stops working. Their passkeys still sign them in.',
+      'Reset password', true)) return;
     state.peopleBusy.set(p.id, 'reset');
     renderPeoplePanel();
     try {
@@ -3097,8 +3363,9 @@
   }
 
   async function removePerson(p) {
-    if (!window.confirm('Remove ' + p.name + '? They are signed out everywhere at once, and their password and'
-        + ' passkeys stop working. Their messages stay.')) return;
+    if (!await confirmDialog('Remove ' + p.name + '?',
+      'They are signed out everywhere at once, and their password and passkeys stop working. Their messages stay.',
+      'Remove', true)) return;
     state.peopleBusy.set(p.id, 'remove');
     renderPeoplePanel();
     try {
@@ -3206,12 +3473,13 @@
     }
     // /close removes every agent and the room row: ask first (false gives the text back)
     if (text.split(/\s+/)[0].toLowerCase() === '/close' &&
-        !window.confirm('Close ' + r.name + '? ' + r.members.length + ' agent(s) leave it and its tab goes away; ' +
-                        'the history is kept and you can reopen it from Closed rooms.')) return false;
+        !await confirmDialog('Close ' + r.name + '?',
+          plural(r.members.length, 'agent', 'agents') + ' leave it and its tab goes away. You can reopen it from Closed.',
+          'Close room', true)) return false;
     // /kick removes an agent and revokes its membership: ask first too
     const words = text.split(/\s+/);
     if (words[0].toLowerCase() === '/kick' && words[1] && !(opts && opts.confirmed) &&
-        !window.confirm('Kick ' + words[1] + ' from ' + r.name + '? It is removed and its membership revoked.')) return false;
+        !await confirmKick(words[1], r.name)) return false;
     const path = '/api/rooms/' + encodeURIComponent(r.slug);
     try {
       if (text.startsWith('//')) {
@@ -3251,7 +3519,23 @@
       $('input').focus();
     } catch (e) {
       if (state.rooms.size) renderLocal(String(e.message || e), true);
-      else window.alert(String(e.message || e));
+      else await openDialog({ kind: 'notice', title: 'Room not created',
+        body: String(e.message || e), action: 'Close' });
+    }
+  }
+
+  async function openRoomRules() {
+    const r = activeRoom();
+    if (!r) return;
+    const text = await openDialog({ kind: 'rules', title: 'Rules for ' + r.name,
+      body: 'These add to switchboard’s five fixed rules. Agents see them at join and with each delivery.',
+      initial: r.rules, action: 'Save rules' });
+    if (text === null) return;
+    try {
+      const result = await api('PUT', '/api/rooms/' + encodeURIComponent(r.slug) + '/rules', { text: text });
+      r.rules = result.rules;
+    } catch (e) {
+      await openDialog({ kind: 'notice', title: 'Rules not saved', body: String(e.message || e), action: 'Close' });
     }
   }
 
@@ -3266,12 +3550,12 @@
     $('join-preview').textContent = 'join switchboard room #' + name;
   }
 
-  // Esc closes the topmost thing: catch-up menu, kick confirm, composer popover, a sheet,
+  // Esc closes the topmost thing: a native dialog, catch-up menu, composer popover, a sheet,
   // the narrow drawer or sheet, then the Inspector. Focus goes back to what opened it.
   function onEscape() {
+    if ($('app-dialog').open || $('confirm-dialog').open) return;
     const ui = state.inspUi;
     if (state.inspect && ui && ui.menu) return setMenu(false);
-    if (state.inspect && ui && ui.confirm) return setConfirm(false);
     if (state.pop) {
       closePop();
       $('input').focus();
@@ -3370,10 +3654,9 @@
       updatePopover();
     });
 
-    $('new-room').addEventListener('click', function () {
-      const name = window.prompt('New room name (for example #build):', '#');
-      if (!name || name === '#') return;
-      createRoom(name);
+    $('new-room').addEventListener('click', async function () {
+      const name = await openDialog({ kind: 'room', title: 'New room', action: 'Create room' });
+      if (name) createRoom(name);
     });
     // first run: the Welcome form creates the room named in its field ("Create #build" by default)
     $('create-form').addEventListener('submit', function (ev) {
@@ -3396,15 +3679,10 @@
       }, function () {});
     });
 
-    $('logout').addEventListener('click', async function () {
-      try { await api('POST', '/logout', {}); } catch (e) { /* already signed out */ }
-      location.replace('/');
-    });
+    $('me-settings').addEventListener('click', openSettings);
     $('remotes-close').addEventListener('click', function () { closeSheet('remotes-panel'); });
     $('add-machine').addEventListener('click', function () { openMachines(null); });
     $('machines-close').addEventListener('click', function () { closeSheet('machines-panel'); });
-    $('passkeys').addEventListener('click', openPasskeys);
-    $('passkeys-close').addEventListener('click', function () { closeSheet('passkeys-panel'); });
     $('open-people').addEventListener('click', openPeople);
     $('people-close').addEventListener('click', function () { closeSheet('people-panel'); });
     $('closed-rooms').addEventListener('click', openClosed);
@@ -3414,6 +3692,7 @@
       const r = activeRoom();
       if (r) submitText(r.settings && r.settings.paused ? '/resume' : '/pause');
     });
+    $('room-rules').addEventListener('click', openRoomRules);
     $('pane-toggle').addEventListener('click', togglePane);
     $('buddy-toggle').addEventListener('click', function () {
       const open = !$('app').classList.contains('sheet-open');
@@ -3480,6 +3759,7 @@
       r.id = l.id;
       r.createdAt = l.created_at;
       r.settings = l.settings || {};
+      r.rules = l.rules || '';
     }
     const was = state.active;
     const pruned = was !== null && gone.has(was);  // a replaced active room counts as pruned
@@ -3511,6 +3791,8 @@
     } catch (e) {
       return;
     }
+    document.documentElement.dataset.theme = (state.me.preferences || {}).theme || 'system';
+    document.documentElement.dataset.textSize = (state.me.preferences || {}).text_size || 'default';
     // Show the broker's build, with a release link and the full revision in the tooltip (§1.1).
     if (state.me && state.me.version) {
       const revision = state.me.commit;
@@ -3522,9 +3804,8 @@
       $('running-release-foot').replaceChildren(release);
       $('brand-name').setAttribute('title', label);
     }
-    // the Sign-in sheet and machines that dial in: a hosted broker (§31.4, §31.8, §32); the
+    // Sign-in controls live in Settings; machines that dial in belong to a hosted broker (§31.8).
     // admin section: its admin (§32.3)
-    $('passkeys').classList.toggle('hidden', !(state.me && (state.me.hosted || state.me.signin)));
     $('admin-section').classList.toggle('hidden', !(state.me && state.me.admin));
     state.machinesHosted = !!(state.me && (state.me.hosted || state.me.signin));
     renderRemotesSection();

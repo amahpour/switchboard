@@ -296,7 +296,7 @@ def device(ctx: Any, page: Any) -> tuple[Any, str]:
 
 def shoot_hosted(browser: Any, out: Path, world: Any) -> None:
     """A hosted broker (issues #41, #61): the sign-in page before it's set up, Choose how you'll
-    sign in, the People sheet with an invite to send (light, dark), the Sign-in sheet (light,
+    sign in, the People sheet with an invite to send (light, dark), Settings with Account (light,
     dark), Confirm it's you, the sign-in page's three ways in, a teammate's own Choose page, and
     the sign-in page on a phone (dark). The invite's address reads https://sb.example.com."""
     from playwright.sync_api import expect
@@ -341,8 +341,8 @@ def shoot_hosted(browser: Any, out: Path, world: Any) -> None:
         page.emulate_media(color_scheme="light")
         page.click("#invite-done")
         page.keyboard.press("Escape")
-        page.click("#passkeys")
-        expect(page.locator("#passkeys-panel")).to_be_visible()
+        page.click("#me-settings")
+        expect(page.locator("#app-dialog")).to_be_visible()
         page.fill("#passkey-name", "iPhone")
         page.mouse.move(1, 1)
         shot(page, out, "passkeys-light.png")
@@ -360,7 +360,8 @@ def shoot_hosted(browser: Any, out: Path, world: Any) -> None:
         shot(page, out, "confirm-light.png")
         page.click("#confirm-cancel")
         page.keyboard.press("Escape")
-        page.click("#logout")
+        page.click("#me-settings")
+        page.click("#settings-sign-out")
         expect(page.locator("#login-choose")).to_be_visible()
         expect(page.locator("#passkey-btn")).to_be_visible()
         page.evaluate("document.activeElement && document.activeElement.blur()")

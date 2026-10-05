@@ -55,7 +55,8 @@ REMOTE_FORBIDDEN = "human and room commands run on the desktop"
 # attest on mcp.hello, its hook chain on hook.event): set by dispatch_remote for that
 # one request (a long poll's task keeps its copy), never read from params.
 REQUEST_FACTS: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
-    "switchboard_request_facts", default=None)
+    "switchboard_request_facts", default=None
+)
 ERROR_CODES = frozenset(
     {
         "bad_request",
@@ -194,9 +195,7 @@ class RpcServer:
             p.unlink()
         old = os.umask(0o077)
         try:
-            self._server = await asyncio.start_unix_server(
-                self._handle, path=str(p), limit=MAX_LINE + 1
-            )
+            self._server = await asyncio.start_unix_server(self._handle, path=str(p), limit=MAX_LINE + 1)
         finally:
             os.umask(old)
         os.chmod(p, 0o600)
@@ -273,7 +272,11 @@ class RpcServer:
         times on this broker's clock (``t = recv - t_age``, clamped; any wall-clock
         value from the far side is dropped), and its ``facts`` are visible to the
         handler of this request only. Then the same path as a local request."""
-        if isinstance(req, dict) and isinstance(req.get("params"), dict) and isinstance(req.get("method"), str):
+        if (
+            isinstance(req, dict)
+            and isinstance(req.get("params"), dict)
+            and isinstance(req.get("method"), str)
+        ):
             req = {**req, "params": proto.from_ages(req["method"], req["params"], recv)}
         token = REQUEST_FACTS.set(facts)
         try:
@@ -496,6 +499,14 @@ def build_methods(state: "BrokerState") -> dict[str, MethodSpec]:
         room = svc().create_room(_str(p, "name"))
         return {"room": svc().room_dict(room)}
 
+    async def room_rules(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
+        ref = _str(p, "room")
+        if "text" in p:
+            room = svc().set_room_rules(ref, p["text"], state.cfg.human_name)
+        else:
+            room = svc().room(ref)
+        return {"room": room.name, "rules": room.rules_text}
+
     async def human_say(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
         msg = svc().human_say(_str(p, "room"), _str(p, "text"), via="cli")
         return {"id": msg.id}
@@ -518,9 +529,15 @@ def build_methods(state: "BrokerState") -> dict[str, MethodSpec]:
             or not isinstance(created_at, (int, float))
         ):
             raise RpcError("bad_request", "room_id, name and created_at are required: run the plan first")
-        return svc().delete_room(ref, dry_run=dry_run, room_id=room_id, db_path=state.paths.db,
-                                 chain=state.peer_policy.describe(conn.peer),
-                                 name=None if dry_run else name, created_at=None if dry_run else created_at)
+        return svc().delete_room(
+            ref,
+            dry_run=dry_run,
+            room_id=room_id,
+            db_path=state.paths.db,
+            chain=state.peer_policy.describe(conn.peer),
+            name=None if dry_run else name,
+            created_at=None if dry_run else created_at,
+        )
 
     async def human_login_link(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
         token = state.login_tokens.mint()
@@ -610,6 +627,7 @@ def build_methods(state: "BrokerState") -> dict[str, MethodSpec]:
         "room.history": MethodSpec("anon", room_history),
         "room.tail": MethodSpec("anon", room_tail),
         "room.create": MethodSpec("human", room_create),
+        "room.rules": MethodSpec("human_cli", room_rules),
         # human plus a terminal you typed in (§28.6); never over a link (REMOTE_METHODS)
         "room.delete": MethodSpec("login", room_delete),
         "human.say": MethodSpec("human_cli", human_say),

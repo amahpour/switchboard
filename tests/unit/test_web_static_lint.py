@@ -110,14 +110,19 @@ def test_catchup_hint_for_commands_written_mid_message() -> None:
     assert r"(^|\s)\/(catchup|review)\b" in js  # only a mention inside plain text triggers it
 
 
+def test_browser_confirm_alert_and_prompt_are_not_used() -> None:
+    for p in files("js"):
+        assert not re.search(r"\bwindow\.(?:confirm|alert|prompt)\s*\(", p.read_text()), p.name
+
+
 def test_closed_rooms_ui() -> None:
     # §28: tabs are pruned (by name and by id), the Closed panel lists and reopens closed rooms,
     # and /close asks before it runs
     js = (STATIC / "app.js").read_text()
     assert "state.rooms.delete(" in js
     assert "/api/closed-rooms" in js
-    guard = re.search(r"=== '/close' &&\s*!window\.confirm\('Close '", js)
-    assert guard, "a window.confirm must guard /close"
+    guard = re.search(r"=== '/close' &&\s*!await confirmDialog\('Close '", js)
+    assert guard, "the shared dialog must guard /close"
     assert "return false;" in js[guard.end() : guard.end() + 400]  # declining gives the text back
     html = (STATIC / "index.html").read_text()
     assert 'id="closed-panel"' in html and 'id="closed-rooms"' in html

@@ -176,26 +176,68 @@ class Engine:
     def _snap(self, room_ids: Iterable[int]) -> list[Action]:
         return [Snapshot(r) for r in sorted(set(room_ids))]
 
-    def _fit(self, items: list[Item], room: Room, m: Membership, *, peer_inline: bool, max_chars: int,
-             item_limit: int | None = envelope.ITEM_LIMIT, shrink: bool = True) -> envelope.Fit:
-        return envelope.fit_batch(items, room=room.name, recipient=m.screen_name,
-                                  human_name=self.cfg.human_name, peer_inline=peer_inline,
-                                  max_chars=max_chars, item_limit=item_limit, shrink=shrink)
+    def _fit(
+        self,
+        items: list[Item],
+        room: Room,
+        m: Membership,
+        *,
+        peer_inline: bool,
+        max_chars: int,
+        item_limit: int | None = envelope.ITEM_LIMIT,
+        shrink: bool = True,
+    ) -> envelope.Fit:
+        return envelope.fit_batch(
+            items,
+            room=room.name,
+            recipient=m.screen_name,
+            human_name=self.cfg.human_name,
+            peer_inline=peer_inline,
+            max_chars=max_chars,
+            item_limit=item_limit,
+            shrink=shrink,
+            room_rules=room.rules_text,
+        )
 
-    def _render(self, b: Batch, fit: envelope.Fit, room: Room, m: Membership, *, peer_inline: bool,
-                item_limit: int | None = envelope.ITEM_LIMIT, more: bool = False) -> str:
-        return envelope.render_batch(fit.items, room=room.name, recipient=m.screen_name,
-                                     human_name=self.cfg.human_name, token=self.token(b),
-                                     peer_inline=peer_inline, more=more, item_limit=item_limit,
-                                     limits=fit.limits)
+    def _render(
+        self,
+        b: Batch,
+        fit: envelope.Fit,
+        room: Room,
+        m: Membership,
+        *,
+        peer_inline: bool,
+        item_limit: int | None = envelope.ITEM_LIMIT,
+        more: bool = False,
+    ) -> str:
+        return envelope.render_batch(
+            fit.items,
+            room=room.name,
+            recipient=m.screen_name,
+            human_name=self.cfg.human_name,
+            token=self.token(b),
+            peer_inline=peer_inline,
+            more=more,
+            item_limit=item_limit,
+            limits=fit.limits,
+            room_rules=room.rules_text,
+        )
 
     def _rooms_of(self, participant_id: int) -> list[int]:
         return [m.room_id for m in self.store.participant_memberships(participant_id)]
 
-    def _event(self, kind: str, *, room_id: int | None = None, membership_id: int | None = None,
-               participant_id: int | None = None, **data: Any) -> None:
-        self.store.add_event(kind, room_id=room_id, membership_id=membership_id,
-                             participant_id=participant_id, data=data)
+    def _event(
+        self,
+        kind: str,
+        *,
+        room_id: int | None = None,
+        membership_id: int | None = None,
+        participant_id: int | None = None,
+        **data: Any,
+    ) -> None:
+        self.store.add_event(
+            kind, room_id=room_id, membership_id=membership_id, participant_id=participant_id, data=data
+        )
 
     def _ctx(self, m: Membership) -> tuple[Participant, Room] | None:
         p = self.store.get_participant(m.participant_id)
@@ -223,15 +265,25 @@ class Engine:
                 m = self.store.get_membership(membership_id)
                 if m is not None:
                     self._parked_at[membership_id] = (m.room_id, m.participant_id)
-                    self._event("parked", room_id=m.room_id, membership_id=membership_id,
-                                participant_id=m.participant_id, reason=self.parked[membership_id])
+                    self._event(
+                        "parked",
+                        room_id=m.room_id,
+                        membership_id=membership_id,
+                        participant_id=m.participant_id,
+                        reason=self.parked[membership_id],
+                    )
         else:
             since = self.parked_since.pop(membership_id, None)
             self.parked_escalated.discard(membership_id)
             where = self._parked_at.pop(membership_id, None)
             if since is not None and where is not None:
-                self._event("unparked", room_id=where[0], membership_id=membership_id, participant_id=where[1],
-                            seconds=round(self.now() - since, 1))
+                self._event(
+                    "unparked",
+                    room_id=where[0],
+                    membership_id=membership_id,
+                    participant_id=where[1],
+                    seconds=round(self.now() - since, 1),
+                )
 
     def _unpark(self, membership_id: int) -> None:
         self.parked.pop(membership_id, None)
@@ -285,12 +337,20 @@ class Engine:
                 # a pull like read() (whole texts, not counted), so a wait loop that skipped
                 # the read() can't sit on them until its timeout (the read-first rule, §24).
                 ids = set(unread)
-                pull = Release(items=tuple(i for i in pending if i.message_id in ids), kind="pull",
-                               counted=False, reason="unread")
+                pull = Release(
+                    items=tuple(i for i in pending if i.message_id in ids),
+                    kind="pull",
+                    counted=False,
+                    reason="unread",
+                )
                 return self._fill_sink(p, m, room, pull, sink, pending) + unparked()
-            if rules.budget_blocked(pending, room=room, eff=eff,
-                                    peer_batch_boundary=m.peer_batch_boundary,
-                                    boundary_seq=p.boundary_seq):
+            if rules.budget_blocked(
+                pending,
+                room=room,
+                eff=eff,
+                peer_batch_boundary=m.peer_batch_boundary,
+                boundary_seq=p.boundary_seq,
+            ):
                 out += self._budget_exhausted(room)
             return out + unparked()
         route = adapter.route(p, rel, sink, self.now())
@@ -339,14 +399,18 @@ class Engine:
             return []
         self._event("budget_exhausted", room_id=room.id, window=room.budget_window_start)
         return [
-            Notice(room.id, "warn",
-                   f"the wake budget for this hour is used up: agents now wake only for "
-                   f"{self._whose()} messages. Raise it with /budget <n> in the web UI."),
+            Notice(
+                room.id,
+                "warn",
+                f"the wake budget for this hour is used up: agents now wake only for "
+                f"{self._whose()} messages. Raise it with /budget <n> in the web UI.",
+            ),
             Snapshot(room.id),
         ]
 
-    def _fill_sink(self, p: Participant, m: Membership, room: Room, rel: Release, sink: Sink,
-                   pending: list[Item]) -> list[Action]:
+    def _fill_sink(
+        self, p: Participant, m: Membership, room: Room, rel: Release, sink: Sink, pending: list[Item]
+    ) -> list[Action]:
         """A wait() call returns the release (plus any notified stubs: wait is a pull path)."""
         if sink.kind == "park":
             return self._fill_park(p, m, room, rel, sink)
@@ -375,11 +439,22 @@ class Engine:
         tu = sink.meta.get("tool_use_id")
         if isinstance(tu, str):
             self.pull_tool_use[b.id] = tu  # Devin: only this call's PostToolUse confirms it
-        out: list[Action] = [self._close_sink(sink, {"status": "messages", "text": text,
-                                                     "batch_id": b.id, "count": len(items)},
-                                              "filled")]
-        self._event("offer", room_id=room.id, membership_id=m.id, participant_id=p.id,
-                    batch_id=b.id, path=b.path, n=len(items), counted=rel.counted, ids=_ids(items))
+        out: list[Action] = [
+            self._close_sink(
+                sink, {"status": "messages", "text": text, "batch_id": b.id, "count": len(items)}, "filled"
+            )
+        ]
+        self._event(
+            "offer",
+            room_id=room.id,
+            membership_id=m.id,
+            participant_id=p.id,
+            batch_id=b.id,
+            path=b.path,
+            n=len(items),
+            counted=rel.counted,
+            ids=_ids(items),
+        )
         out += self._arm_pull(b, p)
         if rel.counted:
             out += self._after_counted(room.id)
@@ -392,22 +467,46 @@ class Engine:
         ``stop_cont`` wake; confirmed by the hook's ack plus the next hook."""
         caps = self.adapter(p).caps(p)
         inline = sink.path in caps.inline_paths
-        fit = self._fit(list(rel.items), room, m, peer_inline=inline,
-                        max_chars=min(self.d.batch_max_chars, caps.ctx_max_chars))
+        fit = self._fit(
+            list(rel.items),
+            room,
+            m,
+            peer_inline=inline,
+            max_chars=min(self.d.batch_max_chars, caps.ctx_max_chars),
+        )
         items = list(fit.items)
         b = self.store.create_batch(
-            m.id, path=sink.path, kind=rel.kind, wake_kind="stop_cont", wake_reason=rel.reason,
-            counted=rel.counted, items=envelope.inline_flags(items, inline, fit.partial),
+            m.id,
+            path=sink.path,
+            kind=rel.kind,
+            wake_kind="stop_cont",
+            wake_reason=rel.reason,
+            counted=rel.counted,
+            items=envelope.inline_flags(items, inline, fit.partial),
         )
         self._mark_peer(b, p, items)
         self.store.mark_posted(b.id)
         text = self._render(b, fit, room, m, peer_inline=inline)
         ack = self._continue(b, p, sink.meta.get("loop_count"))
         sink.batch_id = b.id
-        out: list[Action] = [self._close_sink(sink, {"status": "messages", "text": text, "batch_id": b.id,
-                                                     "ack": ack, "count": len(items)}, "filled")]
-        self._event("offer", room_id=room.id, membership_id=m.id, participant_id=p.id,
-                    batch_id=b.id, path=b.path, n=len(items), counted=rel.counted, ids=_ids(items))
+        out: list[Action] = [
+            self._close_sink(
+                sink,
+                {"status": "messages", "text": text, "batch_id": b.id, "ack": ack, "count": len(items)},
+                "filled",
+            )
+        ]
+        self._event(
+            "offer",
+            room_id=room.id,
+            membership_id=m.id,
+            participant_id=p.id,
+            batch_id=b.id,
+            path=b.path,
+            n=len(items),
+            counted=rel.counted,
+            ids=_ids(items),
+        )
         # the follow-up starts a turn: busy until a hook says otherwise
         self._set_status_quiet(p, "busy", "stop:followup")
         if rel.counted:
@@ -442,8 +541,13 @@ class Engine:
     def _push(self, p: Participant, m: Membership, room: Room, rel: Release, path: str) -> list[Action]:
         caps = self.adapter(p).caps(p)
         inline = path in caps.inline_paths
-        fit = self._fit(list(rel.items), room, m, peer_inline=inline,
-                        max_chars=min(self.d.batch_max_chars, caps.ctx_max_chars))
+        fit = self._fit(
+            list(rel.items),
+            room,
+            m,
+            peer_inline=inline,
+            max_chars=min(self.d.batch_max_chars, caps.ctx_max_chars),
+        )
         items = list(fit.items)
         b = self.store.create_batch(
             m.id,
@@ -456,10 +560,20 @@ class Engine:
         )
         self._mark_peer(b, p, items)
         text = self._render(b, fit, room, m, peer_inline=inline)
-        self._event("offer", room_id=room.id, membership_id=m.id, participant_id=p.id,
-                    batch_id=b.id, path=path, n=len(items), counted=rel.counted, ids=_ids(items))
-        out: list[Action] = [Push(b.id, p.id, path, text, room=room.name,
-                                  sender=items[0].sender_name if items else "")]
+        self._event(
+            "offer",
+            room_id=room.id,
+            membership_id=m.id,
+            participant_id=p.id,
+            batch_id=b.id,
+            path=path,
+            n=len(items),
+            counted=rel.counted,
+            ids=_ids(items),
+        )
+        out: list[Action] = [
+            Push(b.id, p.id, path, text, room=room.name, sender=items[0].sender_name if items else "")
+        ]
         if rel.counted:
             out += self._after_counted(room.id)
         out.append(Snapshot(room.id))
@@ -494,8 +608,14 @@ class Engine:
             return []  # pragma: no cover - membership rows are deleted only with a room without members (§28)
         if peer_mark is not None:
             self.store.mark_peer_batch(m.id, peer_mark)
-        self._event("confirm", room_id=m.room_id, membership_id=m.id,
-                    participant_id=m.participant_id, batch_id=b.id, evidence=evidence)
+        self._event(
+            "confirm",
+            room_id=m.room_id,
+            membership_id=m.id,
+            participant_id=m.participant_id,
+            batch_id=b.id,
+            evidence=evidence,
+        )
         extra: list[Action] = []
         if cont is not None and b.path == "stop_followup":
             p = self.store.get_participant(m.participant_id)
@@ -503,12 +623,12 @@ class Engine:
                 self.store.update_participant(p.id, unconfirmed_followups=0)
                 extra += self.refresh_tier(p.id)
         # a settled push frame may free another room's frame (one per session)
-        again = (self.evaluate_participant(m.participant_id) if is_push_path(b.path)
-                 else self.evaluate(m.id))
+        again = self.evaluate_participant(m.participant_id) if is_push_path(b.path) else self.evaluate(m.id)
         return extra + again + [Snapshot(m.room_id)]
 
-    def on_expire(self, batch_id: int, reason: str, *, state: str = "expired",
-                  count_failure: bool = True) -> list[Action]:
+    def on_expire(
+        self, batch_id: int, reason: str, *, state: str = "expired", count_failure: bool = True
+    ) -> list[Action]:
         """An offer failed: its deliveries go back to pending. ``count_failure=False``
         (a push re-route: nothing reached the session) doesn't count toward the push-expiry
         warning, and a counted wake gives its room's budget unit back (the next offer
@@ -525,25 +645,42 @@ class Engine:
                 return self._undo_stop_busy(cont.participant_id, cont.created_at, f"expired:{reason}")
             return []
         push = is_push_path(cur.path)
-        b = self.store.expire_batch(batch_id, reason, state=state, push=push and count_failure,
-                                    refund=push and not count_failure)
+        b = self.store.expire_batch(
+            batch_id, reason, state=state, push=push and count_failure, refund=push and not count_failure
+        )
         if b is None:
             return []  # pragma: no cover - checked offered just above, in this same synchronous call
         m = self.store.get_membership(b.membership_id)
         if m is None:
             return []  # pragma: no cover - membership rows are deleted only with a room without members (§28)
-        self._event("expire" if state == "expired" else "cancel", room_id=m.room_id,
-                    membership_id=m.id, participant_id=m.participant_id, batch_id=b.id,
-                    path=b.path, reason=reason)
+        self._event(
+            "expire" if state == "expired" else "cancel",
+            room_id=m.room_id,
+            membership_id=m.id,
+            participant_id=m.participant_id,
+            batch_id=b.id,
+            path=b.path,
+            reason=reason,
+        )
         out: list[Action] = []
         if push and state == "expired" and count_failure:
             p = self.store.get_participant(m.participant_id)
             if p is not None:
                 self.adapter(p).push_expired(p, b, reason, self.now())
                 if p.push_expiries == PUSH_EXPIRY_WARN:
-                    out.append(Notice(m.room_id, "warn",
-                                      f"{m.screen_name}: deliveries not confirmed; check `switchboard status`"))
-        if cont is not None and b.path == "stop_followup" and state == "expired" and self._missed(cont, reason):
+                    out.append(
+                        Notice(
+                            m.room_id,
+                            "warn",
+                            f"{m.screen_name}: deliveries not confirmed; check `switchboard status`",
+                        )
+                    )
+        if (
+            cont is not None
+            and b.path == "stop_followup"
+            and state == "expired"
+            and self._missed(cont, reason)
+        ):
             out += self._followup_expired(m, reason)
         if cont is not None and reason in TIMER_EXPIRIES:
             # the continuation set the member busy; with no hook since, no turn ran
@@ -584,9 +721,14 @@ class Engine:
         out: list[Action] = []
         if limit and n == limit:
             self._event("tier", participant_id=p.id, what="degraded", reason=reason, n=n)
-            out.append(Notice(m.room_id, "warn",
-                              f"{m.screen_name}: {n} stop follow-ups in a row were not confirmed; no more"
-                              " follow-ups until your next prompt in that Cursor session"))
+            out.append(
+                Notice(
+                    m.room_id,
+                    "warn",
+                    f"{m.screen_name}: {n} stop follow-ups in a row were not confirmed; no more"
+                    " follow-ups until your next prompt in that Cursor session",
+                )
+            )
         return out + self.refresh_tier(p.id)
 
     def refresh_tier(self, participant_id: int) -> list[Action]:
@@ -601,8 +743,14 @@ class Engine:
         self._event("tier", participant_id=p.id, tier=tier, note=note or "")
         return self._snap(self._rooms_of(p.id))
 
-    def expire_pull_batches(self, participant_id: int, reason: str, *,
-                            before: float | None = None, paths: Iterable[str] = PULL_PATHS) -> list[Action]:
+    def expire_pull_batches(
+        self,
+        participant_id: int,
+        reason: str,
+        *,
+        before: float | None = None,
+        paths: Iterable[str] = PULL_PATHS,
+    ) -> list[Action]:
         """Unconfirmed wait/read/say answers of this participant go back to pending."""
         out: list[Action] = []
         paths = frozenset(paths)
@@ -688,8 +836,13 @@ class Engine:
         )
         retry = rules.check_rate_limit(p.last_say_at, self.now(), self.d.rate_limit_s, exempt)
         if retry is not None:
-            self._event("rate_limited", room_id=m.room_id, membership_id=m.id, participant_id=p.id,
-                        retry_after_s=retry)
+            self._event(
+                "rate_limited",
+                room_id=m.room_id,
+                membership_id=m.id,
+                participant_id=p.id,
+                retry_after_s=retry,
+            )
         return retry
 
     def check_pass(self, p: Participant, m: Membership) -> list[int]:
@@ -699,13 +852,21 @@ class Engine:
         read() always shows every such item (they are pending), so it can't wedge."""
         ids = rules.unread_stubs(self.store.pending_items(m.id))
         if ids:
-            self._event("pass_refused", room_id=m.room_id, membership_id=m.id, participant_id=p.id,
-                        reason="read_first", n=len(ids), ids=ids[:20])
+            self._event(
+                "pass_refused",
+                room_id=m.room_id,
+                membership_id=m.id,
+                participant_id=p.id,
+                reason="read_first",
+                n=len(ids),
+                ids=ids[:20],
+            )
         return ids
 
     # ================================================================= pulls
-    def pull(self, p: Participant, m: Membership, path: str, limit: int, *,
-             before_id: int | None = None) -> tuple[str, int | None, int, bool, list[Action]]:
+    def pull(
+        self, p: Participant, m: Membership, path: str, limit: int, *, before_id: int | None = None
+    ) -> tuple[str, int | None, int, bool, list[Action]]:
         """read()/say() answer: every pending item (notified stubs too), oldest first.
 
         Returns (text, batch_id, count, more, actions).
@@ -724,33 +885,60 @@ class Engine:
         if not items:
             return envelope.batch_header(room.name, self.cfg.human_name, 0, 0, 0), None, 0, False, out
         # whole texts, up to pull_max_chars rendered; the rest is "more"
-        fit = self._fit(items, room, m, peer_inline=True, max_chars=self.d.pull_max_chars,
-                        item_limit=None, shrink=False)
+        fit = self._fit(
+            items, room, m, peer_inline=True, max_chars=self.d.pull_max_chars, item_limit=None, shrink=False
+        )
         items, more = list(fit.items), more or fit.more
-        b = self.store.create_batch(m.id, path=path, kind="pull",
-                                    items=envelope.inline_flags(items, True, fit.partial))
+        b = self.store.create_batch(
+            m.id, path=path, kind="pull", items=envelope.inline_flags(items, True, fit.partial)
+        )
         self.store.mark_posted(b.id)
         text = self._render(b, fit, room, m, peer_inline=True, item_limit=None, more=more)
-        self._event("offer", room_id=room.id, membership_id=m.id, participant_id=p.id,
-                    batch_id=b.id, path=path, n=len(items), counted=False, ids=_ids(items))
+        self._event(
+            "offer",
+            room_id=room.id,
+            membership_id=m.id,
+            participant_id=p.id,
+            batch_id=b.id,
+            path=path,
+            n=len(items),
+            counted=False,
+            ids=_ids(items),
+        )
         out += self._arm_pull(b, p)
         out.append(Snapshot(room.id))
         return text, b.id, len(items), more, out
 
     # ================================================================= sinks
-    def open_wait(self, p: Participant, m: Membership, wait_id: str, timeout_s: float,
-                  conn_id: int | None = None) -> tuple[Sink, list[Action]]:
+    def open_wait(
+        self, p: Participant, m: Membership, wait_id: str, timeout_s: float, conn_id: int | None = None
+    ) -> tuple[Sink, list[Action]]:
         """A wait() call: supersede older sinks, expire unconfirmed pulls, open, evaluate."""
         out: list[Action] = []
         for old in self.sinks.for_participant(p.id):
-            out.append(self._close_sink(old, {"status": "superseded",
-                                              "text": "[switchboard] this wait() was replaced by a newer wait() call."},
-                                        "superseded"))
+            out.append(
+                self._close_sink(
+                    old,
+                    {
+                        "status": "superseded",
+                        "text": "[switchboard] this wait() was replaced by a newer wait() call.",
+                    },
+                    "superseded",
+                )
+            )
         out += self.expire_pull_batches(p.id, "superseded")
         now = self.now()
-        sink = self.sinks.open(participant_id=p.id, membership_id=m.id, room_id=m.room_id,
-                               kind="wait", path="wait", wait_id=wait_id, opened_at=now,
-                               deadline=now + float(timeout_s), conn_id=conn_id)
+        sink = self.sinks.open(
+            participant_id=p.id,
+            membership_id=m.id,
+            room_id=m.room_id,
+            kind="wait",
+            path="wait",
+            wait_id=wait_id,
+            opened_at=now,
+            deadline=now + float(timeout_s),
+            conn_id=conn_id,
+        )
         pre = self.wait_calls.pop(p.id, None)
         if pre is not None and now - pre[1] <= WAIT_PRE_FRESH_S:
             sink.meta["tool_use_id"] = pre[0]  # the PreToolUse of this very wait() call (Devin)
@@ -760,16 +948,18 @@ class Engine:
         # timeouts. Wakes stay bounded by the budget and the loop guard.
         if p.harness == "test" or p.hooks_seen_at is None:
             # status is inferred from sinks
-            self.store.set_status(p.id, "idle" if p.harness == "test" else p.status, "sink",
-                                  bump_boundary=True)
+            self.store.set_status(
+                p.id, "idle" if p.harness == "test" else p.status, "sink", bump_boundary=True
+            )
         else:
             self.store.bump_boundary(p.id)
         out += self.evaluate(m.id)
         out.append(Snapshot(m.room_id))
         return sink, out
 
-    def open_park(self, p: Participant, ev: HookEvent, secs: float,
-                  conn_id: int | None = None) -> tuple[Sink, list[Action]]:
+    def open_park(
+        self, p: Participant, ev: HookEvent, secs: float, conn_id: int | None = None
+    ) -> tuple[Sink, list[Action]]:
         """A Cursor stop hook parks (§9.4): one live park per conversation (an
         older one resolves with no continuation), serving every room of the
         session. The engine fills it with the first wake batch that is due."""
@@ -779,10 +969,18 @@ class Engine:
         ms = self.store.participant_memberships(p.id)
         now = self.now()
         m = ms[0]
-        sink = self.sinks.open(participant_id=p.id, membership_id=m.id, room_id=m.room_id, kind="park",
-                               path="stop_followup", wait_id=f"park-{secrets.token_hex(4)}", opened_at=now,
-                               deadline=now + float(secs), conn_id=conn_id,
-                               meta={"loop_count": ev.loop_count})
+        sink = self.sinks.open(
+            participant_id=p.id,
+            membership_id=m.id,
+            room_id=m.room_id,
+            kind="park",
+            path="stop_followup",
+            wait_id=f"park-{secrets.token_hex(4)}",
+            opened_at=now,
+            deadline=now + float(secs),
+            conn_id=conn_id,
+            meta={"loop_count": ev.loop_count},
+        )
         self._event("park", participant_id=p.id, secs=round(float(secs), 1), loop_count=ev.loop_count)
         out += self.evaluate_participant(p.id)
         return sink, out + self._snap(m2.room_id for m2 in ms)
@@ -850,18 +1048,23 @@ class Engine:
         if room is None:
             return []  # pragma: no cover - a room is deleted only without members (§28)
         if msg.sender_kind == "agent" and rules.hop_tripped(room):
-            out += self.pause_room(room.id, "loop guard", event="loop_guard",
-                                   notice=f"loop guard: {room.hop_count} agent messages in a row"
-                                          f" with no message from {self._a_human()}. {room.name}"
-                                          " is paused; /resume in the web UI to continue."
-                                          f" /hops <n> changes the limit (now {room.hop_limit}).")
+            out += self.pause_room(
+                room.id,
+                "loop guard",
+                event="loop_guard",
+                notice=f"loop guard: {room.hop_count} agent messages in a row"
+                f" with no message from {self._a_human()}. {room.name}"
+                " is paused; /resume in the web UI to continue."
+                f" /hops <n> changes the limit (now {room.hop_limit}).",
+            )
         out += self.evaluate_room(room.id)
         out.append(Snapshot(room.id))
         return out
 
     # ============================================================== commands
-    def pause_room(self, room_id: int, reason: str, *, event: str = "pause",
-                   notice: str | None = None) -> list[Action]:
+    def pause_room(
+        self, room_id: int, reason: str, *, event: str = "pause", notice: str | None = None
+    ) -> list[Action]:
         self.store.set_paused(room_id, True, reason)
         out: list[Action] = []
         if event != "pause":
@@ -880,8 +1083,9 @@ class Engine:
         for m in self.store.room_memberships(room_id):
             # a Cursor stop park ends too, unless another room of that session is still live
             if self.sinks.parks_for(m.participant_id) and all(
-                    (r := self.store.room_by_id(x.room_id)) is None or r.paused
-                    for x in self.store.participant_memberships(m.participant_id)):
+                (r := self.store.room_by_id(x.room_id)) is None or r.paused
+                for x in self.store.participant_memberships(m.participant_id)
+            ):
                 out += self.release_parks(m.participant_id, "paused")
             for b in self.store.offered_batches(m.id):
                 if b.posted_at is None:
@@ -907,14 +1111,19 @@ class Engine:
         m = self.store.get_membership(membership_id)
         out: list[Action] = []
         status = "kicked" if reason == "kick" else "left"
-        text = ("[switchboard] you were removed from the room by your user." if reason == "kick"
-                else "[switchboard] you are no longer in this room.")
+        text = (
+            "[switchboard] you were removed from the room by your user."
+            if reason == "kick"
+            else "[switchboard] you are no longer in this room."
+        )
         if reason == "closed":
             # /close (§28.3): the room is already renamed #name~closed-<id>; name it as people saw it
             room = self.store.room_by_id(m.room_id) if m is not None else None
             status = "closed"
-            text = (f"[switchboard] {display_room(room.name) if room is not None else 'this room'}"
-                    f" was closed by {self.cfg.human_name}; you are no longer in it.")
+            text = (
+                f"[switchboard] {display_room(room.name) if room is not None else 'this room'}"
+                f" was closed by {self.cfg.human_name}; you are no longer in it."
+            )
         for s in self.sinks.for_membership(membership_id):
             out.append(self._close_sink(s, {"status": status, "text": text}, reason))
         if m is not None and not self.store.participant_memberships(m.participant_id):
@@ -922,7 +1131,9 @@ class Engine:
         elif m is not None and not self._unpaused_memberships(m.participant_id):
             out += self.release_parks(m.participant_id, "paused")  # the rooms left are all paused
         self._unpark(membership_id)
-        for b in self.store.offered_batches(membership_id):  # pragma: no cover - callers end it in the store first
+        for b in self.store.offered_batches(
+            membership_id
+        ):  # pragma: no cover - callers end it in the store first
             self.hook_acks.pop(b.id, None)
             self.pull_deadlines.pop(b.id, None)
         for bid in list(self.peer_marks):  # the store cancelled this member's offers
@@ -991,15 +1202,26 @@ class Engine:
         # Codex: input steered into a running turn (a turn/steer, or a turn/start
         # merged into a busy turn) fires UserPromptSubmit with that turn's own id.
         # It is mid-turn input, not a new turn (M4 live).
-        mid_turn = (E == "UserPromptSubmit" and p.harness == "codex" and bool(ev.gen)
-                    and (ev.gen or "")[:128] == p.gen and not was_idle)
+        mid_turn = (
+            E == "UserPromptSubmit"
+            and p.harness == "codex"
+            and bool(ev.gen)
+            and (ev.gen or "")[:128] == p.gen
+            and not was_idle
+        )
         gen = (ev.gen or "")[:128] or None
         if E == "UserPromptSubmit" and not mid_turn:
-            upd.update(gen=gen, gen_tainted=int(gen is not None and gen in self.tainted_gens.get(p.id, {})),
-                       rearms_in_gen=0)
+            upd.update(
+                gen=gen,
+                gen_tainted=int(gen is not None and gen in self.tainted_gens.get(p.id, {})),
+                rearms_in_gen=0,
+            )
             limit = self.cfg.cursor.max_unconfirmed_followups
-            if p.harness == "cursor" and p.unconfirmed_followups and (
-                    not limit or p.unconfirmed_followups >= limit):
+            if (
+                p.harness == "cursor"
+                and p.unconfirmed_followups
+                and (not limit or p.unconfirmed_followups >= limit)
+            ):
                 # the human's prompt ends a degraded spell (§9.4); below the limit the
                 # count stands: only a confirmed follow-up breaks a run of misses
                 upd["unconfirmed_followups"] = 0
@@ -1017,8 +1239,9 @@ class Engine:
             out += self.refresh_tier(p.id)
         # Devin: a hook of a prompt that started a background subagent may be the
         # subagent's (F§6 5.2): no context, no continue, no re-deliver for it.
-        tainted = p.harness == "devin" and (bool(p.gen_tainted) or (
-            gen is not None and gen in self.tainted_gens.get(p.id, {})))
+        tainted = p.harness == "devin" and (
+            bool(p.gen_tainted) or (gen is not None and gen in self.tainted_gens.get(p.id, {}))
+        )
         stale_sub = tainted and gen is not None and gen != p.gen
         if not stale_sub:
             # A parked stop hook of this session ends at any hook of it: a newer
@@ -1040,11 +1263,16 @@ class Engine:
                 b = self.check_token(p.id, bid, mac)
                 if b is None or b.state != "offered" or b.path in CONTINUE_PATHS:
                     continue  # continuations are confirmed by the next hook (below)
-                if b.path in PULL_PATHS and not adapter.pull_confirms(b.path, self.pull_tool_use.get(b.id), ev):
+                if b.path in PULL_PATHS and not adapter.pull_confirms(
+                    b.path, self.pull_tool_use.get(b.id), ev
+                ):
                     continue
                 confirmed.add(b.id)
-                if (E == "UserPromptSubmit" and is_push_path(b.path)
-                        and (b.wake_kind == "idle_wake" or was_idle)):
+                if (
+                    E == "UserPromptSubmit"
+                    and is_push_path(b.path)
+                    and (b.wake_kind == "idle_wake" or was_idle)
+                ):
                     # turn start = the confirming UserPromptSubmit (§12.5); a
                     # bypass mid-task frame lands inside a running turn: not one
                     self.store.set_batch_times(b.id, turn_start_at=ev.t if ev.t else now)
@@ -1156,9 +1384,16 @@ class Engine:
         t = ev.t if ev.t is not None else self.now()
         for s in self.sinks.for_participant(p.id):
             if s.kind == "wait" and s.opened_at < t:
-                out.append(self._close_sink(s, {"status": "superseded",
-                                                "text": "[switchboard] this wait() ended: your session moved on."},
-                                            "orphaned"))
+                out.append(
+                    self._close_sink(
+                        s,
+                        {
+                            "status": "superseded",
+                            "text": "[switchboard] this wait() ended: your session moved on.",
+                        },
+                        "orphaned",
+                    )
+                )
                 out.append(Snapshot(s.room_id))
         out += self.expire_pull_batches(p.id, f"hook:{ev.ev}", before=t, paths=("wait",))
         return out
@@ -1197,9 +1432,14 @@ class Engine:
             if room.paused or m.held or self.store.inflight_offer(m.id):
                 continue
             rel = rules.releasable(
-                self.store.pending_items(m.id), room=room, eff="idle",
-                peer_batch_boundary=m.peer_batch_boundary, boundary_seq=p.boundary_seq,
-                now=self.now(), quiet_s=self.d.quiet_s, max_hold_s=self.d.max_hold_s,
+                self.store.pending_items(m.id),
+                room=room,
+                eff="idle",
+                peer_batch_boundary=m.peer_batch_boundary,
+                boundary_seq=p.boundary_seq,
+                now=self.now(),
+                quiet_s=self.d.quiet_s,
+                max_hold_s=self.d.max_hold_s,
                 batch_max_msgs=self.d.batch_max_msgs,
                 max_chars=min(self.d.batch_max_chars, caps.ctx_max_chars),
             )
@@ -1212,19 +1452,38 @@ class Engine:
         if best is not None:
             _, m, room, rel = best
             inline = "stop_block" in caps.inline_paths
-            fit = self._fit(list(rel.items), room, m, peer_inline=inline,
-                            max_chars=min(self.d.batch_max_chars, caps.ctx_max_chars))
+            fit = self._fit(
+                list(rel.items),
+                room,
+                m,
+                peer_inline=inline,
+                max_chars=min(self.d.batch_max_chars, caps.ctx_max_chars),
+            )
             items = list(fit.items)
             b = self.store.create_batch(
-                m.id, path="stop_block", kind="wake", wake_kind="stop_cont", wake_reason=rel.reason,
-                counted=rel.counted, items=envelope.inline_flags(items, inline, fit.partial),
+                m.id,
+                path="stop_block",
+                kind="wake",
+                wake_kind="stop_cont",
+                wake_reason=rel.reason,
+                counted=rel.counted,
+                items=envelope.inline_flags(items, inline, fit.partial),
             )
             self._mark_peer(b, p, items)
             self.store.mark_posted(b.id)
             ack = self._continue(b, p, None)
             text = self._render(b, fit, room, m, peer_inline=inline)
-            self._event("offer", room_id=room.id, membership_id=m.id, participant_id=p.id,
-                        batch_id=b.id, path=b.path, n=len(items), counted=rel.counted, ids=_ids(items))
+            self._event(
+                "offer",
+                room_id=room.id,
+                membership_id=m.id,
+                participant_id=p.id,
+                batch_id=b.id,
+                path=b.path,
+                n=len(items),
+                counted=rel.counted,
+                ids=_ids(items),
+            )
             out += self.set_status(p, "busy", "stop:block")
             if rel.counted:
                 out += self._after_counted(room.id)
@@ -1246,8 +1505,9 @@ class Engine:
             self.store.spend_budget(room.id)
             recent.append(now)
             self.store.update_participant(p.id, rearms_in_gen=p.rearms_in_gen + 1)
-            self._event("rearm", room_id=room.id, membership_id=m.id, participant_id=p.id,
-                        n=p.rearms_in_gen + 1)
+            self._event(
+                "rearm", room_id=room.id, membership_id=m.id, participant_id=p.id, n=p.rearms_in_gen + 1
+            )
             out += self.set_status(p, "busy", "stop:rearm")
             self.rearm_busy[p.id] = now
             out += self._after_counted(room.id)
@@ -1263,8 +1523,15 @@ class Engine:
             ids = rules.redeliver_ids(self.store.in_context_items(m.id))
             n = self.store.requeue(m.id, ids, redeliver=True)
             if n:
-                self._event("requeue", room_id=m.room_id, membership_id=m.id, participant_id=p.id,
-                            reason="redeliver", n=n, ids=ids[:20])
+                self._event(
+                    "requeue",
+                    room_id=m.room_id,
+                    membership_id=m.id,
+                    participant_id=p.id,
+                    reason="redeliver",
+                    n=n,
+                    ids=ids[:20],
+                )
                 out.append(Snapshot(m.room_id))
         return out
 
@@ -1288,9 +1555,14 @@ class Engine:
             if room.paused or m.held or self.store.inflight_offer(m.id):
                 continue
             rel = rules.releasable(
-                self.store.pending_items(m.id), room=room, eff="busy",
-                peer_batch_boundary=m.peer_batch_boundary, boundary_seq=p.boundary_seq,
-                now=self.now(), quiet_s=self.d.quiet_s, max_hold_s=self.d.max_hold_s,
+                self.store.pending_items(m.id),
+                room=room,
+                eff="busy",
+                peer_batch_boundary=m.peer_batch_boundary,
+                boundary_seq=p.boundary_seq,
+                now=self.now(),
+                quiet_s=self.d.quiet_s,
+                max_hold_s=self.d.max_hold_s,
                 batch_max_msgs=self.d.batch_max_msgs,
                 max_chars=min(self.d.batch_max_chars, caps.ctx_max_chars),
             )
@@ -1305,17 +1577,32 @@ class Engine:
         inline = path in caps.inline_paths
         # fitted to the hook's printable limit: nothing is cut after this, and
         # an item whose text had to be cut stays pending for read() (§8.6)
-        fit = self._fit(list(rel.items), room, m, peer_inline=inline,
-                        max_chars=min(self.d.batch_max_chars, caps.ctx_max_chars))
+        fit = self._fit(
+            list(rel.items),
+            room,
+            m,
+            peer_inline=inline,
+            max_chars=min(self.d.batch_max_chars, caps.ctx_max_chars),
+        )
         items = list(fit.items)
-        b = self.store.create_batch(m.id, path=path, kind="priority",
-                                    items=envelope.inline_flags(items, inline, fit.partial))
+        b = self.store.create_batch(
+            m.id, path=path, kind="priority", items=envelope.inline_flags(items, inline, fit.partial)
+        )
         self.store.mark_posted(b.id)
         ack = secrets.token_hex(16)
         self.hook_acks[b.id] = (ack, self.now() + self.d.hook_ack_s)
         text = self._render(b, fit, room, m, peer_inline=inline)
-        self._event("offer", room_id=room.id, membership_id=m.id, participant_id=p.id,
-                    batch_id=b.id, path=path, n=len(items), counted=False, ids=_ids(items))
+        self._event(
+            "offer",
+            room_id=room.id,
+            membership_id=m.id,
+            participant_id=p.id,
+            batch_id=b.id,
+            path=path,
+            n=len(items),
+            counted=False,
+            ids=_ids(items),
+        )
         return HookOut("context", text, b.id, ack), [Snapshot(room.id)]
 
     def _push_expiry(self, b: Batch, now: float) -> str | None:
@@ -1393,7 +1680,9 @@ class Engine:
         for it in self.store.watch_items(now - d.watchdog_s):
             by_member.setdefault(it.membership_id, []).append(it)
         # forget stalled notices for items no longer watched (answered, reminded, left)
-        self.stalled_told &= {(it.membership_id, it.message_id) for items in by_member.values() for it in items}
+        self.stalled_told &= {
+            (it.membership_id, it.message_id) for items in by_member.values() for it in items
+        }
         for mid, items in by_member.items():
             m = self.store.get_membership(mid)
             ctx = self._ctx(m) if m is not None and m.active else None
@@ -1411,8 +1700,9 @@ class Engine:
             answered = self.store.last_answer_at(m.id)
             verdicts: dict[str, list[int]] = {}
             for it in items:
-                v = rules.watchdog_verdict(it, now=now, watchdog_s=d.watchdog_s, watchdog_max=wmax,
-                                           answered_at=answered, idle=idle)
+                v = rules.watchdog_verdict(
+                    it, now=now, watchdog_s=d.watchdog_s, watchdog_max=wmax, answered_at=answered, idle=idle
+                )
                 if v is not None:
                     verdicts.setdefault(v, []).append(it.message_id)
             if not verdicts:
@@ -1421,16 +1711,34 @@ class Engine:
                 self.store.watchdog_done(m.id, verdicts["done"], keep_count=False)
             ids = verdicts.get("remind", [])
             if ids and self.store.watchdog_requeue(m.id, ids):
-                self._event("watchdog_remind", room_id=room.id, membership_id=m.id, participant_id=p.id,
-                            n=len(ids), ids=ids[:20])
+                self._event(
+                    "watchdog_remind",
+                    room_id=room.id,
+                    membership_id=m.id,
+                    participant_id=p.id,
+                    n=len(ids),
+                    ids=ids[:20],
+                )
             ids = verdicts.get("escalate", [])
             if ids and self.store.watchdog_done(m.id, ids, keep_count=True):
-                self._event("watchdog_escalate", room_id=room.id, membership_id=m.id, participant_id=p.id,
-                            why="unanswered", n=len(ids), ids=ids[:20])
-                out.append(Notice(room.id, "warn",
-                                  f"watchdog: {m.screen_name} hasn't answered @mention {_id_list(ids)}"
-                                  f" after {wmax} reminder{'s' if wmax != 1 else ''}. It can still read()"
-                                  f" it, but won't be woken for it again."))
+                self._event(
+                    "watchdog_escalate",
+                    room_id=room.id,
+                    membership_id=m.id,
+                    participant_id=p.id,
+                    why="unanswered",
+                    n=len(ids),
+                    ids=ids[:20],
+                )
+                out.append(
+                    Notice(
+                        room.id,
+                        "warn",
+                        f"watchdog: {m.screen_name} hasn't answered @mention {_id_list(ids)}"
+                        f" after {wmax} reminder{'s' if wmax != 1 else ''}. It can still read()"
+                        f" it, but won't be woken for it again.",
+                    )
+                )
             out += self.evaluate(m.id)
             out.append(Snapshot(room.id))
         for mid, reason in list(self.parked.items()):
@@ -1441,41 +1749,76 @@ class Engine:
             room = self.store.room_by_id(m.room_id) if m is not None else None
             if m is None or room is None or not m.active or room.paused or m.held:
                 continue
-            due = rules.parked_escalation(self.store.pending_items(mid), parked_since=since, now=now,
-                                          watchdog_s=d.watchdog_s)
+            due = rules.parked_escalation(
+                self.store.pending_items(mid), parked_since=since, now=now, watchdog_s=d.watchdog_s
+            )
             if not due:
                 continue
             self.parked_escalated.add(mid)
             ids = [i.message_id for i in due]
-            self._event("watchdog_escalate", room_id=room.id, membership_id=m.id,
-                        participant_id=m.participant_id, why="parked", n=len(ids), ids=ids[:20])
-            out.append(Notice(room.id, "warn",
-                              f"watchdog: {m.screen_name} is parked — needs a poke ({reason})."
-                              f" Waiting for it: @mention {_id_list(ids)}."))
+            self._event(
+                "watchdog_escalate",
+                room_id=room.id,
+                membership_id=m.id,
+                participant_id=m.participant_id,
+                why="parked",
+                n=len(ids),
+                ids=ids[:20],
+            )
+            out.append(
+                Notice(
+                    room.id,
+                    "warn",
+                    f"watchdog: {m.screen_name} is parked — needs a poke ({reason})."
+                    f" Waiting for it: @mention {_id_list(ids)}.",
+                )
+            )
         return out
 
-    def _watchdog_stalled(self, m: Membership, room: Room, eff: str, items: list[Item], now: float,
-                          wmax: int) -> list[Action]:
+    def _watchdog_stalled(
+        self, m: Membership, room: Room, eff: str, items: list[Item], now: float, wmax: int
+    ) -> list[Action]:
         """@mentions overdue on a member that isn't idle: tell the human once per item."""
         d = self.d
-        due = [i for i in rules.stalled(items, now=now, watchdog_s=d.watchdog_s, watchdog_max=wmax)
-               if (m.id, i.message_id) not in self.stalled_told]
+        due = [
+            i
+            for i in rules.stalled(items, now=now, watchdog_s=d.watchdog_s, watchdog_max=wmax)
+            if (m.id, i.message_id) not in self.stalled_told
+        ]
         if not due:
             return []
         # looked at once: a say()/pass() since it arrived answers it (settled once the member is idle)
         self.stalled_told.update((m.id, i.message_id) for i in due)
-        due = rules.stalled(due, now=now, watchdog_s=d.watchdog_s, watchdog_max=wmax,
-                            answered_at=self.store.last_answer_at(m.id))
+        due = rules.stalled(
+            due,
+            now=now,
+            watchdog_s=d.watchdog_s,
+            watchdog_max=wmax,
+            answered_at=self.store.last_answer_at(m.id),
+        )
         if not due:
             return []
         ids = [i.message_id for i in due]
-        self._event("watchdog_escalate", room_id=room.id, membership_id=m.id, participant_id=m.participant_id,
-                    why="not_idle", status=eff, n=len(ids), ids=ids[:20])
+        self._event(
+            "watchdog_escalate",
+            room_id=room.id,
+            membership_id=m.id,
+            participant_id=m.participant_id,
+            why="not_idle",
+            status=eff,
+            n=len(ids),
+            ids=ids[:20],
+        )
         what = {"busy": "busy in a turn", "waiting-approval": "waiting on an approval prompt"}.get(eff, eff)
         later = " It will be reminded once it is idle." if wmax > 0 else ""
-        return [Notice(room.id, "warn",
-                       f"watchdog: {m.screen_name} hasn't answered @mention {_id_list(ids)} for"
-                       f" {_duration((wmax + 1) * d.watchdog_s)}; it is {what}.{later}")]
+        return [
+            Notice(
+                room.id,
+                "warn",
+                f"watchdog: {m.screen_name} hasn't answered @mention {_id_list(ids)} for"
+                f" {_duration((wmax + 1) * d.watchdog_s)}; it is {what}.{later}",
+            )
+        ]
 
 
 BYPASS_MODES = frozenset({"bypassPermissions"})
@@ -1515,5 +1858,7 @@ def _id_list(ids: list[int], n: int = 5) -> str:
 
 
 def paused_text(room: str) -> str:
-    return (f"[switchboard] {room} is paused by your user. End your turn now; don't call"
-            " wait() again until your user resumes the room.")
+    return (
+        f"[switchboard] {room} is paused by your user. End your turn now; don't call"
+        " wait() again until your user resumes the room."
+    )

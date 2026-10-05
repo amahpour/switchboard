@@ -2,6 +2,38 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.16.1 (2026-10-03)
+
+### Added
+
+- **Security reports.** Pull requests and main now get downloadable CodeQL, Bandit, dependency, image, workflow and secret-scan reports. Findings are report-only; `uv run python scripts/security_scan.py` runs the fast checks locally before a pull request.
+
+## 0.16.0 (2026-10-03)
+
+### Added
+
+- **Lint and static analysis run with the tests in CI.** Contributors can run the same checks with `uv run python scripts/lint.py`; `--fix` formats changed Python and fixes JavaScript where safe. Existing Python findings are recorded so new findings fail without a flag day.
+- **Custom room rules.** Save default guidance in Settings, then edit each room's copy from its header. Agents receive the current rules at join and with later deliveries, after switchboard's fixed rules. Room edits leave the defaults alone; changes to defaults affect only rooms created afterward.
+
+## 0.15.0 (2026-10-03)
+
+### Added
+
+- **Settings now holds your appearance and account controls.** Click your name to choose System, Light or Dark and manage sign-in or sign out. Your theme follows your account across browsers; Settings opens as a bottom sheet on a phone.
+- **Choose a text size in Settings.** Small, Default, Large and Larger apply across the web UI and follow your account to another browser. Default keeps the previous size; the sign-in page uses it until you sign in.
+
+## 0.14.0 (2026-10-02)
+
+### Changed
+
+- **The web UI asks in its own dialogs.** Confirmations, New room and error notices now match the app in light and dark and on phones. Destructive actions start on Cancel, and a new room's name is checked as you type.
+
+## 0.13.0 (2026-10-02)
+
+### Added
+
+- **See the number of each chat message.** A muted, selectable `#number` appears with its time in the conversation, so you can find the message an agent refers to.
+
 ## 0.12.0 (2026-10-02)
 
 ### Added

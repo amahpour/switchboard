@@ -142,23 +142,23 @@ def test_claim_backup_sheet_sign_out_and_sign_in(ui: UI, hosted: InProcBroker) -
     assert [p.name for p in st.store.passkeys()][1:] == ["iPhone"]
     assert len(devices.credentials(phone)) == 1
 
-    # the passkeys sheet: the count, Add a passkey (fresh from the claim: no check asked), on a
+    # Settings > Account: the count, Add a passkey (fresh from the claim: no check asked), on a
     # security key while the phone is put away (with both attached, Chromium may pick the phone,
     # whose passkey is excluded)
-    expect(page.locator("#passkeys")).to_be_visible()
-    page.click("#passkeys")
-    expect(page.locator("#passkeys-panel")).to_be_visible()
-    expect(page.locator("#passkeys-body .passkey-count")).to_have_text("2 passkeys")
+    expect(page.locator("#me-settings")).to_be_visible()
+    page.click("#me-settings")
+    expect(page.locator("#app-dialog")).to_be_visible()
+    expect(page.locator("#settings-account .passkey-count")).to_have_text("2 passkeys")
     phone_creds = devices.put_away(phone)
     key = devices.add("usb")
     page.fill("#passkey-name", "YubiKey")
     page.click("#passkey-add-btn")
     expect(page.locator("#passkey-result")).to_have_text('added "YubiKey"')
-    expect(page.locator("#passkeys-body .passkey-count")).to_have_text("3 passkeys")
+    expect(page.locator("#settings-account .passkey-count")).to_have_text("3 passkeys")
     devices.remove(key)  # the key is unplugged again
     phone = devices.bring_back(phone_creds)
     page.keyboard.press("Escape")
-    expect(page.locator("#passkeys-panel")).to_be_hidden()
+    expect(page.locator("#app-dialog")).to_be_hidden()
 
     # the claim link is gone for good: /setup is the app now
     page.goto(origin + "/setup")
@@ -166,7 +166,8 @@ def test_claim_backup_sheet_sign_out_and_sign_in(ui: UI, hosted: InProcBroker) -
     assert page.url == origin + "/"
 
     # sign off this browser: the sign-in page offers the three ways in, not the terminal text
-    page.click("#logout")
+    page.click("#me-settings")
+    page.click("#settings-sign-out")
     expect(page.locator("#passkey-btn")).to_be_visible()
     expect(page.locator("#password-form")).to_be_visible()
     expect(page.locator("#sso-btn")).to_be_disabled()
@@ -184,9 +185,10 @@ def test_claim_backup_sheet_sign_out_and_sign_in(ui: UI, hosted: InProcBroker) -
     assert rows["iPhone"].sign_count >= 1  # Chromium's virtual authenticator counts
 
     # Sign out everywhere, then back in
-    page.click("#passkeys")
-    page.once("dialog", lambda d: d.accept())
+    page.click("#me-settings")
     page.click("#logout-all")
+    expect(page.locator("#app-dialog-title")).to_have_text("Sign out everywhere?")
+    page.click("#app-dialog-action")
     expect(page.locator("#passkey-btn")).to_be_visible()
     assert st.store.web_session_count() == 0
     page.click("#passkey-btn")

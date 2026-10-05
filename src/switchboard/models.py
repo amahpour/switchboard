@@ -53,9 +53,7 @@ def normalize_room(name: str) -> str:
     if not n.startswith("#"):
         n = "#" + n
     if not ROOM_RE.match(n):
-        raise InvalidName(
-            "room names look like #build: a-z, 0-9, '_' or '-', at most 32 characters"
-        )
+        raise InvalidName("room names look like #build: a-z, 0-9, '_' or '-', at most 32 characters")
     return n
 
 
@@ -137,6 +135,7 @@ class Room:
     hop_count: int
     hop_limit: int
     last_msg_at: float | None
+    rules_text: str = ""
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "Room":
@@ -154,6 +153,7 @@ class Room:
             hop_count=r["hop_count"],
             hop_limit=r["hop_limit"],
             last_msg_at=r["last_msg_at"],
+            rules_text=r["rules_text"] if "rules_text" in r.keys() else "",  # read-only old-schema reports
         )
 
     @property

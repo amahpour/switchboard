@@ -28,11 +28,16 @@ def test_open_creates_full_schema_with_wal(tmp_path: Path) -> None:
     assert con.isolation_level is None
     tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert EXPECTED_TABLES <= tables
-    # v2 since M8b (§27.6), v3 since #41 (§31.2), v4 since #61 (§32.2)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 4
+    # v2 since M8b (§27.6), v3 since #41 (§31.2), v4 since #61 (§32.2), v5 since #100
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 7
     indexes = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='index'")}
-    assert {"memberships_active_name", "memberships_active_part", "messages_room_id",
-            "deliveries_open", "events_kind_ts"} <= indexes
+    assert {
+        "memberships_active_name",
+        "memberships_active_part",
+        "messages_room_id",
+        "deliveries_open",
+        "events_kind_ts",
+    } <= indexes
     assert (os.stat(tmp_path / "y.db").st_mode & 0o777) == 0o600
 
 
@@ -43,12 +48,35 @@ def test_schema_columns_match_design(tmp_path: Path) -> None:
         return {r[1] for r in con.execute(f"PRAGMA table_info({t})")}
 
     assert {"budget_notice_window", "hop_limit", "last_msg_at", "paused_reason"} <= cols("rooms")
-    assert {"bind_nonce", "thread_proof", "approval_mode", "env_leak", "boundary_seq", "gen_tainted",
-            "rearms_in_gen", "unconfirmed_followups", "push_expiries", "hooks_seen_at"} <= cols("participants")
-    assert {"cred_hash", "join_msg_id", "kicked", "held", "cursor_id", "peer_batch_boundary"} <= cols("memberships")
-    assert {"sender_membership_id", "sender_harness", "via", "kind", "mentions", "reply_to"} <= cols("messages")
-    assert {"wake_kind", "wake_reason", "budget_counted", "turn_start_at", "first_action_at", "evidence"} <= cols("batches")
-    assert {"prio", "mentioned", "offered_inline", "notified_at", "redelivered", "reminders"} <= cols("deliveries")
+    assert {
+        "bind_nonce",
+        "thread_proof",
+        "approval_mode",
+        "env_leak",
+        "boundary_seq",
+        "gen_tainted",
+        "rearms_in_gen",
+        "unconfirmed_followups",
+        "push_expiries",
+        "hooks_seen_at",
+    } <= cols("participants")
+    assert {"cred_hash", "join_msg_id", "kicked", "held", "cursor_id", "peer_batch_boundary"} <= cols(
+        "memberships"
+    )
+    assert {"sender_membership_id", "sender_harness", "via", "kind", "mentions", "reply_to"} <= cols(
+        "messages"
+    )
+    assert {
+        "wake_kind",
+        "wake_reason",
+        "budget_counted",
+        "turn_start_at",
+        "first_action_at",
+        "evidence",
+    } <= cols("batches")
+    assert {"prio", "mentioned", "offered_inline", "notified_at", "redelivered", "reminders"} <= cols(
+        "deliveries"
+    )
     assert {"id_hash", "expires_at", "via"} <= cols("web_sessions")
     assert {"credential_id", "public_key", "sign_count"} <= cols("passkeys")
     assert {"name", "key", "key_fp", "approved_at", "removed_at"} <= cols("link_machines")
@@ -66,14 +94,16 @@ def test_migrate_is_idempotent_and_refuses_unknown_version(tmp_path: Path) -> No
 def test_check_constraints(tmp_path: Path) -> None:
     con = db.open_db(tmp_path / "y.db")
     with pytest.raises(sqlite3.IntegrityError):
-        con.execute(
-            "INSERT INTO participants(harness, session_key, created_at) VALUES('bogus','k',0)"
-        )
-    con.execute("INSERT INTO rooms(name, created_at, created_by, budget_per_hour, budget_remaining,"
-                " budget_window_start, hop_limit) VALUES('#a',0,'alice',60,60,0,6)")
+        con.execute("INSERT INTO participants(harness, session_key, created_at) VALUES('bogus','k',0)")
+    con.execute(
+        "INSERT INTO rooms(name, created_at, created_by, budget_per_hour, budget_remaining,"
+        " budget_window_start, hop_limit) VALUES('#a',0,'alice',60,60,0,6)"
+    )
     with pytest.raises(sqlite3.IntegrityError):
-        con.execute("INSERT INTO messages(room_id, ts, sender_name, sender_kind, via, text)"
-                    " VALUES(1, 0, 'x', 'robot', 'web', 't')")
+        con.execute(
+            "INSERT INTO messages(room_id, ts, sender_name, sender_kind, via, text)"
+            " VALUES(1, 0, 'x', 'robot', 'web', 't')"
+        )
 
 
 def test_tx_rolls_back_and_nests(tmp_path: Path) -> None:
@@ -169,9 +199,21 @@ def test_readonly_connection_cannot_write(tmp_path: Path) -> None:
 def _room(name: str, rid: int):
     from switchboard.models import Room
 
-    return Room(id=rid, name=name, created_at=0.0, created_by="alice", paused=False, paused_reason=None,
-                budget_per_hour=60, budget_remaining=60, budget_window_start=0.0, budget_notice_window=None,
-                hop_count=0, hop_limit=6, last_msg_at=None)
+    return Room(
+        id=rid,
+        name=name,
+        created_at=0.0,
+        created_by="alice",
+        paused=False,
+        paused_reason=None,
+        budget_per_hour=60,
+        budget_remaining=60,
+        budget_window_start=0.0,
+        budget_notice_window=None,
+        hop_count=0,
+        hop_limit=6,
+        last_msg_at=None,
+    )
 
 
 def _with_remote(p: Path) -> sqlite3.Connection:
@@ -182,7 +224,10 @@ def _with_remote(p: Path) -> sqlite3.Connection:
 
 def test_delete_backup_path(tmp_path: Path) -> None:
     p = tmp_path / "switchboard.db"
-    assert db.delete_backup_path(p, _room("#build~closed-7", 7)) == tmp_path / "switchboard.db.delete-build-7.bak"
+    assert (
+        db.delete_backup_path(p, _room("#build~closed-7", 7))
+        == tmp_path / "switchboard.db.delete-build-7.bak"
+    )
     assert db.delete_backup_path(str(p), _room("#a_b-c", 3)) == tmp_path / "switchboard.db.delete-a_b-c-3.bak"
 
 
@@ -207,8 +252,10 @@ def test_pre_delete_backup_is_never_overwritten(tmp_path: Path, monkeypatch: pyt
     to = db.delete_backup_path(tmp_path / "switchboard.db", _room("#build", 7))
     to.write_bytes(b"kept")
     got = [db.backup_verified(con, to, tables=db.TABLES, what="pre-delete backup")[0] for _ in range(2)]
-    assert [g.name for g in got] == ["switchboard.db.delete-build-7.bak.1790000000",
-                                     "switchboard.db.delete-build-7.bak.1790000000-1"]
+    assert [g.name for g in got] == [
+        "switchboard.db.delete-build-7.bak.1790000000",
+        "switchboard.db.delete-build-7.bak.1790000000-1",
+    ]
     assert to.read_bytes() == b"kept"
 
 
@@ -219,8 +266,11 @@ def test_backup_errors_name_what_it_is(tmp_path: Path, monkeypatch: pytest.Monke
     # the copy fails its integrity check
     with monkeypatch.context() as m:
         m.setattr(db, "integrity_ok", lambda c: "row 3 missing from index")
-        with pytest.raises(db.SchemaError, match=r"^the pre-delete backup switchboard\.db\.delete-build-7\.bak"
-                                                 r" failed its integrity check: row 3 missing from index$"):
+        with pytest.raises(
+            db.SchemaError,
+            match=r"^the pre-delete backup switchboard\.db\.delete-build-7\.bak"
+            r" failed its integrity check: row 3 missing from index$",
+        ):
             db.backup_verified(con, to, **kw)
     assert not to.exists()  # a bad copy is not left behind as a backup
     # the copy's counts differ (the second row_counts call is the copy's)
@@ -245,8 +295,11 @@ def test_backup_errors_name_what_it_is(tmp_path: Path, monkeypatch: pytest.Monke
 
     with monkeypatch.context() as m:
         m.setattr(db.os, "open", taken)
-        with pytest.raises(db.SchemaError, match=r"^no free name for the pre-delete backup next to"
-                                                 r" switchboard\.db\.delete-build-7\.bak$"):
+        with pytest.raises(
+            db.SchemaError,
+            match=r"^no free name for the pre-delete backup next to"
+            r" switchboard\.db\.delete-build-7\.bak$",
+        ):
             db.backup_verified(con, to, **kw)
     # the migration's wording is the default
     with monkeypatch.context() as m:

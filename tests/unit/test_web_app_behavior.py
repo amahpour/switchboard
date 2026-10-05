@@ -158,7 +158,7 @@ def test_the_inspector_shows_the_member_detail_and_closes_when_it_leaves() -> No
 def test_the_inspector_actions_use_the_command_path() -> None:
     out = run("inspector_actions")
     assert out["commands"] == ["/hold claude-1", "/kick claude-1"]
-    assert out["confirmShown"] and out["confirms"] == []  # its own confirm, not window.confirm again
+    assert out["confirmShown"]
     assert not out["inspecting"]
     assert texts(out) == ["/holdok", "/kickok"]
 
@@ -176,7 +176,7 @@ def test_a_catchup_entry_keeps_the_draft_and_gives_it_back_after_the_command() -
 def test_a_typed_kick_asks_first_and_declining_gives_the_text_back() -> None:
     out = run("kick_typed_declined")
     assert out["commands"] == [] and out["input"] == "/kick codex-1"
-    assert out["confirms"] == ["Kick codex-1 from #build? It is removed and its membership revoked."]
+    assert out["title"] == "Kick codex-1 from #build?" and out["action"] == "Kick"
 
 
 def test_the_palette_and_mentions_complete_without_sending() -> None:

@@ -78,7 +78,7 @@
       headers: { 'Content-Type': 'application/json', 'X-Switchboard': '1' },
       body: JSON.stringify(body || {}),
     });
-    let data = null;
+    let data;
     try { data = await r.json(); } catch (e) { data = null; }
     if (!r.ok) {
       const err = new Error((data && data.message) || r.statusText || ('HTTP ' + r.status));
@@ -106,6 +106,8 @@
     try {
       cred = await navigator.credentials.create(creationOptions(json));
     } catch (e) {
+      // The raw WebAuthn error may contain browser details; only expose the safe explanation.
+      // eslint-disable-next-line preserve-caught-error
       throw new Error(explain(e));
     }
     if (!cred) throw new Error('no passkey was created');
@@ -117,6 +119,8 @@
     try {
       cred = await navigator.credentials.get(requestOptions(json));
     } catch (e) {
+      // The raw WebAuthn error may contain browser details; only expose the safe explanation.
+      // eslint-disable-next-line preserve-caught-error
       throw new Error(explain(e));
     }
     if (!cred) throw new Error('no passkey was used');

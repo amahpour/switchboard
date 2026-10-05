@@ -28,7 +28,9 @@ def _home_given(args: argparse.Namespace) -> bool:
     return getattr(args, "home", None) is not None
 
 
-def _call(args: argparse.Namespace, method: str, params: dict[str, Any] | None = None, timeout: float = 10.0) -> dict[str, Any]:
+def _call(
+    args: argparse.Namespace, method: str, params: dict[str, Any] | None = None, timeout: float = 10.0
+) -> dict[str, Any]:
     from switchboard.mcp.client import call_sync
 
     return call_sync(_paths(args).sock, method, params or {}, timeout)
@@ -59,11 +61,17 @@ def on_desktop(args: argparse.Namespace) -> int:
     authority are on the desktop, never here."""
     conf = _dialing(args)
     if conf is not None:
-        print(f"switchboard: use the broker's web UI ({conf.broker_url}): this machine dials it; the broker and"
-              " the web UI run there", file=sys.stderr)
+        print(
+            f"switchboard: use the broker's web UI ({conf.broker_url}): this machine dials it; the broker and"
+            " the web UI run there",
+            file=sys.stderr,
+        )
         return EXIT_ERR
-    print(f"switchboard: run this on the desktop ({_desktop(args)}): this is a satellite home;"
-          " the broker and the web UI run there", file=sys.stderr)
+    print(
+        f"switchboard: run this on the desktop ({_desktop(args)}): this is a satellite home;"
+        " the broker and the web UI run there",
+        file=sys.stderr,
+    )
     return EXIT_ERR
 
 
@@ -139,10 +147,10 @@ def _remote_line(p: Any, info: dict[str, Any]) -> str:
     line = _clean(describe(info))
     head = _clean(str(info.get("name", ""))) + ": "
     if line.startswith(head):
-        rest = line[len(head):]
+        rest = line[len(head) :]
         for word in ("needs enable", "up", "down", "blocked", "disabled", str(info.get("state") or "")):
-            if word and rest.startswith(word) and rest[len(word):len(word) + 1] in ("", " ", ":", ","):
-                return head + _state(p, word) + rest[len(word):]
+            if word and rest.startswith(word) and rest[len(word) : len(word) + 1] in ("", " ", ":", ","):
+                return head + _state(p, word) + rest[len(word) :]
     return line
 
 
@@ -155,8 +163,11 @@ def cmd_start(args: argparse.Namespace) -> int:
     if _satellite_home(args):
         if _dialing(args) is not None:
             return cmd_start_dialer(args)
-        print(f"switchboard: this is a satellite home: the broker runs on {_desktop(args)}, which dials this"
-              " machine (`switchboard remote status` there)", file=sys.stderr)
+        print(
+            f"switchboard: this is a satellite home: the broker runs on {_desktop(args)}, which dials this"
+            " machine (`switchboard remote status` there)",
+            file=sys.stderr,
+        )
         return EXIT_ERR
     if args.test_trust_uds and not args.test_mode:
         print("switchboard: --test-trust-uds needs --test-mode", file=sys.stderr)
@@ -192,13 +203,19 @@ def cmd_start(args: argparse.Namespace) -> int:
         return EXIT_ERR
     # the broker checks these too; here a bad one fails now, not in the child's log
     try:
-        daemon.web_settings(cfg.listen if args.listen is None else args.listen,
-                            cfg.public_url if args.public_url is None else args.public_url)
+        daemon.web_settings(
+            cfg.listen if args.listen is None else args.listen,
+            cfg.public_url if args.public_url is None else args.public_url,
+        )
     except ValueError as e:
         print(f"switchboard: {e}", file=sys.stderr)
         return EXIT_USAGE
     return daemon.start(
-        paths, port=args.port, listen=args.listen, public_url=args.public_url, test_mode=args.test_mode,
+        paths,
+        port=args.port,
+        listen=args.listen,
+        public_url=args.public_url,
+        test_mode=args.test_mode,
         test_trust_uds=args.test_trust_uds,
     )
 
@@ -242,8 +259,10 @@ def cmd_satellite_status(args: argparse.Namespace) -> int:
     except (BrokerDown, OSError, TimeoutError):
         st = None
     if st is None or st.get("role") != "satellite":
-        print(f"link down: the desktop ({_desktop(args)}) dials this machine; on the desktop run"
-              " `switchboard remote status`")
+        print(
+            f"link down: the desktop ({_desktop(args)}) dials this machine; on the desktop run"
+            " `switchboard remote status`"
+        )
         return EXIT_DOWN
     if args.json:
         print(json.dumps(st, indent=2))
@@ -276,8 +295,10 @@ def cmd_status(args: argparse.Namespace) -> int:
     up = int(st.get("uptime_s", 0))
     from switchboard.build_info import version_text
 
-    print(f"{version_text(st['version'], st.get('commit'))} {p.ok('running')}: pid {st['pid']},"
-          f" up {up // 3600}h{up % 3600 // 60:02d}m")
+    print(
+        f"{version_text(st['version'], st.get('commit'))} {p.ok('running')}: pid {st['pid']},"
+        f" up {up // 3600}h{up % 3600 // 60:02d}m"
+    )
     print(f"  web UI  {p.link(str(st['url']))}  ({st.get('web_clients', 0)} browser tab(s) connected)")
     print(f"  home    {st['home']}")
     print(f"  hooks   {_lead(p, str(st['hooks']))}")
@@ -291,8 +312,13 @@ def cmd_status(args: argparse.Namespace) -> int:
     for r in rooms:
         state = p.warn(f"paused ({r['paused_reason']})") if r["paused"] else p.ok("active")
         limit = r.get("hop_limit")
-        hops = (f"{r['hop_count']}, {p.warn('loop guard off')}" if limit == 0
-                else f"{r['hop_count']}" if limit is None else f"{r['hop_count']}/{limit}")
+        hops = (
+            f"{r['hop_count']}, {p.warn('loop guard off')}"
+            if limit == 0
+            else f"{r['hop_count']}"
+            if limit is None
+            else f"{r['hop_count']}/{limit}"
+        )
         print(
             f"  {r['name']}: {state}, {r['members']} agent(s), budget "
             f"{r['budget_remaining']}/{r['budget_per_hour']}, hops {hops}"
@@ -336,7 +362,10 @@ def cmd_logout(args: argparse.Namespace) -> int:
     if _satellite_home(args):
         return on_desktop(args)
     if not args.all:
-        print("switchboard: use `switchboard logout --all` (or the Log out button in the web UI)", file=sys.stderr)
+        print(
+            "switchboard: use `switchboard logout --all` (or the Log out button in the web UI)",
+            file=sys.stderr,
+        )
         return EXIT_USAGE
     res = _call(args, "human.logout_all")
     print(f"revoked {res['revoked']} web session(s)")
@@ -350,6 +379,8 @@ def _ymdhm(ts: float | None) -> str:
 def cmd_rooms(args: argparse.Namespace) -> int:
     if getattr(args, "rooms_cmd", None) == "delete":
         return cmd_rooms_delete(args)
+    if getattr(args, "rooms_cmd", None) == "rules":
+        return cmd_rooms_rules(args)
     if args.closed:
         res = _call(args, "room.list", {"closed": True})
         if args.json:
@@ -358,8 +389,10 @@ def cmd_rooms(args: argparse.Namespace) -> int:
         if not res["rooms"]:
             print("no closed rooms")
         for r in res["rooms"]:
-            print(f"{r['name']}  was {r['display']}, closed {_ymdhm(r.get('closed_at'))}"
-                  f" by {_clean(r.get('closed_by') or '?')}, {r['messages']} message(s)")
+            print(
+                f"{r['name']}  was {r['display']}, closed {_ymdhm(r.get('closed_at'))}"
+                f" by {_clean(r.get('closed_by') or '?')}, {r['messages']} message(s)"
+            )
         return EXIT_OK
     res = _call(args, "room.list")
     if args.json:
@@ -367,8 +400,11 @@ def cmd_rooms(args: argparse.Namespace) -> int:
         return EXIT_OK
     closed = res.get("closed", 0)
     if not res["rooms"]:
-        print(f"no open rooms ({closed} closed: switchboard rooms --closed)" if closed
-              else "no rooms yet (create one in the web UI)")
+        print(
+            f"no open rooms ({closed} closed: switchboard rooms --closed)"
+            if closed
+            else "no rooms yet (create one in the web UI)"
+        )
         return EXIT_OK
     for r in res["rooms"]:
         s = r["settings"]
@@ -379,9 +415,23 @@ def cmd_rooms(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_rooms_rules(args: argparse.Namespace) -> int:
+    """Read or set a room's rules through the broker's human CLI method (§35)."""
+    if _satellite_home(args):
+        return on_desktop(args)
+    params = {"room": args.room}
+    if args.set_text is not None:
+        params["text"] = sys.stdin.read() if args.set_text == "-" else args.set_text
+    result = _call(args, "room.rules", params)
+    print(result["rules"] or "(no custom room rules)")
+    return EXIT_OK
+
+
 def _removed(c: dict[str, int]) -> str:
-    return (f"{c['rooms']} room, {c['messages']} message(s), {c['memberships']} membership(s),"
-            f" {c['deliveries']} delivery row(s), {c['batches']} batch(es), {c['events']} event(s)")
+    return (
+        f"{c['rooms']} room, {c['messages']} message(s), {c['memberships']} membership(s),"
+        f" {c['deliveries']} delivery row(s), {c['batches']} batch(es), {c['events']} event(s)"
+    )
 
 
 def cmd_rooms_delete(args: argparse.Namespace) -> int:
@@ -396,8 +446,10 @@ def cmd_rooms_delete(args: argparse.Namespace) -> int:
     plan = _call(args, "room.delete", {"room": args.room, "dry_run": True}, timeout=30.0)
     print(f"switchboard rooms delete {plan['name']}:")
     if plan.get("state") == "closed":
-        print(f"  {plan['name']}: was {plan['display']}, closed {_ymdhm(plan.get('closed_at'))}"
-              f" by {_clean(plan.get('closed_by') or '?')}")
+        print(
+            f"  {plan['name']}: was {plan['display']}, closed {_ymdhm(plan.get('closed_at'))}"
+            f" by {_clean(plan.get('closed_by') or '?')}"
+        )
     else:
         print(f"  {plan['name']}: open, no agents, created {_ymdhm(plan.get('created_at'))}")
     print(f"  removes {_removed(plan['counts'])}")
@@ -410,7 +462,10 @@ def cmd_rooms_delete(args: argparse.Namespace) -> int:
     pin = {"room_id": plan["room_id"], "name": plan["name"], "created_at": plan["created_at"]}
     res = _call(args, "room.delete", {"room": args.room, **pin}, timeout=120.0)
     print(f"deleted {res['name']}: {_removed(res['removed'])}")
-    print(f"backup: {res['backup']} (0600, checked); it still holds the room: remove it once you no longer need it")
+    print(
+        f"backup: {res['backup']} (0600, checked); it still holds the room:"
+        " remove it once you no longer need it"
+    )
     return EXIT_OK
 
 
@@ -440,8 +495,9 @@ def command_text(words: list[str]) -> str:
     so ``switchboard cmd '#build' /catchup codex-1 on "sprint cleanup"`` sends the topic in
     quotes; a word that has a double quote itself goes as it is. The whole command as one
     word (``'/catchup codex-1 on "sprint cleanup"'``) is passed on unchanged."""
-    out = [w if i == 0 or not any(c.isspace() for c in w) or '"' in w else f'"{w}"'
-           for i, w in enumerate(words)]
+    out = [
+        w if i == 0 or not any(c.isspace() for c in w) or '"' in w else f'"{w}"' for i, w in enumerate(words)
+    ]
     return " ".join(out).strip()
 
 
@@ -491,15 +547,15 @@ def cmd_who(args: argparse.Namespace) -> int:
         tier = tier_label(m.get("tier"), m.get("tier_note"))
         name = p.nick(_clean(m["name"])) + (p.dim(f"@{_clean(m['host'])}") if m.get("host") else "")
         status = {"idle": p.ok, "waiting-approval": p.warn, "offline": p.dim, "starting": p.dim}.get(
-            m["status"], str)(m["status"])
+            m["status"], str
+        )(m["status"])
         print(f"  {name}  {m['harness']}  {status}  {tier}  {' '.join(flags)}{away}".rstrip())
     return EXIT_OK
 
 
 def cmd_tail(args: argparse.Namespace) -> int:
-    from switchboard.mcp.client import BrokerDown, Stream
-
     from switchboard.colors import for_args
+    from switchboard.mcp.client import BrokerDown, Stream
 
     p = for_args(args)
     params: dict[str, Any] = {"room": args.room, "follow": not args.no_follow, "limit": args.lines}
@@ -571,8 +627,18 @@ def cmd_hook(args: argparse.Namespace) -> int:
     if not copy.exists():
         print(f"switchboard: no hook copy at {copy}; run `switchboard start` once", file=sys.stderr)
         return EXIT_OK
-    argv = [sys.executable, "-I", "-S", str(copy), "--home", str(paths.home),
-            "--harness", args.harness, "--event", args.event]
+    argv = [
+        sys.executable,
+        "-I",
+        "-S",
+        str(copy),
+        "--home",
+        str(paths.home),
+        "--harness",
+        args.harness,
+        "--event",
+        args.event,
+    ]
     if args.max_wait is not None:
         argv += ["--max-wait", str(args.max_wait)]
     os.execv(sys.executable, argv)
@@ -643,23 +709,43 @@ def _pairing(args: argparse.Namespace) -> int:
         if args.remote_cmd == "add":
             if sat:
                 return on_desktop(args)
-            return pairing.add(paths, args.name, args.dest, rooms=args.rooms, port=args.port,
-                               harnesses=args.harnesses, ssh_config=args.ssh_config, known_hosts=args.known_hosts,
-                               authorized_keys=ak, label=args.label)
+            return pairing.add(
+                paths,
+                args.name,
+                args.dest,
+                rooms=args.rooms,
+                port=args.port,
+                harnesses=args.harnesses,
+                ssh_config=args.ssh_config,
+                known_hosts=args.known_hosts,
+                authorized_keys=ak,
+                label=args.label,
+            )
         if args.remote_cmd == "accept":
-            return pairing.accept(paths, args.token, from_=args.from_, ak_path=ak, yes=args.yes,
-                                  allow_editable=args.allow_editable)
+            return pairing.accept(
+                paths,
+                args.token,
+                from_=args.from_,
+                ak_path=ak,
+                yes=args.yes,
+                allow_editable=args.allow_editable,
+            )
         if args.remote_cmd == "remove":
             if sat:
                 return pairing.remove_remote(paths, args.name, ak_path=ak, yes=args.yes)
-            return pairing.remove_desktop(paths, args.name, yes=args.yes,
-                                          call=lambda m, p: _call(args, m, p, timeout=30.0))
+            return pairing.remove_desktop(
+                paths, args.name, yes=args.yes, call=lambda m, p: _call(args, m, p, timeout=30.0)
+            )
         # doctor
         akp = ak or pairing.default_authorized_keys()
         if sat:
-            findings = pairing.doctor_remote(paths, ak_path=akp, environ=os.environ,
-                                             probe_desktop=args.probe_desktop,
-                                             status=lambda: _satellite_status(paths))
+            findings = pairing.doctor_remote(
+                paths,
+                ak_path=akp,
+                environ=os.environ,
+                probe_desktop=args.probe_desktop,
+                status=lambda: _satellite_status(paths),
+            )
             print(f"switchboard remote doctor (satellite home {paths.home}):")
         else:
             if args.probe_desktop is not None:
@@ -670,9 +756,12 @@ def _pairing(args: argparse.Namespace) -> int:
             except ConfigError as e:
                 print(f"switchboard: config error: {e}", file=sys.stderr)
                 return EXIT_ERR
-            ssh_dir = Path(args.ssh_dir).expanduser() if args.ssh_dir else Path(os.path.expanduser("~")) / ".ssh"
-            findings = pairing.doctor_desktop(paths, ak_path=akp, ssh_dir=ssh_dir, allow_ssh_cli=allow,
-                                              status=lambda: _remote_status(args))
+            ssh_dir = (
+                Path(args.ssh_dir).expanduser() if args.ssh_dir else Path(os.path.expanduser("~")) / ".ssh"
+            )
+            findings = pairing.doctor_desktop(
+                paths, ak_path=akp, ssh_dir=ssh_dir, allow_ssh_cli=allow, status=lambda: _remote_status(args)
+            )
             print(f"switchboard remote doctor (desktop home {paths.home}):")
         from switchboard.colors import for_args
 
@@ -749,8 +838,14 @@ def cmd_remote_join(args: argparse.Namespace) -> int:
             print(f"switchboard remote join: {why}", file=sys.stderr)
             return EXIT_USAGE
     try:
-        return join.join(paths, args.url, args.code, home_given=_home_given(args), test_mode=args.test_mode,
-                         start=not args.no_start)
+        return join.join(
+            paths,
+            args.url,
+            args.code,
+            home_given=_home_given(args),
+            test_mode=args.test_mode,
+            start=not args.no_start,
+        )
     except join.JoinError as e:
         print(f"switchboard remote join: {e}", file=sys.stderr)
         return EXIT_ERR
@@ -822,16 +917,31 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--foreground", action="store_true", help="run in this process")
     # a container sets --port, --listen and --public-url through the environment (docs/DEPLOY.md);
     # config.toml's `port`, `listen` and `public_url` otherwise
-    s.add_argument("--port", type=_port_number, default=os.environ.get("SWITCHBOARD_PORT") or None,
-                   help="TCP port (default 7419; 0 = any; env SWITCHBOARD_PORT)")
-    s.add_argument("--listen", default=os.environ.get("SWITCHBOARD_LISTEN") or None, metavar="ADDR",
-                   help="listen on this IPv4 address (default 127.0.0.1; any other needs --public-url;"
-                        " env SWITCHBOARD_LISTEN)")
-    s.add_argument("--public-url", default=os.environ.get("SWITCHBOARD_PUBLIC_URL") or None, metavar="URL",
-                   help="the https:// address browsers use, behind a proxy that terminates TLS"
-                        " (env SWITCHBOARD_PUBLIC_URL)")
-    s.add_argument("--log-stdout", action="store_true",
-                   help="with --foreground: log to stdout instead of logs/broker.log (a container)")
+    s.add_argument(
+        "--port",
+        type=_port_number,
+        default=os.environ.get("SWITCHBOARD_PORT") or None,
+        help="TCP port (default 7419; 0 = any; env SWITCHBOARD_PORT)",
+    )
+    s.add_argument(
+        "--listen",
+        default=os.environ.get("SWITCHBOARD_LISTEN") or None,
+        metavar="ADDR",
+        help="listen on this IPv4 address (default 127.0.0.1; any other needs --public-url;"
+        " env SWITCHBOARD_LISTEN)",
+    )
+    s.add_argument(
+        "--public-url",
+        default=os.environ.get("SWITCHBOARD_PUBLIC_URL") or None,
+        metavar="URL",
+        help="the https:// address browsers use, behind a proxy that terminates TLS"
+        " (env SWITCHBOARD_PUBLIC_URL)",
+    )
+    s.add_argument(
+        "--log-stdout",
+        action="store_true",
+        help="with --foreground: log to stdout instead of logs/broker.log (a container)",
+    )
     s.add_argument("--test-mode", action="store_true", help=argparse.SUPPRESS)
     s.add_argument("--test-trust-uds", action="store_true", help=argparse.SUPPRESS)
     s.set_defaults(func=cmd_start)
@@ -851,13 +961,22 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--all", action="store_true", help="revoke every web session")
     s.set_defaults(func=cmd_logout)
 
-    s = sub.add_parser("rooms", parents=[common], help="list rooms (--closed: closed ones); rooms delete ROOM")
+    s = sub.add_parser(
+        "rooms", parents=[common], help="list rooms (--closed: closed ones); rooms delete ROOM"
+    )
     s.add_argument("--json", action="store_true")
     s.add_argument("--closed", action="store_true", help="list closed rooms (reopen them in the web UI)")
     rs = s.add_subparsers(dest="rooms_cmd", metavar="ACTION")  # optional: bare `rooms` lists
-    d = rs.add_parser("delete", parents=[common], help="delete a room and its history for good (after a checked backup)")
+    d = rs.add_parser(
+        "delete", parents=[common], help="delete a room and its history for good (after a checked backup)"
+    )
     d.add_argument("room", help="'#build', or a closed room's full name '#build~closed-7' (quote it)")
     d.add_argument("--yes", action="store_true", help="apply without asking")
+    rules = rs.add_parser("rules", parents=[common], help="show or set a room's custom rules")
+    rules.add_argument("room", help="room name, e.g. '#build'")
+    rules.add_argument(
+        "--set", dest="set_text", metavar="TEXT", help="set rules; '-' reads stdin; empty clears"
+    )
     s.set_defaults(func=cmd_rooms)
 
     s = sub.add_parser("create", parents=[common], help="create a room (needs the web session)")
@@ -890,8 +1009,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_who)
 
-    s = sub.add_parser("report", parents=[common],
-                       help="latency, turns, posts vs passes and rules fired in a room (markdown or JSON)")
+    s = sub.add_parser(
+        "report",
+        parents=[common],
+        help="latency, turns, posts vs passes and rules fired in a room (markdown or JSON)",
+    )
     s.add_argument("--room", required=True, help="the room, e.g. '#build'")
     s.add_argument("--since", default=None, help="start at this ISO time (default: the room's creation)")
     s.add_argument("--last", default=None, help="only the last N s/m/h/d, e.g. 2h")
@@ -899,84 +1021,148 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--out", default=None, help="write to FILE instead of stdout")
     s.set_defaults(func=cmd_report)
 
-    s = sub.add_parser("install", parents=[common],
-                       help="register switchboard's MCP server and hooks with a harness (shows a diff first)")
-    s.add_argument("harness", choices=["claude", "codex", "cursor", "devin", "all"],
-                   help="a harness, or all (every harness whose CLI is on PATH, one confirmation)")
+    s = sub.add_parser(
+        "install",
+        parents=[common],
+        help="register switchboard's MCP server and hooks with a harness (shows a diff first)",
+    )
+    s.add_argument(
+        "harness",
+        choices=["claude", "codex", "cursor", "devin", "all"],
+        help="a harness, or all (every harness whose CLI is on PATH, one confirmation)",
+    )
     s.add_argument("--dry-run", action="store_true", help="show the diff, write nothing")
     s.add_argument("--yes", action="store_true", help="apply without asking")
-    s.add_argument("--print-args", action="store_true",
-                   help="print per-launch flags/files as JSON (writes nothing)")
+    s.add_argument(
+        "--print-args", action="store_true", help="print per-launch flags/files as JSON (writes nothing)"
+    )
     s.add_argument("--workspace", default=None, help="with --print-args: the workspace dir")
     s.add_argument("--user-home", default=None, help="treat DIR as ~ (tests)")
-    s.add_argument("--allow-editable", action="store_true",
-                   help="allow an editable/source install of switchboard (agents could edit its code)")
+    s.add_argument(
+        "--allow-editable",
+        action="store_true",
+        help="allow an editable/source install of switchboard (agents could edit its code)",
+    )
     s.set_defaults(func=cmd_install)
 
-    s = sub.add_parser("uninstall", parents=[common],
-                       help="remove switchboard's own MCP server and hooks from a harness (shows a diff first)")
-    s.add_argument("harness", choices=["claude", "codex", "cursor", "devin", "all"],
-                   help="a harness, or all (the four in order, one confirmation)")
+    s = sub.add_parser(
+        "uninstall",
+        parents=[common],
+        help="remove switchboard's own MCP server and hooks from a harness (shows a diff first)",
+    )
+    s.add_argument(
+        "harness",
+        choices=["claude", "codex", "cursor", "devin", "all"],
+        help="a harness, or all (the four in order, one confirmation)",
+    )
     s.add_argument("--dry-run", action="store_true", help="show the diff, write nothing")
     s.add_argument("--yes", action="store_true", help="apply without asking")
     s.add_argument("--user-home", default=None, help="treat DIR as ~ (tests)")
-    s.add_argument("--purge-hooks", action="store_true",
-                   help="also delete switchboard's hook copies in <home>/hooks if no harness config still runs them")
+    s.add_argument(
+        "--purge-hooks",
+        action="store_true",
+        help="also delete switchboard's hook copies in <home>/hooks if no harness config still runs them",
+    )
     s.set_defaults(func=cmd_uninstall)
 
     s = sub.add_parser("mcp", parents=[common], help="run the stdio MCP server (harnesses start this)")
     s.add_argument("--harness", choices=["test"], default=None, help=argparse.SUPPRESS)
     s.add_argument("--test-session", default=None, help=argparse.SUPPRESS)
-    s.add_argument("--ack", choices=["next_call", "immediate", "never"], default=None,
-                   help=argparse.SUPPRESS)
+    s.add_argument("--ack", choices=["next_call", "immediate", "never"], default=None, help=argparse.SUPPRESS)
     s.set_defaults(func=cmd_mcp)
 
-    s = sub.add_parser("remote", parents=[common],
-                       help="remote members: over ssh (add/accept, enable, disable, status, remove, doctor), or a"
-                            " machine that dials a hosted broker (join)")
+    s = sub.add_parser(
+        "remote",
+        parents=[common],
+        help="remote members: over ssh (add/accept, enable, disable, status, remove, doctor), or a"
+        " machine that dials a hosted broker (join)",
+    )
     rsub = s.add_subparsers(dest="remote_cmd", metavar="ACTION", required=True)
-    r = rsub.add_parser("add", parents=[common],
-                        help="desktop: pair a remote (link key, pinned host key, remotes.toml) and print its token")
+    r = rsub.add_parser(
+        "add",
+        parents=[common],
+        help="desktop: pair a remote (link key, pinned host key, remotes.toml) and print its token",
+    )
     r.add_argument("name", help="the remote's name, e.g. fpga-pi")
     r.add_argument("dest", help="[user@]host, resolved once with `ssh -G`")
-    r.add_argument("--rooms", action="append", default=None,
-                   help="limit its members to these rooms (comma list, or repeat), e.g. '#fpga';"
-                        " default: any room")
+    r.add_argument(
+        "--rooms",
+        action="append",
+        default=None,
+        help="limit its members to these rooms (comma list, or repeat), e.g. '#fpga'; default: any room",
+    )
     r.add_argument("--port", type=int, default=None, help="ssh port (default: from your ssh config, else 22)")
-    r.add_argument("--harnesses", action="append", default=None,
-                   help="harnesses allowed there (comma list; default claude,codex,cursor,devin)")
+    r.add_argument(
+        "--harnesses",
+        action="append",
+        default=None,
+        help="harnesses allowed there (comma list; default claude,codex,cursor,devin)",
+    )
     r.add_argument("--ssh-config", default=None, help="ssh config for `ssh -G` (default: yours)")
-    r.add_argument("--known-hosts", default=None,
-                   help="known_hosts file holding the remote's host key (default: your ssh config's)")
-    r.add_argument("--authorized-keys", default=None,
-                   help="this machine's authorized_keys, scanned for shell keys (default ~/.ssh/authorized_keys)")
+    r.add_argument(
+        "--known-hosts",
+        default=None,
+        help="known_hosts file holding the remote's host key (default: your ssh config's)",
+    )
+    r.add_argument(
+        "--authorized-keys",
+        default=None,
+        help="this machine's authorized_keys, scanned for shell keys (default ~/.ssh/authorized_keys)",
+    )
     r.add_argument("--label", default=None, help="this machine's name in the token (default: its host name)")
-    r = rsub.add_parser("accept", parents=[common],
-                        help="remote: authorize the desktop's link key for the satellite only (shows the line first)")
+    r = rsub.add_parser(
+        "accept",
+        parents=[common],
+        help="remote: authorize the desktop's link key for the satellite only (shows the line first)",
+    )
     r.add_argument("token", help="the token `remote add` printed: 'switchboard-link v1 …'")
-    r.add_argument("--from", dest="from_", default=None,
-                   help="accept the key only from this address (the desktop's IP; comma list allowed)")
-    r.add_argument("--authorized-keys", default=None, help="the file to write (default ~/.ssh/authorized_keys)")
+    r.add_argument(
+        "--from",
+        dest="from_",
+        default=None,
+        help="accept the key only from this address (the desktop's IP; comma list allowed)",
+    )
+    r.add_argument(
+        "--authorized-keys", default=None, help="the file to write (default ~/.ssh/authorized_keys)"
+    )
     r.add_argument("--yes", action="store_true", help="apply without asking")
     # switchboard's own tests only (their venv is editable): refused outside a test home
     r.add_argument("--allow-editable", action="store_true", help=argparse.SUPPRESS)
-    r = rsub.add_parser("remove", parents=[common],
-                        help="unpair: on the desktop the link, members, key and table; on the remote its key line")
+    r = rsub.add_parser(
+        "remove",
+        parents=[common],
+        help="unpair: on the desktop the link, members, key and table; on the remote its key line",
+    )
     r.add_argument("name")
-    r.add_argument("--authorized-keys", default=None, help="remote: the file to edit (default ~/.ssh/authorized_keys)")
+    r.add_argument(
+        "--authorized-keys", default=None, help="remote: the file to edit (default ~/.ssh/authorized_keys)"
+    )
     r.add_argument("--yes", action="store_true", help="apply without asking")
     r = rsub.add_parser("doctor", parents=[common], help="check this machine's side of its remote links")
     r.add_argument("--authorized-keys", default=None, help="the authorized_keys to check (default ~/.ssh/…)")
-    r.add_argument("--ssh-dir", default=None, help="desktop: where this machine's own public keys are (default ~/.ssh)")
-    r.add_argument("--probe-desktop", default=None, metavar="DEST",
-                   help="remote: also try `ssh DEST true` (a shell on the desktop from here is a warning)")
-    r = rsub.add_parser("join", parents=[common],
-                        help="this machine: pair with a hosted broker (a code from its web UI), then dial it")
+    r.add_argument(
+        "--ssh-dir", default=None, help="desktop: where this machine's own public keys are (default ~/.ssh)"
+    )
+    r.add_argument(
+        "--probe-desktop",
+        default=None,
+        metavar="DEST",
+        help="remote: also try `ssh DEST true` (a shell on the desktop from here is a warning)",
+    )
+    r = rsub.add_parser(
+        "join",
+        parents=[common],
+        help="this machine: pair with a hosted broker (a code from its web UI), then dial it",
+    )
     r.add_argument("url", help="the broker's address, e.g. https://sb.example.com")
     r.add_argument("code", help="the pairing code from the web UI (Add a machine), e.g. 7KQ4-M2XD-9HVA")
-    r.add_argument("--no-start", action="store_true", help="pair only; start the dialer later with `switchboard start`")
+    r.add_argument(
+        "--no-start", action="store_true", help="pair only; start the dialer later with `switchboard start`"
+    )
     r.add_argument("--test-mode", action="store_true", help=argparse.SUPPRESS)
-    r = rsub.add_parser("enable", parents=[common], help="consent to this remote's current config and dial it")
+    r = rsub.add_parser(
+        "enable", parents=[common], help="consent to this remote's current config and dial it"
+    )
     r.add_argument("name")
     r = rsub.add_parser("disable", parents=[common], help="stop dialing a remote (its members go offline)")
     r.add_argument("name")
@@ -1000,8 +1186,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _version() -> str:
-    from switchboard import __version__
-    from switchboard import build_info
+    from switchboard import __version__, build_info
 
     return build_info.version_text(__version__, build_info.commit())
 

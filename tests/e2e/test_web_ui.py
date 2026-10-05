@@ -30,9 +30,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from playwright.sync_api import Browser, BrowserContext, ConsoleMessage, Page, expect
-
 from conftest import PHASE_REPORTS, TEST_HUMAN, sanitize_env
+from playwright.sync_api import Browser, BrowserContext, ConsoleMessage, Page, expect
 from ui_world import CI_URL, JS_SCHEME, PROFILE, UIWorld
 
 pytestmark = pytest.mark.e2e
@@ -41,8 +40,12 @@ ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS = Path(os.environ.get("SWITCHBOARD_E2E_ARTIFACTS") or ROOT / "e2e-artifacts")
 
 DESKTOP: dict[str, Any] = {"viewport": {"width": 1440, "height": 900}}
-PHONE: dict[str, Any] = {"viewport": {"width": 390, "height": 844}, "device_scale_factor": 3,
-                         "is_mobile": True, "has_touch": True}
+PHONE: dict[str, Any] = {
+    "viewport": {"width": 390, "height": 844},
+    "device_scale_factor": 3,
+    "is_mobile": True,
+    "has_touch": True,
+}
 WAIT_MS = 15_000
 
 # Injected into every page before its own scripts: a CSP violation becomes a console error,
@@ -91,7 +94,9 @@ class UI:
         def on_console(msg: ConsoleMessage) -> None:
             if msg.type == "error":
                 loc = msg.location or {}
-                self.problems.append(f"{where}: console error: {msg.text} ({loc.get('url', '?')}:{loc.get('lineNumber', '?')})")
+                self.problems.append(
+                    f"{where}: console error: {msg.text} ({loc.get('url', '?')}:{loc.get('lineNumber', '?')})"
+                )
 
         page.on("console", on_console)
         page.on("pageerror", lambda err: self.problems.append(f"{where}: page error: {err}"))
@@ -184,13 +189,15 @@ def rgb(hex_color: str) -> str:
     h = hex_color.strip().lstrip("#")
     if len(h) == 3:
         h = "".join(c * 2 for c in h)
-    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    r, g, b = (int(h[i : i + 2], 16) for i in (0, 2, 4))
     return f"rgb({r}, {g}, {b})"
 
 
 def no_horizontal_scroll(page: Page) -> None:
-    widths = page.evaluate("[document.documentElement.scrollWidth, document.documentElement.clientWidth,"
-                           " document.body.scrollWidth, document.body.clientWidth]")
+    widths = page.evaluate(
+        "[document.documentElement.scrollWidth, document.documentElement.clientWidth,"
+        " document.body.scrollWidth, document.body.clientWidth]"
+    )
     assert widths[0] <= widths[1] and widths[2] <= widths[3], f"horizontal scroll: {widths}"
 
 
@@ -199,8 +206,10 @@ def test_problem_watch_catches_a_csp_violation(ui: UI) -> None:
     """The guard the other tests rely on is live: an inline script the page's CSP refuses is
     reported (then cleared, so this test passes)."""
     page = ui.open(room=None)
-    page.evaluate("() => { const s = document.createElement('script'); s.textContent = 'window.__x = 1';"
-                  " document.body.append(s); }")
+    page.evaluate(
+        "() => { const s = document.createElement('script'); s.textContent = 'window.__x = 1';"
+        " document.body.append(s); }"
+    )
     page.wait_for_timeout(200)  # the violation event is queued, not synchronous
     assert page.evaluate("window.__x") is None, "the CSP let an inline script run"
     assert any("CSP violation" in p or "Content Security Policy" in p for p in ui.problems), ui.problems
@@ -219,8 +228,25 @@ def test_sidebar_shows_running_release_and_full_commit(ui: UI) -> None:
         expect(release).to_be_visible()
         expect(release).to_have_text(f"switchboard {me['version']} ({me['commit'][:7]})")
         expect(release).to_have_attribute(
-            "href", f"https://github.com/amahpour/switchboard/releases/tag/v{me['version']}")
+            "href", f"https://github.com/amahpour/switchboard/releases/tag/v{me['version']}"
+        )
         assert me["commit"] in (release.get_attribute("title") or "")
+
+
+def test_chat_message_numbers_are_visible_by_their_times(ui: UI) -> None:
+    """Every chat ID is readable and selectable, including grouped rows and phone width."""
+    for options in ({}, PHONE):
+        page = ui.open(**options)
+        rows = page.locator("#log .line.k-chat")
+        expect(rows).to_have_count(8)
+        for row in rows.all():
+            number = row.locator(".msg-number")
+            expect(number).to_have_text("#" + str(row.get_attribute("data-id")))
+            expect(number).to_be_visible()
+            expect(row.locator(".msg-meta time")).to_have_count(1)
+            assert number.evaluate("el => getComputedStyle(el).userSelect") != "none"
+        assert page.locator("#log .line.k-chat.cont .msg-number").count() >= 1
+        no_horizontal_scroll(page)
 
 
 def test_app_loads_connected_with_rooms_members_and_chips(ui: UI) -> None:
@@ -257,10 +283,18 @@ def test_markdown_renders_real_elements(ui: UI) -> None:
     page = ui.open()
     log = page.locator("#log")
     # each construct is a real element, not text with asterisks or pipes in it
-    for sel, text in (("strong", "Doing:"), ("em", "pick a free port"), ("code.md-code", "parse_port"),
-                      ("pre", "def parse_port"), ("ol li", "Reject non-digits"),
-                      ("ul li", "Leading zeros"), ("blockquote", "add input validation"),
-                      ("table th", "input"), ("table td", "ValueError"), ("[role=heading]", "Open questions")):
+    for sel, text in (
+        ("strong", "Doing:"),
+        ("em", "pick a free port"),
+        ("code.md-code", "parse_port"),
+        ("pre", "def parse_port"),
+        ("ol li", "Reject non-digits"),
+        ("ul li", "Leading zeros"),
+        ("blockquote", "add input validation"),
+        ("table th", "input"),
+        ("table td", "ValueError"),
+        ("[role=heading]", "Open questions"),
+    ):
         expect(log.locator(sel, has_text=text).first).to_be_visible()
     expect(log.locator("hr.md-hr").first).to_be_attached()
     # a fence keeps its lines
@@ -278,8 +312,13 @@ def test_markdown_links_and_raw_html_stay_inert(ui: UI) -> None:
     assert blocked.evaluate("e => e.tagName") == "SPAN"
     assert blocked.get_attribute("href") is None
     assert devin.locator("a").count() == 0
-    assert page.evaluate(f"[...document.querySelectorAll('[href]')].filter(e => e.getAttribute('href')"
-                         f".toLowerCase().includes({JS_SCHEME!r})).length") == 0
+    assert (
+        page.evaluate(
+            f"[...document.querySelectorAll('[href]')].filter(e => e.getAttribute('href')"
+            f".toLowerCase().includes({JS_SCHEME!r})).length"
+        )
+        == 0
+    )
 
     # raw HTML is literal text: no script or b element anywhere in the log
     expect(devin).to_contain_text("<script>alert(1)</script> stays text, as does <b>this</b>.")
@@ -310,8 +349,10 @@ def test_color_scheme_follows_the_system(ui: UI, scheme: str, other: str) -> Non
     page = ui.open(color_scheme=scheme)
 
     def body_and_token() -> tuple[str, str]:
-        return page.evaluate("[getComputedStyle(document.body).backgroundColor,"
-                             " getComputedStyle(document.documentElement).getPropertyValue('--bg')]")
+        return page.evaluate(
+            "[getComputedStyle(document.body).backgroundColor,"
+            " getComputedStyle(document.documentElement).getPropertyValue('--bg')]"
+        )
 
     bg, token = body_and_token()
     assert bg == rgb(token), (bg, token)
@@ -349,13 +390,18 @@ def test_remote_dots_show_their_state(ui: UI) -> None:
     when up, amber when connecting, red when down or blocked, a hollow ring when disabled. The
     sidebar's base rule used to outweigh the state rules, so every dot there was grey."""
     page = ui.open(room=None)
-    tok = {k: rgb(page.evaluate(f"getComputedStyle(document.documentElement).getPropertyValue('--{k}')"))
-           for k in ("green", "busy", "danger", "muted")}
+    tok = {
+        k: rgb(page.evaluate(f"getComputedStyle(document.documentElement).getPropertyValue('--{k}')"))
+        for k in ("green", "busy", "danger", "muted")
+    }
 
     def check(sel: str) -> None:
         expect(page.locator(sel)).to_have_class(cls("st-disabled"))
         dots = page.evaluate(REMOTE_DOTS, [sel, list(DOT_COLOUR)])
-        assert dots.pop("disabled") == {"bg": "rgba(0, 0, 0, 0)", "ring": f"{tok['muted']} 0px 0px 0px 1.5px inset"}, sel
+        assert dots.pop("disabled") == {
+            "bg": "rgba(0, 0, 0, 0)",
+            "ring": f"{tok['muted']} 0px 0px 0px 1.5px inset",
+        }, sel
         assert dots == {st: {"bg": tok[k], "ring": "none"} for st, k in DOT_COLOUR.items()}, sel
 
     check("#remotes .remote")  # the sidebar row
@@ -445,7 +491,9 @@ def test_inspector_hold_posts_the_command_and_shows_held(ui: UI) -> None:
     hold = page.locator("#insp-hold")
     expect(hold).to_have_text("Hold")
     try:
-        with page.expect_request(lambda r: r.method == "POST" and r.url.endswith("/api/rooms/build/command")) as req:
+        with page.expect_request(
+            lambda r: r.method == "POST" and r.url.endswith("/api/rooms/build/command")
+        ) as req:
             hold.click()
         assert req.value.post_data_json == {"text": "/hold codex-1"}
         expect(page.locator("#insp-body .chip-held")).to_have_text("Held")
@@ -462,8 +510,11 @@ def test_inspector_hold_posts_the_command_and_shows_held(ui: UI) -> None:
     finally:
         # leave the shared world as it was, whatever happened above (an extra release is a no-op reply)
         assert ui.world.web is not None
-        ui.world.web.post("/api/rooms/build/command", json={"text": "/release codex-1"},
-                          headers=ui.world.broker.write_headers())
+        ui.world.web.post(
+            "/api/rooms/build/command",
+            json={"text": "/release codex-1"},
+            headers=ui.world.broker.write_headers(),
+        )
 
 
 def test_slash_palette_and_mentions(ui: UI) -> None:
@@ -519,32 +570,206 @@ def test_close_a_room_then_reopen_it(ui: UI) -> None:
     open_room(page, "e2e-close")
     before = int(re.findall(r"\d+", page.locator("#closed-label").inner_text())[0])
 
-    # /close asks first (the native confirm); accepting it closes the room and drops its tab
-    asked: list[str] = []
-
-    def accept(dialog: Any) -> None:
-        asked.append(dialog.message)
-        dialog.accept()
-
-    page.once("dialog", accept)
-    page.locator("#input").focus()
-    page.keyboard.type("/close")
+    # /close uses the in-page dialog; Esc backs out and keeps the command to retry.
+    box = page.locator("#input")
+    box.fill("/close")
     page.keyboard.press("Enter")
+    dialog = page.locator("#app-dialog")
+    expect(dialog).to_be_visible()
+    expect(page.locator("#app-dialog-title")).to_have_text("Close #e2e-close?")
+    expect(page.locator("#app-dialog-body")).to_contain_text("You can reopen it from Closed.")
+    expect(page.locator("#app-dialog-cancel")).to_be_focused()
+    page.keyboard.press("Escape")
+    expect(dialog).to_be_hidden()
+    expect(box).to_have_value("/close")
+    expect(tab).to_be_visible()
+    page.keyboard.press("Enter")
+    expect(dialog).to_be_visible()
+    page.get_by_role("button", name="Close room").click()
     expect(tab).to_have_count(0)
-    assert asked and asked[0].startswith("Close #e2e-close?"), asked
     expect(page.locator("#closed-label")).to_have_text(f"Closed ({before + 1})")
 
     # the Closed rooms sheet lists it; Reopen brings it back under its name
     page.click("#closed-rooms")
     expect(page.locator("#closed-panel")).to_be_visible()
     card = page.locator("#closed-body .closed-card").filter(
-        has=page.locator(".closed-name", has_text=re.compile(r"^e2e-close$")))
+        has=page.locator(".closed-name", has_text=re.compile(r"^e2e-close$"))
+    )
     expect(card).to_have_count(1)
     card.get_by_role("button", name="Reopen").click()
     expect(tab).to_be_visible()
     expect(page.locator("#closed-label")).to_have_text(f"Closed ({before})")
     page.keyboard.press("Escape")
     expect(page.locator("#closed-panel")).to_be_hidden()
+
+
+def test_new_room_dialog_validates_name_and_returns_focus(ui: UI) -> None:
+    """New room uses a modal form: names validate as typed and Cancel leaves no room."""
+    for suffix, options in (("desktop", {}), ("phone", PHONE)):
+        page = ui.open(room=None, **options)
+        if options:
+            page.click("#rooms-toggle")
+        new = page.locator("#new-room")
+        new.click()
+        dialog = page.locator("#app-dialog")
+        expect(dialog).to_be_visible()
+        bounds = dialog.bounding_box()
+        assert bounds is not None
+        if options:
+            assert abs(bounds["x"]) < 2 and abs(bounds["width"] - 390) < 2
+            assert abs(bounds["y"] + bounds["height"] - 844) < 2
+            action_box = page.locator("#app-dialog-action").bounding_box()
+            cancel_box = page.locator("#app-dialog-cancel").bounding_box()
+            assert action_box is not None and cancel_box is not None
+            assert action_box["y"] < cancel_box["y"]
+        expect(page.locator("#app-dialog-title")).to_have_text("New room")
+        name = page.locator("#app-dialog-name")
+        expect(name).to_be_focused()
+        name.fill("#build")
+        expect(page.locator("#app-dialog-error")).to_have_text("#build already exists. Pick another name.")
+        expect(page.locator("#app-dialog-action")).to_be_disabled()
+        room = "#e2e-dialog-" + suffix
+        name.fill(room)
+        expect(page.locator("#app-dialog-error")).to_be_empty()
+        expect(page.locator("#app-dialog-action")).to_be_enabled()
+        page.locator("#app-dialog-cancel").click()
+        expect(dialog).to_be_hidden()
+        expect(new).to_be_focused()
+        expect(page.locator(f'#tabs .room[data-room="{room}"]')).to_have_count(0)
+        new.click()
+        page.locator("#app-dialog-name").fill(room)
+        page.locator("#app-dialog-action").click()
+        expect(page.locator(f'#tabs .room[data-room="{room}"]')).to_have_count(1)
+        ui.world.command(room.removeprefix("#"), "/close")
+
+
+def test_settings_theme_follows_the_person_and_sign_out_moves_inside(ui: UI) -> None:
+    """Settings opens from the name, changes the first-paint theme across browsers, and signs out."""
+    page = ui.open()
+    page.click("#me-settings")
+    dialog = page.locator("#app-dialog")
+    expect(dialog).to_be_visible()
+    expect(page.locator("#app-dialog-title")).to_have_text("Settings")
+    page.click("#settings-theme-dark")
+    expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+    page.keyboard.press("Escape")
+    expect(dialog).to_be_hidden()
+    page.reload()
+    expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+    other = ui.open()
+    expect(other.locator("html")).to_have_attribute("data-theme", "dark")
+
+    phone = ui.open(**PHONE)
+    phone.click("#rooms-toggle")
+    phone.click("#me-settings")
+    modal = phone.locator("#app-dialog")
+    expect(modal).to_be_visible()
+    assert not phone.locator("#app").evaluate("e => e.classList.contains('nav-open')")
+    bounds = modal.bounding_box()
+    assert bounds is not None and abs(bounds["y"] + bounds["height"] - 844) < 2
+    phone.click("#settings-theme-light")
+    expect(phone.locator("html")).to_have_attribute("data-theme", "light")
+    phone.click("#settings-sign-out")
+    expect(phone.locator("#app-dialog")).to_be_hidden()
+    expect(phone.locator("#login-cli")).to_be_visible()
+    other.click("#me-settings")
+    other.click("#settings-theme-system")  # do not change the seeded world's later tests
+    expect(other.locator("html")).to_have_attribute("data-theme", "system")
+
+
+def test_text_size_scales_the_whole_ui_and_survives_reload_on_a_phone(ui: UI) -> None:
+    """Larger text reaches the log, controls and Inspector, persists, and fits at phone width."""
+    page = ui.open()
+    selectors = ("body", "#tabs .room", "#log .line.k-chat", "#input", "#buddy-list .member")
+    sizes = {
+        selector: page.locator(selector).first.evaluate("e => parseFloat(getComputedStyle(e).fontSize)")
+        for selector in selectors
+    }
+    page.click("#me-settings")
+    page.click("#settings-text-larger")
+    expect(page.locator("html")).to_have_attribute("data-text-size", "larger")
+    for selector, before in sizes.items():
+        after = page.locator(selector).first.evaluate("e => parseFloat(getComputedStyle(e).fontSize)")
+        assert after >= before * 1.25, (selector, before, after)
+    assert page.locator("#room-title").evaluate("e => e.scrollWidth <= e.clientWidth + 1")
+    page.keyboard.press("Escape")
+    page.locator('#buddy-list .member[data-name="claude-1"]').click()
+    expect(page.locator("#insp-name")).to_contain_text("claude-1")
+    expect(page.locator("#insp-name")).to_be_visible()
+    assert page.locator("#insp-name").evaluate("e => parseFloat(getComputedStyle(e).fontSize)") >= 20
+    page.reload()
+    expect(page.locator("html")).to_have_attribute("data-text-size", "larger")
+
+    phone = ui.open(**PHONE)
+    expect(phone.locator("html")).to_have_attribute("data-text-size", "larger")
+    assert phone.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
+    phone.click("#rooms-toggle")
+    phone.click("#me-settings")
+    expect(phone.locator("#settings-text-larger")).to_have_attribute("aria-pressed", "true")
+    phone.click("#settings-text-default")  # keep the shared seeded broker's next tests at their default
+    expect(phone.locator("html")).to_have_attribute("data-text-size", "default")
+
+
+def test_custom_room_rules_copy_from_settings_and_edit_on_a_phone(ui: UI) -> None:
+    """The saved default seeds a room; its own bottom-sheet editor changes only that room."""
+    page = ui.open()
+    page.click("#me-settings")
+    page.locator("#settings-room-rules").fill("Work in a worktree.")
+    expect(page.locator("#settings-rules-count")).to_have_text("19 / 2000")
+    page.click("#settings-rules-save")
+    expect(page.locator("#settings-rules-status")).to_have_text("Saved")
+    page.click("#settings-close")
+    page.click("#new-room")
+    page.locator("#app-dialog-name").fill("#e2e-room-rules")
+    page.click("#app-dialog-action")
+    expect(page.locator('#tabs .room[data-room="#e2e-room-rules"]')).to_have_count(1)
+
+    phone = ui.open(room="e2e-room-rules", **PHONE)
+    phone.click("#room-rules")
+    dialog = phone.locator("#app-dialog")
+    expect(dialog).to_be_visible()
+    bounds = dialog.bounding_box()
+    assert bounds is not None and abs(bounds["x"]) < 2 and abs(bounds["width"] - 390) < 2
+    expect(phone.locator("#app-dialog-rules")).to_have_value("Work in a worktree.")
+    phone.locator("#app-dialog-rules").fill("Post a PR link.")
+    phone.click("#app-dialog-action")
+    expect(dialog).to_be_hidden()
+    expect(phone.locator("#log")).to_contain_text(TEST_HUMAN + " updated the room rules")
+    phone.reload()
+    phone.click("#room-rules")
+    expect(phone.locator("#app-dialog-rules")).to_have_value("Post a PR link.")
+    phone.click("#app-dialog-cancel")
+    page.click("#me-settings")
+    expect(page.locator("#settings-room-rules")).to_have_value("Work in a worktree.")
+    page.locator("#settings-room-rules").fill("")
+    page.click("#settings-rules-save")
+    ui.world.command("e2e-room-rules", "/close")
+
+
+def test_typed_and_inspector_kick_use_the_same_dialog(ui: UI) -> None:
+    """Typed /kick and the Inspector button share the title, body, and safe Cancel focus."""
+    ui.world.create_room("#e2e-dialog-kick")
+    ui.world.add_agents("#e2e-dialog-kick", ("dialog-agent",))
+    page = ui.open(room="e2e-dialog-kick")
+    box = page.locator("#input")
+    box.fill("/kick dialog-agent")
+    page.keyboard.press("Enter")
+    dialog = page.locator("#app-dialog")
+    expect(dialog).to_be_visible()
+    title = page.locator("#app-dialog-title").inner_text()
+    body = page.locator("#app-dialog-body").inner_text()
+    expect(page.locator("#app-dialog-cancel")).to_be_focused()
+    page.keyboard.press("Escape")
+    expect(box).to_have_value("/kick dialog-agent")
+    expect(page.locator('#buddy-list .member[data-name="dialog-agent"]')).to_be_visible()
+    page.locator('#buddy-list .member[data-name="dialog-agent"]').click()
+    page.click("#insp-kick")
+    expect(dialog).to_be_visible()
+    expect(page.locator("#app-dialog-title")).to_have_text(title)
+    expect(page.locator("#app-dialog-body")).to_have_text(body)
+    expect(page.locator("#app-dialog-action")).to_have_text("Kick")
+    page.locator("#app-dialog-action").click()
+    expect(page.locator('#buddy-list .member[data-name="dialog-agent"]')).to_have_count(0)
 
 
 # A sidebar row per case, cloned from the seeded fpga-pi's with a name, a state and the text
@@ -568,9 +793,11 @@ REMOTE_ROWS = """(cases) => {
   });
 }"""
 
-LONG_STATES = [("scope-pi", "down", "down: timeout (retry in 20 s)"),
-               ("build-vm", "blocked", "blocked: forced command failed"),
-               ("dev-box-west", "disabled", "needs enable (config changed)")]
+LONG_STATES = [
+    ("scope-pi", "down", "down: timeout (retry in 20 s)"),
+    ("build-vm", "blocked", "blocked: forced command failed"),
+    ("dev-box-west", "disabled", "needs enable (config changed)"),
+]
 
 
 @pytest.mark.parametrize("size", ["desktop", "phone"])
@@ -580,8 +807,14 @@ def test_a_long_remote_state_leaves_the_name_readable(ui: UI, size: str) -> None
     take the whole row and squeeze the name to nothing; now it ends in an ellipsis."""
     page = ui.open(room=None, **(PHONE if size == "phone" else {}))
     expect(page.locator("#remotes .remote")).to_have_count(1)
-    rows = page.evaluate(REMOTE_ROWS, [*LONG_STATES, ("gpu-box", "up", "up · 14 ms"),
-                                       ("fpga-bench-lab-02", "down", "down: timeout (retry in 20 s)")])
+    rows = page.evaluate(
+        REMOTE_ROWS,
+        [
+            *LONG_STATES,
+            ("gpu-box", "up", "up · 14 ms"),
+            ("fpga-bench-lab-02", "down", "down: timeout (retry in 20 s)"),
+        ],
+    )
     *long, short, both = rows
     for (name, _, text), r in zip(LONG_STATES, long):
         assert r["name"][0] >= r["name"][1] - 1, f"{size}: {name} is cut to {r['name']} px next to {text!r}"
@@ -637,8 +870,13 @@ def test_keyboard_tab_walk_shows_a_focus_ring(ui: UI) -> None:
         f = page.evaluate(FOCUS_RING)
         if not f:
             continue
-        key = "input" if f["id"] == "input" else "pane-toggle" if f["id"] == "pane-toggle" else (
-            "member" if "member" in f["cls"].split() and f["name"] else "")
+        key = (
+            "input"
+            if f["id"] == "input"
+            else "pane-toggle"
+            if f["id"] == "pane-toggle"
+            else ("member" if "member" in f["cls"].split() and f["name"] else "")
+        )
         if key and key not in seen:
             seen[key] = f
         if len(seen) == 3:
@@ -649,8 +887,10 @@ def test_keyboard_tab_walk_shows_a_focus_ring(ui: UI) -> None:
 
 
 # ------------------------------------------------------------------ focus (review findings)
-ACTIVE_FOCUS_KEY = "() => document.activeElement ? (document.activeElement.dataset.focus || document.activeElement.id" \
-                   " || document.activeElement.tagName) : null"
+ACTIVE_FOCUS_KEY = (
+    "() => document.activeElement ? (document.activeElement.dataset.focus || document.activeElement.id"
+    " || document.activeElement.tagName) : null"
+)
 
 
 def member_row(page: Page, name: str) -> Any:
@@ -691,16 +931,16 @@ def test_inspector_re_renders_keep_focus(ui: UI) -> None:
         page.keyboard.press("Escape")
         expect(page.locator("#insp-catchup")).to_be_focused()
 
-        # the kick confirm: Tab to the red Kick button, re-render, it is still focused; Esc backs out
+        # the shared kick dialog: Tab to Kick, re-render, focus stays in the modal; Esc backs out
         page.click("#insp-kick")
-        expect(page.locator("#kick-confirm")).to_be_visible()
+        expect(page.locator("#app-dialog")).to_be_visible()
         page.keyboard.press("Tab")
-        do_kick = page.locator("#kick-confirm .btn-danger")
+        do_kick = page.locator("#app-dialog-action")
         expect(do_kick).to_be_focused()
         members_frame("/release codex-1")
         expect(do_kick).to_be_focused()
         page.keyboard.press("Escape")
-        expect(page.locator("#kick-confirm")).to_be_hidden()
+        expect(page.locator("#app-dialog")).to_be_hidden()
         expect(page.locator("#insp-kick")).to_be_focused()
         expect(member_row(page, "claude-1")).to_have_count(1)  # nothing was kicked
     finally:
@@ -716,12 +956,12 @@ def test_focus_moves_to_a_neighbour_when_the_inspected_agent_goes(ui: UI) -> Non
     page = ui.open(room="e2e-focus")
     expect(page.locator("#buddy-list .member")).to_have_count(3)
 
-    # 1. Kick from the Inspector's confirm (by keyboard): ag-3 takes ag-2's place
+    # 1. Kick from the Inspector's dialog (by keyboard): ag-3 takes ag-2's place
     member_row(page, "ag-2").click()
     expect(page.locator("#insp-name")).to_contain_text("ag-2")
     page.click("#insp-kick")
     page.keyboard.press("Tab")
-    expect(page.locator("#kick-confirm .btn-danger")).to_be_focused()
+    expect(page.locator("#app-dialog-action")).to_be_focused()
     page.keyboard.press("Enter")
     expect(member_row(page, "ag-2")).to_have_count(0)  # the members frame landed
     expect(page.locator("#pane")).not_to_have_class(cls("inspecting"))
@@ -751,10 +991,13 @@ def test_phone_members_sheet_takes_focus_and_gives_it_back(ui: UI) -> None:
     page.keyboard.press("Enter")
     expect(page.locator("#app")).to_have_class(cls("sheet-open"))
     expect(member_row(page, "claude-1")).to_be_focused()
-    assert page.evaluate("[document.getElementById('main').inert, document.getElementById('sidebar').inert]") == [True, True]
+    assert page.evaluate(
+        "[document.getElementById('main').inert, document.getElementById('sidebar').inert]"
+    ) == [True, True]
     page.keyboard.press("Tab")
-    assert page.evaluate("document.getElementById('pane').contains(document.activeElement)"), \
-        page.evaluate(ACTIVE_FOCUS_KEY)
+    assert page.evaluate("document.getElementById('pane').contains(document.activeElement)"), page.evaluate(
+        ACTIVE_FOCUS_KEY
+    )
     page.locator("#scrim").click(position={"x": 195, "y": 60})  # above the sheet
     expect(page.locator("#app")).not_to_have_class(cls("sheet-open"))
     expect(page.locator("#buddy-toggle")).to_be_focused()
@@ -837,8 +1080,13 @@ def test_a_mermaid_block_shows_its_diagram_on_click_and_its_code_again(ui: UI) -
     """A ```mermaid block shows as code with "Show diagram". Mermaid loads only then, once; the
     drawing lands in the block's shadow root (no style of it reaches the page) and "Show code"
     brings the code back. Copy copies the source either way (DESIGN.md §33)."""
-    page = diagram_room(ui, "e2e-diagram", f"{FENCE}mermaid\n{FLOW}\n{FENCE}", f"{FENCE}mermaid\n{SEQ}\n{FENCE}",
-                        permissions=["clipboard-read", "clipboard-write"])
+    page = diagram_room(
+        ui,
+        "e2e-diagram",
+        f"{FENCE}mermaid\n{FLOW}\n{FENCE}",
+        f"{FENCE}mermaid\n{SEQ}\n{FENCE}",
+        permissions=["clipboard-read", "clipboard-write"],
+    )
     assert page.evaluate(MERMAID_SCRIPTS) == 0 and page.evaluate("typeof window.mermaid") == "undefined"
     styles_before = page.evaluate("document.querySelectorAll('style').length")
     box = show(page)
@@ -847,7 +1095,9 @@ def test_a_mermaid_block_shows_its_diagram_on_click_and_its_code_again(ui: UI) -
     expect(box.locator(".md-diagram")).to_be_visible()
     expect(box.locator(".md-pre-body")).to_be_hidden()
     assert box.evaluate(SHADOW_SVG)
-    assert box.evaluate("(b) => b.querySelector('.md-diagram').shadowRoot.querySelector('svg style') !== null")
+    assert box.evaluate(
+        "(b) => b.querySelector('.md-diagram').shadowRoot.querySelector('svg style') !== null"
+    )
     assert page.evaluate("document.querySelectorAll('style').length") == styles_before  # none in the page
     assert page.evaluate("document.querySelectorAll('.md-diagram-stage').length") == 0
     box.locator("button.md-copy", has_text="Copy").click()
@@ -883,13 +1133,37 @@ def test_a_diagram_follows_the_light_or_dark_scheme(ui: UI) -> None:
     """A drawing uses the page's scheme, and one on show is redrawn when the scheme changes."""
     page = diagram_room(ui, "e2e-diagram-dark", f"{FENCE}mermaid\n{FLOW}\n{FENCE}", color_scheme="dark")
     box = show(page)
-    fill = "(b) => getComputedStyle(b.querySelector('.md-diagram').shadowRoot.querySelector('.node rect')).fill"
+    fill = (
+        "(b) => getComputedStyle(b.querySelector('.md-diagram').shadowRoot.querySelector('.node rect')).fill"
+    )
     dark = box.evaluate(fill)
     page.emulate_media(color_scheme="light")
     page.wait_for_function(f"(prev) => ({fill})(document.querySelector('#log .md-pre')) !== prev", arg=dark)
     light = box.evaluate(fill)
     assert dark != light, (dark, light)
     expect(box).to_have_class(cls("md-showing-diagram"))
+
+
+def test_a_diagram_follows_the_saved_theme_instead_of_the_system(ui: UI) -> None:
+    """A Light system with Dark chosen in Settings redraws an open Mermaid diagram in Dark."""
+    page = diagram_room(ui, "e2e-diagram-choice", f"{FENCE}mermaid\n{FLOW}\n{FENCE}", color_scheme="light")
+    box = show(page)
+    fill = (
+        "(b) => getComputedStyle(b.querySelector('.md-diagram').shadowRoot.querySelector('.node rect')).fill"
+    )
+    light = box.evaluate(fill)
+    try:
+        page.click("#me-settings")
+        page.click("#settings-theme-dark")
+        expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+        page.wait_for_function(
+            f"(prev) => ({fill})(document.querySelector('#log .md-pre')) !== prev", arg=light
+        )
+        assert box.evaluate(fill) != light
+    finally:
+        if page.locator("#app-dialog").is_visible():
+            page.click("#settings-theme-system")
+            expect(page.locator("html")).to_have_attribute("data-theme", "system")
 
 
 def test_a_hostile_diagram_cannot_reach_the_page(ui: UI) -> None:
@@ -902,27 +1176,32 @@ def test_a_hostile_diagram_cannot_reach_the_page(ui: UI) -> None:
         "flowchart TD\n"
         '  A["<img src=x onerror=window.__pwned=1> <b>bold</b>"] --> B[next]\n'
         '  click A "/logout" _self\n'
-        '  click B call alert(1)\n'
-        "  style A fill:#f00,stroke:#333")
+        "  click B call alert(1)\n"
+        "  style A fill:#f00,stroke:#333"
+    )
     page = diagram_room(ui, "e2e-diagram-hostile", f"{FENCE}mermaid\n{hostile}\n{FENCE}")
     dialogs: list[str] = []
     page.on("dialog", lambda d: (dialogs.append(d.message), d.dismiss()))
     box = show(page)
     assert box.evaluate(SHADOW_SVG)
     root = "(b) => b.querySelector('.md-diagram').shadowRoot"
-    found = box.evaluate(f"(b) => {{ const r = ({root})(b); return {{"
-                         " unsafe: r.querySelectorAll('img, image, foreignObject, iframe, script, object, embed').length,"
-                         " links: r.querySelectorAll('[href], [*|href]').length,"
-                         " text: [...r.querySelectorAll('text')].map(t => t.textContent).join(' '),"
-                         " css: [...r.querySelectorAll('style')].map(s => s.textContent).join('') }; }")
+    found = box.evaluate(
+        f"(b) => {{ const r = ({root})(b); return {{"
+        " unsafe: r.querySelectorAll('img, image, foreignObject, iframe, script, object, embed').length,"
+        " links: r.querySelectorAll('[href], [*|href]').length,"
+        " text: [...r.querySelectorAll('text')].map(t => t.textContent).join(' '),"
+        " css: [...r.querySelectorAll('style')].map(s => s.textContent).join('') }; }"
+    )
     assert found["unsafe"] == 0 and found["links"] == 0, found
     assert '<img src="x"' in found["text"] and "onerror" not in found["text"]  # a label is text
     assert "display: none" not in found["css"] and "#cde498" not in found["css"]  # no themeCSS, not forest
     # clicking either node does nothing: no callback was bound (an alert() would have opened, and
     # been recorded, before the click returned) and there is no href to follow (above)
     for node in ("A", "B"):
-        clicked = box.evaluate(f"(b) => {{ const n = ({root})(b).querySelector('g.node[id*=\"-{node}-\"]');"
-                               " return !!n && n.dispatchEvent(new MouseEvent('click', {bubbles: true})); }")
+        clicked = box.evaluate(
+            f"(b) => {{ const n = ({root})(b).querySelector('g.node[id*=\"-{node}-\"]');"
+            " return !!n && n.dispatchEvent(new MouseEvent('click', {bubbles: true})); }"
+        )
         assert clicked, node
     assert dialogs == [] and page.evaluate("window.__pwned") is None
     assert page.evaluate("fetch('/api/me').then(r => r.status)") == 200
@@ -955,8 +1234,9 @@ def test_a_broken_agent_diagram_can_ask_its_sender_to_fix_it(ui: UI) -> None:
     own_box = show(page, 1)
     expect(own_box.get_by_role("button", name=re.compile("Ask .* to fix it"))).to_have_count(0)
 
-    with page.expect_response(lambda r: r.url.endswith(f"/api/rooms/{room}/say") and
-                              r.request.method == "POST") as sent:
+    with page.expect_response(
+        lambda r: r.url.endswith(f"/api/rooms/{room}/say") and r.request.method == "POST"
+    ) as sent:
         ask.click()
     body = sent.value.request.post_data_json
     assert sent.value.status == 200
@@ -964,8 +1244,9 @@ def test_a_broken_agent_diagram_can_ask_its_sender_to_fix_it(ui: UI) -> None:
     assert body["text"].startswith("@diagram-agent ")
     assert "Parse error on line 3" in body["text"] and "Expecting " in body["text"]
     assert "flowchart LR" not in body["text"] and "A -->" not in body["text"]
-    reply = page.locator(f'#log .line.k-chat[data-from="{TEST_HUMAN}"]',
-                         has_text="Please fix this Mermaid diagram")
+    reply = page.locator(
+        f'#log .line.k-chat[data-from="{TEST_HUMAN}"]', has_text="Please fix this Mermaid diagram"
+    )
     expect(reply).to_have_count(1)
     expect(reply).to_contain_text("Parse error on line 3")
     expect(reply.locator(".reply-to")).to_contain_text("diagram-agent")
@@ -981,8 +1262,9 @@ def test_ask_to_fix_never_posts_an_agents_plain_instructions(ui: UI) -> None:
     ui.world.agent_say(f"#{room}", "instructions-agent", source)
     page = ui.open(room=room)
     show(page)
-    with page.expect_response(lambda r: r.url.endswith(f"/api/rooms/{room}/say") and
-                              r.request.method == "POST") as sent:
+    with page.expect_response(
+        lambda r: r.url.endswith(f"/api/rooms/{room}/say") and r.request.method == "POST"
+    ) as sent:
         page.get_by_role("button", name="Ask instructions-agent to fix it").click()
     body = sent.value.request.post_data_json
     assert sent.value.status == 200

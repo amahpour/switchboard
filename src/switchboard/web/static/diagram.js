@@ -44,6 +44,9 @@
   }
 
   function dark() {
+    const chosen = document.documentElement.dataset.theme;
+    if (chosen === 'dark') return true;
+    if (chosen === 'light') return false;
     try {
       return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-color-scheme: dark)').matches;
     } catch (e) { return false; }
@@ -199,13 +202,16 @@
     return render(box, source, button).finally(function () { button.disabled = false; });
   }
 
-  // a diagram on show follows the system's light or dark scheme, as the page does
+  function redrawShown() {
+    forget();
+    for (const [box, v] of Array.from(shown)) render(box, v.source, v.button);
+  }
+
+  // A diagram on show follows either a chosen theme or the system's scheme.
   try {
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {
-      forget();
-      for (const [box, v] of Array.from(shown)) render(box, v.source, v.button);
-    });
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', redrawShown);
   } catch (e) { /* no matchMedia: the theme is the one at draw time */ }
+  window.addEventListener('switchboard-theme-change', redrawShown);
 
   window.SBDiagram = Object.freeze({ toggle: toggle });
 })();

@@ -7,6 +7,7 @@
 #   - a round trip on a connection kept open (an MCP server's BrokerConn).
 # The link itself (a forced command's stdio, which M8 uses instead of a forward) is
 # measured by forced_command.sh. User-level sshd on 127.0.0.1; see lib.sh.
+# shellcheck source=tests/manual/m8/lib.sh
 . "$(dirname "$0")/lib.sh"
 
 bg "$PY" -c '

@@ -14,7 +14,7 @@ The rules are in [CLAUDE.md](../../../CLAUDE.md); this is the order of work. It 
 
 3. **Build it, with its tests.** Write what each test checks and why before its body, then see it fail without the change: for a bug, the test first. Only this issue; anything else becomes an issue of its own. Commit as you go, files by name, never `--no-verify`.
 
-4. **Run the suite.** `uv run pytest -q -n auto`. Then what the change calls for:
+4. **Run lint, security reports and the suite.** `uv run python scripts/lint.py` (or `--fix` while editing), `uv run python scripts/security_scan.py` (findings are report-only), then `uv run pytest -q -n auto`. Then what the change calls for:
 
    | It touches | Also |
    |---|---|

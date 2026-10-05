@@ -7,8 +7,9 @@ silently loses updates on read-then-write (FINDINGS §10 S5).
 Schema versions: 1 (0.1.0 and 0.2.0), 2 (remote members: ``participants.host``,
 ``messages.sender_host``, the ``remotes`` table), 3 (a hosted broker's owner, §31:
 ``passkeys``, ``web_sessions.via``, ``link_machines``, and the owner's rows in ``meta``)
-and 4 (people, §32: ``people``, a person on passkeys, web sessions, machines and
-messages, where NULL is the owner).
+4 (people, §32: ``people``, a person on passkeys, web sessions, machines and
+messages, where NULL is the owner), 5 (per-person preferences, §34), 6 (text size, §34),
+and 7 (custom room rules, §35).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -28,7 +29,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 7
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -40,7 +41,8 @@ CREATE TABLE rooms(
   budget_per_hour INTEGER NOT NULL, budget_remaining INTEGER NOT NULL, budget_window_start REAL NOT NULL,
   budget_notice_window REAL,
   hop_count INTEGER NOT NULL DEFAULT 0, hop_limit INTEGER NOT NULL,
-  last_msg_at REAL);
+  last_msg_at REAL,
+  rules_text TEXT NOT NULL DEFAULT '' CHECK(length(rules_text) <= 2000));
 
 CREATE TABLE participants(
   id INTEGER PRIMARY KEY,
@@ -157,6 +159,12 @@ CREATE TABLE people(
   password_hash TEXT, must_reset INTEGER NOT NULL DEFAULT 1, password_expires_at REAL,
   created_at REAL NOT NULL, removed_at REAL);
 CREATE UNIQUE INDEX people_active_name ON people(name) WHERE removed_at IS NULL;
+
+CREATE TABLE preferences(
+  person_id INTEGER PRIMARY KEY CHECK(person_id >= 0),
+  theme TEXT NOT NULL DEFAULT 'system' CHECK(theme IN ('system','light','dark')),
+  text_size TEXT NOT NULL DEFAULT 'default' CHECK(text_size IN ('small','default','large','larger')),
+  room_rules TEXT NOT NULL DEFAULT '' CHECK(length(room_rules) <= 2000));
 """
 
 TABLES = (
@@ -173,12 +181,14 @@ TABLES = (
     "passkeys",
     "link_machines",
     "people",
+    "preferences",
 )
 # the tables of a version-1 database (0.1.0, 0.2.0) and of a version-2 one (0.3.0 to 0.6.5):
 # the rows a migration must keep
 V1_TABLES = TABLES[:9]
 V2_TABLES = TABLES[:10]
 V3_TABLES = TABLES[:12]
+V4_TABLES = TABLES[:13]
 
 # v1 -> v2 (DESIGN.md §27.6): one BEGIN IMMEDIATE, after a verified backup. The
 # columns land at the end of their tables, where the fresh schema above puts them too.
@@ -206,7 +216,7 @@ V2_TO_V3 = (
     " name TEXT PRIMARY KEY, key BLOB NOT NULL, key_fp TEXT NOT NULL,"
     " facts TEXT NOT NULL DEFAULT '{}',"
     " rooms TEXT NOT NULL DEFAULT '[\"*\"]',"
-    " harnesses TEXT NOT NULL DEFAULT '[\"claude\",\"codex\",\"cursor\",\"devin\"]',"
+    ' harnesses TEXT NOT NULL DEFAULT \'["claude","codex","cursor","devin"]\','
     " created_at REAL NOT NULL, approved_at REAL, approved_via TEXT CHECK(approved_via IN ('cli','web')),"
     " removed_at REAL, last_seen_at REAL)",
     "UPDATE meta SET value='3' WHERE key='schema_version'",
@@ -229,12 +239,42 @@ V3_TO_V4 = (
     "UPDATE meta SET value='4' WHERE key='schema_version'",
 )
 
+# v4 -> v5 (DESIGN.md §29.2): key 0 is the owner, positive ids are people. Defaults
+# are virtual until a person chooses a setting, so old databases need no rows rewritten.
+V4_TO_V5 = (
+    "CREATE TABLE preferences("
+    " person_id INTEGER PRIMARY KEY CHECK(person_id >= 0),"
+    " theme TEXT NOT NULL DEFAULT 'system' CHECK(theme IN ('system','light','dark')))",
+    "UPDATE meta SET value='5' WHERE key='schema_version'",
+)
+
+# v5 -> v6 (#79): existing choices keep their theme; every person starts at the former size.
+V5_TO_V6 = (
+    "ALTER TABLE preferences ADD COLUMN text_size TEXT NOT NULL DEFAULT 'default'"
+    " CHECK(text_size IN ('small','default','large','larger'))",
+    "UPDATE meta SET value='6' WHERE key='schema_version'",
+)
+
+# v6 -> v7 (#105): existing rooms and people keep an empty rules text.
+V6_TO_V7 = (
+    "ALTER TABLE rooms ADD COLUMN rules_text TEXT NOT NULL DEFAULT '' CHECK(length(rules_text) <= 2000)",
+    "ALTER TABLE preferences ADD COLUMN room_rules TEXT NOT NULL DEFAULT ''"
+    " CHECK(length(room_rules) <= 2000)",
+    "UPDATE meta SET value='7' WHERE key='schema_version'",
+)
+
 
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
     the tables the step adds). Read from the module at run time, never cached."""
-    all_steps = {1: (2, V1_TO_V2, ("remotes",)), 2: (3, V2_TO_V3, ("passkeys", "link_machines")),
-                 3: (4, V3_TO_V4, ("people",))}
+    all_steps = {
+        1: (2, V1_TO_V2, ("remotes",)),
+        2: (3, V2_TO_V3, ("passkeys", "link_machines")),
+        3: (4, V3_TO_V4, ("people",)),
+        4: (5, V4_TO_V5, ("preferences",)),
+        5: (6, V5_TO_V6, ()),
+        6: (7, V6_TO_V7, ()),
+    }
     out = []
     v = frm
     while v < SCHEMA_VERSION:
@@ -252,6 +292,8 @@ def tables_of(version: int) -> tuple[str, ...]:
         return V2_TABLES
     if version == 3:
         return V3_TABLES
+    if version == 4:
+        return V4_TABLES
     return TABLES
 
 
@@ -279,13 +321,9 @@ def connect(path: str | os.PathLike, *, readonly: bool = False) -> sqlite3.Conne
     """Open the database with WAL, NORMAL sync, foreign keys and a 5 s busy timeout."""
     if readonly:
         uri = Path(path).resolve().as_uri() + "?mode=ro"
-        con = sqlite3.connect(
-            uri, uri=True, timeout=5.0, isolation_level=None, check_same_thread=False
-        )
+        con = sqlite3.connect(uri, uri=True, timeout=5.0, isolation_level=None, check_same_thread=False)
     else:
-        con = sqlite3.connect(
-            str(path), timeout=5.0, isolation_level=None, check_same_thread=False
-        )
+        con = sqlite3.connect(str(path), timeout=5.0, isolation_level=None, check_same_thread=False)
     con.row_factory = sqlite3.Row
     if not readonly:
         con.execute("PRAGMA journal_mode=WAL")
@@ -316,9 +354,7 @@ def tx(con: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
 
 
 def schema_version(con: sqlite3.Connection) -> int | None:
-    row = con.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='meta'"
-    ).fetchone()
+    row = con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='meta'").fetchone()
     if row is None:
         return None
     v = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
@@ -354,9 +390,13 @@ def _create_backup_file(path: Path, what: str = "migration backup") -> Path:
     raise SchemaError(f"no free name for the {what} next to {path.name}")
 
 
-def backup_verified(con: sqlite3.Connection, backup_to: str | os.PathLike, *,
-                    tables: tuple[str, ...] = V1_TABLES,
-                    what: str = "migration backup") -> tuple[Path, dict[str, int]]:
+def backup_verified(
+    con: sqlite3.Connection,
+    backup_to: str | os.PathLike,
+    *,
+    tables: tuple[str, ...] = V1_TABLES,
+    what: str = "migration backup",
+) -> tuple[Path, dict[str, int]]:
     """Copy the database with the sqlite3 backup API into a new 0600 file (never
     overwriting one: see ``_create_backup_file``) and check the copy: ``integrity_check``
     and the row count of every table in ``tables`` (the version-1 ones for a migration,
@@ -377,8 +417,9 @@ def backup_verified(con: sqlite3.Connection, backup_to: str | os.PathLike, *,
         finally:
             bcon.close()
         if got != src_counts:
-            raise SchemaError(f"the {what} {dest.name} does not match the database"
-                              f" (rows {got} != {src_counts})")
+            raise SchemaError(
+                f"the {what} {dest.name} does not match the database (rows {got} != {src_counts})"
+            )
     except BaseException:
         # a bad copy is not a backup; the name stays taken only by a good one
         with contextlib.suppress(OSError):
@@ -393,8 +434,10 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
     the row counts again: the old tables' rows are all still there and the new tables are
     empty. Any failure rolls back and leaves the database as it was."""
     if backup_to is None:
-        raise SchemaError(f"schema version {frm} needs a migration to version {SCHEMA_VERSION}, and a migration"
-                          " needs a backup path")
+        raise SchemaError(
+            f"schema version {frm} needs a migration to version {SCHEMA_VERSION}, and a migration"
+            " needs a backup path"
+        )
     kept = tables_of(frm)
     dest, counts = backup_verified(con, backup_to, tables=kept)
     log.warning("schema migration %d -> %d: backup written to %s", frm, SCHEMA_VERSION, dest.name)
@@ -425,11 +468,14 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
         if con.in_transaction:  # SQLite may already have rolled back (a full disk, an I/O error)
             con.execute("ROLLBACK")
         if isinstance(e, SchemaError):
-            raise SchemaError(f"{e} (the database is unchanged, still schema version {frm};"
-                              f" backup: {dest.name})") from None
+            raise SchemaError(
+                f"{e} (the database is unchanged, still schema version {frm}; backup: {dest.name})"
+            ) from None
         if isinstance(e, sqlite3.Error):
-            raise SchemaError(f"migration to schema version {SCHEMA_VERSION} failed: {e} (the database is"
-                              f" unchanged, still schema version {frm}; backup: {dest.name})") from e
+            raise SchemaError(
+                f"migration to schema version {SCHEMA_VERSION} failed: {e} (the database is"
+                f" unchanged, still schema version {frm}; backup: {dest.name})"
+            ) from e
         raise
     con.execute("COMMIT")
     log.warning("schema migration %d -> %d done", frm, SCHEMA_VERSION)
@@ -453,9 +499,7 @@ def migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None = None)
         _migrate(con, backup_to, v)
         v = schema_version(con)
     if v != SCHEMA_VERSION:
-        raise SchemaError(
-            f"database schema version {v} is not supported (expected {SCHEMA_VERSION})"
-        )
+        raise SchemaError(f"database schema version {v} is not supported (expected {SCHEMA_VERSION})")
     return v
 
 

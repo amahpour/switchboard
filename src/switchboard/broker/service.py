@@ -244,7 +244,8 @@ class RoomService:
         if room is None:
             if self.store.closed_rooms(n):
                 raise ServiceError(
-                    "not_found", f"no such room: {n} (it is closed: reopen it from Closed rooms in the web UI)"
+                    "not_found",
+                    f"no such room: {n} (it is closed: reopen it from Closed rooms in the web UI)",
                 )
             raise ServiceError("not_found", f"no such room: {n}")
         return room
@@ -271,6 +272,7 @@ class RoomService:
             "members": len(self.store.active_names(room.id)),
             "last_id": self.store.last_message_id(room.id),
             "settings": self.settings(room),
+            "rules": room.rules_text,
         }
 
     def rooms(self) -> list[dict[str, Any]]:
@@ -371,8 +373,13 @@ class RoomService:
                 if lab not in labels:
                     labels.append(lab)
             top = max((p for p, _n, _h in senders), default=None)
-            out.update(path=path, n=_num(d.get("n")), counted=bool(d.get("counted")),
-                       prio=PRIO_LABEL.get(top, "chatter") if top is not None else None, **{"from": labels[:3]})
+            out.update(
+                path=path,
+                n=_num(d.get("n")),
+                counted=bool(d.get("counted")),
+                prio=PRIO_LABEL.get(top, "chatter") if top is not None else None,
+                **{"from": labels[:3]},
+            )
         elif kind in ("expire", "cancel"):
             out.update(path=path, reason=_text(d.get("reason"), 200))
         elif kind == "parked":
@@ -383,7 +390,9 @@ class RoomService:
             out.update(n=_num(d.get("n")))
         elif kind == "requeue":
             reason = d.get("reason")
-            out.update(reason="redeliver" if reason == "redeliver" else _text(reason, 200), n=_num(d.get("n")))
+            out.update(
+                reason="redeliver" if reason == "redeliver" else _text(reason, 200), n=_num(d.get("n"))
+            )
         elif kind in ("watchdog_remind", "watchdog_escalate"):
             out.update(n=_num(d.get("n")), why=_text(d.get("why"), 40))
         elif kind == "said":
@@ -402,7 +411,7 @@ class RoomService:
         return self.settings(room) if room is not None else None
 
     # ---------------------------------------------------------------- writes
-    def create_room(self, name: str) -> Room:
+    def create_room(self, name: str, *, creator: str | None = None, person_id: int | None = None) -> Room:
         try:
             n = normalize_room(name)
         except InvalidName as e:
@@ -410,15 +419,39 @@ class RoomService:
         try:
             room = self.store.create_room(
                 n,
-                self.cfg.human_name,
+                creator or self.cfg.human_name,
                 self.cfg.delivery.budget_per_hour,
                 self.cfg.delivery.hop_limit,
+                self.store.preferences(person_id)["room_rules"],
             )
         except Conflict:
             raise ServiceError("conflict", f"{n} already exists") from None
         self.store.add_event("room_create", room_id=room.id)
-        self._post(room, sender_name="switchboard", sender_kind="system", via="system",
-                   kind="notice", text=f"{n} created by {self.cfg.human_name}")
+        self._post(
+            room,
+            sender_name="switchboard",
+            sender_kind="system",
+            via="system",
+            kind="notice",
+            text=f"{n} created by {creator or self.cfg.human_name}",
+        )
+        self.rooms_changed()
+        return room
+
+    def set_room_rules(self, room_name: str, text: str, actor: str) -> Room:
+        if not isinstance(text, str) or len(text) > 2000:
+            raise ServiceError("bad_request", "room rules must be at most 2000 characters")
+        room = self.room(room_name)
+        room = self.store.set_room_rules(room.id, text)
+        self.store.add_event("room_rules", room_id=room.id, data={"by": actor})
+        self._post(
+            room,
+            sender_name="switchboard",
+            sender_kind="system",
+            via="system",
+            kind="notice",
+            text=f"{actor} updated the room rules",
+        )
         self.rooms_changed()
         return room
 
@@ -442,33 +475,42 @@ class RoomService:
         with db.tx(self.store.con):
             for m in members:
                 self.store.end_membership(m.membership_id, "closed", keep_cred=True)
-                posted.append(self.store.insert_message(
+                posted.append(
+                    self.store.insert_message(
+                        room.id,
+                        sender_name=m.name,
+                        sender_kind="agent",
+                        sender_harness=m.harness,
+                        sender_membership_id=m.membership_id,
+                        via="system",
+                        kind="leave",
+                        text=f"left ({room.name} closed)",
+                        sender_host=m.host or None,
+                    )
+                )
+            posted.append(
+                self.store.insert_message(
                     room.id,
-                    sender_name=m.name,
-                    sender_kind="agent",
-                    sender_harness=m.harness,
-                    sender_membership_id=m.membership_id,
+                    sender_name="switchboard",
+                    sender_kind="system",
                     via="system",
-                    kind="leave",
-                    text=f"left ({room.name} closed)",
-                    sender_host=m.host or None,
-                ))
-            posted.append(self.store.insert_message(
-                room.id,
-                sender_name="switchboard",
-                sender_kind="system",
-                via="system",
-                kind="notice",
-                text=f"{room.name} closed by {human}{audit}: {len(members)} agent(s) removed; the history is kept",
-            ))
-            self.store.add_event("room_close", room_id=room.id, data={
-                "name": room.name,
-                "closed_name": new,
-                "by": human,
-                "via": actor.via,
-                "chain": actor.chain,
-                "members": [m.membership_id for m in members],
-            })
+                    kind="notice",
+                    text=f"{room.name} closed by {human}{audit}: {len(members)} agent(s) removed;"
+                    " the history is kept",
+                )
+            )
+            self.store.add_event(
+                "room_close",
+                room_id=room.id,
+                data={
+                    "name": room.name,
+                    "closed_name": new,
+                    "by": human,
+                    "via": actor.via,
+                    "chain": actor.chain,
+                    "members": [m.membership_id for m in members],
+                },
+            )
             self.store.rename_room(room.id, new, expect=room.name)
         for msg in posted:
             self.hub.message(room.name, message_dict(msg))
@@ -482,8 +524,10 @@ class RoomService:
                 hosts[m.host] = hosts.get(m.host, 0) + 1
         extra = " (" + ", ".join(f"{n} on {h}" for h, n in sorted(hosts.items())) + ")" if hosts else ""
         log.info("%s closed via %s: %d member(s) ended", room.name, actor.via, len(members))
-        return (f"closed {room.name}: {len(members)} agent(s) removed{extra}; history kept."
-                " The name is free again; reopen this room from Closed rooms in the web UI")
+        return (
+            f"closed {room.name}: {len(members)} agent(s) removed{extra}; history kept."
+            " The name is free again; reopen this room from Closed rooms in the web UI"
+        )
 
     def reopen_room(self, room_id: int, via: str = "web") -> Room:
         """A closed room gets its name back (DESIGN.md §28.4). Nobody is re-added: former
@@ -503,20 +547,39 @@ class RoomService:
                     " then reopen this one",
                 ) from None
             msg = self.store.insert_message(
-                room.id, sender_name="switchboard", sender_kind="system", via="system", kind="notice",
+                room.id,
+                sender_name="switchboard",
+                sender_kind="system",
+                via="system",
+                kind="notice",
                 text=f"{room.name} reopened by {human} (via {via}); agents join() it again",
             )
             assert before is not None
-            self.store.add_event("room_reopen", room_id=room.id, data={
-                "name": room.name, "from": before.name, "by": human, "via": via,
-            })
+            self.store.add_event(
+                "room_reopen",
+                room_id=room.id,
+                data={
+                    "name": room.name,
+                    "from": before.name,
+                    "by": human,
+                    "via": via,
+                },
+            )
         self.hub.message(room.name, message_dict(msg))
         self.rooms_changed()
         return room
 
-    def delete_room(self, ref: str, *, dry_run: bool, room_id: int | None, db_path: Any,
-                    chain: str | None, name: str | None = None,
-                    created_at: float | None = None) -> dict[str, Any]:
+    def delete_room(
+        self,
+        ref: str,
+        *,
+        dry_run: bool,
+        room_id: int | None,
+        db_path: Any,
+        chain: str | None,
+        name: str | None = None,
+        created_at: float | None = None,
+    ) -> dict[str, Any]:
         """``switchboard rooms delete`` (DESIGN.md §28.6): the plan (``dry_run``), or, pinned by
         the plan's ``room_id``, ``name`` and ``created_at``, a checked backup of the whole
         database and then the delete in one transaction. The id alone is not enough: a
@@ -526,7 +589,9 @@ class RoomService:
         try:
             room = self.store.resolve_room(ref)
         except InvalidName as e:
-            raise ServiceError("bad_request", f"{e} (or a closed room's full name, e.g. #build~closed-7)") from None
+            raise ServiceError(
+                "bad_request", f"{e} (or a closed room's full name, e.g. #build~closed-7)"
+            ) from None
         except Ambiguous as e:
             n = display_room(e.names[0])
             raise ServiceError(
@@ -569,18 +634,25 @@ class RoomService:
         if dry_run:
             return plan
         try:
-            dest, counts = db.backup_verified(self.store.con, backup, tables=db.TABLES, what="pre-delete backup")
+            dest, counts = db.backup_verified(
+                self.store.con, backup, tables=db.TABLES, what="pre-delete backup"
+            )
         except (db.SchemaError, OSError, sqlite3.Error) as e:
             raise ServiceError("internal", f"the backup failed ({e}); nothing was deleted") from None
         try:
-            removed = self.store.delete_room(room.id, name=room.name, created_at=room.created_at,
-                                             expect_counts=counts, event={
-                "room_id": room.id,
-                "name": room.name,
-                "display": room.display_name,
-                "backup": dest.name,
-                "chain": chain,
-            })
+            removed = self.store.delete_room(
+                room.id,
+                name=room.name,
+                created_at=room.created_at,
+                expect_counts=counts,
+                event={
+                    "room_id": room.id,
+                    "name": room.name,
+                    "display": room.display_name,
+                    "backup": dest.name,
+                    "chain": chain,
+                },
+            )
         except Conflict as e:
             raise ServiceError("conflict", f"{e}; nothing was deleted (backup: {dest.name})") from None
         except (StoreError, sqlite3.Error) as e:
@@ -589,7 +661,9 @@ class RoomService:
             self.hub.drop_room(room.name)
         self.rooms_changed()
         self.hub.notice(None, "warn", f"{room.name} deleted via cli ({chain}); backup {dest.name}")
-        log.warning("%s (room %d) deleted via cli (%s): %s; backup %s", room.name, room.id, chain, removed, dest)
+        log.warning(
+            "%s (room %d) deleted via cli (%s): %s; backup %s", room.name, room.id, chain, removed, dest
+        )
         return {
             "room_id": room.id,
             "name": room.name,
@@ -626,8 +700,16 @@ class RoomService:
             raise ServiceError("bad_request", f"reply_to {reply_to} is not a message in {room.name}")
         return target
 
-    def human_say(self, name: str, text: str, via: str, *, skip: tuple[int, ...] = (),
-                  person: tuple[str, int | None] | None = None, reply_to: int | None = None) -> Message:
+    def human_say(
+        self,
+        name: str,
+        text: str,
+        via: str,
+        *,
+        skip: tuple[int, ...] = (),
+        person: tuple[str, int | None] | None = None,
+        reply_to: int | None = None,
+    ) -> Message:
         """A message from a human. Posted literally, never parsed as a command.
         ``skip``: memberships that get no delivery of it (only ``/catchup`` passes any: its
         subjects, §26). ``person``: who, on a hosted broker with people (§32): their name
@@ -668,13 +750,20 @@ class RoomService:
         the human has no delivery rows)."""
         return self.store.active_names(room.id) + self.people_names()
 
-
     def people_names(self) -> list[str]:
         """The humans (§32): the owner, then everyone the owner added on a hosted broker."""
         return [self.cfg.human_name] + [p.name for p in self.store.people()]
+
     def post_notice(self, room: Room, text: str, level: str | None = None) -> Message:
-        return self._post(room, sender_name="switchboard", sender_kind="system",
-                          via="system", kind="notice", text=text, level=level)
+        return self._post(
+            room,
+            sender_name="switchboard",
+            sender_kind="system",
+            via="system",
+            kind="notice",
+            text=text,
+            level=level,
+        )
 
     def kick(self, room: Room, member: Member) -> None:
         self.store.end_membership(member.membership_id, "kick", kicked=True)
@@ -707,8 +796,13 @@ class RoomService:
         if result.post is not None:
             # /catchup: one ordinary human chat message (every delivery rule applies); a refusal
             # here (too long, empty) leaves nothing posted or recorded
-            posted = self.human_say(room.name, result.post, via=actor.via, skip=result.post_skip,
-                                    person=(actor.who(self.cfg.human_name), actor.person_id))
+            posted = self.human_say(
+                room.name,
+                result.post,
+                via=actor.via,
+                skip=result.post_skip,
+                person=(actor.who(self.cfg.human_name), actor.person_id),
+            )
         room = self.store.room_by_id(room.id) or room
         audit = self._audit_suffix(actor)
         if result.event:
@@ -805,8 +899,20 @@ class RoomService:
                 f" in flight {counts.get('offered', 0)}, expired: {exp_s}"
             )
         rule_kinds = (
-            "pause", "resume", "budget_set", "budget_exhausted", "loop_guard", "hop_limit_set", "rate_limited",
-            "pass_refused", "hold", "release", "kick", "watchdog_remind", "watchdog_escalate", "expire",
+            "pause",
+            "resume",
+            "budget_set",
+            "budget_exhausted",
+            "loop_guard",
+            "hop_limit_set",
+            "rate_limited",
+            "pass_refused",
+            "hold",
+            "release",
+            "kick",
+            "watchdog_remind",
+            "watchdog_escalate",
+            "expire",
             "requeue",
         )
         evs = self.store.recent_events(room_id=room.id, kinds=rule_kinds, limit=10)

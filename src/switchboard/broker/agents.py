@@ -32,7 +32,13 @@ from switchboard.adapters.base import HOOK_EVENTS
 from switchboard.adapters.testagent import ACK_MODES
 from switchboard.broker import proc
 from switchboard.broker.hosts import HostViews
-from switchboard.broker.peer import HookCandidate, McpIdentity, McpRefused, resolve_hook_participant, verify_mcp_peer
+from switchboard.broker.peer import (
+    HookCandidate,
+    McpIdentity,
+    McpRefused,
+    resolve_hook_participant,
+    verify_mcp_peer,
+)
 from switchboard.broker.proc import ProcInfo
 from switchboard.broker.service import ServiceError
 from switchboard.delivery import rules
@@ -198,8 +204,11 @@ class AgentService:
         else:
             try:
                 ident = verify_mcp_peer(
-                    conn.peer, claimed, claude_socket=sock,
-                    sessions_dir=self.cfg.claude.sessions_dir, test_mode=self.state.test_mode,
+                    conn.peer,
+                    claimed,
+                    claude_socket=sock,
+                    sessions_dir=self.cfg.claude.sessions_dir,
+                    test_mode=self.state.test_mode,
                 )
             except McpRefused as e:
                 raise ServiceError(e.code, e.message) from None
@@ -208,12 +217,18 @@ class AgentService:
         if ident.harness == "test":
             ts = params.get("test_session")
             if not isinstance(ts, str) or not TEST_SESSION_RE.match(ts):
-                raise ServiceError("bad_request", "--harness test needs --test-session KEY ([A-Za-z0-9_.-]{1,64})")
+                raise ServiceError(
+                    "bad_request", "--harness test needs --test-session KEY ([A-Za-z0-9_.-]{1,64})"
+                )
             test_session = ts
             a = params.get("test_ack")
             ack = a if a in ACK_MODES else "next_call"
         ci = params.get("client_info")
-        ci = {k: str(v)[:80] for k, v in ci.items() if k in ("name", "version")} if isinstance(ci, dict) else {}
+        ci = (
+            {k: str(v)[:80] for k, v in ci.items() if k in ("name", "version")}
+            if isinstance(ci, dict)
+            else {}
+        )
         ev = params.get("evidence")
         ev = {k: str(v)[:120] for k, v in ev.items()} if isinstance(ev, dict) else {}
         sid = params.get("session_id")
@@ -242,8 +257,13 @@ class AgentService:
             codex.on_mcp_hello(ident, [p for p in mine if p.harness == "codex"])
         adapter = self.engine.adapter_for(ident.harness, ident.host)
         tier, note = adapter.tier(None)
-        log.info("mcp hello: conn %d harness %s%s (%s)", conn.id, ident.harness,
-                 f" on {ident.host}" if ident.host else "", ident.evidence)
+        log.info(
+            "mcp hello: conn %d harness %s%s (%s)",
+            conn.id,
+            ident.harness,
+            f" on {ident.host}" if ident.host else "",
+            ident.evidence,
+        )
         return {
             "conn_id": conn.id,
             "harness": ident.harness,
@@ -411,12 +431,19 @@ class AgentService:
         if adapter is None:
             return {}
         t = params.get("t_post")
-        t_ok = isinstance(t, (int, float)) and not isinstance(t, bool) and math.isfinite(t)
+        if isinstance(t, (int, float)) and not isinstance(t, bool) and math.isfinite(t):
+            t_post = float(t)
+        else:
+            t_post = None
         err = params.get("err")
         if err is not None:
             # it reaches the broker log: codes only, never free text
             err = err if isinstance(err, str) and POST_ERR_RE.fullmatch(err) else "post_failed"
-        res: dict[str, Any] = {"ok": params.get("ok") is True, "t_post": float(t) if t_ok else None, "err": err}
+        res: dict[str, Any] = {
+            "ok": params.get("ok") is True,
+            "t_post": t_post,
+            "err": err,
+        }
         if _remote(conn) and conn.facts.get("lastmile") is True:
             res["lastmile"] = True  # the satellite's own report (§27.5.6)
         adapter.posted(bid, conn, res)
@@ -433,7 +460,9 @@ class AgentService:
             return session_key("codex", host, thread_id)
         if h == "cursor":
             # bound to the conversation id by the join nonce (M5); until then, the agent process
-            return session_key("cursor", host, f"agent:{mc.ident.agent_pid}@{_start_key(mc.ident.agent_start)}")
+            return session_key(
+                "cursor", host, f"agent:{mc.ident.agent_pid}@{_start_key(mc.ident.agent_start)}"
+            )
         return session_key(h, host, f"{mc.ident.agent_pid}@{_start_key(mc.ident.agent_start)}")
 
     def _cursor_session(self, mc: McpConn) -> Participant | None:
@@ -448,8 +477,11 @@ class AgentService:
     @staticmethod
     def _same_mcp(p: Participant, ident: McpIdentity) -> bool:
         """``(host, mcp_pid, mcp_start)`` equal: the very MCP process that holds ``p``."""
-        return p.host == ident.host and p.mcp_pid == ident.mcp_pid and proc.same_start(
-            p.mcp_start, ident.mcp_start)
+        return (
+            p.host == ident.host
+            and p.mcp_pid == ident.mcp_pid
+            and proc.same_start(p.mcp_start, ident.mcp_start)
+        )
 
     def _check_same_session(self, existing: Participant, mc: McpConn) -> None:
         """A re-join may take over a session's memberships (rotating the
@@ -466,20 +498,33 @@ class AgentService:
         if existing.mcp_pid:
             a = view.alive(existing.mcp_pid, existing.mcp_start)
             if a is None:
-                raise ServiceError("conflict", f"can't verify this session on {existing.host or 'this machine'}"
-                                               " yet; try again in a few seconds")
+                raise ServiceError(
+                    "conflict",
+                    f"can't verify this session on {existing.host or 'this machine'}"
+                    " yet; try again in a few seconds",
+                )
             if a:
-                raise ServiceError("conflict", "this session is already joined from another live switchboard MCP"
-                                               " server; ask your user")
-        same_agent = existing.host == mc.ident.host and existing.agent_pid == mc.ident.agent_pid and \
-            proc.same_start(existing.agent_start, mc.ident.agent_start)
+                raise ServiceError(
+                    "conflict",
+                    "this session is already joined from another live switchboard MCP server; ask your user",
+                )
+        same_agent = (
+            existing.host == mc.ident.host
+            and existing.agent_pid == mc.ident.agent_pid
+            and proc.same_start(existing.agent_start, mc.ident.agent_start)
+        )
         if not same_agent and existing.agent_pid:
             a = view.alive(existing.agent_pid, existing.agent_start)
             if a is None:
-                raise ServiceError("conflict", f"can't verify this session on {existing.host or 'this machine'}"
-                                               " yet; try again in a few seconds")
+                raise ServiceError(
+                    "conflict",
+                    f"can't verify this session on {existing.host or 'this machine'}"
+                    " yet; try again in a few seconds",
+                )
             if a:
-                raise ServiceError("conflict", "this session belongs to another live agent process; ask your user")
+                raise ServiceError(
+                    "conflict", "this session belongs to another live agent process; ask your user"
+                )
 
     def _mcp(self, conn: "Conn") -> McpConn:
         mc = getattr(conn, "mcp", None)
@@ -487,8 +532,9 @@ class AgentService:
             raise ServiceError("unauthorized", "send mcp.hello first")
         return mc
 
-    def _member(self, conn: "Conn", params: dict[str, Any], *, next_call: bool = True
-                ) -> tuple[Participant, Membership, Room]:
+    def _member(
+        self, conn: "Conn", params: dict[str, Any], *, next_call: bool = True
+    ) -> tuple[Participant, Membership, Room]:
         mc = self._mcp(conn)
         cred = params.get("cred")
         if not isinstance(cred, str) or not cred or len(cred) > 200:
@@ -499,9 +545,13 @@ class AgentService:
             closed = self.store.closed_membership_by_cred(h)
             if closed is not None:
                 # still `unauthorized`: the MCP server then forgets the credential (§28.3)
-                raise ServiceError("unauthorized", f"{closed[1].display_name} was closed by {self.cfg.human_name};"
-                                                   " you are no longer in it")
-            raise ServiceError("unauthorized", "not a member (your membership was revoked or rotated): join() again")
+                raise ServiceError(
+                    "unauthorized",
+                    f"{closed[1].display_name} was closed by {self.cfg.human_name}; you are no longer in it",
+                )
+            raise ServiceError(
+                "unauthorized", "not a member (your membership was revoked or rotated): join() again"
+            )
         p = self.store.get_participant(m.participant_id)
         if p is None or not p.active:
             raise ServiceError("unauthorized", "this session has ended: join() again")
@@ -520,8 +570,11 @@ class AgentService:
             # longer allows (the manager ends those at reload) never works over the link (§27.5.2)
             link = getattr(conn, "link", None)
             if link is None or not link.entry.allows_room(room.name):
-                raise ServiceError("forbidden", f"members on {p.host} may no longer use {room.name}"
-                                                " (the rooms of its remotes.toml entry on the desktop)")
+                raise ServiceError(
+                    "forbidden",
+                    f"members on {p.host} may no longer use {room.name}"
+                    " (the rooms of its remotes.toml entry on the desktop)",
+                )
             if p.harness != mc.ident.harness:
                 raise ServiceError("unauthorized", "this credential belongs to another process")
         if next_call:
@@ -544,8 +597,11 @@ class AgentService:
                 wanted = ""
             if link is None or not link.entry.allows_room(wanted):
                 allowed = ", ".join(link.entry.rooms) if link is not None else "none"
-                raise ServiceError("forbidden", f"members on {host} may join only {allowed}"
-                                                " (the rooms of its remotes.toml entry on the desktop)")
+                raise ServiceError(
+                    "forbidden",
+                    f"members on {host} may join only {allowed}"
+                    " (the rooms of its remotes.toml entry on the desktop)",
+                )
         try:
             room = self.svc.room(raw_room)
         except ServiceError as e:
@@ -553,14 +609,20 @@ class AgentService:
                 n = raw_room.strip().lower()
                 n = n if n.startswith("#") else "#" + n
                 if self.store.closed_rooms(n):
-                    raise ServiceError("not_found", f"{n} was closed by {self.cfg.human_name}:"
-                                                    " ask your user to reopen it") from None
-                raise ServiceError("not_found", f"no such room {clean(n)[:40]}: ask your user to create it") from None
+                    raise ServiceError(
+                        "not_found", f"{n} was closed by {self.cfg.human_name}: ask your user to reopen it"
+                    ) from None
+                raise ServiceError(
+                    "not_found", f"no such room {clean(n)[:40]}: ask your user to create it"
+                ) from None
             raise
         name = params.get("screen_name")
         name = name.strip().lower().lstrip("@") if isinstance(name, str) else ""
         if not SCREEN_NAME_RE.match(name):
-            raise ServiceError("bad_request", "screen names look like claude-1: a-z first, then a-z, 0-9, '_' or '-', at most 24")
+            raise ServiceError(
+                "bad_request",
+                "screen names look like claude-1: a-z first, then a-z, 0-9, '_' or '-', at most 24",
+            )
         human = self.cfg.human_name.lower()
         if name in RESERVED_NAMES or name.startswith("switchboard") or name.startswith(human):
             raise ServiceError("name_reserved", f"{name} is reserved; pick another screen name")
@@ -578,9 +640,14 @@ class AgentService:
             mine = self._cursor_session(mc)
             if mine is not None:
                 existing, key = mine, mine.session_key
-        if existing is not None and (self.store.was_kicked(room.id, existing.id) or (
-                h == "cursor" and existing.bind_state == "bound"  # a resumed conversation (§9.4)
-                and self.store.was_kicked_session(room.id, h, existing.session_key, exclude=existing.id))):
+        if existing is not None and (
+            self.store.was_kicked(room.id, existing.id)
+            or (
+                h == "cursor"
+                and existing.bind_state == "bound"  # a resumed conversation (§9.4)
+                and self.store.was_kicked_session(room.id, h, existing.session_key, exclude=existing.id)
+            )
+        ):
             raise ServiceError("kicked", f"you were kicked from {room.name}; ask your user")
         if existing is not None and existing.active:
             self._check_same_session(existing, mc)
@@ -614,22 +681,37 @@ class AgentService:
         if cur is None and link is not None:
             joined = {p.id for p in self.store.joined_participants() if p.host == host}
             if (existing is None or existing.id not in joined) and len(joined) >= link.entry.max_members:
-                self.run([Notice(room.id, "warn", f"a join from {host} was refused: it already has"
-                                                  f" {len(joined)} member(s) (max_members)")])
-                raise ServiceError("conflict", f"{host} already has {len(joined)} member(s), its limit"
-                                               " (max_members in remotes.toml on the desktop)")
+                self.run(
+                    [
+                        Notice(
+                            room.id,
+                            "warn",
+                            f"a join from {host} was refused: it already has"
+                            f" {len(joined)} member(s) (max_members)",
+                        )
+                    ]
+                )
+                raise ServiceError(
+                    "conflict",
+                    f"{host} already has {len(joined)} member(s), its limit"
+                    " (max_members in remotes.toml on the desktop)",
+                )
         if cur is None:
             other = self.store.active_membership_by_name(room.id, name)
             if other is not None and (existing is None or other.participant_id != existing.id):
                 raise ServiceError("name_taken", f"{name} is taken in {room.name}; pick another screen name")
-            if self.store.name_used_by_other(room.id, name, existing.id if existing else -1,
-                                             now - NAME_REUSE_S):
-                raise ServiceError("name_reserved",
-                                   f"{name} was used by another agent in {room.name} today; pick another")
+            if self.store.name_used_by_other(
+                room.id, name, existing.id if existing else -1, now - NAME_REUSE_S
+            ):
+                raise ServiceError(
+                    "name_reserved", f"{name} was used by another agent in {room.name} today; pick another"
+                )
         elif cur.screen_name.lower() != name:
-            raise ServiceError("bad_request",
-                               f"this session is already in {room.name} as {cur.screen_name};"
-                               " leave() first to change your name")
+            raise ServiceError(
+                "bad_request",
+                f"this session is already in {room.name} as {cur.screen_name};"
+                " leave() first to change your name",
+            )
         nonce = secrets.token_hex(8)
         p = self.store.upsert_participant(h, key, bind_nonce=nonce, **fields)
         if h == "test":
@@ -641,25 +723,41 @@ class AgentService:
             self.store.rotate_cred(cur.id, cred_hash(cred))
             m = cur
             self.run(self.engine.expire_pull_batches(p.id, "rejoin"))
-            self.store.add_event("bind", room_id=room.id, membership_id=m.id, participant_id=p.id,
-                                 data={"what": "rotate"})
+            self.store.add_event(
+                "bind", room_id=room.id, membership_id=m.id, participant_id=p.id, data={"what": "rotate"}
+            )
             if h == "codex" and not same_mcp:
                 # another MCP process took this thread's membership over (the one that held
                 # it is gone, e.g. after a daemon restart): as visible as a new join; its
                 # thread is proven again before any push (§9.3)
-                self.run([Notice(room.id, "info", f"{m.screen_name} re-joined from a new switchboard MCP server")])
+                self.run(
+                    [Notice(room.id, "info", f"{m.screen_name} re-joined from a new switchboard MCP server")]
+                )
         else:
             m = self.store.create_membership(room.id, p.id, name, cred_hash(cred))
             # a Codex thread proof about to run shows as "verifying...", not "mcp-only"; the
             # event says so, so the proof that passes announces it here (§9.3)
             verifying = note == VERIFYING
-            self.store.add_event("join", room_id=room.id, membership_id=m.id, participant_id=p.id,
-                                 data={"harness": h, "tier": tier, **({"verifying": True} if verifying else {})})
+            self.store.add_event(
+                "join",
+                room_id=room.id,
+                membership_id=m.id,
+                participant_id=p.id,
+                data={"harness": h, "tier": tier, **({"verifying": True} if verifying else {})},
+            )
             where = f"{h} on {host}" if host else h
             shown = VERIFYING if verifying else tier
-            self.svc._post(room, sender_name=name, sender_kind="agent", sender_harness=h,
-                           sender_membership_id=m.id, via="mcp", kind="join",
-                           text=f"joined ({where}, {shown})", sender_host=host or None)
+            self.svc._post(
+                room,
+                sender_name=name,
+                sender_kind="agent",
+                sender_harness=h,
+                sender_membership_id=m.id,
+                via="mcp",
+                kind="join",
+                text=f"joined ({where}, {shown})",
+                sender_host=host or None,
+            )
         self.refresh_index()
         if p.agent_pid:
             early = self._early_models.get((p.host, p.agent_pid, _start_key(p.agent_start)))
@@ -668,12 +766,19 @@ class AgentService:
         adapter.on_joined(p, nonce, not same_mcp or not rejoined)
         others = [(x.name, x.harness, x.host) for x in self.store.members(room.id) if x.membership_id != m.id]
         hist = [x for x in self.store.history(room.id, None, 400) if x.kind == "chat"]
-        catchup = hist[-self.cfg.delivery.catchup_n:] if self.cfg.delivery.catchup_n else []
+        catchup = hist[-self.cfg.delivery.catchup_n :] if self.cfg.delivery.catchup_n else []
         text = envelope.render_join(
-            room=room.name, screen_name=m.screen_name, human_name=self.cfg.human_name,
-            others=others, catchup=catchup, nonce=nonce,
-            guidance=adapter.join_guidance(p, room.name), test_mode=self.state.test_mode,
-            rejoined=rejoined, people=self.svc.people_names(),
+            room=room.name,
+            screen_name=m.screen_name,
+            human_name=self.cfg.human_name,
+            others=others,
+            catchup=catchup,
+            nonce=nonce,
+            guidance=adapter.join_guidance(p, room.name),
+            test_mode=self.state.test_mode,
+            rejoined=rejoined,
+            people=self.svc.people_names(),
+            room_rules=room.rules_text,
         )
         self.run(self.engine.evaluate(m.id) + [Snapshot(room.id)])
         return {
@@ -692,9 +797,17 @@ class AgentService:
         self.store.end_membership(m.id, "leave")
         self.store.add_event("leave", room_id=room.id, membership_id=m.id, participant_id=p.id)
         self.run(self.engine.on_membership_ended(m.id, "leave"))
-        self.svc._post(room, sender_name=m.screen_name, sender_kind="agent", sender_harness=p.harness,
-                       sender_membership_id=m.id, via="mcp", kind="leave", text="left",
-                       sender_host=p.host or None)
+        self.svc._post(
+            room,
+            sender_name=m.screen_name,
+            sender_kind="agent",
+            sender_harness=p.harness,
+            sender_membership_id=m.id,
+            via="mcp",
+            kind="leave",
+            text="left",
+            sender_host=p.host or None,
+        )
         self.refresh_index()
         return {"room": room.name, "text": f"[switchboard] you left {room.name}."}
 
@@ -702,8 +815,11 @@ class AgentService:
         _p, _m, room = self._member(conn, params)
         rows = self.svc.member_rows(room.id)
         humans = self.svc.people_names()
-        who = (f"{envelope._word(humans[0])} (your user, kind=human)" if len(humans) == 1
-               else f"{envelope.users_phrase(humans)} (your users, kind=human)")
+        who = (
+            f"{envelope._word(humans[0])} (your user, kind=human)"
+            if len(humans) == 1
+            else f"{envelope.users_phrase(humans)} (your users, kind=human)"
+        )
         lines = [f"[switchboard] {room.name}: {who} and {len(rows)} agent(s)"]
         for x in rows:
             bits = [f"- {envelope._word(x.name)}", f"harness={x.harness}"]
@@ -734,8 +850,10 @@ class AgentService:
         if not clean(text).strip():
             raise ServiceError("bad_request", "empty message")
         if len(text) > self.cfg.delivery.max_msg_chars:
-            raise ServiceError("bad_request",
-                               f"message too long ({len(text)} > {self.cfg.delivery.max_msg_chars} characters)")
+            raise ServiceError(
+                "bad_request",
+                f"message too long ({len(text)} > {self.cfg.delivery.max_msg_chars} characters)",
+            )
         reply_to = params.get("reply_to")
         target = self.svc.reply_target(room, reply_to)
         now = self.state.clock.now()
@@ -743,14 +861,29 @@ class AgentService:
         if retry is not None:
             utext, bid, count, _more, acts = self.engine.pull(p, m, "say", 50)
             self.run(acts)
-            return {"posted_id": None, "reason": "rate_limited", "retry_after_s": retry,
-                    "unread_text": utext if count else None, "batch_id": bid, "count": count}
+            return {
+                "posted_id": None,
+                "reason": "rate_limited",
+                "retry_after_s": retry,
+                "unread_text": utext if count else None,
+                "batch_id": bid,
+                "count": count,
+            }
         self.store.mark_handled(m.id)
         self.store.update_participant(p.id, last_say_at=now)
         mentions = rules.parse_mentions(text, self.svc.mention_names(room))
-        msg = self.svc._post(room, sender_name=m.screen_name, sender_kind="agent",
-                             sender_harness=p.harness, sender_membership_id=m.id, via="mcp",
-                             text=text, reply_to=reply_to, mentions=mentions, sender_host=p.host or None)
+        msg = self.svc._post(
+            room,
+            sender_name=m.screen_name,
+            sender_kind="agent",
+            sender_harness=p.harness,
+            sender_membership_id=m.id,
+            via="mcp",
+            text=text,
+            reply_to=reply_to,
+            mentions=mentions,
+            sender_host=p.host or None,
+        )
         utext, bid, count, _more, acts = self.engine.pull(p, m, "say", 50, before_id=msg.id)
         self.run(acts)
         return {"posted_id": msg.id, "unread_text": utext if count else None, "batch_id": bid, "count": count}
@@ -798,12 +931,23 @@ class AgentService:
         unread = self.engine.check_pass(p, m)  # the read-first rule (DESIGN.md §24)
         if unread:
             # a normal result, like a rate-limited say: nothing handled, nothing logged as a pass
-            return {"room": room.name, "passed": False, "reason": "read_first", "unread": len(unread),
-                    "ids": unread[:20], "text": envelope.render_read_first(room.name, unread)}
+            return {
+                "room": room.name,
+                "passed": False,
+                "reason": "read_first",
+                "unread": len(unread),
+                "ids": unread[:20],
+                "text": envelope.render_read_first(room.name, unread),
+            }
         n = self.store.mark_handled(m.id)
         note = params.get("note")
-        self.store.add_event("pass", room_id=room.id, membership_id=m.id, participant_id=p.id,
-                             data={"handled": n, "note_len": len(note) if isinstance(note, str) else 0})
+        self.store.add_event(
+            "pass",
+            room_id=room.id,
+            membership_id=m.id,
+            participant_id=p.id,
+            data={"handled": n, "note_len": len(note) if isinstance(note, str) else 0},
+        )
         self.run(self.engine.evaluate(m.id) + [Snapshot(room.id)])
         return {"room": room.name, "passed": True, "handled": n, "text": "[switchboard] logged, not posted."}
 
@@ -863,14 +1007,22 @@ class AgentService:
         ev = parse_hook_event(harness, event, params)
         self._record(harness, event, params)
         cands = [
-            HookCandidate(participant_id=p.id, harness=p.harness, agent_pid=p.agent_pid,
-                          agent_start=p.agent_start, session_id=p.session_id,
-                          session_key=p.session_key, bind_state=p.bind_state)
-            for p in self.store.joined_participants() if p.host == host
+            HookCandidate(
+                participant_id=p.id,
+                harness=p.harness,
+                agent_pid=p.agent_pid,
+                agent_start=p.agent_start,
+                session_id=p.session_id,
+                session_key=p.session_key,
+                bind_state=p.bind_state,
+            )
+            for p in self.store.joined_participants()
+            if p.host == host
         ]
         nonce_bind = harness == "cursor" and bool(ev.join_nonce)
-        c = resolve_hook_participant(get_chain(), harness, ev.sid, cands, join_nonce_bind=nonce_bind,
-                                     argv_fn=argv_fn, host=host)
+        c = resolve_hook_participant(
+            get_chain(), harness, ev.sid, cands, join_nonce_bind=nonce_bind, argv_fn=argv_fn, host=host
+        )
         if c is None:
             return inert
         p = self.store.get_participant(c.participant_id)
@@ -899,8 +1051,10 @@ class AgentService:
         facts = conn.facts.get("chain")
         if not facts:
             return None
-        chain = [ProcInfo(pid=pid, ppid=facts[i + 1][0] if i + 1 < len(facts) else 0, start=start, uid=-1)
-                 for i, (pid, start, _v) in enumerate(facts)]
+        chain = [
+            ProcInfo(pid=pid, ppid=facts[i + 1][0] if i + 1 < len(facts) else 0, start=start, uid=-1)
+            for i, (pid, start, _v) in enumerate(facts)
+        ]
         verdicts = {pid: v for pid, _s, v in facts}
 
         def argv_fn(procs: list[ProcInfo]) -> dict[int, str]:
@@ -951,7 +1105,9 @@ class AgentService:
         nonce, sid = ev.join_nonce or "", ev.sid or ""
         if not p.bind_nonce or not hmac.compare_digest(p.bind_nonce, nonce):
             # not this participant's current join: only its own bound conversation may go on
-            return p if p.bind_state == "bound" and p.session_key == session_key("cursor", p.host, sid) else None
+            return (
+                p if p.bind_state == "bound" and p.session_key == session_key("cursor", p.host, sid) else None
+            )
         if not CURSOR_SID_RE.fullmatch(sid):
             return None
         key = session_key("cursor", p.host, sid)
@@ -960,33 +1116,55 @@ class AgentService:
             return self.store.get_participant(p.id)
         if self._held_elsewhere("cursor", sid, p.host) is not None:
             # a conversation id is global: no session ever moves between hosts (§27.5.4)
-            self.store.add_event("bind", participant_id=p.id, data={"what": "cursor", "ok": False,
-                                                                    "why": "conversation on another host"})
-            self.run([Notice(m.room_id, "warn",
-                             f"{m.screen_name}: can't bind to its Cursor conversation: it is joined from"
-                             " another machine (it stays mcp-only)")
-                      for m in self.store.participant_memberships(p.id)])
+            self.store.add_event(
+                "bind",
+                participant_id=p.id,
+                data={"what": "cursor", "ok": False, "why": "conversation on another host"},
+            )
+            self.run(
+                [
+                    Notice(
+                        m.room_id,
+                        "warn",
+                        f"{m.screen_name}: can't bind to its Cursor conversation: it is joined from"
+                        " another machine (it stays mcp-only)",
+                    )
+                    for m in self.store.participant_memberships(p.id)
+                ]
+            )
             return None
         other = self.store.find_participant("cursor", key)
         if other is not None and other.id != p.id:
             # the holder's own host decides; one that can't tell (None) counts as alive
             if other.active and other.agent_pid and self.hosts.agent_alive(other) is not False:
-                self.store.add_event("bind", participant_id=p.id, data={"what": "cursor", "ok": False,
-                                                                        "why": "conversation held"})
-                log.warning("cursor participant %d: conversation already bound to live participant %d",
-                            p.id, other.id)
-                self.run([Notice(m.room_id, "warn",
-                                 f"{m.screen_name}: can't bind to its Cursor conversation: another live"
-                                 " switchboard session holds it (it stays mcp-only)")
-                          for m in self.store.participant_memberships(p.id)])
+                self.store.add_event(
+                    "bind",
+                    participant_id=p.id,
+                    data={"what": "cursor", "ok": False, "why": "conversation held"},
+                )
+                log.warning(
+                    "cursor participant %d: conversation already bound to live participant %d", p.id, other.id
+                )
+                self.run(
+                    [
+                        Notice(
+                            m.room_id,
+                            "warn",
+                            f"{m.screen_name}: can't bind to its Cursor conversation: another live"
+                            " switchboard session holds it (it stays mcp-only)",
+                        )
+                        for m in self.store.participant_memberships(p.id)
+                    ]
+                )
                 return None
             if other.active:  # its agent is gone: end it now, as the liveness check would
                 self.check_liveness()
             # the key of an ended session of this conversation (e.g. before a --resume) is freed
             self.store.update_participant(other.id, session_key=f"{key}#ended-{other.id}")
         # the nonce is single use: re-keying again takes a new join() (a visible rejoin)
-        p = self.store.update_participant(p.id, session_key=key, session_id=sid[:128], bind_state="bound",
-                                          bind_nonce=None)
+        p = self.store.update_participant(
+            p.id, session_key=key, session_id=sid[:128], bind_state="bound", bind_nonce=None
+        )
         self.store.add_event("bind", participant_id=p.id, data={"what": "cursor", "ok": True})
         self._carry_kicks(p, key)
         acts = self.engine.refresh_tier(p.id) + self.engine.evaluate_participant(p.id)
@@ -1002,15 +1180,27 @@ class AgentService:
             if not self.store.was_kicked_session(m.room_id, "cursor", key, exclude=p.id):
                 continue
             self.store.end_membership(m.id, "kick", kicked=True)
-            self.store.add_event("kick", room_id=m.room_id, membership_id=m.id, participant_id=p.id,
-                                 data={"why": "resumed a kicked conversation"})
+            self.store.add_event(
+                "kick",
+                room_id=m.room_id,
+                membership_id=m.id,
+                participant_id=p.id,
+                data={"why": "resumed a kicked conversation"},
+            )
             self.run(self.engine.on_membership_ended(m.id, "kick"))
             room = self.store.room_by_id(m.room_id)
             if room is not None:
-                self.svc._post(room, sender_name=m.screen_name, sender_kind="agent", sender_harness="cursor",
-                               sender_membership_id=m.id, via="system", kind="leave",
-                               text=f"was kicked by {self.cfg.human_name} (earlier, in this conversation)",
-                               sender_host=p.host or None)
+                self.svc._post(
+                    room,
+                    sender_name=m.screen_name,
+                    sender_kind="agent",
+                    sender_harness="cursor",
+                    sender_membership_id=m.id,
+                    via="system",
+                    kind="leave",
+                    text=f"was kicked by {self.cfg.human_name} (earlier, in this conversation)",
+                    sender_host=p.host or None,
+                )
         self.refresh_index()
 
     def hook_ack(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
@@ -1074,10 +1264,17 @@ class AgentService:
                 self.run(self.engine.on_membership_ended(m.id, "session_end"))
                 room = self.store.room_by_id(m.room_id)
                 if room is not None:
-                    self.svc._post(room, sender_name=m.screen_name, sender_kind="agent",
-                                   sender_harness=p.harness, sender_membership_id=m.id,
-                                   via="system", kind="leave", text="left (session ended)",
-                                   sender_host=p.host or None)
+                    self.svc._post(
+                        room,
+                        sender_name=m.screen_name,
+                        sender_kind="agent",
+                        sender_harness=p.harness,
+                        sender_membership_id=m.id,
+                        via="system",
+                        kind="leave",
+                        text="left (session ended)",
+                        sender_host=p.host or None,
+                    )
             log.info("participant %d ended (agent gone)", p.id)
         self.refresh_index()
 
@@ -1101,8 +1298,13 @@ def parse_hook_event(harness: str, event: str, p: dict[str, Any]) -> HookEvent:
     raw = p.get("tokens")
     if isinstance(raw, list):
         for t in raw[:20]:
-            if (isinstance(t, (list, tuple)) and len(t) == 2 and isinstance(t[0], int)
-                    and not isinstance(t[0], bool) and isinstance(t[1], str)):
+            if (
+                isinstance(t, (list, tuple))
+                and len(t) == 2
+                and isinstance(t[0], int)
+                and not isinstance(t[0], bool)
+                and isinstance(t[1], str)
+            ):
                 if TOKEN_RE.fullmatch(f"yk:b{t[0]}.{t[1]}"):
                     toks.append((t[0], t[1]))
     lc = p.get("loop_count")
