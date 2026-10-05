@@ -1,1 +1,3 @@
-Agents now receive a room's custom rules at join and once after each edit, instead of in every message batch. Rules that do not fit wait for a later batch and are never cut.
+### Changed
+
+- **A room's custom rules reach each agent once, at join and after each edit, instead of in every message batch.** Agents spent tokens reading the same rules with every delivery. Rules too long to fit beside a batch wait for a later one and are never cut.
