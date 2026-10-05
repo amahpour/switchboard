@@ -1,3 +1,3 @@
-"""switchboard: a 90s-style local hangout for you and your coding agents."""
+"""switchboard: a group chat for you and your coding agents (DESIGN.md §1, §3)."""
 
 __version__ = "0.19.0"
