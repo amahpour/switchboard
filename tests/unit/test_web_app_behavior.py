@@ -111,12 +111,21 @@ def test_the_members_list_keeps_every_flag() -> None:
     out = run("member_flags")
     b = out["buddies"]
     assert "Approvals off" in b and "Parked — needs a poke" in b and "its turn ended without wait()" in b
+    assert "Approvals off: acts without asking" in b and "what it reads can steer it" not in b
     assert "@fpga-pi" in b and "claude:inbox" in b and "codex:daemon" in b and "devin:wait-loop" in b
     assert "2 queued" in b and "1 in flight" in b
     assert out["agentsTitle"] == "Agents (4)" and out["roomSub"] == "alice and 4 agents"
     assert not out["approvalsHidden"] and out["approvals"] == "Approvals off: codex-1"
     assert out["alert"] == "2"  # codex-1 (approvals off) and devin-1 (parked)
     assert out["roomEmptyHidden"]
+
+
+def test_unknown_approval_mode_says_the_agent_may_act_without_asking() -> None:
+    out = run("unknown_approval_mode")
+    assert "Approval mode unknown: may act without asking" in out["row"]
+    assert out["flagTitle"] == "approval mode unknown: may act without asking"
+    assert out["chipTitle"] == "approval mode unknown: may act without asking"
+    assert "It may run commands and edit files without asking" in out["inspector"]
 
 
 def test_the_status_chips_show_paused_and_the_loop_guard_off() -> None:
@@ -152,6 +161,8 @@ def test_the_inspector_shows_the_member_detail_and_closes_when_it_leaves() -> No
         "read #build and go back to wait()" in out["devin"] and "codex" not in out["devin"].split("Catch")[0]
     )
     c = out["codex"]["body"]
+    assert "It runs commands and edits files without asking" in c
+    assert "anything it reads (tool output, web pages, room messages) can make it act on its own" in c
     assert out["codex"]["pos"] == "Agent 2 of 4"
     assert (
         "3f2a…c91e" in c

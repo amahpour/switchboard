@@ -789,11 +789,11 @@ def test_config_review_key_is_tolerated() -> None:
 @pytest.mark.parametrize(
     "mode,warn",
     [
-        ("bypass", "⚠ codex-1 runs with approvals off: what it reads (tool output, web pages) can steer it"),
+        ("bypass", "⚠ codex-1 runs with approvals off: transcripts it reads can make it act without asking"),
         (
             "unknown",
-            "⚠ codex-1 may run with approvals off (its approval mode is unknown): what it reads (tool"
-            " output, web pages) can steer it",
+            "⚠ codex-1 may run with approvals off (its approval mode is unknown): transcripts it reads"
+            " may make it act without asking",
         ),
         ("prompting", None),
     ],

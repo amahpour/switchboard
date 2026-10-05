@@ -129,8 +129,8 @@ async def test_catchup_wakes_the_agent_not_the_subject(broker: InProcBroker, cla
             == f"  subject: claude-1 · claude · session {SID} · host: the switchboard machine (yours)"
         )
         assert lines[2] == (
-            "⚠ catcher may run with approvals off (its approval mode is unknown): what it reads"
-            " (tool output, web pages) can steer it"
+            "⚠ catcher may run with approvals off (its approval mode is unknown): transcripts it reads"
+            " may make it act without asking"
         )
         [msg] = human_chat(broker)  # exactly one post
         assert msg["text"].splitlines()[0] == "@catcher please catch up on claude-1's work."
