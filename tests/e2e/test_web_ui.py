@@ -279,6 +279,29 @@ def test_app_loads_connected_with_rooms_members_and_chips(ui: UI) -> None:
     expect(page.locator("#banner-test")).to_be_hidden()
 
 
+def test_approval_flags_explain_on_hover_focus_and_phone_tap(ui: UI) -> None:
+    page = ui.open()
+    row = page.locator('#buddy-list .member[data-name="codex-1"]')
+    expect(row.locator(".m-warn")).to_have_count(0)
+    flag = row.locator(".approval-flag")
+    expect(flag).to_have_attribute("role", "button")
+    expect(flag).to_have_attribute("tabindex", "0")
+    expect(flag).to_have_attribute("aria-label", re.compile("run commands and edit files without asking"))
+    flag.hover()
+    assert flag.evaluate("el => getComputedStyle(el, '::after').visibility") == "visible"
+    page.mouse.move(0, 0)
+    flag.focus()
+    assert flag.evaluate("el => getComputedStyle(el, '::after').visibility") == "visible"
+    expect(page.locator(".pane-foot")).to_contain_text("question mark")
+
+    phone = ui.open(**PHONE)
+    phone.click("#buddy-toggle")
+    phone_flag = phone.locator('#buddy-list .member[data-name="codex-1"] .approval-flag')
+    phone_flag.tap()
+    assert phone_flag.evaluate("el => getComputedStyle(el, '::after').visibility") == "visible"
+    expect(phone.locator("#pane")).not_to_have_class(cls("inspecting"))
+
+
 def test_markdown_renders_real_elements(ui: UI) -> None:
     page = ui.open()
     log = page.locator("#log")
@@ -913,7 +936,7 @@ def test_keyboard_tab_walk_shows_a_focus_ring(ui: UI) -> None:
             if f["id"] == "input"
             else "pane-toggle"
             if f["id"] == "pane-toggle"
-            else ("member" if "member" in f["cls"].split() and f["name"] else "")
+            else ("member" if "m-open" in f["cls"].split() and f["name"] else "")
         )
         if key and key not in seen:
             seen[key] = f
@@ -933,6 +956,10 @@ ACTIVE_FOCUS_KEY = (
 
 def member_row(page: Page, name: str) -> Any:
     return page.locator(f'#buddy-list .member[data-name="{name}"]')
+
+
+def member_name_button(page: Page, name: str) -> Any:
+    return member_row(page, name).locator(".m-open")
 
 
 def test_inspector_re_renders_keep_focus(ui: UI) -> None:
@@ -1003,7 +1030,7 @@ def test_focus_moves_to_a_neighbour_when_the_inspected_agent_goes(ui: UI) -> Non
     page.keyboard.press("Enter")
     expect(member_row(page, "ag-2")).to_have_count(0)  # the members frame landed
     expect(page.locator("#pane")).not_to_have_class(cls("inspecting"))
-    expect(member_row(page, "ag-3")).to_be_focused()
+    expect(member_name_button(page, "ag-3")).to_be_focused()
 
     # 2. ag-3 (last in the list) is kicked from elsewhere while focus is on its Hold button
     member_row(page, "ag-3").click()
@@ -1011,7 +1038,7 @@ def test_focus_moves_to_a_neighbour_when_the_inspected_agent_goes(ui: UI) -> Non
     page.locator("#insp-hold").focus()
     ui.world.command("e2e-focus", "/kick ag-3")
     expect(page.locator("#pane")).not_to_have_class(cls("inspecting"))
-    expect(member_row(page, "ag-1")).to_be_focused()
+    expect(member_name_button(page, "ag-1")).to_be_focused()
 
     # 3. the last agent goes: the Members heading
     member_row(page, "ag-1").click()
@@ -1028,7 +1055,7 @@ def test_phone_members_sheet_takes_focus_and_gives_it_back(ui: UI) -> None:
     page.locator("#buddy-toggle").focus()
     page.keyboard.press("Enter")
     expect(page.locator("#app")).to_have_class(cls("sheet-open"))
-    expect(member_row(page, "claude-1")).to_be_focused()
+    expect(member_name_button(page, "claude-1")).to_be_focused()
     assert page.evaluate(
         "[document.getElementById('main').inert, document.getElementById('sidebar').inert]"
     ) == [True, True]

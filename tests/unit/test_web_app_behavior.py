@@ -110,13 +110,30 @@ def test_a_warn_notice_is_a_red_alert_row() -> None:
 def test_the_members_list_keeps_every_flag() -> None:
     out = run("member_flags")
     b = out["buddies"]
-    assert "Approvals off" in b and "Parked — needs a poke" in b and "its turn ended without wait()" in b
+    assert "Approvals off" not in b and "Parked — needs a poke" in b and "its turn ended without wait()" in b
     assert "@fpga-pi" in b and "claude:inbox" in b and "codex:daemon" in b and "devin:wait-loop" in b
     assert "2 queued" in b and "1 in flight" in b
     assert out["agentsTitle"] == "Agents (4)" and out["roomSub"] == "alice and 4 agents"
     assert not out["approvalsHidden"] and out["approvals"] == "Approvals off: codex-1"
     assert out["alert"] == "2"  # codex-1 (approvals off) and devin-1 (parked)
     assert out["roomEmptyHidden"]
+
+
+def test_approval_flags_explain_the_risk_without_extra_member_rows() -> None:
+    out = run("member_flag_tooltips")
+    assert out["warnings"] == 0
+    assert out["flags"] == [
+        {
+            "role": "button",
+            "tabindex": "0",
+            "label": "Approvals off: this agent can run commands and edit files without asking.",
+        },
+        {
+            "role": "button",
+            "tabindex": "0",
+            "label": "Approval mode unknown: this agent may run commands and edit files without asking.",
+        },
+    ]
 
 
 def test_the_status_chips_show_paused_and_the_loop_guard_off() -> None:
