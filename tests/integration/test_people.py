@@ -14,13 +14,13 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-
 from conftest import FakeClock, InProcBroker, ws_connect
 from fakes.fake_agent import FakeAgent
 from fakes.fake_authenticator import SoftAuthenticator
-from switchboard.broker.people import ONE_TIME_TTL_S
-from switchboard.broker.passwords import FREE_FAILURES
 from test_passkeys import PUBLIC, RP_ID, Browser, claim_link, events, hosted_broker, stop, token_of
+
+from switchboard.broker.passwords import FREE_FAILURES
+from switchboard.broker.people import ONE_TIME_TTL_S
 
 ADMIN_PW = "correct horse battery"
 BOB_PW = "bob's own secret 1"
@@ -81,11 +81,20 @@ def test_the_admin_sets_up_with_the_one_time_password_then_their_own(hosted: InP
     assert signin(br, "admin", "WRONG-ONE0-TIME-PASS").status_code == 403
     assert signin(br, "bob", tok).status_code == 403  # the admin's, and only as the admin
     r = signin(br, "admin", tok.lower().replace("-", " "))  # as typed from the log: any case, any spacing
-    assert r.status_code == 200 and r.json() == {"ok": True, "next": "setup", "human": "alice", "passkeys": True}
+    assert r.status_code == 200 and r.json() == {
+        "ok": True,
+        "next": "setup",
+        "human": "alice",
+        "passkeys": True,
+    }
     assert "switchboard_setup" in br.cookies and "switchboard_session" not in br.cookies
     assert br.get("/setup").status_code == 200  # the page to choose their own
-    for weak, why in [("short", "at least 10"), ("aaaaaaaaaaaa", "more than one or two"), ("alice", "at least 10"),
-                      (tok, "not a one-time one")]:
+    for weak, why in [
+        ("short", "at least 10"),
+        ("aaaaaaaaaaaa", "more than one or two"),
+        ("alice", "at least 10"),
+        (tok, "not a one-time one"),
+    ]:
         r = br.post("/api/setup/password", {"password": weak})
         assert r.status_code == 400 and why in r.json()["message"], weak
     assert br.post("/api/setup/password", {"password": ADMIN_PW}).status_code == 200
@@ -126,12 +135,19 @@ def test_a_teammate_joins_with_a_one_time_password(hosted: InProcBroker) -> None
     got = add(admin, "Bob")
     one_time = got["password"]
     assert got["person"]["name"] == "bob" and got["person"]["sign_in"] == "one-time"
-    assert got["invite"] == (f"You're invited to switchboard: {PUBLIC}\nSign in as bob with the one-time password"
-                             f" {one_time} (it works for 7 days).\nRight after, you choose your own password, or a"
-                             " passkey.")
+    assert got["invite"] == (
+        f"You're invited to switchboard: {PUBLIC}\nSign in as bob with the one-time password"
+        f" {one_time} (it works for 7 days).\nRight after, you choose your own password, or a"
+        " passkey."
+    )
     bob = Browser(hosted)
     r = signin(bob, "BOB", one_time.lower().replace("-", ""))
-    assert r.status_code == 200 and r.json() == {"ok": True, "next": "setup", "human": "bob", "passkeys": True}
+    assert r.status_code == 200 and r.json() == {
+        "ok": True,
+        "next": "setup",
+        "human": "bob",
+        "passkeys": True,
+    }
     # on the one-time password, the only thing to do is to choose their own
     page = bob.get("/")
     assert page.status_code == 200 and "/static/setup.js" in page.text
@@ -150,8 +166,10 @@ def test_a_teammate_joins_with_a_one_time_password(hosted: InProcBroker) -> None
     assert signin(Browser(hosted), "bob", one_time).status_code == 403
     assert signin(Browser(hosted), "bob", BOB_PW).json()["next"] == "app"
     people = admin.get("/api/people").json()["people"]
-    assert [(p["name"], p["admin"], p["sign_in"]) for p in people] == [("alice", True, "admin"),
-                                                                        ("bob", False, "password")]
+    assert [(p["name"], p["admin"], p["sign_in"]) for p in people] == [
+        ("alice", True, "admin"),
+        ("bob", False, "password"),
+    ]
 
 
 def test_everyone_signed_in_is_equal_but_for_the_admin_section(hosted: InProcBroker) -> None:
@@ -164,7 +182,9 @@ def test_everyone_signed_in_is_equal_but_for_the_admin_section(hosted: InProcBro
     assert (msg["from"], msg["sender_kind"]) == ("bob", "human")
     r = bob.post("/api/rooms/build/command", {"text": "/pause"})
     assert r.status_code == 200 and r.json()["ok"]
-    notices = [m["text"] for m in admin.get("/api/rooms/build/messages").json()["messages"] if m["kind"] == "notice"]
+    notices = [
+        m["text"] for m in admin.get("/api/rooms/build/messages").json()["messages"] if m["kind"] == "notice"
+    ]
     assert any(t.startswith("bob paused the room") for t in notices), notices
     # machines: anyone signed in, with a fresh check (bob just signed in)
     r = bob.post("/api/machines/pair", {"name": "bob-laptop"})
@@ -179,7 +199,9 @@ async def test_every_person_is_every_agents_user(hosted: InProcBroker) -> None:
     bob = await asyncio.to_thread(join_as_bob, hosted, admin)
     async with FakeAgent(hosted.home, "ka") as agent:
         j = await agent.join("#build", "helper")
-        assert j["ok"] and "Your users are alice and bob (kind=human): each of them is your user." in j["text"]
+        assert (
+            j["ok"] and "Your users are alice and bob (kind=human): each of them is your user." in j["text"]
+        )
         r = await asyncio.to_thread(bob.post, "/api/rooms/build/say", {"text": "please run the tests"})
         assert r.status_code == 200
         got = await agent.read("#build")
@@ -279,9 +301,16 @@ def test_a_passkey_instead_of_a_password(hosted: InProcBroker) -> None:
 def test_names_people_can_have(hosted: InProcBroker) -> None:
     admin = set_up(hosted)
     add(admin, "bob")
-    for bad, why in [("alice", "reserved"), ("admin", "reserved"), ("switchboard-2", "reserved"),
-                     ("system", "reserved"), ("Bob", "someone here"), ("b@d", "names look like"), ("", "names look"),
-                     ("x" * 25, "names look like")]:
+    for bad, why in [
+        ("alice", "reserved"),
+        ("admin", "reserved"),
+        ("switchboard-2", "reserved"),
+        ("system", "reserved"),
+        ("Bob", "someone here"),
+        ("b@d", "names look like"),
+        ("", "names look"),
+        ("x" * 25, "names look like"),
+    ]:
         r = admin.post("/api/people", {"name": bad})
         assert r.status_code == 400 and why in r.json()["message"], bad
 

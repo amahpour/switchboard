@@ -29,10 +29,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from fakes.fake_agent import ids_in
 from fakes.fake_claude import SID, TOKEN, FakeClaude, fixture
 from fakes.fake_link import PID_SHIFT, FakeLink, wait_for
+
 from switchboard.config import Config
 from switchboard.install.common import hook_command
 from switchboard.paths import hook_sha12
@@ -102,7 +102,9 @@ def joined_idle(fc: FakeClaude, link: FakeLink) -> None:
     fc.hook(fixture("PostToolUse_mcp"))
     fc.hook(fixture("Stop"))
     assert wait_for(lambda: part(link)["status"] == "idle", what="idle")
-    assert wait_for(lambda: (v := relayed(link)) is not None and v.status == "idle", what="a relayed idle view")
+    assert wait_for(
+        lambda: (v := relayed(link)) is not None and v.status == "idle", what="a relayed idle view"
+    )
 
 
 def turn_from(fc: FakeClaude, text: str) -> str:
@@ -114,7 +116,9 @@ def turn_from(fc: FakeClaude, text: str) -> str:
 def test_pi_claude_verified_tier_inbox(link: FakeLink, fc: FakeClaude) -> None:
     j = fc.tool("join", room="#fpga", screen_name="bench")
     assert j["ok"] and j["tier"] == "claude:inbox", j
-    assert "arrive as a message from switchboard" in j["text"] and "You don't need to call wait()" in j["text"]
+    assert (
+        "arrive as a message from switchboard" in j["text"] and "You don't need to call wait()" in j["text"]
+    )
     p = part(link)
     assert p["host"] == "fpga-pi" and p["agent_pid"] == fc.pid + PID_SHIFT
     assert p["tier"] == "claude:inbox" and p["claude_socket"] == fc.inbox_path
@@ -190,7 +194,9 @@ def test_registry_flips_before_post_no_frame_then_delivered(link: FakeLink, fc: 
     rl.send_frame = flip_first  # type: ignore[method-assign]
     try:
         mid = say(link, "one for the bench")
-        assert wait_for(lambda: [b["expire_reason"] for b in inbox_batches(link)] == ["reroute"], what="reroute")
+        assert wait_for(
+            lambda: [b["expire_reason"] for b in inbox_batches(link)] == ["reroute"], what="reroute"
+        )
         assert fc.inbox.frames() == [] and state(link, mid) == "pending"
         assert checked[0]["want"] == "idle" and checked[0]["pid"] == part(link)["agent_pid"]
         assert part(link)["push_expiries"] == 0  # uncounted
@@ -284,7 +290,9 @@ def test_nested_claude_on_pi_is_inert(link: FakeLink, fc: FakeClaude) -> None:
         other = "00000000-0000-4000-8000-00000000beef"
         for name in ("PostToolUse_bash", "Stop", "SessionStart_startup", "SessionEnd_exit"):
             payload = fixture(name, session_id=other)
-            cmd = hook_command(sys.executable, str(link.pi), hook_sha12(), "claude", payload["hook_event_name"])
+            cmd = hook_command(
+                sys.executable, str(link.pi), hook_sha12(), "claude", payload["hook_event_name"]
+            )
             cmd = f"{shlex.quote(sys.executable)} {shlex.quote(str(nested))} {shlex.quote(cmd)}"
             fc.p.stdin.write(json.dumps({"op": "hook", "command": cmd, "payload": payload}) + "\n")
             fc.p.stdin.flush()
@@ -308,7 +316,9 @@ def test_clear_keeps_hooks_resolving(link: FakeLink, fc: FakeClaude) -> None:
     out = json.loads(fc.hook(fixture("SessionStart_clear", session_id=new_sid)))
     assert "#fpga as bench" in out["hookSpecificOutput"]["additionalContext"]
     p = part(link)
-    assert p["id"] == before and p["session_id"] == new_sid and p["status"] == "idle" and p["ended_at"] is None
+    assert (
+        p["id"] == before and p["session_id"] == new_sid and p["status"] == "idle" and p["ended_at"] is None
+    )
     assert p["tier"] == "claude:inbox"
     mid = say(link, "after the clear")
     [(_c, frame)] = fc.inbox.wait_frames(1)

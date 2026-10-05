@@ -6,10 +6,10 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
 from fakes.fake_agent import FakeAgent
 from fakes.fake_claude import FakeClaude
 from fakes.fake_link import FakeLink, SatDriver, make_pi_home, wait_for
+
 from switchboard.mcp.client import RpcError, Stream
 
 TID = "019a0000-0000-7000-8000-0000000c0dex"
@@ -47,8 +47,9 @@ def test_two_pi_agents_are_two_participants() -> None:
             ms = {m["name"]: m for m in link.members()}
             assert set(ms) == {"one", "two"}
             assert all(m["harness"] == "unknown" and m["host"] == "fpga-pi" for m in ms.values())
-            keys = link.broker.on_loop(lambda: sorted(p.session_key for p in
-                                                      link.broker.state.store.joined_participants()))
+            keys = link.broker.on_loop(
+                lambda: sorted(p.session_key for p in link.broker.state.store.joined_participants())
+            )
             assert len(set(keys)) == 2 and all(k.startswith("unknown@fpga-pi:") for k in keys)
             assert any(k.startswith(f"unknown@fpga-pi:{a.pid + 1_000_000_000}@") for k in keys)
         finally:
@@ -65,8 +66,13 @@ def test_one_bye_leaves_the_other_online() -> None:
             a.close()  # its MCP server says bye
             # offline, or already ended: its agent process exited too, and the next alive frame
             # ends the session within about a second (a slow machine can miss the offline step)
-            wait_for(lambda: next((m for m in link.members() if m["name"] == "one"), {"status": "offline"})[
-                "status"] == "offline", what="one offline")
+            wait_for(
+                lambda: (
+                    next((m for m in link.members() if m["name"] == "one"), {"status": "offline"})["status"]
+                    == "offline"
+                ),
+                what="one offline",
+            )
             assert member(link, "two")["status"] != "offline"
             assert b.tool("say", room="#fpga", text="still here")["ok"]
         finally:
@@ -109,7 +115,9 @@ async def test_test_harness_needs_test_mode_on_both_sides() -> None:
             assert e.value.code == "forbidden" and "test-mode" in e.value.message
             s.send("mcp.hello", {"harness": "unknown"})  # anything else is attested and relayed
             req = sat.recv_type("req")
-        assert req["line"]["params"]["harness"] == "unknown" and req["facts"]["attest"]["harness"] == "unknown"
+        assert (
+            req["line"]["params"]["harness"] == "unknown" and req["facts"]["attest"]["harness"] == "unknown"
+        )
         # the refused test hello was never relayed: the first req frame is the second hello
         assert req["line"]["id"] == 2
     finally:
@@ -130,8 +138,9 @@ async def test_test_harness_needs_test_mode_on_both_sides() -> None:
         from switchboard.broker.remote import Attempt, LinkClosed
         from switchboard.remote import proto
 
-        hello = proto.hello(version="0.0.0", name=link.name, now=0.0, hook_state="ok", test_mode=True,
-                            harden="none")
+        hello = proto.hello(
+            version="0.0.0", name=link.name, now=0.0, hook_state="ok", test_mode=True, harden="none"
+        )
         link.broker.state.test_mode = False
         try:
             with pytest.raises(LinkClosed) as ei:
@@ -157,7 +166,11 @@ def test_codex_thread_cannot_cross_hosts() -> None:
             assert r["ok"] is False and r["code"] == "conflict"
             m = member(link, "cx-pi")
             assert (m["harness"], m["tier"], m["tier_note"], m["host"]) == (
-                "codex", "codex:hook", "remote Codex: pull only", "fpga-pi")
+                "codex",
+                "codex:hook",
+                "remote Codex: pull only",
+                "fpga-pi",
+            )
         finally:
             local.close()
             remote.close()
@@ -170,6 +183,10 @@ def test_harness_outside_allowlist_is_unknown() -> None:
             r = cx.tool("join", meta={"threadId": TID}, room="#fpga", screen_name="cx-pi")
             assert r["ok"], r
             m = member(link, "cx-pi")
-            assert (m["harness"], m["tier"], m["tier_note"]) == ("unknown", "mcp-only", "not allowed for fpga-pi")
+            assert (m["harness"], m["tier"], m["tier_note"]) == (
+                "unknown",
+                "mcp-only",
+                "not allowed for fpga-pi",
+            )
         finally:
             cx.close()

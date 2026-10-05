@@ -16,16 +16,22 @@ from pathlib import Path
 from typing import Any
 
 import mcp.types as mt
+from conftest import child_env
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from conftest import child_env
-
 
 class FakeAgent:
-    def __init__(self, home: str | Path, key: str, *, ack: str = "next_call",
-                 env: dict[str, str] | None = None, harness_test: bool = True,
-                 client_name: str = "fake-agent"):
+    def __init__(
+        self,
+        home: str | Path,
+        key: str,
+        *,
+        ack: str = "next_call",
+        env: dict[str, str] | None = None,
+        harness_test: bool = True,
+        client_name: str = "fake-agent",
+    ):
         self.home = Path(home)
         self.key = key
         self.ack = ack

@@ -47,11 +47,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import InProcBroker
 from fakes.fake_agent import FakeAgent
 from fakes.fake_claude import FakeClaude
 from fakes.fake_codex_daemon import CANARY, FakeCodexDaemon
+
 from switchboard.adapters import codex as codex_mod
 from switchboard.adapters import codex_rpc
 from switchboard.broker import agents as agents_mod
@@ -94,7 +94,10 @@ class W:
         self.d = FakeCodexDaemon(self.sock).start() if daemon else None
         self.b.start()
         self.web = self.b.web_client()
-        assert self.web.post("/api/rooms", json={"name": "#build"}, headers=self.b.write_headers()).status_code == 200
+        assert (
+            self.web.post("/api/rooms", json={"name": "#build"}, headers=self.b.write_headers()).status_code
+            == 200
+        )
         self.cx: FakeClaude | None = None
 
     @property
@@ -162,8 +165,13 @@ class W:
 
     def hook(self, event: str, **extra: Any) -> str:
         assert self.cx is not None
-        payload = {"hook_event_name": event, "session_id": TID, "cwd": "/ws", "permission_mode": "default",
-                   **extra}
+        payload = {
+            "hook_event_name": event,
+            "session_id": TID,
+            "cwd": "/ws",
+            "permission_mode": "default",
+            **extra,
+        }
         cmd = hook_command(sys.executable, str(self.b.paths.home), hook_sha12(), "codex", event)
         self.cx.p.stdin.write(json.dumps({"op": "hook", "command": cmd, "payload": payload}) + "\n")
         self.cx.p.stdin.flush()
@@ -391,8 +399,16 @@ def test_the_loaded_list_picks_the_queue_tier_and_its_argv(w: W) -> None:
     assert wait_for(lambda: w.queue_calls())
     [call] = w.queue_calls()
     text = call["argv"][-1]
-    assert call["argv"] == [os.path.realpath(w.fake_bin), "queue", "--remote", f"unix://{w.sock}", "--thread",
-                            TID, "--message", text]
+    assert call["argv"] == [
+        os.path.realpath(w.fake_bin),
+        "queue",
+        "--remote",
+        f"unix://{w.sock}",
+        "--thread",
+        TID,
+        "--message",
+        text,
+    ]
     assert text.startswith("[switchboard]") and f"id={mid}" in text
     # (macOS adds __CF_USER_TEXT_ENCODING; Python's C-locale coercion adds LC_CTYPE in the child)
     assert set(call["env"]) - {"__CF_USER_TEXT_ENCODING", "LC_CTYPE"} == {"PATH", "HOME"}
@@ -450,8 +466,11 @@ def test_canary_from_thread_read_reaches_no_log_db_or_event(w: W, caplog: pytest
     finally:
         con.close()
     for p in w.home.rglob("*"):
-        if p.is_file() and not p.name.endswith((".db", ".db-wal", ".db-shm", ".sock")) and \
-                not stat.S_ISSOCK(p.stat().st_mode):
+        if (
+            p.is_file()
+            and not p.name.endswith((".db", ".db-wal", ".db-shm", ".sock"))
+            and not stat.S_ISSOCK(p.stat().st_mode)
+        ):
             assert CANARY not in p.read_text(errors="replace"), p
 
 
@@ -540,8 +559,15 @@ def test_the_proof_is_retried_when_the_join_turn_outlasts_the_first_tries(w: W) 
 def test_a_nonce_outside_the_join_result_proves_nothing(w: W) -> None:
     r = w.join(prove=False)
     nonce = r["text"].split("yk:j", 1)[1][:16]
-    w.d.add_item(TID, {"type": "commandExecution", "id": "c1", "status": "completed",
-                       "aggregatedOutput": f"cat notes.txt: yk:j{nonce}"})
+    w.d.add_item(
+        TID,
+        {
+            "type": "commandExecution",
+            "id": "c1",
+            "status": "completed",
+            "aggregatedOutput": f"cat notes.txt: yk:j{nonce}",
+        },
+    )
     time.sleep(1.5)
     assert w.part()["thread_proof"] == 0
 
@@ -613,7 +639,8 @@ def test_the_threads_own_human_ends_the_hold(w: W) -> None:
 
 
 def test_the_fresh_lsof_check_stops_a_turn_start_right_after_a_detach(
-        w: W, monkeypatch: pytest.MonkeyPatch) -> None:
+    w: W, monkeypatch: pytest.MonkeyPatch
+) -> None:
     w.join()
     w.daemon_tier()
     monkeypatch.setattr(codex_mod, "CLIENTS_POLL_S", 60.0)  # the cached check keeps saying "attached"
@@ -819,14 +846,20 @@ def test_a_rejoin_that_says_verifying_is_announced_again(w: W, monkeypatch: pyte
     assert wait_for(lambda: w.tier()[1] != "verifying..."), w.tier()
     settled(w)
     first, second = verified(w)  # the tier it has then (the new MCP server may not be seen attached yet)
-    assert first == "codex-1 is verified: codex:daemon" and second.startswith("codex-1 is verified: codex:daemon")
+    assert first == "codex-1 is verified: codex:daemon" and second.startswith(
+        "codex-1 is verified: codex:daemon"
+    )
     ev = [json.loads(r[0]) for r in w.q("SELECT data FROM events WHERE kind='join' ORDER BY id")]
     assert [e.get("verifying") for e in ev] == [True, True]
 
 
 def restart_events(w: W) -> list[tuple[str, str | None]]:
-    return [(e["what"], e.get("via")) for e in (json.loads(r[0]) for r in w.q(
-        "SELECT data FROM events WHERE kind='codex_restart' ORDER BY id"))]
+    return [
+        (e["what"], e.get("via"))
+        for e in (
+            json.loads(r[0]) for r in w.q("SELECT data FROM events WHERE kind='codex_restart' ORDER BY id")
+        )
+    ]
 
 
 def as_app_server(monkeypatch: pytest.MonkeyPatch, pids: set[int]) -> None:
@@ -835,11 +868,18 @@ def as_app_server(monkeypatch: pytest.MonkeyPatch, pids: set[int]) -> None:
     MCP servers' parent at once (its argv is a TUI's), and the fake app-server
     listens inside this test process."""
     real = proc.argv
-    monkeypatch.setattr(proc, "argv", lambda pid, start: "/opt/homebrew/bin/codex app-server --listen unix://"
-                        if pid in pids else real(pid, start))
+    monkeypatch.setattr(
+        proc,
+        "argv",
+        lambda pid, start: (
+            "/opt/homebrew/bin/codex app-server --listen unix://" if pid in pids else real(pid, start)
+        ),
+    )
 
 
-def test_a_daemon_restart_keeps_the_member_and_delivers_after_it(w: W, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_daemon_restart_keeps_the_member_and_delivers_after_it(
+    w: W, monkeypatch: pytest.MonkeyPatch
+) -> None:
     servers: set[int] = set()
     as_app_server(monkeypatch, servers)
     w.join()
@@ -868,7 +908,8 @@ def test_a_daemon_restart_keeps_the_member_and_delivers_after_it(w: W, monkeypat
     assert (w.part()["mcp_pid"], w.part()["mcp_start"]) == mcp0
     assert lines(w, "leave") == []
     assert [x for x in lines(w, "notice") if "reconnected" in x] == [
-        "codex-1 reconnected after a Codex daemon restart"]
+        "codex-1 reconnected after a Codex daemon restart"
+    ]
     assert restart_events(w) == [("app_server_gone", None), ("rebound", "loaded")]
     # hooks of the thread run under the new app-server now, and resolve to the member
     w.hook("UserPromptSubmit", prompt="typed after the restart")
@@ -878,10 +919,16 @@ def test_a_daemon_restart_keeps_the_member_and_delivers_after_it(w: W, monkeypat
     assert r["ok"] is False and r["code"] == "not_member"
     r = w.cx.tool("join", meta={"threadId": TID}, room="#build", screen_name="codex-1")
     assert r["ok"], r
-    assert len(w.q("SELECT id FROM memberships")) == 1 and len(lines(w, "join")) == 1  # a re-join, not a new one
+    assert (
+        len(w.q("SELECT id FROM memberships")) == 1 and len(lines(w, "join")) == 1
+    )  # a re-join, not a new one
     # ...but visible: another MCP process took the membership over, and its thread is proven again
-    assert wait_for(lambda: [x for x in lines(w, "notice") if "re-joined" in x] == [
-        "codex-1 re-joined from a new switchboard MCP server"])
+    assert wait_for(
+        lambda: (
+            [x for x in lines(w, "notice") if "re-joined" in x]
+            == ["codex-1 re-joined from a new switchboard MCP server"]
+        )
+    )
     # "verifying..." while the first tries run (0.2, 0.5, 1.0 s here), then "unverified thread"
     assert w.part()["thread_proof"] == 0 and w.tier()[0] == "mcp-only"
     assert w.tier()[1] in ("verifying...", "unverified thread")
@@ -896,7 +943,8 @@ def test_a_daemon_restart_keeps_the_member_and_delivers_after_it(w: W, monkeypat
 
 
 def test_a_restart_rebinds_to_the_app_server_serving_the_control_socket(
-        w: W, monkeypatch: pytest.MonkeyPatch) -> None:
+    w: W, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The main way to name the new app-server: the one Codex app-server lsof shows
     listening on the control socket (here the fake app-server, in this process), not
     the MCP servers' hellos (the stand-in's argv is a TUI's)."""
@@ -914,7 +962,8 @@ def test_a_restart_rebinds_to_the_app_server_serving_the_control_socket(
     assert restart_events(w) == [("app_server_gone", None), ("rebound", "loaded")]
     assert lines(w, "leave") == []
     assert [x for x in lines(w, "notice") if "reconnected" in x] == [
-        "codex-1 reconnected after a Codex daemon restart"]
+        "codex-1 reconnected after a Codex daemon restart"
+    ]
 
 
 def test_a_rejoin_in_the_grace_window_is_a_reconnect_only_once_proven(w: W) -> None:
@@ -931,7 +980,9 @@ def test_a_rejoin_in_the_grace_window_is_a_reconnect_only_once_proven(w: W) -> N
     r = w.cx.tool("join", meta={"threadId": TID}, room="#build", screen_name="codex-1")
     assert r["ok"], r
     time.sleep(1.3)  # every first proof attempt (0.2, 0.5, 1.0 s) failed: nothing proven yet
-    assert [x for x in lines(w, "notice") if "re-joined" in x] == ["codex-1 re-joined from a new switchboard MCP server"]
+    assert [x for x in lines(w, "notice") if "re-joined" in x] == [
+        "codex-1 re-joined from a new switchboard MCP server"
+    ]
     assert not [x for x in lines(w, "notice") if "reconnected" in x]
     assert w.tier() == ("mcp-only", "unverified thread") and w.part()["thread_proof"] == 0
     assert len(w.q("SELECT id FROM memberships")) == 1 and lines(w, "leave") == []
@@ -940,8 +991,12 @@ def test_a_rejoin_in_the_grace_window_is_a_reconnect_only_once_proven(w: W) -> N
     w.d.prove(TID, r["text"])
     w.hook("Stop", stop_hook_active=False)
     assert wait_for(lambda: w.part()["thread_proof"] == 1)
-    assert wait_for(lambda: [x for x in lines(w, "notice") if "reconnected" in x] == [
-        "codex-1 reconnected after a Codex daemon restart"])
+    assert wait_for(
+        lambda: (
+            [x for x in lines(w, "notice") if "reconnected" in x]
+            == ["codex-1 reconnected after a Codex daemon restart"]
+        )
+    )
     assert restart_events(w) == [("app_server_gone", None), ("rebound", "join")]
     # its TUI attaches and the thread loads: the daemon tier again
     w.cx.p.stdin.write(json.dumps({"op": "attach", "path": w.sock}) + "\n")
@@ -1054,7 +1109,8 @@ def test_the_same_mcp_process_reconnecting_keeps_its_credentials(w: W) -> None:
     assert r["ok"], r
     assert w.part()["mcp_pid"] == mcp_pid and w.tier() == ("codex:daemon", None)
     assert [x for x in lines(w, "notice") if "reconnected" in x] == [
-        "codex-1 reconnected after a Codex daemon restart"]
+        "codex-1 reconnected after a Codex daemon restart"
+    ]
     ev = [json.loads(r[0]) for r in w.q("SELECT data FROM events WHERE kind='codex_restart' ORDER BY id")]
     assert [(e["what"], e.get("via")) for e in ev] == [("app_server_gone", None), ("rebound", "mcp_hello")]
 
@@ -1115,12 +1171,19 @@ async def test_a_turn_start_stub_must_be_read_before_pass(w: W) -> None:
         assert w.delivery(mid) == "pending"  # notified: read() only
         r = w.cx.tool("pass", meta={"threadId": TID}, room="#build")
         assert r["ok"] is False and r["code"] == "read_first" and 'Call read("#build") now' in r["error"]
-        assert w.delivery(mid) == "pending" and w.q("SELECT COUNT(*) FROM events WHERE kind='pass'")[0][0] == 0
+        assert (
+            w.delivery(mid) == "pending" and w.q("SELECT COUNT(*) FROM events WHERE kind='pass'")[0][0] == 0
+        )
         rd = w.cx.tool("read", meta={"threadId": TID}, room="#build")
         assert rd["ok"] and f"id={mid}" in rd["text"] and "drops 0; can you check?" in rd["text"]
         # Codex fires PostToolUse for the MCP call; its output carries the batch token
-        w.hook("PostToolUse", tool_name="mcp__switchboard__read", tool_input={"room": "#build"},
-               tool_response={"content": [{"type": "text", "text": json.dumps(rd)}]}, tool_use_id="call_rd1")
+        w.hook(
+            "PostToolUse",
+            tool_name="mcp__switchboard__read",
+            tool_input={"room": "#build"},
+            tool_response={"content": [{"type": "text", "text": json.dumps(rd)}]},
+            tool_use_id="call_rd1",
+        )
         assert wait_for(lambda: w.delivery(mid) == "in_context")
         r = w.cx.tool("pass", meta={"threadId": TID}, room="#build")
         assert r["ok"] and r["text"] == "[switchboard] logged, not posted."

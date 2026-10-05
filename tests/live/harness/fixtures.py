@@ -40,7 +40,7 @@ class Sanitizer:
             if real:
                 subs.append((real, fake))
                 if real.startswith("/private/"):
-                    subs.append((real[len("/private"):], fake))
+                    subs.append((real[len("/private") :], fake))
         subs.append((home, "~"))
         subs.append(("/private/tmp", "/tmp"))
         self.subs = sorted(subs, key=lambda x: -len(x[0]))
@@ -112,8 +112,11 @@ SELECT: list[tuple[str, str, Any]] = [
     ("UserPromptSubmit", "UserPromptSubmit", lambda p: not is_inbox_prompt(p)),
     ("UserPromptSubmit_inbox", "UserPromptSubmit", is_inbox_prompt),
     ("PreToolUse_bash", "PreToolUse", tool_is("Bash")),
-    ("PostToolUse_bash", "PostToolUse", lambda p: p.get("tool_name") == "Bash"
-     and "echo" in json.dumps(p.get("tool_input"))),
+    (
+        "PostToolUse_bash",
+        "PostToolUse",
+        lambda p: p.get("tool_name") == "Bash" and "echo" in json.dumps(p.get("tool_input")),
+    ),
     ("PostToolUse_mcp", "PostToolUse", mcp_tool),
     ("PostToolUseFailure_bash", "PostToolUseFailure", tool_is("Bash")),
     ("PostToolUseFailure_mcp_timeout", "PostToolUseFailure", mcp_tool),
@@ -144,12 +147,20 @@ def build(run: Path, out: Path, version: str, ws: Path | None) -> list[str]:
         written.append(name)
     # derived: one documented value changed on a recorded payload
     derived = [
-        ("PostToolUse_bypass", "PostToolUse_bash", {"permission_mode": "bypassPermissions"},
-         "recorded PostToolUse_bash with permission_mode set to bypassPermissions (the value M0 saw in"
-         " bypass sessions; M3 launches no bypass session)"),
-        ("Stop_active", "Stop", {"stop_hook_active": True},
-         "recorded Stop with stop_hook_active true (a chained Stop, FINDINGS §3 2.2; switchboard never"
-         " blocks a Claude Stop, so the live run can't produce one)"),
+        (
+            "PostToolUse_bypass",
+            "PostToolUse_bash",
+            {"permission_mode": "bypassPermissions"},
+            "recorded PostToolUse_bash with permission_mode set to bypassPermissions (the value M0 saw in"
+            " bypass sessions; M3 launches no bypass session)",
+        ),
+        (
+            "Stop_active",
+            "Stop",
+            {"stop_hook_active": True},
+            "recorded Stop with stop_hook_active true (a chained Stop, FINDINGS §3 2.2; switchboard never"
+            " blocks a Claude Stop, so the live run can't produce one)",
+        ),
     ]
     for name, base, over, note in derived:
         if base not in chosen:
@@ -178,9 +189,13 @@ def cross_check(run: Path, chosen: dict[str, dict[str, Any]]) -> None:
         ev = p["hook_event_name"]
         if ev not in hk.HANDLED["claude"]:
             continue
-        mine = frozenset(k for k in hk.build_params(p, "claude", ev, 0.0, 1.0) if k not in ("t", "max_wait_s"))
+        mine = frozenset(
+            k for k in hk.build_params(p, "claude", ev, 0.0, 1.0) if k not in ("t", "max_wait_s")
+        )
         ok = mine in rec.get(ev, set())
-        print(f"  params {name}: {'matches a live relay' if ok else 'NO live relay with these keys'} {sorted(mine)}")
+        print(
+            f"  params {name}: {'matches a live relay' if ok else 'NO live relay with these keys'} {sorted(mine)}"
+        )
 
 
 def main() -> int:

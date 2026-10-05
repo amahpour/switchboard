@@ -82,9 +82,11 @@ def test_the_broker_listens_through_loopback_listener(
     assert f"can't listen on 127.0.0.1:{port}: Address already in use" in capsys.readouterr().err
 
 
-@pytest.mark.skipif(not sys.platform.startswith("linux"),
-                    reason="macOS reports an accepted socket's proto as 0, so asyncio leaves Nagle on there "
-                           "(as before; no delay measured: REST to WebSocket p50 0.6 ms)")
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="macOS reports an accepted socket's proto as 0, so asyncio leaves Nagle on there "
+    "(as before; no delay measured: REST to WebSocket p50 0.6 ms)",
+)
 async def test_accepted_connections_get_tcp_nodelay() -> None:
     """The same path uvicorn takes: an asyncio server on the pre-bound socket."""
     s = loopback_listener(0)

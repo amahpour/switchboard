@@ -95,7 +95,9 @@ class Runner:
             cur = st.store.get_batch(a.batch_id)
             if cur is not None and cur.state != "offered":
                 # already confirmed (the frame landed) or settled: nothing to take back
-                log.info("push of batch %d: no post report (%s); batch already %s", a.batch_id, why, cur.state)
+                log.info(
+                    "push of batch %d: no post report (%s); batch already %s", a.batch_id, why, cur.state
+                )
                 return
             if send_err and not e.counted:
                 # a re-route (e.g. a Codex steer after the turn ended): back to

@@ -8,6 +8,7 @@ import sqlite3
 from pathlib import Path
 
 from conftest import SubprocBroker
+
 from switchboard.mcp.client import call_sync
 from switchboard.paths import Paths
 

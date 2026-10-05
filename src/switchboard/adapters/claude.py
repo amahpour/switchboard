@@ -110,8 +110,9 @@ def registry_view(data: dict[str, Any], prev: RegView | None, now: float) -> Reg
     return RegView(status=status, read_at=now, since=since)
 
 
-def registry_transition(status: str, hooks_seen_at: float | None, reg: RegView,
-                        now: float) -> tuple[str, bool] | None:
+def registry_transition(
+    status: str, hooks_seen_at: float | None, reg: RegView, now: float
+) -> tuple[str, bool] | None:
     """The status change a registry read implies: ``(new_status, bump_boundary)`` or None.
 
     - ``waiting`` (an approval prompt is open) holds every delivery (§7.4:
@@ -126,8 +127,13 @@ def registry_transition(status: str, hooks_seen_at: float | None, reg: RegView,
         return None if status == "waiting-approval" else ("waiting-approval", False)
     if status == "waiting-approval":
         return ("idle", True) if reg.status == "idle" else ("busy", False)
-    if (status == "busy" and reg.status == "idle" and hooks_seen_at is not None
-            and reg.since > hooks_seen_at and now - reg.since >= REGISTRY_IDLE_GRACE_S):
+    if (
+        status == "busy"
+        and reg.status == "idle"
+        and hooks_seen_at is not None
+        and reg.since > hooks_seen_at
+        and now - reg.since >= REGISTRY_IDLE_GRACE_S
+    ):
         return ("idle", True)
     return None
 
@@ -202,10 +208,17 @@ class ClaudeAdapter(Adapter):
         return (TIER_INBOX, None) if self.attached(p) else (TIER_HOOK, None)
 
     def conn_tier(self, ident: Any, existing: Participant | None) -> tuple[str, str | None]:
-        e = (self.conns.get((getattr(ident, "host", LOCAL_HOST), int(ident.mcp_pid)))
-             if ident is not None and ident.mcp_pid else None)
-        if (e is not None and ident.claude_socket and proc.same_start(e[0], ident.mcp_start)
-                and not getattr(e[1], "closed", False)):
+        e = (
+            self.conns.get((getattr(ident, "host", LOCAL_HOST), int(ident.mcp_pid)))
+            if ident is not None and ident.mcp_pid
+            else None
+        )
+        if (
+            e is not None
+            and ident.claude_socket
+            and proc.same_start(e[0], ident.mcp_start)
+            and not getattr(e[1], "closed", False)
+        ):
             return TIER_INBOX, None
         return TIER_HOOK, None
 
@@ -254,8 +267,12 @@ class ClaudeAdapter(Adapter):
 
     def _registry_busy(self, p: Participant, now: float) -> bool:
         reg = self.reg_view(p)
-        return (reg is not None and now - reg.read_at <= self.fresh_s(p) and reg.status == "busy"
-                and not self._rechecking(p, reg))
+        return (
+            reg is not None
+            and now - reg.read_at <= self.fresh_s(p)
+            and reg.status == "busy"
+            and not self._rechecking(p, reg)
+        )
 
     def route(self, p: Participant, rel: Release, sink: Any, now: float) -> Route:
         if sink is not None:
@@ -266,15 +283,22 @@ class ClaudeAdapter(Adapter):
             # straddle), and only while a fresh registry read says the turn is
             # running (not waiting on a prompt: e.g. the human switched modes and
             # no hook has said so yet); everyone else pulls it at the next tool boundary.
-            if (inbox and p.approval_mode == "bypass" and not self._backing_off(p, now)
-                    and not self._rerouting(p, now) and self._unconfirmed_wait(p, now) <= 0
-                    and self._registry_busy(p, now)):
+            if (
+                inbox
+                and p.approval_mode == "bypass"
+                and not self._backing_off(p, now)
+                and not self._rerouting(p, now)
+                and self._unconfirmed_wait(p, now) <= 0
+                and self._registry_busy(p, now)
+            ):
                 return Route("push", path="inbox")
             return Route("pull", reason="next tool call")
         if not inbox:
             return Route("none", reason="idle and not listening: call wait() or poke it")
         if p.hooks_seen_at is None:
-            return Route("none", reason="no switchboard hooks seen from this session: run `switchboard install claude`")
+            return Route(
+                "none", reason="no switchboard hooks seen from this session: run `switchboard install claude`"
+            )
         if p.status not in ("idle", "starting"):
             return Route("defer", reason="turn still running")
         if self._backing_off(p, now):
@@ -326,7 +350,11 @@ class ClaudeAdapter(Adapter):
         assumed: ``busy`` for a mid-task priority batch, ``idle`` for a wake."""
         if not p.agent_pid or p.agent_start is None:
             return None
-        return {"pid": p.agent_pid, "start": p.agent_start, "want": "busy" if batch.kind == "priority" else "idle"}
+        return {
+            "pid": p.agent_pid,
+            "start": p.agent_start,
+            "want": "busy" if batch.kind == "priority" else "idle",
+        }
 
     async def send(self, p: Participant, batch: Batch, text: str, **meta: Any) -> float | None:
         """Hand one frame to the session's MCP server and wait for ``mcp.posted``. On a
@@ -337,8 +365,12 @@ class ClaudeAdapter(Adapter):
         if conn is None or (remote and chk is None):
             self._failed(p)
             raise SendError("no inbox channel")
-        data = {"batch_id": batch.id, "text": text,
-                "room": str(meta.get("room") or ""), "sender": str(meta.get("sender") or "")}
+        data = {
+            "batch_id": batch.id,
+            "text": text,
+            "room": str(meta.get("room") or ""),
+            "sender": str(meta.get("sender") or ""),
+        }
         fut: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         self.pending_posts[batch.id] = (fut, conn)
         try:
@@ -399,8 +431,9 @@ class ClaudeAdapter(Adapter):
         self.reroutes[p.id] = (until, n)
 
     # ------------------------------------------------------------- registry
-    def observe(self, agent_pid: int, data: dict[str, Any], now: float,
-                host: str = LOCAL_HOST) -> tuple[RegView, bool]:
+    def observe(
+        self, agent_pid: int, data: dict[str, Any], now: float, host: str = LOCAL_HOST
+    ) -> tuple[RegView, bool]:
         """Record one registry read; returns (view, status changed)."""
         key = (host, int(agent_pid))
         prev = self.registry.get(key)
@@ -483,8 +516,14 @@ class ClaudeAdapter(Adapter):
         for p in self.runner.state.store.joined_participants():
             if p.harness != "claude" or p.host != host or not p.agent_pid:
                 continue
-            e = next((v for (pid, start), v in got.items()
-                      if pid == p.agent_pid and proc.same_start(start, p.agent_start)), None)
+            e = next(
+                (
+                    v
+                    for (pid, start), v in got.items()
+                    if pid == p.agent_pid and proc.same_start(start, p.agent_start)
+                ),
+                None,
+            )
             if e is None:
                 continue
             key = (host, p.agent_pid)
@@ -500,7 +539,7 @@ class ClaudeAdapter(Adapter):
             self.registry[key] = view
             # a view that makes the member routable again (a new status, the first fresh
             # one after a stale stretch, the first after a refusal) routes it at once
-            changed = (prev is None or prev.status != view.status or now - prev.read_at > self.fresh_s(p))
+            changed = prev is None or prev.status != view.status or now - prev.read_at > self.fresh_s(p)
             rechecked = self._recheck_done(p, view)
             acts += self.apply_view(p, view, now, changed or rechecked)
         for key in [x for x in self.registry if x[0] == host and x not in seen]:

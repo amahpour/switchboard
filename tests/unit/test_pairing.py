@@ -41,6 +41,7 @@ HOME = "/home/alice/.switchboard"
 HAVE_SSH = all(os.access(b, os.X_OK) for b in ("/usr/bin/ssh", "/usr/bin/ssh-keygen"))
 needs_ssh = pytest.mark.skipif(not HAVE_SSH, reason="needs /usr/bin/ssh and /usr/bin/ssh-keygen")
 
+
 @pytest.fixture(autouse=True)
 def installed_copy(monkeypatch: pytest.MonkeyPatch) -> None:
     """These tests run from the repo's editable venv; ``accept`` sees an installed copy
@@ -71,8 +72,12 @@ def test_token_round_trip() -> None:
         (TOKEN.replace("ssh-ed25519", "ssh-rsa"), "key type"),
         (TOKEN.replace(KEY, "!!!!"), "base64"),
         (TOKEN.replace(KEY, rsa), "not an ssh-ed25519"),
-        (TOKEN.replace(KEY, base64.b64encode(b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20" + b"x" * 31).decode()),
-         "not an ssh-ed25519"),
+        (
+            TOKEN.replace(
+                KEY, base64.b64encode(b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20" + b"x" * 31).decode()
+            ),
+            "not an ssh-ed25519",
+        ),
     ]:
         with pytest.raises(PairingError, match=why):
             parse_token(bad)
@@ -82,7 +87,8 @@ def test_authorized_keys_line_exact() -> None:
     t = parse_token(TOKEN)
     assert authorized_line(t, PY, HOME) == (
         f'restrict,command="{PY} -I -m switchboard satellite --home {HOME} --name fpga-pi"'
-        f" ssh-ed25519 {KEY} switchboard-link fpga-pi")
+        f" ssh-ed25519 {KEY} switchboard-link fpga-pi"
+    )
     # a path with a blank is quoted for the login shell; quotes and $ are refused outright
     spaced = authorized_line(t, "/opt/my tools/python", HOME)
     assert "command=\"'/opt/my tools/python' -I -m switchboard satellite" in spaced
@@ -109,7 +115,9 @@ def test_from_option() -> None:
     line = authorized_line(parse_token(TOKEN), PY, HOME, check_from("192.0.2.10"))
     assert line.startswith('restrict,from="192.0.2.10",command="')
     e = parse_ak_line(line)
-    assert e is not None and e.option("from") == "192.0.2.10" and satellite_command(e) == (PY, HOME, "fpga-pi")
+    assert (
+        e is not None and e.option("from") == "192.0.2.10" and satellite_command(e) == (PY, HOME, "fpga-pi")
+    )
 
 
 def test_refuses_unrestricted_duplicate(tmp_path: Path) -> None:
@@ -118,7 +126,7 @@ def test_refuses_unrestricted_duplicate(tmp_path: Path) -> None:
     with pytest.raises(PairingError, match="without command="):
         plan_accept(ORIGINAL + shell, t, authorized_line(t, PY, HOME), HOME)
     with pytest.raises(PairingError, match="without command="):
-        plan_accept(f'no-pty ssh-ed25519 {KEY} x\n', t, authorized_line(t, PY, HOME), HOME)
+        plan_accept(f"no-pty ssh-ed25519 {KEY} x\n", t, authorized_line(t, PY, HOME), HOME)
     # through `accept`: nothing is written
     ak = tmp_path / "authorized_keys"
     ak.write_text(ORIGINAL + shell)
@@ -131,8 +139,9 @@ def test_refuses_unrestricted_duplicate(tmp_path: Path) -> None:
 def _accept(home: Path, ak: Path, token: str = TOKEN, **kw: object) -> str:
     out = io.StringIO()
     kw.setdefault("allow_editable", True)
-    rc = pairing.accept(Paths.from_home(home), token, ak_path=ak, yes=True, python=PY, out=out,
-                        ping=lambda _p: None, **kw)  # type: ignore[arg-type]
+    rc = pairing.accept(
+        Paths.from_home(home), token, ak_path=ak, yes=True, python=PY, out=out, ping=lambda _p: None, **kw
+    )  # type: ignore[arg-type]
     assert rc == 0, out.getvalue()
     return out.getvalue()
 
@@ -149,7 +158,11 @@ def test_backup_0600(tmp_path: Path) -> None:
     assert f"backup: {backups[0]}" in out and f"+ {authorized_line(parse_token(TOKEN), PY, str(home))}" in out
     assert os.stat(ak).st_mode & 0o777 == 0o644  # the file keeps its mode
     conf = read_satellite_conf(Paths.from_home(home))
-    assert (conf.name, conf.desktop, conf.key_fingerprint) == ("fpga-pi", "desk", parse_token(TOKEN).fingerprint)
+    assert (conf.name, conf.desktop, conf.key_fingerprint) == (
+        "fpga-pi",
+        "desk",
+        parse_token(TOKEN).fingerprint,
+    )
     # a new file is created 0600, and a second accept changes nothing
     ak2 = tmp_path / "new" / "authorized_keys"
     _accept(tmp_path / "home2", ak2)
@@ -174,7 +187,9 @@ def test_remove_round_trip_byte_for_byte(tmp_path: Path) -> None:
     t2 = f"switchboard-link v1 fpga-pi desk ssh-ed25519 {KEY3}"
     _accept(home, ak)
     first = ak.read_text()
-    after, replaced = plan_accept(first, parse_token(t2), authorized_line(parse_token(t2), PY, str(home)), home)
+    after, replaced = plan_accept(
+        first, parse_token(t2), authorized_line(parse_token(t2), PY, str(home)), home
+    )
     assert len(replaced) == 1 and KEY in replaced[0] and after.count("switchboard-link fpga-pi") == 1
     assert KEY3 in after and after.count("\n") == first.count("\n")
     # plan_remove never touches another remote's line
@@ -217,8 +232,15 @@ def test_refuses_editable_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     ak = tmp_path / "authorized_keys"
     ak.write_text(ORIGINAL)
     with pytest.raises(PairingError, match="editable"):
-        pairing.accept(Paths.from_home(tmp_path / "home"), TOKEN, ak_path=ak, yes=True, python=PY,
-                       out=io.StringIO(), ping=lambda _p: None)
+        pairing.accept(
+            Paths.from_home(tmp_path / "home"),
+            TOKEN,
+            ak_path=ak,
+            yes=True,
+            python=PY,
+            out=io.StringIO(),
+            ping=lambda _p: None,
+        )
     assert ak.read_text() == ORIGINAL and not (tmp_path / "home").exists()
     # --allow-editable is switchboard's own tests' override: never for a real home
     with pytest.raises(PairingError, match="only for switchboard's own tests"):
@@ -242,8 +264,16 @@ def test_accept_refuses_a_desktop_or_foreign_home(tmp_path: Path) -> None:
         _accept(home, ak)
     (home / "remotes.toml").unlink()
     with pytest.raises(PairingError, match="broker runs"):
-        pairing.accept(Paths.from_home(home), TOKEN, ak_path=ak, yes=True, python=PY, out=io.StringIO(),
-                       allow_editable=True, ping=lambda _p: {"role": None, "pid": 1})
+        pairing.accept(
+            Paths.from_home(home),
+            TOKEN,
+            ak_path=ak,
+            yes=True,
+            python=PY,
+            out=io.StringIO(),
+            allow_editable=True,
+            ping=lambda _p: {"role": None, "pid": 1},
+        )
     _accept(home, ak)
     with pytest.raises(PairingError, match="already fpga-pi's satellite home"):
         _accept(home, ak, token=TOKEN.replace("fpga-pi", "other-pi"))
@@ -253,17 +283,34 @@ def test_accept_refuses_a_desktop_or_foreign_home(tmp_path: Path) -> None:
 def test_accept_needs_a_yes(tmp_path: Path) -> None:
     ak = tmp_path / "authorized_keys"
     out = io.StringIO()
-    rc = pairing.accept(Paths.from_home(tmp_path / "home"), TOKEN, ak_path=ak, yes=False, python=PY,
-                        allow_editable=True, stdin=io.StringIO("y\n"), out=out, ping=lambda _p: None)
+    rc = pairing.accept(
+        Paths.from_home(tmp_path / "home"),
+        TOKEN,
+        ak_path=ak,
+        yes=False,
+        python=PY,
+        allow_editable=True,
+        stdin=io.StringIO("y\n"),
+        out=out,
+        ping=lambda _p: None,
+    )
     assert rc == 1 and "not applied" in out.getvalue() and not ak.exists()  # no terminal: never applied
 
 
 # --------------------------------------------------------------------- add
 def test_ssh_g_parsing() -> None:
-    r = parse_ssh_g("user alice\nhostname fpga-pi.local\nport 2222\nproxyjump none\nhostkeyalias none\n"
-                    "userknownhostsfile /h/.ssh/known_hosts /h/.ssh/known_hosts2\n"
-                    "globalknownhostsfile /etc/ssh/ssh_known_hosts\n")
-    assert (r.hostname, r.user, r.port, r.proxy, r.hostkeyalias) == ("fpga-pi.local", "alice", 2222, None, None)
+    r = parse_ssh_g(
+        "user alice\nhostname fpga-pi.local\nport 2222\nproxyjump none\nhostkeyalias none\n"
+        "userknownhostsfile /h/.ssh/known_hosts /h/.ssh/known_hosts2\n"
+        "globalknownhostsfile /etc/ssh/ssh_known_hosts\n"
+    )
+    assert (r.hostname, r.user, r.port, r.proxy, r.hostkeyalias) == (
+        "fpga-pi.local",
+        "alice",
+        2222,
+        None,
+        None,
+    )
     assert r.known_hosts == ["/h/.ssh/known_hosts", "/h/.ssh/known_hosts2", "/etc/ssh/ssh_known_hosts"]
     assert parse_ssh_g("hostname x\nproxycommand nc %h %p\n").proxy == "proxycommand nc %h %p"
     assert pairing.known_hosts_name(r) == "[fpga-pi.local]:2222"
@@ -297,13 +344,21 @@ def _hashed(host: str, keytype: str, key: str) -> str:
 @needs_ssh
 def test_pin_from_hashed_known_hosts(tmp_path: Path) -> None:
     kh = tmp_path / "known_hosts"
-    ecdsa = ("AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBCpAEVchclT81q64CFZjE5HYEyQ2Wurc9jNSh2DUbBaPWCv"
-             "/r16hVQGZEftMgtBvbYtldlVO0qsZlr1+Y57MZko=")
-    kh.write_text(_hashed("other.host", "ssh-ed25519", KEY2)
-                  + _hashed("[192.0.2.10]:2222", "ecdsa-sha2-nistp256", ecdsa)
-                  + _hashed("[192.0.2.10]:2222", "ssh-ed25519", KEY)
-                  + f"@cert-authority *.example ssh-ed25519 {KEY2}\n")
-    assert find_pin("[192.0.2.10]:2222", [str(tmp_path / "missing"), str(kh)]) == ("ssh-ed25519", KEY, str(kh))
+    ecdsa = (
+        "AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBCpAEVchclT81q64CFZjE5HYEyQ2Wurc9jNSh2DUbBaPWCv"
+        "/r16hVQGZEftMgtBvbYtldlVO0qsZlr1+Y57MZko="
+    )
+    kh.write_text(
+        _hashed("other.host", "ssh-ed25519", KEY2)
+        + _hashed("[192.0.2.10]:2222", "ecdsa-sha2-nistp256", ecdsa)
+        + _hashed("[192.0.2.10]:2222", "ssh-ed25519", KEY)
+        + f"@cert-authority *.example ssh-ed25519 {KEY2}\n"
+    )
+    assert find_pin("[192.0.2.10]:2222", [str(tmp_path / "missing"), str(kh)]) == (
+        "ssh-ed25519",
+        KEY,
+        str(kh),
+    )
     assert find_pin("192.0.2.10", [str(kh)]) is None  # port 22 is another entry
     # a revoked key is never pinned
     kh.write_text(_hashed("[192.0.2.10]:2222", "ssh-ed25519", KEY) + f"@revoked * ssh-ed25519 {KEY}\n")
@@ -317,9 +372,18 @@ def _add(home: Path, tmp: Path, kh_text: str, name: str = "fpga-pi", **kw: objec
     kh.write_text(kh_text)
     out = io.StringIO()
     kw.setdefault("rooms", ["#fpga"])
-    rc = pairing.add(Paths.from_home(home), name, "alice@192.0.2.10", port=2222, ssh_config=str(cfg),
-                     known_hosts=str(kh), authorized_keys=tmp / "desk_ak", label="desk", out=out,
-                     **kw)  # type: ignore[arg-type]
+    rc = pairing.add(
+        Paths.from_home(home),
+        name,
+        "alice@192.0.2.10",
+        port=2222,
+        ssh_config=str(cfg),
+        known_hosts=str(kh),
+        authorized_keys=tmp / "desk_ak",
+        label="desk",
+        out=out,
+        **kw,
+    )  # type: ignore[arg-type]
     assert rc == 0
     return out.getvalue()
 
@@ -330,8 +394,13 @@ def test_add_writes_key_pin_and_table(tmp_path: Path) -> None:
     home.mkdir(mode=0o700)
     (home / "remotes.toml").write_text("# my remotes\n")
     (tmp_path / "desk_ak").write_text(ORIGINAL)
-    out = _add(home, tmp_path, f"[192.0.2.10]:2222 ssh-ed25519 {KEY}\n", rooms=["#fpga,#lab"],
-               harnesses=["claude,codex"])
+    out = _add(
+        home,
+        tmp_path,
+        f"[192.0.2.10]:2222 ssh-ed25519 {KEY}\n",
+        rooms=["#fpga,#lab"],
+        harnesses=["claude,codex"],
+    )
     d = home / "remotes" / "fpga-pi"
     assert (d / "known_hosts").read_text() == f"switchboard-fpga-pi ssh-ed25519 {KEY}\n"
     for f in (d / "id_ed25519", d / "id_ed25519.pub", d / "known_hosts", home / "remotes.toml"):
@@ -340,8 +409,13 @@ def test_add_writes_key_pin_and_table(tmp_path: Path) -> None:
     text = (home / "remotes.toml").read_text()
     assert text.startswith("# my remotes\n")
     table = tomllib.loads(text)["remote"]["fpga-pi"]
-    assert table == {"host": "192.0.2.10", "user": "alice", "port": 2222, "rooms": ["#fpga", "#lab"],
-                     "harnesses": ["claude", "codex"]}
+    assert table == {
+        "host": "192.0.2.10",
+        "user": "alice",
+        "port": 2222,
+        "rooms": ["#fpga", "#lab"],
+        "harnesses": ["claude", "codex"],
+    }
     e = load_remotes(Paths.from_home(home), test_mode=False)["fpga-pi"]
     assert e.transport == "ssh" and e.rooms == ("#fpga", "#lab")
     pub = (d / "id_ed25519.pub").read_text().split()
@@ -372,14 +446,18 @@ def test_add_without_rooms_allows_any_room(tmp_path: Path) -> None:
 
 
 def test_remove_table_keeps_the_rest() -> None:
-    text = ('# remotes\n[remote.a]\nhost = "a.local"\nuser = "alice"\nrooms = [\n  "#x",\n]\n\n'
-            '[remote.fpga-pi] # the bench\nhost = "p.local"\nuser = "alice"\nrooms = ["#fpga"]\n\n'
-            '[remote."b"]\nhost = "b.local"\nuser = "alice"\nrooms = ["#y"]\n')
+    text = (
+        '# remotes\n[remote.a]\nhost = "a.local"\nuser = "alice"\nrooms = [\n  "#x",\n]\n\n'
+        '[remote.fpga-pi] # the bench\nhost = "p.local"\nuser = "alice"\nrooms = ["#fpga"]\n\n'
+        '[remote."b"]\nhost = "b.local"\nuser = "alice"\nrooms = ["#y"]\n'
+    )
     new = remove_table(text, "fpga-pi")
     assert "p.local" not in new and new.startswith("# remotes\n[remote.a]") and '[remote."b"]' in new
     assert set(tomllib.loads(new)["remote"]) == {"a", "b"}
-    inline = ('[remote]\nfpga-pi = { host = "p.local", user = "u", rooms = ["#x"] }\n\n'
-              '[remote.a]\nhost = "a.local"\nuser = "u"\nrooms = ["#x"]\n')
+    inline = (
+        '[remote]\nfpga-pi = { host = "p.local", user = "u", rooms = ["#x"] }\n\n'
+        '[remote.a]\nhost = "a.local"\nuser = "u"\nrooms = ["#x"]\n'
+    )
     with pytest.raises(PairingError, match="by hand"):
         remove_table(inline, "fpga-pi")
 
@@ -410,6 +488,7 @@ def test_remove_on_the_desktop(tmp_path: Path) -> None:
 
     with pytest.raises(RpcError):
         pairing.remove_desktop(Paths.from_home(home), "other-pi", yes=True, call=refuse, out=io.StringIO())
-    assert (home / "remotes" / "other-pi").exists() and "other-pi" in load_remotes(Paths.from_home(home),
-                                                                                    test_mode=False)
+    assert (home / "remotes" / "other-pi").exists() and "other-pi" in load_remotes(
+        Paths.from_home(home), test_mode=False
+    )
     shutil.rmtree(home, ignore_errors=True)

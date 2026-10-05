@@ -20,13 +20,26 @@ BASE32 = "#" + "a" * 32  # the longest open name
 
 
 def room(name: str, rid: int = 7) -> Room:
-    return Room(id=rid, name=name, created_at=0.0, created_by="alice", paused=False, paused_reason=None,
-                budget_per_hour=60, budget_remaining=60, budget_window_start=0.0, budget_notice_window=None,
-                hop_count=0, hop_limit=6, last_msg_at=None)
+    return Room(
+        id=rid,
+        name=name,
+        created_at=0.0,
+        created_by="alice",
+        paused=False,
+        paused_reason=None,
+        budget_per_hour=60,
+        budget_remaining=60,
+        budget_window_start=0.0,
+        budget_notice_window=None,
+        hop_count=0,
+        hop_limit=6,
+        last_msg_at=None,
+    )
 
 
-@pytest.mark.parametrize("name, rid", [("#build", 7), ("#a_b-c", 1), ("#0", 12), (BASE32, 10**18),
-                                       ("#x", 999_999_999_999_999_999)])
+@pytest.mark.parametrize(
+    "name, rid", [("#build", 7), ("#a_b-c", 1), ("#0", 12), (BASE32, 10**18), ("#x", 999_999_999_999_999_999)]
+)
 def test_closed_name_round_trip(name: str, rid: int) -> None:
     closed = closed_room_name(name, rid)
     assert closed == f"{name}~closed-{rid}"
@@ -39,17 +52,46 @@ def test_closed_room_name_example() -> None:
     assert closed_room_name("#build", 7) == "#build~closed-7"
 
 
-@pytest.mark.parametrize("name, rid", [("build", 7), ("#Build", 7), ("#build", 0), ("#build", -1),
-                                       (BASE32 + "a", 1), ("#x~closed-1", 2), ("#x", 10**19)])
+@pytest.mark.parametrize(
+    "name, rid",
+    [
+        ("build", 7),
+        ("#Build", 7),
+        ("#build", 0),
+        ("#build", -1),
+        (BASE32 + "a", 1),
+        ("#x~closed-1", 2),
+        ("#x", 10**19),
+    ],
+)
 def test_closed_room_name_refuses_what_it_could_not_split(name: str, rid: int) -> None:
     with pytest.raises(ValueError):
         closed_room_name(name, rid)
 
 
-@pytest.mark.parametrize("bad", ["#x~closed-0", "#x~closed-01", "#x~closed-1\n", "\n#x~closed-1",
-                                 "#x~closed-", "#x~closed-1a", "x~closed-1", "#X~closed-1",
-                                 "#x~closed-1~closed-2", "#x~Closed-1", "#x~closed-" + "1" * 20,
-                                 BASE32 + "a~closed-1", "#-x~closed-1", "#x", "", "#x~", None, 7])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "#x~closed-0",
+        "#x~closed-01",
+        "#x~closed-1\n",
+        "\n#x~closed-1",
+        "#x~closed-",
+        "#x~closed-1a",
+        "x~closed-1",
+        "#X~closed-1",
+        "#x~closed-1~closed-2",
+        "#x~Closed-1",
+        "#x~closed-" + "1" * 20,
+        BASE32 + "a~closed-1",
+        "#-x~closed-1",
+        "#x",
+        "",
+        "#x~",
+        None,
+        7,
+    ],
+)
 def test_split_closed_rejects(bad: object) -> None:
     assert split_closed(bad) is None  # type: ignore[arg-type]
 

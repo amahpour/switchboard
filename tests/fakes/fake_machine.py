@@ -18,16 +18,21 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-
 from conftest import child_env
+
 from fakes.fake_link import PID_SHIFT, make_pi_home
 from switchboard import __version__
 from switchboard.paths import Paths
 from switchboard.remote import linkkey
 from switchboard.remote.config import write_satellite_conf
 
-FACTS = {"hostname": "work-laptop", "os": "macOS 15.6", "arch": "arm64", "version": __version__,
-         "harnesses": ["claude", "codex"]}
+FACTS = {
+    "hostname": "work-laptop",
+    "os": "macOS 15.6",
+    "arch": "arm64",
+    "version": __version__,
+    "harnesses": ["claude", "codex"],
+}
 
 
 class TestMachine:
@@ -47,22 +52,44 @@ class TestMachine:
         key = linkkey.make_key(self.home / "link" / linkkey.MACHINE_KEY)
         pub = linkkey.pub_raw(key)
         self.fingerprint = linkkey.fingerprint(pub)
-        r = httpx.post(self.origin + linkkey.PAIR_PATH, json={"code": code, "key": linkkey.b64u(pub),
-                                                              "facts": self.facts}, timeout=10)
+        r = httpx.post(
+            self.origin + linkkey.PAIR_PATH,
+            json={"code": code, "key": linkkey.b64u(pub), "facts": self.facts},
+            timeout=10,
+        )
         r.raise_for_status()
         data = r.json()
         assert data["fingerprint"] == self.fingerprint, data
         self.name = data["name"]
-        write_satellite_conf(self.paths, self.name, desktop="broker", key_fp=self.fingerprint,
-                             broker_url=self.origin, broker_key=data["broker_key"])
+        write_satellite_conf(
+            self.paths,
+            self.name,
+            desktop="broker",
+            key_fp=self.fingerprint,
+            broker_url=self.origin,
+            broker_key=data["broker_key"],
+        )
         return data
 
     def start(self) -> subprocess.Popen[bytes]:
         out = open(self.home / "dialer-test.out", "ab")
-        self.proc = subprocess.Popen([sys.executable, "-m", "switchboard", "--home", str(self.home), "start",
-                                      "--foreground", "--test-mode"],
-                                     env=child_env(SWITCHBOARD_TEST_PID_SHIFT=str(PID_SHIFT)),
-                                     stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True)
+        self.proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "switchboard",
+                "--home",
+                str(self.home),
+                "start",
+                "--foreground",
+                "--test-mode",
+            ],
+            env=child_env(SWITCHBOARD_TEST_PID_SHIFT=str(PID_SHIFT)),
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=out,
+            start_new_session=True,
+        )
         out.close()
         return self.proc
 

@@ -78,7 +78,9 @@ def set_allow(data: dict[str, Any]) -> list[str]:
     if perms is None:
         perms = data["permissions"] = {}
     if not isinstance(perms, dict):
-        raise InstallError('"permissions" in ~/.config/devin/config.json is not an object; fix it by hand first')
+        raise InstallError(
+            '"permissions" in ~/.config/devin/config.json is not an object; fix it by hand first'
+        )
     allow = perms.get("allow")
     if allow is None:
         allow = perms["allow"] = []
@@ -94,7 +96,9 @@ def set_mcp(data: dict[str, Any], entry: dict[str, Any]) -> list[str]:
     if servers is None:
         servers = data["mcpServers"] = {}
     if not isinstance(servers, dict):
-        raise InstallError('"mcpServers" in ~/.config/devin/mcp_config.json is not an object; fix it by hand first')
+        raise InstallError(
+            '"mcpServers" in ~/.config/devin/mcp_config.json is not an object; fix it by hand first'
+        )
     have = servers.get("switchboard")
     refuse_foreign_mcp("~/.config/devin/mcp_config.json", have)
     if have == entry:
@@ -139,20 +143,26 @@ def unplan(user_home: Path, home: str, *, run_commands: bool = True) -> Plan:
     p = Plan("devin", verb="uninstall")
     base = user_home / ".config" / "devin"
     mj = base / "mcp_config.json"
-    json_removal(p, mj, user_home, home, lambda d: remove_mcp(d, home, tilde(mj, user_home), "devin", p.notes))
+    json_removal(
+        p, mj, user_home, home, lambda d: remove_mcp(d, home, tilde(mj, user_home), "devin", p.notes)
+    )
     mcp_after = p.edits[-1].after if isinstance(p.edits[-1], FileEdit) else None
     cj = base / "config.json"
 
     def remove(d: dict[str, Any]) -> list[str]:
         lines = remove_hook_groups(d, home, drop_empty_hooks=True)[0]
         # the eight names serve every switchboard home: keep them while another home's install remains
-        others = sorted({*other_hook_homes(dump_json(d), home), *filter(None, [_other_mcp_home(mcp_after, home)])})
+        others = sorted(
+            {*other_hook_homes(dump_json(d), home), *filter(None, [_other_mcp_home(mcp_after, home)])}
+        )
         allow = (d.get("permissions") or {}).get("allow") if isinstance(d.get("permissions"), dict) else None
         if not others:
             return lines + remove_allow(d)
         if isinstance(allow, list) and any(n in ALLOW for n in allow):
-            p.notes.append(f"{tilde(cj, user_home)}: switchboard's eight allow names stay: the switchboard install for"
-                           f" another home ({', '.join(safe_text(o) for o in others)}) still uses them")
+            p.notes.append(
+                f"{tilde(cj, user_home)}: switchboard's eight allow names stay: the switchboard install for"
+                f" another home ({', '.join(safe_text(o) for o in others)}) still uses them"
+            )
         return lines
 
     json_removal(p, cj, user_home, home, remove)
@@ -166,21 +176,39 @@ def plan(user_home: Path, python: str, home: str, sha12: str, *, run_commands: b
     before, data = load_json_obj(mj)
     new = deep(data)
     lines = set_mcp(new, mcp_entry(python, home))
-    p.edits.append(FileEdit(path=mj, before=before, after=dump_json(new) if lines else (before or ""),
-                            display=lines, label=tilde(mj, user_home)))
+    p.edits.append(
+        FileEdit(
+            path=mj,
+            before=before,
+            after=dump_json(new) if lines else (before or ""),
+            display=lines,
+            label=tilde(mj, user_home),
+        )
+    )
     cj = base / "config.json"
     cbefore, cdata = load_json_obj(cj)
     cnew = deep(cdata)
     clines = set_hook_groups(cnew, hook_events(python, home, sha12), home)
     allow_lines = set_allow(cnew)
     clines += allow_lines
-    p.edits.append(FileEdit(path=cj, before=cbefore, after=dump_json(cnew) if clines else (cbefore or ""),
-                            display=clines, label=tilde(cj, user_home)))
+    p.edits.append(
+        FileEdit(
+            path=cj,
+            before=cbefore,
+            after=dump_json(cnew) if clines else (cbefore or ""),
+            display=clines,
+            label=tilde(cj, user_home),
+        )
+    )
     if allow_lines:
-        p.notes.append("permissions.allow pre-approves switchboard's eight tools in Devin: they run without an"
-                       " approval prompt (nothing else is allowlisted)")
-    p.notes.append("hooks and the MCP server take effect in new Devin sessions; they are inert until a"
-                   " session joins a room")
+        p.notes.append(
+            "permissions.allow pre-approves switchboard's eight tools in Devin: they run without an"
+            " approval prompt (nothing else is allowlisted)"
+        )
+    p.notes.append(
+        "hooks and the MCP server take effect in new Devin sessions; they are inert until a"
+        " session joins a room"
+    )
     p.notes.append("an idle Devin agent listens in wait(); interject by typing, then Enter on an empty line")
     return p
 
@@ -196,8 +224,10 @@ def print_args(python: str, home: str, sha12: str, workspace: Path | None = None
         "env": {},
         "files": {
             ".devin/config.json": dump_json(cfg),
-            ".devin/mcp_config.json": json.dumps({"mcpServers": {"switchboard": mcp_entry(python, home)}},
-                                                  indent=2) + "\n",
+            ".devin/mcp_config.json": json.dumps(
+                {"mcpServers": {"switchboard": mcp_entry(python, home)}}, indent=2
+            )
+            + "\n",
         },
         "notes": ["put these files in the workspace (project-local Devin config); nothing was written"],
     }

@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from conftest import InProcBroker, child_env
+
 from fakes.fake_claude_inbox import FakeInbox
 from switchboard.install.common import hook_command
 from switchboard.paths import hook_sha12
@@ -42,16 +43,28 @@ def fixture(name: str, **over: Any) -> dict[str, Any]:
 class FakeClaude:
     """A fake harness process; ``as_harness="codex"`` makes it a Codex daemon stand-in."""
 
-    def __init__(self, b: InProcBroker | None, as_harness: str = "claude", *, inbox: bool = False,
-                 reg_socket: str | None = None, token: bool = True, home: str | Path | None = None,
-                 sessions_dir: str | Path | None = None, env: dict[str, str] | None = None):
+    def __init__(
+        self,
+        b: InProcBroker | None,
+        as_harness: str = "claude",
+        *,
+        inbox: bool = False,
+        reg_socket: str | None = None,
+        token: bool = True,
+        home: str | Path | None = None,
+        sessions_dir: str | Path | None = None,
+        env: dict[str, str] | None = None,
+    ):
         """``home``/``sessions_dir``: another switchboard home and Claude registry than the
         broker's (a session on a remote host, whose MCP server and hooks dial that home's
         satellite, DESIGN.md §27.13)."""
         self.b = b
         self.home = str(home) if home is not None else str(b.paths.home)  # type: ignore[union-attr]
-        self.sessions_dir = (str(sessions_dir) if sessions_dir is not None
-                             else (b.cfg.claude.sessions_dir if b is not None else ""))
+        self.sessions_dir = (
+            str(sessions_dir)
+            if sessions_dir is not None
+            else (b.cfg.claude.sessions_dir if b is not None else "")
+        )
         self.bindir = Path(tempfile.mkdtemp(prefix="yk-fc-", dir="/tmp"))
         exe = self.bindir / as_harness
         shutil.copy(FAKE, exe)
@@ -72,8 +85,9 @@ class FakeClaude:
         else:
             extra.update(YK_FAKE_CLIENT="codex-tui")
         env = child_env(**extra)
-        self.p = subprocess.Popen([sys.executable, str(exe)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                  env=env, text=True)
+        self.p = subprocess.Popen(
+            [sys.executable, str(exe)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env, text=True
+        )
         hello = self.recv()
         assert hello.get("ready"), hello
         self.pid = hello["pid"]

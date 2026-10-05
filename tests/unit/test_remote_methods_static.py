@@ -17,9 +17,21 @@ from switchboard.broker.remote import RemotePeer
 from switchboard.remote import proto
 
 EXACT = {
-    "mcp.hello", "mcp.attach", "mcp.posted", "mcp.bye",
-    "agent.join", "agent.leave", "agent.who", "agent.say", "agent.read", "agent.wait", "agent.unwait",
-    "agent.pass", "agent.away", "hook.event", "hook.ack",
+    "mcp.hello",
+    "mcp.attach",
+    "mcp.posted",
+    "mcp.bye",
+    "agent.join",
+    "agent.leave",
+    "agent.who",
+    "agent.say",
+    "agent.read",
+    "agent.wait",
+    "agent.unwait",
+    "agent.pass",
+    "agent.away",
+    "hook.event",
+    "hook.ack",
 }
 
 
@@ -83,10 +95,26 @@ def _server(called: list[str]) -> rpc.RpcServer:
     return srv
 
 
-FORBIDDEN_HERE = ["sys.stop", "sys.status", "sys.ping", "human.say", "human.command", "human.login_link",
-                  "human.logout_all", "room.create", "room.list", "room.who", "room.history", "room.tail",
-                  "remote.enable", "remote.disable", "remote.remove", "remote.status", "room.delete",
-                  "no.such.method"]
+FORBIDDEN_HERE = [
+    "sys.stop",
+    "sys.status",
+    "sys.ping",
+    "human.say",
+    "human.command",
+    "human.login_link",
+    "human.logout_all",
+    "room.create",
+    "room.list",
+    "room.who",
+    "room.history",
+    "room.tail",
+    "remote.enable",
+    "remote.disable",
+    "remote.remove",
+    "remote.status",
+    "room.delete",
+    "no.such.method",
+]
 
 
 @pytest.mark.parametrize("method", FORBIDDEN_HERE)

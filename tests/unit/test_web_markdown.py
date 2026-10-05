@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import node_for_tests
 
 HARNESS = Path(__file__).resolve().parents[1] / "web_md_harness.js"
@@ -27,8 +26,27 @@ NODE, pytestmark = node_for_tests()  # a skip without node; a failure under SWIT
 JS = "java" + "script:"
 
 ALLOWED_TAGS = {
-    "p", "br", "div", "span", "strong", "em", "code", "pre", "ul", "ol", "li", "blockquote", "hr",
-    "table", "thead", "tbody", "tr", "th", "td", "a", "button",
+    "p",
+    "br",
+    "div",
+    "span",
+    "strong",
+    "em",
+    "code",
+    "pre",
+    "ul",
+    "ol",
+    "li",
+    "blockquote",
+    "hr",
+    "table",
+    "thead",
+    "tbody",
+    "tr",
+    "th",
+    "td",
+    "a",
+    "button",
 }
 TITLE_SCHEME = "Not a link: only http(s) URLs are followed"
 TITLE_LOCAL = "Not a link: links to this switchboard page are never followed"
@@ -37,9 +55,12 @@ TITLE_CREDS = "Not a link: a URL with a user name or password can hide its real 
 
 # ------------------------------------------------------------------ helpers
 
+
 def harness(cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
     assert NODE is not None
-    r = subprocess.run([NODE, str(HARNESS)], input=json.dumps(cases), capture_output=True, text=True, timeout=30)
+    r = subprocess.run(
+        [NODE, str(HARNESS)], input=json.dumps(cases), capture_output=True, text=True, timeout=30
+    )
     assert r.returncode == 0, r.stderr
     out: list[dict[str, Any]] = json.loads(r.stdout)
     return out
@@ -101,13 +122,17 @@ def blocked(tree: dict[str, Any]) -> dict[str, Any]:
 
 # ------------------------------------------------------------------ constructs (MarkdownSheet M1-M10)
 
-@pytest.mark.parametrize(("src", "cls", "level"), [
-    ("# parse_port review", "md-h1", "3"),
-    ("## Open questions", "md-h2", "4"),
-    ("### Next step", "md-h3", "5"),
-    ("#### four", "md-h3", "6"),
-    ("###### six ##", "md-h3", "6"),
-])
+
+@pytest.mark.parametrize(
+    ("src", "cls", "level"),
+    [
+        ("# parse_port review", "md-h1", "3"),
+        ("## Open questions", "md-h2", "4"),
+        ("### Next step", "md-h3", "5"),
+        ("#### four", "md-h3", "6"),
+        ("###### six ##", "md-h3", "6"),
+    ],
+)
 def test_headings_are_scaled_down(src: str, cls: str, level: str) -> None:
     [h] = top(render(src))
     assert h["tag"] == "div" and classes(h) == ["md-h", cls]
@@ -207,9 +232,16 @@ def test_unclosed_fence_runs_to_the_end_and_keeps_markup_raw() -> None:
     assert pre["children"][1]["text"] == "# not a heading\n\n**raw** <b>\n"
 
 
-@pytest.mark.parametrize(("info", "label"), [
-    ("sh", "sh"), ("c++", "c++"), ("", "code"), ("<img/src=x>", "imgsrcx"), ("x" * 40, "x" * 20),
-])
+@pytest.mark.parametrize(
+    ("info", "label"),
+    [
+        ("sh", "sh"),
+        ("c++", "c++"),
+        ("", "code"),
+        ("<img/src=x>", "imgsrcx"),
+        ("x" * 40, "x" * 20),
+    ],
+)
 def test_fence_language_label_is_filtered(info: str, label: str) -> None:
     [lang] = by_cls(render(f"```{info}\nx\n```"), "md-lang")
     assert lang["text"] == label
@@ -286,7 +318,9 @@ def test_thematic_break(src: str) -> None:
 
 
 def test_mention_only_when_the_broker_listed_it() -> None:
-    tree = render("@claude-1 add validation, then @Codex-1 review. cc @devin-1", mentions=("claude-1", "codex-1"))
+    tree = render(
+        "@claude-1 add validation, then @Codex-1 review. cc @devin-1", mentions=("claude-1", "codex-1")
+    )
     assert [m["text"] for m in by_cls(tree, "md-mention")] == ["@claude-1", "@Codex-1"]
     assert tree["text"].endswith("cc @devin-1")
 
@@ -311,14 +345,18 @@ def test_link_text_can_hold_inline_markup() -> None:
 
 # ------------------------------------------------------------------ injection
 
-@pytest.mark.parametrize("src", [
-    "<script>alert(1)</script>",
-    "<img src=x onerror=alert(1)>",
-    "<b>x</b>",
-    "&amp; &lt;b&gt; &#106;",
-    "<iframe src=x></iframe>",
-    '<a href="/x">y</a>',
-])
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "<script>alert(1)</script>",
+        "<img src=x onerror=alert(1)>",
+        "<b>x</b>",
+        "&amp; &lt;b&gt; &#106;",
+        "<iframe src=x></iframe>",
+        '<a href="/x">y</a>',
+    ],
+)
 def test_raw_html_is_literal_text(src: str) -> None:
     tree = render(src)
     [p] = top(tree)
@@ -326,54 +364,63 @@ def test_raw_html_is_literal_text(src: str) -> None:
     assert all(c["tag"] == "#text" for c in p["children"])
 
 
-@pytest.mark.parametrize("src", [
-    "![a](http://x/y.png)",
-    '![alt *x*](https://example.com/a.png "t")',
-    "![see https://example.com/z](https://example.com/y.png)",
-    "![[inner](https://example.com/a)](https://example.com/b.png)",
-])
+@pytest.mark.parametrize(
+    "src",
+    [
+        "![a](http://x/y.png)",
+        '![alt *x*](https://example.com/a.png "t")',
+        "![see https://example.com/z](https://example.com/y.png)",
+        "![[inner](https://example.com/a)](https://example.com/b.png)",
+    ],
+)
 def test_images_never_render_and_nothing_inside_becomes_a_link(src: str) -> None:
     tree = render(src)
     assert not by_tag(tree, "a") and not by_tag(tree, "em")
     assert tree["text"] == src
 
 
-@pytest.mark.parametrize("dest", [
-    JS + "alert(1)",
-    JS.upper() + "alert(1)",
-    "JaVaScRiPt:alert(1)",
-    "java\tscript:alert(1)",
-    "java\nscript:alert(1)",
-    "&#106;avascript:alert(1)",
-    "data:text/html,<script>alert(1)</script>",
-    "vbscript:msgbox(1)",
-    "file:///etc/passwd",
-    "//evil.example.com",
-    "/relative",
-    "http://",
-    "mailto:a@example.com",
-    "",
-])
+@pytest.mark.parametrize(
+    "dest",
+    [
+        JS + "alert(1)",
+        JS.upper() + "alert(1)",
+        "JaVaScRiPt:alert(1)",
+        "java\tscript:alert(1)",
+        "java\nscript:alert(1)",
+        "&#106;avascript:alert(1)",
+        "data:text/html,<script>alert(1)</script>",
+        "vbscript:msgbox(1)",
+        "file:///etc/passwd",
+        "//evil.example.com",
+        "/relative",
+        "http://",
+        "mailto:a@example.com",
+        "",
+    ],
+)
 def test_non_http_links_are_blocked(dest: str) -> None:
     tree = render(f"[x]({dest})")
     span = blocked(tree)
     assert span["text"] == "x" and span["title"] == TITLE_SCHEME
 
 
-@pytest.mark.parametrize("url", [
-    "http://switchboard.localhost:7419/logout",
-    "HTTP://SWITCHBOARD.LOCALHOST/",
-    "http://switchboard.localhost./x",
-    "http://a.switchboard.localhost/",
-    "http://localhost/",
-    "http://127.0.0.1:7419/",
-    "http://127.1.2.3/",
-    "http://2130706433/",
-    "http://[::1]/",
-    "http://[0:0:0:0:0:0:0:1]/",
-    "http://0.0.0.0:7419/",
-    "https://fpga-pi.example.com:7419/api",
-])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://switchboard.localhost:7419/logout",
+        "HTTP://SWITCHBOARD.LOCALHOST/",
+        "http://switchboard.localhost./x",
+        "http://a.switchboard.localhost/",
+        "http://localhost/",
+        "http://127.0.0.1:7419/",
+        "http://127.1.2.3/",
+        "http://2130706433/",
+        "http://[::1]/",
+        "http://[0:0:0:0:0:0:0:1]/",
+        "http://0.0.0.0:7419/",
+        "https://fpga-pi.example.com:7419/api",
+    ],
+)
 def test_links_to_this_switchboard_are_blocked(url: str) -> None:
     host = "fpga-pi.example.com"
     tree = render(f"[x]({url})", local_host=host)
@@ -397,12 +444,20 @@ def test_a_good_link_shows_the_real_url() -> None:
 
 def test_link_title_and_angle_destination() -> None:
     tree = render('[a](https://example.com/p?q=1 "the title") and [b](<https://example.com/x y>)')
-    assert [a["href"] for a in by_tag(tree, "a")] == ["https://example.com/p?q=1", "https://example.com/x%20y"]
+    assert [a["href"] for a in by_tag(tree, "a")] == [
+        "https://example.com/p?q=1",
+        "https://example.com/x%20y",
+    ]
 
 
-@pytest.mark.parametrize(("src", "tail"), [
-    ("<https://x.y/z>", ""), ("https://x.y/z).", ")."), ("(https://x.y/z)", ")"),
-])
+@pytest.mark.parametrize(
+    ("src", "tail"),
+    [
+        ("<https://x.y/z>", ""),
+        ("https://x.y/z).", ")."),
+        ("(https://x.y/z)", ")"),
+    ],
+)
 def test_autolinks_trim_trailing_punctuation(src: str, tail: str) -> None:
     tree = render(src)
     [p] = top(tree)
@@ -418,17 +473,29 @@ def test_bare_urls_keep_balanced_parens_and_skip_link_text() -> None:
     assert hrefs == ["https://en.wikipedia.org/wiki/Foo_(bar)", "https://b.example/"]
 
 
-@pytest.mark.parametrize(("src", "url", "mentions"), [
-    # Review finding: bare URLs used to be found only in the text left over after emphasis, code
-    # spans and mentions had taken their pieces, so each of these linked somewhere else.
-    ("see https://github.com/python/cpython/blob/main/Lib/__init__.py ok",
-     "https://github.com/python/cpython/blob/main/Lib/__init__.py", ()),
-    ("https://www.npmjs.com/package/@types/node", "https://www.npmjs.com/package/@types/node", ("types",)),
-    ("https://x.com/a*b*c", "https://x.com/a*b*c", ()),
-    ("https://x.com/a_b_/c`d", "https://x.com/a_b_/c", ()),  # a backtick ends it (URL_STOP)
-    ("https://x.y/a\\_b", "https://x.y/a_b", ()),  # an escape inside keeps its character
-])
-def test_a_bare_url_is_taken_whole_before_inline_markup(src: str, url: str, mentions: tuple[str, ...]) -> None:
+@pytest.mark.parametrize(
+    ("src", "url", "mentions"),
+    [
+        # Review finding: bare URLs used to be found only in the text left over after emphasis, code
+        # spans and mentions had taken their pieces, so each of these linked somewhere else.
+        (
+            "see https://github.com/python/cpython/blob/main/Lib/__init__.py ok",
+            "https://github.com/python/cpython/blob/main/Lib/__init__.py",
+            (),
+        ),
+        (
+            "https://www.npmjs.com/package/@types/node",
+            "https://www.npmjs.com/package/@types/node",
+            ("types",),
+        ),
+        ("https://x.com/a*b*c", "https://x.com/a*b*c", ()),
+        ("https://x.com/a_b_/c`d", "https://x.com/a_b_/c", ()),  # a backtick ends it (URL_STOP)
+        ("https://x.y/a\\_b", "https://x.y/a_b", ()),  # an escape inside keeps its character
+    ],
+)
+def test_a_bare_url_is_taken_whole_before_inline_markup(
+    src: str, url: str, mentions: tuple[str, ...]
+) -> None:
     tree = render(src, mentions=mentions)
     [a] = by_tag(tree, "a")
     assert a["href"] == url and a["text"] == url
@@ -441,17 +508,22 @@ def test_emphasis_around_a_bare_url_still_wraps_it() -> None:
     assert [a["href"] for a in by_tag(tree, "a")] == ["https://x.y/z", "https://x.y/w", "https://x.y/v"]
     [em] = by_tag(tree, "em")
     [strong] = by_tag(tree, "strong")
-    assert [c["tag"] for c in em["children"]][:1] == ["a"] and [c["tag"] for c in strong["children"]][:1] == ["a"]
+    assert [c["tag"] for c in em["children"]][:1] == ["a"] and [c["tag"] for c in strong["children"]][:1] == [
+        "a"
+    ]
     assert tree["text"].endswith("https://x.y/v\u2197).")
 
 
-@pytest.mark.parametrize("url", [
-    "https://a@b.example/",
-    "https://github.com%2Fx@evil.example/",
-    "https://github.com%2Famahpour%2Fswitchboard%2Factions@evil.example/",
-    "https://user:secret@example.com/x",
-    "https://:secret@example.com/",
-])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://a@b.example/",
+        "https://github.com%2Fx@evil.example/",
+        "https://github.com%2Famahpour%2Fswitchboard%2Factions@evil.example/",
+        "https://user:secret@example.com/x",
+        "https://:secret@example.com/",
+    ],
+)
 def test_urls_with_a_user_name_or_password_are_blocked(url: str) -> None:
     """Review finding: userinfo makes the shown URL start with a trusted-looking host while the
     browser goes to the host after the '@'. Refused on every path: a link, an autolink, bare."""
@@ -478,12 +550,14 @@ def test_a_link_inside_a_link_keeps_only_its_text() -> None:
 
 
 def test_safe_url_api() -> None:
-    out = harness([
-        {"fn": "safeUrl", "raw": " https://Example.com/a b ", "localHost": ""},
-        {"fn": "safeUrl", "raw": JS + "x", "localHost": ""},
-        {"fn": "safeUrl", "raw": "/x", "localHost": ""},
-        {"fn": "safeUrl", "raw": "http://fpga-pi:7419/", "localHost": "FPGA-PI"},
-    ])
+    out = harness(
+        [
+            {"fn": "safeUrl", "raw": " https://Example.com/a b ", "localHost": ""},
+            {"fn": "safeUrl", "raw": JS + "x", "localHost": ""},
+            {"fn": "safeUrl", "raw": "/x", "localHost": ""},
+            {"fn": "safeUrl", "raw": "http://fpga-pi:7419/", "localHost": "FPGA-PI"},
+        ]
+    )
     assert out == [
         {"ok": True, "href": "https://example.com/a%20b"},
         {"ok": False, "why": "scheme"},
@@ -493,6 +567,7 @@ def test_safe_url_api() -> None:
 
 
 # ------------------------------------------------------------------ limits and performance
+
 
 def big_table(cols: int, rows: int) -> str:
     line = "|".join(["a"] * cols)
@@ -573,17 +648,21 @@ def test_inline_nesting_stops_at_sixteen_levels(run: int) -> None:
 
 # ------------------------------------------------------------------ firstLine
 
-@pytest.mark.parametrize(("src", "max_", "want"), [
-    ("**Next step:** flash once codex-1 signs off", 80, "Next step: flash once codex-1 signs off"),
-    ("\n\n## Title *here*\nmore", 80, "Title here"),
-    ("> - [the link](https://example.com) and `code`", 80, "the link and code"),
-    ("```python\nprint(1)\n```", 80, "print(1)"),
-    ("<b>x</b> &amp;", 80, "<b>x</b> &amp;"),
-    ("word " * 40, 20, "word word word word…"),
-    ("abcdefghij", 10, "abcdefghij"),
-    ("abcdefghijk", 10, "abcdefghi…"),
-    ("", 80, ""),
-])
+
+@pytest.mark.parametrize(
+    ("src", "max_", "want"),
+    [
+        ("**Next step:** flash once codex-1 signs off", 80, "Next step: flash once codex-1 signs off"),
+        ("\n\n## Title *here*\nmore", 80, "Title here"),
+        ("> - [the link](https://example.com) and `code`", 80, "the link and code"),
+        ("```python\nprint(1)\n```", 80, "print(1)"),
+        ("<b>x</b> &amp;", 80, "<b>x</b> &amp;"),
+        ("word " * 40, 20, "word word word word…"),
+        ("abcdefghij", 10, "abcdefghij"),
+        ("abcdefghijk", 10, "abcdefghi…"),
+        ("", 80, ""),
+    ],
+)
 def test_first_line(src: str, max_: int, want: str) -> None:
     [out] = harness([{"fn": "firstLine", "text": src, "max": max_}])
     assert out["value"] == want

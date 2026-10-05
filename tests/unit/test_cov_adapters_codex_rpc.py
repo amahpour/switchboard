@@ -40,7 +40,9 @@ def test_thread_read_params_are_type_checked() -> None:
         check_request("thread/read", {})
 
 
-def test_the_override_denylist_holds_even_if_an_allowlist_were_widened(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_override_denylist_holds_even_if_an_allowlist_were_widened(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Defence in depth: the per-method key tables are the first gate, the
     guardrails' override-field list the second. Widen a table by mistake and
     the override key is still refused before anything is sent."""
@@ -57,8 +59,13 @@ def test_contains_is_false_for_a_thread_that_does_not_serialize() -> None:
 
 def test_join_proof_skips_malformed_turns() -> None:
     needle = "yk:j0123456789abcdef"
-    good = {"type": "mcpToolCall", "server": "switchboard", "tool": "join", "status": "completed",
-            "result": {"content": [{"type": "text", "text": needle}]}}
+    good = {
+        "type": "mcpToolCall",
+        "server": "switchboard",
+        "tool": "join",
+        "status": "completed",
+        "result": {"content": [{"type": "text", "text": needle}]},
+    }
     assert not rpc.join_proven({"turns": ["x", {"items": "x"}, {"id": "t"}]}, needle)
     assert rpc.join_proven({"turns": ["x", {"items": "x"}, {"items": ["junk", good]}]}, needle)
 
@@ -118,9 +125,11 @@ async def test_a_failed_initialize_closes_the_connection_and_raises(tmp_home: Pa
 
 
 async def test_junk_frames_are_skipped_and_a_raising_handler_is_contained(
-        tmp_home: Path, caplog: pytest.LogCaptureFixture) -> None:
+    tmp_home: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """Frames that aren't a JSON object, a message with neither id nor a string
     method, and a notification handler that raises all leave the link up."""
+
     async def handler(ws: Any) -> None:
         async for frame in ws:
             m = json.loads(frame)
@@ -158,6 +167,7 @@ async def test_junk_frames_are_skipped_and_a_raising_handler_is_contained(
 async def test_a_dropped_connection_fails_the_request_in_flight(tmp_home: Path) -> None:
     """The server vanishes (no close frame) while a request waits: the request
     fails with ConnectionError at once, and the client says it is closed."""
+
     async def handler(ws: Any) -> None:
         async for frame in ws:
             m = json.loads(frame)
@@ -244,7 +254,9 @@ async def test_one_shot_reads_on_a_fresh_connection_and_closes_it(tmp_home: Path
                     await ws.send(init_ok(m))
                 elif m.get("method") == "thread/read":
                     tid = m["params"]["threadId"]
-                    res: Any = {"thread": {"id": tid, "status": {"type": "idle"}}} if tid == "t1" else {"thread": 5}
+                    res: Any = (
+                        {"thread": {"id": tid, "status": {"type": "idle"}}} if tid == "t1" else {"thread": 5}
+                    )
                     await ws.send(json.dumps({"id": m["id"], "result": res}))
         finally:
             open_now.discard(me)
@@ -254,7 +266,9 @@ async def test_one_shot_reads_on_a_fresh_connection_and_closes_it(tmp_home: Path
         path = str(tmp_home / "cx.sock")
         th = await rpc.one_shot(path, lambda r: r.read_thread("t1"), timeout=2.0)
         assert th == {"id": "t1", "status": {"type": "idle"}}
-        assert await rpc.one_shot(path, lambda r: r.read_thread("t2"), timeout=2.0) == {}  # not a thread object
+        assert (
+            await rpc.one_shot(path, lambda r: r.read_thread("t2"), timeout=2.0) == {}
+        )  # not a thread object
         assert conns == [1, 2]
         for _ in range(100):  # the server notices each close a moment later
             if not open_now:

@@ -12,11 +12,19 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import FakeClock
+
 from switchboard import db
 from switchboard.broker.commands import (
-    HELP_TEXT, MAX_BUDGET, MAX_HOPS, Actor, CommandError, apply, hops_raise, parse_command, required_role,
+    HELP_TEXT,
+    MAX_BUDGET,
+    MAX_HOPS,
+    Actor,
+    CommandError,
+    apply,
+    hops_raise,
+    parse_command,
+    required_role,
 )
 from switchboard.broker.hub import Hub, Subscriber
 from switchboard.broker.service import BrokerInfo, RoomService, ServiceError
@@ -88,8 +96,14 @@ def forbidden(svc: RoomService, text: str, actor: Actor = CLI) -> str:
 # ---------------------------------------------------------------- parsing
 @pytest.mark.parametrize(
     "text,args",
-    [("/hops", ()), ("/HOPS 30", ("30",)), ("/hops 0", ("0",)), ("/hops 007", ("7",)),
-     (f"/hops {MAX_HOPS}", (str(MAX_HOPS),)), ("  /hops   12 ", ("12",))],
+    [
+        ("/hops", ()),
+        ("/HOPS 30", ("30",)),
+        ("/hops 0", ("0",)),
+        ("/hops 007", ("7",)),
+        (f"/hops {MAX_HOPS}", (str(MAX_HOPS),)),
+        ("  /hops   12 ", ("12",)),
+    ],
 )
 def test_parse(text: str, args: tuple[str, ...]) -> None:
     c = parse_command(text)
@@ -98,8 +112,19 @@ def test_parse(text: str, args: tuple[str, ...]) -> None:
 
 @pytest.mark.parametrize(
     "text",
-    ["/hops -1", f"/hops {MAX_HOPS + 1}", "/hops x", "/hops 1 2", "/hops 1.5", "/hops +5", "/hops 1_0",
-     "/hops ²", "/hops ３", "/hops 1e3", "/hops 99999999999999999999"],
+    [
+        "/hops -1",
+        f"/hops {MAX_HOPS + 1}",
+        "/hops x",
+        "/hops 1 2",
+        "/hops 1.5",
+        "/hops +5",
+        "/hops 1_0",
+        "/hops ²",
+        "/hops ３",
+        "/hops 1e3",
+        "/hops 99999999999999999999",
+    ],
 )
 def test_parse_errors(text: str) -> None:
     with pytest.raises(CommandError) as e:
@@ -144,10 +169,19 @@ def test_hops_raise() -> None:
 
 def test_required_roles(svc: RoomService) -> None:
     room = svc.room("#build")  # limit 6
-    need = {t: required_role(parse_command(t), room) for t in
-            ["/hops", "/hops 6", "/hops 5", "/hops 1", "/hops 7", "/hops 1000", "/hops 0"]}
-    assert need == {"/hops": "human_cli", "/hops 6": "human_cli", "/hops 5": "human_cli",
-                    "/hops 1": "human_cli", "/hops 7": "human", "/hops 1000": "human", "/hops 0": "human"}
+    need = {
+        t: required_role(parse_command(t), room)
+        for t in ["/hops", "/hops 6", "/hops 5", "/hops 1", "/hops 7", "/hops 1000", "/hops 0"]
+    }
+    assert need == {
+        "/hops": "human_cli",
+        "/hops 6": "human_cli",
+        "/hops 5": "human_cli",
+        "/hops 1": "human_cli",
+        "/hops 7": "human",
+        "/hops 1000": "human",
+        "/hops 0": "human",
+    }
     room = svc.store.set_hop_limit(room.id, 0)
     need = {t: required_role(parse_command(t), room) for t in ["/hops", "/hops 0", "/hops 1000"]}
     assert need == {"/hops": "human_cli", "/hops 0": "human_cli", "/hops 1000": "human_cli"}
@@ -158,7 +192,11 @@ def test_the_cli_may_lower_it_but_not_raise_it_or_turn_it_off(svc: RoomService) 
     assert msg == "raising the hop limit needs your web session: type it in the switchboard web UI"
     msg = forbidden(svc, "/hops 0")
     assert msg == "turning the loop guard off needs your web session: type it in the switchboard web UI"
-    assert svc.room("#build").hop_limit == 6 and hop_events(svc) == [] and notices(svc) == ["#build created by alice"]
+    assert (
+        svc.room("#build").hop_limit == 6
+        and hop_events(svc) == []
+        and notices(svc) == ["#build created by alice"]
+    )
     assert cmd(svc, "/hops 4", CLI) == "#build: hop limit set to 4 (was 6); hops 0/4"
     assert svc.room("#build").hop_limit == 4
     assert hop_events(svc) == [{"via": "cli", "old": 6, "new": 4}]
@@ -175,8 +213,12 @@ def test_apply_refuses_a_low_role_cleanly(svc: RoomService) -> None:
     """Defence in depth: apply() re-checks the role, with a clean 'forbidden' for every form."""
     anon = Actor(role="anon", via="cli")
     room = svc.room("#build")
-    for text, what in (("/hops", "/hops"), ("/hops 0", "turning the loop guard off"),
-                       ("/hops 7", "raising the hop limit"), ("/hops 3", "/hops")):
+    for text, what in (
+        ("/hops", "/hops"),
+        ("/hops 0", "turning the loop guard off"),
+        ("/hops 7", "raising the hop limit"),
+        ("/hops 3", "/hops"),
+    ):
         with pytest.raises(CommandError) as e:
             apply(parse_command(text), room, anon, svc)
         assert e.value.code == "forbidden" and e.value.message.startswith(what + " needs your web session")
@@ -186,7 +228,8 @@ def test_apply_refuses_a_low_role_cleanly(svc: RoomService) -> None:
 # ---------------------------------------------------------------- effects
 def test_show(svc: RoomService) -> None:
     assert cmd(svc, "/hops", CLI) == (
-        "#build: hops 0/6 (the room pauses after 6 agent messages in a row with none from alice)")
+        "#build: hops 0/6 (the room pauses after 6 agent messages in a row with none from alice)"
+    )
     agent_msgs(svc, 3)
     assert cmd(svc, "/hops").startswith("#build: hops 3/6 (")
     assert hop_events(svc) == []  # showing changes nothing
@@ -206,7 +249,9 @@ def test_raise_from_the_web_persists_broadcasts_and_notices(svc: RoomService, re
     assert notices(svc)[-1] == "alice set the hop limit to 30 (was 6) (via web)"
     frames = [d for k, r, d in rec.items if k == "room" and r == "#build"]
     assert frames and frames[-1]["settings"]["hop_limit"] == 30 and frames[-1]["settings"]["hop_count"] == 2
-    assert any(k == "msg" and d["msg"]["text"].startswith("alice set the hop limit to 30") for k, _, d in rec.items)
+    assert any(
+        k == "msg" and d["msg"]["text"].startswith("alice set the hop limit to 30") for k, _, d in rec.items
+    )
     assert svc.settings(room)["hop_limit"] == 30
     st = cmd(svc, "/status")
     assert "hops 2/30" in st and "] hop_limit_set" in st
@@ -216,7 +261,8 @@ def test_raise_from_the_web_persists_broadcasts_and_notices(svc: RoomService, re
 def test_zero_turns_the_guard_off_and_the_cli_may_turn_it_back_on(svc: RoomService, rec: Rec) -> None:
     agent_msgs(svc, 3)
     assert cmd(svc, "/hops 0") == (
-        "#build: loop guard off (hop limit 0, was 6); agents may message each other without limit")
+        "#build: loop guard off (hop limit 0, was 6); agents may message each other without limit"
+    )
     assert svc.room("#build").hop_limit == 0
     assert notices(svc)[-1] == "alice turned the loop guard off (hop limit was 6) (via web)"
     frames = [d for k, _, d in rec.items if k == "room"]
@@ -238,10 +284,14 @@ def test_a_loop_guard_pause_is_never_lifted_by_a_new_limit(svc: RoomService) -> 
     room = svc.room("#build")
     assert room.paused and room.paused_reason == "loop guard" and room.hop_count == 7
     # lowered below the count: still paused, and /resume is still the way out
-    assert cmd(svc, "/hops 5", CLI) == ("#build: hop limit set to 5 (was 30); hops 7/5; still paused by the"
-                                         " loop guard: /resume to continue (it resets the count)")
-    assert cmd(svc, "/hops 0") == ("#build: loop guard off (hop limit 0, was 5); agents may message each other"
-                                   " without limit; the room is still paused by the loop guard: /resume to continue")
+    assert cmd(svc, "/hops 5", CLI) == (
+        "#build: hop limit set to 5 (was 30); hops 7/5; still paused by the"
+        " loop guard: /resume to continue (it resets the count)"
+    )
+    assert cmd(svc, "/hops 0") == (
+        "#build: loop guard off (hop limit 0, was 5); agents may message each other"
+        " without limit; the room is still paused by the loop guard: /resume to continue"
+    )
     assert svc.room("#build").paused
     cmd(svc, "/resume")
     room = svc.room("#build")
@@ -250,8 +300,9 @@ def test_a_loop_guard_pause_is_never_lifted_by_a_new_limit(svc: RoomService) -> 
 
 def test_a_human_pause_is_reported_and_kept(svc: RoomService) -> None:
     cmd(svc, "/pause")
-    assert cmd(svc, "/hops 30") == ("#build: hop limit set to 30 (was 6); hops 0/30; the room is paused"
-                                    " (paused by alice) until /resume")
+    assert cmd(svc, "/hops 30") == (
+        "#build: hop limit set to 30 (was 6); hops 0/30; the room is paused (paused by alice) until /resume"
+    )
     assert svc.room("#build").paused
 
 
@@ -259,7 +310,8 @@ def test_lowering_below_the_count_says_the_next_agent_message_pauses(svc: RoomSe
     cmd(svc, "/hops 30")
     agent_msgs(svc, 10)
     assert cmd(svc, "/hops 5", CLI) == (
-        "#build: hop limit set to 5 (was 30); hops 10/5; the next agent message pauses the room")
+        "#build: hop limit set to 5 (was 30); hops 10/5; the next agent message pauses the room"
+    )
     assert not svc.room("#build").paused  # not at once: on the next agent message (engine)
 
 
@@ -267,4 +319,3 @@ def test_help_lists_hops(svc: RoomService) -> None:
     text = cmd(svc, "/help")
     assert text == HELP_TEXT
     assert "/hops               show" in text and "/hops <n>" in text and "0 turns it off" in text
-

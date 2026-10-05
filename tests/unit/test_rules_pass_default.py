@@ -10,7 +10,6 @@ import random
 from pathlib import Path
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import World
 from test_claude_adapter import claude
@@ -18,6 +17,7 @@ from test_codex_adapter import attach, codex
 from test_cursor_adapter import cursor, park_result, stop
 from test_devin_adapter import devin
 from test_rules_release import item
+
 from switchboard import envelope
 from switchboard.config import Config
 from switchboard.models import Push
@@ -77,14 +77,21 @@ def test_devin_stop_block_and_a_steer_carry_it(w: World) -> None:
 
 
 def test_stub_only_reminder_and_again_headers_carry_it(w: World) -> None:
-    stub = envelope.render_batch([item(1, 1)], room="#build", recipient="bot", human_name="alice",
-                                 token="yk:b1.00000000", peer_inline=False)
+    stub = envelope.render_batch(
+        [item(1, 1)],
+        room="#build",
+        recipient="bot",
+        human_name="alice",
+        token="yk:b1.00000000",
+        peer_inline=False,
+    )
     assert 'Call read("#build")' in stub and ADVICE in stub.splitlines()[0]
     again = dataclasses.replace(item(2, 2), redelivered=True)
     rem = dataclasses.replace(item(3, 1), reminders=1)
     for it in (again, rem):
-        text = envelope.render_batch([it], room="#build", recipient="bot", human_name="alice",
-                                     token="yk:b1.00000000", peer_inline=True)
+        text = envelope.render_batch(
+            [it], room="#build", recipient="bot", human_name="alice", token="yk:b1.00000000", peer_inline=True
+        )
         assert ADVICE in text.splitlines()[0]
 
 
@@ -97,14 +104,28 @@ def test_every_rendered_batch_has_it_in_its_header() -> None:
             it = item(i + 1, rng.choice([0, 1, 2]), text=rng.choice(["x", "<b>", "/pause", "yk:b1.aa"]))
             it = dataclasses.replace(it, redelivered=rng.random() < 0.2, reminders=rng.choice([0, 0, 1, 2]))
             items.append(it)
-        text = envelope.render_batch(items, room="#build", recipient="bot", human_name="alice",
-                                     token="yk:b9.12345678", peer_inline=rng.random() < 0.5,
-                                     more=rng.random() < 0.3)
+        text = envelope.render_batch(
+            items,
+            room="#build",
+            recipient="bot",
+            human_name="alice",
+            token="yk:b9.12345678",
+            peer_inline=rng.random() < 0.5,
+            more=rng.random() < 0.3,
+        )
         head = text.splitlines()[0]
         assert head.startswith("[switchboard]") and head.endswith(ADVICE)
 
 
 def test_the_join_result_carries_it() -> None:
-    text = envelope.render_join(room="#build", screen_name="bot", human_name="alice", others=[],
-                                catchup=[], nonce="0" * 16, guidance="x", test_mode=False)
+    text = envelope.render_join(
+        room="#build",
+        screen_name="bot",
+        human_name="alice",
+        others=[],
+        catchup=[],
+        nonce="0" * 16,
+        guidance="x",
+        test_mode=False,
+    )
     assert ADVICE in text

@@ -31,11 +31,19 @@ HOOK_CONTEXT_EVENTS: dict[str, frozenset[str]] = {
 
 # Events each harness registers (DESIGN.md §7.4), in canonical (Claude) spelling.
 HOOK_EVENTS: dict[str, frozenset[str]] = {
-    "claude": frozenset({"SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"}),
+    "claude": frozenset(
+        {"SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"}
+    ),
     "codex": frozenset({"UserPromptSubmit", "PostToolUse", "Stop", "Interrupt", "SessionEnd"}),
-    "cursor": frozenset({"SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"}),
-    "devin": frozenset({"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"}),
-    "test": frozenset({"SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"}),
+    "cursor": frozenset(
+        {"SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"}
+    ),
+    "devin": frozenset(
+        {"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"}
+    ),
+    "test": frozenset(
+        {"SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"}
+    ),
 }
 
 
@@ -153,8 +161,9 @@ class Adapter:
         the wait() call's own successful PostToolUse)."""
         return True
 
-    def continue_verdict(self, p: Participant, loop_count: int | None, acked: bool,
-                         ev: HookEvent) -> str | None:
+    def continue_verdict(
+        self, p: Participant, loop_count: int | None, acked: bool, ev: HookEvent
+    ) -> str | None:
         """For an unconfirmed stop continuation: 'confirm', an expiry reason, or None."""
         return None
 

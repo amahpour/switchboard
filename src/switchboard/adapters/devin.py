@@ -40,13 +40,17 @@ TIER = "devin:wait-loop"
 WAIT_TOOL = "mcp__switchboard__wait"
 # a stop_block acked but with no hook of that session for this long expired
 BLOCK_CONFIRM_S = 180.0
-TAINT_WHY = ("a background subagent ran in this prompt: hook delivery is off until your next prompt"
-             " (the agent can still read())")
+TAINT_WHY = (
+    "a background subagent ran in this prompt: hook delivery is off until your next prompt"
+    " (the agent can still read())"
+)
 
 
 def rearm_text(room: str, wait_s: int) -> str:
-    return (f'[switchboard] (from switchboard, not your user) To keep listening in {room}, call'
-            f' wait("{room}", {wait_s}). If your user asked you to stop listening, don\'t.')
+    return (
+        f"[switchboard] (from switchboard, not your user) To keep listening in {room}, call"
+        f' wait("{room}", {wait_s}). If your user asked you to stop listening, don\'t.'
+    )
 
 
 class DevinAdapter(Adapter):
@@ -101,8 +105,9 @@ class DevinAdapter(Adapter):
             return False
         return want_tool_use is None or ev.tool_use_id == want_tool_use
 
-    def continue_verdict(self, p: Participant, loop_count: int | None, acked: bool,
-                         ev: HookEvent) -> str | None:
+    def continue_verdict(
+        self, p: Participant, loop_count: int | None, acked: bool, ev: HookEvent
+    ) -> str | None:
         E = ev.ev
         if E == "UserPromptSubmit":
             return "new_prompt"  # e.g. an interrupt deferred the block (FINDINGS §6 5.3)

@@ -45,8 +45,12 @@ MAX_MEMBERS_CAP = 32
 END_AFTER_MAX_S = 30 * 24 * 3600
 TRANSPORTS = ("ssh", "exec")
 ANY_ROOM = "*"  # rooms = ["*"]: this host's members may join any room (the default)
-_KEYS = frozenset({"host", "user", "port", "rooms", "harnesses", "max_members", "end_after_s", "transport", "home"})
-_SAT_KEYS = frozenset({"name", "desktop", "key_fingerprint", "accepted_at", "transport", "broker_url", "broker_key"})
+_KEYS = frozenset(
+    {"host", "user", "port", "rooms", "harnesses", "max_members", "end_after_s", "transport", "home"}
+)
+_SAT_KEYS = frozenset(
+    {"name", "desktop", "key_fingerprint", "accepted_at", "transport", "broker_url", "broker_key"}
+)
 SAT_TRANSPORTS = ("ssh", "wss")  # the desktop dials this home over ssh; or this home dials its broker (§31.7)
 _URL_RE = re.compile(r"^https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?$")
 _B64U_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")  # 32 bytes in base64url, no padding
@@ -114,7 +118,9 @@ def _int(v: Any, where: str, lo: int, hi: int) -> int:
 def parse_entry(name: str, data: Any, *, test_mode: bool) -> RemoteEntry:
     where = f"[remote.{name}]"
     if not valid_host(name):
-        raise RemoteConfigError(f"{where}: remote names look like fpga-pi (a-z first, then a-z, 0-9, '-'; at most 24)")
+        raise RemoteConfigError(
+            f"{where}: remote names look like fpga-pi (a-z first, then a-z, 0-9, '-'; at most 24)"
+        )
     if not isinstance(data, dict):
         raise RemoteConfigError(f"{where} must be a table")
     unknown = sorted(set(data) - _KEYS)
@@ -122,7 +128,7 @@ def parse_entry(name: str, data: Any, *, test_mode: bool) -> RemoteEntry:
         raise RemoteConfigError(f"unknown key(s) in {where}: {', '.join(unknown)}")
     transport = data.get("transport", "ssh")
     if transport not in TRANSPORTS:
-        raise RemoteConfigError(f"{where}.transport must be \"ssh\"")
+        raise RemoteConfigError(f'{where}.transport must be "ssh"')
     if transport == "exec" and not test_mode:
         raise RemoteConfigError(f'{where}.transport = "exec" needs a test-mode broker')
     home = data.get("home", "")
@@ -142,8 +148,10 @@ def parse_entry(name: str, data: Any, *, test_mode: bool) -> RemoteEntry:
     port = _int(data.get("port", 22), f"{where}.port", 1, 65535)
     raw_rooms = data.get("rooms", [ANY_ROOM])
     if not isinstance(raw_rooms, list) or not raw_rooms:
-        raise RemoteConfigError(f"{where}.rooms must list the rooms this host's members may join, e.g. [\"#fpga\"],"
-                                " or [\"*\"] for any room")
+        raise RemoteConfigError(
+            f'{where}.rooms must list the rooms this host\'s members may join, e.g. ["#fpga"],'
+            ' or ["*"] for any room'
+        )
     rooms: list[str] = []
     if ANY_ROOM in raw_rooms:
         raw_rooms = []
@@ -160,14 +168,22 @@ def parse_entry(name: str, data: Any, *, test_mode: bool) -> RemoteEntry:
         raise RemoteConfigError(f"{where}.harnesses must be a list of harness names")
     bad = sorted(set(raw_h) - set(REMOTE_HARNESSES))
     if bad:
-        raise RemoteConfigError(f"{where}.harnesses: unknown harness(es) {', '.join(bad)}"
-                                f" (allowed: {', '.join(REMOTE_HARNESSES)})")
+        raise RemoteConfigError(
+            f"{where}.harnesses: unknown harness(es) {', '.join(bad)}"
+            f" (allowed: {', '.join(REMOTE_HARNESSES)})"
+        )
     harnesses = tuple(h for h in REMOTE_HARNESSES if h in raw_h)
     return RemoteEntry(
-        name=name, host=host, user=user, port=port, rooms=tuple(rooms), harnesses=harnesses,
+        name=name,
+        host=host,
+        user=user,
+        port=port,
+        rooms=tuple(rooms),
+        harnesses=harnesses,
         max_members=_int(data.get("max_members", 8), f"{where}.max_members", 1, MAX_MEMBERS_CAP),
         end_after_s=_int(data.get("end_after_s", 900), f"{where}.end_after_s", 1, END_AFTER_MAX_S),
-        transport=transport, home=home if transport == "exec" else "",
+        transport=transport,
+        home=home if transport == "exec" else "",
     )
 
 
@@ -200,7 +216,9 @@ def load_remotes(paths: Paths, *, test_mode: bool) -> dict[str, RemoteEntry]:
         if not stat.S_ISREG(st.st_mode):
             raise RemoteConfigError("remotes.toml is not a regular file")
         if st.st_uid != os.getuid() or st.st_mode & 0o022:
-            raise RemoteConfigError("remotes.toml must be yours and writable only by you (chmod 600 remotes.toml)")
+            raise RemoteConfigError(
+                "remotes.toml must be yours and writable only by you (chmod 600 remotes.toml)"
+            )
         with os.fdopen(fd, "rb") as f:
             fd = -1
             raw = f.read(1 << 20)
@@ -299,8 +317,10 @@ PIN_MAX_BYTES = 16 * 1024
 def home_path_problem(paths: Paths) -> str | None:
     """Why this home's path can't go into ssh's argv as one path, or None."""
     if _SSH_PATH_UNSAFE.search(str(paths.home)):
-        return ("the switchboard home's path has a blank, a quote, a backslash or one of # % $ ~, which ssh"
-                " would read as more than one path: use a home without them (--home or SWITCHBOARD_HOME)")
+        return (
+            "the switchboard home's path has a blank, a quote, a backslash or one of # % $ ~, which ssh"
+            " would read as more than one path: use a home without them (--home or SWITCHBOARD_HOME)"
+        )
     return None
 
 
@@ -314,7 +334,7 @@ def _key_blob_type(b64: str) -> str:
         return ""
     n = int.from_bytes(blob[:4], "big")
     try:
-        return blob[4:4 + n].decode("ascii") if 0 < n <= 64 and len(blob) >= 4 + n else ""
+        return blob[4 : 4 + n].decode("ascii") if 0 < n <= 64 and len(blob) >= 4 + n else ""
     except UnicodeDecodeError:
         return ""
 
@@ -353,11 +373,17 @@ def pin_problem(paths: Paths, name: str) -> str | None:
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     alias = host_key_alias(name)
     if len(raw) > PIN_MAX_BYTES or len(lines) != 1:
-        return (f"{rel} must hold exactly one line, the host key pinned under {alias}"
-                f" ({len(lines)} found): anything more would be trusted too")
+        return (
+            f"{rel} must hold exactly one line, the host key pinned under {alias}"
+            f" ({len(lines)} found): anything more would be trusted too"
+        )
     words = lines[0].split()
-    if (len(words) != 3 or words[0] != alias or not PIN_KEY_TYPES.fullmatch(words[1])
-            or _key_blob_type(words[2]) != words[1]):
+    if (
+        len(words) != 3
+        or words[0] != alias
+        or not PIN_KEY_TYPES.fullmatch(words[1])
+        or _key_blob_type(words[2]) != words[1]
+    ):
         return f"{rel} has no pinned host key for {alias} (one line: {alias} <type> <key>)"
     return None
 
@@ -372,8 +398,9 @@ def ssh_files_problem(paths: Paths, name: str) -> str | None:
     why = home_path_problem(paths)
     if why:
         return why
-    why = (_private_dir_problem(paths.home / "remotes", "remotes")
-           or _private_dir_problem(remote_dir(paths, name), f"remotes/{name}"))
+    why = _private_dir_problem(paths.home / "remotes", "remotes") or _private_dir_problem(
+        remote_dir(paths, name), f"remotes/{name}"
+    )
     if why:
         return why
     rel = f"remotes/{name}/id_ed25519"
@@ -389,8 +416,12 @@ def ssh_files_problem(paths: Paths, name: str) -> str | None:
 def config_hash(entry: RemoteEntry, key_fp: str, pinned_line: str) -> str:
     """sha256 over the canonical entry, the link key's fingerprint and the pinned
     host-key line: any edit to any of them needs a new enable (§27.5.8)."""
-    blob = json.dumps({"entry": entry.canonical(), "key": key_fp, "pin": pinned_line},
-                      sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    blob = json.dumps(
+        {"entry": entry.canonical(), "key": key_fp, "pin": pinned_line},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
     return hashlib.sha256(blob.encode()).hexdigest()
 
 
@@ -454,17 +485,31 @@ def read_satellite_conf(paths: Paths) -> SatelliteConf:
             raise RemoteConfigError("satellite.toml: broker_key must be the broker's key (base64url)")
     elif url or bkey:
         raise RemoteConfigError('satellite.toml: broker_url and broker_key are only for transport = "wss"')
-    return SatelliteConf(name=name, desktop=desktop, key_fingerprint=fp,
-                         accepted_at=float(at) if at is not None else None,
-                         transport=transport, broker_url=url, broker_key=bkey)
+    return SatelliteConf(
+        name=name,
+        desktop=desktop,
+        key_fingerprint=fp,
+        accepted_at=float(at) if at is not None else None,
+        transport=transport,
+        broker_url=url,
+        broker_key=bkey,
+    )
 
 
 def _toml_str(s: str) -> str:
     return json.dumps(s, ensure_ascii=True)  # a TOML basic string for these plain values
 
 
-def write_satellite_conf(paths: Paths, name: str, desktop: str = "", key_fp: str = "",
-                         accepted_at: float | None = None, *, broker_url: str = "", broker_key: str = "") -> Path:
+def write_satellite_conf(
+    paths: Paths,
+    name: str,
+    desktop: str = "",
+    key_fp: str = "",
+    accepted_at: float | None = None,
+    *,
+    broker_url: str = "",
+    broker_key: str = "",
+) -> Path:
     """Write ``satellite.toml`` atomically, 0600. With ``broker_url`` (``remote join``), a home
     that dials that broker (``transport = "wss"``), pinning ``broker_key``."""
     if not valid_host(name):
@@ -472,16 +517,18 @@ def write_satellite_conf(paths: Paths, name: str, desktop: str = "", key_fp: str
     if desktop and not LABEL_RE.fullmatch(desktop):
         raise RemoteConfigError(f"not a desktop label: {desktop!r}")
     at = time.time() if accepted_at is None else accepted_at
-    text = (f"name = {_toml_str(name)}\n"
-            f"desktop = {_toml_str(desktop)}\n"
-            f"key_fingerprint = {_toml_str(key_fp)}\n"
-            f"accepted_at = {at!r}\n")
+    text = (
+        f"name = {_toml_str(name)}\n"
+        f"desktop = {_toml_str(desktop)}\n"
+        f"key_fingerprint = {_toml_str(key_fp)}\n"
+        f"accepted_at = {at!r}\n"
+    )
     if broker_url:
         if not _URL_RE.fullmatch(broker_url) or not _B64U_KEY_RE.fullmatch(broker_key):
             raise RemoteConfigError("not a broker URL and key")
-        text += (f'transport = "wss"\n'
-                 f"broker_url = {_toml_str(broker_url)}\n"
-                 f"broker_key = {_toml_str(broker_key)}\n")
+        text += (
+            f'transport = "wss"\nbroker_url = {_toml_str(broker_url)}\nbroker_key = {_toml_str(broker_key)}\n'
+        )
     target = paths.satellite_conf
     tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

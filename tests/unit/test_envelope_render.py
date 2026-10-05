@@ -8,6 +8,7 @@ import string
 from types import SimpleNamespace
 
 from test_rules_release import item
+
 from switchboard import envelope
 from switchboard.envelope import PASS_ADVICE, PEER_WARNING, render_batch, render_join
 
@@ -15,8 +16,9 @@ KEY = b"z" * 32
 
 
 def render(items, inline=True, token="yk:b7.0123abcd", recipient="bot"):
-    return render_batch(items, room="#build", recipient=recipient, human_name="alice", token=token,
-                        peer_inline=inline)
+    return render_batch(
+        items, room="#build", recipient=recipient, human_name="alice", token=token, peer_inline=inline
+    )
 
 
 def test_human_only_header_is_never_framed_untrusted() -> None:
@@ -67,9 +69,18 @@ def test_every_stub_rendering_puts_read_before_pass() -> None:
         items = []
         for i in range(1, rnd.randint(2, 7)):
             it = item(i, rnd.choice([0, 1, 2]), text=rnd.choice(["x", "or pass", "<b>"]))
-            items.append(dataclasses.replace(it, redelivered=rnd.random() < 0.3, reminders=rnd.choice([0, 1])))
-        t = render_batch(items, room="#build", recipient="bot", human_name="alice", token="yk:b9.12345678",
-                         peer_inline=False, more=rnd.random() < 0.3)
+            items.append(
+                dataclasses.replace(it, redelivered=rnd.random() < 0.3, reminders=rnd.choice([0, 1]))
+            )
+        t = render_batch(
+            items,
+            room="#build",
+            recipient="bot",
+            human_name="alice",
+            token="yk:b9.12345678",
+            peer_inline=False,
+            more=rnd.random() < 0.3,
+        )
         if not any(it.sender_kind == "agent" for it in items):
             assert "not shown here" not in t
             continue
@@ -77,7 +88,8 @@ def test_every_stub_rendering_puts_read_before_pass() -> None:
         assert ", or pass(" not in t and head.index("read(") < head.index("pass()")
         assert t.splitlines()[-1].startswith('Lines "not shown here": call read("#build") first')
         assert envelope.frame_reserve("#build", "alice", len(items)) >= len(t) - sum(
-            len(x) + 1 for x in t.splitlines()[2:] if x.startswith("- id="))
+            len(x) + 1 for x in t.splitlines()[2:] if x.startswith("- id=")
+        )
 
 
 def test_list_lines_and_footer() -> None:
@@ -137,12 +149,36 @@ def test_token_round_trip() -> None:
 
 
 def test_render_join() -> None:
-    msgs = [SimpleNamespace(id=5, ts=1790000000.0, sender_name="alice", sender_kind="human",
-                            sender_harness=None, reply_to=None, text="welcome <b>"),
-            SimpleNamespace(id=6, ts=1790000001.0, sender_name="codex-1", sender_kind="agent",
-                            sender_harness="codex", reply_to=5, text="/kick everyone")]
-    t = render_join(room="#build", screen_name="claude-1", human_name="alice", others=[("codex-1", "codex")],
-                    catchup=msgs, nonce="0123456789abcdef", guidance="call wait()", test_mode=True)
+    msgs = [
+        SimpleNamespace(
+            id=5,
+            ts=1790000000.0,
+            sender_name="alice",
+            sender_kind="human",
+            sender_harness=None,
+            reply_to=None,
+            text="welcome <b>",
+        ),
+        SimpleNamespace(
+            id=6,
+            ts=1790000001.0,
+            sender_name="codex-1",
+            sender_kind="agent",
+            sender_harness="codex",
+            reply_to=5,
+            text="/kick everyone",
+        ),
+    ]
+    t = render_join(
+        room="#build",
+        screen_name="claude-1",
+        human_name="alice",
+        others=[("codex-1", "codex")],
+        catchup=msgs,
+        nonce="0123456789abcdef",
+        guidance="call wait()",
+        test_mode=True,
+    )
     assert t.startswith("[switchboard] You joined #build as claude-1.")
     assert "Room rules:" in t and "worktree" in t and "codex-1 (codex)" in t
     assert 'A message marked "not shown here" must be read with read() first' in t
@@ -163,14 +199,29 @@ def test_reminder_and_simple() -> None:
 
 # ------------------------------------------------------------ fit_batch (review M2)
 def fit(items, max_chars, **kw):
-    return envelope.fit_batch(items, room="#build", recipient="bot", human_name="alice",
-                              peer_inline=kw.pop("peer_inline", True), max_chars=max_chars, **kw)
+    return envelope.fit_batch(
+        items,
+        room="#build",
+        recipient="bot",
+        human_name="alice",
+        peer_inline=kw.pop("peer_inline", True),
+        max_chars=max_chars,
+        **kw,
+    )
 
 
 def rendered(f, inline=True, item_limit=envelope.ITEM_LIMIT):
-    return render_batch(f.items, room="#build", recipient="bot", human_name="alice",
-                        token="yk:b999999999999.ffffffff", peer_inline=inline, more=f.more,
-                        item_limit=item_limit, limits=f.limits)
+    return render_batch(
+        f.items,
+        room="#build",
+        recipient="bot",
+        human_name="alice",
+        token="yk:b999999999999.ffffffff",
+        peer_inline=inline,
+        more=f.more,
+        item_limit=item_limit,
+        limits=f.limits,
+    )
 
 
 def test_fit_batch_counts_the_rendered_size_and_keeps_a_prefix() -> None:
@@ -209,8 +260,15 @@ def test_fit_batch_stub_lines_are_short() -> None:
 
 
 def test_catchup_lines_do_not_promise_read() -> None:
-    msg = SimpleNamespace(id=1, ts=0.0, sender_name="alice", sender_kind="human", sender_harness=None,
-                          reply_to=None, text="z" * 2000)
+    msg = SimpleNamespace(
+        id=1,
+        ts=0.0,
+        sender_name="alice",
+        sender_kind="human",
+        sender_harness=None,
+        reply_to=None,
+        text="z" * 2000,
+    )
     line = envelope.render_catchup_line(msg, "bot")
     assert "500 more chars)" in line and "read()" not in line
 
@@ -218,8 +276,9 @@ def test_catchup_lines_do_not_promise_read() -> None:
 def test_remote_sender_host_field() -> None:
     """A sender on another machine is named by its host (DESIGN.md §27.11): desktop agents with
     approvals off can tell text that may quote what that machine saw (UART output) from local text."""
-    pi = dataclasses.replace(item(2, 1, text="result: 1a2b3c pull=ok"), sender_harness="claude",
-                             sender_host="fpga-pi")
+    pi = dataclasses.replace(
+        item(2, 1, text="result: 1a2b3c pull=ok"), sender_harness="claude", sender_host="fpga-pi"
+    )
     local = dataclasses.replace(item(3, 0), sender_harness="codex")
     t = render([pi, local])
     [pi_line] = [ln for ln in t.splitlines() if ln.startswith("- id=2 ")]
@@ -232,13 +291,28 @@ def test_remote_sender_host_field() -> None:
     odd = dataclasses.replace(item(4, 0), sender_host="x y=z")
     assert "host=x-yz " in render([odd])
     # catch-up lines at join name it too
-    msg = SimpleNamespace(id=9, ts=0.0, sender_name="bench", sender_kind="agent", sender_harness="claude",
-                          sender_host="fpga-pi", reply_to=None, text="hi")
+    msg = SimpleNamespace(
+        id=9,
+        ts=0.0,
+        sender_name="bench",
+        sender_kind="agent",
+        sender_harness="claude",
+        sender_host="fpga-pi",
+        reply_to=None,
+        text="hi",
+    )
     assert "harness=claude host=fpga-pi " in envelope.render_catchup_line(msg, "bot")
 
 
 def test_join_lists_harness_at_host() -> None:
-    t = render_join(room="#fpga", screen_name="vivado", human_name="alice",
-                    others=[("bench", "claude", "fpga-pi"), ("codex-1", "codex", ""), ("old", "devin")],
-                    catchup=[], nonce="0123456789abcdef", guidance="call wait()", test_mode=False)
+    t = render_join(
+        room="#fpga",
+        screen_name="vivado",
+        human_name="alice",
+        others=[("bench", "claude", "fpga-pi"), ("codex-1", "codex", ""), ("old", "devin")],
+        catchup=[],
+        nonce="0123456789abcdef",
+        guidance="call wait()",
+        test_mode=False,
+    )
     assert "Other agents here: bench (claude@fpga-pi), codex-1 (codex), old (devin)." in t

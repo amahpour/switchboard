@@ -41,8 +41,16 @@ class SoftAuthenticator:
         self.last_id: bytes | None = None
 
     # ------------------------------------------------------------ registration
-    def register(self, options: dict[str, Any], *, origin: str | None = None, rp_id: str | None = None,
-                 uv: bool = True, up: bool = True, counter: int = 0) -> dict[str, Any]:
+    def register(
+        self,
+        options: dict[str, Any],
+        *,
+        origin: str | None = None,
+        rp_id: str | None = None,
+        uv: bool = True,
+        up: bool = True,
+        counter: int = 0,
+    ) -> dict[str, Any]:
         pk = options["publicKey"]
         for d in pk.get("excludeCredentials") or []:
             if websafe_decode(d["id"]) in self.keys:
@@ -55,20 +63,37 @@ class SoftAuthenticator:
         cose = ES256.from_cryptography_key(key.public_key())
         acd = AttestedCredentialData.create(AAGUID, cred_id, cose)
         flags = FLAG.AT | (FLAG.UP if up else 0) | (FLAG.UV if uv else 0)
-        auth = AuthenticatorData.create(hashlib.sha256((rp_id or self.rp_id).encode()).digest(), flags, counter, acd)
+        auth = AuthenticatorData.create(
+            hashlib.sha256((rp_id or self.rp_id).encode()).digest(), flags, counter, acd
+        )
         att = AttestationObject.create("none", auth, {})
         cd = CollectedClientData.create("webauthn.create", pk["challenge"], origin or self.origin)
         return {
-            "id": websafe_encode(cred_id), "rawId": websafe_encode(cred_id), "type": "public-key",
-            "authenticatorAttachment": "platform", "clientExtensionResults": {},
-            "response": {"clientDataJSON": websafe_encode(cd), "attestationObject": websafe_encode(att),
-                         "transports": ["internal"]},
+            "id": websafe_encode(cred_id),
+            "rawId": websafe_encode(cred_id),
+            "type": "public-key",
+            "authenticatorAttachment": "platform",
+            "clientExtensionResults": {},
+            "response": {
+                "clientDataJSON": websafe_encode(cd),
+                "attestationObject": websafe_encode(att),
+                "transports": ["internal"],
+            },
         }
 
     # ------------------------------------------------------------------ sign-in
-    def get(self, options: dict[str, Any], *, credential_id: bytes | None = None, origin: str | None = None,
-            rp_id: str | None = None, uv: bool = True, up: bool = True, counter: int | None = None,
-            challenge: str | None = None) -> dict[str, Any]:
+    def get(
+        self,
+        options: dict[str, Any],
+        *,
+        credential_id: bytes | None = None,
+        origin: str | None = None,
+        rp_id: str | None = None,
+        uv: bool = True,
+        up: bool = True,
+        counter: int | None = None,
+        challenge: str | None = None,
+    ) -> dict[str, Any]:
         pk = options["publicKey"]
         cid = credential_id if credential_id is not None else self.last_id
         assert cid is not None, "no credential registered"
@@ -77,17 +102,26 @@ class SoftAuthenticator:
             if self.counts:
                 self.counter += 1
             counter = self.counter
-        auth = AuthenticatorData.create(hashlib.sha256((rp_id or self.rp_id).encode()).digest(),
-                                        (FLAG.UP if up else 0) | (FLAG.UV if uv else 0), counter)
+        auth = AuthenticatorData.create(
+            hashlib.sha256((rp_id or self.rp_id).encode()).digest(),
+            (FLAG.UP if up else 0) | (FLAG.UV if uv else 0),
+            counter,
+        )
         cd = CollectedClientData.create("webauthn.get", challenge or pk["challenge"], origin or self.origin)
         if key is None:  # an unknown credential: a signature from a key the broker never saw
             key = ec.generate_private_key(ec.SECP256R1())
         sig = key.sign(bytes(auth) + cd.hash, ec.ECDSA(hashes.SHA256()))
         handle = self.handles.get(cid)
         return {
-            "id": websafe_encode(cid), "rawId": websafe_encode(cid), "type": "public-key",
-            "authenticatorAttachment": "platform", "clientExtensionResults": {},
-            "response": {"clientDataJSON": websafe_encode(cd), "authenticatorData": websafe_encode(auth),
-                         "signature": websafe_encode(sig),
-                         "userHandle": websafe_encode(handle) if handle is not None else None},
+            "id": websafe_encode(cid),
+            "rawId": websafe_encode(cid),
+            "type": "public-key",
+            "authenticatorAttachment": "platform",
+            "clientExtensionResults": {},
+            "response": {
+                "clientDataJSON": websafe_encode(cd),
+                "authenticatorData": websafe_encode(auth),
+                "signature": websafe_encode(sig),
+                "userHandle": websafe_encode(handle) if handle is not None else None,
+            },
         }

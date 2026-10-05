@@ -53,12 +53,34 @@ COLOUR_CODES = {"31": "red", "32": "green", "33": "yellow", "34": "blue", "35": 
 # Two terminal themes: the 8 basic colours are the only ones switchboard asks for, so each
 # theme maps just those (and bold and dim) to something that reads on its background.
 THEMES: dict[str, dict[str, str]] = {
-    "dark": {"bg": "#1c1e22", "fg": "#d8dbe0", "bar": "#26292e", "bar_fg": "#9aa1ab", "border": "#34383e",
-             "prompt": "#8b939e", "red": "#f07178", "green": "#7fd17a", "yellow": "#e6c07b", "blue": "#6cb6ff",
-             "magenta": "#d59ef5", "cyan": "#5fd0de"},
-    "light": {"bg": "#fcfcfd", "fg": "#1f2328", "bar": "#eef0f3", "bar_fg": "#57606a", "border": "#d6dbe1",
-              "prompt": "#6e7781", "red": "#c4271f", "green": "#1a7f37", "yellow": "#8a5a00", "blue": "#0550ae",
-              "magenta": "#8250df", "cyan": "#0b6e82"},
+    "dark": {
+        "bg": "#1c1e22",
+        "fg": "#d8dbe0",
+        "bar": "#26292e",
+        "bar_fg": "#9aa1ab",
+        "border": "#34383e",
+        "prompt": "#8b939e",
+        "red": "#f07178",
+        "green": "#7fd17a",
+        "yellow": "#e6c07b",
+        "blue": "#6cb6ff",
+        "magenta": "#d59ef5",
+        "cyan": "#5fd0de",
+    },
+    "light": {
+        "bg": "#fcfcfd",
+        "fg": "#1f2328",
+        "bar": "#eef0f3",
+        "bar_fg": "#57606a",
+        "border": "#d6dbe1",
+        "prompt": "#6e7781",
+        "red": "#c4271f",
+        "green": "#1a7f37",
+        "yellow": "#8a5a00",
+        "blue": "#0550ae",
+        "magenta": "#8250df",
+        "cyan": "#0b6e82",
+    },
 }
 
 PAGE = """<!doctype html>
@@ -103,7 +125,7 @@ def to_html(text: str) -> str:
         out.append(f'<span class="{" ".join(classes)}">{esc}</span>' if classes else esc)
 
     for m in SGR.finditer(text):
-        emit(text[pos:m.start()])
+        emit(text[pos : m.start()])
         pos = m.end()
         for code in (m.group(1) or "0").split(";"):
             if code in ("", "0"):
@@ -122,8 +144,13 @@ def to_html(text: str) -> str:
 
 
 def page(command: str, text: str, theme: str) -> str:
-    return PAGE.format(title=html.escape(command.split(" --home")[0]), command=html.escape(command),
-                       body=to_html(text.rstrip("\n")), columns=COLUMNS, **THEMES[theme])
+    return PAGE.format(
+        title=html.escape(command.split(" --home")[0]),
+        command=html.escape(command),
+        body=to_html(text.rstrip("\n")),
+        columns=COLUMNS,
+        **THEMES[theme],
+    )
 
 
 # ------------------------------------------------------------------ captures
@@ -178,8 +205,12 @@ def collect(world: Any, base: Path) -> list[tuple[str, str, str, tuple[str, ...]
 
     add("status", "switchboard status", ["status", *h, *c])
     add("who", "switchboard who '#build'", ["who", "#build", *h, *c])
-    add("tail", "switchboard tail '#build' -n 12 --no-follow", ["tail", "#build", "-n", "12", "--no-follow", *h, *c],
-        ("dark", "light"))
+    add(
+        "tail",
+        "switchboard tail '#build' -n 12 --no-follow",
+        ["tail", "#build", "-n", "12", "--no-follow", *h, *c],
+        ("dark", "light"),
+    )
     add("remote-status", "switchboard remote status", ["remote", "status", *h, *c])
 
     uh = user_home(base)
@@ -187,10 +218,17 @@ def collect(world: Any, base: Path) -> list[tuple[str, str, str, tuple[str, ...]
     sys.executable = PYTHON_STANDIN  # what the hooks would run, as the diff shows it
     try:
         u = ["--user-home", str(uh)]
-        add("install", "switchboard install all --dry-run", ["install", "all", "--dry-run", *h, *u, *c],
-            ("dark", "light"))
-        add("install-plain", "switchboard install all --dry-run", ["install", "all", "--dry-run", *h, *u,
-                                                                   "--color", "never"])
+        add(
+            "install",
+            "switchboard install all --dry-run",
+            ["install", "all", "--dry-run", *h, *u, *c],
+            ("dark", "light"),
+        )
+        add(
+            "install-plain",
+            "switchboard install all --dry-run",
+            ["install", "all", "--dry-run", *h, *u, "--color", "never"],
+        )
         capture(["install", "all", "--yes", "--allow-editable", *h, *u])  # so uninstall has something to show
         add("uninstall", "switchboard uninstall all --dry-run", ["uninstall", "all", "--dry-run", *h, *u, *c])
     finally:
@@ -208,8 +246,9 @@ def collect(world: Any, base: Path) -> list[tuple[str, str, str, tuple[str, ...]
 def shoot(browser: Any, out: Path, shots: list[tuple[str, str, str, tuple[str, ...]]]) -> None:
     for stem, typed, text, themes in shots:
         for theme in themes:
-            ctx = browser.new_context(device_scale_factor=2, viewport={"width": 1400, "height": 900},
-                                      color_scheme=theme)
+            ctx = browser.new_context(
+                device_scale_factor=2, viewport={"width": 1400, "height": 900}, color_scheme=theme
+            )
             try:
                 pg = ctx.new_page()
                 pg.set_content(page(typed, text, theme))
@@ -226,7 +265,6 @@ def main() -> None:
     ap.add_argument("--out", default=str(OUT), help="output directory (default docs/media/cli)")
     args = ap.parse_args()
     from playwright.sync_api import sync_playwright
-
     from ui_shots import REAL_HOME, isolate
 
     # Playwright's driver starts before HOME moves, so it finds its browsers under the real HOME

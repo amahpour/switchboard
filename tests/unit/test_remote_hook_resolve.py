@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from conftest import InProcBroker
+
 from switchboard.broker import proc
 from switchboard.broker.agents import AgentService, cred_hash
 from switchboard.broker.peer import HookCandidate, resolve_hook_participant
@@ -51,14 +52,23 @@ class RConn:
         pass
 
 
-def mk(b: InProcBroker, harness: str, host: str, rest: str, name: str, agent: tuple[int, float] = A,
-       **kw: Any) -> Participant:
+def mk(
+    b: InProcBroker, harness: str, host: str, rest: str, name: str, agent: tuple[int, float] = A, **kw: Any
+) -> Participant:
     def f() -> Participant:
         st = b.state.store
         room = st.get_room("#fpga") or st.create_room("#fpga", "alice", 60, 6)
-        p = st.upsert_participant(harness, session_key(harness, host, rest), host=host, agent_pid=agent[0],
-                                  agent_start=agent[1], mcp_pid=agent[0] + 1, mcp_start=agent[1] + 1,
-                                  status="busy", **kw)
+        p = st.upsert_participant(
+            harness,
+            session_key(harness, host, rest),
+            host=host,
+            agent_pid=agent[0],
+            agent_start=agent[1],
+            mcp_pid=agent[0] + 1,
+            mcp_start=agent[1] + 1,
+            status="busy",
+            **kw,
+        )
         st.create_membership(room.id, p.id, name, cred_hash(secrets.token_urlsafe(8)))
         b.state.agents.refresh_index()
         return p
@@ -66,7 +76,9 @@ def mk(b: InProcBroker, harness: str, host: str, rest: str, name: str, agent: tu
     return b.on_loop(f)
 
 
-def hook(b: InProcBroker, conn: Any, harness: str, event: str = "PostToolUse", **params: Any) -> dict[str, Any]:
+def hook(
+    b: InProcBroker, conn: Any, harness: str, event: str = "PostToolUse", **params: Any
+) -> dict[str, Any]:
     ev = {"harness": harness, "event": event, **params}
     fut = asyncio.run_coroutine_threadsafe(b.state.agents.hook_event(conn, ev), b.loop)
     return fut.result(10)
@@ -102,7 +114,9 @@ def test_local_hook_never_reaches_remote_row(broker: InProcBroker) -> None:
     assert me is not None
     # the remote row names this very process's pid and start: a local hook from here is ours, not its
     rp = mk(broker, "test", PI, "bench", "bench", agent=(me.pid, me.start))
-    assert broker.call("hook.event", {"harness": "test", "event": "UserPromptSubmit", "t": time.time()}) == {"out": None}
+    assert broker.call("hook.event", {"harness": "test", "event": "UserPromptSubmit", "t": time.time()}) == {
+        "out": None
+    }
     assert not seen(broker, rp)
     # the same row's hook through the link resolves
     hook(broker, RConn([[*HOOK, "-"], [me.pid, me.start, "-"]]), "test", "UserPromptSubmit")
@@ -141,8 +155,13 @@ def test_sid_keyed_compare_uses_host(broker: InProcBroker) -> None:
     hook(broker, RConn(chain), "codex", sid=tid)
     assert seen(broker, rp) and not seen(broker, local)
     # the resolver compares the key with the host: the same sid under host '' is not this row
-    cand = HookCandidate(participant_id=rp.id, harness="codex", agent_pid=A[0], agent_start=A[1],
-                         session_key=session_key("codex", PI, tid))
+    cand = HookCandidate(
+        participant_id=rp.id,
+        harness="codex",
+        agent_pid=A[0],
+        agent_start=A[1],
+        session_key=session_key("codex", PI, tid),
+    )
     procs, argv_fn = _procs(chain)
     assert resolve_hook_participant(procs, "codex", tid, [cand], argv_fn=argv_fn, host=PI) == cand
     assert resolve_hook_participant(procs, "codex", tid, [cand], argv_fn=argv_fn, host="") is None

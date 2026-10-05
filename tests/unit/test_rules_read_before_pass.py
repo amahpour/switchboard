@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import World
 from test_claude_adapter import claude
@@ -25,6 +24,7 @@ from test_codex_adapter import attach, codex
 from test_cursor_adapter import cursor, park_result, stop
 from test_devin_adapter import devin
 from test_rules_release import item
+
 from switchboard import envelope
 from switchboard.config import Config
 from switchboard.delivery import rules
@@ -46,8 +46,9 @@ def pushes(w: World) -> list[Push]:
     return [a for a in w.take() if isinstance(a, Push)]
 
 
-def hook_stub(w: World, p: Any, peer: Any, text: str = "@bot please look at parse_port",
-              name: str = "bot") -> Any:
+def hook_stub(
+    w: World, p: Any, peer: Any, text: str = "@bot please look at parse_port", name: str = "bot"
+) -> Any:
     """A peer @mention that reached ``p`` as a stub in PostToolUse hook context (acked)."""
     msg = w.agent_says(peer, text, mentions=(name,))
     out = w.hook(p, "PostToolUse", ok=True)
@@ -74,7 +75,7 @@ def says_read_first(text: str, room: str = "#build") -> None:
     head = text.splitlines()[0]
     assert f'Call read("{room}") now' in head
     assert head.index(f'read("{room}")') < head.index("pass()")
-    assert ", or pass(" not in text and "or pass(\"" not in head
+    assert ", or pass(" not in text and 'or pass("' not in head
     assert envelope.PASS_ADVICE in head and envelope.PEER_WARNING in head
     foot = text.splitlines()[-1]
     assert foot.index(f'call read("{room}") first') < foot.index(f'pass("{room}")')
@@ -184,8 +185,9 @@ def test_a_peer_text_cut_on_the_inbox_was_shown_inline_so_pass_works(w: World) -
     msg = w.agent_says(peer, "@claude-1 " + "y" * 3000, mentions=("claude-1",))
     [push] = pushes(w)
     assert "read() shows full" in push.text and "not shown here" not in push.text
-    [(_mid, flag)] = w.store.con.execute("SELECT message_id, offered_inline FROM deliveries"
-                                         " WHERE membership_id=?", (m.id,)).fetchall()
+    [(_mid, flag)] = w.store.con.execute(
+        "SELECT message_id, offered_inline FROM deliveries WHERE membership_id=?", (m.id,)
+    ).fetchall()
     assert flag == envelope.INLINE_CUT
     w.actions += w.engine.on_confirm(push.batch_id, "hook:UserPromptSubmit")
     d = w.delivery(m, msg)
@@ -219,8 +221,11 @@ def test_every_stub_path_says_read_first(w: World) -> None:
     pd, _md = devin(w)
     w.hook(pd, "UserPromptSubmit", gen="g1")
     _pp, peer = w.agent("peer")
-    w.agent_says(peer, "@claude-2 @codex-1 @cursor-1 @devin-1 have a look",
-                 mentions=("claude-2", "codex-1", "cursor-1", "devin-1"))
+    w.agent_says(
+        peer,
+        "@claude-2 @codex-1 @cursor-1 @devin-1 have a look",
+        mentions=("claude-2", "codex-1", "cursor-1", "devin-1"),
+    )
     for a in pushes(w):
         got[a.path] = a.text
     got["stop_followup"] = park_result(w, park.sink_id)["text"]

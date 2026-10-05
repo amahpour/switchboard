@@ -19,10 +19,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import InProcBroker
 from fakes.fake_agent import ids_in
 from fakes.fake_claude import TOKEN, FakeClaude, fixture
+
 from switchboard.config import Config
 
 IDLE_EXPIRE_S = 0.6
@@ -132,8 +132,10 @@ def test_idle_wake_frame_format_and_confirmation(broker: InProcBroker, claude: F
     assert b["state"] == "confirmed" and b["evidence"] == "hook:UserPromptSubmit"
     assert b["turn_start_at"] is not None
     [m] = q(broker, "SELECT ts FROM messages WHERE id=?", mid)
-    print(f"fake inbox: message -> frame {(conn.t_accept - m['ts']) * 1000:.1f} ms,"
-          f" -> turn start (fake UPS) {(b['turn_start_at'] - m['ts']) * 1000:.1f} ms")
+    print(
+        f"fake inbox: message -> frame {(conn.t_accept - m['ts']) * 1000:.1f} ms,"
+        f" -> turn start (fake UPS) {(b['turn_start_at'] - m['ts']) * 1000:.1f} ms"
+    )
     assert state(broker, mid) == "in_context" and part(broker)["status"] == "busy"
 
 
@@ -150,8 +152,9 @@ def test_idle_wake_waits_for_the_registry_to_say_idle(broker: InProcBroker, clau
     assert ids_in(frame["message"]["content"]) == [mid]
 
 
-def test_mid_task_prompting_member_gets_posttooluse_context_only(broker: InProcBroker,
-                                                                 claude: FakeClaude) -> None:
+def test_mid_task_prompting_member_gets_posttooluse_context_only(
+    broker: InProcBroker, claude: FakeClaude
+) -> None:
     joined_idle(claude, broker)
     claude.hook(fixture("UserPromptSubmit"))  # the human typed: busy, default mode
     mid = say(broker, "also check the tests")
@@ -163,8 +166,9 @@ def test_mid_task_prompting_member_gets_posttooluse_context_only(broker: InProcB
     assert claude.inbox.frames() == []
 
 
-def test_mid_task_bypass_member_gets_the_inbox_and_the_warning_badge(broker: InProcBroker,
-                                                                    claude: FakeClaude) -> None:
+def test_mid_task_bypass_member_gets_the_inbox_and_the_warning_badge(
+    broker: InProcBroker, claude: FakeClaude
+) -> None:
     joined_idle(claude, broker)
     claude.hook(fixture("UserPromptSubmit", permission_mode="bypassPermissions"))
     claude.set_registry("busy")  # the turn is running (mid-task inbox needs a fresh busy read)
@@ -182,8 +186,9 @@ def test_mid_task_bypass_member_gets_the_inbox_and_the_warning_badge(broker: InP
     assert wait_for(lambda: state(broker, mid) == "in_context")
 
 
-def test_registry_waiting_holds_delivery_until_the_prompt_clears(broker: InProcBroker,
-                                                                 claude: FakeClaude) -> None:
+def test_registry_waiting_holds_delivery_until_the_prompt_clears(
+    broker: InProcBroker, claude: FakeClaude
+) -> None:
     joined_idle(claude, broker)
     claude.hook(fixture("UserPromptSubmit"))
     claude.set_registry("waiting")  # a permission prompt is open
@@ -271,7 +276,12 @@ def test_clear_keeps_the_binding_and_the_inbox(broker: InProcBroker, claude: Fak
     out = json.loads(claude.hook(fixture("SessionStart_clear", session_id=new_sid)))
     assert "#build as claude-1" in out["hookSpecificOutput"]["additionalContext"]
     p = part(broker)
-    assert p["id"] == pid_before and p["session_id"] == new_sid and p["status"] == "idle" and p["ended_at"] is None
+    assert (
+        p["id"] == pid_before
+        and p["session_id"] == new_sid
+        and p["status"] == "idle"
+        and p["ended_at"] is None
+    )
     mid = say(broker, "after the clear")
     [(_c, frame)] = claude.inbox.wait_frames(1)
     turn_from(claude, frame["message"]["content"])
@@ -331,8 +341,9 @@ def test_pause_stops_idle_wakes(broker: InProcBroker, claude: FakeClaude) -> Non
     assert ids_in(frame["message"]["content"]) == [mid]
 
 
-def test_a_broker_restart_reattaches_and_a_starting_session_is_woken(broker: InProcBroker,
-                                                                    claude: FakeClaude) -> None:
+def test_a_broker_restart_reattaches_and_a_starting_session_is_woken(
+    broker: InProcBroker, claude: FakeClaude
+) -> None:
     """After a restart the MCP server reconnects on its own, says hello (the
     member is 'starting') and attaches again; an idle wake goes out, and a frame
     that isn't taken up expires even though no hook ever says idle."""
@@ -340,13 +351,20 @@ def test_a_broker_restart_reattaches_and_a_starting_session_is_woken(broker: InP
     broker.web.close()
     broker.restart()
     broker.web = broker.web_client()
-    assert wait_for(lambda: part(broker)["status"] == "starting" and part(broker)["tier"] == "claude:inbox", 15)
+    assert wait_for(
+        lambda: part(broker)["status"] == "starting" and part(broker)["tier"] == "claude:inbox", 15
+    )
     assert wait_for(lambda: member(broker)["tier"] == "claude:inbox")
     mid = say(broker, "after the restart")
     [(_c, f1)] = claude.inbox.wait_frames(1)
     assert ids_in(f1["message"]["content"]) == [mid]
-    assert wait_for(lambda: q(broker, "SELECT 1 FROM batches WHERE path='inbox' AND state='expired'"
-                                      " AND expire_reason='idle_no_token'"), 5)
+    assert wait_for(
+        lambda: q(
+            broker,
+            "SELECT 1 FROM batches WHERE path='inbox' AND state='expired' AND expire_reason='idle_no_token'",
+        ),
+        5,
+    )
     fr = claude.inbox.wait_frames(2, timeout=8)
     claude.set_registry("busy")
     turn_from(claude, fr[1][1]["message"]["content"])

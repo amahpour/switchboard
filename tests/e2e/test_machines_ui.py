@@ -19,14 +19,14 @@ from typing import Any
 
 import httpx
 import pytest
-from playwright.sync_api import Page, expect
-
 from conftest import InProcBroker, make_tmp_home, sanitize_env
 from fakes.fake_machine import TestMachine
-from switchboard.broker.auth import WebOrigin
-from switchboard.remote.dialer import EXIT_FINAL
+from playwright.sync_api import Page, expect
 from test_passkeys_ui import Devices, open_link
 from test_web_ui import PHASE_REPORTS, UI
+
+from switchboard.broker.auth import WebOrigin
+from switchboard.remote.dialer import EXIT_FINAL
 
 pytestmark = pytest.mark.e2e
 
@@ -96,6 +96,7 @@ def owner_page(ui: UI, hosted: InProcBroker) -> tuple[Page, Devices]:
 
 def not_fresh(hosted: InProcBroker) -> None:
     """Forget every session's passkey check: the next code or approval asks for a passkey."""
+
     def forget() -> None:
         hosted.state.passkey_checks.clear()
         hosted.state.claim_grace.clear()
@@ -130,13 +131,19 @@ def test_add_approve_and_remove_a_machine(ui: UI, hosted: InProcBroker, machines
     not_fresh(hosted)
     checks = len(st.passkey_checks)
     page.click("#machine-pair-btn")
-    expect(page.locator("#pair-join")).to_have_text(re.compile(
-        r"^switchboard remote join " + re.escape(origin) + r" [0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$"))
+    expect(page.locator("#pair-join")).to_have_text(
+        re.compile(
+            r"^switchboard remote join " + re.escape(origin) + r" [0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$"
+        )
+    )
     assert len(st.passkey_checks) == checks + 1
-    expect(page.locator("#pair-install")).to_have_text(re.compile(
-        r"^uv tool install git\+https://github\.com/amahpour/switchboard@v\d+\.\d+\.\d+"))
+    expect(page.locator("#pair-install")).to_have_text(
+        re.compile(r"^uv tool install git\+https://github\.com/amahpour/switchboard@v\d+\.\d+\.\d+")
+    )
     expect(page.locator("#pair-left")).to_have_text(re.compile(r"^(10:00|9:[0-5]\d) left$"))
-    expect(page.locator("#machines-body .machine-wait")).to_contain_text("Waiting for work-laptop to dial in…")
+    expect(page.locator("#machines-body .machine-wait")).to_contain_text(
+        "Waiting for work-laptop to dial in…"
+    )
     expect(page.locator('[data-focus="copy:install"]')).to_be_focused()
     code = pair_code(page)
 
@@ -225,7 +232,9 @@ def test_cancel_reject_and_an_expired_code(ui: UI, hosted: InProcBroker, machine
     page.click("#machine-pair-btn")
     old = pair_code(page)
     page.clock.fast_forward("10:01")
-    expect(page.locator("#machines-body .machine-wait")).to_contain_text("The code expired before a machine used it.")
+    expect(page.locator("#machines-body .machine-wait")).to_contain_text(
+        "The code expired before a machine used it."
+    )
     page.click('[data-focus="pair-again"]')
     expect(page.locator("#pair-left")).to_have_text(re.compile(r" left$"))
     assert pair_code(page) != old

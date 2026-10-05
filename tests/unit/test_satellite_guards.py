@@ -19,11 +19,14 @@ from switchboard.remote.satellite import Satellite
 
 
 def sat(tmp_path: Path) -> Satellite:
-    return Satellite(Paths.from_home(tmp_path), "fpga-pi", test_mode=True, sessions_dir=str(tmp_path),
-                     harden_state="none")
+    return Satellite(
+        Paths.from_home(tmp_path), "fpga-pi", test_mode=True, sessions_dir=str(tmp_path), harden_state="none"
+    )
 
 
-def test_a_registry_read_that_raises_reads_as_unreadable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_registry_read_that_raises_reads_as_unreadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     info = proc.info(os.getpid())
     assert info is not None
     s = sat(tmp_path)

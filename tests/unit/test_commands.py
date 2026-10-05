@@ -6,11 +6,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import FakeClock
 from test_store import add_agent
+
 from switchboard import db
-from switchboard.broker.commands import Actor, CommandError, HELP_TEXT, parse_command, required_role
+from switchboard.broker.commands import HELP_TEXT, Actor, CommandError, parse_command, required_role
 from switchboard.broker.hub import Hub, Subscriber
 from switchboard.broker.service import BrokerInfo, RoomService, ServiceError
 from switchboard.config import Config
@@ -82,8 +82,21 @@ def test_parse_ok(text: str, name: str, args: tuple[str, ...]) -> None:
 
 @pytest.mark.parametrize(
     "text",
-    ["pause", "//pause", "/", "/mode chatty", "/pause now", "/budget -1", "/budget x", "/budget 1 2",
-     "/budget 99999999", "/kick", "/kick a b", "/hold 1abc", "/who me"],
+    [
+        "pause",
+        "//pause",
+        "/",
+        "/mode chatty",
+        "/pause now",
+        "/budget -1",
+        "/budget x",
+        "/budget 1 2",
+        "/budget 99999999",
+        "/kick",
+        "/kick a b",
+        "/hold 1abc",
+        "/who me",
+    ],
 )
 def test_parse_errors(text: str) -> None:
     with pytest.raises(CommandError) as e:
@@ -93,14 +106,38 @@ def test_parse_errors(text: str) -> None:
 
 def test_required_roles(svc: RoomService) -> None:
     room = svc.room("#build")  # budget 60
-    need = {t: required_role(parse_command(t), room) for t in
-            ["/pause", "/resume", "/kick a", "/budget", "/budget 10", "/budget 60", "/budget 61",
-             "/hold a", "/release a", "/who", "/status", "/help", "/close"]}
+    need = {
+        t: required_role(parse_command(t), room)
+        for t in [
+            "/pause",
+            "/resume",
+            "/kick a",
+            "/budget",
+            "/budget 10",
+            "/budget 60",
+            "/budget 61",
+            "/hold a",
+            "/release a",
+            "/who",
+            "/status",
+            "/help",
+            "/close",
+        ]
+    }
     assert need == {
-        "/pause": "human_cli", "/resume": "human", "/kick a": "human_cli", "/budget": "human_cli",
-        "/budget 10": "human_cli", "/budget 60": "human_cli", "/budget 61": "human",
-        "/hold a": "human_cli", "/release a": "human", "/who": "human_cli", "/status": "human_cli",
-        "/help": "human_cli", "/close": "human_cli",
+        "/pause": "human_cli",
+        "/resume": "human",
+        "/kick a": "human_cli",
+        "/budget": "human_cli",
+        "/budget 10": "human_cli",
+        "/budget 60": "human_cli",
+        "/budget 61": "human",
+        "/hold a": "human_cli",
+        "/release a": "human",
+        "/who": "human_cli",
+        "/status": "human_cli",
+        "/help": "human_cli",
+        "/close": "human_cli",
     }
 
 
@@ -244,5 +281,7 @@ def test_mentions_cover_members_and_the_human(svc: RoomService) -> None:
     add_agent(svc.store, room.id, "claude-1")
     m = svc.human_say("#build", "@claude-1 and @ALICE, not @nobody or a@claude-1", via="web")
     assert m.mentions == ["alice", "claude-1"]
-    rows = svc.store.con.execute("SELECT prio, mentioned FROM deliveries WHERE message_id=?", (m.id,)).fetchall()
+    rows = svc.store.con.execute(
+        "SELECT prio, mentioned FROM deliveries WHERE message_id=?", (m.id,)
+    ).fetchall()
     assert [tuple(r) for r in rows] == [(2, 1)]  # human message: prio 2 regardless

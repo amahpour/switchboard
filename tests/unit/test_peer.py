@@ -31,8 +31,7 @@ from switchboard.broker.peer import (
 )
 
 CLIENT = (
-    "import socket, sys, time\n"
-    "s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); time.sleep(3)\n"
+    "import socket, sys, time\ns = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); time.sleep(3)\n"
 )
 
 
@@ -142,7 +141,7 @@ def nested_sh(fake_agent: Path, depth: int) -> list[str]:
     for _ in range(depth - 1):
         inner = "sh -c " + shlex.quote(inner) + ' "$0" "$1"; true'
     runner = fake_agent.parent / "runner.sh"
-    runner.write_text(f"#!/bin/sh\nsh -c {shlex.quote(inner)} \"$1\" \"$2\"; true\n")
+    runner.write_text(f'#!/bin/sh\nsh -c {shlex.quote(inner)} "$1" "$2"; true\n')
     runner.chmod(0o755)
     return [str(fake_agent), str(runner), CLIENT]
 
@@ -252,7 +251,9 @@ def test_agent_matchers(argv: str, harness: str | None) -> None:
 
 def test_is_agent_chain_and_short_chain() -> None:
     assert is_agent_chain(["python", "-zsh", "claude --resume"])
-    assert not is_agent_chain(["python", "-zsh", "/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"])
+    assert not is_agent_chain(
+        ["python", "-zsh", "/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"]
+    )
     chain = proc.ancestry(os.getpid(), 3)
     s = short_chain(chain)
     assert isinstance(s, str) and s
@@ -329,8 +330,7 @@ def test_nested_session_hooks_are_inert() -> None:
     # hook 10 <- sh 11 <- nested claude 12 <- zsh 13 <- outer claude 14
     chain = [_pi(p, 1000.0 + p) for p in (10, 11, 12, 13, 14)]
     outer = HookCandidate(1, "claude", 14, 1014.0, session_id="outer", session_key="claude:14@1014.00")
-    argvs = {10: "python3 -I -S hook.py --harness claude", 11: "/bin/sh -c x", 12: "claude -p hi",
-             13: "-zsh"}
+    argvs = {10: "python3 -I -S hook.py --harness claude", 11: "/bin/sh -c x", 12: "claude -p hi", 13: "-zsh"}
     assert resolve_hook_participant(chain, "claude", "nested", [outer], argv_fn=_argvs(argvs)) is None
     assert resolve_hook_participant(chain, "claude", "outer", [outer], argv_fn=_argvs(argvs)) is None
     # another harness in between counts too; so does an unreadable argv (fail closed)

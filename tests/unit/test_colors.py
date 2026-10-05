@@ -17,20 +17,23 @@ class Tty(io.StringIO):
         return True
 
 
-@pytest.mark.parametrize(("mode", "env", "tty", "want"), [
-    ("always", {"NO_COLOR": "1"}, False, True),      # an explicit flag beats everything
-    ("never", {"FORCE_COLOR": "1"}, True, False),
-    ("auto", {}, True, True),                        # a terminal
-    ("auto", {}, False, False),                      # a pipe or a file
-    ("auto", {"NO_COLOR": "1"}, True, False),        # https://no-color.org
-    ("auto", {"NO_COLOR": ""}, True, True),          # ... "present and not empty"
-    ("auto", {"NO_COLOR": "1", "FORCE_COLOR": "1"}, True, False),  # NO_COLOR wins
-    ("auto", {"FORCE_COLOR": "1"}, False, True),
-    ("auto", {"FORCE_COLOR": "0"}, False, False),    # 0 / false turn forcing off
-    ("auto", {"FORCE_COLOR": "false"}, False, False),
-    ("auto", {"CLICOLOR_FORCE": "1"}, False, True),
-    ("auto", {"TERM": "dumb"}, True, False),
-])
+@pytest.mark.parametrize(
+    ("mode", "env", "tty", "want"),
+    [
+        ("always", {"NO_COLOR": "1"}, False, True),  # an explicit flag beats everything
+        ("never", {"FORCE_COLOR": "1"}, True, False),
+        ("auto", {}, True, True),  # a terminal
+        ("auto", {}, False, False),  # a pipe or a file
+        ("auto", {"NO_COLOR": "1"}, True, False),  # https://no-color.org
+        ("auto", {"NO_COLOR": ""}, True, True),  # ... "present and not empty"
+        ("auto", {"NO_COLOR": "1", "FORCE_COLOR": "1"}, True, False),  # NO_COLOR wins
+        ("auto", {"FORCE_COLOR": "1"}, False, True),
+        ("auto", {"FORCE_COLOR": "0"}, False, False),  # 0 / false turn forcing off
+        ("auto", {"FORCE_COLOR": "false"}, False, False),
+        ("auto", {"CLICOLOR_FORCE": "1"}, False, True),
+        ("auto", {"TERM": "dumb"}, True, False),
+    ],
+)
 def test_when_to_colour(mode: str, env: dict[str, str], tty: bool, want: bool) -> None:
     stream = Tty() if tty else io.StringIO()
     assert enabled(mode, stream, env) is want
@@ -72,10 +75,18 @@ def test_paint_wraps_each_line_and_leaves_empty_text_alone() -> None:
 def test_nicks_are_stable_and_the_human_and_system_stand_apart() -> None:
     p = Paint(True)
     # crc32, not hash(): the same colour in every process and on every run
-    assert [nick_colour(n) for n in ("claude-1", "codex-1", "devin-1", "bench")] == ["blue", "cyan", "magenta",
-                                                                                    "yellow"]
-    out = subprocess.run([sys.executable, "-c", "from switchboard.colors import nick_colour as n; print(n('claude-1'))"],
-                         capture_output=True, text=True, check=True).stdout.strip()
+    assert [nick_colour(n) for n in ("claude-1", "codex-1", "devin-1", "bench")] == [
+        "blue",
+        "cyan",
+        "magenta",
+        "yellow",
+    ]
+    out = subprocess.run(
+        [sys.executable, "-c", "from switchboard.colors import nick_colour as n; print(n('claude-1'))"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
     assert out == "blue"
     assert p.nick("codex-1") == "\x1b[36mcodex-1\x1b[0m"
     assert p.nick("alice", "human") == "\x1b[1malice\x1b[0m"

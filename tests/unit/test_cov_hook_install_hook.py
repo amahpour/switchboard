@@ -71,8 +71,21 @@ def line(obj: Any) -> bytes:
 
 # ---------------------------------------------------------------- arguments
 def test_parse_args_skips_unknown_and_dangling_flags() -> None:
-    got = hk.parse_args(["--verbose", "--home", "/h", "stray", "--harness", "cursor", "--event", "stop",
-                         "--max-wait", "70", "--event"])
+    got = hk.parse_args(
+        [
+            "--verbose",
+            "--home",
+            "/h",
+            "stray",
+            "--harness",
+            "cursor",
+            "--event",
+            "stop",
+            "--max-wait",
+            "70",
+            "--event",
+        ]
+    )
     assert got == {"home": "/h", "harness": "cursor", "event": "stop", "max_wait": 70.0}
 
 
@@ -111,23 +124,46 @@ class _BrokenStdin:
         raise OSError("stdin closed")
 
 
-@pytest.mark.parametrize("argv,stdin,env", [
-    (ARGV, _BrokenStdin(), {}),
-    (ARGV, io.StringIO("not json"), {}),
-    (ARGV, io.StringIO("[1, 2]"), {}),
-    (ARGV, io.StringIO("null"), {}),
-    (["--home", "/h", "--harness", "gemini", "--event", "PostToolUse"], io.StringIO(json.dumps(POST)), {}),
-    (["--home", "/h", "--harness", "claude"], io.StringIO(json.dumps(POST)), {}),
-    (ARGV, io.StringIO(json.dumps({**POST, "cursor_version": "1.0"})), {}),  # Cursor imported it
-    (ARGV, io.StringIO(json.dumps(POST)), {"CHISEL_SESSION_DB": "/ws/x.db"}),  # Devin imported it
-    (ARGV, io.StringIO(json.dumps({**POST, "hook_event_name": "Stop"})), {}),  # another event's payload
-    (["--home", "/h", "--harness", "claude", "--event", "PreToolUse"],
-     io.StringIO(json.dumps({**POST, "hook_event_name": "PreToolUse"})), {}),  # not registered for claude
-    (["--harness", "claude", "--event", "PostToolUse"], io.StringIO(json.dumps(POST)), {}),  # no --home
-], ids=["stdin-error", "not-json", "a-list", "null", "unknown-harness", "no-event", "cursor-payload",
-        "devin-env", "event-mismatch", "unhandled-event", "no-home"])
-def test_early_exits_never_ask_the_broker_or_print(monkeypatch: pytest.MonkeyPatch, argv: list[str], stdin: Any,
-                                                   env: dict[str, str]) -> None:
+@pytest.mark.parametrize(
+    "argv,stdin,env",
+    [
+        (ARGV, _BrokenStdin(), {}),
+        (ARGV, io.StringIO("not json"), {}),
+        (ARGV, io.StringIO("[1, 2]"), {}),
+        (ARGV, io.StringIO("null"), {}),
+        (
+            ["--home", "/h", "--harness", "gemini", "--event", "PostToolUse"],
+            io.StringIO(json.dumps(POST)),
+            {},
+        ),
+        (["--home", "/h", "--harness", "claude"], io.StringIO(json.dumps(POST)), {}),
+        (ARGV, io.StringIO(json.dumps({**POST, "cursor_version": "1.0"})), {}),  # Cursor imported it
+        (ARGV, io.StringIO(json.dumps(POST)), {"CHISEL_SESSION_DB": "/ws/x.db"}),  # Devin imported it
+        (ARGV, io.StringIO(json.dumps({**POST, "hook_event_name": "Stop"})), {}),  # another event's payload
+        (
+            ["--home", "/h", "--harness", "claude", "--event", "PreToolUse"],
+            io.StringIO(json.dumps({**POST, "hook_event_name": "PreToolUse"})),
+            {},
+        ),  # not registered for claude
+        (["--harness", "claude", "--event", "PostToolUse"], io.StringIO(json.dumps(POST)), {}),  # no --home
+    ],
+    ids=[
+        "stdin-error",
+        "not-json",
+        "a-list",
+        "null",
+        "unknown-harness",
+        "no-event",
+        "cursor-payload",
+        "devin-env",
+        "event-mismatch",
+        "unhandled-event",
+        "no-home",
+    ],
+)
+def test_early_exits_never_ask_the_broker_or_print(
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], stdin: Any, env: dict[str, str]
+) -> None:
     asked: list[Any] = []
     monkeypatch.setattr(hk, "ask_broker", lambda *a, **k: asked.append(a) or (CTX, None))
     out = io.StringIO()
@@ -141,8 +177,9 @@ def test_bytes_stdin_is_read_through_its_buffer(monkeypatch: pytest.MonkeyPatch)
     out = io.StringIO()
     text = hk.run(ARGV, stdin, out, {})
     assert text == out.getvalue()
-    assert json.loads(text) == {"hookSpecificOutput": {"hookEventName": "PostToolUse",
-                                                       "additionalContext": "[switchboard] hello"}}
+    assert json.loads(text) == {
+        "hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "[switchboard] hello"}
+    }
 
 
 # ------------------------------------------------------------- the exchange
@@ -269,15 +306,21 @@ def test_send_ack_on_a_dead_socket_is_quiet() -> None:
 def test_a_long_cursor_stop_watches_its_agent(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[Any, ...]] = []
     monkeypatch.setattr(hk, "_agent_gpid", lambda: 4242)
-    monkeypatch.setattr(hk, "ask_broker", lambda path, params, mw, watch=None: calls.append((mw, watch)) or
-                        (None, None))
-    payload = json.dumps({"hook_event_name": "stop", "conversation_id": "c-1", "cursor_version": "1.0",
-                          "status": "completed"})
+    monkeypatch.setattr(
+        hk, "ask_broker", lambda path, params, mw, watch=None: calls.append((mw, watch)) or (None, None)
+    )
+    payload = json.dumps(
+        {"hook_event_name": "stop", "conversation_id": "c-1", "cursor_version": "1.0", "status": "completed"}
+    )
     base = ["--home", "/opt/yk/home", "--harness", "cursor", "--event", "stop"]
     hk.run(base + ["--max-wait", "70"], io.StringIO(payload), io.StringIO(), {})
     hk.run(base, io.StringIO(payload), io.StringIO(), {})  # the default 1 s wait: nothing to watch
-    hk.run(["--home", "/opt/yk/home", "--harness", "cursor", "--event", "postToolUse", "--max-wait", "70"],
-           io.StringIO(json.dumps({"hook_event_name": "postToolUse", "cursor_version": "1.0"})), io.StringIO(), {})
+    hk.run(
+        ["--home", "/opt/yk/home", "--harness", "cursor", "--event", "postToolUse", "--max-wait", "70"],
+        io.StringIO(json.dumps({"hook_event_name": "postToolUse", "cursor_version": "1.0"})),
+        io.StringIO(),
+        {},
+    )
     assert calls == [(70.0, 4242), (1.0, None), (70.0, None)]
 
 
@@ -291,7 +334,12 @@ def test_agent_gpid_is_the_parent_of_our_parent(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(subprocess, "run", fake_run)
     out = "  4242\n"
     assert hk._agent_gpid() == 4242
-    assert seen[0][0] in ("/bin/ps", "/usr/bin/ps") and seen[0][1:] == ["-o", "ppid=", "-p", str(os.getppid())]
+    assert seen[0][0] in ("/bin/ps", "/usr/bin/ps") and seen[0][1:] == [
+        "-o",
+        "ppid=",
+        "-p",
+        str(os.getppid()),
+    ]
     out = "1\n"  # reparented to init/launchd: no agent to watch
     assert hk._agent_gpid() is None
     out = ""  # ps found no such process

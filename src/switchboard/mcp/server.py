@@ -66,8 +66,12 @@ BROKER_DOWN = "switchboard broker not running — ask your user to run: switchbo
 def link_down(desktop: str) -> str:
     """BROKER_DOWN on a satellite home (DESIGN.md §27.10): the broker is on the desktop,
     which dials this machine; nothing here can start it."""
-    return (f"the link to the switchboard broker on {desktop} is down: ask your user to check"
-            " `switchboard remote status` on the desktop")
+    return (
+        f"the link to the switchboard broker on {desktop} is down: ask your user to check"
+        " `switchboard remote status` on the desktop"
+    )
+
+
 # wait() caps per harness (DESIGN.md §6.1); the broker clamps again.
 WAIT_CAPS = {"claude": 110, "codex": 240, "cursor": 50, "devin": 600, "test": 50, "unknown": 50}
 HELLO_TIMEOUT_S = 3.0
@@ -159,14 +163,21 @@ class McpState:
 
     # ------------------------------------------------------------- identity
     def hello_params(self) -> dict[str, Any]:
-        h, ev = detect(self.env, self.client_info, self.parent_argv, harness_flag=self.harness_flag,
-                       ppid=self.ppid, sessions_dir=self.sessions_dir)
+        h, ev = detect(
+            self.env,
+            self.client_info,
+            self.parent_argv,
+            harness_flag=self.harness_flag,
+            ppid=self.ppid,
+            sessions_dir=self.sessions_dir,
+        )
         self.harness, self.evidence = h, ev
         params: dict[str, Any] = {
             "harness": h,
             "evidence": {k: v for k, v in ev.items() if k != "env_leak"},
-            "client_info": {k: str(v)[:80] for k, v in (self.client_info or {}).items()
-                            if k in ("name", "version")},
+            "client_info": {
+                k: str(v)[:80] for k, v in (self.client_info or {}).items() if k in ("name", "version")
+            },
             "env_leak": env_leak(self.env, h),
             "has_messaging_token": _TOKEN_ENV in self.env,
         }
@@ -249,7 +260,9 @@ class McpState:
             res["err"] = "not_mine"  # not a thread that joined through this process
         else:
             try:
-                res["t_post"] = await codex_wake.wake(self.codex_sock, tid, nonce, text, bid, self.codex_proven)
+                res["t_post"] = await codex_wake.wake(
+                    self.codex_sock, tid, nonce, text, bid, self.codex_proven
+                )
                 res["ok"] = True
             except codex_wake.Refused as e:
                 res["err"] = e.code
@@ -271,8 +284,14 @@ class McpState:
             try:
                 # the token is read here, at post time, and goes nowhere but the socket
                 res["t_post"] = await asyncio.to_thread(
-                    claude_inbox.post, self.inbox, os.environ.get(claude_inbox.TOKEN_ENV), text,
-                    from_, claude_inbox.message_id(bid), self.inbox_hold_s)
+                    claude_inbox.post,
+                    self.inbox,
+                    os.environ.get(claude_inbox.TOKEN_ENV),
+                    text,
+                    from_,
+                    claude_inbox.message_id(bid),
+                    self.inbox_hold_s,
+                )
                 res["ok"] = True
             except claude_inbox.InboxRefused:
                 res["err"] = "guard"
@@ -354,8 +373,13 @@ def pass_result(room: str, res: dict[str, Any]) -> dict[str, Any]:
             out["code"] = res["code"]
         return out
     if res.get("passed") is False:
-        return {"room": room, "ok": False, "code": res.get("reason") or "read_first",
-                "unread": res.get("unread"), "error": res.get("text") or "call read() first"}
+        return {
+            "room": room,
+            "ok": False,
+            "code": res.get("reason") or "read_first",
+            "unread": res.get("unread"),
+            "error": res.get("text") or "call read() first",
+        }
     return {"room": room, "ok": True}
 
 
@@ -365,9 +389,12 @@ def pass_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
     if all(r["ok"] for r in results):
         return {"ok": True, "text": PASSED, "rooms": results}
     done = [r["room"] for r in results if r["ok"]]
-    parts = ([f"[switchboard] passed in {', '.join(done)} (logged, not posted)."] if done else [])
-    parts += [r["error"] if r["error"].startswith("[switchboard]") else f"[switchboard] {r['room']}: {r['error']}"
-              for r in results if not r["ok"]]
+    parts = [f"[switchboard] passed in {', '.join(done)} (logged, not posted)."] if done else []
+    parts += [
+        r["error"] if r["error"].startswith("[switchboard]") else f"[switchboard] {r['room']}: {r['error']}"
+        for r in results
+        if not r["ok"]
+    ]
     text = " ".join(parts)
     out: dict[str, Any] = {"ok": False, "error": text, "text": text, "rooms": results}
     codes = [r["code"] for r in results if not r["ok"] and r.get("code")]
@@ -409,10 +436,13 @@ def build_server(st: McpState) -> FastMCP:
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         if st.harness == "codex" and not tid:
-            return err("this Codex call carried no thread id; switchboard can't tell which session you are",
-                       "bad_request")
-        res = await st.call("agent.join", {"room": room, "screen_name": screen_name,
-                                           **({"thread_id": tid} if tid else {})})
+            return err(
+                "this Codex call carried no thread id; switchboard can't tell which session you are",
+                "bad_request",
+            )
+        res = await st.call(
+            "agent.join", {"room": room, "screen_name": screen_name, **({"thread_id": tid} if tid else {})}
+        )
         if not res.get("ok"):
             return dumps(res)
         cred = res.pop("cred")
@@ -422,8 +452,15 @@ def build_server(st: McpState) -> FastMCP:
             got = NONCE_RE.search(str(res.get("text") or ""))
             if got is not None:
                 st.codex_threads[tid] = got.group(1)
-        return dumps({"ok": True, "room": res["room"], "screen_name": res["screen_name"],
-                      "tier": res.get("tier"), "text": res["text"]})
+        return dumps(
+            {
+                "ok": True,
+                "room": res["room"],
+                "screen_name": res["screen_name"],
+                "tier": res.get("tier"),
+                "text": res["text"],
+            }
+        )
 
     @mcp.tool(annotations=RW_IDEM)
     async def leave(room: str, ctx: Context) -> str:
@@ -594,8 +631,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--ack", choices=list(ACK_MODES), default="next_call", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
     os.umask(0o077)
-    logging.basicConfig(level=logging.WARNING, stream=sys.stderr,
-                        format="switchboard mcp: %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.WARNING, stream=sys.stderr, format="switchboard mcp: %(levelname)s %(message)s"
+    )
     from switchboard.config import Config, ConfigError, load
     from switchboard.paths import Paths
 

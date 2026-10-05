@@ -15,11 +15,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import InProcBroker
 from fakes.fake_agent import ids_in
 from fakes.fake_claude import SID, FakeClaude, fixture
 from fakes.fake_cli import fixture as cli_fixture
+
 from switchboard.config import Config
 from switchboard.envelope import TOKEN_RE
 from switchboard.install.common import hook_command
@@ -149,8 +149,9 @@ def test_bypass_payload_marks_the_member(broker: InProcBroker, claude: FakeClaud
 
 
 @pytest.mark.parametrize("name", ["UserPromptSubmit_auto", "UserPromptSubmit_dontAsk"])
-def test_auto_and_dont_ask_payloads_show_approvals_on(broker: InProcBroker, claude: FakeClaude,
-                                                      name: str) -> None:
+def test_auto_and_dont_ask_payloads_show_approvals_on(
+    broker: InProcBroker, claude: FakeClaude, name: str
+) -> None:
     """Claude's Auto and Don't-ask modes (recorded, #73) run nothing that wasn't approved, by the
     person or their allow rules, so Members shows approvals on. Before, both fell through to
     "approval mode unknown", which Members and /catchup treat like approvals off."""
@@ -160,8 +161,9 @@ def test_auto_and_dont_ask_payloads_show_approvals_on(broker: InProcBroker, clau
     assert wait_for(lambda: member(broker)["approval_mode"] == "prompting")
 
 
-@pytest.mark.parametrize("name,want", [("UserPromptSubmit_approve_for_me", "prompting"),
-                                       ("UserPromptSubmit_never", "bypass")])
+@pytest.mark.parametrize(
+    "name,want", [("UserPromptSubmit_approve_for_me", "prompting"), ("UserPromptSubmit_never", "bypass")]
+)
 def test_recorded_codex_approval_policies(broker: InProcBroker, name: str, want: str) -> None:
     """Codex 0.158's hooks report `default` under every approval policy but `never`, including
     --approve-for-me (its automatic reviewer), and `bypassPermissions` under `never` (recorded, #73)."""
@@ -175,7 +177,9 @@ def test_recorded_codex_approval_policies(broker: InProcBroker, name: str, want:
         cx.close()
 
 
-def test_mid_task_priority_arrives_as_posttooluse_context_and_is_acked(broker: InProcBroker, claude: FakeClaude) -> None:
+def test_mid_task_priority_arrives_as_posttooluse_context_and_is_acked(
+    broker: InProcBroker, claude: FakeClaude
+) -> None:
     claude.tool("join", room="#build", screen_name="claude-1")
     claude.hook(fixture("UserPromptSubmit"))
     mid = say(broker, "please also check the tests")
@@ -207,7 +211,9 @@ def test_session_start_clear_prints_a_membership_reminder(broker: InProcBroker, 
     assert "#build as claude-1" in out["hookSpecificOutput"]["additionalContext"]
 
 
-def test_read_is_confirmed_by_the_posttooluse_that_carries_its_token(broker: InProcBroker, claude: FakeClaude) -> None:
+def test_read_is_confirmed_by_the_posttooluse_that_carries_its_token(
+    broker: InProcBroker, claude: FakeClaude
+) -> None:
     claude.tool("join", room="#build", screen_name="claude-1")
     claude.hook(fixture("UserPromptSubmit"))
     mid = say(broker, "x")
@@ -216,8 +222,11 @@ def test_read_is_confirmed_by_the_posttooluse_that_carries_its_token(broker: InP
     assert ids_in(r["text"]) == [mid] and state(broker, mid) == "offered"
     claude.tool("who", room="#build")
     assert state(broker, mid) == "offered"
-    payload = fixture("PostToolUse_mcp", tool_name="mcp__switchboard__read",
-                      tool_response=[{"type": "text", "text": json.dumps(r)}])
+    payload = fixture(
+        "PostToolUse_mcp",
+        tool_name="mcp__switchboard__read",
+        tool_response=[{"type": "text", "text": json.dumps(r)}],
+    )
     claude.hook(payload)
     assert wait_for(lambda: state(broker, mid) == "in_context")
 
@@ -232,7 +241,12 @@ def test_foreign_token_does_not_confirm(broker: InProcBroker, claude: FakeClaude
     claude.hook(fixture("PostToolUse_mcp", tool_response=[{"type": "text", "text": forged}]))
     assert state(broker, mid) == "offered"
     # a different batch id with a mac for another membership: nothing either
-    claude.hook(fixture("PostToolUse_mcp", tool_response=[{"type": "text", "text": f"yk:b{int(tok.group(1)) + 99}.{tok.group(2)}"}]))
+    claude.hook(
+        fixture(
+            "PostToolUse_mcp",
+            tool_response=[{"type": "text", "text": f"yk:b{int(tok.group(1)) + 99}.{tok.group(2)}"}],
+        )
+    )
     assert state(broker, mid) == "offered"
 
 
@@ -253,7 +267,9 @@ def test_joined_hook_latency(broker: InProcBroker, claude: FakeClaude) -> None:
         claude.hook(fixture("PostToolUse_bash"))
         ts.append(time.perf_counter() - t0)
     ts.sort()
-    print(f"joined claude hook round trip p50={ts[5]*1000:.1f} ms max={ts[-1]*1000:.1f} ms (n=10, via fake harness)")
+    print(
+        f"joined claude hook round trip p50={ts[5] * 1000:.1f} ms max={ts[-1] * 1000:.1f} ms (n=10, via fake harness)"
+    )
     assert ts[5] < 0.5
 
 
@@ -262,7 +278,9 @@ def test_a_dead_agent_ends_its_session(broker: InProcBroker, claude: FakeClaude)
     claude.p.kill()  # the whole harness dies (its MCP server sees EOF)
     claude.p.wait(5)
     assert wait_for(lambda: part(broker)["ended_at"] is not None, 10)
-    assert q(broker, "SELECT left_reason FROM memberships WHERE screen_name='claude-1'")[0][0] == "session_end"
+    assert (
+        q(broker, "SELECT left_reason FROM memberships WHERE screen_name='claude-1'")[0][0] == "session_end"
+    )
     msgs = broker.web.get("/api/rooms/build/messages").json()["messages"]
     assert msgs[-1]["kind"] == "leave" and "session ended" in msgs[-1]["text"]
     assert broker.web.get("/api/rooms/build/members").json()["members"] == []
@@ -277,7 +295,9 @@ def test_codex_sessions_are_keyed_by_thread(broker: InProcBroker) -> None:
         assert r["ok"], r
         r = cx.tool("join", meta={"threadId": "thread-B"}, room="#build", screen_name="codex-2")
         assert r["ok"], r
-        rows = q(broker, "SELECT session_key, agent_pid, tier FROM participants WHERE harness='codex' ORDER BY id")
+        rows = q(
+            broker, "SELECT session_key, agent_pid, tier FROM participants WHERE harness='codex' ORDER BY id"
+        )
         assert [x[0] for x in rows] == ["codex:thread-A", "codex:thread-B"]
         assert {x[1] for x in rows} == {cx.pid} and {x[2] for x in rows} == {"mcp-only"}
         mid = say(broker, "for both threads")
@@ -287,21 +307,31 @@ def test_codex_sessions_are_keyed_by_thread(broker: InProcBroker) -> None:
         c = cx.tool("read", meta={"threadId": "thread-C"}, room="#build")
         assert c["ok"] is False and c["code"] == "not_member"
         # a Codex hook resolves by session id among threads of the same daemon; M2 prints nothing
-        cmd_payload = {"hook_event_name": "PostToolUse", "session_id": "thread-A", "tool_name": "Bash",
-                       "tool_response": "ok", "permission_mode": "default", "cwd": "/ws"}
+        cmd_payload = {
+            "hook_event_name": "PostToolUse",
+            "session_id": "thread-A",
+            "tool_name": "Bash",
+            "tool_response": "ok",
+            "permission_mode": "default",
+            "cwd": "/ws",
+        }
         cmd = hook_command(sys.executable, str(broker.paths.home), hook_sha12(), "codex", "PostToolUse")
         cx.p.stdin.write(json.dumps({"op": "hook", "command": cmd, "payload": cmd_payload}) + "\n")
         cx.p.stdin.flush()
         assert cx.recv()["stdout"] == ""
-        rows = q(broker, "SELECT session_key, approval_mode, hooks_seen_at FROM participants WHERE harness='codex' ORDER BY id")
+        rows = q(
+            broker,
+            "SELECT session_key, approval_mode, hooks_seen_at FROM participants WHERE harness='codex' ORDER BY id",
+        )
         assert rows[0][1] == "prompting" and rows[0][2] is not None  # thread A only
         assert rows[1][1] == "unknown" and rows[1][2] is None
     finally:
         cx.close()
 
 
-def run_hook_as(cx: FakeClaude, harness: str, payload: dict[str, Any], event: str,
-                wrap: str | None = None) -> str:
+def run_hook_as(
+    cx: FakeClaude, harness: str, payload: dict[str, Any], event: str, wrap: str | None = None
+) -> str:
     """Run a hook command as a child of the stand-in (optionally via ``wrap``, a
     nested stand-in session in between)."""
     cmd = hook_command(sys.executable, str(cx.b.paths.home), hook_sha12(), harness, event)
@@ -317,8 +347,9 @@ def run_hook_as(cx: FakeClaude, harness: str, payload: dict[str, Any], event: st
 NESTED = "import subprocess, sys\nsys.exit(subprocess.run(sys.argv[1], shell=True).returncode)\n"
 
 
-def test_a_nested_sessions_hooks_are_not_credited_to_the_outer_session(broker: InProcBroker,
-                                                                       claude: FakeClaude) -> None:
+def test_a_nested_sessions_hooks_are_not_credited_to_the_outer_session(
+    broker: InProcBroker, claude: FakeClaude
+) -> None:
     """`claude -p` run from a joined Claude's Bash fires the same user-level hooks.
     They must not claim the outer member's context, flip its status or re-key it."""
     claude.tool("join", room="#build", screen_name="claude-1")
@@ -355,19 +386,44 @@ def test_an_unjoined_sibling_thread_cannot_touch_a_joined_thread(broker: InProcB
     cx = FakeClaude(broker, as_harness="codex")
     try:
         assert cx.tool("join", meta={"threadId": "thread-A"}, room="#build", screen_name="codex-1")["ok"]
-        rows = lambda: [tuple(x) for x in q(broker, "SELECT session_key, status, approval_mode, hooks_seen_at"  # noqa: E731
-                                                     " FROM participants")]
+        rows = lambda: [
+            tuple(x)
+            for x in q(
+                broker,
+                "SELECT session_key, status, approval_mode, hooks_seen_at"  # noqa: E731
+                " FROM participants",
+            )
+        ]
         before = rows()
         assert before[0][3] is None
-        for ev, extra in (("PostToolUse", {"tool_name": "Bash", "tool_response": "ok"}), ("Stop", {}),
-                          ("SessionEnd", {"reason": "exit"})):
-            payload = {"hook_event_name": ev, "session_id": "thread-B", "permission_mode": "bypassPermissions",
-                       "cwd": "/ws", **extra}
+        for ev, extra in (
+            ("PostToolUse", {"tool_name": "Bash", "tool_response": "ok"}),
+            ("Stop", {}),
+            ("SessionEnd", {"reason": "exit"}),
+        ):
+            payload = {
+                "hook_event_name": ev,
+                "session_id": "thread-B",
+                "permission_mode": "bypassPermissions",
+                "cwd": "/ws",
+                **extra,
+            }
             assert run_hook_as(cx, "codex", payload, ev) == ""
         assert rows() == before
         # thread A's own hook is credited to it
-        run_hook_as(cx, "codex", {"hook_event_name": "PostToolUse", "session_id": "thread-A", "tool_name": "Bash",
-                                  "tool_response": "ok", "permission_mode": "default", "cwd": "/ws"}, "PostToolUse")
+        run_hook_as(
+            cx,
+            "codex",
+            {
+                "hook_event_name": "PostToolUse",
+                "session_id": "thread-A",
+                "tool_name": "Bash",
+                "tool_response": "ok",
+                "permission_mode": "default",
+                "cwd": "/ws",
+            },
+            "PostToolUse",
+        )
         assert rows()[0][2] == "prompting" and rows()[0][3] is not None
     finally:
         cx.close()
@@ -410,8 +466,15 @@ def test_a_codex_thread_cannot_be_taken_over_from_another_process(quiet_broker: 
         assert row[0] == a.pid
         # once A's codex and MCP server are gone, the thread can be resumed elsewhere
         a.close()
-        r = wait_for(lambda: (x := b.tool("join", meta={"threadId": "thread-A"}, room="#build",
-                                          screen_name="codex-1"))["ok"] and x, 10)
+        r = wait_for(
+            lambda: (
+                (x := b.tool("join", meta={"threadId": "thread-A"}, room="#build", screen_name="codex-1"))[
+                    "ok"
+                ]
+                and x
+            ),
+            10,
+        )
         assert r and r["text"].startswith("[switchboard] You rejoined #build as codex-1")
         [row] = q(broker, "SELECT agent_pid FROM participants WHERE harness='codex'")
         assert row[0] == b.pid
@@ -420,7 +483,9 @@ def test_a_codex_thread_cannot_be_taken_over_from_another_process(quiet_broker: 
         b.close()
 
 
-def test_a_codex_thread_is_joined_fresh_after_the_sweep_ended_the_old_session(quiet_broker: InProcBroker) -> None:
+def test_a_codex_thread_is_joined_fresh_after_the_sweep_ended_the_old_session(
+    quiet_broker: InProcBroker,
+) -> None:
     """The other ordering: the liveness sweep ends A's session before B arrives."""
     broker = quiet_broker
     a = FakeClaude(broker, as_harness="codex")

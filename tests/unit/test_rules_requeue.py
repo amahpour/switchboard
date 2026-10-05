@@ -10,24 +10,46 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import World
+
 from switchboard import envelope
 from switchboard.config import Config
 from switchboard.delivery import rules
 from switchboard.models import Item
 
 
-def item(mid: int, prio: int, state: str = "in_context", redelivered: bool = False, attempts: int = 0) -> Item:
-    return Item(membership_id=1, message_id=mid, prio=prio, mentioned=prio == 1, state=state, batch_id=None,
-                attempts=attempts, notified_at=None, ts=0.0, sender_name="alice", sender_kind="human",
-                sender_harness=None, text="t", reply_to=None, redelivered=redelivered)
+def item(
+    mid: int, prio: int, state: str = "in_context", redelivered: bool = False, attempts: int = 0
+) -> Item:
+    return Item(
+        membership_id=1,
+        message_id=mid,
+        prio=prio,
+        mentioned=prio == 1,
+        state=state,
+        batch_id=None,
+        attempts=attempts,
+        notified_at=None,
+        ts=0.0,
+        sender_name="alice",
+        sender_kind="human",
+        sender_harness=None,
+        text="t",
+        reply_to=None,
+        redelivered=redelivered,
+    )
 
 
 def test_redeliver_ids_picks_unanswered_priority_items_once() -> None:
-    items = [item(1, 2), item(2, 1), item(3, 0), item(4, 2, redelivered=True), item(5, 2, state="handled"),
-             item(6, 1, attempts=7)]
+    items = [
+        item(1, 2),
+        item(2, 1),
+        item(3, 0),
+        item(4, 2, redelivered=True),
+        item(5, 2, state="handled"),
+        item(6, 1, attempts=7),
+    ]
     assert rules.redeliver_ids(items) == [1, 2, 6]  # attempts don't matter; the redelivered mark does
 
 
@@ -79,7 +101,9 @@ def test_chatter_is_never_redelivered(w: World) -> None:
     w.actions += acts
     msg = w.agent_says(peer, "just chatter")
     [res] = w.resolved(sink.id)
-    w.hook(p, "PostToolUse", ok=True, tokens=((res["batch_id"], envelope.TOKEN_RE.search(res["text"]).group(2)),))
+    w.hook(
+        p, "PostToolUse", ok=True, tokens=((res["batch_id"], envelope.TOKEN_RE.search(res["text"]).group(2)),)
+    )
     assert w.delivery(m, msg)["state"] == "handled"
     w.hook(p, "Stop")
     assert w.delivery(m, msg)["state"] == "handled"

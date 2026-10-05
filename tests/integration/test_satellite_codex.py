@@ -22,9 +22,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import child_env
 from fakes.fake_link import SatDriver, make_pi_home, wait_for
+
 from switchboard.broker import proc
 from switchboard.paths import Paths
 from switchboard.remote import proto
@@ -69,9 +69,13 @@ class StandInCodex:
         exe.write_text(STANDIN)
         client = tmp / "client.py"
         client.write_text(CLIENT)
-        self.p = subprocess.Popen([sys.executable, str(exe), str(client), str(Paths.from_home(pi).sock)],
-                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, env=child_env(),
-                                  start_new_session=True)
+        self.p = subprocess.Popen(
+            [sys.executable, str(exe), str(client), str(Paths.from_home(pi).sock)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            env=child_env(),
+            start_new_session=True,
+        )
         self.pid = self.p.pid
         info = wait_for(lambda: proc.info(self.pid), what="the stand-in's start time")
         self.start = info.start
@@ -121,8 +125,16 @@ def attested(pi: Path, tmp: Path) -> tuple[SatDriver, StandInCodex, int]:
 
 
 def deliver(bid: int = 7) -> dict[str, Any]:
-    return {"push": "deliver", "data": {"batch_id": bid, "text": "[switchboard] #fpga: hi", "room": "#fpga",
-                                         "sender": "alice", "thread_id": "019a-thread"}}
+    return {
+        "push": "deliver",
+        "data": {
+            "batch_id": bid,
+            "text": "[switchboard] #fpga: hi",
+            "room": "#fpga",
+            "sender": "alice",
+            "thread_id": "019a-thread",
+        },
+    }
 
 
 def own_report(sat: SatDriver, c: int, bid: int, err: str) -> None:

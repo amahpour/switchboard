@@ -47,10 +47,17 @@ from switchboard.remote.config import (
 )
 
 # each harness, and the commands on PATH that mean it is installed
-HARNESS_BINS = {"claude": ("claude",), "codex": ("codex",), "cursor": ("cursor-agent", "agent"), "devin": ("devin",)}
+HARNESS_BINS = {
+    "claude": ("claude",),
+    "codex": ("codex",),
+    "cursor": ("cursor-agent", "agent"),
+    "devin": ("devin",),
+}
 POST_TIMEOUT_S = 20.0
-USED_BANNER = ("This code was already used by another machine. Don't approve the pending machine:"
-               " remove it in the web UI and make a new code.")
+USED_BANNER = (
+    "This code was already used by another machine. Don't approve the pending machine:"
+    " remove it in the web UI and make a new code."
+)
 
 
 class JoinError(Exception):
@@ -63,8 +70,13 @@ def found_harnesses() -> list[str]:
 
 def machine_facts() -> dict[str, Any]:
     """What this machine says about itself: shown to the owner as the machine's own claims."""
-    return {"hostname": socket.gethostname()[:64], "os": f"{platform.system()} {platform.release()}"[:80],
-            "arch": platform.machine()[:32], "version": __version__, "harnesses": found_harnesses()}
+    return {
+        "hostname": socket.gethostname()[:64],
+        "os": f"{platform.system()} {platform.release()}"[:80],
+        "arch": platform.machine()[:32],
+        "version": __version__,
+        "harnesses": found_harnesses(),
+    }
 
 
 def tls_context() -> ssl.SSLContext:
@@ -73,12 +85,17 @@ def tls_context() -> ssl.SSLContext:
     return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 
 
-def post_pair(origin: str, body: dict[str, Any], timeout: float = POST_TIMEOUT_S) -> tuple[int, dict[str, Any]]:
+def post_pair(
+    origin: str, body: dict[str, Any], timeout: float = POST_TIMEOUT_S
+) -> tuple[int, dict[str, Any]]:
     """``POST <origin>/link/pair``; (status, JSON answer). No cookie, no Origin: this isn't a browser."""
     o = WebOrigin.parse(origin)
-    req = urllib.request.Request(o.origin + linkkey.PAIR_PATH, data=json.dumps(body).encode("utf-8"), method="POST",
-                                 headers={"Content-Type": "application/json",
-                                          "User-Agent": f"switchboard/{__version__}"})
+    req = urllib.request.Request(
+        o.origin + linkkey.PAIR_PATH,
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json", "User-Agent": f"switchboard/{__version__}"},
+    )
     handlers: list[Any] = [urllib.request.HTTPSHandler(context=tls_context())] if o.scheme == "https" else []
     opener = urllib.request.build_opener(*handlers)
     try:
@@ -104,9 +121,11 @@ def _json(raw: bytes) -> dict[str, Any]:
 def home_problem(paths: Paths) -> str | None:
     """Why ``remote join`` can't use this home, or None."""
     if paths.db.exists() or remotes_path(paths).exists():
-        return (f"{paths.home} runs a switchboard broker (it has its database): a machine that dials a broker"
-                " needs a home of its own, so this machine's agents don't move off your local broker without"
-                " you knowing. Run this again with --home, for example --home ~/.switchboard-link")
+        return (
+            f"{paths.home} runs a switchboard broker (it has its database): a machine that dials a broker"
+            " needs a home of its own, so this machine's agents don't move off your local broker without"
+            " you knowing. Run this again with --home, for example --home ~/.switchboard-link"
+        )
     try:
         conf = read_satellite_conf(paths)
     except FileNotFoundError:
@@ -114,8 +133,10 @@ def home_problem(paths: Paths) -> str | None:
     except (OSError, RemoteConfigError) as e:
         return f"satellite.toml: {e}"
     if conf is not None and not conf.dials:
-        return (f"{paths.home} is dialed over ssh by a desktop ({conf.desktop or '?'}): use another --home, or"
-                f" `switchboard remote remove {conf.name}` here first")
+        return (
+            f"{paths.home} is dialed over ssh by a desktop ({conf.desktop or '?'}): use another --home, or"
+            f" `switchboard remote remove {conf.name}` here first"
+        )
     from switchboard.remote.dialer import running_pid
 
     pid = running_pid(paths)
@@ -139,9 +160,18 @@ def install_lines(paths: Paths, home_given: bool) -> list[str]:
     return [f"  switchboard install {h}{flag}" for h in hs]
 
 
-def join(paths: Paths, url: str, code: str, *, home_given: bool, test_mode: bool = False, start: bool = True,
-         out: TextIO | None = None, post: Callable[..., tuple[int, dict[str, Any]]] = post_pair,
-         start_dialer: Callable[..., int] | None = None) -> int:
+def join(
+    paths: Paths,
+    url: str,
+    code: str,
+    *,
+    home_given: bool,
+    test_mode: bool = False,
+    start: bool = True,
+    out: TextIO | None = None,
+    post: Callable[..., tuple[int, dict[str, Any]]] = post_pair,
+    start_dialer: Callable[..., int] | None = None,
+) -> int:
     out = out or sys.stdout
     try:
         origin = WebOrigin.parse(url)
@@ -168,8 +198,13 @@ def join(paths: Paths, url: str, code: str, *, home_given: bool, test_mode: bool
     if status != 200:
         with contextlib.suppress(OSError):
             key_path.unlink()
-        raise JoinError(str(data.get("message") or f"{origin.origin} answered {status}: is it a switchboard broker"
-                                                   " with passkeys (a hosted one)?"))
+        raise JoinError(
+            str(
+                data.get("message")
+                or f"{origin.origin} answered {status}: is it a switchboard broker"
+                " with passkeys (a hosted one)?"
+            )
+        )
     name, bkey, got_fp = data.get("name"), data.get("broker_key"), data.get("fingerprint")
     try:
         bkey_raw = linkkey.unb64u(bkey, 32)
@@ -178,10 +213,18 @@ def join(paths: Paths, url: str, code: str, *, home_given: bool, test_mode: bool
     if not isinstance(name, str) or not valid_host(name):
         raise JoinError("the broker's answer holds no machine name")
     if got_fp != fp:
-        raise JoinError("the broker received another key than this machine's: something between this machine and the"
-                        " broker changed it. Don't approve anything: remove the pending machine in the web UI")
-    write_satellite_conf(paths, name, desktop=_label(origin.hostname), key_fp=fp, broker_url=origin.origin,
-                         broker_key=linkkey.b64u(bkey_raw))
+        raise JoinError(
+            "the broker received another key than this machine's: something between this machine and the"
+            " broker changed it. Don't approve anything: remove the pending machine in the web UI"
+        )
+    write_satellite_conf(
+        paths,
+        name,
+        desktop=_label(origin.hostname),
+        key_fp=fp,
+        broker_url=origin.origin,
+        broker_key=linkkey.b64u(bkey_raw),
+    )
     print(f"Paired as {name} with {origin.origin}.", file=out)
     print(f"The broker's key, pinned here: {linkkey.fingerprint(bkey_raw)}", file=out)
     print(f"\nThis machine's key: {fp}", file=out)
@@ -196,12 +239,15 @@ def join(paths: Paths, url: str, code: str, *, home_given: bool, test_mode: bool
     print("", file=out)
     if start_dialer is None:
         from switchboard.broker.daemon import start_dialer as start_dialer_
+
         start_dialer = start_dialer_
     return start_dialer(paths, test_mode=test_mode, out=out)
 
 
 # ------------------------------------------------------------------ leave
-def leave(paths: Paths, name: str, *, yes: bool = False, stdin: TextIO | None = None, out: TextIO | None = None) -> int:
+def leave(
+    paths: Paths, name: str, *, yes: bool = False, stdin: TextIO | None = None, out: TextIO | None = None
+) -> int:
     """``switchboard remote remove <name>`` on a home that dials its broker: stop the dialer, and
     forget the pairing (``satellite.toml`` and the machine key)."""
     from switchboard.install.common import confirm
@@ -226,7 +272,10 @@ def leave(paths: Paths, name: str, *, yes: bool = False, stdin: TextIO | None = 
     for p in (paths.satellite_conf, key_path, state_path(paths), pid_path(paths)):
         with contextlib.suppress(FileNotFoundError):
             p.unlink()
-    print(f"removed {name} here. Remove it in the web UI too ({conf.broker_url}), if it's still listed.", file=out)
+    print(
+        f"removed {name} here. Remove it in the web UI too ({conf.broker_url}), if it's still listed.",
+        file=out,
+    )
     return 0
 
 
@@ -239,12 +288,16 @@ def status_lines(paths: Paths) -> list[str]:
     pid = running_pid(paths)
     state = st.get("state") if pid is not None or st.get("state") == "stopped" else "not running"
     reason = st.get("reason")
-    lines = [f"switchboard dialer for {conf.name}: {state}{f' ({reason})' if reason else ''}"
-             + (f", pid {pid}" if pid else "")]
+    lines = [
+        f"switchboard dialer for {conf.name}: {state}{f' ({reason})' if reason else ''}"
+        + (f", pid {pid}" if pid else "")
+    ]
     lines.append(f"  broker  {conf.broker_url}")
     lines.append(f"  key     {conf.key_fingerprint}")
     if st.get("message"):
-        lines += textwrap.wrap(str(st["message"]), 96, initial_indent="  why     ", subsequent_indent=" " * 10)
+        lines += textwrap.wrap(
+            str(st["message"]), 96, initial_indent="  why     ", subsequent_indent=" " * 10
+        )
     if pid is None and state != "stopped":
         where = "" if paths.home == Paths.from_home(None).home else f" --home {paths.home}"
         lines.append(f"  start it with `switchboard start{where}`")

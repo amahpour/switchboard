@@ -63,36 +63,83 @@ def build(path: Path) -> dict[str, int]:
     clock.advance(1.0)
 
     def part(harness: str, key: str, pid: int, **kw):
-        base = dict(agent_pid=pid, agent_start=T0 - 600.0, mcp_pid=pid + 7, mcp_start=T0 - 599.5,
-                    status="idle", status_at=clock.now(), status_src="join", tier="mcp-only")
+        base = dict(
+            agent_pid=pid,
+            agent_start=T0 - 600.0,
+            mcp_pid=pid + 7,
+            mcp_start=T0 - 599.5,
+            status="idle",
+            status_at=clock.now(),
+            status_src="join",
+            tier="mcp-only",
+        )
         base.update(kw)
         return store.upsert_participant(harness, key, **base)
 
     def join(room, p, name: str):
         m = store.create_membership(room.id, p.id, name, h("cred-" + name))
-        store.add_event("join", room_id=room.id, membership_id=m.id, participant_id=p.id,
-                        data={"harness": p.harness, "tier": p.tier})
+        store.add_event(
+            "join",
+            room_id=room.id,
+            membership_id=m.id,
+            participant_id=p.id,
+            data={"harness": p.harness, "tier": p.tier},
+        )
         where = f"{p.harness} on {p.host}" if p.host else p.harness
-        store.insert_message(room.id, sender_name=name, sender_kind="agent", via="mcp", kind="join",
-                             sender_membership_id=m.id, sender_harness=p.harness, sender_host=p.host or None,
-                             text=f"joined ({where}, {p.tier})")
+        store.insert_message(
+            room.id,
+            sender_name=name,
+            sender_kind="agent",
+            via="mcp",
+            kind="join",
+            sender_membership_id=m.id,
+            sender_harness=p.harness,
+            sender_host=p.host or None,
+            text=f"joined ({where}, {p.tier})",
+        )
         clock.advance(0.5)
         return m
 
-    claude = part("claude", f"claude:41001@{T0 - 600.0:.2f}", 41001, tier="claude:hook",
-                  claude_socket="/tmp/yk-inbox-41001.sock", approval_mode="prompting",
-                  session_id="00000000-0000-4000-8000-00000000c1a0", hooks_seen_at=clock.now())
-    codex = part("codex", "codex:00000000-0000-4000-8000-0000000c0de1", 42001, thread_proof=1,
-                 session_id="00000000-0000-4000-8000-0000000c0de1", approval_mode="bypass")
-    cursor = part("cursor", "cursor:conv-00000000-0001", 43001, bind_state="bound",
-                  session_id="conv-00000000-0001", tier="cursor:stop-park")
+    claude = part(
+        "claude",
+        f"claude:41001@{T0 - 600.0:.2f}",
+        41001,
+        tier="claude:hook",
+        claude_socket="/tmp/yk-inbox-41001.sock",
+        approval_mode="prompting",
+        session_id="00000000-0000-4000-8000-00000000c1a0",
+        hooks_seen_at=clock.now(),
+    )
+    codex = part(
+        "codex",
+        "codex:00000000-0000-4000-8000-0000000c0de1",
+        42001,
+        thread_proof=1,
+        session_id="00000000-0000-4000-8000-0000000c0de1",
+        approval_mode="bypass",
+    )
+    cursor = part(
+        "cursor",
+        "cursor:conv-00000000-0001",
+        43001,
+        bind_state="bound",
+        session_id="conv-00000000-0001",
+        tier="cursor:stop-park",
+    )
     devin = part("devin", f"devin:44001@{T0 - 600.0:.2f}", 44001, tier="devin:wait-loop")
     bot = part("test", "test:bot-a", 45001, status="busy")
     gone = part("unknown", f"unknown:46001@{T0 - 600.0:.2f}", 46001)
     # schema 2: a member on a remote host (its pids are that host's), with the owner's consent
-    bench = part("claude", f"claude@fpga-pi:1000041001@{T0 - 600.0:.2f}", 1000041001, host="fpga-pi",
-                 tier="claude:inbox", claude_socket="/tmp/yk-inbox-remote.sock", approval_mode="prompting",
-                 session_id="00000000-0000-4000-8000-00000000be9c")
+    bench = part(
+        "claude",
+        f"claude@fpga-pi:1000041001@{T0 - 600.0:.2f}",
+        1000041001,
+        host="fpga-pi",
+        tier="claude:inbox",
+        claude_socket="/tmp/yk-inbox-remote.sock",
+        approval_mode="prompting",
+        session_id="00000000-0000-4000-8000-00000000be9c",
+    )
     store.set_remote_enabled("fpga-pi", h("config-fpga-pi"), "cli")
     store.touch_remote_up("fpga-pi")
     engine.ack_modes[bot.id] = "next_call"
@@ -107,8 +154,14 @@ def build(path: Path) -> dict[str, int]:
     store.web_session_create(h("web-session-1"), 7 * 24 * 3600.0)
 
     # the human asks, agents answer; the engine offers, confirms and expires batches
-    msg1 = store.insert_message(build_room.id, sender_name="alice", sender_kind="human", via="web",
-                                text="@vivado build blinky and hand it to @bot-a", mentions=("vivado", "bot-a"))
+    msg1 = store.insert_message(
+        build_room.id,
+        sender_name="alice",
+        sender_kind="human",
+        via="web",
+        text="@vivado build blinky and hand it to @bot-a",
+        mentions=("vivado", "bot-a"),
+    )
     engine.on_message(msg1.id)
     clock.advance(1.0)
     p_bot = store.get_participant(bot.id)
@@ -116,56 +169,104 @@ def build(path: Path) -> dict[str, int]:
     clock.advance(0.5)
     engine.before_call(store.get_participant(bot.id))  # the next call confirms it
     store.mark_handled(mb.id)
-    msg2 = store.insert_message(build_room.id, sender_name="bot-a", sender_kind="agent", via="mcp",
-                                sender_membership_id=mb.id, sender_harness="test",
-                                text="artifact: blinky/top.bit size:1024", reply_to=msg1.id, mentions=("vivado",))
+    msg2 = store.insert_message(
+        build_room.id,
+        sender_name="bot-a",
+        sender_kind="agent",
+        via="mcp",
+        sender_membership_id=mb.id,
+        sender_harness="test",
+        text="artifact: blinky/top.bit size:1024",
+        reply_to=msg1.id,
+        mentions=("vivado",),
+    )
     engine.on_message(msg2.id)
     clock.advance(1.0)
     # a Claude hook: busy, then PostToolUse context
     ev = HookEvent(harness="claude", event="UserPromptSubmit", sid=claude.session_id, t=clock.now())
     engine.claim_for_hook(store.get_participant(claude.id), ev)
     clock.advance(0.5)
-    ev = HookEvent(harness="claude", event="PostToolUse", sid=claude.session_id, tool="Bash", ok=True,
-                   t=clock.now())
+    ev = HookEvent(
+        harness="claude", event="PostToolUse", sid=claude.session_id, tool="Bash", ok=True, t=clock.now()
+    )
     engine.claim_for_hook(store.get_participant(claude.id), ev)
     clock.advance(1.0)
-    msg3 = store.insert_message(build_room.id, sender_name="vivado", sender_kind="agent", via="mcp",
-                                sender_membership_id=mc.id, sender_harness="claude",
-                                text="built; @bot-a please flash it", mentions=("bot-a",))
+    msg3 = store.insert_message(
+        build_room.id,
+        sender_name="vivado",
+        sender_kind="agent",
+        via="mcp",
+        sender_membership_id=mc.id,
+        sender_harness="claude",
+        text="built; @bot-a please flash it",
+        mentions=("bot-a",),
+    )
     engine.on_message(msg3.id)
     clock.advance(1.0)
     # the remote member reports from its host
-    msg4 = store.insert_message(build_room.id, sender_name="bench", sender_kind="agent", via="mcp",
-                                sender_membership_id=mr.id, sender_harness="claude", sender_host="fpga-pi",
-                                text="flashed; UART shows PORT_OK 8080", reply_to=msg3.id)
+    msg4 = store.insert_message(
+        build_room.id,
+        sender_name="bench",
+        sender_kind="agent",
+        via="mcp",
+        sender_membership_id=mr.id,
+        sender_harness="claude",
+        sender_host="fpga-pi",
+        text="flashed; UART shows PORT_OK 8080",
+        reply_to=msg3.id,
+    )
     engine.on_message(msg4.id)
     clock.advance(1.0)
     # a Devin wait() in #review that a human message answers
-    store.insert_message(review.id, sender_name="alice", sender_kind="human", via="cli",
-                         text="devin-1: review the UART test when you can")
+    store.insert_message(
+        review.id,
+        sender_name="alice",
+        sender_kind="human",
+        via="cli",
+        text="devin-1: review the UART test when you can",
+    )
     engine.pull(store.get_participant(devin.id), md, "wait", 20)
     clock.advance(2.0)
     # an offer that expires, a notice, a command, a leave and an ended session
     _t, bid2, _n, _m, _a = engine.pull(store.get_participant(codex.id), mx, "read", 20)
     if bid2 is not None:
         store.expire_batch(bid2, "disconnect")
-    store.insert_message(build_room.id, sender_name="switchboard", sender_kind="system", via="system",
-                         kind="notice", text="#build: hop limit set to 6")
+    store.insert_message(
+        build_room.id,
+        sender_name="switchboard",
+        sender_kind="system",
+        via="system",
+        kind="notice",
+        text="#build: hop limit set to 6",
+    )
     store.add_event("hops", room_id=build_room.id, data={"limit": 6})
     store.add_event("model", participant_id=claude.id, data={"model": "claude-test-model"})
-    store.add_event("pass", room_id=build_room.id, membership_id=mu.id, participant_id=cursor.id,
-                    data={"handled": 0, "note_len": 0})
+    store.add_event(
+        "pass",
+        room_id=build_room.id,
+        membership_id=mu.id,
+        participant_id=cursor.id,
+        data={"handled": 0, "note_len": 0},
+    )
     store.add_event("remote", data={"what": "enable", "name": "fpga-pi", "via": "cli"})
     clock.advance(1.0)
     ended = store.end_participant(gone.id, "session_end")
     for m in ended:
         engine.on_membership_ended(m.id, "session_end")
-        store.insert_message(m.room_id, sender_name=m.screen_name, sender_kind="agent", via="system",
-                             kind="leave", sender_membership_id=m.id, sender_harness="unknown",
-                             text="left (session ended)")
+        store.insert_message(
+            m.room_id,
+            sender_name=m.screen_name,
+            sender_kind="agent",
+            via="system",
+            kind="leave",
+            sender_membership_id=m.id,
+            sender_harness="unknown",
+            text="left (session ended)",
+        )
     store.set_status(codex.id, "offline", "mcp:bye")
-    store.insert_message(build_room.id, sender_name="alice", sender_kind="human", via="web",
-                         text="thanks all")
+    store.insert_message(
+        build_room.id, sender_name="alice", sender_kind="human", via="web", text="thanks all"
+    )
     engine.on_message(store.last_message_id(build_room.id))
     store.set_held(mu.id, True)
     store.con.execute("PRAGMA wal_checkpoint(TRUNCATE)")

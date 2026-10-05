@@ -16,10 +16,10 @@ from pathlib import Path
 
 import httpx
 import pytest
+from conftest import InProcBroker, SubprocBroker, cookie_of, make_tmp_home
 from websockets.exceptions import InvalidStatus
 from websockets.sync.client import connect
 
-from conftest import InProcBroker, SubprocBroker, cookie_of, make_tmp_home
 from switchboard.broker.auth import SESSION_TTL_S, WebOrigin
 
 PUBLIC = "https://sb.example.com"
@@ -42,8 +42,13 @@ def client(b: InProcBroker, host: str = HOST, cookie: str | None = None) -> http
     headers = {"Host": host}
     if cookie:
         headers["Cookie"] = f"switchboard_session={cookie}"
-    return httpx.Client(base_url=f"http://127.0.0.1:{b.port}", headers=headers, timeout=10.0,
-                        follow_redirects=False, limits=httpx.Limits(keepalive_expiry=1.0))
+    return httpx.Client(
+        base_url=f"http://127.0.0.1:{b.port}",
+        headers=headers,
+        timeout=10.0,
+        follow_redirects=False,
+        limits=httpx.Limits(keepalive_expiry=1.0),
+    )
 
 
 def cookie_attrs(set_cookie: str) -> tuple[str, list[str]]:
@@ -76,8 +81,14 @@ def test_the_public_host_is_the_only_host(public: InProcBroker) -> None:
     with client(public) as c:
         r = c.get("/")
     assert r.status_code == 200 and "switchboard login" in r.text
-    for host in [f"switchboard.localhost:{public.port}", f"127.0.0.1:{public.port}", "sb.example.com:443",
-                 "SB.example.com", "sb.example.com.evil.com", "evil.com"]:
+    for host in [
+        f"switchboard.localhost:{public.port}",
+        f"127.0.0.1:{public.port}",
+        "sb.example.com:443",
+        "SB.example.com",
+        "sb.example.com.evil.com",
+        "evil.com",
+    ]:
         with client(public, host=host) as c:
             r = c.get("/")
         assert r.status_code == 421, host
@@ -102,8 +113,14 @@ def test_writes_need_the_public_origin(public: InProcBroker) -> None:
     sid = sign_in(public)
     with client(public, cookie=sid) as c:
         assert c.post("/api/rooms", json={"name": "#build"}, headers=write_headers()).status_code == 200
-        for origin in ["http://sb.example.com", f"http://switchboard.localhost:{public.port}", "https://evil.com",
-                       "https://sb.example.com:443", "null", None]:
+        for origin in [
+            "http://sb.example.com",
+            f"http://switchboard.localhost:{public.port}",
+            "https://evil.com",
+            "https://sb.example.com:443",
+            "null",
+            None,
+        ]:
             h = {"X-Switchboard": "1", "Content-Type": "application/json"}
             if origin:
                 h["Origin"] = origin
@@ -127,8 +144,15 @@ def ws(b: InProcBroker, cookie: str | None, *, host: str = HOST, origin: str | N
     sock = socket.create_connection(("127.0.0.1", b.port), timeout=5)
     headers = {"Cookie": f"switchboard_session={cookie}"} if cookie else {}
     try:
-        return connect(f"ws://{host}/ws", sock=sock, origin=origin, additional_headers=headers,  # type: ignore[arg-type]
-                       open_timeout=5, close_timeout=2, legacy=True)  # connect now; tests close explicitly
+        return connect(
+            f"ws://{host}/ws",
+            sock=sock,
+            origin=origin,
+            additional_headers=headers,  # type: ignore[arg-type]
+            open_timeout=5,
+            close_timeout=2,
+            legacy=True,
+        )  # connect now; tests close explicitly
     except BaseException:
         sock.close()
         raise
@@ -142,8 +166,13 @@ def test_the_websocket_needs_the_public_host_and_origin(public: InProcBroker) ->
         assert conn.recv(timeout=5) == '{"t": "pong"}'  # type: ignore[attr-defined]
     finally:
         conn.close()  # type: ignore[attr-defined]
-    refused = [dict(origin="http://sb.example.com"), dict(origin=f"http://switchboard.localhost:{public.port}"),
-               dict(origin=None), dict(host=f"switchboard.localhost:{public.port}"), dict(host="evil.com")]
+    refused = [
+        dict(origin="http://sb.example.com"),
+        dict(origin=f"http://switchboard.localhost:{public.port}"),
+        dict(origin=None),
+        dict(host=f"switchboard.localhost:{public.port}"),
+        dict(host="evil.com"),
+    ]
     for kw in refused:
         with pytest.raises(InvalidStatus):
             ws(public, sid, **kw)  # type: ignore[arg-type]
@@ -172,7 +201,9 @@ def test_status_and_ping_give_the_public_url(public: InProcBroker, broker: InPro
 
 # ------------------------------------------------------------------ /healthz
 @pytest.mark.parametrize("mode", ["public", "default"])
-def test_healthz_answers_any_host_and_nothing_else(mode: str, public: InProcBroker, broker: InProcBroker) -> None:
+def test_healthz_answers_any_host_and_nothing_else(
+    mode: str, public: InProcBroker, broker: InProcBroker
+) -> None:
     """A platform's health check probes the container's own address, so /healthz skips the Host
     check; it needs no session and says nothing but "ok". Everything else keeps the check."""
     b = public if mode == "public" else broker
@@ -188,7 +219,15 @@ def test_healthz_answers_any_host_and_nothing_else(mode: str, public: InProcBrok
     with client(b, host="10.0.0.7:7419") as c:
         # only GET and HEAD of exactly /healthz
         assert c.post("/healthz", headers=write_headers()).status_code == 421
-        for path in ["/healthz/", "/healthz/../api/me", "//healthz", "/HEALTHZ", "/api/me", "/", "/login?t=x"]:
+        for path in [
+            "/healthz/",
+            "/healthz/../api/me",
+            "//healthz",
+            "/HEALTHZ",
+            "/api/me",
+            "/",
+            "/login?t=x",
+        ]:
             assert c.get(path).status_code == 421, path
     # no Host at all (HTTP/1.0): still ok
     s = socket.create_connection(("127.0.0.1", b.port), timeout=5)

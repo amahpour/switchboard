@@ -17,9 +17,9 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import World
+
 from switchboard.adapters import codex as cx
 from switchboard.adapters import cursor as cu
 from switchboard.adapters.claude import TIER_HOOK, TIER_INBOX, ClaudeAdapter
@@ -39,14 +39,19 @@ def w(tmp_path: Path, clock: FakeClock) -> World:
     return World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0))
 
 
-def remote(w: World, harness: str, rest: str, name: str, *, like: Participant | None = None,
-           **fields: Any) -> Participant:
+def remote(
+    w: World, harness: str, rest: str, name: str, *, like: Participant | None = None, **fields: Any
+) -> Participant:
     """A joined participant on the Pi. With ``like``, it has that local row's pids and
     starts (on the Pi they are some Pi process; here they would name the local one)."""
     base: dict[str, Any] = dict(agent_pid=7001, agent_start=1.0, mcp_pid=7101, mcp_start=2.0)
     if like is not None:
-        base = dict(agent_pid=like.agent_pid, agent_start=like.agent_start, mcp_pid=like.mcp_pid,
-                    mcp_start=like.mcp_start)
+        base = dict(
+            agent_pid=like.agent_pid,
+            agent_start=like.agent_start,
+            mcp_pid=like.mcp_pid,
+            mcp_start=like.mcp_start,
+        )
     base.update(status="idle", tier="mcp-only", hooks_seen_at=w.clock.now())
     base.update(fields)
     p = w.store.upsert_participant(harness, session_key(harness, PI, rest), host=PI, **base)
@@ -62,8 +67,13 @@ def me() -> proc.ProcInfo:
 
 # ------------------------------------------------------------------ keys
 def test_split_session_key_inverts_session_key() -> None:
-    for h, host, rest in [("claude", "", "4242@1.00"), ("claude", PI, "4242@1.00"), ("codex", PI, "a:b:c"),
-                          ("cursor", "", "agent:7@1.00"), ("test", PI, "s")]:
+    for h, host, rest in [
+        ("claude", "", "4242@1.00"),
+        ("claude", PI, "4242@1.00"),
+        ("codex", PI, "a:b:c"),
+        ("cursor", "", "agent:7@1.00"),
+        ("test", PI, "s"),
+    ]:
         assert split_session_key(session_key(h, host, rest)) == (h, host, rest)
     for bad in ["nocolon", ":x", "@fpga-pi:x", "codex@Not A Host:t", "codex@:t"]:
         assert split_session_key(bad) is None, bad
@@ -103,7 +113,8 @@ def test_poll_once_reads_and_prunes_only_this_machines_registry(w: World, tmp_pa
     rp = remote(w, "claude", "7001@1.00", "bench", claude_socket=SOCK)
     # this machine happens to have a Claude session with the Pi row's pid, waiting on a prompt
     (sessions / f"{rp.agent_pid}.json").write_text(
-        json.dumps({"pid": rp.agent_pid, "status": "waiting", "messagingSocketPath": SOCK}))
+        json.dumps({"pid": rp.agent_pid, "status": "waiting", "messagingSocketPath": SOCK})
+    )
     a.observe(4242, {"pid": 4242, "status": "busy"}, w.clock.now(), host=PI)  # a relayed Pi view
     a.poll_once()
     assert ("", rp.agent_pid) not in a.registry and (PI, rp.agent_pid) not in a.registry
@@ -122,8 +133,15 @@ def test_push_channels_and_registry_views_are_per_host(w: World) -> None:
     a.observe(p.agent_pid, {"pid": p.agent_pid, "status": "idle"}, w.clock.now())
     assert a.conn_for(p) is conn and a.conn_for(rp) is None
     assert a.reg_view(p) is not None and a.reg_view(rp) is None
-    ident = dict(harness="claude", mcp_pid=p.mcp_pid, mcp_start=p.mcp_start, agent_pid=p.agent_pid,
-                 agent_start=p.agent_start, evidence="stub", claude_socket=SOCK)
+    ident = dict(
+        harness="claude",
+        mcp_pid=p.mcp_pid,
+        mcp_start=p.mcp_start,
+        agent_pid=p.agent_pid,
+        agent_start=p.agent_start,
+        evidence="stub",
+        claude_socket=SOCK,
+    )
     assert a.conn_tier(McpIdentity(**ident), None) == (TIER_INBOX, None)
     assert a.conn_tier(McpIdentity(**ident, host=PI), None) == (TIER_HOOK, None)
     # and the Pi's own channel (M8c attaches it with its host) is only the Pi row's
@@ -139,9 +157,11 @@ def codex_ad(w: World) -> CodexAdapter:
     assert isinstance(a, CodexAdapter)
     a.clock = w.clock
     a.runner = SimpleNamespace(
-        state=SimpleNamespace(store=w.store, engine=w.engine, clock=w.clock, agents=None,
-                              info=SimpleNamespace(codex_link="")),
-        execute=lambda acts: w.actions.extend(acts))
+        state=SimpleNamespace(
+            store=w.store, engine=w.engine, clock=w.clock, agents=None, info=SimpleNamespace(codex_link="")
+        ),
+        execute=lambda acts: w.actions.extend(acts),
+    )
     return a
 
 
@@ -184,8 +204,14 @@ def test_codex_conn_tier_needs_the_same_host(w: World) -> None:
     a = codex_ad(w)
     p = local_codex(w)
     attach_daemon(a, w)
-    ident = dict(harness="codex", mcp_pid=p.mcp_pid, mcp_start=p.mcp_start, agent_pid=p.agent_pid,
-                 agent_start=p.agent_start, evidence="stub")
+    ident = dict(
+        harness="codex",
+        mcp_pid=p.mcp_pid,
+        mcp_start=p.mcp_start,
+        agent_pid=p.agent_pid,
+        agent_start=p.agent_start,
+        evidence="stub",
+    )
     assert a.conn_tier(McpIdentity(**ident), p) == a.tier(p) == ("codex:daemon", None)
     # anything else proves the thread again first: "verifying..." until on_joined's proof ends
     assert a.conn_tier(McpIdentity(**ident, host=PI), p) == ("mcp-only", "verifying...")
@@ -216,10 +242,12 @@ def test_cursor_bound_reads_a_key_of_any_host(w: World) -> None:
     a = w.engine.adapters["cursor"]
     lb = w.store.upsert_participant("cursor", "cursor:conv-1", bind_state="bound", status="idle")
     lp = w.store.upsert_participant("cursor", "cursor:agent:7@1.00", bind_state="pending", status="idle")
-    rb = w.store.upsert_participant("cursor", "cursor@fpga-pi:conv-2", host=PI, bind_state="bound",
-                                    status="idle")
-    rpend = w.store.upsert_participant("cursor", "cursor@fpga-pi:agent:7@1.00", host=PI,
-                                       bind_state="pending", status="idle")
+    rb = w.store.upsert_participant(
+        "cursor", "cursor@fpga-pi:conv-2", host=PI, bind_state="bound", status="idle"
+    )
+    rpend = w.store.upsert_participant(
+        "cursor", "cursor@fpga-pi:agent:7@1.00", host=PI, bind_state="pending", status="idle"
+    )
     assert [cu.bound(x) for x in (lb, lp, rb, rpend)] == [True, False, True, False]
     assert a.tier(rb) == a.tier(lb) and a.tier(rpend) == a.tier(lp)
     assert a.tier(rb)[0] == cu.TIER

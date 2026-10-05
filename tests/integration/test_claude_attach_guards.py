@@ -10,8 +10,8 @@ import math
 from typing import Any
 
 import pytest
-
 from conftest import InProcBroker
+
 from switchboard.broker.agents import McpConn
 from switchboard.broker.peer import McpIdentity
 from switchboard.broker.service import ServiceError
@@ -32,10 +32,18 @@ class StubConn:
         self.pushed.append((kind, data))
 
 
-def claude_conn(*, token: bool = True, socket: str | None = "/tmp/yk-guard-test.sock",
-                harness: str = "claude") -> StubConn:
-    ident = McpIdentity(harness=harness, mcp_pid=987654, mcp_start=1.0, agent_pid=987650, agent_start=0.5,
-                        evidence="stub", claude_socket=socket)
+def claude_conn(
+    *, token: bool = True, socket: str | None = "/tmp/yk-guard-test.sock", harness: str = "claude"
+) -> StubConn:
+    ident = McpIdentity(
+        harness=harness,
+        mcp_pid=987654,
+        mcp_start=1.0,
+        agent_pid=987650,
+        agent_start=0.5,
+        evidence="stub",
+        claude_socket=socket,
+    )
     return StubConn(McpConn(ident=ident, has_messaging_token=token))
 
 
@@ -45,7 +53,9 @@ def attach(b: InProcBroker, conn: StubConn, params: dict[str, Any]) -> dict[str,
 
 def test_an_unverified_connection_claiming_claude_is_refused(broker: InProcBroker) -> None:
     with Stream(broker.paths.sock, timeout=5) as s:
-        s.call("mcp.hello", {"harness": "claude", "claude_socket": "/tmp/x.sock", "has_messaging_token": True}, 5)
+        s.call(
+            "mcp.hello", {"harness": "claude", "claude_socket": "/tmp/x.sock", "has_messaging_token": True}, 5
+        )
         r = s.call("mcp.attach", {"guard_ok": True}, 5)
         assert r.get("attached") is False
         # and mcp.posted from a connection that isn't attached changes nothing
@@ -58,11 +68,15 @@ def test_attach_before_hello_is_unauthorized(broker: InProcBroker) -> None:
     assert ei.value.code == "unauthorized"
 
 
-@pytest.mark.parametrize("case", ["no_token", "guard_missing", "guard_false", "guard_truthy_string",
-                                  "no_socket", "not_claude"])
+@pytest.mark.parametrize(
+    "case", ["no_token", "guard_missing", "guard_false", "guard_truthy_string", "no_socket", "not_claude"]
+)
 def test_the_broker_refuses_attach_on_its_own(broker: InProcBroker, case: str) -> None:
-    conn = claude_conn(token=case != "no_token", socket=None if case == "no_socket" else "/tmp/yk-g.sock",
-                       harness="codex" if case == "not_claude" else "claude")
+    conn = claude_conn(
+        token=case != "no_token",
+        socket=None if case == "no_socket" else "/tmp/yk-g.sock",
+        harness="codex" if case == "not_claude" else "claude",
+    )
     params: dict[str, Any] = {"guard_ok": True}
     if case == "guard_missing":
         params = {}
@@ -86,6 +100,7 @@ def test_posted_fields_are_bounded(broker: InProcBroker) -> None:
     assert attach(broker, conn, {"guard_ok": True})["attached"] is True
     adapter = broker.state.engine.adapters["claude"]
     try:
+
         async def post(params: dict[str, Any]) -> dict[str, Any]:
             fut = asyncio.get_running_loop().create_future()
             adapter.pending_posts[77] = (fut, conn)
@@ -128,8 +143,12 @@ class RemoteStubConn(StubConn):
         self.facts = facts
 
 
-@pytest.mark.parametrize(("facts", "marked"), [({"lastmile": True}, True), ({}, False), ({"lastmile": 1}, False)])
-def test_only_the_satellites_own_report_is_marked(broker: InProcBroker, facts: dict[str, Any], marked: bool) -> None:
+@pytest.mark.parametrize(
+    ("facts", "marked"), [({"lastmile": True}, True), ({}, False), ({"lastmile": 1}, False)]
+)
+def test_only_the_satellites_own_report_is_marked(
+    broker: InProcBroker, facts: dict[str, Any], marked: bool
+) -> None:
     """``mcp.posted`` over a link is the satellite's own last-mile report only when the request
     carries ``facts.lastmile`` (which a client can't set); the adapter re-routes only that one
     uncounted (DESIGN.md §27.5.6, M8d review). A local connection is never marked."""

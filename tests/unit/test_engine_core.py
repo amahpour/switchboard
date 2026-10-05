@@ -7,9 +7,9 @@ import re
 from pathlib import Path
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import KEY, World
+
 from switchboard import envelope
 from switchboard.config import Config
 from switchboard.models import Push, Snapshot
@@ -378,8 +378,12 @@ def test_three_push_expiries_in_a_row_warn(w: World) -> None:
     p, m = w.agent("bot")
     for i in range(3):
         msg = w.human(f"m{i}")
-        w.store.con.execute("UPDATE deliveries SET state='pending', batch_id=NULL WHERE membership_id=?", (m.id,))
-        w.store.con.execute("UPDATE batches SET state='cancelled' WHERE membership_id=? AND state='offered'", (m.id,))
+        w.store.con.execute(
+            "UPDATE deliveries SET state='pending', batch_id=NULL WHERE membership_id=?", (m.id,)
+        )
+        w.store.con.execute(
+            "UPDATE batches SET state='cancelled' WHERE membership_id=? AND state='offered'", (m.id,)
+        )
         b = w.store.create_batch(m.id, path="inbox", kind="wake", items=[(msg.id, True)])
         w.actions += w.engine.on_expire(b.id, "no_confirm")
     warns = [a for a in w.take() if isinstance(a, Notice) and "not confirmed" in a.text]
@@ -387,12 +391,11 @@ def test_three_push_expiries_in_a_row_warn(w: World) -> None:
 
 
 # ---------------------------------------------------- envelope fitting (review M2)
-HTMLISH = ("<div class=\"x\">\n<b>hi</b>\n</div>\n" * 60)[:1400]
+HTMLISH = ('<div class="x">\n<b>hi</b>\n</div>\n' * 60)[:1400]
 
 
 def printed_lines(text: str) -> dict[int, str]:
-    return {int(m.group(1)): line for line in text.splitlines()
-            if (m := re.match(r"- id=(\d+) ", line))}
+    return {int(m.group(1)): line for line in text.splitlines() if (m := re.match(r"- id=(\d+) ", line))}
 
 
 def test_hook_context_fits_the_hook_limit_and_every_acked_item_was_shown_whole(w: World) -> None:
@@ -476,10 +479,19 @@ def test_a_wait_loop_gets_chatter_on_every_new_wait(w: World, clock: FakeClock) 
     assert r2["status"] == "messages" and f"id={b.id} " in r2["text"]
 
 
-@pytest.mark.parametrize("mode,want", [("bypassPermissions", "bypass"), ("default", "prompting"),
-                                       ("acceptEdits", "prompting"), ("plan", "prompting"),
-                                       ("auto", "prompting"), ("dontAsk", "prompting"),
-                                       ("never", "unknown"), ("x-future", "unknown")])
+@pytest.mark.parametrize(
+    "mode,want",
+    [
+        ("bypassPermissions", "bypass"),
+        ("default", "prompting"),
+        ("acceptEdits", "prompting"),
+        ("plan", "prompting"),
+        ("auto", "prompting"),
+        ("dontAsk", "prompting"),
+        ("never", "unknown"),
+        ("x-future", "unknown"),
+    ],
+)
 def test_approval_mode_fails_closed_on_unknown_values(w: World, mode: str, want: str) -> None:
     """Every mode Claude's and Codex's hooks report maps to what it means: Auto and Don't-ask run
     nothing nobody approved, so they are approvals on, not "unknown" (#73). A value no recording

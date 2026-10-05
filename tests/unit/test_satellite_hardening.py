@@ -21,11 +21,11 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-
 from conftest import child_env
 
-pytestmark = pytest.mark.skipif(not sys.platform.startswith("linux"),
-                                reason="Linux only: prctl(PR_SET_DUMPABLE) and /proc")
+pytestmark = pytest.mark.skipif(
+    not sys.platform.startswith("linux"), reason="Linux only: prctl(PR_SET_DUMPABLE) and /proc"
+)
 
 PTRACE_ATTACH = 16
 PTRACE_DETACH = 17
@@ -42,8 +42,13 @@ time.sleep(60)
 def helper(request: pytest.FixtureRequest) -> Iterator[tuple[int, str]]:
     """A helper process of this test's uid: ``harden`` (it calls ``satellite.harden()``)
     or ``none`` (the control). Yields (pid, what harden() said)."""
-    p = subprocess.Popen([sys.executable, "-c", HELPER, request.param], stdin=subprocess.DEVNULL,
-                         stdout=subprocess.PIPE, env=child_env(), text=True)
+    p = subprocess.Popen(
+        [sys.executable, "-c", HELPER, request.param],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        env=child_env(),
+        text=True,
+    )
     try:
         assert p.stdout is not None
         said = p.stdout.readline().strip()

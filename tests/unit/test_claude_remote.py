@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import World
+
 from switchboard.adapters.base import SendError
 from switchboard.adapters.claude import (
     REGISTRY_FRESH_S,
@@ -96,8 +96,15 @@ def view_of(w: World) -> RemoteView:
     return v
 
 
-def claude(w: World, name: str, *, host: str = "", status: str = "idle", mode: str = "prompting",
-           registry: str | None = "idle") -> tuple[Any, Any, FakeConn]:
+def claude(
+    w: World,
+    name: str,
+    *,
+    host: str = "",
+    status: str = "idle",
+    mode: str = "prompting",
+    registry: str | None = "idle",
+) -> tuple[Any, Any, FakeConn]:
     p, m = w.agent(name, harness="claude", status=status, hooks=True, host=host)
     p = w.store.update_participant(p.id, claude_socket=SOCK, approval_mode=mode)
     conn: FakeConn = FakeRemoteConn() if host else FakeConn()
@@ -111,7 +118,9 @@ def claude(w: World, name: str, *, host: str = "", status: str = "idle", mode: s
     return p, m, conn
 
 
-def reg(w: World, p: Any, status: str | None, *, since_age: float | None = None, read_age: float = 0.0) -> list[Any]:
+def reg(
+    w: World, p: Any, status: str | None, *, since_age: float | None = None, read_age: float = 0.0
+) -> list[Any]:
     """One registry read of ``p``: a local file read, or a relayed ``reg`` frame for a remote
     session (ages rebased by its host's view). Returns the actions it implies."""
     a = ad(w)
@@ -127,9 +136,24 @@ def reg(w: World, p: Any, status: str | None, *, since_age: float | None = None,
 
 
 def batch(m: Any, kind: str, bid: int = 1) -> Batch:
-    return Batch(id=bid, membership_id=m.id, path="inbox", kind=kind, wake_kind=None, wake_reason=None,
-                 budget_counted=False, state="offered", created_at=0.0, posted_at=None, confirmed_at=None,
-                 expired_at=None, expire_reason=None, turn_start_at=None, first_action_at=None, evidence=None)
+    return Batch(
+        id=bid,
+        membership_id=m.id,
+        path="inbox",
+        kind=kind,
+        wake_kind=None,
+        wake_reason=None,
+        budget_counted=False,
+        state="offered",
+        created_at=0.0,
+        posted_at=None,
+        confirmed_at=None,
+        expired_at=None,
+        expire_reason=None,
+        turn_start_at=None,
+        first_action_at=None,
+        evidence=None,
+    )
 
 
 async def send_and_answer(a: ClaudeAdapter, p: Any, b: Batch, conn: FakeConn, result: dict[str, Any]) -> Any:
@@ -175,8 +199,12 @@ def test_remote_view_fresh_1_5s_lost_5s(w: World, clock: FakeClock) -> None:
     rb = w.store.update_participant(rp.id, status="busy", approval_mode="bypass")
     reg(w, lb, "busy")
     reg(w, rb, "busy")
-    assert a.route(lb, PRIO, None, t0 + 0.4).path == "inbox" and a.route(lb, PRIO, None, t0 + 0.6).kind == "pull"
-    assert a.route(rb, PRIO, None, t0 + 1.4).path == "inbox" and a.route(rb, PRIO, None, t0 + 1.6).kind == "pull"
+    assert (
+        a.route(lb, PRIO, None, t0 + 0.4).path == "inbox" and a.route(lb, PRIO, None, t0 + 0.6).kind == "pull"
+    )
+    assert (
+        a.route(rb, PRIO, None, t0 + 1.4).path == "inbox" and a.route(rb, PRIO, None, t0 + 1.6).kind == "pull"
+    )
 
 
 @pytest.mark.parametrize("case", ["waiting", "approved", "declined", "esc"])
@@ -185,8 +213,12 @@ def test_remote_transitions_match_local(w: World, clock: FakeClock, case: str) -
     same status: the approval hold, an approved or declined prompt, an Esc-ended turn."""
     lp, _lm, _lc = claude(w, "vivado", status="busy", registry=None)
     rp, _rm, _rc = claude(w, "bench", host=HOST, status="busy", registry=None)
-    steps = {"waiting": ["waiting"], "approved": ["waiting", "busy"], "declined": ["waiting", "idle"],
-             "esc": ["idle", "idle"]}[case]
+    steps = {
+        "waiting": ["waiting"],
+        "approved": ["waiting", "busy"],
+        "declined": ["waiting", "idle"],
+        "esc": ["idle", "idle"],
+    }[case]
     expect = {"waiting": "waiting-approval", "approved": "busy", "declined": "idle", "esc": "idle"}[case]
     t_status = clock.now()
     seen: list[tuple[str, str]] = []
@@ -282,12 +314,15 @@ def test_stale_status_from_a_local_channel_is_a_failure(w: World) -> None:
     assert e.counted is True and lp.id in a.backoff and lp.id not in a.recheck
 
 
-@pytest.mark.parametrize("result", [
-    {"ok": False, "err": "stale_status"},  # from the Pi MCP connection itself, not the satellite
-    {"ok": False, "err": "stale_status", "lastmile": False},
-    {"ok": False, "err": "no_chk", "lastmile": True},  # the satellite: a push the broker never sends
-    {"ok": False, "err": "bad_chk", "lastmile": True},
-])
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"ok": False, "err": "stale_status"},  # from the Pi MCP connection itself, not the satellite
+        {"ok": False, "err": "stale_status", "lastmile": False},
+        {"ok": False, "err": "no_chk", "lastmile": True},  # the satellite: a push the broker never sends
+        {"ok": False, "err": "bad_chk", "lastmile": True},
+    ],
+)
 def test_only_the_satellites_stale_status_is_uncounted(w: World, result: dict[str, Any]) -> None:
     """A client on the remote host can't take the silent re-route path: ``stale_status`` is
     uncounted only in the satellite's own report (``facts.lastmile``, which only the

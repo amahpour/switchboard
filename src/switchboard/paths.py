@@ -136,9 +136,7 @@ def ensure_private_dir(d: str | os.PathLike) -> Path:
     if st.st_uid != os.getuid():
         raise UnsafePathError(f"{p} is owned by uid {st.st_uid}, not {os.getuid()}")
     if st.st_mode & 0o077:
-        raise UnsafePathError(
-            f"{p} has mode {oct(st.st_mode & 0o777)}; run: chmod 700 '{p}'"
-        )
+        raise UnsafePathError(f"{p} has mode {oct(st.st_mode & 0o777)}; run: chmod 700 '{p}'")
     return p
 
 

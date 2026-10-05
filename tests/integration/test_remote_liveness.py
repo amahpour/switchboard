@@ -11,7 +11,6 @@ import time
 from typing import Any
 
 import pytest
-
 from fakes.fake_agent import FakeAgent
 from fakes.fake_cli import FakeCli
 from fakes.fake_link import FakeLink, wait_for
@@ -72,5 +71,7 @@ async def test_remote_member_survives_5s_of_liveness_checks(link: FakeLink) -> N
         assert [m["name"] for m in link.members()] == ["bench"] and leaves(link) == []
         view = link.broker.state.hosts.view("fpga-pi")
         assert view.alive(p.agent_pid, p.agent_start) is True
-        assert link.broker.state.hosts.local.alive(p.agent_pid, p.agent_start) is False  # what a desktop probe says
+        assert (
+            link.broker.state.hosts.local.alive(p.agent_pid, p.agent_start) is False
+        )  # what a desktop probe says
         assert (await a.who("#fpga"))["ok"]

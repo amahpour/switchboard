@@ -41,7 +41,6 @@ from typing import Any
 
 import httpx
 import pytest
-
 from harness import drift, preflight, profiles
 from harness.tmuxdrv import Tmux, clean_env
 
@@ -96,8 +95,24 @@ class Live:
         benv = {**env, "SWITCHBOARD_TEST": "1", "SWITCHBOARD_RECORD_PAYLOADS": str(self.params)}
         out = open(self.home / "broker.stdout", "ab")
         self.broker = subprocess.Popen(
-            [sys.executable, "-m", "switchboard", "start", "--foreground", "--test-mode", "--home", str(self.home),
-             "--port", "0"], env=benv, stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True)
+            [
+                sys.executable,
+                "-m",
+                "switchboard",
+                "start",
+                "--foreground",
+                "--test-mode",
+                "--home",
+                str(self.home),
+                "--port",
+                "0",
+            ],
+            env=benv,
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=out,
+            start_new_session=True,
+        )
         from switchboard.mcp.client import ping
         from switchboard.paths import Paths
 
@@ -116,9 +131,23 @@ class Live:
         self.hdr = {"Origin": base, "X-Switchboard": "1", "Content-Type": "application/json"}
         assert self.web.post("/api/rooms", json={"name": "#build"}, headers=self.hdr).status_code == 200
         self.command("/budget 20")
-        pa = subprocess.run([sys.executable, "-m", "switchboard", "install", "cursor", "--print-args", "--home",
-                             str(self.home)], env={**env, "SWITCHBOARD_TEST": "1"}, capture_output=True, text=True,
-                            timeout=30, check=True)
+        pa = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "switchboard",
+                "install",
+                "cursor",
+                "--print-args",
+                "--home",
+                str(self.home),
+            ],
+            env={**env, "SWITCHBOARD_TEST": "1"},
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
         files = json.loads(pa.stdout)["files"]
         (self.ws / ".cursor").mkdir()
         for rel, text in files.items():
@@ -126,7 +155,9 @@ class Live:
         (self.ws / ".cursor" / "cli.json").write_text(json.dumps(profiles.cursor_cli_json(), indent=1))
 
     def launch(self) -> None:
-        self.tmux.new_session(SESSION, str(self.ws), clean_env(REAL_PATH), profiles.cursor_argv(self.agent_bin))
+        self.tmux.new_session(
+            SESSION, str(self.ws), clean_env(REAL_PATH), profiles.cursor_argv(self.agent_bin)
+        )
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             s = self.tmux.capture(SESSION)
@@ -152,7 +183,9 @@ class Live:
                 self.broker.kill()
         if self.web is not None:
             self.web.close()
-        left = subprocess.run(["/usr/bin/pgrep", "-f", str(self.home)], capture_output=True, text=True).stdout.split()
+        left = subprocess.run(
+            ["/usr/bin/pgrep", "-f", str(self.home)], capture_output=True, text=True
+        ).stdout.split()
         for pid in left:
             try:
                 os.kill(int(pid), signal.SIGTERM)
@@ -183,12 +216,16 @@ class Live:
             con.close()
 
     def part(self) -> sqlite3.Row | None:
-        rows = self.q("SELECT * FROM participants WHERE harness='cursor' AND ended_at IS NULL ORDER BY id DESC")
+        rows = self.q(
+            "SELECT * FROM participants WHERE harness='cursor' AND ended_at IS NULL ORDER BY id DESC"
+        )
         return rows[0] if rows else None
 
     def events(self) -> list[dict[str, Any]]:
         try:
-            return [json.loads(x) for x in (self.params / "cursor.jsonl").read_text().splitlines() if x.strip()]
+            return [
+                json.loads(x) for x in (self.params / "cursor.jsonl").read_text().splitlines() if x.strip()
+            ]
         except OSError:
             return []
 
@@ -207,8 +244,12 @@ class Live:
         raise AssertionError(f"timed out waiting for {what}\n--- screen ---\n{self.tmux.screen(SESSION)}")
 
     def batch_for(self, msg_id: int) -> sqlite3.Row | None:
-        rows = self.q("SELECT b.* FROM batches b JOIN deliveries d ON d.batch_id=b.id WHERE d.message_id=?"
-                      " AND d.membership_id=? AND b.state='confirmed'", msg_id, self.mid)
+        rows = self.q(
+            "SELECT b.* FROM batches b JOIN deliveries d ON d.batch_id=b.id WHERE d.message_id=?"
+            " AND d.membership_id=? AND b.state='confirmed'",
+            msg_id,
+            self.mid,
+        )
         return rows[0] if rows else None
 
     def msg_ts(self, msg_id: int) -> float:
@@ -218,12 +259,17 @@ class Live:
         """The nearest cursor-agent process above ``pid``."""
         cur = pid
         for _ in range(8):
-            ppid = int(subprocess.run(["/bin/ps", "-o", "ppid=", "-p", str(cur)], capture_output=True,
-                                      text=True).stdout.strip() or 0)
+            ppid = int(
+                subprocess.run(
+                    ["/bin/ps", "-o", "ppid=", "-p", str(cur)], capture_output=True, text=True
+                ).stdout.strip()
+                or 0
+            )
             if ppid <= 1:
                 return None
-            args = subprocess.run(["/bin/ps", "-ww", "-o", "args=", "-p", str(ppid)], capture_output=True,
-                                  text=True).stdout
+            args = subprocess.run(
+                ["/bin/ps", "-ww", "-o", "args=", "-p", str(ppid)], capture_output=True, text=True
+            ).stdout
             if "cursor-agent" in args:
                 return ppid
             cur = ppid
@@ -243,9 +289,12 @@ def live():
 
 
 def test_1_join_binds_the_conversation(live: Live) -> None:
-    live.tmux.type(SESSION, 'Use the switchboard MCP tools: call join with room "#build" and screen_name "cursor-1".'
-                            " Then reply with one word: joined. Later, switchboard will relay messages I (alice) post in"
-                            " #build; answer each with the switchboard say tool, exactly as it asks.")
+    live.tmux.type(
+        SESSION,
+        'Use the switchboard MCP tools: call join with room "#build" and screen_name "cursor-1".'
+        " Then reply with one word: joined. Later, switchboard will relay messages I (alice) post in"
+        " #build; answer each with the switchboard say tool, exactly as it asks.",
+    )
     live.wait(lambda: (p := live.part()) is not None and p["bind_state"] == "bound", 120, "the bind")
     p = live.part()
     live.mid = live.q("SELECT id FROM memberships WHERE screen_name='cursor-1' AND left_at IS NULL")[0][0]
@@ -268,8 +317,11 @@ def test_2_stop_park_followups(live: Live) -> None:
         b = live.wait(lambda: live.batch_for(mid), 60, f"follow-up {i} confirmed")
         assert b["path"] == "stop_followup" and b["wake_kind"] == "stop_cont"
         lat.append(b["turn_start_at"] - live.msg_ts(mid))
-    res = {"n": len(lat), "first_hook_ms": [round(x * 1000, 1) for x in lat],
-           "first_hook_p50_ms": round(pctl(lat, 50) * 1000, 1)}
+    res = {
+        "n": len(lat),
+        "first_hook_ms": [round(x * 1000, 1) for x in lat],
+        "first_hook_p50_ms": round(pctl(lat, 50) * 1000, 1),
+    }
     live.results["scenarios"]["stop_park"] = res
     print("stop park", res)
 

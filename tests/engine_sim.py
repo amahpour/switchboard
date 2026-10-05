@@ -52,6 +52,7 @@ from typing import Any
 
 from conftest import FakeClock
 from engine_world import World
+
 from switchboard import envelope
 from switchboard.adapters.claude import ClaudeAdapter, registry_transition
 from switchboard.adapters.codex import Clients, CodexAdapter
@@ -202,12 +203,14 @@ class Sim:
             self.store.update_participant(p.id, claude_socket=f"/tmp/yk-sim-{i}.sock", approval_mode=mem.mode)
             self.claude.attach(p.mcp_pid, p.mcp_start, mem.iconn, host=host)
         elif kind == "cursor":
-            self.store.update_participant(p.id, session_key=session_key("cursor", host, f"conv-{name}"),
-                                          bind_state="bound")
+            self.store.update_participant(
+                p.id, session_key=session_key("cursor", host, f"conv-{name}"), bind_state="bound"
+            )
         elif kind == "codex":
             mem.tid = f"019a0000-0000-7000-8000-{i:012d}"
-            self.store.update_participant(p.id, session_key=f"codex:{mem.tid}", thread_proof=1,
-                                          approval_mode="prompting")
+            self.store.update_participant(
+                p.id, session_key=f"codex:{mem.tid}", thread_proof=1, approval_mode="prompting"
+            )
             self.codex.loaded.add(mem.tid)
             self.codex.view[mem.tid] = ("idle", self.clock.now())
         self.members.append(mem)
@@ -315,8 +318,11 @@ class Sim:
         self.run(self.engine.before_call(self.p(mem)))
         # an agent call confirms the session's acked stop continuations (§24): none is left
         # offered, so a stub it carried is pending for this call's read()/pass()
-        left = [bid for bid, c in self.engine.continues.items()
-                if c.participant_id == mem.pid and c.acked_at is not None]
+        left = [
+            bid
+            for bid, c in self.engine.continues.items()
+            if c.participant_id == mem.pid and c.acked_at is not None
+        ]
         assert not left, f"seed {self.seed}: {mem.name}'s call left acked continuations {left} offered"
 
     def show_tokens(self, mem: Mem) -> tuple[tuple[int, str], ...]:
@@ -334,7 +340,9 @@ class Sim:
         p = self.p(mem)
         if p is None or not p.active or not mem.mids:
             return
-        view, changed = self.claude.observe(p.agent_pid, {"pid": p.agent_pid, "status": mem.reg}, self.clock.now())
+        view, changed = self.claude.observe(
+            p.agent_pid, {"pid": p.agent_pid, "status": mem.reg}, self.clock.now()
+        )
         tr = registry_transition(p.status, p.hooks_seen_at, view, self.clock.now())
         if tr is not None:
             self.run(self.engine.set_status(p, tr[0], "claude:registry", bump=tr[1]))
@@ -422,7 +430,9 @@ class Sim:
                 mem.gen += 1
                 mem.reg = "busy"
                 self.claude_poll(mem)
-            self.hook(mem, "UserPromptSubmit", gen=f"c{mem.gen}", tokens=(tok,), permission_mode=self._pm(mem))
+            self.hook(
+                mem, "UserPromptSubmit", gen=f"c{mem.gen}", tokens=(tok,), permission_mode=self._pm(mem)
+            )
             return True
         if push.path in ("turn_start", "steer"):
             want = "idle" if push.path == "turn_start" else "busy"
@@ -451,8 +461,14 @@ class Sim:
         names = self.store.active_names(room.id)
         mentions = tuple(r.sample(names, k=min(len(names), r.choice([0, 0, 1, 2]))))
         text = " ".join(f"@{n}" for n in mentions) + f" human {r.randint(0, 999)}"
-        msg = self.store.insert_message(room.id, sender_name="alice", sender_kind="human",
-                                        via=r.choice(["web", "cli"]), text=text, mentions=mentions)
+        msg = self.store.insert_message(
+            room.id,
+            sender_name="alice",
+            sender_kind="human",
+            via=r.choice(["web", "cli"]),
+            text=text,
+            mentions=mentions,
+        )
         self.run(self.engine.on_message(msg.id))
 
     def say(self, mem: Mem) -> None:
@@ -471,10 +487,16 @@ class Sim:
             names = [n for n in self.store.active_names(room.id) if n != m.screen_name]
             mentions = tuple(r.sample(names, k=min(len(names), r.choice([0, 0, 1]))))
             msg = self.store.insert_message(
-                room.id, sender_name=m.screen_name, sender_kind="agent", via="mcp",
+                room.id,
+                sender_name=m.screen_name,
+                sender_kind="agent",
+                via="mcp",
                 text=" ".join(f"@{n}" for n in mentions) + f" agent {r.randint(0, 999)}",
-                sender_membership_id=m.id, sender_harness=p.harness,
-                reply_to=target.id if target else None, mentions=mentions)
+                sender_membership_id=m.id,
+                sender_harness=p.harness,
+                reply_to=target.id if target else None,
+                mentions=mentions,
+            )
             self.run(self.engine.on_message(msg.id))
             _t, bid, _c, _more, acts = self.engine.pull(self.p(mem), m, "say", 50, before_id=msg.id)
         else:
@@ -501,8 +523,9 @@ class Sim:
                 return  # more than one read() holds: it passes on a later round
         m = self.store.get_membership(mid)
         n = self.store.mark_handled(mid)
-        self.store.add_event("pass", room_id=m.room_id, membership_id=mid, participant_id=mem.pid,
-                             data={"handled": n})
+        self.store.add_event(
+            "pass", room_id=m.room_id, membership_id=mid, participant_id=mem.pid, data={"handled": n}
+        )
         self.run(self.engine.evaluate(mid))
 
     def read_now(self, mem: Mem, mid: int) -> bool:
@@ -532,8 +555,9 @@ class Sim:
     def read(self, mem: Mem, mid: int | None = None) -> None:
         self.before_call(mem)
         mid = mid if mid is not None else self.rng.choice(mem.mids)
-        _t, bid, _c, _more, acts = self.engine.pull(self.p(mem), self.store.get_membership(mid), "read",
-                                                    self.rng.randint(1, 20))
+        _t, bid, _c, _more, acts = self.engine.pull(
+            self.p(mem), self.store.get_membership(mid), "read", self.rng.randint(1, 20)
+        )
         self.run(acts)
         if bid is not None:
             mem.shown.append(self.token(bid))
@@ -546,8 +570,9 @@ class Sim:
             mem.tuid = f"call_{mem.name}_{mem.n}"
             self.hook(mem, "PreToolUse", tool=WAIT_TOOL, tool_use_id=mem.tuid, gen=f"d{mem.gen}")
         self.before_call(mem)
-        sink, acts = self.engine.open_wait(self.p(mem), self.store.get_membership(mid), mem.wid, secs,
-                                           conn_id=mem.conn)
+        sink, acts = self.engine.open_wait(
+            self.p(mem), self.store.get_membership(mid), mem.wid, secs, conn_id=mem.conn
+        )
         mem.sink, mem.sink_used = sink.id, False
         self.run(acts)
 
@@ -566,11 +591,24 @@ class Sim:
         if mem.kind == "test":
             self.before_call(mem)  # --ack next_call
         elif mem.kind == "devin":
-            self.hook(mem, "PostToolUse", tool=WAIT_TOOL, tool_use_id=mem.tuid, ok=ok, tokens=toks,
-                      gen=f"d{mem.gen}")
+            self.hook(
+                mem,
+                "PostToolUse",
+                tool=WAIT_TOOL,
+                tool_use_id=mem.tuid,
+                ok=ok,
+                tokens=toks,
+                gen=f"d{mem.gen}",
+            )
         else:
-            self.hook(mem, "PostToolUse", tool="mcp__switchboard__wait", ok=ok, tokens=toks,
-                      permission_mode=self._pm(mem))
+            self.hook(
+                mem,
+                "PostToolUse",
+                tool="mcp__switchboard__wait",
+                ok=ok,
+                tokens=toks,
+                permission_mode=self._pm(mem),
+            )
         return True
 
     # ------------------------------------------------------ safety checks
@@ -593,14 +631,20 @@ class Sim:
         wake-eligible again."""
         wmax = max(0, min(self.w.cfg.delivery.watchdog_max, WATCHDOG_DONE - 1))
         out = []
-        for d in self.store.con.execute("SELECT membership_id, message_id, state, notified_at, reminders"
-                                        " FROM deliveries WHERE reminders>0"):
+        for d in self.store.con.execute(
+            "SELECT membership_id, message_id, state, notified_at, reminders"
+            " FROM deliveries WHERE reminders>0"
+        ):
             if d["reminders"] % WATCHDOG_DONE > wmax:
-                out.append(f"seed {self.seed}: {d['membership_id']}/{d['message_id']} had"
-                           f" {d['reminders'] % WATCHDOG_DONE} reminders (max {wmax})")
+                out.append(
+                    f"seed {self.seed}: {d['membership_id']}/{d['message_id']} had"
+                    f" {d['reminders'] % WATCHDOG_DONE} reminders (max {wmax})"
+                )
         for mid, message_id in self.escalated:
-            st = self.store.con.execute("SELECT state, notified_at FROM deliveries WHERE membership_id=?"
-                                        " AND message_id=?", (mid, message_id)).fetchone()
+            st = self.store.con.execute(
+                "SELECT state, notified_at FROM deliveries WHERE membership_id=? AND message_id=?",
+                (mid, message_id),
+            ).fetchone()
             if st is not None and st["state"] == "pending" and st["notified_at"] is None:
                 out.append(f"seed {self.seed}: escalated @mention {mid}/{message_id} is wake-eligible again")
         return out
@@ -623,16 +667,20 @@ class Sim:
         before the pause, and a Cursor park lives only while a room it serves is live."""
         rows = self.store.con.execute(
             "SELECT b.id, b.kind, b.path, m.room_id FROM batches b JOIN memberships m ON m.id=b.membership_id"
-            " WHERE b.id>?", (before,)).fetchall()
+            " WHERE b.id>?",
+            (before,),
+        ).fetchall()
         for b in rows:
             room = self.store.room_by_id(b["room_id"])
             after = room.paused and b["id"] > self.paused_after.get(room.id, 0)
             assert not (after and b["kind"] != "pull"), (
-                f"seed {self.seed}: a {b['path']} batch was offered in paused {room.name}: {self.trace[-5:]}")
+                f"seed {self.seed}: a {b['path']} batch was offered in paused {room.name}: {self.trace[-5:]}"
+            )
         for park in self.engine.sinks.parks():
             serves = self.store.participant_memberships(park.participant_id)
             assert any(not self.room_of(x.id).paused for x in serves), (
-                f"seed {self.seed}: a Cursor stop is parked while every room it serves is paused: {self.trace[-5:]}")
+                f"seed {self.seed}: a Cursor stop is parked while every room it serves is paused: {self.trace[-5:]}"
+            )
         for room in self.rooms:
             r = self.store.room_by_id(room.id)
             if not r.paused or room.id not in self.just_paused:
@@ -645,8 +693,20 @@ class Sim:
 
     def _step(self) -> None:
         r = self.rng
-        kinds = ["human", "say", "pass", "read", "tick", "tick", "big_tick", "cmd", "push", "harness",
-                 "harness", "harness"]
+        kinds = [
+            "human",
+            "say",
+            "pass",
+            "read",
+            "tick",
+            "tick",
+            "big_tick",
+            "cmd",
+            "push",
+            "harness",
+            "harness",
+            "harness",
+        ]
         weights = [10, 8, 4, 2, 10, 4, 1, 5, 8, 12, 12, 12]
         kinds = kinds + ["link"]
         weights = weights + [2 if any(m.host for m in self.members) else 0]
@@ -674,8 +734,9 @@ class Sim:
             self.command()
         elif what == "push" and self.inflight:
             bid = r.choice(sorted(self.inflight))
-            if not self.link_up and any(m.host and m.pid == self.inflight[bid].participant_id
-                                        for m in self.members):
+            if not self.link_up and any(
+                m.host and m.pid == self.inflight[bid].participant_id for m in self.members
+            ):
                 return  # no push reaches a remote member while its link is down
             self.trace.append(f"push:{bid}")
             self.deliver(bid, r.choices(["ok", "lost", "fail"], [7, 2, 1])[0])
@@ -741,7 +802,9 @@ class Sim:
             mem.n += 1
             tu = f"t{mem.n}"
             self.hook(mem, "PreToolUse", tool="read", tool_use_id=tu, gen=g)
-            self.hook(mem, "PostToolUse", tool="read", tool_use_id=tu, ok=True, tokens=self.show_tokens(mem), gen=g)
+            self.hook(
+                mem, "PostToolUse", tool="read", tool_use_id=tu, ok=True, tokens=self.show_tokens(mem), gen=g
+            )
         elif what == "prompt":
             mem.gen += 1
             self.hook(mem, "UserPromptSubmit", gen=f"d{mem.gen}")
@@ -756,8 +819,24 @@ class Sim:
 
     def ev_claude(self, mem: Mem) -> None:
         r = self.rng
-        what = r.choice(["prompt", "tool", "tool", "toolfail", "stop", "esc", "approval", "answer", "ack",
-                         "attach", "wait", "use", "offline", "clear"])
+        what = r.choice(
+            [
+                "prompt",
+                "tool",
+                "tool",
+                "toolfail",
+                "stop",
+                "esc",
+                "approval",
+                "answer",
+                "ack",
+                "attach",
+                "wait",
+                "use",
+                "offline",
+                "clear",
+            ]
+        )
         self.trace.append(f"claude:{what}:{mem.name}")
         pm = self._pm(mem)
         if what == "prompt":
@@ -944,7 +1023,9 @@ class Sim:
             mem.n += 1
             tu, g = f"t{mem.n}", f"d{mem.gen}"
             self.hook(mem, "PreToolUse", tool="read", tool_use_id=tu, gen=g)
-            self.hook(mem, "PostToolUse", tool="read", tool_use_id=tu, ok=True, tokens=self.show_tokens(mem), gen=g)
+            self.hook(
+                mem, "PostToolUse", tool="read", tool_use_id=tu, ok=True, tokens=self.show_tokens(mem), gen=g
+            )
             busy = True
         if self.p(mem).gen_tainted:
             mem.gen += 1
@@ -981,7 +1062,9 @@ class Sim:
         p = self.p(mem)
         if mem.reg == "busy" or p.status == "busy":
             if mem.shown:
-                self.hook(mem, "PostToolUse", ok=True, tokens=self.show_tokens(mem), permission_mode=self._pm(mem))
+                self.hook(
+                    mem, "PostToolUse", ok=True, tokens=self.show_tokens(mem), permission_mode=self._pm(mem)
+                )
             self.ack_all(mem)
             self.answer(mem)
             self.hook(mem, "Stop", permission_mode=self._pm(mem))
@@ -1035,16 +1118,20 @@ class Sim:
             for mid in mem.mids:
                 for d in self.store.deliveries(mid):
                     if d["state"] == "offered" or (d["state"] == "pending" and d["notified_at"] is None):
-                        out.append(f"{mem.name}/{mid} msg {d['message_id']}: {d['state']}"
-                                   f" (prio {d['prio']}, attempts {d['attempts']}, reminders {d['reminders']})")
+                        out.append(
+                            f"{mem.name}/{mid} msg {d['message_id']}: {d['state']}"
+                            f" (prio {d['prio']}, attempts {d['attempts']}, reminders {d['reminders']})"
+                        )
         return out
 
     def describe(self) -> str:
         lines = [f"seed {self.seed}: cfg {dataclasses.asdict(self.w.cfg.delivery)}"]
         for mem in self.members:
             p = self.p(mem)
-            lines.append(f"  {mem.name} ({mem.kind}) status={p.status} tier={p.tier} reg={mem.reg} view={mem.view}"
-                         f" mids={mem.mids} parked={[self.engine.parked_reason(x) for x in mem.mids]}")
+            lines.append(
+                f"  {mem.name} ({mem.kind}) status={p.status} tier={p.tier} reg={mem.reg} view={mem.view}"
+                f" mids={mem.mids} parked={[self.engine.parked_reason(x) for x in mem.mids]}"
+            )
         for room in self.rooms:
             r = self.store.room_by_id(room.id)
             lines.append(f"  {r.name} paused={r.paused} budget={r.budget_remaining} hops={r.hop_count}")

@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import KEY, World
+
 from switchboard import envelope
 from switchboard.config import Config
 from switchboard.delivery import rules
@@ -23,16 +23,38 @@ W = 120.0  # the default watchdog_s
 
 def item(**kw: Any) -> Item:
     base: dict[str, Any] = dict(
-        membership_id=1, message_id=7, prio=1, mentioned=True, state="in_context", batch_id=None,
-        attempts=0, notified_at=None, ts=NOW - 500, sender_name="peer", sender_kind="agent",
-        sender_harness="test", text="@bot hi", reply_to=None, in_context_at=NOW - W)
+        membership_id=1,
+        message_id=7,
+        prio=1,
+        mentioned=True,
+        state="in_context",
+        batch_id=None,
+        attempts=0,
+        notified_at=None,
+        ts=NOW - 500,
+        sender_name="peer",
+        sender_kind="agent",
+        sender_harness="test",
+        text="@bot hi",
+        reply_to=None,
+        in_context_at=NOW - W,
+    )
     base.update(kw)
     return Item(**base)
 
 
-def verdict(it: Item, *, now: float = NOW, answered: float | None = None, idle: bool = True,
-            wmax: int = 2, ws: float = W) -> str | None:
-    return rules.watchdog_verdict(it, now=now, watchdog_s=ws, watchdog_max=wmax, answered_at=answered, idle=idle)
+def verdict(
+    it: Item,
+    *,
+    now: float = NOW,
+    answered: float | None = None,
+    idle: bool = True,
+    wmax: int = 2,
+    ws: float = W,
+) -> str | None:
+    return rules.watchdog_verdict(
+        it, now=now, watchdog_s=ws, watchdog_max=wmax, answered_at=answered, idle=idle
+    )
 
 
 # ------------------------------------------------------------------ pure rules
@@ -62,13 +84,20 @@ def test_reminded_marks_and_the_envelope() -> None:
     assert not item().reminded and item(reminders=1).reminded
     assert item(reminders=WATCHDOG_DONE + 2).reminded  # escalated: still unanswered
     assert not item(reminders=WATCHDOG_DONE).reminded  # answered
-    text = envelope.render_batch([item(reminders=1)], room="#build", recipient="bot", human_name="alice",
-                                 token="yk:b1.00000000", peer_inline=True)
+    text = envelope.render_batch(
+        [item(reminders=1)],
+        room="#build",
+        recipient="bot",
+        human_name="alice",
+        token="yk:b1.00000000",
+        peer_inline=True,
+    )
     head = text.splitlines()[0]
     assert head.startswith("[switchboard] #build: " + envelope.REMINDER_HEAD) and envelope.PASS_ADVICE in head
     assert "reminder=yes" in text and envelope.REMINDER_NOTE in text
-    plain = envelope.render_batch([item()], room="#build", recipient="bot", human_name="alice",
-                                  token="yk:b1.00000000", peer_inline=True)
+    plain = envelope.render_batch(
+        [item()], room="#build", recipient="bot", human_name="alice", token="yk:b1.00000000", peer_inline=True
+    )
     assert "reminder" not in plain
 
 
@@ -80,10 +109,12 @@ def test_wake_reason_is_reminder_unless_a_new_human_message_drove_it() -> None:
 
 
 def test_parked_escalation_waits_for_both_the_message_and_the_parking() -> None:
-    pend = [item(state="pending", in_context_at=None, ts=NOW - 200),
-            item(message_id=8, state="pending", in_context_at=None, ts=NOW - 10),  # too new
-            item(message_id=9, state="pending", in_context_at=None, mentioned=False, prio=0, ts=NOW - 500),
-            item(message_id=10, state="pending", in_context_at=None, notified_at=NOW - 300, ts=NOW - 400)]
+    pend = [
+        item(state="pending", in_context_at=None, ts=NOW - 200),
+        item(message_id=8, state="pending", in_context_at=None, ts=NOW - 10),  # too new
+        item(message_id=9, state="pending", in_context_at=None, mentioned=False, prio=0, ts=NOW - 500),
+        item(message_id=10, state="pending", in_context_at=None, notified_at=NOW - 300, ts=NOW - 400),
+    ]
     got = rules.parked_escalation(pend, parked_since=NOW - 130, now=NOW, watchdog_s=W)
     assert [i.message_id for i in got] == [7]
     assert rules.parked_escalation(pend, parked_since=NOW - 60, now=NOW, watchdog_s=W) == []
@@ -136,7 +167,12 @@ def test_remind_twice_then_escalate_to_the_human(w: World) -> None:
         assert f"id={msg.id} " in res["text"] and "reminder=yes" in res["text"]
         assert envelope.REMINDER_HEAD in res["text"] and envelope.PASS_ADVICE in res["text"]
         b = w.store.get_batch(res["batch_id"])
-        assert (b.kind, b.wake_kind, b.wake_reason, b.budget_counted) == ("wake", "wait_return", "reminder", True)
+        assert (b.kind, b.wake_kind, b.wake_reason, b.budget_counted) == (
+            "wake",
+            "wait_return",
+            "reminder",
+            True,
+        )
         assert w.delivery(m, msg)["reminders"] == n
     assert w.store.count_events("watchdog_remind") == 2
     assert w.store.room_by_id(w.room.id).budget_remaining == budget - 2  # reminders are counted wakes
@@ -293,7 +329,9 @@ def test_a_member_stuck_away_from_idle_gets_the_human_told(w: World, status: str
     tick(w, 1)
     [note] = notices(w)
     assert note.level == "warn" and f"bot hasn't answered @mention #{msg.id} for 6 min" in note.text
-    assert {"waiting-approval": "it is waiting on an approval prompt", "offline": "it is offline"}[status] in note.text
+    assert {"waiting-approval": "it is waiting on an approval prompt", "offline": "it is offline"}[
+        status
+    ] in note.text
     tick(w, 5 * W)
     assert not notices(w) and w.store.count_events("watchdog_remind") == 0
     assert w.delivery(m, msg)["state"] == "in_context" and w.delivery(m, msg)["reminders"] == 0
@@ -378,9 +416,18 @@ def test_a_mention_waiting_on_a_parked_member_escalates_once_per_spell(w: World)
     # a poke (a wait()) delivers it and ends the spell...
     s = listen(w, p, m, "w1")
     assert w.resolved(s.id)[0]["status"] == "messages" and w.engine.parked_reason(m.id) is None
-    w.hook(p, "PostToolUse", ok=True, tool="mcp__switchboard__wait",
-           tokens=((w.resolved(s.id)[0]["batch_id"],
-                    envelope.batch_token(KEY, w.resolved(s.id)[0]["batch_id"], m.id).split(".")[1]),))
+    w.hook(
+        p,
+        "PostToolUse",
+        ok=True,
+        tool="mcp__switchboard__wait",
+        tokens=(
+            (
+                w.resolved(s.id)[0]["batch_id"],
+                envelope.batch_token(KEY, w.resolved(s.id)[0]["batch_id"], m.id).split(".")[1],
+            ),
+        ),
+    )
     w.store.mark_handled(m.id)
     w.hook(p, "Stop")
     # ...and a new spell escalates again

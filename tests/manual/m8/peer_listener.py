@@ -47,7 +47,9 @@ def serve(conn: socket.socket, launcher: int) -> None:
         "peer_argv": short(argvs.get(peer.pid or 0, "")),
         "chain": [short(argvs.get(p.pid, "") or p.comm, 60) for p in below],
         "relay_peer": relay_name(argvs.get(peer.pid or 0, "")),
-        "remote_login_above": sorted({n for p in below[1:] if (n := remote_login_name(argvs.get(p.pid, "")))}),
+        "remote_login_above": sorted(
+            {n for p in below[1:] if (n := remote_login_name(argvs.get(p.pid, "")))}
+        ),
         "human_cli": pol.human_cli_allowed(check),
         "refusal": pol.refusal(check),
     }

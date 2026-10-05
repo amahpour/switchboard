@@ -12,7 +12,9 @@ def test_history_survives_restart(broker: InProcBroker) -> None:
     h = broker.write_headers()
     web.post("/api/rooms", json={"name": "#build"}, headers=h)
     web.post("/api/rooms", json={"name": "#ops"}, headers=h)
-    sent = [web.post("/api/rooms/build/say", json={"text": f"msg {i}"}, headers=h).json()["id"] for i in range(10)]
+    sent = [
+        web.post("/api/rooms/build/say", json={"text": f"msg {i}"}, headers=h).json()["id"] for i in range(10)
+    ]
     broker.call("human.say", {"room": "#ops", "text": "ops line"})
     broker.call("human.command", {"room": "#build", "text": "/pause"})
     before = web.get("/api/rooms/build/messages").json()["messages"]

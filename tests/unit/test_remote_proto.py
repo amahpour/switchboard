@@ -13,31 +13,54 @@ from switchboard.broker import peer as P
 from switchboard.broker.proc import ProcInfo
 from switchboard.remote import proto
 
-ATTEST = {"harness": "claude", "mcp": [1000004242, 1727000000.5], "agent": [1000004241, 1727000000.25],
-          "evidence": "parent:claude+registry", "tier_note": None, "claude_socket": "/tmp/x/inbox.sock"}
+ATTEST = {
+    "harness": "claude",
+    "mcp": [1000004242, 1727000000.5],
+    "agent": [1000004241, 1727000000.25],
+    "evidence": "parent:claude+registry",
+    "tier_note": None,
+    "claude_socket": "/tmp/x/inbox.sock",
+}
 CHAIN = [[1000000100, 1.0, "-"], [1000000099, 2.0, "claude"], [1000000001, 0.5, "?"]]
 
 GOOD_S2B: dict[str, dict[str, Any]] = {
-    "hello": proto.hello(version="0.3.0", name="fpga-pi", now=1790000000.0, hook_state="ok (1 copy)",
-                         test_mode=False, harden="prctl"),
+    "hello": proto.hello(
+        version="0.3.0",
+        name="fpga-pi",
+        now=1790000000.0,
+        hook_state="ok (1 copy)",
+        test_mode=False,
+        harden="prctl",
+    ),
     "open": proto.open_(7),
     "req": proto.req(7, {"id": 1, "method": "mcp.hello", "params": {}}, {"attest": ATTEST}),
     "req_chain": proto.req(7, {"id": 2, "method": "hook.event", "params": {}}, {"chain": CHAIN}),
     "req_plain": proto.req(7, {"id": 3, "method": "agent.say", "params": {"text": "hi"}}),
     # the satellite's own report after its last-mile check dropped a push (M8d)
-    "req_lastmile": proto.req(7, {"id": -1, "method": "mcp.posted",
-                                  "params": {"batch_id": 4, "ok": False, "err": proto.STALE_STATUS}},
-                              {"lastmile": True}),
+    "req_lastmile": proto.req(
+        7,
+        {"id": -1, "method": "mcp.posted", "params": {"batch_id": 4, "ok": False, "err": proto.STALE_STATUS}},
+        {"lastmile": True},
+    ),
     "close": proto.close(7),
     "alive": proto.alive(3, [(1000004242, 1727000000.5)]),
-    "reg": {"t": "reg", "views": [[1000004241, 1.5, "idle", 12.0], [1000004243, 2.0, None, None]], "read_age": 0.01},
+    "reg": {
+        "t": "reg",
+        "views": [[1000004241, 1.5, "idle", 12.0], [1000004243, 2.0, None, None]],
+        "read_age": 0.01,
+    },
     "pong": proto.pong(9),
     "status": proto.status("ok (1 copy)"),
     "bye": proto.bye("replaced"),
 }
 GOOD_B2S: dict[str, dict[str, Any]] = {
-    "welcome": proto.welcome(version="0.3.0", link="0123456789abcdef", rooms=["#fpga"], harnesses=["claude"],
-                             limits={"max_conns": 64}),
+    "welcome": proto.welcome(
+        version="0.3.0",
+        link="0123456789abcdef",
+        rooms=["#fpga"],
+        harnesses=["claude"],
+        limits={"max_conns": 64},
+    ),
     "refuse": proto.refuse("proto", "link protocol 2 is not 1"),
     "out": proto.out(7, {"id": 1, "result": {}}, {"pid": 1000004241, "start": 1.5, "want": "idle"}),
     "close": proto.close(7),
@@ -75,10 +98,14 @@ BAD_S2B: dict[str, dict[str, Any]] = {
     "attest_pid_bool": mutate(GOOD_S2B["req"], facts={"attest": {**ATTEST, "mcp": [True, 1.0]}}),
     "attest_pid_neg": mutate(GOOD_S2B["req"], facts={"attest": {**ATTEST, "agent": [-5, 1.0]}}),
     "attest_socket_rel": mutate(GOOD_S2B["req"], facts={"attest": {**ATTEST, "claude_socket": "x.sock"}}),
-    "attest_socket_long": mutate(GOOD_S2B["req"], facts={"attest": {**ATTEST, "claude_socket": "/" + "a" * 1023}}),
+    "attest_socket_long": mutate(
+        GOOD_S2B["req"], facts={"attest": {**ATTEST, "claude_socket": "/" + "a" * 1023}}
+    ),
     "attest_socket_missing": mutate(GOOD_S2B["req"], facts={"attest": {**ATTEST, "claude_socket": None}}),
-    "attest_socket_unverified": mutate(GOOD_S2B["req"], facts={"attest": {
-        **ATTEST, "harness": "unknown", "evidence": "parent:claude,registry-mismatch"}}),
+    "attest_socket_unverified": mutate(
+        GOOD_S2B["req"],
+        facts={"attest": {**ATTEST, "harness": "unknown", "evidence": "parent:claude,registry-mismatch"}},
+    ),
     "attest_note": mutate(GOOD_S2B["req"], facts={"attest": {**ATTEST, "tier_note": "vouched for"}}),
     "attest_extra": mutate(GOOD_S2B["req"], facts={"attest": {**ATTEST, "argv": "claude"}}),
     "chain_argv": mutate(GOOD_S2B["req_chain"], facts={"chain": [[1000000100, 1.0, "/usr/bin/claude"]]}),
@@ -120,8 +147,14 @@ def test_frames_validate(name: str) -> None:
 
 
 def test_frames_validate_nan_infinity_and_json() -> None:
-    for text in (b'{"t":"pong","n":NaN}', b'{"t":"alive","n":1,"dead":[[5,Infinity]]}',
-                 b'{"t":"hello","proto":1,"now":-Infinity}', b"not json", b"[1,2]", b'"x"'):
+    for text in (
+        b'{"t":"pong","n":NaN}',
+        b'{"t":"alive","n":1,"dead":[[5,Infinity]]}',
+        b'{"t":"hello","proto":1,"now":-Infinity}',
+        b"not json",
+        b"[1,2]",
+        b'"x"',
+    ):
         with pytest.raises(proto.FrameError):
             proto.decode(text, "s2b")
     with pytest.raises(ValueError):
@@ -156,17 +189,35 @@ def test_evidence_vocabulary_is_what_verify_mcp_peer_says() -> None:
     for claimed in ("test", "claude", "codex", "devin", "cursor", "unknown"):
         for argv in ("claude", "codex app-server", "devin acp", "cursor-agent", "bash", ""):
             ident = P.verify_mcp_peer(
-                P.Peer(pid=4000, uid=0, start=10.0), claimed, claude_socket=None, sessions_dir="/nonexistent",
-                test_mode=True, chain_fn=lambda pid, depth: [me, parent, grand],
-                argv_fn=lambda procs, a=argv: {3000: a, 2000: a})
-            a = {"harness": ident.harness, "mcp": [ident.mcp_pid, ident.mcp_start],
-                 "agent": [ident.agent_pid, ident.agent_start], "evidence": ident.evidence,
-                 "tier_note": ident.tier_note, "claude_socket": ident.claude_socket}
+                P.Peer(pid=4000, uid=0, start=10.0),
+                claimed,
+                claude_socket=None,
+                sessions_dir="/nonexistent",
+                test_mode=True,
+                chain_fn=lambda pid, depth: [me, parent, grand],
+                argv_fn=lambda procs, a=argv: {3000: a, 2000: a},
+            )
+            a = {
+                "harness": ident.harness,
+                "mcp": [ident.mcp_pid, ident.mcp_start],
+                "agent": [ident.agent_pid, ident.agent_start],
+                "evidence": ident.evidence,
+                "tier_note": ident.tier_note,
+                "claude_socket": ident.claude_socket,
+            }
             proto.check_attest(a)
             seen.add(ident.evidence)
     # the registry match, with its socket
-    proto.check_attest({"harness": "claude", "mcp": [4000, 10.0], "agent": [3000, 9.0],
-                        "evidence": "parent:claude+registry", "tier_note": None, "claude_socket": "/s"})
+    proto.check_attest(
+        {
+            "harness": "claude",
+            "mcp": [4000, 10.0],
+            "agent": [3000, 9.0],
+            "evidence": "parent:claude+registry",
+            "tier_note": None,
+            "claude_socket": "/s",
+        }
+    )
     assert seen | {"parent:claude+registry"} == set(proto.EVIDENCE)
 
 
@@ -181,8 +232,13 @@ async def _read(lines: list[bytes], **kw: Any) -> dict[str, Any]:
 
 async def test_hello_skips_shell_noise() -> None:
     hello = proto.encode(GOOD_S2B["hello"])
-    noise = [b"Welcome to fpga-pi!\n", b"\x1b[32mlast login: today\x1b[0m\n", b"{not json either}\n",
-             b'{"t": "motd"}\n', b"\n"] * 12
+    noise = [
+        b"Welcome to fpga-pi!\n",
+        b"\x1b[32mlast login: today\x1b[0m\n",
+        b"{not json either}\n",
+        b'{"t": "motd"}\n',
+        b"\n",
+    ] * 12
     assert len(noise) <= proto.HELLO_MAX_LINES
     got = await _read(noise + [hello])
     assert got["t"] == "hello" and got["name"] == "fpga-pi"
@@ -248,8 +304,12 @@ def test_request_times_become_ages_and_back() -> None:
 
 # ----------------------------------------------------------------- facts
 def test_chain_facts_carry_no_argv() -> None:
-    argvs = {1: "/usr/bin/claude --dangerous-flag --api-key sk-canary", 2: "bash -c 'cat ~/.ssh/id_ed25519'",
-             3: "", 4: "/opt/devin/bin/devin --x acp"}
+    argvs = {
+        1: "/usr/bin/claude --dangerous-flag --api-key sk-canary",
+        2: "bash -c 'cat ~/.ssh/id_ed25519'",
+        3: "",
+        4: "/opt/devin/bin/devin --x acp",
+    }
     verdicts = [proto.verdict(argvs[i], P.match_agent) for i in (1, 2, 3, 4)]
     assert verdicts == ["claude", "-", "?", "devin"]
     chain = proto.check_chain([[i, float(i), v] for i, v in zip((1, 2, 3, 4), verdicts, strict=True)])

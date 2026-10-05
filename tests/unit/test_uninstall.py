@@ -33,8 +33,10 @@ SEEDS: dict[str, dict[str, str]] = {
     "claude": {".claude/settings.json": "claude/settings.seed.json"},
     "codex": {".codex/config.toml": "codex/config.seed.toml", ".codex/hooks.json": "codex/hooks.seed.json"},
     "cursor": {".cursor/mcp.json": "cursor/mcp.seed.json", ".cursor/hooks.json": "cursor/hooks.seed.json"},
-    "devin": {".config/devin/mcp_config.json": "devin/mcp_config.seed.json",
-              ".config/devin/config.json": "devin/config.seed.json"},
+    "devin": {
+        ".config/devin/mcp_config.json": "devin/mcp_config.seed.json",
+        ".config/devin/config.json": "devin/config.seed.json",
+    },
 }
 ALL_FILES = [rel for files in SEEDS.values() for rel in files]
 
@@ -76,15 +78,22 @@ def configs(uh: Path) -> dict[str, bytes]:
 
 def install(h: str, home: Path, uh: Path, *extra: str) -> tuple[int, str]:
     out = io.StringIO()
-    rc = run_install(build_parser().parse_args(["install", h, "--home", str(home), "--user-home", str(uh), "--yes",
-                                                "--allow-editable", *extra]), out=out)
+    rc = run_install(
+        build_parser().parse_args(
+            ["install", h, "--home", str(home), "--user-home", str(uh), "--yes", "--allow-editable", *extra]
+        ),
+        out=out,
+    )
     return rc, out.getvalue()
 
 
 def uninstall(h: str, home: Path, uh: Path, *extra: str, stdin: Any = None) -> tuple[int, str]:
     out = io.StringIO()
-    rc = run_uninstall(build_parser().parse_args(["uninstall", h, "--home", str(home), "--user-home", str(uh),
-                                                  *extra]), stdin=stdin, out=out)
+    rc = run_uninstall(
+        build_parser().parse_args(["uninstall", h, "--home", str(home), "--user-home", str(uh), *extra]),
+        stdin=stdin,
+        out=out,
+    )
     return rc, out.getvalue()
 
 
@@ -92,17 +101,22 @@ def uninstall(h: str, home: Path, uh: Path, *extra: str, stdin: Any = None) -> t
 def _later_json(rel: str, data: dict[str, Any]) -> None:
     if rel == ".claude/settings.json":
         data.setdefault("hooks", {}).setdefault("Stop", []).append(
-            {"matcher": "", "hooks": [{"type": "command", "command": "echo later-stop"}]})
+            {"matcher": "", "hooks": [{"type": "command", "command": "echo later-stop"}]}
+        )
         data["theme"] = "dark"
     elif rel == ".codex/hooks.json":
         data["hooks"]["Stop"].append({"hooks": [{"type": "command", "command": "echo later-stop"}]})
-        data["hooks"].setdefault("SessionEnd", []).append({"hooks": [{"type": "command", "command": "echo bye"}]})
+        data["hooks"].setdefault("SessionEnd", []).append(
+            {"hooks": [{"type": "command", "command": "echo bye"}]}
+        )
     elif rel == ".cursor/hooks.json":
         data["hooks"]["stop"].append({"command": "echo later-stop"})
     elif rel in (".cursor/mcp.json", ".config/devin/mcp_config.json"):
         data["mcpServers"]["later-server"] = {"command": "node", "args": ["later.js"]}
     elif rel == ".config/devin/config.json":
-        data["hooks"]["Stop"].append({"matcher": "", "hooks": [{"type": "command", "command": "echo later-stop"}]})
+        data["hooks"]["Stop"].append(
+            {"matcher": "", "hooks": [{"type": "command", "command": "echo later-stop"}]}
+        )
         data["permissions"]["allow"].append("exec(ls)")
         data["model"] = "later"
 
@@ -129,8 +143,9 @@ def test_round_trip_is_byte_for_byte(tmp_path: Path, tmp_home: Path, harness: st
 
 
 @pytest.mark.parametrize("harness", list(SEEDS))
-def test_user_entries_added_after_switchboard_survive_byte_for_byte(tmp_path: Path, tmp_home: Path,
-                                                                 harness: str) -> None:
+def test_user_entries_added_after_switchboard_survive_byte_for_byte(
+    tmp_path: Path, tmp_home: Path, harness: str
+) -> None:
     """The user's entries sit before switchboard's (from the seed) and after them
     (added once installed); uninstall leaves exactly the user's file."""
     uh = tmp_path / "uh"
@@ -204,8 +219,12 @@ def test_clean_home_says_nothing_to_remove_and_creates_nothing(tmp_path: Path, t
     assert rc == 0
     assert list(uh.iterdir()) == []
     assert out.count("not there, skipped") == len(ALL_FILES)
-    assert out.splitlines()[-4:] == ["  claude: nothing to remove", "  codex: nothing to remove",
-                                     "  cursor: nothing to remove", "  devin: nothing to remove"]
+    assert out.splitlines()[-4:] == [
+        "  claude: nothing to remove",
+        "  codex: nothing to remove",
+        "  cursor: nothing to remove",
+        "  devin: nothing to remove",
+    ]
 
 
 @pytest.mark.parametrize("harness", list(SEEDS))
@@ -265,7 +284,9 @@ def test_confirmation_prompt_yes_and_no(tmp_path: Path, tmp_home: Path) -> None:
     assert rc == 0 and "mcp__switchboard__" not in (uh / ".config/devin/config.json").read_text()
 
 
-def test_editable_install_is_not_refused(tmp_path: Path, tmp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_editable_install_is_not_refused(
+    tmp_path: Path, tmp_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(common, "editable_install", lambda: True)
     uh = tmp_path / "uh"
     seed(uh, "cursor", normalize=True)
@@ -282,7 +303,14 @@ def test_diff_shows_only_switchboard_entries_masked(tmp_path: Path, tmp_home: Pa
         install(h, tmp_home, uh)
     rc, out = uninstall("all", tmp_home, uh, "--dry-run")
     assert rc == 0
-    for secret in ("placeholder-not-a-secret", "notify-user", "user-hook", "other-server", "git status", "zsh"):
+    for secret in (
+        "placeholder-not-a-secret",
+        "notify-user",
+        "user-hook",
+        "other-server",
+        "git status",
+        "zsh",
+    ):
         assert secret not in out
     diff = out.split("\nsummary:\n")[0].splitlines()
     indented = [line for line in diff if line.startswith("  ")]
@@ -290,11 +318,21 @@ def test_diff_shows_only_switchboard_entries_masked(tmp_path: Path, tmp_home: Pa
 
 
 def test_masking_of_removed_toml_lines() -> None:
-    lines = ["[mcp_servers.switchboard]\n", 'command = "/p"\n', 'api_key = "sk-x"\n', "[mcp_servers.switchboard.env]\n",
-             'FOO = "bar"\n']
+    lines = [
+        "[mcp_servers.switchboard]\n",
+        'command = "/p"\n',
+        'api_key = "sk-x"\n',
+        "[mcp_servers.switchboard.env]\n",
+        'FOO = "bar"\n',
+    ]
     shown = codex._show_toml(lines)
-    assert shown == ["  - [mcp_servers.switchboard]", '  - command = "/p"', "  - api_key = ***",
-                     "  - [mcp_servers.switchboard.env]", "  - FOO = ***"]
+    assert shown == [
+        "  - [mcp_servers.switchboard]",
+        '  - command = "/p"',
+        "  - api_key = ***",
+        "  - [mcp_servers.switchboard.env]",
+        "  - FOO = ***",
+    ]
 
 
 def test_results_have_no_forbidden_strings(tmp_path: Path, tmp_home: Path) -> None:
@@ -318,11 +356,15 @@ def test_older_hook_versions_are_removed_and_other_homes_are_kept(tmp_path: Path
     old = hook_command(PY, home, "0" * 12, "claude", "Stop")
     other = hook_command(PY, "/opt/other/home", "1" * 12, "claude", "Stop")
     mine = "echo switchboard is great"  # mentions switchboard, isn't a switchboard hook
-    data = {"hooks": {"Stop": [
-        {"matcher": "", "hooks": [{"type": "command", "command": old}]},
-        {"matcher": "", "hooks": [{"type": "command", "command": other}]},
-        {"matcher": "", "hooks": [{"type": "command", "command": mine}]},
-    ]}}
+    data = {
+        "hooks": {
+            "Stop": [
+                {"matcher": "", "hooks": [{"type": "command", "command": old}]},
+                {"matcher": "", "hooks": [{"type": "command", "command": other}]},
+                {"matcher": "", "hooks": [{"type": "command", "command": mine}]},
+            ]
+        }
+    }
     (uh / ".claude").mkdir(parents=True)
     (uh / ".claude/settings.json").write_text(dump_json(data))
     plan = claude.unplan(uh, home)
@@ -335,7 +377,9 @@ def test_a_home_whose_path_ends_with_this_one_is_not_ours(tmp_path: Path, tmp_ho
     uh = tmp_path / "uh"
     home = real(tmp_home)
     longer = "/opt" + home  # ".../opt/private/tmp/yk-x" contains "/private/tmp/yk-x/hooks/..."
-    theirs = {"hooks": [{"type": "command", "command": hook_command(PY, longer, hook_sha12(), "cursor", "stop")}]}
+    theirs = {
+        "hooks": [{"type": "command", "command": hook_command(PY, longer, hook_sha12(), "cursor", "stop")}]
+    }
     (uh / ".codex").mkdir(parents=True)
     (uh / ".codex/hooks.json").write_text(dump_json({"hooks": {"Stop": [theirs]}}))
     plan = codex.unplan(uh, home)
@@ -347,27 +391,39 @@ def test_a_home_whose_path_ends_with_this_one_is_not_ours(tmp_path: Path, tmp_ho
     assert again[0] == theirs and len(again) == 2
 
 
-def test_a_switchboard_hook_inside_a_user_group_removes_just_that_handler(tmp_path: Path, tmp_home: Path) -> None:
+def test_a_switchboard_hook_inside_a_user_group_removes_just_that_handler(
+    tmp_path: Path, tmp_home: Path
+) -> None:
     uh = tmp_path / "uh"
     home = real(tmp_home)
-    ours = {"type": "command", "command": hook_command(PY, home, hook_sha12(), "devin", "Stop"), "timeout": 30}
+    ours = {
+        "type": "command",
+        "command": hook_command(PY, home, hook_sha12(), "devin", "Stop"),
+        "timeout": 30,
+    }
     group = {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo a"}, ours]}
     (uh / ".config/devin").mkdir(parents=True)
     (uh / ".config/devin/config.json").write_text(dump_json({"hooks": {"Stop": [group]}}))
     plan = devin.unplan(uh, home)
-    assert json.loads(plan.edits[1].after) == {"hooks": {"Stop": [{"matcher": "Bash", "hooks": [
-        {"type": "command", "command": "echo a"}]}]}}
+    assert json.loads(plan.edits[1].after) == {
+        "hooks": {"Stop": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo a"}]}]}
+    }
     assert "  - hooks.Stop[0].hooks[1]:" in plan.edits[1].display[0]
 
 
 def test_already_empty_containers_are_left_alone(tmp_path: Path, tmp_home: Path) -> None:
     uh = tmp_path / "uh"
     home = real(tmp_home)
-    ours = {"matcher": "", "hooks": [{"type": "command",
-                                       "command": hook_command(PY, home, hook_sha12(), "claude", "Stop")}]}
+    ours = {
+        "matcher": "",
+        "hooks": [{"type": "command", "command": hook_command(PY, home, hook_sha12(), "claude", "Stop")}],
+    }
     (uh / ".claude").mkdir(parents=True)
-    (uh / ".claude/settings.json").write_text(dump_json(
-        {"hooks": {"Notification": [], "PreCompact": [{"matcher": "", "hooks": []}], "Stop": [ours]}}))
+    (uh / ".claude/settings.json").write_text(
+        dump_json(
+            {"hooks": {"Notification": [], "PreCompact": [{"matcher": "", "hooks": []}], "Stop": [ours]}}
+        )
+    )
     after = json.loads(claude.unplan(uh, home).edits[0].after)
     assert after == {"hooks": {"Notification": [], "PreCompact": [{"matcher": "", "hooks": []}]}}
 
@@ -378,20 +434,31 @@ def test_devin_removes_exactly_the_eight_allow_names(tmp_path: Path, tmp_home: P
     (uh / ".config/devin").mkdir(parents=True)
     (uh / ".config/devin/config.json").write_text(dump_json({"permissions": {"allow": allow, "deny": ["x"]}}))
     after = json.loads(devin.unplan(uh, real(tmp_home)).edits[1].after)
-    assert after == {"permissions": {"allow": ["read", "mcp__switchboard__*", "mcp__other__join"], "deny": ["x"]}}
+    assert after == {
+        "permissions": {"allow": ["read", "mcp__switchboard__*", "mcp__other__join"], "deny": ["x"]}
+    }
     (uh / ".config/devin/config.json").write_text(dump_json({"permissions": {"allow": list(devin.ALLOW)}}))
     assert json.loads(devin.unplan(uh, real(tmp_home)).edits[1].after) == {}
 
 
-@pytest.mark.parametrize("harness,rel", [("cursor", ".cursor/mcp.json"), ("devin", ".config/devin/mcp_config.json")])
-def test_mcp_entry_removed_only_if_it_is_switchboard_for_this_home(tmp_path: Path, tmp_home: Path, harness: str,
-                                                                rel: str) -> None:
+@pytest.mark.parametrize(
+    "harness,rel", [("cursor", ".cursor/mcp.json"), ("devin", ".config/devin/mcp_config.json")]
+)
+def test_mcp_entry_removed_only_if_it_is_switchboard_for_this_home(
+    tmp_path: Path, tmp_home: Path, harness: str, rel: str
+) -> None:
     uh = tmp_path / "uh"
     home = real(tmp_home)
     (uh / rel).parent.mkdir(parents=True)
     cases = {
-        "ours-old-python": ({"command": "/old/python", "args": ["-I", "-m", "switchboard", "mcp", "--home", home]}, True),
-        "other-home": ({"command": PY, "args": ["-I", "-m", "switchboard", "mcp", "--home", "/opt/other"]}, False),
+        "ours-old-python": (
+            {"command": "/old/python", "args": ["-I", "-m", "switchboard", "mcp", "--home", home]},
+            True,
+        ),
+        "other-home": (
+            {"command": PY, "args": ["-I", "-m", "switchboard", "mcp", "--home", "/opt/other"]},
+            False,
+        ),
         "not-switchboard": ({"command": "npx", "args": ["-y", "switchboard-lookalike"]}, False),
     }
     for name, (entry, removed) in cases.items():
@@ -406,8 +473,15 @@ def test_mcp_entry_removed_only_if_it_is_switchboard_for_this_home(tmp_path: Pat
 
 # ------------------------------------------------------------------- codex
 def codex_group(home: str, event: str, sha: str | None = None) -> dict[str, Any]:
-    return {"hooks": [{"type": "command", "command": hook_command(PY, home, sha or hook_sha12(), "codex", event),
-                       "timeout": 10}]}
+    return {
+        "hooks": [
+            {
+                "type": "command",
+                "command": hook_command(PY, home, sha or hook_sha12(), "codex", event),
+                "timeout": 10,
+            }
+        ]
+    }
 
 
 def user_group(cmd: str) -> dict[str, Any]:
@@ -418,24 +492,38 @@ def test_codex_warns_about_user_groups_that_move_up(tmp_path: Path, tmp_home: Pa
     uh = tmp_path / "uh"
     home = real(tmp_home)
     (uh / ".codex").mkdir(parents=True)
-    hooks = {"Stop": [user_group("echo a"), codex_group(home, "Stop"), user_group("echo b"), user_group("echo c")],
-             "PostToolUse": [user_group("echo d"), codex_group(home, "PostToolUse")],
-             "SessionEnd": [{"hooks": [{"type": "command", "command": "echo e"},
-                                       codex_group(home, "SessionEnd")["hooks"][0],
-                                       {"type": "command", "command": "echo f"}]}]}
+    hooks = {
+        "Stop": [user_group("echo a"), codex_group(home, "Stop"), user_group("echo b"), user_group("echo c")],
+        "PostToolUse": [user_group("echo d"), codex_group(home, "PostToolUse")],
+        "SessionEnd": [
+            {
+                "hooks": [
+                    {"type": "command", "command": "echo e"},
+                    codex_group(home, "SessionEnd")["hooks"][0],
+                    {"type": "command", "command": "echo f"},
+                ]
+            }
+        ],
+    }
     (uh / ".codex/hooks.json").write_text(dump_json({"hooks": hooks}))
     plan = codex.unplan(uh, home)
     lines = plan.edits[1].display
     assert "  ! hooks.Stop[2] (not switchboard's) moves to hooks.Stop[1]" in lines
     assert "  ! hooks.Stop[3] (not switchboard's) moves to hooks.Stop[2]" in lines
-    assert "  ! hooks.SessionEnd[0].hooks[2] (not switchboard's) moves to hooks.SessionEnd[0].hooks[1]" in lines
-    assert not any("PostToolUse" in line and "!" in line for line in lines)  # switchboard's was last: nothing moves
+    assert (
+        "  ! hooks.SessionEnd[0].hooks[2] (not switchboard's) moves to hooks.SessionEnd[0].hooks[1]" in lines
+    )
+    assert not any(
+        "PostToolUse" in line and "!" in line for line in lines
+    )  # switchboard's was last: nothing moves
     assert "hooks.Stop[0]" not in "".join(lines)
     assert any("marked ! move up (3)" in n and "/hooks" in n for n in plan.notes)
     after = json.loads(plan.edits[1].after)["hooks"]
     assert after["Stop"] == [user_group("echo a"), user_group("echo b"), user_group("echo c")]
-    assert after["SessionEnd"][0]["hooks"] == [{"type": "command", "command": "echo e"},
-                                               {"type": "command", "command": "echo f"}]
+    assert after["SessionEnd"][0]["hooks"] == [
+        {"type": "command", "command": "echo e"},
+        {"type": "command", "command": "echo f"},
+    ]
     for text in ("echo a", "echo b", "echo e"):
         assert text not in "\n".join(lines)  # the user's hooks are named by position only
 
@@ -477,7 +565,9 @@ def test_codex_leaves_other_homes_and_outside_entries(tmp_path: Path, tmp_home: 
     cfg = uh / ".codex/config.toml"
     cfg.write_text(codex.toml_block(PY, "/opt/other/home"))
     plan = codex.unplan(uh, real(tmp_home))
-    assert not plan.edits[0].changed and any("another switchboard home (/opt/other/home)" in n for n in plan.notes)
+    assert not plan.edits[0].changed and any(
+        "another switchboard home (/opt/other/home)" in n for n in plan.notes
+    )
     cfg.write_text('[mcp_servers.switchboard]\ncommand = "x"\n')
     plan = codex.unplan(uh, real(tmp_home))
     assert not plan.edits[0].changed and any("outside switchboard's markers" in n for n in plan.notes)
@@ -497,7 +587,7 @@ def test_codex_refuses_broken_markers_or_toml(tmp_path: Path, tmp_home: Path) ->
 def test_codex_block_in_the_middle_keeps_what_follows(tmp_path: Path, tmp_home: Path) -> None:
     uh = tmp_path / "uh"
     (uh / ".codex").mkdir(parents=True)
-    head, tail = 'model = "m"\n', '\n[tui]\nx = 1\n'
+    head, tail = 'model = "m"\n', "\n[tui]\nx = 1\n"
     (uh / ".codex/config.toml").write_text(head + "\n" + codex.toml_block(PY, real(tmp_home)) + tail)
     assert codex.unplan(uh, real(tmp_home)).edits[0].after == head + tail
 
@@ -527,8 +617,9 @@ def claude_json(uh: Path, entry: dict[str, Any] | None) -> None:
     (uh / ".claude.json").write_text(json.dumps({"numStartups": 3, "mcpServers": servers}))
 
 
-def test_claude_mcp_remove_runs_for_switchboard_entry_only(tmp_path: Path, tmp_home: Path,
-                                                       fake_claude: Callable[[int], Path]) -> None:
+def test_claude_mcp_remove_runs_for_switchboard_entry_only(
+    tmp_path: Path, tmp_home: Path, fake_claude: Callable[[int], Path]
+) -> None:
     log = fake_claude(0)
     home = real(tmp_home)
     cases = {
@@ -549,7 +640,13 @@ def test_claude_mcp_remove_runs_for_switchboard_entry_only(tmp_path: Path, tmp_h
         plan = claude.unplan(uh, home, run_commands=True)
         assert common.apply_plan(plan, run_commands=True, out=io.StringIO()) == 0
         if runs:
-            assert log.read_text().split("\n")[0].split() == ["mcp", "remove", "--scope", "user", "switchboard"], name
+            assert log.read_text().split("\n")[0].split() == [
+                "mcp",
+                "remove",
+                "--scope",
+                "user",
+                "switchboard",
+            ], name
         else:
             assert not log.exists(), name
             if entry is not None:
@@ -558,8 +655,9 @@ def test_claude_mcp_remove_runs_for_switchboard_entry_only(tmp_path: Path, tmp_h
         assert "switchboard_hook-" not in (uh / ".claude/settings.json").read_text()
 
 
-def test_claude_mcp_remove_failure_prints_the_command(tmp_path: Path, tmp_home: Path, capsys: pytest.CaptureFixture[str],
-                                                      fake_claude: Callable[[int], Path]) -> None:
+def test_claude_mcp_remove_failure_prints_the_command(
+    tmp_path: Path, tmp_home: Path, capsys: pytest.CaptureFixture[str], fake_claude: Callable[[int], Path]
+) -> None:
     fake_claude(1)
     uh = tmp_path / "uh"
     seed(uh, "claude", normalize=False)
@@ -572,7 +670,9 @@ def test_claude_mcp_remove_failure_prints_the_command(tmp_path: Path, tmp_home: 
     assert "switchboard_hook-" not in (uh / ".claude/settings.json").read_text()  # the file edit still landed
 
 
-def test_user_home_never_runs_claude(tmp_path: Path, tmp_home: Path, fake_claude: Callable[[int], Path]) -> None:
+def test_user_home_never_runs_claude(
+    tmp_path: Path, tmp_home: Path, fake_claude: Callable[[int], Path]
+) -> None:
     log = fake_claude(0)
     uh = tmp_path / "uh"
     seed(uh, "claude", normalize=False)
@@ -594,8 +694,9 @@ def fake_clis(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, names: list[str])
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}/usr/bin{os.pathsep}/bin")
 
 
-def test_install_all_skips_missing_clis_and_uninstall_all_reverses_it(tmp_path: Path, tmp_home: Path,
-                                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+def test_install_all_skips_missing_clis_and_uninstall_all_reverses_it(
+    tmp_path: Path, tmp_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     fake_clis(tmp_path, monkeypatch, ["claude", "codex", "devin"])  # no cursor-agent / agent
     uh = tmp_path / "uh"
     for h in SEEDS:
@@ -608,17 +709,29 @@ def test_install_all_skips_missing_clis_and_uninstall_all_reverses_it(tmp_path: 
     assert out.splitlines()[-5:] == [
         "summary:",
         "  claude: installed (files only: harness commands aren't run with --user-home)",
-        "  codex: installed", "  cursor: skipped (`cursor-agent` or `agent` not on PATH)", "  devin: installed"]
+        "  codex: installed",
+        "  cursor: skipped (`cursor-agent` or `agent` not on PATH)",
+        "  devin: installed",
+    ]
     assert configs(uh)[".cursor/hooks.json"] == original[".cursor/hooks.json"]
     for rel in (".claude/settings.json", ".codex/hooks.json", ".config/devin/config.json"):
         assert "switchboard_hook-" in (uh / rel).read_text()
     rc, out = uninstall("all", tmp_home, uh, "--yes")
     assert rc == 0, out
     assert configs(uh) == original
-    assert out.splitlines()[-5:] == ["summary:", "  claude: removed", "  codex: removed",
-                                     "  cursor: nothing to remove", "  devin: removed"]
-    assert out.index("switchboard uninstall claude:") < out.index("switchboard uninstall codex:") \
-        < out.index("switchboard uninstall cursor:") < out.index("switchboard uninstall devin:")
+    assert out.splitlines()[-5:] == [
+        "summary:",
+        "  claude: removed",
+        "  codex: removed",
+        "  cursor: nothing to remove",
+        "  devin: removed",
+    ]
+    assert (
+        out.index("switchboard uninstall claude:")
+        < out.index("switchboard uninstall codex:")
+        < out.index("switchboard uninstall cursor:")
+        < out.index("switchboard uninstall devin:")
+    )
     rc, out = install("all", tmp_home, uh, "--dry-run")
     assert rc == 0 and "  claude: would change" in out and configs(uh) == original
 
@@ -629,11 +742,23 @@ def test_all_has_one_confirmation(tmp_path: Path, tmp_home: Path, monkeypatch: p
     for h in SEEDS:
         seed(uh, h, normalize=False)
     out = io.StringIO()
-    rc = run_install(build_parser().parse_args(["install", "all", "--home", str(tmp_home), "--user-home", str(uh),
-                                                "--allow-editable"]), stdin=TTY("y\n"), out=out)
+    rc = run_install(
+        build_parser().parse_args(
+            ["install", "all", "--home", str(tmp_home), "--user-home", str(uh), "--allow-editable"]
+        ),
+        stdin=TTY("y\n"),
+        out=out,
+    )
     assert rc == 0 and out.getvalue().count("Apply? [y/N]") == 1
-    assert all("switchboard_hook-" in (uh / SEEDS_HOOKS).read_text() for SEEDS_HOOKS in
-               (".claude/settings.json", ".codex/hooks.json", ".cursor/hooks.json", ".config/devin/config.json"))
+    assert all(
+        "switchboard_hook-" in (uh / SEEDS_HOOKS).read_text()
+        for SEEDS_HOOKS in (
+            ".claude/settings.json",
+            ".codex/hooks.json",
+            ".cursor/hooks.json",
+            ".config/devin/config.json",
+        )
+    )
     rc, text = uninstall("all", tmp_home, uh, stdin=TTY("y\n"))
     assert rc == 0 and text.count("Apply? [y/N]") == 1
     assert not any("switchboard_hook-" in v.decode() for v in configs(uh).values())
@@ -655,19 +780,26 @@ def test_all_goes_on_past_a_broken_harness_and_exits_1(tmp_path: Path, tmp_home:
 
 def test_install_all_print_args_is_refused(tmp_home: Path) -> None:
     out = io.StringIO()
-    rc = run_install(build_parser().parse_args(["install", "all", "--print-args", "--home", str(tmp_home)]), out=out)
+    rc = run_install(
+        build_parser().parse_args(["install", "all", "--print-args", "--home", str(tmp_home)]), out=out
+    )
     assert rc == 1 and out.getvalue() == ""
 
 
-def test_install_all_is_refused_on_editable_without_the_flag(tmp_path: Path, tmp_home: Path,
-                                                            monkeypatch: pytest.MonkeyPatch) -> None:
+def test_install_all_is_refused_on_editable_without_the_flag(
+    tmp_path: Path, tmp_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(common, "editable_install", lambda: True)
     fake_clis(tmp_path, monkeypatch, ["claude", "codex", "cursor-agent", "devin"])
     uh = tmp_path / "uh"
     uh.mkdir()
     out = io.StringIO()
-    rc = run_install(build_parser().parse_args(["install", "all", "--home", str(tmp_home), "--user-home", str(uh),
-                                                "--yes"]), out=out)
+    rc = run_install(
+        build_parser().parse_args(
+            ["install", "all", "--home", str(tmp_home), "--user-home", str(uh), "--yes"]
+        ),
+        out=out,
+    )
     assert rc == 1 and list(uh.iterdir()) == []
 
 
@@ -675,7 +807,9 @@ def test_cli_main_wires_uninstall(tmp_path: Path, tmp_home: Path, capsys: pytest
     uh = tmp_path / "uh"
     seed(uh, "cursor", normalize=False)
     install("cursor", tmp_home, uh)
-    assert cli.main(["uninstall", "cursor", "--home", str(tmp_home), "--user-home", str(uh), "--dry-run"]) == 0
+    assert (
+        cli.main(["uninstall", "cursor", "--home", str(tmp_home), "--user-home", str(uh), "--dry-run"]) == 0
+    )
     assert "switchboard uninstall cursor:" in capsys.readouterr().out
     with pytest.raises(SystemExit):
         cli.main(["uninstall", "vim", "--user-home", str(uh)])
@@ -725,15 +859,18 @@ def test_purge_refuses_a_symlinked_hooks_dir(tmp_path: Path, tmp_home: Path) -> 
     assert (target / f"switchboard_hook-{'a' * 12}.py").exists()
 
 
-def test_unplan_does_not_mutate_or_touch_the_switchboard_home(tmp_path: Path, tmp_home: Path,
-                                                         monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unplan_does_not_mutate_or_touch_the_switchboard_home(
+    tmp_path: Path, tmp_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     uh = tmp_path / "uh"
     for h in SEEDS:
         seed(uh, h, normalize=False)
         install(h, tmp_home, uh)
     home = real(tmp_home)
     installed = configs(uh)
-    yk_before = {str(p.relative_to(tmp_home)): p.read_bytes() for p in sorted(tmp_home.rglob("*")) if p.is_file()}
+    yk_before = {
+        str(p.relative_to(tmp_home)): p.read_bytes() for p in sorted(tmp_home.rglob("*")) if p.is_file()
+    }
     assert any(k.startswith("hooks/switchboard_hook-") for k in yk_before)
     loaded: list[tuple[dict[str, Any], dict[str, Any]]] = []
     real_load = common.load_json_obj
@@ -751,7 +888,9 @@ def test_unplan_does_not_mutate_or_touch_the_switchboard_home(tmp_path: Path, tm
     monkeypatch.setattr(common, "load_json_obj", real_load)
     assert uninstall("all", tmp_home, uh, "--yes")[0] == 0
     assert configs(uh) != installed
-    yk_after = {str(p.relative_to(tmp_home)): p.read_bytes() for p in sorted(tmp_home.rglob("*")) if p.is_file()}
+    yk_after = {
+        str(p.relative_to(tmp_home)): p.read_bytes() for p in sorted(tmp_home.rglob("*")) if p.is_file()
+    }
     assert yk_after == yk_before  # the switchboard home, hook copies included, is untouched
 
 
@@ -772,8 +911,9 @@ def test_devin_allow_names_stay_while_another_home_uses_them(tmp_path: Path, tmp
     assert set(devin.ALLOW) <= set(cfg["permissions"]["allow"])
     assert real(other) in json.dumps(cfg["hooks"]) and real(tmp_home) not in json.dumps(cfg["hooks"])
     assert "eight allow names stay" in out and real(other) in out
-    assert common.mcp_home(json.loads((uh / ".config/devin/mcp_config.json").read_text())
-                           ["mcpServers"]["switchboard"]) == real(other)
+    assert common.mcp_home(
+        json.loads((uh / ".config/devin/mcp_config.json").read_text())["mcpServers"]["switchboard"]
+    ) == real(other)
     # a home that never installed anything has nothing to remove
     unused = tmp_path / "home-unused"
     unused.mkdir(mode=0o700)
@@ -801,15 +941,32 @@ def test_removed_mcp_entries_show_only_command_and_args(tmp_path: Path, tmp_home
     and args are printed (a value after a secret-looking flag masked)."""
     uh = tmp_path / "uh"
     home = real(tmp_home)
-    entry = {"command": PY, "args": ["-I", "-m", "switchboard", "mcp", "--home", home, "--api-key", "sk-ARG",
-                                     "--token=sk-EQ"],
-             "env": {"GITHUB_PAT": "ghp_SECRET", "DB": "postgres://u:pw@h/db"}, "headers": {"X-Foo": "bar-SECRET"},
-             "cwd": "/srv/private-SECRET"}
+    entry = {
+        "command": PY,
+        "args": ["-I", "-m", "switchboard", "mcp", "--home", home, "--api-key", "sk-ARG", "--token=sk-EQ"],
+        "env": {"GITHUB_PAT": "ghp_SECRET", "DB": "postgres://u:pw@h/db"},
+        "headers": {"X-Foo": "bar-SECRET"},
+        "cwd": "/srv/private-SECRET",
+    }
     for rel in (".cursor/mcp.json", ".config/devin/mcp_config.json"):
         (uh / rel).parent.mkdir(parents=True, exist_ok=True)
         (uh / rel).write_text(dump_json({"mcpServers": {"switchboard": entry}}))
-    (uh / ".cursor/hooks.json").write_text(dump_json({"version": 1, "hooks": {"stop": [
-        {"command": hook_command(PY, home, hook_sha12(), "cursor", "stop"), "env": {"X": "SECRET"}, "note": "SECRET"}]}}))
+    (uh / ".cursor/hooks.json").write_text(
+        dump_json(
+            {
+                "version": 1,
+                "hooks": {
+                    "stop": [
+                        {
+                            "command": hook_command(PY, home, hook_sha12(), "cursor", "stop"),
+                            "env": {"X": "SECRET"},
+                            "note": "SECRET",
+                        }
+                    ]
+                },
+            }
+        )
+    )
     rc, out = uninstall("all", tmp_home, uh, "--dry-run")
     assert rc == 0 and "SECRET" not in out and "sk-" not in out and "pw@" not in out
     assert '"--api-key", "***", "--token=***"], "env": "***", "headers": "***", "cwd": "***"}' in out
@@ -817,22 +974,52 @@ def test_removed_mcp_entries_show_only_command_and_args(tmp_path: Path, tmp_home
 
 
 def test_removed_toml_lines_are_masked_by_allowlist() -> None:
-    lines = [f"{codex.BEGIN}\n", "# Added by `switchboard install codex`; this span is replaced on re-install.\n",
-             "[mcp_servers.switchboard]\n", 'command = "/p"\n', 'args = ["-I", "--api-key", "sk-1", "--token=sk-2"]\n',
-             'http_headers = { Authorization = "Bearer sk-3" }\n', "extra = [\n", '  "--db", "postgres://u:sk-4@h",\n',
-             "]\n", "# my token: sk-5\n", "[mcp_servers.switchboard.env]\n", 'A = "sk-6"\n', f"{codex.END}\n"]
+    lines = [
+        f"{codex.BEGIN}\n",
+        "# Added by `switchboard install codex`; this span is replaced on re-install.\n",
+        "[mcp_servers.switchboard]\n",
+        'command = "/p"\n',
+        'args = ["-I", "--api-key", "sk-1", "--token=sk-2"]\n',
+        'http_headers = { Authorization = "Bearer sk-3" }\n',
+        "extra = [\n",
+        '  "--db", "postgres://u:sk-4@h",\n',
+        "]\n",
+        "# my token: sk-5\n",
+        "[mcp_servers.switchboard.env]\n",
+        'A = "sk-6"\n',
+        f"{codex.END}\n",
+    ]
     shown = codex._show_toml(lines)
     assert "sk-" not in "\n".join(shown)
-    assert shown == [f"  - {codex.BEGIN}", "  - # Added by `switchboard install codex`; this span is replaced on re-install.",
-                     "  - [mcp_servers.switchboard]", '  - command = "/p"',
-                     '  - args = ["-I", "--api-key", "***", "--token=***"]', "  - http_headers = ***",
-                     "  - extra = ***", "  -   ***", "  -   ***", "  - # ***", "  - [mcp_servers.switchboard.env]",
-                     "  - A = ***", f"  - {codex.END}"]
+    assert shown == [
+        f"  - {codex.BEGIN}",
+        "  - # Added by `switchboard install codex`; this span is replaced on re-install.",
+        "  - [mcp_servers.switchboard]",
+        '  - command = "/p"',
+        '  - args = ["-I", "--api-key", "***", "--token=***"]',
+        "  - http_headers = ***",
+        "  - extra = ***",
+        "  -   ***",
+        "  -   ***",
+        "  - # ***",
+        "  - [mcp_servers.switchboard.env]",
+        "  - A = ***",
+        f"  - {codex.END}",
+    ]
 
 
-@pytest.mark.parametrize("harness,rel", [("cursor", ".cursor/mcp.json"), ("devin", ".config/devin/mcp_config.json"),
-                                         ("claude", ".claude.json"), ("codex", ".codex/config.toml")])
-def test_a_foreign_home_is_escaped_and_quoted_in_notes(tmp_path: Path, tmp_home: Path, harness: str, rel: str) -> None:
+@pytest.mark.parametrize(
+    "harness,rel",
+    [
+        ("cursor", ".cursor/mcp.json"),
+        ("devin", ".config/devin/mcp_config.json"),
+        ("claude", ".claude.json"),
+        ("codex", ".codex/config.toml"),
+    ],
+)
+def test_a_foreign_home_is_escaped_and_quoted_in_notes(
+    tmp_path: Path, tmp_home: Path, harness: str, rel: str
+) -> None:
     """A --home read from a config file can't inject terminal escapes or shell
     syntax into the printed "run this yourself" command."""
     uh = tmp_path / "uh"
@@ -840,8 +1027,9 @@ def test_a_foreign_home_is_escaped_and_quoted_in_notes(tmp_path: Path, tmp_home:
     evil = "/tmp/x; touch /tmp/PWNED #\x1b[2K\rnothing to remove"
     entry = {"command": PY, "args": ["-I", "-m", "switchboard", "mcp", "--home", evil]}
     if harness == "codex":
-        (uh / rel).write_text(codex.toml_block(PY, "/tmp/PLACEHOLDER").replace('"/tmp/PLACEHOLDER"',
-                                                                             json.dumps(evil)))
+        (uh / rel).write_text(
+            codex.toml_block(PY, "/tmp/PLACEHOLDER").replace('"/tmp/PLACEHOLDER"', json.dumps(evil))
+        )
     elif harness == "claude":
         claude_json(uh, entry)
     else:
@@ -857,7 +1045,9 @@ def test_a_foreign_home_is_escaped_and_quoted_in_notes(tmp_path: Path, tmp_home:
     elif harness == "claude":
         claude_json(uh, {**entry, "args": entry["args"][:-1] + [mild]})
     else:
-        (uh / rel).write_text(dump_json({"mcpServers": {"switchboard": {**entry, "args": entry["args"][:-1] + [mild]}}}))
+        (uh / rel).write_text(
+            dump_json({"mcpServers": {"switchboard": {**entry, "args": entry["args"][:-1] + [mild]}}})
+        )
     rc, out = uninstall(harness, tmp_home, uh, "--dry-run")
     assert f"switchboard uninstall {harness} --home '/tmp/a b;c'` for it" in out
 
@@ -867,8 +1057,9 @@ def test_safe_text_escapes_non_printables(tmp_path: Path, tmp_home: Path) -> Non
     assert common.compact({"k2": "a\x9bb"}) == '{"k2": "a\\x9bb"}'
 
 
-def test_install_all_goes_on_past_a_broken_harness(tmp_path: Path, tmp_home: Path,
-                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+def test_install_all_goes_on_past_a_broken_harness(
+    tmp_path: Path, tmp_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     fake_clis(tmp_path, monkeypatch, ["claude", "codex", "cursor-agent", "devin"])
     uh = tmp_path / "uh"
     for h in SEEDS:
@@ -895,8 +1086,9 @@ def test_summary_says_why_hook_copies_are_kept(tmp_path: Path, tmp_home: Path) -
     assert list((tmp_home / "hooks").glob("switchboard_hook-*.py"))
 
 
-def test_summary_when_only_a_harness_command_failed(tmp_path: Path, tmp_home: Path,
-                                                    fake_claude: Callable[[int], Path]) -> None:
+def test_summary_when_only_a_harness_command_failed(
+    tmp_path: Path, tmp_home: Path, fake_claude: Callable[[int], Path]
+) -> None:
     fake_claude(1)
     uh = tmp_path / "uh"
     seed(uh, "claude", normalize=False)  # no switchboard hooks: only `claude mcp remove` to do
@@ -935,6 +1127,7 @@ def test_codex_reinstall_shows_foreign_lines_moving(tmp_path: Path, tmp_home: Pa
     foreign = '[hooks.state."/x:stop:1:0"]\ntrusted_hash = "sha256:1"\n'
     cfg.write_text(cfg.read_text().replace(codex.END, foreign + codex.END))
     plan = codex.plan(uh, sys.executable, real(tmp_home), hook_sha12())
-    assert plan.edits[0].display == [f"  ~ 2 line(s) between the markers that aren't switchboard's move after"
-                                     f" {codex.END!r}"]
+    assert plan.edits[0].display == [
+        f"  ~ 2 line(s) between the markers that aren't switchboard's move after {codex.END!r}"
+    ]
     assert plan.edits[0].after.index(codex.END) < plan.edits[0].after.index(foreign)

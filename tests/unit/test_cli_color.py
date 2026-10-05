@@ -13,10 +13,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import World
 from test_cli_unit import Calls
+
 from switchboard import cli, report
 from switchboard.colors import Paint
 from switchboard.remote.pairing import Finding, print_findings
@@ -31,16 +31,61 @@ def only_our_codes(text: str) -> bool:
 
 
 MESSAGES: list[dict[str, Any]] = [
-    {"id": 1, "ts": 0, "from": "alice", "sender_kind": "human", "via": "web", "kind": "chat",
-     "text": "@claude-1 ship it"},
-    {"id": 2, "ts": 0, "from": "claude-1", "sender_kind": "agent", "via": "mcp", "kind": "chat",
-     "text": "done\x1b]0;pwned\x07\x1b[2J\x1b[31m*** fake warning\x1b[0m\nsecond line"},
-    {"id": 3, "ts": 0, "from": "codex-1", "sender_kind": "agent", "via": "mcp", "kind": "join", "text": "joined"},
-    {"id": 4, "ts": 0, "from": "switchboard", "sender_kind": "system", "via": "system", "kind": "notice",
-     "text": "codex-1 runs with approvals off", "level": "warn"},
-    {"id": 5, "ts": 0, "from": "switchboard", "sender_kind": "system", "via": "system", "kind": "notice",
-     "text": "devin-1 is parked"},
-    {"id": 6, "ts": 0, "from": "alice", "sender_kind": "human", "via": "cli", "kind": "chat", "text": "from cli"},
+    {
+        "id": 1,
+        "ts": 0,
+        "from": "alice",
+        "sender_kind": "human",
+        "via": "web",
+        "kind": "chat",
+        "text": "@claude-1 ship it",
+    },
+    {
+        "id": 2,
+        "ts": 0,
+        "from": "claude-1",
+        "sender_kind": "agent",
+        "via": "mcp",
+        "kind": "chat",
+        "text": "done\x1b]0;pwned\x07\x1b[2J\x1b[31m*** fake warning\x1b[0m\nsecond line",
+    },
+    {
+        "id": 3,
+        "ts": 0,
+        "from": "codex-1",
+        "sender_kind": "agent",
+        "via": "mcp",
+        "kind": "join",
+        "text": "joined",
+    },
+    {
+        "id": 4,
+        "ts": 0,
+        "from": "switchboard",
+        "sender_kind": "system",
+        "via": "system",
+        "kind": "notice",
+        "text": "codex-1 runs with approvals off",
+        "level": "warn",
+    },
+    {
+        "id": 5,
+        "ts": 0,
+        "from": "switchboard",
+        "sender_kind": "system",
+        "via": "system",
+        "kind": "notice",
+        "text": "devin-1 is parked",
+    },
+    {
+        "id": 6,
+        "ts": 0,
+        "from": "alice",
+        "sender_kind": "human",
+        "via": "cli",
+        "kind": "chat",
+        "text": "from cli",
+    },
 ]
 
 
@@ -64,13 +109,36 @@ class FakeStream:
 
 
 STATUS = {
-    "version": "0.4.0", "pid": 7, "uptime_s": 3700, "url": "http://switchboard.localhost:7419/", "web_clients": 1,
-    "home": "/h", "hooks": "ok (1 copy)", "codex_link": "up since 10:25:16 (0 thread(s) loaded)", "test_mode": True,
+    "version": "0.4.0",
+    "pid": 7,
+    "uptime_s": 3700,
+    "url": "http://switchboard.localhost:7419/",
+    "web_clients": 1,
+    "home": "/h",
+    "hooks": "ok (1 copy)",
+    "codex_link": "up since 10:25:16 (0 thread(s) loaded)",
+    "test_mode": True,
     "rooms": [
-        {"name": "#build", "paused": False, "paused_reason": None, "members": 3, "budget_remaining": 47,
-         "budget_per_hour": 60, "hop_count": 3, "hop_limit": 30},
-        {"name": "#lab", "paused": True, "paused_reason": "loop guard", "members": 1, "budget_remaining": 60,
-         "budget_per_hour": 60, "hop_count": 6, "hop_limit": 0},
+        {
+            "name": "#build",
+            "paused": False,
+            "paused_reason": None,
+            "members": 3,
+            "budget_remaining": 47,
+            "budget_per_hour": 60,
+            "hop_count": 3,
+            "hop_limit": 30,
+        },
+        {
+            "name": "#lab",
+            "paused": True,
+            "paused_reason": "loop guard",
+            "members": 1,
+            "budget_remaining": 60,
+            "budget_per_hour": 60,
+            "hop_count": 6,
+            "hop_limit": 0,
+        },
     ],
     "closed_rooms": 1,
     "remotes": [
@@ -81,16 +149,53 @@ STATUS = {
     ],
 }
 
-WHO = {"room": "#build", "human": "alice", "members": [
-    {"name": "claude-1", "harness": "claude", "status": "idle", "tier": "claude:inbox", "tier_note": None,
-     "approval_mode": "prompting", "env_leak": False, "held": False, "queued": 0, "parked": None,
-     "session": "3f2a-c91e", "away": None, "host": None},
-    {"name": "codex-1", "harness": "codex", "status": "busy", "tier": "codex:daemon", "tier_note": None,
-     "approval_mode": "bypass", "env_leak": True, "held": True, "queued": 2, "parked": None, "away": "lunch\x1b[2J"},
-    {"name": "devin-1", "harness": "devin", "status": "offline", "tier": "devin:wait-loop", "tier_note": None,
-     "approval_mode": "unknown", "env_leak": False, "held": False, "queued": 4,
-     "parked": "its turn ended without wait()", "host": "fpga-pi"},
-]}
+WHO = {
+    "room": "#build",
+    "human": "alice",
+    "members": [
+        {
+            "name": "claude-1",
+            "harness": "claude",
+            "status": "idle",
+            "tier": "claude:inbox",
+            "tier_note": None,
+            "approval_mode": "prompting",
+            "env_leak": False,
+            "held": False,
+            "queued": 0,
+            "parked": None,
+            "session": "3f2a-c91e",
+            "away": None,
+            "host": None,
+        },
+        {
+            "name": "codex-1",
+            "harness": "codex",
+            "status": "busy",
+            "tier": "codex:daemon",
+            "tier_note": None,
+            "approval_mode": "bypass",
+            "env_leak": True,
+            "held": True,
+            "queued": 2,
+            "parked": None,
+            "away": "lunch\x1b[2J",
+        },
+        {
+            "name": "devin-1",
+            "harness": "devin",
+            "status": "offline",
+            "tier": "devin:wait-loop",
+            "tier_note": None,
+            "approval_mode": "unknown",
+            "env_leak": False,
+            "held": False,
+            "queued": 4,
+            "parked": "its turn ended without wait()",
+            "host": "fpga-pi",
+        },
+    ],
+}
 
 
 # ---------------------------------------------------------------- per command
@@ -111,10 +216,14 @@ def spec_remote_status(mp: pytest.MonkeyPatch, tmp: Path, clock: FakeClock) -> t
 
 def spec_tail(mp: pytest.MonkeyPatch, tmp: Path, clock: FakeClock) -> tuple[list[str], bool]:
     mp.setattr("switchboard.mcp.client.Stream", FakeStream)
-    mp.setattr(FakeStream, "pushes_to_send", [
-        {"push": "notice", "data": {"level": "warn", "text": "loop guard paused #build\x1b[2J"}},
-        {"push": "notice", "data": {"level": "info", "text": "claude-1 joined"}},
-    ])
+    mp.setattr(
+        FakeStream,
+        "pushes_to_send",
+        [
+            {"push": "notice", "data": {"level": "warn", "text": "loop guard paused #build\x1b[2J"}},
+            {"push": "notice", "data": {"level": "info", "text": "claude-1 joined"}},
+        ],
+    )
     return ["tail", "#build", "--home", str(tmp)], True
 
 
@@ -135,22 +244,48 @@ def _user_home(tmp: Path) -> Path:
 
 
 def spec_install(mp: pytest.MonkeyPatch, tmp: Path, clock: FakeClock) -> tuple[list[str], bool]:
-    return ["install", "claude", "--dry-run", "--home", str(tmp / "sbh"), "--user-home", str(_user_home(tmp))], False
+    return [
+        "install",
+        "claude",
+        "--dry-run",
+        "--home",
+        str(tmp / "sbh"),
+        "--user-home",
+        str(_user_home(tmp)),
+    ], False
 
 
 def spec_uninstall(mp: pytest.MonkeyPatch, tmp: Path, clock: FakeClock) -> tuple[list[str], bool]:
-    return ["uninstall", "all", "--dry-run", "--home", str(tmp / "sbh"), "--user-home", str(_user_home(tmp))], False
+    return [
+        "uninstall",
+        "all",
+        "--dry-run",
+        "--home",
+        str(tmp / "sbh"),
+        "--user-home",
+        str(_user_home(tmp)),
+    ], False
 
 
 SPECS: dict[str, Callable[..., tuple[list[str], bool]]] = {
-    "status": spec_status, "who": spec_who, "remote status": spec_remote_status, "tail": spec_tail,
-    "report": spec_report, "install": spec_install, "uninstall": spec_uninstall,
+    "status": spec_status,
+    "who": spec_who,
+    "remote status": spec_remote_status,
+    "tail": spec_tail,
+    "report": spec_report,
+    "install": spec_install,
+    "uninstall": spec_uninstall,
 }
 
 
 @pytest.mark.parametrize("cmd", list(SPECS))
-def test_colour_only_where_it_belongs(cmd: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-                                      clock: FakeClock, capsys: pytest.CaptureFixture[str]) -> None:
+def test_colour_only_where_it_belongs(
+    cmd: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    clock: FakeClock,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     argv, has_json = SPECS[cmd](monkeypatch, tmp_path, clock)
 
     def run(*extra: str, tty: bool = False, env: dict[str, str] | None = None) -> str:
@@ -189,22 +324,22 @@ def test_color_flag_goes_before_or_after_the_verb() -> None:
 
 
 # ---------------------------------------------------------------- what is coloured
-def test_tail_colours_the_framing_and_keeps_room_text_inert(monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-                                                             clock: FakeClock,
-                                                             capsys: pytest.CaptureFixture[str]) -> None:
+def test_tail_colours_the_framing_and_keeps_room_text_inert(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clock: FakeClock, capsys: pytest.CaptureFixture[str]
+) -> None:
     argv, _ = spec_tail(monkeypatch, tmp_path, clock)
     cli.main([*argv, "--color", "always"])
     out = capsys.readouterr().out
     assert only_our_codes(out)
     # the injected OSC title and screen clear are gone; the fake colour is inert text
     assert "\x07" not in out and "]0;pwned" in out and "[31m*** fake warning[0m" in out
-    assert "<\x1b[1malice\x1b[0m>" in out           # you, bold
-    assert "<\x1b[34mclaude-1\x1b[0m>" in out       # an agent, its own colour
+    assert "<\x1b[1malice\x1b[0m>" in out  # you, bold
+    assert "<\x1b[34mclaude-1\x1b[0m>" in out  # an agent, its own colour
     assert "\x1b[2m* codex-1 joined\x1b[0m" in out  # join lines dim
     assert "\x1b[31m-!- codex-1 runs with approvals off\x1b[0m" in out  # a warning red
-    assert "\x1b[2m-!- devin-1 is parked\x1b[0m" in out                 # other notices dim
+    assert "\x1b[2m-!- devin-1 is parked\x1b[0m" in out  # other notices dim
     assert "\x1b[2m (via cli)\x1b[0m" in out
-    assert "\x1b[31m-!- loop guard paused #build[2J\x1b[0m" in out     # a pushed warning
+    assert "\x1b[31m-!- loop guard paused #build[2J\x1b[0m" in out  # a pushed warning
     assert "\x1b[2m-!- claude-1 joined\x1b[0m" in out
     assert "\n" + " " * 11 + "second line" in out  # continuation lines keep their indent
 
@@ -213,11 +348,15 @@ def test_status_and_remote_lines_colour_state_words_only() -> None:
     p = Paint(True)
     line = cli._remote_line(p, {"name": "lab", "state": "blocked", "reason": "auth", "detail": "up down"})
     assert line.startswith("lab: \x1b[31mblocked\x1b[0m: auth") and line.endswith("[up down]")
-    assert cli._remote_line(p, {"name": "a", "state": "up", "rtt_ms": 3}).startswith("a: \x1b[32mup\x1b[0m 3.0 ms")
+    assert cli._remote_line(p, {"name": "a", "state": "up", "rtt_ms": 3}).startswith(
+        "a: \x1b[32mup\x1b[0m 3.0 ms"
+    )
     assert cli._remote_line(p, {"name": "a", "state": "disabled", "reason": "config_changed"}).startswith(
-        "a: \x1b[33mneeds enable\x1b[0m (config changed)")
+        "a: \x1b[33mneeds enable\x1b[0m (config changed)"
+    )
     assert cli._remote_line(p, {"name": "a", "state": "disabled", "reason": "disabled"}).startswith(
-        "a: \x1b[2mdisabled\x1b[0m (")
+        "a: \x1b[2mdisabled\x1b[0m ("
+    )
     assert cli._remote_line(p, {"name": "a", "state": "connecting"}) == "a: \x1b[33mconnecting\x1b[0m"
     # a name holding control characters is cleaned in the line and in the lookup alike:
     # only switchboard's own codes reach the terminal
@@ -249,8 +388,11 @@ def test_doctor_levels(capsys: pytest.CaptureFixture[str]) -> None:
     import io
 
     buf = io.StringIO()
-    rc = print_findings([Finding("ok", "a"), Finding("note", "b"), Finding("WARN", "c"), Finding("FAIL", "d")], buf,
-                        paint=Paint(True))
+    rc = print_findings(
+        [Finding("ok", "a"), Finding("note", "b"), Finding("WARN", "c"), Finding("FAIL", "d")],
+        buf,
+        paint=Paint(True),
+    )
     out = buf.getvalue()
     assert rc == 1
     assert "  \x1b[32mok\x1b[0m    a" in out and "  \x1b[2mnote\x1b[0m  b" in out

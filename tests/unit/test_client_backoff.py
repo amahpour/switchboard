@@ -166,7 +166,9 @@ async def test_eof_fails_a_call_made_while_the_hello_is_in_flight(sock_dir: Path
 # not the gaps a clock measures between connections: on a loaded CI runner a 0.1 s gap
 # once measured 0.55 s. The fake broker's own holds (0.3 s, 0.2 s, 2.1 s) stay real, since
 # the client decides from them whether a connection was healthy.
-async def test_backoff_resets_only_after_answered_hello(sock_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_backoff_resets_only_after_answered_hello(
+    sock_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     path = sock_dir / "b.sock"
     rec = SleepRecorder()
     monkeypatch.setattr(client_mod, "asyncio", rec)
@@ -196,8 +198,9 @@ async def test_backoff_resets_only_after_answered_hello(sock_dir: Path, monkeypa
     assert rec.delays[:6] == [0.1, 0.2, 0.4, 0.1, 0.1, 0.2], rec.delays
 
 
-async def test_backoff_resets_after_a_2s_connection_without_hello(sock_dir: Path,
-                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_backoff_resets_after_a_2s_connection_without_hello(
+    sock_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     path = sock_dir / "b.sock"
     rec = SleepRecorder()
     monkeypatch.setattr(client_mod, "asyncio", rec)
@@ -211,7 +214,9 @@ async def test_backoff_resets_after_a_2s_connection_without_hello(sock_dir: Path
         await asyncio.sleep(30)
 
     async with FakeBroker(path, script) as fb:
-        conn = BrokerConn(path, backoff=(0.1, 3.2))  # no hello params (an MCP server before its first tool call)
+        conn = BrokerConn(
+            path, backoff=(0.1, 3.2)
+        )  # no hello params (an MCP server before its first tool call)
         conn.start()
         await until(lambda: len(fb.opened) >= 6, 10.0)
         await conn.close()
@@ -282,15 +287,18 @@ def test_satellite_home_caps_backoff_at_2s(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("hello", [False, True], ids=["no_hello", "hello"])
-async def test_satellite_backoff_levels_off_at_2s_behind_accept_then_close(sock_dir: Path, hello: bool) -> None:
+async def test_satellite_backoff_levels_off_at_2s_behind_accept_then_close(
+    sock_dir: Path, hello: bool
+) -> None:
     """The post-connection sleeps (not only the connect-failure ones) stop at the 2 s cap
     on a satellite home, and at 10 s by default, behind a socket that accepts and closes."""
     rec = SleepRecorder()
     mp = pytest.MonkeyPatch()
     mp.setattr(client_mod, "asyncio", rec)
     try:
-        for i, (backoff, want) in enumerate((((0.5, 2.0), [0.5, 1.0] + [2.0] * 6),
-                                             ((0.5, 10.0), [0.5, 1.0, 2.0, 4.0, 8.0, 10.0, 10.0, 10.0]))):
+        for i, (backoff, want) in enumerate(
+            (((0.5, 2.0), [0.5, 1.0] + [2.0] * 6), ((0.5, 10.0), [0.5, 1.0, 2.0, 4.0, 8.0, 10.0, 10.0, 10.0]))
+        ):
             rec.delays.clear()
             path = sock_dir / f"b{i}.sock"
             async with FakeBroker(path, close_at_once) as fb:

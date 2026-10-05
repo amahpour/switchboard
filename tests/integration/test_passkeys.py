@@ -18,10 +18,10 @@ from typing import Any
 
 import httpx
 import pytest
-from cryptography.hazmat.primitives.asymmetric import ec
-
 from conftest import FakeClock, InProcBroker, SubprocBroker, make_tmp_home
+from cryptography.hazmat.primitives.asymmetric import ec
 from fakes.fake_authenticator import Excluded, SoftAuthenticator
+
 from switchboard.broker import app as broker_app
 from switchboard.broker.auth import SESSION_TTL_S, WebOrigin
 from switchboard.broker.passkeys import CEREMONY_TTL_S, CLAIM_GRACE_S, CLAIM_TTL_S, FRESH_CHECK_S
@@ -38,8 +38,12 @@ class Browser:
     so a jar on a plain-http client would drop them) and sends the write headers."""
 
     def __init__(self, b: InProcBroker, host: str = HOST, origin: str = PUBLIC):
-        self.c = httpx.Client(base_url=f"http://127.0.0.1:{b.port}", timeout=10.0, follow_redirects=False,
-                              limits=httpx.Limits(keepalive_expiry=1.0))
+        self.c = httpx.Client(
+            base_url=f"http://127.0.0.1:{b.port}",
+            timeout=10.0,
+            follow_redirects=False,
+            limits=httpx.Limits(keepalive_expiry=1.0),
+        )
         self.host, self.origin = host, origin
         self.cookies: dict[str, str] = {}
         self.set_cookies: list[str] = []  # every Set-Cookie seen, raw
@@ -132,8 +136,12 @@ def events(b: InProcBroker, what: str) -> list[dict[str, Any]]:
     return [e.data for e in evs if e.data.get("what") == what]
 
 
-def claim(b: InProcBroker, br: Browser | None = None, auth: SoftAuthenticator | None = None,
-          name: str = "MacBook Pro") -> tuple[Browser, SoftAuthenticator, dict[str, Any]]:
+def claim(
+    b: InProcBroker,
+    br: Browser | None = None,
+    auth: SoftAuthenticator | None = None,
+    name: str = "MacBook Pro",
+) -> tuple[Browser, SoftAuthenticator, dict[str, Any]]:
     """The whole claim, as the page does it: begin with the link's token, create, finish."""
     br = br or Browser(b)
     auth = auth or SoftAuthenticator(RP_ID, PUBLIC)
@@ -168,11 +176,23 @@ def test_an_unclaimed_hosted_broker_prints_one_claim_link(hosted: InProcBroker) 
     assert hosted.on_loop(st.unclaimed)
     br = Browser(hosted)
     r = br.get("/setup")
-    assert r.status_code == 200 and "Choose how you&rsquo;ll sign in" in r.text and "/static/setup.js" in r.text
+    assert (
+        r.status_code == 200 and "Choose how you&rsquo;ll sign in" in r.text and "/static/setup.js" in r.text
+    )
     assert "setup#t=" not in r.text and tok not in r.text
-    assert r.headers["cache-control"] == "no-store" and "script-src 'self'" in r.headers["content-security-policy"]
-    assert br.get("/api/auth/state").json() == {"hosted": True, "claimed": False, "passkeys": False, "claim": True,
-                                                "passkeys_work": True, "password": True, "sso": "coming soon"}
+    assert (
+        r.headers["cache-control"] == "no-store"
+        and "script-src 'self'" in r.headers["content-security-policy"]
+    )
+    assert br.get("/api/auth/state").json() == {
+        "hosted": True,
+        "claimed": False,
+        "passkeys": False,
+        "claim": True,
+        "passkeys_work": True,
+        "password": True,
+        "sso": "coming soon",
+    }
     assert "/static/login.js" in br.get("/").text  # the sign-in page, which login.js then adjusts
     # the claim page needs the public Host, as everything does
     assert Browser(hosted, host=f"127.0.0.1:{hosted.port}").get("/setup").status_code == 421
@@ -205,8 +225,11 @@ def test_the_claim(hosted: InProcBroker) -> None:
     pk = got["options"]["publicKey"]
     assert pk["rp"] == {"id": RP_ID, "name": "switchboard"}
     assert pk["user"]["name"] == "alice" and len(pk["user"]["id"]) >= 20
-    assert pk["authenticatorSelection"] == {"residentKey": "required", "requireResidentKey": True,
-                                            "userVerification": "required"}
+    assert pk["authenticatorSelection"] == {
+        "residentKey": "required",
+        "requireResidentKey": True,
+        "userVerification": "required",
+    }
     assert pk["attestation"] == "none" and "excludeCredentials" not in pk
     assert [p["alg"] for p in pk["pubKeyCredParams"]] == [-7, -8, -257]
     assert len(pk["challenge"]) >= 40
@@ -229,19 +252,33 @@ def test_the_claim(hosted: InProcBroker) -> None:
     assert st.store.owner_handle() == websafe_decode(pk["user"]["id"])
     assert st.store.owner_claimed_at() is not None
     [row] = st.store.passkeys()
-    assert row.name == "MacBook Pro" and row.sign_count == 0 and row.aaguid == "01020304-0506-0708-090a-0b0c0d0e0f10"
+    assert (
+        row.name == "MacBook Pro"
+        and row.sign_count == 0
+        and row.aaguid == "01020304-0506-0708-090a-0b0c0d0e0f10"
+    )
     assert row.credential_id == auth.last_id and row.last_used_at is None
     # the token is spent, the link is gone, and the page redirects
     assert st.claim is None and not hosted.paths.test_claim_link.exists()
     assert br.post("/api/setup/begin", {"token": tok}).status_code == 403
     r = br.get("/setup")
     assert r.status_code == 303 and r.headers["location"] == "/"
-    assert br.get("/api/auth/state").json() == {"hosted": True, "claimed": True, "passkeys": True, "claim": False,
-                                                "passkeys_work": True, "password": True, "sso": "coming soon"}
+    assert br.get("/api/auth/state").json() == {
+        "hosted": True,
+        "claimed": True,
+        "passkeys": True,
+        "claim": False,
+        "passkeys_work": True,
+        "password": True,
+        "sso": "coming soon",
+    }
     me = br.get("/api/me").json()
     assert me["hosted"] is True and me["passkeys"] == 1 and me["fresh"] is True
     assert "/static/app.js" in br.get("/").text  # signed in
-    assert st.store.web_session_via(next(iter(st.store.con.execute("SELECT id_hash FROM web_sessions")))[0]) == "claim"
+    assert (
+        st.store.web_session_via(next(iter(st.store.con.execute("SELECT id_hash FROM web_sessions")))[0])
+        == "claim"
+    )
     assert events(hosted, "claim") == [{"what": "claim", "via": "web", "passkey": "MacBook Pro"}]
 
 
@@ -271,8 +308,12 @@ def test_the_claim_ceremony_is_one_browser_at_a_time(hosted: InProcBroker) -> No
     # the token is still good: begin again, and a registration that fails verification
     r = a.post("/api/setup/begin", {"token": tok})
     assert r.status_code == 200
-    for kw, why in [(dict(origin="https://evil.com"), "origin"), (dict(rp_id="evil.com"), "rp id"),
-                    (dict(uv=False), "verification"), (dict(up=False), "present")]:
+    for kw, why in [
+        (dict(origin="https://evil.com"), "origin"),
+        (dict(rp_id="evil.com"), "rp id"),
+        (dict(uv=False), "verification"),
+        (dict(up=False), "present"),
+    ]:
         r = a.post("/api/setup/begin", {"token": tok})
         assert r.status_code == 200
         r = a.post("/api/setup/finish", {"credential": auth.register(r.json()["options"], **kw), "name": "x"})
@@ -344,8 +385,12 @@ def test_sign_in_with_a_passkey(hosted: InProcBroker) -> None:
     assert row.sign_count == 3 and row.last_used_at is not None
     sessions = {r[0]: r[1] for r in hosted.state.store.con.execute("SELECT id_hash, via FROM web_sessions")}
     assert sorted(sessions.values()) == ["claim", "passkey:MacBook Pro"]
-    assert events(hosted, "session")[0] == {"what": "session", "via": "passkey", "passkey": "MacBook Pro",
-                                            "person": "alice"}
+    assert events(hosted, "session")[0] == {
+        "what": "session",
+        "via": "passkey",
+        "passkey": "MacBook Pro",
+        "person": "alice",
+    }
     # the same sealed cookie and assertion again: a replay
     br.cookies["switchboard_passkey"] = sealed
     r = br.post("/api/passkey/finish", {"credential": auth.get({"publicKey": pk}, counter=4)})
@@ -368,12 +413,20 @@ def test_what_a_sign_in_refuses(hosted: InProcBroker) -> None:
     assert r.status_code == 403 and r.json()["error"] == "no_ceremony"
     br.cookies["switchboard_passkey"] = good
     # a wrong origin, RP id, no user verification, another challenge, an unknown credential
-    for kw, why in [(dict(origin="https://evil.com"), "origin"), (dict(rp_id="evil.com"), "rp id"),
-                    (dict(uv=False), "verified"), (dict(challenge="A" * 43), "challenge"),
-                    (dict(credential_id=b"\x01" * 32), "unknown credential")]:
+    for kw, why in [
+        (dict(origin="https://evil.com"), "origin"),
+        (dict(rp_id="evil.com"), "rp id"),
+        (dict(uv=False), "verified"),
+        (dict(challenge="A" * 43), "challenge"),
+        (dict(credential_id=b"\x01" * 32), "unknown credential"),
+    ]:
         br.cookies["switchboard_passkey"] = good
         r = br.post("/api/passkey/finish", {"credential": auth.get(opts, **kw)})
-        assert r.status_code == 403 and r.json()["error"] == "bad_credential" and why in r.json()["message"].lower(), kw
+        assert (
+            r.status_code == 403
+            and r.json()["error"] == "bad_credential"
+            and why in r.json()["message"].lower()
+        ), kw
     # a signature by another key over the right data
     other = SoftAuthenticator(RP_ID, PUBLIC)
     other.keys[auth.last_id] = ec.generate_private_key(ec.SECP256R1())
@@ -436,7 +489,9 @@ def test_the_backup_passkey_right_after_the_claim(hosted: InProcBroker) -> None:
     assert r.json() == {"ok": True, "name": "iPhone", "passkeys": 2}
     assert "switchboard_passkey_add" not in br.cookies
     assert [p.name for p in hosted.state.store.passkeys()] == ["MacBook Pro", "iPhone"]
-    assert events(hosted, "passkey_added") == [{"what": "passkey_added", "passkey": "iPhone", "person": "alice"}]
+    assert events(hosted, "passkey_added") == [
+        {"what": "passkey_added", "passkey": "iPhone", "person": "alice"}
+    ]
     # the new one signs in
     other = Browser(hosted)
     assert sign_in(hosted, other, phone).json()["name"] == "iPhone"
@@ -520,18 +575,24 @@ def test_the_reset_acts_once_per_value(monkeypatch: pytest.MonkeyPatch) -> None:
         from switchboard import db
 
         with db.tx(st.con):  # a paired and approved machine (PR 2 makes these): back to pending at the reset
-            st.con.execute("INSERT INTO link_machines(name, key, key_fp, created_at, approved_at, approved_via)"
-                           " VALUES('work-laptop', X'00', 'SHA256:x', 1.0, 2.0, 'web')")
+            st.con.execute(
+                "INSERT INTO link_machines(name, key, key_fp, created_at, approved_at, approved_via)"
+                " VALUES('work-laptop', X'00', 'SHA256:x', 1.0, 2.0, 'web')"
+            )
         first_token = None
         monkeypatch.setenv("SWITCHBOARD_RESET_OWNER", "2026-09-30")
         b.restart()
         st = b.state.store
         assert st.passkey_count() == 0 and st.owner_handle() is None and st.web_session_count() == 0
-        assert tuple(st.con.execute("SELECT approved_at, approved_via FROM link_machines").fetchone()) == (None, None)
+        assert tuple(st.con.execute("SELECT approved_at, approved_via FROM link_machines").fetchone()) == (
+            None,
+            None,
+        )
         assert b.state.claim is not None and b.paths.test_claim_link.exists()
         first_token = token_of(claim_link(b))
-        assert events(b, "owner_reset") == [{"what": "owner_reset", "passkeys": 1, "sessions": 1,
-                                             "machines_pending": 1, "people": 0}]
+        assert events(b, "owner_reset") == [
+            {"what": "owner_reset", "passkeys": 1, "sessions": 1, "machines_pending": 1, "people": 0}
+        ]
         assert br.get("/api/me").status_code == 401  # the old session is gone
         # claimed again by the new owner; the same value at the next start changes nothing
         br2, auth2, _ = claim(b)
@@ -545,7 +606,9 @@ def test_the_reset_acts_once_per_value(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SWITCHBOARD_RESET_OWNER", "2026-10-01")
         b.restart()
         st = b.state.store
-        assert st.passkey_count() == 0 and b.state.claim is not None and token_of(claim_link(b)) != first_token
+        assert (
+            st.passkey_count() == 0 and b.state.claim is not None and token_of(claim_link(b)) != first_token
+        )
         assert len(events(b, "owner_reset")) == 2
         # the variable unset: nothing happens either
         monkeypatch.delenv("SWITCHBOARD_RESET_OWNER")
@@ -557,9 +620,12 @@ def test_the_reset_acts_once_per_value(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ------------------------------------------------------- where it doesn't apply
-@pytest.mark.parametrize("url,why", [("http://sb.test", "not a secure context"), ("https://10.0.0.5", "IP address")])
-def test_where_passkeys_cant_work_the_password_still_sets_it_up(url: str, why: str,
-                                                                caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.parametrize(
+    "url,why", [("http://sb.test", "not a secure context"), ("https://10.0.0.5", "IP address")]
+)
+def test_where_passkeys_cant_work_the_password_still_sets_it_up(
+    url: str, why: str, caplog: pytest.LogCaptureFixture
+) -> None:
     """No passkeys at an IP address or on plain http, but the one-time password in the log
     still sets the broker up, with a password (DESIGN.md §32.4)."""
     b = hosted_broker(url=url)
@@ -569,11 +635,20 @@ def test_where_passkeys_cant_work_the_password_still_sets_it_up(url: str, why: s
         origin = WebOrigin.parse(url)
         br = Browser(b, host=origin.host, origin=origin.origin)
         assert br.get("/setup").status_code == 200
-        assert br.get("/api/auth/state").json() == {"hosted": True, "claimed": False, "passkeys": False, "claim": True,
-                                                    "passkeys_work": False, "password": True, "sso": "coming soon"}
+        assert br.get("/api/auth/state").json() == {
+            "hosted": True,
+            "claimed": False,
+            "passkeys": False,
+            "claim": True,
+            "passkeys_work": False,
+            "password": True,
+            "sso": "coming soon",
+        }
         assert br.post("/api/passkey/begin").json()["error"] == "no_passkeys"
-        assert br.post("/api/setup/begin", {"token": token_of(claim_link(b), origin.origin)}).json()["error"] == \
-            "no_passkeys"
+        assert (
+            br.post("/api/setup/begin", {"token": token_of(claim_link(b), origin.origin)}).json()["error"]
+            == "no_passkeys"
+        )
         exec_login_url = b.login_url()
         assert exec_login_url.startswith(origin.origin + "/login?t=")  # the way in
         r = br.get(exec_login_url.removeprefix(origin.origin))
@@ -590,8 +665,15 @@ def test_the_desktop_has_no_claim_flow(broker: InProcBroker, web: httpx.Client) 
     assert not broker.paths.test_claim_link.exists()
     c = httpx.Client(base_url=broker.base)
     assert c.get("/setup").status_code == 303
-    assert c.get("/api/auth/state").json() == {"hosted": False, "claimed": False, "passkeys": False, "claim": False,
-                                               "passkeys_work": False, "password": False, "sso": "coming soon"}
+    assert c.get("/api/auth/state").json() == {
+        "hosted": False,
+        "claimed": False,
+        "passkeys": False,
+        "claim": False,
+        "passkeys_work": False,
+        "password": False,
+        "sso": "coming soon",
+    }
     h = broker.write_headers()
     assert c.post("/api/passkey/begin", json={}, headers=h).status_code == 403
     assert c.post("/api/passkey/finish", json={}, headers=h).status_code == 403
@@ -616,11 +698,16 @@ def test_the_claim_link_is_on_stdout_and_nowhere_else(tmp_home: Path) -> None:
         tok = link.split("#t=", 1)[1]
         out = (tmp_home / "subproc.out").read_text(errors="replace")
         lines = [ln for ln in out.splitlines() if "isn't set up yet" in ln]
-        assert lines == [f"switchboard isn't set up yet. Sign in at http://sb.localhost as admin with the one-time"
-                         f" password {tok} (it works once, for 60 min), then choose your own password or passkey."
-                         f" Or open {link}"]
-        r = httpx.post(f"http://127.0.0.1:{b.port}/api/setup/begin", json={"token": tok},
-                       headers={"Host": "sb.localhost", "Origin": "http://sb.localhost", "X-Switchboard": "1"})
+        assert lines == [
+            f"switchboard isn't set up yet. Sign in at http://sb.localhost as admin with the one-time"
+            f" password {tok} (it works once, for 60 min), then choose your own password or passkey."
+            f" Or open {link}"
+        ]
+        r = httpx.post(
+            f"http://127.0.0.1:{b.port}/api/setup/begin",
+            json={"token": tok},
+            headers={"Host": "sb.localhost", "Origin": "http://sb.localhost", "X-Switchboard": "1"},
+        )
         assert r.status_code == 200
         assert "secure" not in [p.strip().lower() for p in r.headers["set-cookie"].split(";")]  # plain http
         b.kill()
@@ -633,8 +720,11 @@ def test_the_claim_link_is_on_stdout_and_nowhere_else(tmp_home: Path) -> None:
         assert link2 != link
         out = (tmp_home / "subproc.out").read_text(errors="replace")
         assert len([ln for ln in out.splitlines() if "isn't set up yet" in ln]) == 2
-        r = httpx.post(f"http://127.0.0.1:{b.port}/api/setup/begin", json={"token": tok},
-                       headers={"Host": "sb.localhost", "Origin": "http://sb.localhost", "X-Switchboard": "1"})
+        r = httpx.post(
+            f"http://127.0.0.1:{b.port}/api/setup/begin",
+            json={"token": tok},
+            headers={"Host": "sb.localhost", "Origin": "http://sb.localhost", "X-Switchboard": "1"},
+        )
         assert r.status_code == 403
     finally:
         b.kill()

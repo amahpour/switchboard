@@ -30,9 +30,9 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import World
+
 from switchboard.adapters import codex as cx
 from switchboard.adapters import codex_rpc
 from switchboard.adapters.base import SendError
@@ -65,17 +65,30 @@ def wire(w: World) -> CodexAdapter:
     collects actions), as ``start()`` would give it, without any I/O."""
     a = ad(w)
     a.runner = SimpleNamespace(
-        state=SimpleNamespace(store=w.store, engine=w.engine, clock=w.clock, agents=None,
-                              info=SimpleNamespace(codex_link="")),
-        execute=lambda acts: w.actions.extend(acts))
+        state=SimpleNamespace(
+            store=w.store, engine=w.engine, clock=w.clock, agents=None, info=SimpleNamespace(codex_link="")
+        ),
+        execute=lambda acts: w.actions.extend(acts),
+    )
     return a
 
 
-def codex(w: World, name: str = "codex-1", *, tid: str = TID, status: str = "idle", proof: bool = True,
-          self_agent: bool = False, **upd: Any) -> tuple[Any, Any]:
+def codex(
+    w: World,
+    name: str = "codex-1",
+    *,
+    tid: str = TID,
+    status: str = "idle",
+    proof: bool = True,
+    self_agent: bool = False,
+    **upd: Any,
+) -> tuple[Any, Any]:
     p, m = w.agent(name, harness="codex", status=status, hooks=True)
-    fields: dict[str, Any] = {"session_key": f"codex:{tid}", "thread_proof": int(proof),
-                              "approval_mode": "prompting"}
+    fields: dict[str, Any] = {
+        "session_key": f"codex:{tid}",
+        "thread_proof": int(proof),
+        "approval_mode": "prompting",
+    }
     if self_agent:  # a live agent process: this test process (the queue tier checks it)
         me = proc.info(os.getpid())
         assert me is not None
@@ -90,7 +103,9 @@ def attach(w: World, tid: str = TID, view: str | None = "idle", clients: bool = 
     a.link_state = "up"
     a.loaded = {tid}
     a.loaded_at = w.clock.now()
-    a.clients = Clients(clients, w.clock.now(), 1 if clients else 0, None if clients else "no Codex TUI attached")
+    a.clients = Clients(
+        clients, w.clock.now(), 1 if clients else 0, None if clients else "no Codex TUI attached"
+    )
     if view is not None:
         a.view[tid] = (view, w.clock.now())
     return a
@@ -110,14 +125,22 @@ def pushes(w: World) -> list[Push]:
 
 def batch(**kw: Any) -> Batch:
     base: dict[str, Any] = {f.name: None for f in dataclasses.fields(Batch)}
-    base.update(id=1, membership_id=1, path="turn_start", kind="wake", budget_counted=True, state="offered",
-                created_at=1.0)
+    base.update(
+        id=1,
+        membership_id=1,
+        path="turn_start",
+        kind="wake",
+        budget_counted=True,
+        state="offered",
+        created_at=1.0,
+    )
     base.update(kw)
     return Batch(**base)
 
 
 def no_lsof(monkeypatch: pytest.MonkeyPatch, a: CodexAdapter) -> None:
     """The send guard's fresh lsof look keeps the clients the test set up."""
+
     async def keep() -> Clients | None:
         return a.clients
 
@@ -128,15 +151,22 @@ class FakeRpc:
     """A connection to a scripted app-server: every request is checked against
     the real allowlist before it is 'sent'."""
 
-    def __init__(self, threads: dict[str, dict[str, Any]] | None = None, *,
-                 request_error: BaseException | None = None, read_error: BaseException | None = None):
+    def __init__(
+        self,
+        threads: dict[str, dict[str, Any]] | None = None,
+        *,
+        request_error: BaseException | None = None,
+        read_error: BaseException | None = None,
+    ):
         self.threads = threads or {}
         self.request_error = request_error
         self.read_error = read_error
         self.sent: list[tuple[str, dict[str, Any] | None]] = []
         self.closed = False
 
-    async def read_thread(self, tid: str, include_turns: bool = False, timeout: float = 10.0) -> dict[str, Any]:
+    async def read_thread(
+        self, tid: str, include_turns: bool = False, timeout: float = 10.0
+    ) -> dict[str, Any]:
         codex_rpc.check_request("thread/read", codex_rpc.thread_read_params(tid, include_turns))
         if self.read_error is not None:
             raise self.read_error
@@ -173,8 +203,11 @@ def use_rpc(monkeypatch: pytest.MonkeyPatch, r: FakeRpc | BaseException) -> list
 
 
 def busy_thread(tid: str = TID, flags: list[str] | None = None) -> dict[str, Any]:
-    return {"id": tid, "status": {"type": "active", "activeFlags": list(flags or [])},
-            "turns": [{"id": "turn-1", "status": "inProgress", "items": []}]}
+    return {
+        "id": tid,
+        "status": {"type": "active", "activeFlags": list(flags or [])},
+        "turns": [{"id": "turn-1", "status": "inProgress", "items": []}],
+    }
 
 
 async def until(cond: Callable[[], Any], timeout: float = 5.0) -> None:
@@ -187,7 +220,8 @@ async def until(cond: Callable[[], Any], timeout: float = 5.0) -> None:
 
 # ------------------------------------------------------------ pure helpers
 def test_a_homebrew_prefix_that_cannot_be_read_is_not_an_install_dir(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     root = str(tmp_path / "brew")  # listed as a prefix, but not there
     monkeypatch.setattr(cx, "HOMEBREW_PREFIXES", (root,))
     assert cx._homebrew_install_dir(root, root + "/bin") is False
@@ -272,8 +306,11 @@ def test_queue_tier_routing(w: World) -> None:
 
 
 def test_no_queue_tier_when_the_fallback_is_off(tmp_path: Path, clock: FakeClock) -> None:
-    w = World(tmp_path, clock, Config().replace(codex=CodexCfg(queue_fallback=False)).with_delivery(
-        quiet_s=0.0, max_hold_s=0.0))
+    w = World(
+        tmp_path,
+        clock,
+        Config().replace(codex=CodexCfg(queue_fallback=False)).with_delivery(quiet_s=0.0, max_hold_s=0.0),
+    )
     p, _m = codex(w, self_agent=True)
     a = queue_tier(w)
     assert a.queue_guard() == (False, None, "queue fallback is off")
@@ -298,7 +335,10 @@ def test_only_an_offered_push_of_an_offline_member_expires_early(w: World) -> No
     assert a.expire_due(p, batch(path="wait"), now) is None
     assert a.expire_due(p, batch(), now) is None
     for path in ("turn_start", "steer", "queue"):
-        assert a.expire_due(w.store.update_participant(p.id, status="offline"), batch(path=path), now) == "offline"
+        assert (
+            a.expire_due(w.store.update_participant(p.id, status="offline"), batch(path=path), now)
+            == "offline"
+        )
     a.steers[9] = SteerState(9, p.id, TID, "yk:b9.x", "turn-1", now)
     a.push_expired(p, batch(id=9, path="steer"), "offline", now)
     assert a.steers == {}
@@ -346,7 +386,8 @@ async def test_send_refuses_a_bad_thread_id_or_path(w: World) -> None:
 
 
 async def test_turn_start_into_a_thread_that_is_not_idle_is_rerouted(
-        w: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    w: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
     p, _m = codex(w)
     a = wire(w)
     attach(w, view="busy")
@@ -358,13 +399,17 @@ async def test_turn_start_into_a_thread_that_is_not_idle_is_rerouted(
     assert opened == [] and a.reroutes[p.id] == (0.0, 1)
 
 
-@pytest.mark.parametrize(("failure", "reason"), [
-    (codex_rpc.RpcError(-32000, "server overloaded"), "turn/start error -32000"),
-    (ConnectionRefusedError(61, "refused"), "codex control socket unavailable"),
-    (codex_rpc.SocketRefused("control socket not found"), "codex control socket unavailable"),
-])
-async def test_turn_start_failures_back_off(w: World, monkeypatch: pytest.MonkeyPatch,
-                                            failure: BaseException, reason: str) -> None:
+@pytest.mark.parametrize(
+    ("failure", "reason"),
+    [
+        (codex_rpc.RpcError(-32000, "server overloaded"), "turn/start error -32000"),
+        (ConnectionRefusedError(61, "refused"), "codex control socket unavailable"),
+        (codex_rpc.SocketRefused("control socket not found"), "codex control socket unavailable"),
+    ],
+)
+async def test_turn_start_failures_back_off(
+    w: World, monkeypatch: pytest.MonkeyPatch, failure: BaseException, reason: str
+) -> None:
     p, _m = codex(w)
     a = wire(w)
     attach(w)
@@ -381,7 +426,8 @@ async def test_turn_start_failures_back_off(w: World, monkeypatch: pytest.Monkey
 
 
 async def test_a_steer_into_an_approval_wait_is_rerouted_and_holds(
-        w: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    w: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
     p, _m = codex(w, status="busy")
     a = wire(w)
     attach(w, view="busy")
@@ -396,12 +442,16 @@ async def test_a_steer_into_an_approval_wait_is_rerouted_and_holds(
     assert a.reroutes[p.id] == (0.0, 1) and a.steers == {}
 
 
-@pytest.mark.parametrize(("failure", "reason"), [
-    (codex_rpc.RpcError(-32603, "internal error"), "turn/steer error -32603"),
-    (ConnectionResetError(54, "reset"), "codex control socket unavailable"),
-])
+@pytest.mark.parametrize(
+    ("failure", "reason"),
+    [
+        (codex_rpc.RpcError(-32603, "internal error"), "turn/steer error -32603"),
+        (ConnectionResetError(54, "reset"), "codex control socket unavailable"),
+    ],
+)
 async def test_steer_failures_other_than_a_turn_change_back_off(
-        w: World, monkeypatch: pytest.MonkeyPatch, failure: BaseException, reason: str) -> None:
+    w: World, monkeypatch: pytest.MonkeyPatch, failure: BaseException, reason: str
+) -> None:
     p, _m = codex(w, status="busy")
     a = wire(w)
     attach(w, view="busy")
@@ -419,7 +469,8 @@ async def test_steer_failures_other_than_a_turn_change_back_off(
 
 
 async def test_a_steer_whose_turn_ended_meanwhile_is_settled_from_history(
-        w: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    w: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
     p, m = codex(w, status="busy")
     a = wire(w)
     attach(w, view="busy")
@@ -455,7 +506,9 @@ async def test_settling_with_no_readable_history(w: World, monkeypatch: pytest.M
 
     monkeypatch.setattr(a, "_read", unreadable)
     tok = w.engine.token(w.store.get_batch(push.batch_id))
-    a.steers[push.batch_id] = SteerState(push.batch_id, p.id, TID, tok, "turn-1", w.clock.now(), approval_seen=True)
+    a.steers[push.batch_id] = SteerState(
+        push.batch_id, p.id, TID, tok, "turn-1", w.clock.now(), approval_seen=True
+    )
     await a._settle(TID)
     b = w.store.get_batch(push.batch_id)
     assert (b.state, b.expire_reason) == ("expired", "steer_approval")
@@ -469,7 +522,8 @@ async def test_settling_with_no_readable_history(w: World, monkeypatch: pytest.M
 
 
 async def test_settling_skips_a_steer_settled_meanwhile_and_is_a_no_op_without_steers(
-        w: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    w: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
     p, _m = codex(w, status="busy")
     a = wire(w)
     attach(w, view="busy")
@@ -487,7 +541,9 @@ async def test_settling_skips_a_steer_settled_meanwhile_and_is_a_no_op_without_s
 
     confirmed: list[tuple[int, str]] = []
     real = w.engine.on_confirm
-    monkeypatch.setattr(w.engine, "on_confirm", lambda bid, why: confirmed.append((bid, why)) or real(bid, why))
+    monkeypatch.setattr(
+        w.engine, "on_confirm", lambda bid, why: confirmed.append((bid, why)) or real(bid, why)
+    )
     monkeypatch.setattr(a, "_read", read)
     await a._settle(TID)
     assert reads == [TID] and confirmed == [(push.batch_id, "rpc:steer+history")] and a.steers == {}
@@ -501,7 +557,9 @@ def _script(path: Path, body: str) -> str:
     return str(path)
 
 
-async def queue_world(w: World, monkeypatch: pytest.MonkeyPatch, bin_path: str | None) -> tuple[Any, CodexAdapter]:
+async def queue_world(
+    w: World, monkeypatch: pytest.MonkeyPatch, bin_path: str | None
+) -> tuple[Any, CodexAdapter]:
     p, _m = codex(w, self_agent=True)
     a = wire(w)
     queue_tier(w)
@@ -521,7 +579,8 @@ async def test_no_queue_send_without_a_codex_binary(w: World, monkeypatch: pytes
 
 
 async def test_a_flag_like_queue_text_is_never_run(
-        w: World, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    w: World, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     ran = tmp_path / "ran"
     p, a = await queue_world(w, monkeypatch, _script(tmp_path / "codex", f"#!/bin/sh\ntouch {ran}\n"))
     with pytest.raises(SendError) as ei:
@@ -530,7 +589,9 @@ async def test_a_flag_like_queue_text_is_never_run(
     assert not ran.exists()
 
 
-async def test_a_codex_queue_that_cannot_start(w: World, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_a_codex_queue_that_cannot_start(
+    w: World, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     exe = tmp_path / "codex"
     exe.write_bytes(b"\x00\x01\x02 not a program")
     exe.chmod(0o755)
@@ -553,7 +614,9 @@ async def test_a_codex_queue_that_fails(w: World, monkeypatch: pytest.MonkeyPatc
     assert a.backoff == {} and a.reroutes == {}
 
 
-async def test_a_codex_queue_that_hangs_is_killed(w: World, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_a_codex_queue_that_hangs_is_killed(
+    w: World, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     p, a = await queue_world(w, monkeypatch, _script(tmp_path / "codex", "#!/bin/sh\nexec sleep 30\n"))
     monkeypatch.setattr(cx, "QUEUE_TIMEOUT_S", 0.2)
     children: list[Any] = []
@@ -575,7 +638,8 @@ async def test_a_codex_queue_that_hangs_is_killed(w: World, monkeypatch: pytest.
 
 # ------------------------------------------------------------- the link
 async def test_the_link_retries_a_socket_that_refuses_connections(
-        w: World, monkeypatch: pytest.MonkeyPatch, tmp_home: Path) -> None:
+    w: World, monkeypatch: pytest.MonkeyPatch, tmp_home: Path
+) -> None:
     monkeypatch.setattr(cx, "LINK_BACKOFF_S", (0.01, 0.02))
     a = wire(w)
     s = socket.socket(socket.AF_UNIX)
@@ -598,7 +662,8 @@ async def test_the_link_retries_a_socket_that_refuses_connections(
 
 
 async def test_the_link_survives_a_failure_while_up(
-        w: World, monkeypatch: pytest.MonkeyPatch, tmp_home: Path, caplog: pytest.LogCaptureFixture) -> None:
+    w: World, monkeypatch: pytest.MonkeyPatch, tmp_home: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     from websockets.asyncio.server import unix_serve
 
     async def handler(ws: Any) -> None:
@@ -632,8 +697,10 @@ async def test_the_link_survives_a_failure_while_up(
             await task
         server.close()
         await server.wait_closed()
-    states = [e.data.get("note") or e.data["state"] for e in reversed(w.store.recent_events(kinds=["codex_link"],
-                                                                                              limit=10))]
+    states = [
+        e.data.get("note") or e.data["state"]
+        for e in reversed(w.store.recent_events(kinds=["codex_link"], limit=10))
+    ]
     # up, lost (the failure), up again, lost (the cancel); the version recorded once
     assert states == ["up", "version", "connection lost", "up", "connection lost"]
     assert a.rpc is None and a.link_state == "down"
@@ -648,7 +715,8 @@ async def test_a_failed_loaded_list_changes_nothing(w: World) -> None:
 
 
 async def test_a_poll_forgets_unloaded_threads_and_ignores_an_ended_one_it_asked_about_too_early(
-        w: World) -> None:
+    w: World,
+) -> None:
     a = wire(w)
     a.link_state = "up"
     a.rpc = FakeRpc({TID: {"id": TID, "ephemeral": True, "threadSource": "thread_title"}})  # type: ignore[assignment]
@@ -696,17 +764,25 @@ async def test_a_failing_lsof_means_nobody_is_attached(w: World, monkeypatch: py
 
 
 async def test_queue_tier_app_servers_are_checked_for_their_own_tuis(
-        w: World, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    w: World, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """One lsof pass: the control socket's TUIs, and for each queue-tier thread's
     own process whether a Codex TUI is on it (its own socket's clients, or its
     parent when it has no socket)."""
     a = wire(w)
     a.sock = str(tmp_path / "control.sock")
     agent_sock = "/run/agent300.sock"
-    tids = {300: TID, 500: TID2, 700: "019a0000-0000-7000-8000-00000000c0f3",
-            900: "019a0000-0000-7000-8000-00000000c0f4", 950: "019a0000-0000-7000-8000-00000000c0f5"}
-    parts = {pid: codex(w, f"codex-{pid}", tid=tid, agent_pid=pid, agent_start=float(pid))[0]
-             for pid, tid in tids.items()}
+    tids = {
+        300: TID,
+        500: TID2,
+        700: "019a0000-0000-7000-8000-00000000c0f3",
+        900: "019a0000-0000-7000-8000-00000000c0f4",
+        950: "019a0000-0000-7000-8000-00000000c0f5",
+    }
+    parts = {
+        pid: codex(w, f"codex-{pid}", tid=tid, agent_pid=pid, agent_start=float(pid))[0]
+        for pid, tid in tids.items()
+    }
     table = {  # pid -> (ppid, argv)
         100: (1, "/opt/homebrew/bin/codex app-server --listen unix://control"),
         200: (1, "/opt/homebrew/bin/codex"),
@@ -718,7 +794,12 @@ async def test_queue_tier_app_servers_are_checked_for_their_own_tuis(
         800: (1, "/sbin/launchd"),
         900: (1, "/opt/homebrew/bin/codex"),
     }
-    lsof = [(100, "0xa1", a.sock), (200, "0xb1", "->0xa1"), (300, "0xc1", agent_sock), (400, "0xd1", "->0xc1")]
+    lsof = [
+        (100, "0xa1", a.sock),
+        (200, "0xb1", "->0xa1"),
+        (300, "0xc1", agent_sock),
+        (400, "0xd1", "->0xc1"),
+    ]
 
     def lsof_out() -> str:
         return "".join(f"p{pid}\nf3\nd{dev}\nn{name}\n" for pid, dev, name in lsof)
@@ -749,12 +830,16 @@ async def test_queue_tier_app_servers_are_checked_for_their_own_tuis(
 
     lsof.pop()  # the TUI on agent 300's own app-server quit: its thread is held
     await a.refresh_clients()
-    assert (a.agent_clients[300].ok, a.agent_clients[300].why) == (False, "no Codex TUI attached to its app-server")
+    assert (a.agent_clients[300].ok, a.agent_clients[300].why) == (
+        False,
+        "no Codex TUI attached to its app-server",
+    )
     assert TID in a.suspect and a.holds[("agent", 300, 300.0)].tids == {TID}
 
 
 async def test_the_clients_loop_survives_an_error(
-        w: World, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    w: World, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     monkeypatch.setattr(cx, "CLIENTS_POLL_S", 0.01)
     monkeypatch.setattr(cx, "resolve_codex", lambda name: None)
     codex(w)
@@ -815,7 +900,8 @@ async def test_a_second_join_replaces_the_pending_proof(w: World, monkeypatch: p
 
 
 async def test_a_proof_stops_early_for_a_gone_rejoined_or_proven_member(
-        w: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    w: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
     p, _m = codex(w, proof=False, bind_nonce="n1")
     a = wire(w)
 
@@ -831,14 +917,20 @@ async def test_a_proof_stops_early_for_a_gone_rejoined_or_proven_member(
 
 
 async def test_a_proof_clears_a_session_end_and_resyncs_the_status(
-        w: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    w: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
     p, m = codex(w, proof=False, bind_nonce="n1")
     a = wire(w)
     attach(w)
     w.hook(p, "SessionEnd", sid=TID, reason="other")
     assert w.p(p).status == "offline" and TID in a.ended
-    join_result = {"type": "mcpToolCall", "server": "switchboard", "tool": "join", "status": "completed",
-                   "result": {"content": [{"type": "text", "text": "joined #build yk:jn1"}]}}
+    join_result = {
+        "type": "mcpToolCall",
+        "server": "switchboard",
+        "tool": "join",
+        "status": "completed",
+        "result": {"content": [{"type": "text", "text": "joined #build yk:jn1"}]},
+    }
 
     async def read(tid: str, include_turns: bool = False) -> dict[str, Any]:
         return {"turns": [{"id": "t", "status": "completed", "items": [join_result]}]}
@@ -876,7 +968,8 @@ def test_the_grace_ends_with_a_last_look_that_rebinds(w: World, monkeypatch: pyt
     assert a.defer_end(w.p(p)) is True  # re-bound by the last look, not ended
     assert p.id not in a.orphans and w.p(p).agent_pid == os.getpid()
     assert [x.text for x in w.take() if isinstance(x, Notice)] == [
-        "codex-1 reconnected after a Codex daemon restart"]
+        "codex-1 reconnected after a Codex daemon restart"
+    ]
 
 
 def test_mcp_hello_bookkeeping(w: World, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -924,4 +1017,3 @@ async def test_stop_cancels_everything_and_closes_the_link_quietly(w: World) -> 
     a._main = [main]
     await a.stop()
     assert main.cancelled() and BrokenLink.closes == 1 and a.rpc is None
-

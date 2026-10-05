@@ -45,7 +45,9 @@ def stepped_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Paths
 @pytest.mark.skipif(not LINUX, reason="/proc btime: Linux")
 @pytest.mark.parametrize("command", ("status", "start", "stop", "remote remove", "remote join"))
 def test_dialer_commands_keep_the_same_process_after_clock_step(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
 ) -> None:
     """Each command must see the dialer recorded before btime moved, without starting another."""
     paths, pid, _ = stepped_home(tmp_path, monkeypatch)
@@ -53,7 +55,9 @@ def test_dialer_commands_keep_the_same_process_after_clock_step(
     if command == "status":
         assert f"dialer for machine: up, pid {pid}" in join.status_lines(paths)[0]
     elif command == "start":
-        monkeypatch.setattr(daemon.subprocess, "Popen", lambda *a, **k: pytest.fail("started a second dialer"))
+        monkeypatch.setattr(
+            daemon.subprocess, "Popen", lambda *a, **k: pytest.fail("started a second dialer")
+        )
         assert daemon.start_dialer(paths, out=out) == 0
         assert "already runs" in out.getvalue()
     elif command == "remote join":
@@ -75,7 +79,8 @@ def test_dialer_commands_keep_the_same_process_after_clock_step(
 
 @pytest.mark.skipif(not LINUX, reason="/proc btime: Linux")
 def test_broker_sigterm_fallback_still_matches_its_pidfile_after_clock_step(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """With a dead socket, stop may signal only the broker recorded before btime moved."""
     paths, pid, start = stepped_home(tmp_path, monkeypatch)

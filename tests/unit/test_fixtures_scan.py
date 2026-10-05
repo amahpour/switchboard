@@ -43,7 +43,11 @@ def entropy(s: str) -> float:
 def high_entropy(s: str) -> list[str]:
     out = []
     for tok in TOKENISH.findall(s):
-        mixed = any(ch.islower() for ch in tok) and any(ch.isupper() for ch in tok) and any(ch.isdigit() for ch in tok)
+        mixed = (
+            any(ch.islower() for ch in tok)
+            and any(ch.isupper() for ch in tok)
+            and any(ch.isdigit() for ch in tok)
+        )
         if mixed and entropy(tok) > 4.0:
             out.append(tok)
     return out

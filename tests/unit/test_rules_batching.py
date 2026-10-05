@@ -11,10 +11,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import World
 from test_codex_adapter import attach, codex
+
 from switchboard.config import Config
 from switchboard.models import Push
 
@@ -121,7 +121,7 @@ def test_the_batch_cap_in_rendered_characters(w: World) -> None:
     assert 1 <= len(got) < 6 and got == [x.id for x in msgs[: len(got)]]
     assert len(res["text"]) <= w.cfg.delivery.batch_max_chars
     left = [d["message_id"] for d in w.store.deliveries(m.id) if d["state"] == "pending"]
-    assert left == [x.id for x in msgs[len(got):]]
+    assert left == [x.id for x in msgs[len(got) :]]
 
 
 def test_the_cap_follows_each_harness_context_limit(w: World) -> None:
@@ -133,7 +133,7 @@ def test_the_cap_follows_each_harness_context_limit(w: World) -> None:
     assert push.path == "steer" and len(push.text) <= w.cfg.codex.ctx_max_chars
     assert 1 <= len(ids(push.text)) <= 3
     pending = [d["message_id"] for d in w.store.deliveries(mx.id) if d["state"] == "pending"]
-    assert pending == [x.id for x in msgs[len(ids(push.text)):]]
+    assert pending == [x.id for x in msgs[len(ids(push.text)) :]]
 
 
 def test_one_huge_message_is_never_stuck(w: World) -> None:

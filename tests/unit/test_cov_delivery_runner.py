@@ -13,11 +13,11 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import World
 from test_claude_adapter import claude
 from test_cursor_adapter import cursor
+
 from switchboard.adapters.base import SendError
 from switchboard.config import Config
 from switchboard.delivery.runner import Runner
@@ -77,7 +77,8 @@ class Transport:
 
 
 def test_a_push_the_transport_could_not_send_goes_back_to_pending_as_a_failure(
-        w: World, caplog: pytest.LogCaptureFixture) -> None:
+    w: World, caplog: pytest.LogCaptureFixture
+) -> None:
     p, m, conn, push, msg = claude_push(w)
     w.engine.adapters["claude"].detach(conn)  # the session's MCP server went away first
     hub = RecHub()
@@ -155,7 +156,8 @@ def test_stop_cancels_frames_in_flight_and_answers_open_waits(w: World) -> None:
 
 
 def test_a_rerouted_push_is_offered_again_at_once_without_counting_a_failure(
-        w: World, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    w: World, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     p, m, _conn, push, msg = claude_push(w)
     send = Transport(SendError("turn ended", counted=False), None)
     monkeypatch.setattr(w.engine.adapters["claude"], "send", send)
@@ -178,7 +180,8 @@ def test_a_rerouted_push_is_offered_again_at_once_without_counting_a_failure(
 
 
 def test_a_push_confirmed_before_its_transport_reported_is_left_alone(
-        w: World, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    w: World, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     p, m, _conn, push, msg = claude_push(w)
 
     def landed(b: Any) -> SendError:
@@ -192,16 +195,23 @@ def test_a_push_confirmed_before_its_transport_reported_is_left_alone(
     assert w.store.get_batch(push.batch_id).state == "confirmed"
     assert w.delivery(m, msg)["state"] == "in_context"
     assert w.p(p).push_expiries == 0  # nothing to take back, no failure counted
-    assert f"push of batch {push.batch_id}: no post report (no mcp.posted); batch already confirmed" in caplog.text
+    assert (
+        f"push of batch {push.batch_id}: no post report (no mcp.posted); batch already confirmed"
+        in caplog.text
+    )
 
 
-@pytest.mark.parametrize(("t_post", "posted"), [
-    (1000.0, 6.0),  # a far-future clock reading is capped at now + 1 s
-    (5.5, 5.5),  # a later reading refines the post time
-    (-1000.0, 5.0),  # never before the batch; not earlier than the hand-over either
-])
-def test_the_transports_post_time_is_bounded(w: World, clock: FakeClock, monkeypatch: pytest.MonkeyPatch,
-                                              t_post: float, posted: float) -> None:
+@pytest.mark.parametrize(
+    ("t_post", "posted"),
+    [
+        (1000.0, 6.0),  # a far-future clock reading is capped at now + 1 s
+        (5.5, 5.5),  # a later reading refines the post time
+        (-1000.0, 5.0),  # never before the batch; not earlier than the hand-over either
+    ],
+)
+def test_the_transports_post_time_is_bounded(
+    w: World, clock: FakeClock, monkeypatch: pytest.MonkeyPatch, t_post: float, posted: float
+) -> None:
     _p, _m, _conn, push, _msg = claude_push(w)
     t0 = w.store.get_batch(push.batch_id).created_at
     clock.advance(5.0)  # handed to the transport 5 s after the batch was made
@@ -221,8 +231,13 @@ def test_wait_futures_resolve_once_and_a_dropped_one_is_never_answered(w: World)
     async def go() -> tuple[Any, Any]:
         f1, f2 = r.future_for(s1.id), r.future_for(s2.id)
         r.drop_future(s2.id)  # its wait() RPC went away
-        r.execute([ResolveSink(s1.id, {"status": "messages"}), ResolveSink(s2.id, {"status": "messages"}),
-                   ResolveSink(s1.id, {"status": "timeout"})])
+        r.execute(
+            [
+                ResolveSink(s1.id, {"status": "messages"}),
+                ResolveSink(s2.id, {"status": "messages"}),
+                ResolveSink(s1.id, {"status": "timeout"}),
+            ]
+        )
         return f1, f2
 
     f1, f2 = asyncio.run(go())

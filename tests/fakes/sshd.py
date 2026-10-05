@@ -51,15 +51,22 @@ def free_port() -> int:
 
 def keygen(path: Path, comment: str = "yk-test") -> str:
     """A new ed25519 key pair at ``path``; returns the public line ``ssh-ed25519 AAAA… comment``."""
-    subprocess.run([SSH_KEYGEN_BIN, "-q", "-t", "ed25519", "-N", "", "-C", comment, "-f", str(path)],
-                   check=True, stdin=subprocess.DEVNULL, capture_output=True, env=child_env(), timeout=30)
+    subprocess.run(
+        [SSH_KEYGEN_BIN, "-q", "-t", "ed25519", "-N", "", "-C", comment, "-f", str(path)],
+        check=True,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        env=child_env(),
+        timeout=30,
+    )
     return path.with_name(path.name + ".pub").read_text().strip()
 
 
 def descendants(root: int) -> list[int]:
     """Every process below ``root`` (sshd's sessions live in their own sessions)."""
-    out = subprocess.run(["/bin/ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True, timeout=10,
-                         env=child_env()).stdout
+    out = subprocess.run(
+        ["/bin/ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True, timeout=10, env=child_env()
+    ).stdout
     kids: dict[int, list[int]] = {}
     for ln in out.splitlines():
         try:
@@ -97,13 +104,24 @@ class Sshd:
     # ------------------------------------------------------------- config
     def config_text(self) -> str:
         lines = [
-            f"Port {self.port}", "ListenAddress 127.0.0.1", f"HostKey {self.host_key}",
-            f"PidFile {self.dir / 'sshd.pid'}", f"AuthorizedKeysFile {self.authorized_keys}",
-            "StrictModes no", "UsePAM no", "PasswordAuthentication no", "KbdInteractiveAuthentication no",
-            "PubkeyAuthentication yes", "PermitUserRC no", "UseDNS no", "LogLevel VERBOSE",
+            f"Port {self.port}",
+            "ListenAddress 127.0.0.1",
+            f"HostKey {self.host_key}",
+            f"PidFile {self.dir / 'sshd.pid'}",
+            f"AuthorizedKeysFile {self.authorized_keys}",
+            "StrictModes no",
+            "UsePAM no",
+            "PasswordAuthentication no",
+            "KbdInteractiveAuthentication no",
+            "PubkeyAuthentication yes",
+            "PermitUserRC no",
+            "UseDNS no",
+            "LogLevel VERBOSE",
             f"StreamLocalBindUnlink {'yes' if self.stream_local_bind_unlink else 'no'}",
             # forwarding stays on for the server, so a refusal shows the link key's `restrict`
-            "AllowTcpForwarding yes", "AllowStreamLocalForwarding yes", "PermitTTY yes",
+            "AllowTcpForwarding yes",
+            "AllowStreamLocalForwarding yes",
+            "PermitTTY yes",
             *self.extra,
         ]
         if self._penalties:
@@ -112,13 +130,25 @@ class Sshd:
 
     def _write_config(self) -> None:
         self.cfg.write_text(self.config_text())
-        r = subprocess.run([SSHD_BIN, "-t", "-f", str(self.cfg)], capture_output=True, text=True, timeout=30,
-                           env=child_env(), stdin=subprocess.DEVNULL)
+        r = subprocess.run(
+            [SSHD_BIN, "-t", "-f", str(self.cfg)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=child_env(),
+            stdin=subprocess.DEVNULL,
+        )
         if r.returncode != 0 and self._penalties and "PerSourcePenalties" in (r.stderr + r.stdout):
             self._penalties = False  # an older sshd (Debian 12's 9.2) has no such option
             self.cfg.write_text(self.config_text())
-            r = subprocess.run([SSHD_BIN, "-t", "-f", str(self.cfg)], capture_output=True, text=True, timeout=30,
-                               env=child_env(), stdin=subprocess.DEVNULL)
+            r = subprocess.run(
+                [SSHD_BIN, "-t", "-f", str(self.cfg)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=child_env(),
+                stdin=subprocess.DEVNULL,
+            )
         if r.returncode != 0:
             raise RuntimeError(f"sshd -t refused the test config: {r.stderr.strip()}")
 
@@ -127,8 +157,14 @@ class Sshd:
         self._write_config()
         out = open(self.log, "ab")
         try:
-            self.proc = subprocess.Popen([SSHD_BIN, "-D", "-e", "-f", str(self.cfg)], stdin=subprocess.DEVNULL,
-                                         stdout=out, stderr=out, env=child_env(), start_new_session=True)
+            self.proc = subprocess.Popen(
+                [SSHD_BIN, "-D", "-e", "-f", str(self.cfg)],
+                stdin=subprocess.DEVNULL,
+                stdout=out,
+                stderr=out,
+                env=child_env(),
+                start_new_session=True,
+            )
         finally:
             out.close()
         deadline = time.monotonic() + 15
@@ -200,7 +236,28 @@ class Sshd:
 
     def client_argv(self, key: Path, known_hosts: Path, *extra: str) -> list[str]:
         """A test client: no config, no agent, only ``key``, its own known_hosts."""
-        return [SSH_BIN, "-F", "/dev/null", "-i", str(key), "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none",
-                "-o", f"UserKnownHostsFile={known_hosts}", "-o", "GlobalKnownHostsFile=/dev/null",
-                "-o", "StrictHostKeyChecking=yes", "-o", "BatchMode=yes", "-o", "LogLevel=ERROR",
-                "-p", str(self.port), *extra, f"{self.user}@127.0.0.1"]
+        return [
+            SSH_BIN,
+            "-F",
+            "/dev/null",
+            "-i",
+            str(key),
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "IdentityAgent=none",
+            "-o",
+            f"UserKnownHostsFile={known_hosts}",
+            "-o",
+            "GlobalKnownHostsFile=/dev/null",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "LogLevel=ERROR",
+            "-p",
+            str(self.port),
+            *extra,
+            f"{self.user}@127.0.0.1",
+        ]

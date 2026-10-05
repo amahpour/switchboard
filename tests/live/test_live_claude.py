@@ -40,7 +40,6 @@ from typing import Any
 
 import httpx
 import pytest
-
 from harness import drift, preflight, profiles
 from harness.tmuxdrv import REAL_HOME, Tmux, clean_env
 
@@ -91,17 +90,35 @@ class Live:
         env = clean_env(REAL_PATH, TMPDIR=tempfile.gettempdir())
         subprocess.run(["git", "init", "-q"], cwd=self.ws, env=env, check=True)
         (self.ws / "README.md").write_text("scratch workspace for a switchboard live test\n")
-        ver = subprocess.run([self.claude_bin, "--version"], env=env, capture_output=True, text=True,
-                             timeout=30).stdout.strip()
+        ver = subprocess.run(
+            [self.claude_bin, "--version"], env=env, capture_output=True, text=True, timeout=30
+        ).stdout.strip()
         self.results["claude_version"] = ver
         self.results["ws"] = str(self.ws)  # scratch only; fixtures.py rewrites it to /ws
         (self.home / "config.toml").write_text(  # human_name: the name the prompts use
-            f'human_name = "alice"\n[claude]\nsessions_dir = "{self.sessions_dir}"\n')
+            f'human_name = "alice"\n[claude]\nsessions_dir = "{self.sessions_dir}"\n'
+        )
         benv = {**env, "SWITCHBOARD_TEST": "1", "SWITCHBOARD_RECORD_PAYLOADS": str(self.run / "params")}
         out = open(self.run / "broker.stdout", "ab")
         self.broker = subprocess.Popen(
-            [sys.executable, "-m", "switchboard", "start", "--foreground", "--test-mode", "--home", str(self.home),
-             "--port", "0"], env=benv, stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True)
+            [
+                sys.executable,
+                "-m",
+                "switchboard",
+                "start",
+                "--foreground",
+                "--test-mode",
+                "--home",
+                str(self.home),
+                "--port",
+                "0",
+            ],
+            env=benv,
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=out,
+            start_new_session=True,
+        )
         from switchboard.mcp.client import ping
         from switchboard.paths import Paths
 
@@ -122,16 +139,32 @@ class Live:
         assert self.web.post("/api/rooms", json={"name": "#build"}, headers=self.hdr).status_code == 200
         # a few more wakes than the default test cap: 5 idle wakes plus the scenarios
         self.command("/budget 40")
-        pa = subprocess.run([sys.executable, "-m", "switchboard", "install", "claude", "--print-args", "--home",
-                             str(self.home)], env={**env, "SWITCHBOARD_TEST": "1"}, capture_output=True, text=True,
-                            timeout=30, check=True)
+        pa = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "switchboard",
+                "install",
+                "claude",
+                "--print-args",
+                "--home",
+                str(self.home),
+            ],
+            env={**env, "SWITCHBOARD_TEST": "1"},
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
         print_args = json.loads(pa.stdout)
         (self.run / "mcp.json").write_text(json.dumps(profiles.claude_mcp_config(print_args)))
         (self.run / "settings.json").write_text(json.dumps(profiles.claude_settings(print_args, self.raw)))
 
     def launch(self, *extra: str, extra_env: dict[str, str] | None = None) -> None:
         env = clean_env(REAL_PATH, DISABLE_AUTOUPDATER="1", **(extra_env or {}))
-        argv = profiles.claude_argv(self.claude_bin, self.run / "mcp.json", self.run / "settings.json", *extra)
+        argv = profiles.claude_argv(
+            self.claude_bin, self.run / "mcp.json", self.run / "settings.json", *extra
+        )
         self.tmux.new_session(SESSION, str(self.ws), env, argv)
         self.wait_ready()
         self.claude_pid = self.find_claude_pid()
@@ -143,8 +176,15 @@ class Live:
         root = self.tmux.pane_pid(SESSION)
         if root is None:
             return None
-        cands = [(root, 0, subprocess.run(["/bin/ps", "-o", "args=", "-p", str(root)], capture_output=True,
-                                          text=True).stdout.strip())]
+        cands = [
+            (
+                root,
+                0,
+                subprocess.run(
+                    ["/bin/ps", "-o", "args=", "-p", str(root)], capture_output=True, text=True
+                ).stdout.strip(),
+            )
+        ]
         cands += preflight.descendants(root)
         for pid, _pp, args in cands:
             if re.search(r"(^|/)claude(\s|$)", args):
@@ -193,7 +233,9 @@ class Live:
         if self.web is not None:
             self.web.close()
         # sweep: nothing we started may survive (our home is on every command line)
-        left = subprocess.run(["/usr/bin/pgrep", "-f", str(self.home)], capture_output=True, text=True).stdout.split()
+        left = subprocess.run(
+            ["/usr/bin/pgrep", "-f", str(self.home)], capture_output=True, text=True
+        ).stdout.split()
         for pid in left:
             try:
                 os.kill(int(pid), signal.SIGTERM)
@@ -230,7 +272,9 @@ class Live:
             con.close()
 
     def part(self) -> sqlite3.Row | None:
-        rows = self.q("SELECT * FROM participants WHERE harness='claude' AND ended_at IS NULL ORDER BY id DESC")
+        rows = self.q(
+            "SELECT * FROM participants WHERE harness='claude' AND ended_at IS NULL ORDER BY id DESC"
+        )
         return rows[0] if rows else None
 
     def registry(self) -> dict[str, Any]:
@@ -259,8 +303,10 @@ class Live:
         p = self.part()
         if p is None or p["status"] != "idle" or self.registry().get("status") != "idle":
             return False
-        busy = self.q("SELECT COUNT(*) FROM deliveries WHERE membership_id=? AND state IN ('pending','offered')",
-                      self.mid)[0][0]
+        busy = self.q(
+            "SELECT COUNT(*) FROM deliveries WHERE membership_id=? AND state IN ('pending','offered')",
+            self.mid,
+        )[0][0]
         return busy == 0
 
     def decline_stray_prompt(self) -> None:
@@ -279,8 +325,12 @@ class Live:
         self.wait(ok, timeout, "the session to settle", step=0.3)
 
     def confirmed_batch_for(self, msg_id: int) -> sqlite3.Row | None:
-        rows = self.q("SELECT b.* FROM batches b JOIN deliveries d ON d.batch_id=b.id"
-                      " WHERE d.message_id=? AND d.membership_id=? AND b.state='confirmed'", msg_id, self.mid)
+        rows = self.q(
+            "SELECT b.* FROM batches b JOIN deliveries d ON d.batch_id=b.id"
+            " WHERE d.message_id=? AND d.membership_id=? AND b.state='confirmed'",
+            msg_id,
+            self.mid,
+        )
         return rows[0] if rows else None
 
     def msg_ts(self, msg_id: int) -> float:
@@ -311,12 +361,20 @@ def pctl(xs: list[float], q: float) -> float:
 
 # ------------------------------------------------------------------ scenarios
 def test_1_join_binds_the_session_with_the_inbox_tier(live: Live) -> None:
-    live.type('Use the switchboard tools: call join with room "#build" and screen_name "claude-1". Then run the Bash'
-              ' command `false` (it fails on purpose; that is fine), then the Bash command `echo ready`, then reply'
-              ' with one word: joined. Later, switchboard will relay messages that I (alice) post in #build; answer'
-              ' each one with the switchboard say tool, or pass, exactly as the message asks. Keep it short.')
-    live.wait(lambda: live.part() is not None and live.q(
-        "SELECT id FROM memberships WHERE screen_name='claude-1' AND left_at IS NULL"), 120, "the join")
+    live.type(
+        'Use the switchboard tools: call join with room "#build" and screen_name "claude-1". Then run the Bash'
+        " command `false` (it fails on purpose; that is fine), then the Bash command `echo ready`, then reply"
+        " with one word: joined. Later, switchboard will relay messages that I (alice) post in #build; answer"
+        " each one with the switchboard say tool, or pass, exactly as the message asks. Keep it short."
+    )
+    live.wait(
+        lambda: (
+            live.part() is not None
+            and live.q("SELECT id FROM memberships WHERE screen_name='claude-1' AND left_at IS NULL")
+        ),
+        120,
+        "the join",
+    )
     p = live.part()
     live.mid = live.q("SELECT id FROM memberships WHERE screen_name='claude-1' AND left_at IS NULL")[0][0]
     live.pid_row = p["id"]
@@ -363,19 +421,38 @@ def test_3_mid_task_priority_arrives_at_the_next_tool_boundary(live: Live) -> No
     live.wait_settled(120)
     tag = secrets.token_hex(3)
     n0 = len(live.raw_events())
-    live.type(f"Run the Bash command `sleep 10`, then run the Bash command `echo mid-done-{tag}`, then reply"
-              " with one word: finished.")
-    live.wait(lambda: any(e["event"] == "PreToolUse" and "sleep" in json.dumps(e["payload"].get("tool_input"))
-                          for e in live.raw_events()[n0:]), 60, "the sleep to start")
+    live.type(
+        f"Run the Bash command `sleep 10`, then run the Bash command `echo mid-done-{tag}`, then reply"
+        " with one word: finished."
+    )
+    live.wait(
+        lambda: any(
+            e["event"] == "PreToolUse" and "sleep" in json.dumps(e["payload"].get("tool_input"))
+            for e in live.raw_events()[n0:]
+        ),
+        60,
+        "the sleep to start",
+    )
     time.sleep(2.0)
     assert live.part()["status"] == "busy"
-    mid = live.say(f"MID-{tag}: when you read this, call the switchboard say tool with the text: ack MID-{tag}")
+    mid = live.say(
+        f"MID-{tag}: when you read this, call the switchboard say tool with the text: ack MID-{tag}"
+    )
     time.sleep(1.0)
-    assert live.q("SELECT COUNT(*) FROM batches WHERE path='inbox' AND created_at>?", live.msg_ts(mid))[0][0] == 0
+    assert (
+        live.q("SELECT COUNT(*) FROM batches WHERE path='inbox' AND created_at>?", live.msg_ts(mid))[0][0]
+        == 0
+    )
     b = live.wait(lambda: live.confirmed_batch_for(mid), 30, "the mid-task message to reach context")
     ts = live.msg_ts(mid)
-    sleep_end = next((e["t"] for e in live.raw_events()[n0:] if e["event"] == "PostToolUse"
-                      and "sleep" in json.dumps(e["payload"].get("tool_input"))), None)
+    sleep_end = next(
+        (
+            e["t"]
+            for e in live.raw_events()[n0:]
+            if e["event"] == "PostToolUse" and "sleep" in json.dumps(e["payload"].get("tool_input"))
+        ),
+        None,
+    )
     res = {
         "path": b["path"],
         "evidence": b["evidence"],
@@ -386,14 +463,23 @@ def test_3_mid_task_priority_arrives_at_the_next_tool_boundary(live: Live) -> No
     assert b["path"] == "hook_ctx" and b["evidence"] == "hook_ack", res
     # "at the next tool boundary": claimed by the sleep's own PostToolUse, before
     # the model's next tool call (the echo) even started
-    echo_pre = next((e["t"] for e in live.raw_events()[n0:] if e["event"] == "PreToolUse"
-                     and f"mid-done-{tag}" in json.dumps(e["payload"].get("tool_input"))), None)
+    echo_pre = next(
+        (
+            e["t"]
+            for e in live.raw_events()[n0:]
+            if e["event"] == "PreToolUse" and f"mid-done-{tag}" in json.dumps(e["payload"].get("tool_input"))
+        ),
+        None,
+    )
     assert res["after_tool_end_ms"] is not None and 0 <= res["after_tool_end_ms"] < 1000, res
     assert echo_pre is None or b["confirmed_at"] < echo_pre, (res, echo_pre)
     live.wait_settled(150)
     res["model_acked"] = live.agent_said(rf"ack MID-{tag}", mid)
-    res["redelivered"] = bool(live.q("SELECT redelivered FROM deliveries WHERE message_id=? AND membership_id=?",
-                                     mid, live.mid)[0][0])
+    res["redelivered"] = bool(
+        live.q("SELECT redelivered FROM deliveries WHERE message_id=? AND membership_id=?", mid, live.mid)[0][
+            0
+        ]
+    )
     live.results["scenarios"]["mid_task"] = res
     print("mid task", res)
 
@@ -410,12 +496,18 @@ def test_4_approval_hold_then_decline_with_esc(live: Live) -> None:
     time.sleep(7.5)  # long enough for the Notification hook (about 6 s) to be recorded too
     held = {
         "status": live.part()["status"],
-        "delivery": live.q("SELECT state FROM deliveries WHERE message_id=? AND membership_id=?", mid, live.mid)[0][0],
+        "delivery": live.q(
+            "SELECT state FROM deliveries WHERE message_id=? AND membership_id=?", mid, live.mid
+        )[0][0],
         "batches_since": live.q("SELECT COUNT(*) FROM batches WHERE created_at>?", live.msg_ts(mid))[0][0],
         "prompt_still_open": "Do you want to proceed" in live.tmux.capture(SESSION),
     }
-    assert held == {"status": "waiting-approval", "delivery": "pending", "batches_since": 0,
-                    "prompt_still_open": True}, held
+    assert held == {
+        "status": "waiting-approval",
+        "delivery": "pending",
+        "batches_since": 0,
+        "prompt_still_open": True,
+    }, held
     t_esc = time.time()
     live.tmux.key(SESSION, "Escape")  # decline; the driver never approves
     b = live.wait(lambda: live.confirmed_batch_for(mid), 30, "the held message after the Esc")
@@ -438,19 +530,31 @@ def test_5_clear_keeps_the_binding(live: Live) -> None:
     before = live.part()
     n0 = len(live.raw_events())
     live.type("/clear")
-    live.wait(lambda: any(e["event"] == "SessionStart" and e["payload"].get("source") == "clear"
-                          for e in live.raw_events()[n0:]), 30, "SessionStart(clear)")
+    live.wait(
+        lambda: any(
+            e["event"] == "SessionStart" and e["payload"].get("source") == "clear"
+            for e in live.raw_events()[n0:]
+        ),
+        30,
+        "SessionStart(clear)",
+    )
     live.wait(lambda: live.part()["session_id"] != before["session_id"], 10, "the new session id")
     after = live.part()
     assert after["id"] == before["id"] and after["ended_at"] is None and after["tier"] == "claude:inbox"
     assert live.q("SELECT left_at FROM memberships WHERE id=?", live.mid)[0][0] is None
     live.wait_settled(60)
     tag = secrets.token_hex(3)
-    mid = live.say(f"CLEAR-{tag}: call the switchboard say tool (room #build) with the text: ack CLEAR-{tag}."
-                   " Use only that tool; no shell commands.")
+    mid = live.say(
+        f"CLEAR-{tag}: call the switchboard say tool (room #build) with the text: ack CLEAR-{tag}."
+        " Use only that tool; no shell commands."
+    )
     b = live.wait(lambda: live.confirmed_batch_for(mid), 30, "a wake after /clear")
-    res = {"same_participant": True, "session_id_changed": True, "path": b["path"],
-           "turn_start_ms": round((b["turn_start_at"] - live.msg_ts(mid)) * 1000, 1)}
+    res = {
+        "same_participant": True,
+        "session_id_changed": True,
+        "path": b["path"],
+        "turn_start_ms": round((b["turn_start_at"] - live.msg_ts(mid)) * 1000, 1),
+    }
     live.wait_settled(150)
     res["model_acked"] = live.agent_said(rf"ack CLEAR-{tag}", mid)
     live.results["scenarios"]["clear"] = res
@@ -466,18 +570,31 @@ def test_6_exit_and_resume_for_the_fixtures(live: Live) -> None:
     live.type("/exit")
     live.wait(lambda: live.tmux.pane_dead(SESSION), 30, "claude to exit")
     live.tmux.run("kill-session", "-t", SESSION)
-    live.wait(lambda: live.part() is None or live.part()["status"] == "offline", 15, "the session to go offline")
+    live.wait(
+        lambda: live.part() is None or live.part()["status"] == "offline", 15, "the session to go offline"
+    )
     if os.environ.get("SWITCHBOARD_LIVE_RESUME", "1") != "1":
         return
     live.command("/resume")
     live.launch("--resume", sid, extra_env={"MCP_TOOL_TIMEOUT": "5000"})
     n0 = len(live.raw_events())
-    live.type('Call the switchboard join tool with room "#build" and screen_name "claude-2", then call the switchboard'
-              ' wait tool with room "#build" and timeout_s 30, then reply with one word: waited.')
-    live.wait(lambda: any(e["event"] == "PostToolUseFailure" and "wait" in str(e["payload"].get("tool_name"))
-                          for e in live.raw_events()[n0:]), 90, "the MCP timeout")
-    res = {"resumed": any(e["event"] == "SessionStart" and e["payload"].get("source") == "resume"
-                          for e in live.raw_events())}
+    live.type(
+        'Call the switchboard join tool with room "#build" and screen_name "claude-2", then call the switchboard'
+        ' wait tool with room "#build" and timeout_s 30, then reply with one word: waited.'
+    )
+    live.wait(
+        lambda: any(
+            e["event"] == "PostToolUseFailure" and "wait" in str(e["payload"].get("tool_name"))
+            for e in live.raw_events()[n0:]
+        ),
+        90,
+        "the MCP timeout",
+    )
+    res = {
+        "resumed": any(
+            e["event"] == "SessionStart" and e["payload"].get("source") == "resume" for e in live.raw_events()
+        )
+    }
     time.sleep(3)
     live.command("/pause")
     live.type("/exit")

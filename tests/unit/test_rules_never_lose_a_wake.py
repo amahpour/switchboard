@@ -10,11 +10,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import World
 from test_claude_adapter import claude, reg, tok
 from test_codex_adapter import attach, codex
+
 from switchboard.config import Config
 from switchboard.models import Push
 

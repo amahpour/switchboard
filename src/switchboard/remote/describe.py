@@ -15,22 +15,22 @@ BLOCK_HINTS = {
     "local_broker": "a switchboard broker runs on the remote from the satellite's home: stop it there",
     "test_mode": "the satellite runs in test mode and this broker doesn't",
     "host_key": "the remote's host key is not the one pinned at `remote add` (it was reinstalled, or something"
-                " is in the middle): compare fingerprints on that machine; to pin its new key run"
-                " `switchboard remote remove <name>`, `remote add` and `remote accept` again",
+    " is in the middle): compare fingerprints on that machine; to pin its new key run"
+    " `switchboard remote remove <name>`, `remote add` and `remote accept` again",
     "auth": "the remote refused the link key: run `switchboard remote accept` there with the token"
-            " `remote add` printed, and check ~/.ssh/authorized_keys there",
+    " `remote add` printed, and check ~/.ssh/authorized_keys there",
     "files": "remotes/<name>/ lacks its link key or pinned host key, or they aren't private:"
-             " run `switchboard remote remove <name>`, `remote add` and `remote accept` again",
+    " run `switchboard remote remove <name>`, `remote add` and `remote accept` again",
     "ssh_bin": "/usr/bin/ssh is missing, or not owned by root: switchboard dials only through the system's"
-               " OpenSSH client",
+    " OpenSSH client",
     "negotiate": "this machine's ssh and the remote's sshd share no key-exchange, cipher or host-key algorithm"
-                 " (one of them is very old or locked down): update OpenSSH on the older side",
+    " (one of them is very old or locked down): update OpenSSH on the older side",
     "command": "the remote couldn't run the forced command (switchboard moved or was uninstalled there):"
-               " run `switchboard remote accept` there again",
+    " run `switchboard remote accept` there again",
     "satellite": "the satellite refused to start on the remote (the detail says why): run"
-                 " `switchboard remote doctor` there",
+    " `switchboard remote doctor` there",
     "exposed": "another process on the remote held the link's stdio when the satellite started (a process"
-               " of that user raced it, or the login shell left one behind): check that machine",
+    " of that user raced it, or the login shell left one behind): check that machine",
 }
 
 

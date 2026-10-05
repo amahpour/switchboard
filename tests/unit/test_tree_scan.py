@@ -36,8 +36,18 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SKIP_DIRS = frozenset(
-    {".git", ".venv", ".worktrees", "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache",
-     "node_modules", "dist", "build"}
+    {
+        ".git",
+        ".venv",
+        ".worktrees",
+        "__pycache__",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".mypy_cache",
+        "node_modules",
+        "dist",
+        "build",
+    }
 )
 MAX_BYTES = 5 * 1024 * 1024
 SNIFF_BYTES = 8192  # a NUL byte in here means binary
@@ -46,15 +56,35 @@ SNIFF_BYTES = 8192  # a NUL byte in here means binary
 # "dev" and "pi" are the two-host containers' users (sandbox/Dockerfile.twohost; pi was Raspberry
 # Pi OS's default user); "switchboard" is the published image's user (Dockerfile).
 FAKE_NAMES = frozenset(
-    {"someone", "x", "me", "you", "runner", "user", "username", "name", "shared", "example", "alice", "bob",
-     "dev", "pi", "linuxbrew", "switchboard"}
+    {
+        "someone",
+        "x",
+        "me",
+        "you",
+        "runner",
+        "user",
+        "username",
+        "name",
+        "shared",
+        "example",
+        "alice",
+        "bob",
+        "dev",
+        "pi",
+        "linuxbrew",
+        "switchboard",
+    }
 )
 
 PATTERNS = (
     ("Claude scratch dir", re.compile(r"/tmp/claude-\d+")),
     ("tmux socket dir", re.compile(r"\btmux-\d+")),
-    ("session UUID before /scratchpad",
-     re.compile(r"(?i)\b(?!0{8}-0{4}-0{4}-0{4}-0{12})[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}[/\\]+scratchpad")),
+    (
+        "session UUID before /scratchpad",
+        re.compile(
+            r"(?i)\b(?!0{8}-0{4}-0{4}-0{4}-0{12})[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}[/\\]+scratchpad"
+        ),
+    ),
 )
 NAMED_PATTERNS = (
     ("home path /Users/<name>", re.compile(r"/Users/([A-Za-z0-9_][A-Za-z0-9._-]*)")),
@@ -176,7 +206,9 @@ def _git_names(root: Path) -> list[str] | None:
     try:
         r = subprocess.run(
             ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-            capture_output=True, timeout=30, check=True,
+            capture_output=True,
+            timeout=30,
+            check=True,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -212,7 +244,9 @@ def repo_texts() -> tuple[tuple[str, str], ...]:
 
 def test_repo_has_no_local_details() -> None:
     texts = repo_texts()
-    assert Path(__file__).resolve().relative_to(ROOT).as_posix() in dict(texts)  # the scan covers this file too
+    assert Path(__file__).resolve().relative_to(ROOT).as_posix() in dict(
+        texts
+    )  # the scan covers this file too
     hits = [f"{rel}:{n}: {what}" for rel, text in texts for n, what in scan_text(text)]
     assert not hits, (
         "local machine details in the repo; use ~, $HOME, <uid>, <scratch>, "
