@@ -186,7 +186,7 @@ async def seed(b: InProcBroker, agents: dict[str, Any]) -> None:
         await say("devin-1", t["devin"])
         notice(f"devin-1 is parked — needs a poke ({PARKED})")
         notice(
-            "⚠ codex-1 runs with approvals off: what it reads (tool output, web pages) can steer it", "warn"
+            "⚠ codex-1 runs with approvals off: transcripts it reads can make it act without asking", "warn"
         )
         human(t["flash"])
         await say("bench", t["report"])

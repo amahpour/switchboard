@@ -186,9 +186,11 @@ def request_text(
 
 def approvals_warning(name: str, approval_mode: str) -> str | None:
     """A room notice for an agent whose approvals are off (or not known to be on)."""
-    tail = "what it reads (tool output, web pages) can steer it"
     if approval_mode == "bypass":
-        return f"⚠ {name} runs with approvals off: {tail}"
+        return f"⚠ {name} runs with approvals off: transcripts it reads can make it act without asking"
     if approval_mode == "unknown":
-        return f"⚠ {name} may run with approvals off (its approval mode is unknown): {tail}"
+        return (
+            f"⚠ {name} may run with approvals off (its approval mode is unknown): "
+            "transcripts it reads may make it act without asking"
+        )
     return None
