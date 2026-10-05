@@ -784,7 +784,7 @@ class Satellite:
             status = None
             if e is not None and proc.same_start(e[1], chk["start"]):
                 status, _since = self.claude_status(a[0], a[1], a[2])
-            if status == chk["want"]:
+            if status == chk["want"] or (chk["want"] == "idle" and status in claude_registry.REGISTRY_IDLE):
                 return True
         log.info("conn %d: a push dropped (%s)", lc.c, err)
         self.send_reg()

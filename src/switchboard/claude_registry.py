@@ -25,6 +25,7 @@ import stat
 from typing import Any
 
 MAX_BYTES = 1 << 20
+REGISTRY_IDLE = frozenset({"idle", "shell"})  # shell: turn ended, background command still runs
 # statusUpdatedAt is epoch ms (seconds tolerated); anything at or past this is not a time
 _MAX_STAMP = 1e15
 

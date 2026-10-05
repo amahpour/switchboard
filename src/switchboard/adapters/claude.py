@@ -51,7 +51,7 @@ from typing import Any
 from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, Adapter
 from switchboard.adapters.base import SendError as _BaseSendError
 from switchboard.broker import proc
-from switchboard.claude_registry import registry_status
+from switchboard.claude_registry import REGISTRY_IDLE, registry_status
 from switchboard.clock import Clock, SystemClock
 from switchboard.config import Config
 from switchboard.models import LOCAL_HOST, Action, Batch, Participant, Release, Route
@@ -118,18 +118,18 @@ def registry_transition(
     - ``waiting`` (an approval prompt is open) holds every delivery (§7.4:
       only the registry and CodexLink touch waiting-approval).
     - When the prompt goes away the registry says what the session does now:
-      ``idle`` (the prompt was declined, which ends the turn with no Stop
+      ``idle`` or ``shell`` (the prompt was declined, which ends the turn with no Stop
       hook) or anything else (approved: the tool runs).
-    - A busy member whose registry has said ``idle`` for ``REGISTRY_IDLE_GRACE_S``
+    - A busy member whose registry has said ``idle`` or ``shell`` for ``REGISTRY_IDLE_GRACE_S``
       since after its last hook ended a turn that fired no Stop (Esc).
     """
     if reg.status == "waiting":
         return None if status == "waiting-approval" else ("waiting-approval", False)
     if status == "waiting-approval":
-        return ("idle", True) if reg.status == "idle" else ("busy", False)
+        return ("idle", True) if reg.status in REGISTRY_IDLE else ("busy", False)
     if (
         status == "busy"
-        and reg.status == "idle"
+        and reg.status in REGISTRY_IDLE
         and hooks_seen_at is not None
         and reg.since > hooks_seen_at
         and now - reg.since >= REGISTRY_IDLE_GRACE_S
@@ -314,7 +314,7 @@ class ClaudeAdapter(Adapter):
             return Route("none", reason="can't read the Claude session registry")
         if self._rechecking(p, reg):
             return Route("defer", reason="registry changed; re-checking")
-        if now - reg.read_at > self.fresh_s(p) or reg.status != "idle":
+        if now - reg.read_at > self.fresh_s(p) or reg.status not in REGISTRY_IDLE:
             return Route("defer", reason="registry not idle yet")
         return Route("push", path="inbox")
 
@@ -329,10 +329,10 @@ class ClaudeAdapter(Adapter):
         if b.posted_at is None or p.status not in ("idle", "starting"):
             return None
         reg = self.reg_view(p)
-        if reg is not None and reg.status not in (None, "idle"):
+        if reg is not None and reg.status is not None and reg.status not in REGISTRY_IDLE:
             return None  # the session is running again: the frame may still land
         idle_since = max(b.posted_at, p.status_at or 0.0)
-        if reg is not None and reg.status == "idle":
+        if reg is not None and reg.status in REGISTRY_IDLE:
             idle_since = max(idle_since, reg.since)
         if now - idle_since >= self.cfg.claude.inbox_idle_expire_s:
             return "idle_no_token"
