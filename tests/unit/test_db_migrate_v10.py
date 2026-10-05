@@ -29,7 +29,7 @@ def test_people_gain_an_empty_google_email_with_a_checked_backup(tmp_path: Path)
     os.chmod(p, 0o600)
 
     con = db.open_db(p)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 10
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 11
     assert db.row_counts(con, db.TABLES) == before
     assert {r[0] for r in con.execute("SELECT google_email FROM people")} == {None}
     assert p.with_name(p.name + ".v9.bak").exists()

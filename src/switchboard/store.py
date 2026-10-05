@@ -1212,8 +1212,11 @@ class Store:
         )
         return [MachineRow.from_row(r) for r in self.con.execute(sql)]
 
-    def machine_pair(self, name: str, key: bytes, key_fp: str, facts: dict[str, Any]) -> MachineRow:
-        """A machine paired with a code: a new pending row, or a removed one's name again."""
+    def machine_pair(
+        self, name: str, key: bytes, key_fp: str, facts: dict[str, Any], person_id: int | None = None
+    ) -> MachineRow:
+        """A machine paired with a code: a new pending row, or a removed one's name again.
+        ``person_id``: who made the code (None: the owner)."""
         if not valid_host(name) or len(key) != 32:
             raise ValueError("a machine needs a name like work-laptop and a 32-byte key")
         now = self.clock.now()
@@ -1223,28 +1226,39 @@ class Store:
                 raise Conflict(f"{name} is paired already: remove it first")
             self.con.execute("DELETE FROM link_machines WHERE name=?", (name,))
             self.con.execute(
-                "INSERT INTO link_machines(name, key, key_fp, facts, created_at) VALUES(?,?,?,?,?)",
-                (name, key, key_fp, json.dumps(facts, sort_keys=True), now),
+                "INSERT INTO link_machines(name, key, key_fp, facts, created_at, person_id)"
+                " VALUES(?,?,?,?,?,?)",
+                (name, key, key_fp, json.dumps(facts, sort_keys=True), now, person_id),
             )
         got = self.machine(name)
         assert got is not None
         return got
 
-    def machine_approve(self, name: str, via: str) -> bool:
-        """The owner approved a pending machine. False if it isn't pending."""
+    def machine_approve(self, name: str, via: str, person_id: int | None = None) -> bool:
+        """Someone approved a pending machine (``person_id``; None: the owner). False if it isn't
+        pending."""
         if via not in ("cli", "web"):
             raise ValueError(f"approved via {via!r}")
         now = self.clock.now()
         with db.tx(self.con):
             return (
                 self.con.execute(
-                    "UPDATE link_machines SET approved_at=?, approved_via=? WHERE name=?"
+                    "UPDATE link_machines SET approved_at=?, approved_via=?, approved_by=? WHERE name=?"
                     " AND approved_at IS NULL"
                     " AND removed_at IS NULL",
-                    (now, via, name),
+                    (now, via, person_id, name),
                 ).rowcount
                 == 1
             )
+
+    def machines_of(self, person_id: int) -> list[str]:
+        """The machines (not removed) a person paired or approved: they go when that person does."""
+        rows = self.con.execute(
+            "SELECT name FROM link_machines WHERE removed_at IS NULL AND (person_id=? OR approved_by=?)"
+            " ORDER BY name",
+            (person_id, person_id),
+        ).fetchall()
+        return [r[0] for r in rows]
 
     def machine_remove(self, name: str) -> bool:
         """Remove: the key is forgotten (a connection with it is refused from now on)."""

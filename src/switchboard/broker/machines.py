@@ -101,6 +101,7 @@ class _Code:
     name: str
     expires: float
     used_fp: str | None = None
+    person_id: int | None = None  # who made it (None: the owner); the machine is theirs (#178)
 
 
 class PairingCodes:
@@ -111,16 +112,24 @@ class PairingCodes:
         self.ttl_s = ttl_s
         self._codes: dict[bytes, _Code] = {}
 
-    def mint(self, name: str) -> str:
-        """A fresh code for ``name``; an unused code made for it before dies."""
+    def mint(self, name: str, person_id: int | None = None) -> str:
+        """A fresh code for ``name``, made by ``person_id`` (None: the owner); an unused code made
+        for it before dies."""
         self.purge()
         for h in [h for h, c in self._codes.items() if c.name == name and c.used_fp is None]:
             del self._codes[h]
         code = linkkey.make_code()
         canon = linkkey.normalize_code(code)
         assert canon is not None
-        self._codes[linkkey.code_hash(canon)] = _Code(name, self.clock.now() + self.ttl_s)
+        self._codes[linkkey.code_hash(canon)] = _Code(
+            name, self.clock.now() + self.ttl_s, person_id=person_id
+        )
         return code
+
+    def maker(self, name: str, fp: str) -> int | None:
+        """Who made the code that the key ``fp`` spent for ``name`` (None: the owner)."""
+        c = next((c for c in self._codes.values() if c.name == name and c.used_fp == fp), None)
+        return c.person_id if c is not None else None
 
     def use(self, text: Any, fp: str) -> tuple[str, str | None]:
         """("ok", name) spends a live code for the key ``fp``; ("used", name) for a code that
@@ -451,6 +460,13 @@ class MachineManager:
                 log.exception("machines: saving last seen failed")
 
     # --------------------------------------------------------------- the UI
+    def _person_name(self, person_id: int | None) -> str:
+        """Who paired or approved a machine, as the Machines sheet names them (#178)."""
+        if person_id is None:
+            return self.state.cfg.human_name
+        p = self.state.store.person(person_id)
+        return p.name if p is not None else "someone removed"
+
     def info(self, row: MachineRow) -> dict[str, Any]:
         """One machine, as the web UI shows it: the link's state for an approved one."""
         link = self.remotes.machines.get(row.name)
@@ -462,6 +478,8 @@ class MachineManager:
             "approved": row.approved,
             "approved_at": row.approved_at,
             "approved_via": row.approved_via,
+            "paired_by": self._person_name(row.person_id),
+            "approved_by": self._person_name(row.approved_by) if row.approved else None,
             "last_seen": self._seen.get(row.name) or row.last_seen_at,
             "dialed_in": row.name in self.waiting or (link is not None and link.attempt is not None),
             "transport": "wss",
@@ -531,8 +549,9 @@ class MachineManager:
             f[0], f[1] = 0.0, now
 
     # -------------------------------------------------------- owner actions
-    def mint(self, name: Any) -> dict[str, Any]:
-        """A pairing code for a machine named ``name`` (the caller checked the fresh passkey check)."""
+    def mint(self, name: Any, person_id: int | None = None) -> dict[str, Any]:
+        """A pairing code for a machine named ``name``, made by ``person_id`` (None: the owner);
+        the caller checked the fresh passkey check."""
         if not isinstance(name, str) or not valid_host(name):
             raise ServiceError(
                 "bad_request",
@@ -546,9 +565,9 @@ class MachineManager:
         if row is not None and not row.removed:
             what = "waiting for your approval" if row.pending else "approved"
             raise ServiceError("conflict", f"{name} is paired already ({what}): remove it first")
-        code = self.codes.mint(name)
+        code = self.codes.mint(name, person_id)
         origin = self.state.web_origin.origin
-        self.state.store.add_event("machine", data={"what": "code", "name": name})
+        self.state.store.add_event("machine", data={"what": "code", "name": name, "person": person_id})
         log.info("machines: a pairing code for %s", name)
         self.changed()
         return {
@@ -569,17 +588,21 @@ class MachineManager:
             self.changed()
         return {"name": name, "cancelled": dropped}
 
-    def approve(self, name: str, via: str = "web") -> dict[str, Any]:
+    def approve(
+        self, name: str, via: str = "web", by: tuple[str, int | None] | None = None
+    ) -> dict[str, Any]:
+        """``by``: who approved it, their name and person id (None: the owner, the default)."""
+        who, person_id = by or (self.state.cfg.human_name, None)
         row = self.state.store.machine(name)
         if row is None or row.removed:
             raise ServiceError("not_found", f"no machine named {name[:40]}")
         if row.pending:
-            self.state.store.machine_approve(name, via)
-            self.state.store.add_event("machine", data={"what": "approved", "name": name, "via": via})
-            log.warning("machine %s approved via %s (key %s)", name, via, row.key_fp)
-            self.state.hub.notice(
-                None, "info", f"{name} approved by {self.state.cfg.human_name} (key {row.key_fp})"
+            self.state.store.machine_approve(name, via, person_id)
+            self.state.store.add_event(
+                "machine", data={"what": "approved", "name": name, "via": via, "by": who}
             )
+            log.warning("machine %s approved via %s (key %s)", name, via, row.key_fp)
+            self.state.hub.notice(None, "info", f"{name} approved by {who} (key {row.key_fp})")
             row = self.state.store.machine(name)
             assert row is not None
             self._link(row)
@@ -589,9 +612,13 @@ class MachineManager:
             self.changed()
         return self.info(row)
 
-    async def remove(self, name: str, via: str = "web") -> dict[str, Any]:
+    async def remove(
+        self, name: str, via: str = "web", by: str | None = None, why: str = ""
+    ) -> dict[str, Any]:
         """Remove (or reject) a machine: its key is forgotten, its live connection refused (its
-        dialer stops for good), and its members ended at once."""
+        dialer stops for good), and its members ended at once. ``by``: who (the owner by
+        default); ``why``: said in the notice (a person's removal, #178)."""
+        by = by or self.state.cfg.human_name
         row = self.state.store.machine(name)
         if row is None or row.removed:
             raise ServiceError("not_found", f"no machine named {name[:40]}")
@@ -608,14 +635,13 @@ class MachineManager:
         ended = self.remotes.end_members(name, "removed")
         self._seen.pop(name, None)
         self.state.store.add_event(
-            "machine", data={"what": "removed", "name": name, "via": via, "ended": ended}
+            "machine", data={"what": "removed", "name": name, "via": via, "by": by, "ended": ended}
         )
         log.warning("machine %s removed via %s", name, via)
         what = "rejected" if row.pending else "removed"
         tail = f"; {ended} member(s) ended" if ended else ""
-        self.state.hub.notice(
-            None, "warn", f"{name} {what} by {self.state.cfg.human_name}: its key is forgotten{tail}"
-        )
+        because = f" ({why})" if why else ""
+        self.state.hub.notice(None, "warn", f"{name} {what} by {by}{because}: its key is forgotten{tail}")
         self.changed()
         return {"name": name, "ended": ended}
 
@@ -652,7 +678,9 @@ class MachineManager:
                 " pending machine: remove it in the web UI and make a new code.",
             }
         try:
-            self.state.store.machine_pair(name, key, fp, clean_facts(body.get("facts")))
+            self.state.store.machine_pair(
+                name, key, fp, clean_facts(body.get("facts")), self.codes.maker(name, fp)
+            )
         except Conflict:
             return 409, {
                 "error": "conflict",
