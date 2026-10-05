@@ -272,7 +272,7 @@ def create_app(
             state.hub.close_all()
             await asyncio.sleep(0)  # let WS senders see their close sentinel
             with contextlib.suppress(Exception):
-                con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                db.checkpoint(con, "TRUNCATE")
             con.close()
             for f in (paths.test_login_token, paths.test_claim_link):
                 with contextlib.suppress(FileNotFoundError):

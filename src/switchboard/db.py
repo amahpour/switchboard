@@ -631,5 +631,13 @@ def open_db(path: str | os.PathLike) -> sqlite3.Connection:
     return con
 
 
-def checkpoint(con: sqlite3.Connection) -> None:
-    con.execute("PRAGMA wal_checkpoint(PASSIVE)")
+CHECKPOINT_MODES = ("PASSIVE", "TRUNCATE")
+
+
+def checkpoint(con: sqlite3.Connection, mode: str = "PASSIVE") -> None:
+    """WAL checkpoint: ``PASSIVE`` (the periodic one, every 60 s) or ``TRUNCATE`` (at
+    shutdown, which also truncates the ``-wal`` file to nothing for the next start).
+    Any other mode is refused rather than passed through to SQLite (DESIGN.md §4)."""
+    if mode not in CHECKPOINT_MODES:
+        raise ValueError(f"unknown checkpoint mode: {mode!r}")
+    con.execute(f"PRAGMA wal_checkpoint({mode})")
