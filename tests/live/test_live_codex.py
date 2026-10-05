@@ -1,4 +1,6 @@
-"""Live Codex CLI (DESIGN.md §0, §12.4, §13 M4). Opt-in: ``SWITCHBOARD_LIVE=codex uv run pytest -m live tests/live/test_live_codex.py -s``.
+"""Live Codex CLI (DESIGN.md §0, §12.4, §13 M4).
+
+Opt-in: ``SWITCHBOARD_LIVE=codex uv run pytest -m live tests/live/test_live_codex.py -s``.
 
 Real ``codex`` on the user's real ``CODEX_HOME`` (its login used as-is), but
 never the user's shared daemon: a **private** ``codex app-server --listen
@@ -532,7 +534,7 @@ def test_2_idle_wake_turn_start_p50_under_1s(live: Live) -> None:
     for i in range(1, 6):
         live.wait_settled("codex-1", live.sock_a, T1)
         mid = live.say(f"ping {i}: reply in #build with the switchboard say tool, text exactly: pong {i}")
-        b = live.wait(lambda: live.batch_for(mid, "codex-1"), 30, f"idle wake {i}")
+        b = live.wait(lambda mid=mid: live.batch_for(mid, "codex-1"), 30, f"idle wake {i}")
         assert (
             b["path"] == "turn_start" and b["wake_kind"] == "idle_wake" and b["evidence"] == "rpc:turn/start"
         )
@@ -664,7 +666,7 @@ def test_5_queue_tier_on_a_second_app_server(live: Live) -> None:
         mid = live.say(
             f"@codex-2 q{i}: reply in #build with the switchboard say tool, text exactly: qpong {i}"
         )
-        b = live.wait(lambda: live.batch_for(mid, "codex-2"), 40, f"queue wake {i}", session=T2)
+        b = live.wait(lambda mid=mid: live.batch_for(mid, "codex-2"), 40, f"queue wake {i}", session=T2)
         assert b["path"] == "queue" and b["evidence"] == "hook:UserPromptSubmit" and b["turn_start_at"], dict(
             b
         )
@@ -756,7 +758,8 @@ def test_6_app_server_restart_rebinds_the_member(live: Live) -> None:
     live.wait_settled("codex-1", live.sock_a, T1, 150)
     tag = secrets.token_hex(3)
     mid = live.say(
-        f"RESTART-{tag}: reply in #build with the switchboard say tool, text exactly: back {tag}. If switchboard"
+        f"RESTART-{tag}: reply in #build with the switchboard say tool, text exactly:"
+        f" back {tag}. If switchboard"
         ' says you are not in #build, call join with room "#build" and screen_name "codex-1" first.'
     )
     b = live.wait(lambda: live.batch_for(mid, "codex-1"), 40, "the wake after the restart")
@@ -833,7 +836,8 @@ def test_7_tui_quit_sends_no_rpc(live: Live) -> None:
             (
                 round(r["ts"] - t_quit, 1)
                 for r in live.q(
-                    "SELECT ts, data FROM events WHERE kind='status' AND participant_id=? AND ts>=? ORDER BY id",
+                    "SELECT ts, data FROM events WHERE kind='status' AND participant_id=?"
+                    " AND ts>=? ORDER BY id",
                     live.part("codex-1")["id"],
                     t_quit,
                 )

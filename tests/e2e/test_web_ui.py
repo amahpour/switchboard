@@ -854,7 +854,7 @@ def test_a_long_remote_state_leaves_the_name_readable(ui: UI, size: str) -> None
         ],
     )
     *long, short, both = rows
-    for (name, _, text), r in zip(LONG_STATES, long):
+    for (name, _, text), r in zip(LONG_STATES, long, strict=True):
         assert r["name"][0] >= r["name"][1] - 1, f"{size}: {name} is cut to {r['name']} px next to {text!r}"
     assert all(r["inside"] >= -0.5 and r["overflow"] == "ellipsis" for r in rows), rows  # nothing spills out
     assert short["name"][0] >= short["name"][1] - 1 and short["state"][0] >= short["state"][1] - 1, short
@@ -1089,7 +1089,10 @@ def test_empty_room_copy_keeps_its_icon(ui: UI) -> None:
 FENCE = "```"
 FLOW = "flowchart LR\n  H[alice posts] --> B(broker)\n  B -->|idle| W[wake the agent]\n  B -->|busy| Q[queue]"
 SEQ = "sequenceDiagram\n  alice->>claude-1: review the parser\n  claude-1-->>alice: two nits"
-SHADOW_SVG = "(b) => { const f = b.querySelector('.md-diagram'); return !!(f && f.shadowRoot && f.shadowRoot.querySelector('svg')); }"
+SHADOW_SVG = (
+    "(b) => { const f = b.querySelector('.md-diagram'); return !!(f && f.shadowRoot &&"
+    " f.shadowRoot.querySelector('svg')); }"
+)
 MERMAID_SCRIPTS = "document.querySelectorAll('script[src=\"/static/vendor/mermaid/mermaid.min.js\"]').length"
 
 
@@ -1210,7 +1213,8 @@ def test_a_hostile_diagram_cannot_reach_the_page(ui: UI) -> None:
     test on any console error or CSP violation."""
     hostile = (
         '%%{init: {"securityLevel": "loose", "htmlLabels": true, "flowchart": {"htmlLabels": true},'
-        ' "theme": "forest", "themeCSS": "body { display: none }", "dompurifyConfig": {"ADD_TAGS": ["iframe"]}}}%%\n'
+        ' "theme": "forest", "themeCSS": "body { display: none }",'
+        ' "dompurifyConfig": {"ADD_TAGS": ["iframe"]}}}%%\n'
         "flowchart TD\n"
         '  A["<img src=x onerror=window.__pwned=1> <b>bold</b>"] --> B[next]\n'
         '  click A "/logout" _self\n'

@@ -137,7 +137,7 @@ def test_an_expired_read_blocks_again(w: World) -> None:
 def test_say_unread_shows_it_and_lifts_the_rule(w: World) -> None:
     p, m = w.agent("bot", status="busy", hooks=True)
     _pp, peer = w.agent("peer")
-    msg = hook_stub(w, p, peer)
+    hook_stub(w, p, peer)
     text, bid, n, _more, acts = w.engine.pull(w.p(p), w.m(m), "say", 50)  # the say() result's unread
     w.actions += acts
     assert n == 1 and "please look at parse_port" in text

@@ -106,7 +106,8 @@ def test_load_missing_file_gives_defaults(tmp_path: Path) -> None:
 
 def test_load_toml(tmp_path: Path) -> None:
     (tmp_path / "config.toml").write_text(
-        'human_name = "sam"\nport = 8000\n[delivery]\nquiet_s = 1\nbudget_per_hour = 10\n[devin]\nrearm = false\n'
+        'human_name = "sam"\nport = 8000\n[delivery]\nquiet_s = 1\n'
+        "budget_per_hour = 10\n[devin]\nrearm = false\n"
     )
     c = load(Paths.from_home(tmp_path))
     assert c.human_name == "sam" and c.port == 8000

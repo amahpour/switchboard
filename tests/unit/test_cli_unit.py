@@ -57,11 +57,13 @@ def test_check_test_mode(tmp_home: Path, tmp_path: Path, monkeypatch: pytest.Mon
     "message,want",
     [
         (
-            "human.login_link arrived through ssh or another remote login (sshd above the caller); human commands"
+            "human.login_link arrived through ssh or another remote login (sshd above the"
+            " caller); human commands"
             " must come from a terminal on this machine, or set [security] allow_ssh_cli = true",
             [
                 "run `switchboard login` in a terminal on this machine.",
-                "No link here: this command arrived through ssh or another remote login (sshd above the caller)",
+                "No link here: this command arrived through ssh or another remote login"
+                " (sshd above the caller)",
             ],
         ),
         (
@@ -171,7 +173,8 @@ def test_rooms_delete_prints_the_plan_and_needs_a_terminal_or_yes(
     assert out == (
         "switchboard rooms delete #build~closed-7:\n"
         "  #build~closed-7: was #build, closed 2026-09-28 14:02 by alice\n"
-        "  removes 1 room, 412 message(s), 3 membership(s), 1830 delivery row(s), 57 batch(es), 960 event(s)\n"
+        "  removes 1 room, 412 message(s), 3 membership(s), 1830 delivery row(s),"
+        " 57 batch(es), 960 event(s)\n"
         "  a checked backup of the whole database is written first: /h/switchboard.db.delete-build-7.bak\n"
         "  this can't be undone, except by restoring that backup\n"
         "not applied\n"

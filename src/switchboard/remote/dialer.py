@@ -70,9 +70,11 @@ PID_FILE = "dialer.pid"
 FINAL_TEXT = {
     "removed": "the broker's owner removed this machine. To bring it back, make a new code in the web UI"
     " (Add a machine) and run `switchboard remote join` here again",
-    "unknown": "the broker holds no key for this machine (it was removed, or the broker's data was reset). Make"
+    "unknown": "the broker holds no key for this machine (it was removed, or the broker's"
+    " data was reset). Make"
     " a new code in the web UI (Add a machine) and run `switchboard remote join` here again",
-    "broker_key": "the broker's key is not the one pinned at `remote join`. If the broker was reinstalled, pair"
+    "broker_key": "the broker's key is not the one pinned at `remote join`. If the broker was"
+    " reinstalled, pair"
     " this machine again (a new code, `switchboard remote join`); if it wasn't, something between"
     " this machine and the broker is answering in its place",
 }

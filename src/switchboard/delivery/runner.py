@@ -90,7 +90,6 @@ class Runner:
             t_post = await adapter.send(p, b, a.text, room=a.room, sender=a.sender)
         except Exception as e:
             # SendError messages are fixed strings or an exception type name (no text, no paths)
-            send_err = isinstance(e, SendError)
             why = e.reason if isinstance(e, SendError) else type(e).__name__
             cur = st.store.get_batch(a.batch_id)
             if cur is not None and cur.state != "offered":
@@ -99,7 +98,7 @@ class Runner:
                     "push of batch %d: no post report (%s); batch already %s", a.batch_id, why, cur.state
                 )
                 return
-            if send_err and not e.counted:
+            if isinstance(e, SendError) and not e.counted:
                 # a re-route (e.g. a Codex steer after the turn ended): back to
                 # pending without counting as a push failure; re-evaluated at once
                 log.info("push of batch %d re-routed: %s", a.batch_id, why)

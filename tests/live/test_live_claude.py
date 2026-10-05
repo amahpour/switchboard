@@ -362,7 +362,8 @@ def pctl(xs: list[float], q: float) -> float:
 # ------------------------------------------------------------------ scenarios
 def test_1_join_binds_the_session_with_the_inbox_tier(live: Live) -> None:
     live.type(
-        'Use the switchboard tools: call join with room "#build" and screen_name "claude-1". Then run the Bash'
+        'Use the switchboard tools: call join with room "#build" and screen_name'
+        ' "claude-1". Then run the Bash'
         " command `false` (it fails on purpose; that is fine), then the Bash command `echo ready`, then reply"
         " with one word: joined. Later, switchboard will relay messages that I (alice) post in #build; answer"
         " each one with the switchboard say tool, or pass, exactly as the message asks. Keep it short."
@@ -392,7 +393,7 @@ def test_2_idle_wake_turn_start_p50_under_2s(live: Live) -> None:
     for i in range(1, 6):
         live.wait_settled(120)
         mid = live.say(f"ping {i}: reply in #build with the switchboard say tool, text exactly: pong {i}")
-        b = live.wait(lambda: live.confirmed_batch_for(mid), 30, f"idle wake {i} to be confirmed")
+        b = live.wait(lambda mid=mid: live.confirmed_batch_for(mid), 30, f"idle wake {i} to be confirmed")
         ts = live.msg_ts(mid)
         assert b["path"] == "inbox" and b["wake_kind"] == "idle_wake" and b["turn_start_at"] is not None
         lat.append(b["turn_start_at"] - ts)
@@ -579,7 +580,8 @@ def test_6_exit_and_resume_for_the_fixtures(live: Live) -> None:
     live.launch("--resume", sid, extra_env={"MCP_TOOL_TIMEOUT": "5000"})
     n0 = len(live.raw_events())
     live.type(
-        'Call the switchboard join tool with room "#build" and screen_name "claude-2", then call the switchboard'
+        'Call the switchboard join tool with room "#build" and screen_name "claude-2",'
+        " then call the switchboard"
         ' wait tool with room "#build" and timeout_s 30, then reply with one word: waited.'
     )
     live.wait(

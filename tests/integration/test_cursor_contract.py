@@ -375,7 +375,7 @@ def test_dropped_followups_degrade_across_human_prompts(
         r = cur.collect(cur.hook_bg(stop_payload(loop=0), max_wait=PARK_WAIT))
         assert "followup_message" in json.loads(r["stdout"]), (n, r)
         # ... which Cursor never runs: no further hook; the offer expires
-        assert wait_for(lambda: part(broker)["unconfirmed_followups"] == n, 8), (n, dict(part(broker)))
+        assert wait_for(lambda n=n: part(broker)["unconfirmed_followups"] == n, 8), (n, dict(part(broker)))
         assert part(broker)["status"] == "idle"
         assert wait_for(lambda: member(broker)["parked"]), member(broker)
         if n == 1:

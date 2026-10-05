@@ -49,7 +49,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
 import shutil
 import signal
 import subprocess
@@ -695,7 +694,7 @@ class Rehearsal:
         """While bench's approval prompt is open, the buddy list says waiting-approval and a
         message for it is held (§27.5.6): the broker posts nothing into an open prompt."""
         try:
-            m = self.wait_member(
+            self.wait_member(
                 "bench",
                 lambda m: m["status"] == "waiting-approval",
                 20 if self.fake else STEP_S,
@@ -739,7 +738,8 @@ class Rehearsal:
             f"# M8 rehearsal ({'fake remote, scripted' if self.fake else 'real remote'})",
             "",
             f"- remote: `{self.remote}`; link: {self.checks.get('link')}",
-            f"- versions: this broker {self.checks.get('broker_version')}, satellite {self.checks.get('sat_version')}",
+            f"- versions: this broker {self.checks.get('broker_version')},"
+            f" satellite {self.checks.get('sat_version')}",
             f"- tiers: {self.checks.get('tiers')}",
             f"- /hops: {self.checks.get('hop_limit')}",
             f"- harness config on this machine unchanged: {self.checks.get('drift_ok')}"

@@ -7,7 +7,8 @@ Opt-in (never collected by a plain ``pytest`` run: the file name doesn't match
 
 What it does:
 1. a scratch git repo with **no remote** (``yk-ws-m7-*`` under the per-user
-   temp dir, mode 0700, not the world-writable ``/tmp``) holding a small ``parse_port()`` without validation plus a test, one
+    temp dir, mode 0700, not the world-writable ``/tmp``) holding a small
+    ``parse_port()`` without validation plus a test, one
    pre-created worktree per agent (``.worktrees/<name>`` on branch ``<name>``),
    and a private Python env with pytest for the agents (``python -m pytest``);
 2. a test-mode broker in a temp ``SWITCHBOARD_HOME`` (budget 40, hop limit 6); the
@@ -195,7 +196,8 @@ HARD_LIMIT_MIN = 20.0
 
 def join_prompt(harness: str, name: str) -> str:
     base = (
-        f"Use the switchboard MCP tools: join #build as {name} and stay in the room. I (alice) will post a task"
+        f"Use the switchboard MCP tools: join #build as {name} and stay in the room."
+        " I (alice) will post a task"
         " there; coordinate with the other agents through the room with say() and pass(). For every file you"
         f" change, use your own git worktree at .worktrees/{name} (already created, on branch {name}); don't"
         " edit the main checkout or another agent's worktree (you may read them). Edit files with your"
@@ -777,7 +779,9 @@ class Demo:
         # the tier each harness should reach, and the process-tree preflight
         for a in self.active():
             want = {"claude": "claude:inbox", "codex": "codex:daemon", "devin": "devin:wait-loop"}[a.harness]
-            ok = self.wait_for(lambda: self.part(a)["tier"] == want and not self.part(a)["tier_note"], 60)
+            ok = self.wait_for(
+                lambda a=a, want=want: self.part(a)["tier"] == want and not self.part(a)["tier_note"], 60
+            )
             p = self.part(a)
             self.results.setdefault("tiers", {})[a.name] = {
                 "tier": p["tier"],
@@ -1068,7 +1072,7 @@ class Demo:
             if not wt.is_dir():
                 continue
 
-            def git(*args: str) -> str:
+            def git(*args: str, wt: Path = wt) -> str:
                 return subprocess.run(
                     ["git", "-C", str(wt), *args], env=env, capture_output=True, text=True, timeout=30
                 ).stdout.strip()

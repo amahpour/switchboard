@@ -154,7 +154,8 @@ def test_the_start_checks_of_both_paths(tmp_path: Path) -> None:
             "broker_url must be",
         ),
         (
-            f'name = "x-pi"\ntransport = "wss"\nbroker_url = "https://sb.example.com"\nbroker_key = "{KEY[:-1]}"\n',
+            f'name = "x-pi"\ntransport = "wss"\nbroker_url = "https://sb.example.com"\n'
+            f'broker_key = "{KEY[:-1]}"\n',
             "broker_key must be",
         ),
         (

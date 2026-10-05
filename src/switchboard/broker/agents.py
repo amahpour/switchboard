@@ -980,7 +980,8 @@ class AgentService:
             return inert
         if not isinstance(harness, str) or harness not in HOOK_EVENTS:
             return inert
-        event = canonical_event(params.get("event") if isinstance(params.get("event"), str) else "")
+        raw_event = params.get("event")
+        event = canonical_event(raw_event if isinstance(raw_event, str) else "")
         if event not in HOOK_EVENTS[harness]:
             return inert
         if _remote(conn):
@@ -989,7 +990,7 @@ class AgentService:
             if got is None:
                 return inert
             host, chain, argv_fn = got
-            if harness == "test" and not getattr(conn.link, "sat_test_mode", False):
+            if harness == "test" and not getattr(getattr(conn, "link", None), "sat_test_mode", False):
                 return inert
             pid: int | None = chain[0].pid
         else:

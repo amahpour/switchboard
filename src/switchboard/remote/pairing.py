@@ -318,7 +318,7 @@ def check_from(raw: str | None) -> str | None:
     """``--from``: an address or network, or a comma list of them (sshd's ``from=``)."""
     if raw is None:
         return None
-    out = []
+    out: list[str] = []
     for part in raw.split(","):
         p = part.strip()
         try:
@@ -497,7 +497,7 @@ def default_authorized_keys() -> Path:
 def host_key_fingerprints(dirpath: str = "/etc/ssh") -> list[str]:
     """This machine's sshd host keys, as fingerprints (for the owner to compare with what
     ``remote add`` pinned on the desktop)."""
-    out = []
+    out: list[str] = []
     try:
         names = sorted(os.listdir(dirpath))
     except OSError:
@@ -658,11 +658,11 @@ def parse_ssh_g(text: str) -> Resolved:
         port = int(vals.get("port", "22"))
     except ValueError:
         port = -1
-    proxy = None
+    proxy: str | None = None
     for k in ("proxyjump", "proxycommand"):
-        v = vals.get(k)
-        if v and v.lower() != "none":
-            proxy = f"{k} {v}"
+        ssh_value = vals.get(k)
+        if ssh_value and ssh_value.lower() != "none":
+            proxy = f"{k} {ssh_value}"
     alias = vals.get("hostkeyalias")
     files: list[str] = []
     for k in ("userknownhostsfile", "globalknownhostsfile"):
@@ -819,7 +819,8 @@ def add(
     pin = find_pin(lookup, files)
     if pin is None:
         raise PairingError(
-            f"no host key for {lookup} in {', '.join(files) or 'any known_hosts file'}: ssh to it once by hand"
+            f"no host key for {lookup} in {', '.join(files) or 'any known_hosts file'}:"
+            " ssh to it once by hand"
             f" (ssh -p {res.port} {res.user}@{res.hostname} true), check the fingerprint it shows against the"
             " remote's own (ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub there), then run this again"
         )
@@ -981,7 +982,8 @@ def remove_desktop(
         res = call("remote.remove", {"name": name})
         n = res.get("ended", 0)
         print(
-            f"broker: link closed, {n} member(s) ended, consent {'forgotten' if res.get('had_row') else 'none'}",
+            f"broker: link closed, {n} member(s) ended, consent "
+            f"{'forgotten' if res.get('had_row') else 'none'}",
             file=out,
         )
     except BrokerDown:
@@ -1121,8 +1123,8 @@ def doctor_desktop(
             f.append(Finding("WARN", f"{rp} is readable by others (chmod 600)"))
     why = system_bin_problem(SSH_BIN)
     f.append(Finding("FAIL", f"{SSH_BIN}: {why}") if why else Finding("ok", f"{SSH_BIN} is root-owned"))
-    for name, e in sorted(entries.items()):
-        if e.transport != "ssh":
+    for name, entry in sorted(entries.items()):
+        if entry.transport != "ssh":
             continue
         problem = ssh_files_problem(paths, name)
         if problem:
@@ -1165,24 +1167,24 @@ def doctor_desktop(
     else:
         own = own_public_keys(ssh_dir, paths)
         loose = keys = 0
-        for e in (parse_ak_line(ln) for ln in text.splitlines()):
-            if e is None:
+        for key_entry in (parse_ak_line(ln) for ln in text.splitlines()):
+            if key_entry is None:
                 continue
             keys += 1
-            if e.key in own:
+            if key_entry.key in own:
                 f.append(
                     Finding(
                         "WARN",
-                        f"{ak_path} authorizes a key this machine holds ({own[e.key]}): any"
+                        f"{ak_path} authorizes a key this machine holds ({own[key_entry.key]}): any"
                         " process here that reads it can log in here over ssh",
                     )
                 )
-            if not e.has_command:
+            if not key_entry.has_command:
                 loose += 1
                 f.append(
                     Finding(
                         "WARN",
-                        f"{ak_path}: {_describe_key(e)} opens a shell on this machine (no"
+                        f"{ak_path}: {_describe_key(key_entry)} opens a shell on this machine (no"
                         " command=): never give it to a remote machine, never `ssh -A` into one",
                     )
                 )
@@ -1232,8 +1234,8 @@ def doctor_remote(
     except PairingError as e:
         text = ""
         f.append(Finding("FAIL", str(e)))
-    lines = [e for e in (parse_ak_line(ln) for ln in text.splitlines()) if e is not None]
-    ours = [e for e in lines if is_ours(e, conf.name, paths.home)]
+    lines = [entry for entry in (parse_ak_line(ln) for ln in text.splitlines()) if entry is not None]
+    ours = [entry for entry in lines if is_ours(entry, conf.name, paths.home)]
     if not ours:
         f.append(
             Finding(
@@ -1241,8 +1243,8 @@ def doctor_remote(
                 f"{ak_path} has no line for {conf.name} in this home: run `switchboard remote accept` again",
             )
         )
-    for e in ours:
-        sat = satellite_command(e)
+    for entry in ours:
+        sat = satellite_command(entry)
         if sat is None:
             f.append(
                 Finding(
@@ -1262,7 +1264,7 @@ def doctor_remote(
             )
         else:
             f.append(Finding("ok", f"the forced command's python exists ({py}) and its home is this home"))
-        why = line_problem(e, py, paths.home, conf.name)
+        why = line_problem(entry, py, paths.home, conf.name)
         f.append(
             Finding(
                 "FAIL",
@@ -1272,7 +1274,7 @@ def doctor_remote(
             if why
             else Finding("ok", f"{conf.name}'s line is exactly restrict[,from=],command=<the satellite>")
         )
-        frm = e.option("from")
+        frm = entry.option("from")
         f.append(
             Finding("ok", f"the link key is accepted only from {frm}")
             if frm
@@ -1281,7 +1283,7 @@ def doctor_remote(
                 "the link key is accepted from any address: `remote accept --from <desktop ip>` restricts it",
             )
         )
-        if any(x.key == e.key and not x.has_command for x in lines):
+        if any(x.key == entry.key and not x.has_command for x in lines):
             f.append(Finding("FAIL", f"{ak_path} also has the link key without command= (a shell)"))
     hooks = hook_state_text(paths)
     f.append(Finding("ok" if hooks.startswith("ok") else "WARN", f"hook copies: {hooks}"))

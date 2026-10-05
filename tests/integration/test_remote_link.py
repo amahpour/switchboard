@@ -17,6 +17,8 @@ from conftest import human_cli_denied_here
 from fakes.fake_agent import FakeAgent
 from fakes.fake_link import FakeLink, SatDriver, wait_for
 
+from switchboard.broker.remote import LinkClosed
+
 
 def lines(link: FakeLink, kind: str) -> list[str]:
     return [f"{m['from']} {m['text']}" for m in link.messages() if m["kind"] == kind]
@@ -214,7 +216,7 @@ def test_replaced_from_abandoned_link_is_ignored() -> None:
         fut = asyncio.run_coroutine_threadsafe(
             rl._on_frame(a2, {"t": "bye", "why": "replaced"}), link.broker.loop
         )
-        with pytest.raises(Exception):
+        with pytest.raises(LinkClosed):
             fut.result(5)
     finally:
         link.close()

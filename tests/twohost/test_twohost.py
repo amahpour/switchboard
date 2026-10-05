@@ -621,7 +621,11 @@ chain, p = [], sat
 while p > 1 and len(chain) < 8:
     chain.append(p)
     p = ppid(p)
-out = {"uid": os.getuid(), "satellite": sat, "chain": [[q, name(q), os.stat(f"/proc/{q}").st_uid] for q in chain]}
+out = {
+    "uid": os.getuid(),
+    "satellite": sat,
+    "chain": [[q, name(q), os.stat(f"/proc/{q}").st_uid] for q in chain],
+}
 res = {}
 for q in chain:
     r = {}

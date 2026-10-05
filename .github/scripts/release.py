@@ -180,7 +180,11 @@ def merged_release(title: str, root: Path) -> str | None:
 
 def set_version(root: Path, version: str) -> None:
     """The version in pyproject.toml, switchboard/__init__.py and uv.lock's own entry."""
-    patterns = (r'(?m)^version = "[^"]+"', r'(?m)^__version__ = "[^"]+"', r'(name = "switchboard"\nversion = )"[^"]+"')
+    patterns = (
+        r'(?m)^version = "[^"]+"',
+        r'(?m)^__version__ = "[^"]+"',
+        r'(name = "switchboard"\nversion = )"[^"]+"',
+    )
     repls = (f'version = "{version}"', f'__version__ = "{version}"', rf'\g<1>"{version}"')
     for rel, pattern, repl in zip(VERSION_FILES, patterns, repls, strict=True):
         path = root / rel
@@ -224,7 +228,9 @@ def notes_files(root: Path = ROOT) -> list[Path]:
     latest addition); files git doesn't know yet come last, by name."""
     folder = root / CHANGES_DIR
     files = [p for p in folder.glob("*.md") if p.name != "README.md"] if folder.is_dir() else []
-    added = git("log", "--reverse", "--diff-filter=A", "--format=", "--name-only", "--", CHANGES_DIR, root=root)
+    added = git(
+        "log", "--reverse", "--diff-filter=A", "--format=", "--name-only", "--", CHANGES_DIR, root=root
+    )
     rank = {name: i for i, name in enumerate(line.strip() for line in added.splitlines() if line.strip())}
     return sorted(files, key=lambda p: (rank.get(f"{CHANGES_DIR}/{p.name}", len(rank)), p.name))
 
@@ -311,7 +317,9 @@ def main(argv: list[str] | None = None) -> int:
     act = ap.add_mutually_exclusive_group(required=True)
     act.add_argument("--open-pr", action="store_true", help="cut the next release and open its PR")
     act.add_argument("--check-title", metavar="TITLE", help="check a PR title and exit")
-    act.add_argument("--merged", metavar="TITLE", help="print the version a merged release PR releases, if any")
+    act.add_argument(
+        "--merged", metavar="TITLE", help="print the version a merged release PR releases, if any"
+    )
     act.add_argument("--notes-for", metavar="VERSION", help="print a release's CHANGELOG section")
     act.add_argument("--notes", help="apply the next release to this tree and write its notes here")
     ap.add_argument("--root", default=str(ROOT), help=argparse.SUPPRESS)

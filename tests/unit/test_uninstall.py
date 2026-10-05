@@ -341,7 +341,7 @@ def test_results_have_no_forbidden_strings(tmp_path: Path, tmp_home: Path) -> No
         seed(uh, h, normalize=False)
         install(h, tmp_home, uh)
     home = real(tmp_home)
-    for h, mod in MODS.items():
+    for _h, mod in MODS.items():
         for e in mod.unplan(uh, home).edits:
             if isinstance(e, common.FileEdit):
                 assert guardrails.find_forbidden(e.after) == []

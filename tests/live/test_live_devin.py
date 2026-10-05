@@ -338,9 +338,10 @@ def test_1_join_and_enter_the_wait_loop(live: Live) -> None:
     live.tmux.type(
         SESSION,
         (
-            'Use the switchboard MCP tools. Call join with room "#build" and screen_name "devin-1". Then call wait with'
-            ' room "#build" and timeout_s 600. Each time wait returns messages, do exactly what they ask (reply with'
-            " the switchboard say tool), then call wait again with the same arguments. If wait returns timeout, call it"
+            'Use the switchboard MCP tools. Call join with room "#build" and screen_name'
+            ' "devin-1". Then call wait with room "#build" and timeout_s 600. Each time wait'
+            " returns messages, do exactly what they ask (reply with the switchboard say tool),"
+            " then call wait again with the same arguments. If wait returns timeout, call it"
             " again. If it returns paused, end your turn. Keep replies short."
         ),
     )
@@ -375,7 +376,7 @@ def test_2_wait_loop_wake_first_action_p50_under_2s(live: Live) -> None:
         live.wait_settled(120)
         mid = live.say(f"ping {i}: reply in #build with the switchboard say tool, text exactly: pong {i}")
         b = live.wait(
-            lambda: (x := live.batch_for(mid)) is not None and x["first_action_at"] is not None and x,
+            lambda mid=mid: (x := live.batch_for(mid)) is not None and x["first_action_at"] is not None and x,
             60,
             f"wake {i}: confirmed and acted on",
         )
@@ -430,7 +431,8 @@ def test_4_stop_rearms_the_wait_loop(live: Live) -> None:
     rearms0 = live.q("SELECT COUNT(*) FROM events WHERE kind='rearm'")[0][0]
     n0 = len(live.events())
     live.say(
-        f"STOP-{tag}: this tests the room's re-arm. First reply with the switchboard say tool: bye {tag}. Then"
+        f"STOP-{tag}: this tests the room's re-arm. First reply with the switchboard say"
+        f" tool: bye {tag}. Then"
         " end your turn now, without calling wait. switchboard will then ask you to call wait again: do that."
     )
     live.wait(

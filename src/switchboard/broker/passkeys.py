@@ -31,8 +31,9 @@ import hashlib
 import hmac
 import json
 import secrets
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from switchboard.broker.auth import WebOrigin
 from switchboard.broker.passwords import normalize_one_time, one_time_password
@@ -334,7 +335,9 @@ class WebAuthn:
         cred = _credential(credential)
         creds = [
             AttestedCredentialData.create(
-                b"\0" * 16, pk.credential_id, CoseKey.parse(cbor.decode(pk.public_key))
+                b"\0" * 16,
+                pk.credential_id,
+                CoseKey.parse(cast(Mapping[int, Any], cbor.decode(pk.public_key))),
             )
             for pk in passkeys
         ]

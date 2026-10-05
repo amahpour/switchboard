@@ -679,7 +679,8 @@ class Sim:
         for park in self.engine.sinks.parks():
             serves = self.store.participant_memberships(park.participant_id)
             assert any(not self.room_of(x.id).paused for x in serves), (
-                f"seed {self.seed}: a Cursor stop is parked while every room it serves is paused: {self.trace[-5:]}"
+                f"seed {self.seed}: a Cursor stop is parked while every room it serves is"
+                f" paused: {self.trace[-5:]}"
             )
         for room in self.rooms:
             r = self.store.room_by_id(room.id)

@@ -127,7 +127,8 @@ async def test_plan_refusals_close_then_delete(
         # refused while alpha is in it, the plan too
         e = rpc_err(b, {"room": "#build", "dry_run": True})
         assert e.code == "conflict" and e.message == (
-            "#build has 1 agent(s) (alpha): close it first (/close in the web UI, or switchboard cmd '#build' /close)"
+            "#build has 1 agent(s) (alpha): close it first (/close in the web UI, or"
+            " switchboard cmd '#build' /close)"
         )
         mids = [r[0] for r in q(dbp, "SELECT id FROM memberships WHERE room_id=1")]
         close(b, "build")
