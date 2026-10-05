@@ -19,19 +19,38 @@ from typing import Any
 
 import httpx
 import pytest
-
 from conftest import FakeClock, InProcBroker
 from engine_world import World
 from fakes.fake_agent import FakeAgent
+
 from switchboard.broker.service import _last_seen
-from switchboard.delivery.engine import STOP_BUSY_SRCS
 from switchboard.config import Config
+from switchboard.delivery.engine import STOP_BUSY_SRCS
 
 FAST = Config(human_name="alice").with_delivery(quiet_s=0.0, max_hold_s=0.0)
 SECRET = "the quick secret text 7f3a"  # a message body that must never appear in a detail
-MEMBER_KEYS = {"name", "harness", "status", "tier", "tier_note", "away", "approval_mode", "env_leak", "held",
-               "queued", "inflight", "parked", "parked_reason", "host",
-               "joined_at", "held_at", "status_at", "status_src", "last_seen", "last_seen_what"}
+MEMBER_KEYS = {
+    "name",
+    "harness",
+    "status",
+    "tier",
+    "tier_note",
+    "away",
+    "approval_mode",
+    "env_leak",
+    "held",
+    "queued",
+    "inflight",
+    "parked",
+    "parked_reason",
+    "host",
+    "joined_at",
+    "held_at",
+    "status_at",
+    "status_src",
+    "last_seen",
+    "last_seen_what",
+}
 
 
 @pytest.fixture
@@ -52,8 +71,11 @@ def detail(b: InProcBroker, name: str) -> httpx.Response:
 
 
 def web_cmd(b: InProcBroker, text: str) -> httpx.Response:
-    return b.web.post("/api/rooms/build/command", json={"text": text},  # type: ignore[attr-defined]
-                      headers=b.write_headers())
+    return b.web.post(
+        "/api/rooms/build/command",
+        json={"text": text},  # type: ignore[attr-defined]
+        headers=b.write_headers(),
+    )
 
 
 def q(b: InProcBroker, sql: str, *args: Any) -> list[sqlite3.Row]:
@@ -83,8 +105,12 @@ def test_needs_the_web_session(broker: InProcBroker) -> None:
     assert c.get("/api/rooms/build/members/claude-1").status_code == 401
     # GET-only: with a session, origin and header, any write method is refused
     for m in ("POST", "PUT", "DELETE", "PATCH"):
-        r = broker.web.request(m, "/api/rooms/build/members/claude-1",  # type: ignore[attr-defined]
-                               json={}, headers=broker.write_headers())
+        r = broker.web.request(
+            m,
+            "/api/rooms/build/members/claude-1",  # type: ignore[attr-defined]
+            json={},
+            headers=broker.write_headers(),
+        )
         assert r.status_code == 405, (m, r.status_code)
 
 
@@ -127,7 +153,8 @@ async def test_shape_queue_timeline_and_no_text(broker: InProcBroker) -> None:
         # the sender's own say() shows as a "said" entry, then its pass() as "pass"
         d = detail(broker, "codex-1").json()
         assert [e for e in d["timeline"] if e["kind"] == "said"] == [
-            {"ts": d["timeline"][-1]["ts"], "kind": "said", "id": mid}]
+            {"ts": d["timeline"][-1]["ts"], "kind": "said", "id": mid}
+        ]
         assert d["member"]["last_seen_what"] == "said" and d["member"]["last_seen"] is not None
         await b.read("#build")
         res = await b.pass_("#build")
@@ -150,8 +177,13 @@ async def test_offer_entry_names_senders(broker: InProcBroker) -> None:
         await b.join("#build", "bench")
         task = a.wait_task("#build", 20)
         mid = membership_id(broker, "claude-1")
-        await until(lambda: mid in broker.on_loop(
-            lambda: {s.membership_id for s in broker.state.engine.sinks.open_sinks()}), "claude-1 never waited")
+        await until(
+            lambda: (
+                mid
+                in broker.on_loop(lambda: {s.membership_id for s in broker.state.engine.sinks.open_sinks()})
+            ),
+            "claude-1 never waited",
+        )
         await b.say("#build", f"{SECRET} ping")
         got = await task
         assert got.get("messages") or got.get("text"), got
@@ -173,8 +205,11 @@ async def test_timeline_whitelists_event_data(broker: InProcBroker) -> None:
         st = broker.state
 
         def add(kind: str, **data: Any) -> None:
-            broker.on_loop(lambda: st.store.add_event(kind, room_id=None, membership_id=mid,
-                                                      data={"text": SECRET, "ids": [1, 2], **data}))
+            broker.on_loop(
+                lambda: st.store.add_event(
+                    kind, room_id=None, membership_id=mid, data={"text": SECRET, "ids": [1, 2], **data}
+                )
+            )
 
         add("parked", reason=leak)
         add("unparked", seconds=12.5)
@@ -202,8 +237,14 @@ async def test_timeline_whitelists_event_data(broker: InProcBroker) -> None:
         assert by["watchdog_remind"] == {"kind": "watchdog_remind", "n": 1, "why": None}
         assert by["watchdog_escalate"] == {"kind": "watchdog_escalate", "n": None, "why": "parked"}
         # the "ids" the events carry are ids of no delivery of this member: nobody is named
-        assert by["offer"] == {"kind": "offer", "path": "steer", "n": 4, "counted": True, "prio": None,
-                               "from": []}
+        assert by["offer"] == {
+            "kind": "offer",
+            "path": "steer",
+            "n": 4,
+            "counted": True,
+            "prio": None,
+            "from": [],
+        }
         body = detail(broker, "devin-1").text
         assert SECRET not in body and "/Users/x" not in body and "a@b.com" not in body
 
@@ -212,7 +253,9 @@ async def test_parked_reason_is_scrubbed(broker: InProcBroker) -> None:
     async with FakeAgent(broker.home, "a4") as a:
         await a.join("#build", "devin-1")
         mid = membership_id(broker, "devin-1")
-        broker.on_loop(lambda: broker.state.engine.parked.__setitem__(mid, "wedged at /Users/x/secret for a@b.com"))
+        broker.on_loop(
+            lambda: broker.state.engine.parked.__setitem__(mid, "wedged at /Users/x/secret for a@b.com")
+        )
         d = detail(broker, "devin-1").json()
         assert d["member"]["parked"] is True
         assert d["member"]["parked_reason"] == "wedged at <path> for <email>"
@@ -234,8 +277,14 @@ async def test_the_members_frame_is_unchanged(broker: InProcBroker) -> None:
     async with FakeAgent(broker.home, "a6") as a:
         await a.join("#build", "claude-1")
         rows = broker.web.get("/api/rooms/build/members").json()["members"]  # type: ignore[attr-defined]
-        assert set(rows[0]) == MEMBER_KEYS - {"joined_at", "held_at", "status_at", "status_src", "last_seen",
-                                              "last_seen_what"}
+        assert set(rows[0]) == MEMBER_KEYS - {
+            "joined_at",
+            "held_at",
+            "status_at",
+            "status_src",
+            "last_seen",
+            "last_seen_what",
+        }
 
 
 def test_last_seen_names_the_newest_sign_of_life() -> None:
@@ -243,7 +292,10 @@ def test_last_seen_names_the_newest_sign_of_life() -> None:
     assert _last_seen({"last_seen": 5.0, "last_say_at": 5.0, "last_pass_at": 1.0}) == (5.0, "said")
     assert _last_seen({"last_seen": 3.0, "last_say_at": 1.0, "last_pass_at": 3.0}) == (3.0, "passed")
     # a turn end is what the engine writes for a Stop or an Interrupt hook (set_status, "hook:{E}")
-    assert _last_seen({"last_seen": 9.0, "last_say_at": 1.0, "status_src": "hook:Stop"}) == (9.0, "turn ended")
+    assert _last_seen({"last_seen": 9.0, "last_say_at": 1.0, "status_src": "hook:Stop"}) == (
+        9.0,
+        "turn ended",
+    )
     assert _last_seen({"last_seen": 9.0, "status_src": "hook:Interrupt"}) == (9.0, "turn ended")
     # review finding: the stop:* sources mean switchboard kept the turn going (busy), not an end
     for src in STOP_BUSY_SRCS:
@@ -261,4 +313,7 @@ def test_a_real_turn_end_reads_turn_ended(tmp_path: Path, clock: FakeClock, even
     w.hook(p, event)
     got = w.p(p)
     assert got.status == "idle" and got.status_src == f"hook:{event}"
-    assert _last_seen({"last_seen": got.last_seen, "status_src": got.status_src}) == (got.last_seen, "turn ended")
+    assert _last_seen({"last_seen": got.last_seen, "status_src": got.status_src}) == (
+        got.last_seen,
+        "turn ended",
+    )

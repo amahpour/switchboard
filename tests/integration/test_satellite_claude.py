@@ -24,9 +24,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import child_env
 from fakes.fake_link import SatDriver, make_pi_home, wait_for
+
 from switchboard.broker import proc
 from switchboard.paths import Paths
 from switchboard.remote import proto
@@ -115,8 +115,10 @@ def recv_types(sat: SatDriver, *types: str, timeout: float = 5.0) -> list[dict[s
 
 
 def deliver(bid: int = 7) -> dict[str, Any]:
-    return {"push": "deliver", "data": {"batch_id": bid, "text": "[switchboard] #fpga: hi", "room": "#fpga",
-                                         "sender": "alice"}}
+    return {
+        "push": "deliver",
+        "data": {"batch_id": bid, "text": "[switchboard] #fpga: hi", "room": "#fpga", "sender": "alice"},
+    }
 
 
 # ---------------------------------------------------------------- the relay
@@ -215,10 +217,20 @@ class StandInClaude:
         exe.write_text(STANDIN)
         client = tmp / "client.py"
         client.write_text(CLIENT)
-        self.p = subprocess.Popen([sys.executable, str(exe), str(pi / "claude-sessions"), SOCK, str(client),
-                                   str(Paths.from_home(pi).sock)],
-                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, env=child_env(),
-                                  start_new_session=True)
+        self.p = subprocess.Popen(
+            [
+                sys.executable,
+                str(exe),
+                str(pi / "claude-sessions"),
+                SOCK,
+                str(client),
+                str(Paths.from_home(pi).sock),
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            env=child_env(),
+            start_new_session=True,
+        )
         self.pid = self.p.pid
         info = wait_for(lambda: proc.info(self.pid), what="the stand-in's start time")
         self.start = info.start
@@ -254,8 +266,9 @@ class StandInClaude:
             self.p.stdout.close()
 
 
-def attested(pi: Path, tmp: Path, *, watch_claude: bool = True,
-             others: tuple[tuple[int, float], ...] = ()) -> tuple[SatDriver, StandInClaude, int]:
+def attested(
+    pi: Path, tmp: Path, *, watch_claude: bool = True, others: tuple[tuple[int, float], ...] = ()
+) -> tuple[SatDriver, StandInClaude, int]:
     """A satellite past its welcome, a stand-in Claude whose MCP client said hello (attested
     as that Claude's), and a watch naming it (unless not ``watch_claude``) and ``others``."""
     sat = SatDriver(pi)
@@ -296,7 +309,9 @@ def test_last_mile_relays_when_status_matches_and_strips_chk(pi: Path, tmp_path:
         assert got == [line]  # exactly the line: chk rides beside it, never inside
         # a push that is not a deliver and carries no chk is relayed as it is
         sat.send(proto.out(c, {"push": "notice", "data": {"text": "x"}}))
-        assert wait_for(lambda: fc.lines(0.2), what="plain push") == [{"push": "notice", "data": {"text": "x"}}]
+        assert wait_for(lambda: fc.lines(0.2), what="plain push") == [
+            {"push": "notice", "data": {"text": "x"}}
+        ]
         # and a mid-task (bypass) push needs the session busy
         write_reg(pi, fc.pid, status="busy")
         sat.send(proto.out(c, deliver(8), {"pid": fc.pid, "start": fc.start, "want": "busy"}))
@@ -308,8 +323,11 @@ def test_last_mile_relays_when_status_matches_and_strips_chk(pi: Path, tmp_path:
 
 @pytest.mark.parametrize("case", ["busy_not_idle", "idle_not_busy", "waiting", "unwatched", "unreadable"])
 def test_last_mile_drops_a_stale_push_and_reports_it(pi: Path, tmp_path: Path, case: str) -> None:
-    status, want = {"busy_not_idle": ("busy", "idle"), "idle_not_busy": ("idle", "busy"),
-                    "waiting": ("waiting", "idle")}.get(case, ("idle", "idle"))
+    status, want = {
+        "busy_not_idle": ("busy", "idle"),
+        "idle_not_busy": ("idle", "busy"),
+        "waiting": ("waiting", "idle"),
+    }.get(case, ("idle", "idle"))
     sat, fc, c = attested(pi, tmp_path, watch_claude=case != "unwatched")
     try:
         write_reg(pi, fc.pid, status=status)
@@ -320,8 +338,9 @@ def test_last_mile_drops_a_stale_push_and_reports_it(pi: Path, tmp_path: Path, c
         sat.send(proto.out(c, deliver(41), {"pid": fc.pid, "start": fc.start, "want": want}))
         reg = own_report(sat, c, 41, "stale_status")
         # a fresh view first (none for a session the broker doesn't watch)
-        assert [v[2] for v in reg["views"]] == ([] if case == "unwatched" else
-                                               [None if case == "unreadable" else status])
+        assert [v[2] for v in reg["views"]] == (
+            [] if case == "unwatched" else [None if case == "unreadable" else status]
+        )
         assert fc.lines(0.5) == []  # nothing reached the MCP server
         # the broker's answer to the satellite's own request is dropped too
         sat.send(proto.out(c, {"id": -1, "result": {}}))

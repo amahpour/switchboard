@@ -8,9 +8,9 @@ from pathlib import Path
 
 import httpx
 import pytest
+from conftest import FakeClock, InProcBroker, SubprocBroker, cookie_of, ws_connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
-from conftest import FakeClock, InProcBroker, SubprocBroker, cookie_of, ws_connect
 from switchboard.broker.auth import SESSION_TTL_S
 
 
@@ -35,8 +35,18 @@ def raw_http(port: int, request: bytes) -> str:
 
 
 # -------------------------------------------------------------------- host
-@pytest.mark.parametrize("host", ["127.0.0.1:{p}", "localhost:{p}", "switchboard.localhost", "switchboard.localhost:1",
-                                  "evil.com", "switchboard.localhost.evil.com:{p}", "SWITCHBOARD.localhost:{p}"])
+@pytest.mark.parametrize(
+    "host",
+    [
+        "127.0.0.1:{p}",
+        "localhost:{p}",
+        "switchboard.localhost",
+        "switchboard.localhost:1",
+        "evil.com",
+        "switchboard.localhost.evil.com:{p}",
+        "SWITCHBOARD.localhost:{p}",
+    ],
+)
 def test_421_on_other_hosts(broker: InProcBroker, host: str) -> None:
     h = host.format(p=broker.port)
     r = httpx.get(f"http://127.0.0.1:{broker.port}/", headers={"Host": h})
@@ -139,7 +149,10 @@ def test_writes_need_origin_and_header(broker: InProcBroker, web: httpx.Client) 
         "null origin": {"Origin": "null", "X-Switchboard": "1"},
         "other port origin": {"Origin": "http://switchboard.localhost:1", "X-Switchboard": "1"},
         "localhost origin": {"Origin": f"http://localhost:{broker.port}", "X-Switchboard": "1"},
-        "lookalike origin": {"Origin": f"http://switchboard.localhost:{broker.port}.evil.com", "X-Switchboard": "1"},
+        "lookalike origin": {
+            "Origin": f"http://switchboard.localhost:{broker.port}.evil.com",
+            "X-Switchboard": "1",
+        },
         "https origin": {"Origin": f"https://switchboard.localhost:{broker.port}", "X-Switchboard": "1"},
         "no x-switchboard": {"Origin": broker.origin},
         "x-switchboard 0": {"Origin": broker.origin, "X-Switchboard": "0"},
@@ -147,8 +160,11 @@ def test_writes_need_origin_and_header(broker: InProcBroker, web: httpx.Client) 
     for label, h in cases.items():
         r = web.post("/api/rooms/build/say", json={"text": "x"}, headers=h)
         assert r.status_code == 403, label
-    r = web.post("/api/rooms/build/say", content='{"text":"x"}',
-                 headers={"Origin": broker.origin, "Content-Type": "text/plain"})
+    r = web.post(
+        "/api/rooms/build/say",
+        content='{"text":"x"}',
+        headers={"Origin": broker.origin, "Content-Type": "text/plain"},
+    )
     assert r.status_code == 403  # a simple (no-preflight) cross-site form post
     assert web.post("/api/rooms/build/say", json={"text": "ok"}, headers=good).status_code == 200
 
@@ -169,8 +185,9 @@ def test_web_say_can_reply_to_a_message_in_its_room(broker: InProcBroker, web: h
     original = web.post("/api/rooms/build/say", json={"text": "diagram"}, headers=h).json()["id"]
     foreign = web.post("/api/rooms/other/say", json={"text": "elsewhere"}, headers=h).json()["id"]
     room = broker.state.service.room("build")
-    join_id = broker.state.store.insert_message(room.id, sender_name="diagram-agent", sender_kind="agent",
-                                                 via="mcp", kind="join", text="joined").id
+    join_id = broker.state.store.insert_message(
+        room.id, sender_name="diagram-agent", sender_kind="agent", via="mcp", kind="join", text="joined"
+    ).id
     r = web.post("/api/rooms/build/say", json={"text": "please fix", "reply_to": original}, headers=h)
     assert r.status_code == 200, r.text
     messages = web.get("/api/rooms/build/messages").json()["messages"]
@@ -204,15 +221,21 @@ def test_no_unauthenticated_write_routes(broker: InProcBroker) -> None:
             r = c.post(route.path + "/app.js", headers=broker.write_headers())
             assert r.status_code in (401, 403, 405)
     assert checked >= 4  # POST /logout, /api/rooms, say, command
-    r = c.post("/link/pair", json={"code": "x", "key": "y"})  # no Origin: the guard lets it through, the route decides
+    r = c.post(
+        "/link/pair", json={"code": "x", "key": "y"}
+    )  # no Origin: the guard lets it through, the route decides
     assert r.status_code == 404 and r.json()["error"] == "not_found"
 
 
 def test_docs_are_off_and_headers_present(broker: InProcBroker, web: httpx.Client) -> None:
     for path in ["/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"]:
         assert web.get(path).status_code == 404, path
-    for r in [web.get("/"), web.get("/api/rooms"), httpx.get(f"http://127.0.0.1:{broker.port}/"),
-              web.get("/static/app.js")]:
+    for r in [
+        web.get("/"),
+        web.get("/api/rooms"),
+        httpx.get(f"http://127.0.0.1:{broker.port}/"),
+        web.get("/static/app.js"),
+    ]:
         csp = r.headers["content-security-policy"]
         assert "default-src 'self'" in csp and "script-src 'self'" in csp and "frame-ancestors 'none'" in csp
         assert f"ws://switchboard.localhost:{broker.port}" in csp
@@ -239,10 +262,15 @@ def test_markdown_script_is_served_under_the_csp(broker: InProcBroker, web: http
     assert "unsafe-inline" not in httpx.get(broker.base + "/").headers["content-security-policy"]
 
 
-def test_the_diagram_scripts_are_static_files_under_the_strict_csp(broker: InProcBroker, web: httpx.Client) -> None:
+def test_the_diagram_scripts_are_static_files_under_the_strict_csp(
+    broker: InProcBroker, web: httpx.Client
+) -> None:
     """diagram.js and the vendored Mermaid it loads on a first "Show diagram" (§33) are plain
     same-origin scripts; neither is served with the app page's inline-style allowance."""
-    for path, marker in (("/static/diagram.js", "SBDiagram"), ("/static/vendor/mermaid/mermaid.min.js", "mermaid")):
+    for path, marker in (
+        ("/static/diagram.js", "SBDiagram"),
+        ("/static/vendor/mermaid/mermaid.min.js", "mermaid"),
+    ):
         r = web.get(path)
         assert r.status_code == 200 and marker in r.text[:200_000], path
         assert r.headers["content-type"].startswith("text/javascript"), path

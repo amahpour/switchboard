@@ -56,8 +56,12 @@ OUT = ROOT / "docs" / "media" / "ui"
 
 # (viewport, device pixel ratio, phone) for the two sizes the pictures come in
 DESKTOP: dict[str, Any] = {"viewport": {"width": 1440, "height": 900}, "device_scale_factor": 2}
-PHONE: dict[str, Any] = {"viewport": {"width": 390, "height": 844}, "device_scale_factor": 3,
-                         "is_mobile": True, "has_touch": True}
+PHONE: dict[str, Any] = {
+    "viewport": {"width": 390, "height": 844},
+    "device_scale_factor": 3,
+    "is_mobile": True,
+    "has_touch": True,
+}
 TALL = 2400  # a desktop viewport tall enough for the whole #build conversation, cropped to it
 
 # Chromium's own HOME: macOS Chrome's network stack can hang under a HOME with no keychain,
@@ -95,7 +99,8 @@ def settle(page: Any) -> None:
     page.wait_for_function(
         "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r("
         "document.getAnimations().every(a => a.playState !== 'running')))))",
-        timeout=10_000)
+        timeout=10_000,
+    )
 
 
 def shot(page: Any, out: Path, name: str, clip: dict[str, float] | None = None) -> None:
@@ -121,7 +126,9 @@ def open_build(page: Any, n_chat: int) -> None:
 
     page.evaluate("location.hash = 'build'")
     expect(page.locator("#room-title")).to_have_text("build", timeout=WAIT_MS)
-    page.wait_for_function(f"document.querySelectorAll('#log .line.k-chat').length >= {n_chat}", timeout=WAIT_MS)
+    page.wait_for_function(
+        f"document.querySelectorAll('#log .line.k-chat').length >= {n_chat}", timeout=WAIT_MS
+    )
     expect(page.locator("#buddy-list .member")).to_have_count(4, timeout=WAIT_MS)
 
 
@@ -138,8 +145,9 @@ def inspect(page: Any, name: str) -> None:
     the timeline)."""
     from playwright.sync_api import expect
 
-    with page.expect_response(lambda r: f"/members/{name}" in r.url and r.request.method == "GET",
-                              timeout=WAIT_MS):
+    with page.expect_response(
+        lambda r: f"/members/{name}" in r.url and r.request.method == "GET", timeout=WAIT_MS
+    ):
         page.click(f'#buddy-list .member[data-name="{name}"]')
     expect(page.locator("#insp-name")).to_contain_text(name, timeout=WAIT_MS)
 
@@ -170,7 +178,8 @@ def log_clip(page: Any) -> dict[str, float]:
         " const L = log.getBoundingClientRect(), a = rows[0].getBoundingClientRect(),"
         " z = rows[rows.length - 1].getBoundingClientRect();"
         " return {x: L.left, y: Math.max(0, a.top - 12), width: L.width,"
-        " height: z.bottom + 12 - Math.max(0, a.top - 12)}; })()")
+        " height: z.bottom + 12 - Math.max(0, a.top - 12)}; })()"
+    )
 
 
 # ------------------------------------------------------------------ the shots
@@ -278,8 +287,14 @@ def shoot(browser: Any, out: Path, world: Any) -> None:
 
 
 # ---------------------------------------------------------- the hosted shots
-AUTHENTICATOR = {"protocol": "ctap2", "transport": "internal", "hasResidentKey": True, "hasUserVerification": True,
-                 "isUserVerified": True, "automaticPresenceSimulation": True}
+AUTHENTICATOR = {
+    "protocol": "ctap2",
+    "transport": "internal",
+    "hasResidentKey": True,
+    "hasUserVerification": True,
+    "isUserVerified": True,
+    "automaticPresenceSimulation": True,
+}
 
 
 def virtual_authenticator(ctx: Any, page: Any) -> Any:
@@ -416,9 +431,8 @@ AS_DEPLOYED_JS = """([from, to]) => {
 def shoot_machines(browser: Any, out: Path, world: Any) -> None:
     """Machines that dial in (issue #41 part 3): a pairing under way beside a machine that is up,
     the approval card of the one that dialed in with the code, both up, and a phone."""
-    from playwright.sync_api import expect
-
     from fakes.fake_machine import TestMachine
+    from playwright.sync_api import expect
 
     origin = world.origin
     base = {"timezone_id": "UTC", "color_scheme": "light", "locale": "en-US", "reduced_motion": "reduce"}
@@ -460,8 +474,17 @@ def shoot_machines(browser: Any, out: Path, world: Any) -> None:
 
         page.click("#add-machine")
         expect(page.locator("#machines-panel")).to_be_visible()
-        dial_in("lab-pc", add("lab-pc"), {"hostname": "lab-pc", "os": "Ubuntu 24.04", "arch": "x86_64",
-                                          "version": "0.6.5", "harnesses": ["claude", "codex"]})
+        dial_in(
+            "lab-pc",
+            add("lab-pc"),
+            {
+                "hostname": "lab-pc",
+                "os": "Ubuntu 24.04",
+                "arch": "x86_64",
+                "version": "0.6.5",
+                "harnesses": ["claude", "codex"],
+            },
+        )
         up("lab-pc")
         code = add("work-laptop")
         as_deployed(page)
@@ -469,8 +492,17 @@ def shoot_machines(browser: Any, out: Path, world: Any) -> None:
         page.emulate_media(color_scheme="dark")
         shot(page, out, "machines-pairing-dark.png")
         page.emulate_media(color_scheme="light")
-        dial_in("work-laptop", code, {"hostname": "work-laptop", "os": "macOS 15.6", "arch": "arm64",
-                                      "version": "0.6.5", "harnesses": ["claude", "codex"]})
+        dial_in(
+            "work-laptop",
+            code,
+            {
+                "hostname": "work-laptop",
+                "os": "macOS 15.6",
+                "arch": "arm64",
+                "version": "0.6.5",
+                "harnesses": ["claude", "codex"],
+            },
+        )
         page.mouse.move(1, 1)
         shot(page, out, "machines-approve-light.png")
         page.emulate_media(color_scheme="dark")
@@ -489,8 +521,10 @@ def shoot_machines(browser: Any, out: Path, world: Any) -> None:
             ph = ph_ctx.new_page()
             pcdp, phone = device(ph_ctx, ph)
             for c in creds:  # ahead of the counter the broker saw
-                pcdp.send("WebAuthn.addCredential", {"authenticatorId": phone,
-                                                     "credential": {**c, "signCount": c.get("signCount", 0) + 100}})
+                pcdp.send(
+                    "WebAuthn.addCredential",
+                    {"authenticatorId": phone, "credential": {**c, "signCount": c.get("signCount", 0) + 100}},
+                )
             ph.goto(origin + "/")
             ph.click("#passkey-btn")
             connected(ph)
@@ -545,7 +579,9 @@ def run(args: argparse.Namespace, pw: Any) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     ap.add_argument("--out", default=str(OUT), help="output directory (default docs/media/ui)")
-    ap.add_argument("--chrome", help="a Chrome or Chromium binary to use instead of Playwright's own Chromium")
+    ap.add_argument(
+        "--chrome", help="a Chrome or Chromium binary to use instead of Playwright's own Chromium"
+    )
     ap.add_argument("--keep", action="store_true", help="keep the temp homes")
     args = ap.parse_args()
     from playwright.sync_api import sync_playwright

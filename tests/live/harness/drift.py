@@ -13,8 +13,15 @@ from typing import Any
 
 from harness.tmuxdrv import REAL_HOME
 
-FAIL = (".codex/config.toml", ".codex/hooks.json", ".claude/settings.json", ".cursor/mcp.json",
-        ".cursor/hooks.json", ".config/devin/config.json", ".config/devin/mcp_config.json")
+FAIL = (
+    ".codex/config.toml",
+    ".codex/hooks.json",
+    ".claude/settings.json",
+    ".cursor/mcp.json",
+    ".cursor/hooks.json",
+    ".config/devin/config.json",
+    ".config/devin/mcp_config.json",
+)
 INFO = (".claude.json", ".cursor/cli-config.json")
 
 
@@ -52,7 +59,9 @@ def codex_config() -> dict[str, Any] | None:
         return None
 
 
-def codex_config_diff(before: dict[str, Any] | None, after: dict[str, Any] | None) -> tuple[list[str], list[str]]:
+def codex_config_diff(
+    before: dict[str, Any] | None, after: dict[str, Any] | None
+) -> tuple[list[str], list[str]]:
     """(changed top-level keys outside the TUI's own tables, changed TUI tables). Names only."""
     if before is None or after is None:
         return (["<unreadable>"] if before != after else []), []

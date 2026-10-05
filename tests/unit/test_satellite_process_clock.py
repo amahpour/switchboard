@@ -119,8 +119,9 @@ def test_satellite_needs_an_absolute_home(home: str, capsys: pytest.CaptureFixtu
     assert "--home must be an absolute path" in capsys.readouterr().err
 
 
-def test_satellite_cli_defaults_to_the_home_not_the_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-                                                         capsys: pytest.CaptureFixture[str]) -> None:
+def test_satellite_cli_defaults_to_the_home_not_the_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     got: list[list[str]] = []
     monkeypatch.setattr(satellite, "main", lambda argv: got.append(argv) or 0)
     monkeypatch.setenv("SWITCHBOARD_HOME", str(tmp_path / "sbhome"))
@@ -137,8 +138,9 @@ def test_satellite_cli_defaults_to_the_home_not_the_cwd(tmp_path: Path, monkeypa
 def test_request_larger_than_a_local_one_is_refused_on_the_pi(tmp_path: Path) -> None:
     """A 1 MiB line of short numbers grows when re-encoded (1e1 -> 10.0): the satellite refuses it
     rather than send the broker a request frame it would close the link over."""
-    sat = Satellite(Paths.from_home(tmp_path), "fpga-pi", test_mode=True, sessions_dir=str(tmp_path),
-                    harden_state="none")
+    sat = Satellite(
+        Paths.from_home(tmp_path), "fpga-pi", test_mode=True, sessions_dir=str(tmp_path), harden_state="none"
+    )
     lc = LocalConn(1, Peer(pid=os.getpid(), uid=os.getuid(), start=0.0), writer=None)  # type: ignore[arg-type]
     nums = ",".join(["1e1"] * 250_000)
     line = f'{{"id":5,"method":"agent.say","params":{{"cred":"c","room":"#fpga","n":[{nums}]}}}}'.encode()

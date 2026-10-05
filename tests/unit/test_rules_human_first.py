@@ -9,11 +9,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import World
 from test_claude_adapter import claude, reg, tok
 from test_rules_release import item
+
 from switchboard.config import Config
 from switchboard.delivery import rules
 from switchboard.models import Push
@@ -45,8 +45,9 @@ def test_order_is_human_then_mentions_then_chatter_each_by_id() -> None:
 
 
 def test_older_chatter_never_crowds_out_a_later_human_message(tmp_path: Path, clock: FakeClock) -> None:
-    w = World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0, batch_max_msgs=3,
-                                                     hop_limit=0))
+    w = World(
+        tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0, batch_max_msgs=3, hop_limit=0)
+    )
     p, m = w.agent("bot")
     _pp, peer = w.agent("peer")
     w.store.set_budget(w.room.id, 0)  # chatter can't go on its own

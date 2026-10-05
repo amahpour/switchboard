@@ -155,8 +155,11 @@ class RemoteCodexAdapter(PullAdapter):
         if not self.attached(p):
             return Route("none", reason="remote Codex: idle and not listening; call wait() or poke it")
         if p.hooks_seen_at is None:
-            return Route("none", reason="no switchboard hooks seen from this thread: run `switchboard install"
-                                        " codex` there and review the hooks in /hooks")
+            return Route(
+                "none",
+                reason="no switchboard hooks seen from this thread: run `switchboard install"
+                " codex` there and review the hooks in /hooks",
+            )
         if p.id in self.ended:
             return Route("none", reason="session ended")
         if not p.active or p.status == "offline":
@@ -171,8 +174,11 @@ class RemoteCodexAdapter(PullAdapter):
         E = ev.ev
         if E == "SessionEnd":
             self.ended[p.id] = self.clock.now()
-        elif p.id in self.ended and E in RESUME_EVENTS and (
-                E == "UserPromptSubmit" or ev.t is None or ev.t > self.ended[p.id]):
+        elif (
+            p.id in self.ended
+            and E in RESUME_EVENTS
+            and (E == "UserPromptSubmit" or ev.t is None or ev.t > self.ended[p.id])
+        ):
             self.ended.pop(p.id, None)  # a hook of this thread after its SessionEnd: it runs again
         return None
 
@@ -199,8 +205,13 @@ class RemoteCodexAdapter(PullAdapter):
         if conn is None or chk is None or batch.path != PATH or not thread_of(p):
             self._failed(p)
             raise SendError("no wake channel")
-        data = {"batch_id": batch.id, "text": text, "thread_id": thread_of(p),
-                "room": str(meta.get("room") or ""), "sender": str(meta.get("sender") or "")}
+        data = {
+            "batch_id": batch.id,
+            "text": text,
+            "thread_id": thread_of(p),
+            "room": str(meta.get("room") or ""),
+            "sender": str(meta.get("sender") or ""),
+        }
         fut: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         self.pending_posts[batch.id] = (fut, conn)
         try:
@@ -224,7 +235,9 @@ class RemoteCodexAdapter(PullAdapter):
         started = float(t) if isinstance(t, (int, float)) and not isinstance(t, bool) else self.clock.now()
         st = self.runner.state if self.runner is not None else None
         if st is not None:
-            st.store.set_batch_times(batch.id, turn_start_at=min(max(started, batch.created_at), self.clock.now()))
+            st.store.set_batch_times(
+                batch.id, turn_start_at=min(max(started, batch.created_at), self.clock.now())
+            )
             acts = st.engine.on_confirm(batch.id, "link:turn/start")
             if acts:
                 self.runner.execute(acts)
@@ -251,7 +264,9 @@ class RemoteCodexAdapter(PullAdapter):
         n += 1
         until = 0.0
         if n > REROUTE_FREE:
-            until = self.clock.now() + min(REROUTE_BACKOFF_S[0] * 2 ** (n - REROUTE_FREE - 1), REROUTE_BACKOFF_S[1])
+            until = self.clock.now() + min(
+                REROUTE_BACKOFF_S[0] * 2 ** (n - REROUTE_FREE - 1), REROUTE_BACKOFF_S[1]
+            )
         self.reroutes[p.id] = (until, n)
 
     async def start(self, runner: Any) -> None:

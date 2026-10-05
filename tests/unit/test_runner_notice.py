@@ -14,9 +14,9 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import World
+
 from switchboard import db
 from switchboard.broker.commands import Actor
 from switchboard.broker.hub import Hub, Subscriber
@@ -93,8 +93,12 @@ def test_a_persisted_info_notice_is_one_room_line(w: World, runner: Runner, rec:
 
 
 def test_room_less_and_unpersisted_notices_stay_transient(w: World, runner: Runner, rec: Rec) -> None:
-    runner.execute([Notice(None, "warn", "hook copy changed"), Notice(w.room.id, "info", "just now", persist=False)])
-    assert lines_with(rec, "hook copy changed") == [("notice", None, {"level": "warn", "text": "hook copy changed"})]
+    runner.execute(
+        [Notice(None, "warn", "hook copy changed"), Notice(w.room.id, "info", "just now", persist=False)]
+    )
+    assert lines_with(rec, "hook copy changed") == [
+        ("notice", None, {"level": "warn", "text": "hook copy changed"})
+    ]
     assert lines_with(rec, "just now") == [("notice", "#build", {"level": "info", "text": "just now"})]
     assert not [x for x in w.store.history(w.room.id) if x.text in ("hook copy changed", "just now")]
 
@@ -111,7 +115,9 @@ def test_the_loop_guard_trip_shows_once(w: World, runner: Runner, rec: Rec) -> N
     assert kind == "msg" and data["msg"]["level"] == "warn"
 
 
-def test_history_and_replays_keep_the_engine_warnings_styled(w: World, svc: RoomService, runner: Runner) -> None:
+def test_history_and_replays_keep_the_engine_warnings_styled(
+    w: World, svc: RoomService, runner: Runner
+) -> None:
     """The level isn't stored; history (REST, the WebSocket hello replay, tail) re-derives
     'warn' for the engine's fixed-phrase warnings, so a reload still shows them red."""
     _pa, ma = w.agent("a")
@@ -150,16 +156,30 @@ def test_the_web_ui_styles_the_room_line_as_a_warning() -> None:
     assert "#st-hops.bad {" in css
 
 
-def test_a_notice_for_a_closed_or_deleted_room_is_dropped(w: World, svc: RoomService, runner: Runner,
-                                                          rec: Rec) -> None:
+def test_a_notice_for_a_closed_or_deleted_room_is_dropped(
+    w: World, svc: RoomService, runner: Runner, rec: Rec
+) -> None:
     """§28: nobody reads a closed room, and a gone room's notice is no broker-wide news."""
     other = svc.create_room("#gone")
-    svc.store.delete_room(other.id, name="#gone", created_at=other.created_at, expect_counts=db.row_counts(svc.store.con, db.TABLES), event={})
+    svc.store.delete_room(
+        other.id,
+        name="#gone",
+        created_at=other.created_at,
+        expect_counts=db.row_counts(svc.store.con, db.TABLES),
+        event={},
+    )
     svc.close_room(svc.room("#build"), Actor(role="human", via="web"))
     before = len(w.store.history(w.room.id))
     rec.items.clear()
-    runner.execute([Notice(w.room.id, "warn", "for the closed room"), Notice(other.id, "info", "for the gone room"),
-                    Notice(w.room.id, "info", "transient", persist=False)])
+    runner.execute(
+        [
+            Notice(w.room.id, "warn", "for the closed room"),
+            Notice(other.id, "info", "for the gone room"),
+            Notice(w.room.id, "info", "transient", persist=False),
+        ]
+    )
     assert rec.items == [] and len(w.store.history(w.room.id)) == before
     runner.execute([Notice(None, "warn", "still broker-wide")])
-    assert lines_with(rec, "still broker-wide") == [("notice", None, {"level": "warn", "text": "still broker-wide"})]
+    assert lines_with(rec, "still broker-wide") == [
+        ("notice", None, {"level": "warn", "text": "still broker-wide"})
+    ]

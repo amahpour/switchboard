@@ -18,12 +18,39 @@ def test_defaults_match_design() -> None:
     assert (c.human_name, c.port) == ("alice", 7419)  # the login name, which conftest pins to alice
     d = c.delivery
     assert (d.quiet_s, d.max_hold_s, d.batch_max_msgs, d.batch_max_chars) == (3.0, 60.0, 20, 6000)
-    assert (d.rate_limit_s, d.budget_per_hour, d.hop_limit, d.watchdog_s, d.watchdog_max) == (10.0, 60, 6, 120, 2)
-    assert (d.catchup_n, d.max_msg_chars, d.offer_backstop_s, d.hook_ack_s, d.pull_ack_s) == (30, 4000, 1800, 5.0, 10.0)
+    assert (d.rate_limit_s, d.budget_per_hour, d.hop_limit, d.watchdog_s, d.watchdog_max) == (
+        10.0,
+        60,
+        6,
+        120,
+        2,
+    )
+    assert (d.catchup_n, d.max_msg_chars, d.offer_backstop_s, d.hook_ack_s, d.pull_ack_s) == (
+        30,
+        4000,
+        1800,
+        5.0,
+        10.0,
+    )
     assert (c.claude.inbox_hold_s, c.claude.inbox_idle_expire_s, c.claude.wait_cap_s) == (0.3, 5.0, 110)
-    assert (c.codex.queue_fallback, c.codex.require_thread_proof, c.codex.wait_cap_s, c.codex.ctx_max_chars) == (True, True, 240, 5000)
-    assert (c.cursor.stop_park_s, c.cursor.wait_cap_s, c.cursor.ctx_max_chars, c.cursor.max_unconfirmed_followups) == (600, 50, 8000, 2)
-    assert (c.devin.wait_cap_s, c.devin.rearm, c.devin.rearm_max_per_prompt, c.devin.ctx_max_chars) == (600, True, 2, 6000)
+    assert (
+        c.codex.queue_fallback,
+        c.codex.require_thread_proof,
+        c.codex.wait_cap_s,
+        c.codex.ctx_max_chars,
+    ) == (True, True, 240, 5000)
+    assert (
+        c.cursor.stop_park_s,
+        c.cursor.wait_cap_s,
+        c.cursor.ctx_max_chars,
+        c.cursor.max_unconfirmed_followups,
+    ) == (600, 50, 8000, 2)
+    assert (c.devin.wait_cap_s, c.devin.rearm, c.devin.rearm_max_per_prompt, c.devin.ctx_max_chars) == (
+        600,
+        True,
+        2,
+        6000,
+    )
     assert c.devin.rearm_max_per_hour == 12
 
 
@@ -37,23 +64,27 @@ def login(monkeypatch: pytest.MonkeyPatch, name: str | None = None, exc: Excepti
     monkeypatch.setattr(switchboard.config, "getpass", types.SimpleNamespace(getuser=getuser))
 
 
-@pytest.mark.parametrize("name,want", [
-    ("bob", "bob"),
-    ("Bob", "bob"),            # lowercased
-    ("sam_2-x", "sam_2-x"),
-    ("john.doe", "me"),        # not a screen name
-    ("9lives", "me"),
-    ("x" * 25, "me"),          # too long
-    ("", "me"),
-    ("root", "me"),            # reserved
-    ("admin", "me"),
-    ("switchboard-svc", "me"), # switchboard* is reserved
-    ("dev", "me"),             # agents can't take names starting with the human's: devin-1
-    ("c", "me"),
-    ("claude", "me"),
-])
-def test_default_human_name_is_a_valid_login_name_else_me(monkeypatch: pytest.MonkeyPatch, name: str,
-                                                          want: str) -> None:
+@pytest.mark.parametrize(
+    "name,want",
+    [
+        ("bob", "bob"),
+        ("Bob", "bob"),  # lowercased
+        ("sam_2-x", "sam_2-x"),
+        ("john.doe", "me"),  # not a screen name
+        ("9lives", "me"),
+        ("x" * 25, "me"),  # too long
+        ("", "me"),
+        ("root", "me"),  # reserved
+        ("admin", "me"),
+        ("switchboard-svc", "me"),  # switchboard* is reserved
+        ("dev", "me"),  # agents can't take names starting with the human's: devin-1
+        ("c", "me"),
+        ("claude", "me"),
+    ],
+)
+def test_default_human_name_is_a_valid_login_name_else_me(
+    monkeypatch: pytest.MonkeyPatch, name: str, want: str
+) -> None:
     login(monkeypatch, name)
     assert default_human_name() == want and Config().human_name == want
 
@@ -143,10 +174,17 @@ def test_security_unknown_key_refused() -> None:
         from_dict({"allow_ssh_cli": True})  # only inside [security]
 
 
-@pytest.mark.parametrize("toml,want", [("", False), ("[security]\nallow_ssh_cli = false\n", False),
-                                       ("[security]\nallow_ssh_cli = true\n", True)])
-def test_security_reaches_the_broker_policy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-                                            toml: str, want: bool) -> None:
+@pytest.mark.parametrize(
+    "toml,want",
+    [
+        ("", False),
+        ("[security]\nallow_ssh_cli = false\n", False),
+        ("[security]\nallow_ssh_cli = true\n", True),
+    ],
+)
+def test_security_reaches_the_broker_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, toml: str, want: bool
+) -> None:
     """[security] allow_ssh_cli from config.toml reaches the production ProcessPeerPolicy,
     through create_app and through the daemon's run_foreground (the two places that build it)."""
     import socket as socket_mod

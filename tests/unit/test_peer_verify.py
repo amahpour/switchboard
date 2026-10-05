@@ -13,15 +13,24 @@ from switchboard.broker.proc import ProcInfo
 
 def fake(chain_argv: list[str]):
     """chain: [mcp(100), parent(99), grandparent(98), ...] with these argvs (index 0 = mcp)."""
-    procs = [ProcInfo(pid=100 - i, ppid=99 - i, start=1000.0 + i, uid=0, comm="x") for i in range(len(chain_argv))]
+    procs = [
+        ProcInfo(pid=100 - i, ppid=99 - i, start=1000.0 + i, uid=0, comm="x") for i in range(len(chain_argv))
+    ]
     argvs = {p.pid: a for p, a in zip(procs, chain_argv)}
     return (lambda pid, depth: procs[:depth]), (lambda ps: {p.pid: argvs.get(p.pid, "") for p in ps})
 
 
 def verify(claimed: str, argvs: list[str], *, sock=None, sd="/nonexistent", test_mode=False):
     cf, af = fake(argvs)
-    return verify_mcp_peer(Peer(pid=100, uid=0), claimed, claude_socket=sock, sessions_dir=sd,
-                           test_mode=test_mode, chain_fn=cf, argv_fn=af)
+    return verify_mcp_peer(
+        Peer(pid=100, uid=0),
+        claimed,
+        claude_socket=sock,
+        sessions_dir=sd,
+        test_mode=test_mode,
+        chain_fn=cf,
+        argv_fn=af,
+    )
 
 
 MCP = "/venv/bin/python -I -m switchboard mcp --home /h"
@@ -42,11 +51,16 @@ def test_claude_verified_only_with_parent_and_registry(tmp_path: Path) -> None:
     assert ok.harness == "claude" and ok.agent_pid == 99 and ok.claude_socket == "/tmp/cc-socks/99.sock"
     bad = verify("claude", [MCP, "/x/claude/versions/2.1.282"], sock="/tmp/cc-socks/1.sock", sd=str(d))
     assert bad.harness == "unknown" and bad.tier_note == "unverified claude"
-    shell = verify("claude", [MCP, "/bin/zsh", "/x/claude/versions/2.1.282"], sock="/tmp/cc-socks/99.sock",
-                   sd=str(d))
+    shell = verify(
+        "claude", [MCP, "/bin/zsh", "/x/claude/versions/2.1.282"], sock="/tmp/cc-socks/99.sock", sd=str(d)
+    )
     assert shell.harness == "unknown"  # started from an agent's shell: not the harness itself
-    desk = verify("claude", [MCP, "/home/x/.claude/remote/ccd-cli/2.1.284 --output-format stream-json"],
-                  sock="/tmp/cc-socks/99.sock", sd=str(d))
+    desk = verify(
+        "claude",
+        [MCP, "/home/x/.claude/remote/ccd-cli/2.1.284 --output-format stream-json"],
+        sock="/tmp/cc-socks/99.sock",
+        sd=str(d),
+    )
     assert desk.harness == "claude" and desk.agent_pid == 99  # a Claude Desktop session (WSL, Linux)
 
 
@@ -61,8 +75,15 @@ def test_codex_devin_cursor() -> None:
     assert verify("unknown", [MCP, "whatever"]).harness == "unknown"
 
 
-@pytest.mark.parametrize("relay", ["/usr/bin/ssh -R /tmp/x.sock:/h/run/broker.sock pi", "socat UNIX-LISTEN:/tmp/x",
-                                   "sshd-session: alice@notty", "python3 /tmp/k/ssh -L a:b pi"])
+@pytest.mark.parametrize(
+    "relay",
+    [
+        "/usr/bin/ssh -R /tmp/x.sock:/h/run/broker.sock pi",
+        "socat UNIX-LISTEN:/tmp/x",
+        "sshd-session: alice@notty",
+        "python3 /tmp/k/ssh -L a:b pi",
+    ],
+)
 def test_a_relay_on_the_socket_is_no_mcp_server(relay: str) -> None:
     """Through a forward of the socket every process behind it would be one "MCP server"
     (DESIGN.md §27.4.2): refused, whatever it claims (M8c; deferred from M8a)."""
@@ -71,4 +92,7 @@ def test_a_relay_on_the_socket_is_no_mcp_server(relay: str) -> None:
             verify(claimed, [relay, "-zsh", "/sbin/launchd"], test_mode=True)
         assert ei.value.code == "forbidden" and "remote link" in ei.value.message
     # an MCP server that merely mentions ssh in its arguments is not one
-    assert verify("unknown", ["/venv/bin/python -m switchboard mcp --home /tmp/ssh", "-zsh"]).harness == "unknown"
+    assert (
+        verify("unknown", ["/venv/bin/python -m switchboard mcp --home /tmp/ssh", "-zsh"]).harness
+        == "unknown"
+    )

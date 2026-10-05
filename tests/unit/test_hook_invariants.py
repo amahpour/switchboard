@@ -12,16 +12,41 @@ import pytest
 
 from switchboard.hook import switchboard_hook as hk
 
-EVENTS = sorted({e for evs in hk.HANDLED.values() for e in evs} | {
-    "PreToolUse", "PermissionRequest", "Notification", "SubagentStop", "preToolUse", "afterAgentResponse",
-    "sessionStart", "beforeSubmitPrompt", "Interrupt", "SessionEnd", "sessionEnd", "PreCompact"})
-FORBIDDEN_KEYS = {"permissionDecision", "updatedInput", "behavior", "updated_mcp_tool_output",
-                  "decision", "continue", "suppressOutput"}
+EVENTS = sorted(
+    {e for evs in hk.HANDLED.values() for e in evs}
+    | {
+        "PreToolUse",
+        "PermissionRequest",
+        "Notification",
+        "SubagentStop",
+        "preToolUse",
+        "afterAgentResponse",
+        "sessionStart",
+        "beforeSubmitPrompt",
+        "Interrupt",
+        "SessionEnd",
+        "sessionEnd",
+        "PreCompact",
+    }
+)
+FORBIDDEN_KEYS = {
+    "permissionDecision",
+    "updatedInput",
+    "behavior",
+    "updated_mcp_tool_output",
+    "decision",
+    "continue",
+    "suppressOutput",
+}
 
 
 def allowed(harness: str, event: str, printed: dict[str, Any]) -> bool:
-    ctx = {"hookSpecificOutput": {"hookEventName": event, "additionalContext": printed.get(
-        "hookSpecificOutput", {}).get("additionalContext")}}
+    ctx = {
+        "hookSpecificOutput": {
+            "hookEventName": event,
+            "additionalContext": printed.get("hookSpecificOutput", {}).get("additionalContext"),
+        }
+    }
     if harness == "cursor":
         if set(printed) == {"additional_context"}:
             return event in hk.CONTEXT_EVENTS["cursor"]
@@ -37,15 +62,25 @@ def allowed(harness: str, event: str, printed: dict[str, Any]) -> bool:
 
 def replies(rnd: random.Random):
     kinds = ["context", "continue", "approve", "allow", "block", None, 3, "", "deny"]
-    extras = [{}, {"permissionDecision": "allow"}, {"decision": "approve"}, {"updatedInput": {"x": 1}},
-              {"behavior": "allow"}, {"hookSpecificOutput": {"permissionDecision": "allow"}}]
+    extras = [
+        {},
+        {"permissionDecision": "allow"},
+        {"decision": "approve"},
+        {"updatedInput": {"x": 1}},
+        {"behavior": "allow"},
+        {"hookSpecificOutput": {"permissionDecision": "allow"}},
+    ]
     for _ in range(40):
         out: Any = {"kind": rnd.choice(kinds), "text": rnd.choice(["t", "", None, "x" * 20000, 5])}
         out.update(rnd.choice(extras))
         if rnd.random() < 0.1:
             out = rnd.choice([None, "str", [1], {"kind": "context"}])
-        yield {"out": out, "batch_id": rnd.choice([1, None, "x"]), "ack": rnd.choice(["a" * 32, None]),
-               **rnd.choice(extras)}
+        yield {
+            "out": out,
+            "batch_id": rnd.choice([1, None, "x"]),
+            "ack": rnd.choice(["a" * 32, None]),
+            **rnd.choice(extras),
+        }
 
 
 @pytest.mark.parametrize("harness", sorted(hk.HANDLED))
@@ -59,8 +94,12 @@ def test_every_event_and_fuzzed_reply_prints_nothing_or_an_allowed_shape(harness
             if harness == "cursor":
                 payload["cursor_version"] = "2026.09.23"
             env = {"DEVIN_PROJECT_DIR": "/ws"} if harness == "devin" else {}
-            hk.run(["--home", "/tmp/x", "--harness", harness, "--event", event], io.StringIO(json.dumps(payload)),
-                   out, env)
+            hk.run(
+                ["--home", "/tmp/x", "--harness", harness, "--event", event],
+                io.StringIO(json.dumps(payload)),
+                out,
+                env,
+            )
             text = out.getvalue()
             if not text:
                 continue
@@ -79,18 +118,31 @@ def test_every_event_and_fuzzed_reply_prints_nothing_or_an_allowed_shape(harness
 
 def test_render_table_directly() -> None:
     assert hk.render("claude", "PostToolUse", {"kind": "context", "text": "x"}) == {
-        "hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "x"}}
+        "hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "x"}
+    }
     assert hk.render("claude", "Stop", {"kind": "continue", "text": "x"}) is None
     assert hk.render("codex", "UserPromptSubmit", {"kind": "context", "text": "x"}) is None
-    assert hk.render("devin", "Stop", {"kind": "continue", "text": "x"}) == {"decision": "block", "reason": "x"}
+    assert hk.render("devin", "Stop", {"kind": "continue", "text": "x"}) == {
+        "decision": "block",
+        "reason": "x",
+    }
     assert hk.render("devin", "UserPromptSubmit", {"kind": "context", "text": "x"}) is None
     assert hk.render("cursor", "stop", {"kind": "continue", "text": "x"}) == {"followup_message": "x"}
     assert hk.render("cursor", "sessionStart", {"kind": "context", "text": "x"}) is None
     # at the limit: printed whole; over it: nothing (never a cut batch that gets acked)
-    assert len(hk.render("cursor", "postToolUse", {"kind": "context", "text": "y" * 8000})["additional_context"]) == 8000
+    assert (
+        len(hk.render("cursor", "postToolUse", {"kind": "context", "text": "y" * 8000})["additional_context"])
+        == 8000
+    )
     assert hk.render("cursor", "postToolUse", {"kind": "context", "text": "y" * 8001}) is None
-    assert len(hk.render("codex", "PostToolUse", {"kind": "context", "text": "y" * 5000})[
-        "hookSpecificOutput"]["additionalContext"]) == 5000
+    assert (
+        len(
+            hk.render("codex", "PostToolUse", {"kind": "context", "text": "y" * 5000})["hookSpecificOutput"][
+                "additionalContext"
+            ]
+        )
+        == 5000
+    )
     for h, n in hk.CONTEXT_MAX.items():
         ev = "postToolUse" if h == "cursor" else "PostToolUse"
         assert hk.render(h, ev, {"kind": "context", "text": "y" * (n + 1)}) is None

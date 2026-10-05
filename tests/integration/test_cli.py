@@ -13,8 +13,8 @@ import time
 from pathlib import Path
 
 import pytest
-
 from conftest import SubprocBroker, child_env, human_cli_denial_word
+
 from switchboard import __version__, build_info
 from switchboard.broker import proc
 from switchboard.mcp.client import ping
@@ -182,23 +182,40 @@ def test_cli_through_a_relay_named_ssh_is_forbidden(tmp_home: Path) -> None:
         (far / "run").mkdir(parents=True, mode=0o700)
         os.chmod(far, 0o700)
         listen = Paths.from_home(far).sock
-        relay = subprocess.Popen([sys.executable, str(exe), str(listen), str(b.paths.sock)], env=child_env(),
-                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True)
+        relay = subprocess.Popen(
+            [sys.executable, str(exe), str(listen), str(b.paths.sock)],
+            env=child_env(),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
         assert relay.stdout is not None and relay.stdout.readline().strip() == "ready"
 
         def via_relay(*args: str) -> subprocess.CompletedProcess[str]:
-            return subprocess.run([sys.executable, "-m", "switchboard", "--home", str(far), *args], env=b.env,
-                                  stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20,
-                                  start_new_session=True)
+            return subprocess.run(
+                [sys.executable, "-m", "switchboard", "--home", str(far), *args],
+                env=b.env,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                start_new_session=True,
+            )
 
         r = via_relay("status")  # anon: the relay itself works
         assert r.returncode == 0 and "running" in r.stdout, r.stderr
-        for args in (("say", "#build", "through the relay"), ("cmd", "#build", "/budget", "1"),
-                     ("cmd", "#build", "/pause"), ("login",)):
+        for args in (
+            ("say", "#build", "through the relay"),
+            ("cmd", "#build", "/budget", "1"),
+            ("cmd", "#build", "/pause"),
+            ("login",),
+        ):
             r = via_relay(*args)
             assert r.returncode == 1 and "forbidden" in r.stderr, (args, r.stderr)
             # the relay reason, not the agent one: this holds under an agent harness too
-            assert "arrived through ssh" in r.stderr and "(the process on the broker socket is ssh)" in r.stderr, r.stderr
+            assert (
+                "arrived through ssh" in r.stderr and "(the process on the broker socket is ssh)" in r.stderr
+            ), r.stderr
             assert "allow_ssh_cli" not in r.stderr, r.stderr  # no setting relaxes it
         r = b.cli("tail", "#build", "--no-follow")
         assert "through the relay" not in r.stdout and "paused" not in r.stdout, r.stdout
@@ -208,7 +225,9 @@ def test_cli_through_a_relay_named_ssh_is_forbidden(tmp_home: Path) -> None:
         if word is None:
             assert r.returncode == 0, r.stderr
         else:
-            assert r.returncode == 1 and word in r.stderr and "the process on the broker socket" not in r.stderr
+            assert (
+                r.returncode == 1 and word in r.stderr and "the process on the broker socket" not in r.stderr
+            )
     finally:
         if relay is not None:
             relay.kill()
@@ -222,8 +241,13 @@ def test_cli_through_a_relay_named_ssh_is_forbidden(tmp_home: Path) -> None:
 def test_daemonized_start_and_stop(tmp_home: Path) -> None:
     env = child_env()
     base = [sys.executable, "-m", "switchboard", "--home", str(tmp_home)]
-    r = subprocess.run(base + ["start", "--port", "0", "--test-mode", "--test-trust-uds"],
-                       env=env, capture_output=True, text=True, timeout=30)
+    r = subprocess.run(
+        base + ["start", "--port", "0", "--test-mode", "--test-trust-uds"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
     pid = None
     try:
         assert r.returncode == 0, r.stderr
@@ -242,7 +266,9 @@ def test_daemonized_start_and_stop(tmp_home: Path) -> None:
         if sys.platform == "darwin":
             assert me.ppid == 1  # daemonized: reparented to launchd
         # starting again reports the running broker
-        r2 = subprocess.run(base + ["start", "--test-mode"], env=env, capture_output=True, text=True, timeout=30)
+        r2 = subprocess.run(
+            base + ["start", "--test-mode"], env=env, capture_output=True, text=True, timeout=30
+        )
         assert r2.returncode == 0 and "already running" in r2.stdout
         r3 = subprocess.run(base + ["stop"], env=env, capture_output=True, text=True, timeout=30)
         assert r3.returncode == 0 and "stopped" in r3.stdout
@@ -261,53 +287,103 @@ def test_test_mode_guards(tmp_path: Path, tmp_home: Path) -> None:
     # no SWITCHBOARD_TEST
     env = child_env()
     env.pop("SWITCHBOARD_TEST")
-    r = subprocess.run(base + ["--home", str(tmp_home), "start", "--foreground", "--test-mode"],
-                       env=env, capture_output=True, text=True, timeout=30)
+    r = subprocess.run(
+        base + ["--home", str(tmp_home), "start", "--foreground", "--test-mode"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
     assert r.returncode == 2 and "SWITCHBOARD_TEST=1" in r.stderr
     # no marker file
     unmarked = Path("/tmp") / f"yk-nomark-{os.getpid()}"
     unmarked.mkdir(mode=0o700)
     try:
-        r = subprocess.run(base + ["--home", str(unmarked), "start", "--foreground", "--test-mode"],
-                           env=child_env(), capture_output=True, text=True, timeout=30)
+        r = subprocess.run(
+            base + ["--home", str(unmarked), "start", "--foreground", "--test-mode"],
+            env=child_env(),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
         assert r.returncode == 2 and "marker" in r.stderr
     finally:
         unmarked.rmdir()
     # --home missing (SWITCHBOARD_HOME alone is not enough)
-    r = subprocess.run(base + ["start", "--foreground", "--test-mode"],
-                       env=child_env(SWITCHBOARD_HOME=str(tmp_home)), capture_output=True, text=True, timeout=30)
+    r = subprocess.run(
+        base + ["start", "--foreground", "--test-mode"],
+        env=child_env(SWITCHBOARD_HOME=str(tmp_home)),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
     assert r.returncode == 2 and "--home" in r.stderr
     # trust without test mode
-    r = subprocess.run(base + ["--home", str(tmp_home), "start", "--foreground", "--test-trust-uds"],
-                       env=child_env(), capture_output=True, text=True, timeout=30)
+    r = subprocess.run(
+        base + ["--home", str(tmp_home), "start", "--foreground", "--test-trust-uds"],
+        env=child_env(),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
     assert r.returncode == 2
 
 
 def test_second_foreground_broker_is_refused(subproc_broker: SubprocBroker) -> None:
     r = subprocess.run(
-        [sys.executable, "-m", "switchboard", "--home", str(subproc_broker.home), "start", "--foreground",
-         "--port", "0", "--test-mode"],
-        env=child_env(), capture_output=True, text=True, timeout=30,
+        [
+            sys.executable,
+            "-m",
+            "switchboard",
+            "--home",
+            str(subproc_broker.home),
+            "start",
+            "--foreground",
+            "--port",
+            "0",
+            "--test-mode",
+        ],
+        env=child_env(),
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert r.returncode == 1 and "already runs" in r.stderr
     assert ping(subproc_broker.paths.sock) is not None
 
 
 def test_cli_without_broker(tmp_home: Path) -> None:
-    r = subprocess.run([sys.executable, "-m", "switchboard", "--home", str(tmp_home), "who", "#build"],
-                       env=child_env(), capture_output=True, text=True, timeout=30)
+    r = subprocess.run(
+        [sys.executable, "-m", "switchboard", "--home", str(tmp_home), "who", "#build"],
+        env=child_env(),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
     assert r.returncode == 3 and "not running" in r.stderr
-    r = subprocess.run([sys.executable, "-m", "switchboard", "--home", str(tmp_home), "stop"],
-                       env=child_env(), capture_output=True, text=True, timeout=30)
+    r = subprocess.run(
+        [sys.executable, "-m", "switchboard", "--home", str(tmp_home), "stop"],
+        env=child_env(),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
     assert r.returncode == 0 and "not running" in r.stdout
-    r = subprocess.run([sys.executable, "-m", "switchboard"], env=child_env(), capture_output=True, text=True, timeout=30)
+    r = subprocess.run(
+        [sys.executable, "-m", "switchboard"], env=child_env(), capture_output=True, text=True, timeout=30
+    )
     assert r.returncode == 2 and "COMMAND" in r.stdout
 
 
 @pytest.mark.parametrize("args", [["say", "#build"], ["tail"], ["cmd", "#build"]])
 def test_cli_usage_errors(tmp_home: Path, args: list[str]) -> None:
-    r = subprocess.run([sys.executable, "-m", "switchboard", "--home", str(tmp_home), *args],
-                       env=child_env(), capture_output=True, text=True, timeout=30)
+    r = subprocess.run(
+        [sys.executable, "-m", "switchboard", "--home", str(tmp_home), *args],
+        env=child_env(),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
     assert r.returncode == 2
 
 

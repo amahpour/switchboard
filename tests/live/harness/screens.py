@@ -15,11 +15,15 @@ _QUOTA_WORDS = re.compile(r"(?i)(quota|usage limit).{0,60}(exceeded|reached|exha
 _REMAINING = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*% remaining")
 # Claude Code on a model the account can't use: "There's an issue with the selected model (x).
 # It may not exist or you may not have access to it." (after the first API call), or a CLI error
-_CLAUDE_MODEL_ERR = re.compile(r"(?i)(issue with the selected model|may not exist or you may not have access"
-                               r"|model.{0,40}(not (found|available|supported)|invalid|unknown))")
+_CLAUDE_MODEL_ERR = re.compile(
+    r"(?i)(issue with the selected model|may not exist or you may not have access"
+    r"|model.{0,40}(not (found|available|supported)|invalid|unknown))"
+)
 # an approval selector (or any confirm dialog) on a Devin screen: typed text or Enter would reach it
-_DEVIN_SELECTOR = re.compile(r"(?i)(↵ confirm|esc cancel|approve once|switch to bypass|allow (once|always|for)"
-                             r"|do you want to (run|allow|proceed))")
+_DEVIN_SELECTOR = re.compile(
+    r"(?i)(↵ confirm|esc cancel|approve once|switch to bypass|allow (once|always|for)"
+    r"|do you want to (run|allow|proceed))"
+)
 
 
 def devin_quota_left(screen: str) -> float | None:
@@ -50,8 +54,9 @@ def private_tmp() -> str:
     account could re-create later. Falls back to the system temp dir when neither is private."""
     cands: list[str] = []
     try:
-        out = subprocess.run(["/usr/bin/getconf", "DARWIN_USER_TEMP_DIR"], capture_output=True, text=True,
-                             timeout=5).stdout.strip()
+        out = subprocess.run(
+            ["/usr/bin/getconf", "DARWIN_USER_TEMP_DIR"], capture_output=True, text=True, timeout=5
+        ).stdout.strip()
         cands.append(out)
     except (OSError, subprocess.SubprocessError):
         pass

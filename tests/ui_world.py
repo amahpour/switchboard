@@ -46,7 +46,6 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-
 from conftest import TEST_HUMAN, InProcBroker, make_tmp_home
 
 # The four agents in #build, in join order.
@@ -58,7 +57,14 @@ PROFILE = {
     "claude-1": ("claude", "claude:inbox", "prompting", "idle", "", "3f2a91c4-7d2e-4b8a-9c1e-5a6b7c8dc91e"),
     "codex-1": ("codex", "codex:daemon", "bypass", "busy", "", "019a3c2e-55d1-7c40-a0b2-6e1f0c9d2a77"),
     "devin-1": ("devin", "devin:wait-loop", "prompting", "idle", "", "devin-7c1e2b9a4f"),
-    "bench": ("claude", "claude:inbox", "prompting", "idle", "fpga-pi", "8b1d0e37-2c4a-4f19-b6d3-91e0a4c5f208"),
+    "bench": (
+        "claude",
+        "claude:inbox",
+        "prompting",
+        "idle",
+        "fpga-pi",
+        "8b1d0e37-2c4a-4f19-b6d3-91e0a4c5f208",
+    ),
 }
 
 # devin-1's parked reason, as the engine words it
@@ -84,25 +90,37 @@ def md_messages() -> dict[str, str]:
     HTML, which must show as inert text."""
     return {
         "ask": "@claude-1 add input validation to `parse_port`, then @codex-1 review it.",
-        "plan": ("On it. Plan:\n\n1. Reject non-digits and values outside 0–65535\n"
-                 "2. Keep `0` for 'pick a free port'\n3. Add a test for each edge"),
-        "done": ("Done in `.worktrees/claude-1`:\n\n```python\ndef parse_port(s: str) -> int:\n"
-                 "    if not s.isdigit():\n        raise ValueError(f\"not a port: {s!r}\")\n"
-                 "    n = int(s)\n    if not 0 <= n <= 65535:\n"
-                 "        raise ValueError(f\"out of range: {n}\")\n    return n\n```"),
-        "review": ("Two issues:\n\n- `'٢'.isdigit()` is True (Arabic-Indic digits): use "
-                   "`s.isascii() and s.isdigit()`\n- Leading zeros: `'0080'` passes. Intended?"),
-        "devin": ("## Open questions\n\nPicking this up from:\n\n> @claude-1 add input validation to "
-                  "`parse_port`, then @codex-1 review it.\n\n---\n\n"
-                  f"Not a link: [CI run]({JS_SCHEME}alert(document.cookie))\n\n"
-                  "<script>alert(1)</script> stays text, as does <b>this</b>."),
+        "plan": (
+            "On it. Plan:\n\n1. Reject non-digits and values outside 0–65535\n"
+            "2. Keep `0` for 'pick a free port'\n3. Add a test for each edge"
+        ),
+        "done": (
+            "Done in `.worktrees/claude-1`:\n\n```python\ndef parse_port(s: str) -> int:\n"
+            '    if not s.isdigit():\n        raise ValueError(f"not a port: {s!r}")\n'
+            "    n = int(s)\n    if not 0 <= n <= 65535:\n"
+            '        raise ValueError(f"out of range: {n}")\n    return n\n```'
+        ),
+        "review": (
+            "Two issues:\n\n- `'٢'.isdigit()` is True (Arabic-Indic digits): use "
+            "`s.isascii() and s.isdigit()`\n- Leading zeros: `'0080'` passes. Intended?"
+        ),
+        "devin": (
+            "## Open questions\n\nPicking this up from:\n\n> @claude-1 add input validation to "
+            "`parse_port`, then @codex-1 review it.\n\n---\n\n"
+            f"Not a link: [CI run]({JS_SCHEME}alert(document.cookie))\n\n"
+            "<script>alert(1)</script> stays text, as does <b>this</b>."
+        ),
         "flash": "@bench flash it once codex-1 signs off. Keep **`0`** as *pick a free port*.",
-        "report": ("**Doing:** hardening `parse_port` in `.worktrees/claude-1`\n"
-                   "**Decided:** `0` means *pick a free port*\n**Open questions:** leading zeros\n"
-                   "**Next step:** flash once codex-1 signs off"),
-        "table": ("Bitstream flashed; UART shows `PORT_OK 8080`.\n\n| input | result |\n|:--|:--|\n"
-                  "| `'8080'` | ok |\n| `'0080'` | ok (see codex-1) |\n| `'٢'` | ValueError |\n\n"
-                  f"[CI run]({CI_URL})"),
+        "report": (
+            "**Doing:** hardening `parse_port` in `.worktrees/claude-1`\n"
+            "**Decided:** `0` means *pick a free port*\n**Open questions:** leading zeros\n"
+            "**Next step:** flash once codex-1 signs off"
+        ),
+        "table": (
+            "Bitstream flashed; UART shows `PORT_OK 8080`.\n\n| input | result |\n|:--|:--|\n"
+            "| `'8080'` | ok |\n| `'0080'` | ok (see codex-1) |\n| `'٢'` | ValueError |\n\n"
+            f"[CI run]({CI_URL})"
+        ),
     }
 
 
@@ -111,7 +129,9 @@ def start_broker(home: Path) -> InProcBroker:
     guard, so the scripted conversation posts in one go."""
     from switchboard.config import Config
 
-    cfg = Config(human_name=TEST_HUMAN).with_delivery(quiet_s=0.0, max_hold_s=0.0, rate_limit_s=0.0, hop_limit=30)
+    cfg = Config(human_name=TEST_HUMAN).with_delivery(
+        quiet_s=0.0, max_hold_s=0.0, rate_limit_s=0.0, hop_limit=30
+    )
     return InProcBroker(home, cfg, test_mode=True).start()
 
 
@@ -155,7 +175,9 @@ async def seed(b: InProcBroker, agents: dict[str, Any]) -> None:
             return int(r["posted_id"])
 
         def notice(text: str, level: str | None = None) -> None:
-            b.on_loop(lambda: b.state.service.post_notice(b.state.store.get_room("#build"), text, level=level))
+            b.on_loop(
+                lambda: b.state.service.post_notice(b.state.store.get_room("#build"), text, level=level)
+            )
 
         ask = human(t["ask"])
         await say("claude-1", t["plan"], reply_to=ask)
@@ -163,7 +185,9 @@ async def seed(b: InProcBroker, agents: dict[str, Any]) -> None:
         await say("codex-1", t["review"], reply_to=done)
         await say("devin-1", t["devin"])
         notice(f"devin-1 is parked — needs a poke ({PARKED})")
-        notice("⚠ codex-1 runs with approvals off: what it reads (tool output, web pages) can steer it", "warn")
+        notice(
+            "⚠ codex-1 runs with approvals off: what it reads (tool output, web pages) can steer it", "warn"
+        )
         human(t["flash"])
         await say("bench", t["report"])
         await say("bench", t["table"])
@@ -185,21 +209,32 @@ async def seed(b: InProcBroker, agents: dict[str, Any]) -> None:
             s.update_participant(m.participant_id, tier=tier, approval_mode=mode, session_id=sid)
             s.set_status(m.participant_id, status, "hook:PreToolUse" if status == "busy" else "hook:Stop")
             with db.tx(s.con):  # fixtures only: a test agent's harness and host never change
-                s.con.execute("UPDATE participants SET harness=?, host=? WHERE id=?", (harness, host, m.participant_id))
-                s.con.execute("UPDATE messages SET sender_harness=?, sender_host=? WHERE sender_membership_id=?",
-                              (harness, host or None, m.membership_id))
+                s.con.execute(
+                    "UPDATE participants SET harness=?, host=? WHERE id=?", (harness, host, m.participant_id)
+                )
+                s.con.execute(
+                    "UPDATE messages SET sender_harness=?, sender_host=? WHERE sender_membership_id=?",
+                    (harness, host or None, m.membership_id),
+                )
                 # its join line, as the broker words it for that harness and host
                 where = f"{harness} on {host}" if host else harness
-                s.con.execute("UPDATE messages SET text=? WHERE sender_membership_id=? AND kind='join'",
-                              (f"joined ({where}, {tier})", m.membership_id))
+                s.con.execute(
+                    "UPDATE messages SET text=? WHERE sender_membership_id=? AND kind='join'",
+                    (f"joined ({where}, {tier})", m.membership_id),
+                )
             if name in ("claude-1", "bench"):
                 # these two have "read" the room: nothing left for the engine to park them over
                 # (a scripted agent has no wake path, so an idle one with a mention would park)
                 with db.tx(s.con):
-                    s.con.execute("UPDATE deliveries SET state='handled', handled_at=? WHERE membership_id=?"
-                                  " AND state IN ('pending','offered','in_context')", (time.time(), m.membership_id))
-                    s.con.execute("UPDATE batches SET state='cancelled' WHERE membership_id=? AND state='offered'",
-                                  (m.membership_id,))
+                    s.con.execute(
+                        "UPDATE deliveries SET state='handled', handled_at=? WHERE membership_id=?"
+                        " AND state IN ('pending','offered','in_context')",
+                        (time.time(), m.membership_id),
+                    )
+                    s.con.execute(
+                        "UPDATE batches SET state='cancelled' WHERE membership_id=? AND state='offered'",
+                        (m.membership_id,),
+                    )
                 st.engine.parked.pop(m.membership_id, None)
             if name == "devin-1":
                 st.engine.parked[m.membership_id] = PARKED
@@ -232,7 +267,9 @@ class HostedWorld:
         from switchboard.broker.auth import WebOrigin
 
         host = self.host
-        self.b = InProcBroker(self.home, web_origin=lambda port: WebOrigin.parse(f"http://{host}:{port}")).start()
+        self.b = InProcBroker(
+            self.home, web_origin=lambda port: WebOrigin.parse(f"http://{host}:{port}")
+        ).start()
         b = self.b
         b.on_loop(lambda: b.state.service.create_room("#build"))  # the broker answers only to its public host
         if not self.test_mode:

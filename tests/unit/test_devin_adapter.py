@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import KEY, World
+
 from switchboard import envelope
 from switchboard.adapters.devin import BLOCK_CONFIRM_S, TAINT_WHY, WAIT_TOOL, DevinAdapter
 from switchboard.config import Config
@@ -47,8 +47,9 @@ def open_wait(w: World, p: Any, m: Any, *, tuid: str | None = "call_w1", wid: st
     return sink
 
 
-def wait_post(w: World, p: Any, m: Any, bid: int, *, tuid: str = "call_w1", ok: bool = True,
-              tool: str = WAIT_TOOL) -> Any:
+def wait_post(
+    w: World, p: Any, m: Any, bid: int, *, tuid: str = "call_w1", ok: bool = True, tool: str = WAIT_TOOL
+) -> Any:
     return w.hook(p, "PostToolUse", tool=tool, tool_use_id=tuid, ok=ok, tokens=tokens(bid, m))
 
 
@@ -316,7 +317,9 @@ def test_stop_rearms_the_wait_loop_within_budget_and_the_per_prompt_cap(w: World
     assert w.hook(p, "Stop") is not None
 
 
-def test_rearms_are_capped_per_hour_so_prompt_stop_cycles_cant_drain_the_room(w: World, clock: FakeClock) -> None:
+def test_rearms_are_capped_per_hour_so_prompt_stop_cycles_cant_drain_the_room(
+    w: World, clock: FakeClock
+) -> None:
     """The per-prompt count resets at every prompt; forged prompt/Stop cycles from
     the agent's tree still can't spend more than rearm_max_per_hour of the room's budget."""
     p, _m = devin(w)
@@ -342,7 +345,9 @@ def test_no_rearm_when_paused_out_of_budget_or_off(w: World, tmp_path: Path, clo
     w.store.set_budget(w.room.id, 0)
     assert w.hook(p, "Stop") is None
     (tmp_path / "b").mkdir()
-    w2 = World(tmp_path / "b", clock, Config().replace(devin=dataclasses.replace(Config().devin, rearm=False)))
+    w2 = World(
+        tmp_path / "b", clock, Config().replace(devin=dataclasses.replace(Config().devin, rearm=False))
+    )
     q, _qm = w2.agent("devin-2", harness="devin", status="busy", hooks=True)
     assert w2.hook(q, "Stop") is None
 

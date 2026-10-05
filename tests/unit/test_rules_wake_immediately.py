@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import World
 from test_claude_adapter import claude, reg
@@ -16,6 +15,7 @@ from test_codex_adapter import attach, codex
 from test_cursor_adapter import cursor, park_result, stop
 from test_devin_adapter import devin
 from test_devin_adapter import open_wait as devin_wait
+
 from switchboard.models import Push
 
 

@@ -191,8 +191,11 @@ def _tier_timeline(db: _Db, pids: list[int]) -> dict[int, list[tuple[float, str]
     if not pids:
         return out
     marks = ",".join("?" * len(pids))
-    for r in db.q(f"SELECT ts, participant_id, data FROM events WHERE kind IN ('join','tier')"
-                  f" AND participant_id IN ({marks}) ORDER BY id", *pids):
+    for r in db.q(
+        f"SELECT ts, participant_id, data FROM events WHERE kind IN ('join','tier')"
+        f" AND participant_id IN ({marks}) ORDER BY id",
+        *pids,
+    ):
         tier = _data(r["data"]).get("tier")
         if isinstance(tier, str) and tier:
             out[r["participant_id"]].append((r["ts"], tier))
@@ -240,14 +243,17 @@ def _metrics(path: str, kind: str, b: sqlite3.Row, ts: float) -> list[tuple[str,
 
 
 def _stats(xs: list[float]) -> dict[str, Any]:
-    return {"n": len(xs),
-            "p50_ms": None if not xs else round(pctl(xs, 50) * 1000, 1),  # type: ignore[operator]
-            "p95_ms": None if not xs else round(pctl(xs, 95) * 1000, 1),  # type: ignore[operator]
-            "max_ms": None if not xs else round(max(xs) * 1000, 1)}
+    return {
+        "n": len(xs),
+        "p50_ms": None if not xs else round(pctl(xs, 50) * 1000, 1),  # type: ignore[operator]
+        "p95_ms": None if not xs else round(pctl(xs, 95) * 1000, 1),  # type: ignore[operator]
+        "max_ms": None if not xs else round(max(xs) * 1000, 1),
+    }
 
 
-def build(con: sqlite3.Connection, room_name: str, *, since: float | None = None,
-          now: float | None = None) -> dict[str, Any]:
+def build(
+    con: sqlite3.Connection, room_name: str, *, since: float | None = None, now: float | None = None
+) -> dict[str, Any]:
     """The report for ``room_name`` as a JSON-able dict (``render_markdown`` prints it)."""
     from switchboard.models import InvalidName, display_room, room_ref, split_closed
     from switchboard.store import Ambiguous, NotFound, Store
@@ -269,24 +275,51 @@ def build(con: sqlite3.Connection, room_name: str, *, since: float | None = None
 
     # members of the room (a participant may have left and joined again: one row per membership)
     host_col = "p.host" if db.has_column("participants", "host") else "''"
-    members = [Member(membership_id=r["mid"], participant_id=r["pid"], name=r["screen_name"], harness=r["harness"],
-                      tier=r["tier"], tier_note=r["tier_note"], status=r["status"],
-                      approval_mode=r["approval_mode"], joined_at=r["joined_at"], left_at=r["left_at"],
-                      left_reason=r["left_reason"], host=r["host"] or "")
-               for r in db.q("SELECT m.id AS mid, m.participant_id AS pid, m.screen_name, m.joined_at, m.left_at,"
-                             " m.left_reason, p.harness, p.tier, p.tier_note, p.status, p.approval_mode,"
-                             f" {host_col} AS host"
-                             " FROM memberships m JOIN participants p ON p.id=m.participant_id"
-                             " WHERE m.room_id=? AND (m.left_at IS NULL OR m.left_at>=?) ORDER BY m.id", rid, start)]
+    members = [
+        Member(
+            membership_id=r["mid"],
+            participant_id=r["pid"],
+            name=r["screen_name"],
+            harness=r["harness"],
+            tier=r["tier"],
+            tier_note=r["tier_note"],
+            status=r["status"],
+            approval_mode=r["approval_mode"],
+            joined_at=r["joined_at"],
+            left_at=r["left_at"],
+            left_reason=r["left_reason"],
+            host=r["host"] or "",
+        )
+        for r in db.q(
+            "SELECT m.id AS mid, m.participant_id AS pid, m.screen_name, m.joined_at, m.left_at,"
+            " m.left_reason, p.harness, p.tier, p.tier_note, p.status, p.approval_mode,"
+            f" {host_col} AS host"
+            " FROM memberships m JOIN participants p ON p.id=m.participant_id"
+            " WHERE m.room_id=? AND (m.left_at IS NULL OR m.left_at>=?) ORDER BY m.id",
+            rid,
+            start,
+        )
+    ]
     by_mid = {m.membership_id: m for m in members}
     pids = sorted({m.participant_id for m in members})
     tiers = _tier_timeline(db, pids)
 
-    msgs = {r["id"]: r for r in db.q("SELECT id, ts, sender_kind, sender_membership_id, kind FROM messages"
-                                     " WHERE room_id=? AND ts>=?", rid, start)}
-    prio = {(r["membership_id"], r["message_id"]): r["prio"]
-            for r in db.q("SELECT d.membership_id, d.message_id, d.prio FROM deliveries d"
-                          " JOIN memberships m ON m.id=d.membership_id WHERE m.room_id=?", rid)}
+    msgs = {
+        r["id"]: r
+        for r in db.q(
+            "SELECT id, ts, sender_kind, sender_membership_id, kind FROM messages WHERE room_id=? AND ts>=?",
+            rid,
+            start,
+        )
+    }
+    prio = {
+        (r["membership_id"], r["message_id"]): r["prio"]
+        for r in db.q(
+            "SELECT d.membership_id, d.message_id, d.prio FROM deliveries d"
+            " JOIN memberships m ON m.id=d.membership_id WHERE m.room_id=?",
+            rid,
+        )
+    }
 
     # message ids per batch, from the offer events (M7); older databases: the deliveries' last batch
     offer_ids: dict[int, list[int]] = {}
@@ -295,33 +328,56 @@ def build(con: sqlite3.Connection, room_name: str, *, since: float | None = None
         if isinstance(d.get("batch_id"), int) and isinstance(d.get("ids"), list):
             offer_ids[d["batch_id"]] = [i for i in d["ids"] if isinstance(i, int)]
     last_batch: dict[int, list[int]] = defaultdict(list)
-    for r in db.q("SELECT d.batch_id, d.message_id FROM deliveries d JOIN memberships m ON m.id=d.membership_id"
-                  " WHERE m.room_id=? AND d.batch_id IS NOT NULL", rid):
+    for r in db.q(
+        "SELECT d.batch_id, d.message_id FROM deliveries d JOIN memberships m ON m.id=d.membership_id"
+        " WHERE m.room_id=? AND d.batch_id IS NOT NULL",
+        rid,
+    ):
         last_batch[r["batch_id"]].append(r["message_id"])
 
-    batches = db.q("SELECT b.* FROM batches b JOIN memberships m ON m.id=b.membership_id"
-                   " WHERE m.room_id=? AND b.created_at>=? ORDER BY b.id", rid, start)
+    batches = db.q(
+        "SELECT b.* FROM batches b JOIN memberships m ON m.id=b.membership_id"
+        " WHERE m.room_id=? AND b.created_at>=? ORDER BY b.id",
+        rid,
+        start,
+    )
 
     # ---- events: the room's and its members' own, from the beginning (a pause or hold that
     # began before the window still holds); everything else is about other rooms
     cols = "SELECT id, ts, kind, room_id, membership_id, participant_id, data FROM events"
     room_all = db.q(f"{cols} WHERE room_id=? ORDER BY id", rid)
-    part_all = (db.q(f"{cols} WHERE room_id IS NULL AND participant_id IN ({','.join('?' * len(pids))})"
-                     " ORDER BY id", *pids) if pids else [])
+    part_all = (
+        db.q(
+            f"{cols} WHERE room_id IS NULL AND participant_id IN ({','.join('?' * len(pids))}) ORDER BY id",
+            *pids,
+        )
+        if pids
+        else []
+    )
     room_ev = [e for e in room_all if e["ts"] >= start]
     # the window ends at the room's last activity (its messages, its events, the batches that
     # reached its members), so a report made later reads the same
-    batch_times = [b[c] for b in batches for c in ("confirmed_at", "turn_start_at", "first_action_at")
-                   if b[c] is not None]
+    batch_times = [
+        b[c]
+        for b in batches
+        for c in ("confirmed_at", "turn_start_at", "first_action_at")
+        if b[c] is not None
+    ]
     end = max([start] + [r["ts"] for r in msgs.values()] + [e["ts"] for e in room_ev] + batch_times)
     # a participant's own events (turns, approval prompts, Cursor parks) count only inside the
     # window and while it was a member of this room: not its work elsewhere or afterwards
     spans_in_room: dict[int, list[tuple[float, float]]] = defaultdict(list)
     for m in members:
-        spans_in_room[m.participant_id].append((m.joined_at, m.left_at if m.left_at is not None else float("inf")))
+        spans_in_room[m.participant_id].append(
+            (m.joined_at, m.left_at if m.left_at is not None else float("inf"))
+        )
 
     def in_room(pid: int | None, ts: float) -> bool:
-        return pid is not None and start <= ts <= end and any(a <= ts <= b for a, b in spans_in_room.get(pid, []))
+        return (
+            pid is not None
+            and start <= ts <= end
+            and any(a <= ts <= b for a, b in spans_in_room.get(pid, []))
+        )
 
     part_ev = [e for e in part_all if in_room(e["participant_id"], e["ts"])]
     pauses = _room_pauses(room_all, now)
@@ -343,15 +399,19 @@ def build(con: sqlite3.Connection, room_name: str, *, since: float | None = None
     main_samples: dict[tuple[str, str, str, str, str], list[float]] = defaultdict(list)
     held_samples: dict[tuple[str, str, str, str, str], list[float]] = defaultdict(list)
     first_by_path: Counter[str] = Counter()
-    for b in sorted((b for b in batches if b["state"] == "confirmed"), key=lambda b: (b["confirmed_at"], b["id"])):
+    for b in sorted(
+        (b for b in batches if b["state"] == "confirmed"), key=lambda b: (b["confirmed_at"], b["id"])
+    ):
         mem = by_mid.get(b["membership_id"])
         if mem is None:
             continue
         ids = offer_ids.get(b["id"]) or last_batch.get(b["id"], [])
         # a remote Codex wake (issue #63) has the local turn/start's path but its own evidence
         tier = (LINK_TIER if b["evidence"] == LINK_EVIDENCE else PATH_TIER.get(b["path"])) or (
-            "claude:inbox" if b["path"] == "inbox" else
-            _tier_at(tiers.get(mem.participant_id, []), b["created_at"], mem.tier))
+            "claude:inbox"
+            if b["path"] == "inbox"
+            else _tier_at(tiers.get(mem.participant_id, []), b["created_at"], mem.tier)
+        )
         for mid_ in ids:
             key = (mem.membership_id, mid_)
             msg = msgs.get(mid_)
@@ -377,15 +437,25 @@ def build(con: sqlite3.Connection, room_name: str, *, since: float | None = None
         for (h, tier, path, reason, label), xs in (main_samples if main_only else samples).items():
             agg[(pick(h, tier, reason), label)] += xs
         out = [{field: k, "label": lab, **_stats(xs)} for (k, lab), xs in agg.items()]
-        out.sort(key=lambda r: (rord.get(r[field], 9) if field == "reason" else r[field],
-                                order.get(r["label"], 9)))
+        out.sort(
+            key=lambda r: (rord.get(r[field], 9) if field == "reason" else r[field], order.get(r["label"], 9))
+        )
         return out
 
     def flat(src: dict[tuple[str, str, str, str, str], list[float]]) -> list[dict[str, Any]]:
-        out = [{"harness": h, "tier": tier, "path": path, "reason": reason, "label": label, **_stats(xs)}
-               for (h, tier, path, reason, label), xs in src.items()]
-        out.sort(key=lambda r: (r["harness"], r["tier"], r["path"], rord.get(r["reason"], 9),
-                                order.get(r["label"], 9)))
+        out = [
+            {"harness": h, "tier": tier, "path": path, "reason": reason, "label": label, **_stats(xs)}
+            for (h, tier, path, reason, label), xs in src.items()
+        ]
+        out.sort(
+            key=lambda r: (
+                r["harness"],
+                r["tier"],
+                r["path"],
+                rord.get(r["reason"], 9),
+                order.get(r["label"], 9),
+            )
+        )
         return out
 
     detail = flat(samples)
@@ -395,8 +465,11 @@ def build(con: sqlite3.Connection, room_name: str, *, since: float | None = None
     by_reason = rollup("reason", lambda h, t, rs: rs, True)
 
     # ---- per member
-    posts = Counter(r["sender_membership_id"] for r in msgs.values()
-                    if r["sender_kind"] == "agent" and r["kind"] == "chat")
+    posts = Counter(
+        r["sender_membership_id"]
+        for r in msgs.values()
+        if r["sender_kind"] == "agent" and r["kind"] == "chat"
+    )
     passes = Counter(e["membership_id"] for e in room_ev if e["kind"] == "pass")
     rate_limited = Counter(e["membership_id"] for e in room_ev if e["kind"] == "rate_limited")
     rearms = Counter(e["membership_id"] for e in room_ev if e["kind"] == "rearm")
@@ -411,9 +484,11 @@ def build(con: sqlite3.Connection, room_name: str, *, since: float | None = None
                 models[e["participant_id"]] = _safe(mdl)
     parked = _parked_spells([e for e in room_all if e["kind"] in ("parked", "unparked")], start, end)
     open_d = defaultdict(Counter)
-    for r in db.q("SELECT d.membership_id, d.state, d.notified_at FROM deliveries d"
-                  " JOIN memberships m ON m.id=d.membership_id WHERE m.room_id=? AND d.state IN ('pending','offered')",
-                  rid):
+    for r in db.q(
+        "SELECT d.membership_id, d.state, d.notified_at FROM deliveries d"
+        " JOIN memberships m ON m.id=d.membership_id WHERE m.room_id=? AND d.state IN ('pending','offered')",
+        rid,
+    ):
         k = "offered" if r["state"] == "offered" else ("stubs" if r["notified_at"] is not None else "pending")
         open_d[r["membership_id"]][k] += 1
 
@@ -421,54 +496,68 @@ def build(con: sqlite3.Connection, room_name: str, *, since: float | None = None
     for m in members:
         mb = [b for b in batches if b["membership_id"] == m.membership_id]
         wakes = [b for b in mb if b["kind"] == "wake"]
-        agents.append({
-            "name": m.name,
-            "host": _safe(m.host) or "",
-            "harness": m.harness,
-            # the tier when the window ended (a teardown afterwards may have changed the row)
-            "tier": _safe(_tier_at(tiers.get(m.participant_id, []), end, m.tier)),
-            "tier_note": _safe(m.tier_note) if _tier_at(tiers.get(m.participant_id, []), end, m.tier) == m.tier
-            else None,
-            "model": models.get(m.participant_id),
-            "approval_mode": m.approval_mode,
-            "status_now": m.status if m.left_at is None else f"left ({_safe(m.left_reason) or '?'})",
-            "turns": turns.get(m.participant_id, 0),
-            "wakes": {
-                "offered": len(wakes),
-                "confirmed": sum(1 for b in wakes if b["state"] == "confirmed"),
-                "expired": sum(1 for b in wakes if b["state"] == "expired"),
-                "cancelled": sum(1 for b in wakes if b["state"] == "cancelled"),
-                "budget_counted": sum(1 for b in wakes if b["budget_counted"]) + rearms.get(m.membership_id, 0),
-                "by_kind": dict(sorted(Counter(b["wake_kind"] or "-" for b in wakes).items())),
-                "reminders": sum(1 for b in wakes if b["wake_reason"] == "reminder"),
-            },
-            "continuations": sum(1 for b in mb if b["path"] in CONTINUE_PATHS) + rearms.get(m.membership_id, 0),
-            "rearms": rearms.get(m.membership_id, 0),
-            "mid_task": sum(1 for b in mb if b["kind"] == "priority"),
-            "pulls": sum(1 for b in mb if b["kind"] == "pull"),
-            "posts": posts.get(m.membership_id, 0),
-            "passes": passes.get(m.membership_id, 0),
-            "rate_limited": rate_limited.get(m.membership_id, 0),
-            "parked": {"spells": len(parked.get(m.membership_id, [])),
-                       "seconds": round(sum(x for x, _ in parked.get(m.membership_id, [])), 1),
-                       "reasons": dict(sorted(Counter(r for _, r in parked.get(m.membership_id, [])).items()))},
-            "undelivered_at_end": dict(open_d.get(m.membership_id, {})),
-        })
+        agents.append(
+            {
+                "name": m.name,
+                "host": _safe(m.host) or "",
+                "harness": m.harness,
+                # the tier when the window ended (a teardown afterwards may have changed the row)
+                "tier": _safe(_tier_at(tiers.get(m.participant_id, []), end, m.tier)),
+                "tier_note": _safe(m.tier_note)
+                if _tier_at(tiers.get(m.participant_id, []), end, m.tier) == m.tier
+                else None,
+                "model": models.get(m.participant_id),
+                "approval_mode": m.approval_mode,
+                "status_now": m.status if m.left_at is None else f"left ({_safe(m.left_reason) or '?'})",
+                "turns": turns.get(m.participant_id, 0),
+                "wakes": {
+                    "offered": len(wakes),
+                    "confirmed": sum(1 for b in wakes if b["state"] == "confirmed"),
+                    "expired": sum(1 for b in wakes if b["state"] == "expired"),
+                    "cancelled": sum(1 for b in wakes if b["state"] == "cancelled"),
+                    "budget_counted": sum(1 for b in wakes if b["budget_counted"])
+                    + rearms.get(m.membership_id, 0),
+                    "by_kind": dict(sorted(Counter(b["wake_kind"] or "-" for b in wakes).items())),
+                    "reminders": sum(1 for b in wakes if b["wake_reason"] == "reminder"),
+                },
+                "continuations": sum(1 for b in mb if b["path"] in CONTINUE_PATHS)
+                + rearms.get(m.membership_id, 0),
+                "rearms": rearms.get(m.membership_id, 0),
+                "mid_task": sum(1 for b in mb if b["kind"] == "priority"),
+                "pulls": sum(1 for b in mb if b["kind"] == "pull"),
+                "posts": posts.get(m.membership_id, 0),
+                "passes": passes.get(m.membership_id, 0),
+                "rate_limited": rate_limited.get(m.membership_id, 0),
+                "parked": {
+                    "spells": len(parked.get(m.membership_id, [])),
+                    "seconds": round(sum(x for x, _ in parked.get(m.membership_id, [])), 1),
+                    "reasons": dict(sorted(Counter(r for _, r in parked.get(m.membership_id, [])).items())),
+                },
+                "undelivered_at_end": dict(open_d.get(m.membership_id, {})),
+            }
+        )
 
     # ---- rules that fired
     kinds = Counter(e["kind"] for e in room_ev)
     esc = Counter(str(_data(e["data"]).get("why", "?")) for e in room_ev if e["kind"] == "watchdog_escalate")
-    expire = Counter(f"{_data(e['data']).get('path', '?')}:{_safe(str(_data(e['data']).get('reason', '?')))}"
-                     for e in room_ev if e["kind"] == "expire")
+    expire = Counter(
+        f"{_data(e['data']).get('path', '?')}:{_safe(str(_data(e['data']).get('reason', '?')))}"
+        for e in room_ev
+        if e["kind"] == "expire"
+    )
     cancel = Counter(str(_data(e["data"]).get("path", "?")) for e in room_ev if e["kind"] == "cancel")
     requeue = Counter(str(_data(e["data"]).get("reason", "?")) for e in room_ev if e["kind"] == "requeue")
     # approval prompts: paired over the whole history (a prompt that closed after the window still
     # has its length), kept when one opened inside the window while its session was in the room
-    holds_approval, stalls = _approval_spells([e for e in part_all if e["kind"] == "status"], members, now,
-                                              keep=in_room)
+    holds_approval, stalls = _approval_spells(
+        [e for e in part_all if e["kind"] == "status"], members, now, keep=in_room
+    )
     # Codex holds name no participant or room: counted inside the window when a Codex agent was here
-    codex_holds = (db.q("SELECT COUNT(*) FROM events WHERE kind='codex_hold' AND ts>=? AND ts<=?",
-                        start, end)[0][0] if any(m.harness == "codex" for m in members) else 0)
+    codex_holds = (
+        db.q("SELECT COUNT(*) FROM events WHERE kind='codex_hold' AND ts>=? AND ts<=?", start, end)[0][0]
+        if any(m.harness == "codex" for m in members)
+        else 0
+    )
     rules_ = {
         "loop_guard": kinds.get("loop_guard", 0),
         "budget_exhausted": kinds.get("budget_exhausted", 0),
@@ -493,7 +582,9 @@ def build(con: sqlite3.Connection, room_name: str, *, since: float | None = None
         "rearm": kinds.get("rearm", 0),
         "parked": sum(len(v) for v in parked.values()),
         "cursor_parks": sum(1 for e in part_ev if e["kind"] == "park"),
-        "degraded": sum(1 for e in part_ev if e["kind"] == "tier" and _data(e["data"]).get("what") == "degraded"),
+        "degraded": sum(
+            1 for e in part_ev if e["kind"] == "tier" and _data(e["data"]).get("what") == "degraded"
+        ),
     }
 
     humans = sum(1 for r in msgs.values() if r["sender_kind"] == "human" and r["kind"] == "chat")
@@ -502,8 +593,11 @@ def build(con: sqlite3.Connection, room_name: str, *, since: float | None = None
     if split_closed(room["name"]) is not None:
         close_ev = [e for e in room_all if e["kind"] == "room_close"]
         last = _data(close_ev[-1]["data"]) if close_ev else {}
-        closed = {"name": room["name"], "at": iso(close_ev[-1]["ts"]) if close_ev else None,
-                  "by": _safe(last.get("by")) if isinstance(last.get("by"), str) else None}
+        closed = {
+            "name": room["name"],
+            "at": iso(close_ev[-1]["ts"]) if close_ev else None,
+            "by": _safe(last.get("by")) if isinstance(last.get("by"), str) else None,
+        }
     return {
         "room": display_room(room["name"]),
         "closed": closed,
@@ -515,11 +609,21 @@ def build(con: sqlite3.Connection, room_name: str, *, since: float | None = None
             "paused_at_end": bool(room["paused"]),
             "paused_reason": _safe(room["paused_reason"]),
         },
-        "traffic": {"human_messages": humans, "agent_messages": agent_msgs,
-                    "passes": sum(passes.values()), "members": len(members)},
-        "latency": {"by_harness": by_harness, "by_tier": by_tier, "by_reason": by_reason, "detail": detail,
-                    "held": held_detail, "first_delivery_paths": dict(sorted(first_by_path.items())),
-                    "room_paused_s": round(sum(max(0.0, min(b, end) - max(a, start)) for a, b in pauses), 1)},
+        "traffic": {
+            "human_messages": humans,
+            "agent_messages": agent_msgs,
+            "passes": sum(passes.values()),
+            "members": len(members),
+        },
+        "latency": {
+            "by_harness": by_harness,
+            "by_tier": by_tier,
+            "by_reason": by_reason,
+            "detail": detail,
+            "held": held_detail,
+            "first_delivery_paths": dict(sorted(first_by_path.items())),
+            "room_paused_s": round(sum(max(0.0, min(b, end) - max(a, start)) for a, b in pauses), 1),
+        },
         "agents": agents,
         "rules": rules_,
         "stalls": stalls,
@@ -575,8 +679,9 @@ def _approval_intervals(status_ev: list[sqlite3.Row], now: float) -> dict[int, l
     return out
 
 
-def _approval_spells(status_ev: list[sqlite3.Row], members: list[Member], now: float,
-                     keep: Any = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _approval_spells(
+    status_ev: list[sqlite3.Row], members: list[Member], now: float, keep: Any = None
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Approval prompts from status events: (every spell, the stalls over 60 s). ``keep(pid, t0)``
     picks the spells to list (the window and the membership); a prompt still open runs to ``now``."""
     names: dict[int, str] = {}
@@ -591,16 +696,40 @@ def _approval_spells(status_ev: list[sqlite3.Row], members: list[Member], now: f
             open_at[pid] = e["ts"]
         elif d.get("frm") == "waiting-approval" and pid in open_at:
             t0 = open_at.pop(pid)
-            spells.append((pid, t0, {"name": names.get(pid, "?"), "at": iso(t0), "seconds": round(e["ts"] - t0, 1),
-                                     "ended_by": _safe(str(d.get("to", "?"))), "ongoing": False}))
+            spells.append(
+                (
+                    pid,
+                    t0,
+                    {
+                        "name": names.get(pid, "?"),
+                        "at": iso(t0),
+                        "seconds": round(e["ts"] - t0, 1),
+                        "ended_by": _safe(str(d.get("to", "?"))),
+                        "ongoing": False,
+                    },
+                )
+            )
     for pid, t0 in open_at.items():
-        spells.append((pid, t0, {"name": names.get(pid, "?"), "at": iso(t0), "seconds": round(now - t0, 1),
-                                 "ended_by": None, "ongoing": True}))
+        spells.append(
+            (
+                pid,
+                t0,
+                {
+                    "name": names.get(pid, "?"),
+                    "at": iso(t0),
+                    "seconds": round(now - t0, 1),
+                    "ended_by": None,
+                    "ongoing": True,
+                },
+            )
+        )
     out = [sp for pid, t0, sp in sorted(spells, key=lambda x: x[1]) if keep is None or keep(pid, t0)]
     return out, [s for s in out if s["seconds"] > STALL_S]
 
 
-def _parked_spells(park_ev: list[sqlite3.Row], start: float, end: float) -> dict[int, list[tuple[float, str]]]:
+def _parked_spells(
+    park_ev: list[sqlite3.Row], start: float, end: float
+) -> dict[int, list[tuple[float, str]]]:
     """(seconds, reason) of each parked spell per membership (§8.5, "needs a poke") that began inside
     the window, from the engine's ``parked``/``unparked`` events; one still open runs to the end."""
     out: dict[int, list[tuple[float, str]]] = defaultdict(list)
@@ -647,26 +776,30 @@ def render_markdown(rep: dict[str, Any], *, title: str | None = None, paint: Any
     c = rep.get("closed")
     L.append(f"# {title or 'switchboard report: ' + rep['room'] + (' (closed)' if c else '')}")
     L.append("")
-    L.append(f"Room `{rep['room']}`, {w['start']} to {w['end']} ({w['minutes']} min, UTC). "
-             f"{t['members']} agent membership(s); {t['human_messages']} message(s) from the human, "
-             f"{t['agent_messages']} from agents, {t['passes']} pass(es). Budget {s['budget_remaining_at_end']}"
-             f"/{s['budget_per_hour']} left at the end, hop limit {s['hop_limit']}"
-             + (" (loop guard off)" if s["hop_limit"] == 0 else "")
-             + (f", paused at the end ({s['paused_reason']})." if s["paused_at_end"] else ".")
-             + (f" Closed {c['at'] or 'n/a'} by {c['by'] or 'n/a'} (internal name `{c['name']}`)." if c else ""))
+    L.append(
+        f"Room `{rep['room']}`, {w['start']} to {w['end']} ({w['minutes']} min, UTC). "
+        f"{t['members']} agent membership(s); {t['human_messages']} message(s) from the human, "
+        f"{t['agent_messages']} from agents, {t['passes']} pass(es). Budget {s['budget_remaining_at_end']}"
+        f"/{s['budget_per_hour']} left at the end, hop limit {s['hop_limit']}"
+        + (" (loop guard off)" if s["hop_limit"] == 0 else "")
+        + (f", paused at the end ({s['paused_reason']})." if s["paused_at_end"] else ".")
+        + (f" Closed {c['at'] or 'n/a'} by {c['by'] or 'n/a'} (internal name `{c['name']}`)." if c else "")
+    )
     L.append("")
     L.append("## Latency: message sent to the recipient")
     L.append("")
-    L.append("Each message counts once per recipient, at the first batch that reached it (deliveries held by a"
-             " pause, a /hold or an approval prompt are listed separately, below). T0 is the message's"
-             " time on the broker clock. **turn start**: the new turn began (Claude: the UserPromptSubmit the inbox"
-             " message started; Codex: `thread/status` went active after `turn/start`, or the UserPromptSubmit of a"
-             " `codex queue` item). **first hook**: the first hook after a Cursor follow-up or a Devin Stop"
-             " message. **in context**: a Devin `wait()` answer's PostToolUse, or mid-task context confirmed"
-             " (hook ack, steer). **first action**: the tool call that followed a Devin `wait()` answer."
-             " **pulled**: the agent's own `read()`/`say()` answer. Chatter includes the room's 3 s quiet period."
-             " \"By reason\" uses each sample's main measure: turn start, first hook, first action (or in"
-             " context when no tool call followed a `wait()` answer), in context for mid-task, pulled.")
+    L.append(
+        "Each message counts once per recipient, at the first batch that reached it (deliveries held by a"
+        " pause, a /hold or an approval prompt are listed separately, below). T0 is the message's"
+        " time on the broker clock. **turn start**: the new turn began (Claude: the UserPromptSubmit the inbox"
+        " message started; Codex: `thread/status` went active after `turn/start`, or the UserPromptSubmit of a"
+        " `codex queue` item). **first hook**: the first hook after a Cursor follow-up or a Devin Stop"
+        " message. **in context**: a Devin `wait()` answer's PostToolUse, or mid-task context confirmed"
+        " (hook ack, steer). **first action**: the tool call that followed a Devin `wait()` answer."
+        " **pulled**: the agent's own `read()`/`say()` answer. Chatter includes the room's 3 s quiet period."
+        ' "By reason" uses each sample\'s main measure: turn start, first hook, first action (or in'
+        " context when no tool call followed a `wait()` answer), in context for mid-task, pulled."
+    )
     L.append("")
     L.append("### By harness")
     L.append("")
@@ -696,29 +829,60 @@ def render_markdown(rep: dict[str, Any], *, title: str | None = None, paint: Any
     L.append(_row(["harness", "tier", "path", "reason", "measure", "n", "p50", "p95", "max"]))
     L.append(_row(["---"] * 9))
     for r in rep["latency"]["detail"]:
-        L.append(_row([r["harness"], f"`{r['tier']}`", f"`{r['path']}`", r["reason"], r["label"], *_lat_cells(r)]))
+        L.append(
+            _row([r["harness"], f"`{r['tier']}`", f"`{r['path']}`", r["reason"], r["label"], *_lat_cells(r)])
+        )
     L.append("")
     L.append("### Held by a pause, a /hold or an approval prompt")
     L.append("")
     held = rep["latency"]["held"]
-    L.append("Deliveries that a room pause (`/pause` or the loop guard), a `/hold` or an approval prompt open in the"
-             " recipient's session held up: their latency includes the hold, so they are kept out of the tables"
-             " above. Pulls (`read()`/`say()` answers) are never held: the agent asked for them."
-             f" The room was paused for {fmt_s(rep['latency']['room_paused_s'])} of the window.")
+    L.append(
+        "Deliveries that a room pause (`/pause` or the loop guard), a `/hold` or an approval prompt open in the"
+        " recipient's session held up: their latency includes the hold, so they are kept out of the tables"
+        " above. Pulls (`read()`/`say()` answers) are never held: the agent asked for them."
+        f" The room was paused for {fmt_s(rep['latency']['room_paused_s'])} of the window."
+    )
     L.append("")
     if held:
         L.append(_row(["harness", "tier", "path", "reason", "measure", "n", "p50", "p95", "max"]))
         L.append(_row(["---"] * 9))
         for r in held:
-            L.append(_row([r["harness"], f"`{r['tier']}`", f"`{r['path']}`", r["reason"], r["label"],
-                           *_lat_cells(r)]))
+            L.append(
+                _row(
+                    [
+                        r["harness"],
+                        f"`{r['tier']}`",
+                        f"`{r['path']}`",
+                        r["reason"],
+                        r["label"],
+                        *_lat_cells(r),
+                    ]
+                )
+            )
     else:
         L.append("None.")
     L.append("")
     L.append("## Agents")
     L.append("")
-    L.append(_row(["agent", "harness", "model", "tier at end", "turns", "wakes (confirmed/offered)",
-                   "continuations", "mid-task", "posts", "passes", "rate-limited", "parked", "undelivered at end"]))
+    L.append(
+        _row(
+            [
+                "agent",
+                "harness",
+                "model",
+                "tier at end",
+                "turns",
+                "wakes (confirmed/offered)",
+                "continuations",
+                "mid-task",
+                "posts",
+                "passes",
+                "rate-limited",
+                "parked",
+                "undelivered at end",
+            ]
+        )
+    )
     L.append(_row(["---"] * 13))
     for a in rep["agents"]:
         wk = a["wakes"]
@@ -728,17 +892,35 @@ def render_markdown(rep: dict[str, Any], *, title: str | None = None, paint: Any
         pk = a["parked"]
         pk_s = f"{pk['spells']} ({fmt_s(pk['seconds'])})" if pk["spells"] else "0"
         who = f"{a['name']}@{a['host']}" if a.get("host") else a["name"]
-        L.append(_row([who, a["harness"], a["model"] or "-", tier, a["turns"],
-                       f"{wk['confirmed']}/{wk['offered']}", a["continuations"], a["mid_task"], a["posts"],
-                       a["passes"], a["rate_limited"], pk_s, und_s]))
+        L.append(
+            _row(
+                [
+                    who,
+                    a["harness"],
+                    a["model"] or "-",
+                    tier,
+                    a["turns"],
+                    f"{wk['confirmed']}/{wk['offered']}",
+                    a["continuations"],
+                    a["mid_task"],
+                    a["posts"],
+                    a["passes"],
+                    a["rate_limited"],
+                    pk_s,
+                    und_s,
+                ]
+            )
+        )
     L.append("")
-    L.append("Turns are `turn_start` events (a UserPromptSubmit that began a turn: your own prompts and switchboard's"
-             " wakes; a Devin agent in its `wait()` loop stays in one turn). Wakes are batches that could start a"
-             " turn or return a `wait()` (counted against the budget, with Devin re-arms); continuations are"
-             " Cursor follow-ups, Devin Stop messages and re-arms. Turns and approval prompts count only while"
-             " the agent was a member of the room, inside the window. \"Parked\": spells with messages waiting"
-             " and no way to wake the agent (\"needs a poke\"), and their total time. \"Undelivered\": pending"
-             " (wake-eligible), stubs (already announced, `read()` only) or offered at the end.")
+    L.append(
+        "Turns are `turn_start` events (a UserPromptSubmit that began a turn: your own prompts and switchboard's"
+        " wakes; a Devin agent in its `wait()` loop stays in one turn). Wakes are batches that could start a"
+        " turn or return a `wait()` (counted against the budget, with Devin re-arms); continuations are"
+        " Cursor follow-ups, Devin Stop messages and re-arms. Turns and approval prompts count only while"
+        ' the agent was a member of the room, inside the window. "Parked": spells with messages waiting'
+        ' and no way to wake the agent ("needs a poke"), and their total time. "Undelivered": pending'
+        " (wake-eligible), stubs (already announced, `read()` only) or offered at the end."
+    )
     L.append("")
     L.append("## Rules that fired")
     L.append("")
@@ -755,13 +937,20 @@ def render_markdown(rep: dict[str, Any], *, title: str | None = None, paint: Any
     rule("rate limit (say refused)", r["rate_limited"])
     rule("read first (pass refused: a stub not read yet)", r.get("pass_refused", 0))
     rule("watchdog reminders", r["watchdog_remind"])
-    rule("watchdog notices to the human", sum(r["watchdog_escalate"].values()),
-         ", ".join(f"{k} {v}" for k, v in r["watchdog_escalate"].items()))
+    rule(
+        "watchdog notices to the human",
+        sum(r["watchdog_escalate"].values()),
+        ", ".join(f"{k} {v}" for k, v in r["watchdog_escalate"].items()),
+    )
     rule("re-deliver once (seen, not answered)", r["redeliver"])
-    rule("offers expired", sum(r["expired"].values()),
-         ", ".join(f"`{k}` {v}" for k, v in r["expired"].items()))
-    rule("offers cancelled by a pause", sum(r["cancelled_by_pause"].values()),
-         ", ".join(f"`{k}` {v}" for k, v in r["cancelled_by_pause"].items()))
+    rule(
+        "offers expired", sum(r["expired"].values()), ", ".join(f"`{k}` {v}" for k, v in r["expired"].items())
+    )
+    rule(
+        "offers cancelled by a pause",
+        sum(r["cancelled_by_pause"].values()),
+        ", ".join(f"`{k}` {v}" for k, v in r["cancelled_by_pause"].items()),
+    )
     rule("/pause", r["pause"])
     rule("/resume", r["resume"])
     rule("/budget n", r["budget_set"])
@@ -780,13 +969,24 @@ def render_markdown(rep: dict[str, Any], *, title: str | None = None, paint: Any
     if not rep["approval_holds"]:
         L.append("No approval prompt was seen (Claude registry, Codex app-server).")
     else:
-        L.append(f"A stall is an approval prompt open longer than {STALL_S:.0f} s; switchboard holds deliveries"
-                 " while one is open, and nothing answers it but the human.")
+        L.append(
+            f"A stall is an approval prompt open longer than {STALL_S:.0f} s; switchboard holds deliveries"
+            " while one is open, and nothing answers it but the human."
+        )
         L.append("")
         L.append(_row(["agent", "opened (UTC)", "open for", "then", "stall"]))
         L.append(_row(["---"] * 5))
         for sp in rep["approval_holds"]:
-            L.append(_row([sp["name"], sp["at"], fmt_s(sp["seconds"]), sp["ended_by"] or "still open",
-                           "**stalled**" if sp["seconds"] > STALL_S else ""]))
+            L.append(
+                _row(
+                    [
+                        sp["name"],
+                        sp["at"],
+                        fmt_s(sp["seconds"]),
+                        sp["ended_by"] or "still open",
+                        "**stalled**" if sp["seconds"] > STALL_S else "",
+                    ]
+                )
+            )
     L.append("")
     return "\n".join(p.heading(x) if _HEADING_RE.match(x) else x for x in L)

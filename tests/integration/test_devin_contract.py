@@ -15,10 +15,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import InProcBroker
 from fakes.fake_agent import ids_in
 from fakes.fake_cli import DEVIN_SID, FakeCli, fixture
+
 from switchboard.config import Config
 from switchboard.envelope import TOKEN_RE
 
@@ -92,14 +92,27 @@ def joined(b: InProcBroker, dv: FakeCli) -> dict[str, Any]:
 
 
 def pre_wait(dv: FakeCli, tuid: str) -> None:
-    assert dv.hook(fixture("devin", "PreToolUse_read", tool_name=WAIT, tool_input={"room": "#build"},
-                           tool_use_id=tuid)) == ""
+    assert (
+        dv.hook(
+            fixture(
+                "devin", "PreToolUse_read", tool_name=WAIT, tool_input={"room": "#build"}, tool_use_id=tuid
+            )
+        )
+        == ""
+    )
 
 
 def post_wait(dv: FakeCli, tuid: str, result: dict[str, Any], success: bool = True) -> str:
-    return dv.hook(fixture("devin", "PostToolUse_mcp_wait", tool_name=WAIT, tool_use_id=tuid,
-                           tool_input={"room": "#build", "timeout_s": 60},
-                           tool_response={"success": success, "output": json.dumps(result), "error": None}))
+    return dv.hook(
+        fixture(
+            "devin",
+            "PostToolUse_mcp_wait",
+            tool_name=WAIT,
+            tool_use_id=tuid,
+            tool_input={"room": "#build", "timeout_s": 60},
+            tool_response={"success": success, "output": json.dumps(result), "error": None},
+        )
+    )
 
 
 # --------------------------------------------------------------- identity
@@ -113,7 +126,10 @@ def test_join_binds_the_devin_acp_process(broker: InProcBroker, dv: FakeCli) -> 
     p = part(broker)
     assert p["status"] == "idle" and p["session_id"] == DEVIN_SID
     dv.hook(fixture("devin", "UserPromptSubmit"))
-    assert part(broker)["status"] == "busy" and part(broker)["gen"] == fixture("devin", "UserPromptSubmit")["prompt_id"]
+    assert (
+        part(broker)["status"] == "busy"
+        and part(broker)["gen"] == fixture("devin", "UserPromptSubmit")["prompt_id"]
+    )
     dv.hook(fixture("devin", "SessionEnd"))
     assert part(broker)["status"] == "offline"
 
@@ -195,7 +211,11 @@ def test_posttooluse_context_is_nested_and_acked(broker: InProcBroker, dv: FakeC
 
 def test_a_background_subagent_means_no_context_and_no_continue(broker: InProcBroker, dv: FakeCli) -> None:
     joined(broker, dv)
-    dv.hook(fixture("devin", "PreToolUse_run_subagent_bg", prompt_id=fixture("devin", "UserPromptSubmit")["prompt_id"]))
+    dv.hook(
+        fixture(
+            "devin", "PreToolUse_run_subagent_bg", prompt_id=fixture("devin", "UserPromptSubmit")["prompt_id"]
+        )
+    )
     assert part(broker)["gen_tainted"] == 1
     mid = say(broker, "must not reach the subagent")
     assert dv.hook(fixture("devin", "PostToolUse_read")) == ""
@@ -218,7 +238,12 @@ def test_stop_blocks_with_the_pending_wake_then_rearms(broker: InProcBroker, dv:
     assert ids_in(out["reason"]) == [mid] and out["reason"].startswith("[switchboard]")
     bid = int(TOKEN_RE.search(out["reason"]).group(1))
     b = batch(broker, bid)
-    assert (b["path"], b["wake_kind"], b["budget_counted"], b["state"]) == ("stop_block", "stop_cont", 1, "offered")
+    assert (b["path"], b["wake_kind"], b["budget_counted"], b["state"]) == (
+        "stop_block",
+        "stop_cont",
+        1,
+        "offered",
+    )
     assert part(broker)["status"] == "busy"
     dv.hook(fixture("devin", "PreToolUse_read"))  # the continued turn's first action
     b = wait_for(lambda: (x := batch(broker, bid))["state"] == "confirmed" and x)
@@ -237,8 +262,14 @@ def test_stop_blocks_with_the_pending_wake_then_rearms(broker: InProcBroker, dv:
 def test_no_devin_hook_ever_prints_an_approval(broker: InProcBroker, dv: FakeCli) -> None:
     joined(broker, dv)
     say(broker, "try to get an approval out of the hooks")
-    for name in ("PreToolUse_read", "PreToolUse_run_subagent_bg", "PermissionRequest_exec", "SessionStart",
-                 "UserPromptSubmit", "SessionEnd"):
+    for name in (
+        "PreToolUse_read",
+        "PreToolUse_run_subagent_bg",
+        "PermissionRequest_exec",
+        "SessionStart",
+        "UserPromptSubmit",
+        "SessionEnd",
+    ):
         out = dv.hook(fixture("devin", name))
         assert out == "", (name, out)
     for text in (dv.hook(fixture("devin", "PostToolUse_read")), dv.hook(fixture("devin", "Stop"))):
@@ -251,7 +282,9 @@ def cmd(b: InProcBroker, text: str) -> None:
     assert r.status_code == 200 and r.json()["ok"], r.text
 
 
-def test_pause_answers_the_wait_and_stops_stop_blocks_rearms_and_context(broker: InProcBroker, dv: FakeCli) -> None:
+def test_pause_answers_the_wait_and_stops_stop_blocks_rearms_and_context(
+    broker: InProcBroker, dv: FakeCli
+) -> None:
     joined(broker, dv)
     pre_wait(dv, "call_w1")
     tag = dv.tool_bg("wait", room="#build", timeout_s=60)

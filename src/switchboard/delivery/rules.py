@@ -159,8 +159,9 @@ def releasable(
     return None
 
 
-def budget_blocked(pending: Sequence[Item], *, room: Room, eff: str, peer_batch_boundary: int,
-                   boundary_seq: int) -> bool:
+def budget_blocked(
+    pending: Sequence[Item], *, room: Room, eff: str, peer_batch_boundary: int, boundary_seq: int
+) -> bool:
     """True when an idle member has wake-eligible non-human items that only the
     empty budget holds back (drives the once-per-window budget_exhausted notice)."""
     if not is_idle(eff) or room.budget_remaining > 0:
@@ -180,7 +181,9 @@ def pull_items(pending: Sequence[Item], limit: int) -> tuple[list[Item], bool]:
     return ordered[:limit], len(ordered) > limit
 
 
-def check_rate_limit(last_say_at: float | None, now: float, rate_limit_s: float, exempt: bool) -> float | None:
+def check_rate_limit(
+    last_say_at: float | None, now: float, rate_limit_s: float, exempt: bool
+) -> float | None:
     """None if the say may go ahead, else seconds until it may (DESIGN.md §8.4)."""
     if exempt or last_say_at is None or rate_limit_s <= 0:
         return None
@@ -188,8 +191,9 @@ def check_rate_limit(last_say_at: float | None, now: float, rate_limit_s: float,
     return round(left, 1) if left > 0 else None
 
 
-def rate_limit_exempt(*, reply_to_kind: str | None, reply_to_mentions: Iterable[str],
-                      sender_name: str, unhandled_priority: int) -> bool:
+def rate_limit_exempt(
+    *, reply_to_kind: str | None, reply_to_mentions: Iterable[str], sender_name: str, unhandled_priority: int
+) -> bool:
     """Replying to the human, or to a message that mentions the sender, or while
     priority items are in context but unanswered, is never rate-limited."""
     if reply_to_kind == "human":
@@ -223,9 +227,7 @@ def redeliver_ids(in_context: Iterable[Item]) -> list[int]:
     Chatter is handled on confirmation and never comes back; the once-only
     mark is the ``redelivered`` column, independent of ``attempts``.
     """
-    return [i.message_id for i in in_context
-            if i.state == "in_context" and i.prio >= 1 and not i.redelivered]
-
+    return [i.message_id for i in in_context if i.state == "in_context" and i.prio >= 1 and not i.redelivered]
 
 
 # -------------------------------------------------------------- watchdog (M6)
@@ -239,8 +241,9 @@ def watch_since(item: Item) -> float | None:
     return None
 
 
-def watchdog_verdict(item: Item, *, now: float, watchdog_s: float, watchdog_max: int,
-                     answered_at: float | None, idle: bool) -> str | None:
+def watchdog_verdict(
+    item: Item, *, now: float, watchdog_s: float, watchdog_max: int, answered_at: float | None, idle: bool
+) -> str | None:
     """The watchdog for one @mention (DESIGN.md §8.5): None, 'remind', 'escalate' or 'done'.
 
     - Only @mentions (``mentioned``) that reached the member (in context, or a
@@ -266,8 +269,14 @@ def watchdog_verdict(item: Item, *, now: float, watchdog_s: float, watchdog_max:
     return "remind" if item.reminders < watchdog_max else "escalate"
 
 
-def stalled(items: Sequence[Item], *, now: float, watchdog_s: float, watchdog_max: int,
-            answered_at: float | None = None) -> list[Item]:
+def stalled(
+    items: Sequence[Item],
+    *,
+    now: float,
+    watchdog_s: float,
+    watchdog_max: int,
+    answered_at: float | None = None,
+) -> list[Item]:
     """@mentions a member that isn't idle (busy in a turn, waiting on an approval
     prompt, offline) has held unanswered for ``(watchdog_max + 1) * watchdog_s``,
     as long as reminding and escalating an idle member takes: the human is told
@@ -286,15 +295,19 @@ def stalled(items: Sequence[Item], *, now: float, watchdog_s: float, watchdog_ma
     return out
 
 
-def parked_escalation(pending: Sequence[Item], *, parked_since: float, now: float,
-                      watchdog_s: float) -> list[Item]:
+def parked_escalation(
+    pending: Sequence[Item], *, parked_since: float, now: float, watchdog_s: float
+) -> list[Item]:
     """@mentions that are waiting only because the member is parked (nothing can
     reach it), for ``watchdog_s`` since both the message and the parking: the
     human is told the member needs a poke (DESIGN.md §8.5)."""
     if watchdog_s <= 0:
         return []
-    return [i for i in pending
-            if i.mentioned and i.notified_at is None and now - max(i.ts, parked_since) >= watchdog_s]
+    return [
+        i
+        for i in pending
+        if i.mentioned and i.notified_at is None and now - max(i.ts, parked_since) >= watchdog_s
+    ]
 
 
 # ------------------------------------------------------------ read first (§24)
@@ -313,6 +326,11 @@ def unread_stubs(pending: Iterable[Item]) -> list[int]:
       block again.
     - Human items never block: they are never stubbed.
     """
-    return sorted(i.message_id for i in pending
-                  if i.state == "pending" and i.notified_at is not None
-                  and i.sender_kind == "agent" and i.in_context_at is None)
+    return sorted(
+        i.message_id
+        for i in pending
+        if i.state == "pending"
+        and i.notified_at is not None
+        and i.sender_kind == "agent"
+        and i.in_context_at is None
+    )

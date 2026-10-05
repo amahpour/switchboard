@@ -186,15 +186,24 @@ def exposure(ids: frozenset[tuple[int, int]], proc_root: str = "/proc") -> list[
     return sorted(found)
 
 
-def start_refusal(paths: Paths, name: str, *, test_mode: bool, environ: Any, fds: tuple[int, int] = (0, 1),
-                  dialer: bool = False) -> str | None:
+def start_refusal(
+    paths: Paths,
+    name: str,
+    *,
+    test_mode: bool,
+    environ: Any,
+    fds: tuple[int, int] = (0, 1),
+    dialer: bool = False,
+) -> str | None:
     """Why this satellite may not start, or None. ``dialer``: inside a machine's dialer
     (§31.7), which has no ssh connection and no stdio link: the home must be one that dials
     its broker. Over ssh, such a home is refused (its satellite runs only in its dialer)."""
     try:
         conf = read_satellite_conf(paths)
     except FileNotFoundError:
-        return f"{paths.home} is not a satellite home (no satellite.toml): run `switchboard remote accept` there"
+        return (
+            f"{paths.home} is not a satellite home (no satellite.toml): run `switchboard remote accept` there"
+        )
     except (OSError, RemoteConfigError) as e:
         return str(e)
     if conf.name != name:
@@ -202,8 +211,10 @@ def start_refusal(paths: Paths, name: str, *, test_mode: bool, environ: Any, fds
     if dialer and not conf.dials:
         return "this home is dialed over ssh by its desktop (satellite.toml has no broker_url)"
     if not dialer and conf.dials:
-        return ("this home dials its broker (satellite.toml: transport = \"wss\"): its satellite runs only in"
-                " its dialer, `switchboard start` there")
+        return (
+            'this home dials its broker (satellite.toml: transport = "wss"): its satellite runs only in'
+            " its dialer, `switchboard start` there"
+        )
     if test_mode:
         why = test_mode_refusal(paths, home_given=True)
         if why:
@@ -379,9 +390,21 @@ class LocalConn:
 
 # -------------------------------------------------------------- satellite
 class Satellite:
-    def __init__(self, paths: Paths, name: str, *, test_mode: bool, sessions_dir: str, harden_state: str,
-                 pid_shift: int = 0, clock_skew: float = 0.0, link_proto: int = proto.LINK_PROTO,
-                 desktop: str = "", frame_log: str | None = None, stdio: str = "other"):
+    def __init__(
+        self,
+        paths: Paths,
+        name: str,
+        *,
+        test_mode: bool,
+        sessions_dir: str,
+        harden_state: str,
+        pid_shift: int = 0,
+        clock_skew: float = 0.0,
+        link_proto: int = proto.LINK_PROTO,
+        desktop: str = "",
+        frame_log: str | None = None,
+        stdio: str = "other",
+    ):
         self.paths = paths
         self.stdio = stdio
         self.name = name
@@ -467,13 +490,17 @@ class Satellite:
         claimed = claimed if isinstance(claimed, str) and claimed in HARNESSES else "unknown"
         sock = params.get("claude_socket")
         sock = sock if isinstance(sock, str) and len(sock) < 1024 else None
-        ident = verify_mcp_peer(peer, claimed, claude_socket=sock, sessions_dir=self.sessions_dir,
-                                test_mode=self.test_mode)
+        ident = verify_mcp_peer(
+            peer, claimed, claude_socket=sock, sessions_dir=self.sessions_dir, test_mode=self.test_mode
+        )
         a = {
             "harness": ident.harness,
             "mcp": [self.out_pid(ident.mcp_pid), ident.mcp_start],
-            "agent": ([self.out_pid(ident.agent_pid), ident.agent_start]
-                      if ident.agent_pid and ident.agent_start is not None else None),
+            "agent": (
+                [self.out_pid(ident.agent_pid), ident.agent_start]
+                if ident.agent_pid and ident.agent_start is not None
+                else None
+            ),
             "evidence": ident.evidence,
             "tier_note": ident.tier_note,
             "claude_socket": ident.claude_socket,
@@ -492,12 +519,19 @@ class Satellite:
         if not chain or chain[0].pid != peer.pid or not proc.same_start(chain[0].start, peer.start):
             return None
         argvs = proc.argv_many(chain)
-        return [[self.out_pid(p.pid), p.start, proto.verdict(argvs.get(p.pid, ""), match_agent)] for p in chain]
+        return [
+            [self.out_pid(p.pid), p.start, proto.verdict(argvs.get(p.pid, ""), match_agent)] for p in chain
+        ]
 
     # ------------------------------------------------------ local requests
     def ping_result(self) -> dict[str, Any]:
-        return {"version": __version__, "pid": os.getpid(), "port": None, "test_mode": self.test_mode,
-                "role": "satellite"}
+        return {
+            "version": __version__,
+            "pid": os.getpid(),
+            "port": None,
+            "test_mode": self.test_mode,
+            "role": "satellite",
+        }
 
     def status_result(self) -> dict[str, Any]:
         w = self.welcome or {}
@@ -659,11 +693,15 @@ class Satellite:
         if self.watch_n is None:
             return
         # a pid below the test shift was never one of this machine's: gone, as far as it goes
-        dead = [(pid, start) for pid, mine, start in self.watched if mine is None or not proc.alive(mine, start)]
+        dead = [
+            (pid, start) for pid, mine, start in self.watched if mine is None or not proc.alive(mine, start)
+        ]
         self.send(proto.alive(self.watch_n, dead))
 
     # ------------------------------------------------------------- Claude
-    def claude_status(self, mine: int | None, start: float, sock: str | None) -> tuple[str | None, float | None]:
+    def claude_status(
+        self, mine: int | None, start: float, sock: str | None
+    ) -> tuple[str | None, float | None]:
         """``(status, since)`` of a watched Claude agent on this machine, from this home's
         Claude registry, with the broker's own checks (``ClaudeAdapter.poll_once``): the
         file names this pid (or no pid) and the socket its MCP server proved (or none).
@@ -693,11 +731,15 @@ class Satellite:
         """The relayed registry of every watched Claude: statuses and ages, nothing else
         (no path, no session id, no text)."""
         t_read = self.now()
-        read = [(pid, start, *self.claude_status(mine, start, sock))
-                for pid, (mine, start, sock) in self.claude.items()]
+        read = [
+            (pid, start, *self.claude_status(mine, start, sock))
+            for pid, (mine, start, sock) in self.claude.items()
+        ]
         now = self.now()
-        views = [(pid, start, status, (now - since) if status is not None and since is not None else None)
-                 for pid, start, status, since in read]
+        views = [
+            (pid, start, status, (now - since) if status is not None and since is not None else None)
+            for pid, start, status, since in read
+        ]
         self.send(proto.reg(views, max(0.0, now - t_read)))
 
     def send_reg_if_watched(self) -> None:
@@ -727,7 +769,11 @@ class Satellite:
             # a Codex MCP server (issue #63): only a wake for the Codex it was attested
             # under, while that process lives; the thread's own status is read by that
             # server just before its turn/start, on this machine (mcp/codex_wake.py)
-            if self.in_pid(chk["pid"]) != cx[0] or not proc.same_start(cx[1], chk["start"]) or chk["want"] != "idle":
+            if (
+                self.in_pid(chk["pid"]) != cx[0]
+                or not proc.same_start(cx[1], chk["start"])
+                or chk["want"] != "idle"
+            ):
                 err = proto.BAD_CHK
             elif proc.alive(cx[0], cx[1]):
                 return True
@@ -745,8 +791,11 @@ class Satellite:
         data = line.get("data")
         bid = data.get("batch_id") if line.get("push") == "deliver" and isinstance(data, dict) else None
         if proto.is_int(bid):
-            posted = {"id": -next(self._own_ids), "method": "mcp.posted",
-                      "params": {"batch_id": bid, "ok": False, "err": err}}
+            posted = {
+                "id": -next(self._own_ids),
+                "method": "mcp.posted",
+                "params": {"batch_id": bid, "ok": False, "err": err},
+            }
             self.send(proto.req(lc.c, posted, {"lastmile": True}))
         return False
 
@@ -813,7 +862,9 @@ class Satellite:
             path.unlink()  # a stale socket; we hold broker.lock, so no broker listens here
         old = os.umask(0o077)
         try:
-            self.server = await asyncio.start_unix_server(self.serve_local, path=str(path), limit=MAX_LINE + 1)
+            self.server = await asyncio.start_unix_server(
+                self.serve_local, path=str(path), limit=MAX_LINE + 1
+            )
         finally:
             os.umask(old)
         os.chmod(path, 0o600)
@@ -835,16 +886,20 @@ class Satellite:
         si, so = os.fstat(in_fd), os.fstat(out_fd)
         if stat.S_ISSOCK(si.st_mode) and (si.st_dev, si.st_ino) == (so.st_dev, so.st_ino):
             os.close(in_fd)
-            reader, self.writer = await asyncio.open_connection(sock=socket.socket(fileno=out_fd),
-                                                                limit=proto.MAX_FRAME + 1)
+            reader, self.writer = await asyncio.open_connection(
+                sock=socket.socket(fileno=out_fd), limit=proto.MAX_FRAME + 1
+            )
             return reader
         reader = asyncio.StreamReader(limit=proto.MAX_FRAME + 1)
-        await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), os.fdopen(in_fd, "rb", buffering=0))
+        await loop.connect_read_pipe(
+            lambda: asyncio.StreamReaderProtocol(reader), os.fdopen(in_fd, "rb", buffering=0)
+        )
         if stat.S_ISSOCK(so.st_mode):
             _r, self.writer = await asyncio.open_connection(sock=socket.socket(fileno=out_fd))
         else:
-            wt, wp = await loop.connect_write_pipe(asyncio.streams.FlowControlMixin,
-                                                   os.fdopen(out_fd, "wb", buffering=0))
+            wt, wp = await loop.connect_write_pipe(
+                asyncio.streams.FlowControlMixin, os.fdopen(out_fd, "wb", buffering=0)
+            )
             self.writer = asyncio.StreamWriter(wt, wp, None, loop)
         return reader
 
@@ -888,8 +943,17 @@ class Satellite:
         self.done = asyncio.Event()
         self.welcomed = asyncio.Event()
         self.hook_state = hook_state_text(self.paths)
-        self.send(proto.hello(version=__version__, name=self.name, now=self.now(), hook_state=self.hook_state,
-                              test_mode=self.test_mode, harden=self.harden_state, proto=self.link_proto))
+        self.send(
+            proto.hello(
+                version=__version__,
+                name=self.name,
+                now=self.now(),
+                hook_state=self.hook_state,
+                test_mode=self.test_mode,
+                harden=self.harden_state,
+                proto=self.link_proto,
+            )
+        )
         self._tasks.append(loop.create_task(self._read_link(reader)))
         try:
             await _wait_any(self.welcomed, self.done, timeout=WELCOME_TIMEOUT_S)
@@ -946,8 +1010,9 @@ async def _wait_any(*events: asyncio.Event, timeout: float) -> None:
 # ------------------------------------------------------------------- main
 def setup_logging(paths: Paths) -> None:
     """``logs/satellite.log`` (0600, rotating): ids and states only, never text."""
-    handler = logging.handlers.RotatingFileHandler(paths.logs_dir / "satellite.log", maxBytes=2 * 1024 * 1024,
-                                                   backupCount=2, encoding="utf-8")
+    handler = logging.handlers.RotatingFileHandler(
+        paths.logs_dir / "satellite.log", maxBytes=2 * 1024 * 1024, backupCount=2, encoding="utf-8"
+    )
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     root = logging.getLogger()
     for h in list(root.handlers):
@@ -1014,8 +1079,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     # before any start time is read (its own, the lock holder's, any client's)
     clock_state = pin_linux_clock(paths)
-    log.info("start: %s (test mode %s, harden %s, stdio %s, process clock %s)", args.name, args.test_mode,
-             harden_state, stdio, clock_state)
+    log.info(
+        "start: %s (test mode %s, harden %s, stdio %s, process clock %s)",
+        args.name,
+        args.test_mode,
+        harden_state,
+        stdio,
+        clock_state,
+    )
     from switchboard.config import ConfigError, load
 
     try:
@@ -1034,9 +1105,19 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, RemoteConfigError):
         conf = None
     write_hook_copy(paths)
-    sat = Satellite(paths, args.name, test_mode=args.test_mode, sessions_dir=cfg.claude.sessions_dir,
-                    harden_state=harden_state, pid_shift=shift, clock_skew=skew, link_proto=link_proto,
-                    desktop=conf.desktop if conf else "", frame_log=frame_log, stdio=stdio)
+    sat = Satellite(
+        paths,
+        args.name,
+        test_mode=args.test_mode,
+        sessions_dir=cfg.claude.sessions_dir,
+        harden_state=harden_state,
+        pid_shift=shift,
+        clock_skew=skew,
+        link_proto=link_proto,
+        desktop=conf.desktop if conf else "",
+        frame_log=frame_log,
+        stdio=stdio,
+    )
     try:
         return asyncio.run(sat.run(in_fd, out_fd))
     finally:

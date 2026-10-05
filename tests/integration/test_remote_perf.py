@@ -18,9 +18,9 @@ import time
 from typing import Any
 
 import pytest
-
 from fakes.fake_claude import FakeClaude, fixture
 from fakes.fake_link import FakeLink, wait_for
+
 from switchboard.config import Config
 
 ROUNDS = 20
@@ -64,8 +64,14 @@ def test_idle_wake_over_exec_link() -> None:
             assert len(got) == i + 1, f"round {i}: no frame"
             conn, f = got[i]
             fc.hook(fixture("UserPromptSubmit", prompt=f["message"]["content"]))  # the turn starts
-            b = wait_for(lambda: (x := q(link, "SELECT * FROM batches WHERE path='inbox' ORDER BY id")[-1])[
-                "state"] == "confirmed" and x, what="confirmed")
+            b = wait_for(
+                lambda: (
+                    (x := q(link, "SELECT * FROM batches WHERE path='inbox' ORDER BY id")[-1])["state"]
+                    == "confirmed"
+                    and x
+                ),
+                what="confirmed",
+            )
             [m] = q(link, "SELECT ts FROM messages WHERE id=?", mid)
             turn.append(b["turn_start_at"] - m["ts"])
             frame.append(conn.t_accept - m["ts"])
@@ -74,9 +80,11 @@ def test_idle_wake_over_exec_link() -> None:
             wait_for(lambda: status(link) == "idle", what="idle")
             time.sleep(0.05)
         p50 = statistics.median(turn)
-        print(f"remote idle wake over the exec link, n={ROUNDS}: message -> inbox frame p50"
-              f" {statistics.median(frame) * 1000:.1f} ms; -> turn start p50 {p50 * 1000:.1f} ms,"
-              f" max {max(turn) * 1000:.1f} ms")
+        print(
+            f"remote idle wake over the exec link, n={ROUNDS}: message -> inbox frame p50"
+            f" {statistics.median(frame) * 1000:.1f} ms; -> turn start p50 {p50 * 1000:.1f} ms,"
+            f" max {max(turn) * 1000:.1f} ms"
+        )
         assert p50 < P50_MAX_S, sorted(turn)
     finally:
         if fc is not None:

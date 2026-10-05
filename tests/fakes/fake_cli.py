@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from conftest import InProcBroker, child_env
+
 from switchboard.install.common import hook_command
 from switchboard.paths import hook_sha12
 
@@ -44,8 +45,14 @@ def fixture(harness: str, name: str, **over: Any) -> dict[str, Any]:
 class FakeCli:
     _tags = itertools.count(1)
 
-    def __init__(self, b: InProcBroker | None, harness: str, *, home: str | Path | None = None,
-                 env: dict[str, str] | None = None):
+    def __init__(
+        self,
+        b: InProcBroker | None,
+        harness: str,
+        *,
+        home: str | Path | None = None,
+        env: dict[str, str] | None = None,
+    ):
         """``home``: another switchboard home than the broker's (a session on a remote host)."""
         assert harness in ("cursor", "devin")
         self.b = b
@@ -62,8 +69,9 @@ class FakeCli:
             extra["YK_FAKE_CLIENT"] = "devin"
             extra["DEVIN_PROJECT_DIR"] = "/ws"
             argv.append("acp")
-        self.p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=child_env(**extra),
-                                  text=True)
+        self.p = subprocess.Popen(
+            argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=child_env(**extra), text=True
+        )
         hello = self.recv()
         assert hello.get("ready"), hello
         self.pid = hello["pid"]
@@ -92,15 +100,23 @@ class FakeCli:
         return hook_command(sys.executable, self.home, hook_sha12(), self.harness, event, max_wait)
 
     def hook(self, payload: dict[str, Any], *, max_wait: int | None = None) -> str:
-        r = self.send({"op": "hook", "command": self.command(payload["hook_event_name"], max_wait),
-                       "payload": payload})
+        r = self.send(
+            {"op": "hook", "command": self.command(payload["hook_event_name"], max_wait), "payload": payload}
+        )
         assert r["rc"] == 0, r
         return r["stdout"]
 
     def hook_bg(self, payload: dict[str, Any], *, max_wait: int | None = None, timeout: float = 60) -> str:
         tag = f"h{next(self._tags)}"
-        r = self.send({"op": "hook", "command": self.command(payload["hook_event_name"], max_wait),
-                       "payload": payload, "tag": tag, "timeout": timeout})
+        r = self.send(
+            {
+                "op": "hook",
+                "command": self.command(payload["hook_event_name"], max_wait),
+                "payload": payload,
+                "tag": tag,
+                "timeout": timeout,
+            }
+        )
         assert r == {"started": tag}
         return tag
 

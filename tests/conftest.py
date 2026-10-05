@@ -140,10 +140,14 @@ def node_for_tests() -> tuple[str | None, pytest.MarkDecorator]:
     collection instead, so the tests can never be skipped by accident."""
     node = shutil.which("node")
     if node is None and os.environ.get("SWITCHBOARD_REQUIRE_NODE") == "1":
-        pytest.fail("node is not on PATH, and SWITCHBOARD_REQUIRE_NODE=1 says the web UI's node tests "
-                    "must run: install node (22 in CI) or unset the variable", pytrace=False)
-    return node, pytest.mark.skipif(node is None, reason="node is not installed "
-                                    "(SWITCHBOARD_REQUIRE_NODE=1 makes this an error)")
+        pytest.fail(
+            "node is not on PATH, and SWITCHBOARD_REQUIRE_NODE=1 says the web UI's node tests "
+            "must run: install node (22 in CI) or unset the variable",
+            pytrace=False,
+        )
+    return node, pytest.mark.skipif(
+        node is None, reason="node is not installed (SWITCHBOARD_REQUIRE_NODE=1 makes this an error)"
+    )
 
 
 def make_tmp_home() -> Path:
@@ -205,7 +209,9 @@ class InProcBroker:
         # Never let a test broker look at the user's real Codex daemon or Claude registry.
         base = cfg or Config(human_name=TEST_HUMAN)
         self.cfg = base.replace(
-            codex=dataclasses.replace(base.codex, control_socket=str(self.home / "cx.sock"), bin="/usr/bin/false"),
+            codex=dataclasses.replace(
+                base.codex, control_socket=str(self.home / "cx.sock"), bin="/usr/bin/false"
+            ),
             claude=dataclasses.replace(base.claude, sessions_dir=str(self.home / "claude-sessions")),
         )
         self.policy = policy if policy is not None else AllowAllHumans()
@@ -232,7 +238,12 @@ class InProcBroker:
         self.tcp = tcp
         origin = self.web_origin(self.port) if callable(self.web_origin) else self.web_origin
         self.app = create_app(
-            self.paths, self.cfg, self.policy, self.test_mode, port=self.port, clock=self.clock,
+            self.paths,
+            self.cfg,
+            self.policy,
+            self.test_mode,
+            port=self.port,
+            clock=self.clock,
             web_origin=origin,
         )
         self.server = uvicorn.Server(
@@ -292,7 +303,9 @@ class InProcBroker:
     def origin(self) -> str:
         return self.base
 
-    def call(self, method: str, params: dict[str, Any] | None = None, timeout: float = 10.0) -> dict[str, Any]:
+    def call(
+        self, method: str, params: dict[str, Any] | None = None, timeout: float = 10.0
+    ) -> dict[str, Any]:
         from switchboard.mcp.client import call_sync
 
         return call_sync(self.paths.sock, method, params or {}, timeout)
@@ -313,8 +326,12 @@ class InProcBroker:
         # An idle connection is dropped after 1 s, well before uvicorn closes it (5 s,
         # timeout_keep_alive): reusing one the server was closing at that moment got
         # "Connection reset by peer" on a POST, which httpx doesn't retry (seen on a slow runner).
-        c = httpx.Client(base_url=self.base, timeout=10.0, follow_redirects=False,
-                         limits=httpx.Limits(keepalive_expiry=1.0))
+        c = httpx.Client(
+            base_url=self.base,
+            timeout=10.0,
+            follow_redirects=False,
+            limits=httpx.Limits(keepalive_expiry=1.0),
+        )
         r = c.get(self.login_url().removeprefix(self.base))
         assert r.status_code == 303, r.text
         return c
@@ -348,7 +365,9 @@ def cookie_of(client: httpx.Client) -> str:
     raise AssertionError("no switchboard_session cookie")
 
 
-def ws_connect(broker: InProcBroker, cookie: str | None, *, origin: str | None = "default", host: str | None = None) -> Any:
+def ws_connect(
+    broker: InProcBroker, cookie: str | None, *, origin: str | None = "default", host: str | None = None
+) -> Any:
     """Open the UI WebSocket. ``host`` replaces switchboard.localhost:<port> in the URL (and so the Host header)."""
     from websockets.sync.client import connect
 
@@ -386,8 +405,18 @@ class SubprocBroker:
     def start(self) -> "SubprocBroker":
         from switchboard.mcp.client import ping
 
-        cmd = [sys.executable, "-m", "switchboard", "start", "--foreground", "--home", str(self.home), "--port", "0",
-               *self.args]
+        cmd = [
+            sys.executable,
+            "-m",
+            "switchboard",
+            "start",
+            "--foreground",
+            "--home",
+            str(self.home),
+            "--port",
+            "0",
+            *self.args,
+        ]
         if self.test_mode:
             cmd.append("--test-mode")
             if self.trust:
@@ -409,7 +438,9 @@ class SubprocBroker:
         self.kill()
         raise RuntimeError("subprocess broker did not start: " + (self.home / "subproc.out").read_text())
 
-    def cli(self, *args: str, input: str | None = None, timeout: float = 20.0) -> subprocess.CompletedProcess[str]:
+    def cli(
+        self, *args: str, input: str | None = None, timeout: float = 20.0
+    ) -> subprocess.CompletedProcess[str]:
         # A new session: the child never has a controlling terminal, so TTY-gated
         # verbs (``login``) behave the same in a real terminal, under CI and under an agent.
         return subprocess.run(

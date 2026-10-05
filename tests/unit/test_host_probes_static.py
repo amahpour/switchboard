@@ -42,29 +42,36 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("broker/peer.py", "AllowAllHumans.__init__"): "default chain reader for a local peer (test policy)",
     ("broker/peer.py", "verify_mcp_peer"): "a local MCP server's own ancestry (its kernel peer's chain)",
     ("broker/peer.py", "claude_registry_socket"): "the registry file of an MCP server's own parent Claude on"
-                                                  " the machine it runs on (verify_mcp_peer, the MCP server's"
-                                                  " own guard), never a participant row's pid",
+    " the machine it runs on (verify_mcp_peer, the MCP server's"
+    " own guard), never a participant row's pid",
     ("broker/daemon.py", "_write_pidfile"): "the broker's own pid",
     ("broker/daemon.py", "_pid_matches"): "the pidfile's broker process",
     ("mcp/server.py", "_parent_argv"): "the MCP server's own parent process",
-    ("adapters/codex.py", "CodexAdapter.refresh_clients"):
-        "lsof peers of this machine's Codex control socket, and agent pids of local rows only (_joined)",
-    ("adapters/codex.py", "_codex_app_server"):
-        "this machine's Codex app-servers, named by lsof or by a local mcp.hello",
+    (
+        "adapters/codex.py",
+        "CodexAdapter.refresh_clients",
+    ): "lsof peers of this machine's Codex control socket, and agent pids of local rows only (_joined)",
+    (
+        "adapters/codex.py",
+        "_codex_app_server",
+    ): "this machine's Codex app-servers, named by lsof or by a local mcp.hello",
     # the satellite (M8c) is the remote host's own view: it runs there and probes only the
     # machine it runs on, which is exactly what the broker's RemoteView of that host relays
     ("remote/satellite.py", "_is_satellite"): "an older satellite of this home, before taking it over, or the"
-                                               " newer one its replace marker names",
+    " newer one its replace marker names",
     ("remote/satellite.py", "Satellite.__init__"): "the satellite's own start time",
     ("remote/satellite.py", "main"): "the satellite's own start time, for its pidfile",
     ("remote/satellite.py", "Satellite.chain"): "its own kernel peer's chain (a hook on its own machine)",
     ("remote/satellite.py", "Satellite.send_alive"): "the watched pids, which are pids on its own machine",
-    ("remote/satellite.py", "Satellite.claude_status"): "a watched Claude on its own machine: that pid, and its"
-                                                        " registry file in this home's sessions dir (M8d)",
+    (
+        "remote/satellite.py",
+        "Satellite.claude_status",
+    ): "a watched Claude on its own machine: that pid, and its"
+    " registry file in this home's sessions dir (M8d)",
     ("remote/satellite.py", "exposure"): "the satellite's own ancestors (sshd's session process), which hold"
-                                         " the far ends of its stdio (M8e)",
+    " the far ends of its stdio (M8e)",
     ("remote/satellite.py", "Satellite.last_mile"): "the Codex process a local MCP server was attested under,"
-                                                    " on its own machine, before relaying its wake (issue #63)",
+    " on its own machine, before relaying its wake (issue #63)",
     # a remote Codex wake (issue #63) runs in the MCP server on the thread's own machine
     ("mcp/codex_wake.py", "tui_attached"): "lsof peers of that machine's own Codex control socket",
     # the dialer (§31.7) runs on the machine that dials in and looks only at its own pidfile
@@ -136,8 +143,10 @@ class _Scan(ast.NodeVisitor):
                 self._hit(node, f"{node.value.id}.{REGISTRY}")
         else:
             dotted = _dotted(node)  # switchboard.broker.proc.alive, switchboard.adapters.claude.read_registry
-            if dotted and ((dotted.endswith(".broker.proc." + node.attr) and node.attr in PROBES)
-                           or dotted.endswith((".adapters.claude." + REGISTRY, ".claude_registry." + REGISTRY))):
+            if dotted and (
+                (dotted.endswith(".broker.proc." + node.attr) and node.attr in PROBES)
+                or dotted.endswith((".adapters.claude." + REGISTRY, ".claude_registry." + REGISTRY))
+            ):
                 self._hit(node, dotted)
         self.generic_visit(node)
 
@@ -147,8 +156,13 @@ class _Scan(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         # getattr(proc, "alive") and friends
-        if (isinstance(node.func, ast.Name) and node.func.id == "getattr" and node.args
-                and isinstance(node.args[0], ast.Name) and node.args[0].id in self.proc_names):
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and node.args
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id in self.proc_names
+        ):
             self._hit(node, "getattr(proc, ...)")
         self.generic_visit(node)
 
@@ -171,8 +185,11 @@ def _hits(source: str, rel: str) -> list[tuple[int, str, str]]:
 
 
 def direct_probes(source: str, rel: str) -> list[str]:
-    return [f"{rel}:{line} in {func}: {what}" for line, func, what in _hits(source, rel)
-            if (rel, func) not in ALLOWED]
+    return [
+        f"{rel}:{line} in {func}: {what}"
+        for line, func, what in _hits(source, rel)
+        if (rel, func) not in ALLOWED
+    ]
 
 
 def test_no_direct_participant_probes_outside_hosts() -> None:
@@ -210,24 +227,46 @@ def _with_line(rel: str, anchor: str, line: str) -> str:
     raise AssertionError(f"{anchor!r} not in {rel}")
 
 
-@pytest.mark.parametrize(("rel", "anchor", "line"), [
-    # the regression the design names: a liveness check straight on the desktop's process table
-    ("broker/agents.py", "if self.engine.adapter(p).defer_end(p):",
-     "if not proc.alive(p.agent_pid, p.agent_start): pass"),
-    ("broker/agents.py", "if self._same_mcp(existing, mc.ident):", "proc.ancestry(existing.agent_pid, 8)"),
-    ("broker/app.py", "state.recovery = ", "state.store.recover_on_start(proc.alive)"),
-    ("adapters/claude.py", "data = view_of.read_registry(p.agent_pid)",
-     "data = read_registry(self.cfg.claude.sessions_dir, p.agent_pid)"),
-    ("store.py", "def recover_on_start(", "from switchboard.broker.proc import alive"),
-    # the review's finds: CodexAdapter.live on the desktop's process table, and a hook
-    # resolver that falls back to this machine's argv for another host's chain
-    ("adapters/codex.py", "if not p.agent_pid or not self._local_view().alive(p.agent_pid, p.agent_start):",
-     "if not proc.alive(p.agent_pid, p.agent_start): pass"),
-    ("adapters/codex.py", 'self._rebind(p, o, (ident.agent_pid, ident.agent_start), "mcp_hello")',
-     "proc.alive(ident.agent_pid, ident.agent_start)"),
-    ("broker/peer.py", "sid_key = session_key(harness, host, sid) if sid else None",
-     "argv_fn = argv_fn or proc.argv_many"),
-])
+@pytest.mark.parametrize(
+    ("rel", "anchor", "line"),
+    [
+        # the regression the design names: a liveness check straight on the desktop's process table
+        (
+            "broker/agents.py",
+            "if self.engine.adapter(p).defer_end(p):",
+            "if not proc.alive(p.agent_pid, p.agent_start): pass",
+        ),
+        (
+            "broker/agents.py",
+            "if self._same_mcp(existing, mc.ident):",
+            "proc.ancestry(existing.agent_pid, 8)",
+        ),
+        ("broker/app.py", "state.recovery = ", "state.store.recover_on_start(proc.alive)"),
+        (
+            "adapters/claude.py",
+            "data = view_of.read_registry(p.agent_pid)",
+            "data = read_registry(self.cfg.claude.sessions_dir, p.agent_pid)",
+        ),
+        ("store.py", "def recover_on_start(", "from switchboard.broker.proc import alive"),
+        # the review's finds: CodexAdapter.live on the desktop's process table, and a hook
+        # resolver that falls back to this machine's argv for another host's chain
+        (
+            "adapters/codex.py",
+            "if not p.agent_pid or not self._local_view().alive(p.agent_pid, p.agent_start):",
+            "if not proc.alive(p.agent_pid, p.agent_start): pass",
+        ),
+        (
+            "adapters/codex.py",
+            'self._rebind(p, o, (ident.agent_pid, ident.agent_start), "mcp_hello")',
+            "proc.alive(ident.agent_pid, ident.agent_start)",
+        ),
+        (
+            "broker/peer.py",
+            "sid_key = session_key(harness, host, sid) if sid else None",
+            "argv_fn = argv_fn or proc.argv_many",
+        ),
+    ],
+)
 def test_a_direct_probe_added_back_is_caught(rel: str, anchor: str, line: str) -> None:
     assert direct_probes((PKG / rel).read_text(encoding="utf-8"), rel) == []
     hits = direct_probes(_with_line(rel, anchor, line), rel)

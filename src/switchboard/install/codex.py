@@ -214,23 +214,27 @@ def config_after(before: str | None, python: str, home: str) -> str:
     text = before or ""
     span = _span(text)
     # lines between the markers that aren't switchboard's (a table Codex appended) are kept
-    theirs = "" if span is None else "".join(_split_span(text[span[0]: span[1]])[1])
-    outside = text if span is None else text[: span[0]] + theirs + text[span[1]:]
+    theirs = "" if span is None else "".join(_split_span(text[span[0] : span[1]])[1])
+    outside = text if span is None else text[: span[0]] + theirs + text[span[1] :]
     data = _parse(outside, "~/.codex/config.toml")
     servers = data.get("mcp_servers")
     if isinstance(servers, dict) and "switchboard" in servers:
-        raise InstallError("~/.codex/config.toml already defines mcp_servers.switchboard outside switchboard's"
-                           " markers; remove it (or wrap it in the markers) and re-run")
+        raise InstallError(
+            "~/.codex/config.toml already defines mcp_servers.switchboard outside switchboard's"
+            " markers; remove it (or wrap it in the markers) and re-run"
+        )
     if span is not None:
-        after = text[: span[0]] + block + theirs + text[span[1]:]
+        after = text[: span[0]] + block + theirs + text[span[1] :]
     elif not text:
         after = block
     else:
         after = text + ("" if text.endswith("\n") else "\n") + "\n" + block
     got = _parse(after, "the updated config.toml")
     if (got.get("mcp_servers") or {}).get("switchboard") != mcp_entry(python, home):
-        raise InstallError("couldn't add [mcp_servers.switchboard] to ~/.codex/config.toml safely"
-                           " (an inline mcp_servers table?); add it by hand")
+        raise InstallError(
+            "couldn't add [mcp_servers.switchboard] to ~/.codex/config.toml safely"
+            " (an inline mcp_servers table?); add it by hand"
+        )
     return after
 
 
@@ -240,10 +244,12 @@ def _install_display(before: str | None, after: str, block: str) -> list[str]:
     if after == before:
         return []
     span = _span(before) if before else None
-    ours, theirs = _split_span(before[span[0]: span[1]]) if before and span else ([], [])
+    ours, theirs = _split_span(before[span[0] : span[1]]) if before and span else ([], [])
     shown = [] if theirs and "".join(ours) == block else [f"  + {line}" for line in block.splitlines()]
     if theirs:
-        shown.append(f"  ~ {len(theirs)} line(s) between the markers that aren't switchboard's move after {END!r}")
+        shown.append(
+            f"  ~ {len(theirs)} line(s) between the markers that aren't switchboard's move after {END!r}"
+        )
     return shown
 
 
@@ -251,27 +257,45 @@ def config_without(before: str, home: str) -> tuple[str, list[str], list[str]]:
     """(new text, removed lines for the diff, notes): switchboard's lines of the
     marker block removed, everything else kept byte for byte."""
     data = _parse(before, "~/.codex/config.toml")
-    entry = (data.get("mcp_servers") or {}).get("switchboard") if isinstance(data.get("mcp_servers"), dict) else None
+    entry = (
+        (data.get("mcp_servers") or {}).get("switchboard")
+        if isinstance(data.get("mcp_servers"), dict)
+        else None
+    )
     span = _span(before)
     if span is None:
         if entry is not None:
-            return before, [], ["~/.codex/config.toml has an [mcp_servers.switchboard] table outside switchboard's"
-                                " markers; left alone (install never writes one there)"]
+            return (
+                before,
+                [],
+                [
+                    "~/.codex/config.toml has an [mcp_servers.switchboard] table outside switchboard's"
+                    " markers; left alone (install never writes one there)"
+                ],
+            )
         return before, [], []
     other = mcp_home(entry)
     if other is not None and other != home:
-        return before, [], [f"~/.codex/config.toml: switchboard's block there is for another switchboard home"
-                            f" ({safe_text(other)}); left alone ({other_home_hint('codex', other)})"]
-    ours, theirs = _split_span(before[span[0]: span[1]])
-    prefix, suffix = before[: span[0]], before[span[1]:]
+        return (
+            before,
+            [],
+            [
+                f"~/.codex/config.toml: switchboard's block there is for another switchboard home"
+                f" ({safe_text(other)}); left alone ({other_home_hint('codex', other)})"
+            ],
+        )
+    ours, theirs = _split_span(before[span[0] : span[1]])
+    prefix, suffix = before[: span[0]], before[span[1] :]
     if not theirs and prefix.endswith("\n\n") and (not suffix or suffix.startswith("\n")):
         prefix = prefix[:-1]  # the blank line install put before the block
     after = prefix + "".join(theirs) + suffix
     got = _parse(after, "config.toml without switchboard's block")
     still = isinstance(got.get("mcp_servers"), dict) and "switchboard" in got["mcp_servers"]
     if still or _without_switchboard(got) != _without_switchboard(data):
-        raise InstallError("couldn't remove switchboard's block from ~/.codex/config.toml safely; delete the"
-                           f" lines from {BEGIN!r} to {END!r} by hand")
+        raise InstallError(
+            "couldn't remove switchboard's block from ~/.codex/config.toml safely; delete the"
+            f" lines from {BEGIN!r} to {END!r} by hand"
+        )
     return after, _show_toml(ours), []
 
 
@@ -327,12 +351,18 @@ def plan(user_home: Path, python: str, home: str, sha12: str, *, run_commands: b
     lines = set_codex_hooks(new, hook_events(python, home, sha12), home)
     hafter = dump_json(new) if lines else (hbefore or "")
     p.edits.append(FileEdit(path=hj, before=hbefore, after=hafter, display=lines, label=tilde(hj, user_home)))
-    p.notes.append("start codex, run /hooks, then review and trust the switchboard hooks: Codex doesn't run a"
-                   " hook until you trust it, and switchboard never trusts anything itself")
-    p.notes.append("hooks and the MCP server take effect in new Codex sessions; they are inert until a"
-                   " session joins a room")
-    p.notes.append("idle wakes need the TUI attached to the Codex app-server daemon (daemon_auto_start, or"
-                   " `codex app-server daemon start`); otherwise switchboard uses `codex queue` (up to ~10 s)")
+    p.notes.append(
+        "start codex, run /hooks, then review and trust the switchboard hooks: Codex doesn't run a"
+        " hook until you trust it, and switchboard never trusts anything itself"
+    )
+    p.notes.append(
+        "hooks and the MCP server take effect in new Codex sessions; they are inert until a"
+        " session joins a room"
+    )
+    p.notes.append(
+        "idle wakes need the TUI attached to the Codex app-server daemon (daemon_auto_start, or"
+        " `codex app-server daemon start`); otherwise switchboard uses `codex queue` (up to ~10 s)"
+    )
     return p
 
 
@@ -357,12 +387,16 @@ def unplan(user_home: Path, home: str, *, run_commands: bool = True) -> Plan:
 
     json_removal(p, user_home / ".codex" / "hooks.json", user_home, home, remove)
     if moved:
-        p.notes.append(f"your own Codex hooks marked ! move up ({moved}): Codex keys hook trust by position, so"
-                       " start codex and run /hooks; it may ask you to review and trust them again (switchboard never"
-                       " writes trust state)")
+        p.notes.append(
+            f"your own Codex hooks marked ! move up ({moved}): Codex keys hook trust by position, so"
+            " start codex and run /hooks; it may ask you to review and trust them again (switchboard never"
+            " writes trust state)"
+        )
     if any(e.changed for e in p.edits):
-        p.notes.append("Codex's own trust records for the removed hooks stay in ~/.codex/config.toml; switchboard"
-                       " never edits trust state")
+        p.notes.append(
+            "Codex's own trust records for the removed hooks stay in ~/.codex/config.toml; switchboard"
+            " never edits trust state"
+        )
     return p
 
 
@@ -382,6 +416,8 @@ def print_args(python: str, home: str, sha12: str, workspace: Path | None = None
             "config.toml": toml_block(python, home),
             "hooks.json": dump_json(hooks),
         },
-        "notes": ["a -c flag keeps a plain `codex` TUI off the shared daemon; pass it to"
-                  " `codex app-server` (or use the files) instead; nothing was written"],
+        "notes": [
+            "a -c flag keeps a plain `codex` TUI off the shared daemon; pass it to"
+            " `codex app-server` (or use the files) instead; nothing was written"
+        ],
     }

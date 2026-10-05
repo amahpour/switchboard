@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import KEY, World
+
 from switchboard import envelope
 from switchboard.adapters.claude import (
     REGISTRY_IDLE_GRACE_S,
@@ -49,8 +49,15 @@ def ad(w: World) -> ClaudeAdapter:
     return a
 
 
-def claude(w: World, name: str = "claude-1", *, status: str = "idle", mode: str = "prompting",
-           attached: bool = True, registry: str | None = "idle"):
+def claude(
+    w: World,
+    name: str = "claude-1",
+    *,
+    status: str = "idle",
+    mode: str = "prompting",
+    attached: bool = True,
+    registry: str | None = "idle",
+):
     p, m = w.agent(name, harness="claude", status=status, hooks=True)
     p = w.store.update_participant(p.id, claude_socket=SOCK, approval_mode=mode)
     conn = FakeConn()
@@ -234,7 +241,9 @@ def test_mid_task_bypass_member_with_a_waiting_registry_gets_hook_context(w: Wor
     msg = w.human("mode switched, prompt open")
     assert pushes(w) == []
     out = w.hook(p, "PostToolUse", ok=True, permission_mode="bypassPermissions")
-    assert out is not None and f"id={msg.id} " in out.text and w.store.get_batch(out.batch_id).path == "hook_ctx"
+    assert (
+        out is not None and f"id={msg.id} " in out.text and w.store.get_batch(out.batch_id).path == "hook_ctx"
+    )
 
 
 def test_waiting_approval_holds_every_path_until_the_prompt_clears(w: World, clock: FakeClock) -> None:
@@ -252,7 +261,9 @@ def test_waiting_approval_holds_every_path_until_the_prompt_clears(w: World, clo
     # declined with Esc: the registry goes idle, the turn is over
     clock.advance(0.5)
     reg(w, p, "idle")
-    tr = registry_transition(w.p(p).status, w.p(p).hooks_seen_at, ad(w).registry[("", p.agent_pid)], clock.now())
+    tr = registry_transition(
+        w.p(p).status, w.p(p).hooks_seen_at, ad(w).registry[("", p.agent_pid)], clock.now()
+    )
     assert tr == ("idle", True)
     w.actions += w.engine.set_status(w.p(p), tr[0], "claude:registry", bump=tr[1])
     [push] = pushes(w)
@@ -428,7 +439,9 @@ def test_one_frame_per_session_across_rooms(w: World, clock: FakeClock) -> None:
     w.human("room 1 message")
     [p1] = pushes(w)
     assert p1.room == "#build"
-    msg2 = w.store.insert_message(room2.id, sender_name="alice", sender_kind="human", via="web", text="room 2")
+    msg2 = w.store.insert_message(
+        room2.id, sender_name="alice", sender_kind="human", via="web", text="room 2"
+    )
     w.actions += w.engine.on_message(msg2.id)
     assert pushes(w) == [] and w.engine.parked_reason(m2.id) is None
     w.store.mark_posted(p1.batch_id)
@@ -508,8 +521,9 @@ def _poller(w: World, tmp_path: Path) -> tuple[ClaudeAdapter, _RunnerStub, Path]
 
 
 @pytest.mark.parametrize("bad", ["pid", "socket"])
-def test_poll_once_ignores_a_registry_file_that_is_not_this_session(w: World, clock: FakeClock,
-                                                                    tmp_path: Path, bad: str) -> None:
+def test_poll_once_ignores_a_registry_file_that_is_not_this_session(
+    w: World, clock: FakeClock, tmp_path: Path, bad: str
+) -> None:
     p, m, _c = claude(w, status="busy", registry=None)
     a, r, sessions = _poller(w, tmp_path)
     data = {"pid": p.agent_pid, "status": "waiting", "messagingSocketPath": SOCK}

@@ -52,8 +52,9 @@ class InboxTarget:
     ppid: int
 
 
-def verify_target(harness: str | None, env_sock: str | None, registry_sock: str | None,
-                  ppid: int | None) -> InboxTarget | None:
+def verify_target(
+    harness: str | None, env_sock: str | None, registry_sock: str | None, ppid: int | None
+) -> InboxTarget | None:
     """The startup check: detection said claude, and the env socket is the one the
     parent's registry file names. Anything else: no inbox."""
     if harness != "claude" or not env_sock or not registry_sock or not ppid:
@@ -91,13 +92,17 @@ def frame_lines(token: str | None, text: str, from_: str, msg_id: str) -> bytes:
     lines = []
     if token:
         lines.append(json.dumps({"type": "auth", "token": token}))
-    lines.append(json.dumps({"type": "user", "message": {"role": "user", "content": text},
-                             "from": from_, "msg_id": msg_id}))
+    lines.append(
+        json.dumps(
+            {"type": "user", "message": {"role": "user", "content": text}, "from": from_, "msg_id": msg_id}
+        )
+    )
     return ("\n".join(lines) + "\n").encode()
 
 
-def post(target: InboxTarget | None, token: str | None, text: str, from_: str, msg_id: str,
-         hold_s: float = 0.3) -> float:
+def post(
+    target: InboxTarget | None, token: str | None, text: str, from_: str, msg_id: str, hold_s: float = 0.3
+) -> float:
     """Send one frame and hold the connection ``hold_s``. Returns the send time (epoch s).
 
     Raises InboxRefused when the guard fails, ValueError on bad text, OSError on

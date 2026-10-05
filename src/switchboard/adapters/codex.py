@@ -234,8 +234,9 @@ def _homebrew_install_dir(root: str, path: str) -> bool:
         return False
     if st.st_uid not in (os.getuid(), 0) or st.st_mode & 0o022:
         return False
-    return (os.path.isfile(os.path.join(root, "bin", "brew"))
-            and os.path.isdir(os.path.join(root, "Library", "Homebrew")))
+    return os.path.isfile(os.path.join(root, "bin", "brew")) and os.path.isdir(
+        os.path.join(root, "Library", "Homebrew")
+    )
 
 
 def internal_thread(th: dict[str, Any]) -> bool:
@@ -312,8 +313,14 @@ def bin_version(path: str) -> str | None:
                 data = json.loads(f.read(65536))
         except (OSError, ValueError):
             data = None
-        if isinstance(data, dict) and data.get("name") == "@openai/codex" and isinstance(data.get("version"), str):
-            m = _BIN_VERSION_RE.match(data["version"])  # it reaches `switchboard status`: a version or nothing
+        if (
+            isinstance(data, dict)
+            and data.get("name") == "@openai/codex"
+            and isinstance(data.get("version"), str)
+        ):
+            m = _BIN_VERSION_RE.match(
+                data["version"]
+            )  # it reaches `switchboard status`: a version or nothing
             return m.group(1) if m else None
         parent = os.path.dirname(d)
         if parent == d:
@@ -618,13 +625,16 @@ class CodexAdapter(Adapter):
         (``host`` set) is never theirs (DESIGN.md §27.5.6, §27.7)."""
         if self.st is None:
             return []
-        return [p for p in self.st.store.joined_participants() if p.harness == "codex" and p.host == LOCAL_HOST]
+        return [
+            p for p in self.st.store.joined_participants() if p.harness == "codex" and p.host == LOCAL_HOST
+        ]
 
     # ======================================================== capabilities
     def loaded_fresh(self, now: float | None = None) -> bool:
         now = self.now() if now is None else now
-        return (self.link_state == "up" and self.loaded_at is not None
-                and now - self.loaded_at <= LOADED_FRESH_S)
+        return (
+            self.link_state == "up" and self.loaded_at is not None and now - self.loaded_at <= LOADED_FRESH_S
+        )
 
     def attached(self, tid: str, now: float | None = None) -> bool:
         return self.loaded_fresh(now) and tid in self.loaded
@@ -696,9 +706,14 @@ class CodexAdapter(Adapter):
         return "mcp-only", why
 
     def conn_tier(self, ident: Any, existing: Participant | None) -> tuple[str, str | None]:
-        if existing is not None and existing.thread_proof and ident is not None \
-                and existing.host == getattr(ident, "host", LOCAL_HOST) \
-                and existing.mcp_pid == ident.mcp_pid and proc.same_start(existing.mcp_start, ident.mcp_start):
+        if (
+            existing is not None
+            and existing.thread_proof
+            and ident is not None
+            and existing.host == getattr(ident, "host", LOCAL_HOST)
+            and existing.mcp_pid == ident.mcp_pid
+            and proc.same_start(existing.mcp_start, ident.mcp_start)
+        ):
             return self.tier(existing)
         if self.cfg.codex.require_thread_proof:
             return "mcp-only", VERIFYING  # on_joined starts the thread proof
@@ -718,8 +733,10 @@ class CodexAdapter(Adapter):
     def status_summary(self) -> str:
         if self.link_state == "up":
             n = len(self._joined())
-            s = (f"up since {_hms(self.link_since)} ({len(self.loaded)} thread(s) loaded, {n} joined;"
-                 f" socket {os.path.basename(self.sock)}; codex {self.server_version or '?'})")
+            s = (
+                f"up since {_hms(self.link_since)} ({len(self.loaded)} thread(s) loaded, {n} joined;"
+                f" socket {os.path.basename(self.sock)}; codex {self.server_version or '?'})"
+            )
             if self.suspect:
                 s += f"; {len(self.suspect)} thread(s) held after a TUI left"
         elif self.link_state == "down":
@@ -819,8 +836,13 @@ class CodexAdapter(Adapter):
         tier, note = self.tier(p)
         tid = thread_of(p)
         if rel.kind == "priority":
-            if (tier == TIER_DAEMON and self.live(p, now)[0] and self.thread_view(tid) == "busy"
-                    and tid not in self.no_steer and not self._backing_off(p, now)):
+            if (
+                tier == TIER_DAEMON
+                and self.live(p, now)[0]
+                and self.thread_view(tid) == "busy"
+                and tid not in self.no_steer
+                and not self._backing_off(p, now)
+            ):
                 return Route("push", path="steer")
             return Route("pull", reason="next tool call")
         if tier == TIER_DAEMON:
@@ -840,8 +862,11 @@ class CodexAdapter(Adapter):
             if not ok:
                 return Route("none", reason=f"detached? {why}")
             if p.hooks_seen_at is None:
-                return Route("none", reason="no switchboard hooks seen from this thread: run `switchboard install"
-                                            " codex` and review the hooks in /hooks")
+                return Route(
+                    "none",
+                    reason="no switchboard hooks seen from this thread: run `switchboard install"
+                    " codex` and review the hooks in /hooks",
+                )
             if p.status not in ("idle", "starting"):
                 return Route("defer", reason="turn still running")
             if self._backing_off(p, now):
@@ -860,8 +885,11 @@ class CodexAdapter(Adapter):
             else:
                 self.ended_gone.pop(tid, None)  # still loaded (e.g. its server shutting down)
             self._soon(self.refresh_tiers)
-        elif tid in self.ended and E in RESUME_EVENTS and (
-                E == "UserPromptSubmit" or ev.t is None or ev.t > self.ended[tid]):
+        elif (
+            tid in self.ended
+            and E in RESUME_EVENTS
+            and (E == "UserPromptSubmit" or ev.t is None or ev.t > self.ended[tid])
+        ):
             # a hook of this thread that started after its SessionEnd: it runs again
             # (a resume, or its TUI reconnected to a restarted daemon)
             self._clear_ended(tid, f"hook:{E}")
@@ -1028,8 +1056,13 @@ class CodexAdapter(Adapter):
             raise SendError("queue text refused") from None
         try:
             child = await asyncio.create_subprocess_exec(
-                *argv, env=queue_env(bin_path, self.cfg), stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                *argv,
+                env=queue_env(bin_path, self.cfg),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
         except OSError:
             self._failed(p)
             raise SendError("codex queue could not start") from None
@@ -1181,7 +1214,9 @@ class CodexAdapter(Adapter):
             if p is not None:
                 lapsed = not self._held(tid, p, now, attached=self.attached(tid, now))
             else:  # not a member: it only matters for the release count
-                lapsed = tid not in self.loaded or (self.thread_view(tid) == "idle" and now - since >= DROP_HOLD_S)
+                lapsed = tid not in self.loaded or (
+                    self.thread_view(tid) == "idle" and now - since >= DROP_HOLD_S
+                )
             if lapsed:
                 self.suspect.pop(tid, None)
         live = set(self.suspect)
@@ -1190,7 +1225,9 @@ class CodexAdapter(Adapter):
             if not self.holds[key].tids:
                 del self.holds[key]
 
-    def _track(self, key: Any, tuis: frozenset[int], now: float, tids: set[str] | None, n_threads: int) -> None:
+    def _track(
+        self, key: Any, tuis: frozenset[int], now: float, tids: set[str] | None, n_threads: int
+    ) -> None:
         """Compare the TUIs connected to one server with the last look."""
         if tids is None:
             return  # which threads it has isn't known yet: look again next time
@@ -1241,8 +1278,14 @@ class CodexAdapter(Adapter):
             prev_version, self.server_version = self.server_version, server_version(rpc.init_result)
             self._set_link("up")
             if self.st is not None and self.server_version != prev_version:
-                self.st.store.add_event("codex_link", data={"state": "version", "version": self.server_version or "",
-                                                            "was": prev_version or ""})
+                self.st.store.add_event(
+                    "codex_link",
+                    data={
+                        "state": "version",
+                        "version": self.server_version or "",
+                        "was": prev_version or "",
+                    },
+                )
                 log.info("codex app-server version %s (was %s)", self.server_version, prev_version)
             self._resolve_bin(force=True)  # a daemon restart may be a Codex upgrade: find the binary again
             delay = LINK_BACKOFF_S[0]
@@ -1348,8 +1391,10 @@ class CodexAdapter(Adapter):
         clients.discard(me)
         joined = self._joined()
         agents: dict[int, float | None] = {
-            p.agent_pid: p.agent_start for p in joined
-            if p.agent_pid and p.agent_pid not in servers and p.agent_pid != me}
+            p.agent_pid: p.agent_start
+            for p in joined
+            if p.agent_pid and p.agent_pid not in servers and p.agent_pid != me
+        }
         peers: dict[int, set[int]] = {}
         for a in agents:
             names = bound_names(recs, a)
@@ -1374,7 +1419,9 @@ class CodexAdapter(Adapter):
             await self._learn_threads(self.rpc)
         users = self.user_threads()
         self._track("control", tuis, now, users if up else None, len(users))
-        self.clients = Clients(bool(tuis), self.now(), len(tuis), None if tuis else "no Codex TUI attached", tuis)
+        self.clients = Clients(
+            bool(tuis), self.now(), len(tuis), None if tuis else "no Codex TUI attached", tuis
+        )
         acs: dict[int, AgentClients] = {}
         for a, start in agents.items():
             i = infos.get(a)
@@ -1386,8 +1433,14 @@ class CodexAdapter(Adapter):
                 t = frozenset(x for x in peers[a] if is_tui_argv(argvs.get(x, "")))
                 tids = {thread_of(p) for p in joined if p.agent_pid == a}
                 self._track(("agent", a, start), t, now, tids, len(tids))
-                acs[a] = AgentClients(start, now, bool(t), True, len(t),
-                                      None if t else "no Codex TUI attached to its app-server")
+                acs[a] = AgentClients(
+                    start,
+                    now,
+                    bool(t),
+                    True,
+                    len(t),
+                    None if t else "no Codex TUI attached to its app-server",
+                )
             else:
                 par = infos.get(i.ppid)
                 ok = par is not None and is_tui_argv(argvs.get(par.pid, ""))
@@ -1454,8 +1507,14 @@ class CodexAdapter(Adapter):
         """One more proof try (at a turn end, or when the link comes up), up to
         PROOF_RETRY_MAX: a join inside a long turn is only readable once that
         turn is over (0.156.1 lists an in-progress turn without its items)."""
-        if (p.harness != "codex" or not self.cfg.codex.require_thread_proof or p.thread_proof
-                or not p.bind_nonce or not p.active or p.id in self._proofs):
+        if (
+            p.harness != "codex"
+            or not self.cfg.codex.require_thread_proof
+            or p.thread_proof
+            or not p.bind_nonce
+            or not p.active
+            or p.id in self._proofs
+        ):
             return
         key = (p.id, p.bind_nonce)
         n = self._proof_tries.get(key, 0)
@@ -1464,13 +1523,21 @@ class CodexAdapter(Adapter):
         self._proof_tries[key] = n + 1
         try:
             t = asyncio.get_running_loop().create_task(
-                self._prove(p.id, thread_of(p), p.bind_nonce, (PROOF_RETRY_DELAY_S,), report=False))
+                self._prove(p.id, thread_of(p), p.bind_nonce, (PROOF_RETRY_DELAY_S,), report=False)
+            )
         except RuntimeError:
             return
         self._proofs[p.id] = t
 
-    async def _prove(self, participant_id: int, tid: str, nonce: str,
-                     schedule: tuple[float, ...] | None = None, *, report: bool = True) -> None:
+    async def _prove(
+        self,
+        participant_id: int,
+        tid: str,
+        nonce: str,
+        schedule: tuple[float, ...] | None = None,
+        *,
+        report: bool = True,
+    ) -> None:
         start = self.now()
         needle = f"yk:j{nonce}"
         try:
@@ -1488,8 +1555,11 @@ class CodexAdapter(Adapter):
                 if join_proven(th, needle):
                     joined = self.st.store.joins_since_thread_proof(participant_id)
                     self.st.store.update_participant(participant_id, thread_proof=1)
-                    self.st.store.add_event("bind", participant_id=participant_id,
-                                            data={"what": "thread_proof", "ok": True, "attempt": n})
+                    self.st.store.add_event(
+                        "bind",
+                        participant_id=participant_id,
+                        data={"what": "thread_proof", "ok": True, "attempt": n},
+                    )
                     log.info("codex participant %d: thread proof ok (attempt %d)", participant_id, n)
                     o = self._rejoins.pop(participant_id, None)
                     if o is not None:  # a re-join after a daemon restart, now proven: the notice
@@ -1501,10 +1571,12 @@ class CodexAdapter(Adapter):
                     self._announce_verified(participant_id, joined)
                     return
             if report:
-                self.st.store.add_event("bind", participant_id=participant_id,
-                                        data={"what": "thread_proof", "ok": False})
-                log.warning("codex participant %d: thread proof not found yet (retried at turn ends)",
-                            participant_id)
+                self.st.store.add_event(
+                    "bind", participant_id=participant_id, data={"what": "thread_proof", "ok": False}
+                )
+                log.warning(
+                    "codex participant %d: thread proof not found yet (retried at turn ends)", participant_id
+                )
             self._verifying.discard(participant_id)
             self.refresh_tiers()
         finally:
@@ -1519,8 +1591,13 @@ class CodexAdapter(Adapter):
         its join was announced before."""
         p = self.st.store.get_participant(participant_id)
         label = tier_label(p.tier, p.tier_note) if p is not None else "-"  # rows are never deleted
-        self._run([Notice(m.room_id, "info", f"{m.screen_name} is verified: {label}")
-                   for m in self.st.store.participant_memberships(participant_id) if m.id in joined])
+        self._run(
+            [
+                Notice(m.room_id, "info", f"{m.screen_name} is verified: {label}")
+                for m in self.st.store.participant_memberships(participant_id)
+                if m.id in joined
+            ]
+        )
 
     # ------------------------------------------------------- session end
     def _clear_ended(self, tid: str, why: str) -> bool:
@@ -1532,10 +1609,14 @@ class CodexAdapter(Adapter):
         self.ended_gone.pop(tid, None)
         p = self._participant(tid)
         if self.st is not None:
-            self.st.store.add_event("codex_session", participant_id=p.id if p else None,
-                                    data={"what": "running_again", "why": why})
-        log.info("codex participant %s: thread running again after its SessionEnd (%s)",
-                 p.id if p else "-", why)
+            self.st.store.add_event(
+                "codex_session",
+                participant_id=p.id if p else None,
+                data={"what": "running_again", "why": why},
+            )
+        log.info(
+            "codex participant %s: thread running again after its SessionEnd (%s)", p.id if p else "-", why
+        )
         self._soon(self.refresh_tiers)
         return True
 
@@ -1573,10 +1654,15 @@ class CodexAdapter(Adapter):
             o = self.orphans[p.id] = Orphan(now, p.agent_pid, p.agent_start)
             if thread_of(p) in self.ended:
                 self.ended_gone.setdefault(thread_of(p), now)  # its server died: loaded again = back
-            self.st.store.add_event("codex_restart", participant_id=p.id,
-                                    data={"what": "app_server_gone", "grace_s": grace})
-            log.info("codex participant %d: its app-server is gone; waiting up to %.0f s for a restarted"
-                     " daemon to load its thread", p.id, grace)
+            self.st.store.add_event(
+                "codex_restart", participant_id=p.id, data={"what": "app_server_gone", "grace_s": grace}
+            )
+            log.info(
+                "codex participant %d: its app-server is gone; waiting up to %.0f s for a restarted"
+                " daemon to load its thread",
+                p.id,
+                grace,
+            )
             self.refresh_tiers()
             self._spawn(self.try_rebind())
             return True
@@ -1586,8 +1672,9 @@ class CodexAdapter(Adapter):
         if p.id not in self.orphans:
             return True  # re-bound just now
         del self.orphans[p.id]
-        self.st.store.add_event("codex_restart", participant_id=p.id,
-                                data={"what": "gave_up", "after_s": round(now - o.since, 1)})
+        self.st.store.add_event(
+            "codex_restart", participant_id=p.id, data={"what": "gave_up", "after_s": round(now - o.since, 1)}
+        )
         log.info("codex participant %d: its thread didn't come back within %.0f s; ending it", p.id, grace)
         return False
 
@@ -1608,8 +1695,11 @@ class CodexAdapter(Adapter):
             o = self.orphans.get(p.id)
             if o is None or p.harness != "codex":
                 continue
-            if getattr(ident, "harness", None) == "codex" and ident.agent_pid and \
-                    self._local_view().alive(ident.agent_pid, ident.agent_start):
+            if (
+                getattr(ident, "harness", None) == "codex"
+                and ident.agent_pid
+                and self._local_view().alive(ident.agent_pid, ident.agent_start)
+            ):
                 self._rebind(p, o, (ident.agent_pid, ident.agent_start), "mcp_hello")
         if self.orphans:
             self._spawn(self.try_rebind())
@@ -1676,16 +1766,25 @@ class CodexAdapter(Adapter):
     def _reconnected(self, p: Participant, o: Orphan, via: str) -> None:
         tid = thread_of(p)
         now = self.now()
-        self.st.store.add_event("codex_restart", participant_id=p.id,
-                                data={"what": "rebound", "via": via, "after_s": round(now - o.since, 1)})
-        log.info("codex participant %d re-bound after a daemon restart (%s, after %.1f s)",
-                 p.id, via, now - o.since)
+        self.st.store.add_event(
+            "codex_restart",
+            participant_id=p.id,
+            data={"what": "rebound", "via": via, "after_s": round(now - o.since, 1)},
+        )
+        log.info(
+            "codex participant %d re-bound after a daemon restart (%s, after %.1f s)",
+            p.id,
+            via,
+            now - o.since,
+        )
         self.backoff.pop(p.id, None)
         self.reroutes.pop(p.id, None)
         self._clear_ended(tid, "daemon restart")  # the old daemon's SessionEnd
         self._sync_status(tid)
-        acts: list[Any] = [Notice(m.room_id, "info", f"{m.screen_name} reconnected after a Codex daemon restart")
-                           for m in self.st.store.participant_memberships(p.id)]
+        acts: list[Any] = [
+            Notice(m.room_id, "info", f"{m.screen_name} reconnected after a Codex daemon restart")
+            for m in self.st.store.participant_memberships(p.id)
+        ]
         self._run(acts)
         self.refresh_tiers()
         self._run(self.st.engine.evaluate_participant(p.id))
@@ -1718,13 +1817,23 @@ class CodexAdapter(Adapter):
         old, self.bin_path = self.bin_path, new
         prev, self.bin_version = self.bin_version, ver
         self.bin_fallback = fell_back
-        log.info("codex binary %s%s%s", f"found (version {ver or '?'})" if new else "not found",
-                 " on PATH (the configured path is gone)" if fell_back else "",
-                 f"; it was version {prev or '?'}" if old else "")
+        log.info(
+            "codex binary %s%s%s",
+            f"found (version {ver or '?'})" if new else "not found",
+            " on PATH (the configured path is gone)" if fell_back else "",
+            f"; it was version {prev or '?'}" if old else "",
+        )
         if self.st is not None:
-            self.st.store.add_event("codex_bin", data={"found": new is not None, "version": ver or "",
-                                                       "was": prev or "", "changed": old is not None,
-                                                       "fell_back": fell_back})
+            self.st.store.add_event(
+                "codex_bin",
+                data={
+                    "found": new is not None,
+                    "version": ver or "",
+                    "was": prev or "",
+                    "changed": old is not None,
+                    "fell_back": fell_back,
+                },
+            )
             self.st.info.codex_link = self.status_summary()
 
     # ------------------------------------------------------------- tiers
@@ -1786,8 +1895,7 @@ def _codex_app_server(pid: int, start: float | None = None) -> tuple[int, float 
 
 def _run_lsof(lsof: str) -> str:
     args = LSOF_ARGS_LINUX if sys.platform.startswith("linux") else ("-n", "-P", "-U", "-F", "pdn")
-    r = subprocess.run([lsof, *args], capture_output=True, text=True, timeout=10,
-                       stdin=subprocess.DEVNULL)
+    r = subprocess.run([lsof, *args], capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
     return r.stdout
 
 

@@ -12,8 +12,8 @@ from typing import Any
 
 import httpx
 import pytest
-
 from conftest import InProcBroker, SubprocBroker, cookie_of, human_cli_denial_word, ws_connect
+
 from switchboard.broker import proc
 from switchboard.broker.peer import ProcessPeerPolicy
 from switchboard.mcp.client import RpcError, Stream, call_sync
@@ -54,14 +54,21 @@ def agent_post(broker: InProcBroker, text: str) -> None:
     svc = broker.state.service
 
     def post() -> None:
-        svc._post(svc.room("#build"), sender_name="alpha", sender_kind="agent", sender_harness="test",
-                  via="mcp", text=text)
+        svc._post(
+            svc.room("#build"),
+            sender_name="alpha",
+            sender_kind="agent",
+            sender_harness="test",
+            via="mcp",
+            text=text,
+        )
 
     broker.on_loop(post)
 
 
-def test_hops_from_the_web_updates_settings_and_posts_a_notice(broker: InProcBroker, web: httpx.Client,
-                                                               room: str) -> None:
+def test_hops_from_the_web_updates_settings_and_posts_a_notice(
+    broker: InProcBroker, web: httpx.Client, room: str
+) -> None:
     ws = ws_connect(broker, cookie_of(web))
     try:
         ws.send(json.dumps({"t": "hello", "rooms": [room], "after": {}}))
@@ -82,8 +89,9 @@ def test_hops_from_the_web_updates_settings_and_posts_a_notice(broker: InProcBro
         ws.close()
 
 
-def test_a_loop_guard_pause_shows_once_on_the_websocket_and_in_tail(broker: InProcBroker, web: httpx.Client,
-                                                                    room: str) -> None:
+def test_a_loop_guard_pause_shows_once_on_the_websocket_and_in_tail(
+    broker: InProcBroker, web: httpx.Client, room: str
+) -> None:
     assert web_cmd(broker, web, "/hops 2")["ok"]  # lower it (the web may do anything)
     ws = ws_connect(broker, cookie_of(web))
     tail = Stream(broker.paths.sock)
@@ -99,18 +107,27 @@ def test_a_loop_guard_pause_shows_once_on_the_websocket_and_in_tail(broker: InPr
         r = web.post("/api/rooms/build/say", json={"text": "after the pause"}, headers=broker.write_headers())
         assert r.status_code == 200
         _, frames = recv_until(ws, is_msg("after the pause"))
-        guard = [f for f in frames
-                 if (f.get("t") == "msg" and "loop guard:" in f["msg"]["text"])
-                 or (f.get("t") == "notice" and "loop guard:" in f["text"])]
+        guard = [
+            f
+            for f in frames
+            if (f.get("t") == "msg" and "loop guard:" in f["msg"]["text"])
+            or (f.get("t") == "notice" and "loop guard:" in f["text"])
+        ]
         assert len(guard) == 1, guard
-        assert guard[0]["t"] == "msg" and guard[0]["msg"]["kind"] == "notice" and guard[0]["msg"]["level"] == "warn"
+        assert (
+            guard[0]["t"] == "msg"
+            and guard[0]["msg"]["kind"] == "notice"
+            and guard[0]["msg"]["level"] == "warn"
+        )
         assert "2 agent messages in a row" in guard[0]["msg"]["text"] and "(now 2)" in guard[0]["msg"]["text"]
         pushes = []
         for p in tail.pushes(timeout=5):
             pushes.append(p)
             if p["push"] == "message" and p["data"]["msg"]["text"] == "after the pause":
                 break
-        texts = [p["data"]["msg"]["text"] if p["push"] == "message" else p["data"].get("text", "") for p in pushes]
+        texts = [
+            p["data"]["msg"]["text"] if p["push"] == "message" else p["data"].get("text", "") for p in pushes
+        ]
         assert sum("loop guard:" in t for t in texts) == 1, texts
         # history has it once too
         msgs = web.get("/api/rooms/build/messages").json()["messages"]
@@ -130,8 +147,12 @@ def test_hops_roles_over_the_uds(tmp_home: Path) -> None:
 
     class CliOnly(ProcessPeerPolicy):
         def __init__(self) -> None:
-            super().__init__(chain_fn=lambda pid: (list(
-                takewhile(lambda p: p.pid != os.getppid(), proc.ancestry(pid, 12))), True))
+            super().__init__(
+                chain_fn=lambda pid: (
+                    list(takewhile(lambda p: p.pid != os.getppid(), proc.ancestry(pid, 12))),
+                    True,
+                )
+            )
 
         def human_cli_allowed(self, peer) -> bool:  # type: ignore[override]
             return peer.uid == os.getuid()
@@ -161,7 +182,11 @@ def test_hops_roles_over_the_uds(tmp_home: Path) -> None:
         with pytest.raises(RpcError) as e:
             uds("/hops 1001")
         assert e.value.code == "bad_request"
-        notices = [m["text"] for m in web.get("/api/rooms/build/messages").json()["messages"] if m["kind"] == "notice"]
+        notices = [
+            m["text"]
+            for m in web.get("/api/rooms/build/messages").json()["messages"]
+            if m["kind"] == "notice"
+        ]
         assert any(n.startswith("alice set the hop limit to 3 (was 6) (via cli:") for n in notices)
         assert "alice set the hop limit to 30 (was 3) (via web)" in notices
         kinds = [(e.kind, e.data) for e in b.state.store.recent_events(kinds=["hop_limit_set"])]

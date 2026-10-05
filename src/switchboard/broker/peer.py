@@ -33,8 +33,11 @@ _LOCAL_PEERPID = 2
 AGENT_MATCHERS: dict[str, tuple[re.Pattern[str], ...]] = {
     # Claude Desktop runs its sessions in WSL and on Linux as ~/.claude/remote/ccd-cli/<version>
     # (the program itself, anchored to argv[0] so a command that merely names that path isn't one).
-    "claude": (re.compile(r"(^|/)claude(\s|$)"), re.compile(r"/claude/versions/"),
-               re.compile(r"^\S*/\.claude/remote/ccd-cli/[0-9][0-9A-Za-z.+-]*(\s|$)")),
+    "claude": (
+        re.compile(r"(^|/)claude(\s|$)"),
+        re.compile(r"/claude/versions/"),
+        re.compile(r"^\S*/\.claude/remote/ccd-cli/[0-9][0-9A-Za-z.+-]*(\s|$)"),
+    ),
     "codex": (re.compile(r"(^|/)codex(\s|$)"), re.compile(r"codex app-server")),
     # Unconfirmed against a live ps capture (Cursor not yet run live); see DESIGN §5.3.
     "cursor": (re.compile(r"cursor-agent"),),
@@ -46,9 +49,7 @@ def peer_pid(sock: socket.socket) -> int | None:
     try:
         if sys.platform == "darwin":
             return struct.unpack("i", sock.getsockopt(_SOL_LOCAL, _LOCAL_PEERPID, 4))[0]
-        pid, _uid, _gid = struct.unpack(
-            "3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
-        )
+        pid, _uid, _gid = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
         return pid
     except (OSError, AttributeError, struct.error):
         return None
@@ -60,9 +61,7 @@ def peer_uid(sock: socket.socket) -> int | None:
             # struct xucred { u_int cr_version; uid_t cr_uid; short cr_ngroups; gid_t cr_groups[16]; }
             xucred = sock.getsockopt(_SOL_LOCAL, _LOCAL_PEERCRED, 76)
             return struct.unpack_from("I", xucred, 4)[0]
-        _pid, uid, _gid = struct.unpack(
-            "3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
-        )
+        _pid, uid, _gid = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
         return uid
     except (OSError, AttributeError, struct.error):
         return None
@@ -156,8 +155,10 @@ def relay_refusal(chain: Sequence[ProcInfo], argvs: dict[int, str]) -> str | Non
     relay = relay_name(argvs.get(chain[0].pid, ""))
     if relay is None:
         return None
-    return (f"arrived through ssh or a socket relay (the process on the broker socket is {relay});"
-            " human commands must come from a terminal on this machine")
+    return (
+        f"arrived through ssh or a socket relay (the process on the broker socket is {relay});"
+        " human commands must come from a terminal on this machine"
+    )
 
 
 def remote_login_refusal(chain: Sequence[ProcInfo], argvs: dict[int, str], allow_ssh_cli: bool) -> str | None:
@@ -168,9 +169,11 @@ def remote_login_refusal(chain: Sequence[ProcInfo], argvs: dict[int, str], allow
     for p in chain[1:]:
         login = remote_login_name(argvs.get(p.pid, ""))
         if login is not None:
-            return (f"arrived through ssh or another remote login ({login} above the caller);"
-                    " human commands must come from a terminal on this machine,"
-                    " or set [security] allow_ssh_cli = true")
+            return (
+                f"arrived through ssh or another remote login ({login} above the caller);"
+                " human commands must come from a terminal on this machine,"
+                " or set [security] allow_ssh_cli = true"
+            )
     return None
 
 
@@ -318,9 +321,7 @@ class ProcessPeerPolicy(PeerPolicy):
         return self._verdict(peer)[0]
 
     def login_allowed(self, peer: Peer) -> bool:
-        return self.human_cli_allowed(peer) and peer.pid is not None and (
-            self._tty_fn(peer.pid) is not None
-        )
+        return self.human_cli_allowed(peer) and peer.pid is not None and (self._tty_fn(peer.pid) is not None)
 
     def refusal(self, peer: Peer) -> str | None:
         return self._verdict(peer)[1]
@@ -446,10 +447,7 @@ def resolve_hook_participant(
                 continue
         cands.append((idx, c))
     if len(cands) > 1 and sid:
-        cands = [
-            (i, c) for i, c in cands
-            if c.session_id == sid or c.session_key == sid_key
-        ]
+        cands = [(i, c) for i, c in cands if c.session_id == sid or c.session_key == sid_key]
     if len(cands) != 1:
         return None
     idx, c = cands[0]
@@ -524,11 +522,15 @@ def verify_mcp_peer(
         # a forward of the socket (ssh -R/-L, socat): the kernel peer is the relay, so every
         # process behind it would be one "MCP server" (§27.4.2). A remote machine's agents
         # join over a remote link (§27.4), never through a forward (M8c; deferred from M8a).
-        raise McpRefused("forbidden", f"the process on the socket is {relay}, a relay: agents on another"
-                                      " machine join over a remote link (switchboard remote), not a socket forward")
+        raise McpRefused(
+            "forbidden",
+            f"the process on the socket is {relay}, a relay: agents on another"
+            " machine join over a remote link (switchboard remote), not a socket forward",
+        )
 
-    def ident(harness: str, agent: ProcInfo | None, evidence: str, note: str | None = None,
-              sock: str | None = None) -> McpIdentity:
+    def ident(
+        harness: str, agent: ProcInfo | None, evidence: str, note: str | None = None, sock: str | None = None
+    ) -> McpIdentity:
         return McpIdentity(
             harness=harness,
             mcp_pid=me.pid,

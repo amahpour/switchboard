@@ -25,7 +25,16 @@ def test_base64url_is_strict() -> None:
     raw = bytes(range(32))
     s = linkkey.b64u(raw)
     assert "=" not in s and linkkey.unb64u(s, 32) == raw
-    for bad in [s + "=", s[:-1] + "!", s + " ", 5, None, "x" * 300, s[:-2] + "+" + s[-1], s[:-2] + "/" + s[-1]]:
+    for bad in [
+        s + "=",
+        s[:-1] + "!",
+        s + " ",
+        5,
+        None,
+        "x" * 300,
+        s[:-2] + "+" + s[-1],
+        s[:-2] + "/" + s[-1],
+    ]:
         with pytest.raises(ValueError):
             linkkey.unb64u(bad, 32)
     with pytest.raises(ValueError):
@@ -73,8 +82,11 @@ def test_a_key_file_that_isnt_private_or_isnt_a_key_is_refused(tmp_path: Path) -
     from cryptography.hazmat.primitives.asymmetric import ec
 
     ecdsa = tmp_path / "link" / "ecdsa"
-    ecdsa.write_bytes(ec.generate_private_key(ec.SECP256R1()).private_bytes(
-        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+    ecdsa.write_bytes(
+        ec.generate_private_key(ec.SECP256R1()).private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+        )
+    )
     os.chmod(ecdsa, 0o600)
     with pytest.raises(linkkey.KeyFileError, match="Ed25519"):
         linkkey.load_key(ecdsa)
@@ -107,9 +119,14 @@ def test_handshake_frames_are_checked_strictly(tmp_path: Path) -> None:
     pub = linkkey.b64u(linkkey.pub_raw(linkkey.make_key(tmp_path / "link" / "k")))
     auth = {"t": "auth", "v": 1, "name": "work-laptop", "key": pub, "nm": linkkey.b64u(nonce(1))}
     assert linkkey.check_auth(auth)[0] == "work-laptop"
-    for change, code in [({"v": 2}, "bad_version"), ({"name": "Work Laptop"}, "bad_name"), ({"key": "x"}, "bad_key"),
-                         ({"nm": linkkey.b64u(b"x" * 8)}, "bad_key"), ({"extra": 1}, "bad_fields"),
-                         ({"t": "proof"}, "bad_type")]:
+    for change, code in [
+        ({"v": 2}, "bad_version"),
+        ({"name": "Work Laptop"}, "bad_name"),
+        ({"key": "x"}, "bad_key"),
+        ({"nm": linkkey.b64u(b"x" * 8)}, "bad_key"),
+        ({"extra": 1}, "bad_fields"),
+        ({"t": "proof"}, "bad_type"),
+    ]:
         with pytest.raises(linkkey.HandshakeError) as e:
             linkkey.check_auth({**auth, **change})
         assert e.value.code == code, change
@@ -141,6 +158,15 @@ def test_pairing_codes() -> None:
     assert linkkey.normalize_code("7KQ4 M2XD 9HVA") == "7KQ4M2XD9HVA"
     assert linkkey.normalize_code("7KQ4-M2XD-9HVI") == "7KQ4M2XD9HV1"  # I, L and O read as 1, 1 and 0
     assert linkkey.normalize_code("OOOO-LLLL-IIII") == "000011111111"
-    for bad in ["7KQ4-M2XD-9HV", "7KQ4-M2XD-9HVAA", "7KQ4-M2XD-9HVU", "", None, 7, "x" * 50, "7KQ4-M2XD-9HV!"]:
+    for bad in [
+        "7KQ4-M2XD-9HV",
+        "7KQ4-M2XD-9HVAA",
+        "7KQ4-M2XD-9HVU",
+        "",
+        None,
+        7,
+        "x" * 50,
+        "7KQ4-M2XD-9HV!",
+    ]:
         assert linkkey.normalize_code(bad) is None, bad
     assert linkkey.code_hash("7KQ4M2XD9HVA") != linkkey.code_hash("7KQ4M2XD9HVB")

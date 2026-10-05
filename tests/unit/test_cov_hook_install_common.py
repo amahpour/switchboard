@@ -32,14 +32,17 @@ SHA = "abcdef012345"
 
 
 # ------------------------------------------------------------ recognising
-@pytest.mark.parametrize("sha12,harness,event", [
-    ("ABCDEF012345", "claude", "Stop"),  # upper-case hex
-    ("abcdef01234", "claude", "Stop"),  # 11 digits
-    (SHA, "Claude", "Stop"),
-    (SHA, "claude code", "Stop"),
-    (SHA, "claude", "Post-Tool"),
-    (SHA, "claude", "Stop;id"),
-])
+@pytest.mark.parametrize(
+    "sha12,harness,event",
+    [
+        ("ABCDEF012345", "claude", "Stop"),  # upper-case hex
+        ("abcdef01234", "claude", "Stop"),  # 11 digits
+        (SHA, "Claude", "Stop"),
+        (SHA, "claude code", "Stop"),
+        (SHA, "claude", "Post-Tool"),
+        (SHA, "claude", "Stop;id"),
+    ],
+)
 def test_hook_command_refuses_bad_parts(sha12: str, harness: str, event: str) -> None:
     with pytest.raises(InstallError, match="bad hook command parts"):
         hook_command(PY, HOME, sha12, harness, event)
@@ -48,11 +51,14 @@ def test_hook_command_refuses_bad_parts(sha12: str, harness: str, event: str) ->
 def test_runs_switchboard_mcp_and_its_home() -> None:
     ours = {"command": PY, "args": ["-I", "-m", "switchboard", "mcp", "--home", HOME]}
     assert common.runs_switchboard_mcp(ours) and common.mcp_home(ours) == HOME
-    for not_ours in ({"command": PY, "args": "-m switchboard mcp"},  # args not a list
-                     {"command": PY, "args": ["-m", "switchboard", "mcp", 5]},  # a non-string arg
-                     {"command": PY, "args": ["-m", "switchboard", "web"]},
-                     {"command": 5, "args": ["-m", "switchboard", "mcp"]},
-                     "switchboard", None):
+    for not_ours in (
+        {"command": PY, "args": "-m switchboard mcp"},  # args not a list
+        {"command": PY, "args": ["-m", "switchboard", "mcp", 5]},  # a non-string arg
+        {"command": PY, "args": ["-m", "switchboard", "web"]},
+        {"command": 5, "args": ["-m", "switchboard", "mcp"]},
+        "switchboard",
+        None,
+    ):
         assert not common.runs_switchboard_mcp(not_ours) and common.mcp_home(not_ours) is None
     # ours, but no usable --home
     assert common.mcp_home({"command": PY, "args": ["-m", "switchboard", "mcp"]}) is None
@@ -62,11 +68,13 @@ def test_runs_switchboard_mcp_and_its_home() -> None:
 def test_removed_entries_are_shown_through_an_allowlist() -> None:
     assert common.mcp_view("a string entry") == "***"
     assert common.mcp_view(["a", "list"]) == "***"
-    assert common.mcp_view({"command": PY, "args": ["--api-key", "k", "--x"], "env": {"A": "1"}, "cwd": "/w"}) == {
-        "command": PY, "args": ["--api-key", "***", "--x"], "env": "***", "cwd": "***"}
+    assert common.mcp_view(
+        {"command": PY, "args": ["--api-key", "k", "--x"], "env": {"A": "1"}, "cwd": "/w"}
+    ) == {"command": PY, "args": ["--api-key", "***", "--x"], "env": "***", "cwd": "***"}
     assert common.hook_view(10) == 10 and common.hook_view("x") == "x" and common.hook_view(None) is None
-    assert common.hook_view([{"matcher": "", "hooks": [{"command": "c", "timeout": 3, "note": "n"}], "id": 7}, 5]) == [
-        {"matcher": "", "hooks": [{"command": "c", "timeout": 3, "note": "***"}], "id": "***"}, 5]
+    assert common.hook_view(
+        [{"matcher": "", "hooks": [{"command": "c", "timeout": 3, "note": "n"}], "id": 7}, 5]
+    ) == [{"matcher": "", "hooks": [{"command": "c", "timeout": 3, "note": "***"}], "id": "***"}, 5]
 
 
 # ------------------------------------------------------------------- json
@@ -98,7 +106,9 @@ def test_set_hook_groups_keeps_the_users_handlers_in_a_shared_group() -> None:
         {"matcher": "x", "hooks": [mine]},
         {"matcher": "", "hooks": [{"type": "command", "command": new, "timeout": 30}]},
     ]
-    assert lines[0] == "  - hooks.Stop: an older switchboard hook" and lines[1].startswith("  + hooks.Stop[1]: ")
+    assert lines[0] == "  - hooks.Stop: an older switchboard hook" and lines[1].startswith(
+        "  + hooks.Stop[1]: "
+    )
 
 
 def test_remove_hook_groups_skips_events_that_are_not_lists() -> None:
@@ -128,7 +138,8 @@ def test_atomic_write_onto_a_directory_fails_cleanly(tmp_path: Path) -> None:
 
 
 def test_atomic_write_reports_the_real_error_if_the_temp_file_is_already_gone(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     def replace_then_fail(src: Any, dst: Any) -> None:
         os.unlink(src)  # something else cleaned it up first
         raise OSError(28, "No space left on device")
@@ -150,17 +161,21 @@ class _Dist:
         return self.raw
 
 
-@pytest.mark.parametrize("dist,editable", [
-    (None, False),  # not installed as a distribution at all
-    (_Dist(None), False),  # no direct_url.json: installed from an index
-    (_Dist(""), False),
-    (_Dist("{not json"), False),
-    (_Dist(json.dumps({"url": "file:///src", "dir_info": {}})), False),
-    (_Dist(json.dumps({"url": "file:///src", "dir_info": {"editable": False}})), False),
-    (_Dist(json.dumps({"url": "file:///src", "dir_info": {"editable": True}})), True),
-])
-def test_editable_install_reads_direct_url(monkeypatch: pytest.MonkeyPatch, dist: _Dist | None,
-                                           editable: bool) -> None:
+@pytest.mark.parametrize(
+    "dist,editable",
+    [
+        (None, False),  # not installed as a distribution at all
+        (_Dist(None), False),  # no direct_url.json: installed from an index
+        (_Dist(""), False),
+        (_Dist("{not json"), False),
+        (_Dist(json.dumps({"url": "file:///src", "dir_info": {}})), False),
+        (_Dist(json.dumps({"url": "file:///src", "dir_info": {"editable": False}})), False),
+        (_Dist(json.dumps({"url": "file:///src", "dir_info": {"editable": True}})), True),
+    ],
+)
+def test_editable_install_reads_direct_url(
+    monkeypatch: pytest.MonkeyPatch, dist: _Dist | None, editable: bool
+) -> None:
     def distribution(name: str) -> _Dist:
         assert name == "switchboard"
         if dist is None:
@@ -178,12 +193,17 @@ def test_module_refuses_an_unknown_harness() -> None:
 
 # ---------------------------------------------------------------- applying
 def test_a_harness_command_that_cannot_start_fails_after_the_file_edits(
-        tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     f = tmp_path / "uh" / ".claude" / "settings.json"
     plan = Plan("claude")
-    plan.edits.append(FileEdit(path=f, before=None, after="{}\n", display=["  + {}"], label="~/.claude/settings.json"))
+    plan.edits.append(
+        FileEdit(path=f, before=None, after="{}\n", display=["  + {}"], label="~/.claude/settings.json")
+    )
     missing = str(tmp_path / "no-such-bin" / "claude")
-    plan.edits.append(CommandEdit(argv=[missing, "mcp", "add", "switchboard"], display="claude mcp add switchboard"))
+    plan.edits.append(
+        CommandEdit(argv=[missing, "mcp", "add", "switchboard"], display="claude mcp add switchboard")
+    )
     out = io.StringIO()
     run = common._Run("claude", plan=plan)
     run.rc = common.apply_plan(plan, run_commands=True, out=out)
@@ -194,7 +214,9 @@ def test_a_harness_command_that_cannot_start_fails_after_the_file_edits(
     assert "Run it yourself:\n  claude mcp add switchboard" in err
     summary = io.StringIO()
     common._summary([run], "install", applied=True, out=summary)
-    assert summary.getvalue() == "summary:\n  claude: files written, but a harness command failed (see above)\n"
+    assert (
+        summary.getvalue() == "summary:\n  claude: files written, but a harness command failed (see above)\n"
+    )
 
 
 def test_apply_purge_counts_only_what_it_deleted(tmp_path: Path) -> None:
@@ -267,5 +289,7 @@ def test_purge_plan_keeps_copies_when_a_config_cannot_be_read(tmp_path: Path) ->
     assert edit.blocked_by == ["~/.claude/settings.json (unreadable)", "~/.cursor/hooks.json (unreadable)"]
     out = io.StringIO()
     common.render_plan(p, out)
-    assert "kept (still used by ~/.claude/settings.json (unreadable), ~/.cursor/hooks.json (unreadable))" in \
-        out.getvalue()
+    assert (
+        "kept (still used by ~/.claude/settings.json (unreadable), ~/.cursor/hooks.json (unreadable))"
+        in out.getvalue()
+    )

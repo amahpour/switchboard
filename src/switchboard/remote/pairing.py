@@ -87,14 +87,26 @@ KEY_TYPE = "ssh-ed25519"
 _ED25519_HEAD = b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20"
 _ED25519_LEN = len(_ED25519_HEAD) + 32
 # which pinned host key to prefer when known_hosts has several for the remote
-PIN_PREFERENCE = ("ssh-ed25519", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521", "ssh-rsa")
-_KEY_TYPE_RE = re.compile(r"^(ssh-[a-z0-9-]+|ecdsa-sha2-nistp[0-9]+|sk-[a-z0-9-]+@openssh\.com"
-                          r"|[a-z0-9-]+-cert-v01@openssh\.com)$")
+PIN_PREFERENCE = (
+    "ssh-ed25519",
+    "ecdsa-sha2-nistp256",
+    "ecdsa-sha2-nistp384",
+    "ecdsa-sha2-nistp521",
+    "ssh-rsa",
+)
+_KEY_TYPE_RE = re.compile(
+    r"^(ssh-[a-z0-9-]+|ecdsa-sha2-nistp[0-9]+|sk-[a-z0-9-]+@openssh\.com"
+    r"|[a-z0-9-]+-cert-v01@openssh\.com)$"
+)
 _DEST_RE = re.compile(r"^(?:([^@\s]+)@)?([^@\s]+)$")
 RUN_TIMEOUT_S = 20.0
 PROBE_TIMEOUT_S = 15.0
-RRSYNC_PATHS = ("/usr/bin/rrsync", "/usr/local/bin/rrsync", "/usr/share/doc/rsync/scripts/rrsync",
-                "/usr/share/doc/rsync/scripts/rrsync.gz")
+RRSYNC_PATHS = (
+    "/usr/bin/rrsync",
+    "/usr/local/bin/rrsync",
+    "/usr/share/doc/rsync/scripts/rrsync",
+    "/usr/share/doc/rsync/scripts/rrsync.gz",
+)
 
 
 class PairingError(Exception):
@@ -102,8 +114,9 @@ class PairingError(Exception):
 
 
 # ------------------------------------------------------------------- running
-def _run(argv: Sequence[str], timeout: float = RUN_TIMEOUT_S,
-         agent_sock: str | None = None) -> subprocess.CompletedProcess[str]:
+def _run(
+    argv: Sequence[str], timeout: float = RUN_TIMEOUT_S, agent_sock: str | None = None
+) -> subprocess.CompletedProcess[str]:
     """Run the system's ``ssh`` or ``ssh-keygen`` (nothing else, ever): a fixed argv, no
     shell, stdin from /dev/null, a clean env, the binary root-owned (as the link's).
     ``agent_sock``: only ``doctor --probe-desktop`` passes this session's agent, since
@@ -117,8 +130,16 @@ def _run(argv: Sequence[str], timeout: float = RUN_TIMEOUT_S,
     if agent_sock:
         env["SSH_AUTH_SOCK"] = agent_sock
     try:
-        return subprocess.run(list(argv), stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                              timeout=timeout, env=env, cwd="/", check=False)
+        return subprocess.run(
+            list(argv),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+            cwd="/",
+            check=False,
+        )
     except subprocess.TimeoutExpired:
         raise PairingError(f"{os.path.basename(argv[0])} took longer than {timeout:.0f} s") from None
     except OSError as e:
@@ -158,10 +179,14 @@ def parse_token(text: str) -> Token:
     if len(words) < 2 or words[0] != TOKEN_MAGIC:
         raise PairingError(f"not a switchboard link token (it starts with '{TOKEN_MAGIC} {TOKEN_VERSION}')")
     if words[1] != TOKEN_VERSION:
-        raise PairingError(f"token version {words[1][:12]!r} is not {TOKEN_VERSION}: install the same switchboard"
-                           " version on both machines")
+        raise PairingError(
+            f"token version {words[1][:12]!r} is not {TOKEN_VERSION}: install the same switchboard"
+            " version on both machines"
+        )
     if len(words) != 6:
-        raise PairingError("a link token has six words: switchboard-link v1 <name> <desktop> ssh-ed25519 <key>")
+        raise PairingError(
+            "a link token has six words: switchboard-link v1 <name> <desktop> ssh-ed25519 <key>"
+        )
     _m, _v, name, desktop, ktype, b64 = words
     if not valid_host(name):
         raise PairingError("the token's remote name is not valid (a-z first, then a-z, 0-9, '-'; at most 24)")
@@ -267,8 +292,12 @@ def parse_ak_line(line: str) -> AkEntry | None:
     parts = rest.split(None, 2)
     if len(parts) < 2 or not _KEY_TYPE_RE.fullmatch(parts[0]):
         return None
-    return AkEntry(options=_split_options(opts), keytype=parts[0], key=parts[1],
-                   comment=parts[2] if len(parts) > 2 else "")
+    return AkEntry(
+        options=_split_options(opts),
+        keytype=parts[0],
+        key=parts[1],
+        comment=parts[2] if len(parts) > 2 else "",
+    )
 
 
 def forced_command(python: str, home: str, name: str) -> str:
@@ -280,8 +309,9 @@ def forced_command(python: str, home: str, name: str) -> str:
         raise PairingError(str(e)) from None
     if not valid_host(name):
         raise PairingError(f"not a remote name: {name!r}")
-    return " ".join([shlex.quote(py), "-I", "-m", "switchboard", "satellite", "--home", shlex.quote(hm), "--name",
-                     name])
+    return " ".join(
+        [shlex.quote(py), "-I", "-m", "switchboard", "satellite", "--home", shlex.quote(hm), "--name", name]
+    )
 
 
 def check_from(raw: str | None) -> str | None:
@@ -294,7 +324,9 @@ def check_from(raw: str | None) -> str | None:
         try:
             net = ipaddress.ip_network(p, strict=False)
         except ValueError:
-            raise PairingError(f"--from takes IP addresses or networks (e.g. 192.0.2.10), not {p[:60]!r}") from None
+            raise PairingError(
+                f"--from takes IP addresses or networks (e.g. 192.0.2.10), not {p[:60]!r}"
+            ) from None
         out.append(str(net.network_address) if net.num_addresses == 1 else str(net))
     if not out:
         raise PairingError("--from is empty")
@@ -329,9 +361,9 @@ def satellite_command(e: AkEntry) -> tuple[str, str, str] | None:
         i = words.index("satellite")
     except ValueError:
         return None
-    if i < 2 or words[i - 2:i] != ["-m", "switchboard"]:
+    if i < 2 or words[i - 2 : i] != ["-m", "switchboard"]:
         return None
-    rest = words[i + 1:]
+    rest = words[i + 1 :]
     home = name = ""
     for k, v in zip(rest, rest[1:], strict=False):
         if k == "--home":
@@ -393,8 +425,10 @@ def plan_accept(before: str, token: Token, line: str, home: str | os.PathLike[st
     for raw in lines:
         e = parse_ak_line(raw)
         if e is not None and e.key == token.key and not e.has_command:
-            raise PairingError("this key is already in authorized_keys without command= (it opens a shell): remove"
-                               " that line by hand first; a link key must only start the satellite")
+            raise PairingError(
+                "this key is already in authorized_keys without command= (it opens a shell): remove"
+                " that line by hand first; a link key must only start the satellite"
+            )
         if e is not None and (e.key == token.key or is_ours(e, token.name, home)):
             replaced.append(raw.rstrip("\r\n"))
             if not placed:
@@ -453,8 +487,10 @@ def default_authorized_keys() -> Path:
     pw = _passwd_home()
     home = os.path.expanduser("~")
     if not pw or os.path.realpath(home) != os.path.realpath(pw):
-        raise PairingError(f"$HOME ({home}) is not your home in the password database ({pw or '?'}), where sshd"
-                           " reads authorized_keys: pass --authorized-keys <file>")
+        raise PairingError(
+            f"$HOME ({home}) is not your home in the password database ({pw or '?'}), where sshd"
+            " reads authorized_keys: pass --authorized-keys <file>"
+        )
     return Path(pw) / ".ssh" / "authorized_keys"
 
 
@@ -488,8 +524,10 @@ def _home_problem(paths: Paths, name: str, ping: Callable[[Path], dict[str, Any]
     except (OSError, RemoteConfigError) as e:
         return f"satellite.toml: {e}"
     if conf is not None and conf.name != name:
-        return (f"this home is already {conf.name}'s satellite home: run `switchboard remote remove {conf.name}`"
-                " here first, or use another --home")
+        return (
+            f"this home is already {conf.name}'s satellite home: run `switchboard remote remove {conf.name}`"
+            " here first, or use another --home"
+        )
     try:
         if load_remotes(paths, test_mode=True):
             return "this home dials remotes (remotes.toml): it is a desktop home; use another --home"
@@ -497,15 +535,26 @@ def _home_problem(paths: Paths, name: str, ping: Callable[[Path], dict[str, Any]
         return "this home has a remotes.toml: it is a desktop home; use another --home"
     info = ping(paths.sock)
     if info is not None and info.get("role") != "satellite":
-        return ("a switchboard broker runs from this home: a satellite home has none (the broker runs on the"
-                " desktop); stop it, or use another --home")
+        return (
+            "a switchboard broker runs from this home: a satellite home has none (the broker runs on the"
+            " desktop); stop it, or use another --home"
+        )
     return None
 
 
-def accept(paths: Paths, token_text: str, *, from_: str | None = None, ak_path: Path | None = None,
-           yes: bool = False, allow_editable: bool = False, python: str | None = None,
-           stdin: TextIO | None = None, out: TextIO | None = None,
-           ping: Callable[[Path], dict[str, Any] | None] | None = None) -> int:
+def accept(
+    paths: Paths,
+    token_text: str,
+    *,
+    from_: str | None = None,
+    ak_path: Path | None = None,
+    yes: bool = False,
+    allow_editable: bool = False,
+    python: str | None = None,
+    stdin: TextIO | None = None,
+    out: TextIO | None = None,
+    ping: Callable[[Path], dict[str, Any] | None] | None = None,
+) -> int:
     """``switchboard remote accept '<token>'`` on the remote (§27.8.2)."""
     out = out or sys.stdout
     token = parse_token(token_text)
@@ -514,11 +563,15 @@ def accept(paths: Paths, token_text: str, *, from_: str | None = None, ak_path: 
     line = authorized_line(token, py, str(paths.home), frm)
     if editable_install():
         if not allow_editable:
-            raise PairingError("refusing an editable/source install: the forced command would run code an agent"
-                               " here could edit. Install a copy first (`uv tool install …`)")
+            raise PairingError(
+                "refusing an editable/source install: the forced command would run code an agent"
+                " here could edit. Install a copy first (`uv tool install …`)"
+            )
         why = test_mode_refusal(paths, True)
         if why:  # the override is for switchboard's own tests (their venv is editable), never a real home
-            raise PairingError(f"--allow-editable is only for switchboard's own tests: {why.replace('--test-mode ', '')}")
+            raise PairingError(
+                f"--allow-editable is only for switchboard's own tests: {why.replace('--test-mode ', '')}"
+            )
     if ping is None:
         from switchboard.mcp.client import ping as ping_sock
 
@@ -555,11 +608,17 @@ def accept(paths: Paths, token_text: str, *, from_: str | None = None, ak_path: 
         print(f"wrote {ak}", file=out)
     fps = host_key_fingerprints()
     if fps:
-        print("this machine's host keys (compare with the fingerprint `remote add` pinned on the desktop):", file=out)
+        print(
+            "this machine's host keys (compare with the fingerprint `remote add` pinned on the desktop):",
+            file=out,
+        )
         for fp in fps:
             print(f"  {fp}", file=out)
     else:
-        print("no host keys found in /etc/ssh to show; compare them by hand with what `remote add` pinned", file=out)
+        print(
+            "no host keys found in /etc/ssh to show; compare them by hand with what `remote add` pinned",
+            file=out,
+        )
     print(f"next, on the desktop ({token.desktop}): switchboard remote enable {token.name}", file=out)
     return 0
 
@@ -608,8 +667,14 @@ def parse_ssh_g(text: str) -> Resolved:
     files: list[str] = []
     for k in ("userknownhostsfile", "globalknownhostsfile"):
         files += [f for f in vals.get(k, "").split() if f and f != "none"]
-    return Resolved(hostname=vals.get("hostname", ""), user=vals.get("user", ""), port=port,
-                    hostkeyalias=alias if alias and alias.lower() != "none" else None, known_hosts=files, proxy=proxy)
+    return Resolved(
+        hostname=vals.get("hostname", ""),
+        user=vals.get("user", ""),
+        port=port,
+        hostkeyalias=alias if alias and alias.lower() != "none" else None,
+        known_hosts=files,
+        proxy=proxy,
+    )
 
 
 def resolve(host: str, user: str | None, port: int | None, ssh_config: str | None) -> Resolved:
@@ -626,8 +691,10 @@ def resolve(host: str, user: str | None, port: int | None, ssh_config: str | Non
         raise PairingError(f"ssh -G {host} failed: {(r.stderr or '').strip()[:300]}")
     res = parse_ssh_g(r.stdout)
     if res.proxy:
-        raise PairingError(f"your ssh config reaches {host} through {res.proxy}: a link dials directly, never"
-                           " through a jump host or proxy command (§27.4.1); give the remote's own address")
+        raise PairingError(
+            f"your ssh config reaches {host} through {res.proxy}: a link dials directly, never"
+            " through a jump host or proxy command (§27.4.1); give the remote's own address"
+        )
     if not _is_host(res.hostname):
         raise PairingError(f"ssh -G gave the host name {res.hostname[:80]!r}, which a link can't use")
     if not USER_RE.fullmatch(res.user):
@@ -676,8 +743,13 @@ def find_pin(lookup: str, files: Sequence[str]) -> tuple[str, str, str] | None:
 def entry_text(name: str, res: Resolved, rooms: list[str], harnesses: list[str] | None) -> str:
     import json
 
-    lines = [f"[remote.{name}]", f"host = {json.dumps(res.hostname)}", f"user = {json.dumps(res.user)}",
-             f"port = {res.port}", "rooms = [" + ", ".join(json.dumps(r) for r in rooms) + "]"]
+    lines = [
+        f"[remote.{name}]",
+        f"host = {json.dumps(res.hostname)}",
+        f"user = {json.dumps(res.user)}",
+        f"port = {res.port}",
+        "rooms = [" + ", ".join(json.dumps(r) for r in rooms) + "]",
+    ]
     if harnesses is not None:
         lines.append("harnesses = [" + ", ".join(json.dumps(h) for h in harnesses) + "]")
     return "\n".join(lines) + "\n"
@@ -685,7 +757,11 @@ def entry_text(name: str, res: Resolved, rooms: list[str], harnesses: list[str] 
 
 def unrestricted_entries(text: str | None) -> list[AkEntry]:
     """Key lines without ``command=``: each opens a shell for whoever holds the key."""
-    return [e for e in (parse_ak_line(ln) for ln in (text or "").splitlines()) if e is not None and not e.has_command]
+    return [
+        e
+        for e in (parse_ak_line(ln) for ln in (text or "").splitlines())
+        if e is not None and not e.has_command
+    ]
 
 
 def _describe_key(e: AkEntry) -> str:
@@ -693,9 +769,20 @@ def _describe_key(e: AkEntry) -> str:
     return f"{e.fingerprint or e.keytype}{f' ({c})' if c else ''}"
 
 
-def add(paths: Paths, name: str, dest: str, *, rooms: Sequence[str] | None = None, port: int | None = None,
-        harnesses: Sequence[str] | None = None, ssh_config: str | None = None, known_hosts: str | None = None,
-        authorized_keys: Path | None = None, label: str | None = None, out: TextIO | None = None) -> int:
+def add(
+    paths: Paths,
+    name: str,
+    dest: str,
+    *,
+    rooms: Sequence[str] | None = None,
+    port: int | None = None,
+    harnesses: Sequence[str] | None = None,
+    ssh_config: str | None = None,
+    known_hosts: str | None = None,
+    authorized_keys: Path | None = None,
+    label: str | None = None,
+    out: TextIO | None = None,
+) -> int:
     """``switchboard remote add <name> <[user@]host> --rooms …`` on the desktop (§27.8.1)."""
     out = out or sys.stdout
     if not valid_host(name):
@@ -734,7 +821,8 @@ def add(paths: Paths, name: str, dest: str, *, rooms: Sequence[str] | None = Non
         raise PairingError(
             f"no host key for {lookup} in {', '.join(files) or 'any known_hosts file'}: ssh to it once by hand"
             f" (ssh -p {res.port} {res.user}@{res.hostname} true), check the fingerprint it shows against the"
-            " remote's own (ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub there), then run this again")
+            " remote's own (ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub there), then run this again"
+        )
     ktype, kblob, kfile = pin
     lab = desktop_label(label)
     base = paths.home / "remotes"
@@ -743,8 +831,20 @@ def add(paths: Paths, name: str, dest: str, *, rooms: Sequence[str] | None = Non
     ensure_private_dir(d)
     try:
         key = link_key_path(paths, name)
-        r = _run([SSH_KEYGEN_BIN, "-q", "-t", "ed25519", "-N", "", "-C", f"{TOKEN_MAGIC} {name}@{lab}",
-                  "-f", str(key)])
+        r = _run(
+            [
+                SSH_KEYGEN_BIN,
+                "-q",
+                "-t",
+                "ed25519",
+                "-N",
+                "",
+                "-C",
+                f"{TOKEN_MAGIC} {name}@{lab}",
+                "-f",
+                str(key),
+            ]
+        )
         pub = key.with_name(key.name + ".pub")
         if r.returncode != 0 or not key.is_file() or not pub.is_file():
             raise PairingError(f"ssh-keygen failed: {(r.stderr or '').strip()[:300]}")
@@ -770,10 +870,12 @@ def add(paths: Paths, name: str, dest: str, *, rooms: Sequence[str] | None = Non
     if problem:  # pragma: no cover - just written
         raise PairingError(problem)
     shown = "any room" if "*" in entry.rooms else "rooms " + ", ".join(entry.rooms)
-    print(f"added remote {name}: {entry.user}@{entry.host} port {entry.port}, {shown}",
-          file=out)
-    print(f"pinned its host key {key_fingerprint(f'{ktype} {kblob}')} ({ktype}, from {kfile}):"
-          " compare it with what `remote accept` prints there", file=out)
+    print(f"added remote {name}: {entry.user}@{entry.host} port {entry.port}, {shown}", file=out)
+    print(
+        f"pinned its host key {key_fingerprint(f'{ktype} {kblob}')} ({ktype}, from {kfile}):"
+        " compare it with what `remote accept` prints there",
+        file=out,
+    )
     print(f"link key {token.fingerprint} ({link_key_path(paths, name)})", file=out)
     print("", file=out)
     print("On the remote, run:", file=out)
@@ -787,9 +889,12 @@ def add(paths: Paths, name: str, dest: str, *, rooms: Sequence[str] | None = Non
         print(f"note: this machine's authorized_keys not checked ({e})", file=out)
     if loose:
         print("", file=out)
-        print(f"warning: {ak} lets {len(loose)} key(s) open a shell on this machine (no command=). Never give"
-              " a remote machine such a key, and never `ssh -A` into it: an agent there could then act as you"
-              " here (`switchboard remote doctor` lists them).", file=out)
+        print(
+            f"warning: {ak} lets {len(loose)} key(s) open a shell on this machine (no command=). Never give"
+            " a remote machine such a key, and never `ssh -A` into it: an agent there could then act as you"
+            " here (`switchboard remote doctor` lists them).",
+            file=out,
+        )
     return 0
 
 
@@ -820,8 +925,10 @@ def remove_table(text: str, name: str) -> str:
         raise PairingError(f"remotes.toml: {e}") from None
     want = {k: v for k, v in before.items() if k != name}
     if after != want:
-        raise PairingError(f"couldn't take [remote.{name}] out of remotes.toml line by line: edit it by hand,"
-                           " then run this again")
+        raise PairingError(
+            f"couldn't take [remote.{name}] out of remotes.toml line by line: edit it by hand,"
+            " then run this again"
+        )
     return new
 
 
@@ -836,8 +943,15 @@ def _delete_remote_dir(d: Path) -> None:
     shutil.rmtree(d)
 
 
-def remove_desktop(paths: Paths, name: str, *, yes: bool = False, call: Callable[..., dict[str, Any]],
-                   stdin: TextIO | None = None, out: TextIO | None = None) -> int:
+def remove_desktop(
+    paths: Paths,
+    name: str,
+    *,
+    yes: bool = False,
+    call: Callable[..., dict[str, Any]],
+    stdin: TextIO | None = None,
+    out: TextIO | None = None,
+) -> int:
     """``switchboard remote remove <name>`` on the desktop: the broker ends the host's members
     and drops its consent (human only), then the table and ``remotes/<name>/`` go."""
     from switchboard.mcp.client import BrokerDown
@@ -866,11 +980,15 @@ def remove_desktop(paths: Paths, name: str, *, yes: bool = False, call: Callable
     try:
         res = call("remote.remove", {"name": name})
         n = res.get("ended", 0)
-        print(f"broker: link closed, {n} member(s) ended, consent {'forgotten' if res.get('had_row') else 'none'}",
-              file=out)
+        print(
+            f"broker: link closed, {n} member(s) ended, consent {'forgotten' if res.get('had_row') else 'none'}",
+            file=out,
+        )
     except BrokerDown:
-        print("the broker is not running: members of this remote left from before are ended when it starts",
-              file=out)
+        print(
+            "the broker is not running: members of this remote left from before are ended when it starts",
+            file=out,
+        )
     if new is not None:
         atomic_write(rp, new, default_mode=0o600)
     if has_dir:
@@ -896,8 +1014,15 @@ def _stop_satellite(paths: Paths) -> int | None:
     return pid
 
 
-def remove_remote(paths: Paths, name: str, *, ak_path: Path | None = None, yes: bool = False,
-                  stdin: TextIO | None = None, out: TextIO | None = None) -> int:
+def remove_remote(
+    paths: Paths,
+    name: str,
+    *,
+    ak_path: Path | None = None,
+    yes: bool = False,
+    stdin: TextIO | None = None,
+    out: TextIO | None = None,
+) -> int:
     """``switchboard remote remove <name>`` on the remote: the link line (diff, confirm,
     backup), ``satellite.toml``, and a running satellite of this home."""
     out = out or sys.stdout
@@ -971,8 +1096,14 @@ def own_public_keys(ssh_dir: Path, paths: Paths) -> dict[str, str]:
     return out
 
 
-def doctor_desktop(paths: Paths, *, ak_path: Path, ssh_dir: Path, allow_ssh_cli: bool,
-                   status: Callable[[], dict[str, Any] | None]) -> list[Finding]:
+def doctor_desktop(
+    paths: Paths,
+    *,
+    ak_path: Path,
+    ssh_dir: Path,
+    allow_ssh_cli: bool,
+    status: Callable[[], dict[str, Any] | None],
+) -> list[Finding]:
     """The desktop's checks (§27.8.3): links, key and pin files, ``allow_ssh_cli``, shell keys."""
     from switchboard.remote.describe import describe
 
@@ -997,8 +1128,13 @@ def doctor_desktop(paths: Paths, *, ak_path: Path, ssh_dir: Path, allow_ssh_cli:
         if problem:
             f.append(Finding("FAIL", f"{name}: {problem}"))
         else:
-            f.append(Finding("ok", f"{name}: remotes/{name}/ 0700, link key 0600, one host key pinned under"
-                                   f" {host_key_alias(name)}"))
+            f.append(
+                Finding(
+                    "ok",
+                    f"{name}: remotes/{name}/ 0700, link key 0600, one host key pinned under"
+                    f" {host_key_alias(name)}",
+                )
+            )
     st = status()
     if st is None:
         f.append(Finding("note", "the broker is not running: link states unknown"))
@@ -1010,8 +1146,13 @@ def doctor_desktop(paths: Paths, *, ak_path: Path, ssh_dir: Path, allow_ssh_cli:
             lvl = "ok" if state == "up" else "WARN" if state in ("blocked", "down") else "note"
             f.append(Finding(lvl, describe(info)))
     if allow_ssh_cli:
-        f.append(Finding("WARN", "[security] allow_ssh_cli = true: human commands (say, cmd, login) are accepted"
-                                 " from ssh logins, for every key that opens a shell here"))
+        f.append(
+            Finding(
+                "WARN",
+                "[security] allow_ssh_cli = true: human commands (say, cmd, login) are accepted"
+                " from ssh logins, for every key that opens a shell here",
+            )
+        )
     else:
         f.append(Finding("ok", "[security] allow_ssh_cli is off: human commands only from a terminal here"))
     try:
@@ -1029,19 +1170,35 @@ def doctor_desktop(paths: Paths, *, ak_path: Path, ssh_dir: Path, allow_ssh_cli:
                 continue
             keys += 1
             if e.key in own:
-                f.append(Finding("WARN", f"{ak_path} authorizes a key this machine holds ({own[e.key]}): any"
-                                         " process here that reads it can log in here over ssh"))
+                f.append(
+                    Finding(
+                        "WARN",
+                        f"{ak_path} authorizes a key this machine holds ({own[e.key]}): any"
+                        " process here that reads it can log in here over ssh",
+                    )
+                )
             if not e.has_command:
                 loose += 1
-                f.append(Finding("WARN", f"{ak_path}: {_describe_key(e)} opens a shell on this machine (no"
-                                         " command=): never give it to a remote machine, never `ssh -A` into one"))
+                f.append(
+                    Finding(
+                        "WARN",
+                        f"{ak_path}: {_describe_key(e)} opens a shell on this machine (no"
+                        " command=): never give it to a remote machine, never `ssh -A` into one",
+                    )
+                )
         if not keys:
             f.append(Finding("ok", f"{ak_path} holds no key: no key opens a shell on this machine"))
         elif not loose:
             f.append(Finding("ok", f"{ak_path}: every key is restricted to a command"))
     rr = _rrsync()
-    f.append(Finding("note", f"rrsync: {rr}" if rr else "rrsync not found (only the pull variant of the bitstream"
-                                                          " key needs it here, §27.8.4)"))
+    f.append(
+        Finding(
+            "note",
+            f"rrsync: {rr}"
+            if rr
+            else "rrsync not found (only the pull variant of the bitstream key needs it here, §27.8.4)",
+        )
+    )
     return f
 
 
@@ -1052,8 +1209,14 @@ def _writable(p: str) -> bool:
         return False
 
 
-def doctor_remote(paths: Paths, *, ak_path: Path, environ: Any, probe_desktop: str | None = None,
-                  status: Callable[[], dict[str, Any] | None]) -> list[Finding]:
+def doctor_remote(
+    paths: Paths,
+    *,
+    ak_path: Path,
+    environ: Any,
+    probe_desktop: str | None = None,
+    status: Callable[[], dict[str, Any] | None],
+) -> list[Finding]:
     """The remote's checks (§27.8.2): the forced command, ``satellite.toml``, the hook copy,
     an agent socket in this session, ``rrsync``, and, only when asked, whether this machine
     can open a shell on the desktop."""
@@ -1072,53 +1235,102 @@ def doctor_remote(paths: Paths, *, ak_path: Path, environ: Any, probe_desktop: s
     lines = [e for e in (parse_ak_line(ln) for ln in text.splitlines()) if e is not None]
     ours = [e for e in lines if is_ours(e, conf.name, paths.home)]
     if not ours:
-        f.append(Finding("FAIL", f"{ak_path} has no line for {conf.name} in this home: run `switchboard remote"
-                                 " accept` again"))
+        f.append(
+            Finding(
+                "FAIL",
+                f"{ak_path} has no line for {conf.name} in this home: run `switchboard remote accept` again",
+            )
+        )
     for e in ours:
         sat = satellite_command(e)
         if sat is None:
-            f.append(Finding("FAIL", f"{conf.name}'s line has no satellite command: run `switchboard remote accept`"
-                                     " again"))
+            f.append(
+                Finding(
+                    "FAIL",
+                    f"{conf.name}'s line has no satellite command: run `switchboard remote accept` again",
+                )
+            )
             continue
         py, _home, _n = sat
         if not (os.path.isfile(py) and os.access(py, os.X_OK)):
-            f.append(Finding("FAIL", f"the forced command's python {py} is missing: run `switchboard remote accept`"
-                                     " again (switchboard moved?)"))
+            f.append(
+                Finding(
+                    "FAIL",
+                    f"the forced command's python {py} is missing: run `switchboard remote accept`"
+                    " again (switchboard moved?)",
+                )
+            )
         else:
             f.append(Finding("ok", f"the forced command's python exists ({py}) and its home is this home"))
         why = line_problem(e, py, paths.home, conf.name)
-        f.append(Finding("FAIL", f"{conf.name}'s line is not the one `remote accept` writes: {why}; run"
-                                 " `switchboard remote accept` again") if why else
-                 Finding("ok", f"{conf.name}'s line is exactly restrict[,from=],command=<the satellite>"))
+        f.append(
+            Finding(
+                "FAIL",
+                f"{conf.name}'s line is not the one `remote accept` writes: {why}; run"
+                " `switchboard remote accept` again",
+            )
+            if why
+            else Finding("ok", f"{conf.name}'s line is exactly restrict[,from=],command=<the satellite>")
+        )
         frm = e.option("from")
-        f.append(Finding("ok", f"the link key is accepted only from {frm}") if frm else
-                 Finding("note", "the link key is accepted from any address: `remote accept --from <desktop ip>`"
-                                 " restricts it"))
+        f.append(
+            Finding("ok", f"the link key is accepted only from {frm}")
+            if frm
+            else Finding(
+                "note",
+                "the link key is accepted from any address: `remote accept --from <desktop ip>` restricts it",
+            )
+        )
         if any(x.key == e.key and not x.has_command for x in lines):
             f.append(Finding("FAIL", f"{ak_path} also has the link key without command= (a shell)"))
     hooks = hook_state_text(paths)
     f.append(Finding("ok" if hooks.startswith("ok") else "WARN", f"hook copies: {hooks}"))
     if environ.get("SSH_AUTH_SOCK"):
-        f.append(Finding("WARN", "SSH_AUTH_SOCK is set in this session: don't `ssh -A` into this machine; an agent"
-                                 " here could use your forwarded keys"))
+        f.append(
+            Finding(
+                "WARN",
+                "SSH_AUTH_SOCK is set in this session: don't `ssh -A` into this machine; an agent"
+                " here could use your forwarded keys",
+            )
+        )
     rr = _rrsync()
-    f.append(Finding("note", f"rrsync: {rr}" if rr else "rrsync not found (the push variant of the bitstream key"
-                                                          " needs it here, §27.8.4)"))
+    f.append(
+        Finding(
+            "note",
+            f"rrsync: {rr}"
+            if rr
+            else "rrsync not found (the push variant of the bitstream key needs it here, §27.8.4)",
+        )
+    )
     import switchboard
 
     pkg = os.path.dirname(os.path.realpath(switchboard.__file__))
     mine = [p for p in (os.path.realpath(sys.executable), pkg) if _writable(p)]
     if mine:
-        f.append(Finding("note", "this user can write the satellite's install (" + ", ".join(mine) + "): any process"
-                         " of this user could change what the forced command runs at the next link start"
-                         " (§27.12); a root-owned install closes that"))
+        f.append(
+            Finding(
+                "note",
+                "this user can write the satellite's install (" + ", ".join(mine) + "): any process"
+                " of this user could change what the forced command runs at the next link start"
+                " (§27.12); a root-owned install closes that",
+            )
+        )
     st = status()
     if st is not None and st.get("role") == "satellite":
-        f.append(Finding("ok", f"the satellite runs (pid {st.get('pid')}), link {st.get('link')},"
-                               f" harden {st.get('harden')}, stdio {st.get('stdio', '?')}"))
+        f.append(
+            Finding(
+                "ok",
+                f"the satellite runs (pid {st.get('pid')}), link {st.get('link')},"
+                f" harden {st.get('harden')}, stdio {st.get('stdio', '?')}",
+            )
+        )
     else:
-        f.append(Finding("note", "no satellite runs now: the desktop dials this machine (`switchboard remote"
-                                 " status` there)"))
+        f.append(
+            Finding(
+                "note",
+                "no satellite runs now: the desktop dials this machine (`switchboard remote status` there)",
+            )
+        )
     if probe_desktop is not None:
         f.append(probe(probe_desktop, environ.get("SSH_AUTH_SOCK") or None))
     return f
@@ -1132,16 +1344,30 @@ def probe(dest: str, agent_sock: str | None = None) -> Finding:
     user, host = split_dest(dest)
     target = f"{user}@{host}" if user else host
     try:
-        r = _run([SSH_BIN, "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", target, "true"],
-                 timeout=PROBE_TIMEOUT_S, agent_sock=agent_sock)
+        r = _run(
+            [SSH_BIN, "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", target, "true"],
+            timeout=PROBE_TIMEOUT_S,
+            agent_sock=agent_sock,
+        )
     except PairingError as e:
-        return Finding("WARN", f"the probe of {target} could not run ({e}): check by hand that `ssh {target} true`"
-                               " fails here")
+        return Finding(
+            "WARN",
+            f"the probe of {target} could not run ({e}): check by hand that `ssh {target} true` fails here",
+        )
     if r.returncode == 0:
-        return Finding("WARN", f"this machine can open a shell on {target} (ssh … true succeeded): an agent here"
-                               " could act as you on the desktop; remove that key from the desktop")
-    how = "this user's keys and this session's agent" if agent_sock else "this user's keys (no agent in this session)"
-    return Finding("ok", f"ssh {target} true failed here (exit {r.returncode}): no shell on the desktop from {how}")
+        return Finding(
+            "WARN",
+            f"this machine can open a shell on {target} (ssh … true succeeded): an agent here"
+            " could act as you on the desktop; remove that key from the desktop",
+        )
+    how = (
+        "this user's keys and this session's agent"
+        if agent_sock
+        else "this user's keys (no agent in this session)"
+    )
+    return Finding(
+        "ok", f"ssh {target} true failed here (exit {r.returncode}): no shell on the desktop from {how}"
+    )
 
 
 def print_findings(findings: list[Finding], out: TextIO, paint: Any = None) -> int:

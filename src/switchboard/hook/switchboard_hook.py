@@ -54,7 +54,14 @@ JOIN_TOOLS = ("MCP:join", "mcp__switchboard__join")
 HANDLED = {
     "claude": ("SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"),
     "codex": ("UserPromptSubmit", "PostToolUse", "Stop", "Interrupt", "SessionEnd"),
-    "cursor": ("sessionStart", "beforeSubmitPrompt", "postToolUse", "postToolUseFailure", "stop", "sessionEnd"),
+    "cursor": (
+        "sessionStart",
+        "beforeSubmitPrompt",
+        "postToolUse",
+        "postToolUseFailure",
+        "stop",
+        "sessionEnd",
+    ),
     "devin": ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"),
 }
 
@@ -176,7 +183,9 @@ def build_params(payload, harness, event, t0, max_wait):
         "ok": ok,
         "status": _str(payload.get("status"), 32),
         "loop_count": payload.get("loop_count") if isinstance(payload.get("loop_count"), int) else None,
-        "stop_hook_active": payload.get("stop_hook_active") if isinstance(payload.get("stop_hook_active"), bool) else None,
+        "stop_hook_active": payload.get("stop_hook_active")
+        if isinstance(payload.get("stop_hook_active"), bool)
+        else None,
         "source": _str(payload.get("source"), 32),
         "reason": _str(payload.get("reason"), 64),
         "permission_mode": _str(payload.get("permission_mode"), 32),
@@ -186,7 +195,9 @@ def build_params(payload, harness, event, t0, max_wait):
         "max_wait_s": max_wait,
     }
     if tool in JOIN_TOOLS:
-        m = NONCE_RE.search(_as_text(payload.get("tool_output")) + " " + _as_text(payload.get("tool_response")))
+        m = NONCE_RE.search(
+            _as_text(payload.get("tool_output")) + " " + _as_text(payload.get("tool_response"))
+        )
         if m:
             p["join_nonce"] = m.group(1)
     if harness == "devin" and event == "PreToolUse" and tool == "run_subagent":
@@ -239,8 +250,9 @@ def _agent_gpid():
         import subprocess
 
         ps = "/bin/ps" if os.path.exists("/bin/ps") else "/usr/bin/ps"
-        r = subprocess.run([ps, "-o", "ppid=", "-p", str(os.getppid())], capture_output=True,
-                           text=True, timeout=2)
+        r = subprocess.run(
+            [ps, "-o", "ppid=", "-p", str(os.getppid())], capture_output=True, text=True, timeout=2
+        )
         v = int(r.stdout.strip())
         return v if v > 1 else None
     except Exception:

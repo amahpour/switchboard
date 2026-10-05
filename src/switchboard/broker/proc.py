@@ -8,8 +8,8 @@ which may come from an agent's shell). A process is identified by
 
 from __future__ import annotations
 
-import ctypes
 import contextlib
+import ctypes
 import math
 import os
 import re
@@ -69,9 +69,7 @@ def _run_ps(args: list[str]) -> str:
     if ps is None:
         return ""
     try:
-        return subprocess.run(
-            [ps, *args], capture_output=True, text=True, timeout=5
-        ).stdout
+        return subprocess.run([ps, *args], capture_output=True, text=True, timeout=5).stdout
     except (OSError, subprocess.SubprocessError):
         return ""
 
@@ -209,7 +207,11 @@ def _info_linux(pid: int) -> ProcInfo | None:
     hz = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
     start = (_BTIME_PIN if _BTIME_PIN is not None else _linux_btime()) + ticks / float(hz)
     return ProcInfo(
-        pid=pid, ppid=ppid, start=round(start, 2), uid=uid, comm=comm,
+        pid=pid,
+        ppid=ppid,
+        start=round(start, 2),
+        uid=uid,
+        comm=comm,
         tty_dev=tty_nr or None,
     )
 

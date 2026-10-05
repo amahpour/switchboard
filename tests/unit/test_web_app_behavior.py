@@ -14,14 +14,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import node_for_tests
 
 HARNESS = Path(__file__).resolve().parents[1] / "web_app_harness.js"
 NODE, pytestmark = node_for_tests()  # a skip without node; a failure under SWITCHBOARD_REQUIRE_NODE=1
 
-CLOSE_REPLY = ("closed #build: 2 agent(s) removed (1 on fpga-pi); history kept."
-               " The name is free again; reopen this room from Closed rooms in the web UI")
+CLOSE_REPLY = (
+    "closed #build: 2 agent(s) removed (1 on fpga-pi); history kept."
+    " The name is free again; reopen this room from Closed rooms in the web UI"
+)
 GONE = "#build is no longer open (closed or deleted); Closed rooms can reopen a closed room"
 
 
@@ -52,7 +53,9 @@ def test_a_failed_resync_on_open_still_subscribes_the_tabs() -> None:
     assert out["tabs"] == ["#build"] and hello_rooms(out) == [["#build"]]
 
 
-@pytest.mark.parametrize("scenario", ["close_reply_frame_late", "close_reply_frame_first", "close_reply_last_room"])
+@pytest.mark.parametrize(
+    "scenario", ["close_reply_frame_late", "close_reply_frame_first", "close_reply_last_room"]
+)
 def test_the_close_reply_stays_on_screen(scenario: str) -> None:
     out = run(scenario)
     assert not out["logHidden"]
@@ -139,14 +142,23 @@ def test_an_empty_room_shows_how_to_join() -> None:
 def test_the_inspector_shows_the_member_detail_and_closes_when_it_leaves() -> None:
     out = run("inspector")
     # at once, from member_dict; the detail is still loading
-    assert out["early"]["inspecting"] and "codex-1" in out["early"]["body"] and "loading" in out["early"]["body"]
+    assert (
+        out["early"]["inspecting"] and "codex-1" in out["early"]["body"] and "loading" in out["early"]["body"]
+    )
     assert "Approvals off" in out["early"]["body"] and out["sel"] == ["codex-1"]
     # codex-1's late answer (held) never replaced devin-1's view
     assert out["devin"].startswith("DVdevin-1") and "a test session" in out["devin"]
-    assert "read #build and go back to wait()" in out["devin"] and "codex" not in out["devin"].split("Catch")[0]
+    assert (
+        "read #build and go back to wait()" in out["devin"] and "codex" not in out["devin"].split("Catch")[0]
+    )
     c = out["codex"]["body"]
     assert out["codex"]["pos"] == "Agent 2 of 4"
-    assert "3f2a…c91e" in c and "said" in c and "please review parse_port" in c and "message #999 (not loaded)" in c
+    assert (
+        "3f2a…c91e" in c
+        and "said" in c
+        and "please review parse_port" in c
+        and "message #999 (not loaded)" in c
+    )
     assert "Turn start inbox: 2 from claude-1, bench@fpga-pi" in c and "Passed called pass()" in c
     # commands take bare names; the label keeps the host
     assert "/catchup codex-1 on bench" in c and "bench@fpga-pi’s work" in c and "bench@fpga-pi on" not in c

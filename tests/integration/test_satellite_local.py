@@ -12,9 +12,9 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-
 from conftest import child_env
 from fakes.fake_link import FakeLink, SatDriver, make_pi_home, wait_for
+
 from switchboard.paths import Paths
 from switchboard.remote.satellite import start_refusal
 
@@ -28,10 +28,17 @@ def pi() -> Iterator[Path]:
         shutil.rmtree(d, ignore_errors=True)
 
 
-def run_satellite(home: Path, *extra: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([sys.executable, "-m", "switchboard", "satellite", "--home", str(home), "--name", "fpga-pi",
-                           *extra], env=child_env(**(env or {})), capture_output=True, text=True,
-                          stdin=subprocess.DEVNULL, timeout=30)
+def run_satellite(
+    home: Path, *extra: str, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "switchboard", "satellite", "--home", str(home), "--name", "fpga-pi", *extra],
+        env=child_env(**(env or {})),
+        capture_output=True,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        timeout=30,
+    )
 
 
 def test_refuses_without_satellite_toml() -> None:
@@ -132,8 +139,14 @@ def test_takes_over_a_stale_satellite(pi: Path) -> None:
 
 
 def test_start_refused_on_satellite_home(pi: Path) -> None:
-    r = subprocess.run([sys.executable, "-m", "switchboard", "--home", str(pi), "start", "--test-mode"],
-                       env=child_env(), capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
+    r = subprocess.run(
+        [sys.executable, "-m", "switchboard", "--home", str(pi), "start", "--test-mode"],
+        env=child_env(),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        stdin=subprocess.DEVNULL,
+    )
     assert r.returncode == 1 and "this is a satellite home: the broker runs on desk" in r.stderr
     assert not (pi / "switchboard.db").exists()
 
@@ -184,12 +197,31 @@ def test_refuses_when_another_process_holds_its_stdio(pi: Path, held: str) -> No
     in_r, in_w = os.pipe()
     out_r, out_w = os.pipe()
     keep = {"stdin": (in_r,), "stdout": (out_w,), "none": ()}[held]
-    holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], pass_fds=keep,
-                              env=child_env(), stdin=subprocess.DEVNULL)
+    holder = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        pass_fds=keep,
+        env=child_env(),
+        stdin=subprocess.DEVNULL,
+    )
     try:
-        sat = subprocess.Popen([sys.executable, "-I", "-m", "switchboard", "satellite", "--home", str(pi), "--name",
-                                "fpga-pi", "--test-mode"], stdin=in_r, stdout=out_w, stderr=subprocess.PIPE,
-                               env=child_env())
+        sat = subprocess.Popen(
+            [
+                sys.executable,
+                "-I",
+                "-m",
+                "switchboard",
+                "satellite",
+                "--home",
+                str(pi),
+                "--name",
+                "fpga-pi",
+                "--test-mode",
+            ],
+            stdin=in_r,
+            stdout=out_w,
+            stderr=subprocess.PIPE,
+            env=child_env(),
+        )
         os.close(in_r)
         os.close(out_w)
         try:

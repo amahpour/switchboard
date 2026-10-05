@@ -9,13 +9,13 @@ import re
 from pathlib import Path
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import World
 from test_claude_adapter import claude
 from test_codex_adapter import TID, attach, codex
 from test_cursor_adapter import cursor
 from test_devin_adapter import devin
+
 from switchboard.config import Config
 from switchboard.models import Push
 
@@ -29,16 +29,21 @@ def ids(text: str) -> list[int]:
     return [int(x) for x in re.findall(r"^- id=(\d+) ", text, re.M)]
 
 
-@pytest.mark.parametrize("harness,event,kw", [
-    ("claude", "PostToolUse", {"ok": True}),
-    ("claude", "PostToolUseFailure", {"ok": False}),
-    ("claude", "UserPromptSubmit", {"gen": "g2"}),
-    ("codex", "PostToolUse", {"ok": True, "sid": TID, "tool": "Bash"}),
-    ("cursor", "postToolUse", {"ok": True}),
-    ("cursor", "postToolUseFailure", {"ok": False}),
-    ("devin", "PostToolUse", {"ok": True, "tool": "read"}),
-])
-def test_priority_rides_the_next_hook_and_chatter_never_does(w: World, harness: str, event: str, kw: dict) -> None:
+@pytest.mark.parametrize(
+    "harness,event,kw",
+    [
+        ("claude", "PostToolUse", {"ok": True}),
+        ("claude", "PostToolUseFailure", {"ok": False}),
+        ("claude", "UserPromptSubmit", {"gen": "g2"}),
+        ("codex", "PostToolUse", {"ok": True, "sid": TID, "tool": "Bash"}),
+        ("cursor", "postToolUse", {"ok": True}),
+        ("cursor", "postToolUseFailure", {"ok": False}),
+        ("devin", "PostToolUse", {"ok": True, "tool": "read"}),
+    ],
+)
+def test_priority_rides_the_next_hook_and_chatter_never_does(
+    w: World, harness: str, event: str, kw: dict
+) -> None:
     if harness == "claude":
         p, m, _c = claude(w, status="busy", attached=False, registry=None)
     elif harness == "codex":

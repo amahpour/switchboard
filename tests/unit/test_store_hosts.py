@@ -11,8 +11,8 @@ import hashlib
 from pathlib import Path
 
 import pytest
-
 from conftest import FakeClock
+
 from switchboard import db
 from switchboard.models import HOST_RE, session_key, valid_host
 from switchboard.store import Store
@@ -116,15 +116,31 @@ def test_members_and_messages_carry_host(store: Store) -> None:
     lm = store.create_membership(room.id, lp.id, "vivado", "h1")
     rm = store.create_membership(room.id, rp.id, "bench", "h2")
     assert {m.name: m.host for m in store.members(room.id)} == {"vivado": "", "bench": PI}
-    a = store.insert_message(room.id, sender_name="vivado", sender_kind="agent", via="mcp", text="hi",
-                             sender_membership_id=lm.id, sender_harness="claude")
-    b = store.insert_message(room.id, sender_name="bench", sender_kind="agent", via="mcp", text="hi",
-                             sender_membership_id=rm.id, sender_harness="claude", sender_host=PI)
+    a = store.insert_message(
+        room.id,
+        sender_name="vivado",
+        sender_kind="agent",
+        via="mcp",
+        text="hi",
+        sender_membership_id=lm.id,
+        sender_harness="claude",
+    )
+    b = store.insert_message(
+        room.id,
+        sender_name="bench",
+        sender_kind="agent",
+        via="mcp",
+        text="hi",
+        sender_membership_id=rm.id,
+        sender_harness="claude",
+        sender_host=PI,
+    )
     assert a.sender_host is None and b.sender_host == PI
     assert [m.sender_host for m in store.history(room.id)] == [None, PI]
     with pytest.raises(ValueError):
-        store.insert_message(room.id, sender_name="x", sender_kind="agent", via="mcp", text="t",
-                             sender_host="Not A Host")
+        store.insert_message(
+            room.id, sender_name="x", sender_kind="agent", via="mcp", text="t", sender_host="Not A Host"
+        )
 
 
 def test_remotes_rows(store: Store, clock: FakeClock) -> None:
@@ -155,9 +171,15 @@ def test_remotes_rows(store: Store, clock: FakeClock) -> None:
     assert store.clear_remote(PI) is False
 
 
-@pytest.mark.parametrize("bad", [
-    dict(name="Bad Name"), dict(config_hash="abc"), dict(config_hash="A" * 64), dict(via="ssh"),
-])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        dict(name="Bad Name"),
+        dict(config_hash="abc"),
+        dict(config_hash="A" * 64),
+        dict(via="ssh"),
+    ],
+)
 def test_remotes_rows_refuse_bad_values(store: Store, bad: dict[str, str]) -> None:
     args = dict(name=PI, config_hash="a" * 64, via="cli")
     args.update(bad)

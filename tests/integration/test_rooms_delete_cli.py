@@ -8,6 +8,7 @@ from pathlib import Path
 
 from conftest import TEST_HUMAN, SubprocBroker
 from fakes.fake_agent import FakeAgent
+
 from switchboard import db
 from switchboard.clock import SystemClock
 from switchboard.paths import Paths
@@ -49,15 +50,21 @@ async def test_refused_with_a_member_then_close_and_delete(tmp_home: Path) -> No
         assert bak.name == "switchboard.db.delete-build-1.bak"
         lines = r.stdout.splitlines()
         assert lines[0] == "switchboard rooms delete #build~closed-1:"
-        assert re.fullmatch(r"  #build~closed-1: was #build, closed \d{4}-\d\d-\d\d \d\d:\d\d by alice", lines[1])
-        counts = re.fullmatch(r"  removes (1 room, \d+ message\(s\), 1 membership\(s\), \d+ delivery row\(s\),"
-                              r" \d+ batch\(es\), \d+ event\(s\))", lines[2])
+        assert re.fullmatch(
+            r"  #build~closed-1: was #build, closed \d{4}-\d\d-\d\d \d\d:\d\d by alice", lines[1]
+        )
+        counts = re.fullmatch(
+            r"  removes (1 room, \d+ message\(s\), 1 membership\(s\), \d+ delivery row\(s\),"
+            r" \d+ batch\(es\), \d+ event\(s\))",
+            lines[2],
+        )
         assert counts, lines[2]
         assert lines[3] == f"  a checked backup of the whole database is written first: {bak}"
         assert lines[4] == "  this can't be undone, except by restoring that backup"
         assert lines[5] == f"deleted #build~closed-1: {counts.group(1)}"
-        assert lines[6] == (f"backup: {bak} (0600, checked); it still holds the room:"
-                            " remove it once you no longer need it")
+        assert lines[6] == (
+            f"backup: {bak} (0600, checked); it still holds the room: remove it once you no longer need it"
+        )
         assert len(lines) == 7
         r = b.cli("rooms", "--closed")
         assert r.returncode == 0 and r.stdout.strip() == "no closed rooms"
@@ -71,8 +78,9 @@ def test_without_yes_nothing_is_applied(tmp_home: Path) -> None:
     try:
         r = b.cli("rooms", "delete", "#scratch")  # stdin is not a terminal
         assert r.returncode == 1 and r.stdout.splitlines()[-1] == "not applied", (r.stdout, r.stderr)
-        assert re.fullmatch(r"  #scratch: open, no agents, created \d{4}-\d\d-\d\d \d\d:\d\d",
-                            r.stdout.splitlines()[1])
+        assert re.fullmatch(
+            r"  #scratch: open, no agents, created \d{4}-\d\d-\d\d \d\d:\d\d", r.stdout.splitlines()[1]
+        )
         assert backups(tmp_home) == []
         r = b.cli("rooms")
         assert r.returncode == 0 and "#scratch" in r.stdout
@@ -85,7 +93,10 @@ def test_forbidden_without_a_terminal_and_when_the_broker_is_down(tmp_home: Path
     b = SubprocBroker(tmp_home, trust=False).start()
     try:
         r = b.cli("rooms", "delete", "#scratch", "--yes")
-        assert r.returncode == 1 and "forbidden" in r.stderr and "room.delete" in r.stderr, (r.stdout, r.stderr)
+        assert r.returncode == 1 and "forbidden" in r.stderr and "room.delete" in r.stderr, (
+            r.stdout,
+            r.stderr,
+        )
         assert backups(tmp_home) == []
         r = b.cli("rooms")
         assert r.returncode == 0 and "#scratch" in r.stdout

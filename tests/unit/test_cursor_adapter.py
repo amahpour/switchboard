@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import World
+
 from switchboard.adapters.cursor import FOLLOWUP_CONFIRM_S, FOLLOWUP_RACE_S, CursorAdapter
 from switchboard.config import Config
 from switchboard.models import Notice, Release, ResolveSink
@@ -28,13 +28,16 @@ def ad(w: World) -> CursorAdapter:
     return a
 
 
-def cursor(w: World, name: str = "cursor-1", *, status: str = "idle", bound: bool = True,
-           room_id: int | None = None) -> tuple[Any, Any]:
+def cursor(
+    w: World, name: str = "cursor-1", *, status: str = "idle", bound: bool = True, room_id: int | None = None
+) -> tuple[Any, Any]:
     p, m = w.agent(name, harness="cursor", status=status, hooks=True, room_id=room_id)
     if bound:
         p = w.store.update_participant(p.id, session_key=f"cursor:conv-{name}", bind_state="bound")
     else:
-        p = w.store.update_participant(p.id, session_key=f"cursor:agent:{p.agent_pid}@1.00", bind_state="pending")
+        p = w.store.update_participant(
+            p.id, session_key=f"cursor:agent:{p.agent_pid}@1.00", bind_state="pending"
+        )
     return p, m
 
 
@@ -222,7 +225,8 @@ def test_an_acked_followup_with_no_further_hook_expires(w: World, clock: FakeClo
 
 @pytest.mark.parametrize("acked", [True, False])
 def test_a_followup_that_expires_with_no_hook_leaves_the_member_parked_not_busy(
-        w: World, clock: FakeClock, acked: bool) -> None:
+    w: World, clock: FakeClock, acked: bool
+) -> None:
     """Cursor dropped the follow-up (or the hook died before printing it): no turn
     started, so the member is idle again and shown parked, not busy for good."""
     p, m = cursor(w, status="busy")
@@ -383,7 +387,9 @@ def test_pause_of_one_room_keeps_a_park_that_serves_another(w: World) -> None:
     out = stop(w, p)
     w.engine.pause_room(w.room.id, "test")
     assert park_result(w, out.sink_id) is None  # #other can still wake it
-    msg = w.store.insert_message(other.id, sender_name="alice", sender_kind="human", via="web", text="in other")
+    msg = w.store.insert_message(
+        other.id, sender_name="alice", sender_kind="human", via="web", text="in other"
+    )
     w.actions += w.engine.on_message(msg.id)
     assert park_result(w, out.sink_id)["status"] == "messages"
 

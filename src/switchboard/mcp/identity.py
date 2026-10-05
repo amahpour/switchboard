@@ -53,8 +53,7 @@ def detect(
     argv0 = os.path.basename((parent_argv or "").split(" ", 1)[0]) if parent_argv else ""
 
     def result(h: str, rule: str) -> tuple[str, dict[str, Any]]:
-        return h, {"rule": rule, "client": ci_name[:40], "parent": argv0[:40],
-                   "env_leak": env_leak(env, h)}
+        return h, {"rule": rule, "client": ci_name[:40], "parent": argv0[:40], "env_leak": env_leak(env, h)}
 
     if harness_flag == "test":
         return result("test", "flag")

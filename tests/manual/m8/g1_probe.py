@@ -19,8 +19,9 @@ import sys
 import threading
 import time
 
-OUT = os.path.join(os.environ.get("G1_OUT") or os.path.dirname(os.path.abspath(__file__)),
-                   f"g1-record-{os.getpid()}.json")
+OUT = os.path.join(
+    os.environ.get("G1_OUT") or os.path.dirname(os.path.abspath(__file__)), f"g1-record-{os.getpid()}.json"
+)
 PPID = os.getppid()
 
 
@@ -60,13 +61,15 @@ def snapshot(tag: str) -> dict:
     }
     if isinstance(reg, dict):
         st = reg.get("status")
-        rec.update({
-            "session_file_keys": sorted(reg.keys()),
-            "session_pid_is_parent": reg.get("pid") == PPID,
-            "session_socket_matches_env": bool(sock) and reg.get("messagingSocketPath") == sock,
-            "session_status": st if isinstance(st, str) and len(st) <= 32 else None,
-            "session_has_statusUpdatedAt": "statusUpdatedAt" in reg,
-        })
+        rec.update(
+            {
+                "session_file_keys": sorted(reg.keys()),
+                "session_pid_is_parent": reg.get("pid") == PPID,
+                "session_socket_matches_env": bool(sock) and reg.get("messagingSocketPath") == sock,
+                "session_status": st if isinstance(st, str) and len(st) <= 32 else None,
+                "session_has_statusUpdatedAt": "statusUpdatedAt" in reg,
+            }
+        )
     return rec
 
 
@@ -121,15 +124,23 @@ def main() -> None:
             continue  # a notification
         if method == "initialize":
             pv = (req.get("params") or {}).get("protocolVersion", "2025-06-18")
-            reply(rid, {"protocolVersion": pv, "capabilities": {"tools": {}},
-                        "serverInfo": {"name": "g1probe", "version": "1"}})
+            reply(
+                rid,
+                {
+                    "protocolVersion": pv,
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "g1probe", "version": "1"},
+                },
+            )
         elif method == "tools/list":
             reply(rid, {"tools": [TOOL]})
         elif method == "tools/call":
             time.sleep(2)
             r = record("tool_call")
-            summary = {k: r.get(k) for k in ("env_names", "session_file_exists", "session_socket_matches_env",
-                                             "session_status")}
+            summary = {
+                k: r.get(k)
+                for k in ("env_names", "session_file_exists", "session_socket_matches_env", "session_status")
+            }
             reply(rid, {"content": [{"type": "text", "text": json.dumps(summary)}], "isError": False})
         elif method == "ping":
             reply(rid, {})

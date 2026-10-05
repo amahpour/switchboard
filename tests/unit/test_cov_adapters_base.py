@@ -29,9 +29,22 @@ SINK = SimpleNamespace(path="wait", id=41)
 def part(**kw: Any) -> Participant:
     """A participant row with neutral defaults (no store needed: routing is pure)."""
     base: dict[str, Any] = {f.name: None for f in dataclasses.fields(Participant)}
-    base.update(id=7, harness="unknown", session_key="unknown:s1", bind_state="bound", thread_proof=False,
-                status="idle", approval_mode="default", env_leak=False, boundary_seq=0, gen_tainted=False,
-                rearms_in_gen=0, unconfirmed_followups=0, push_expiries=0, created_at=1.0)
+    base.update(
+        id=7,
+        harness="unknown",
+        session_key="unknown:s1",
+        bind_state="bound",
+        thread_proof=False,
+        status="idle",
+        approval_mode="default",
+        env_leak=False,
+        boundary_seq=0,
+        gen_tainted=False,
+        rearms_in_gen=0,
+        unconfirmed_followups=0,
+        push_expiries=0,
+        created_at=1.0,
+    )
     base.update(kw)
     return Participant(**base)
 
@@ -42,8 +55,9 @@ def ev(event: str, harness: str = "test", **kw: Any) -> HookEvent:
 
 def batch(**kw: Any) -> Batch:
     base: dict[str, Any] = {f.name: None for f in dataclasses.fields(Batch)}
-    base.update(id=3, membership_id=1, path="wait", kind="wake", budget_counted=True, state="offered",
-                created_at=1.0)
+    base.update(
+        id=3, membership_id=1, path="wait", kind="wake", budget_counted=True, state="offered", created_at=1.0
+    )
     base.update(kw)
     return Batch(**base)
 
@@ -71,7 +85,8 @@ def test_the_base_adapter_defaults_are_the_conservative_answers() -> None:
     assert a.status_summary() is None
     assert a.join_guidance(p, "#build") == (
         'switchboard can\'t wake this session on its own. Call read("#build") to check for messages,'
-        ' or wait("#build", 50) to block until one arrives.')
+        ' or wait("#build", 50) to block until one arrives.'
+    )
     assert a.context_events(p) == frozenset()
     assert a.on_hook(p, ev("Stop")) is None
     assert a.park_s(p, ev("Stop")) is None
@@ -133,7 +148,8 @@ def test_the_scripted_test_agent_adapter() -> None:
     assert a.context_events(p) == HOOK_CONTEXT_EVENTS["test"]
     assert a.join_guidance(p, "#build") == (
         'scripted test agent: call read("#build") or wait("#build", 50); mid-task items can also arrive'
-        " as synthetic hook context.")
+        " as synthetic hook context."
+    )
     r = a.route(p, WAKE, SINK, 0.0)
     assert (r.kind, r.path, r.sink_id) == ("sink", "wait", 41)
     assert a.route(p, PRIO, None, 0.0).kind == "pull"
@@ -152,7 +168,7 @@ def test_cursor_routes_an_open_wait_to_its_sink_even_unbound() -> None:
     r = a.route(pending, WAKE, SINK, 0.0)
     assert (r.kind, r.sink_id) == ("sink", 41)
     assert a.route(pending, WAKE, None, 0.0).reason == UNBOUND_WHY
-    assert "wait(\"#build\", 50)" in a.join_guidance(pending, "#build")
+    assert 'wait("#build", 50)' in a.join_guidance(pending, "#build")
 
 
 def test_cursor_park_needs_a_completed_stop_and_enough_hook_budget() -> None:
@@ -236,8 +252,10 @@ def test_devin_pull_confirmation_needs_the_wait_calls_own_successful_post() -> N
     assert a.pull_confirms("wait", None, ok) is True
     assert a.pull_confirms("wait", "tu-2", ok) is False
     assert a.pull_confirms("wait", "tu-1", ev("PreToolUse", "devin", tool=WAIT_TOOL, ok=True)) is False
-    assert a.pull_confirms("wait", "tu-1", ev("PostToolUse", "devin", tool="mcp__switchboard__read",
-                                              ok=True)) is False
+    assert (
+        a.pull_confirms("wait", "tu-1", ev("PostToolUse", "devin", tool="mcp__switchboard__read", ok=True))
+        is False
+    )
     assert a.pull_confirms("wait", "tu-1", ev("PostToolUse", "devin", tool=WAIT_TOOL, ok=False)) is False
 
 

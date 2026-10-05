@@ -13,26 +13,66 @@ from switchboard.models import Item, Room
 NOW = 1_790_000_000.0
 
 
-def item(mid: int, prio: int, *, ts: float = NOW - 100, text: str = "x", notified: float | None = None,
-         kind: str | None = None) -> Item:
-    return Item(membership_id=1, message_id=mid, prio=prio, mentioned=prio == 1, state="pending",
-                batch_id=None, attempts=0, notified_at=notified, ts=ts,
-                sender_name="alice" if prio == 2 else "peer",
-                sender_kind=kind or ("human" if prio == 2 else "agent"), sender_harness=None,
-                text=text, reply_to=None)
+def item(
+    mid: int,
+    prio: int,
+    *,
+    ts: float = NOW - 100,
+    text: str = "x",
+    notified: float | None = None,
+    kind: str | None = None,
+) -> Item:
+    return Item(
+        membership_id=1,
+        message_id=mid,
+        prio=prio,
+        mentioned=prio == 1,
+        state="pending",
+        batch_id=None,
+        attempts=0,
+        notified_at=notified,
+        ts=ts,
+        sender_name="alice" if prio == 2 else "peer",
+        sender_kind=kind or ("human" if prio == 2 else "agent"),
+        sender_harness=None,
+        text=text,
+        reply_to=None,
+    )
 
 
 def room(**kw) -> Room:
-    base = dict(id=1, name="#build", created_at=0.0, created_by="alice", paused=False, paused_reason=None,
-                budget_per_hour=60, budget_remaining=60, budget_window_start=NOW - 10,
-                budget_notice_window=None, hop_count=0, hop_limit=6, last_msg_at=NOW - 100)
+    base = dict(
+        id=1,
+        name="#build",
+        created_at=0.0,
+        created_by="alice",
+        paused=False,
+        paused_reason=None,
+        budget_per_hour=60,
+        budget_remaining=60,
+        budget_window_start=NOW - 10,
+        budget_notice_window=None,
+        hop_count=0,
+        hop_limit=6,
+        last_msg_at=NOW - 100,
+    )
     base.update(kw)
     return Room(**base)
 
 
 def rel(pending, *, eff="idle", r=None, pbb=-1, seq=0, now=NOW, quiet=3.0, hold=60.0, msgs=20, chars=6000):
-    return rules.releasable(pending, room=r or room(), eff=eff, peer_batch_boundary=pbb, boundary_seq=seq,
-                            now=now, quiet_s=quiet, max_hold_s=hold, batch_max_msgs=msgs, max_chars=chars)
+    return rules.releasable(
+        pending,
+        room=r or room(),
+        eff=eff,
+        peer_batch_boundary=pbb,
+        boundary_seq=seq,
+        now=now,
+        quiet_s=quiet,
+        max_hold_s=hold,
+        batch_max_msgs=msgs,
+        max_chars=chars,
+    )
 
 
 def ids(r) -> list[int]:

@@ -11,7 +11,6 @@ from switchboard.adapters.remote_codex import RemoteCodexAdapter
 from switchboard.adapters.testagent import TestAgentAdapter
 from switchboard.config import Config
 
-
 # The adapter of a Codex session on another host (DESIGN.md §27.7); never a harness name.
 REMOTE_CODEX = "codex@remote"
 
@@ -31,5 +30,16 @@ def build_adapters(cfg: Config) -> dict[str, Adapter]:
     }
 
 
-__all__ = ["REMOTE_CODEX", "Adapter", "Caps", "ClaudeAdapter", "CodexAdapter", "CursorAdapter", "DevinAdapter",
-           "PullAdapter", "RemoteCodexAdapter", "TestAgentAdapter", "build_adapters"]
+__all__ = [
+    "REMOTE_CODEX",
+    "Adapter",
+    "Caps",
+    "ClaudeAdapter",
+    "CodexAdapter",
+    "CursorAdapter",
+    "DevinAdapter",
+    "PullAdapter",
+    "RemoteCodexAdapter",
+    "TestAgentAdapter",
+    "build_adapters",
+]

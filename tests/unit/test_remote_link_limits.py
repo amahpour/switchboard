@@ -52,8 +52,16 @@ async def test_request_frame_over_the_local_line_limit_closes_the_link() -> None
     link, _ = stub_link()
     a = Attempt(n=1, link_id="0123456789abcdef")
     link.attempt = a
-    big = proto.encode(proto.req(1, {"id": 1, "method": "agent.say",
-                                     "params": {"cred": "c", "text": "x" * (proto.MAX_LINE + 70_000)}}))
+    big = proto.encode(
+        proto.req(
+            1,
+            {
+                "id": 1,
+                "method": "agent.say",
+                "params": {"cred": "c", "text": "x" * (proto.MAX_LINE + 70_000)},
+            },
+        )
+    )
     assert proto.MAX_REQ_FRAME < len(big) <= proto.MAX_FRAME + 1
     reader = asyncio.StreamReader(limit=proto.MAX_FRAME + 1)
     reader.feed_data(big)

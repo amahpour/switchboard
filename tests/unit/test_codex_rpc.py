@@ -20,19 +20,41 @@ SCHEMA = Path(__file__).resolve().parents[1] / "fixtures" / "codex_schema"
 
 # ------------------------------------------------------------ allowlists
 def test_only_the_allowlisted_methods() -> None:
-    assert rpc.ALLOWED_METHODS == {"initialize", "initialized", "thread/read", "thread/loaded/list",
-                                   "turn/start", "turn/steer"}
-    for m in ("thread/resume", "thread/start", "thread/shellCommand", "command/exec", "config/batchWrite",
-              "config/value/write", "turn/interrupt", "hooks/list", "thread/queue/add", "fs/writeFile",
-              "account/logout", "thread/unsubscribe", "turn/steerx", ""):
+    assert rpc.ALLOWED_METHODS == {
+        "initialize",
+        "initialized",
+        "thread/read",
+        "thread/loaded/list",
+        "turn/start",
+        "turn/steer",
+    }
+    for m in (
+        "thread/resume",
+        "thread/start",
+        "thread/shellCommand",
+        "command/exec",
+        "config/batchWrite",
+        "config/value/write",
+        "turn/interrupt",
+        "hooks/list",
+        "thread/queue/add",
+        "fs/writeFile",
+        "account/logout",
+        "thread/unsubscribe",
+        "turn/steerx",
+        "",
+    ):
         with pytest.raises(ForbiddenRpc):
             check_request(m, {})
 
 
 def test_turn_params_are_exactly_the_allowlist() -> None:
     p = rpc.turn_start_params("t1", "[switchboard] hi", "yk-b7")
-    assert p == {"threadId": "t1", "input": [{"type": "text", "text": "[switchboard] hi", "text_elements": []}],
-                 "clientUserMessageId": "yk-b7"}
+    assert p == {
+        "threadId": "t1",
+        "input": [{"type": "text", "text": "[switchboard] hi", "text_elements": []}],
+        "clientUserMessageId": "yk-b7",
+    }
     check_request("turn/start", p)
     s = rpc.turn_steer_params("t1", "turn-9", "[switchboard] hi", "yk-b8")
     assert set(s) == {"threadId", "expectedTurnId", "input", "clientUserMessageId"}
@@ -41,8 +63,10 @@ def test_turn_params_are_exactly_the_allowlist() -> None:
 
 @pytest.mark.parametrize("field", guardrails.CODEX_OVERRIDE_FIELDS)
 def test_no_override_field_can_be_sent(field: str) -> None:
-    for method, base in (("turn/start", rpc.turn_start_params("t", "x", "yk-b1")),
-                         ("turn/steer", rpc.turn_steer_params("t", "u", "x", "yk-b1"))):
+    for method, base in (
+        ("turn/start", rpc.turn_start_params("t", "x", "yk-b1")),
+        ("turn/steer", rpc.turn_steer_params("t", "u", "x", "yk-b1")),
+    ):
         with pytest.raises(ForbiddenRpc):
             check_request(method, {**base, field: "never"})
 
@@ -52,10 +76,16 @@ def test_turn_params_need_every_key_and_plain_text() -> None:
     for k in base:
         with pytest.raises(ForbiddenRpc):
             check_request("turn/start", {kk: v for kk, v in base.items() if kk != k})
-    for bad in ([{"type": "image", "url": "x"}], [{"type": "text", "text": "x", "text_elements": [],
-                                                   "extra": 1}], [], "x",
-                [{"type": "text", "text": "a", "text_elements": []}, {"type": "text", "text": "b",
-                                                                     "text_elements": []}]):
+    for bad in (
+        [{"type": "image", "url": "x"}],
+        [{"type": "text", "text": "x", "text_elements": [], "extra": 1}],
+        [],
+        "x",
+        [
+            {"type": "text", "text": "a", "text_elements": []},
+            {"type": "text", "text": "b", "text_elements": []},
+        ],
+    ):
         with pytest.raises(ForbiddenRpc):
             check_request("turn/start", {**base, "input": bad})
     with pytest.raises(ForbiddenRpc):
@@ -74,8 +104,9 @@ def test_initialize_declares_no_experimental_api() -> None:
     with pytest.raises(ForbiddenRpc):
         check_request("initialize", {**p, "capabilities": {"experimentalApi": True}})
     with pytest.raises(ForbiddenRpc):
-        check_request("initialize", {**p, "capabilities": {"experimentalApi": False,
-                                                            "optOutNotificationMethods": []}})
+        check_request(
+            "initialize", {**p, "capabilities": {"experimentalApi": False, "optOutNotificationMethods": []}}
+        )
 
 
 def test_thread_read_and_loaded_list_params() -> None:
@@ -88,15 +119,20 @@ def test_thread_read_and_loaded_list_params() -> None:
         check_request("thread/loaded/list", {"limit": 5, "model": "x"})
 
 
-@pytest.mark.parametrize("name", ["TurnStartParams", "TurnSteerParams", "ThreadReadParams",
-                                  "ThreadLoadedListParams"])
+@pytest.mark.parametrize(
+    "name", ["TurnStartParams", "TurnSteerParams", "ThreadReadParams", "ThreadLoadedListParams"]
+)
 def test_params_match_the_recorded_protocol_schema(name: str) -> None:
     """codex-cli 0.156.1 ``app-server generate-json-schema`` (v2), trimmed: every key
     switchboard sends exists in the schema, every required key is sent, and every
     schema key switchboard does not send is one it must never send (an override)."""
     schema = json.loads((SCHEMA / f"{name}.json").read_text())
-    method = {"TurnStartParams": "turn/start", "TurnSteerParams": "turn/steer", "ThreadReadParams": "thread/read",
-              "ThreadLoadedListParams": "thread/loaded/list"}[name]
+    method = {
+        "TurnStartParams": "turn/start",
+        "TurnSteerParams": "turn/steer",
+        "ThreadReadParams": "thread/read",
+        "ThreadLoadedListParams": "thread/loaded/list",
+    }[name]
     props = set(schema["properties"])
     sent = rpc.PARAM_KEYS[method]
     assert sent <= props
@@ -121,8 +157,12 @@ def test_thread_status_mapping() -> None:
 
 
 def test_active_turn_and_contains() -> None:
-    th = {"turns": [{"id": "a", "status": "completed", "items": []},
-                    {"id": "b", "status": "inProgress", "items": [{"text": "yk:b12.0badf00d"}]}]}
+    th = {
+        "turns": [
+            {"id": "a", "status": "completed", "items": []},
+            {"id": "b", "status": "inProgress", "items": [{"text": "yk:b12.0badf00d"}]},
+        ]
+    }
     assert rpc.active_turn_id(th) == "b"
     assert rpc.active_turn_id({"turns": [{"id": "a", "status": "interrupted"}]}) is None
     assert rpc.active_turn_id({}) is None
@@ -137,15 +177,27 @@ def test_the_join_proof_must_be_switchboards_own_join_result() -> None:
     def th(*items: dict) -> dict:
         return {"turns": [{"id": "t", "status": "completed", "items": list(items)}]}
 
-    good = {"type": "mcpToolCall", "id": "c", "server": "switchboard", "tool": "join", "status": "completed",
-            "arguments": {}, "result": {"content": [{"type": "text", "text": f"joined {needle}"}]}}
+    good = {
+        "type": "mcpToolCall",
+        "id": "c",
+        "server": "switchboard",
+        "tool": "join",
+        "status": "completed",
+        "arguments": {},
+        "result": {"content": [{"type": "text", "text": f"joined {needle}"}]},
+    }
     assert rpc.join_proven(th(good), needle)
     assert not rpc.join_proven(th(good), "yk:jffffffffffffffff")
-    for bad in ({**good, "server": "other"}, {**good, "tool": "say"}, {**good, "status": "inProgress"},
-                {**good, "result": None}, {**good, "type": "dynamicToolCall"},
-                {"type": "commandExecution", "id": "x", "aggregatedOutput": needle},
-                {"type": "userMessage", "id": "u", "content": [{"type": "text", "text": needle}]},
-                {**good, "result": {"content": []}, "arguments": {"text": needle}}):
+    for bad in (
+        {**good, "server": "other"},
+        {**good, "tool": "say"},
+        {**good, "status": "inProgress"},
+        {**good, "result": None},
+        {**good, "type": "dynamicToolCall"},
+        {"type": "commandExecution", "id": "x", "aggregatedOutput": needle},
+        {"type": "userMessage", "id": "u", "content": [{"type": "text", "text": needle}]},
+        {**good, "result": {"content": []}, "arguments": {"text": needle}},
+    ):
         assert not rpc.join_proven(th(bad), needle), bad
     assert not rpc.join_proven({}, needle) and not rpc.join_proven({"turns": "x"}, needle)
 
@@ -202,19 +254,36 @@ class _Srv:
             self.got.append(m)
             if m.get("method") == "initialize":
                 await ws.send(json.dumps({"id": m["id"], "result": {"userAgent": "x"}}))
-                await ws.send(json.dumps({"id": 77, "method": "item/commandExecution/requestApproval",
-                                          "params": {"threadId": "t"}}))
-                await ws.send(json.dumps({"method": "thread/status/changed",
-                                          "params": {"threadId": "t", "status": {"type": "idle"}}}))
+                await ws.send(
+                    json.dumps(
+                        {
+                            "id": 77,
+                            "method": "item/commandExecution/requestApproval",
+                            "params": {"threadId": "t"},
+                        }
+                    )
+                )
+                await ws.send(
+                    json.dumps(
+                        {
+                            "method": "thread/status/changed",
+                            "params": {"threadId": "t", "status": {"type": "idle"}},
+                        }
+                    )
+                )
             elif m.get("method") == "thread/loaded/list":
                 if m.get("params", {}).get("cursor"):
                     await ws.send(json.dumps({"id": m["id"], "result": {"data": ["t3"], "nextCursor": None}}))
                 else:
-                    await ws.send(json.dumps({"id": m["id"], "result": {"data": ["t1", "t2"],
-                                                                        "nextCursor": "c"}}))
+                    await ws.send(
+                        json.dumps({"id": m["id"], "result": {"data": ["t1", "t2"], "nextCursor": "c"}})
+                    )
             elif m.get("method") == "turn/steer":
-                await ws.send(json.dumps({"id": m["id"], "error": {"code": -32600,
-                                                                   "message": "no active turn to steer"}}))
+                await ws.send(
+                    json.dumps(
+                        {"id": m["id"], "error": {"code": -32600, "message": "no active turn to steer"}}
+                    )
+                )
 
 
 async def test_client_never_answers_server_requests_and_pages_loaded_list() -> None:

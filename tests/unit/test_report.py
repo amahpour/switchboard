@@ -12,11 +12,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import World
 from test_claude_adapter import FakeConn, ad, claude, pushes, reg, tok
 from test_devin_adapter import WAIT_TOOL, devin, open_wait, tokens
+
 from switchboard import report
 from switchboard.cli import main
 from switchboard.models import Message
@@ -37,23 +37,58 @@ def row(rows: list[dict[str, Any]], **match: Any) -> dict[str, Any]:
     return got[0]
 
 
-def quiet_msg(w: World, text: str, *, sender: str = "alice", kind: str = "human", mentions: tuple[str, ...] = (),
-              membership: Any = None) -> Message:
+def quiet_msg(
+    w: World,
+    text: str,
+    *,
+    sender: str = "alice",
+    kind: str = "human",
+    mentions: tuple[str, ...] = (),
+    membership: Any = None,
+) -> Message:
     """A message with its delivery rows but no engine action (the test offers it by hand)."""
     extra: dict[str, Any] = {}
     if membership is not None:
         extra = {"sender_membership_id": membership.id, "sender_harness": "codex"}
-    return w.store.insert_message(w.room.id, sender_name=sender, sender_kind=kind,
-                                  via="web" if kind == "human" else "mcp", text=text, mentions=mentions, **extra)
+    return w.store.insert_message(
+        w.room.id,
+        sender_name=sender,
+        sender_kind=kind,
+        via="web" if kind == "human" else "mcp",
+        text=text,
+        mentions=mentions,
+        **extra,
+    )
 
 
-def offer(w: World, m: Any, msgs: list[Message], *, path: str, kind: str, wake_kind: str | None = None,
-          reason: str | None = None, counted: bool = False) -> int:
+def offer(
+    w: World,
+    m: Any,
+    msgs: list[Message],
+    *,
+    path: str,
+    kind: str,
+    wake_kind: str | None = None,
+    reason: str | None = None,
+    counted: bool = False,
+) -> int:
     ids = [x.id for x in msgs]
-    b = w.store.create_batch(m.id, path=path, kind=kind, items=[(i, True) for i in ids], wake_kind=wake_kind,
-                             wake_reason=reason, counted=counted)
-    w.store.add_event("offer", room_id=w.room.id, membership_id=m.id, participant_id=m.participant_id,
-                      data={"batch_id": b.id, "path": path, "n": len(ids), "counted": counted, "ids": ids})
+    b = w.store.create_batch(
+        m.id,
+        path=path,
+        kind=kind,
+        items=[(i, True) for i in ids],
+        wake_kind=wake_kind,
+        wake_reason=reason,
+        counted=counted,
+    )
+    w.store.add_event(
+        "offer",
+        room_id=w.room.id,
+        membership_id=m.id,
+        participant_id=m.participant_id,
+        data={"batch_id": b.id, "path": path, "n": len(ids), "counted": counted, "ids": ids},
+    )
     return b.id
 
 
@@ -117,8 +152,9 @@ def test_devin_wait_loop_reports_in_context_and_first_action(w: World, clock: Fa
     for i, (ctx, act) in enumerate(((0.04, 1.3), (0.06, 1.1))):
         open_wait(w, p, m, tuid=f"call_{i}", wid=f"w{i}")
         msg = w.human(f"ping {i}")
-        bid = w.store.con.execute("SELECT batch_id FROM deliveries WHERE message_id=? AND membership_id=?",
-                                  (msg.id, m.id)).fetchone()[0]
+        bid = w.store.con.execute(
+            "SELECT batch_id FROM deliveries WHERE message_id=? AND membership_id=?", (msg.id, m.id)
+        ).fetchone()[0]
         clock.advance(ctx)
         w.hook(p, "PostToolUse", tool=WAIT_TOOL, tool_use_id=f"call_{i}", ok=True, tokens=tokens(bid, m))
         clock.advance(act)
@@ -141,15 +177,24 @@ def test_each_path_gets_its_label_and_tier(w: World, clock: FakeClock) -> None:
     px, mx = w.agent("codex-1", harness="codex", status="idle", hooks=True)
     w.store.update_participant(px.id, tier="codex:daemon")
     pu, mu = w.agent("cursor-1", harness="cursor", status="idle", hooks=True)
-    w.store.add_event("join", room_id=w.room.id, membership_id=mu.id, participant_id=pu.id,
-                      data={"harness": "cursor", "tier": "cursor:stop-park"})
+    w.store.add_event(
+        "join",
+        room_id=w.room.id,
+        membership_id=mu.id,
+        participant_id=pu.id,
+        data={"harness": "cursor", "tier": "cursor:stop-park"},
+    )
     a = quiet_msg(w, "task")
     t0 = a.ts
     clock.advance(0.04)
-    b1 = offer(w, mx, [a], path="turn_start", kind="wake", wake_kind="idle_wake", reason="human", counted=True)
+    b1 = offer(
+        w, mx, [a], path="turn_start", kind="wake", wake_kind="idle_wake", reason="human", counted=True
+    )
     w.store.set_batch_times(b1, turn_start_at=t0 + 0.045)
     w.store.confirm_batch(b1, "rpc:turn/start")
-    b2 = offer(w, mu, [a], path="stop_followup", kind="wake", wake_kind="stop_cont", reason="human", counted=True)
+    b2 = offer(
+        w, mu, [a], path="stop_followup", kind="wake", wake_kind="stop_cont", reason="human", counted=True
+    )
     clock.advance(1.0)
     w.store.set_batch_times(b2, turn_start_at=clock.now())
     w.store.confirm_batch(b2, "hook:postToolUse")
@@ -158,7 +203,9 @@ def test_each_path_gets_its_label_and_tier(w: World, clock: FakeClock) -> None:
     clock.advance(6.0)
     b3 = offer(w, mx, [s], path="steer", kind="priority", reason="human")
     w.store.confirm_batch(b3, "hook:UserPromptSubmit")
-    peer = quiet_msg(w, "@cursor-1 look", sender="codex-1", kind="agent", mentions=("cursor-1",), membership=mx)
+    peer = quiet_msg(
+        w, "@cursor-1 look", sender="codex-1", kind="agent", mentions=("cursor-1",), membership=mx
+    )
     clock.advance(2.5)
     b4 = offer(w, mu, [peer], path="hook_ctx", kind="priority", reason="mention")
     w.store.confirm_batch(b4, "hook_ack")
@@ -170,14 +217,26 @@ def test_each_path_gets_its_label_and_tier(w: World, clock: FakeClock) -> None:
     rep = build(w)
     d = rep["latency"]["detail"]
     assert row(d, path="turn_start", label="turn start") | {} == {
-        "harness": "codex", "tier": "codex:daemon", "path": "turn_start", "reason": "human", "label": "turn start",
-        "n": 1, "p50_ms": 45.0, "p95_ms": 45.0, "max_ms": 45.0}
+        "harness": "codex",
+        "tier": "codex:daemon",
+        "path": "turn_start",
+        "reason": "human",
+        "label": "turn start",
+        "n": 1,
+        "p50_ms": 45.0,
+        "p95_ms": 45.0,
+        "max_ms": 45.0,
+    }
     assert row(d, path="stop_followup")["label"] == "first hook"
     assert row(d, path="stop_followup")["tier"] == "cursor:stop-park"
     assert row(d, path="steer")["label"] == "in context" and row(d, path="steer")["p50_ms"] == 6000.0
     ctx = row(d, path="hook_ctx")
-    assert (ctx["reason"], ctx["label"], ctx["tier"], ctx["p50_ms"]) == ("mention", "in context",
-                                                                          "cursor:stop-park", 2500.0)
+    assert (ctx["reason"], ctx["label"], ctx["tier"], ctx["p50_ms"]) == (
+        "mention",
+        "in context",
+        "cursor:stop-park",
+        2500.0,
+    )
     pulled = row(d, path="read")
     assert (pulled["reason"], pulled["label"], pulled["p50_ms"]) == ("chatter", "pulled", 9000.0)
     assert {r["tier"] for r in rep["latency"]["by_tier"]} == {"codex:daemon", "cursor:stop-park"}
@@ -201,7 +260,9 @@ def test_only_the_first_confirmed_batch_counts_per_recipient(w: World, clock: Fa
     px, mx = w.agent("codex-1", harness="codex", status="idle", hooks=True)
     a = quiet_msg(w, "task")
     clock.advance(0.1)
-    lost = offer(w, mx, [a], path="turn_start", kind="wake", wake_kind="idle_wake", reason="human", counted=True)
+    lost = offer(
+        w, mx, [a], path="turn_start", kind="wake", wake_kind="idle_wake", reason="human", counted=True
+    )
     w.store.expire_batch(lost, "send_error", push=True)
     clock.advance(1.0)
     b = offer(w, mx, [a], path="turn_start", kind="wake", wake_kind="idle_wake", reason="human", counted=True)
@@ -210,15 +271,24 @@ def test_only_the_first_confirmed_batch_counts_per_recipient(w: World, clock: Fa
     # re-delivered once later: not a second sample
     w.store.requeue(mx.id, [a.id], redeliver=True)
     clock.advance(30.0)
-    again = offer(w, mx, [a], path="turn_start", kind="wake", wake_kind="idle_wake", reason="human", counted=True)
+    again = offer(
+        w, mx, [a], path="turn_start", kind="wake", wake_kind="idle_wake", reason="human", counted=True
+    )
     w.store.set_batch_times(again, turn_start_at=clock.now())
     w.store.confirm_batch(again, "rpc:turn/start")
     rep = build(w)
     r = row(rep["latency"]["detail"], path="turn_start")
     assert r["n"] == 1 and r["p50_ms"] == pytest.approx(1120.0, abs=0.1)
     [ag] = rep["agents"]
-    assert ag["wakes"] == {"offered": 3, "confirmed": 2, "expired": 1, "cancelled": 0, "budget_counted": 3,
-                           "by_kind": {"idle_wake": 3}, "reminders": 0}
+    assert ag["wakes"] == {
+        "offered": 3,
+        "confirmed": 2,
+        "expired": 1,
+        "cancelled": 0,
+        "budget_counted": 3,
+        "by_kind": {"idle_wake": 3},
+        "reminders": 0,
+    }
     assert rep["rules"]["expired"] == {}  # expire *events* are the engine's; none were written here
 
 
@@ -229,8 +299,16 @@ def test_held_deliveries_are_kept_out_of_the_main_tables(w: World, clock: FakeCl
     pc, mc = w.agent("claude-1", harness="claude", status="idle", hooks=True)
 
     def wake(m: Any, msg: Message, after: float) -> None:
-        b = offer(w, m, [msg], path="turn_start" if m is mx else "inbox", kind="wake", wake_kind="idle_wake",
-                  reason="human", counted=True)
+        b = offer(
+            w,
+            m,
+            [msg],
+            path="turn_start" if m is mx else "inbox",
+            kind="wake",
+            wake_kind="idle_wake",
+            reason="human",
+            counted=True,
+        )
         w.store.set_batch_times(b, turn_start_at=msg.ts + after)
         w.store.confirm_batch(b, "hook:UserPromptSubmit")
 
@@ -268,8 +346,15 @@ def test_held_deliveries_are_kept_out_of_the_main_tables(w: World, clock: FakeCl
 def test_without_offer_ids_the_deliveries_last_batch_is_used(w: World, clock: FakeClock) -> None:
     px, mx = w.agent("codex-1", harness="codex", status="idle", hooks=True)
     a = quiet_msg(w, "task")
-    b = w.store.create_batch(mx.id, path="turn_start", kind="wake", items=[(a.id, True)], wake_kind="idle_wake",
-                             wake_reason="human", counted=True)
+    b = w.store.create_batch(
+        mx.id,
+        path="turn_start",
+        kind="wake",
+        items=[(a.id, True)],
+        wake_kind="idle_wake",
+        wake_reason="human",
+        counted=True,
+    )
     clock.advance(0.3)
     w.store.set_batch_times(b.id, turn_start_at=clock.now())
     w.store.confirm_batch(b.id, "rpc:turn/start")
@@ -293,32 +378,62 @@ def test_agents_rules_and_stalls(w: World, clock: FakeClock) -> None:
     w.human("go")
     for text in ("plan", "done"):
         w.agent_says(m1, text)
-    w.store.add_event("pass", room_id=w.room.id, membership_id=m2.id, participant_id=p2.id, data={"handled": 1})
+    w.store.add_event(
+        "pass", room_id=w.room.id, membership_id=m2.id, participant_id=p2.id, data={"handled": 1}
+    )
     w.store.add_event("rate_limited", room_id=w.room.id, membership_id=m1.id, participant_id=p1.id, data={})
-    w.store.add_event("pass_refused", room_id=w.room.id, membership_id=m1.id, participant_id=p1.id,
-                      data={"reason": "read_first", "n": 1, "ids": [1]})
+    w.store.add_event(
+        "pass_refused",
+        room_id=w.room.id,
+        membership_id=m1.id,
+        participant_id=p1.id,
+        data={"reason": "read_first", "n": 1, "ids": [1]},
+    )
     w.store.add_event("rearm", room_id=w.room.id, membership_id=m2.id, participant_id=p2.id, data={"n": 1})
     w.store.add_event("loop_guard", room_id=w.room.id, data={"reason": "loop guard"})
     w.store.add_event("resume", room_id=w.room.id, data={"via": "web"})
     w.store.add_event("watchdog_escalate", room_id=w.room.id, membership_id=m1.id, data={"why": "not_idle"})
-    w.store.add_event("expire", room_id=w.room.id, membership_id=m1.id,
-                      data={"batch_id": 9, "path": "inbox", "reason": "idle_no_token"})
+    w.store.add_event(
+        "expire",
+        room_id=w.room.id,
+        membership_id=m1.id,
+        data={"batch_id": 9, "path": "inbox", "reason": "idle_no_token"},
+    )
     w.store.add_event("requeue", room_id=w.room.id, membership_id=m1.id, data={"reason": "redeliver", "n": 1})
     # a 0.2.0 /review event and a /catchup event: one row counts both (§26)
-    w.store.add_event("review", room_id=w.room.id, data={"via": "web", "reviewer": m2.id, "author": m1.id,
-                                                         "harness": "claude", "message_id": 1})
-    w.store.add_event("catchup", room_id=w.room.id, data={"via": "web", "agent": m2.id, "mode": "member",
-                                                          "subjects": [m1.id], "with_id": 1, "message_id": 2})
+    w.store.add_event(
+        "review",
+        room_id=w.room.id,
+        data={"via": "web", "reviewer": m2.id, "author": m1.id, "harness": "claude", "message_id": 1},
+    )
+    w.store.add_event(
+        "catchup",
+        room_id=w.room.id,
+        data={
+            "via": "web",
+            "agent": m2.id,
+            "mode": "member",
+            "subjects": [m1.id],
+            "with_id": 1,
+            "message_id": 2,
+        },
+    )
     # approval prompts from the status events: 75 s (a stall), 10 s, and one still open
     for secs, to in ((75.0, "idle"), (10.0, "busy"), (None, None)):
-        w.store.add_event("status", participant_id=p1.id, data={"frm": "busy", "to": "waiting-approval",
-                                                                "src": "claude:registry"})
+        w.store.add_event(
+            "status",
+            participant_id=p1.id,
+            data={"frm": "busy", "to": "waiting-approval", "src": "claude:registry"},
+        )
         if secs is None:
             clock.advance(3.0)
             break
         clock.advance(secs)
-        w.store.add_event("status", participant_id=p1.id, data={"frm": "waiting-approval", "to": to,
-                                                                "src": "claude:registry"})
+        w.store.add_event(
+            "status",
+            participant_id=p1.id,
+            data={"frm": "waiting-approval", "to": to, "src": "claude:registry"},
+        )
         clock.advance(1.0)
     w.store.add_event("pause", room_id=w.room.id, data={"via": "web"})  # the room's last activity
     w.store.update_participant(p1.id, tier_note="guard refused /Users/someone/.codex/x.sock")
@@ -460,13 +575,17 @@ def test_parked_spells_come_from_the_engines_events(w: World, clock: FakeClock) 
 def test_the_window_filters_older_traffic(w: World, clock: FakeClock) -> None:
     px, mx = w.agent("codex-1", harness="codex", status="idle", hooks=True)
     old = quiet_msg(w, "old")
-    b = offer(w, mx, [old], path="turn_start", kind="wake", wake_kind="idle_wake", reason="human", counted=True)
+    b = offer(
+        w, mx, [old], path="turn_start", kind="wake", wake_kind="idle_wake", reason="human", counted=True
+    )
     w.store.set_batch_times(b, turn_start_at=clock.now() + 0.1)
     w.store.confirm_batch(b, "rpc:turn/start")
     clock.advance(3600)
     cut = clock.now()
     new = quiet_msg(w, "new")
-    b2 = offer(w, mx, [new], path="turn_start", kind="wake", wake_kind="idle_wake", reason="human", counted=True)
+    b2 = offer(
+        w, mx, [new], path="turn_start", kind="wake", wake_kind="idle_wake", reason="human", counted=True
+    )
     w.store.set_batch_times(b2, turn_start_at=clock.now() + 0.2)
     w.store.confirm_batch(b2, "rpc:turn/start")
     assert row(build(w)["latency"]["detail"], path="turn_start")["n"] == 2
@@ -491,8 +610,9 @@ def test_unknown_room_is_an_error(w: World) -> None:
 
 
 # ------------------------------------------------------------------ the CLI
-def test_cli_writes_markdown_and_json_read_only(tmp_path: Path, clock: FakeClock,
-                                                capsys: pytest.CaptureFixture[str]) -> None:
+def test_cli_writes_markdown_and_json_read_only(
+    tmp_path: Path, clock: FakeClock, capsys: pytest.CaptureFixture[str]
+) -> None:
     home = tmp_path / "home"
     home.mkdir()
     w = World(home, clock)
@@ -507,7 +627,9 @@ def test_cli_writes_markdown_and_json_read_only(tmp_path: Path, clock: FakeClock
     assert got["room"] == "#build"
     assert main(["report", "--home", str(home), "--room", "#other"]) == 1
     assert "no room #other" in capsys.readouterr().err
-    assert main(["report", "--home", str(home), "--room", "#build", "--out", str(tmp_path / "no" / "x.md")]) == 1
+    assert (
+        main(["report", "--home", str(home), "--room", "#build", "--out", str(tmp_path / "no" / "x.md")]) == 1
+    )
     assert "can't write" in capsys.readouterr().err
     empty = tmp_path / "empty"
     empty.mkdir()
@@ -539,13 +661,17 @@ def test_report_reads_v1_and_v2(tmp_path: Path) -> None:
     assert db.schema_version(sqlite3.connect(path)) == 1  # read, never migrated
     assert path.read_bytes() == before and not list(tmp_path.glob("*.v1.bak*"))
     assert {a["name"] for a in rep1["agents"]} >= {"vivado", "bot-a"}
-    assert all(a["host"] == "" for a in rep1["agents"]) and "@" not in md1.split("## Agents")[1].split("\n\n")[1]
+    assert (
+        all(a["host"] == "" for a in rep1["agents"]) and "@" not in md1.split("## Agents")[1].split("\n\n")[1]
+    )
 
     # the broker migrates it; then one of its participants is on a Pi
     c = db.open_db(path)
     pid = c.execute("SELECT participant_id FROM memberships WHERE screen_name='bot-a'").fetchone()[0]
-    c.execute("UPDATE participants SET host='fpga-pi', session_key=? WHERE id=?",
-              (session_key("test", "fpga-pi", "bot-a"), pid))
+    c.execute(
+        "UPDATE participants SET host='fpga-pi', session_key=? WHERE id=?",
+        (session_key("test", "fpga-pi", "bot-a"), pid),
+    )
     c.close()
     con = report.open_ro(path)
     rep2 = report.build(con, "#build", now=1_790_000_100.0)
@@ -572,9 +698,16 @@ def close_by_hand(w: World, room_id: int, *, by: str | None = "alice", event: bo
         w.store.end_membership(mid, "closed", keep_cred=True)
     closed = closed_room_name(room.name, room.id)
     if event:
-        w.store.add_event("room_close", room_id=room_id,
-                          data={"name": room.name, "closed_name": closed, "members": mids,
-                                **({"by": by} if by is not None else {})})
+        w.store.add_event(
+            "room_close",
+            room_id=room_id,
+            data={
+                "name": room.name,
+                "closed_name": closed,
+                "members": mids,
+                **({"by": by} if by is not None else {}),
+            },
+        )
     w.store.rename_room(room_id, closed, expect=room.name)
     return closed
 
@@ -628,7 +761,9 @@ def test_an_open_room_wins_over_a_closed_one(w: World, clock: FakeClock) -> None
         report.build(w.store.con, "#build~closed-99")
 
 
-def test_cli_reports_a_closed_room(tmp_path: Path, clock: FakeClock, capsys: pytest.CaptureFixture[str]) -> None:
+def test_cli_reports_a_closed_room(
+    tmp_path: Path, clock: FakeClock, capsys: pytest.CaptureFixture[str]
+) -> None:
     home = tmp_path / "home"
     home.mkdir()
     w = World(home, clock)

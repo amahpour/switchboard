@@ -137,8 +137,9 @@ class RemoteView:
                 self._alive_at.pop(p, None)
         return new
 
-    def registry(self, views: list[tuple[int, float, str | None, float | None]], read_age: float,
-                 recv: float) -> dict[tuple[int, float], Relayed]:
+    def registry(
+        self, views: list[tuple[int, float, str | None, float | None]], read_age: float, recv: float
+    ) -> dict[tuple[int, float], Relayed]:
         """A ``reg`` frame received at ``recv``: the relayed status of each watched Claude
         pair (anything else in it is dropped), on this broker's clock."""
         read_at = proto.rebase_field("read_age", read_age, recv)

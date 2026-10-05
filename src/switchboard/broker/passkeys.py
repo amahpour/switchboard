@@ -142,7 +142,9 @@ class Sealer:
         self.key = key or secrets.token_bytes(32)
 
     def seal(self, state: dict[str, Any], ttl_s: float) -> str:
-        body = json.dumps({"s": state, "exp": self.clock.now() + ttl_s}, separators=(",", ":"), sort_keys=True).encode()
+        body = json.dumps(
+            {"s": state, "exp": self.clock.now() + ttl_s}, separators=(",", ":"), sort_keys=True
+        ).encode()
         mac = hmac.new(self.key, body, hashlib.sha256).digest()
         return _b64(body) + "." + _b64(mac)
 
@@ -160,8 +162,11 @@ class Sealer:
             obj = json.loads(body)
         except ValueError:
             return None
-        if (not isinstance(obj, dict) or not isinstance(obj.get("s"), dict)
-                or not isinstance(obj.get("exp"), (int, float))):
+        if (
+            not isinstance(obj, dict)
+            or not isinstance(obj.get("s"), dict)
+            or not isinstance(obj.get("exp"), (int, float))
+        ):
             return None
         if self.clock.now() >= float(obj["exp"]):
             return None
@@ -197,8 +202,10 @@ def passkeys_unavailable(origin: WebOrigin) -> str | None:
     if not origin.public:
         return "no public URL: this broker is signed in to with `switchboard login`"
     if not origin.secure_context():
-        return (f"{origin.origin} is not a secure context (https, or plain http on localhost and *.localhost"
-                " only), which passkeys need")
+        return (
+            f"{origin.origin} is not a secure context (https, or plain http on localhost and *.localhost"
+            " only), which passkeys need"
+        )
     name = origin.hostname
     if name.replace(".", "").isdigit():
         return f"{origin.origin} names an IP address, and a passkey's relying party must be a DNS name"
@@ -243,17 +250,22 @@ class WebAuthn:
 
         self.origin = origin
         self.rp_id = origin.hostname
-        self.server = Fido2Server(PublicKeyCredentialRpEntity(id=self.rp_id, name=RP_NAME),
-                                  attestation=AttestationConveyancePreference.NONE,
-                                  verify_origin=lambda o: o == origin.origin)
+        self.server = Fido2Server(
+            PublicKeyCredentialRpEntity(id=self.rp_id, name=RP_NAME),
+            attestation=AttestationConveyancePreference.NONE,
+            verify_origin=lambda o: o == origin.origin,
+        )
         from fido2.webauthn import PublicKeyCredentialParameters, PublicKeyCredentialType
 
         self.server.allowed_algorithms = [
-            PublicKeyCredentialParameters(type=PublicKeyCredentialType.PUBLIC_KEY, alg=alg) for alg in ALGORITHMS]
+            PublicKeyCredentialParameters(type=PublicKeyCredentialType.PUBLIC_KEY, alg=alg)
+            for alg in ALGORITHMS
+        ]
 
     # ------------------------------------------------------------ registration
-    def register_options(self, handle: bytes, user_name: str,
-                         exclude: list[bytes]) -> tuple[dict[str, Any], dict[str, Any]]:
+    def register_options(
+        self, handle: bytes, user_name: str, exclude: list[bytes]
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         """The creation options (JSON, as the browser's ``PublicKeyCredential.parseCreationOptionsFromJSON``
         takes them) and the server state to verify the answer with. A discoverable credential
         with user verification, attestation ``none``, and the existing passkeys excluded."""
@@ -266,11 +278,15 @@ class WebAuthn:
         )
 
         user = PublicKeyCredentialUserEntity(id=handle, name=user_name, display_name=user_name)
-        descriptors = [PublicKeyCredentialDescriptor(type=PublicKeyCredentialType.PUBLIC_KEY, id=cid)
-                       for cid in exclude]
+        descriptors = [
+            PublicKeyCredentialDescriptor(type=PublicKeyCredentialType.PUBLIC_KEY, id=cid) for cid in exclude
+        ]
         options, state = self.server.register_begin(
-            user, descriptors or None, resident_key_requirement=ResidentKeyRequirement.REQUIRED,
-            user_verification=UserVerificationRequirement.REQUIRED)
+            user,
+            descriptors or None,
+            resident_key_requirement=ResidentKeyRequirement.REQUIRED,
+            user_verification=UserVerificationRequirement.REQUIRED,
+        )
         return _json(options), _state(state)
 
     def register_finish(self, state: dict[str, Any], credential: Any) -> Registered:
@@ -288,8 +304,12 @@ class WebAuthn:
         if cd.public_key.get(3) not in ALGORITHMS:
             raise ValueError("the passkey's algorithm is not one this broker offered")
         aaguid = str(cd.aaguid) if cd.aaguid else None
-        return Registered(credential_id=bytes(cd.credential_id), public_key=cbor.encode(dict(cd.public_key)),
-                          aaguid=aaguid, sign_count=int(auth_data.counter))
+        return Registered(
+            credential_id=bytes(cd.credential_id),
+            public_key=cbor.encode(dict(cd.public_key)),
+            aaguid=aaguid,
+            sign_count=int(auth_data.counter),
+        )
 
     # ------------------------------------------------------------- sign-in
     def auth_options(self) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -297,7 +317,9 @@ class WebAuthn:
         discoverable passkeys) and user verification required."""
         from fido2.webauthn import UserVerificationRequirement
 
-        options, state = self.server.authenticate_begin(None, user_verification=UserVerificationRequirement.REQUIRED)
+        options, state = self.server.authenticate_begin(
+            None, user_verification=UserVerificationRequirement.REQUIRED
+        )
         return _json(options), _state(state)
 
     def auth_finish(self, state: dict[str, Any], passkeys: list[Any], credential: Any) -> tuple[bytes, int]:
@@ -310,8 +332,12 @@ class WebAuthn:
         from fido2.webauthn import AttestedCredentialData, UserVerificationRequirement
 
         cred = _credential(credential)
-        creds = [AttestedCredentialData.create(b"\0" * 16, pk.credential_id, CoseKey.parse(cbor.decode(pk.public_key)))
-                 for pk in passkeys]
+        creds = [
+            AttestedCredentialData.create(
+                b"\0" * 16, pk.credential_id, CoseKey.parse(cbor.decode(pk.public_key))
+            )
+            for pk in passkeys
+        ]
         st = {"challenge": state["challenge"], "user_verification": UserVerificationRequirement(state["uv"])}
         matched = self.server.authenticate_complete(st, creds, cred)
         auth_data = cred["response"]["authenticatorData"]
@@ -340,9 +366,11 @@ def _credential(credential: Any) -> dict[str, Any]:
     if len(json.dumps(credential)) > MAX_CREDENTIAL:
         raise ValueError("credential too large")
     resp = credential.get("response")
-    if not isinstance(credential.get("id"), str) or not isinstance(credential.get("rawId"), str) \
-            or not isinstance(resp, dict):
+    if (
+        not isinstance(credential.get("id"), str)
+        or not isinstance(credential.get("rawId"), str)
+        or not isinstance(resp, dict)
+    ):
         raise ValueError("credential is missing its id or response")
     # fido2 parses only what it knows; the browser may add fields (transports, extension results)
     return credential
-

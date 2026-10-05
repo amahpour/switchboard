@@ -11,9 +11,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import World
+
 from switchboard.broker.commands import Actor
 from switchboard.broker.hub import Hub
 from switchboard.broker.service import BrokerInfo, RoomService
@@ -155,7 +155,9 @@ def test_hops_command_lower_reaches_the_engine(w: World, svc: RoomService) -> No
     assert room(w).paused and w.store.count_events("loop_guard") == 1
 
 
-def test_raising_while_guard_paused_needs_resume_then_runs_to_the_new_limit(w: World, svc: RoomService) -> None:
+def test_raising_while_guard_paused_needs_resume_then_runs_to_the_new_limit(
+    w: World, svc: RoomService
+) -> None:
     _pa, ma = w.agent("a")
     pb, mb = w.agent("b")
     for i in range(6):
@@ -177,4 +179,3 @@ def test_raising_while_guard_paused_needs_resume_then_runs_to_the_new_limit(w: W
     assert not room(w).paused
     w.agent_says(ma, "thirtieth")
     assert room(w).paused
-

@@ -63,7 +63,7 @@ INSTALL_URL = "git+https://github.com/amahpour/switchboard"
 REFUSE_TEXT = {
     "removed": "the owner removed this machine: pair it again with a new code to bring it back",
     "unknown": "this broker holds no such key for that name (the machine was removed, or never paired):"
-               " pair it again with a new code",
+    " pair it again with a new code",
     "replaced": "another connection with this machine's key took over",
     "shutdown": "the broker is stopping",
     "protocol": "the handshake went wrong",
@@ -143,8 +143,14 @@ class PairingCodes:
         """The live codes nobody used yet, as the web UI lists them: a name and the seconds left."""
         self.purge()
         now = self.clock.now()
-        return sorted(({"name": c.name, "expires_in_s": round(c.expires - now, 1)}
-                       for c in self._codes.values() if c.used_fp is None), key=lambda d: d["name"])
+        return sorted(
+            (
+                {"name": c.name, "expires_in_s": round(c.expires - now, 1)}
+                for c in self._codes.values()
+                if c.used_fp is None
+            ),
+            key=lambda d: d["name"],
+        )
 
     def cancel(self, name: str) -> bool:
         """The owner gave up on a code: an unused one for ``name`` dies (a used one stays
@@ -173,8 +179,9 @@ class MachineLink(RemoteLink):
     dials; ``serve`` runs one attempt over the reader and writer of each approved connection."""
 
     def __init__(self, machines: "MachineManager", row: MachineRow):
-        entry = RemoteEntry(name=row.name, host="", user="", rooms=(ANY_ROOM,), harnesses=REMOTE_HARNESSES,
-                            transport="wss")
+        entry = RemoteEntry(
+            name=row.name, host="", user="", rooms=(ANY_ROOM,), harnesses=REMOTE_HARNESSES, transport="wss"
+        )
         self.machines = machines
         self.key_fp = row.key_fp
         self.gone = False  # removed: its connection is refused, and no "link down" line follows
@@ -243,8 +250,10 @@ class MachineLink(RemoteLink):
         approved = row.approved_at if row is not None else None
         when = time.strftime("%Y-%m-%d", time.localtime(approved)) if approved else "?"
         rtt = f"{fmt_ms(self.rtt_ms)} ms" if self.rtt_ms is not None else "?"
-        self.notice(f"{self.name}: link up (approved via {via} by {self.st.cfg.human_name} on {when};"
-                    f" satellite {self.sat_version}, rtt {rtt})")
+        self.notice(
+            f"{self.name}: link up (approved via {via} by {self.st.cfg.human_name} on {when};"
+            f" satellite {self.sat_version}, rtt {rtt})"
+        )
         self.machines.changed()
         self._wake_waiters()
 
@@ -257,9 +266,11 @@ class MachineLink(RemoteLink):
             now = self.now()
             if now - self._replaced_noted >= REPLACED_NOTICE_S:
                 self._replaced_noted = now
-                self.notice(f"{self.name}: a second connection with this machine's key replaced the first. If you"
-                            " didn't start one, remove the machine in the web UI: its key may have been copied",
-                            "warn")
+                self.notice(
+                    f"{self.name}: a second connection with this machine's key replaced the first. If you"
+                    " didn't start one, remove the machine in the web UI: its key may have been copied",
+                    "warn",
+                )
             log.warning("machine %s: a second connection with its key replaced the first", self.name)
         async with self._lock:
             if self.gone:
@@ -403,8 +414,9 @@ class MachineManager:
                 await self._task
         for w in list(self.waiting.values()):
             w.decide("shutdown")
-        await asyncio.gather(*(link.stop() for link in list(self.remotes.machines.values())),
-                             return_exceptions=True)
+        await asyncio.gather(
+            *(link.stop() for link in list(self.remotes.machines.values())), return_exceptions=True
+        )
         self.save_all()
 
     def _link(self, row: MachineRow) -> MachineLink:
@@ -455,15 +467,31 @@ class MachineManager:
             "transport": "wss",
         }
         if row.pending or link is None:
-            out.update(state="pending", reason="waiting_approval" if row.name in self.waiting else "not_dialed_in",
-                       members=[], rtt_ms=None, version=None, hint=None)
+            out.update(
+                state="pending",
+                reason="waiting_approval" if row.name in self.waiting else "not_dialed_in",
+                members=[],
+                rtt_ms=None,
+                version=None,
+                hint=None,
+            )
         else:
             up = link.state == "up"
-            out.update(state=link.state, reason=link.reason or None, since=link.since,
-                       rtt_ms=link.rtt_ms if up else None, version=link.sat_version, skew_s=link.skew_s,
-                       hooks=link.hooks, harden=link.harden, test_mode=link.sat_test_mode,
-                       members=link.members(), max_members=link.entry.max_members, hint=link.hint(),
-                       detail=link.end_detail)
+            out.update(
+                state=link.state,
+                reason=link.reason or None,
+                since=link.since,
+                rtt_ms=link.rtt_ms if up else None,
+                version=link.sat_version,
+                skew_s=link.skew_s,
+                hooks=link.hooks,
+                harden=link.harden,
+                test_mode=link.sat_test_mode,
+                members=link.members(),
+                max_members=link.entry.max_members,
+                hint=link.hint(),
+                detail=link.end_detail,
+            )
         return out
 
     def summary(self) -> list[dict[str, Any]]:
@@ -506,11 +534,14 @@ class MachineManager:
     def mint(self, name: Any) -> dict[str, Any]:
         """A pairing code for a machine named ``name`` (the caller checked the fresh passkey check)."""
         if not isinstance(name, str) or not valid_host(name):
-            raise ServiceError("bad_request", "a machine's name looks like work-laptop (a-z first, then a-z, 0-9,"
-                                              " '-'; at most 24)")
+            raise ServiceError(
+                "bad_request",
+                "a machine's name looks like work-laptop (a-z first, then a-z, 0-9, '-'; at most 24)",
+            )
         if name in self.remotes.links:
-            raise ServiceError("conflict", f"{name} is a remote this broker dials over ssh (remotes.toml): pick"
-                                           " another name")
+            raise ServiceError(
+                "conflict", f"{name} is a remote this broker dials over ssh (remotes.toml): pick another name"
+            )
         row = self.state.store.machine(name)
         if row is not None and not row.removed:
             what = "waiting for your approval" if row.pending else "approved"
@@ -520,10 +551,15 @@ class MachineManager:
         self.state.store.add_event("machine", data={"what": "code", "name": name})
         log.info("machines: a pairing code for %s", name)
         self.changed()
-        return {"name": name, "code": code, "expires_in_s": self.codes.ttl_s, "broker": origin,
-                "broker_fingerprint": self.fingerprint,
-                "install": f"uv tool install {INSTALL_URL}@v{__version__}",
-                "join": f"switchboard remote join {origin} {code}"}
+        return {
+            "name": name,
+            "code": code,
+            "expires_in_s": self.codes.ttl_s,
+            "broker": origin,
+            "broker_fingerprint": self.fingerprint,
+            "install": f"uv tool install {INSTALL_URL}@v{__version__}",
+            "join": f"switchboard remote join {origin} {code}",
+        }
 
     def cancel(self, name: str) -> dict[str, Any]:
         """Forget the unused pairing code for ``name`` (the web UI's Cancel)."""
@@ -541,7 +577,9 @@ class MachineManager:
             self.state.store.machine_approve(name, via)
             self.state.store.add_event("machine", data={"what": "approved", "name": name, "via": via})
             log.warning("machine %s approved via %s (key %s)", name, via, row.key_fp)
-            self.state.hub.notice(None, "info", f"{name} approved by {self.state.cfg.human_name} (key {row.key_fp})")
+            self.state.hub.notice(
+                None, "info", f"{name} approved by {self.state.cfg.human_name} (key {row.key_fp})"
+            )
             row = self.state.store.machine(name)
             assert row is not None
             self._link(row)
@@ -569,11 +607,15 @@ class MachineManager:
         self.state.hosts.remove_remote(name)
         ended = self.remotes.end_members(name, "removed")
         self._seen.pop(name, None)
-        self.state.store.add_event("machine", data={"what": "removed", "name": name, "via": via, "ended": ended})
+        self.state.store.add_event(
+            "machine", data={"what": "removed", "name": name, "via": via, "ended": ended}
+        )
         log.warning("machine %s removed via %s", name, via)
         what = "rejected" if row.pending else "removed"
         tail = f"; {ended} member(s) ended" if ended else ""
-        self.state.hub.notice(None, "warn", f"{name} {what} by {self.state.cfg.human_name}: its key is forgotten{tail}")
+        self.state.hub.notice(
+            None, "warn", f"{name} {what} by {self.state.cfg.human_name}: its key is forgotten{tail}"
+        )
         self.changed()
         return {"name": name, "ended": ended}
 
@@ -590,26 +632,48 @@ class MachineManager:
         outcome, name = self.codes.use(body.get("code"), fp)
         if outcome == "bad" or name is None:
             self._failed("bad_code")
-            return 403, {"error": "bad_code", "message": "this pairing code is invalid or expired: make a new one in"
-                                                          " the web UI (Add a machine)"}
+            return 403, {
+                "error": "bad_code",
+                "message": "this pairing code is invalid or expired: make a new one in"
+                " the web UI (Add a machine)",
+            }
         if outcome == "used":
             self._failed("used_code")
-            self.state.hub.notice(None, "warn", f"a second machine tried {name}'s pairing code. If your machine says"
-                                                " the code was already used, reject the pending machine and make a"
-                                                " new code")
-            return 409, {"error": "used", "message": "This code was already used by another machine. Don't approve the"
-                                                      " pending machine: remove it in the web UI and make a new code."}
+            self.state.hub.notice(
+                None,
+                "warn",
+                f"a second machine tried {name}'s pairing code. If your machine says"
+                " the code was already used, reject the pending machine and make a"
+                " new code",
+            )
+            return 409, {
+                "error": "used",
+                "message": "This code was already used by another machine. Don't approve the"
+                " pending machine: remove it in the web UI and make a new code.",
+            }
         try:
             self.state.store.machine_pair(name, key, fp, clean_facts(body.get("facts")))
         except Conflict:
-            return 409, {"error": "conflict", "message": f"{name} is paired already: remove it in the web UI first"}
+            return 409, {
+                "error": "conflict",
+                "message": f"{name} is paired already: remove it in the web UI first",
+            }
         self.state.store.add_event("machine", data={"what": "paired", "name": name, "key": fp})
         log.warning("machine %s paired (key %s), waiting for approval", name, fp)
-        self.state.hub.notice(None, "warn", f"{name} paired, with the key {fp}. Before you approve it, check that"
-                                            " this is the key remote join printed on your machine")
+        self.state.hub.notice(
+            None,
+            "warn",
+            f"{name} paired, with the key {fp}. Before you approve it, check that"
+            " this is the key remote join printed on your machine",
+        )
         self.changed()
-        return 200, {"name": name, "fingerprint": fp, "broker_key": linkkey.b64u(self.bkey),
-                     "broker_fingerprint": self.fingerprint, "link_url": self.link_url}
+        return 200, {
+            "name": name,
+            "fingerprint": fp,
+            "broker_key": linkkey.b64u(self.bkey),
+            "broker_fingerprint": self.fingerprint,
+            "link_url": self.link_url,
+        }
 
     async def serve(self, ws: "WebSocket") -> None:
         """``GET /link`` (the WebSocket), after its Host and no-Origin checks: the handshake, a
@@ -673,8 +737,12 @@ class MachineManager:
             raise _End(linkkey.refuse("unknown", REFUSE_TEXT["unknown"]), "unknown")
         nb = secrets.token_bytes(linkkey.NONCE_BYTES)
         sig = linkkey.sign(self.key, "broker", self.host, nm, nb)
-        await ws.send_text(json.dumps({"t": "challenge", "nb": linkkey.b64u(nb), "bkey": linkkey.b64u(self.bkey),
-                                       "sig": sig}, separators=(",", ":")))
+        await ws.send_text(
+            json.dumps(
+                {"t": "challenge", "nb": linkkey.b64u(nb), "bkey": linkkey.b64u(self.bkey), "sig": sig},
+                separators=(",", ":"),
+            )
+        )
         try:
             proof = linkkey.check_proof(await self._recv(ws, linkkey.HANDSHAKE_TIMEOUT_S))
         except linkkey.HandshakeError as e:
@@ -707,7 +775,9 @@ class MachineManager:
                 return False
             msg = recv.result()
             if msg.get("type") != "websocket.disconnect":
-                await self._close(ws, linkkey.refuse("protocol", "nothing is sent while waiting for approval"))
+                await self._close(
+                    ws, linkkey.refuse("protocol", "nothing is sent while waiting for approval")
+                )
             return False
         finally:
             for fut in (recv, decided):

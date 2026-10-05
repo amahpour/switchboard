@@ -9,17 +9,30 @@ import socket
 from typing import Any
 
 import pytest
-
 from conftest import sanitize_env
 from fakes.fake_agent import FakeAgent
 from fakes.fake_claude import FakeClaude
 from fakes.fake_link import FakeLink, remotes_toml, wait_for
+
 from switchboard.broker.rpc import REMOTE_FORBIDDEN
 from switchboard.remote.satellite import ON_DESKTOP
 
-FORBIDDEN = ["sys.stop", "sys.status", "sys.ping", "human.say", "human.command", "human.login_link",
-             "human.logout_all", "room.create", "room.list", "room.who", "room.history", "room.tail",
-             "remote.enable", "room.delete"]
+FORBIDDEN = [
+    "sys.stop",
+    "sys.status",
+    "sys.ping",
+    "human.say",
+    "human.command",
+    "human.login_link",
+    "human.logout_all",
+    "room.create",
+    "room.list",
+    "room.who",
+    "room.history",
+    "room.tail",
+    "remote.enable",
+    "room.delete",
+]
 PARAMS: dict[str, dict[str, Any]] = {
     "human.say": {"room": "#fpga", "text": "I am the human now"},
     "human.command": {"room": "#fpga", "text": "/pause"},
@@ -80,7 +93,9 @@ def injected(link: FakeLink, method: str, params: dict[str, Any]) -> list[dict[s
         rl.send_frame = capture  # type: ignore[method-assign]
         try:
             await rl._on_frame(a, {"t": "open", "c": 4242})
-            await rl._on_frame(a, {"t": "req", "c": 4242, "line": {"id": 9, "method": method, "params": params}})
+            await rl._on_frame(
+                a, {"t": "req", "c": 4242, "line": {"id": 9, "method": method, "params": params}}
+            )
             await asyncio.sleep(0.05)
             await rl._on_frame(a, {"t": "close", "c": 4242})
         finally:
@@ -115,9 +130,15 @@ def test_methods_forbidden_over_link(link: FakeLink, method: str) -> None:
 
 @pytest.mark.parametrize("verb", ["say", "cmd", "login", "logout", "stop", "create", "delete"])
 def test_pi_cli_human_verbs_print_desktop_message(link: FakeLink, verb: str) -> None:
-    args = {"say": ["say", "#fpga", "hi"], "cmd": ["cmd", "#fpga", "/pause"], "login": ["login"],
-            "logout": ["logout", "--all"], "stop": ["stop"], "create": ["create", "#x"],
-            "delete": ["rooms", "delete", "#fpga", "--yes"]}[verb]
+    args = {
+        "say": ["say", "#fpga", "hi"],
+        "cmd": ["cmd", "#fpga", "/pause"],
+        "login": ["login"],
+        "logout": ["logout", "--all"],
+        "stop": ["stop"],
+        "create": ["create", "#x"],
+        "delete": ["rooms", "delete", "#fpga", "--yes"],
+    }[verb]
     r = link.pi_cli(*args)
     assert r.returncode == 1 and "run this on the desktop (desk)" in r.stderr, (r.stdout, r.stderr)
     assert link.status()["state"] == "up"
@@ -188,7 +209,9 @@ async def test_narrowed_rooms_revoke_at_once() -> None:
             link.broker.on_loop(lambda: setattr(rl, "entry", dataclasses.replace(full, rooms=("#fpga",))))
             try:
                 r = await a.say("#secret", "only #fpga now")
-                assert r["ok"] is False and r["code"] == "forbidden" and "no longer use #secret" in r["error"], r
+                assert (
+                    r["ok"] is False and r["code"] == "forbidden" and "no longer use #secret" in r["error"]
+                ), r
                 assert (await a.say("#fpga", "fine here"))["ok"]
             finally:
                 link.broker.on_loop(lambda: setattr(rl, "entry", full))
@@ -198,8 +221,11 @@ async def test_narrowed_rooms_revoke_at_once() -> None:
             assert "bench left (#secret is no longer allowed for fpga-pi)" in leave_lines(link, "#secret")
             link.wait_state("disabled", reason="config_changed")
             assert link.call("remote.enable", {"name": link.name}, timeout=30)["state"] == "up"
-            wait_for(lambda: any(m["name"] == "bench" and m["status"] != "offline" for m in link.members("#fpga")),
-                     timeout=15, what="bench back in #fpga")
+            wait_for(
+                lambda: any(m["name"] == "bench" and m["status"] != "offline" for m in link.members("#fpga")),
+                timeout=15,
+                what="bench back in #fpga",
+            )
             r = await a.say("#secret", "still here?")
             assert r["ok"] is False, r
             assert (await a.read("#secret"))["ok"] is False
@@ -220,7 +246,9 @@ def test_narrowed_harnesses_end_sessions_at_once() -> None:
             assert r["ok"], r
             assert next(m for m in link.members() if m["name"] == "cx-pi")["harness"] == "codex"
             link.write_remotes(remotes_toml(link.name, link.pi, link.rooms, harnesses=["claude"]))
-            wait_for(lambda: not any(m["name"] == "cx-pi" for m in link.members()), timeout=10, what="cx-pi ended")
+            wait_for(
+                lambda: not any(m["name"] == "cx-pi" for m in link.members()), timeout=10, what="cx-pi ended"
+            )
             assert "cx-pi left (codex is no longer allowed on fpga-pi)" in leave_lines(link, "#fpga")
             assert link.call("remote.enable", {"name": link.name}, timeout=30)["state"] == "up"
             r = cx.tool("say", meta={"threadId": tid}, room="#fpga", text="still codex?")

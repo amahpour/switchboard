@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import World
 from test_claude_adapter import claude, reg
@@ -18,6 +17,7 @@ from test_cursor_adapter import cursor, park_result, stop
 from test_devin_adapter import devin
 from test_devin_adapter import open_wait as devin_wait
 from test_rules_release import NOW, item, room
+
 from switchboard.config import Config
 from switchboard.delivery import rules
 from switchboard.models import Notice, Push
@@ -51,20 +51,54 @@ def set_budget(w: World, n: int) -> None:
 # ------------------------------------------------------------------ pure rules
 def test_budget_zero_blocks_mentions_and_chatter_but_not_humans() -> None:
     r0 = room(budget_remaining=0)
-    assert rules.releasable([item(1, 1)], room=r0, eff="idle", peer_batch_boundary=-1, boundary_seq=0,
-                            now=NOW, quiet_s=3, max_hold_s=60, batch_max_msgs=20, max_chars=6000) is None
-    r = rules.releasable([item(1, 2), item(2, 0)], room=r0, eff="idle", peer_batch_boundary=-1,
-                         boundary_seq=0, now=NOW, quiet_s=3, max_hold_s=60, batch_max_msgs=20, max_chars=6000)
+    assert (
+        rules.releasable(
+            [item(1, 1)],
+            room=r0,
+            eff="idle",
+            peer_batch_boundary=-1,
+            boundary_seq=0,
+            now=NOW,
+            quiet_s=3,
+            max_hold_s=60,
+            batch_max_msgs=20,
+            max_chars=6000,
+        )
+        is None
+    )
+    r = rules.releasable(
+        [item(1, 2), item(2, 0)],
+        room=r0,
+        eff="idle",
+        peer_batch_boundary=-1,
+        boundary_seq=0,
+        now=NOW,
+        quiet_s=3,
+        max_hold_s=60,
+        batch_max_msgs=20,
+        max_chars=6000,
+    )
     assert r is not None and r.counted and [i.message_id for i in r.items] == [1, 2]
     assert rules.budget_blocked([item(1, 1)], room=r0, eff="idle", peer_batch_boundary=-1, boundary_seq=0)
     assert not rules.budget_blocked([item(1, 2)], room=r0, eff="idle", peer_batch_boundary=-1, boundary_seq=0)
-    assert not rules.budget_blocked([item(1, 1)], room=room(), eff="idle", peer_batch_boundary=-1,
-                                    boundary_seq=0)
+    assert not rules.budget_blocked(
+        [item(1, 1)], room=room(), eff="idle", peer_batch_boundary=-1, boundary_seq=0
+    )
 
 
 def test_mid_task_priority_is_never_counted_nor_blocked() -> None:
-    r = rules.releasable([item(1, 1)], room=room(budget_remaining=0), eff="busy", peer_batch_boundary=-1,
-                         boundary_seq=0, now=NOW, quiet_s=3, max_hold_s=60, batch_max_msgs=20, max_chars=6000)
+    r = rules.releasable(
+        [item(1, 1)],
+        room=room(budget_remaining=0),
+        eff="busy",
+        peer_batch_boundary=-1,
+        boundary_seq=0,
+        now=NOW,
+        quiet_s=3,
+        max_hold_s=60,
+        batch_max_msgs=20,
+        max_chars=6000,
+    )
     assert r is not None and r.kind == "priority" and not r.counted
 
 
@@ -117,10 +151,17 @@ def test_each_kind_of_wake_and_continuation_is_counted(w: World) -> None:
     out = w.hook(pd, "Stop", gen="g1")  # the Devin Stop block hands it over: counted
     assert out is not None and out.kind == "continue"
     assert left(w) == start - 5
-    counted = {(b["path"], b["wake_kind"]) for b in w.store.con.execute(
-        "SELECT path, wake_kind FROM batches WHERE budget_counted=1").fetchall()}
-    assert counted == {("inbox", "idle_wake"), ("turn_start", "idle_wake"), ("wait", "wait_return"),
-                       ("stop_followup", "stop_cont"), ("stop_block", "stop_cont")}
+    counted = {
+        (b["path"], b["wake_kind"])
+        for b in w.store.con.execute("SELECT path, wake_kind FROM batches WHERE budget_counted=1").fetchall()
+    }
+    assert counted == {
+        ("inbox", "idle_wake"),
+        ("turn_start", "idle_wake"),
+        ("wait", "wait_return"),
+        ("stop_followup", "stop_cont"),
+        ("stop_block", "stop_cont"),
+    }
     # the re-arm ("call wait()") is a counted continuation with no batch
     w.engine.on_hook_ack(out.batch_id, out.ack)
     w.hook(pd, "PreToolUse", gen="g1", tool="read", tool_use_id="t1")  # confirms the block

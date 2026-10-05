@@ -69,12 +69,12 @@ STATE_FILE = "dialer.state"
 PID_FILE = "dialer.pid"
 FINAL_TEXT = {
     "removed": "the broker's owner removed this machine. To bring it back, make a new code in the web UI"
-               " (Add a machine) and run `switchboard remote join` here again",
+    " (Add a machine) and run `switchboard remote join` here again",
     "unknown": "the broker holds no key for this machine (it was removed, or the broker's data was reset). Make"
-               " a new code in the web UI (Add a machine) and run `switchboard remote join` here again",
+    " a new code in the web UI (Add a machine) and run `switchboard remote join` here again",
     "broker_key": "the broker's key is not the one pinned at `remote join`. If the broker was reinstalled, pair"
-                  " this machine again (a new code, `switchboard remote join`); if it wasn't, something between"
-                  " this machine and the broker is answering in its place",
+    " this machine again (a new code, `switchboard remote join`); if it wasn't, something between"
+    " this machine and the broker is answering in its place",
 }
 
 
@@ -150,8 +150,16 @@ class DialerState:
         if (state, reason) != (self.state, self.reason):
             self.state, self.reason, self.since = state, reason, time.time()
             log.info("dialer: %s%s", state, f" ({reason})" if reason else "")
-        data = {"state": self.state, "reason": self.reason or None, "since": self.since, "pid": os.getpid(),
-                "name": self.conf.name, "broker": self.conf.broker_url, "version": __version__, **extra}
+        data = {
+            "state": self.state,
+            "reason": self.reason or None,
+            "since": self.since,
+            "pid": os.getpid(),
+            "name": self.conf.name,
+            "broker": self.conf.broker_url,
+            "version": __version__,
+            **extra,
+        }
         with contextlib.suppress(OSError):
             _write_atomic(state_path(self.paths), json.dumps(data))
 
@@ -198,9 +206,18 @@ async def handshake(ws: Any, conf: SatelliteConf, key: Any, host: str, on_pendin
     """Prove this machine's key, check the broker's against the pinned one, then wait until the
     machine is approved (``on_pending`` is called once if it has to wait)."""
     nm = secrets.token_bytes(linkkey.NONCE_BYTES)
-    await ws.send(json.dumps({"t": "auth", "v": linkkey.LINK_VERSION, "name": conf.name,
-                              "key": linkkey.b64u(linkkey.pub_raw(key)), "nm": linkkey.b64u(nm)},
-                             separators=(",", ":")))
+    await ws.send(
+        json.dumps(
+            {
+                "t": "auth",
+                "v": linkkey.LINK_VERSION,
+                "name": conf.name,
+                "key": linkkey.b64u(linkkey.pub_raw(key)),
+                "nm": linkkey.b64u(nm),
+            },
+            separators=(",", ":"),
+        )
+    )
     try:
         nb, bkey, sig = linkkey.check_challenge(await _recv(ws, linkkey.HANDSHAKE_TIMEOUT_S))
     except linkkey.HandshakeError:
@@ -210,8 +227,9 @@ async def handshake(ws: Any, conf: SatelliteConf, key: Any, host: str, on_pendin
         raise Final("broker_key")
     if not linkkey.verify(bkey, sig, "broker", host, nm, nb):
         raise Down("broker_proof")
-    await ws.send(json.dumps({"t": "proof", "sig": linkkey.sign(key, "machine", host, nb, nm)},
-                             separators=(",", ":")))
+    await ws.send(
+        json.dumps({"t": "proof", "sig": linkkey.sign(key, "machine", host, nb, nm)}, separators=(",", ":"))
+    )
     waiting = False
     while True:
         f = await _recv(ws, None if waiting else linkkey.HANDSHAKE_TIMEOUT_S)
@@ -263,7 +281,9 @@ async def run_link(ws: Any, satellite: sat.Satellite) -> str:
             with contextlib.suppress(asyncio.TimeoutError, TimeoutError, Exception):
                 await asyncio.wait_for(asyncio.shield(session), 10.0)
         with contextlib.suppress(asyncio.TimeoutError, TimeoutError, Exception):
-            await asyncio.wait_for(asyncio.shield(up), 2.0)  # the satellite's bye, while the socket carries it
+            await asyncio.wait_for(
+                asyncio.shield(up), 2.0
+            )  # the satellite's bye, while the socket carries it
     finally:
         for t in (up, down, session):
             if not t.done():
@@ -278,7 +298,9 @@ async def run_link(ws: Any, satellite: sat.Satellite) -> str:
 
 # ------------------------------------------------------------------ the loop
 class Dialer:
-    def __init__(self, paths: Paths, conf: SatelliteConf, key: Any, satellite: sat.Satellite, state: DialerState):
+    def __init__(
+        self, paths: Paths, conf: SatelliteConf, key: Any, satellite: sat.Satellite, state: DialerState
+    ):
         self.paths = paths
         self.conf = conf
         self.key = key
@@ -304,9 +326,15 @@ class Dialer:
     def _connect(self) -> Any:
         from websockets.asyncio.client import connect
 
-        kwargs: dict[str, Any] = dict(compression=None, max_size=proto.MAX_FRAME + 1024, open_timeout=CONNECT_TIMEOUT_S,
-                                      ping_interval=PING_S, ping_timeout=PING_S, close_timeout=5,
-                                      user_agent_header=f"switchboard/{__version__}")
+        kwargs: dict[str, Any] = dict(
+            compression=None,
+            max_size=proto.MAX_FRAME + 1024,
+            open_timeout=CONNECT_TIMEOUT_S,
+            ping_interval=PING_S,
+            ping_timeout=PING_S,
+            close_timeout=5,
+            user_agent_header=f"switchboard/{__version__}",
+        )
         if self.secure:
             kwargs["ssl"] = tls_context()
         return connect(self.uri, **kwargs)
@@ -317,8 +345,13 @@ class Dialer:
         async with self._connect() as ws:
             self.ws = ws
             try:
-                await handshake(ws, self.conf, self.key, self.host,
-                                on_pending=lambda: self.state.set("pending", "waiting for approval in the web UI"))
+                await handshake(
+                    ws,
+                    self.conf,
+                    self.key,
+                    self.host,
+                    on_pending=lambda: self.state.set("pending", "waiting for approval in the web UI"),
+                )
                 if self.stopping.is_set():
                     return "shutdown", 0.0
                 self.state.set("up")
@@ -362,8 +395,9 @@ class Dialer:
             if up_for >= BACKOFF_RESET_UP_S:
                 failures = 0
             failures += 1
-            delay = wait or BACKOFF_S[min(failures, len(BACKOFF_S)) - 1] * random.uniform(1 - BACKOFF_JITTER,
-                                                                                         1 + BACKOFF_JITTER)
+            delay = wait or BACKOFF_S[min(failures, len(BACKOFF_S)) - 1] * random.uniform(
+                1 - BACKOFF_JITTER, 1 + BACKOFF_JITTER
+            )
             self.state.set("down", str(reason)[:80], retry_in_s=round(delay, 1))
             with contextlib.suppress(asyncio.TimeoutError, TimeoutError):
                 await asyncio.wait_for(self.stopping.wait(), delay)
@@ -378,8 +412,9 @@ def setup_logging(paths: Paths, *, stdout: bool = False) -> None:
     if stdout:
         handler = logging.StreamHandler(sys.stdout)
     else:
-        handler = logging.handlers.RotatingFileHandler(paths.logs_dir / "dialer.log", maxBytes=2 * 1024 * 1024,
-                                                       backupCount=2, encoding="utf-8")
+        handler = logging.handlers.RotatingFileHandler(
+            paths.logs_dir / "dialer.log", maxBytes=2 * 1024 * 1024, backupCount=2, encoding="utf-8"
+        )
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     root = logging.getLogger()
     for h in list(root.handlers):
@@ -397,8 +432,10 @@ def main(paths: Paths, *, test_mode: bool = False, log_stdout: bool = False) -> 
     try:
         conf = read_satellite_conf(paths)
     except FileNotFoundError:
-        print("switchboard: this home dials no broker (no satellite.toml): run `switchboard remote join`",
-              file=sys.stderr)
+        print(
+            "switchboard: this home dials no broker (no satellite.toml): run `switchboard remote join`",
+            file=sys.stderr,
+        )
         return EXIT_REFUSED
     except (OSError, RemoteConfigError) as e:
         print(f"switchboard: {e}", file=sys.stderr)
@@ -428,7 +465,10 @@ def main(paths: Paths, *, test_mode: bool = False, log_stdout: bool = False) -> 
     try:
         key = linkkey.load_key(paths.home / "link" / linkkey.MACHINE_KEY)
     except linkkey.KeyFileError as e:
-        print(f"switchboard: this machine's link key: {e} (run `switchboard remote join` again)", file=sys.stderr)
+        print(
+            f"switchboard: this machine's link key: {e} (run `switchboard remote join` again)",
+            file=sys.stderr,
+        )
         return EXIT_REFUSED
     clock_state = sat.pin_linux_clock(paths)
     from switchboard.config import ConfigError, load
@@ -442,18 +482,38 @@ def main(paths: Paths, *, test_mode: bool = False, log_stdout: bool = False) -> 
     me_pair = (os.getpid(), me.start if me else time.time())
     locks = sat.take_locks(paths, me_pair)
     if isinstance(locks, str):
-        what = ("a switchboard broker runs from this home" if locks == "local_broker"
-                else "another dialer (or a satellite) runs from this home")
+        what = (
+            "a switchboard broker runs from this home"
+            if locks == "local_broker"
+            else "another dialer (or a satellite) runs from this home"
+        )
         print(f"switchboard: {what}", file=sys.stderr)
         return 1
     _write_atomic(pid_path(paths), f"{me_pair[0]} {me_pair[1]!r}\n")
     state = DialerState(paths, conf)
-    log.info("dialer: %s for %s (test mode %s, harden %s, process clock %s, satellite %s)", conf.name,
-             conf.broker_url, test_mode, harden_state, clock_state, __version__)
+    log.info(
+        "dialer: %s for %s (test mode %s, harden %s, process clock %s, satellite %s)",
+        conf.name,
+        conf.broker_url,
+        test_mode,
+        harden_state,
+        clock_state,
+        __version__,
+    )
     write_hook_copy(paths)
-    satellite = sat.Satellite(paths, conf.name, test_mode=test_mode, sessions_dir=cfg.claude.sessions_dir,
-                              harden_state=harden_state, pid_shift=shift, clock_skew=skew, link_proto=link_proto,
-                              desktop=conf.desktop, frame_log=frame_log, stdio="wss")
+    satellite = sat.Satellite(
+        paths,
+        conf.name,
+        test_mode=test_mode,
+        sessions_dir=cfg.claude.sessions_dir,
+        harden_state=harden_state,
+        pid_shift=shift,
+        clock_skew=skew,
+        link_proto=link_proto,
+        desktop=conf.desktop,
+        frame_log=frame_log,
+        stdio="wss",
+    )
 
     async def run() -> int:
         dialer = Dialer(paths, conf, key, satellite, state)

@@ -50,7 +50,9 @@ def toml_str(s: str) -> str:
 def model_slugs() -> list[str]:
     try:
         d = json.loads((CODEX_HOME / "models_cache.json").read_text())
-        return [m["slug"] for m in d.get("models", []) if isinstance(m, dict) and isinstance(m.get("slug"), str)]
+        return [
+            m["slug"] for m in d.get("models", []) if isinstance(m, dict) and isinstance(m.get("slug"), str)
+        ]
     except (OSError, ValueError, KeyError):
         return []
 
@@ -59,7 +61,7 @@ def disable_overrides() -> list[str]:
     """-c pairs that turn off every user MCP server and plugin (names read at runtime)."""
     cfg = user_config()
     out: list[str] = []
-    for name in (cfg.get("mcp_servers") or {}):
+    for name in cfg.get("mcp_servers") or {}:
         if not NAME_RE.fullmatch(name):
             raise RuntimeError("an MCP server name the -c parser can't take; add it by hand")
         out += ["-c", f"mcp_servers.{name}.enabled=false"]
@@ -81,7 +83,7 @@ def nux_override() -> list[str]:
 
 def project_trust(ws: Path) -> list[str]:
     paths = {str(ws), os.path.realpath(ws)}
-    table = ",".join(f"{toml_str(p)}={{trust_level=\"trusted\"}}" for p in sorted(paths))
+    table = ",".join(f'{toml_str(p)}={{trust_level="trusted"}}' for p in sorted(paths))
     return ["-c", f"projects={{{table}}}"]
 
 
@@ -89,16 +91,41 @@ def base_overrides(ws: Path, print_args: dict[str, Any]) -> list[str]:
     """Everything but hooks.state (computed from these by codex_trust.py)."""
     argv = print_args["argv"]
     assert argv[0] == "-c" and argv[1].startswith("mcp_servers.switchboard=")
-    return (["-c", 'approval_policy="on-request"', "-c", 'sandbox_mode="workspace-write"']
-            + disable_overrides() + ["-c", argv[1]] + project_trust(ws) + nux_override())
+    return (
+        ["-c", 'approval_policy="on-request"', "-c", 'sandbox_mode="workspace-write"']
+        + disable_overrides()
+        + ["-c", argv[1]]
+        + project_trust(ws)
+        + nux_override()
+    )
 
 
 def app_server_argv(codex_bin: str, sock: str, overrides: list[str], hooks_state: str) -> list[str]:
-    return [codex_bin, "app-server", "--listen", f"unix://{sock}", *overrides, "-c", f"hooks.state={hooks_state}"]
+    return [
+        codex_bin,
+        "app-server",
+        "--listen",
+        f"unix://{sock}",
+        *overrides,
+        "-c",
+        f"hooks.state={hooks_state}",
+    ]
 
 
 def tui_argv(codex_bin: str, sock: str) -> list[str]:
     """A ``--remote`` TUI sends its **own** config's approval and sandbox policy with
     ``thread/start`` (which may be never + danger-full-access), so it gets them too."""
-    return [codex_bin, "--remote", f"unix://{sock}", "-a", "on-request", "-s", "workspace-write", "-m", MODEL,
-            "-c", f'model_reasoning_effort="{EFFORT}"', *NO_UPDATE_CHECK]
+    return [
+        codex_bin,
+        "--remote",
+        f"unix://{sock}",
+        "-a",
+        "on-request",
+        "-s",
+        "workspace-write",
+        "-m",
+        MODEL,
+        "-c",
+        f'model_reasoning_effort="{EFFORT}"',
+        *NO_UPDATE_CHECK,
+    ]

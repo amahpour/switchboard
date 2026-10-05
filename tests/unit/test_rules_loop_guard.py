@@ -8,10 +8,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import World
 from test_rules_release import room
+
 from switchboard.config import Config
 from switchboard.delivery import rules
 from switchboard.models import Notice
@@ -56,11 +56,21 @@ def test_only_the_humans_messages_reset_the_counter(w: World) -> None:
     for i in range(5):
         w.agent_says(ma, f"hop {i}")
     # a system notice (e.g. a join line, a command audit) is not the human
-    w.store.insert_message(w.room.id, sender_name="switchboard", sender_kind="system", via="system",
-                           kind="notice", text="a notice")
-    w.store.insert_message(w.room.id, sender_name="a", sender_kind="agent", via="mcp", kind="join", text="joined")
+    w.store.insert_message(
+        w.room.id,
+        sender_name="switchboard",
+        sender_kind="system",
+        via="system",
+        kind="notice",
+        text="a notice",
+    )
+    w.store.insert_message(
+        w.room.id, sender_name="a", sender_kind="agent", via="mcp", kind="join", text="joined"
+    )
     assert w.store.room_by_id(w.room.id).hop_count == 5
-    msg = w.store.insert_message(w.room.id, sender_name="alice", sender_kind="human", via="cli", text="from the CLI")
+    msg = w.store.insert_message(
+        w.room.id, sender_name="alice", sender_kind="human", via="cli", text="from the CLI"
+    )
     w.actions += w.engine.on_message(msg.id)
     assert w.store.room_by_id(w.room.id).hop_count == 0  # the CLI is the human too
     for i in range(5):

@@ -12,9 +12,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import InProcBroker, cookie_of, ws_connect
 from fakes.fake_agent import FakeAgent
+
 from switchboard import db
 from switchboard.cli import main
 from switchboard.config import Config
@@ -76,7 +76,9 @@ def room_rows(path: Path, rid: int, mids: list[int]) -> dict[str, int]:
         "rooms": q(path, "SELECT COUNT(*) FROM rooms WHERE id=?", rid)[0][0],
         "messages": q(path, "SELECT COUNT(*) FROM messages WHERE room_id=?", rid)[0][0],
         "memberships": q(path, "SELECT COUNT(*) FROM memberships WHERE room_id=?", rid)[0][0],
-        "deliveries": q(path, f"SELECT COUNT(*) FROM deliveries WHERE membership_id IN ({marks})", *mids)[0][0],
+        "deliveries": q(path, f"SELECT COUNT(*) FROM deliveries WHERE membership_id IN ({marks})", *mids)[0][
+            0
+        ],
         "batches": q(path, f"SELECT COUNT(*) FROM batches WHERE membership_id IN ({marks})", *mids)[0][0],
         "events": q(path, "SELECT COUNT(*) FROM events WHERE room_id=?", rid)[0][0],
     }
@@ -84,14 +86,21 @@ def room_rows(path: Path, rid: int, mids: list[int]) -> dict[str, int]:
 
 def add_offline_member(b: InProcBroker, room_id: int, name: str) -> None:
     """A member whose agent is offline: still a member, so the delete is refused."""
+
     def go() -> None:
         con = b.state.store.con
         with db.tx(con):
-            cur = con.execute("INSERT INTO participants(harness, session_key, status, created_at)"
-                              " VALUES('test', ?, 'offline', 0)", (f"test:{name}",))
-            con.execute("INSERT INTO memberships(room_id, participant_id, screen_name, cred_hash, joined_at,"
-                        " join_msg_id) VALUES(?,?,?,?,0,?)",
-                        (room_id, cur.lastrowid, name, "h" * 64, b.state.store.last_message_id(room_id)))
+            cur = con.execute(
+                "INSERT INTO participants(harness, session_key, status, created_at)"
+                " VALUES('test', ?, 'offline', 0)",
+                (f"test:{name}",),
+            )
+            con.execute(
+                "INSERT INTO memberships(room_id, participant_id, screen_name, cred_hash, joined_at,"
+                " join_msg_id) VALUES(?,?,?,?,0,?)",
+                (room_id, cur.lastrowid, name, "h" * 64, b.state.store.last_message_id(room_id)),
+            )
+
     b.on_loop(go)
 
 
@@ -107,7 +116,9 @@ def recv_until(ws: Any, pred: Any, timeout: float = 5.0) -> list[dict[str, Any]]
             return got
 
 
-async def test_plan_refusals_close_then_delete(broker: InProcBroker, capsys: pytest.CaptureFixture[str]) -> None:
+async def test_plan_refusals_close_then_delete(
+    broker: InProcBroker, capsys: pytest.CaptureFixture[str]
+) -> None:
     b = broker
     dbp = b.paths.db
     async with FakeAgent(b.home, "ka") as a:
@@ -116,7 +127,8 @@ async def test_plan_refusals_close_then_delete(broker: InProcBroker, capsys: pyt
         # refused while alpha is in it, the plan too
         e = rpc_err(b, {"room": "#build", "dry_run": True})
         assert e.code == "conflict" and e.message == (
-            "#build has 1 agent(s) (alpha): close it first (/close in the web UI, or switchboard cmd '#build' /close)")
+            "#build has 1 agent(s) (alpha): close it first (/close in the web UI, or switchboard cmd '#build' /close)"
+        )
         mids = [r[0] for r in q(dbp, "SELECT id FROM memberships WHERE room_id=1")]
         close(b, "build")
     other_before = room_rows(dbp, 2, [])
@@ -124,10 +136,17 @@ async def test_plan_refusals_close_then_delete(broker: InProcBroker, capsys: pyt
     plan = b.call("room.delete", {"room": "#build", "dry_run": True}, timeout=30)
     backup = Path(plan["backup"])
     assert (plan["room_id"], plan["name"], plan["display"], plan["state"], plan["closed_by"]) == (
-        1, "#build~closed-1", "#build", "closed", "alice")
+        1,
+        "#build~closed-1",
+        "#build",
+        "closed",
+        "alice",
+    )
     assert backup == dbp.with_name(f"{dbp.name}.delete-build-1.bak") and not backup.exists()
     assert plan["counts"] == room_rows(dbp, 1, mids)
-    assert plan["counts"]["rooms"] == 1 and plan["counts"]["messages"] >= 4 and plan["counts"]["deliveries"] >= 1
+    assert (
+        plan["counts"]["rooms"] == 1 and plan["counts"]["messages"] >= 4 and plan["counts"]["deliveries"] >= 1
+    )
     # a stale pin: conflict, nothing deleted
     e = rpc_err(b, {"room": "#build", **pin(plan), "room_id": 99})
     assert e.code == "conflict" and "#build~closed-1 changed since the plan" in e.message
@@ -184,8 +203,10 @@ def test_ambiguous_names_and_delete_by_full_name(broker: InProcBroker) -> None:
     close(b, "build")
     e = rpc_err(b, {"room": "#build", "dry_run": True})
     assert e.code == "bad_request"
-    assert e.message == ("#build names 2 closed rooms: #build~closed-3, #build~closed-1;"
-                         " give the full name of the one to delete")
+    assert e.message == (
+        "#build names 2 closed rooms: #build~closed-3, #build~closed-1;"
+        " give the full name of the one to delete"
+    )
     plan = b.call("room.delete", {"room": "#build~closed-1", "dry_run": True})
     assert plan["room_id"] == 1
     assert b.call("room.delete", {"room": "#build~closed-1", **pin(plan)}, timeout=60)["room_id"] == 1
@@ -229,7 +250,8 @@ def test_a_reopen_or_re_create_between_plan_and_apply_deletes_nothing(broker: In
     web_post(b, "/api/closed-rooms/1/reopen", {})
     e = rpc_err(b, {"room": "#build", **pin(plan)})
     assert e.code == "conflict" and e.message == (
-        "#build~closed-1 changed since the plan (reopened, deleted or re-created); run the command again")
+        "#build~closed-1 changed since the plan (reopened, deleted or re-created); run the command again"
+    )
     assert [r["name"] for r in b.call("room.list")["rooms"]] == ["#build", "#other"]
     stale = b.call("room.delete", {"room": "#other", "dry_run": True})
     b.call("room.delete", {"room": "#other", **pin(stale)}, timeout=60)

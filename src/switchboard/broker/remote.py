@@ -110,16 +110,61 @@ def ssh_argv(entry: RemoteEntry, paths: Paths) -> list[str]:
     (an unknown or changed key aborts; no prompt of any kind), no forwarding of any
     kind, keepalives, and a fixed remote command that the forced command ignores."""
     return [
-        SSH_BIN, "-F", "/dev/null", "-T", "-x", "-a", "-k", "-e", "none",
-        "-i", str(link_key_path(paths, entry.name)), "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none",
-        "-o", f"UserKnownHostsFile={pin_path(paths, entry.name)}", "-o", "GlobalKnownHostsFile=/dev/null",
-        "-o", f"HostKeyAlias={host_key_alias(entry.name)}", "-o", "StrictHostKeyChecking=yes",
-        "-o", "UpdateHostKeys=no", "-o", "CheckHostIP=no",
-        "-o", "BatchMode=yes", "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no",
-        "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=3",
-        "-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "ClearAllForwardings=yes",
-        "-o", "PermitLocalCommand=no",
-        "-o", "LogLevel=ERROR", "-p", str(entry.port), "-l", entry.user, entry.host, "switchboard-satellite",
+        SSH_BIN,
+        "-F",
+        "/dev/null",
+        "-T",
+        "-x",
+        "-a",
+        "-k",
+        "-e",
+        "none",
+        "-i",
+        str(link_key_path(paths, entry.name)),
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        "IdentityAgent=none",
+        "-o",
+        f"UserKnownHostsFile={pin_path(paths, entry.name)}",
+        "-o",
+        "GlobalKnownHostsFile=/dev/null",
+        "-o",
+        f"HostKeyAlias={host_key_alias(entry.name)}",
+        "-o",
+        "StrictHostKeyChecking=yes",
+        "-o",
+        "UpdateHostKeys=no",
+        "-o",
+        "CheckHostIP=no",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "PasswordAuthentication=no",
+        "-o",
+        "KbdInteractiveAuthentication=no",
+        "-o",
+        "ConnectTimeout=5",
+        "-o",
+        "ServerAliveInterval=5",
+        "-o",
+        "ServerAliveCountMax=3",
+        "-o",
+        "ControlMaster=no",
+        "-o",
+        "ControlPath=none",
+        "-o",
+        "ClearAllForwardings=yes",
+        "-o",
+        "PermitLocalCommand=no",
+        "-o",
+        "LogLevel=ERROR",
+        "-p",
+        str(entry.port),
+        "-l",
+        entry.user,
+        entry.host,
+        "switchboard-satellite",
     ]
 
 
@@ -141,27 +186,41 @@ def passwd_home() -> str:
 # ssh refused comes before the auth failure it causes.
 SSH_FAILED = 255  # ssh's own exit status for an error of its own (or a remote command's 255)
 _SSH_BLOCKS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
-    (reason, re.compile(pat, re.IGNORECASE)) for reason, pat in (
-        ("host_key", r"host key verification failed\."
-                     r"|@+ +warning: remote host identification has changed! +@+"
-                     r"|no \S+ host key is known for \S+ and you have requested strict checking\."
-                     r"|(?:\S+ )?host key for \S+ has changed and you have requested strict checking\."),
-        ("files", r"@+ +warning: unprotected private key file! +@+"
-                  r"|permissions 0[0-7]+ for '[^']*' are too open\."
-                  r'|load key "[^"]*": (?:bad permissions|invalid format|error in libcrypto)'
-                  r"|no such identity: .+|warning: identity file .+ not accessible: .+"),
-        ("auth", r"\S+: permission denied \([a-z0-9,@.-]+\)\."
-                 r"|received disconnect from \S+ port \d+:\d+: too many authentication failures(?: for \S+)?"
-                 r"|no supported authentication methods available(?: \(server sent: [a-z0-9,@.-]*\))?"
-                 r"|authentication failed\."),
+    (reason, re.compile(pat, re.IGNORECASE))
+    for reason, pat in (
+        (
+            "host_key",
+            r"host key verification failed\."
+            r"|@+ +warning: remote host identification has changed! +@+"
+            r"|no \S+ host key is known for \S+ and you have requested strict checking\."
+            r"|(?:\S+ )?host key for \S+ has changed and you have requested strict checking\.",
+        ),
+        (
+            "files",
+            r"@+ +warning: unprotected private key file! +@+"
+            r"|permissions 0[0-7]+ for '[^']*' are too open\."
+            r'|load key "[^"]*": (?:bad permissions|invalid format|error in libcrypto)'
+            r"|no such identity: .+|warning: identity file .+ not accessible: .+",
+        ),
+        (
+            "auth",
+            r"\S+: permission denied \([a-z0-9,@.-]+\)\."
+            r"|received disconnect from \S+ port \d+:\d+: too many authentication failures(?: for \S+)?"
+            r"|no supported authentication methods available(?: \(server sent: [a-z0-9,@.-]*\))?"
+            r"|authentication failed\.",
+        ),
         ("negotiate", r"unable to negotiate with \S+ port \d+: no matching .+"),
     )
 )
 # network trouble: down, retried with backoff (harmless if the remote's own text says it)
 _SSH_DOWNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
-    (reason, re.compile(pat, re.IGNORECASE)) for reason, pat in (
-        ("dns", r"could not resolve hostname|name or service not known|nodename nor servname"
-                r"|temporary failure in name resolution|no address associated with hostname"),
+    (reason, re.compile(pat, re.IGNORECASE))
+    for reason, pat in (
+        (
+            "dns",
+            r"could not resolve hostname|name or service not known|nodename nor servname"
+            r"|temporary failure in name resolution|no address associated with hostname",
+        ),
         ("refused", r"connection refused"),
         ("unreachable", r"no route to host|network is unreachable|host is down|host is unreachable"),
         ("keepalive", r"timeout, server \S+ not responding"),
@@ -173,8 +232,9 @@ EXIT_COMMAND = (126, 127)  # the remote's shell couldn't run the forced command
 SATELLITE_REFUSED = 2  # remote/satellite.py EXIT_REFUSED, with "switchboard satellite: <why>" on stderr
 
 
-def classify_exit(stderr: str, returncode: int | None, default: str = "eof", *,
-                  ran: bool = False) -> tuple[str, str]:
+def classify_exit(
+    stderr: str, returncode: int | None, default: str = "eof", *, ran: bool = False
+) -> tuple[str, str]:
     """``(state, reason)`` for an ssh child that ended (or whose link hit EOF).
 
     ``ran``: something came back on the link's stdout, so the remote command ran (the
@@ -230,8 +290,14 @@ def pinned_fingerprints(pin: str) -> list[str]:
 class LinkClosed(Exception):
     """An attempt ended: ``state`` is 'down' or 'blocked', ``reason`` a code."""
 
-    def __init__(self, state: str, reason: str, notice: str | None = None, level: str = "warn",
-                 detail: str | None = None):
+    def __init__(
+        self,
+        state: str,
+        reason: str,
+        notice: str | None = None,
+        level: str = "warn",
+        detail: str | None = None,
+    ):
         super().__init__(reason)
         self.state = state
         self.reason = reason
@@ -357,7 +423,9 @@ class RemoteLink:
         self.stderr_tail = ""
         self.end_detail: str | None = None  # why the last attempt ended, for `remote status` only
         self.watch_n = 0
-        self._watch: tuple[frozenset[tuple[int, float]], tuple[tuple[int, float, str | None], ...]] | None = None
+        self._watch: tuple[frozenset[tuple[int, float]], tuple[tuple[int, float, str | None], ...]] | None = (
+            None
+        )
         self._skew_noted = False
         self._harden_noted = False
         self._version_noted: str | None = None
@@ -543,8 +611,18 @@ class RemoteLink:
     def _argv(self) -> list[str]:
         e = self.entry
         if e.transport == "exec":
-            return [sys.executable, "-I", "-m", "switchboard", "satellite", "--home", e.home, "--name", e.name,
-                    "--test-mode"]
+            return [
+                sys.executable,
+                "-I",
+                "-m",
+                "switchboard",
+                "satellite",
+                "--home",
+                e.home,
+                "--name",
+                e.name,
+                "--test-mode",
+            ]
         # checked before every dial: a binary someone could replace, or a link key or pin
         # that is missing or readable by others, needs the owner
         # (the notice, read by the remote's agents, names no path of this machine's user;
@@ -563,19 +641,28 @@ class RemoteLink:
         path; ``detail``: ``remote status`` shows the owner more (stderr, the file)."""
         hint = BLOCK_HINTS.get(reason, reason).replace("<name>", self.name)
         more = f" (`switchboard remote status {self.name}` shows the detail)" if detail else ""
-        return (f"{self.name}: link blocked ({reason}): {hint}{more}. Once fixed, run"
-                f" `switchboard remote enable {self.name}` on this machine")
+        return (
+            f"{self.name}: link blocked ({reason}): {hint}{more}. Once fixed, run"
+            f" `switchboard remote enable {self.name}` on this machine"
+        )
 
     def _env(self) -> dict[str, str]:
         """A clean env (§0): no harness variables, no agent socket, nothing but these. The
         ssh child gets exactly ``PATH`` and the passwd ``HOME`` (§27.4.1)."""
         if self.entry.transport == "ssh":
             return {"PATH": "/usr/bin:/bin", "HOME": passwd_home()}
-        env = {"PATH": "/usr/bin:/bin", "HOME": os.environ.get("HOME", "/"), "LANG": os.environ.get("LANG", "C.UTF-8")}
+        env = {
+            "PATH": "/usr/bin:/bin",
+            "HOME": os.environ.get("HOME", "/"),
+            "LANG": os.environ.get("LANG", "C.UTF-8"),
+        }
         if self.st.test_mode:
             for k, v in os.environ.items():
-                if k == "SWITCHBOARD_TEST" or k.startswith("SWITCHBOARD_TEST_") or k in (
-                        "TMPDIR", "COVERAGE_PROCESS_CONFIG"):
+                if (
+                    k == "SWITCHBOARD_TEST"
+                    or k.startswith("SWITCHBOARD_TEST_")
+                    or k in ("TMPDIR", "COVERAGE_PROCESS_CONFIG")
+                ):
                     env[k] = v
         return env
 
@@ -587,8 +674,15 @@ class RemoteLink:
             # env, stdin and stdout one end of a socketpair (a pipe could be reopened through
             # /proc/<pid>/fd, a socket can't), stderr kept for the reason (§27.4.1)
             a.proc = await asyncio.create_subprocess_exec(
-                *argv, stdin=theirs.fileno(), stdout=theirs.fileno(), stderr=asyncio.subprocess.PIPE,
-                env=self._env(), cwd="/", start_new_session=True, close_fds=True)
+                *argv,
+                stdin=theirs.fileno(),
+                stdout=theirs.fileno(),
+                stderr=asyncio.subprocess.PIPE,
+                env=self._env(),
+                cwd="/",
+                start_new_session=True,
+                close_fds=True,
+            )
         except OSError:
             mine.close()
             raise LinkClosed("down", "spawn_failed") from None
@@ -671,13 +765,19 @@ class RemoteLink:
         try:
             h = proto.validate(first, "s2b")
         except proto.FrameError as e:
-            raise LinkClosed("down", "malformed", f"{self.name}: a malformed hello from the satellite ({e.code})")
+            raise LinkClosed(
+                "down", "malformed", f"{self.name}: a malformed hello from the satellite ({e.code})"
+            )
         if h["proto"] != proto.LINK_PROTO:
             self.send_frame(a, proto.refuse("proto", f"link protocol {h['proto']} is not {proto.LINK_PROTO}"))
-            raise LinkClosed("blocked", "proto", f"{self.name}: link blocked (proto): the satellite"
-                             f" {h.get('version', '?')} speaks link protocol {h['proto']}, this broker"
-                             f" {__version__} speaks {proto.LINK_PROTO}: install the same switchboard version"
-                             f" on both machines, then run `switchboard remote enable {self.name}`")
+            raise LinkClosed(
+                "blocked",
+                "proto",
+                f"{self.name}: link blocked (proto): the satellite"
+                f" {h.get('version', '?')} speaks link protocol {h['proto']}, this broker"
+                f" {__version__} speaks {proto.LINK_PROTO}: install the same switchboard version"
+                f" on both machines, then run `switchboard remote enable {self.name}`",
+            )
         if h["name"] != self.name:
             self.send_frame(a, proto.refuse("name", "not the remote this link dials"))
             raise LinkClosed("blocked", "name")
@@ -687,11 +787,21 @@ class RemoteLink:
         self.sat_version, self.sat_proto = h["version"], h["proto"]
         self.sat_test_mode, self.harden, self.hooks = h["test_mode"], h["harden"], one_line(h["hook_state"])
         self.skew_s = round(h["now"] - recv, 2)
-        self.send_frame(a, proto.welcome(
-            version=__version__, link=a.link_id, rooms=self._welcome_rooms(),
-            harnesses=list(self.entry.harnesses),
-            limits={"max_conns": MAX_CONNS, "max_members": self.entry.max_members, "frame_rate": FRAME_RATE,
-                    "queue_lines": QUEUE_LINES}))
+        self.send_frame(
+            a,
+            proto.welcome(
+                version=__version__,
+                link=a.link_id,
+                rooms=self._welcome_rooms(),
+                harnesses=list(self.entry.harnesses),
+                limits={
+                    "max_conns": MAX_CONNS,
+                    "max_members": self.entry.max_members,
+                    "frame_rate": FRAME_RATE,
+                    "queue_lines": QUEUE_LINES,
+                },
+            ),
+        )
         a.up_at = self.now()
         self._down_noted = None
         self.view.link_up()
@@ -712,19 +822,26 @@ class RemoteLink:
         there can read and forge its link frames, §27.4.8, §27.12)."""
         if self.sat_version != __version__ and self._version_noted != self.sat_version:
             self._version_noted = self.sat_version
-            self.notice(f"{self.name}: satellite {self.sat_version}, this broker {__version__}: the link works;"
-                        " install the same version on both machines when you can")
+            self.notice(
+                f"{self.name}: satellite {self.sat_version}, this broker {__version__}: the link works;"
+                " install the same version on both machines when you can"
+            )
         skewed = self.skew_s is not None and abs(self.skew_s) > SKEW_NOTICE_S
         if skewed and not self._skew_noted:
             ahead = "ahead" if (self.skew_s or 0.0) > 0 else "behind"
-            self.notice(f"{self.name}'s clock is {abs(self.skew_s or 0.0):.0f} s {ahead}; delivery is unaffected,"
-                        " check NTP")
+            self.notice(
+                f"{self.name}'s clock is {abs(self.skew_s or 0.0):.0f} s {ahead}; delivery is unaffected,"
+                " check NTP"
+            )
         self._skew_noted = skewed
         failed = self.harden == "failed"
         if failed and not self._harden_noted:
-            self.notice(f"{self.name}: the satellite could not make itself non-dumpable (prctl failed): other"
-                        " processes of that user there can read and forge its link frames; check `switchboard"
-                        " remote status`", "warn")
+            self.notice(
+                f"{self.name}: the satellite could not make itself non-dumpable (prctl failed): other"
+                " processes of that user there can read and forge its link frames; check `switchboard"
+                " remote status`",
+                "warn",
+            )
         self._harden_noted = failed
 
     async def _announce(self, a: Attempt) -> None:
@@ -735,10 +852,16 @@ class RemoteLink:
             return
         row = self.row()
         via = (row.enabled_via if row is not None else None) or "?"
-        when = time.strftime("%Y-%m-%d", time.localtime(row.enabled_at)) if row is not None and row.enabled_at else "?"
+        when = (
+            time.strftime("%Y-%m-%d", time.localtime(row.enabled_at))
+            if row is not None and row.enabled_at
+            else "?"
+        )
         rtt = f"{fmt_ms(self.rtt_ms)} ms" if self.rtt_ms is not None else "?"
-        self.notice(f"{self.name}: link up (enabled via {via} by {self.st.cfg.human_name} on {when};"
-                    f" satellite {self.sat_version}, rtt {rtt})")
+        self.notice(
+            f"{self.name}: link up (enabled via {via} by {self.st.cfg.human_name} on {when};"
+            f" satellite {self.sat_version}, rtt {rtt})"
+        )
         self.mgr.changed(self)  # the chip's first RTT
         self._wake_waiters()
 
@@ -766,8 +889,12 @@ class RemoteLink:
             try:
                 line = await reader.readline()
             except (ValueError, asyncio.LimitOverrunError):
-                raise LinkClosed("down", "malformed", f"{self.name}: link closed: a frame over"
-                                 f" {proto.MAX_FRAME} bytes from the satellite; reconnecting") from None
+                raise LinkClosed(
+                    "down",
+                    "malformed",
+                    f"{self.name}: link closed: a frame over"
+                    f" {proto.MAX_FRAME} bytes from the satellite; reconnecting",
+                ) from None
             except (ConnectionError, OSError):
                 line = b""
             if a.abort is not None:
@@ -781,12 +908,20 @@ class RemoteLink:
             try:
                 f = proto.decode(line, "s2b")
             except proto.FrameError as e:
-                raise LinkClosed("down", "malformed", f"{self.name}: link closed: a malformed frame from the"
-                                 f" satellite ({e.code}); its members are offline, reconnecting") from None
+                raise LinkClosed(
+                    "down",
+                    "malformed",
+                    f"{self.name}: link closed: a malformed frame from the"
+                    f" satellite ({e.code}); its members are offline, reconnecting",
+                ) from None
             if f["t"] == "req" and len(line) > proto.MAX_REQ_FRAME:
                 # a remote request is no larger than a local one (rpc.MAX_LINE, plus the envelope)
-                raise LinkClosed("down", "malformed", f"{self.name}: link closed: a request over"
-                                 f" {proto.MAX_LINE} bytes from the satellite; reconnecting")
+                raise LinkClosed(
+                    "down",
+                    "malformed",
+                    f"{self.name}: link closed: a request over"
+                    f" {proto.MAX_LINE} bytes from the satellite; reconnecting",
+                )
             await self._on_frame(a, f)
 
     def _count(self, a: Attempt, size: int) -> None:
@@ -801,12 +936,20 @@ class RemoteLink:
         while a.sizes and now - a.sizes[0][0] > FRAME_WINDOW_S:
             a.window_bytes -= a.sizes.popleft()[1]
         if len(a.frames) > FRAME_RATE * FRAME_WINDOW_S:
-            raise LinkClosed("down", "flood", f"{self.name}: link closed: more than {FRAME_RATE} frames a"
-                             " second from the satellite; its members are offline, reconnecting")
+            raise LinkClosed(
+                "down",
+                "flood",
+                f"{self.name}: link closed: more than {FRAME_RATE} frames a"
+                " second from the satellite; its members are offline, reconnecting",
+            )
         if a.window_bytes > FRAME_BYTES_RATE * FRAME_WINDOW_S:
-            raise LinkClosed("down", "flood", f"{self.name}: link closed: more than"
-                             f" {FRAME_BYTES_RATE // (1024 * 1024)} MiB a second from the satellite;"
-                             " its members are offline, reconnecting")
+            raise LinkClosed(
+                "down",
+                "flood",
+                f"{self.name}: link closed: more than"
+                f" {FRAME_BYTES_RATE // (1024 * 1024)} MiB a second from the satellite;"
+                " its members are offline, reconnecting",
+            )
 
     async def _on_frame(self, a: Attempt, f: dict[str, Any]) -> None:
         """One validated frame of attempt ``a``. A frame of any other attempt (an
@@ -822,13 +965,18 @@ class RemoteLink:
         elif t == "open":
             c = f["c"]
             if c in a.conns:
-                raise LinkClosed("down", "malformed", f"{self.name}: link closed: connection {c} opened twice")
+                raise LinkClosed(
+                    "down", "malformed", f"{self.name}: link closed: connection {c} opened twice"
+                )
             if len(a.conns) >= MAX_CONNS:
                 self.send_frame(a, proto.close(c))
                 if not a.conn_warned:
                     a.conn_warned = True
-                    self.notice(f"{self.name}: more than {MAX_CONNS} connections at once from that machine;"
-                                " refusing new ones", "warn")
+                    self.notice(
+                        f"{self.name}: more than {MAX_CONNS} connections at once from that machine;"
+                        " refusing new ones",
+                        "warn",
+                    )
                 return
             a.conns[c] = RemoteConn(self, a, c)
         elif t == "close":
@@ -859,7 +1007,9 @@ class RemoteLink:
                 raise LinkClosed("blocked", why)
             raise LinkClosed("down", why)
         else:  # a second hello
-            raise LinkClosed("down", "malformed", f"{self.name}: link closed: a second hello from the satellite")
+            raise LinkClosed(
+                "down", "malformed", f"{self.name}: link closed: a second hello from the satellite"
+            )
 
     def _check_liveness(self) -> None:
         with contextlib.suppress(Exception):
@@ -944,8 +1094,16 @@ class RemoteLink:
         except proto.FrameError:
             log.warning("remote %s: a frame over the limit was not sent (%s)", self.name, frame.get("t"))
             if frame.get("t") == "out":
-                self.send_frame(a, proto.out(frame["c"], {"id": frame["line"].get("id"), "error": {
-                    "code": "internal", "message": "reply too large for the link"}}))
+                self.send_frame(
+                    a,
+                    proto.out(
+                        frame["c"],
+                        {
+                            "id": frame["line"].get("id"),
+                            "error": {"code": "internal", "message": "reply too large for the link"},
+                        },
+                    ),
+                )
             return
         tr = a.writer.transport
         if tr.is_closing():
@@ -1046,8 +1204,10 @@ class RemoteLink:
         if self.state == "blocked":
             return str(BLOCK_HINTS.get(self.reason, self.reason)).replace("<name>", self.name)
         if self.state == "disabled" and self.reason == "config_changed":
-            return ("its remotes.toml entry or key files changed since you enabled it: check the destination"
-                    " and host key, then enable it again")
+            return (
+                "its remotes.toml entry or key files changed since you enabled it: check the destination"
+                " and host key, then enable it again"
+            )
         if self.state == "disabled" and self.reason == "not_enabled":
             return "never enabled: check the destination and host key, then enable it"
         if self.state == "disabled" and self.reason == "disabled":
@@ -1164,8 +1324,11 @@ class RemoteManager:
                 await link.stop()
                 link.entry, link.hash = entry, h
                 if was_up:
-                    link.notice(f"{name}: remotes.toml changed (its entry or key files); the link needs a new"
-                                f" enable (`switchboard remote enable {name}`); its members are offline", "warn")
+                    link.notice(
+                        f"{name}: remotes.toml changed (its entry or key files); the link needs a new"
+                        f" enable (`switchboard remote enable {name}`); its members are offline",
+                        "warn",
+                    )
                 if self.running:
                     link.start()
             self.enforce(entry)
@@ -1266,13 +1429,29 @@ class RemoteManager:
                 st.agents.run(st.engine.on_membership_ended(m.id, "not_allowed"))
                 if room is None:
                     continue
-                why = (f"{room.name} is no longer allowed for {entry.name}" if harness_ok
-                       else f"{p.harness} is no longer allowed on {entry.name}")
-                st.store.add_event("leave", room_id=room.id, membership_id=m.id, participant_id=p.id,
-                                   data={"why": "not_allowed"})
-                st.service._post(room, sender_name=m.screen_name, sender_kind="agent", sender_harness=p.harness,
-                                 sender_membership_id=m.id, via="system", kind="leave", text=f"left ({why})",
-                                 sender_host=entry.name)
+                why = (
+                    f"{room.name} is no longer allowed for {entry.name}"
+                    if harness_ok
+                    else f"{p.harness} is no longer allowed on {entry.name}"
+                )
+                st.store.add_event(
+                    "leave",
+                    room_id=room.id,
+                    membership_id=m.id,
+                    participant_id=p.id,
+                    data={"why": "not_allowed"},
+                )
+                st.service._post(
+                    room,
+                    sender_name=m.screen_name,
+                    sender_kind="agent",
+                    sender_harness=p.harness,
+                    sender_membership_id=m.id,
+                    via="system",
+                    kind="leave",
+                    text=f"left ({why})",
+                    sender_host=entry.name,
+                )
         if n:
             log.info("remote %s: %d membership(s) no longer allowed, ended", entry.name, n)
             st.agents.refresh_index()
@@ -1291,9 +1470,17 @@ class RemoteManager:
                 st.agents.run(st.engine.on_membership_ended(m.id, why))
                 room = st.store.room_by_id(m.room_id)
                 if room is not None:
-                    st.service._post(room, sender_name=m.screen_name, sender_kind="agent", sender_harness=p.harness,
-                                     sender_membership_id=m.id, via="system", kind="leave",
-                                     text=f"left ({host} {why})", sender_host=host)
+                    st.service._post(
+                        room,
+                        sender_name=m.screen_name,
+                        sender_kind="agent",
+                        sender_harness=p.harness,
+                        sender_membership_id=m.id,
+                        via="system",
+                        kind="leave",
+                        text=f"left ({host} {why})",
+                        sender_host=host,
+                    )
         if n:
             log.info("remote %s: %d member(s) ended (%s)", host, n, why)
             st.agents.refresh_index()
@@ -1320,7 +1507,9 @@ class RemoteManager:
             raise ServiceError("not_found", f"no remote named {name[:40]} in remotes.toml")
         return link
 
-    async def enable(self, name: str, *, via: str, actor: str = "", expect_hash: str | None = None) -> dict[str, Any]:
+    async def enable(
+        self, name: str, *, via: str, actor: str = "", expect_hash: str | None = None
+    ) -> dict[str, Any]:
         """The owner's consent for this remote's current config; dial now and wait (up
         to 15 s) for the link to come up, block or fail (§27.5.8). Two enables at once,
         or an enable beside a reload, share one attempt: none ends the other's. With
@@ -1331,8 +1520,11 @@ class RemoteManager:
             link = await self._link(name)
             if expect_hash is not None and expect_hash != link.hash:
                 self.changed(link)  # the page gets the config as it is now
-                raise ServiceError("conflict", f"{name}: remotes.toml or its key files changed since the page showed"
-                                               " them; check the remote's destination and host key, then enable again")
+                raise ServiceError(
+                    "conflict",
+                    f"{name}: remotes.toml or its key files changed since the page showed"
+                    " them; check the remote's destination and host key, then enable again",
+                )
             self.state.store.set_remote_enabled(name, link.hash, via)
             self.state.store.add_event("remote", data={"what": "enable", "name": name, "via": via})
             log.warning("remote %s enabled via %s (%s)", name, via, actor or "?")
@@ -1353,8 +1545,10 @@ class RemoteManager:
             skew = info.get("skew_s") or 0.0
             rtt = f"{fmt_ms(info['rtt_ms'])} ms" if info.get("rtt_ms") is not None else "rtt ?"
             hooks = info.get("hooks") or "?"
-            info["text"] = (f"link ok: satellite {info['version']} (proto {info['proto']}), rtt {rtt},"
-                            f" clock {skew:+.2f} s, remote hooks {hooks}")
+            info["text"] = (
+                f"link ok: satellite {info['version']} (proto {info['proto']}), rtt {rtt},"
+                f" clock {skew:+.2f} s, remote hooks {hooks}"
+            )
         else:
             info["text"] = describe(info)
         return info
@@ -1368,8 +1562,11 @@ class RemoteManager:
             await link.stop("disabled", "disabled")
             link.start()
             if was in ("up", "connecting"):
-                link.notice(f"{name}: link disabled by {self.state.cfg.human_name} (via {via});"
-                            " its members are offline", "warn")
+                link.notice(
+                    f"{name}: link disabled by {self.state.cfg.human_name} (via {via});"
+                    " its members are offline",
+                    "warn",
+                )
             return self._result(link)
 
     async def remove(self, name: str, *, via: str) -> dict[str, Any]:
@@ -1398,8 +1595,11 @@ class RemoteManager:
                     if room is not None:
                         with contextlib.suppress(Exception):
                             self.state.service.post_notice(
-                                room, f"{name}: remote removed by {self.state.cfg.human_name} (via {via});"
-                                      " its link is closed and its members were ended", level="warn")
+                                room,
+                                f"{name}: remote removed by {self.state.cfg.human_name} (via {via});"
+                                " its link is closed and its members were ended",
+                                level="warn",
+                            )
         return {"name": name, "ended": ended, "had_row": had_row, "configured": old is not None}
 
     async def status(self, name: str | None = None) -> dict[str, Any]:

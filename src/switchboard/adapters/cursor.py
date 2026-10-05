@@ -59,8 +59,10 @@ FOLLOWUP_CONFIRM_S = 180.0
 # follow-up turn in between) counts as a follow-up Cursor never ran; sooner is a race
 FOLLOWUP_RACE_S = 10.0
 
-UNBOUND_WHY = ("not bound to a Cursor conversation yet (no switchboard postToolUse hook for join():"
-               " run `switchboard install cursor`, then start a new agent session)")
+UNBOUND_WHY = (
+    "not bound to a Cursor conversation yet (no switchboard postToolUse hook for join():"
+    " run `switchboard install cursor`, then start a new agent session)"
+)
 
 
 def bound(p: Participant) -> bool:
@@ -68,8 +70,12 @@ def bound(p: Participant) -> bool:
     ``cursor@<host>:<conversation>`` on a remote host (DESIGN.md §27.5.4), and no
     longer the pending ``…:agent:<pid>@<start>``."""
     parts = split_session_key(p.session_key)
-    return p.bind_state == "bound" and parts is not None and parts[0] == "cursor" \
+    return (
+        p.bind_state == "bound"
+        and parts is not None
+        and parts[0] == "cursor"
         and not parts[2].startswith(PENDING_REST)
+    )
 
 
 class CursorAdapter(Adapter):
@@ -104,8 +110,10 @@ class CursorAdapter(Adapter):
         if rel.kind == "priority":
             return Route("pull", reason="next tool call")
         if self.degraded(p):
-            return Route("none", reason="stop follow-ups were not confirmed (degraded) until your next"
-                                        " prompt in that session")
+            return Route(
+                "none",
+                reason="stop follow-ups were not confirmed (degraded) until your next prompt in that session",
+            )
         return Route("none", reason="stopped and not parked (no stop hook waiting)")
 
     # --------------------------------------------------------------- hooks
@@ -123,8 +131,9 @@ class CursorAdapter(Adapter):
         # Ctrl+C gives stop 'aborted' then 'error': an abort is not "the turn ended unanswered"
         return ev.status == "completed"
 
-    def continue_verdict(self, p: Participant, loop_count: int | None, acked: bool,
-                         ev: HookEvent) -> str | None:
+    def continue_verdict(
+        self, p: Participant, loop_count: int | None, acked: bool, ev: HookEvent
+    ) -> str | None:
         """What this hook says about an unconfirmed follow-up sent at a stop
         whose ``loop_count`` was ``loop_count``: 'confirm', an expiry reason, or None."""
         E = ev.ev

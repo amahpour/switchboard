@@ -48,8 +48,15 @@ def _b64(b: bytes) -> str:
 
 def hash_password(password: str) -> str:
     salt = secrets.token_bytes(16)
-    dk = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P,
-                        maxmem=SCRYPT_MAXMEM, dklen=32)
+    dk = hashlib.scrypt(
+        password.encode("utf-8"),
+        salt=salt,
+        n=SCRYPT_N,
+        r=SCRYPT_R,
+        p=SCRYPT_P,
+        maxmem=SCRYPT_MAXMEM,
+        dklen=32,
+    )
     return f"scrypt${SCRYPT_N}${SCRYPT_R}${SCRYPT_P}${_b64(salt)}${_b64(dk)}"
 
 
@@ -65,7 +72,9 @@ def verify_password(password: Any, stored: str | None) -> bool:
         salt, want = base64.b64decode(parts[4], validate=True), base64.b64decode(parts[5], validate=True)
         if (n, r, p) != (SCRYPT_N, SCRYPT_R, SCRYPT_P) or len(salt) != 16 or len(want) != 32:
             return False
-        got = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=n, r=r, p=p, maxmem=SCRYPT_MAXMEM, dklen=32)
+        got = hashlib.scrypt(
+            password.encode("utf-8"), salt=salt, n=n, r=r, p=p, maxmem=SCRYPT_MAXMEM, dklen=32
+        )
     except (ValueError, TypeError):
         return False
     return hmac.compare_digest(got, want)
@@ -73,7 +82,7 @@ def verify_password(password: Any, stored: str | None) -> bool:
 
 def one_time_password() -> str:
     raw = "".join(secrets.choice(CROCKFORD) for _ in range(ONE_TIME_CHARS))
-    return "-".join(raw[i:i + 4] for i in range(0, ONE_TIME_CHARS, 4))
+    return "-".join(raw[i : i + 4] for i in range(0, ONE_TIME_CHARS, 4))
 
 
 def normalize_one_time(text: Any) -> str | None:
@@ -129,7 +138,7 @@ class SignInLimiter:
         while fails and fails[0] <= now - WINDOW_S:
             fails.popleft()
         if len(fails) >= FREE_FAILURES:
-            until = now + min(FIRST_WAIT_S * 2 ** locks, MAX_WAIT_S)
+            until = now + min(FIRST_WAIT_S * 2**locks, MAX_WAIT_S)
             locks += 1
         self._names[key] = (fails, until, locks)
         self._all.append(now)
@@ -144,7 +153,9 @@ class SignInLimiter:
         self._names.pop(name.lower()[:64], None)
 
     def _prune(self, now: float) -> None:
-        for k in [k for k, (f, u, _l) in self._names.items() if u <= now and (not f or f[-1] <= now - WINDOW_S)]:
+        for k in [
+            k for k, (f, u, _l) in self._names.items() if u <= now and (not f or f[-1] <= now - WINDOW_S)
+        ]:
             del self._names[k]
         while len(self._names) > MAX_TRACKED:  # still full: forget the oldest
             del self._names[next(iter(self._names))]

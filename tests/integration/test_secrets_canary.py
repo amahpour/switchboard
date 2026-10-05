@@ -18,15 +18,36 @@ def test_install_output_and_backups_never_show_secrets(tmp_path: Path, tmp_home:
     uh = tmp_path / "uh"
     (uh / ".claude").mkdir(parents=True)
     target = uh / ".claude" / "settings.json"
-    target.write_text(json.dumps({
-        "env": {"API_TOKEN": CANARY, "DATABASE_URL": f"postgres://u:{CANARY2}@db/x"},
-        "mcpServers": {"other": {"command": "x", "env": {"SECRET": CANARY2}}},
-        "hooks": {"Stop": [{"matcher": "", "hooks": [{"type": "command", "command": f"notify {CANARY}"}]}]},
-    }))
+    target.write_text(
+        json.dumps(
+            {
+                "env": {"API_TOKEN": CANARY, "DATABASE_URL": f"postgres://u:{CANARY2}@db/x"},
+                "mcpServers": {"other": {"command": "x", "env": {"SECRET": CANARY2}}},
+                "hooks": {
+                    "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": f"notify {CANARY}"}]}]
+                },
+            }
+        )
+    )
     target.chmod(0o644)
-    base = [sys.executable, "-m", "switchboard", "--home", str(tmp_home), "install", "claude", "--user-home", str(uh)]
+    base = [
+        sys.executable,
+        "-m",
+        "switchboard",
+        "--home",
+        str(tmp_home),
+        "install",
+        "claude",
+        "--user-home",
+        str(uh),
+    ]
     outs = []
-    for extra in (["--dry-run"], ["--yes", "--allow-editable"], ["--yes", "--allow-editable"], ["--print-args"]):
+    for extra in (
+        ["--dry-run"],
+        ["--yes", "--allow-editable"],
+        ["--yes", "--allow-editable"],
+        ["--print-args"],
+    ):
         r = subprocess.run(base + extra, capture_output=True, text=True, env=child_env(), timeout=60)
         assert r.returncode == 0, r.stderr
         outs.append(r.stdout + r.stderr)
@@ -53,12 +74,23 @@ def test_canary_never_on_link_or_satellite_log(tmp_path: Path) -> None:
     fc = None
     try:
         link.start()
-        fc = FakeClaude(None, home=link.pi, sessions_dir=link.pi_sessions,
-                        env={"API_TOKEN": CANARY, "DATABASE_URL": f"postgres://u:{CANARY2}@db/x"})
+        fc = FakeClaude(
+            None,
+            home=link.pi,
+            sessions_dir=link.pi_sessions,
+            env={"API_TOKEN": CANARY, "DATABASE_URL": f"postgres://u:{CANARY2}@db/x"},
+        )
         assert fc.tool("join", room="#fpga", screen_name="bench")["ok"]
-        fc.hook(claude_fixture("UserPromptSubmit", prompt=f"deploy with {CANARY} please", cwd=f"/w/{CANARY2}"))
-        fc.hook(claude_fixture("PostToolUse_bash", tool_input={"command": f"echo {CANARY}"},
-                               tool_response={"stdout": CANARY2, "stderr": ""}))
+        fc.hook(
+            claude_fixture("UserPromptSubmit", prompt=f"deploy with {CANARY} please", cwd=f"/w/{CANARY2}")
+        )
+        fc.hook(
+            claude_fixture(
+                "PostToolUse_bash",
+                tool_input={"command": f"echo {CANARY}"},
+                tool_response={"stdout": CANARY2, "stderr": ""},
+            )
+        )
         fc.hook(claude_fixture("Stop", transcript_path=f"/t/{CANARY}.jsonl"))
         assert fc.tool("say", room="#fpga", text="done, nothing secret here")["ok"]
         fc.close()

@@ -6,9 +6,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from conftest import FakeClock
 from test_store import add_agent
+
 from switchboard import db
 from switchboard.models import InvalidName, Room, closed_room_name
 from switchboard.store import Ambiguous, Conflict, NotFound, Store
@@ -38,9 +38,18 @@ def close(store: Store, r: Room) -> Room:
         ids = [m.membership_id for m in store.members(r.id)]
         for mid in ids:
             store.end_membership(mid, "closed", keep_cred=True)
-        store.add_event("room_close", room_id=r.id,
-                        data={"name": r.name, "closed_name": closed_room_name(r.name, r.id), "by": "alice",
-                              "via": "web", "chain": None, "members": ids})
+        store.add_event(
+            "room_close",
+            room_id=r.id,
+            data={
+                "name": r.name,
+                "closed_name": closed_room_name(r.name, r.id),
+                "by": "alice",
+                "via": "web",
+                "chain": None,
+                "members": ids,
+            },
+        )
         return store.rename_room(r.id, closed_room_name(r.name, r.id), expect=r.name)
 
 

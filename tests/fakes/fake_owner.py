@@ -19,8 +19,12 @@ from fakes.fake_authenticator import SoftAuthenticator
 
 class Browser:
     def __init__(self, b: Any, host: str, origin: str):
-        self.c = httpx.Client(base_url=f"http://127.0.0.1:{b.port}", timeout=10.0, follow_redirects=False,
-                              limits=httpx.Limits(keepalive_expiry=1.0))
+        self.c = httpx.Client(
+            base_url=f"http://127.0.0.1:{b.port}",
+            timeout=10.0,
+            follow_redirects=False,
+            limits=httpx.Limits(keepalive_expiry=1.0),
+        )
         self.host, self.origin = host, origin
         self.cookies: dict[str, str] = {}
         self.set_cookies: list[str] = []  # every Set-Cookie seen, raw
@@ -73,7 +77,9 @@ def claim_link(b: Any) -> str:
     return b.paths.test_claim_link.read_text().strip()
 
 
-def claim(b: Any, br: Browser, auth: SoftAuthenticator, token: str, name: str = "MacBook Pro") -> dict[str, Any]:
+def claim(
+    b: Any, br: Browser, auth: SoftAuthenticator, token: str, name: str = "MacBook Pro"
+) -> dict[str, Any]:
     """The whole claim, as the page does it: begin with the link's token, create, finish."""
     r = br.post("/api/setup/begin", {"token": token})
     assert r.status_code == 200, r.text

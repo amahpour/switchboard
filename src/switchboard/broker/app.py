@@ -25,7 +25,6 @@ from switchboard.broker.agents import AgentService
 from switchboard.broker.auth import HostOriginGuard, LoginTokens, SecurityHeaders, Sessions, WebOrigin
 from switchboard.broker.hosts import HostViews
 from switchboard.broker.hub import Hub, WsSubscriber
-from switchboard.broker.passwords import SignInLimiter
 from switchboard.broker.passkeys import (
     CLAIM_TTL_S,
     FRESH_CHECK_S,
@@ -35,6 +34,7 @@ from switchboard.broker.passkeys import (
     WebAuthn,
     passkeys_unavailable,
 )
+from switchboard.broker.passwords import SignInLimiter
 from switchboard.broker.peer import AllowAllHumans, PeerPolicy, ProcessPeerPolicy
 from switchboard.broker.remote import RemoteManager
 from switchboard.broker.rpc import RpcServer
@@ -110,8 +110,10 @@ class BrokerState:
         the claim's own session within its grace: what adding a passkey or pairing or approving
         a machine needs (§31.6), so a stolen session can't make itself permanent."""
         now = self.clock.now()
-        return (now - self.passkey_checks.get(sid_hash, float("-inf")) <= FRESH_CHECK_S
-                or self.claim_grace.get(sid_hash, 0.0) > now)
+        return (
+            now - self.passkey_checks.get(sid_hash, float("-inf")) <= FRESH_CHECK_S
+            or self.claim_grace.get(sid_hash, 0.0) > now
+        )
 
     def claimed(self) -> None:
         """The claim succeeded: no claim link from now on."""
@@ -170,8 +172,13 @@ def create_app(
         peer_policy=peer_policy or default_peer_policy(cfg),
         test_mode=test_mode,
         clock=clock,
-        info=BrokerInfo(port=port, test_mode=test_mode, home=str(paths.home), started_at=clock.now(),
-                        url=web_origin.origin + "/"),
+        info=BrokerInfo(
+            port=port,
+            test_mode=test_mode,
+            home=str(paths.home),
+            started_at=clock.now(),
+            url=web_origin.origin + "/",
+        ),
         login_tokens=LoginTokens(clock),
         web_origin=web_origin,
         hosts=HostViews(cfg.claude.sessions_dir, clock),
@@ -189,8 +196,10 @@ def create_app(
         proc.pin_home_btime(paths)  # recovery compares old process starts before ending any session
         if cfg.review.agentsview:
             # a 0.2.0 key: /catchup never looks for agentsview (DESIGN.md §26); once per start
-            log.warning("config.toml: [review] agentsview is ignored since /catchup replaced /review;"
-                        " you can remove it")
+            log.warning(
+                "config.toml: [review] agentsview is ignored since /catchup replaced /review;"
+                " you can remove it"
+            )
         con = db.open_db(paths.db)  # a version-1 database is migrated here, after a backup (§27.6)
         state.store = Store(con, clock)
         # local rows only: a remote row's pids are pids on its own host (§27.5.6)
@@ -203,8 +212,9 @@ def create_app(
         _owner_start(state, reset_owner)
         state.hub = Hub()
         state.service = RoomService(state.store, state.hub, cfg, state.info, clock)
-        state.engine = Engine(state.store, clock, cfg, build_adapters(cfg), SinkRegistry(),
-                              test_mode=test_mode)
+        state.engine = Engine(
+            state.store, clock, cfg, build_adapters(cfg), SinkRegistry(), test_mode=test_mode
+        )
         state.runner = Runner(state)
         state.agents = AgentService(state)
         state.service.delivery = state.agents
@@ -301,16 +311,23 @@ def _owner_start(state: BrokerState, reset_owner: str | None) -> None:
     if origin.public:
         why = passkeys_unavailable(origin)
         if why:
-            log.warning("passkeys are off: %s. Sign in with `switchboard login` in the container's shell", why)
+            log.warning(
+                "passkeys are off: %s. Sign in with `switchboard login` in the container's shell", why
+            )
         else:
             state.webauthn = WebAuthn(origin)
     if reset_owner:
         applied = hashlib.sha256(reset_owner.encode("utf-8")).hexdigest()
         if state.store.reset_owner_applied() != applied:
             got = state.store.reset_owner(applied)
-            log.warning("owner reset (%s): %d passkey(s) and %d web session(s) deleted, %d paired machine(s)"
-                        " back to pending; this can't be undone", RESET_OWNER_ENV, got["passkeys"], got["sessions"],
-                        got["machines_pending"])
+            log.warning(
+                "owner reset (%s): %d passkey(s) and %d web session(s) deleted, %d paired machine(s)"
+                " back to pending; this can't be undone",
+                RESET_OWNER_ENV,
+                got["passkeys"],
+                got["sessions"],
+                got["machines_pending"],
+            )
             state.store.add_event("login", data={"what": "owner_reset", **got})
     if origin.public and state.unclaimed():
         # passwords work wherever the broker is hosted; passkeys only where WebAuthn can (§32.4)
@@ -329,13 +346,18 @@ def _announce_claim(state: BrokerState) -> None:
     origin = state.web_origin.origin
     url = f"{origin}/setup#t={token}"
     minutes = int(claim.ttl_s // 60)
-    state.claim_out(f"switchboard isn't set up yet. Sign in at {origin} as admin with the one-time password {token}"
-                    f" (it works once, for {minutes} min), then choose your own password or passkey."
-                    f" Or open {url}")
+    state.claim_out(
+        f"switchboard isn't set up yet. Sign in at {origin} as admin with the one-time password {token}"
+        f" (it works once, for {minutes} min), then choose your own password or passkey."
+        f" Or open {url}"
+    )
     if state.test_mode:
         _write_test_file(state.paths.test_claim_link, url)
-    log.warning("no admin yet: a one-time password is on stdout (it works once, for %d min; a new one each time"
-                " it expires, until someone signs in with it)", minutes)
+    log.warning(
+        "no admin yet: a one-time password is on stdout (it works once, for %d min; a new one each time"
+        " it expires, until someone signs in with it)",
+        minutes,
+    )
 
 
 async def _claim_loop(state: BrokerState) -> None:
@@ -363,7 +385,9 @@ async def _maintenance(state: BrokerState) -> None:
             bad = state.info.hook_state.startswith("MISMATCH")
             if bad and not was_bad:
                 state.store.add_event("hook_hash", data={"state": "mismatch"})
-                state.hub.notice(None, "warn", "switchboard hook copy changed on disk: " + state.info.hook_state)
+                state.hub.notice(
+                    None, "warn", "switchboard hook copy changed on disk: " + state.info.hook_state
+                )
             was_bad = bad
             state.store.web_session_purge()
             state.login_tokens.purge()
@@ -374,7 +398,11 @@ async def _maintenance(state: BrokerState) -> None:
             for k in [k for k, t in state.claim_grace.items() if t <= now]:
                 del state.claim_grace[k]
             for sub in list(state.hub.subs):
-                if isinstance(sub, WsSubscriber) and sub.sid_hash and not state.store.web_session_valid(sub.sid_hash):
+                if (
+                    isinstance(sub, WsSubscriber)
+                    and sub.sid_hash
+                    and not state.store.web_session_valid(sub.sid_hash)
+                ):
                     state.hub.remove(sub)
         except Exception:
             log.exception("maintenance failed")

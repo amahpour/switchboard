@@ -11,8 +11,8 @@ import time
 from pathlib import Path
 
 import pytest
-
 from fakes.fake_claude_inbox import FakeInbox
+
 from switchboard.mcp import claude_inbox as ci
 
 
@@ -35,11 +35,17 @@ def target(ib: FakeInbox) -> ci.InboxTarget:
 
 
 def test_frame_is_auth_then_one_plain_string_user_frame_held_open(inbox: FakeInbox) -> None:
-    t0 = ci.post(target(inbox), "tok-x", "[switchboard] #build: hi", "switchboard:#build/alice", "yk-b7-00aa11bb", 0.3)
+    t0 = ci.post(
+        target(inbox), "tok-x", "[switchboard] #build: hi", "switchboard:#build/alice", "yk-b7-00aa11bb", 0.3
+    )
     [(conn, frame)] = inbox.wait_frames(1)
     assert conn.lines[0] == {"type": "auth", "token": "tok-x"}
-    assert frame == {"type": "user", "message": {"role": "user", "content": "[switchboard] #build: hi"},
-                     "from": "switchboard:#build/alice", "msg_id": "yk-b7-00aa11bb"}
+    assert frame == {
+        "type": "user",
+        "message": {"role": "user", "content": "[switchboard] #build: hi"},
+        "from": "switchboard:#build/alice",
+        "msg_id": "yk-b7-00aa11bb",
+    }
     assert isinstance(frame["message"]["content"], str)
     assert "priority" not in conn.raw.decode()  # never an urgency key
     for _ in range(100):

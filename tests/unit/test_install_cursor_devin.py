@@ -27,7 +27,10 @@ HOME = "/opt/yk/home"
 REGEN = os.environ.get("SWITCHBOARD_REGEN_GOLDEN") == "1"
 SEEDS = {
     "cursor": {".cursor/mcp.json": "mcp.seed.json", ".cursor/hooks.json": "hooks.seed.json"},
-    "devin": {".config/devin/mcp_config.json": "mcp_config.seed.json", ".config/devin/config.json": "config.seed.json"},
+    "devin": {
+        ".config/devin/mcp_config.json": "mcp_config.seed.json",
+        ".config/devin/config.json": "config.seed.json",
+    },
 }
 MODS = {"cursor": cursor, "devin": devin}
 
@@ -68,13 +71,23 @@ def test_cursor_hooks_shape_and_the_stop_park_settings(tmp_path: Path) -> None:
     uh = seeded(tmp_path, "cursor", True)
     plan = cursor.plan(uh, PY, HOME, hook_sha12())
     mcp = json.loads(plan.edits[0].after)
-    assert mcp["mcpServers"]["switchboard"] == {"command": PY, "args": ["-I", "-m", "switchboard", "mcp", "--home", HOME]}
+    assert mcp["mcpServers"]["switchboard"] == {
+        "command": PY,
+        "args": ["-I", "-m", "switchboard", "mcp", "--home", HOME],
+    }
     assert mcp["mcpServers"]["other-server"]["env"] == {"OTHER_API_TOKEN": "placeholder-not-a-secret"}
     data = json.loads(plan.edits[1].after)
     assert data["version"] == 1
     hooks = data["hooks"]
-    assert set(hooks) == {"sessionStart", "beforeSubmitPrompt", "postToolUse", "postToolUseFailure", "stop",
-                          "sessionEnd", "afterFileEdit"}
+    assert set(hooks) == {
+        "sessionStart",
+        "beforeSubmitPrompt",
+        "postToolUse",
+        "postToolUseFailure",
+        "stop",
+        "sessionEnd",
+        "afterFileEdit",
+    }
     assert hooks["afterFileEdit"] == [{"command": "echo user-hook"}]
     assert hooks["stop"][0] == {"command": "notify-user done", "timeout": 30}  # the user's own hook is kept
     ours = hooks["stop"][1]
@@ -91,9 +104,15 @@ def test_cursor_stop_timing_follows_the_homes_config(tmp_path: Path, tmp_home: P
     uh = seeded(tmp_path, "cursor", False)
     hooks = json.loads(cursor.plan(uh, PY, str(tmp_home), hook_sha12()).edits[1].after)["hooks"]
     assert hooks["stop"][0]["timeout"] == 180 and "--max-wait 150;" in hooks["stop"][0]["command"]
-    assert cursor.hook_entries(PY, HOME, hook_sha12(),
-                               dataclasses.replace(Config(), cursor=dataclasses.replace(
-                                   Config().cursor, stop_park_s=60)))["stop"]["timeout"] == 120
+    assert (
+        cursor.hook_entries(
+            PY,
+            HOME,
+            hook_sha12(),
+            dataclasses.replace(Config(), cursor=dataclasses.replace(Config().cursor, stop_park_s=60)),
+        )["stop"]["timeout"]
+        == 120
+    )
 
 
 def test_devin_hooks_and_exactly_the_eight_allow_names(tmp_path: Path) -> None:
@@ -105,11 +124,24 @@ def test_devin_hooks_and_exactly_the_eight_allow_names(tmp_path: Path) -> None:
     assert cfg["permissions"]["allow"] == ["read"] + [f"mcp__switchboard__{t}" for t in devin.TOOLS]
     assert len(devin.ALLOW) == 8 and not any("*" in a for a in devin.ALLOW)
     hooks = cfg["hooks"]
-    assert set(hooks) == {"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"}
+    assert set(hooks) == {
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop",
+        "SessionEnd",
+    }
     assert hooks["Stop"][0]["hooks"][0]["command"] == "notify-user done"
     timeouts = {e: hooks[e][-1]["hooks"][0]["timeout"] for e in hooks}
-    assert timeouts == {"SessionStart": 10, "UserPromptSubmit": 10, "PreToolUse": 10, "PostToolUse": 10,
-                        "Stop": 30, "SessionEnd": 10}
+    assert timeouts == {
+        "SessionStart": 10,
+        "UserPromptSubmit": 10,
+        "PreToolUse": 10,
+        "PostToolUse": 10,
+        "Stop": 30,
+        "SessionEnd": 10,
+    }
     assert all(hooks[e][-1]["matcher"] == "" for e in hooks)
     for key in ("read_config_from", "PermissionRequest", "trust", "bypass", "mcp__switchboard__*"):
         assert key not in plan.edits[1].after
@@ -163,28 +195,46 @@ def test_refuses_a_malformed_file(tmp_path: Path, harness: str) -> None:
 
 
 @pytest.mark.parametrize("harness", ["cursor", "devin"])
-def test_an_mcp_server_named_switchboard_that_isnt_ours_is_refused(tmp_path: Path, tmp_home: Path,
-                                                                   harness: str) -> None:
-    """"switchboard" is a common word: another tool's server of that name is never
+def test_an_mcp_server_named_switchboard_that_isnt_ours_is_refused(
+    tmp_path: Path, tmp_home: Path, harness: str
+) -> None:
+    """ "switchboard" is a common word: another tool's server of that name is never
     overwritten; install fails for that harness and leaves the file alone."""
     uh = seeded(tmp_path, harness, False)
     rel = list(SEEDS[harness])[0]
     where = {"cursor": "~/.cursor/mcp.json", "devin": "~/.config/devin/mcp_config.json"}[harness]
-    for foreign in ({"command": "npx", "args": ["-y", "switchboard-flags"]}, {"url": "https://example.test/mcp"},
-                    {"command": "/usr/bin/python3", "args": ["-m", "switchboard"]}, "switchboard"):
+    for foreign in (
+        {"command": "npx", "args": ["-y", "switchboard-flags"]},
+        {"url": "https://example.test/mcp"},
+        {"command": "/usr/bin/python3", "args": ["-m", "switchboard"]},
+        "switchboard",
+    ):
         (uh / rel).write_text(json.dumps({"mcpServers": {"other": {"command": "x"}, "switchboard": foreign}}))
         before = (uh / rel).read_bytes()
-        with pytest.raises(InstallError, match=f"{where} already has an MCP server named switchboard"
-                                               " that isn't switchboard's"):
+        with pytest.raises(
+            InstallError,
+            match=f"{where} already has an MCP server named switchboard that isn't switchboard's",
+        ):
             MODS[harness].plan(uh, PY, HOME, hook_sha12())
-        a = build_parser().parse_args(["install", harness, "--home", str(tmp_home), "--user-home", str(uh), "--yes",
-                                       "--allow-editable"])
+        a = build_parser().parse_args(
+            ["install", harness, "--home", str(tmp_home), "--user-home", str(uh), "--yes", "--allow-editable"]
+        )
         assert run_install(a, out=io.StringIO()) == 1
         assert (uh / rel).read_bytes() == before
         assert not list((uh / rel).parent.glob("*.bak-switchboard-*"))
     # switchboard's own entry, for another home or an older Python, is still replaced
-    (uh / rel).write_text(json.dumps({"mcpServers": {"switchboard": {
-        "command": "/old/python", "args": ["-I", "-m", "switchboard", "mcp", "--home", "/opt/other"]}}}))
+    (uh / rel).write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "switchboard": {
+                        "command": "/old/python",
+                        "args": ["-I", "-m", "switchboard", "mcp", "--home", "/opt/other"],
+                    }
+                }
+            }
+        )
+    )
     plan = MODS[harness].plan(uh, PY, HOME, hook_sha12())
     assert json.loads(plan.edits[0].after)["mcpServers"]["switchboard"]["args"][-1] == HOME
     assert plan.edits[0].display[0].startswith("  ~ mcpServers.switchboard: ")
@@ -194,8 +244,9 @@ def test_an_mcp_server_named_switchboard_that_isnt_ours_is_refused(tmp_path: Pat
 def test_print_args_writes_nothing(tmp_home: Path, harness: str) -> None:
     before = sorted(p.name for p in tmp_home.iterdir())
     out = io.StringIO()
-    rc = run_install(build_parser().parse_args(["install", harness, "--print-args", "--home", str(tmp_home)]),
-                     out=out)
+    rc = run_install(
+        build_parser().parse_args(["install", harness, "--print-args", "--home", str(tmp_home)]), out=out
+    )
     assert rc == 0
     data = json.loads(out.getvalue())
     assert set(data) == {"argv", "env", "files", "notes"} and data["argv"] == []
@@ -220,8 +271,9 @@ def test_apply_into_a_temp_user_home(tmp_path: Path, tmp_home: Path, harness: st
     uh = seeded(tmp_path, harness, True)
     for rel in SEEDS[harness]:
         (uh / rel).chmod(0o644)
-    a = build_parser().parse_args(["install", harness, "--home", str(tmp_home), "--user-home", str(uh), "--yes",
-                                   "--allow-editable"])
+    a = build_parser().parse_args(
+        ["install", harness, "--home", str(tmp_home), "--user-home", str(uh), "--yes", "--allow-editable"]
+    )
     assert run_install(a, out=io.StringIO()) == 0
     for rel in SEEDS[harness]:
         baks = sorted((uh / rel).parent.glob(f"{Path(rel).name}.bak-switchboard-*"))

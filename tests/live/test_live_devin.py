@@ -42,7 +42,6 @@ from typing import Any
 
 import httpx
 import pytest
-
 from harness import drift, preflight, profiles
 from harness.tmuxdrv import Tmux, clean_env
 
@@ -100,15 +99,32 @@ class Live:
         (self.ws / "README.md").write_text("scratch workspace for a switchboard live test\n")
         for n in ("one", "two", "three"):
             (self.ws / f"{n}.txt").write_text(f"this is file {n}\n")
-        ver = subprocess.run([self.devin_bin, "--version"], env=env, capture_output=True, text=True,
-                             timeout=30).stdout.strip()
+        ver = subprocess.run(
+            [self.devin_bin, "--version"], env=env, capture_output=True, text=True, timeout=30
+        ).stdout.strip()
         self.results["devin_version"] = ver
         (self.home / "config.toml").write_text('human_name = "alice"\n')  # a fixed name, not the login
         benv = {**env, "SWITCHBOARD_TEST": "1", "SWITCHBOARD_RECORD_PAYLOADS": str(self.params)}
         out = open(self.home / "broker.stdout", "ab")
         self.broker = subprocess.Popen(
-            [sys.executable, "-m", "switchboard", "start", "--foreground", "--test-mode", "--home", str(self.home),
-             "--port", "0"], env=benv, stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True)
+            [
+                sys.executable,
+                "-m",
+                "switchboard",
+                "start",
+                "--foreground",
+                "--test-mode",
+                "--home",
+                str(self.home),
+                "--port",
+                "0",
+            ],
+            env=benv,
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=out,
+            start_new_session=True,
+        )
         from switchboard.mcp.client import ping
         from switchboard.paths import Paths
 
@@ -128,9 +144,23 @@ class Live:
         self.hdr = {"Origin": base, "X-Switchboard": "1", "Content-Type": "application/json"}
         assert self.web.post("/api/rooms", json={"name": "#build"}, headers=self.hdr).status_code == 200
         self.command("/budget 30")
-        pa = subprocess.run([sys.executable, "-m", "switchboard", "install", "devin", "--print-args", "--home",
-                             str(self.home)], env={**env, "SWITCHBOARD_TEST": "1"}, capture_output=True, text=True,
-                            timeout=30, check=True)
+        pa = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "switchboard",
+                "install",
+                "devin",
+                "--print-args",
+                "--home",
+                str(self.home),
+            ],
+            env={**env, "SWITCHBOARD_TEST": "1"},
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
         print_args = json.loads(pa.stdout)
         d = self.ws / ".devin"
         d.mkdir()
@@ -138,7 +168,9 @@ class Live:
         (d / "mcp_config.json").write_text(print_args["files"][".devin/mcp_config.json"])
 
     def launch(self) -> None:
-        self.tmux.new_session(SESSION, str(self.ws), clean_env(REAL_PATH), profiles.devin_argv(self.devin_bin))
+        self.tmux.new_session(
+            SESSION, str(self.ws), clean_env(REAL_PATH), profiles.devin_argv(self.devin_bin)
+        )
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             s = self.tmux.capture(SESSION)
@@ -187,10 +219,12 @@ class Live:
         if self.web is not None:
             self.web.close()
         time.sleep(1)
-        left = subprocess.run(["/usr/bin/pgrep", "-f", str(self.home)], capture_output=True,
-                              text=True).stdout.split()
-        left += [str(p) for p, _pp, a in preflight.descendants(1)
-                 if str(self.ws) in a and re.search(r"devin", a)]
+        left = subprocess.run(
+            ["/usr/bin/pgrep", "-f", str(self.home)], capture_output=True, text=True
+        ).stdout.split()
+        left += [
+            str(p) for p, _pp, a in preflight.descendants(1) if str(self.ws) in a and re.search(r"devin", a)
+        ]
         for pid in left:
             try:
                 os.kill(int(pid), signal.SIGTERM)
@@ -224,13 +258,17 @@ class Live:
             con.close()
 
     def part(self) -> sqlite3.Row | None:
-        rows = self.q("SELECT * FROM participants WHERE harness='devin' AND ended_at IS NULL ORDER BY id DESC")
+        rows = self.q(
+            "SELECT * FROM participants WHERE harness='devin' AND ended_at IS NULL ORDER BY id DESC"
+        )
         return rows[0] if rows else None
 
     def events(self) -> list[dict[str, Any]]:
         """The hook params the broker received (allowlisted fields), in arrival order."""
         try:
-            return [json.loads(x) for x in (self.params / "devin.jsonl").read_text().splitlines() if x.strip()]
+            return [
+                json.loads(x) for x in (self.params / "devin.jsonl").read_text().splitlines() if x.strip()
+            ]
         except OSError:
             return []
 
@@ -251,17 +289,25 @@ class Live:
     def settled(self) -> bool:
         if not self.listening():
             return False
-        open_ = self.q("SELECT COUNT(*) FROM deliveries WHERE membership_id=? AND state IN ('pending','offered')",
-                       self.mid)[0][0]
+        open_ = self.q(
+            "SELECT COUNT(*) FROM deliveries WHERE membership_id=? AND state IN ('pending','offered')",
+            self.mid,
+        )[0][0]
         return open_ == 0
 
     def wait_settled(self, timeout: float = 120) -> None:
-        self.wait(lambda: self.settled() and (time.sleep(0.8) or self.settled()), timeout,
-                  "the agent to sit in wait()", step=0.3)
+        self.wait(
+            lambda: self.settled() and (time.sleep(0.8) or self.settled()),
+            timeout,
+            "the agent to sit in wait()",
+            step=0.3,
+        )
 
     def batch_for(self, msg_id: int, state: str | None = "confirmed") -> sqlite3.Row | None:
-        sql = ("SELECT b.* FROM batches b JOIN deliveries d ON d.batch_id=b.id WHERE d.message_id=?"
-               " AND d.membership_id=?")
+        sql = (
+            "SELECT b.* FROM batches b JOIN deliveries d ON d.batch_id=b.id WHERE d.message_id=?"
+            " AND d.membership_id=?"
+        )
         if state:
             sql += f" AND b.state='{state}'"
         rows = self.q(sql, msg_id, self.mid)
@@ -289,13 +335,23 @@ def live():
 
 # ------------------------------------------------------------------ scenarios
 def test_1_join_and_enter_the_wait_loop(live: Live) -> None:
-    live.tmux.type(SESSION, (
-        'Use the switchboard MCP tools. Call join with room "#build" and screen_name "devin-1". Then call wait with'
-        ' room "#build" and timeout_s 600. Each time wait returns messages, do exactly what they ask (reply with'
-        ' the switchboard say tool), then call wait again with the same arguments. If wait returns timeout, call it'
-        ' again. If it returns paused, end your turn. Keep replies short.'))
-    live.wait(lambda: live.part() is not None and live.q(
-        "SELECT id FROM memberships WHERE screen_name='devin-1' AND left_at IS NULL"), 180, "the join")
+    live.tmux.type(
+        SESSION,
+        (
+            'Use the switchboard MCP tools. Call join with room "#build" and screen_name "devin-1". Then call wait with'
+            ' room "#build" and timeout_s 600. Each time wait returns messages, do exactly what they ask (reply with'
+            " the switchboard say tool), then call wait again with the same arguments. If wait returns timeout, call it"
+            " again. If it returns paused, end your turn. Keep replies short."
+        ),
+    )
+    live.wait(
+        lambda: (
+            live.part() is not None
+            and live.q("SELECT id FROM memberships WHERE screen_name='devin-1' AND left_at IS NULL")
+        ),
+        180,
+        "the join",
+    )
     live.mid = live.q("SELECT id FROM memberships WHERE screen_name='devin-1' AND left_at IS NULL")[0][0]
     p = live.part()
     live.acp_pid = live.find_acp()
@@ -306,8 +362,11 @@ def test_1_join_and_enter_the_wait_loop(live: Live) -> None:
     live.wait_settled(180)
     p = live.part()
     assert p["hooks_seen_at"] is not None and p["session_id"]
-    live.results["scenarios"]["join"] = {"tier": p["tier"], "approval_mode": p["approval_mode"],
-                                         "session_id_seen": bool(p["session_id"])}
+    live.results["scenarios"]["join"] = {
+        "tier": p["tier"],
+        "approval_mode": p["approval_mode"],
+        "session_id_seen": bool(p["session_id"]),
+    }
 
 
 def test_2_wait_loop_wake_first_action_p50_under_2s(live: Live) -> None:
@@ -315,8 +374,11 @@ def test_2_wait_loop_wake_first_action_p50_under_2s(live: Live) -> None:
     for i in range(1, N_WAKES + 1):
         live.wait_settled(120)
         mid = live.say(f"ping {i}: reply in #build with the switchboard say tool, text exactly: pong {i}")
-        b = live.wait(lambda: (x := live.batch_for(mid)) is not None and x["first_action_at"] is not None and x,
-                      60, f"wake {i}: confirmed and acted on")
+        b = live.wait(
+            lambda: (x := live.batch_for(mid)) is not None and x["first_action_at"] is not None and x,
+            60,
+            f"wake {i}: confirmed and acted on",
+        )
         ts = live.msg_ts(mid)
         assert b["path"] == "wait" and b["wake_kind"] == "wait_return"
         first.append(b["first_action_at"] - ts)
@@ -342,14 +404,19 @@ def test_2_wait_loop_wake_first_action_p50_under_2s(live: Live) -> None:
 def test_3_posttooluse_context_mid_task(live: Live) -> None:
     live.wait_settled(120)
     tag = secrets.token_hex(3)
-    a = live.say(f"CTX-{tag}: use your read tool to read one.txt, then two.txt, then three.txt in this folder,"
-                 f" one call at a time. Then reply with the switchboard say tool: read done {tag}. Then call wait"
-                 " again.")
+    a = live.say(
+        f"CTX-{tag}: use your read tool to read one.txt, then two.txt, then three.txt in this folder,"
+        f" one call at a time. Then reply with the switchboard say tool: read done {tag}. Then call wait"
+        " again."
+    )
     live.wait(lambda: live.batch_for(a), 60, "the task message to reach context")
     b_mid = live.say(f"MID-{tag}: when you see this, also reply with the switchboard say tool: ack MID-{tag}")
     b = live.wait(lambda: live.batch_for(b_mid), 90, "the mid-task message to reach context")
-    res = {"path": b["path"], "evidence": b["evidence"],
-           "in_context_ms": round((b["confirmed_at"] - live.msg_ts(b_mid)) * 1000, 1)}
+    res = {
+        "path": b["path"],
+        "evidence": b["evidence"],
+        "in_context_ms": round((b["confirmed_at"] - live.msg_ts(b_mid)) * 1000, 1),
+    }
     live.wait_settled(150)
     res["model_acked"] = live.agent_said(rf"ack MID-{tag}", b_mid)
     live.results["scenarios"]["posttooluse_context"] = res
@@ -362,16 +429,25 @@ def test_4_stop_rearms_the_wait_loop(live: Live) -> None:
     tag = secrets.token_hex(3)
     rearms0 = live.q("SELECT COUNT(*) FROM events WHERE kind='rearm'")[0][0]
     n0 = len(live.events())
-    live.say(f"STOP-{tag}: this tests the room's re-arm. First reply with the switchboard say tool: bye {tag}. Then"
-             " end your turn now, without calling wait. switchboard will then ask you to call wait again: do that.")
-    live.wait(lambda: live.q("SELECT COUNT(*) FROM events WHERE kind='rearm'")[0][0] > rearms0, 120,
-              "the Stop hook's re-arm")
+    live.say(
+        f"STOP-{tag}: this tests the room's re-arm. First reply with the switchboard say tool: bye {tag}. Then"
+        " end your turn now, without calling wait. switchboard will then ask you to call wait again: do that."
+    )
+    live.wait(
+        lambda: live.q("SELECT COUNT(*) FROM events WHERE kind='rearm'")[0][0] > rearms0,
+        120,
+        "the Stop hook's re-arm",
+    )
     stops = [e for e in live.events()[n0:] if e["event"] == "Stop"]
     live.wait(lambda: live.listening(), 90, "the agent to call wait() again")
     p = live.part()
-    res = {"rearm_events": live.q("SELECT COUNT(*) FROM events WHERE kind='rearm'")[0][0] - rearms0,
-           "stops_seen": len(stops), "rearms_in_gen": p["rearms_in_gen"], "listening_again": True,
-           "said_bye": live.agent_said(rf"bye {tag}", 0)}
+    res = {
+        "rearm_events": live.q("SELECT COUNT(*) FROM events WHERE kind='rearm'")[0][0] - rearms0,
+        "stops_seen": len(stops),
+        "rearms_in_gen": p["rearms_in_gen"],
+        "listening_again": True,
+        "said_bye": live.agent_said(rf"bye {tag}", 0),
+    }
     live.results["scenarios"]["stop_rearm"] = res
     print("Stop re-arm", res)
     assert res["rearm_events"] >= 1

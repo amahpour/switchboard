@@ -22,7 +22,9 @@ import time
 from typing import Any
 
 CANARY = "sk-canary-codex-7f3a9c1e5b"
-KNOWN = frozenset({"initialize", "initialized", "thread/loaded/list", "thread/read", "turn/start", "turn/steer"})
+KNOWN = frozenset(
+    {"initialize", "initialized", "thread/loaded/list", "thread/read", "turn/start", "turn/steer"}
+)
 
 
 class FakeCodexDaemon:
@@ -93,16 +95,31 @@ class FakeCodexDaemon:
         return asyncio.run_coroutine_threadsafe(coro, self.loop).result(5)
 
     # ------------------------------------------------------------- threads
-    def add_thread(self, tid: str, status: str = "idle", *, loaded: bool = True, ephemeral: bool = False,
-                   thread_source: str | None = None) -> None:
+    def add_thread(
+        self,
+        tid: str,
+        status: str = "idle",
+        *,
+        loaded: bool = True,
+        ephemeral: bool = False,
+        thread_source: str | None = None,
+    ) -> None:
         """``ephemeral`` with ``thread_source="thread_title"``: like 0.157.0's title
         thread (the app-server's own, no TUI)."""
         with self.lock:
-            self.threads[tid] = {"id": tid, "status": {"type": status} if status != "active" else
-                                 {"type": "active", "activeFlags": []}, "ephemeral": ephemeral,
-                                 "threadSource": thread_source, "turns": [
-                                     {"id": "turn-0", "status": "completed", "items": [
-                                         {"type": "agentMessage", "id": "i0", "text": f"the key is {CANARY}"}]}]}
+            self.threads[tid] = {
+                "id": tid,
+                "status": {"type": status} if status != "active" else {"type": "active", "activeFlags": []},
+                "ephemeral": ephemeral,
+                "threadSource": thread_source,
+                "turns": [
+                    {
+                        "id": "turn-0",
+                        "status": "completed",
+                        "items": [{"type": "agentMessage", "id": "i0", "text": f"the key is {CANARY}"}],
+                    }
+                ],
+            }
             if loaded:
                 self.loaded.add(tid)
 
@@ -112,15 +129,35 @@ class FakeCodexDaemon:
 
     def prove(self, tid: str, join_text: str) -> None:
         """The join's MCP tool result, as it would appear in the thread's history."""
-        self.add_item(tid, {"type": "mcpToolCall", "id": "join", "server": "switchboard", "tool": "join",
-                            "status": "completed", "result": {"content": [{"type": "text", "text": join_text}]}})
+        self.add_item(
+            tid,
+            {
+                "type": "mcpToolCall",
+                "id": "join",
+                "server": "switchboard",
+                "tool": "join",
+                "status": "completed",
+                "result": {"content": [{"type": "text", "text": join_text}]},
+            },
+        )
 
     def begin_turn(self, tid: str) -> str:
         """The human typed a prompt: a turn in progress."""
         turn = f"turn-{next(self._turn)}"
         with self.lock:
-            self.threads[tid]["turns"].append({"id": turn, "status": "inProgress", "items": [
-                {"type": "userMessage", "id": f"u-{turn}", "content": [{"type": "text", "text": "human prompt"}]}]})
+            self.threads[tid]["turns"].append(
+                {
+                    "id": turn,
+                    "status": "inProgress",
+                    "items": [
+                        {
+                            "type": "userMessage",
+                            "id": f"u-{turn}",
+                            "content": [{"type": "text", "text": "human prompt"}],
+                        }
+                    ],
+                }
+            )
         self.set_status(tid, "active")
         return turn
 
@@ -158,13 +195,17 @@ class FakeCodexDaemon:
     def send_server_request(self, method: str = "item/commandExecution/requestApproval") -> int:
         rid = next(self._req)
         self.server_requests[rid] = method
-        self.broadcast({"id": rid, "method": method, "params": {"threadId": "t", "itemId": "x", "command": "rm -rf /"}})
+        self.broadcast(
+            {"id": rid, "method": method, "params": {"threadId": "t", "itemId": "x", "command": "rm -rf /"}}
+        )
         return rid
 
     # ------------------------------------------------------------ records
     def calls(self, method: str) -> list[dict[str, Any]]:
         with self.lock:
-            return [m.get("params") or {} for _c, m in self.received if m.get("method") == method and "id" in m]
+            return [
+                m.get("params") or {} for _c, m in self.received if m.get("method") == method and "id" in m
+            ]
 
     def methods(self) -> set[str]:
         with self.lock:
@@ -206,7 +247,9 @@ class FakeCodexDaemon:
                 if t["status"] == "inProgress":
                     t["status"] = "completed"
             self.threads[tid]["status"] = {"type": "idle"}
-        msg = json.dumps({"method": "thread/status/changed", "params": {"threadId": tid, "status": {"type": "idle"}}})
+        msg = json.dumps(
+            {"method": "thread/status/changed", "params": {"threadId": tid, "status": {"type": "idle"}}}
+        )
         for ws in list(self.conns.values()):
             asyncio.ensure_future(ws.send(msg))
 
@@ -220,8 +263,14 @@ class FakeCodexDaemon:
         if method not in KNOWN:
             return self._err(-32601, f"method not found: {method}")
         if method == "initialize":
-            return {"result": {"userAgent": "fake/0.156.1", "codexHome": "/fake", "platformFamily": "unix",
-                               "platformOs": "macos"}}
+            return {
+                "result": {
+                    "userAgent": "fake/0.156.1",
+                    "codexHome": "/fake",
+                    "platformFamily": "unix",
+                    "platformOs": "macos",
+                }
+            }
         if method == "thread/loaded/list":
             with self.lock:
                 return {"result": {"data": sorted(self.loaded), "nextCursor": None}}
@@ -236,13 +285,23 @@ class FakeCodexDaemon:
                     for t in turns:
                         if t["status"] == "inProgress":
                             t["items"] = []
-                view = {"id": tid, "status": th["status"], "preview": f"secret {CANARY}", "cwd": "/ws",
-                        "ephemeral": th.get("ephemeral", False), "threadSource": th.get("threadSource"),
-                        "turns": turns}
+                view = {
+                    "id": tid,
+                    "status": th["status"],
+                    "preview": f"secret {CANARY}",
+                    "cwd": "/ws",
+                    "ephemeral": th.get("ephemeral", False),
+                    "threadSource": th.get("threadSource"),
+                    "turns": turns,
+                }
                 return {"result": {"thread": view}}
             text = "".join(i.get("text", "") for i in p.get("input") or [])
-            item = {"type": "userMessage", "id": f"m{time.time_ns()}", "clientId": p.get("clientUserMessageId"),
-                    "content": [{"type": "text", "text": text}]}
+            item = {
+                "type": "userMessage",
+                "id": f"m{time.time_ns()}",
+                "clientId": p.get("clientUserMessageId"),
+                "content": [{"type": "text", "text": text}],
+            }
             if method == "turn/start":
                 if tid not in self.loaded:
                     return self._err(-32600, "thread not found")
@@ -253,7 +312,10 @@ class FakeCodexDaemon:
                 turn = f"turn-{next(self._turn)}"
                 th["turns"].append({"id": turn, "status": "inProgress", "items": [item]})
                 th["status"] = {"type": "active", "activeFlags": []}
-                note = {"method": "thread/status/changed", "params": {"threadId": tid, "status": th["status"]}}
+                note = {
+                    "method": "thread/status/changed",
+                    "params": {"threadId": tid, "status": th["status"]},
+                }
                 for ws in list(self.conns.values()):
                     asyncio.ensure_future(ws.send(json.dumps(note)))
                 return {"result": {"turn": {"id": turn, "status": "inProgress", "items": []}}}
@@ -262,8 +324,9 @@ class FakeCodexDaemon:
             if not active:
                 return self._err(-32600, "no active turn to steer")
             if active[-1]["id"] != p.get("expectedTurnId"):
-                return self._err(-32600, f"expected active turn id {p.get('expectedTurnId')} but found"
-                                         f" {active[-1]['id']}")
+                return self._err(
+                    -32600, f"expected active turn id {p.get('expectedTurnId')} but found {active[-1]['id']}"
+                )
             if self.steers_land:
                 active[-1]["items"].append(item)
             return {"result": {"turnId": active[-1]["id"]}}

@@ -154,9 +154,7 @@ class Hub:
         except RuntimeError:  # no loop (unit tests): publish right away
             self._flush_members(room)
             return
-        self._members_pending[room] = loop.call_later(
-            MEMBERS_DEBOUNCE_S, self._flush_members, room
-        )
+        self._members_pending[room] = loop.call_later(MEMBERS_DEBOUNCE_S, self._flush_members, room)
 
     def _flush_members(self, room: str) -> None:
         self._members_pending.pop(room, None)
@@ -178,9 +176,7 @@ class Hub:
         except RuntimeError:
             self._flush_settings(room)
             return
-        self._settings_pending[room] = loop.call_later(
-            MEMBERS_DEBOUNCE_S, self._flush_settings, room
-        )
+        self._settings_pending[room] = loop.call_later(MEMBERS_DEBOUNCE_S, self._flush_settings, room)
 
     def _flush_settings(self, room: str) -> None:
         self._settings_pending.pop(room, None)

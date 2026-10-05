@@ -39,22 +39,39 @@ from switchboard.broker.proc import ProcInfo
 from switchboard.broker.rpc import RpcError, RpcServer
 
 CLI = "/opt/sb/bin/python3 -I -m switchboard say #build hi"
-MAC_TAIL = ["-zsh", "login -pf alice", "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
-            "/sbin/launchd"]
-LINUX_TAIL = ["/bin/bash", "/usr/libexec/gnome-terminal-server", "/usr/lib/systemd/systemd --user",
-              "/sbin/init splash"]
+MAC_TAIL = [
+    "-zsh",
+    "login -pf alice",
+    "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+    "/sbin/launchd",
+]
+LINUX_TAIL = [
+    "/bin/bash",
+    "/usr/libexec/gnome-terminal-server",
+    "/usr/lib/systemd/systemd --user",
+    "/sbin/init splash",
+]
 TMUX_TAIL = ["-bash", "tmux new -s work", "/sbin/init"]
 
 
 def chain_of(argvs: list[str]) -> list[ProcInfo]:
     n = len(argvs)
     uid = os.getuid()
-    return [ProcInfo(pid=1000 + i, ppid=(1001 + i) if i < n - 1 else 0, start=float(i + 1), uid=uid,
-                     comm=os.path.basename(a.split()[0]) if a else "") for i, a in enumerate(argvs)]
+    return [
+        ProcInfo(
+            pid=1000 + i,
+            ppid=(1001 + i) if i < n - 1 else 0,
+            start=float(i + 1),
+            uid=uid,
+            comm=os.path.basename(a.split()[0]) if a else "",
+        )
+        for i, a in enumerate(argvs)
+    ]
 
 
-def policy(argvs: list[str], *, allow_ssh_cli: bool = False, tty: str | None = "ttys003",
-           complete: bool = True) -> tuple[ProcessPeerPolicy, Peer]:
+def policy(
+    argvs: list[str], *, allow_ssh_cli: bool = False, tty: str | None = "ttys003", complete: bool = True
+) -> tuple[ProcessPeerPolicy, Peer]:
     chain = chain_of(argvs)
     by_pid = {p.pid: a for p, a in zip(chain, argvs)}
     pol = ProcessPeerPolicy(
@@ -109,8 +126,15 @@ def test_remote_login_ancestor_is_not_human(title: str) -> None:
 
 def test_remote_login_anywhere_above_the_caller() -> None:
     """Deep in the chain (tmux under an ssh login) counts as much as the direct parent."""
-    chain = [CLI, "-zsh", "tmux: server", "sshd-session: alice@pts/3", "sshd-session: alice [priv]",
-             "sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups", "/sbin/init"]
+    chain = [
+        CLI,
+        "-zsh",
+        "tmux: server",
+        "sshd-session: alice@pts/3",
+        "sshd-session: alice [priv]",
+        "sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups",
+        "/sbin/init",
+    ]
     pol, peer = policy(chain)
     assert not pol.human_cli_allowed(peer)
     assert remote_login_name("/usr/libexec/sshd-session -R") == "sshd"  # before it sets its title
@@ -127,14 +151,21 @@ def test_allow_ssh_cli_admits_ssh_ancestry_never_a_relay_peer() -> None:
     assert not pol.human_cli_allowed(peer) and not pol.login_allowed(peer)
     assert "socat" in (pol.refusal(peer) or "")
     # and an agent anywhere above still refuses, whatever allow_ssh_cli says
-    pol, peer = policy([CLI, "-bash", "/opt/homebrew/bin/claude", "sshd: alice@pts/0", "/sbin/init"],
-                       allow_ssh_cli=True)
+    pol, peer = policy(
+        [CLI, "-bash", "/opt/homebrew/bin/claude", "sshd: alice@pts/0", "/sbin/init"], allow_ssh_cli=True
+    )
     assert not pol.human_cli_allowed(peer)
 
 
 def test_login_refused_under_sshd_even_with_tty() -> None:
-    chain = [CLI.replace(" say #build hi", " login"), "-bash", "sshd-session: alice@pts/0",
-             "sshd-session: alice [priv]", "sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups", "/sbin/init"]
+    chain = [
+        CLI.replace(" say #build hi", " login"),
+        "-bash",
+        "sshd-session: alice@pts/0",
+        "sshd-session: alice [priv]",
+        "sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups",
+        "/sbin/init",
+    ]
     pol, peer = policy(chain, tty="pts/0")
     assert not pol.login_allowed(peer)
     assert not pol.human_cli_allowed(peer)
@@ -159,8 +190,16 @@ def test_local_terminal_chain_still_human(tail: list[str]) -> None:
     assert not pol.human_cli_allowed(peer) and pol.refusal(peer) is None
 
 
-@pytest.mark.parametrize("text", ["I restarted /usr/sbin/sshd", "is /usr/bin/mosh-server installed",
-                                  "see /usr/sbin/dropbear -F", "sshd: alice@pts/0", "use /usr/bin/ssh"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I restarted /usr/sbin/sshd",
+        "is /usr/bin/mosh-server installed",
+        "see /usr/sbin/dropbear -F",
+        "sshd: alice@pts/0",
+        "use /usr/bin/ssh",
+    ],
+)
 @pytest.mark.parametrize("tail", [MAC_TAIL, LINUX_TAIL], ids=["macos", "linux"])
 def test_message_text_is_never_a_remote_login(tail: list[str], text: str) -> None:
     """A human at a local terminal writing about sshd is still the human: only the
@@ -178,8 +217,15 @@ def test_message_text_is_never_a_remote_login(tail: list[str], text: str) -> Non
 def test_agent_under_ssh_gets_the_agent_message_not_the_setting() -> None:
     """An agent the owner started inside an ssh login is refused as an agent: telling it
     to set allow_ssh_cli would not help it and would weaken the rule for every shell key."""
-    chain = [CLI, "zsh -c switchboard cmd #build /budget 999", "/opt/homebrew/bin/claude", "-zsh",
-             "sshd-session: alice@pts/3", "sshd-session: alice [priv]", "/sbin/launchd"]
+    chain = [
+        CLI,
+        "zsh -c switchboard cmd #build /budget 999",
+        "/opt/homebrew/bin/claude",
+        "-zsh",
+        "sshd-session: alice@pts/3",
+        "sshd-session: alice [priv]",
+        "/sbin/launchd",
+    ]
     for allow in (False, True):
         pol, peer = policy(chain, allow_ssh_cli=allow)
         assert not pol.human_cli_allowed(peer) and not pol.login_allowed(peer)
@@ -240,65 +286,73 @@ def test_refusal_message_names_the_reason() -> None:
     assert "agent" in e.value.message and "ssh" not in e.value.message
 
 
-@pytest.mark.parametrize("argv,want", [
-    ("ssh", "ssh"),
-    ("/usr/bin/ssh -T host", "ssh"),
-    ("sshd: alice@notty", "sshd"),
-    ("sshd-session: alice@notty", "sshd-session"),
-    ("/usr/sbin/sshd -D", "sshd"),
-    ("/usr/libexec/sshd-session -R", "sshd-session"),
-    ("netcat -U /tmp/b.sock", "netcat"),
-    ("/usr/sbin/dropbear -F", "dropbear"),
-    ("/usr/bin/python3 /tmp/yk-relay/ssh /tmp/l.sock /tmp/b.sock", "ssh"),  # a script named ssh
-    ("/usr/bin/python3.13 -I /tmp/x/socat", "socat"),
-    ("/bin/sh /tmp/x/nc", "nc"),
-    ("ssh: /home/alice/.ssh/cm-alice@fpga-pi:22 [mux]", "ssh"),  # a ControlMaster serving -R forwards
-    ("busybox nc -lk -U /tmp/x.sock", "nc"),
-    ("/Library/Frameworks/Python.framework/Versions/3.13/Resources/Python.app/Contents/MacOS/Python /tmp/x/ssh",
-     "ssh"),
-    # not relays
-    ("/opt/sb/bin/python3 -I -m switchboard say #r look at /usr/bin/ssh now", None),
-    ("/opt/sb/bin/python3 /opt/sb/bin/switchboard say #r ssh", None),
-    ("ssh-agent -l", None),
-    ("/usr/bin/ssh-keygen -F host", None),
-    ("sshfs host: /mnt", None),
-    ("python3: a retitled process", None),
-    ("tmux: server", None),
-    ("-zsh", None),
-    ("", None),
-])
+@pytest.mark.parametrize(
+    "argv,want",
+    [
+        ("ssh", "ssh"),
+        ("/usr/bin/ssh -T host", "ssh"),
+        ("sshd: alice@notty", "sshd"),
+        ("sshd-session: alice@notty", "sshd-session"),
+        ("/usr/sbin/sshd -D", "sshd"),
+        ("/usr/libexec/sshd-session -R", "sshd-session"),
+        ("netcat -U /tmp/b.sock", "netcat"),
+        ("/usr/sbin/dropbear -F", "dropbear"),
+        ("/usr/bin/python3 /tmp/yk-relay/ssh /tmp/l.sock /tmp/b.sock", "ssh"),  # a script named ssh
+        ("/usr/bin/python3.13 -I /tmp/x/socat", "socat"),
+        ("/bin/sh /tmp/x/nc", "nc"),
+        ("ssh: /home/alice/.ssh/cm-alice@fpga-pi:22 [mux]", "ssh"),  # a ControlMaster serving -R forwards
+        ("busybox nc -lk -U /tmp/x.sock", "nc"),
+        (
+            "/Library/Frameworks/Python.framework/Versions/3.13/Resources/Python.app/Contents/MacOS/Python /tmp/x/ssh",
+            "ssh",
+        ),
+        # not relays
+        ("/opt/sb/bin/python3 -I -m switchboard say #r look at /usr/bin/ssh now", None),
+        ("/opt/sb/bin/python3 /opt/sb/bin/switchboard say #r ssh", None),
+        ("ssh-agent -l", None),
+        ("/usr/bin/ssh-keygen -F host", None),
+        ("sshfs host: /mnt", None),
+        ("python3: a retitled process", None),
+        ("tmux: server", None),
+        ("-zsh", None),
+        ("", None),
+    ],
+)
 def test_relay_name(argv: str, want: str | None) -> None:
     assert relay_name(argv) == want
 
 
-@pytest.mark.parametrize("argv,want", [
-    ("sshd: alice@pts/0", "sshd"),
-    ("sshd-session: alice [priv]", "sshd"),
-    ("sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups", "sshd"),
-    ("/usr/sbin/sshd -D", "sshd"),
-    ("sshd", "sshd"),
-    ("/usr/sbin/dropbear -F -R", "dropbear"),
-    ("mosh-server new -s -c 256 -l LANG=en_US.UTF-8", "mosh-server"),
-    ("/usr/bin/mosh-server", "mosh-server"),
-    ("/usr/lib/openssh/sshd-session", "sshd"),
-    ("/usr/sbin/tinysshd -v /etc/tinyssh/sshkeydir", "tinysshd"),
-    ("/usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state", "tailscaled"),
-    ("tailscaled be-child ssh --uid=1000", "tailscaled"),
-    ("etserver --daemon", "etserver"),
-    ("in.telnetd: 192.0.2.10", "telnetd"),
-    ("/usr/sbin/telnetd -debug", "telnetd"),
-    # not remote logins: arguments never count
-    ("vim /etc/ssh/sshd_config", None),
-    ("/opt/sb/bin/python3 -I -m switchboard say #r I restarted /usr/sbin/sshd", None),
-    ("/opt/homebrew/bin/uv run switchboard say #r is /usr/bin/mosh-server installed", None),
-    ("/bin/bash -c switchboard say #r see /usr/sbin/dropbear -F", None),
-    ("sudo systemctl restart sshd", None),
-    ("tmux: server", None),
-    ("sshd_config_check", None),
-    ("/usr/bin/ssh host", None),
-    ("-zsh", None),
-    ("", None),
-])
+@pytest.mark.parametrize(
+    "argv,want",
+    [
+        ("sshd: alice@pts/0", "sshd"),
+        ("sshd-session: alice [priv]", "sshd"),
+        ("sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups", "sshd"),
+        ("/usr/sbin/sshd -D", "sshd"),
+        ("sshd", "sshd"),
+        ("/usr/sbin/dropbear -F -R", "dropbear"),
+        ("mosh-server new -s -c 256 -l LANG=en_US.UTF-8", "mosh-server"),
+        ("/usr/bin/mosh-server", "mosh-server"),
+        ("/usr/lib/openssh/sshd-session", "sshd"),
+        ("/usr/sbin/tinysshd -v /etc/tinyssh/sshkeydir", "tinysshd"),
+        ("/usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state", "tailscaled"),
+        ("tailscaled be-child ssh --uid=1000", "tailscaled"),
+        ("etserver --daemon", "etserver"),
+        ("in.telnetd: 192.0.2.10", "telnetd"),
+        ("/usr/sbin/telnetd -debug", "telnetd"),
+        # not remote logins: arguments never count
+        ("vim /etc/ssh/sshd_config", None),
+        ("/opt/sb/bin/python3 -I -m switchboard say #r I restarted /usr/sbin/sshd", None),
+        ("/opt/homebrew/bin/uv run switchboard say #r is /usr/bin/mosh-server installed", None),
+        ("/bin/bash -c switchboard say #r see /usr/sbin/dropbear -F", None),
+        ("sudo systemctl restart sshd", None),
+        ("tmux: server", None),
+        ("sshd_config_check", None),
+        ("/usr/bin/ssh host", None),
+        ("-zsh", None),
+        ("", None),
+    ],
+)
 def test_remote_login_name(argv: str, want: str | None) -> None:
     assert remote_login_name(argv) == want
 
@@ -319,7 +373,9 @@ def listener() -> Iterator[tuple[socket.socket, str]]:
         shutil.rmtree(d, ignore_errors=True)
 
 
-CLIENT = "import socket, sys, time\ns = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); time.sleep(3)\n"
+CLIENT = (
+    "import socket, sys, time\ns = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); time.sleep(3)\n"
+)
 
 
 def below_pytest(pid: int) -> tuple[list[ProcInfo], bool]:
@@ -332,8 +388,9 @@ def test_real_process_named_ssh_is_a_relay_peer(listener: tuple[socket.socket, s
     srv, path = listener
     script = tmp_path / "ssh"
     script.write_text(CLIENT)
-    child = subprocess.Popen([sys.executable, str(script), path], stdin=subprocess.DEVNULL,
-                             start_new_session=True)
+    child = subprocess.Popen(
+        [sys.executable, str(script), path], stdin=subprocess.DEVNULL, start_new_session=True
+    )
     try:
         conn, _ = srv.accept()
         peer = Peer.from_socket(conn)
@@ -344,8 +401,9 @@ def test_real_process_named_ssh_is_a_relay_peer(listener: tuple[socket.socket, s
         # the same client under another name is human (the control case)
         plain = tmp_path / "client.py"
         plain.write_text(CLIENT)
-        other = subprocess.Popen([sys.executable, str(plain), path], stdin=subprocess.DEVNULL,
-                                 start_new_session=True)
+        other = subprocess.Popen(
+            [sys.executable, str(plain), path], stdin=subprocess.DEVNULL, start_new_session=True
+        )
         try:
             conn, _ = srv.accept()
             peer2 = Peer.from_socket(conn)

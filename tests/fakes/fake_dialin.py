@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from conftest import InProcBroker, child_env, make_tmp_home
+
 from fakes.fake_authenticator import SoftAuthenticator
 from fakes.fake_link import PID_SHIFT, make_pi_home
 from fakes.fake_owner import Browser, claim, claim_link
@@ -34,8 +35,9 @@ class DialIn:
         self.machine = make_pi_home(satellite=False)
         self.machine_paths = Paths.from_home(self.machine)
         self.env_extra = {"SWITCHBOARD_TEST_PID_SHIFT": str(PID_SHIFT)}
-        self.b = InProcBroker(self.desk, cfg, clock=clock,
-                              web_origin=lambda port: WebOrigin.parse(f"http://localhost:{port}"))
+        self.b = InProcBroker(
+            self.desk, cfg, clock=clock, web_origin=lambda port: WebOrigin.parse(f"http://localhost:{port}")
+        )
         self.dialers: list[subprocess.Popen[bytes]] = []
         self.owner: Browser | None = None
         self.auth: SoftAuthenticator | None = None
@@ -102,8 +104,9 @@ class DialIn:
     def machine_info(self, name: str = "work-laptop") -> dict[str, Any] | None:
         return next((m for m in self.machines() if m["name"] == name), None)
 
-    def wait_machine(self, pred: Any, name: str = "work-laptop", timeout: float = 20.0,
-                     what: str = "") -> dict[str, Any]:
+    def wait_machine(
+        self, pred: Any, name: str = "work-laptop", timeout: float = 20.0, what: str = ""
+    ) -> dict[str, Any]:
         deadline = time.monotonic() + timeout
         m = None
         while time.monotonic() < deadline:
@@ -114,10 +117,18 @@ class DialIn:
         raise AssertionError(f"machine {name} never got {what or 'there'}: {m}")
 
     # ---------------------------------------------------------- the machine
-    def cli(self, *args: str, home: Path | None = None, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
-        return subprocess.run([sys.executable, "-m", "switchboard", "--home", str(home or self.machine), *args],
-                              env=child_env(**self.env_extra), capture_output=True, text=True, timeout=timeout,
-                              stdin=subprocess.DEVNULL, start_new_session=True)
+    def cli(
+        self, *args: str, home: Path | None = None, timeout: float = 60.0
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-m", "switchboard", "--home", str(home or self.machine), *args],
+            env=child_env(**self.env_extra),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
 
     def join(self, code: str, *extra: str) -> subprocess.CompletedProcess[str]:
         return self.cli("remote", "join", self.origin, code, "--test-mode", "--no-start", *extra)
@@ -125,9 +136,23 @@ class DialIn:
     def start_dialer(self, home: Path | None = None) -> subprocess.Popen[bytes]:
         home = home or self.machine
         out = open(home / "dialer-test.out", "ab")
-        p = subprocess.Popen([sys.executable, "-m", "switchboard", "--home", str(home), "start", "--foreground",
-                              "--test-mode"], env=child_env(**self.env_extra), stdin=subprocess.DEVNULL, stdout=out,
-                             stderr=out, start_new_session=True)
+        p = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "switchboard",
+                "--home",
+                str(home),
+                "start",
+                "--foreground",
+                "--test-mode",
+            ],
+            env=child_env(**self.env_extra),
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=out,
+            start_new_session=True,
+        )
         out.close()
         self.dialers.append(p)
         return p

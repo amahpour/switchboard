@@ -13,11 +13,11 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from playwright.sync_api import Browser, Page, expect
-
 from conftest import InProcBroker, make_tmp_home, sanitize_env
-from switchboard.broker.auth import WebOrigin
+from playwright.sync_api import Browser, Page, expect
 from test_web_ui import PHASE_REPORTS, UI
+
+from switchboard.broker.auth import WebOrigin
 
 pytestmark = pytest.mark.e2e
 
@@ -81,7 +81,9 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
     expect(page.locator("#sso-btn")).to_be_disabled()
     expect(page.locator("#sso-soon")).to_have_text("Coming soon")
     sign_in(page, "admin", one_time.lower())  # as typed: any case
-    expect(page.locator("#choose-lead")).to_contain_text("You’re the admin of this switchboard, signed in as alice")
+    expect(page.locator("#choose-lead")).to_contain_text(
+        "You’re the admin of this switchboard, signed in as alice"
+    )
     # two different passwords: said here, nothing sent
     page.fill("#new-password", ADMIN_PW)
     page.fill("#new-password-2", ADMIN_PW + "!")
@@ -98,7 +100,9 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
     page.click("#person-add")  # fresh from the sign-in: no check asked
     expect(page.locator("#copy-invite")).to_be_focused()
     invite = page.locator("#invite-text").inner_text()
-    assert invite.startswith(f"You're invited to switchboard: {origin}\nSign in as bob with the one-time password ")
+    assert invite.startswith(
+        f"You're invited to switchboard: {origin}\nSign in as bob with the one-time password "
+    )
     bob_otp = invite.split("one-time password ", 1)[1].split(" ", 1)[0]
     page.click("#copy-invite")
     expect(page.locator("#copy-invite")).to_have_attribute("aria-label", "Copied")

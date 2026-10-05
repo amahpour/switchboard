@@ -85,22 +85,37 @@ def password_state(p: PersonRow, now: float) -> str:
 def summary(state: "BrokerState") -> list[dict[str, Any]]:
     """The admin section's list: the owner, then everyone else in the order they were added."""
     now = state.clock.now()
-    out: list[dict[str, Any]] = [{
-        "id": None, "name": state.cfg.human_name, "admin": True,
-        "passkeys": len(state.store.passkeys_of(None)), "password": state.store.owner_password_hash() is not None,
-        "sign_in": "admin", "created_at": state.store.owner_claimed_at(),
-    }]
+    out: list[dict[str, Any]] = [
+        {
+            "id": None,
+            "name": state.cfg.human_name,
+            "admin": True,
+            "passkeys": len(state.store.passkeys_of(None)),
+            "password": state.store.owner_password_hash() is not None,
+            "sign_in": "admin",
+            "created_at": state.store.owner_claimed_at(),
+        }
+    ]
     for p in state.store.people():
-        out.append({
-            "id": p.id, "name": p.name, "admin": False, "passkeys": len(state.store.passkeys_of(p.id)),
-            "password": p.password_hash is not None and not p.must_reset, "sign_in": password_state(p, now),
-            "created_at": p.created_at, "expires_at": p.password_expires_at if p.must_reset else None,
-        })
+        out.append(
+            {
+                "id": p.id,
+                "name": p.name,
+                "admin": False,
+                "passkeys": len(state.store.passkeys_of(p.id)),
+                "password": p.password_hash is not None and not p.must_reset,
+                "sign_in": password_state(p, now),
+                "created_at": p.created_at,
+                "expires_at": p.password_expires_at if p.must_reset else None,
+            }
+        )
     return out
 
 
 def invite_text(origin: str, name: str, one_time: str) -> str:
     """What the owner sends a new person (the admin section's Copy button)."""
-    return (f"You're invited to switchboard: {origin}\n"
-            f"Sign in as {name} with the one-time password {one_time} (it works for 7 days).\n"
-            "Right after, you choose your own password, or a passkey.")
+    return (
+        f"You're invited to switchboard: {origin}\n"
+        f"Sign in as {name} with the one-time password {one_time} (it works for 7 days).\n"
+        "Right after, you choose your own password, or a passkey."
+    )

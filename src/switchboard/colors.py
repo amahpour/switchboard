@@ -30,8 +30,16 @@ from typing import Any
 
 MODES = ("auto", "always", "never")
 
-_SGR = {"bold": "1", "dim": "2", "red": "31", "green": "32", "yellow": "33", "blue": "34",
-        "magenta": "35", "cyan": "36"}
+_SGR = {
+    "bold": "1",
+    "dim": "2",
+    "red": "31",
+    "green": "32",
+    "yellow": "33",
+    "blue": "34",
+    "magenta": "35",
+    "cyan": "36",
+}
 _RESET = "\x1b[0m"
 # An agent's nick colour: stable for its name (crc32, since Python's hash() of a str changes
 # from process to process). Red is kept for warnings, and the human is bold, not coloured.
@@ -85,28 +93,28 @@ class Paint:
     def dim(self, text: str) -> str:
         return self.style(text, "dim")
 
-    def ok(self, text: str) -> str:          # up, online, idle, installed, wrote
+    def ok(self, text: str) -> str:  # up, online, idle, installed, wrote
         return self.style(text, "green")
 
-    def warn(self, text: str) -> str:        # down, parked, paused, held, would change
+    def warn(self, text: str) -> str:  # down, parked, paused, held, would change
         return self.style(text, "yellow")
 
-    def bad(self, text: str) -> str:         # blocked, failed, a warning line, approvals off
+    def bad(self, text: str) -> str:  # blocked, failed, a warning line, approvals off
         return self.style(text, "red")
 
-    def link(self, text: str) -> str:        # URLs
+    def link(self, text: str) -> str:  # URLs
         return self.style(text, "cyan")
 
-    def added(self, text: str) -> str:       # a diff's + lines
+    def added(self, text: str) -> str:  # a diff's + lines
         return self.style(text, "green")
 
-    def removed(self, text: str) -> str:     # a diff's - lines
+    def removed(self, text: str) -> str:  # a diff's - lines
         return self.style(text, "red")
 
     def heading(self, text: str) -> str:
         return self.style(text, "bold")
 
-    def prompt(self, text: str) -> str:      # Apply? [y/N]
+    def prompt(self, text: str) -> str:  # Apply? [y/N]
         return self.style(text, "bold", "yellow")
 
     def nick(self, name: str, kind: str = "agent") -> str:
