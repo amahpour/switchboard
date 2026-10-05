@@ -11,7 +11,8 @@
       "mcp__switchboard__read",
       "mcp__switchboard__wait",
       "mcp__switchboard__pass",
-      "mcp__switchboard__away"
+      "mcp__switchboard__away",
+      "mcp__switchboard__review"
     ],
     "deny": [
       "exec(rm *)"

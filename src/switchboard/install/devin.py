@@ -7,7 +7,7 @@
   SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop (timeout 30)
   and SessionEnd (10). PermissionRequest is never registered: a Devin hook
   can approve there.
-- ``permissions.allow`` gains exactly switchboard's eight tool names
+- ``permissions.allow`` gains exactly switchboard's nine tool names
   (``mcp__switchboard__join`` ... ``mcp__switchboard__away``), per the decision on
   FINDINGS §14.3: Devin prompts for every unapproved MCP call, and a wildcard
   would also approve the tools of any other server named ``switchboard``. Nothing
@@ -18,7 +18,7 @@
 
 ``switchboard uninstall devin`` (``unplan``) removes ``mcpServers.switchboard`` when it
 runs switchboard's MCP server for this home, switchboard's hooks (any version) and
-exactly the eight ``mcp__switchboard__*`` allow names; a ``hooks``,
+exactly the nine ``mcp__switchboard__*`` allow names; a ``hooks``,
 ``permissions.allow`` or ``permissions`` the removal empties is dropped. The
 allow names are shared by every switchboard home, so they stay (with a note) while
 the MCP entry or hooks of another switchboard home remain.
@@ -59,7 +59,7 @@ EVENTS: tuple[tuple[str, int], ...] = (
     ("Stop", 30),
     ("SessionEnd", 10),
 )
-TOOLS = ("join", "leave", "who", "say", "read", "wait", "pass", "away")
+TOOLS = ("join", "leave", "who", "say", "read", "wait", "pass", "away", "review")
 ALLOW = tuple(f"mcp__switchboard__{t}" for t in TOOLS)
 
 
@@ -73,7 +73,7 @@ def hook_events(python: str, home: str, sha12: str) -> dict[str, tuple[str, int]
 
 
 def set_allow(data: dict[str, Any]) -> list[str]:
-    """Add exactly switchboard's eight tool names to ``permissions.allow`` (nothing else)."""
+    """Add exactly switchboard's nine tool names to ``permissions.allow`` (nothing else)."""
     perms = data.get("permissions")
     if perms is None:
         perms = data["permissions"] = {}
@@ -108,7 +108,7 @@ def set_mcp(data: dict[str, Any], entry: dict[str, Any]) -> list[str]:
 
 
 def remove_allow(data: dict[str, Any]) -> list[str]:
-    """Remove exactly switchboard's eight tool names from ``permissions.allow``;
+    """Remove exactly switchboard's nine tool names from ``permissions.allow``;
     drop ``allow`` / ``permissions`` only if that empties them."""
     perms = data.get("permissions")
     if not isinstance(perms, dict) or not isinstance(perms.get("allow"), list):
@@ -151,7 +151,7 @@ def unplan(user_home: Path, home: str, *, run_commands: bool = True) -> Plan:
 
     def remove(d: dict[str, Any]) -> list[str]:
         lines = remove_hook_groups(d, home, drop_empty_hooks=True)[0]
-        # the eight names serve every switchboard home: keep them while another home's install remains
+        # the nine names serve every switchboard home: keep them while another home's install remains
         others = sorted(
             {*other_hook_homes(dump_json(d), home), *filter(None, [_other_mcp_home(mcp_after, home)])}
         )
@@ -160,7 +160,7 @@ def unplan(user_home: Path, home: str, *, run_commands: bool = True) -> Plan:
             return lines + remove_allow(d)
         if isinstance(allow, list) and any(n in ALLOW for n in allow):
             p.notes.append(
-                f"{tilde(cj, user_home)}: switchboard's eight allow names stay: the switchboard install for"
+                f"{tilde(cj, user_home)}: switchboard's nine allow names stay: the switchboard install for"
                 f" another home ({', '.join(safe_text(o) for o in others)}) still uses them"
             )
         return lines
@@ -202,7 +202,7 @@ def plan(user_home: Path, python: str, home: str, sha12: str, *, run_commands: b
     )
     if allow_lines:
         p.notes.append(
-            "permissions.allow pre-approves switchboard's eight tools in Devin: they run without an"
+            "permissions.allow pre-approves switchboard's nine tools in Devin: they run without an"
             " approval prompt (nothing else is allowlisted)"
         )
     p.notes.append(
@@ -214,7 +214,7 @@ def plan(user_home: Path, python: str, home: str, sha12: str, *, run_commands: b
 
 
 def print_args(python: str, home: str, sha12: str, workspace: Path | None = None) -> dict[str, Any]:
-    """Project-local files for one workspace: switchboard's hooks, the eight allow names
+    """Project-local files for one workspace: switchboard's hooks, the nine allow names
     and the MCP entry. The launcher adds its own isolation (e.g. read_config_from)."""
     cfg: dict[str, Any] = {}
     set_hook_groups(cfg, hook_events(python, home, sha12), home)

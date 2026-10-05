@@ -255,3 +255,15 @@ def test_narrowed_harnesses_end_sessions_at_once() -> None:
             assert r["ok"] is False, r
         finally:
             cx.close()
+
+
+async def test_a_remote_agent_works_the_review_board() -> None:
+    """An agent on another machine moves its own cards like a local one (#80, DESIGN.md §37.4):
+    `agent.review` is a member method in REMOTE_METHODS, scoped to the rooms it joined."""
+    with FakeLink(rooms=("#fpga",), desk_rooms=("#fpga",), kind="inproc") as link:
+        async with FakeAgent(link.pi, "bench") as a:
+            assert (await a.join("#fpga", "bench"))["ok"]
+            r = await a.call("review", room="#fpga", action="open", url="https://example.com/pr/7")
+            assert r["ok"], r
+            r = await a.call("review", room="#fpga", action="raise", title="flash timing", lines="12")
+            assert r["ok"] and r["item"] == "F1" and "raised by bench" in r["board"], r
