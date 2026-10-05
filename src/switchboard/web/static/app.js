@@ -914,17 +914,25 @@
     const chip = $('st-approvals');
     const bypass = members.filter(function (m) { return m.approval_mode === 'bypass'; }).map(function (m) { return label(m.name, m.host); });
     const unknown = members.filter(function (m) { return m.approval_mode === 'unknown'; }).map(function (m) { return label(m.name, m.host); });
+    const count = bypass.length + unknown.length;
     chip.replaceChildren();
-    chip.classList.toggle('hidden', !bypass.length && !unknown.length);
-    if (bypass.length) {
-      const t = el('span');
-      t.append(el('span', 'wide-only', 'Approvals off: '), bypass.join(', '));
-      chip.append(icon('warn'), t);
-      chip.title = 'approvals are off in this session: room messages can make it act without asking';
-    } else if (unknown.length) {
-      chip.append(icon('warn'), el('span', null, 'Approval mode unknown: ' + unknown.join(', ')));
-      chip.title = 'approval mode unknown: may act without asking';
-    }
+    chip.classList.toggle('hidden', count === 0);
+    chip.dataset.count = String(count);
+    const tip = $('approvals-tip');
+    if (!count) { tip.textContent = ''; return; }
+    let summary;
+    if (count === 1) summary = bypass.length ? 'Approvals off: ' + bypass[0] : 'Approval mode unknown: ' + unknown[0];
+    else if (bypass.length && unknown.length) summary = plural(count, 'agent', 'agents') + ' may act without asking';
+    else if (bypass.length) summary = 'Approvals off for ' + plural(count, 'agent', 'agents');
+    else summary = 'Approval mode unknown for ' + plural(count, 'agent', 'agents');
+    const names = [];
+    if (bypass.length) names.push('Approvals off: ' + bypass.join(', '));
+    if (unknown.length) names.push('Unknown: ' + unknown.join(', '));
+    const explanation = unknown.length ? ' Unknown agents may run commands and edit files without asking.'
+      : ' These agents can run commands and edit files without asking.';
+    tip.textContent = names.join('; ') + '.' + explanation;
+    chip.setAttribute('aria-label', tip.textContent);
+    chip.append(icon('warn'), el('span', 'wide-only', summary));
   }
 
   function renderStatus() {
@@ -3929,6 +3937,16 @@
       renderBoard();
     });
     $('pane-toggle').addEventListener('click', togglePane);
+    $('st-approvals').addEventListener('click', function () {
+      const r = activeRoom();
+      if (!r) return;
+      const flagged = r.members.find(function (m) { return m.approval_mode === 'bypass' || m.approval_mode === 'unknown'; });
+      if (!flagged) return;
+      if (state.inspect) closeInspector(false);
+      showPane();
+      const row = state.rowRefs.get(flagged.name);
+      if (row) { row.scrollIntoView({ block: 'center' }); row.focus(); }
+    });
     $('buddy-toggle').addEventListener('click', function () {
       const open = !$('app').classList.contains('sheet-open');
       setSheet(open);

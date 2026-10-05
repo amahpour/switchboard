@@ -436,6 +436,23 @@ const SCENARIOS = {
     });
   },
 
+  async approvals_chip_cases() {
+    const one = await buildRoom(MEMBERS);
+    const oneText = one.w.$('st-approvals').textContent;
+    const manyMembers = MEMBERS.map(function (m) { return m.name === 'bench' ? m : { ...m, approval_mode: 'bypass' }; });
+    const many = await buildRoom(manyMembers);
+    const mixedMembers = MEMBERS.map(function (m) { return Object.assign({}, m, {
+      approval_mode: m.name === 'codex-1' || m.name === 'claude-1' ? 'bypass' : 'unknown',
+    }); });
+    const mixed = await buildRoom(mixedMembers);
+    return {
+      one: oneText,
+      many: many.w.$('st-approvals').textContent,
+      mixed: mixed.w.$('st-approvals').textContent,
+      mixedTip: mixed.w.$('approvals-tip').textContent,
+    };
+  },
+
   // An unknown approval mode may also let the agent act without asking.
   async unknown_approval_mode() {
     const members = MEMBERS.map(function (m) { return m.name === 'codex-1' ? { ...m, approval_mode: 'unknown' } : m; });
@@ -446,7 +463,7 @@ const SCENARIOS = {
     return report(w, ws, {
       row: row.textContent,
       flagTitle: flag.title,
-      chipTitle: w.$('st-approvals').title,
+      chipTip: w.$('approvals-tip').textContent,
       inspector: w.$('insp-body').textContent,
     });
   },

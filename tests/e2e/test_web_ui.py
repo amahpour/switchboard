@@ -279,6 +279,51 @@ def test_app_loads_connected_with_rooms_members_and_chips(ui: UI) -> None:
     expect(page.locator("#banner-test")).to_be_hidden()
 
 
+def test_approvals_chip_names_one_counts_several_and_includes_unknown(ui: UI) -> None:
+    """The room warning stays short, counts unknown modes too, and leads to flagged members."""
+    world = ui.world
+    world.create_room("#chip-one")
+    world.add_agents("#chip-one", ("ag-1",))
+    world.set_approval_modes("#chip-one", {"ag-1": "bypass"})
+    one = ui.open(room="chip-one")
+    chip = one.locator("#st-approvals")
+    expect(chip).to_have_text("Approvals off: ag-1")
+    chip.hover()
+    expect(one.locator("#approvals-tip")).to_be_visible()
+    expect(one.locator("#approvals-tip")).to_contain_text("Approvals off: ag-1")
+    chip.focus()
+    expect(one.locator("#approvals-tip")).to_be_visible()
+    chip.click()
+    expect(one.locator("#members-view")).to_be_visible()
+    expect(one.locator('#buddy-list .member[data-name="ag-1"]')).to_be_in_viewport()
+
+    world.create_room("#chip-many")
+    world.add_agents("#chip-many", ("ag-1", "ag-2", "ag-3"))
+    world.set_approval_modes("#chip-many", {"ag-1": "bypass", "ag-2": "bypass", "ag-3": "bypass"})
+    many = ui.open(room="chip-many")
+    chip = many.locator("#st-approvals")
+    expect(chip).to_have_text("Approvals off for 3 agents")
+    chip.focus()
+    expect(many.locator("#approvals-tip")).to_have_text(re.compile("ag-1.*ag-2.*ag-3"))
+
+    world.create_room("#chip-mixed")
+    names = tuple(f"ag-{i}" for i in range(1, 9))
+    world.add_agents("#chip-mixed", names)
+    modes = {name: "prompting" for name in names}
+    modes.update({"ag-7": "bypass", "ag-8": "unknown"})
+    world.set_approval_modes("#chip-mixed", modes)
+    mixed = ui.open(room="chip-mixed", **PHONE)
+    chip = mixed.locator("#st-approvals")
+    expect(chip).to_have_text("2 agents may act without asking")
+    chip.focus()
+    expect(mixed.locator("#approvals-tip")).to_have_text(re.compile("Approvals off: ag-7.*Unknown: ag-8"))
+    expect(chip.locator(".wide-only")).to_be_hidden()
+    assert chip.evaluate("el => getComputedStyle(el, '::after').content") == '"2"'
+    chip.click()
+    expect(mixed.locator("#app")).to_have_class(cls("sheet-open"))
+    expect(mixed.locator('#buddy-list .member[data-name="ag-7"]')).to_be_in_viewport()
+
+
 def test_markdown_renders_real_elements(ui: UI) -> None:
     page = ui.open()
     log = page.locator("#log")
