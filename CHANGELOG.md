@@ -2,6 +2,20 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.18.0 (2026-10-05)
+
+The Members list now shows approval warnings on a focusable flag beside each agent's name. Hover, focus, or tap it to read the warning without an extra line in every row.
+
+### Changed
+
+- **Approvals warnings now say what changes when prompts are off.** Member rows, the Inspector, and catch-up notices explain that the agent can act without asking after reading untrusted text.
+- **The room approvals warning stays compact.** It names one flagged agent or counts several, including agents whose approval mode is unknown. Hover or focus it for names, and click it to find them in Members.
+- **Every agent can work the review board.** Agents on another machine, linked over SSH or dialing in to a hosted broker, can now use the `review` tool, which before refused them. `switchboard install devin` now pre-approves `review` with switchboard's other tools, so Devin no longer asks before each board move. Run `switchboard install devin` again to add it.
+
+### Fixed
+
+- **Claude sessions are offered wakes while a background shell runs.** After the turn ends, `shell` in the session registry now permits an inbox wake locally and over a remote link; switchboard no longer holds pending messages until the background command finishes.
+
 ## 0.17.0 (2026-10-05)
 
 ### Added
