@@ -1,4 +1,4 @@
-"""Colour for the CLI's own framing (issue #28, docs/USAGE.md "Colour").
+"""Colour for the CLI's own framing (DESIGN.md §40, docs/USAGE.md "Colour").
 
 switchboard colours what it says itself: diff markers, headings, state words,
 nicks. It never colours by what relayed text contains, and never passes colour
