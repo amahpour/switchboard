@@ -20,13 +20,13 @@ from typing import Any
 
 import httpx
 import pytest
-from websockets.exceptions import InvalidStatus
-from websockets.sync.client import connect
-
 from conftest import FakeClock
 from fakes.fake_agent import FakeAgent
 from fakes.fake_dialin import DialIn
 from fakes.fake_link import make_pi_home, wait_for
+from websockets.exceptions import InvalidStatus
+from websockets.sync.client import connect
+
 from switchboard.broker.passkeys import CLAIM_GRACE_S
 from switchboard.remote import linkkey
 from switchboard.remote.dialer import EXIT_FINAL, read_state
@@ -51,8 +51,13 @@ def events(d: DialIn, what: str) -> list[dict[str, Any]]:
 
 def link_ws(d: DialIn, *, origin: str | None = None) -> Any:
     """A raw /link WebSocket, as the dialer (or something else) opens it."""
-    return connect(f"ws://localhost:{d.b.port}/link", origin=origin, open_timeout=5, close_timeout=2,  # type: ignore[arg-type]
-                   compression=None)
+    return connect(
+        f"ws://localhost:{d.b.port}/link",
+        origin=origin,
+        open_timeout=5,
+        close_timeout=2,  # type: ignore[arg-type]
+        compression=None,
+    )
 
 
 def recv(ws: Any) -> dict[str, Any]:
@@ -76,7 +81,9 @@ async def test_pair_wait_approve_talk_and_remove(d: DialIn) -> None:
     # it dials in and waits in the handshake: no session, so no socket for its agents
     d.start_dialer()
     d.wait_machine(lambda m: m["dialed_in"], what="dialed in")
-    wait_for(lambda: (read_state(d.machine_paths) or {}).get("state") == "pending", what="the dialer says pending")
+    wait_for(
+        lambda: (read_state(d.machine_paths) or {}).get("state") == "pending", what="the dialer says pending"
+    )
     assert not d.sock.exists()
     assert "work-laptop" not in d.b.state.remotes.machines
 
@@ -93,7 +100,9 @@ async def test_pair_wait_approve_talk_and_remove(d: DialIn) -> None:
     said = [(x["from"], x.get("host"), x["text"]) for x in hist if x["kind"] == "chat"]
     assert said == [("bench", "work-laptop", "hello from the machine")]
     st = d.cli("status")
-    assert st.returncode == 0 and "switchboard dialer for work-laptop: up" in st.stdout and d.origin in st.stdout
+    assert (
+        st.returncode == 0 and "switchboard dialer for work-laptop: up" in st.stdout and d.origin in st.stdout
+    )
     assert d.cli("say", "#build", "x").returncode != 0  # human verbs belong to the web UI
     m = d.machine_info()
     assert m is not None and m["approved"] and m["approved_via"] == "web" and m["last_seen"]
@@ -105,7 +114,9 @@ async def test_pair_wait_approve_talk_and_remove(d: DialIn) -> None:
     assert "the broker's owner removed this machine" in d.dialer_output()
     assert (read_state(d.machine_paths) or {}).get("reason") == "removed"
     assert not d.sock.exists()
-    leaves = [x["text"] for x in d.b.call("room.history", {"room": "#build"})["messages"] if x["kind"] == "leave"]
+    leaves = [
+        x["text"] for x in d.b.call("room.history", {"room": "#build"})["messages"] if x["kind"] == "leave"
+    ]
     assert leaves == ["left (work-laptop removed)"]
     assert d.machine_info() is None and d.b.state.store.machine("work-laptop").key == b""
 
@@ -125,12 +136,24 @@ async def test_the_link_drops_and_comes_back(d: DialIn) -> None:
         await a.join("#build", "bench")
         link = d.b.state.remotes.machines["work-laptop"]
         # the broker side goes away (a restart, a network drop): the dialer redials, the member comes back
-        d.b.on_loop(lambda: link._abort(link.attempt, __import__("switchboard.broker.remote", fromlist=["x"])
-                                         .LinkClosed("down", "eof")))
+        d.b.on_loop(
+            lambda: link._abort(
+                link.attempt,
+                __import__("switchboard.broker.remote", fromlist=["x"]).LinkClosed("down", "eof"),
+            )
+        )
         d.wait_machine(lambda m: m["state"] != "up", what="down")
         d.wait_machine(lambda m: m["state"] == "up", what="up again", timeout=30)
-        wait_for(lambda: next(x for x in d.b.call("room.who", {"room": "#build"})["members"]
-                              if x["name"] == "bench")["status"] != "offline", timeout=15, what="bench back")
+        wait_for(
+            lambda: (
+                next(x for x in d.b.call("room.who", {"room": "#build"})["members"] if x["name"] == "bench")[
+                    "status"
+                ]
+                != "offline"
+            ),
+            timeout=15,
+            what="bench back",
+        )
         assert (await a.say("#build", "still here"))["ok"]
     assert len([t for t in notices(d) if "link down" in t]) == 1
     assert len(writes) in (1, 2)  # the drop saved it (both ends of the bridge may), never each ping
@@ -163,8 +186,11 @@ def test_a_second_connection_with_the_same_key_replaces_the_first(d: DialIn) -> 
         d.b.on_loop(lambda: d.b.state.service.post_notice(d.b.state.store.get_room("#build"), "marker"))
         first = d.dialers[0]
         d.start_dialer(copy)
-        wait_for(lambda: (read_state(d.machine_paths) or {}).get("reason") == "replaced", timeout=20,
-                 what="the first dialer replaced")
+        wait_for(
+            lambda: (read_state(d.machine_paths) or {}).get("reason") == "replaced",
+            timeout=20,
+            what="the first dialer replaced",
+        )
         d.wait_machine(lambda m: m["state"] == "up", what="up on the copy")
         assert first.poll() is None  # it redials later (a minute), it doesn't stop
         assert (read_state(d.machine_paths) or {}).get("retry_in_s") == 60.0
@@ -182,8 +208,12 @@ def test_a_changed_broker_key_stops_the_dialer(d: DialIn) -> None:
     conf = d.machine / "satellite.toml"
     other = linkkey.b64u(linkkey.pub_raw(linkkey.make_key(d.machine / "link" / "other")))
     text = conf.read_text()
-    conf.write_text("\n".join(f'broker_key = "{other}"' if ln.startswith("broker_key") else ln
-                              for ln in text.splitlines()) + "\n")
+    conf.write_text(
+        "\n".join(
+            f'broker_key = "{other}"' if ln.startswith("broker_key") else ln for ln in text.splitlines()
+        )
+        + "\n"
+    )
     p = d.start_dialer()
     assert p.wait(20) == EXIT_FINAL
     assert "the broker's key is not the one pinned" in d.dialer_output()
@@ -204,8 +234,17 @@ def test_an_unknown_machine_stops_for_good(d: DialIn) -> None:
 
 # ------------------------------------------------------------- /link itself
 def handshake_until_challenge(d: DialIn, ws: Any, name: str, key: Any, nm: bytes) -> dict[str, Any]:
-    ws.send(json.dumps({"t": "auth", "v": 1, "name": name, "key": linkkey.b64u(linkkey.pub_raw(key)),
-                        "nm": linkkey.b64u(nm)}))
+    ws.send(
+        json.dumps(
+            {
+                "t": "auth",
+                "v": 1,
+                "name": name,
+                "key": linkkey.b64u(linkkey.pub_raw(key)),
+                "nm": linkkey.b64u(nm),
+            }
+        )
+    )
     return recv(ws)
 
 
@@ -253,8 +292,11 @@ def test_link_refuses_browsers_unknown_keys_and_bad_proofs(d: DialIn) -> None:
     with link_ws(d) as ws:
         nm = os.urandom(32)
         ch = handshake_until_challenge(d, ws, "work-laptop", key, nm)
-        ws.send(json.dumps({"t": "proof", "sig": linkkey.sign(key, "machine", d.host,
-                                                               linkkey.unb64u(ch["nb"], 32), nm)}))
+        ws.send(
+            json.dumps(
+                {"t": "proof", "sig": linkkey.sign(key, "machine", d.host, linkkey.unb64u(ch["nb"], 32), nm)}
+            )
+        )
         assert recv(ws) == {"t": "pending"}
         ws.send('{"t":"hello"}')  # nothing is sent while pending
         assert recv(ws)["why"] == "protocol"
@@ -269,7 +311,9 @@ def test_link_answers_nothing_to_silence(d: DialIn) -> None:
 
 # ------------------------------------------------------------ /link/pair
 def pair(d: DialIn, body: dict[str, Any], **headers: str) -> httpx.Response:
-    return httpx.post(f"http://127.0.0.1:{d.b.port}/link/pair", json=body, headers={"Host": d.host, **headers})
+    return httpx.post(
+        f"http://127.0.0.1:{d.b.port}/link/pair", json=body, headers={"Host": d.host, **headers}
+    )
 
 
 def test_the_pairing_route(d: DialIn) -> None:
@@ -320,7 +364,10 @@ def test_pairing_and_approving_need_a_fresh_passkey_check() -> None:
     with DialIn(clock=clock).start() as d:
         d.paired()
         clock.advance(CLAIM_GRACE_S)
-        for path, body in (("/api/machines/pair", {"name": "box-2"}), ("/api/machines/work-laptop/approve", {})):
+        for path, body in (
+            ("/api/machines/pair", {"name": "box-2"}),
+            ("/api/machines/work-laptop/approve", {}),
+        ):
             r = d.api("POST", path, body)
             assert r.status_code == 403 and r.json()["error"] == "reauth", path
         # removing only takes access away: no check
@@ -332,8 +379,12 @@ def test_pairing_and_approving_need_a_fresh_passkey_check() -> None:
         # no session at all
         anon = httpx.Client(base_url=f"http://127.0.0.1:{d.b.port}", headers={"Host": d.host})
         assert anon.get("/api/machines").status_code == 401
-        assert anon.post("/api/machines/pair", json={}, headers={"Origin": d.origin,
-                                                                 "X-Switchboard": "1"}).status_code == 401
+        assert (
+            anon.post(
+                "/api/machines/pair", json={}, headers={"Origin": d.origin, "X-Switchboard": "1"}
+            ).status_code
+            == 401
+        )
 
 
 def test_the_desktop_takes_no_machines(broker: Any, web: httpx.Client) -> None:
@@ -362,7 +413,8 @@ def test_join_refuses_a_home_with_a_broker_and_a_used_code(d: DialIn, tmp_path: 
         r = d.cli("remote", "join", d.origin, code, "--test-mode", "--no-start", home=other)
         assert r.returncode == 1
         assert "This code was already used by another machine. Don't approve the pending machine" in " ".join(
-            r.stdout.split())
+            r.stdout.split()
+        )
         assert "This machine's key" not in r.stdout  # nothing to compare: it paired nothing
         assert not (other / "satellite.toml").exists() and not (other / "link" / linkkey.MACHINE_KEY).exists()
         r = d.cli("remote", "join", d.origin, "NOT-A-CODE", "--test-mode", "--no-start", home=other)
@@ -378,7 +430,10 @@ def test_leave_stops_the_dialer_and_forgets_the_pairing(d: DialIn) -> None:
     r = d.cli("remote", "remove", "work-laptop", "--yes")
     assert r.returncode == 0, r.stderr
     assert "dialer stopped" in r.stdout
-    assert not (d.machine / "satellite.toml").exists() and not (d.machine / "link" / linkkey.MACHINE_KEY).exists()
+    assert (
+        not (d.machine / "satellite.toml").exists()
+        and not (d.machine / "link" / linkkey.MACHINE_KEY).exists()
+    )
     assert d.dialers[0].wait(10) == 0
     d.wait_machine(lambda m: m["state"] != "up", what="down")
 
@@ -388,9 +443,18 @@ def test_the_web_ui_lists_live_codes_and_cancels_one(d: DialIn) -> None:
     got = d.api("GET", "/api/machines").json()
     assert [c["name"] for c in got["codes"]] == ["work-laptop"] and got["codes"][0]["expires_in_s"] > 590
     # cancelling needs a session and no passkey check (it only takes access away)
-    assert httpx.post(f"{d.origin}/api/machines/work-laptop/cancel", json={}, headers={"Origin": d.origin,
-                      "X-Switchboard": "1"}).status_code == 401
-    assert d.api("POST", "/api/machines/work-laptop/cancel").json() == {"name": "work-laptop", "cancelled": True}
+    assert (
+        httpx.post(
+            f"{d.origin}/api/machines/work-laptop/cancel",
+            json={},
+            headers={"Origin": d.origin, "X-Switchboard": "1"},
+        ).status_code
+        == 401
+    )
+    assert d.api("POST", "/api/machines/work-laptop/cancel").json() == {
+        "name": "work-laptop",
+        "cancelled": True,
+    }
     assert d.api("GET", "/api/machines").json()["codes"] == []
     assert pair(d, {"code": code, "key": linkkey.b64u(os.urandom(32))}).status_code == 403
     assert d.api("POST", "/api/machines/Bad Name/cancel").status_code == 400
@@ -405,9 +469,10 @@ def test_a_machine_refused_at_each_dial_says_why(d: DialIn) -> None:
 
     def off() -> None:
         d.b.state.test_mode = False
-        link._abort(link.attempt, __import__("switchboard.broker.remote", fromlist=["x"]).LinkClosed("down", "eof"))
+        link._abort(
+            link.attempt, __import__("switchboard.broker.remote", fromlist=["x"]).LinkClosed("down", "eof")
+        )
 
     d.b.on_loop(off)
     m = d.wait_machine(lambda m: m["reason"] == "test_mode", what="refused")
     assert m["state"] == "down" and m["hint"] == "the machine runs in test mode and this broker doesn't"
-

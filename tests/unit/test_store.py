@@ -7,8 +7,8 @@ import os
 from pathlib import Path
 
 import pytest
-
 from conftest import FakeClock
+
 from switchboard import db
 from switchboard.store import Conflict, Store
 
@@ -18,8 +18,15 @@ def store(tmp_path: Path, clock: FakeClock) -> Store:
     return Store(db.open_db(tmp_path / "y.db"), clock)
 
 
-def add_agent(store: Store, room_id: int, name: str, *, pid: int | None = None, start: float | None = None,
-              harness: str = "test") -> tuple[int, int]:
+def add_agent(
+    store: Store,
+    room_id: int,
+    name: str,
+    *,
+    pid: int | None = None,
+    start: float | None = None,
+    harness: str = "test",
+) -> tuple[int, int]:
     """Insert a participant + active membership directly (M2 owns the real join path)."""
     con = store.con
     with db.tx(con):
@@ -87,7 +94,9 @@ def test_messages_history_and_hops(store: Store, clock: FakeClock) -> None:
     # hop counter: agent chat +1, human chat resets, notices don't count
     store.insert_message(r.id, sender_name="a", sender_kind="agent", via="mcp", text="x")
     store.insert_message(r.id, sender_name="a", sender_kind="agent", via="mcp", text="y")
-    store.insert_message(r.id, sender_name="switchboard", sender_kind="system", via="system", kind="notice", text="n")
+    store.insert_message(
+        r.id, sender_name="switchboard", sender_kind="system", via="system", kind="notice", text="n"
+    )
     assert store.room_by_id(r.id).hop_count == 2
     store.insert_message(r.id, sender_name="alice", sender_kind="human", via="cli", text="reset")
     assert store.room_by_id(r.id).hop_count == 0
@@ -101,13 +110,25 @@ def test_delivery_classification(store: Store) -> None:
     _, m_a = add_agent(store, r.id, "alpha")
     _, m_b = add_agent(store, r.id, "beta")
     h = store.insert_message(r.id, sender_name="alice", sender_kind="human", via="web", text="hi all")
-    a = store.insert_message(r.id, sender_name="alpha", sender_kind="agent", via="mcp", text="@beta look",
-                             sender_membership_id=m_a, mentions=["beta"])
-    c = store.insert_message(r.id, sender_name="beta", sender_kind="agent", via="mcp", text="ok",
-                             sender_membership_id=m_b)
-    store.insert_message(r.id, sender_name="switchboard", sender_kind="system", via="system", kind="notice", text="n")
-    rows = {(x["membership_id"], x["message_id"]): (x["prio"], x["mentioned"], x["state"])
-            for x in store.con.execute("SELECT * FROM deliveries")}
+    a = store.insert_message(
+        r.id,
+        sender_name="alpha",
+        sender_kind="agent",
+        via="mcp",
+        text="@beta look",
+        sender_membership_id=m_a,
+        mentions=["beta"],
+    )
+    c = store.insert_message(
+        r.id, sender_name="beta", sender_kind="agent", via="mcp", text="ok", sender_membership_id=m_b
+    )
+    store.insert_message(
+        r.id, sender_name="switchboard", sender_kind="system", via="system", kind="notice", text="n"
+    )
+    rows = {
+        (x["membership_id"], x["message_id"]): (x["prio"], x["mentioned"], x["state"])
+        for x in store.con.execute("SELECT * FROM deliveries")
+    }
     assert rows == {
         (m_a, h.id): (2, 0, "pending"),
         (m_b, h.id): (2, 0, "pending"),
@@ -121,7 +142,14 @@ def test_members_view_hold_and_end(store: Store) -> None:
     _, mid = add_agent(store, r.id, "claude-1", harness="claude")
     store.insert_message(r.id, sender_name="alice", sender_kind="human", via="web", text="x")
     [m] = store.members(r.id)
-    assert (m.name, m.harness, m.status, m.queued, m.inflight, m.held) == ("claude-1", "claude", "idle", 1, 0, False)
+    assert (m.name, m.harness, m.status, m.queued, m.inflight, m.held) == (
+        "claude-1",
+        "claude",
+        "idle",
+        1,
+        0,
+        False,
+    )
     assert store.find_member(r.id, "CLAUDE-1") is not None
     store.set_held(mid, True)
     assert store.members(r.id)[0].held
@@ -186,32 +214,52 @@ def test_recover_on_start(store: Store, clock: FakeClock) -> None:
         )
     alive = lambda pid, start: pid == os.getpid()  # noqa: E731
     res = store.recover_on_start(alive)
-    assert res == {"batches_expired": 1, "deliveries_reverted": 1, "participants_offline": 2,
-                   "participants_ended": 1}
+    assert res == {
+        "batches_expired": 1,
+        "deliveries_reverted": 1,
+        "participants_offline": 2,
+        "participants_ended": 1,
+    }
     b = con.execute("SELECT * FROM batches WHERE id=?", (bid,)).fetchone()
     assert b["state"] == "expired" and b["expire_reason"] == "restart"
-    d = con.execute("SELECT * FROM deliveries WHERE membership_id=? AND message_id=?", (live_m, msg.id)).fetchone()
+    d = con.execute(
+        "SELECT * FROM deliveries WHERE membership_id=? AND message_id=?", (live_m, msg.id)
+    ).fetchone()
     assert d["state"] == "pending" and d["attempts"] == 1
-    d2 = con.execute("SELECT * FROM deliveries WHERE membership_id=? AND message_id=?", (live_m, msg2.id)).fetchone()
+    d2 = con.execute(
+        "SELECT * FROM deliveries WHERE membership_id=? AND message_id=?", (live_m, msg2.id)
+    ).fetchone()
     assert d2["state"] == "pending" and d2["attempts"] == 0
     statuses = {x["id"]: x["status"] for x in con.execute("SELECT id, status FROM participants")}
     assert statuses == {live_part: "offline", dead_part: "offline"}
     dm = con.execute("SELECT * FROM memberships WHERE id=?", (dead_m,)).fetchone()
     assert dm["left_reason"] == "session_end" and dm["cred_hash"] is None
-    assert {x[0] for x in con.execute("SELECT state FROM deliveries WHERE membership_id=?", (dead_m,))} == {"revoked"}
+    assert {x[0] for x in con.execute("SELECT state FROM deliveries WHERE membership_id=?", (dead_m,))} == {
+        "revoked"
+    }
     leave = store.history(r.id)[-1]
     assert (leave.kind, leave.sender_name, leave.text) == ("leave", "dead", "left (session ended)")
     assert [m.name for m in store.members(r.id)] == ["live"]
     # live credentials persist
     assert con.execute("SELECT cred_hash FROM memberships WHERE id=?", (live_m,)).fetchone()[0] is not None
     # a second recovery has nothing left to do
-    assert store.recover_on_start(alive) == {"batches_expired": 0, "deliveries_reverted": 0,
-                                             "participants_offline": 1, "participants_ended": 0}
+    assert store.recover_on_start(alive) == {
+        "batches_expired": 0,
+        "deliveries_reverted": 0,
+        "participants_offline": 1,
+        "participants_ended": 0,
+    }
 
 
 def test_mentions_are_stored_lowercase_json(store: Store) -> None:
     r = store.create_room("#b", "alice", 60, 6)
-    m = store.insert_message(r.id, sender_name="alice", sender_kind="human", via="web", text="x",
-                             mentions=["Beta", "alpha", "beta"])
+    m = store.insert_message(
+        r.id,
+        sender_name="alice",
+        sender_kind="human",
+        via="web",
+        text="x",
+        mentions=["Beta", "alpha", "beta"],
+    )
     row = store.con.execute("SELECT mentions FROM messages WHERE id=?", (m.id,)).fetchone()
     assert json.loads(row[0]) == ["alpha", "beta"]

@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from conftest import TEST_HUMAN, InProcBroker, SubprocBroker, child_env, make_tmp_home
+
 from switchboard import db
 from switchboard.clock import SystemClock
 from switchboard.mcp.client import call_sync
@@ -52,8 +53,12 @@ def make_pi_home(name: str = NAME, *, desktop: str = "desk", satellite: bool = T
 
 
 def remotes_toml(name: str, pi_home: Path, rooms: tuple[str, ...], **extra: Any) -> str:
-    lines = [f"[remote.{name}]", 'transport = "exec"', f'home = "{pi_home}"',
-             "rooms = [" + ", ".join(json.dumps(r) for r in rooms) + "]"]
+    lines = [
+        f"[remote.{name}]",
+        'transport = "exec"',
+        f'home = "{pi_home}"',
+        "rooms = [" + ", ".join(json.dumps(r) for r in rooms) + "]",
+    ]
     for k, v in extra.items():
         if v is not None:
             lines.append(f"{k} = {json.dumps(v)}")
@@ -61,11 +66,22 @@ def remotes_toml(name: str, pi_home: Path, rooms: tuple[str, ...], **extra: Any)
 
 
 class FakeLink:
-    def __init__(self, *, name: str = NAME, rooms: tuple[str, ...] = ("#fpga",),
-                 desk_rooms: tuple[str, ...] | None = None, harnesses: list[str] | None = None,
-                 max_members: int | None = None, end_after_s: int | None = None, kind: str = "subproc",
-                 trust: bool = True, enable: bool = True, pid_shift: int = PID_SHIFT,
-                 env: dict[str, str] | None = None, broker_cfg: Any = None):
+    def __init__(
+        self,
+        *,
+        name: str = NAME,
+        rooms: tuple[str, ...] = ("#fpga",),
+        desk_rooms: tuple[str, ...] | None = None,
+        harnesses: list[str] | None = None,
+        max_members: int | None = None,
+        end_after_s: int | None = None,
+        kind: str = "subproc",
+        trust: bool = True,
+        enable: bool = True,
+        pid_shift: int = PID_SHIFT,
+        env: dict[str, str] | None = None,
+        broker_cfg: Any = None,
+    ):
         self.name = name
         self.rooms = rooms
         self.desk = make_tmp_home()
@@ -76,8 +92,9 @@ class FakeLink:
         self.kind = kind
         self.trust = trust
         self.env_extra = {"SWITCHBOARD_TEST_PID_SHIFT": str(pid_shift), **(env or {})}
-        self.toml = remotes_toml(name, self.pi, rooms, harnesses=harnesses, max_members=max_members,
-                                 end_after_s=end_after_s)
+        self.toml = remotes_toml(
+            name, self.pi, rooms, harnesses=harnesses, max_members=max_members, end_after_s=end_after_s
+        )
         (self.desk / "remotes.toml").write_text(self.toml)
         self._prepare(desk_rooms if desk_rooms is not None else rooms, enable)
         self.broker: Any = None
@@ -147,7 +164,9 @@ class FakeLink:
         self.close()
 
     # ------------------------------------------------------------ queries
-    def call(self, method: str, params: dict[str, Any] | None = None, timeout: float = 10.0) -> dict[str, Any]:
+    def call(
+        self, method: str, params: dict[str, Any] | None = None, timeout: float = 10.0
+    ) -> dict[str, Any]:
         """A request on the desktop broker's own socket."""
         return call_sync(self.desk_paths.sock, method, params or {}, timeout)
 
@@ -187,9 +206,15 @@ class FakeLink:
         return self.run_cli(self.pi, *args, timeout=timeout)
 
     def run_cli(self, home: Path, *args: str, timeout: float = 30.0) -> subprocess.CompletedProcess[str]:
-        return subprocess.run([sys.executable, "-m", "switchboard", "--home", str(home), *args],
-                              env=child_env(**self.env_extra), capture_output=True, text=True, timeout=timeout,
-                              stdin=subprocess.DEVNULL, start_new_session=True)
+        return subprocess.run(
+            [sys.executable, "-m", "switchboard", "--home", str(home), *args],
+            env=child_env(**self.env_extra),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
 
     def write_remotes(self, text: str) -> None:
         p = self.desk / "remotes.toml"
@@ -213,16 +238,39 @@ def wait_for(fn: Any, timeout: float = 10.0, interval: float = 0.05, what: str =
 class SatDriver:
     """A satellite run by hand with pipes: this test plays the broker's side of the link."""
 
-    def __init__(self, pi_home: Path, name: str = NAME, *, test_mode: bool = True,
-                 env: dict[str, str] | None = None, pid_shift: int = 0):
+    def __init__(
+        self,
+        pi_home: Path,
+        name: str = NAME,
+        *,
+        test_mode: bool = True,
+        env: dict[str, str] | None = None,
+        pid_shift: int = 0,
+    ):
         e = child_env(**(env or {}))
         if pid_shift:
             e["SWITCHBOARD_TEST_PID_SHIFT"] = str(pid_shift)
-        argv = [sys.executable, "-I", "-m", "switchboard", "satellite", "--home", str(pi_home), "--name", name]
+        argv = [
+            sys.executable,
+            "-I",
+            "-m",
+            "switchboard",
+            "satellite",
+            "--home",
+            str(pi_home),
+            "--name",
+            name,
+        ]
         if test_mode:
             argv.append("--test-mode")
-        self.p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                  env=e, start_new_session=True)
+        self.p = subprocess.Popen(
+            argv,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=e,
+            start_new_session=True,
+        )
         self.buf = b""
 
     def send(self, frame: dict[str, Any]) -> None:
@@ -260,12 +308,20 @@ class SatDriver:
             if f.get("t") == t:
                 return f
 
-    def welcome(self, rooms: list[str] | None = None, *, hello: dict[str, Any] | None = None) -> dict[str, Any]:
+    def welcome(
+        self, rooms: list[str] | None = None, *, hello: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Read the hello (unless given) and answer it with a welcome."""
         hello = hello or self.recv_type("hello")
-        self.send(proto.welcome(version="0.0.0", link="0123456789abcdef", rooms=rooms or ["#fpga"],
-                                harnesses=["claude", "codex", "cursor", "devin"],
-                                limits={"max_conns": 64, "max_members": 8, "frame_rate": 300, "queue_lines": 5000}))
+        self.send(
+            proto.welcome(
+                version="0.0.0",
+                link="0123456789abcdef",
+                rooms=rooms or ["#fpga"],
+                harnesses=["claude", "codex", "cursor", "devin"],
+                limits={"max_conns": 64, "max_members": 8, "frame_rate": 300, "queue_lines": 5000},
+            )
+        )
         return hello
 
     def close(self) -> int:

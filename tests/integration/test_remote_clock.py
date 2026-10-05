@@ -12,10 +12,10 @@ import time
 from typing import Any
 
 import pytest
-
 from fakes.fake_agent import ids_in
 from fakes.fake_cli import FakeCli, fixture
 from fakes.fake_link import PID_SHIFT, FakeLink, wait_for
+
 from switchboard.config import Config
 
 FAST = Config(human_name="alice").with_delivery(quiet_s=0.0, max_hold_s=0.0)
@@ -53,9 +53,15 @@ def inject_hook(link: FakeLink, dv: FakeCli, params: dict[str, Any]) -> dict[str
         rl.send_frame = capture  # type: ignore[method-assign]
         try:
             await rl._on_frame(a, {"t": "open", "c": 555})
-            await rl._on_frame(a, {"t": "req", "c": 555, "facts": {"chain": chain},
-                                   "line": {"id": 1, "method": "hook.event",
-                                            "params": {"harness": "devin", **params}}})
+            await rl._on_frame(
+                a,
+                {
+                    "t": "req",
+                    "c": 555,
+                    "facts": {"chain": chain},
+                    "line": {"id": 1, "method": "hook.event", "params": {"harness": "devin", **params}},
+                },
+            )
             await asyncio.sleep(0.1)
             await rl._on_frame(a, {"t": "close", "c": 555})
         finally:
@@ -88,20 +94,36 @@ def test_pi_clock_skew(skew: str) -> None:
         assert res["status"] == "superseded", res
 
         # 2. a wait() answer, confirmed by that call's own PostToolUse: its turn start is broker time
-        dv.hook(fixture("devin", "PreToolUse_read", tool_name=WAIT, tool_input={"room": "#fpga"},
-                        tool_use_id="call_w2"))
+        dv.hook(
+            fixture(
+                "devin",
+                "PreToolUse_read",
+                tool_name=WAIT,
+                tool_input={"room": "#fpga"},
+                tool_use_id="call_w2",
+            )
+        )
         tag = dv.tool_bg("wait", room="#fpga", timeout_s=60)
         wait_for(lambda: len(link.broker.state.engine.sinks.open_sinks()) == 1, what="wait open again")
         mid = say(link, "flash it")
         res = dv.collect(tag)["result"]
         assert res["status"] == "messages" and ids_in(res["text"]) == [mid]
         bid = res["batch_id"]
-        dv.hook(fixture("devin", "PostToolUse_mcp_wait", tool_name=WAIT, tool_use_id="call_w2",
-                        tool_input={"room": "#fpga", "timeout_s": 60},
-                        tool_response={"success": True, "output": json.dumps(res), "error": None}))
+        dv.hook(
+            fixture(
+                "devin",
+                "PostToolUse_mcp_wait",
+                tool_name=WAIT,
+                tool_use_id="call_w2",
+                tool_input={"room": "#fpga", "timeout_s": 60},
+                tool_response={"success": True, "output": json.dumps(res), "error": None},
+            )
+        )
         now = time.time()
-        b = wait_for(lambda: (x := q(link, "SELECT * FROM batches WHERE id=?", bid)[0])["state"] == "confirmed"
-                     and x, what="confirmed")
+        b = wait_for(
+            lambda: (x := q(link, "SELECT * FROM batches WHERE id=?", bid)[0])["state"] == "confirmed" and x,
+            what="confirmed",
+        )
         assert abs(b["turn_start_at"] - now) < 0.5, (b["turn_start_at"], now)
 
         # 3. no early pull-batch expiry: a Stop that started before a read() answer was made
@@ -115,7 +137,9 @@ def test_pi_clock_skew(skew: str) -> None:
         assert out == {"id": 1, "result": {"out": None}} or out.get("result") is not None
         assert q(link, "SELECT state FROM batches WHERE id=?", rb)[0][0] == "offered"
         inject_hook(link, dv, {"event": "Stop", "t_age": 0.0, "t": time.time() - 3600})
-        assert q(link, "SELECT state FROM batches WHERE id=?", rb)[0][0] == "expired"  # control: ended after it
+        assert (
+            q(link, "SELECT state FROM batches WHERE id=?", rb)[0][0] == "expired"
+        )  # control: ended after it
 
         # 4. exactly one notice about the clock, and the link stays up
         notes = [t for t in link.notices() if "clock is" in t]

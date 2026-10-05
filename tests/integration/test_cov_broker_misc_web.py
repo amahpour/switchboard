@@ -15,11 +15,11 @@ from typing import Any
 
 import httpx
 import pytest
+from conftest import InProcBroker, cookie_of, ws_connect
 from fastapi import FastAPI
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 from websockets.exceptions import ConnectionClosed
 
-from conftest import InProcBroker, cookie_of, ws_connect
 from switchboard.broker import web as webmod
 from switchboard.broker.auth import COOKIE_NAME
 from switchboard.broker.hub import Hub, Subscriber
@@ -36,8 +36,11 @@ def test_favicon_is_the_32_px_icon(broker: InProcBroker) -> None:
     assert r.status_code == 200 and r.headers["content-type"] == "image/png"
     assert r.content.startswith(b"\x89PNG\r\n\x1a\n") and r.content[16:24] == (32).to_bytes(4, "big") * 2
     assert r.headers["cache-control"] == "no-cache"
-    for path, kind in (("/static/favicon.svg", "image/svg+xml"), ("/static/favicon-32.png", "image/png"),
-                       ("/static/apple-touch-icon.png", "image/png")):
+    for path, kind in (
+        ("/static/favicon.svg", "image/svg+xml"),
+        ("/static/favicon-32.png", "image/png"),
+        ("/static/apple-touch-icon.png", "image/png"),
+    ):
         r = httpx.get(broker.base + path)  # the sign-in page links them too: no session needed
         assert r.status_code == 200 and r.headers["content-type"].startswith(kind), path
         assert "script-src 'self'" in r.headers["content-security-policy"], path
@@ -46,13 +49,24 @@ def test_favicon_is_the_32_px_icon(broker: InProcBroker) -> None:
 def test_request_bodies_are_checked(broker: InProcBroker, web: httpx.Client) -> None:
     h = broker.write_headers()
     big = json.dumps({"name": "#build", "pad": "x" * webmod.MAX_BODY})
-    assert err(web.post("/api/rooms", content=big, headers=h)) == (400, "bad_request", "request body too large")
+    assert err(web.post("/api/rooms", content=big, headers=h)) == (
+        400,
+        "bad_request",
+        "request body too large",
+    )
     assert err(web.post("/api/rooms", content=b"", headers=h)) == (400, "bad_request", "name is required")
     assert err(web.post("/api/rooms", content="{", headers=h)) == (400, "bad_request", "invalid JSON")
     for body in ("[]", '["#build"]', '"#build"', "3"):
-        assert err(web.post("/api/rooms", content=body, headers=h)) == (400, "bad_request",
-                                                                         "body must be a JSON object"), body
-    assert err(web.post("/api/rooms", json={"name": 5}, headers=h)) == (400, "bad_request", "name is required")
+        assert err(web.post("/api/rooms", content=body, headers=h)) == (
+            400,
+            "bad_request",
+            "body must be a JSON object",
+        ), body
+    assert err(web.post("/api/rooms", json={"name": 5}, headers=h)) == (
+        400,
+        "bad_request",
+        "name is required",
+    )
     # none of that made a room
     assert web.get("/api/rooms").json()["rooms"] == []
 
@@ -61,10 +75,16 @@ def test_say_and_command_need_text(broker: InProcBroker, web: httpx.Client) -> N
     h = broker.write_headers()
     assert web.post("/api/rooms", json={"name": "#build"}, headers=h).status_code == 200
     for body in ({}, {"text": None}, {"text": 5}, {"text": ["hi"]}):
-        assert err(web.post("/api/rooms/build/say", json=body, headers=h)) == (400, "bad_request",
-                                                                                "text is required"), body
-        assert err(web.post("/api/rooms/build/command", json=body, headers=h)) == (400, "bad_request",
-                                                                                    "text is required"), body
+        assert err(web.post("/api/rooms/build/say", json=body, headers=h)) == (
+            400,
+            "bad_request",
+            "text is required",
+        ), body
+        assert err(web.post("/api/rooms/build/command", json=body, headers=h)) == (
+            400,
+            "bad_request",
+            "text is required",
+        ), body
     msgs = web.get("/api/rooms/build/messages").json()["messages"]
     assert [m for m in msgs if m["sender_kind"] == "human"] == []  # nothing was posted as the human
     assert web.post("/api/rooms/build/command", json={"text": "/who"}, headers=h).json()["ok"] is True
@@ -75,17 +95,27 @@ def test_members_and_messages_of_a_bad_room_or_query(broker: InProcBroker, web: 
     assert web.post("/api/rooms", json={"name": "#build"}, headers=broker.write_headers()).status_code == 200
     assert web.get("/api/rooms/build/members").json()["room"] == "#build"
     for key in ("after", "limit"):
-        assert err(web.get(f"/api/rooms/build/messages?{key}=-1")) == (400, "bad_request", f"{key} must be >= 0")
-        assert err(web.get(f"/api/rooms/build/messages?{key}=x")) == (400, "bad_request",
-                                                                       f"{key} must be an integer")
+        assert err(web.get(f"/api/rooms/build/messages?{key}=-1")) == (
+            400,
+            "bad_request",
+            f"{key} must be >= 0",
+        )
+        assert err(web.get(f"/api/rooms/build/messages?{key}=x")) == (
+            400,
+            "bad_request",
+            f"{key} must be an integer",
+        )
     assert web.get("/api/rooms/build/messages?after=&limit=0").status_code == 200  # blank and 0: defaults
 
 
 def test_logout_with_a_bad_body_keeps_the_session(broker: InProcBroker, web: httpx.Client) -> None:
     h = broker.write_headers()
     assert err(web.post("/logout", content="{nope", headers=h)) == (400, "bad_request", "invalid JSON")
-    assert err(web.post("/logout", content="[true]", headers=h)) == (400, "bad_request",
-                                                                     "body must be a JSON object")
+    assert err(web.post("/logout", content="[true]", headers=h)) == (
+        400,
+        "bad_request",
+        "body must be a JSON object",
+    )
     assert web.get("/api/me").status_code == 200  # still signed in
     assert web.post("/logout", content=b"", headers=h).json() == {"ok": True, "revoked": 1}
     assert web.get("/api/me").status_code == 401

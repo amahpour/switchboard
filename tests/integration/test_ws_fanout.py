@@ -8,8 +8,8 @@ from typing import Any
 
 import httpx
 import pytest
-
 from conftest import InProcBroker, cookie_of, ws_connect
+
 from switchboard.mcp.client import Stream
 
 
@@ -38,7 +38,9 @@ def room(broker: InProcBroker, web: httpx.Client) -> str:
     return "#build"
 
 
-def test_two_websockets_and_a_uds_tail_get_the_message(broker: InProcBroker, web: httpx.Client, room: str) -> None:
+def test_two_websockets_and_a_uds_tail_get_the_message(
+    broker: InProcBroker, web: httpx.Client, room: str
+) -> None:
     ck = cookie_of(web)
     ws1, ws2 = ws_connect(broker, ck), ws_connect(broker, cookie_of(broker.web_client()))
     tail = Stream(broker.paths.sock)
@@ -61,8 +63,19 @@ def test_two_websockets_and_a_uds_tail_get_the_message(broker: InProcBroker, web
             m = f["msg"]
             assert f["room"] == room and m["id"] == mid
             assert (m["from"], m["sender_kind"], m["via"], m["kind"]) == ("alice", "human", "web", "chat")
-            assert set(m) == {"id", "ts", "from", "harness", "sender_kind", "via", "kind", "text",
-                              "reply_to", "mentions", "host"}  # host: M8c, None on this machine
+            assert set(m) == {
+                "id",
+                "ts",
+                "from",
+                "harness",
+                "sender_kind",
+                "via",
+                "kind",
+                "text",
+                "reply_to",
+                "mentions",
+                "host",
+            }  # host: M8c, None on this machine
             assert m["host"] is None
         assert push["data"]["room"] == room and push["data"]["msg"]["id"] == mid
     finally:
@@ -148,10 +161,24 @@ def test_join_and_leave_lines_reach_the_ui(broker: InProcBroker, web: httpx.Clie
 
         def post_join_leave() -> None:
             r = st.store.get_room(room)
-            st.service._post(r, sender_name="claude-1", sender_kind="agent", sender_harness="claude",
-                             via="system", kind="join", text="joined")
-            st.service._post(r, sender_name="claude-1", sender_kind="agent", sender_harness="claude",
-                             via="system", kind="leave", text="left")
+            st.service._post(
+                r,
+                sender_name="claude-1",
+                sender_kind="agent",
+                sender_harness="claude",
+                via="system",
+                kind="join",
+                text="joined",
+            )
+            st.service._post(
+                r,
+                sender_name="claude-1",
+                sender_kind="agent",
+                sender_harness="claude",
+                via="system",
+                kind="leave",
+                text="left",
+            )
 
         broker.on_loop(post_join_leave)
         j = recv_until(ws, lambda f: f.get("t") == "msg" and f["msg"]["kind"] == "join")
@@ -166,7 +193,9 @@ def test_display_text_is_cleaned(broker: InProcBroker, web: httpx.Client, room: 
     try:
         hello(ws, [room])
         recv_until(ws, lambda f: f.get("t") == "members")
-        web.post("/api/rooms/build/say", json={"text": "hi\x1b[2J‮evil <b>x</b>"}, headers=broker.write_headers())
+        web.post(
+            "/api/rooms/build/say", json={"text": "hi\x1b[2J‮evil <b>x</b>"}, headers=broker.write_headers()
+        )
         f = recv_until(ws, lambda f: f.get("t") == "msg" and f["msg"]["kind"] == "chat")
         assert f["msg"]["text"] == "hi[2Jevil <b>x</b>"
     finally:

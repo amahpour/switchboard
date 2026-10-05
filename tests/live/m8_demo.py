@@ -80,9 +80,12 @@ SCRIPTED = os.environ.get("SWITCHBOARD_M8_SCRIPTED") == "1"
 REAL_PATH = os.environ.get("PATH", "/usr/bin:/bin")
 # the docker CLI's env, taken at import (the suite's clean-env fixture moves HOME to a temp
 # dir later, where the CLI would find no compose plugin)
-DOCKER_ENV = {k: v for k, v in os.environ.items()
-              if k in ("PATH", "HOME", "USER", "LANG", "TMPDIR", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME")
-              or k.startswith(("DOCKER_", "BUILDX_", "COMPOSE_"))}
+DOCKER_ENV = {
+    k: v
+    for k, v in os.environ.items()
+    if k in ("PATH", "HOME", "USER", "LANG", "TMPDIR", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME")
+    or k.startswith(("DOCKER_", "BUILDX_", "COMPOSE_"))
+}
 COMPOSE = ["docker", "compose", "-f", str(ROOT / "sandbox" / "twohost" / "compose.yaml"), "--profile", "demo"]
 ACTORS_HOST = ROOT / "tests" / "twohost" / "actors.py"
 ACTORS_CT = "/opt/switchboard-src/tests/twohost/actors.py"
@@ -95,10 +98,14 @@ STEP_S = 60.0 if SCRIPTED else 1800.0  # how long one step may take: a stand-in,
 # a relative path whose parts never start with a dot (no "..", no leading "/"), and a plain
 # board name: the bench prompt puts nothing else from the line into a command (§27.9)
 SEG = r"[A-Za-z0-9_-][A-Za-z0-9_.-]*"
-ART_RE = re.compile(rf"artifact: (?P<rel>{SEG}(?:/{SEG})*) sha256:(?P<sha>[0-9a-f]{{64}}) size:(?P<size>\d+)"
-                    r" board:(?P<board>[A-Za-z0-9_-]+)(?=\s|$)")
-RESULT_RE = re.compile(r"^result: (?P<sha12>[0-9a-f]{12}) pull=(ok|fail|skip) verify=(ok|fail) flash=(ok|fail|skip)"
-                       r" uart=(?P<uart>pass\(\d+/\d+\)|fail\(\d+/\d+\)|fail|skip) t=\d+s")
+ART_RE = re.compile(
+    rf"artifact: (?P<rel>{SEG}(?:/{SEG})*) sha256:(?P<sha>[0-9a-f]{{64}}) size:(?P<size>\d+)"
+    r" board:(?P<board>[A-Za-z0-9_-]+)(?=\s|$)"
+)
+RESULT_RE = re.compile(
+    r"^result: (?P<sha12>[0-9a-f]{12}) pull=(ok|fail|skip) verify=(ok|fail) flash=(ok|fail|skip)"
+    r" uart=(?P<uart>pass\(\d+/\d+\)|fail\(\d+/\d+\)|fail|skip) t=\d+s"
+)
 TOKEN_RE = re.compile(r"switchboard remote accept '([^']+)'")
 
 # the human's lines (docs/DEMO-FPGA.md §6)
@@ -111,7 +118,8 @@ LINE_REVERSE = "@vivado reverse the LED pattern"
 DEMO_DOC = ROOT / "docs" / "DEMO-FPGA.md"
 BENCH_VALUES = {
     "[board]": os.environ.get("SWITCHBOARD_M8_BOARD") or ("fake" if "fakepi" in LIVE else None),
-    "[/dev/ttyUSB1]": os.environ.get("SWITCHBOARD_M8_UART") or ("~/bench/ttyFAKE0" if "fakepi" in LIVE else None),
+    "[/dev/ttyUSB1]": os.environ.get("SWITCHBOARD_M8_UART")
+    or ("~/bench/ttyFAKE0" if "fakepi" in LIVE else None),
     "[115200]": os.environ.get("SWITCHBOARD_M8_BAUD") or "115200",
 }
 
@@ -139,10 +147,14 @@ def _skip_reason() -> str | None:
     if not LIVE & {"fakepi", "pi"}:
         return "set SWITCHBOARD_LIVE=fakepi (with --scripted) or SWITCHBOARD_LIVE=pi to run the M8 rehearsal"
     if "fakepi" in LIVE and not SCRIPTED:
-        return ("SWITCHBOARD_LIVE=fakepi runs --scripted only; for real Claude sessions in the container, pair"
-                " a rehearsal home with it and use SWITCHBOARD_LIVE=pi")
+        return (
+            "SWITCHBOARD_LIVE=fakepi runs --scripted only; for real Claude sessions in the container, pair"
+            " a rehearsal home with it and use SWITCHBOARD_LIVE=pi"
+        )
     if "pi" in LIVE and not os.environ.get("SWITCHBOARD_M8_HOME"):
-        return "SWITCHBOARD_LIVE=pi needs SWITCHBOARD_M8_HOME, a rehearsal home paired with the remote by hand"
+        return (
+            "SWITCHBOARD_LIVE=pi needs SWITCHBOARD_M8_HOME, a rehearsal home paired with the remote by hand"
+        )
     return None
 
 
@@ -158,8 +170,15 @@ class Actor:
     """A long-running ``actors.py``: JSON lines out, JSON commands in."""
 
     def __init__(self, argv: list[str], env: dict[str, str] | None = None):
-        self.p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                  text=True, env=env, start_new_session=True)
+        self.p = subprocess.Popen(
+            argv,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+            start_new_session=True,
+        )
         self.q: Queue[dict[str, Any]] = Queue()
         self.log: list[dict[str, Any]] = []
         self.err: list[str] = []
@@ -181,7 +200,9 @@ class Actor:
         while True:
             left = deadline - time.monotonic()
             if left <= 0:
-                raise AssertionError(f"no {ev} in {timeout:.0f} s; events {self.log[-6:]}; {''.join(self.err)[-2000:]}")
+                raise AssertionError(
+                    f"no {ev} in {timeout:.0f} s; events {self.log[-6:]}; {''.join(self.err)[-2000:]}"
+                )
             try:
                 e = self.q.get(timeout=left)
             except Empty:
@@ -236,29 +257,51 @@ class Rehearsal:
         # the fake run's processes get a HOME of their own: nothing of this user's harness config,
         # Codex daemon or Claude sessions is in reach; a real run's broker keeps the real HOME
         # (its rehearsal home's config.toml names what it uses)
-        self.benv = {"HOME": str(self.run) if self.fake else REAL_HOME, "PATH": REAL_PATH, "LANG": "en_US.UTF-8",
-                     "SWITCHBOARD_TEST": "1", "TMPDIR": tempfile.gettempdir()}
+        self.benv = {
+            "HOME": str(self.run) if self.fake else REAL_HOME,
+            "PATH": REAL_PATH,
+            "LANG": "en_US.UTF-8",
+            "SWITCHBOARD_TEST": "1",
+            "TMPDIR": tempfile.gettempdir(),
+        }
 
     # ------------------------------------------------------------- log
     def note(self, what: str, **kw: Any) -> None:
         t = time.time()
         rel = round(t - self.t0, 2) if self.t0 else None
         self.timeline.append({"t0_s": rel, "what": what, **kw})
-        print(f"[m8 {ts()} T0{'+' if rel is not None else ''}{rel if rel is not None else '-'}] {what}"
-              f" {kw if kw else ''}", flush=True)
+        print(
+            f"[m8 {ts()} T0{'+' if rel is not None else ''}{rel if rel is not None else '-'}] {what}"
+            f" {kw if kw else ''}",
+            flush=True,
+        )
 
     # --------------------------------------------------------- commands
     def sb(self, *args: str, check: bool = True, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
-        r = subprocess.run([sys.executable, "-m", "switchboard", "--home", str(self.home), *args], env=self.benv,
-                           capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+        r = subprocess.run(
+            [sys.executable, "-m", "switchboard", "--home", str(self.home), *args],
+            env=self.benv,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            stdin=subprocess.DEVNULL,
+        )
         if check and r.returncode != 0:
             raise AssertionError(f"switchboard {' '.join(args)}: {r.stdout}{r.stderr}")
         return r
 
-    def dc(self, *args: str, input: str | None = None, check: bool = True,
-           timeout: float = 120.0) -> subprocess.CompletedProcess[str]:
-        r = subprocess.run([*COMPOSE, *args], input=input, capture_output=True, text=True, timeout=timeout,
-                           stdin=None if input is not None else subprocess.DEVNULL, env=DOCKER_ENV)
+    def dc(
+        self, *args: str, input: str | None = None, check: bool = True, timeout: float = 120.0
+    ) -> subprocess.CompletedProcess[str]:
+        r = subprocess.run(
+            [*COMPOSE, *args],
+            input=input,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            stdin=None if input is not None else subprocess.DEVNULL,
+            env=DOCKER_ENV,
+        )
         if check and r.returncode != 0:
             raise AssertionError(f"docker compose {' '.join(args[:6])}: {r.stdout[-2000:]}{r.stderr[-2000:]}")
         return r
@@ -281,7 +324,9 @@ class Rehearsal:
         return {m["name"]: m for m in r.json()["members"]}
 
     def messages(self, after: int = 0) -> list[dict[str, Any]]:
-        return self.web.get("/api/rooms/fpga/messages", params={"after": after, "limit": 500}).json()["messages"]
+        return self.web.get("/api/rooms/fpga/messages", params={"after": after, "limit": 500}).json()[
+            "messages"
+        ]
 
     def say(self, text: str) -> int:
         r = self.web.post("/api/rooms/fpga/say", json={"text": text}, headers=self.hdr)
@@ -315,12 +360,28 @@ class Rehearsal:
             (self.home / "config.toml").write_text(
                 'human_name = "alice"\n\n'
                 f'[claude]\nsessions_dir = "{self.run / "claude-sessions"}"\n\n'
-                f'[codex]\ncontrol_socket = "{self.run / "cx.sock"}"\nbin = "/usr/bin/false"\n')
+                f'[codex]\ncontrol_socket = "{self.run / "cx.sock"}"\nbin = "/usr/bin/false"\n'
+            )
         out = open(self.run / "broker.out", "ab")
         self.broker = subprocess.Popen(
-            [sys.executable, "-m", "switchboard", "start", "--foreground", "--test-mode", "--home", str(self.home),
-             "--port", "0"], env=self.benv, stdin=subprocess.DEVNULL, stdout=out, stderr=out,
-            start_new_session=True)
+            [
+                sys.executable,
+                "-m",
+                "switchboard",
+                "start",
+                "--foreground",
+                "--test-mode",
+                "--home",
+                str(self.home),
+                "--port",
+                "0",
+            ],
+            env=self.benv,
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=out,
+            start_new_session=True,
+        )
         from switchboard.mcp.client import ping
         from switchboard.paths import Paths
 
@@ -340,7 +401,9 @@ class Rehearsal:
         rooms = [r["name"] for r in self.web.get("/api/rooms").json()["rooms"]]
         if ROOM not in rooms:
             assert self.web.post("/api/rooms", json={"name": ROOM}, headers=self.hdr).status_code == 200
-        hops = next(r for r in self.web.get("/api/rooms").json()["rooms"] if r["name"] == ROOM)["settings"]["hop_limit"]
+        hops = next(r for r in self.web.get("/api/rooms").json()["rooms"] if r["name"] == ROOM)["settings"][
+            "hop_limit"
+        ]
         if hops < 20:
             r = self.web.post("/api/rooms/fpga/command", json={"text": "/hops 30"}, headers=self.hdr)
             assert r.status_code == 200 and r.json().get("ok"), r.text
@@ -351,47 +414,98 @@ class Rehearsal:
         """``remote add`` here, ``remote accept`` in the container, ``remote enable``: for real,
         against temp ssh files here (never ~/.ssh) and a home of its own in the container."""
         running = self.dc("ps", "--status", "running", "--services", check=False).stdout.split()
-        assert "pi" in running, ("the demo container isn't running: docker compose -f sandbox/twohost/compose.yaml"
-                                 " --profile demo up -d --build pi")
+        assert "pi" in running, (
+            "the demo container isn't running: docker compose -f sandbox/twohost/compose.yaml"
+            " --profile demo up -d --build pi"
+        )
         pub = self.ct("cat", "/home/pi/.sshd/host_ed25519.pub").stdout.split()
         host_key = f"{pub[0]} {pub[1]}"
         fp = self.dc("logs", "pi", check=False).stdout
         assert host_key in fp, "the container printed another host key than it serves"
-        snap = self.ct("python3", "-c", "import json, os; h = '/home/pi'; f = h + '/bench/flash.log';"
-                                        " print(json.dumps({'ssh': sorted(os.listdir(h + '/.ssh')),"
-                                        " 'flash_log': os.path.getsize(f) if os.path.exists(f) else None}))")
+        snap = self.ct(
+            "python3",
+            "-c",
+            "import json, os; h = '/home/pi'; f = h + '/bench/flash.log';"
+            " print(json.dumps({'ssh': sorted(os.listdir(h + '/.ssh')),"
+            " 'flash_log': os.path.getsize(f) if os.path.exists(f) else None}))",
+        )
         self.ct_before = json.loads(snap.stdout.strip().splitlines()[-1])
         (self.run / "ssh_config").write_text("")
         (self.run / "desk_ak").write_text("")
         (self.run / "ssh-dir").mkdir(mode=0o700)
         (self.run / "known_hosts").write_text(f"[127.0.0.1]:2222 {host_key}\n")
-        r = self.sb("remote", "add", self.remote, "pi@127.0.0.1", "--port", "2222", "--rooms", ROOM,
-                    "--ssh-config", str(self.run / "ssh_config"), "--known-hosts", str(self.run / "known_hosts"),
-                    "--authorized-keys", str(self.run / "desk_ak"), "--label", "desk")
+        r = self.sb(
+            "remote",
+            "add",
+            self.remote,
+            "pi@127.0.0.1",
+            "--port",
+            "2222",
+            "--rooms",
+            ROOM,
+            "--ssh-config",
+            str(self.run / "ssh_config"),
+            "--known-hosts",
+            str(self.run / "known_hosts"),
+            "--authorized-keys",
+            str(self.run / "desk_ak"),
+            "--label",
+            "desk",
+        )
         token = TOKEN_RE.search(r.stdout)
         assert token, r.stdout + r.stderr
-        self.ct("python3", "-c", f"import os; os.umask(0o077); os.makedirs({CT_HOME!r} + '/claude-sessions',"
-                                 " exist_ok=True);"
-                                 f" open({CT_HOME!r} + '/config.toml', 'w').write('[claude]\\nsessions_dir = "
-                                 f"\"{CT_HOME}/claude-sessions\"\\n')")
+        self.ct(
+            "python3",
+            "-c",
+            f"import os; os.umask(0o077); os.makedirs({CT_HOME!r} + '/claude-sessions',"
+            " exist_ok=True);"
+            f" open({CT_HOME!r} + '/config.toml', 'w').write('[claude]\\nsessions_dir = "
+            f'"{CT_HOME}/claude-sessions"\\n\')',
+        )
         r = self.ct("switchboard", "--home", CT_HOME, "remote", "accept", token.group(1), "--yes")
         self.note("accept", out=r.stdout.strip().splitlines()[-1:])
         # the bitstream push key (§27.8.4), limited to writing ~/fpga/in there
-        subprocess.run(["/usr/bin/ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", PUSH_COMMENT, "-f",
-                        str(self.run / "fpga_push")], check=True, capture_output=True, env=self.benv, timeout=30)
+        subprocess.run(
+            [
+                "/usr/bin/ssh-keygen",
+                "-q",
+                "-t",
+                "ed25519",
+                "-N",
+                "",
+                "-C",
+                PUSH_COMMENT,
+                "-f",
+                str(self.run / "fpga_push"),
+            ],
+            check=True,
+            capture_output=True,
+            env=self.benv,
+            timeout=30,
+        )
         push = (self.run / "fpga_push.pub").read_text().strip()
-        self.ct("bash", "-c", "cat >> ~/.ssh/authorized_keys",
-                input=f'restrict,command="rrsync -wo /home/pi/fpga/in" {push}\n')
-        self.push_ssh = (f"/usr/bin/ssh -F /dev/null -i {self.run / 'fpga_push'} -o IdentitiesOnly=yes"
-                         f" -o IdentityAgent=none -o UserKnownHostsFile={self.run / 'known_hosts'}"
-                         " -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o BatchMode=yes"
-                         " -o LogLevel=ERROR -p 2222")
+        self.ct(
+            "bash",
+            "-c",
+            "cat >> ~/.ssh/authorized_keys",
+            input=f'restrict,command="rrsync -wo /home/pi/fpga/in" {push}\n',
+        )
+        self.push_ssh = (
+            f"/usr/bin/ssh -F /dev/null -i {self.run / 'fpga_push'} -o IdentitiesOnly=yes"
+            f" -o IdentityAgent=none -o UserKnownHostsFile={self.run / 'known_hosts'}"
+            " -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o BatchMode=yes"
+            " -o LogLevel=ERROR -p 2222"
+        )
         # consent from the web session (the UI's Enable button): the human's, whoever runs this driver,
         # for the config the remotes panel shows (its config_hash)
         [shown] = [x for x in self.web.get("/api/remotes").json()["remotes"] if x["name"] == self.remote]
         self.note("remote", dest=shown["dest"], host_keys=shown["host_keys"])
-        r = self.web.post(f"/api/remotes/{self.remote}/enable", json={"config_hash": shown["config_hash"]},
-                          headers=self.hdr, timeout=60)
+        r = self.web.post(
+            f"/api/remotes/{self.remote}/enable",
+            json={"config_hash": shown["config_hash"]},
+            headers=self.hdr,
+            timeout=60,
+        )
         assert r.status_code == 200 and r.json()["text"].startswith("link ok: satellite "), r.text
         self.note("enable", text=r.json()["text"])
 
@@ -413,23 +527,62 @@ class Rehearsal:
         dest = os.environ.get("SWITCHBOARD_M8_SSH")
         if self.fake or not dest:
             return None
-        cmd = ("switchboard --version 2>/dev/null || ~/.local/bin/switchboard --version; "
-               "md5sum ~/.claude/settings.json ~/.codex/config.toml ~/.codex/hooks.json 2>/dev/null; true")
-        r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", dest, cmd], capture_output=True,
-                           text=True, timeout=60, env={"HOME": REAL_HOME, "PATH": REAL_PATH,
-                                                       **({"SSH_AUTH_SOCK": os.environ["SSH_AUTH_SOCK"]}
-                                                          if "SSH_AUTH_SOCK" in os.environ else {})})
+        cmd = (
+            "switchboard --version 2>/dev/null || ~/.local/bin/switchboard --version; "
+            "md5sum ~/.claude/settings.json ~/.codex/config.toml ~/.codex/hooks.json 2>/dev/null; true"
+        )
+        r = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", dest, cmd],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env={
+                "HOME": REAL_HOME,
+                "PATH": REAL_PATH,
+                **({"SSH_AUTH_SOCK": os.environ["SSH_AUTH_SOCK"]} if "SSH_AUTH_SOCK" in os.environ else {}),
+            },
+        )
         return {"out": r.stdout.strip(), "rc": str(r.returncode)}
 
     def start_actors(self) -> None:
         if self.fake:
-            self.bench = Actor([*COMPOSE, "exec", "-T", "-u", "pi", "-w", "/home/pi", "pi", CT_PY, ACTORS_CT, "bench",
-                                "--home", CT_HOME, "--hold-s", str(HOLD_S)], env=DOCKER_ENV)
+            self.bench = Actor(
+                [
+                    *COMPOSE,
+                    "exec",
+                    "-T",
+                    "-u",
+                    "pi",
+                    "-w",
+                    "/home/pi",
+                    "pi",
+                    CT_PY,
+                    ACTORS_CT,
+                    "bench",
+                    "--home",
+                    CT_HOME,
+                    "--hold-s",
+                    str(HOLD_S),
+                ],
+                env=DOCKER_ENV,
+            )
             self.actors.append(self.bench)
             j = self.bench.next("joined", 60)
             assert j["ok"] and j["tier"] == "claude:inbox", j
-            self.vivado = Actor([sys.executable, str(ACTORS_HOST), "agent", "--home", str(self.home), "--name",
-                                 "vivado", "--test-session", "vivado"], env=self.benv)
+            self.vivado = Actor(
+                [
+                    sys.executable,
+                    str(ACTORS_HOST),
+                    "agent",
+                    "--home",
+                    str(self.home),
+                    "--name",
+                    "vivado",
+                    "--test-session",
+                    "vivado",
+                ],
+                env=self.benv,
+            )
             self.actors.append(self.vivado)
             assert self.vivado.next("joined", 60)["ok"]
             return
@@ -460,11 +613,22 @@ class Rehearsal:
         tag = f"{tag}-{self.rid}"  # a dir of this run's own under ~/fpga/in there
         self.tags.append(tag)
         out = self.run / "out" / tag / "top.bit"
-        b = subprocess.run([sys.executable, str(ACTORS_HOST), "build", "--out", str(out), "--tag", tag],
-                           capture_output=True, text=True, timeout=60, env=self.benv, check=True)
+        b = subprocess.run(
+            [sys.executable, str(ACTORS_HOST), "build", "--out", str(out), "--tag", tag],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=self.benv,
+            check=True,
+        )
         bit = json.loads(b.stdout.strip().splitlines()[-1])
-        r = subprocess.run(["/usr/bin/rsync", "-t", "-e", self.push_ssh, str(out), f"pi@127.0.0.1:{tag}/"],
-                           capture_output=True, text=True, timeout=60, env=self.benv)
+        r = subprocess.run(
+            ["/usr/bin/rsync", "-t", "-e", self.push_ssh, str(out), f"pi@127.0.0.1:{tag}/"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=self.benv,
+        )
         assert r.returncode == 0, r.stderr
         self.note("vivado pushed", tag=tag, sha12=bit["sha256"][:12])
         text = f"@bench artifact: {tag}/top.bit sha256:{bit['sha256']} size:{bit['size']} board:fake via:push"
@@ -479,8 +643,13 @@ class Rehearsal:
         self.say(line)
         if self.fake:
             self.vivado_turn(tag)
-        art = self.wait_msg(lambda m: m["from"] == "vivado" and ART_RE.search(m["text"] or "") is not None
-                            and m["ts"] >= t_say - 1, STEP_S, f"artifact line (cycle {n})")
+        art = self.wait_msg(
+            lambda m: (
+                m["from"] == "vivado" and ART_RE.search(m["text"] or "") is not None and m["ts"] >= t_say - 1
+            ),
+            STEP_S,
+            f"artifact line (cycle {n})",
+        )
         t_art = art["ts"]
         self.note("artifact", cycle=n, id=art["id"], text=art["text"][:120])
         if self.fake:
@@ -488,34 +657,50 @@ class Rehearsal:
             # line (the human's line may have woken it first: it @mentions bench too), else the job
             aid = art["id"]
             seen = self.bench.next("job", STEP_S, pred=lambda e: e["id"] == aid)
-            first = [e for e in self.bench.log if e.get("ev") in ("woken", "context") and aid in e.get("ids", [])]
+            first = [
+                e for e in self.bench.log if e.get("ev") in ("woken", "context") and aid in e.get("ids", [])
+            ]
             t_woke = min([e["at"] for e in first] + [seen["at"]])
             status = self.members()["bench"]["status"]
         else:
-            status = self.wait_member("bench", lambda m: m["status"] in ("busy", "waiting-approval"), STEP_S,
-                                      "woke (busy)")["status"]
+            status = self.wait_member(
+                "bench", lambda m: m["status"] in ("busy", "waiting-approval"), STEP_S, "woke (busy)"
+            )["status"]
             t_woke = time.time()
         self.note("bench woke", cycle=n, status=status, after_s=round(t_woke - t_art, 2))
         held = None
         if n == 1:
             held = self.check_hold()
-        res = self.wait_msg(lambda m: m["from"] == "bench" and m["text"].startswith("result:")
-                            and m["reply_to"] == art["id"], STEP_S, f"result line (cycle {n})")
+        res = self.wait_msg(
+            lambda m: m["from"] == "bench" and m["text"].startswith("result:") and m["reply_to"] == art["id"],
+            STEP_S,
+            f"result line (cycle {n})",
+        )
         self.note("result", cycle=n, text=res["text"].splitlines()[0])
         m = RESULT_RE.match(res["text"])
         assert m, res["text"]
         sha = ART_RE.search(art["text"]).group("sha")  # type: ignore[union-attr]
         assert m.group("sha12") == sha[:12] and res["host"] == self.remote
-        return {"cycle": n, "say_to_artifact_s": round(t_art - t_say, 2), "artifact_to_woke_s": round(t_woke - t_art, 2),
-                "artifact_to_result_s": round(res["ts"] - t_art, 2), "result": res["text"].splitlines()[0],
-                "uart": m.group("uart"), "held": held}
+        return {
+            "cycle": n,
+            "say_to_artifact_s": round(t_art - t_say, 2),
+            "artifact_to_woke_s": round(t_woke - t_art, 2),
+            "artifact_to_result_s": round(res["ts"] - t_art, 2),
+            "result": res["text"].splitlines()[0],
+            "uart": m.group("uart"),
+            "held": held,
+        }
 
     def check_hold(self) -> dict[str, Any] | None:
         """While bench's approval prompt is open, the buddy list says waiting-approval and a
         message for it is held (§27.5.6): the broker posts nothing into an open prompt."""
         try:
-            m = self.wait_member("bench", lambda m: m["status"] == "waiting-approval", 20 if self.fake else STEP_S,
-                                 "waiting-approval")
+            m = self.wait_member(
+                "bench",
+                lambda m: m["status"] == "waiting-approval",
+                20 if self.fake else STEP_S,
+                "waiting-approval",
+            )
         except AssertionError:
             if self.fake:
                 raise
@@ -528,12 +713,20 @@ class Rehearsal:
         still = self.members()["bench"]
         # the stand-in's inbox watcher reports every frame as it arrives, even while its turn
         # sits in the approval prompt: none may arrive during the hold
-        frames_during = ([e for e in self.bench.log if e.get("ev") == "inbox" and e["at"] > t_wait]
-                         if self.fake else [])
-        ok = still["status"] == "waiting-approval" and (still["held"] or still["queued"]) and not frames_during
+        frames_during = (
+            [e for e in self.bench.log if e.get("ev") == "inbox" and e["at"] > t_wait] if self.fake else []
+        )
+        ok = (
+            still["status"] == "waiting-approval" and (still["held"] or still["queued"]) and not frames_during
+        )
         self.note("hold", status=still["status"], held=still["held"], queued=still["queued"], ok=bool(ok))
         assert ok or not self.fake, (still, frames_during)
-        return {"message_id": mid, "status": still["status"], "held": still["held"], "queued": still["queued"]}
+        return {
+            "message_id": mid,
+            "status": still["status"],
+            "held": still["held"],
+            "queued": still["queued"],
+        }
 
     # ------------------------------------------------------------ report
     def report(self, cycles: list[dict[str, Any]]) -> Path:
@@ -542,18 +735,27 @@ class Rehearsal:
         runs = HERE / "_runs"
         runs.mkdir(exist_ok=True)
         out = runs / f"m8-{time.strftime('%Y%m%d-%H%M%S')}.md"
-        lines = [f"# M8 rehearsal ({'fake remote, scripted' if self.fake else 'real remote'})", "",
-                 f"- remote: `{self.remote}`; link: {self.checks.get('link')}",
-                 f"- versions: this broker {self.checks.get('broker_version')}, satellite {self.checks.get('sat_version')}",
-                 f"- tiers: {self.checks.get('tiers')}", f"- /hops: {self.checks.get('hop_limit')}",
-                 f"- harness config on this machine unchanged: {self.checks.get('drift_ok')}"
-                 f" (info: {self.checks.get('drift_info')})", ""]
-        lines += ["| cycle | say → artifact | artifact → bench has it | artifact → result | result | hold |",
-                  "|---|---|---|---|---|---|"]
+        lines = [
+            f"# M8 rehearsal ({'fake remote, scripted' if self.fake else 'real remote'})",
+            "",
+            f"- remote: `{self.remote}`; link: {self.checks.get('link')}",
+            f"- versions: this broker {self.checks.get('broker_version')}, satellite {self.checks.get('sat_version')}",
+            f"- tiers: {self.checks.get('tiers')}",
+            f"- /hops: {self.checks.get('hop_limit')}",
+            f"- harness config on this machine unchanged: {self.checks.get('drift_ok')}"
+            f" (info: {self.checks.get('drift_info')})",
+            "",
+        ]
+        lines += [
+            "| cycle | say → artifact | artifact → bench has it | artifact → result | result | hold |",
+            "|---|---|---|---|---|---|",
+        ]
         for c in cycles:
             hold = "—" if not c["held"] else f"{c['held']['status']}, held={c['held']['held']}"
-            lines.append(f"| {c['cycle']} | {c['say_to_artifact_s']} s | {c['artifact_to_woke_s']} s |"
-                         f" {c['artifact_to_result_s']} s | `{c['result']}` | {hold} |")
+            lines.append(
+                f"| {c['cycle']} | {c['say_to_artifact_s']} s | {c['artifact_to_woke_s']} s |"
+                f" {c['artifact_to_result_s']} s | `{c['result']}` | {hold} |"
+            )
         lines += ["", "## Timeline", "", "```"]
         lines += [json.dumps(e) for e in self.timeline]
         lines += ["```", "", f"Room report: `{self.run / 'report.md'}`", ""]
@@ -565,26 +767,36 @@ class Rehearsal:
         for a in self.actors:
             a.stop()
         if self.fake:
-            for cmd in (["switchboard", "--home", CT_HOME, "remote", "remove", self.remote, "--yes"],
-                        ["python3", "-c", "p='/home/pi/.ssh/authorized_keys'; L=open(p).read().splitlines(True);"
-                                          f" open(p,'w').writelines(l for l in L if {PUSH_COMMENT!r} not in l)"],
-                        ["python3", "-c", f"import shutil; shutil.rmtree({CT_HOME!r}, ignore_errors=True)"]):
+            for cmd in (
+                ["switchboard", "--home", CT_HOME, "remote", "remove", self.remote, "--yes"],
+                [
+                    "python3",
+                    "-c",
+                    "p='/home/pi/.ssh/authorized_keys'; L=open(p).read().splitlines(True);"
+                    f" open(p,'w').writelines(l for l in L if {PUSH_COMMENT!r} not in l)",
+                ],
+                ["python3", "-c", f"import shutil; shutil.rmtree({CT_HOME!r}, ignore_errors=True)"],
+            ):
                 with_rc = self.ct(*cmd, check=False)
                 if with_rc.returncode != 0:
                     print(f"[m8] teardown: {' '.join(cmd[:4])}: {with_rc.stderr[-300:]}", flush=True)
             if self.ct_before is not None:
                 # the authorized_keys backups `remote accept` and `remote remove` made, the pushed
                 # bitstreams, and flash.log back to its length before the run
-                code = ("import json, os, shutil, sys; b = json.loads(sys.argv[1]); h = '/home/pi'\n"
-                        "for n in os.listdir(h + '/.ssh'):\n"
-                        "    if n.startswith('authorized_keys.bak-switchboard-') and n not in b['ssh']:\n"
-                        "        os.unlink(h + '/.ssh/' + n)\n"
-                        "for t in b['tags']:\n"
-                        "    shutil.rmtree(h + '/fpga/in/' + t, ignore_errors=True)\n"
-                        "f = h + '/bench/flash.log'\n"
-                        "if os.path.exists(f):\n"
-                        "    os.truncate(f, b['flash_log']) if b['flash_log'] is not None else os.unlink(f)\n")
-                r = self.ct("python3", "-c", code, json.dumps({**self.ct_before, "tags": self.tags}), check=False)
+                code = (
+                    "import json, os, shutil, sys; b = json.loads(sys.argv[1]); h = '/home/pi'\n"
+                    "for n in os.listdir(h + '/.ssh'):\n"
+                    "    if n.startswith('authorized_keys.bak-switchboard-') and n not in b['ssh']:\n"
+                    "        os.unlink(h + '/.ssh/' + n)\n"
+                    "for t in b['tags']:\n"
+                    "    shutil.rmtree(h + '/fpga/in/' + t, ignore_errors=True)\n"
+                    "f = h + '/bench/flash.log'\n"
+                    "if os.path.exists(f):\n"
+                    "    os.truncate(f, b['flash_log']) if b['flash_log'] is not None else os.unlink(f)\n"
+                )
+                r = self.ct(
+                    "python3", "-c", code, json.dumps({**self.ct_before, "tags": self.tags}), check=False
+                )
                 if r.returncode != 0:
                     print(f"[m8] teardown: container files: {r.stderr[-300:]}", flush=True)
         if self.broker is not None and self.broker.poll() is None:
@@ -642,5 +854,19 @@ def test_m8_rehearsal(reh: Rehearsal) -> None:
 
 
 if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-m", "live", "-s", "-p", "no:cacheprovider", "-q",
-                          "-o", "addopts=", *[a for a in sys.argv[1:] if a != "--scripted"]]))
+    sys.exit(
+        pytest.main(
+            [
+                __file__,
+                "-m",
+                "live",
+                "-s",
+                "-p",
+                "no:cacheprovider",
+                "-q",
+                "-o",
+                "addopts=",
+                *[a for a in sys.argv[1:] if a != "--scripted"],
+            ]
+        )
+    )

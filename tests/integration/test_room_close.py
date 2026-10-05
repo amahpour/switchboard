@@ -11,9 +11,9 @@ from typing import Any
 
 import httpx
 import pytest
-
 from conftest import InProcBroker, cookie_of, ws_connect
 from fakes.fake_agent import FakeAgent
+
 from switchboard.cli import main
 from switchboard.config import Config
 
@@ -79,8 +79,12 @@ async def test_close_reuse_and_reopen(broker: InProcBroker) -> None:
     try:
         ws.send(json.dumps({"t": "hello", "rooms": ["#build"], "after": {}}))
         recv_until(ws, lambda f: f.get("t") == "members")
-        async with FakeAgent(b.home, "ka") as alpha, FakeAgent(b.home, "kb") as beta, \
-                FakeAgent(b.home, "kd") as delta, FakeAgent(b.home, "kg") as gamma:
+        async with (
+            FakeAgent(b.home, "ka") as alpha,
+            FakeAgent(b.home, "kb") as beta,
+            FakeAgent(b.home, "kd") as delta,
+            FakeAgent(b.home, "kg") as gamma,
+        ):
             assert (await alpha.join("#build", "alpha"))["ok"]
             assert (await beta.join("#build", "beta"))["ok"]
             assert (await delta.join("#build", "delta"))["ok"]
@@ -90,8 +94,11 @@ async def test_close_reuse_and_reopen(broker: InProcBroker) -> None:
             await until(lambda: open_sinks(b) == 1, what="alpha's wait")
 
             res = await asyncio.to_thread(command, b, "/close")
-            assert res == {"ok": True, "text": "closed #build: 3 agent(s) removed; history kept. The name is free"
-                                               " again; reopen this room from Closed rooms in the web UI"}
+            assert res == {
+                "ok": True,
+                "text": "closed #build: 3 agent(s) removed; history kept. The name is free"
+                " again; reopen this room from Closed rooms in the web UI",
+            }
 
             # the open wait returns `closed`, with the exact text
             r = await asyncio.wait_for(t, 5)
@@ -115,8 +122,11 @@ async def test_close_reuse_and_reopen(broker: InProcBroker) -> None:
                 ("alpha", "leave", "left (#build closed)"),
                 ("beta", "leave", "left (#build closed)"),
                 ("delta", "leave", "left (#build closed)"),
-                ("switchboard", "notice",
-                 "#build closed by alice (via web): 3 agent(s) removed; the history is kept"),
+                (
+                    "switchboard",
+                    "notice",
+                    "#build closed by alice (via web): 3 agent(s) removed; the history is kept",
+                ),
             ]
             assert frames[-1]["rooms"] == []
 
@@ -125,7 +135,12 @@ async def test_close_reuse_and_reopen(broker: InProcBroker) -> None:
             assert got == {"rooms": [], "closed": 1}
             [c] = b.web.get("/api/closed-rooms").json()["rooms"]
             assert (c["id"], c["name"], c["display"], c["closed_by"], c["reopenable"]) == (
-                1, "#build~closed-1", "#build", "alice", True)
+                1,
+                "#build~closed-1",
+                "#build",
+                "alice",
+                True,
+            )
             r = b.web.get("/api/rooms/build/messages")
             assert r.status_code == 404 and "it is closed" in r.text
 
@@ -170,8 +185,10 @@ async def test_close_reuse_and_reopen(broker: InProcBroker) -> None:
 def test_close_an_empty_room_and_the_report(broker: InProcBroker) -> None:
     b = broker
     assert command(b, "/close") == {
-        "ok": True, "text": "closed #build: 0 agent(s) removed; history kept. The name is free again;"
-                            " reopen this room from Closed rooms in the web UI"}
+        "ok": True,
+        "text": "closed #build: 0 agent(s) removed; history kept. The name is free again;"
+        " reopen this room from Closed rooms in the web UI",
+    }
     out = b.home / "r.md"  # a query-only read of the live database (WAL)
     assert main(["report", "--room", "#build", "--home", str(b.home), "--out", str(out)]) == 0
     text = out.read_text()

@@ -117,7 +117,9 @@ class Stream:
         line, self.buf = self.buf.split(b"\n", 1)
         return json.loads(line)
 
-    def call(self, method: str, params: dict[str, Any] | None = None, timeout: float = 10.0) -> dict[str, Any]:
+    def call(
+        self, method: str, params: dict[str, Any] | None = None, timeout: float = 10.0
+    ) -> dict[str, Any]:
         rid = self.send(method, params)
         deadline = time.monotonic() + timeout
         while True:
@@ -370,8 +372,13 @@ class BrokerConn:
             self._pending.pop(rid, None)
             raise
 
-    async def call(self, method: str, params: dict[str, Any] | None = None, timeout: float = 15.0,
-                   ready_timeout: float = 3.0) -> dict[str, Any]:
+    async def call(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        timeout: float = 15.0,
+        ready_timeout: float = 3.0,
+    ) -> dict[str, Any]:
         """A request on the (hello'd) connection. Raises BrokerDown, RpcError or TimeoutError."""
         self.start()
         if not self.ready.is_set():

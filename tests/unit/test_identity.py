@@ -41,12 +41,22 @@ def test_claude_needs_env_parent_and_registry(tmp_path: Path) -> None:
     # env alone never makes a session Claude
     assert detect(env, {"name": "claude-code"}, "/bin/bash", ppid=42, sessions_dir=sd)[0] == "unknown"
     # a registry mismatch (another session's socket) is not Claude
-    assert detect({**env, "CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/cc-socks/9.sock"}, None, CLAUDE_ARGV,
-                  ppid=42, sessions_dir=sd)[0] == "unknown"
+    assert (
+        detect(
+            {**env, "CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/cc-socks/9.sock"},
+            None,
+            CLAUDE_ARGV,
+            ppid=42,
+            sessions_dir=sd,
+        )[0]
+        == "unknown"
+    )
     # no registry file
     assert detect(env, None, CLAUDE_ARGV, ppid=43, sessions_dir=sd)[0] == "unknown"
-    assert detect({"CLAUDE_CODE_MESSAGING_SOCKET": sock}, None, CLAUDE_ARGV, ppid=42,
-                  sessions_dir=sd)[0] == "unknown"
+    assert (
+        detect({"CLAUDE_CODE_MESSAGING_SOCKET": sock}, None, CLAUDE_ARGV, ppid=42, sessions_dir=sd)[0]
+        == "unknown"
+    )
 
 
 def test_codex_with_leaked_claude_env_is_codex_with_env_leak() -> None:
@@ -58,8 +68,13 @@ def test_codex_with_leaked_claude_env_is_codex_with_env_leak() -> None:
 
 
 def test_env_view_never_copies_the_token_value() -> None:
-    environ = {"CLAUDECODE": "1", "CLAUDE_CODE_MESSAGING_TOKEN": "secret-token-value",
-               "CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/s", "HOME": "/h", "API_KEY": "k"}
+    environ = {
+        "CLAUDECODE": "1",
+        "CLAUDE_CODE_MESSAGING_TOKEN": "secret-token-value",
+        "CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/s",
+        "HOME": "/h",
+        "API_KEY": "k",
+    }
     v = env_view(environ)
     assert v["CLAUDE_CODE_MESSAGING_TOKEN"] == ""
     assert "secret-token-value" not in json.dumps(v)

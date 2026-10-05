@@ -10,12 +10,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import World
 from test_claude_adapter import claude
 from test_cursor_adapter import cursor, park_result, stop
 from test_devin_adapter import devin
+
 from switchboard.adapters.cursor import FOLLOWUP_CONFIRM_S
 from switchboard.config import Config
 from switchboard.delivery.engine import TAINTED_GENS_MAX
@@ -43,7 +43,9 @@ def test_a_late_unwait_after_the_member_left_only_refreshes_the_room(w: World) -
     sink, acts = w.engine.open_wait(w.p(p), w.m(m), "w1", 50)
     w.actions += acts
     leave(w, m.id)
-    assert w.resolved(sink.id) == [{"status": "left", "text": "[switchboard] you are no longer in this room."}]
+    assert w.resolved(sink.id) == [
+        {"status": "left", "text": "[switchboard] you are no longer in this room."}
+    ]
     # the harness cancels that wait() afterwards: nothing to close, take back or offer
     assert w.engine.unwait(w.p(p), "w1") == [Snapshot(w.room.id)]
     assert w.engine.parked_reason(m.id) is None
@@ -75,7 +77,10 @@ def test_a_dropped_connection_cancels_only_its_own_waits(w: World) -> None:
     q, qm = w.agent("bot2")
     mine, _ = w.engine.open_wait(w.p(p), w.m(m), "w1", 50, conn_id=7)
     other, _ = w.engine.open_wait(w.p(q), w.m(qm), "w1", 50, conn_id=8)
-    assert w.engine.close_conn_sinks(7) == [ResolveSink(mine.id, {"status": "cancelled"}), Snapshot(w.room.id)]
+    assert w.engine.close_conn_sinks(7) == [
+        ResolveSink(mine.id, {"status": "cancelled"}),
+        Snapshot(w.room.id),
+    ]
     assert w.engine.sinks.get(mine.id).close_reason == "disconnect"
     assert w.engine.sinks.get(other.id).open
     assert w.engine.close_conn_sinks(7) == []
@@ -93,9 +98,16 @@ def test_a_reply_names_the_message_it_answers(w: World) -> None:
     p, m = w.agent("bot")
     _q, qm = w.agent("peer")
     question = w.human("which parser?")
-    reply = w.store.insert_message(w.room.id, sender_name="peer", sender_kind="agent", via="mcp",
-                                   text="the new one", sender_membership_id=qm.id, sender_harness="test",
-                                   reply_to=question.id)
+    reply = w.store.insert_message(
+        w.room.id,
+        sender_name="peer",
+        sender_kind="agent",
+        via="mcp",
+        text="the new one",
+        sender_membership_id=qm.id,
+        sender_harness="test",
+        reply_to=question.id,
+    )
     w.actions += w.engine.on_message(reply.id)
     text, _bid, count, _more, _acts = w.engine.pull(w.p(p), w.m(m), "read", 20)
     assert count == 2
@@ -226,8 +238,14 @@ def test_a_context_ack_after_the_member_left_confirms_nothing(w: World) -> None:
 def test_only_chat_messages_are_delivered(w: World) -> None:
     p, m = w.agent("bot")
     sink, _acts = w.engine.open_wait(w.p(p), w.m(m), "w1", 50)
-    notice = w.store.insert_message(w.room.id, sender_name="switchboard", sender_kind="system",
-                                    via="system", kind="notice", text="alice paused the room")
+    notice = w.store.insert_message(
+        w.room.id,
+        sender_name="switchboard",
+        sender_kind="system",
+        via="system",
+        kind="notice",
+        text="alice paused the room",
+    )
     assert w.engine.on_message(notice.id) == []
     assert w.engine.on_message(notice.id + 1000) == []  # no such message
     assert w.engine.sinks.get(sink.id).open  # a notice never fills a wait()
@@ -300,7 +318,8 @@ def test_the_taint_memory_keeps_only_the_newest_prompts(w: World) -> None:
 
 # ------------------------------------------------ guards: ended, paused, held
 def test_an_ended_session_is_offered_nothing_even_with_a_membership_row_left(
-        w: World, clock: FakeClock) -> None:
+    w: World, clock: FakeClock
+) -> None:
     """The store ends a session's memberships with it (``end_participant``). Should a
     membership row ever outlive its participant, the engine still offers it nothing
     and the watchdog leaves its @mentions alone."""
@@ -323,7 +342,9 @@ def test_an_ended_session_is_offered_nothing_even_with_a_membership_row_left(
 
 
 @pytest.mark.parametrize("how", ["paused", "held"])
-def test_the_parked_escalation_skips_a_paused_room_or_a_held_member(w: World, clock: FakeClock, how: str) -> None:
+def test_the_parked_escalation_skips_a_paused_room_or_a_held_member(
+    w: World, clock: FakeClock, how: str
+) -> None:
     """Paused rooms and held members are left alone by the watchdog (§8.5), even
     while the member is still recorded as parked."""
     p, m = cursor(w, status="idle")  # stopped, no stop hook waiting: nothing can reach it
@@ -363,10 +384,12 @@ def test_a_close_resolves_an_open_wait_with_the_rooms_display_name(w: World) -> 
     w.actions += acts
     close(w, m.id)
     assert w.store.room_by_id(w.room.id).name == f"#build~closed-{w.room.id}"
-    assert w.resolved(sink.id) == [{
-        "status": "closed",
-        "text": f"[switchboard] #build was closed by {w.cfg.human_name}; you are no longer in it.",
-    }]
+    assert w.resolved(sink.id) == [
+        {
+            "status": "closed",
+            "text": f"[switchboard] #build was closed by {w.cfg.human_name}; you are no longer in it.",
+        }
+    ]
     ended = w.store.get_membership(m.id)
     assert ended.left_reason == "closed" and not ended.kicked
 
@@ -378,10 +401,12 @@ def test_a_close_names_this_room_when_the_room_row_is_gone(w: World, monkeypatch
     w.store.end_membership(m.id, "closed", keep_cred=True)
     monkeypatch.setattr(w.store, "room_by_id", lambda rid: None)
     w.actions += w.engine.on_membership_ended(m.id, "closed")
-    assert w.resolved(sink.id) == [{
-        "status": "closed",
-        "text": f"[switchboard] this room was closed by {w.cfg.human_name}; you are no longer in it.",
-    }]
+    assert w.resolved(sink.id) == [
+        {
+            "status": "closed",
+            "text": f"[switchboard] this room was closed by {w.cfg.human_name}; you are no longer in it.",
+        }
+    ]
 
 
 def test_a_close_releases_the_parks_of_a_session_with_no_room_left(w: World) -> None:

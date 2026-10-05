@@ -18,10 +18,10 @@ from typing import Any
 
 import httpx
 import pytest
-
 from conftest import cookie_of, ws_connect
 from fakes.fake_agent import FakeAgent
 from fakes.fake_link import FakeLink, wait_for
+
 from switchboard.broker.hub import Hub, WsSubscriber
 from switchboard.broker.rpc import TailSubscriber
 
@@ -38,8 +38,9 @@ def recv_until(ws: Any, pred: Any, timeout: float = 10.0) -> dict[str, Any]:
             return f
 
 
-def recv_kept(ws: Any, seen: list[dict[str, Any]], pred: Any, since: int = 0,
-              timeout: float = 10.0) -> dict[str, Any]:
+def recv_kept(
+    ws: Any, seen: list[dict[str, Any]], pred: Any, since: int = 0, timeout: float = 10.0
+) -> dict[str, Any]:
     """``recv_until`` that keeps every frame it reads in ``seen`` and first looks at the
     ones from ``since`` on, so waiting for one kind of frame never drops another that
     came first (the ``remotes`` event for a join can come before that room's messages)."""
@@ -62,6 +63,7 @@ def remotes_frame(state: str, reason: str | None = None) -> Any:
             return False
         mine = [r for r in f["remotes"] if r["name"] == NAME]
         return bool(mine) and mine[0]["state"] == state and (reason is None or mine[0]["reason"] == reason)
+
     return pred
 
 
@@ -99,8 +101,11 @@ def shown(web: httpx.Client, name: str = NAME) -> dict[str, Any]:
 
 def enable(web: httpx.Client, b: Any, name: str = NAME) -> httpx.Response:
     """The Enable button: consent for the config the panel shows (its ``config_hash``)."""
-    return web.post(f"/api/remotes/{name}/enable", json={"config_hash": shown(web, name)["config_hash"]},
-                    headers=b.write_headers())
+    return web.post(
+        f"/api/remotes/{name}/enable",
+        json={"config_hash": shown(web, name)["config_hash"]},
+        headers=b.write_headers(),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +134,12 @@ def test_remotes_api_needs_session(idle_link: FakeLink) -> None:
         body = r.json()
         assert body["config_error"] is None and body["version"]
         [rem] = body["remotes"]
-        assert (rem["name"], rem["state"], rem["reason"], rem["enabled"]) == (NAME, "disabled", "not_enabled", False)
+        assert (rem["name"], rem["state"], rem["reason"], rem["enabled"]) == (
+            NAME,
+            "disabled",
+            "not_enabled",
+            False,
+        )
         assert rem["rooms"] == ["#fpga"] and rem["transport"] == "exec"
         assert rem["text"].startswith(f"{NAME}: needs enable")
         # what an Enable would consent to: the destination, the pinned host keys (none for
@@ -185,15 +195,24 @@ def test_enable_needs_origin_and_x_switchboard(idle_link: FakeLink) -> None:
         assert res["state"] == "up" and res["text"].startswith("link ok: satellite "), res
         assert res["enabled"] and res["enabled_via"] == "web"
         assert row(idle_link).enabled_via == "web"
-        wait_for(lambda: [t for t in idle_link.notices() if t.startswith(f"{NAME}: link up (enabled via web by alice")],
-                 what="the link-up notice naming the web")
+        wait_for(
+            lambda: [
+                t for t in idle_link.notices() if t.startswith(f"{NAME}: link up (enabled via web by alice")
+            ],
+            what="the link-up notice naming the web",
+        )
         # disable from the web: the link stops, a notice says who and how
         r = web.post(f"/api/remotes/{NAME}/disable", json={}, headers=b.write_headers())
         assert r.status_code == 200 and r.json()["state"] == "disabled" and r.json()["reason"] == "disabled"
-        wait_for(lambda: any("link disabled by alice (via web)" in t for t in idle_link.notices()),
-                 what="the disable notice")
+        wait_for(
+            lambda: any("link disabled by alice (via web)" in t for t in idle_link.notices()),
+            what="the disable notice",
+        )
         evs = b.on_loop(lambda: b.state.store.recent_events(kinds=["remote"], limit=10))
-        assert [(e.data["what"], e.data["via"]) for e in reversed(evs)] == [("enable", "web"), ("disable", "web")]
+        assert [(e.data["what"], e.data["via"]) for e in reversed(evs)] == [
+            ("enable", "web"),
+            ("disable", "web"),
+        ]
     finally:
         web.close()
 
@@ -207,7 +226,9 @@ def test_enable_from_web_clears_blocked() -> None:
             [rem] = web.get("/api/remotes").json()["remotes"]
             assert (rem["state"], rem["reason"]) == ("blocked", "proto")
             assert "install the same switchboard version" in rem["text"]
-            assert rem["hint"].startswith("the satellite speaks another link protocol")  # the panel's "What to do"
+            assert rem["hint"].startswith(
+                "the satellite speaks another link protocol"
+            )  # the panel's "What to do"
             time.sleep(1.5)
             assert link.status()["state"] == "blocked"  # a block never retries by itself
             # the owner installs the same version (here: the satellite speaks protocol 1 again)
@@ -244,7 +265,10 @@ def test_remotes_ws_event(up_link: FakeLink) -> None:
         old_hash = f["remotes"][0]["config_hash"]
         up_link.write_remotes(up_link.toml + "end_after_s = 3600\n")
         f = recv_until(ws, remotes_frame("disabled", "config_changed"))
-        assert f["remotes"][0]["config_hash"] != old_hash and "changed since you enabled it" in f["remotes"][0]["hint"]
+        assert (
+            f["remotes"][0]["config_hash"] != old_hash
+            and "changed since you enabled it" in f["remotes"][0]["hint"]
+        )
         # a remotes.toml that stops parsing: the page hears that too (its "not read" chip)
         up_link.write_remotes("[remote.fpga-pi]\nhost = \n")
         f = recv_until(ws, lambda fr: fr.get("t") == "remotes" and fr["config_error"] is not None)
@@ -295,15 +319,22 @@ async def test_member_and_message_host_fields(up_link: FakeLink) -> None:
         ws.send(json.dumps({"t": "hello", "rooms": ["#fpga"], "after": {}}))
         recv_until(ws, lambda f: f.get("t") == "members")
         seen: list[dict[str, Any]] = []  # every frame from here on: the remotes event may come first
-        async with FakeAgent(up_link.pi, "bench") as pi_agent, FakeAgent(up_link.desk, "vivado") as desk_agent:
+        async with (
+            FakeAgent(up_link.pi, "bench") as pi_agent,
+            FakeAgent(up_link.desk, "vivado") as desk_agent,
+        ):
             assert (await pi_agent.join("#fpga", "bench"))["ok"]
             assert (await desk_agent.join("#fpga", "vivado"))["ok"]
             assert (await pi_agent.say("#fpga", "result: 3f9a1c2b7d10 flash=ok"))["ok"]
             assert (await desk_agent.say("#fpga", "artifact: blinky/top.bit"))["ok"]
             # the WebSocket's message frames carry the sender's host
-            f = recv_kept(ws, seen, lambda fr: fr.get("t") == "msg" and fr["msg"]["text"].startswith("result:"))
+            f = recv_kept(
+                ws, seen, lambda fr: fr.get("t") == "msg" and fr["msg"]["text"].startswith("result:")
+            )
             assert f["msg"]["from"] == "bench" and f["msg"]["host"] == NAME
-            f = recv_kept(ws, seen, lambda fr: fr.get("t") == "msg" and fr["msg"]["text"].startswith("artifact:"))
+            f = recv_kept(
+                ws, seen, lambda fr: fr.get("t") == "msg" and fr["msg"]["text"].startswith("artifact:")
+            )
             assert f["msg"]["from"] == "vivado" and f["msg"]["host"] is None
             # and so do the REST members and history
             members = {m["name"]: m for m in web.get("/api/rooms/fpga/members").json()["members"]}
@@ -316,16 +347,24 @@ async def test_member_and_message_host_fields(up_link: FakeLink) -> None:
             assert {(m["from"], m["host"]) for m in joins} == {("bench", NAME), ("vivado", None)}
             assert any(m["text"].startswith("joined (test on fpga-pi") for m in joins if m["from"] == "bench")
             # the remotes panel names the remote's members
-            wait_for(lambda: web.get("/api/remotes").json()["remotes"][0]["members"] == ["bench"],
-                     what="the panel's members")
-            recv_kept(ws, seen, lambda fr: fr.get("t") == "remotes" and fr["remotes"][0]["members"] == ["bench"])
+            wait_for(
+                lambda: web.get("/api/remotes").json()["remotes"][0]["members"] == ["bench"],
+                what="the panel's members",
+            )
+            recv_kept(
+                ws, seen, lambda fr: fr.get("t") == "remotes" and fr["remotes"][0]["members"] == ["bench"]
+            )
             # and when it leaves the room, the panel hears that too (a member that only goes
             # offline stays listed: it is still in the room). Only frames read after this
             # point count: one from before bench's join also lists no members.
             mark = len(seen)
             assert (await pi_agent.leave("#fpga"))["ok"]
-            recv_kept(ws, seen, lambda fr: fr.get("t") == "remotes" and fr["remotes"][0]["members"] == [],
-                      since=mark)
+            recv_kept(
+                ws,
+                seen,
+                lambda fr: fr.get("t") == "remotes" and fr["remotes"][0]["members"] == [],
+                since=mark,
+            )
     finally:
         ws.close()
         web.close()
@@ -338,7 +377,11 @@ def test_remotes_event_is_for_the_web_only() -> None:
     assert ws.wants("remotes", None) and "remotes" not in TailSubscriber.kinds
     hub.add(ws)
     assert hub.remotes_changed([{"name": NAME, "state": "up"}]) == 1
-    assert ws.q.get_nowait() == {"t": "remotes", "remotes": [{"name": NAME, "state": "up"}], "config_error": None}
+    assert ws.q.get_nowait() == {
+        "t": "remotes",
+        "remotes": [{"name": NAME, "state": "up"}],
+        "config_error": None,
+    }
 
 
 def test_remote_hooks_text_is_cleaned_and_bounded() -> None:

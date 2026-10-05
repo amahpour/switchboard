@@ -12,9 +12,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from conftest import FakeClock
 from test_store import add_agent
+
 from switchboard import db
 from switchboard.broker.commands import Actor, CommandError, parse_command
 from switchboard.broker.hub import Hub
@@ -59,12 +59,16 @@ def test_hops_on_a_loop_guard_pause_below_the_new_limit(svc: RoomService) -> Non
     agent_msgs(svc, 7)
     svc.store.set_paused(room.id, True, "loop guard")
     # at or over the limit: /resume is the way out, and it resets the count
-    assert cmd(svc, "/hops", CLI).endswith("still paused by the loop guard: /resume to continue (it resets the count)")
+    assert cmd(svc, "/hops", CLI).endswith(
+        "still paused by the loop guard: /resume to continue (it resets the count)"
+    )
     cmd(svc, "/hops 30")
     # now under the limit: still paused, and nothing to say about the count
     text = cmd(svc, "/hops", CLI)
-    assert text == ("#build: hops 7/30 (the room pauses after 30 agent messages in a row with none from alice)"
-                    "; still paused by the loop guard: /resume to continue")
+    assert text == (
+        "#build: hops 7/30 (the room pauses after 30 agent messages in a row with none from alice)"
+        "; still paused by the loop guard: /resume to continue"
+    )
     # setting the same limit again reports the same state and changes nothing
     same = cmd(svc, "/hops 30", CLI)
     assert same.endswith("; still paused by the loop guard: /resume to continue")

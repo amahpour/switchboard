@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from fakes.fake_codex_daemon import FakeCodexDaemon
+
 from switchboard.adapters import codex_rpc
 from switchboard.mcp import codex_wake
 
@@ -44,8 +44,14 @@ def tui(monkeypatch: pytest.MonkeyPatch) -> dict[str, bool]:
     return state
 
 
-def wake(sock: str | None, proven: set[str] | None = None, *, text: str = "[switchboard] #fpga: hi",
-         tid: str = TID, nonce: str = NONCE) -> Any:
+def wake(
+    sock: str | None,
+    proven: set[str] | None = None,
+    *,
+    text: str = "[switchboard] #fpga: hi",
+    tid: str = TID,
+    nonce: str = NONCE,
+) -> Any:
     return asyncio.run(codex_wake.wake(sock, tid, nonce, text, 42, set() if proven is None else proven))
 
 
@@ -122,7 +128,8 @@ def test_no_tui_or_no_daemon_means_no_wake(daemon: Any, tui: dict[str, bool], tm
 
 
 def test_the_tui_check_matches_the_configured_path_and_where_it_resolves(
-        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """lsof names a socket by the path it was bound with: on macOS a socket under /tmp
     shows as /tmp/..., though it resolves to /private/tmp/... (a CI failure)."""
     from switchboard.adapters import codex as cx
@@ -134,11 +141,15 @@ def test_the_tui_check_matches_the_configured_path_and_where_it_resolves(
     link.symlink_to(real)
     bound = str(link / "app-server-control.sock")  # as the app-server bound it
     tui_pid = os.getpid() + 1
-    out = (f"p{os.getpid() + 2}\nf5\nd0xaaa\nn{bound}\n"  # the app-server's end
-           f"p{tui_pid}\nf7\nd0xbbb\nn->0xaaa\n")  # the TUI's end
+    out = (
+        f"p{os.getpid() + 2}\nf5\nd0xaaa\nn{bound}\n"  # the app-server's end
+        f"p{tui_pid}\nf7\nd0xbbb\nn->0xaaa\n"
+    )  # the TUI's end
     monkeypatch.setattr(cx, "lsof_bin", lambda: "/usr/sbin/lsof")
     monkeypatch.setattr(cx, "_run_lsof", lambda _bin: out)
-    monkeypatch.setattr(proc, "info", lambda pid: proc.ProcInfo(pid, 1, 100.0, os.getuid()) if pid == tui_pid else None)
+    monkeypatch.setattr(
+        proc, "info", lambda pid: proc.ProcInfo(pid, 1, 100.0, os.getuid()) if pid == tui_pid else None
+    )
     monkeypatch.setattr(proc, "argv_many", lambda infos: {i.pid: "codex" for i in infos})
     assert codex_wake.tui_attached(bound)
     assert codex_wake.tui_attached(str(real / "app-server-control.sock")) is False  # only the resolved path
@@ -154,8 +165,9 @@ def test_an_rpc_error_is_a_refusal(daemon: Any, tui: dict[str, bool]) -> None:
     assert refused(sock) == codex_wake.RPC_FAILED
 
 
-def test_thread_contents_never_leave_memory(daemon: Any, tui: dict[str, bool],
-                                            caplog: pytest.LogCaptureFixture) -> None:
+def test_thread_contents_never_leave_memory(
+    daemon: Any, tui: dict[str, bool], caplog: pytest.LogCaptureFixture
+) -> None:
     from fakes.fake_codex_daemon import CANARY
 
     fake, sock = daemon

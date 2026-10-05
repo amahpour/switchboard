@@ -21,8 +21,17 @@ from switchboard import db
 from switchboard.store import Store
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "db" / "v0_2_0.sql"
-V1_TABLES = ("meta", "rooms", "participants", "memberships", "messages", "batches", "deliveries", "events",
-             "web_sessions")
+V1_TABLES = (
+    "meta",
+    "rooms",
+    "participants",
+    "memberships",
+    "messages",
+    "batches",
+    "deliveries",
+    "events",
+    "web_sessions",
+)
 
 
 def make_v1(path: Path) -> list[str]:
@@ -95,8 +104,11 @@ def test_v1_fixture_migrates_to_the_current_schema(tmp_path: Path) -> None:
     assert db.schema_version(con) == db.SCHEMA_VERSION
     assert db.integrity_ok(con) is None
     assert db.row_counts(con, V1_TABLES) == before
-    assert db.row_counts(con, ("remotes", "passkeys", "link_machines")) == {"remotes": 0, "passkeys": 0,
-                                                                            "link_machines": 0}
+    assert db.row_counts(con, ("remotes", "passkeys", "link_machines")) == {
+        "remotes": 0,
+        "passkeys": 0,
+        "link_machines": 0,
+    }
     # the migrated schema is the fresh one: same columns in the same order, same indexes
     fresh = db.open_db(tmp_path / "fresh.db")
     for t in db.TABLES:
@@ -123,7 +135,9 @@ def test_backup_written_before_alter_and_equal(tmp_path: Path) -> None:
     db.migrate(con, backup_to=bak)
     con.set_trace_callback(None)
     con.close()
-    alters = [ok for sql, ok in seen if sql.lstrip().upper().startswith(("ALTER", "CREATE INDEX", "CREATE TABLE"))]
+    alters = [
+        ok for sql, ok in seen if sql.lstrip().upper().startswith(("ALTER", "CREATE INDEX", "CREATE TABLE"))
+    ]
     assert alters and all(alters)
     assert (os.stat(bak).st_mode & 0o777) == 0o600
     assert dump(bak) == original  # the v1 database exactly as it was
@@ -216,7 +230,9 @@ def test_failed_migration_leaves_v1_intact(tmp_path: Path, monkeypatch: pytest.M
     assert len(backups(p)) == 2
 
 
-def test_a_write_between_backup_and_migration_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_write_between_backup_and_migration_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The backup must be of the rows that are migrated: a write that lands after
     the copy (another writer: never the broker, which holds its lock) aborts."""
     p = tmp_path / "switchboard.db"
@@ -237,7 +253,9 @@ def test_a_write_between_backup_and_migration_refuses(tmp_path: Path, monkeypatc
     assert len(dump(p)) == len(original) + 1
 
 
-def test_a_bad_backup_is_removed_and_nothing_migrates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_bad_backup_is_removed_and_nothing_migrates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     p = tmp_path / "switchboard.db"
     original = make_v1(p)
     real = db.row_counts
@@ -325,8 +343,9 @@ def _home_db(tmp_path: Path) -> Path:
     return paths.db
 
 
-def test_the_broker_migrates_under_its_lock_before_it_listens(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-                                                              capsys: pytest.CaptureFixture[str]) -> None:
+def test_the_broker_migrates_under_its_lock_before_it_listens(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     p = _home_db(tmp_path)
     original = make_v1(p)
     assert _run_foreground(tmp_path, monkeypatch, "port taken") == 1
@@ -336,8 +355,9 @@ def test_the_broker_migrates_under_its_lock_before_it_listens(tmp_path: Path, mo
     assert bak.name == "switchboard.db.v1.bak" and dump(bak) == original
 
 
-def test_a_second_broker_never_migrates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-                                        capsys: pytest.CaptureFixture[str]) -> None:
+def test_a_second_broker_never_migrates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     """The migration runs under broker.lock: while another broker holds it, nothing
     is copied or changed (two brokers can't migrate one file at once)."""
     import fcntl
@@ -359,8 +379,9 @@ def test_a_second_broker_never_migrates(tmp_path: Path, monkeypatch: pytest.Monk
 
 
 @pytest.mark.parametrize("case", ["v3", "failed_migration"])
-def test_a_refused_database_is_reported_on_stderr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-                                                  capsys: pytest.CaptureFixture[str], case: str) -> None:
+def test_a_refused_database_is_reported_on_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], case: str
+) -> None:
     """``switchboard start`` shows the daemon's stderr (``broker.out``) when the broker
     doesn't come up: the reason must be there, not only in ``broker.log``."""
     p = _home_db(tmp_path)

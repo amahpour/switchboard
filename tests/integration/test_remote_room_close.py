@@ -67,7 +67,11 @@ async def test_close_with_a_remote_member_in_wait() -> None:
             r = await a.say("#fpga", "hello?")
             assert r["ok"] is False and r["code"] == "unauthorized" and r["error"] == CLOSED_CALL
             [leave] = [m for m in room_lines(link, 1) if m.kind == "leave"]
-            assert (leave.sender_name, leave.text, leave.sender_host) == ("bench", "left (#fpga closed)", "fpga-pi")
+            assert (leave.sender_name, leave.text, leave.sender_host) == (
+                "bench",
+                "left (#fpga closed)",
+                "fpga-pi",
+            )
             await until(lambda: not link.status()["members"], what="no remote members")
             assert link.status()["state"] == "up"
         # a restart with the closed room in the database: the welcome leaves its name out

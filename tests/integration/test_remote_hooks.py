@@ -15,12 +15,12 @@ import time
 from typing import Any
 
 import pytest
-
 from fakes.fake_agent import FakeAgent, ids_in
 from fakes.fake_claude import FakeClaude
 from fakes.fake_claude import fixture as claude_fixture
 from fakes.fake_cli import CONV, DEVIN_SID, FakeCli, fixture
 from fakes.fake_link import PID_SHIFT, FakeLink, wait_for
+
 from switchboard.config import Config
 
 FAST = Config(human_name="alice").with_delivery(quiet_s=0.0, max_hold_s=0.0)
@@ -117,8 +117,15 @@ def test_chain_naming_a_desktop_pid_is_inert(link: FakeLink) -> None:
                 rl.send_frame = capture  # type: ignore[method-assign]
                 try:
                     await rl._on_frame(a, {"t": "open", "c": 777})
-                    await rl._on_frame(a, {"t": "req", "c": 777, "facts": {"chain": [tuple(x) for x in chain]},
-                                           "line": {"id": 1, "method": "hook.event", "params": ev}})
+                    await rl._on_frame(
+                        a,
+                        {
+                            "t": "req",
+                            "c": 777,
+                            "facts": {"chain": [tuple(x) for x in chain]},
+                            "line": {"id": 1, "method": "hook.event", "params": ev},
+                        },
+                    )
                     await asyncio.sleep(0.2)
                     await rl._on_frame(a, {"t": "close", "c": 777})
                 finally:
@@ -135,8 +142,14 @@ def test_chain_naming_a_desktop_pid_is_inert(link: FakeLink) -> None:
 # ------------------------------------------------------------------- Cursor
 def join_payload(j: dict[str, Any], conv: str = CONV) -> dict[str, Any]:
     out = json.dumps({"content": [{"type": "text", "text": json.dumps(j)}], "isError": False})
-    return fixture("cursor", "postToolUse_mcp", conv=conv, tool_name="MCP:join",
-                   tool_input={"room": "#fpga", "screen_name": "cursor-pi"}, tool_output=out)
+    return fixture(
+        "cursor",
+        "postToolUse_mcp",
+        conv=conv,
+        tool_name="MCP:join",
+        tool_input={"room": "#fpga", "screen_name": "cursor-pi"},
+        tool_output=out,
+    )
 
 
 def cursor_bound(link: FakeLink) -> FakeCli:
@@ -173,8 +186,12 @@ def test_cursor_join_nonce_bind_over_link(link: FakeLink) -> None:
 
 def _hook_pids(root: int) -> list[int]:
     out = subprocess.run(["/bin/ps", "-A", "-o", "pid=,ppid=,args="], capture_output=True, text=True).stdout
-    procs = [(int(a), int(b), c) for a, b, c in (ln.strip().split(None, 2) for ln in out.splitlines()
-                                                 if len(ln.strip().split(None, 2)) == 3)]
+    procs = [
+        (int(a), int(b), c)
+        for a, b, c in (
+            ln.strip().split(None, 2) for ln in out.splitlines() if len(ln.strip().split(None, 2)) == 3
+        )
+    ]
     kids: dict[int, list[tuple[int, str]]] = {}
     for pid, ppid, args in procs:
         kids.setdefault(ppid, []).append((pid, args))
@@ -229,8 +246,15 @@ def test_devin_wait_loop_over_link(link: FakeLink) -> None:
         assert p["status"] == "idle" and p["session_id"] == DEVIN_SID and p["host"] == "fpga-pi"
         dv.hook(fixture("devin", "UserPromptSubmit"))
         assert part(link, "devin")["status"] == "busy"
-        dv.hook(fixture("devin", "PreToolUse_read", tool_name=WAIT, tool_input={"room": "#fpga"},
-                        tool_use_id="call_w1"))
+        dv.hook(
+            fixture(
+                "devin",
+                "PreToolUse_read",
+                tool_name=WAIT,
+                tool_input={"room": "#fpga"},
+                tool_use_id="call_w1",
+            )
+        )
         tag = dv.tool_bg("wait", room="#fpga", timeout_s=60)
         wait_for(lambda: len(engine(link).sinks.open_sinks()) == 1, what="the wait is open")
         t0 = time.monotonic()
@@ -239,11 +263,20 @@ def test_devin_wait_loop_over_link(link: FakeLink) -> None:
         assert res["status"] == "messages" and ids_in(res["text"]) == [mid], res
         lat = time.monotonic() - t0
         bid = res["batch_id"]
-        dv.hook(fixture("devin", "PostToolUse_mcp_wait", tool_name=WAIT, tool_use_id="call_w1",
-                        tool_input={"room": "#fpga", "timeout_s": 60},
-                        tool_response={"success": True, "output": json.dumps(res), "error": None}))
-        b = wait_for(lambda: (x := q(link, "SELECT * FROM batches WHERE id=?", bid)[0])["state"] == "confirmed"
-                     and x, what="confirmed")
+        dv.hook(
+            fixture(
+                "devin",
+                "PostToolUse_mcp_wait",
+                tool_name=WAIT,
+                tool_use_id="call_w1",
+                tool_input={"room": "#fpga", "timeout_s": 60},
+                tool_response={"success": True, "output": json.dumps(res), "error": None},
+            )
+        )
+        b = wait_for(
+            lambda: (x := q(link, "SELECT * FROM batches WHERE id=?", bid)[0])["state"] == "confirmed" and x,
+            what="confirmed",
+        )
         assert b["turn_start_at"] is not None
         state = q(link, "SELECT state FROM deliveries WHERE message_id=?", mid)[0][0]
         assert state == "in_context"

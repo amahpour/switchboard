@@ -72,10 +72,21 @@ SOCKET_MAX_BYTES = 1023
 # only to give the Pi a clear message.
 REMOTE_METHODS = frozenset(
     {
-        "mcp.hello", "mcp.attach", "mcp.posted", "mcp.bye",
-        "agent.join", "agent.leave", "agent.who", "agent.say", "agent.read", "agent.wait",
-        "agent.unwait", "agent.pass", "agent.away",
-        "hook.event", "hook.ack",
+        "mcp.hello",
+        "mcp.attach",
+        "mcp.posted",
+        "mcp.bye",
+        "agent.join",
+        "agent.leave",
+        "agent.who",
+        "agent.say",
+        "agent.read",
+        "agent.wait",
+        "agent.unwait",
+        "agent.pass",
+        "agent.away",
+        "hook.event",
+        "hook.ack",
     }
 )
 
@@ -211,8 +222,12 @@ def _text(v: Any, n: int) -> str:
 def _socket(v: Any) -> str | None:
     if v is None:
         return None
-    if (not isinstance(v, str) or not v.startswith("/") or "\0" in v
-            or len(v.encode("utf-8", "surrogatepass")) > SOCKET_MAX_BYTES):
+    if (
+        not isinstance(v, str)
+        or not v.startswith("/")
+        or "\0" in v
+        or len(v.encode("utf-8", "surrogatepass")) > SOCKET_MAX_BYTES
+    ):
         raise FrameError("bad_socket")
     return v
 
@@ -244,8 +259,14 @@ def check_attest(a: Any) -> dict[str, Any]:
         raise FrameError("bad_attest", "claude_socket")
     mcp = _pair(a["mcp"])
     agent = None if a["agent"] is None else _pair(a["agent"])
-    return {"harness": harness, "mcp": mcp, "agent": agent, "evidence": evidence, "tier_note": note,
-            "claude_socket": sock}
+    return {
+        "harness": harness,
+        "mcp": mcp,
+        "agent": agent,
+        "evidence": evidence,
+        "tier_note": note,
+        "claude_socket": sock,
+    }
 
 
 def check_chain(c: Any) -> list[tuple[int, float, str]]:
@@ -288,7 +309,11 @@ def _v_hello(f: dict[str, Any]) -> dict[str, Any]:
         raise FrameError("bad_proto")
     if f["proto"] != LINK_PROTO:
         v = f.get("version")
-        return {"t": "hello", "proto": f["proto"], "version": v if isinstance(v, str) and _VERSION.fullmatch(v) else "?"}
+        return {
+            "t": "hello",
+            "proto": f["proto"],
+            "version": v if isinstance(v, str) and _VERSION.fullmatch(v) else "?",
+        }
     _keys(f, {"t", "proto", "version", "name", "now", "hook_state", "test_mode", "harden"})
     if not isinstance(f["version"], str) or not _VERSION.fullmatch(f["version"]):
         raise FrameError("bad_version")
@@ -311,12 +336,17 @@ def _v_welcome(f: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(f["link"], str) or not _HEX16.fullmatch(f["link"]):
         raise FrameError("bad_link")
     rooms, hs, lim = f["rooms"], f["harnesses"], f["limits"]
-    if not isinstance(rooms, list) or len(rooms) > 64 or not all(isinstance(r, str) and ROOM_RE.fullmatch(r)
-                                                                  for r in rooms):
+    if (
+        not isinstance(rooms, list)
+        or len(rooms) > 64
+        or not all(isinstance(r, str) and ROOM_RE.fullmatch(r) for r in rooms)
+    ):
         raise FrameError("bad_rooms")
     if not isinstance(hs, list) or not all(h in HARNESSES for h in hs):
         raise FrameError("bad_harnesses")
-    if not isinstance(lim, dict) or not all(isinstance(k, str) and is_int(v) and v >= 0 for k, v in lim.items()):
+    if not isinstance(lim, dict) or not all(
+        isinstance(k, str) and is_int(v) and v >= 0 for k, v in lim.items()
+    ):
         raise FrameError("bad_limits")
     return dict(f)
 
@@ -414,9 +444,20 @@ def _v_bye(f: dict[str, Any]) -> dict[str, Any]:
 
 
 _VALIDATORS = {
-    "hello": _v_hello, "welcome": _v_welcome, "refuse": _v_refuse, "open": _v_conn, "req": _v_req,
-    "out": _v_out, "close": _v_conn, "watch": _v_watch, "alive": _v_alive, "reg": _v_reg,
-    "ping": _v_n, "pong": _v_n, "status": _v_status, "bye": _v_bye,
+    "hello": _v_hello,
+    "welcome": _v_welcome,
+    "refuse": _v_refuse,
+    "open": _v_conn,
+    "req": _v_req,
+    "out": _v_out,
+    "close": _v_conn,
+    "watch": _v_watch,
+    "alive": _v_alive,
+    "reg": _v_reg,
+    "ping": _v_n,
+    "pong": _v_n,
+    "status": _v_status,
+    "bye": _v_bye,
 }
 
 
@@ -460,16 +501,40 @@ def encode(frame: dict[str, Any]) -> bytes:
 
 
 # ------------------------------------------------------------- builders
-def hello(*, version: str, name: str, now: float, hook_state: str, test_mode: bool, harden: str,
-          proto: int = LINK_PROTO) -> dict[str, Any]:
-    return {"t": "hello", "proto": proto, "version": version, "name": name, "now": now,
-            "hook_state": hook_state[:200], "test_mode": test_mode, "harden": harden}
+def hello(
+    *,
+    version: str,
+    name: str,
+    now: float,
+    hook_state: str,
+    test_mode: bool,
+    harden: str,
+    proto: int = LINK_PROTO,
+) -> dict[str, Any]:
+    return {
+        "t": "hello",
+        "proto": proto,
+        "version": version,
+        "name": name,
+        "now": now,
+        "hook_state": hook_state[:200],
+        "test_mode": test_mode,
+        "harden": harden,
+    }
 
 
-def welcome(*, version: str, link: str, rooms: list[str], harnesses: list[str],
-            limits: dict[str, int]) -> dict[str, Any]:
-    return {"t": "welcome", "proto": LINK_PROTO, "version": version, "link": link, "rooms": rooms,
-            "harnesses": harnesses, "limits": limits}
+def welcome(
+    *, version: str, link: str, rooms: list[str], harnesses: list[str], limits: dict[str, int]
+) -> dict[str, Any]:
+    return {
+        "t": "welcome",
+        "proto": LINK_PROTO,
+        "version": version,
+        "link": link,
+        "rooms": rooms,
+        "harnesses": harnesses,
+        "limits": limits,
+    }
 
 
 def refuse(why: str, message: str) -> dict[str, Any]:
@@ -498,7 +563,9 @@ def close(c: int) -> dict[str, Any]:
     return {"t": "close", "c": c}
 
 
-def watch(n: int, procs: list[tuple[int, float]], claude: list[tuple[int, float, str | None]]) -> dict[str, Any]:
+def watch(
+    n: int, procs: list[tuple[int, float]], claude: list[tuple[int, float, str | None]]
+) -> dict[str, Any]:
     return {"t": "watch", "n": n, "procs": [list(p) for p in procs], "claude": [list(c) for c in claude]}
 
 
@@ -557,8 +624,12 @@ class HelloScanner:
         return None
 
 
-async def read_hello(reader: asyncio.StreamReader, timeout: float = HELLO_TIMEOUT_S,
-                     max_lines: int = HELLO_MAX_LINES, max_bytes: int = HELLO_MAX_BYTES) -> dict[str, Any]:
+async def read_hello(
+    reader: asyncio.StreamReader,
+    timeout: float = HELLO_TIMEOUT_S,
+    max_lines: int = HELLO_MAX_LINES,
+    max_bytes: int = HELLO_MAX_BYTES,
+) -> dict[str, Any]:
     """The satellite's first frame (``hello`` or ``bye``), skipping shell noise.
 
     Raises ShellNoise (over the limits), LinkEOF (the link ended first) or

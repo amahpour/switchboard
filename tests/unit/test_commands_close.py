@@ -8,11 +8,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from test_commands import CLI, WEB, Rec, rec, svc  # noqa: F401  (fixtures)
 from test_store import add_agent
+
 from switchboard import db
-from switchboard.broker.commands import Actor, CommandError, HELP_TEXT, parse_command, required_role
+from switchboard.broker.commands import HELP_TEXT, Actor, CommandError, parse_command, required_role
 from switchboard.broker.hub import Subscriber
 from switchboard.broker.service import RoomService, ServiceError
 from switchboard.store import Conflict, StoreError
@@ -77,13 +77,17 @@ def test_close_parses_and_needs_human_cli(svc: RoomService) -> None:  # noqa: F8
 
 
 def test_help_lists_close() -> None:
-    assert ("  /close              close this room: every agent leaves, the history is kept;\n"
-            "                      reopen it from Closed rooms in the web UI\n") in HELP_TEXT
+    assert (
+        "  /close              close this room: every agent leaves, the history is kept;\n"
+        "                      reopen it from Closed rooms in the web UI\n"
+    ) in HELP_TEXT
 
 
 # ---------------------------------------------------------------- /close
 def test_close_ends_every_member_and_publishes_under_the_old_name(
-    svc: RoomService, rec: Rec, stub: StubDelivery  # noqa: F811
+    svc: RoomService,
+    rec: Rec,
+    stub: StubDelivery,  # noqa: F811
 ) -> None:
     room = svc.room("#build")
     _pa, ma = add_agent(svc.store, room.id, "claude-1")
@@ -91,8 +95,11 @@ def test_close_ends_every_member_and_publishes_under_the_old_name(
     _pc, mc = remote_agent(svc, room.id, "bench")
     rec.items.clear()
     res = svc.command("#build", "/close", WEB)
-    assert res == {"ok": True, "text": "closed #build: 3 agent(s) removed (1 on fpga-pi); history kept."
-                                       " The name is free again; reopen this room from Closed rooms in the web UI"}
+    assert res == {
+        "ok": True,
+        "text": "closed #build: 3 agent(s) removed (1 on fpga-pi); history kept."
+        " The name is free again; reopen this room from Closed rooms in the web UI",
+    }
     for mid in (ma, mb, mc):
         m = svc.store.get_membership(mid)
         assert m.left_reason == "closed" and not m.kicked and m.left_at is not None
@@ -105,15 +112,26 @@ def test_close_ends_every_member_and_publishes_under_the_old_name(
         ("leave", "claude-1", "left (#build closed)", None),
         ("leave", "codex-1", "left (#build closed)", None),
         ("leave", "bench", "left (#build closed)", "fpga-pi"),
-        ("notice", "switchboard", "#build closed by alice (via web): 3 agent(s) removed; the history is kept", None),
+        (
+            "notice",
+            "switchboard",
+            "#build closed by alice (via web): 3 agent(s) removed; the history is kept",
+            None,
+        ),
     ]
     assert all(r == "#build" for k, r in kinds if k == "msg")
     last_msg = max(i for i, (k, _r) in enumerate(kinds) if k == "msg")
     rooms_frames = [(i, d) for i, (k, _r, d) in enumerate(rec.items) if k == "rooms"]
     assert rooms_frames and rooms_frames[0][0] > last_msg and rooms_frames[0][1] == {"rooms": []}
     ev = svc.store.latest_close_event(room.id)
-    assert ev.data == {"name": "#build", "closed_name": closed.name, "by": "alice", "via": "web", "chain": None,
-                       "members": [ma, mb, mc]}
+    assert ev.data == {
+        "name": "#build",
+        "closed_name": closed.name,
+        "by": "alice",
+        "via": "web",
+        "chain": None,
+        "members": [ma, mb, mc],
+    }
     assert stub.ended == [([ma, mb, mc], "closed")]
     # the kept credential names the room; it authorizes nothing
     assert svc.store.membership_by_cred("h" * 64) is None
@@ -125,7 +143,10 @@ def test_close_over_the_cli_leaves_one_audit_notice(svc: RoomService, rec: Rec) 
     res = svc.command("#build", "/close", CLI)
     assert res["text"].startswith("closed #build: 0 agent(s) removed; history kept.")
     notices = [m.text for m in svc.store.history(room.id) if m.kind == "notice"]
-    assert notices[-1] == "#build closed by alice (via cli: zsh ← Terminal): 0 agent(s) removed; the history is kept"
+    assert (
+        notices[-1]
+        == "#build closed by alice (via cli: zsh ← Terminal): 0 agent(s) removed; the history is kept"
+    )
     assert not [n for n in notices if n.startswith("/close by")]
 
 
@@ -138,7 +159,9 @@ def test_after_a_close_the_name_is_free(svc: RoomService, rec: Rec) -> None:  # 
     with pytest.raises(ServiceError) as e:
         svc.room("#build")
     assert (e.value.code, e.value.message) == (
-        "not_found", "no such room: #build (it is closed: reopen it from Closed rooms in the web UI)")
+        "not_found",
+        "no such room: #build (it is closed: reopen it from Closed rooms in the web UI)",
+    )
     with pytest.raises(ServiceError) as e:
         svc.room("#other")
     assert e.value.message == "no such room: #other"
@@ -161,17 +184,30 @@ def test_closed_room_dicts_and_reopen(svc: RoomService, rec: Rec, clock: Any) ->
     new = svc.create_room("#build")
     [d] = svc.closed_room_dicts()
     ev = svc.store.latest_close_event(room.id)
-    assert d == {"id": room.id, "name": f"#build~closed-{room.id}", "display": "#build",
-                 "created_at": room.created_at, "closed_at": ev.ts, "closed_by": "alice",
-                 "messages": svc.store.count_messages(room.id), "reopenable": False}
+    assert d == {
+        "id": room.id,
+        "name": f"#build~closed-{room.id}",
+        "display": "#build",
+        "created_at": room.created_at,
+        "closed_at": ev.ts,
+        "closed_by": "alice",
+        "messages": svc.store.count_messages(room.id),
+        "reopenable": False,
+    }
     with pytest.raises(ServiceError) as e:
         svc.reopen_room(room.id)
     assert (e.value.code, e.value.http_status, e.value.message) == (
-        "conflict", 409, "#build is taken by an open room: close or delete that room first, then reopen this one")
+        "conflict",
+        409,
+        "#build is taken by an open room: close or delete that room first, then reopen this one",
+    )
     with pytest.raises(ServiceError) as e:
         svc.reopen_room(new.id)  # an open room
     assert (e.value.code, e.value.http_status, e.value.message) == (
-        "not_found", 404, f"no closed room with id {new.id}")
+        "not_found",
+        404,
+        f"no closed room with id {new.id}",
+    )
     svc.command("#build", "/close", WEB)
     assert [x["reopenable"] for x in svc.closed_room_dicts()] == [True, True]
     rec.items.clear()
@@ -194,8 +230,14 @@ def test_closed_room_dicts_and_reopen(svc: RoomService, rec: Rec, clock: Any) ->
 
 # ---------------------------------------------------------------- delete (service side)
 def delete(svc: RoomService, ref: str, tmp_path: Path, **kw: Any) -> dict[str, Any]:
-    return svc.delete_room(ref, dry_run=kw.pop("dry_run", False), room_id=kw.pop("room_id", None),
-                           db_path=tmp_path / "y.db", chain="zsh ← Terminal", **kw)
+    return svc.delete_room(
+        ref,
+        dry_run=kw.pop("dry_run", False),
+        room_id=kw.pop("room_id", None),
+        db_path=tmp_path / "y.db",
+        chain="zsh ← Terminal",
+        **kw,
+    )
 
 
 def test_delete_refusals(svc: RoomService, tmp_path: Path) -> None:  # noqa: F811
@@ -205,12 +247,15 @@ def test_delete_refusals(svc: RoomService, tmp_path: Path) -> None:  # noqa: F81
     with pytest.raises(ServiceError) as e:
         delete(svc, "#build", tmp_path, dry_run=True)
     assert (e.value.code, e.value.message) == (
-        "conflict", "#build has 2 agent(s) (claude-1, bench@fpga-pi): close it first"
-                    " (/close in the web UI, or switchboard cmd '#build' /close)")
+        "conflict",
+        "#build has 2 agent(s) (claude-1, bench@fpga-pi): close it first"
+        " (/close in the web UI, or switchboard cmd '#build' /close)",
+    )
     with pytest.raises(ServiceError) as e:
         delete(svc, "#Bad Name!", tmp_path, dry_run=True)
     assert e.value.code == "bad_request" and e.value.message.endswith(
-        " (or a closed room's full name, e.g. #build~closed-7)")
+        " (or a closed room's full name, e.g. #build~closed-7)"
+    )
     with pytest.raises(ServiceError) as e:
         delete(svc, "#nope", tmp_path, dry_run=True)
     assert (e.value.code, e.value.message) == ("not_found", "no such room: #nope")
@@ -221,11 +266,15 @@ def test_delete_refusals(svc: RoomService, tmp_path: Path) -> None:  # noqa: F81
     with pytest.raises(ServiceError) as e:
         delete(svc, "build", tmp_path, dry_run=True)
     assert (e.value.code, e.value.message) == (
-        "bad_request", f"#build names 2 closed rooms: {', '.join(names)}; give the full name of the one to delete")
+        "bad_request",
+        f"#build names 2 closed rooms: {', '.join(names)}; give the full name of the one to delete",
+    )
     with pytest.raises(ServiceError) as e:
         delete(svc, names[0], tmp_path, room_id=room.id)
     assert (e.value.code, e.value.message) == (
-        "conflict", f"{names[0]} changed since the plan (reopened, deleted or re-created); run the command again")
+        "conflict",
+        f"{names[0]} changed since the plan (reopened, deleted or re-created); run the command again",
+    )
     assert not list(tmp_path.glob("*.delete-*"))
 
 
@@ -238,10 +287,17 @@ def test_delete_a_closed_room(svc: RoomService, rec: Rec, tmp_path: Path) -> Non
     name = f"#build~closed-{room.id}"
     plan = delete(svc, "#build", tmp_path, dry_run=True)
     counts = svc.store.room_delete_counts(room.id)
-    assert plan == {"room_id": room.id, "name": name, "display": "#build", "state": "closed",
-                    "created_at": room.created_at, "closed_at": svc.store.latest_close_event(room.id).ts,
-                    "closed_by": "alice", "counts": counts,
-                    "backup": str(tmp_path / f"y.db.delete-build-{room.id}.bak")}
+    assert plan == {
+        "room_id": room.id,
+        "name": name,
+        "display": "#build",
+        "state": "closed",
+        "created_at": room.created_at,
+        "closed_at": svc.store.latest_close_event(room.id).ts,
+        "closed_by": "alice",
+        "counts": counts,
+        "backup": str(tmp_path / f"y.db.delete-build-{room.id}.bak"),
+    }
     assert not Path(plan["backup"]).exists()
     rec.items.clear()
     res = delete(svc, name, tmp_path, room_id=room.id)
@@ -252,8 +308,11 @@ def test_delete_a_closed_room(svc: RoomService, rec: Rec, tmp_path: Path) -> Non
         assert b.execute("SELECT COUNT(*) FROM rooms WHERE id=?", (room.id,)).fetchone()[0] == 1
     assert svc.store.room_by_id(room.id) is None and svc.store.room_by_id(keep.id) is not None
     assert ("rooms", None, {"rooms": ["#keep"]}) in rec.items
-    assert ("notice", None, {"level": "warn",
-                             "text": f"{name} deleted via cli (zsh ← Terminal); backup {backup.name}"}) in rec.items
+    assert (
+        "notice",
+        None,
+        {"level": "warn", "text": f"{name} deleted via cli (zsh ← Terminal); backup {backup.name}"},
+    ) in rec.items
 
 
 def test_delete_an_empty_open_room(svc: RoomService, tmp_path: Path) -> None:  # noqa: F811
@@ -266,7 +325,8 @@ def test_delete_an_empty_open_room(svc: RoomService, tmp_path: Path) -> None:  #
 
 
 def test_delete_is_refused_when_the_planned_closed_room_was_reopened(
-    svc: RoomService, tmp_path: Path  # noqa: F811
+    svc: RoomService,
+    tmp_path: Path,  # noqa: F811
 ) -> None:
     """A reopen keeps the id and only changes the name: the pin must catch it, or the room the
     human just reopened would go although the plan showed a closed one."""
@@ -277,16 +337,22 @@ def test_delete_is_refused_when_the_planned_closed_room_was_reopened(
     svc.reopen_room(room.id)
     assert svc.store.resolve_room("#build").id == plan["room_id"]  # the same id, open again
     with pytest.raises(ServiceError) as e:
-        delete(svc, "#build", tmp_path, room_id=plan["room_id"], name=plan["name"], created_at=plan["created_at"])
+        delete(
+            svc, "#build", tmp_path, room_id=plan["room_id"], name=plan["name"], created_at=plan["created_at"]
+        )
     assert (e.value.code, e.value.message) == (
-        "conflict", f"#build~closed-{room.id} changed since the plan (reopened, deleted or re-created);"
-                    " run the command again")
+        "conflict",
+        f"#build~closed-{room.id} changed since the plan (reopened, deleted or re-created);"
+        " run the command again",
+    )
     assert svc.room("#build").id == room.id  # still there, open
     assert not list(tmp_path.glob("*.delete-*"))
 
 
 def test_delete_is_refused_for_a_re_created_room_that_reused_the_id(
-    svc: RoomService, clock: Any, tmp_path: Path  # noqa: F811
+    svc: RoomService,
+    clock: Any,
+    tmp_path: Path,  # noqa: F811
 ) -> None:
     """Room ids have no AUTOINCREMENT: deleting the highest one frees it for the next room.
     A stale plan for the deleted room must not delete the new one."""
@@ -304,7 +370,9 @@ def test_delete_is_refused_for_a_re_created_room_that_reused_the_id(
 
 
 def test_delete_backup_or_store_failure_deletes_nothing(
-    svc: RoomService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+    svc: RoomService,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,  # noqa: F811
 ) -> None:
     room = svc.room("#build")
 
@@ -315,14 +383,20 @@ def test_delete_backup_or_store_failure_deletes_nothing(
     monkeypatch.setattr(db, "backup_verified", boom)
     with pytest.raises(ServiceError) as e:
         delete(svc, "#build", tmp_path, room_id=room.id)
-    assert (e.value.code, e.value.message) == ("internal", "the backup failed (disk full); nothing was deleted")
+    assert (e.value.code, e.value.message) == (
+        "internal",
+        "the backup failed (disk full); nothing was deleted",
+    )
     monkeypatch.setattr(db, "backup_verified", real)
     for exc, code in ((Conflict("x changed"), "conflict"), (StoreError("bad"), "internal")):
+
         def fail(*a: Any, _exc: Exception = exc, **k: Any) -> Any:
             raise _exc
 
         monkeypatch.setattr(svc.store, "delete_room", fail)
         with pytest.raises(ServiceError) as e:
             delete(svc, "#build", tmp_path, room_id=room.id)
-        assert e.value.code == code and e.value.message.startswith(f"{exc}; nothing was deleted (backup: y.db.delete-")
+        assert e.value.code == code and e.value.message.startswith(
+            f"{exc}; nothing was deleted (backup: y.db.delete-"
+        )
     assert svc.room("#build").id == room.id

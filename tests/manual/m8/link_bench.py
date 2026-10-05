@@ -49,19 +49,31 @@ def main() -> None:
         lat.append((time.perf_counter() - a) * 1000)
         assert r, "link closed"
     a = time.perf_counter()
-    r = rt({"t": "req", "c": 2, "line": {"id": 1, "method": "agent.say", "params": {"text": "z" * (1 << 20)}}})
+    r = rt(
+        {"t": "req", "c": 2, "line": {"id": 1, "method": "agent.say", "params": {"text": "z" * (1 << 20)}}}
+    )
     big_ms = (time.perf_counter() - a) * 1000
     ours.shutdown(socket.SHUT_WR)
     ours.close()
     rc = p.wait(10)
     err = p.stderr.read().decode(errors="replace").strip() if p.stderr else ""
     lat.sort()
-    print(json.dumps({
-        "hello": hello, "setup_ms": round(setup_ms, 1), "n": n,
-        "p50_ms": round(statistics.median(lat), 3), "p95_ms": round(lat[int(n * 0.95)], 3),
-        "max_ms": round(lat[-1], 3), "frame_1MiB_ms": round(big_ms, 1), "frame_1MiB_ok": len(r) > (1 << 20),
-        "rc": rc, "stderr": err[-200:],
-    }))
+    print(
+        json.dumps(
+            {
+                "hello": hello,
+                "setup_ms": round(setup_ms, 1),
+                "n": n,
+                "p50_ms": round(statistics.median(lat), 3),
+                "p95_ms": round(lat[int(n * 0.95)], 3),
+                "max_ms": round(lat[-1], 3),
+                "frame_1MiB_ms": round(big_ms, 1),
+                "frame_1MiB_ok": len(r) > (1 << 20),
+                "rc": rc,
+                "stderr": err[-200:],
+            }
+        )
+    )
 
 
 if __name__ == "__main__":

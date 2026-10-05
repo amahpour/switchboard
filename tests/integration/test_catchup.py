@@ -19,10 +19,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import InProcBroker
 from fakes.fake_agent import FakeAgent, ids_in
 from fakes.fake_claude import SID, FakeClaude
+
 from switchboard.broker import catchup
 from switchboard.broker.peer import AllowAllHumans
 from switchboard.config import Config, ReviewCfg
@@ -73,8 +73,12 @@ def q(b: InProcBroker, sql: str, *args: Any) -> list[sqlite3.Row]:
 
 
 def deliveries(b: InProcBroker, message_id: int) -> dict[str, tuple[int, int, str]]:
-    rows = q(b, "SELECT m.screen_name, d.prio, d.mentioned, d.state FROM deliveries d"
-                " JOIN memberships m ON m.id=d.membership_id WHERE d.message_id=?", message_id)
+    rows = q(
+        b,
+        "SELECT m.screen_name, d.prio, d.mentioned, d.state FROM deliveries d"
+        " JOIN memberships m ON m.id=d.membership_id WHERE d.message_id=?",
+        message_id,
+    )
     return {r[0]: (r[1], r[2], r[3]) for r in rows}
 
 
@@ -88,8 +92,11 @@ def catchup_events(b: InProcBroker) -> list[sqlite3.Row]:
 
 
 def subject_delivery_rows(b: InProcBroker, name: str) -> int:
-    return q(b, "SELECT COUNT(*) FROM deliveries d JOIN memberships m ON m.id=d.membership_id"
-                " WHERE m.screen_name=?", name)[0][0]
+    return q(
+        b,
+        "SELECT COUNT(*) FROM deliveries d JOIN memberships m ON m.id=d.membership_id WHERE m.screen_name=?",
+        name,
+    )[0][0]
 
 
 def waiting(b: InProcBroker) -> set[str]:
@@ -117,9 +124,14 @@ async def test_catchup_wakes_the_agent_not_the_subject(broker: InProcBroker, cla
         assert r.status_code == 200, r.text
         lines = r.json()["text"].splitlines()
         assert lines[0].startswith("asked catcher to catch up on claude-1's work since ")
-        assert lines[1] == f"  subject: claude-1 · claude · session {SID} · host: the switchboard machine (yours)"
-        assert lines[2] == ("⚠ catcher may run with approvals off (its approval mode is unknown): what it reads"
-                            " (tool output, web pages) can steer it")
+        assert (
+            lines[1]
+            == f"  subject: claude-1 · claude · session {SID} · host: the switchboard machine (yours)"
+        )
+        assert lines[2] == (
+            "⚠ catcher may run with approvals off (its approval mode is unknown): what it reads"
+            " (tool output, web pages) can steer it"
+        )
         [msg] = human_chat(broker)  # exactly one post
         assert msg["text"].splitlines()[0] == "@catcher please catch up on claude-1's work."
         assert "  note: pick it apart" in msg["text"].splitlines()
@@ -138,13 +150,19 @@ async def test_catchup_wakes_the_agent_not_the_subject(broker: InProcBroker, cla
         assert set(d) == {"catcher", "bystander"}
         assert d["catcher"][:2] == (2, 1) and d["bystander"][:2] == (2, 0)
         assert subject_delivery_rows(broker, "claude-1") == 0
-        [b] = q(broker, "SELECT b.path, b.kind, b.wake_reason FROM batches b JOIN memberships m"
-                        " ON m.id=b.membership_id WHERE m.screen_name='catcher'")
+        [b] = q(
+            broker,
+            "SELECT b.path, b.kind, b.wake_reason FROM batches b JOIN memberships m"
+            " ON m.id=b.membership_id WHERE m.screen_name='catcher'",
+        )
         assert tuple(b) == ("wait", "wake", "human")
         # the approvals warning is a red room notice after the request
         msgs = broker.web.get("/api/rooms/build/messages").json()["messages"]
         assert msgs[-2]["id"] == msg["id"] and msgs[-1]["kind"] == "notice"
-        assert msgs[-1]["text"].startswith("⚠ catcher may run with approvals off") and msgs[-1]["level"] == "warn"
+        assert (
+            msgs[-1]["text"].startswith("⚠ catcher may run with approvals off")
+            and msgs[-1]["level"] == "warn"
+        )
         assert len(catchup_events(broker)) == 1
         # the agent answers like any member
         assert (await ag.pass_("#build"))["ok"]
@@ -158,8 +176,11 @@ async def test_room_wide_wakes_only_the_agent(broker: InProcBroker, claude: Fake
         await until_waiting(broker, "catcher", "tester")
         r = web_cmd(broker, '/catchup catcher on "the parser"')
         assert r.status_code == 200, r.text
-        assert r.json()["text"].splitlines()[0].startswith('asked catcher to catch up on "the parser" across 2'
-                                                           " session(s) since ")
+        assert (
+            r.json()["text"]
+            .splitlines()[0]
+            .startswith('asked catcher to catch up on "the parser" across 2 session(s) since ')
+        )
         t0 = time.time()
         r = web_cmd(broker, "/catchup catcher")
         t1 = time.time()
@@ -181,7 +202,10 @@ async def test_room_wide_wakes_only_the_agent(broker: InProcBroker, claude: Fake
         # the agent joined moments ago: the room-wide window is the last 24 h
         window = next(x for x in room["text"].splitlines() if x.startswith("  window: since "))
         assert window in {f"  window: since {catchup.utc(t - DAY)}" for t in (t0, t1)}
-        assert [r[0] for r in q(broker, "SELECT kind FROM events WHERE kind='catchup'")] == ["catchup", "catchup"]
+        assert [r[0] for r in q(broker, "SELECT kind FROM events WHERE kind='catchup'")] == [
+            "catchup",
+            "catchup",
+        ]
 
 
 async def test_a_held_agent_keeps_the_request_queued(broker: InProcBroker, claude: FakeClaude) -> None:
@@ -191,8 +215,10 @@ async def test_a_held_agent_keeps_the_request_queued(broker: InProcBroker, claud
         t = ag.wait_task("#build", 20)
         await until_waiting(broker, "catcher")
         r = web_cmd(broker, "/catchup catcher on claude-1")
-        assert r.status_code == 200 and "catcher is held: it gets the request after /release catcher" \
-            in r.json()["text"]
+        assert (
+            r.status_code == 200
+            and "catcher is held: it gets the request after /release catcher" in r.json()["text"]
+        )
         [msg] = human_chat(broker)
         # the post was evaluated before the command answered: the held agent's wait() is still
         # open and the request queued
@@ -241,8 +267,11 @@ async def test_a_codex_subject_through_the_uds(broker: InProcBroker) -> None:
             assert msg["via"] == "cli" and "codex-1 · codex · session thread-A · host" in msg["text"]
             assert set(deliveries(broker, msg["id"])) == {"catcher"}
             assert "session: thread-A @ this machine" in web_cmd(broker, "/who").json()["text"]
-            notices = [m["text"] for m in broker.web.get("/api/rooms/build/messages").json()["messages"]
-                       if m["kind"] == "notice"]
+            notices = [
+                m["text"]
+                for m in broker.web.get("/api/rooms/build/messages").json()["messages"]
+                if m["kind"] == "notice"
+            ]
             assert sum(1 for n in notices if n.startswith("/catchup by alice (via cli: ")) == 2
     finally:
         cx.close()
@@ -316,8 +345,12 @@ def test_room_who_hides_sessions_from_an_agents_shell(tmp_home: Path) -> None:
         with pytest.raises(RpcError) as e:  # and /catchup isn't available to such a caller at all
             b.call("human.command", {"room": "#build", "text": "/catchup claude-1"})
         assert e.value.code == "forbidden"
-        assert f"session: {SID} @ this machine" in b.web.post(
-            "/api/rooms/build/command", json={"text": "/who"}, headers=b.write_headers()).json()["text"]
+        assert (
+            f"session: {SID} @ this machine"
+            in b.web.post(
+                "/api/rooms/build/command", json={"text": "/who"}, headers=b.write_headers()
+            ).json()["text"]
+        )
     finally:
         c.close()
         b.web.close()
@@ -325,7 +358,9 @@ def test_room_who_hides_sessions_from_an_agents_shell(tmp_home: Path) -> None:
 
 
 # ---------------------------------------------------------------- config
-def test_the_ignored_config_key_is_logged_once_at_start(tmp_home: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_the_ignored_config_key_is_logged_once_at_start(
+    tmp_home: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """A 0.2.0 ``[review] agentsview`` still loads (it is ignored); the broker says so once."""
     cfg = FAST.replace(review=ReviewCfg(agentsview="/opt/x/agentsview"))
     with caplog.at_level(logging.WARNING, logger="switchboard.broker"):
@@ -335,8 +370,11 @@ def test_the_ignored_config_key_is_logged_once_at_start(tmp_home: Path, caplog: 
         finally:
             b.stop()
     hits = [r.getMessage() for r in caplog.records if "[review] agentsview" in r.getMessage()]
-    assert hits == ["config.toml: [review] agentsview is ignored since /catchup replaced /review;"
-                    " you can remove it"] * 2
+    assert (
+        hits
+        == ["config.toml: [review] agentsview is ignored since /catchup replaced /review; you can remove it"]
+        * 2
+    )
 
 
 def test_no_warning_without_the_key(tmp_home: Path, caplog: pytest.LogCaptureFixture) -> None:

@@ -28,8 +28,11 @@ async def attach(path):
     from websockets.asyncio.client import unix_connect
 
     ws = await unix_connect(path, uri="ws://localhost/", ping_interval=None, compression=None, proxy=None)
-    await ws.send(json.dumps({"id": 1, "method": "initialize",
-                              "params": {"clientInfo": {"name": "codex-tui", "version": "0"}}}))
+    await ws.send(
+        json.dumps(
+            {"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "codex-tui", "version": "0"}}}
+        )
+    )
     await ws.recv()
 
     async def drain():
@@ -59,11 +62,18 @@ async def main():
         with open(reg, "w") as f:
             json.dump({"pid": os.getpid(), "messagingSocketPath": sock, "status": "idle"}, f)
     env = {k: v for k, v in os.environ.items() if not k.startswith("YK_FAKE_")}
-    params = StdioServerParameters(command=sys.executable, args=["-I", "-m", "switchboard", "mcp", "--home", home],
-                                   env=env)
+    params = StdioServerParameters(
+        command=sys.executable, args=["-I", "-m", "switchboard", "mcp", "--home", home], env=env
+    )
     try:
         async with stdio_client(params) as (r, w):
-            async with ClientSession(r, w, client_info=mt.Implementation(name=os.environ.get("YK_FAKE_CLIENT", "claude-code"), version="1")) as s:
+            async with ClientSession(
+                r,
+                w,
+                client_info=mt.Implementation(
+                    name=os.environ.get("YK_FAKE_CLIENT", "claude-code"), version="1"
+                ),
+            ) as s:
                 await s.initialize()
                 reply({"ready": True, "pid": os.getpid()})
                 loop = asyncio.get_running_loop()
@@ -76,10 +86,15 @@ async def main():
 
                 async def run_hook(cmd):
                     p = await asyncio.create_subprocess_shell(
-                        cmd["command"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                        env=env)
-                    out, _err = await asyncio.wait_for(p.communicate(json.dumps(cmd["payload"]).encode()),
-                                                       cmd.get("timeout", 20))
+                        cmd["command"],
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        env=env,
+                    )
+                    out, _err = await asyncio.wait_for(
+                        p.communicate(json.dumps(cmd["payload"]).encode()), cmd.get("timeout", 20)
+                    )
                     return {"rc": p.returncode, "stdout": out.decode()}
 
                 while True:
@@ -101,8 +116,14 @@ async def main():
                     elif cmd["op"] == "tool":
                         reply(await run_tool(cmd))
                     elif cmd["op"] == "hook":
-                        p = subprocess.run(cmd["command"], shell=True, input=json.dumps(cmd["payload"]).encode(),
-                                           capture_output=True, env=env, timeout=20)
+                        p = subprocess.run(
+                            cmd["command"],
+                            shell=True,
+                            input=json.dumps(cmd["payload"]).encode(),
+                            capture_output=True,
+                            env=env,
+                            timeout=20,
+                        )
                         reply({"rc": p.returncode, "stdout": p.stdout.decode()})
                     elif cmd["op"] == "attach":
                         tui.append(await attach(cmd["path"]))

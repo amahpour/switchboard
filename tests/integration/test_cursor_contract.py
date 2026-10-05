@@ -17,10 +17,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import InProcBroker
 from fakes.fake_agent import ids_in
 from fakes.fake_cli import CONV, FakeCli, fixture
+
 from switchboard.adapters import cursor as cursor_adapter
 from switchboard.config import Config
 
@@ -103,8 +103,14 @@ def wait_for(fn, timeout: float = 5.0) -> Any:
 def join_payload(j: dict[str, Any], conv: str = CONV) -> dict[str, Any]:
     """Cursor's postToolUse for ``MCP:join``: tool_output is the MCP result as a JSON string."""
     out = json.dumps({"content": [{"type": "text", "text": json.dumps(j)}], "isError": False})
-    return fixture("cursor", "postToolUse_mcp", conv=conv, tool_name="MCP:join",
-                   tool_input={"room": "#build", "screen_name": "cursor-1"}, tool_output=out)
+    return fixture(
+        "cursor",
+        "postToolUse_mcp",
+        conv=conv,
+        tool_name="MCP:join",
+        tool_input={"room": "#build", "screen_name": "cursor-1"},
+        tool_output=out,
+    )
 
 
 def join_and_bind(b: InProcBroker, c: FakeCli, name: str = "cursor-1", conv: str = CONV) -> dict[str, Any]:
@@ -142,7 +148,9 @@ def test_join_binds_by_nonce_and_conversation_id(broker: InProcBroker, cur: Fake
     m = wait_for(lambda: (x := member(broker))["tier"] == "cursor:stop-park" and x)
     assert m["tier_note"] == "provisional"
     assert "provisional" in command(broker, "/who")["text"]
-    assert "cursor-1: " in (st := command(broker, "/status")["text"]) and "cursor:stop-park (provisional)" in st
+    assert (
+        "cursor-1: " in (st := command(broker, "/status")["text"]) and "cursor:stop-park (provisional)" in st
+    )
     # the join code is single use: replaying it can't re-key the session to another conversation
     assert part(broker)["bind_nonce"] is None
     assert cur.hook(join_payload(j, conv="00000000-0000-4000-8000-00000000beef")) == ""
@@ -174,8 +182,11 @@ def test_a_bind_from_a_foreign_ancestry_is_rejected(broker: InProcBroker, cur: F
         j3 = other.tool("join", room="#build", screen_name="cursor-2")
         assert other.hook(join_payload(j3, conv=CONV)) == ""
         assert part(broker, other.pid)["session_key"].endswith("f00d")
-        notices = [x["text"] for x in broker.web.get("/api/rooms/build/messages").json()["messages"]
-                   if x["kind"] == "notice"]
+        notices = [
+            x["text"]
+            for x in broker.web.get("/api/rooms/build/messages").json()["messages"]
+            if x["kind"] == "notice"
+        ]
         assert any("cursor-2: can't bind" in t for t in notices), notices
     finally:
         other.close()
@@ -208,12 +219,16 @@ def test_a_stop_that_did_not_complete_answers_at_once(broker: InProcBroker, cur:
     join_and_bind(broker, cur)
     say(broker, "queued while it works")
     t0 = time.monotonic()
-    out = cur.hook(fixture("cursor", "stop_aborted", conversation_id=CONV, session_id=CONV), max_wait=PARK_WAIT)
+    out = cur.hook(
+        fixture("cursor", "stop_aborted", conversation_id=CONV, session_id=CONV), max_wait=PARK_WAIT
+    )
     assert out == "" and time.monotonic() - t0 < 3.0
     assert parks(broker) == [] and part(broker)["status"] == "idle"
 
 
-def test_a_park_is_filled_as_a_followup_and_confirmed_by_the_next_hook(broker: InProcBroker, cur: FakeCli) -> None:
+def test_a_park_is_filled_as_a_followup_and_confirmed_by_the_next_hook(
+    broker: InProcBroker, cur: FakeCli
+) -> None:
     join_and_bind(broker, cur)
     tag = cur.hook_bg(stop_payload(), max_wait=PARK_WAIT)
     wait_parked(broker)
@@ -227,7 +242,12 @@ def test_a_park_is_filled_as_a_followup_and_confirmed_by_the_next_hook(broker: I
     assert set(out) == {"followup_message"} and out["followup_message"].startswith("[switchboard]")
     assert ids_in(out["followup_message"]) == [mid] and "please rerun the tests" in out["followup_message"]
     b = batch_for(broker, mid)
-    assert (b["path"], b["kind"], b["wake_kind"], b["budget_counted"]) == ("stop_followup", "wake", "stop_cont", 1)
+    assert (b["path"], b["kind"], b["wake_kind"], b["budget_counted"]) == (
+        "stop_followup",
+        "wake",
+        "stop_cont",
+        1,
+    )
     assert b["state"] == "offered"  # printed and acked, not yet seen in a turn
     assert part(broker)["status"] == "busy" and budget != command(broker, "/budget")["text"]
     cur.hook(fixture("cursor", "postToolUse_shell"))
@@ -283,8 +303,12 @@ def test_a_park_that_times_out_prints_nothing(broker: InProcBroker, cur: FakeCli
 
 def _hook_pids(root: int) -> list[int]:
     out = subprocess.run(["/bin/ps", "-A", "-o", "pid=,ppid=,args="], capture_output=True, text=True).stdout
-    procs = [(int(a), int(b_), c) for a, b_, c in (ln.strip().split(None, 2) for ln in out.splitlines()
-                                                   if len(ln.strip().split(None, 2)) == 3)]
+    procs = [
+        (int(a), int(b_), c)
+        for a, b_, c in (
+            ln.strip().split(None, 2) for ln in out.splitlines() if len(ln.strip().split(None, 2)) == 3
+        )
+    ]
     kids: dict[int, list[tuple[int, str]]] = {}
     for pid, ppid, args in procs:
         kids.setdefault(ppid, []).append((pid, args))
@@ -326,16 +350,20 @@ def test_two_unconfirmed_followups_degrade_until_the_next_prompt(broker: InProcB
     assert p["unconfirmed_followups"] == 2 and p["tier_note"] == "provisional, degraded"
     m = wait_for(lambda: (x := member(broker))["parked"] and x)
     assert "degraded" in m["parked_reason"] and m["tier_note"] == "provisional, degraded"
-    notices = [x["text"] for x in broker.web.get("/api/rooms/build/messages").json()["messages"]
-               if x["kind"] == "notice"]
+    notices = [
+        x["text"]
+        for x in broker.web.get("/api/rooms/build/messages").json()["messages"]
+        if x["kind"] == "notice"
+    ]
     assert any("not confirmed" in t for t in notices)
     cur.hook(fixture("cursor", "beforeSubmitPrompt"))
     p = part(broker)
     assert p["unconfirmed_followups"] == 0 and p["tier_note"] == "provisional"
 
 
-def test_dropped_followups_degrade_across_human_prompts(broker: InProcBroker, cur: FakeCli,
-                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dropped_followups_degrade_across_human_prompts(
+    broker: InProcBroker, cur: FakeCli, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The sequence Cursor really produces when it ignores a follow-up (a park past
     ~38 s, F§5 4.3): no hook at all until the human types (beforeSubmitPrompt, and
     loop_count starts again at 0). The member must show parked, not busy, and the

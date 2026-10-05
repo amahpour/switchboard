@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import World
+
 from switchboard import report
 from switchboard.models import Message
 
@@ -36,12 +36,26 @@ def quiet_msg(w: World, text: str) -> Message:
     return w.store.insert_message(w.room.id, sender_name="alice", sender_kind="human", via="web", text=text)
 
 
-def offer(w: World, m: Any, msgs: list[Message], *, path: str, kind: str, wake_kind: str | None = None) -> int:
+def offer(
+    w: World, m: Any, msgs: list[Message], *, path: str, kind: str, wake_kind: str | None = None
+) -> int:
     ids = [x.id for x in msgs]
-    b = w.store.create_batch(m.id, path=path, kind=kind, items=[(i, True) for i in ids], wake_kind=wake_kind,
-                             wake_reason="human" if kind == "wake" else None, counted=kind == "wake")
-    w.store.add_event("offer", room_id=w.room.id, membership_id=m.id, participant_id=m.participant_id,
-                      data={"batch_id": b.id, "path": path, "n": len(ids), "counted": kind == "wake", "ids": ids})
+    b = w.store.create_batch(
+        m.id,
+        path=path,
+        kind=kind,
+        items=[(i, True) for i in ids],
+        wake_kind=wake_kind,
+        wake_reason="human" if kind == "wake" else None,
+        counted=kind == "wake",
+    )
+    w.store.add_event(
+        "offer",
+        room_id=w.room.id,
+        membership_id=m.id,
+        participant_id=m.participant_id,
+        data={"batch_id": b.id, "path": path, "n": len(ids), "counted": kind == "wake", "ids": ids},
+    )
     return b.id
 
 
@@ -49,7 +63,14 @@ def raw_event(w: World, kind: str, data: str, **cols: Any) -> None:
     """An events row written as-is (a damaged or foreign row: not through ``add_event``)."""
     w.store.con.execute(
         "INSERT INTO events(ts, room_id, membership_id, participant_id, kind, data) VALUES(?,?,?,?,?,?)",
-        (w.clock.now(), cols.get("room_id"), cols.get("membership_id"), cols.get("participant_id"), kind, data),
+        (
+            w.clock.now(),
+            cols.get("room_id"),
+            cols.get("membership_id"),
+            cols.get("participant_id"),
+            kind,
+            data,
+        ),
     )
     w.store.con.commit()
 
@@ -110,11 +131,17 @@ def test_a_hold_never_released_holds_until_now(w: World, clock: FakeClock) -> No
     assert rep["rules"]["hold"] == 2 and rep["rules"]["release"] == 0
 
 
-def test_each_batch_gets_the_tier_of_its_time_and_the_agent_the_tier_at_the_end(w: World,
-                                                                                 clock: FakeClock) -> None:
+def test_each_batch_gets_the_tier_of_its_time_and_the_agent_the_tier_at_the_end(
+    w: World, clock: FakeClock
+) -> None:
     pu, mu = w.agent("cursor-1", harness="cursor", status="idle", hooks=True)
-    w.store.add_event("join", room_id=w.room.id, membership_id=mu.id, participant_id=pu.id,
-                      data={"harness": "cursor", "tier": "cursor:stop-park"})
+    w.store.add_event(
+        "join",
+        room_id=w.room.id,
+        membership_id=mu.id,
+        participant_id=pu.id,
+        data={"harness": "cursor", "tier": "cursor:stop-park"},
+    )
     a = quiet_msg(w, "first")
     clock.advance(0.1)
     b1 = offer(w, mu, [a], path="hook_ctx", kind="priority")

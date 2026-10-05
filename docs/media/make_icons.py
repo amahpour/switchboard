@@ -26,8 +26,9 @@ def render(pw, svg: str, size: int, out: Path, *, transparent: bool) -> None:
         page = browser.new_page(viewport={"width": size, "height": size}, device_scale_factor=1)
         sized = svg.replace("<svg ", f'<svg width="{size}" height="{size}" ', 1)
         page.set_content(f'<!doctype html><html><body style="margin:0">{sized}</body></html>')
-        page.screenshot(path=str(out), omit_background=transparent,
-                        clip={"x": 0, "y": 0, "width": size, "height": size})
+        page.screenshot(
+            path=str(out), omit_background=transparent, clip={"x": 0, "y": 0, "width": size, "height": size}
+        )
         print(out)
     finally:
         browser.close()

@@ -26,10 +26,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from fakes.fake_claude import FakeClaude
 from fakes.fake_codex_daemon import FakeCodexDaemon
 from fakes.fake_link import FakeLink, wait_for
+
 from switchboard.adapters import remote_codex
 from switchboard.config import Config
 from switchboard.install.common import hook_command
@@ -100,8 +100,13 @@ class World:
         return r
 
     def hook(self, event: str, **extra: Any) -> str:
-        payload = {"hook_event_name": event, "session_id": TID, "cwd": "/ws", "permission_mode": "default",
-                   **extra}
+        payload = {
+            "hook_event_name": event,
+            "session_id": TID,
+            "cwd": "/ws",
+            "permission_mode": "default",
+            **extra,
+        }
         cmd = hook_command(sys.executable, str(self.link.pi), hook_sha12(), "codex", event)
         r = self.op({"op": "hook", "command": cmd, "payload": payload})
         assert r["rc"] == 0, r

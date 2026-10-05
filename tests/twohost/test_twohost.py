@@ -48,24 +48,37 @@ TOKEN_RE = re.compile(r"switchboard remote accept '([^']+)'")
 # The docker CLI's env, taken at import (before the suite's clean-env fixture moves HOME to a
 # temp dir, where the CLI would find no compose plugin): what it needs to reach the daemon,
 # and nothing of any harness (§0).
-DOCKER_ENV = {k: v for k, v in os.environ.items()
-              if k in ("PATH", "HOME", "USER", "LANG", "TMPDIR", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME")
-              or k.startswith("DOCKER_") or k.startswith("BUILDX_") or k.startswith("COMPOSE_")}
-PI_SSH = ("ssh -F /dev/null -i {key} -o IdentitiesOnly=yes -o IdentityAgent=none -o UserKnownHostsFile={kh}"
-          " -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o BatchMode=yes -o LogLevel=ERROR"
-          " -p {port}")
+DOCKER_ENV = {
+    k: v
+    for k, v in os.environ.items()
+    if k in ("PATH", "HOME", "USER", "LANG", "TMPDIR", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME")
+    or k.startswith("DOCKER_")
+    or k.startswith("BUILDX_")
+    or k.startswith("COMPOSE_")
+}
+PI_SSH = (
+    "ssh -F /dev/null -i {key} -o IdentitiesOnly=yes -o IdentityAgent=none -o UserKnownHostsFile={kh}"
+    " -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o BatchMode=yes -o LogLevel=ERROR"
+    " -p {port}"
+)
 
 
 def _docker_missing() -> str | None:
     if shutil.which("docker") is None:
         return "no docker"
     try:
-        r = subprocess.run(["docker", "compose", "version"], capture_output=True, text=True, timeout=20,
-                           env=DOCKER_ENV)
+        r = subprocess.run(
+            ["docker", "compose", "version"], capture_output=True, text=True, timeout=20, env=DOCKER_ENV
+        )
         if r.returncode != 0:
             return "no docker compose"
-        r = subprocess.run(["docker", "info", "--format", "{{.ServerVersion}}"], capture_output=True, text=True,
-                           timeout=20, env=DOCKER_ENV)
+        r = subprocess.run(
+            ["docker", "info", "--format", "{{.ServerVersion}}"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            env=DOCKER_ENV,
+        )
         return None if r.returncode == 0 else "the docker daemon isn't running"
     except (OSError, subprocess.TimeoutExpired):
         return "docker doesn't answer"
@@ -78,8 +91,14 @@ class Actor:
     """A long-running ``actors.py`` in a container: JSON lines out, stdin to stop it."""
 
     def __init__(self, argv: list[str]):
-        self.p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                  text=True, env=DOCKER_ENV)
+        self.p = subprocess.Popen(
+            argv,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=DOCKER_ENV,
+        )
         self.q: Queue[dict[str, Any]] = Queue()
         self.log: list[dict[str, Any]] = []
         self.err: list[str] = []
@@ -106,8 +125,10 @@ class Actor:
         while True:
             left = deadline - time.monotonic()
             if left <= 0:
-                raise AssertionError(f"no {ev} event in {timeout} s; last events: {self.log[-8:]};"
-                                     f" stderr: {''.join(self.err)[-3000:]}")
+                raise AssertionError(
+                    f"no {ev} event in {timeout} s; last events: {self.log[-8:]};"
+                    f" stderr: {''.join(self.err)[-3000:]}"
+                )
             try:
                 e = self.q.get(timeout=left)
             except Empty:
@@ -142,27 +163,65 @@ class TwoHost:
         self.actors: list[Actor] = []
 
     # ----------------------------------------------------------- docker
-    def compose(self, *args: str, timeout: float = 900.0, check: bool = True) -> subprocess.CompletedProcess[str]:
-        r = subprocess.run([*self.base, *args], capture_output=True, text=True, timeout=timeout,
-                           stdin=subprocess.DEVNULL, env=DOCKER_ENV)
+    def compose(
+        self, *args: str, timeout: float = 900.0, check: bool = True
+    ) -> subprocess.CompletedProcess[str]:
+        r = subprocess.run(
+            [*self.base, *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            stdin=subprocess.DEVNULL,
+            env=DOCKER_ENV,
+        )
         if check and r.returncode != 0:
             raise AssertionError(f"docker compose {' '.join(args)}: {r.stdout[-2000:]}{r.stderr[-2000:]}")
         return r
 
-    def exec_argv(self, service: str, user: str, *cmd: str, env: dict[str, str] | None = None,
-                  detach: bool = False) -> list[str]:
+    def exec_argv(
+        self, service: str, user: str, *cmd: str, env: dict[str, str] | None = None, detach: bool = False
+    ) -> list[str]:
         e = []
         for k, v in (env or {}).items():
             e += ["-e", f"{k}={v}"]
         home = "/home/dev" if user == "dev" else "/home/pi"
-        return [*self.base, "exec", "-T", *(["-d"] if detach else []), "-u", user, "-w", home, *e, service, *cmd]
+        return [
+            *self.base,
+            "exec",
+            "-T",
+            *(["-d"] if detach else []),
+            "-u",
+            user,
+            "-w",
+            home,
+            *e,
+            service,
+            *cmd,
+        ]
 
-    def run(self, service: str, user: str, *cmd: str, input: str | None = None, env: dict[str, str] | None = None,
-            timeout: float = 120.0, check: bool = True) -> subprocess.CompletedProcess[str]:
-        r = subprocess.run(self.exec_argv(service, user, *cmd, env=env), input=input, capture_output=True, text=True,
-                           timeout=timeout, stdin=None if input is not None else subprocess.DEVNULL, env=DOCKER_ENV)
+    def run(
+        self,
+        service: str,
+        user: str,
+        *cmd: str,
+        input: str | None = None,
+        env: dict[str, str] | None = None,
+        timeout: float = 120.0,
+        check: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        r = subprocess.run(
+            self.exec_argv(service, user, *cmd, env=env),
+            input=input,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            stdin=None if input is not None else subprocess.DEVNULL,
+            env=DOCKER_ENV,
+        )
         if check and r.returncode != 0:
-            raise AssertionError(f"{service}$ {' '.join(cmd)} -> {r.returncode}\n{r.stdout[-3000:]}\n{r.stderr[-3000:]}")
+            raise AssertionError(
+                f"{service}$ {' '.join(cmd)} -> {r.returncode}\n{r.stdout[-3000:]}\n{r.stderr[-3000:]}"
+            )
         return r
 
     def desk(self, *cmd: str, **kw: Any) -> subprocess.CompletedProcess[str]:
@@ -183,8 +242,14 @@ class TwoHost:
 
     def ip(self, service: str) -> str:
         cid = self.container(service)
-        r = subprocess.run(["docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}",
-                            cid], capture_output=True, text=True, timeout=30, check=True, env=DOCKER_ENV)
+        r = subprocess.run(
+            ["docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}", cid],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+            env=DOCKER_ENV,
+        )
         return r.stdout.split()[0]
 
     # ------------------------------------------------------- switchboard
@@ -234,15 +299,30 @@ class TwoHost:
             time.sleep(0.5)
 
     def start_broker(self) -> None:
-        self.desk("bash", "-c", f"umask 077; mkdir -p {DESK_HOME} {WORK} /home/dev/fpga/out"
-                                f" && touch {DESK_HOME}/.switchboard-test"
-                                f" && printf 'human_name = \"alice\"\\n' > {DESK_HOME}/config.toml")
+        self.desk(
+            "bash",
+            "-c",
+            f"umask 077; mkdir -p {DESK_HOME} {WORK} /home/dev/fpga/out"
+            f" && touch {DESK_HOME}/.switchboard-test"
+            f" && printf 'human_name = \"alice\"\\n' > {DESK_HOME}/config.toml",
+        )
         # the broker in the foreground of a detached exec: it lives as long as the container
-        subprocess.run(self.exec_argv("desk", "dev", "bash", "-c",
-                                      f"exec switchboard start --foreground --test-mode --test-trust-uds"
-                                      f" --home {DESK_HOME} --port 0 >{WORK}/broker.out 2>&1",
-                                      env={"SWITCHBOARD_TEST": "1"}, detach=True),
-                       check=True, capture_output=True, timeout=60, env=DOCKER_ENV)
+        subprocess.run(
+            self.exec_argv(
+                "desk",
+                "dev",
+                "bash",
+                "-c",
+                f"exec switchboard start --foreground --test-mode --test-trust-uds"
+                f" --home {DESK_HOME} --port 0 >{WORK}/broker.out 2>&1",
+                env={"SWITCHBOARD_TEST": "1"},
+                detach=True,
+            ),
+            check=True,
+            capture_output=True,
+            timeout=60,
+            env=DOCKER_ENV,
+        )
         deadline = time.monotonic() + 30
         while True:
             r = self.desk(PY, ACTORS, "rpc", "--home", DESK_HOME, "sys.ping", check=False)
@@ -257,11 +337,29 @@ class TwoHost:
         pub = self.pi("cat", "/home/pi/.sshd/host_ed25519.pub").stdout.split()
         self.host_key = f"{pub[0]} {pub[1]}"
         # the owner ssh'd there once and compared the fingerprint the container printed
-        self.sh("desk", f": > {WORK}/ssh_config; : > {WORK}/desk_ak;"
-                        f" printf '%s\\n' '[pi]:2222 {self.host_key}' > {WORK}/known_hosts")
-        r = self.sb("remote", "add", NAME, "pi@pi", "--port", "2222", "--rooms", ROOM, "--ssh-config",
-                    f"{WORK}/ssh_config", "--known-hosts", f"{WORK}/known_hosts", "--authorized-keys",
-                    f"{WORK}/desk_ak", "--label", "desk")
+        self.sh(
+            "desk",
+            f": > {WORK}/ssh_config; : > {WORK}/desk_ak;"
+            f" printf '%s\\n' '[pi]:2222 {self.host_key}' > {WORK}/known_hosts",
+        )
+        r = self.sb(
+            "remote",
+            "add",
+            NAME,
+            "pi@pi",
+            "--port",
+            "2222",
+            "--rooms",
+            ROOM,
+            "--ssh-config",
+            f"{WORK}/ssh_config",
+            "--known-hosts",
+            f"{WORK}/known_hosts",
+            "--authorized-keys",
+            f"{WORK}/desk_ak",
+            "--label",
+            "desk",
+        )
         m = TOKEN_RE.search(r.stdout)
         assert m, r.stdout + r.stderr
         self.desk_ip = self.ip("desk")
@@ -278,11 +376,17 @@ class TwoHost:
         on the desktop with the remote's pull key limited to ``rrsync -ro ~/fpga/out``."""
         self.desk("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "fpga-push", "-f", f"{WORK}/fpga_push")
         push = self.desk("cat", f"{WORK}/fpga_push.pub").stdout.strip()
-        self.pi("bash", "-c", "cat >> /home/pi/.ssh/authorized_keys",
-                input=f'restrict,command="rrsync -wo /home/pi/fpga/in" {push}\n')
+        self.pi(
+            "bash",
+            "-c",
+            "cat >> /home/pi/.ssh/authorized_keys",
+            input=f'restrict,command="rrsync -wo /home/pi/fpga/in" {push}\n',
+        )
         self.push_ssh = PI_SSH.format(key=f"{WORK}/fpga_push", kh=f"{WORK}/known_hosts", port=2222)
         # the desktop's sshd for pulls: this user's own, on 2223, never a system one
-        self.sh("desk", f"""
+        self.sh(
+            "desk",
+            f"""
             mkdir -p {WORK}/dsshd && chmod 700 {WORK}/dsshd
             ssh-keygen -q -t ed25519 -N '' -C desk-host -f {WORK}/dsshd/host_ed25519
             : > {WORK}/dsshd/authorized_keys
@@ -298,13 +402,25 @@ StrictModes no
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 EOF
-            /usr/sbin/sshd -t -f {WORK}/dsshd/sshd_config""")
-        subprocess.run(self.exec_argv("desk", "dev", "/usr/sbin/sshd", "-D", "-e", "-f", f"{WORK}/dsshd/sshd_config",
-                                      detach=True), check=True, capture_output=True, timeout=60, env=DOCKER_ENV)
+            /usr/sbin/sshd -t -f {WORK}/dsshd/sshd_config""",
+        )
+        subprocess.run(
+            self.exec_argv(
+                "desk", "dev", "/usr/sbin/sshd", "-D", "-e", "-f", f"{WORK}/dsshd/sshd_config", detach=True
+            ),
+            check=True,
+            capture_output=True,
+            timeout=60,
+            env=DOCKER_ENV,
+        )
         self.pi("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "fpga-pull", "-f", "/home/pi/fpga_pull")
         pull = self.pi("cat", "/home/pi/fpga_pull.pub").stdout.strip()
-        self.desk("bash", "-c", f"cat >> {WORK}/dsshd/authorized_keys",
-                  input=f'restrict,from="{self.pi_ip}",command="rrsync -ro /home/dev/fpga/out" {pull}\n')
+        self.desk(
+            "bash",
+            "-c",
+            f"cat >> {WORK}/dsshd/authorized_keys",
+            input=f'restrict,from="{self.pi_ip}",command="rrsync -ro /home/dev/fpga/out" {pull}\n',
+        )
         dkey = " ".join(self.desk("cat", f"{WORK}/dsshd/host_ed25519.pub").stdout.split()[:2])
         self.pi("bash", "-c", "cat > /home/pi/pull_known_hosts", input=f"[desk]:2223 {dkey}\n")
         self.pull_ssh = PI_SSH.format(key="/home/pi/fpga_pull", kh="/home/pi/pull_known_hosts", port=2223)
@@ -335,10 +451,13 @@ def th() -> Iterator[TwoHost]:
         t.start_broker()
         t.enable_text = t.pair()
         t.keys()
-        t.vivado = t.actor("desk", "dev", "agent", "--home", DESK_HOME, "--name", "vivado", "--test-session", "vivado")
+        t.vivado = t.actor(
+            "desk", "dev", "agent", "--home", DESK_HOME, "--name", "vivado", "--test-session", "vivado"
+        )
         assert t.vivado.next("joined")["ok"]
-        t.bench = t.actor("testpi", "pi", "bench", "--home", PI_HOME, "--pull-src", "dev@desk",
-                          "--pull-ssh", t.pull_ssh)
+        t.bench = t.actor(
+            "testpi", "pi", "bench", "--home", PI_HOME, "--pull-src", "dev@desk", "--pull-ssh", t.pull_ssh
+        )
         j = t.bench.next("joined")
         assert j["ok"] and j["tier"] == "claude:inbox", j
         yield t
@@ -348,13 +467,15 @@ def th() -> Iterator[TwoHost]:
 
 def handoff(th: TwoHost, bit: dict[str, Any], via: str = "push") -> dict[str, Any]:
     """vivado posts the artifact line; the bench wakes, works and answers."""
-    text = (f"@bench artifact: blinky/top.bit sha256:{bit['sha256']} size:{bit['size']} board:fake via:{via}")
+    text = f"@bench artifact: blinky/top.bit sha256:{bit['sha256']} size:{bit['size']} board:fake via:{via}"
     for _ in range(3):
         th.vivado.send({"op": "say", "room": ROOM, "text": text})
         said = th.vivado.next("say")
         if said.get("reason") != "rate_limited":
             break
-        time.sleep(said["retry_after_s"] + 0.3)  # an agent may say() once per 10 s (§8.4), as a real one learns
+        time.sleep(
+            said["retry_after_s"] + 0.3
+        )  # an agent may say() once per 10 s (§8.4), as a real one learns
     assert said["ok"] and said["posted_id"], said
     res = th.bench.next("result", timeout=90, pred=lambda e: e["facts"]["sha256"] == bit["sha256"])
     posted = [m for m in th.messages() if m["text"].startswith("result: ") and m["from"] == "bench"]
@@ -366,7 +487,9 @@ def handoff(th: TwoHost, bit: dict[str, Any], via: str = "push") -> dict[str, An
 def test_fpga_handoff_push_rrsync_wo(th: TwoHost) -> None:
     assert "remote hooks ok" in th.enable_text and "rtt " in th.enable_text
     st = th.status()
-    assert st["state"] == "up" and st["transport"] == "ssh" and st["harden"] == "prctl" and not st["test_mode"]
+    assert (
+        st["state"] == "up" and st["transport"] == "ssh" and st["harden"] == "prctl" and not st["test_mode"]
+    )
     who = th.member("bench")
     assert who is not None and who["host"] == NAME and who["tier"] == "claude:inbox"
     bit = th.build(tag="push")
@@ -375,8 +498,9 @@ def test_fpga_handoff_push_rrsync_wo(th: TwoHost) -> None:
     res = handoff(th, bit)
     woke = next(e for e in th.bench.log if e.get("ev") == "woken")
     assert woke["via"] == "inbox"
-    assert re.fullmatch(rf"result: {bit['sha256'][:12]} pull=skip verify=ok flash=ok uart=pass\(12/12\) t=\d+s",
-                        res["text"]), res
+    assert re.fullmatch(
+        rf"result: {bit['sha256'][:12]} pull=skip verify=ok flash=ok uart=pass\(12/12\) t=\d+s", res["text"]
+    ), res
     assert time.monotonic() - t0 < 60
     # openFPGALoader logged what it flashed; the push key can do nothing but write the drop dir
     log = th.pi("cat", "/home/pi/bench/flash.log").stdout
@@ -395,8 +519,9 @@ def test_fpga_handoff_push_rrsync_wo(th: TwoHost) -> None:
 def test_fpga_handoff_pull_rrsync_ro(th: TwoHost) -> None:
     bit = th.build(tag="pull")
     res = handoff(th, bit, via="pull")
-    assert re.fullmatch(rf"result: {bit['sha256'][:12]} pull=ok verify=ok flash=ok uart=pass\(12/12\) t=\d+s",
-                        res["text"]), res
+    assert re.fullmatch(
+        rf"result: {bit['sha256'][:12]} pull=ok verify=ok flash=ok uart=pass\(12/12\) t=\d+s", res["text"]
+    ), res
     # the pull key reads only the out dir, and writes nothing
     r = th.pi("rsync", "-e", th.pull_ssh, "dev@desk:../../../etc/passwd", "/tmp/x", check=False)
     assert r.returncode != 0
@@ -425,24 +550,37 @@ def test_broken_bitstream_fails_uart_then_fixed_passes(th: TwoHost) -> None:
 
 def test_partition_offline_then_delivery(th: TwoHost) -> None:
     net, cid = th.network(), th.container("testpi")
-    subprocess.run(["docker", "network", "disconnect", net, cid], check=True, capture_output=True, timeout=60,
-                   env=DOCKER_ENV)
+    subprocess.run(
+        ["docker", "network", "disconnect", net, cid],
+        check=True,
+        capture_output=True,
+        timeout=60,
+        env=DOCKER_ENV,
+    )
     try:
         st = th.wait_state("down", timeout=40)
-        assert st["reason"] in ("no_pong", "keepalive", "timeout", "unreachable", "eof", "closed") or \
-            st["reason"].startswith("exit"), st
+        assert st["reason"] in ("no_pong", "keepalive", "timeout", "unreachable", "eof", "closed") or st[
+            "reason"
+        ].startswith("exit"), st
         deadline = time.monotonic() + 30
         while (m := th.member("bench")) is not None and m["status"] != "offline":
             assert time.monotonic() < deadline, m
             time.sleep(0.5)
         assert any("link down" in m["text"] for m in th.messages() if m["kind"] == "notice")
         # the owner says something while the bench is unreachable: it waits for it
-        mid = th.rpc("human.say", {"room": ROOM, "text": "@bench are you back? (sent while you were offline)"})["id"]
+        mid = th.rpc(
+            "human.say", {"room": ROOM, "text": "@bench are you back? (sent while you were offline)"}
+        )["id"]
         time.sleep(3)
         assert not [e for e in th.bench.log if e.get("ev") == "woken" and "sent while" in json.dumps(e)]
     finally:
-        subprocess.run(["docker", "network", "connect", "--alias", "pi", net, cid], check=True, capture_output=True,
-                       timeout=60, env=DOCKER_ENV)
+        subprocess.run(
+            ["docker", "network", "connect", "--alias", "pi", net, cid],
+            check=True,
+            capture_output=True,
+            timeout=60,
+            env=DOCKER_ENV,
+        )
     th.wait_state("up", timeout=60)
     deadline = time.monotonic() + 60
     while (m := th.member("bench")) is None or m["status"] == "offline":
@@ -505,17 +643,22 @@ print(json.dumps(out))
     out = json.loads(r.stdout)
     chain, sat, uid = out["chain"], out["satellite"], out["uid"]
     # the satellite is the pi user's own process, and non-dumpable: refused to that same user
-    assert chain[0][2] == uid and chain[0][1].endswith("-m switchboard satellite --home /home/pi/.switchboard"
-                                                       " --name fpga-pi"), chain
+    assert chain[0][2] == uid and chain[0][1].endswith(
+        "-m switchboard satellite --home /home/pi/.switchboard --name fpga-pi"
+    ), chain
     sessions = [(q, n, u) for q, n, u in chain[1:] if n.startswith("sshd")]
-    assert sessions and any(n.startswith(("sshd: pi@notty", "sshd-session: pi@notty")) for _q, n, _u in sessions), chain
+    assert sessions and any(
+        n.startswith(("sshd: pi@notty", "sshd-session: pi@notty")) for _q, n, _u in sessions
+    ), chain
     if half == "satellite":
         assert out["access"][str(sat)] == {"fd1": "refused", "fdlist": "refused", "environ": "refused"}, out
         return
     # a system sshd keeps a root-owned monitor above the user's session; a user-level one has none
     if all(u == uid for _q, _n, u in sessions):
-        pytest.skip("this sshd is user-level (the listener runs as the user): its session stays open to that user;"
-                    " the sshd half of G2 was measured live against a system sshd (DESIGN.md §27.16)")
+        pytest.skip(
+            "this sshd is user-level (the listener runs as the user): its session stays open to that user;"
+            " the sshd half of G2 was measured live against a system sshd (DESIGN.md §27.16)"
+        )
     for q, _n, _u in sessions:
         assert out["access"][str(q)] == {"fd1": "refused", "fdlist": "refused", "environ": "refused"}, out
 
@@ -533,8 +676,10 @@ def test_separate_pid_namespaces_no_desk_probe(th: TwoHost) -> None:
     r = th.desk("bash", "-c", f"test -e /proc/{pid} && tr '\\0' ' ' < /proc/{pid}/cmdline", check=False)
     if r.returncode == 0:
         assert "claude" not in r.stdout
-        pytest.skip(f"pid {pid} also exists on the desk container ({r.stdout[:60]!r}): this run can't tell a desk"
-                    " probe of it from none")
+        pytest.skip(
+            f"pid {pid} also exists on the desk container ({r.stdout[:60]!r}): this run can't tell a desk"
+            " probe of it from none"
+        )
     time.sleep(6)  # three liveness ticks: a desktop probe of that pid would have ended it
     who = th.member("bench")
     assert who is not None and who["status"] != "offline" and who["host"] == NAME

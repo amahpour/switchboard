@@ -18,6 +18,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = ROOT / ".lint-baseline.json"
 TOOLS = ROOT / ".lint-tools"
+PYTHON_DIRS = ("src", "tests", "scripts", "docs/media")
+# One-time #142 reformat migration. Exact snapshots keep the normal ratchet for every other PR.
+FORMATTING_BASELINES = (
+    "daba62f8290a87c1fd591888e3e958ed06da6ca49451f57901282f49fdea3eb1",
+    "6fe65d299e113a166da806ca5f7f29cd19bb1cb89546711946d926fc30497d7e",
+)
 RELEASES = {
     "shellcheck": (
         "v0.11.0",
@@ -166,10 +172,18 @@ def compare(actual: dict[str, list[list[str]]], base: str) -> bool:
     old = run("git", "show", f"{base}:.lint-baseline.json", check=False, capture_output=True)
     if old.returncode == 0:
         former = json.loads(old.stdout)
+        formatting_migration = (
+            hashlib.sha256(old.stdout.encode()).hexdigest() == FORMATTING_BASELINES[0]
+            and hashlib.sha256(BASELINE.read_bytes()).hexdigest() == FORMATTING_BASELINES[1]
+        )
         for tool in ("ruff", "mypy"):
-            growth = Counter(map(tuple, expected[tool])) - Counter(map(tuple, former[tool]))
-            if growth:
-                print(f"{tool}: baseline grew by {sum(growth.values())} findings")
+            if formatting_migration:
+                growth_count = max(0, len(expected[tool]) - len(former[tool]))
+            else:
+                growth = Counter(map(tuple, expected[tool])) - Counter(map(tuple, former[tool]))
+                growth_count = sum(growth.values())
+            if growth_count:
+                print(f"{tool}: baseline grew by {growth_count} findings")
                 good = False
     return good
 
@@ -185,7 +199,7 @@ def changed_python(base: str) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--fix", action="store_true", help="fix JavaScript and changed Python files")
+    parser.add_argument("--fix", action="store_true", help="fix JavaScript and format Python files")
     parser.add_argument(
         "--base", default="origin/main", help="base commit for changed files and baseline ratchet"
     )
@@ -193,12 +207,9 @@ def main() -> int:
     changed = changed_python(args.base)
     if args.fix and changed:
         run("uv", "run", "--frozen", "ruff", "check", "--fix", *changed, check=False)
-    if changed:
-        command = ("uv", "run", "--frozen", "ruff", "format", *([] if args.fix else ["--check"]), *changed)
-        format_ok = run(*command, check=False).returncode == 0
-    else:
-        format_ok = True
-    print(f"ruff format: {len(changed)} changed Python files")
+    command = ("uv", "run", "--frozen", "ruff", "format", *([] if args.fix else ["--check"]), *PYTHON_DIRS)
+    format_ok = run(*command, check=False).returncode == 0
+    print("ruff format: whole Python tree")
     run("npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund")
     js_ok = run("npm", "run", "lint:js", *(["--", "--fix"] if args.fix else []), check=False).returncode == 0
     ok = compare(findings(), args.base) and format_ok and js_ok

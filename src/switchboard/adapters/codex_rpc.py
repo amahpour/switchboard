@@ -102,8 +102,12 @@ def turn_start_params(thread_id: str, text: str, client_id: str) -> dict[str, An
 
 
 def turn_steer_params(thread_id: str, turn_id: str, text: str, client_id: str) -> dict[str, Any]:
-    return {"threadId": thread_id, "expectedTurnId": turn_id, "input": text_input(text),
-            "clientUserMessageId": client_id}
+    return {
+        "threadId": thread_id,
+        "expectedTurnId": turn_id,
+        "input": text_input(text),
+        "clientUserMessageId": client_id,
+    }
 
 
 def check_request(method: str, params: Any) -> None:
@@ -124,19 +128,31 @@ def check_request(method: str, params: Any) -> None:
         raise ForbiddenRpc(f"{method}: override field")
     if method in EXACT_KEYS:
         inp = params.get("input")
-        if (not isinstance(inp, list) or len(inp) != 1 or not isinstance(inp[0], dict)
-                or set(inp[0]) != {"type", "text", "text_elements"} or inp[0]["type"] != "text"
-                or not isinstance(inp[0]["text"], str) or inp[0]["text_elements"] != []):
+        if (
+            not isinstance(inp, list)
+            or len(inp) != 1
+            or not isinstance(inp[0], dict)
+            or set(inp[0]) != {"type", "text", "text_elements"}
+            or inp[0]["type"] != "text"
+            or not isinstance(inp[0]["text"], str)
+            or inp[0]["text_elements"] != []
+        ):
             raise ForbiddenRpc(f"{method}: input must be one plain text item")
         for k in keys - {"input"}:
             if not isinstance(params[k], str) or not params[k] or len(params[k]) > 200:
                 raise ForbiddenRpc(f"{method}: {k} must be a short string")
     if method == "initialize":
         caps = params.get("capabilities") or {}
-        if not isinstance(caps, dict) or caps.get("experimentalApi") is not False or set(caps) - {"experimentalApi"}:
+        if (
+            not isinstance(caps, dict)
+            or caps.get("experimentalApi") is not False
+            or set(caps) - {"experimentalApi"}
+        ):
             raise ForbiddenRpc("initialize: only experimentalApi=false")
     if method == "thread/read":
-        if not isinstance(params.get("threadId"), str) or not isinstance(params.get("includeTurns", False), bool):
+        if not isinstance(params.get("threadId"), str) or not isinstance(
+            params.get("includeTurns", False), bool
+        ):
             raise ForbiddenRpc("thread/read: bad params")
 
 
@@ -172,8 +188,13 @@ NoteFn = Callable[[str, dict[str, Any], float], None]
 class CodexRpc:
     """One connection. ``on_notification(method, params, t)`` sees notifications."""
 
-    def __init__(self, path: str | os.PathLike[str], *, on_notification: NoteFn | None = None,
-                 clock: Callable[[], float] = time.time):
+    def __init__(
+        self,
+        path: str | os.PathLike[str],
+        *,
+        on_notification: NoteFn | None = None,
+        clock: Callable[[], float] = time.time,
+    ):
         self.path = str(path)
         self.on_notification = on_notification
         self.clock = clock
@@ -195,9 +216,18 @@ class CodexRpc:
 
         check_socket(self.path)
         self._ws = await asyncio.wait_for(
-            unix_connect(self.path, uri="ws://localhost/", max_size=MAX_FRAME, ping_interval=None,
-                         compression=None, proxy=None, open_timeout=timeout, close_timeout=1),
-            timeout)
+            unix_connect(
+                self.path,
+                uri="ws://localhost/",
+                max_size=MAX_FRAME,
+                ping_interval=None,
+                compression=None,
+                proxy=None,
+                open_timeout=timeout,
+                close_timeout=1,
+            ),
+            timeout,
+        )
         self._reader = asyncio.get_running_loop().create_task(self._read())
         try:
             res = await self.request("initialize", initialize_params(), timeout=timeout)
@@ -260,8 +290,9 @@ class CodexRpc:
             raise ConnectionError("codex app-server connection closed")
         await self._ws.send(json.dumps(msg, separators=(",", ":")))
 
-    async def request(self, method: str, params: dict[str, Any] | None = None,
-                      timeout: float = REQUEST_TIMEOUT_S) -> Any:
+    async def request(
+        self, method: str, params: dict[str, Any] | None = None, timeout: float = REQUEST_TIMEOUT_S
+    ) -> Any:
         check_request(method, params)
         rid = next(self._ids)
         fut: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
@@ -313,8 +344,9 @@ class CodexRpc:
                 break
         return out
 
-    async def read_thread(self, thread_id: str, include_turns: bool = False,
-                          timeout: float = REQUEST_TIMEOUT_S) -> dict[str, Any]:
+    async def read_thread(
+        self, thread_id: str, include_turns: bool = False, timeout: float = REQUEST_TIMEOUT_S
+    ) -> dict[str, Any]:
         res = await self.request("thread/read", thread_read_params(thread_id, include_turns), timeout=timeout)
         th = res.get("thread") if isinstance(res, dict) else None
         return th if isinstance(th, dict) else {}
@@ -392,9 +424,15 @@ def join_proven(thread: dict[str, Any], needle: str) -> bool:
         if not isinstance(items, list):
             continue
         for it in items:
-            if (isinstance(it, dict) and it.get("type") == "mcpToolCall" and it.get("server") == PROOF_SERVER
-                    and it.get("tool") == PROOF_TOOL and it.get("status") == "completed"
-                    and isinstance(it.get("result"), dict) and contains(it["result"], needle)):
+            if (
+                isinstance(it, dict)
+                and it.get("type") == "mcpToolCall"
+                and it.get("server") == PROOF_SERVER
+                and it.get("tool") == PROOF_TOOL
+                and it.get("status") == "completed"
+                and isinstance(it.get("result"), dict)
+                and contains(it["result"], needle)
+            ):
                 return True
     return False
 

@@ -8,7 +8,6 @@ import subprocess
 from functools import cache
 from pathlib import Path
 
-
 REVISION = re.compile(r"[0-9a-f]{40}")
 
 
@@ -24,8 +23,13 @@ def read_commit(package_dir: Path) -> str | None:
     if not (root / ".git").exists():
         return None
     try:
-        result = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],
-                                capture_output=True, text=True, timeout=2, check=False)
+        result = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
     except (OSError, subprocess.TimeoutExpired):
         return None
     revision = result.stdout.strip()

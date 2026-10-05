@@ -73,7 +73,6 @@ from typing import Any
 
 import httpx
 import pytest
-
 from harness import codex_profile, codex_trust, drift, preflight, profiles, screens
 from harness.tmuxdrv import REAL_HOME, Tmux, clean_env
 
@@ -81,32 +80,55 @@ pytestmark = pytest.mark.live
 
 LIVE = {x.strip() for x in os.environ.get("SWITCHBOARD_LIVE", "").split(",") if x.strip()}
 REAL_PATH = os.environ.get("PATH", "/usr/bin:/bin")
-AGENTS = [x.strip() for x in os.environ.get("SWITCHBOARD_M7_AGENTS", "claude,codex,devin").split(",") if x.strip()]
+AGENTS = [
+    x.strip() for x in os.environ.get("SWITCHBOARD_M7_AGENTS", "claude,codex,devin").split(",") if x.strip()
+]
 SCALE = float(os.environ.get("SWITCHBOARD_M7_SCALE", "1.0"))
 CLAUDE_MODEL = os.environ.get("SWITCHBOARD_M7_CLAUDE_MODEL", "sonnet")
 CODEX_MODEL = os.environ.get("SWITCHBOARD_M7_CODEX_MODEL", "gpt-5.5")
 CODEX_EFFORT = os.environ.get("SWITCHBOARD_M7_CODEX_EFFORT", "medium")
 NAMES = {"claude": "claude-1", "codex": "codex-1", "devin": "devin-1"}
-SOCKDIR = Path(f"/tmp/yk-cx-live-{os.getuid()}")  # short (sun_path); codex keeps a lock per path: reuse a.sock
+SOCKDIR = Path(
+    f"/tmp/yk-cx-live-{os.getuid()}"
+)  # short (sun_path); codex keeps a lock per path: reuse a.sock
 USER_DAEMON_SOCK = Path(REAL_HOME) / ".codex" / "app-server-control" / "app-server-control.sock"
 STALL_S = 60.0
 BUDGET = 40
 HOP_LIMIT = 6
 
 # the narrow allow rules (DESIGN.md §13 M7), test-only
-CLAUDE_BASH_ALLOW = ["Bash(git worktree:*)", "Bash(git diff:*)", "Bash(git add:*)", "Bash(git commit:*)",
-                     "Bash(python -m pytest:*)", "Bash(python3 -m pytest:*)"]
-DEVIN_EXEC_ALLOW = ["Exec(git worktree)", "Exec(git diff)", "Exec(git add)", "Exec(git commit)",
-                    "Exec(python -m pytest)", "Exec(python3 -m pytest)"]
+CLAUDE_BASH_ALLOW = [
+    "Bash(git worktree:*)",
+    "Bash(git diff:*)",
+    "Bash(git add:*)",
+    "Bash(git commit:*)",
+    "Bash(python -m pytest:*)",
+    "Bash(python3 -m pytest:*)",
+]
+DEVIN_EXEC_ALLOW = [
+    "Exec(git worktree)",
+    "Exec(git diff)",
+    "Exec(git add)",
+    "Exec(git commit)",
+    "Exec(python -m pytest)",
+    "Exec(python3 -m pytest)",
+]
 # with acceptEdits, Claude may not edit any harness's project config (another agent's permissions
 # or hooks) or git's own files (hooks run on the pre-approved `git commit`), nor let `git diff`
 # write a file; Devin has no verified deny syntax: the teardown compares these files instead
-CLAUDE_DENY = ["Edit(.claude/**)", "Edit(.devin/**)", "Edit(.codex/**)", "Edit(.git/**)",
-               "Bash(git diff --output:*)"]
+CLAUDE_DENY = [
+    "Edit(.claude/**)",
+    "Edit(.devin/**)",
+    "Edit(.codex/**)",
+    "Edit(.git/**)",
+    "Bash(git diff --output:*)",
+]
 WS_CONFIG = (".claude", ".devin", ".codex", ".git/hooks", ".git/config")
 # typed into a parked Devin (as the README tells a human); no digits: nothing a selector could take
-POKE_TEXT = ("There are messages for you in #build: read them with the switchboard read tool, act on them, then call"
-             " wait again with the same room and timeout as before.")
+POKE_TEXT = (
+    "There are messages for you in #build: read them with the switchboard read tool, act on them, then call"
+    " wait again with the same room and timeout as before."
+)
 
 # what an open approval prompt looks like on each harness's screen
 PROMPT_RE = {
@@ -123,7 +145,7 @@ def parse_port(value):
     """Return the port number in ``value`` (a string or an int)."""
     return int(value)
 '''
-TEST_PORTPARSE = '''from portparse import parse_port
+TEST_PORTPARSE = """from portparse import parse_port
 
 
 def test_parses_a_plain_number():
@@ -132,7 +154,7 @@ def test_parses_a_plain_number():
 
 def test_accepts_an_int():
     assert parse_port(443) == 443
-'''
+"""
 README = """# portparse
 
 `parse_port(value)` turns a configuration value into a TCP port number.
@@ -140,43 +162,61 @@ Run the tests with `python -m pytest -q`.
 """
 
 # ---------------------------------------------------------------- the script
-TASK = ("Task for #build: add input validation to parse_port() in portparse.py. It should accept an int or a"
-        " numeric string (surrounding whitespace is fine) and return an int, and raise ValueError for anything"
-        " else: empty or non-numeric strings, floats such as '80.5', booleans, None, and ports outside 1-65535."
-        " Add tests for the new cases. Divide the work between you (for example: one implements, one writes the"
-        " tests, one reviews), do it in your own worktree (.worktrees/<your name>, its own branch), run"
-        " `python -m pytest -q .worktrees/<your name>`, and review each other's changes. Post a short plan"
-        " first; keep messages short and pass() when you have nothing new to add.")
-INTERJECT_1 = ("Interjection from alice: small change of plan. Ports below 1024 must be rejected unless parse_port"
-               " is called with allow_privileged=True. Please fold that into the implementation and the tests.")
-INTERJECT_2 = ("Checking in: who has what done, and do the tests pass in your worktree? Reviewers: please post one"
-               " concrete review comment each on another agent's change (name its worktree).")
-WRAP_UP = ("Wrap-up: please each post one line: what you changed, whether its tests pass, and what you reviewed."
-           " I'm pausing the room in two minutes.")
-SCRIPT = [(0.0, "task", TASK), (4.0, "interjection 1", INTERJECT_1), (8.0, "interjection 2", INTERJECT_2),
-          (15.0, "wrap-up", WRAP_UP)]
+TASK = (
+    "Task for #build: add input validation to parse_port() in portparse.py. It should accept an int or a"
+    " numeric string (surrounding whitespace is fine) and return an int, and raise ValueError for anything"
+    " else: empty or non-numeric strings, floats such as '80.5', booleans, None, and ports outside 1-65535."
+    " Add tests for the new cases. Divide the work between you (for example: one implements, one writes the"
+    " tests, one reviews), do it in your own worktree (.worktrees/<your name>, its own branch), run"
+    " `python -m pytest -q .worktrees/<your name>`, and review each other's changes. Post a short plan"
+    " first; keep messages short and pass() when you have nothing new to add."
+)
+INTERJECT_1 = (
+    "Interjection from alice: small change of plan. Ports below 1024 must be rejected unless parse_port"
+    " is called with allow_privileged=True. Please fold that into the implementation and the tests."
+)
+INTERJECT_2 = (
+    "Checking in: who has what done, and do the tests pass in your worktree? Reviewers: please post one"
+    " concrete review comment each on another agent's change (name its worktree)."
+)
+WRAP_UP = (
+    "Wrap-up: please each post one line: what you changed, whether its tests pass, and what you reviewed."
+    " I'm pausing the room in two minutes."
+)
+SCRIPT = [
+    (0.0, "task", TASK),
+    (4.0, "interjection 1", INTERJECT_1),
+    (8.0, "interjection 2", INTERJECT_2),
+    (15.0, "wrap-up", WRAP_UP),
+]
 WRAP_GRACE_MIN = 2.0
 HARD_LIMIT_MIN = 20.0
 
 
 def join_prompt(harness: str, name: str) -> str:
-    base = (f"Use the switchboard MCP tools: join #build as {name} and stay in the room. I (alice) will post a task"
-            " there; coordinate with the other agents through the room with say() and pass(). For every file you"
-            f" change, use your own git worktree at .worktrees/{name} (already created, on branch {name}); don't"
-            " edit the main checkout or another agent's worktree (you may read them). Edit files with your"
-            " file-editing tools, not shell commands such as cp, mv, sed or cat. Pre-approved shell commands: git"
-            " worktree, git diff, git add, git commit and python -m pytest, each run as a command of its own"
-            " (a chain such as `cd ... && git ...` asks for approval). Run the tests from here with"
-            f" `python -m pytest -q .worktrees/{name}`; for git in your worktree, first run"
-            f" `cd .worktrees/{name}` as a command of its own. Anything else may ask for an approval that"
-            " nobody will answer during this rehearsal, so avoid it; if a command needs approval, skip it and"
-            " say so in the room.")
+    base = (
+        f"Use the switchboard MCP tools: join #build as {name} and stay in the room. I (alice) will post a task"
+        " there; coordinate with the other agents through the room with say() and pass(). For every file you"
+        f" change, use your own git worktree at .worktrees/{name} (already created, on branch {name}); don't"
+        " edit the main checkout or another agent's worktree (you may read them). Edit files with your"
+        " file-editing tools, not shell commands such as cp, mv, sed or cat. Pre-approved shell commands: git"
+        " worktree, git diff, git add, git commit and python -m pytest, each run as a command of its own"
+        " (a chain such as `cd ... && git ...` asks for approval). Run the tests from here with"
+        f" `python -m pytest -q .worktrees/{name}`; for git in your worktree, first run"
+        f" `cd .worktrees/{name}` as a command of its own. Anything else may ask for an approval that"
+        " nobody will answer during this rehearsal, so avoid it; if a command needs approval, skip it and"
+        " say so in the room."
+    )
     if harness == "codex":
-        base += " Committing may need an approval in your sandbox; if it does, leave your changes uncommitted."
+        base += (
+            " Committing may need an approval in your sandbox; if it does, leave your changes uncommitted."
+        )
     if harness == "devin":
-        base += (' After joining, call wait with room "#build" and timeout_s 600. Each time wait returns, act on'
-                 " the messages, then call wait again with the same arguments. If it returns paused, end your"
-                 " turn.")
+        base += (
+            ' After joining, call wait with room "#build" and timeout_s 600. Each time wait returns, act on'
+            " the messages, then call wait again with the same arguments. If it returns paused, end your"
+            " turn."
+        )
     else:
         base += " After joining, reply with one word: joined."
     return base
@@ -234,9 +274,15 @@ class Demo:
                 a.not_run = "not selected (SWITCHBOARD_M7_AGENTS)"
             elif not shutil.which(h, path=REAL_PATH):
                 a.not_run = f"not run: {h} not on PATH"
-        self.results: dict[str, Any] = {"timeline": [], "stalls": [], "loop_guard_resumes": [],
-                                        "declined_prompts": 0, "pokes": [], "scale": SCALE,
-                                        "not_run": {"cursor": "not run: not yet tested live"}}
+        self.results: dict[str, Any] = {
+            "timeline": [],
+            "stalls": [],
+            "loop_guard_resumes": [],
+            "declined_prompts": 0,
+            "pokes": [],
+            "scale": SCALE,
+            "not_run": {"cursor": "not run: not yet tested live"},
+        }
         self.broker: subprocess.Popen[bytes] | None = None
         self.server: subprocess.Popen[bytes] | None = None
         self.web: httpx.Client | None = None
@@ -256,8 +302,11 @@ class Demo:
         rel = round(t - self.t0, 1) if self.t0 else None
         entry = {"t0_s": rel, "what": what, **kw}
         self.results["timeline"].append(entry)
-        print(f"[m7 {time.strftime('%H:%M:%S')} T0{'+' if rel is not None and rel >= 0 else ''}"
-              f"{rel if rel is not None else '-'}] {what} {kw if kw else ''}", flush=True)
+        print(
+            f"[m7 {time.strftime('%H:%M:%S')} T0{'+' if rel is not None and rel >= 0 else ''}"
+            f"{rel if rel is not None else '-'}] {what} {kw if kw else ''}",
+            flush=True,
+        )
 
     def active(self) -> list[Agent]:
         return [a for a in self.agents.values() if a.not_run is None]
@@ -268,43 +317,94 @@ class Demo:
         git = ["git", "-c", "user.name=switchboard demo", "-c", "user.email=demo@switchboard.invalid"]
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=self.ws, env=env, check=True)
         subprocess.run(["git", "config", "user.name", "switchboard demo"], cwd=self.ws, env=env, check=True)
-        subprocess.run(["git", "config", "user.email", "demo@switchboard.invalid"], cwd=self.ws, env=env, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "demo@switchboard.invalid"], cwd=self.ws, env=env, check=True
+        )
         (self.ws / "portparse.py").write_text(PORTPARSE)
         (self.ws / "test_portparse.py").write_text(TEST_PORTPARSE)
         (self.ws / "README.md").write_text(README)
         (self.ws / ".gitignore").write_text(".worktrees/\n__pycache__/\n.pytest_cache/\n.codex/\n.devin/\n")
         subprocess.run(git + ["add", "-A"], cwd=self.ws, env=env, check=True)
-        subprocess.run(git + ["commit", "-qm", "portparse: parse_port without validation"], cwd=self.ws, env=env,
-                       check=True)
-        remotes = subprocess.run(["git", "remote"], cwd=self.ws, env=env, capture_output=True, text=True).stdout
+        subprocess.run(
+            git + ["commit", "-qm", "portparse: parse_port without validation"],
+            cwd=self.ws,
+            env=env,
+            check=True,
+        )
+        remotes = subprocess.run(
+            ["git", "remote"], cwd=self.ws, env=env, capture_output=True, text=True
+        ).stdout
         assert remotes.strip() == "", "the scratch repo must have no remote"
         for a in self.agents.values():
-            subprocess.run(["git", "worktree", "add", "-q", f".worktrees/{a.name}", "-b", a.name], cwd=self.ws,
-                           env=env, check=True)
+            subprocess.run(
+                ["git", "worktree", "add", "-q", f".worktrees/{a.name}", "-b", a.name],
+                cwd=self.ws,
+                env=env,
+                check=True,
+            )
         (self.ws / ".git" / "hooks").mkdir(exist_ok=True)
         # a private Python with pytest for the agents (nothing global): `python -m pytest` works
         uv = shutil.which("uv", path=REAL_PATH) or "uv"
-        subprocess.run([uv, "venv", str(self.pyenv), "--python", "3.13", "-q"], env=env, check=True, timeout=120)
-        subprocess.run([uv, "pip", "install", "--python", str(self.pyenv / "bin" / "python"), "--offline", "-q",
-                        "pytest"], env=env, check=True, timeout=120)
-        r = subprocess.run(["python", "-m", "pytest", "-q", f".worktrees/{NAMES['claude']}"], cwd=self.ws,
-                           env=clean_env(self.agent_path), capture_output=True, text=True, timeout=60)
+        subprocess.run(
+            [uv, "venv", str(self.pyenv), "--python", "3.13", "-q"], env=env, check=True, timeout=120
+        )
+        subprocess.run(
+            [
+                uv,
+                "pip",
+                "install",
+                "--python",
+                str(self.pyenv / "bin" / "python"),
+                "--offline",
+                "-q",
+                "pytest",
+            ],
+            env=env,
+            check=True,
+            timeout=120,
+        )
+        r = subprocess.run(
+            ["python", "-m", "pytest", "-q", f".worktrees/{NAMES['claude']}"],
+            cwd=self.ws,
+            env=clean_env(self.agent_path),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
         assert r.returncode == 0, r.stdout + r.stderr
         self.results["baseline_tests"] = r.stdout.strip().splitlines()[-1]
 
     def start_broker(self) -> None:
         self.sessions_dir = Path(REAL_HOME) / ".claude" / "sessions"
-        cfg = ('human_name = "alice"\n\n'  # the name the prompts use
-               f'[delivery]\nbudget_per_hour = {BUDGET}\nhop_limit = {HOP_LIMIT}\n\n'
-               f'[claude]\nsessions_dir = "{self.sessions_dir}"\n\n'
-               f'[codex]\ncontrol_socket = "{self.sock}"\nbin = "{self.codex_bin}"\n')
+        cfg = (
+            'human_name = "alice"\n\n'  # the name the prompts use
+            f"[delivery]\nbudget_per_hour = {BUDGET}\nhop_limit = {HOP_LIMIT}\n\n"
+            f'[claude]\nsessions_dir = "{self.sessions_dir}"\n\n'
+            f'[codex]\ncontrol_socket = "{self.sock}"\nbin = "{self.codex_bin}"\n'
+        )
         (self.home / "config.toml").write_text(cfg)
         env = clean_env(REAL_PATH, TMPDIR=tempfile.gettempdir())
         benv = {**env, "SWITCHBOARD_TEST": "1", "SWITCHBOARD_RECORD_PAYLOADS": str(self.run / "params")}
         out = open(self.run / "broker.stdout", "ab")
         self.broker = subprocess.Popen(
-            [sys.executable, "-m", "switchboard", "start", "--foreground", "--test-mode", "--home", str(self.home),
-             "--port", "0"], env=benv, stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True)
+            [
+                sys.executable,
+                "-m",
+                "switchboard",
+                "start",
+                "--foreground",
+                "--test-mode",
+                "--home",
+                str(self.home),
+                "--port",
+                "0",
+            ],
+            env=benv,
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=out,
+            start_new_session=True,
+        )
         from switchboard.mcp.client import ping
         from switchboard.paths import Paths
 
@@ -324,12 +424,31 @@ class Demo:
         self.hdr = {"Origin": base, "X-Switchboard": "1", "Content-Type": "application/json"}
         assert self.web.post("/api/rooms", json={"name": "#build"}, headers=self.hdr).status_code == 200
         room = self.q("SELECT budget_per_hour, budget_remaining, hop_limit FROM rooms WHERE name='#build'")[0]
-        assert (room["budget_per_hour"], room["budget_remaining"], room["hop_limit"]) == (BUDGET, BUDGET, HOP_LIMIT)
+        assert (room["budget_per_hour"], room["budget_remaining"], room["hop_limit"]) == (
+            BUDGET,
+            BUDGET,
+            HOP_LIMIT,
+        )
 
     def print_args(self, harness: str) -> dict[str, Any]:
         env = clean_env(REAL_PATH, TMPDIR=tempfile.gettempdir(), SWITCHBOARD_TEST="1")
-        pa = subprocess.run([sys.executable, "-m", "switchboard", "install", harness, "--print-args", "--home",
-                             str(self.home)], env=env, capture_output=True, text=True, timeout=30, check=True)
+        pa = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "switchboard",
+                "install",
+                harness,
+                "--print-args",
+                "--home",
+                str(self.home),
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
         return json.loads(pa.stdout)
 
     # ----------------------------------------------------------- Claude
@@ -337,14 +456,31 @@ class Demo:
         pa = self.print_args("claude")
         (self.run / "mcp.json").write_text(json.dumps(profiles.claude_mcp_config(pa)))
         settings = profiles.claude_settings(pa, None)
-        settings["permissions"] = {"allow": list(CLAUDE_BASH_ALLOW), "deny": list(profiles.TEST_DENY) + CLAUDE_DENY}
+        settings["permissions"] = {
+            "allow": list(CLAUDE_BASH_ALLOW),
+            "deny": list(profiles.TEST_DENY) + CLAUDE_DENY,
+        }
         (self.run / "settings.json").write_text(json.dumps(settings))
         claude_bin = shutil.which("claude", path=REAL_PATH) or "claude"
-        argv = [claude_bin, "--model", model, "--setting-sources", "project,local", "--strict-mcp-config",
-                "--permission-mode", "acceptEdits",
-                "--allowedTools", ",".join(profiles.SWITCHBOARD_TOOLS + CLAUDE_BASH_ALLOW),
-                "--mcp-config", str(self.run / "mcp.json"), "--settings", str(self.run / "settings.json")]
-        self.tmux.new_session(a.session, str(self.ws), clean_env(self.agent_path, DISABLE_AUTOUPDATER="1"), argv)
+        argv = [
+            claude_bin,
+            "--model",
+            model,
+            "--setting-sources",
+            "project,local",
+            "--strict-mcp-config",
+            "--permission-mode",
+            "acceptEdits",
+            "--allowedTools",
+            ",".join(profiles.SWITCHBOARD_TOOLS + CLAUDE_BASH_ALLOW),
+            "--mcp-config",
+            str(self.run / "mcp.json"),
+            "--settings",
+            str(self.run / "settings.json"),
+        ]
+        self.tmux.new_session(
+            a.session, str(self.ws), clean_env(self.agent_path, DISABLE_AUTOUPDATER="1"), argv
+        )
         a.model = model
 
     def claude_ready(self, a: Agent, timeout: float = 90) -> str | None:
@@ -394,14 +530,25 @@ class Demo:
         project = [h for h in hooks if h["source"] == "project"]
         assert len(project) == 5, project
         ov = self.overrides + ["-c", f"hooks.state={self.hooks_state}"]
-        [res] = codex_trust.stdio_calls(self.codex_bin, REAL_PATH, self.ws, ov,
-                                        [("config/read", {"cwd": str(self.ws), "includeLayers": False})])
+        [res] = codex_trust.stdio_calls(
+            self.codex_bin,
+            REAL_PATH,
+            self.ws,
+            ov,
+            [("config/read", {"cwd": str(self.ws), "includeLayers": False})],
+        )
         cfg = res["result"]["config"]
         assert cfg.get("approval_policy") == "on-request", "approvals must prompt"
         assert cfg.get("sandbox_mode") == "workspace-write", "the sandbox must be workspace-write"
-        on = [k for k, v in (cfg.get("mcp_servers") or {}).items() if not isinstance(v, dict) or v.get("enabled", True)]
+        on = [
+            k
+            for k, v in (cfg.get("mcp_servers") or {}).items()
+            if not isinstance(v, dict) or v.get("enabled", True)
+        ]
         assert on == ["switchboard"], f"other MCP servers enabled: {len(on) - 1}"
-        plugins_on = [k for k, v in (cfg.get("plugins") or {}).items() if isinstance(v, dict) and v.get("enabled")]
+        plugins_on = [
+            k for k, v in (cfg.get("plugins") or {}).items() if isinstance(v, dict) and v.get("enabled")
+        ]
         assert plugins_on == [], "plugins enabled"
         assert (cfg.get("features") or {}).get("apps") is False
 
@@ -410,16 +557,33 @@ class Demo:
         out = open(self.run / "appserver.out", "ab")
         self.server = subprocess.Popen(
             codex_profile.app_server_argv(self.codex_bin, self.sock, self.overrides, self.hooks_state),
-            cwd=str(self.ws), env=clean_env(self.agent_path), stdin=subprocess.DEVNULL, stdout=out, stderr=out,
-            start_new_session=True)
+            cwd=str(self.ws),
+            env=clean_env(self.agent_path),
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=out,
+            start_new_session=True,
+        )
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline and not os.path.exists(self.sock):
             time.sleep(0.1)
         assert os.path.exists(self.sock), "the private app-server did not listen"
         slugs = codex_profile.model_slugs()
         model = CODEX_MODEL if (not slugs or CODEX_MODEL in slugs) else "gpt-6-luna"
-        argv = [self.codex_bin, "--remote", f"unix://{self.sock}", "-a", "on-request", "-s", "workspace-write",
-                "-m", model, "-c", f'model_reasoning_effort="{CODEX_EFFORT}"', *codex_profile.NO_UPDATE_CHECK]
+        argv = [
+            self.codex_bin,
+            "--remote",
+            f"unix://{self.sock}",
+            "-a",
+            "on-request",
+            "-s",
+            "workspace-write",
+            "-m",
+            model,
+            "-c",
+            f'model_reasoning_effort="{CODEX_EFFORT}"',
+            *codex_profile.NO_UPDATE_CHECK,
+        ]
         self.tmux.new_session(a.session, str(self.ws), clean_env(self.agent_path), argv)
         a.model = f"{model} ({CODEX_EFFORT})"
 
@@ -486,8 +650,15 @@ class Demo:
         (d / "config.json").write_text(json.dumps(cfg, indent=2))
         (d / "mcp_config.json").write_text(pa["files"][".devin/mcp_config.json"])
         devin_bin = shutil.which("devin", path=REAL_PATH) or "devin"
-        argv = [devin_bin, "--model", "swe-1-6-slow", "--respect-workspace-trust", "false",
-                "--permission-mode", "accept-edits"]
+        argv = [
+            devin_bin,
+            "--model",
+            "swe-1-6-slow",
+            "--respect-workspace-trust",
+            "false",
+            "--permission-mode",
+            "accept-edits",
+        ]
         self.tmux.new_session(a.session, str(self.ws), clean_env(self.agent_path), argv)
         a.model = "swe-1-6-slow"
 
@@ -524,13 +695,19 @@ class Demo:
 
     def devin_events(self) -> list[dict[str, Any]]:
         try:
-            return [json.loads(x) for x in (self.run / "params" / "devin.jsonl").read_text().splitlines() if x]
+            return [
+                json.loads(x) for x in (self.run / "params" / "devin.jsonl").read_text().splitlines() if x
+            ]
         except (OSError, ValueError):
             return []
 
     def devin_listening(self) -> bool:
         ev = self.devin_events()
-        return bool(ev) and ev[-1]["event"] == "PreToolUse" and ev[-1]["params"].get("tool") == "mcp__switchboard__wait"
+        return (
+            bool(ev)
+            and ev[-1]["event"] == "PreToolUse"
+            and ev[-1]["params"].get("tool") == "mcp__switchboard__wait"
+        )
 
     # ------------------------------------------------------------ joining
     def launch_all(self) -> None:
@@ -562,7 +739,9 @@ class Demo:
             if why is not None:
                 a.not_run = why if why.startswith("not run") else f"not run: {why}"
                 self.note("agent not ready", agent=a.name, why=a.not_run)
-                (self.run / f"not-ready-{a.name}.txt").write_text(self.tmux.capture(a.session))  # scratch only
+                (self.run / f"not-ready-{a.name}.txt").write_text(
+                    self.tmux.capture(a.session)
+                )  # scratch only
                 self.tmux.run("kill-session", "-t", a.session)
                 continue
             self.tmux.type(a.session, join_prompt(a.harness, a.name))
@@ -574,13 +753,19 @@ class Demo:
             if not pending:
                 break
             for a in pending:
-                if a.harness == "claude" and a.model != "haiku" and \
-                        screens.claude_model_error(self.tmux.capture(a.session)):
+                if (
+                    a.harness == "claude"
+                    and a.model != "haiku"
+                    and screens.claude_model_error(self.tmux.capture(a.session))
+                ):
                     self.claude_fallback(a)
                     continue
                 self.handle_prompt(a)
-                rows = self.q("SELECT m.id, m.participant_id FROM memberships m WHERE m.screen_name=?"
-                              " AND m.left_at IS NULL", a.name)
+                rows = self.q(
+                    "SELECT m.id, m.participant_id FROM memberships m WHERE m.screen_name=?"
+                    " AND m.left_at IS NULL",
+                    a.name,
+                )
                 if rows:
                     a.mid, a.pid_row = rows[0]["id"], rows[0]["participant_id"]
                     self.note("joined", agent=a.name, tier=self.part(a)["tier"])
@@ -594,9 +779,17 @@ class Demo:
             want = {"claude": "claude:inbox", "codex": "codex:daemon", "devin": "devin:wait-loop"}[a.harness]
             ok = self.wait_for(lambda: self.part(a)["tier"] == want and not self.part(a)["tier_note"], 60)
             p = self.part(a)
-            self.results.setdefault("tiers", {})[a.name] = {"tier": p["tier"], "note": p["tier_note"],
-                                                             "approval_mode": p["approval_mode"], "reached": ok}
-            root = self.server.pid if a.harness == "codex" and self.server else (self.tmux.pane_pid(a.session) or -1)
+            self.results.setdefault("tiers", {})[a.name] = {
+                "tier": p["tier"],
+                "note": p["tier_note"],
+                "approval_mode": p["approval_mode"],
+                "reached": ok,
+            }
+            root = (
+                self.server.pid
+                if a.harness == "codex" and self.server
+                else (self.tmux.pane_pid(a.session) or -1)
+            )
             bad = preflight.problems(root)
             assert bad == [], f"preflight: unexpected MCP servers/helpers under {a.name}: {bad}"
             if a.harness == "claude":
@@ -621,6 +814,7 @@ class Demo:
 
     def wait_settled(self, timeout: float) -> bool:
         """Every active agent idle (Devin: listening in wait()) with nothing offered."""
+
         def ok() -> bool:
             for a in self.active():
                 self.handle_prompt(a)
@@ -631,6 +825,7 @@ class Demo:
                 elif p["status"] != "idle":
                     return False
             return True
+
         return self.wait_for(ok, timeout, step=1.0)
 
     # --------------------------------------------------------- observing
@@ -674,7 +869,9 @@ class Demo:
         r = self.room()
         if r["paused"] and r["paused_reason"] == "loop guard":
             self.command("/resume")
-            self.results["loop_guard_resumes"].append({"after": label, "t0_s": round(time.time() - self.t0, 1)})
+            self.results["loop_guard_resumes"].append(
+                {"after": label, "t0_s": round(time.time() - self.t0, 1)}
+            )
             self.note("room was loop-guard paused: /resume", after=label)
             if self.agents["devin"].not_run is None:
                 time.sleep(3.0)
@@ -697,7 +894,11 @@ class Demo:
         shown = bool(PROMPT_RE[a.harness].search(s))
         if a.harness == "devin":
             ev = self.devin_events()
-            if ev and ev[-1]["event"] == "PreToolUse" and ev[-1]["params"].get("tool") != "mcp__switchboard__wait":
+            if (
+                ev
+                and ev[-1]["event"] == "PreToolUse"
+                and ev[-1]["params"].get("tool") != "mcp__switchboard__wait"
+            ):
                 return ("devin", len(ev)), shown
             return None
         if shown or (a.pid_row is not None and self.part(a)["status"] == "waiting-approval"):
@@ -713,18 +914,30 @@ class Demo:
             a.prompt_key, a.prompt_since = key, (now if key is not None else None)
             if key is not None and got and got[1]:
                 self.note("approval prompt open", agent=a.name)
-                (self.run / f"prompt-{a.name}-{int(now)}.txt").write_text(self.tmux.capture(a.session))  # scratch
+                (self.run / f"prompt-{a.name}-{int(now)}.txt").write_text(
+                    self.tmux.capture(a.session)
+                )  # scratch
             return
         if key is None or a.prompt_since is None or now - a.prompt_since < STALL_S:
             return
         shown = bool(got and got[1])
         (self.run / f"stall-{a.name}-{int(now)}.txt").write_text(self.tmux.capture(a.session))  # scratch only
-        self.results["stalls"].append({"agent": a.name, "harness": a.harness,
-                                       "t0_s": round(a.prompt_since - self.t0, 1) if self.t0 else None,
-                                       "open_s": round(now - a.prompt_since, 1), "prompt_on_screen": shown,
-                                       "then": "declined with Esc"})
-        self.note("stalled: declining with Esc", agent=a.name, open_s=round(now - a.prompt_since, 1),
-                  prompt_on_screen=shown)
+        self.results["stalls"].append(
+            {
+                "agent": a.name,
+                "harness": a.harness,
+                "t0_s": round(a.prompt_since - self.t0, 1) if self.t0 else None,
+                "open_s": round(now - a.prompt_since, 1),
+                "prompt_on_screen": shown,
+                "then": "declined with Esc",
+            }
+        )
+        self.note(
+            "stalled: declining with Esc",
+            agent=a.name,
+            open_s=round(now - a.prompt_since, 1),
+            prompt_on_screen=shown,
+        )
         self.tmux.key(a.session, "Escape")
         self.results["declined_prompts"] += 1
         a.prompt_key, a.prompt_since = None, None
@@ -764,8 +977,9 @@ class Demo:
             self.note("poke skipped: the text didn't reach the input line", agent=a.name, why=why)
             return
         self.tmux.key(a.session, "Enter")
-        self.results["pokes"].append({"agent": a.name, "why": why,
-                                      "t0_s": round(time.time() - self.t0, 1) if self.t0 else None})
+        self.results["pokes"].append(
+            {"agent": a.name, "why": why, "t0_s": round(time.time() - self.t0, 1) if self.t0 else None}
+        )
         self.note("poked devin", agent=a.name, why=why)
 
     def poke_if_parked(self) -> None:
@@ -792,8 +1006,13 @@ class Demo:
         r = self.room()
         paused = (bool(r["paused"]), r["paused_reason"])
         if paused != getattr(self, "_last_paused", (False, None)):
-            self.note("room state", paused=paused[0], reason=paused[1], hops=r["hop_count"],
-                      budget=r["budget_remaining"])
+            self.note(
+                "room state",
+                paused=paused[0],
+                reason=paused[1],
+                hops=r["hop_count"],
+                budget=r["budget_remaining"],
+            )
             self._last_paused = paused
 
     # ------------------------------------------------------------- script
@@ -814,11 +1033,21 @@ class Demo:
         names = {a.name for a in self.active()}
         while time.time() < pause_at:
             self.tick()
-            said = {r["sender_name"] for r in self.q(
-                "SELECT sender_name FROM messages WHERE id>? AND sender_kind='agent' AND kind='chat'", wrap_id)}
-            passed = {r["screen_name"] for r in self.q(
-                "SELECT m.screen_name FROM events e JOIN memberships m ON m.id=e.membership_id"
-                " WHERE e.kind='pass' AND e.ts>?", self.q("SELECT ts FROM messages WHERE id=?", wrap_id)[0][0])}
+            said = {
+                r["sender_name"]
+                for r in self.q(
+                    "SELECT sender_name FROM messages WHERE id>? AND sender_kind='agent' AND kind='chat'",
+                    wrap_id,
+                )
+            }
+            passed = {
+                r["screen_name"]
+                for r in self.q(
+                    "SELECT m.screen_name FROM events e JOIN memberships m ON m.id=e.membership_id"
+                    " WHERE e.kind='pass' AND e.ts>?",
+                    self.q("SELECT ts FROM messages WHERE id=?", wrap_id)[0][0],
+                )
+            }
             if names <= said | passed:
                 self.note("every agent answered the wrap-up")
                 break
@@ -840,11 +1069,18 @@ class Demo:
                 continue
 
             def git(*args: str) -> str:
-                return subprocess.run(["git", "-C", str(wt), *args], env=env, capture_output=True, text=True,
-                                      timeout=30).stdout.strip()
+                return subprocess.run(
+                    ["git", "-C", str(wt), *args], env=env, capture_output=True, text=True, timeout=30
+                ).stdout.strip()
 
-            t = subprocess.run(["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", f".worktrees/{a.name}"],
-                               cwd=self.ws, env=env, capture_output=True, text=True, timeout=120)
+            t = subprocess.run(
+                ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", f".worktrees/{a.name}"],
+                cwd=self.ws,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
             last = [x for x in t.stdout.strip().splitlines() if x.strip()]
             out[a.name] = {
                 "commits": len([x for x in git("log", "--oneline", f"main..{a.name}").splitlines() if x]),
@@ -860,8 +1096,10 @@ class Demo:
         lines = []
         for r in rows:
             rel = r["ts"] - self.t0 if self.t0 else 0.0
-            lines.append(f"[T0{rel:+7.1f}s] #{r['id']} <{r['sender_name']}> ({r['sender_kind']}/{r['kind']})"
-                         f" {r['text']}")
+            lines.append(
+                f"[T0{rel:+7.1f}s] #{r['id']} <{r['sender_name']}> ({r['sender_kind']}/{r['kind']})"
+                f" {r['text']}"
+            )
         (self.run / "transcript.txt").write_text("\n".join(lines) + "\n")
 
     # ------------------------------------------------------------- teardown
@@ -898,7 +1136,9 @@ class Demo:
         time.sleep(1.0)
         left: list[str] = []
         for needle in (str(self.home), str(self.ws), str(SOCKDIR)):
-            left += subprocess.run(["/usr/bin/pgrep", "-f", needle], capture_output=True, text=True).stdout.split()
+            left += subprocess.run(
+                ["/usr/bin/pgrep", "-f", needle], capture_output=True, text=True
+            ).stdout.split()
         for pid in set(left):
             try:
                 os.kill(int(pid), signal.SIGTERM)
@@ -910,25 +1150,43 @@ class Demo:
         fail, info = drift.compare(self.drift_before, drift.snapshot())
         bad, tui = drift.codex_config_diff(self.codex_cfg_before, drift.codex_config())
         self.results["drift_fail"] = [f for f in fail if f != "~/.codex/config.toml"] + (
-            [f"~/.codex/config.toml: {k}" for k in bad])
-        self.results["drift_info"] = info + [f"~/.codex/config.toml: [{k}] (written by the Codex TUI)" for k in tui]
+            [f"~/.codex/config.toml: {k}" for k in bad]
+        )
+        self.results["drift_info"] = info + [
+            f"~/.codex/config.toml: [{k}] (written by the Codex TUI)" for k in tui
+        ]
         self.results["user_daemon_unchanged"] = USER_DAEMON_SOCK.exists() == self.user_daemon_before
         before = getattr(self, "ws_config_before", None)
         if before is not None:
             after = self.ws_config()
-            self.results["workspace_config_changed"] = sorted(k for k in set(before) | set(after)
-                                                              if before.get(k) != after.get(k))
-        self.results["agents"] = {a.name: {"harness": a.harness, "model": a.model, "not_run": a.not_run}
-                                  for a in self.agents.values()}
+            self.results["workspace_config_changed"] = sorted(
+                k for k in set(before) | set(after) if before.get(k) != after.get(k)
+            )
+        self.results["agents"] = {
+            a.name: {"harness": a.harness, "model": a.model, "not_run": a.not_run}
+            for a in self.agents.values()
+        }
         self.results["wall_clock_s"] = round(time.time() - self.t_start, 1)
         (self.run / "results.json").write_text(json.dumps(self.results, indent=1))
-        print("\nM7 RESULTS", json.dumps({k: v for k, v in self.results.items() if k != "timeline"}, indent=1))
+        print(
+            "\nM7 RESULTS", json.dumps({k: v for k, v in self.results.items() if k != "timeline"}, indent=1)
+        )
 
     def make_report(self) -> dict[str, Any]:
         env = clean_env(REAL_PATH, TMPDIR=tempfile.gettempdir())
         for fmt, name in (("md", "M7-REPORT.md"), ("json", "report.json")):
-            argv = [sys.executable, "-m", "switchboard", "report", "--home", str(self.home), "--room", "#build",
-                    "--out", str(self.run / name)] + (["--json"] if fmt == "json" else [])
+            argv = [
+                sys.executable,
+                "-m",
+                "switchboard",
+                "report",
+                "--home",
+                str(self.home),
+                "--room",
+                "#build",
+                "--out",
+                str(self.run / name),
+            ] + (["--json"] if fmt == "json" else [])
             subprocess.run(argv, env=env, check=True, capture_output=True, timeout=60)
         return json.loads((self.run / "report.json").read_text())
 

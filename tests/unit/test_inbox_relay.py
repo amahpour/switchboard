@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from fakes.fake_claude_inbox import FakeInbox
+
 from switchboard.adapters.claude import ClaudeAdapter, SendError
 from switchboard.config import Config
 from switchboard.mcp import claude_inbox as ci
@@ -30,9 +30,14 @@ class RecConn(BrokerConn):
 
 
 def state(inbox: ci.InboxTarget | None, attached: bool = True) -> srv.McpState:
-    st = srv.McpState(RecConn(), env={"CLAUDECODE": "1", ci.SOCKET_ENV: inbox.sock if inbox else "",
-                                      ci.TOKEN_ENV: ""},
-                      parent_argv="/x/claude", ppid=os.getppid(), sessions_dir="/nonexistent", inbox_hold_s=0.0)
+    st = srv.McpState(
+        RecConn(),
+        env={"CLAUDECODE": "1", ci.SOCKET_ENV: inbox.sock if inbox else "", ci.TOKEN_ENV: ""},
+        parent_argv="/x/claude",
+        ppid=os.getppid(),
+        sessions_dir="/nonexistent",
+        inbox_hold_s=0.0,
+    )
     st.inbox = inbox
     st.inbox_attached = attached
     return st
@@ -62,7 +67,9 @@ async def test_deliver_posts_into_the_verified_parent_socket_and_reports(fake_in
     assert isinstance(res["t_post"], float) and "tok-unit" not in repr(res)
 
 
-@pytest.mark.parametrize("case", ["not_attached", "no_target", "bad_text", "not_switchboard_text", "no_batch"])
+@pytest.mark.parametrize(
+    "case", ["not_attached", "no_target", "bad_text", "not_switchboard_text", "no_batch"]
+)
 async def test_deliver_refuses(case: str, fake_inbox: FakeInbox) -> None:
     target = ci.InboxTarget(fake_inbox.path, os.getppid())
     st = state(None if case == "no_target" else target, attached=case != "not_attached")
@@ -122,7 +129,9 @@ async def test_send_waits_for_posted_from_the_same_channel() -> None:
     a.attach(4242, 100.0, ch)
     task = asyncio.create_task(a.send(P(), B(5), "[switchboard] hi", room="#build", sender="alice"))
     await asyncio.sleep(0.01)
-    assert ch.pushes == [("deliver", {"batch_id": 5, "text": "[switchboard] hi", "room": "#build", "sender": "alice"})]
+    assert ch.pushes == [
+        ("deliver", {"batch_id": 5, "text": "[switchboard] hi", "room": "#build", "sender": "alice"})
+    ]
     assert a.posted(5, other, {"ok": True, "t_post": 1.0}) is False  # another connection can't settle it
     assert a.posted(5, ch, {"ok": True, "t_post": 123.5}) is True
     assert await task == 123.5

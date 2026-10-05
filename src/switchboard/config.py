@@ -26,8 +26,12 @@ def default_human_name() -> str:
         name = getpass.getuser().lower()
     except Exception:  # no login name for this uid (OSError; KeyError before 3.13)
         return FALLBACK_HUMAN_NAME
-    if (not SCREEN_NAME_RE.match(name) or name in RESERVED_NAMES or name.startswith("switchboard")
-            or any(p.startswith(name) for p in _AGENT_PREFIXES)):
+    if (
+        not SCREEN_NAME_RE.match(name)
+        or name in RESERVED_NAMES
+        or name.startswith("switchboard")
+        or any(p.startswith(name) for p in _AGENT_PREFIXES)
+    ):
         return FALLBACK_HUMAN_NAME
     return name
 

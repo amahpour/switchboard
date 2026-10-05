@@ -10,8 +10,8 @@ from itertools import takewhile
 from pathlib import Path
 
 import pytest
-
 from conftest import InProcBroker, has_controlling_tty, human_cli_denial_word
+
 from switchboard.broker import proc
 from switchboard.broker.peer import ProcessPeerPolicy
 from switchboard.mcp.client import RpcError, Stream, call_sync
@@ -49,9 +49,13 @@ def test_ping_and_status(broker: InProcBroker) -> None:
 
 
 def test_framing_errors(broker: InProcBroker) -> None:
-    out = raw_lines(broker.paths.sock, b'not json\n{"id": 1}\n{"id": "x", "method": "sys.ping"}\n'
-                    b'{"id": 2, "method": "nope.nope"}\n{"id": 3, "method": "sys.ping", "params": []}\n'
-                    b'{"id": 4, "method": "sys.ping"}\n', 6)
+    out = raw_lines(
+        broker.paths.sock,
+        b'not json\n{"id": 1}\n{"id": "x", "method": "sys.ping"}\n'
+        b'{"id": 2, "method": "nope.nope"}\n{"id": 3, "method": "sys.ping", "params": []}\n'
+        b'{"id": 4, "method": "sys.ping"}\n',
+        6,
+    )
     assert out[0]["error"]["code"] == "bad_request" and out[0]["id"] is None
     assert out[1]["error"]["code"] == "bad_request"
     assert out[2]["error"]["code"] == "bad_request"
@@ -61,9 +65,7 @@ def test_framing_errors(broker: InProcBroker) -> None:
 
 
 def test_pipelined_requests_answer_in_order(broker: InProcBroker) -> None:
-    payload = b"".join(
-        json.dumps({"id": i, "method": "sys.ping"}).encode() + b"\n" for i in range(1, 21)
-    )
+    payload = b"".join(json.dumps({"id": i, "method": "sys.ping"}).encode() + b"\n" for i in range(1, 21))
     out = raw_lines(broker.paths.sock, payload, 20)
     assert [o["id"] for o in out] == list(range(1, 21))
 
@@ -154,8 +156,12 @@ def test_command_roles_over_uds_without_trust(tmp_home: Path) -> None:
 
     class CliOnly(ProcessPeerPolicy):
         def __init__(self) -> None:
-            super().__init__(chain_fn=lambda pid: (list(
-                takewhile(lambda p: p.pid != os.getppid(), proc.ancestry(pid, 12))), True))
+            super().__init__(
+                chain_fn=lambda pid: (
+                    list(takewhile(lambda p: p.pid != os.getppid(), proc.ancestry(pid, 12))),
+                    True,
+                )
+            )
 
         def human_cli_allowed(self, peer) -> bool:  # type: ignore[override]
             return peer.uid == os.getuid()
@@ -167,7 +173,9 @@ def test_command_roles_over_uds_without_trust(tmp_home: Path) -> None:
     try:
         web = b.web_client()
         web.post("/api/rooms", json={"name": "#build"}, headers=b.write_headers())
-        assert "paused" in call_sync(b.paths.sock, "human.command", {"room": "#build", "text": "/pause"})["text"]
+        assert (
+            "paused" in call_sync(b.paths.sock, "human.command", {"room": "#build", "text": "/pause"})["text"]
+        )
         for text in ["/resume", "/budget 61", "/release x"]:
             with pytest.raises(RpcError) as e:
                 call_sync(b.paths.sock, "human.command", {"room": "#build", "text": text})
@@ -176,7 +184,11 @@ def test_command_roles_over_uds_without_trust(tmp_home: Path) -> None:
         # the same raising command works from the web session
         r = web.post("/api/rooms/build/command", json={"text": "/resume"}, headers=b.write_headers())
         assert r.status_code == 200 and r.json()["ok"]
-        notices = [m["text"] for m in web.get("/api/rooms/build/messages").json()["messages"] if m["kind"] == "notice"]
+        notices = [
+            m["text"]
+            for m in web.get("/api/rooms/build/messages").json()["messages"]
+            if m["kind"] == "notice"
+        ]
         assert any("(via cli:" in n for n in notices) and any("(via web)" in n for n in notices)
     finally:
         b.stop()
@@ -196,13 +208,16 @@ def test_login_refusal_texts(tmp_home: Path) -> None:
         with pytest.raises(RpcError) as e:
             b.call("room.delete", {"room": "#build", "dry_run": True})
         assert e.value.code == "forbidden"
-        assert e.value.message == ("room.delete must come from a terminal you typed in"
-                                   " (not an agent's shell, nor a script without a terminal)")
+        assert e.value.message == (
+            "room.delete must come from a terminal you typed in"
+            " (not an agent's shell, nor a script without a terminal)"
+        )
         with pytest.raises(RpcError) as e:
             b.call("human.login_link")
         assert e.value.code == "forbidden"
-        assert e.value.message == ("login links are only issued to a terminal you typed in:"
-                                   " run `switchboard login` there")
+        assert e.value.message == (
+            "login links are only issued to a terminal you typed in: run `switchboard login` there"
+        )
     finally:
         b.stop()
 
@@ -212,7 +227,8 @@ def test_room_delete_params_and_room_list_closed(broker: InProcBroker) -> None:
     with pytest.raises(RpcError) as e:
         broker.call("room.delete", {"room": "#build"})
     assert e.value.code == "bad_request" and e.value.message == (
-        "room_id, name and created_at are required: run the plan first")
+        "room_id, name and created_at are required: run the plan first"
+    )
     with pytest.raises(RpcError) as e:
         broker.call("room.delete", {"dry_run": True})
     assert e.value.code == "bad_request" and e.value.message == "room is required"
@@ -230,8 +246,15 @@ def test_room_delete_params_and_room_list_closed(broker: InProcBroker) -> None:
     assert broker.call("sys.status")["closed_rooms"] == 1
     plan = broker.call("room.delete", {"room": "#build", "dry_run": True})
     assert plan["state"] == "closed" and plan["closed_by"] == "alice"
-    res = broker.call("room.delete", {"room": "#build", "room_id": plan["room_id"], "name": plan["name"],
-                                      "created_at": plan["created_at"]})
+    res = broker.call(
+        "room.delete",
+        {
+            "room": "#build",
+            "room_id": plan["room_id"],
+            "name": plan["name"],
+            "created_at": plan["created_at"],
+        },
+    )
     assert res["removed"]["rooms"] == 1 and Path(res["backup"]).exists()
     assert broker.call("room.list", {"closed": True}) == {"rooms": [], "closed": 0}
 

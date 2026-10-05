@@ -49,26 +49,42 @@ CADDY_ROOT = "/data/caddy/pki/authorities/local/root.crt"
 # The docker CLI's env, taken at import (before the suite's clean-env fixture moves HOME to a
 # temp dir, where the CLI finds neither its config nor its context): what it needs to reach
 # the daemon, and nothing of any harness (tests/twohost does the same).
-DOCKER_ENV = {k: v for k, v in os.environ.items()
-              if k in ("PATH", "HOME", "USER", "LANG", "TMPDIR", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME")
-              or k.startswith("DOCKER_") or k.startswith("BUILDX_")}
+DOCKER_ENV = {
+    k: v
+    for k, v in os.environ.items()
+    if k in ("PATH", "HOME", "USER", "LANG", "TMPDIR", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME")
+    or k.startswith("DOCKER_")
+    or k.startswith("BUILDX_")
+}
 WAIT_S = 30.0
 LINK_RE = re.compile(r"https://sb\.test:\d+/login\?t=[A-Za-z0-9_-]+")
 # the admin's one-time password and the same as a link (DESIGN.md §32.4): the link is group 1
-CLAIM_RE = re.compile(r"switchboard isn't set up yet\. Sign in at https://sb\.test:\d+ as admin with the one-time"
-                      r" password [0-9A-Z-]+ \(it works once, for 60 min\), then choose your own password or passkey\."
-                      r" Or open (https://sb\.test:\d+/setup#t=[0-9A-Z-]+)")
+CLAIM_RE = re.compile(
+    r"switchboard isn't set up yet\. Sign in at https://sb\.test:\d+ as admin with the one-time"
+    r" password [0-9A-Z-]+ \(it works once, for 60 min\), then choose your own password or passkey\."
+    r" Or open (https://sb\.test:\d+/setup#t=[0-9A-Z-]+)"
+)
 # Chromium's virtual authenticator: a platform passkey with user verification (issue #41)
-AUTHENTICATOR = {"protocol": "ctap2", "transport": "internal", "hasResidentKey": True, "hasUserVerification": True,
-                 "isUserVerified": True, "automaticPresenceSimulation": True}
+AUTHENTICATOR = {
+    "protocol": "ctap2",
+    "transport": "internal",
+    "hasResidentKey": True,
+    "hasUserVerification": True,
+    "isUserVerified": True,
+    "automaticPresenceSimulation": True,
+}
 
 
-def docker(*args: str, check: bool = True, timeout: float = 120.0, stdin: str | None = None
-           ) -> subprocess.CompletedProcess[str]:
-    r = subprocess.run(["docker", *args], capture_output=True, text=True, timeout=timeout, env=DOCKER_ENV,
-                       input=stdin)
+def docker(
+    *args: str, check: bool = True, timeout: float = 120.0, stdin: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    r = subprocess.run(
+        ["docker", *args], capture_output=True, text=True, timeout=timeout, env=DOCKER_ENV, input=stdin
+    )
     if check and r.returncode != 0:
-        raise AssertionError(f"docker {' '.join(args)} -> {r.returncode}:\n{r.stdout[-3000:]}{r.stderr[-3000:]}")
+        raise AssertionError(
+            f"docker {' '.join(args)} -> {r.returncode}:\n{r.stdout[-3000:]}{r.stderr[-3000:]}"
+        )
     return r
 
 
@@ -76,8 +92,13 @@ def docker_missing() -> str | None:
     if shutil.which("docker") is None:
         return "no docker"
     try:
-        r = subprocess.run(["docker", "info", "--format", "{{.ServerVersion}}"], capture_output=True, text=True,
-                           timeout=20, env=DOCKER_ENV)
+        r = subprocess.run(
+            ["docker", "info", "--format", "{{.ServerVersion}}"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            env=DOCKER_ENV,
+        )
         return None if r.returncode == 0 else "the docker daemon isn't running"
     except (OSError, subprocess.TimeoutExpired):
         return "docker doesn't answer"
@@ -136,17 +157,42 @@ class Stack:
     def up(self) -> "Stack":
         docker("network", "create", self.net)
         docker("volume", "create", self.volume)
-        docker("run", "-d", "--name", self.broker, "--network", self.net, "--network-alias", "switchboard",
-               "-v", f"{self.volume}:/data", "-p", "127.0.0.1::7419",
-               "-e", f"SWITCHBOARD_PUBLIC_URL={self.public}", self.image)
+        docker(
+            "run",
+            "-d",
+            "--name",
+            self.broker,
+            "--network",
+            self.net,
+            "--network-alias",
+            "switchboard",
+            "-v",
+            f"{self.volume}:/data",
+            "-p",
+            "127.0.0.1::7419",
+            "-e",
+            f"SWITCHBOARD_PUBLIC_URL={self.public}",
+            self.image,
+        )
         self.direct = int(docker("port", self.broker, "7419/tcp").stdout.split(":")[-1])
         caddyfile = self.work / "Caddyfile"
         caddyfile.write_text(
             "{\n\tadmin off\n\tauto_https disable_redirects\n\tskip_install_trust\n}\n\n"
-            f"https://sb.test:{self.port} {{\n\ttls internal\n\treverse_proxy switchboard:7419\n}}\n")
+            f"https://sb.test:{self.port} {{\n\ttls internal\n\treverse_proxy switchboard:7419\n}}\n"
+        )
         # `sb.test` on this network is the proxy: a machine container dials the public URL through it
-        docker("create", "--name", self.caddy, "--network", self.net, "--network-alias", "sb.test",
-               "-p", f"127.0.0.1:{self.port}:{self.port}", CADDY)
+        docker(
+            "create",
+            "--name",
+            self.caddy,
+            "--network",
+            self.net,
+            "--network-alias",
+            "sb.test",
+            "-p",
+            f"127.0.0.1:{self.port}:{self.port}",
+            CADDY,
+        )
         docker("cp", str(caddyfile), f"{self.caddy}:/etc/caddy/Caddyfile")
         docker("start", self.caddy)
         wait_for("Caddy's local CA", lambda: docker("cp", f"{self.caddy}:{CADDY_ROOT}", str(self.ca)))
@@ -165,8 +211,9 @@ class Stack:
         with opener.open(f"http://127.0.0.1:{self.direct}/healthz", timeout=5) as r:
             return r.read().decode()
 
-    def https(self, method: str, path: str, headers: dict[str, str] | None = None,
-              body: str | None = None) -> tuple[int, Any, str]:
+    def https(
+        self, method: str, path: str, headers: dict[str, str] | None = None, body: str | None = None
+    ) -> tuple[int, Any, str]:
         c = Pinned("sb.test", self.port, context=ssl.create_default_context(cafile=str(self.ca)), timeout=10)
         try:
             c.request(method, path, body=body, headers=headers or {})
@@ -189,7 +236,6 @@ class Stack:
         """Every claim link the container has printed, from its log (no exec)."""
         return [m.group(1) for m in CLAIM_RE.finditer(docker("logs", self.broker).stdout)]
 
-
     def session(self) -> str:
         """A signed-in session's Cookie header, from a fresh link followed through the proxy."""
         status, headers, _ = self.https("GET", self.login_link().removeprefix(self.public))
@@ -199,9 +245,17 @@ class Stack:
     def create_room(self, cookie: str, name: str) -> None:
         """Through the proxy, as the page does: rooms are created from a web session only
         (`switchboard create` says so)."""
-        status, _, body = self.https("POST", "/api/rooms", {
-            "Cookie": cookie, "Origin": self.public, "X-Switchboard": "1", "Content-Type": "application/json",
-        }, json.dumps({"name": name}))
+        status, _, body = self.https(
+            "POST",
+            "/api/rooms",
+            {
+                "Cookie": cookie,
+                "Origin": self.public,
+                "X-Switchboard": "1",
+                "Content-Type": "application/json",
+            },
+            json.dumps({"name": name}),
+        )
         assert status == 200, body
 
 
@@ -217,7 +271,9 @@ class Owner:
         h = {"Cookie": "; ".join(f"{k}={v}" for k, v in self.cookies.items())} if self.cookies else {}
         if method != "GET":
             h.update({"Origin": self.s.public, "X-Switchboard": "1", "Content-Type": "application/json"})
-        status, headers, text = self.s.https(method, path, h, json.dumps(body or {}) if method != "GET" else None)
+        status, headers, text = self.s.https(
+            method, path, h, json.dumps(body or {}) if method != "GET" else None
+        )
         for sc in headers.get_all("set-cookie") or []:
             name, _, value = sc.split(";")[0].partition("=")
             if "max-age=0" in sc.lower():
@@ -260,7 +316,15 @@ def image() -> str:
         docker("image", "inspect", IMAGE)
         return IMAGE
     revision = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip()
-    docker("build", "--build-arg", f"BUILD_COMMIT={revision}", "-t", "switchboard:test", str(ROOT), timeout=1200.0)
+    docker(
+        "build",
+        "--build-arg",
+        f"BUILD_COMMIT={revision}",
+        "-t",
+        "switchboard:test",
+        str(ROOT),
+        timeout=1200.0,
+    )
     return "switchboard:test"
 
 
@@ -279,13 +343,26 @@ def stack(image: str, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stac
 # ----------------------------------------------------------------------- tests
 def test_image_reports_its_revision_label(stack: Stack) -> None:
     """The running broker's full commit and the installed CLI agree with the OCI revision."""
-    label = docker("image", "inspect", stack.image, "--format",
-                   '{{ index .Config.Labels "org.opencontainers.image.revision" }}').stdout.strip()
+    label = docker(
+        "image",
+        "inspect",
+        stack.image,
+        "--format",
+        '{{ index .Config.Labels "org.opencontainers.image.revision" }}',
+    ).stdout.strip()
     assert re.fullmatch(r"[0-9a-f]{40}", label), label
     status = json.loads(stack.cli("status", "--json"))
     assert status["commit"] == label
-    shown = docker("run", "--rm", "--network", "none", "--entrypoint", "/opt/switchboard/bin/switchboard",
-                   stack.image, "--version").stdout.strip()
+    shown = docker(
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--entrypoint",
+        "/opt/switchboard/bin/switchboard",
+        stack.image,
+        "--version",
+    ).stdout.strip()
     assert shown.endswith(f"({label[:7]})"), shown
 
 
@@ -301,16 +378,29 @@ def test_claim_it_from_the_log_and_sign_in_with_a_passkey(stack: Stack, playwrig
     status, _, body = stack.https("GET", "/setup")
     assert status == 200 and "Choose how you&rsquo;ll sign in" in body
     status, _, body = stack.https("GET", "/api/auth/state")
-    assert status == 200 and json.loads(body) == {"hosted": True, "claimed": False, "passkeys": False, "claim": True,
-                                                  "passkeys_work": True, "password": True, "sso": "coming soon"}
+    assert status == 200 and json.loads(body) == {
+        "hosted": True,
+        "claimed": False,
+        "passkeys": False,
+        "claim": True,
+        "passkeys_work": True,
+        "password": True,
+        "sso": "coming soon",
+    }
 
     problems: list[str] = []
     browser = playwright.chromium.launch(args=["--host-resolver-rules=MAP sb.test 127.0.0.1"])
     try:
-        ctx = browser.new_context(ignore_https_errors=True, viewport={"width": 1280, "height": 760},
-                                  timezone_id="UTC", locale="en-US")
+        ctx = browser.new_context(
+            ignore_https_errors=True,
+            viewport={"width": 1280, "height": 760},
+            timezone_id="UTC",
+            locale="en-US",
+        )
         page = ctx.new_page()
-        page.on("console", lambda m: problems.append(f"console {m.type}: {m.text}") if m.type == "error" else None)
+        page.on(
+            "console", lambda m: problems.append(f"console {m.type}: {m.text}") if m.type == "error" else None
+        )
         page.on("pageerror", lambda e: problems.append(f"page error: {e}"))
         cdp = ctx.new_cdp_session(page)
         cdp.send("WebAuthn.enable", {"enableUI": False})
@@ -366,8 +456,9 @@ def test_a_machine_dials_in_through_the_proxy(image: str, tmp_path_factory: pyte
         token = s.claim_lines()[0].split("#t=", 1)[1]
         status, got = owner.call("POST", "/api/setup/begin", {"token": token})
         assert status == 200, got
-        status, got = owner.call("POST", "/api/setup/finish", {"credential": auth.register(got["options"]),
-                                                               "name": "laptop"})
+        status, got = owner.call(
+            "POST", "/api/setup/finish", {"credential": auth.register(got["options"]), "name": "laptop"}
+        )
         assert status == 200, got
         assert owner.call("POST", "/api/rooms", {"name": "#lab"})[0] == 200
         status, got = owner.call("POST", "/api/machines/pair", {"name": "work-laptop"})
@@ -378,29 +469,48 @@ def test_a_machine_dials_in_through_the_proxy(image: str, tmp_path_factory: pyte
         docker("run", "-d", "--name", machine, "--network", s.net, "--entrypoint", "sleep", image, "infinity")
         docker("cp", str(s.ca), f"{machine}:/usr/local/share/ca-certificates/sb-test-ca.crt")
         docker("exec", machine, "update-ca-certificates")
-        r = docker("exec", machine, "switchboard", "remote", "join", s.public, code, "--home", "/data/machine")
+        r = docker(
+            "exec", machine, "switchboard", "remote", "join", s.public, code, "--home", "/data/machine"
+        )
         assert "This machine's key: SHA256:" in r.stdout and "Paired as work-laptop" in r.stdout, r.stdout
         assert "switchboard dialer running" in r.stdout, r.stdout
         fp = r.stdout.split("This machine's key: ", 1)[1].split()[0]
         status, got = owner.call("GET", "/api/machines")
         [m] = got["machines"]
         assert m["key_fp"] == fp and m["state"] == "pending"
-        wait_for("the machine dialed in", lambda: owner.call("GET", "/api/machines")[1]["machines"][0]["dialed_in"])
+        wait_for(
+            "the machine dialed in", lambda: owner.call("GET", "/api/machines")[1]["machines"][0]["dialed_in"]
+        )
         assert owner.call("POST", "/api/machines/work-laptop/approve")[0] == 200
         wait_for("the link up", lambda: owner.call("GET", "/api/machines")[1]["machines"][0]["state"] == "up")
 
-        out = docker("exec", "-i", "-u", "switchboard", machine, "/opt/switchboard/bin/python", "-", "/data/machine",
-                     stdin=AGENT).stdout
+        out = docker(
+            "exec",
+            "-i",
+            "-u",
+            "switchboard",
+            machine,
+            "/opt/switchboard/bin/python",
+            "-",
+            "/data/machine",
+            stdin=AGENT,
+        ).stdout
         assert '"error": false' in out and '"error": true' not in out, out
         status, got = owner.call("GET", "/api/rooms/lab/messages")
         said = [(x["from"], x.get("host"), x["text"]) for x in got["messages"] if x["kind"] == "chat"]
         assert said == [("bench", "work-laptop", "hello over wss, through the proxy")]
 
         assert owner.call("POST", "/api/machines/work-laptop/remove")[0] == 200
-        wait_for("the dialer stopped", lambda: "stopped (removed)" in docker(
-            "exec", machine, "switchboard", "status", "--home", "/data/machine").stdout)
-        cmdlines = docker("exec", machine, "sh", "-c",
-                          "for f in /proc/[0-9]*/cmdline; do tr '\\000' ' ' < $f; echo; done").stdout
+        wait_for(
+            "the dialer stopped",
+            lambda: (
+                "stopped (removed)"
+                in docker("exec", machine, "switchboard", "status", "--home", "/data/machine").stdout
+            ),
+        )
+        cmdlines = docker(
+            "exec", machine, "sh", "-c", "for f in /proc/[0-9]*/cmdline; do tr '\\000' ' ' < $f; echo; done"
+        ).stdout
         assert "start --foreground" not in cmdlines  # the dialer is gone
     finally:
         docker("rm", "-f", machine, check=False)
@@ -415,17 +525,29 @@ def test_it_refuses_to_start_without_a_public_url(image: str) -> None:
 
 def test_it_runs_as_the_unprivileged_user_and_answers_health_checks(stack: Stack) -> None:
     # every process of the container (tini, the broker) runs as the switchboard user
-    pids = docker("exec", stack.broker, "sh", "-c",
-                  "for p in /proc/[0-9]*; do [ \"${p#/proc/}\" = $$ ] || grep -H '^Uid:' $p/status; done").stdout
+    pids = docker(
+        "exec",
+        stack.broker,
+        "sh",
+        "-c",
+        "for p in /proc/[0-9]*; do [ \"${p#/proc/}\" = $$ ] || grep -H '^Uid:' $p/status; done",
+    ).stdout
     uids = re.findall(r"^/proc/(\d+)/status:Uid:\s+(\d+)", pids, re.M)
-    assert ("1", "10001") in uids and all(uid == "10001" for pid, uid in uids if pid != "1") and len(uids) >= 2
+    assert (
+        ("1", "10001") in uids and all(uid == "10001" for pid, uid in uids if pid != "1") and len(uids) >= 2
+    )
     # its home: the user's own and private, on the volume
-    assert docker("exec", stack.broker, "stat", "-c", "%u %a", "/data/switchboard").stdout.split() == ["10001", "700"]
+    assert docker("exec", stack.broker, "stat", "-c", "%u %a", "/data/switchboard").stdout.split() == [
+        "10001",
+        "700",
+    ]
     # /healthz on the container's own port, with no Host of the public URL; and Docker's check
     assert stack.healthz() == "ok\n"
-    wait_for("Docker's health check",
-             lambda: docker("inspect", "-f", "{{.State.Health.Status}}", stack.broker).stdout.strip() == "healthy",
-             timeout=60.0)
+    wait_for(
+        "Docker's health check",
+        lambda: docker("inspect", "-f", "{{.State.Health.Status}}", stack.broker).stdout.strip() == "healthy",
+        timeout=60.0,
+    )
     # anything else at the container's own address is refused (only the public URL's Host)
     try:
         urllib.request.build_opener(urllib.request.ProxyHandler({})).open(f"http://127.0.0.1:{stack.direct}/")
@@ -451,10 +573,16 @@ def test_sign_in_and_the_ui_over_https(stack: Stack, playwright: Any) -> None:
     browser = playwright.chromium.launch(args=["--host-resolver-rules=MAP sb.test 127.0.0.1"])
     try:
         # Caddy's local CA isn't in Chromium's trust store; the check above verified the chain
-        ctx = browser.new_context(ignore_https_errors=True, viewport={"width": 1280, "height": 760},
-                                  timezone_id="UTC", locale="en-US")
+        ctx = browser.new_context(
+            ignore_https_errors=True,
+            viewport={"width": 1280, "height": 760},
+            timezone_id="UTC",
+            locale="en-US",
+        )
         page = ctx.new_page()
-        page.on("console", lambda m: problems.append(f"console {m.type}: {m.text}") if m.type == "error" else None)
+        page.on(
+            "console", lambda m: problems.append(f"console {m.type}: {m.text}") if m.type == "error" else None
+        )
         page.on("pageerror", lambda e: problems.append(f"page error: {e}"))
         page.goto(stack.login_link())
         page.wait_for_selector("#st-conn:text-is('Connected')", timeout=15_000)
@@ -463,7 +591,11 @@ def test_sign_in_and_the_ui_over_https(stack: Stack, playwright: Any) -> None:
             headers: {'X-Switchboard': '1', 'Content-Type': 'application/json'},
             body: JSON.stringify({name: '#smoke'})})).status""")
         assert created == 200  # the browser's own Origin, the public one, passed the check
-        stack.cli("say", "#smoke", "hello from **inside the container**: this page came through the proxy over https")
+        stack.cli(
+            "say",
+            "#smoke",
+            "hello from **inside the container**: this page came through the proxy over https",
+        )
         page.click('#tabs .room[data-room="#smoke"]')
         page.wait_for_selector("#log .line.k-chat:has-text('inside the container')", timeout=15_000)
         ARTIFACTS.mkdir(parents=True, exist_ok=True)
@@ -502,19 +634,52 @@ def test_the_volumes_platforms_mount(image: str, platform: str) -> None:
     owner, perms = mode.split()
     try:
         docker("volume", "create", vol)
-        docker("run", "--rm", "-v", f"{vol}:/data", "--entrypoint", "sh", image, "-c",
-               f"chown {owner} /data && chmod {perms} /data")
+        docker(
+            "run",
+            "--rm",
+            "-v",
+            f"{vol}:/data",
+            "--entrypoint",
+            "sh",
+            image,
+            "-c",
+            f"chown {owner} /data && chmod {perms} /data",
+        )
         # Kubernetes as deploy/kubernetes/switchboard.yaml runs it: the user from the start, a
         # read-only root filesystem with /tmp an emptyDir, no capabilities, no privilege escalation
-        user = [] if platform == "render" else [
-            "--user", "10001:10001", "--read-only", "--tmpfs", "/tmp", "--cap-drop", "ALL",
-            "--security-opt", "no-new-privileges"]
+        user = (
+            []
+            if platform == "render"
+            else [
+                "--user",
+                "10001:10001",
+                "--read-only",
+                "--tmpfs",
+                "/tmp",
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges",
+            ]
+        )
         for boot in (1, 2):
-            docker("run", "-d", "--name", name, *user, "-v", f"{vol}:/data",
-                   "-e", "SWITCHBOARD_PUBLIC_URL=https://sb.example.com", image)
+            docker(
+                "run",
+                "-d",
+                "--name",
+                name,
+                *user,
+                "-v",
+                f"{vol}:/data",
+                "-e",
+                "SWITCHBOARD_PUBLIC_URL=https://sb.example.com",
+                image,
+            )
             wait_for(f"boot {boot}", lambda: "broker up" in docker("logs", name).stdout)
             got = docker("exec", name, "stat", "-c", "%u %a", "/data/switchboard").stdout.split()
-            assert got[0] == "10001" and got[1] in ("700", "2700"), got  # 2700: the fsGroup's setgid, inherited
+            assert got[0] == "10001" and got[1] in ("700", "2700"), (
+                got
+            )  # 2700: the fsGroup's setgid, inherited
             docker("stop", "-t", "10", name)
             assert docker("inspect", "-f", "{{.State.ExitCode}}", name).stdout.strip() == "0"
             docker("rm", name)

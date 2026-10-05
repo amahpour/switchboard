@@ -9,13 +9,13 @@ import stat
 from pathlib import Path
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import World
+
 from switchboard.adapters import codex as cx
 from switchboard.adapters.codex import AgentClients, Clients, CodexAdapter
 from switchboard.broker import proc
-from switchboard.config import Config, CodexCfg
+from switchboard.config import CodexCfg, Config
 from switchboard.models import Push
 
 TID = "019a0000-0000-7000-8000-000000000001"
@@ -33,8 +33,15 @@ def ad(w: World) -> CodexAdapter:
     return a
 
 
-def codex(w: World, *, status: str = "idle", proof: bool = True, hooks: bool = True, tid: str = TID,
-          self_agent: bool = False):
+def codex(
+    w: World,
+    *,
+    status: str = "idle",
+    proof: bool = True,
+    hooks: bool = True,
+    tid: str = TID,
+    self_agent: bool = False,
+):
     p, m = w.agent("codex-1", harness="codex", status=status, hooks=hooks)
     upd = {"session_key": f"codex:{tid}", "thread_proof": int(proof), "approval_mode": "prompting"}
     if self_agent:  # a live agent process (the queue tier checks it)
@@ -51,7 +58,9 @@ def attach(w: World, tid: str = TID, view: str | None = "idle", clients: bool = 
     a.link_state = "up"
     a.loaded = {tid}
     a.loaded_at = w.clock.now()
-    a.clients = Clients(clients, w.clock.now(), 1 if clients else 0, None if clients else "no Codex TUI attached")
+    a.clients = Clients(
+        clients, w.clock.now(), 1 if clients else 0, None if clients else "no Codex TUI attached"
+    )
     if view is not None:
         a.view[tid] = (view, w.clock.now())
     return a
@@ -72,7 +81,11 @@ def test_tier_needs_the_thread_proof(w: World) -> None:
 
 
 def test_tier_without_proof_requirement(tmp_path: Path, clock: FakeClock) -> None:
-    cfg = Config().replace(codex=CodexCfg(require_thread_proof=False)).with_delivery(quiet_s=0.0, max_hold_s=0.0)
+    cfg = (
+        Config()
+        .replace(codex=CodexCfg(require_thread_proof=False))
+        .with_delivery(quiet_s=0.0, max_hold_s=0.0)
+    )
     w = World(tmp_path, clock, cfg)
     p, _m = codex(w, proof=False)
     attach(w)
@@ -231,9 +244,23 @@ def test_send_backoff_defers(w: World) -> None:
 # ------------------------------------------------------------------ queue
 def test_queue_argv_is_fixed() -> None:
     assert cx.queue_argv("/opt/codex", "t-1", "[switchboard] hi", "/tmp/cx.sock") == [
-        "/opt/codex", "queue", "--remote", "unix:///tmp/cx.sock", "--thread", "t-1", "--message", "[switchboard] hi"]
+        "/opt/codex",
+        "queue",
+        "--remote",
+        "unix:///tmp/cx.sock",
+        "--thread",
+        "t-1",
+        "--message",
+        "[switchboard] hi",
+    ]
     assert cx.queue_argv("/opt/codex", "t-1", "[switchboard] hi", None) == [
-        "/opt/codex", "queue", "--thread", "t-1", "--message", "[switchboard] hi"]
+        "/opt/codex",
+        "queue",
+        "--thread",
+        "t-1",
+        "--message",
+        "[switchboard] hi",
+    ]
     from switchboard import guardrails
 
     assert guardrails.find_forbidden(cx.queue_argv("/opt/codex", "t", "x", "/s")) == []
@@ -250,15 +277,17 @@ def test_daemon_auto_start_is_read_only_parsed(tmp_path: Path) -> None:
     """Off only when explicitly false: an absent key or file counts as on (fail closed)."""
     cfg = Config().replace(codex=CodexCfg(home=str(tmp_path)))
     assert cx.daemon_auto_start(cfg) is True  # no file: Codex's default, unknown
-    (tmp_path / "config.toml").write_text('[features]\ndaemon_auto_start = true\n')
+    (tmp_path / "config.toml").write_text("[features]\ndaemon_auto_start = true\n")
     assert cx.daemon_auto_start(cfg) is True
     (tmp_path / "config.toml").write_text('model = "x"\n[features]\napps = true\n')
     assert cx.daemon_auto_start(cfg) is True  # key absent
-    (tmp_path / "config.toml").write_text('[features]\ndaemon_auto_start = false\n')
+    (tmp_path / "config.toml").write_text("[features]\ndaemon_auto_start = false\n")
     assert cx.daemon_auto_start(cfg) is False
     # the selected default profile wins
-    (tmp_path / "config.toml").write_text('profile = "p"\n[features]\ndaemon_auto_start = false\n'
-                                          '[profiles.p.features]\ndaemon_auto_start = true\n')
+    (tmp_path / "config.toml").write_text(
+        'profile = "p"\n[features]\ndaemon_auto_start = false\n'
+        "[profiles.p.features]\ndaemon_auto_start = true\n"
+    )
     assert cx.daemon_auto_start(cfg) is True
     (tmp_path / "config.toml").write_text("not = [toml")
     assert cx.daemon_auto_start(cfg) is None
@@ -276,7 +305,9 @@ def test_resolve_bin(tmp_path: Path) -> None:
     assert cx.resolve_bin("bin/codex") is None  # relative with a slash: never
 
 
-def test_resolve_bin_skips_workspace_and_temp_path_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_bin_skips_workspace_and_temp_path_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A bare name is looked up on PATH, but never in a git work tree (an agent's
     workspace: e.g. an activated .venv/bin), a temp dir or a relative entry."""
     ws = tmp_path / "ws"
@@ -290,7 +321,9 @@ def test_resolve_bin_skips_workspace_and_temp_path_entries(tmp_path: Path, monke
         (d / "codex").chmod(0o755)
     monkeypatch.setattr(cx, "_temp_roots", lambda: set())  # tmp_path itself is under the temp dir
     monkeypatch.setenv("PATH", os.pathsep.join(["rel/bin", str(planted), str(safe)]))
-    assert cx.unsafe_bin_dir(str(planted)) and cx.unsafe_bin_dir("rel/bin") and not cx.unsafe_bin_dir(str(safe))
+    assert (
+        cx.unsafe_bin_dir(str(planted)) and cx.unsafe_bin_dir("rel/bin") and not cx.unsafe_bin_dir(str(safe))
+    )
     assert cx.resolve_bin("codex") == os.path.realpath(safe / "codex")
     # a safe-looking entry that links into the workspace is refused too
     (safe / "codex").unlink()
@@ -430,10 +463,17 @@ def test_real_lsof_sees_a_client_of_our_socket() -> None:
         srv.bind(path)
         srv.listen()
         child = subprocess.Popen(
-            [sys.executable, "-c",
-             "import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); "
-             "print('ok', flush=True); sys.stdin.read()", path],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            [
+                sys.executable,
+                "-c",
+                "import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); "
+                "print('ok', flush=True); sys.stdin.read()",
+                path,
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
         try:
             assert child.stdout is not None and child.stdout.readline().strip() == "ok"
             conn, _ = srv.accept()
@@ -457,9 +497,17 @@ def test_only_a_codex_tui_counts_as_attached() -> None:
     assert tui("codex --remote unix:///tmp/cx.sock -m gpt-6-luna -c model_reasoning_effort=low")
     assert tui("codex resume 019a0000")
     assert tui("codex --remote unix:///Users/me/.codex/app-server-control/app-server-control.sock")
-    for argv in ("codex app-server daemon pid-update-loop", "/x/codex app-server --listen unix:///tmp/a.sock",
-                 "codex exec 'fix it'", "codex e hi", "codex queue --thread t --message m",
-                 "codex mcp-server", "/usr/bin/python3 -m pytest", "", "claude"):
+    for argv in (
+        "codex app-server daemon pid-update-loop",
+        "/x/codex app-server --listen unix:///tmp/a.sock",
+        "codex exec 'fix it'",
+        "codex e hi",
+        "codex queue --thread t --message m",
+        "codex mcp-server",
+        "/usr/bin/python3 -m pytest",
+        "",
+        "claude",
+    ):
         assert not tui(argv), argv
     assert cx.is_app_server_argv("codex app-server --listen unix:///tmp/a.sock")
     assert not cx.is_app_server_argv("codex --remote unix:///tmp/a.sock")
@@ -485,7 +533,9 @@ def test_a_steer_lands_as_a_same_turn_userpromptsubmit(w: World) -> None:
     token = w.engine.token(b)
     bid_s, mac = token.removeprefix("yk:b").split(".")
     starts = w.store.count_events("turn_start")
-    w.hook(p, "UserPromptSubmit", sid=TID, gen="turn-7", tokens=((int(bid_s), mac),), permission_mode="default")
+    w.hook(
+        p, "UserPromptSubmit", sid=TID, gen="turn-7", tokens=((int(bid_s), mac),), permission_mode="default"
+    )
     b = w.store.get_batch(push.batch_id)
     assert b.state == "confirmed" and b.turn_start_at is None
     assert w.store.count_events("turn_start") == starts  # not a new turn
@@ -587,7 +637,9 @@ def test_queue_tier_app_server_needs_its_own_tui(w: World) -> None:
     a.loaded = set()
     a.bin_path = "/usr/bin/true"
     me = proc.info(os.getpid())
-    a.agent_clients[os.getpid()] = AgentClients(me.start, w.clock.now(), False, True, 0, "no Codex TUI attached")
+    a.agent_clients[os.getpid()] = AgentClients(
+        me.start, w.clock.now(), False, True, 0, "no Codex TUI attached"
+    )
     assert a.tier(w.p(p)) == ("codex:queue", "detached?")
     a.agent_clients[os.getpid()] = AgentClients(me.start, w.clock.now(), True, True, 1)
     assert a.tier(w.p(p)) == ("codex:queue", None)
@@ -643,9 +695,11 @@ def wire(w: World) -> CodexAdapter:
 
     a = ad(w)
     a.runner = SimpleNamespace(
-        state=SimpleNamespace(store=w.store, engine=w.engine, clock=w.clock, agents=None,
-                              info=SimpleNamespace(codex_link="")),
-        execute=lambda acts: w.actions.extend(acts))
+        state=SimpleNamespace(
+            store=w.store, engine=w.engine, clock=w.clock, agents=None, info=SimpleNamespace(codex_link="")
+        ),
+        execute=lambda acts: w.actions.extend(acts),
+    )
     return a
 
 
@@ -738,8 +792,13 @@ def test_session_end_while_still_loaded_needs_the_thread_gone_first(w: World) ->
 def app_server(monkeypatch: pytest.MonkeyPatch, *pids: int) -> None:
     """These pids look like the managed daemon (``codex app-server --listen unix://``)."""
     real = proc.argv
-    monkeypatch.setattr(cx.proc, "argv", lambda pid, start: "/opt/homebrew/bin/codex app-server --listen unix://"
-                        if pid in pids else real(pid, start))
+    monkeypatch.setattr(
+        cx.proc,
+        "argv",
+        lambda pid, start: (
+            "/opt/homebrew/bin/codex app-server --listen unix://" if pid in pids else real(pid, start)
+        ),
+    )
 
 
 def test_a_daemon_restart_keeps_the_member_and_rebinds_it(w: World, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -836,8 +895,11 @@ def test_the_new_app_server_must_be_unambiguous(w: World, monkeypatch: pytest.Mo
     a.lost = (w.clock.now(), frozenset())
     a.fresh_agents[(os.getpid(), me.start)] = w.clock.now()
     assert a._new_agent() is None  # its MCP servers said hello, but it isn't a Codex app-server
-    monkeypatch.setattr(cx.proc, "argv", lambda pid, start: "/opt/homebrew/bin/codex --remote unix://x"
-                        if pid == os.getpid() else "")
+    monkeypatch.setattr(
+        cx.proc,
+        "argv",
+        lambda pid, start: "/opt/homebrew/bin/codex --remote unix://x" if pid == os.getpid() else "",
+    )
     assert a._new_agent() is None  # a TUI (or exec, or anything but an app-server) never
     app_server(monkeypatch, os.getpid(), os.getppid())
     a.fresh_agents[(os.getpid(), me.start)] = w.clock.now() - 60  # said hello before the link was lost
@@ -870,7 +932,8 @@ def _exe(path: Path, version: str = "9.8.7") -> Path:
 
 
 def test_the_codex_binary_is_found_again_when_its_path_vanishes(
-        tmp_path: Path, clock: FakeClock, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: Path, clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A Homebrew upgrade removes the old version's directory: the configured (or
     cached) path is gone, and ``codex`` is looked up again on PATH (same checks)."""
     monkeypatch.setattr(cx, "_temp_roots", lambda: set())
@@ -906,7 +969,9 @@ def test_the_codex_binary_is_found_again_when_its_path_vanishes(
 
 def test_the_binary_version_is_read_from_where_it_is_installed(tmp_path: Path) -> None:
     """Never by running it: any codex run writes into ~/.codex/tmp."""
-    assert cx.bin_version(str(_exe(tmp_path / "Caskroom" / "codex" / "0.157.0" / "bin" / "codex"))) == "0.157.0"
+    assert (
+        cx.bin_version(str(_exe(tmp_path / "Caskroom" / "codex" / "0.157.0" / "bin" / "codex"))) == "0.157.0"
+    )
     daemon = tmp_path / "releases" / "0.157.0-aarch64-apple-darwin" / "bin" / "codex"
     assert cx.bin_version(str(_exe(daemon, "x"))) == "0.157.0"
     npm = tmp_path / "lib" / "node_modules" / "@openai" / "codex"
@@ -930,7 +995,8 @@ def test_the_binary_version_is_read_from_where_it_is_installed(tmp_path: Path) -
 
 
 def test_an_in_place_upgrade_updates_the_recorded_version(
-        tmp_path: Path, clock: FakeClock, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: Path, clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """npm upgrades @openai/codex in place (the same path): the version is read again
     at each forced look (link up), not only when the path changes."""
     npm = tmp_path / "lib" / "node_modules" / "@openai" / "codex"
@@ -952,7 +1018,8 @@ def test_an_in_place_upgrade_updates_the_recorded_version(
 
 
 def test_resolve_codex_falls_back_to_path_only_for_a_vanished_absolute_path(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(cx, "_temp_roots", lambda: set())
     new = _exe(tmp_path / "safe" / "bin" / "codex")
     monkeypatch.setenv("PATH", str(new.parent))
@@ -979,7 +1046,8 @@ def _fake_brew(root: Path) -> Path:
 
 
 def test_a_workspace_faking_a_homebrew_prefix_is_still_a_workspace(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The review's forge: bin/brew and Library/Homebrew planted in a workspace whose
     bin/ is on PATH (a direnv PATH_add bin) must not make its codex trusted."""
     monkeypatch.setattr(cx, "_temp_roots", lambda: set())

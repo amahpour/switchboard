@@ -103,8 +103,9 @@ def client_id(batch_id: int) -> str:
     return f"yk-b{batch_id}"
 
 
-async def wake(sock_path: str | None, thread_id: str, nonce: str, text: str, batch_id: int,
-               proven: set[str]) -> float:
+async def wake(
+    sock_path: str | None, thread_id: str, nonce: str, text: str, batch_id: int, proven: set[str]
+) -> float:
     """Start a turn in ``thread_id`` with ``text``; returns when the app-server accepted
     it (epoch s). ``proven`` holds the threads whose proof already passed (updated here).
     Raises ``Refused`` when no turn was started."""

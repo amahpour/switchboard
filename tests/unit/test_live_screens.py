@@ -12,8 +12,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "live"))
 from harness import screens  # noqa: E402
 
 DEVIN_READY = "Ask Devin to do anything\n  swe-1-6-slow · accept edits · {} remaining\n"
-DEVIN_SELECTOR = ("Run `cd .worktrees/devin-1 && git log`?\n❭ 1 Yes  (Approve once)\n  2 Yes, and allow always\n"
-                  "  6 Edit command\n↵ confirm · esc cancel\n")
+DEVIN_SELECTOR = (
+    "Run `cd .worktrees/devin-1 && git log`?\n❭ 1 Yes  (Approve once)\n  2 Yes, and allow always\n"
+    "  6 Edit command\n↵ confirm · esc cancel\n"
+)
 
 
 def test_devin_quota_is_exhausted_only_at_zero() -> None:
@@ -27,8 +29,10 @@ def test_devin_quota_is_exhausted_only_at_zero() -> None:
 
 
 def test_claude_model_errors() -> None:
-    assert screens.claude_model_error("There's an issue with the selected model (sonnet). It may not exist or you"
-                                      " may not have access to it. Run /model to pick a different model.")
+    assert screens.claude_model_error(
+        "There's an issue with the selected model (sonnet). It may not exist or you"
+        " may not have access to it. Run /model to pick a different model."
+    )
     assert screens.claude_model_error("Error: model not found: sonnet-9")
     assert not screens.claude_model_error("? for shortcuts · accept edits on")
     assert not screens.claude_model_error("> join #build as claude-1 and stay in the room")

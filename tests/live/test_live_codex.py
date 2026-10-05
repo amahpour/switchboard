@@ -42,8 +42,8 @@ import secrets
 import shutil
 import signal
 import sqlite3
-import statistics
 import stat
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -53,7 +53,6 @@ from typing import Any
 
 import httpx
 import pytest
-
 from harness import codex_profile, codex_trust, drift, preflight
 from harness.tmuxdrv import REAL_HOME, Tmux, clean_env
 
@@ -129,19 +128,50 @@ class Live:
         (self.ws / "README.md").write_text("scratch workspace for a switchboard live test\n")
         ver = subprocess.run([self.codex, "--version"], env=env, capture_output=True, text=True, timeout=30)
         self.results["codex_version"] = ver.stdout.strip()
-        pa = subprocess.run([sys.executable, "-m", "switchboard", "install", "codex", "--print-args", "--home",
-                             str(self.home)], env={**env, "SWITCHBOARD_TEST": "1"}, capture_output=True, text=True,
-                            timeout=30, check=True)
+        pa = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "switchboard",
+                "install",
+                "codex",
+                "--print-args",
+                "--home",
+                str(self.home),
+            ],
+            env={**env, "SWITCHBOARD_TEST": "1"},
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
         self.print_args = json.loads(pa.stdout)
         (self.ws / ".codex").mkdir()
         (self.ws / ".codex" / "hooks.json").write_text(self.print_args["files"]["hooks.json"])
         (self.home / "config.toml").write_text(  # human_name: the name the prompts use
-            f'human_name = "alice"\n[codex]\ncontrol_socket = "{self.sock_a}"\nbin = "{self.codex}"\n')
+            f'human_name = "alice"\n[codex]\ncontrol_socket = "{self.sock_a}"\nbin = "{self.codex}"\n'
+        )
         benv = {**env, "SWITCHBOARD_TEST": "1", "SWITCHBOARD_RECORD_PAYLOADS": str(self.run / "params")}
         out = open(self.run / "broker.stdout", "ab")
         self.broker = subprocess.Popen(
-            [sys.executable, "-m", "switchboard", "start", "--foreground", "--test-mode", "--home", str(self.home),
-             "--port", "0"], env=benv, stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True)
+            [
+                sys.executable,
+                "-m",
+                "switchboard",
+                "start",
+                "--foreground",
+                "--test-mode",
+                "--home",
+                str(self.home),
+                "--port",
+                "0",
+            ],
+            env=benv,
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=out,
+            start_new_session=True,
+        )
         from switchboard.mcp.client import ping
         from switchboard.paths import Paths
 
@@ -173,22 +203,39 @@ class Live:
         """Abort unless the effective config prompts for approvals, sandboxes the
         workspace and runs no MCP server or plugin but switchboard's."""
         ov = self.overrides + ["-c", f"hooks.state={self.hooks_state}"]
-        [res] = codex_trust.stdio_calls(self.codex, REAL_PATH, self.ws, ov,
-                                        [("config/read", {"cwd": str(self.ws), "includeLayers": False})])
+        [res] = codex_trust.stdio_calls(
+            self.codex,
+            REAL_PATH,
+            self.ws,
+            ov,
+            [("config/read", {"cwd": str(self.ws), "includeLayers": False})],
+        )
         cfg = res["result"]["config"]
         assert cfg.get("approval_policy") == "on-request", "approvals must prompt"
         assert cfg.get("sandbox_mode") == "workspace-write", "the sandbox must be workspace-write"
-        on = [k for k, v in (cfg.get("mcp_servers") or {}).items() if not isinstance(v, dict) or v.get("enabled", True)]
+        on = [
+            k
+            for k, v in (cfg.get("mcp_servers") or {}).items()
+            if not isinstance(v, dict) or v.get("enabled", True)
+        ]
         assert on == ["switchboard"], f"other MCP servers enabled: {len(on) - 1}"
-        plugins_on = [k for k, v in (cfg.get("plugins") or {}).items() if isinstance(v, dict) and v.get("enabled")]
+        plugins_on = [
+            k for k, v in (cfg.get("plugins") or {}).items() if isinstance(v, dict) and v.get("enabled")
+        ]
         assert plugins_on == [], "plugins enabled"
         assert (cfg.get("features") or {}).get("apps") is False
 
     def start_server(self, name: str, sock: str) -> int:
         out = open(self.run / f"appserver-{name}.out", "ab")
-        p = subprocess.Popen(codex_profile.app_server_argv(self.codex, sock, self.overrides, self.hooks_state),
-                             cwd=str(self.ws), env=clean_env(REAL_PATH), stdin=subprocess.DEVNULL, stdout=out,
-                             stderr=out, start_new_session=True)
+        p = subprocess.Popen(
+            codex_profile.app_server_argv(self.codex, sock, self.overrides, self.hooks_state),
+            cwd=str(self.ws),
+            env=clean_env(REAL_PATH),
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=out,
+            start_new_session=True,
+        )
         self.servers[name] = p
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline and not self.answers(sock):
@@ -287,7 +334,9 @@ class Live:
             self.web.close()
         left: list[str] = []
         for needle in (str(self.home), str(SOCKDIR)):
-            left += subprocess.run(["/usr/bin/pgrep", "-f", needle], capture_output=True, text=True).stdout.split()
+            left += subprocess.run(
+                ["/usr/bin/pgrep", "-f", needle], capture_output=True, text=True
+            ).stdout.split()
         for pid in left:
             try:
                 os.kill(int(pid), signal.SIGTERM)
@@ -301,8 +350,11 @@ class Live:
         bad, tui = drift.codex_config_diff(self.codex_cfg_before, drift.codex_config())
         # ~/.codex/config.toml may change only in the TUI's own tables
         self.results["drift_fail"] = [f for f in fail if f != "~/.codex/config.toml"] + (
-            [f"~/.codex/config.toml: {k}" for k in bad])
-        self.results["drift_info"] = info + [f"~/.codex/config.toml: [{k}] (written by the Codex TUI)" for k in tui]
+            [f"~/.codex/config.toml: {k}" for k in bad]
+        )
+        self.results["drift_info"] = info + [
+            f"~/.codex/config.toml: [{k}] (written by the Codex TUI)" for k in tui
+        ]
         self.results["user_daemon_unchanged"] = USER_DAEMON_SOCK.exists() == self.user_daemon_before
         (self.run / "results.json").write_text(json.dumps(self.results, indent=1))
         print("\nLIVE RESULTS", json.dumps(self.results, indent=1))
@@ -328,8 +380,11 @@ class Live:
             con.close()
 
     def part(self, name: str) -> sqlite3.Row | None:
-        rows = self.q("SELECT p.* FROM participants p JOIN memberships m ON m.participant_id=p.id"
-                      " WHERE m.screen_name=? ORDER BY m.id DESC", name)
+        rows = self.q(
+            "SELECT p.* FROM participants p JOIN memberships m ON m.participant_id=p.id"
+            " WHERE m.screen_name=? ORDER BY m.id DESC",
+            name,
+        )
         return rows[0] if rows else None
 
     def member(self, name: str) -> dict[str, Any]:
@@ -364,8 +419,11 @@ class Live:
             return False
         # a peer's message shown as a "call read()" stub stays pending for read() by design
         # (notified, never a wake): not something to wait for
-        busy = self.q("SELECT COUNT(*) FROM deliveries WHERE membership_id=? AND (state='offered' OR"
-                      " (state='pending' AND notified_at IS NULL))", self.mids[name])[0][0]
+        busy = self.q(
+            "SELECT COUNT(*) FROM deliveries WHERE membership_id=? AND (state='offered' OR"
+            " (state='pending' AND notified_at IS NULL))",
+            self.mids[name],
+        )[0][0]
         return busy == 0
 
     def resume_if_loop_guarded(self) -> None:
@@ -384,31 +442,47 @@ class Live:
         self.wait(ok, timeout, f"{name} to settle", step=0.4, session=session)
 
     def batch_for(self, msg_id: int, name: str, state: str = "confirmed") -> sqlite3.Row | None:
-        rows = self.q("SELECT b.* FROM batches b JOIN deliveries d ON d.batch_id=b.id"
-                      " WHERE d.message_id=? AND d.membership_id=? AND b.state=?", msg_id, self.mids[name], state)
+        rows = self.q(
+            "SELECT b.* FROM batches b JOIN deliveries d ON d.batch_id=b.id"
+            " WHERE d.message_id=? AND d.membership_id=? AND b.state=?",
+            msg_id,
+            self.mids[name],
+            state,
+        )
         return rows[0] if rows else None
 
     def batches_since(self, name: str, t: float) -> list[sqlite3.Row]:
-        return self.q("SELECT * FROM batches WHERE membership_id=? AND created_at>? ORDER BY id", self.mids[name], t)
+        return self.q(
+            "SELECT * FROM batches WHERE membership_id=? AND created_at>? ORDER BY id", self.mids[name], t
+        )
 
     def msg_ts(self, msg_id: int) -> float:
         return self.q("SELECT ts FROM messages WHERE id=?", msg_id)[0][0]
 
     def agent_said(self, pattern: str, after: int, name: str | None = None) -> bool:
-        rows = self.q("SELECT text, sender_name FROM messages WHERE id>? AND sender_kind='agent' AND kind='chat'", after)
+        rows = self.q(
+            "SELECT text, sender_name FROM messages WHERE id>? AND sender_kind='agent' AND kind='chat'", after
+        )
         return any(re.search(pattern, r[0]) and (name is None or r[1] == name) for r in rows)
 
     def sleeping(self, server: str, secs: int) -> bool:
         pid = self.servers[server].pid
-        return any(re.search(rf"(^|[\s'])sleep {secs}([\s']|$)", a) for _p, _pp, a in preflight.descendants(pid))
+        return any(
+            re.search(rf"(^|[\s'])sleep {secs}([\s']|$)", a) for _p, _pp, a in preflight.descendants(pid)
+        )
 
     def join(self, session: str, name: str, sock: str) -> sqlite3.Row:
-        self.tmux.type(session, f'Use the switchboard MCP tools: call join with room "#build" and screen_name "{name}".'
-                                " Then reply with one word: joined. Later, switchboard will relay messages that I (alice)"
-                                " post in #build; answer each one with the switchboard say tool, or pass, exactly as the"
-                                " message asks. Keep it short.")
+        self.tmux.type(
+            session,
+            f'Use the switchboard MCP tools: call join with room "#build" and screen_name "{name}".'
+            " Then reply with one word: joined. Later, switchboard will relay messages that I (alice)"
+            " post in #build; answer each one with the switchboard say tool, or pass, exactly as the"
+            " message asks. Keep it short.",
+        )
         self.wait(lambda: self.part(name), 120, f"{name} to join", session=session)
-        self.mids[name] = self.q("SELECT id FROM memberships WHERE screen_name=? AND left_at IS NULL", name)[0][0]
+        self.mids[name] = self.q("SELECT id FROM memberships WHERE screen_name=? AND left_at IS NULL", name)[
+            0
+        ][0]
         p = self.part(name)
         self.tids[name] = p["session_key"].removeprefix("codex:")
         self.wait(lambda: self.part(name)["thread_proof"] == 1, 30, f"{name}'s thread proof", session=session)
@@ -433,8 +507,11 @@ def live():
 def test_1_join_binds_the_thread_with_the_daemon_tier(live: Live) -> None:
     p = live.join(T1, "codex-1", live.sock_a)
     assert p["agent_pid"] == live.servers["a"].pid, (p["agent_pid"], live.servers["a"].pid)
-    live.wait(lambda: live.part("codex-1")["tier"] == "codex:daemon" and live.part("codex-1")["tier_note"] is None,
-              20, "the codex:daemon tier")
+    live.wait(
+        lambda: live.part("codex-1")["tier"] == "codex:daemon" and live.part("codex-1")["tier_note"] is None,
+        20,
+        "the codex:daemon tier",
+    )
     live.wait_settled("codex-1", live.sock_a, T1)
     p = live.part("codex-1")
     assert p["approval_mode"] == "prompting" and p["hooks_seen_at"] is not None, dict(p)
@@ -442,8 +519,11 @@ def test_1_join_binds_the_thread_with_the_daemon_tier(live: Live) -> None:
     assert bad == [], f"preflight: unexpected MCP servers/helpers under the app-server: {bad}"
     ev = live.q("SELECT data FROM events WHERE kind='bind' AND participant_id=? ORDER BY id", p["id"])
     proof = [json.loads(x[0]) for x in ev if json.loads(x[0]).get("what") == "thread_proof"]
-    live.results["scenarios"]["join"] = {"tier": p["tier"], "approval_mode": p["approval_mode"],
-                                         "thread_proof": proof[-1] if proof else None}
+    live.results["scenarios"]["join"] = {
+        "tier": p["tier"],
+        "approval_mode": p["approval_mode"],
+        "thread_proof": proof[-1] if proof else None,
+    }
     assert proof and proof[-1]["ok"] is True
 
 
@@ -453,7 +533,9 @@ def test_2_idle_wake_turn_start_p50_under_1s(live: Live) -> None:
         live.wait_settled("codex-1", live.sock_a, T1)
         mid = live.say(f"ping {i}: reply in #build with the switchboard say tool, text exactly: pong {i}")
         b = live.wait(lambda: live.batch_for(mid, "codex-1"), 30, f"idle wake {i}")
-        assert b["path"] == "turn_start" and b["wake_kind"] == "idle_wake" and b["evidence"] == "rpc:turn/start"
+        assert (
+            b["path"] == "turn_start" and b["wake_kind"] == "idle_wake" and b["evidence"] == "rpc:turn/start"
+        )
         ts = live.msg_ts(mid)
         lat.append(b["turn_start_at"] - ts)
         posted.append(b["posted_at"] - ts)
@@ -475,19 +557,28 @@ def test_2_idle_wake_turn_start_p50_under_1s(live: Live) -> None:
 def test_3_steer_lands_at_the_tool_boundary(live: Live) -> None:
     live.wait_settled("codex-1", live.sock_a, T1)
     tag = secrets.token_hex(3)
-    live.tmux.type(T1, f"Run the shell command `sleep 7`, then run the shell command `echo done-{tag}`, then reply"
-                       " with one word: finished.")
+    live.tmux.type(
+        T1,
+        f"Run the shell command `sleep 7`, then run the shell command `echo done-{tag}`, then reply"
+        " with one word: finished.",
+    )
     live.wait(lambda: live.sleeping("a", 7), 60, "the sleep to start")
     t_sleep = time.time()
     time.sleep(1.0)
-    mid = live.say(f"MID-{tag}: when you read this, call the switchboard say tool with the text: ack MID-{tag}")
+    mid = live.say(
+        f"MID-{tag}: when you read this, call the switchboard say tool with the text: ack MID-{tag}"
+    )
     ts = live.msg_ts(mid)
     b = live.wait(lambda: live.batch_for(mid, "codex-1"), 40, "the steer to be confirmed")
     live.wait_settled("codex-1", live.sock_a, T1, 150)
     th = live.read_thread(live.sock_a, live.tids["codex-1"], True)
-    turn = next(t for t in reversed(th["turns"]) if any(i.get("clientId") == f"yk-b{b['id']}" for i in t["items"]))
-    kinds = [(i.get("type"), i.get("clientId") == f"yk-b{b['id']}", "sleep 7" in json.dumps(i.get("command")))
-             for i in turn["items"]]
+    turn = next(
+        t for t in reversed(th["turns"]) if any(i.get("clientId") == f"yk-b{b['id']}" for i in t["items"])
+    )
+    kinds = [
+        (i.get("type"), i.get("clientId") == f"yk-b{b['id']}", "sleep 7" in json.dumps(i.get("command")))
+        for i in turn["items"]
+    ]
     i_steer = next(k for k, x in enumerate(kinds) if x[1])
     i_sleep = next(k for k, x in enumerate(kinds) if x[0] == "commandExecution" and x[2])
     res = {
@@ -511,8 +602,11 @@ def test_4_approval_hold_then_decline_with_esc(live: Live) -> None:
     live.wait_settled("codex-1", live.sock_a, T1, 150)
     tag = secrets.token_hex(3)
     outside = live.run / f"yk-perm-{tag}.txt"  # outside the workspace: the sandbox needs an escalation
-    live.tmux.type(T1, f"Run exactly this shell command: `touch {outside}`. It writes outside the workspace, so"
-                       " request escalated permissions for that one command. Then reply done.")
+    live.tmux.type(
+        T1,
+        f"Run exactly this shell command: `touch {outside}`. It writes outside the workspace, so"
+        " request escalated permissions for that one command. Then reply done.",
+    )
     live.wait(lambda: APPROVAL in live.tmux.capture(T1), 90, "the approval prompt")
     live.wait(lambda: live.part("codex-1")["status"] == "waiting-approval", 10, "the waiting-approval hold")
     mid = live.say(f"HOLD-{tag}: call the switchboard say tool with the text: got HOLD-{tag}")
@@ -520,13 +614,18 @@ def test_4_approval_hold_then_decline_with_esc(live: Live) -> None:
     time.sleep(7.0)
     held = {
         "status": live.part("codex-1")["status"],
-        "delivery": live.q("SELECT state FROM deliveries WHERE message_id=? AND membership_id=?", mid,
-                           live.mids["codex-1"])[0][0],
+        "delivery": live.q(
+            "SELECT state FROM deliveries WHERE message_id=? AND membership_id=?", mid, live.mids["codex-1"]
+        )[0][0],
         "batches_since": len(live.batches_since("codex-1", t_post - 0.01)),
         "prompt_still_open": APPROVAL in live.tmux.capture(T1),
     }
-    assert held == {"status": "waiting-approval", "delivery": "pending", "batches_since": 0,
-                    "prompt_still_open": True}, held
+    assert held == {
+        "status": "waiting-approval",
+        "delivery": "pending",
+        "batches_since": 0,
+        "prompt_still_open": True,
+    }, held
     t_esc = time.time()
     live.tmux.key(T1, "Escape")  # decline; the driver never approves
     b = live.wait(lambda: live.batch_for(mid, "codex-1"), 40, "the held message after the Esc")
@@ -535,7 +634,9 @@ def test_4_approval_hold_then_decline_with_esc(live: Live) -> None:
         "path": b["path"],
         "esc_to_turn_start_ms": round((b["turn_start_at"] - t_esc) * 1000, 1) if b["turn_start_at"] else None,
         "file_created": outside.exists(),
-        "reroutes": len([x for x in live.batches_since("codex-1", t_esc - 0.01) if x["expire_reason"] == "reroute"]),
+        "reroutes": len(
+            [x for x in live.batches_since("codex-1", t_esc - 0.01) if x["expire_reason"] == "reroute"]
+        ),
     }
     live.wait_settled("codex-1", live.sock_a, T1, 150)
     res["model_acked"] = live.agent_said(rf"got HOLD-{tag}", mid, "codex-1")
@@ -551,23 +652,36 @@ def test_5_queue_tier_on_a_second_app_server(live: Live) -> None:
     live.launch_tui(T2, live.sock_b)
     p = live.join(T2, "codex-2", live.sock_b)
     assert p["agent_pid"] == live.servers["b"].pid
-    live.wait(lambda: live.part("codex-2")["tier"] == "codex:queue" and live.part("codex-2")["tier_note"] is None,
-              30, "the codex:queue tier", session=T2)
+    live.wait(
+        lambda: live.part("codex-2")["tier"] == "codex:queue" and live.part("codex-2")["tier_note"] is None,
+        30,
+        "the codex:queue tier",
+        session=T2,
+    )
     lat = []
     for i in range(1, 3):
         live.wait_settled("codex-2", live.sock_b, T2)
-        mid = live.say(f"@codex-2 q{i}: reply in #build with the switchboard say tool, text exactly: qpong {i}")
+        mid = live.say(
+            f"@codex-2 q{i}: reply in #build with the switchboard say tool, text exactly: qpong {i}"
+        )
         b = live.wait(lambda: live.batch_for(mid, "codex-2"), 40, f"queue wake {i}", session=T2)
-        assert b["path"] == "queue" and b["evidence"] == "hook:UserPromptSubmit" and b["turn_start_at"], dict(b)
+        assert b["path"] == "queue" and b["evidence"] == "hook:UserPromptSubmit" and b["turn_start_at"], dict(
+            b
+        )
         lat.append(b["turn_start_at"] - live.msg_ts(mid))
     live.wait_settled("codex-2", live.sock_b, T2)
     # mid-task: no steer path on the queue tier; PostToolUse context (best effort)
     tag = secrets.token_hex(3)
-    live.tmux.type(T2, f"Run the shell command `sleep 7`, then run the shell command `echo done-{tag}`, then reply"
-                       " with one word: finished.")
+    live.tmux.type(
+        T2,
+        f"Run the shell command `sleep 7`, then run the shell command `echo done-{tag}`, then reply"
+        " with one word: finished.",
+    )
     live.wait(lambda: live.sleeping("b", 7), 60, "the sleep to start", session=T2)
     time.sleep(1.0)
-    mid = live.say(f"@codex-2 PTU-{tag}: when you read this, call the switchboard say tool with the text: ack PTU-{tag}")
+    mid = live.say(
+        f"@codex-2 PTU-{tag}: when you read this, call the switchboard say tool with the text: ack PTU-{tag}"
+    )
     b = live.wait(lambda: live.batch_for(mid, "codex-2"), 40, "the PostToolUse context", session=T2)
     live.wait_settled("codex-2", live.sock_b, T2, 150)
     res = {
@@ -575,9 +689,12 @@ def test_5_queue_tier_on_a_second_app_server(live: Live) -> None:
         "queue_turn_start_ms": [round(x * 1000, 1) for x in lat],
         "queue_turn_start_p50_ms": round(pctl(lat, 50) * 1000, 1),
         "replied_with_say": sum(1 for i in (1, 2) if live.agent_said(rf"\bqpong {i}\b", 0, "codex-2")),
-        "posttooluse": {"path": b["path"], "evidence": b["evidence"],
-                        "in_context_ms": round((b["confirmed_at"] - live.msg_ts(mid)) * 1000, 1),
-                        "model_acked": live.agent_said(rf"ack PTU-{tag}", mid, "codex-2")},
+        "posttooluse": {
+            "path": b["path"],
+            "evidence": b["evidence"],
+            "in_context_ms": round((b["confirmed_at"] - live.msg_ts(mid)) * 1000, 1),
+            "model_acked": live.agent_said(rf"ack PTU-{tag}", mid, "codex-2"),
+        },
     }
     live.results["scenarios"]["queue"] = res
     print("queue", res)
@@ -599,7 +716,9 @@ def test_6_app_server_restart_rebinds_the_member(live: Live) -> None:
     old = live.servers["a"]
     assert p0["agent_pid"] == old.pid
     t_kill = time.time()
-    os.killpg(old.pid, signal.SIGTERM)  # the app-server and its children (MCP server, hooks), as a restart does
+    os.killpg(
+        old.pid, signal.SIGTERM
+    )  # the app-server and its children (MCP server, hooks), as a restart does
     old.wait(15)
     if os.path.lexists(SOCKDIR / "a.sock"):
         (SOCKDIR / "a.sock").unlink()  # its stale link (a literal path in our own socket dir)
@@ -615,21 +734,31 @@ def test_6_app_server_restart_rebinds_the_member(live: Live) -> None:
 
     live.wait(rebound, 60, "codex-1 to be re-bound to the new app-server", step=0.2)
     t_rebound = time.time()
-    live.wait(lambda: (live.part("codex-1")["tier"], live.part("codex-1")["tier_note"]) == ("codex:daemon", None),
-              40, "the codex:daemon tier after the restart")
+    live.wait(
+        lambda: (live.part("codex-1")["tier"], live.part("codex-1")["tier_note"]) == ("codex:daemon", None),
+        40,
+        "the codex:daemon tier after the restart",
+    )
     [m1] = live.q("SELECT id, cred_hash FROM memberships WHERE screen_name='codex-1' AND left_at IS NULL")
     leaves = live.q("SELECT text FROM messages WHERE kind='leave' AND sender_name='codex-1' AND ts>?", t_kill)
-    notes = [r[0] for r in live.q("SELECT text FROM messages WHERE kind='notice' AND ts>?", t_kill)
-             if "reconnected after a Codex daemon restart" in r[0]]
-    ev = [json.loads(r[0]) for r in live.q("SELECT data FROM events WHERE kind='codex_restart' AND ts>? ORDER BY id",
-                                            t_kill)]
+    notes = [
+        r[0]
+        for r in live.q("SELECT text FROM messages WHERE kind='notice' AND ts>?", t_kill)
+        if "reconnected after a Codex daemon restart" in r[0]
+    ]
+    ev = [
+        json.loads(r[0])
+        for r in live.q("SELECT data FROM events WHERE kind='codex_restart' AND ts>? ORDER BY id", t_kill)
+    ]
     bad = preflight.problems(new_pid)
     assert bad == [], f"preflight: unexpected MCP servers/helpers under the new app-server: {bad}"
     # a wake after the restart (the new MCP server holds no credential: the agent may join again first)
     live.wait_settled("codex-1", live.sock_a, T1, 150)
     tag = secrets.token_hex(3)
-    mid = live.say(f"RESTART-{tag}: reply in #build with the switchboard say tool, text exactly: back {tag}. If switchboard"
-                   " says you are not in #build, call join with room \"#build\" and screen_name \"codex-1\" first.")
+    mid = live.say(
+        f"RESTART-{tag}: reply in #build with the switchboard say tool, text exactly: back {tag}. If switchboard"
+        ' says you are not in #build, call join with room "#build" and screen_name "codex-1" first.'
+    )
     b = live.wait(lambda: live.batch_for(mid, "codex-1"), 40, "the wake after the restart")
     live.wait_settled("codex-1", live.sock_a, T1, 150)
     res = {
@@ -641,12 +770,18 @@ def test_6_app_server_restart_rebinds_the_member(live: Live) -> None:
         "leave_lines": len(leaves),
         "reconnect_notices": len(notes),
         "events": [(e.get("what"), e.get("via")) for e in ev],
-        "wake": {"path": b["path"], "evidence": b["evidence"],
-                 "turn_start_ms": round((b["turn_start_at"] - live.msg_ts(mid)) * 1000, 1)
-                 if b["turn_start_at"] else None},
+        "wake": {
+            "path": b["path"],
+            "evidence": b["evidence"],
+            "turn_start_ms": round((b["turn_start_at"] - live.msg_ts(mid)) * 1000, 1)
+            if b["turn_start_at"]
+            else None,
+        },
         "model_replied": live.agent_said(rf"back {tag}", mid, "codex-1"),
-        "rejoined": len(live.q("SELECT id FROM events WHERE kind='bind' AND ts>? AND data LIKE '%rotate%'",
-                               t_rebound)) > 0,
+        "rejoined": len(
+            live.q("SELECT id FROM events WHERE kind='bind' AND ts>? AND data LIKE '%rotate%'", t_rebound)
+        )
+        > 0,
     }
     live.results["scenarios"]["app_server_restart"] = res
     print("app-server restart", res)
@@ -689,17 +824,31 @@ def test_7_tui_quit_sends_no_rpc(live: Live) -> None:
         "turns_before": turns_before,
         "turns_after_post": turns_mid,
         "push_batches_after_quit": [(b["path"], b["state"], b["expire_reason"]) for b in sent],
-        "delivery": live.q("SELECT state FROM deliveries WHERE message_id=? AND membership_id=?", mid,
-                           live.mids["codex-1"])[0][0],
+        "delivery": live.q(
+            "SELECT state FROM deliveries WHERE message_id=? AND membership_id=?", mid, live.mids["codex-1"]
+        )[0][0],
         "member_after_quit": {k: live.member("codex-1").get(k) for k in ("status", "tier", "tier_note")},
         "notifications_after_quit": [(round(t - t_quit, 1), m, s) for t, m, s in notes if t >= t_quit],
-        "session_end_hook_s": next((round(r["ts"] - t_quit, 1) for r in live.q(
-            "SELECT ts, data FROM events WHERE kind='status' AND participant_id=? AND ts>=? ORDER BY id",
-            live.part("codex-1")["id"], t_quit) if "hook:SessionEnd" in r["data"]), None),  # this quit's
+        "session_end_hook_s": next(
+            (
+                round(r["ts"] - t_quit, 1)
+                for r in live.q(
+                    "SELECT ts, data FROM events WHERE kind='status' AND participant_id=? AND ts>=? ORDER BY id",
+                    live.part("codex-1")["id"],
+                    t_quit,
+                )
+                if "hook:SessionEnd" in r["data"]
+            ),
+            None,
+        ),  # this quit's
     }
     live.results["scenarios"]["tui_quit"] = res
     print("tui quit", res)
     assert turns_mid == turns_before, res  # no turn/start reached the app-server
-    assert all(b["state"] != "confirmed" and b["path"] in ("turn_start", "steer", "queue") and
-               b["expire_reason"] in ("reroute", "offline") for b in sent), res
+    assert all(
+        b["state"] != "confirmed"
+        and b["path"] in ("turn_start", "steer", "queue")
+        and b["expire_reason"] in ("reroute", "offline")
+        for b in sent
+    ), res
     assert res["delivery"] == "pending", res

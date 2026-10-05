@@ -11,8 +11,16 @@ from switchboard.models import Room
 
 
 def wait_sink(reg: SinkRegistry, participant_id: int, wait_id: str) -> Any:
-    return reg.open(participant_id=participant_id, membership_id=participant_id * 10, room_id=1, kind="wait",
-                    path="wait", wait_id=wait_id, opened_at=0.0, deadline=50.0)
+    return reg.open(
+        participant_id=participant_id,
+        membership_id=participant_id * 10,
+        room_id=1,
+        kind="wait",
+        path="wait",
+        wait_id=wait_id,
+        opened_at=0.0,
+        deadline=50.0,
+    )
 
 
 def test_find_wait_matches_participant_and_wait_id_open_or_recently_closed() -> None:
@@ -46,9 +54,21 @@ def test_only_the_most_recent_closed_sinks_are_remembered() -> None:
 
 
 def test_no_chatter_is_never_due() -> None:
-    room = Room(id=1, name="#build", created_at=0.0, created_by="alice", paused=False, paused_reason=None,
-                budget_per_hour=60, budget_remaining=60, budget_window_start=0.0, budget_notice_window=None,
-                hop_count=0, hop_limit=6, last_msg_at=None)  # a quiet room
+    room = Room(
+        id=1,
+        name="#build",
+        created_at=0.0,
+        created_by="alice",
+        paused=False,
+        paused_reason=None,
+        budget_per_hour=60,
+        budget_remaining=60,
+        budget_window_start=0.0,
+        budget_notice_window=None,
+        hop_count=0,
+        hop_limit=6,
+        last_msg_at=None,
+    )  # a quiet room
     assert rules.chatter_due(room, [], now=1000.0, quiet_s=0.0, max_hold_s=0.0) is False
 
 

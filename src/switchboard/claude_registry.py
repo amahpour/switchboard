@@ -66,7 +66,11 @@ def registry_status(data: dict[str, Any]) -> tuple[str | None, float | None]:
     since: float | None = None
     upd = data.get("statusUpdatedAt")
     # bounded before any float arithmetic: a huge integer would overflow it
-    if (isinstance(upd, (int, float)) and not isinstance(upd, bool) and 0 < upd < _MAX_STAMP
-            and math.isfinite(upd)):
+    if (
+        isinstance(upd, (int, float))
+        and not isinstance(upd, bool)
+        and 0 < upd < _MAX_STAMP
+        and math.isfinite(upd)
+    ):
         since = float(upd) / 1000.0 if upd > 1e11 else float(upd)  # epoch ms (seconds tolerated)
     return status, since

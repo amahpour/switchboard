@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import InProcBroker
 from fakes.fake_agent import FakeAgent, ids_in
+
 from switchboard.config import Config
 
 FAST = Config(human_name="alice").with_delivery(quiet_s=0.0, max_hold_s=0.0)
@@ -54,7 +54,9 @@ async def run_agent(a: FakeAgent, name: str, policy: str, stop: asyncio.Event, l
         lines = LINE.findall(r["text"])
         mine = [(int(i), frm, to) for i, frm, _k, to in lines if frm != name]
         target = mine[-1] if mine else None
-        speak = target is not None and (policy == "always" or (policy == "mentions" and any(t == "yes" for *_, t in mine)))
+        speak = target is not None and (
+            policy == "always" or (policy == "mentions" and any(t == "yes" for *_, t in mine))
+        )
         if speak:
             other = "beta" if name == "alpha" else "alpha"
             res = await a.say("#build", f"@{other} my take on #{target[0]}", reply_to=target[0])
@@ -67,13 +69,19 @@ async def run_agent(a: FakeAgent, name: str, policy: str, stop: asyncio.Event, l
 async def test_loop_guard_stops_two_chatty_agents_at_six(broker: InProcBroker) -> None:
     log: list[str] = []
     stop = asyncio.Event()
-    async with FakeAgent(broker.home, "a") as a, FakeAgent(broker.home, "b") as b, FakeAgent(broker.home, "c") as c:
+    async with (
+        FakeAgent(broker.home, "a") as a,
+        FakeAgent(broker.home, "b") as b,
+        FakeAgent(broker.home, "c") as c,
+    ):
         await a.join("#build", "alpha")
         await b.join("#build", "beta")
         await c.join("#build", "gamma")
-        tasks = [asyncio.create_task(run_agent(a, "alpha", "always", stop, log)),
-                 asyncio.create_task(run_agent(b, "beta", "mentions", stop, log)),
-                 asyncio.create_task(run_agent(c, "gamma", "pass", stop, log))]
+        tasks = [
+            asyncio.create_task(run_agent(a, "alpha", "always", stop, log)),
+            asyncio.create_task(run_agent(b, "beta", "mentions", stop, log)),
+            asyncio.create_task(run_agent(c, "gamma", "pass", stop, log)),
+        ]
         await asyncio.sleep(0.5)
         human = say(broker, "@alpha @beta please discuss the plan")
         done, pending = await asyncio.wait(tasks, timeout=30)
@@ -81,15 +89,21 @@ async def test_loop_guard_stops_two_chatty_agents_at_six(broker: InProcBroker) -
         for t in pending:
             t.cancel()
         await asyncio.gather(*pending, return_exceptions=True)
-    [(paused, reason, hops)] = q(broker, "SELECT paused, paused_reason, hop_count FROM rooms WHERE name='#build'")
+    [(paused, reason, hops)] = q(
+        broker, "SELECT paused, paused_reason, hop_count FROM rooms WHERE name='#build'"
+    )
     assert paused == 1 and reason == "loop guard" and hops >= 6
-    agent_msgs = q(broker, "SELECT sender_name FROM messages WHERE kind='chat' AND sender_kind='agent' AND id>?", human)
+    agent_msgs = q(
+        broker, "SELECT sender_name FROM messages WHERE kind='chat' AND sender_kind='agent' AND id>?", human
+    )
     assert len(agent_msgs) == 6, log
     assert {r[0] for r in agent_msgs} <= {"alpha", "beta"}  # gamma always passed
     assert q(broker, "SELECT COUNT(*) FROM events WHERE kind='loop_guard'")[0][0] == 1
     assert q(broker, "SELECT COUNT(*) FROM events WHERE kind='pass'")[0][0] >= 1
     assert any(x.endswith(":paused") for x in log)
-    notices = [m for m in broker.web.get("/api/rooms/build/messages").json()["messages"] if m["kind"] == "notice"]
+    notices = [
+        m for m in broker.web.get("/api/rooms/build/messages").json()["messages"] if m["kind"] == "notice"
+    ]
     assert any("loop guard" in m["text"] for m in notices)
 
 
@@ -97,7 +111,9 @@ async def test_budget_holds_chatter_but_never_the_human(broker: InProcBroker) ->
     async with FakeAgent(broker.home, "a") as a, FakeAgent(broker.home, "b") as b:
         await a.join("#build", "alpha")
         await b.join("#build", "beta")
-        r = broker.web.post("/api/rooms/build/command", json={"text": "/budget 0"}, headers=broker.write_headers())
+        r = broker.web.post(
+            "/api/rooms/build/command", json={"text": "/budget 0"}, headers=broker.write_headers()
+        )
         assert r.json()["ok"]
         await b.say("#build", "chatter nobody asked for")
         assert (await a.wait("#build", 1))["status"] == "timeout"  # chatter: no wake at budget 0
@@ -144,7 +160,9 @@ async def test_the_watchdog_reminds_then_tells_the_human(tmp_home: Path) -> None
             assert "reminder=yes" in again["text"] and "haven't answered" in again["text"]
             last = await asyncio.wait_for(a.wait("#build", 4), 8)
             assert last["status"] == "timeout"  # escalated: no more wakes for it
-            notices = [m for m in web.get("/api/rooms/build/messages").json()["messages"] if m["kind"] == "notice"]
+            notices = [
+                m for m in web.get("/api/rooms/build/messages").json()["messages"] if m["kind"] == "notice"
+            ]
             assert any(f"alpha hasn't answered @mention #{mid}" in m["text"] for m in notices), notices
             read = await a.read("#build")
             assert mid in ids_in(read["text"])  # still readable
@@ -207,10 +225,42 @@ def test_property_simulation_exercises_every_path_and_rule(tmp_path: Path) -> No
     # members on a remote host whose link drops and comes back (M8c); remote Claude frames
     # refused by the satellite's last-mile check and re-routed (M8d)
     assert remote_kinds == {"test", "devin", "cursor", "claude"} and link_drops >= 5 and stale >= 3
-    assert paths == {"wait", "read", "say", "inbox", "turn_start", "steer", "hook_ctx", "hook_ups",
-                     "stop_followup", "stop_block"}
-    assert {"pause", "no_ack", "no_confirm", "idle_no_token", "reroute", "send_error", "superseded",
-            "unwait", "newer_read", "human_prompt", "loop_reset"} <= reasons
-    assert {"loop_guard", "budget_exhausted", "rate_limited", "rearm", "requeue", "park", "watchdog_remind",
-            "watchdog_escalate:unanswered", "watchdog_escalate:parked", "watchdog_escalate:not_idle",
-            "cancel", "pass_refused"} <= events
+    assert paths == {
+        "wait",
+        "read",
+        "say",
+        "inbox",
+        "turn_start",
+        "steer",
+        "hook_ctx",
+        "hook_ups",
+        "stop_followup",
+        "stop_block",
+    }
+    assert {
+        "pause",
+        "no_ack",
+        "no_confirm",
+        "idle_no_token",
+        "reroute",
+        "send_error",
+        "superseded",
+        "unwait",
+        "newer_read",
+        "human_prompt",
+        "loop_reset",
+    } <= reasons
+    assert {
+        "loop_guard",
+        "budget_exhausted",
+        "rate_limited",
+        "rearm",
+        "requeue",
+        "park",
+        "watchdog_remind",
+        "watchdog_escalate:unanswered",
+        "watchdog_escalate:parked",
+        "watchdog_escalate:not_idle",
+        "cancel",
+        "pass_refused",
+    } <= events

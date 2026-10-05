@@ -13,7 +13,6 @@ import time
 from pathlib import Path
 
 import pytest
-
 from conftest import human_cli_denied_here
 from fakes.fake_agent import FakeAgent
 from fakes.fake_link import FakeLink, SatDriver, wait_for
@@ -83,11 +82,15 @@ async def test_satellite_killed_members_offline_then_back_with_same_creds() -> N
             assert pid
             os.kill(pid, signal.SIGKILL)
             wait_for(lambda: link.status()["state"] != "up", what="link down")
-            wait_for(lambda: next(m for m in link.members() if m["name"] == "bench")["status"] == "offline",
-                     what="member offline")
+            wait_for(
+                lambda: next(m for m in link.members() if m["name"] == "bench")["status"] == "offline",
+                what="member offline",
+            )
             link.wait_state("up")
-            wait_for(lambda: next(m for m in link.members() if m["name"] == "bench")["status"] != "offline",
-                     what="member back")
+            wait_for(
+                lambda: next(m for m in link.members() if m["name"] == "bench")["status"] != "offline",
+                what="member back",
+            )
             res = await a.say("#fpga", "after")  # the credential it had still works
             assert res["ok"] and res["posted_id"]
         joins, leaves = lines(link, "join"), lines(link, "leave")
@@ -105,8 +108,10 @@ async def test_broker_restart_remote_rows_offline_not_ended_then_back() -> None:
             m = next(m for m in link.members() if m["name"] == "bench")
             assert m["host"] == "fpga-pi"
             link.wait_state("up")
-            wait_for(lambda: next(m for m in link.members() if m["name"] == "bench")["status"] != "offline",
-                     what="member back")
+            wait_for(
+                lambda: next(m for m in link.members() if m["name"] == "bench")["status"] != "offline",
+                what="member back",
+            )
             res = await a.say("#fpga", "after the restart")
             assert res["ok"] and res["posted_id"]
         assert lines(link, "leave") == [] and len(lines(link, "join")) == 1
@@ -193,16 +198,22 @@ def test_replaced_from_abandoned_link_is_ignored() -> None:
             await rl.restart()
 
         link.broker.on_loop(lambda: asyncio.ensure_future(reconnect()))
-        wait_for(lambda: rl.attempt is not None and rl.attempt is not a1 and rl.state == "up", what="a new attempt")
+        wait_for(
+            lambda: rl.attempt is not None and rl.attempt is not a1 and rl.state == "up", what="a new attempt"
+        )
         a2 = rl.attempt
         # the old child's "bye replaced" arrives late: dropped, never a block (§27.10 half-open race)
-        fut = asyncio.run_coroutine_threadsafe(rl._on_frame(a1, {"t": "bye", "why": "replaced"}), link.broker.loop)
+        fut = asyncio.run_coroutine_threadsafe(
+            rl._on_frame(a1, {"t": "bye", "why": "replaced"}), link.broker.loop
+        )
         fut.result(5)
         time.sleep(0.3)
         assert rl.state == "up" and rl.attempt is a2
         assert link.broker.on_loop(link.broker.state.store.remote_row, link.name).blocked_at is None
         # the same frame on the current attempt does block
-        fut = asyncio.run_coroutine_threadsafe(rl._on_frame(a2, {"t": "bye", "why": "replaced"}), link.broker.loop)
+        fut = asyncio.run_coroutine_threadsafe(
+            rl._on_frame(a2, {"t": "bye", "why": "replaced"}), link.broker.loop
+        )
         with pytest.raises(Exception):
             fut.result(5)
     finally:
@@ -235,8 +246,10 @@ def test_proto_mismatch_blocked() -> None:
         link.wait_state("blocked", reason="proto")
         [n] = [t for t in link.notices() if "link blocked (proto)" in t]
         assert "link protocol 2" in n and "install the same switchboard version" in n
-        wait_for(lambda: link.satellite_pid() is None or not os.path.exists(link.pi_paths.sock),
-                 what="no satellite socket")
+        wait_for(
+            lambda: link.satellite_pid() is None or not os.path.exists(link.pi_paths.sock),
+            what="no satellite socket",
+        )
 
 
 async def test_end_after_s_ends_unreachable_members() -> None:
@@ -277,7 +290,9 @@ def test_concurrent_enables_share_one_attempt() -> None:
         rl = mgr.links[link.name]
 
         async def both() -> list[dict]:
-            return list(await asyncio.gather(mgr.enable(link.name, via="cli"), mgr.enable(link.name, via="cli")))
+            return list(
+                await asyncio.gather(mgr.enable(link.name, via="cli"), mgr.enable(link.name, via="cli"))
+            )
 
         res = asyncio.run_coroutine_threadsafe(both(), link.broker.loop).result(40)
         assert [r["state"] for r in res] == ["up", "up"], res

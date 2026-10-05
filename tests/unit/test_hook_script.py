@@ -15,17 +15,35 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import child_env, make_tmp_home
 from hook_stub import StubBroker
+
 from switchboard.hook import switchboard_hook as hk
 from switchboard.install.common import hook_command
 from switchboard.paths import Paths, hook_sha12, write_hook_copy
 
 FIX = Path(__file__).resolve().parents[1] / "fixtures" / "payloads"
-ALLOWED_PARAMS = {"harness", "event", "sid", "gen", "tool", "tool_use_id", "ok", "status", "loop_count",
-                  "stop_hook_active", "source", "reason", "permission_mode", "tokens", "t", "max_wait_s",
-                  "join_nonce", "subagent_bg", "model"}
+ALLOWED_PARAMS = {
+    "harness",
+    "event",
+    "sid",
+    "gen",
+    "tool",
+    "tool_use_id",
+    "ok",
+    "status",
+    "loop_count",
+    "stop_hook_active",
+    "source",
+    "reason",
+    "permission_mode",
+    "tokens",
+    "t",
+    "max_wait_s",
+    "join_nonce",
+    "subagent_bg",
+    "model",
+}
 CTX = {"out": {"kind": "context", "text": "[switchboard] hello"}, "batch_id": 3, "ack": "a" * 32}
 
 
@@ -49,14 +67,30 @@ def stub(home):
     s.close()
 
 
-def run_hook(home: Path, harness: str, event: str, payload: Any, *, env: dict[str, str] | None = None,
-             python: str | None = None, sha: str | None = None, max_wait: int | None = None,
-             raw: bytes | None = None) -> subprocess.CompletedProcess[bytes]:
-    cmd = hook_command(python or sys.executable, str(Paths.from_home(home).home), sha or hook_sha12(),
-                       harness, event, max_wait)
+def run_hook(
+    home: Path,
+    harness: str,
+    event: str,
+    payload: Any,
+    *,
+    env: dict[str, str] | None = None,
+    python: str | None = None,
+    sha: str | None = None,
+    max_wait: int | None = None,
+    raw: bytes | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    cmd = hook_command(
+        python or sys.executable,
+        str(Paths.from_home(home).home),
+        sha or hook_sha12(),
+        harness,
+        event,
+        max_wait,
+    )
     data = raw if raw is not None else json.dumps(payload).encode()
-    return subprocess.run(cmd, shell=True, input=data, capture_output=True, env=child_env(**(env or {})),
-                          timeout=20)
+    return subprocess.run(
+        cmd, shell=True, input=data, capture_output=True, env=child_env(**(env or {})), timeout=20
+    )
 
 
 def all_fixtures():
@@ -77,7 +111,14 @@ def test_every_fixture_relays_only_allowlisted_fields(home, stub, harness: str, 
         assert set(params) <= ALLOWED_PARAMS
         assert params["harness"] == harness and params["event"] == event
         blob = json.dumps(params)
-        for k in ("cwd", "transcript_path", "prompt", "last_assistant_message", "tool_input", "workspace_roots"):
+        for k in (
+            "cwd",
+            "transcript_path",
+            "prompt",
+            "last_assistant_message",
+            "tool_input",
+            "workspace_roots",
+        ):
             v = payload.get(k)
             if isinstance(v, str) and len(v) > 8:
                 assert v not in blob
@@ -95,8 +136,9 @@ def test_claude_context_output_and_ack(home) -> None:
             ev = payload["hook_event_name"]
             r = run_hook(home, "claude", ev, payload)
             assert r.returncode == 0
-            assert json.loads(r.stdout) == {"hookSpecificOutput": {"hookEventName": ev,
-                                                                    "additionalContext": "[switchboard] hello"}}
+            assert json.loads(r.stdout) == {
+                "hookSpecificOutput": {"hookEventName": ev, "additionalContext": "[switchboard] hello"}
+            }
         deadline = time.monotonic() + 3
         while len(s.acks) < 4 and time.monotonic() < deadline:
             time.sleep(0.02)
@@ -117,8 +159,11 @@ def test_claude_context_output_and_ack(home) -> None:
 def test_oversized_context_prints_nothing_and_is_not_acked(home) -> None:
     """The hook never cuts a batch (a cut batch would be acked as fully seen);
     the broker fits batches to this limit, so this is only a safety net."""
-    big = {"out": {"kind": "context", "text": "[switchboard] " + "y" * hk.CONTEXT_MAX["claude"]},
-           "batch_id": 5, "ack": "c" * 32}
+    big = {
+        "out": {"kind": "context", "text": "[switchboard] " + "y" * hk.CONTEXT_MAX["claude"]},
+        "batch_id": 5,
+        "ack": "c" * 32,
+    }
     s = StubBroker(home, lambda req: big)
     try:
         payload = load("claude", "PostToolUse_bash")
@@ -202,7 +247,7 @@ def test_token_extraction_from_every_payload_shape() -> None:
     tok = "yk:b12.0123abcd"
     shapes = [
         {"tool_response": {"success": True, "output": f"x {tok} y", "error": None}},  # Devin
-        {"tool_response": {"content": [{"type": "text", "text": f"{{\"text\":\"{tok}\"}}"}]}},  # Codex MCP
+        {"tool_response": {"content": [{"type": "text", "text": f'{{"text":"{tok}"}}'}]}},  # Codex MCP
         {"tool_output": json.dumps({"content": [{"type": "text", "text": tok}]})},  # Cursor JSON string
         {"tool_response": [{"type": "text", "text": tok}]},  # Claude MCP content list
         {"prompt": f"[switchboard] ... batch {tok} ..."},  # inbox prompt
@@ -216,11 +261,17 @@ def test_token_extraction_from_every_payload_shape() -> None:
 
 
 def test_join_nonce_only_from_the_join_tool() -> None:
-    p = {"tool_name": "mcp__switchboard__join", "tool_response": [{"type": "text", "text": "join yk:j0123456789abcdef"}]}
+    p = {
+        "tool_name": "mcp__switchboard__join",
+        "tool_response": [{"type": "text", "text": "join yk:j0123456789abcdef"}],
+    }
     assert hk.build_params(p, "claude", "PostToolUse", 1.0, 1.0)["join_nonce"] == "0123456789abcdef"
     p2 = {**p, "tool_name": "Bash"}
     assert "join_nonce" not in hk.build_params(p2, "claude", "PostToolUse", 1.0, 1.0)
-    cur = {"tool_name": "MCP:join", "tool_output": json.dumps({"content": [{"text": "yk:j0123456789abcdef"}]})}
+    cur = {
+        "tool_name": "MCP:join",
+        "tool_output": json.dumps({"content": [{"text": "yk:j0123456789abcdef"}]}),
+    }
     assert hk.build_params(cur, "cursor", "postToolUse", 1.0, 1.0)["join_nonce"] == "0123456789abcdef"
 
 
@@ -233,11 +284,30 @@ def test_devin_background_subagent_flag() -> None:
 
 def test_the_model_name_is_relayed_only_when_it_looks_like_one() -> None:
     """For the report's model per participant (DESIGN.md §12.6): a short identifier only."""
-    for model in ("claude-sonnet-4-6", "gpt-5.5", "claude-haiku-4-5-20251001", "swe-1-6-slow", "claude:4@x",
-                  "claude-3-5-sonnet-v2@20241022"):
+    for model in (
+        "claude-sonnet-4-6",
+        "gpt-5.5",
+        "claude-haiku-4-5-20251001",
+        "swe-1-6-slow",
+        "claude:4@x",
+        "claude-3-5-sonnet-v2@20241022",
+    ):
         assert hk.build_params({"model": model}, "codex", "Stop", 1.0, 1.0)["model"] == model
-    for bad in ("/Users/someone/model", "org/model", "a b", "x" * 65, "", None, 5, {"id": "gpt"}, "-flag",
-                "someone@example.com", "first.last@example.com", "a@b@c", "m@" + "v" * 70):
+    for bad in (
+        "/Users/someone/model",
+        "org/model",
+        "a b",
+        "x" * 65,
+        "",
+        None,
+        5,
+        {"id": "gpt"},
+        "-flag",
+        "someone@example.com",
+        "first.last@example.com",
+        "a@b@c",
+        "m@" + "v" * 70,
+    ):
         assert "model" not in hk.build_params({"model": bad}, "codex", "Stop", 1.0, 1.0)
 
 
@@ -264,7 +334,7 @@ def _timings(home: Path, n: int) -> list[float]:
 def test_hook_latency_loose(home, stub) -> None:
     ts = _timings(home, 30)
     p95 = statistics.quantiles(ts, n=100, method="inclusive")[94]
-    print(f"hook p50={statistics.median(ts)*1000:.1f} ms p95={p95*1000:.1f} ms (n=30, incl. shell spawn)")
+    print(f"hook p50={statistics.median(ts) * 1000:.1f} ms p95={p95 * 1000:.1f} ms (n=30, incl. shell spawn)")
     assert p95 < 0.3
 
 
@@ -272,7 +342,7 @@ def test_hook_latency_loose(home, stub) -> None:
 def test_hook_latency_strict(home, stub) -> None:
     ts = _timings(home, 40)
     p95 = statistics.quantiles(ts, n=100, method="inclusive")[94]
-    print(f"hook p50={statistics.median(ts)*1000:.1f} ms p95={p95*1000:.1f} ms (n=40)")
+    print(f"hook p50={statistics.median(ts) * 1000:.1f} ms p95={p95 * 1000:.1f} ms (n=40)")
     assert p95 < 0.1
 
 
@@ -294,11 +364,15 @@ def test_cursor_and_devin_outputs_through_the_real_guard(home) -> None:
         assert json.loads(r.stdout) == {"additional_context": "[switchboard] hello"}
         r = run_hook(home, "cursor", "stop", load("cursor", "stop"), max_wait=35)
         assert json.loads(r.stdout) == {"followup_message": "[switchboard] go on"}
-        assert s.requests[-1]["params"]["max_wait_s"] == 35.0 and s.requests[-1]["params"]["status"] == "completed"
+        assert (
+            s.requests[-1]["params"]["max_wait_s"] == 35.0
+            and s.requests[-1]["params"]["status"] == "completed"
+        )
         dv = {"DEVIN_PROJECT_DIR": "/ws"}
         r = run_hook(home, "devin", "PostToolUse", load("devin", "PostToolUse_read"), env=dv)
-        assert json.loads(r.stdout) == {"hookSpecificOutput": {"hookEventName": "PostToolUse",
-                                                                "additionalContext": "[switchboard] hello"}}
+        assert json.loads(r.stdout) == {
+            "hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "[switchboard] hello"}
+        }
         r = run_hook(home, "devin", "Stop", load("devin", "Stop"), env=dv)
         assert json.loads(r.stdout) == {"decision": "block", "reason": "[switchboard] go on"}
         # never on PreToolUse, whatever the broker says
@@ -323,7 +397,10 @@ def test_a_parked_cursor_stop_waits_for_the_broker(home) -> None:
     try:
         t0 = time.monotonic()
         r = run_hook(home, "cursor", "stop", load("cursor", "stop"), max_wait=40)
-        assert json.loads(r.stdout) == {"followup_message": "[switchboard] late"} and time.monotonic() - t0 >= 2.4
+        assert (
+            json.loads(r.stdout) == {"followup_message": "[switchboard] late"}
+            and time.monotonic() - t0 >= 2.4
+        )
         # without --max-wait the hard 1.5 s guard ends it, printing nothing
         r = run_hook(home, "cursor", "stop", load("cursor", "stop"))
         assert r.returncode == 0 and r.stdout == b""

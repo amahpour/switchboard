@@ -12,9 +12,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import FakeClock, InProcBroker
 from engine_world import World
+
 from switchboard.adapters import remote_codex as rc
 from switchboard.adapters.base import SendError
 from switchboard.adapters.codex import CodexAdapter
@@ -52,7 +52,9 @@ def test_tier_and_routes(w: World) -> None:
     assert caps.wait_cap_s == w.cfg.codex.wait_cap_s and caps.ctx_max_chars == w.cfg.codex.ctx_max_chars
     rel = Release(items=(), kind="wake", counted=True, reason="human")
     assert a.route(p, rel, None, w.clock.now()).kind == "none"  # idle and not listening: no push path
-    assert a.route(p, Release(items=(), kind="priority", counted=False, reason="human"), None, 0).kind == "pull"
+    assert (
+        a.route(p, Release(items=(), kind="priority", counted=False, reason="human"), None, 0).kind == "pull"
+    )
     # mid-task, PostToolUse carries priority context, as for a local Codex hook member
     w.store.set_status(p.id, "busy", "hook")
     w.human("urgent")
@@ -79,8 +81,18 @@ def test_codex_adapter_never_sees_remote_rows(w: World) -> None:
     # its lookups are by this machine's key: a thread of the same id on another host is not found
     assert cx._participant(TID) is None
     assert cx.live(p)[0] is False
-    cx.on_mcp_hello(McpIdentity(harness="codex", mcp_pid=5, mcp_start=1.0, agent_pid=4, agent_start=1.0,
-                                evidence="parent:codex", host=PI), [p])
+    cx.on_mcp_hello(
+        McpIdentity(
+            harness="codex",
+            mcp_pid=5,
+            mcp_start=1.0,
+            agent_pid=4,
+            agent_start=1.0,
+            evidence="parent:codex",
+            host=PI,
+        ),
+        [p],
+    )
     assert cx.fresh_agents == {}  # a remote identity is none of its business
     assert cx.orphans == {}
 
@@ -92,10 +104,25 @@ def test_remote_codex_goes_offline_on_disconnect(broker: InProcBroker) -> None:
     def mk(host: str, rest: str) -> tuple[int, McpConn]:
         st = broker.state.store
         room = st.get_room("#build") or st.create_room("#build", "alice", 60, 6)
-        ident = McpIdentity(harness="codex", mcp_pid=4250 + len(rest), mcp_start=101.0, agent_pid=4242,
-                            agent_start=100.0, evidence="parent:codex", host=host)
-        p = st.upsert_participant("codex", session_key("codex", host, rest), host=host, agent_pid=4242,
-                                  agent_start=100.0, mcp_pid=ident.mcp_pid, mcp_start=101.0, status="idle")
+        ident = McpIdentity(
+            harness="codex",
+            mcp_pid=4250 + len(rest),
+            mcp_start=101.0,
+            agent_pid=4242,
+            agent_start=100.0,
+            evidence="parent:codex",
+            host=host,
+        )
+        p = st.upsert_participant(
+            "codex",
+            session_key("codex", host, rest),
+            host=host,
+            agent_pid=4242,
+            agent_start=100.0,
+            mcp_pid=ident.mcp_pid,
+            mcp_start=101.0,
+            status="idle",
+        )
         st.create_membership(room.id, p.id, f"cx{len(rest)}", cred_hash(secrets.token_urlsafe(8)))
         return p.id, McpConn(ident=ident)
 
@@ -157,8 +184,9 @@ def wake_push(w: World, p: Any, text: str = "hi") -> Push:
     return push
 
 
-async def send_and_answer(a: RemoteCodexAdapter, p: Any, push: Push, conn: LinkConn,
-                          result: dict[str, Any] | None) -> Any:
+async def send_and_answer(
+    a: RemoteCodexAdapter, p: Any, push: Push, conn: LinkConn, result: dict[str, Any] | None
+) -> Any:
     """``send`` one wake; the server answers ``mcp.posted`` with ``result`` (None: never)."""
     b = a.runner.state.store.get_batch(push.batch_id)
 
@@ -212,7 +240,11 @@ def test_an_accepted_wake_is_confirmed_as_link_turn_start(w: World) -> None:
     assert (data["batch_id"], data["thread_id"], data["text"]) == (push.batch_id, TID, push.text)
     assert chk == {"pid": p.agent_pid, "start": p.agent_start, "want": "idle"}
     b = w.store.get_batch(push.batch_id)
-    assert b is not None and (b.state, b.evidence, b.turn_start_at) == ("confirmed", "link:turn/start", t_post)
+    assert b is not None and (b.state, b.evidence, b.turn_start_at) == (
+        "confirmed",
+        "link:turn/start",
+        t_post,
+    )
 
 
 def test_refusals_reroute_or_back_off(w: World, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -280,8 +312,15 @@ def test_the_broker_takes_a_codex_wake_channel_only_over_a_link(broker: InProcBr
             self.mcp, self.remote, self.closed, self.id = mc, remote, False, 880000 + mc.ident.mcp_pid
 
     def mk(harness: str, host: str, n: int) -> Stub:
-        ident = McpIdentity(harness=harness, mcp_pid=5000 + n, mcp_start=101.0, agent_pid=4000 + n,
-                            agent_start=100.0, evidence=f"parent:{harness}", host=host)
+        ident = McpIdentity(
+            harness=harness,
+            mcp_pid=5000 + n,
+            mcp_start=101.0,
+            agent_pid=4000 + n,
+            agent_start=100.0,
+            evidence=f"parent:{harness}",
+            host=host,
+        )
         return Stub(McpConn(ident=ident), remote=bool(host))
 
     ag = broker.state.agents
@@ -291,8 +330,10 @@ def test_the_broker_takes_a_codex_wake_channel_only_over_a_link(broker: InProcBr
     assert broker.on_loop(ag.attach, claude, {"codex": True, "guard_ok": True})["attached"] is False
     remote = mk("codex", PI, 3)
     assert broker.on_loop(ag.attach, remote, {"codex": True})["attached"] is False  # its own guard must pass
-    assert broker.on_loop(ag.attach, remote, {"codex": True, "guard_ok": True}) == {"attached": True,
-                                                                                   "tier": "codex:link"}
+    assert broker.on_loop(ag.attach, remote, {"codex": True, "guard_ok": True}) == {
+        "attached": True,
+        "tier": "codex:link",
+    }
     a = broker.state.engine.adapters["codex@remote"]
     assert remote.mcp.codex_attached and a.conns[(PI, 5003)] == (101.0, remote)
     broker.on_loop(ag.conn_closed, remote)

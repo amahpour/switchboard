@@ -36,7 +36,11 @@ KNOWN_HITS = {"web/static/vendor/mermaid/mermaid.min.js": {'cli:"-T, --trust"': 
 
 
 def source_files() -> list[Path]:
-    return [p for p in SRC.rglob("*") if p.is_file() and p.suffix in {".py", ".js", ".html", ".css", ".toml", ".json"}]
+    return [
+        p
+        for p in SRC.rglob("*")
+        if p.is_file() and p.suffix in {".py", ".js", ".html", ".css", ".toml", ".json"}
+    ]
 
 
 def test_denylist_is_complete() -> None:

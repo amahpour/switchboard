@@ -148,22 +148,34 @@ def check_path(p: str, what: str) -> str:
 
 def mcp_argv(python: str, home: str) -> list[str]:
     """The MCP command, byte-identical for every harness (no harness hint)."""
-    return [check_path(python, "python"), "-I", "-m", "switchboard", "mcp", "--home", check_path(home, "home")]
+    return [
+        check_path(python, "python"),
+        "-I",
+        "-m",
+        "switchboard",
+        "mcp",
+        "--home",
+        check_path(home, "home"),
+    ]
 
 
-def hook_command(python: str, home: str, sha12: str, harness: str, event: str,
-                 max_wait: float | int | None = None) -> str:
+def hook_command(
+    python: str, home: str, sha12: str, harness: str, event: str, max_wait: float | int | None = None
+) -> str:
     """DESIGN.md §7.1: a /bin/sh guard, so a missing file or interpreter exits 0."""
     check_path(python, "python")
     check_path(home, "home")
-    if not re.fullmatch(r"[0-9a-f]{12}", sha12) or not re.fullmatch(r"[a-z]+", harness) \
-            or not re.fullmatch(r"[A-Za-z]+", event):
+    if (
+        not re.fullmatch(r"[0-9a-f]{12}", sha12)
+        or not re.fullmatch(r"[a-z]+", harness)
+        or not re.fullmatch(r"[A-Za-z]+", event)
+    ):
         raise InstallError("bad hook command parts")
     mw = f" --max-wait {int(max_wait)}" if max_wait is not None else ""
     h = f"{home}/hooks/switchboard_hook-{sha12}.py"
     return (
-        f"/bin/sh -c 'H=\"{h}\"; P=\"{python}\"; [ -r \"$H\" ] && [ -x \"$P\" ] && exec \"$P\" -I -S \"$H\""
-        f" --home \"{home}\" --harness {harness} --event {event}{mw}; exit 0'"
+        f'/bin/sh -c \'H="{h}"; P="{python}"; [ -r "$H" ] && [ -x "$P" ] && exec "$P" -I -S "$H"'
+        f' --home "{home}" --harness {harness} --event {event}{mw}; exit 0\''
     )
 
 
@@ -202,7 +214,7 @@ def runs_switchboard_mcp(entry: Any) -> bool:
     args = entry.get("args")
     if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
         return False
-    return any(args[i:i + 3] == ["-m", "switchboard", "mcp"] for i in range(len(args)))
+    return any(args[i : i + 3] == ["-m", "switchboard", "mcp"] for i in range(len(args)))
 
 
 def mcp_home(entry: Any) -> str | None:
@@ -222,8 +234,10 @@ def refuse_foreign_mcp(where: str, entry: Any) -> None:
     switchboard's MCP server (any home, any Python): "switchboard" is a
     common word, and another tool's server of that name isn't ours to drop."""
     if entry is not None and not runs_switchboard_mcp(entry):
-        raise InstallError(f"{where} already has an MCP server named switchboard that isn't switchboard's;"
-                           " rename or remove it, then re-run")
+        raise InstallError(
+            f"{where} already has an MCP server named switchboard that isn't switchboard's;"
+            " rename or remove it, then re-run"
+        )
 
 
 def safe_text(s: str) -> str:
@@ -246,8 +260,10 @@ def foreign_mcp_note(where: str, entry: Any, harness: str) -> str:
     """Why an MCP server named switchboard was left alone."""
     other = mcp_home(entry)
     if other is not None:
-        return (f"{where}: the switchboard MCP server there is for another switchboard home ({safe_text(other)});"
-                f" left alone ({other_home_hint(harness, other)})")
+        return (
+            f"{where}: the switchboard MCP server there is for another switchboard home ({safe_text(other)});"
+            f" left alone ({other_home_hint(harness, other)})"
+        )
     return f"{where}: an MCP server named switchboard that isn't switchboard's; left alone"
 
 
@@ -275,9 +291,16 @@ def mcp_view(entry: Any) -> Any:
     ``mask_args``); every other key (``env``, ``headers``, ...) shows ``***``."""
     if not isinstance(entry, dict):
         return "***"
-    return {k: (v if k == "command" and isinstance(v, str)
-                else mask_args(v) if k == "args" and isinstance(v, list) else "***")
-            for k, v in entry.items()}
+    return {
+        k: (
+            v
+            if k == "command" and isinstance(v, str)
+            else mask_args(v)
+            if k == "args" and isinstance(v, list)
+            else "***"
+        )
+        for k, v in entry.items()
+    }
 
 
 _HOOK_KEYS = frozenset({"matcher", "type", "command", "timeout", "loop_limit"})
@@ -331,8 +354,9 @@ def compact(obj: Any) -> str:
     return safe_text(json.dumps(mask(obj), ensure_ascii=False))
 
 
-def set_hook_groups(settings: dict[str, Any], events: dict[str, tuple[str, int]], home: str,
-                    *, matcher: bool = True) -> list[str]:
+def set_hook_groups(
+    settings: dict[str, Any], events: dict[str, tuple[str, int]], home: str, *, matcher: bool = True
+) -> list[str]:
     """Claude-shaped hooks: ``hooks.<Event> = [{"matcher":"", "hooks":[{type,command,timeout}]}]``.
 
     Older switchboard hook entries for this home are replaced; everything else is kept.
@@ -351,7 +375,8 @@ def set_hook_groups(settings: dict[str, Any], events: dict[str, tuple[str, int]]
         if not isinstance(arr, list):
             raise InstallError(f'"hooks.{event}" is not a list; fix it by hand first')
         present = any(
-            isinstance(g, dict) and isinstance(g.get("hooks"), list)
+            isinstance(g, dict)
+            and isinstance(g.get("hooks"), list)
             and any(isinstance(h, dict) and h.get("command") == cmd for h in g["hooks"])
             for g in arr
         )
@@ -360,7 +385,11 @@ def set_hook_groups(settings: dict[str, Any], events: dict[str, tuple[str, int]]
         kept = []
         for g in arr:
             if isinstance(g, dict) and isinstance(g.get("hooks"), list):
-                inner = [h for h in g["hooks"] if not (isinstance(h, dict) and is_switchboard_hook(h.get("command"), home))]
+                inner = [
+                    h
+                    for h in g["hooks"]
+                    if not (isinstance(h, dict) and is_switchboard_hook(h.get("command"), home))
+                ]
                 if len(inner) != len(g["hooks"]):
                     lines.append(f"  - hooks.{event}: an older switchboard hook")
                     if not inner:
@@ -376,8 +405,9 @@ def set_hook_groups(settings: dict[str, Any], events: dict[str, tuple[str, int]]
     return lines
 
 
-def remove_hook_groups(data: dict[str, Any], home: str, *, drop_empty_hooks: bool,
-                       positional: bool = False) -> tuple[list[str], int]:
+def remove_hook_groups(
+    data: dict[str, Any], home: str, *, drop_empty_hooks: bool, positional: bool = False
+) -> tuple[list[str], int]:
     """Undo ``set_hook_groups`` / ``set_codex_hooks`` (``hooks.<Event> = [{..., "hooks": [...]}]``).
 
     Every switchboard hook for this home is removed, in any event (older versions
@@ -404,26 +434,37 @@ def remove_hook_groups(data: dict[str, Any], home: str, *, drop_empty_hooks: boo
         shifts: list[str] = []
         for gi, g in enumerate(arr):
             if isinstance(g, dict) and isinstance(g.get("hooks"), list):
-                ours = [hi for hi, h in enumerate(g["hooks"])
-                        if isinstance(h, dict) and is_switchboard_hook(h.get("command"), home)]
+                ours = [
+                    hi
+                    for hi, h in enumerate(g["hooks"])
+                    if isinstance(h, dict) and is_switchboard_hook(h.get("command"), home)
+                ]
                 if ours:
                     removed = True
                     if len(ours) == len(g["hooks"]):
                         lines.append(f"  - hooks.{event}[{gi}]: {compact(hook_view(g))}")
                         continue
                     for hi in ours:
-                        lines.append(f"  - hooks.{event}[{gi}].hooks[{hi}]: {compact(hook_view(g['hooks'][hi]))}")
+                        lines.append(
+                            f"  - hooks.{event}[{gi}].hooks[{hi}]: {compact(hook_view(g['hooks'][hi]))}"
+                        )
                     inner = [h for hi, h in enumerate(g["hooks"]) if hi not in ours]
                     if len(kept) == gi:  # the group keeps its index; later handlers move up
-                        for new_hi, old_hi in enumerate(hi for hi in range(len(g["hooks"])) if hi not in ours):
+                        for new_hi, old_hi in enumerate(
+                            hi for hi in range(len(g["hooks"])) if hi not in ours
+                        ):
                             if new_hi != old_hi:
                                 moved += 1
-                                shifts.append(f"  ! hooks.{event}[{gi}].hooks[{old_hi}] (not switchboard's) moves to"
-                                              f" hooks.{event}[{gi}].hooks[{new_hi}]")
+                                shifts.append(
+                                    f"  ! hooks.{event}[{gi}].hooks[{old_hi}] (not switchboard's) moves to"
+                                    f" hooks.{event}[{gi}].hooks[{new_hi}]"
+                                )
                     g = {**g, "hooks": inner}
             if len(kept) != gi:
                 moved += 1
-                shifts.append(f"  ! hooks.{event}[{gi}] (not switchboard's) moves to hooks.{event}[{len(kept)}]")
+                shifts.append(
+                    f"  ! hooks.{event}[{gi}] (not switchboard's) moves to hooks.{event}[{len(kept)}]"
+                )
             kept.append(g)
         if not removed:
             continue
@@ -438,8 +479,7 @@ def remove_hook_groups(data: dict[str, Any], home: str, *, drop_empty_hooks: boo
     return lines, (moved if positional else 0)
 
 
-def json_removal(plan: Plan, path: Path, user_home: Path, home: str,
-                 remove: Any) -> None:
+def json_removal(plan: Plan, path: Path, user_home: Path, home: str, remove: Any) -> None:
     """Add the FileEdit for removing switchboard's entries from one JSON file.
 
     ``remove(data) -> display lines`` edits ``data`` in place. A missing file
@@ -456,13 +496,17 @@ def json_removal(plan: Plan, path: Path, user_home: Path, home: str,
     after = dump_json(new) if lines else before
     plan.edits.append(FileEdit(path=path, before=before, after=after, display=lines, label=label))
     if mentions_hook(after, home):
-        plan.notes.append(f"{label} still mentions switchboard's hooks somewhere uninstall doesn't recognise;"
-                          " remove them by hand")
+        plan.notes.append(
+            f"{label} still mentions switchboard's hooks somewhere uninstall doesn't recognise;"
+            " remove them by hand"
+        )
     others = other_hook_homes(after, home)
     if others:
-        plan.notes.append(f"{label} has switchboard hooks for another switchboard home"
-                          f" ({', '.join(safe_text(o) for o in others)}); left alone"
-                          f" (run `switchboard uninstall {plan.harness} --home DIR` for those)")
+        plan.notes.append(
+            f"{label} has switchboard hooks for another switchboard home"
+            f" ({', '.join(safe_text(o) for o in others)}); left alone"
+            f" (run `switchboard uninstall {plan.harness} --home DIR` for those)"
+        )
 
 
 # ---------------------------------------------------------------- writing
@@ -535,8 +579,9 @@ def editable_install() -> bool:
     return bool((info.get("dir_info") or {}).get("editable"))
 
 
-def confirm(yes: bool, stdin: TextIO | None = None, stdout: TextIO | None = None,
-            paint: Paint | None = None) -> bool:
+def confirm(
+    yes: bool, stdin: TextIO | None = None, stdout: TextIO | None = None, paint: Paint | None = None
+) -> bool:
     if yes:
         return True
     stdin = stdin or sys.stdin
@@ -603,8 +648,12 @@ def render_plan(plan: Plan, out: TextIO, paint: Paint | None = None) -> None:
                 print(p.dim(f"{e.label}: no hook copies"), file=out)
             else:
                 any_change = True
-                print(p.heading(f"{e.label} (delete {len(e.files)} hook cop{'y' if len(e.files) == 1 else 'ies'}):"),
-                      file=out)
+                print(
+                    p.heading(
+                        f"{e.label} (delete {len(e.files)} hook cop{'y' if len(e.files) == 1 else 'ies'}):"
+                    ),
+                    file=out,
+                )
                 for f in e.files:
                     print(_diff_line(p, f"  - {f.name}"), file=out)
         elif isinstance(e, FileEdit):
@@ -621,8 +670,10 @@ def render_plan(plan: Plan, out: TextIO, paint: Paint | None = None) -> None:
                 print(p.dim(f"{safe_text(e.display)}: {same}"), file=out)
                 continue
             any_change = True
-            print(p.dim("$") + " " + p.bold(safe_text(e.display)) + (p.dim(f"   # {e.note}") if e.note else ""),
-                  file=out)
+            print(
+                p.dim("$") + " " + p.bold(safe_text(e.display)) + (p.dim(f"   # {e.note}") if e.note else ""),
+                file=out,
+            )
     for n in plan.notes:
         print(_note(p, n), file=out)
     if not any_change:
@@ -637,7 +688,9 @@ def apply_purge(e: PurgeEdit, out: TextIO, paint: Paint | None = None) -> None:
             n += 1
         except FileNotFoundError:
             pass
-    print((paint or PLAIN).ok("deleted") + f" {n} hook cop{'y' if n == 1 else 'ies'} from {e.label}", file=out)
+    print(
+        (paint or PLAIN).ok("deleted") + f" {n} hook cop{'y' if n == 1 else 'ies'} from {e.label}", file=out
+    )
 
 
 def apply_plan(plan: Plan, *, run_commands: bool, out: TextIO, paint: Paint | None = None) -> int:
@@ -664,8 +717,11 @@ def apply_plan(plan: Plan, *, run_commands: bool, out: TextIO, paint: Paint | No
         except OSError as err:
             why = type(err).__name__
         if why:
-            print(f"switchboard: `{' '.join(e.argv[:3])} ...` failed ({why}); any file edits"
-                  f" above were applied. Run it yourself:\n  {e.display}", file=sys.stderr)
+            print(
+                f"switchboard: `{' '.join(e.argv[:3])} ...` failed ({why}); any file edits"
+                f" above were applied. Run it yourself:\n  {e.display}",
+                file=sys.stderr,
+            )
             return 1
         print(p.ok("ran:") + " " + p.dim(safe_text(e.display)), file=out)
     return 0
@@ -720,8 +776,15 @@ def _unchanged(plan: Plan) -> str:
     return plan.unchanged_text
 
 
-def _summary(runs: list[_Run], verb: str, *, applied: bool, out: TextIO, run_commands: bool = True,
-             paint: Paint | None = None) -> None:
+def _summary(
+    runs: list[_Run],
+    verb: str,
+    *,
+    applied: bool,
+    out: TextIO,
+    run_commands: bool = True,
+    paint: Paint | None = None,
+) -> None:
     p = paint or PLAIN
     done = {"install": "installed", "uninstall": "removed"}[verb]
     would = {"install": "would change", "uninstall": "would remove"}[verb]
@@ -744,9 +807,18 @@ def _summary(runs: list[_Run], verb: str, *, applied: bool, out: TextIO, run_com
         print(f"  {r.name}: {s}", file=out)
 
 
-def _finish(runs: list[_Run], args: argparse.Namespace, *, verb: str, many: bool, stdin: TextIO | None,
-            out: TextIO, trailer: list[str] | None = None, prepare: Any = None,
-            check_editable: bool = False) -> int:
+def _finish(
+    runs: list[_Run],
+    args: argparse.Namespace,
+    *,
+    verb: str,
+    many: bool,
+    stdin: TextIO | None,
+    out: TextIO,
+    trailer: list[str] | None = None,
+    prepare: Any = None,
+    check_editable: bool = False,
+) -> int:
     """Render every section, then one confirmation, then apply each changed plan."""
     p = for_args(args, out)  # colour only when ``out`` is a terminal (or --color always)
     for r in runs:
@@ -810,8 +882,12 @@ def run_install(args: argparse.Namespace, *, stdin: TextIO | None = None, out: T
                 runs.append(_Run(h, status=f"skipped ({names} not on PATH)"))
                 continue
             try:
-                runs.append(_Run(h, plan=_module(h).plan(user_home, python, home, sha12,
-                                                          run_commands=not args.user_home)))
+                runs.append(
+                    _Run(
+                        h,
+                        plan=_module(h).plan(user_home, python, home, sha12, run_commands=not args.user_home),
+                    )
+                )
             except InstallError as e:
                 if not many:
                     raise
@@ -826,8 +902,9 @@ def run_install(args: argparse.Namespace, *, stdin: TextIO | None = None, out: T
         Paths.from_home(home).ensure()
         write_hook_copy(Paths.from_home(home))
 
-    return _finish(runs, args, verb="install", many=many, stdin=stdin, out=out, prepare=prepare,
-                   check_editable=True)
+    return _finish(
+        runs, args, verb="install", many=many, stdin=stdin, out=out, prepare=prepare, check_editable=True
+    )
 
 
 def hook_copies(hooks_dir: Path) -> tuple[list[Path], str]:
@@ -843,8 +920,11 @@ def hook_copies(hooks_dir: Path) -> tuple[list[Path], str]:
         return [], "not a directory you own"
     try:
         names = sorted(os.listdir(hooks_dir))
-        files = [hooks_dir / n for n in names
-                 if HOOK_COPY_RE.fullmatch(n) and stat.S_ISREG(os.lstat(hooks_dir / n).st_mode)]
+        files = [
+            hooks_dir / n
+            for n in names
+            if HOOK_COPY_RE.fullmatch(n) and stat.S_ISREG(os.lstat(hooks_dir / n).st_mode)
+        ]
     except OSError as e:
         return [], f"can't read it: {e.strerror or e}"
     return files, ""
@@ -885,7 +965,9 @@ def purge_plan(plans: list[Plan], user_home: Path, home: str) -> Plan:
             if hook_ref(home) in text:
                 users.append(label)
     files, problem = hook_copies(hooks_dir)
-    p.edits.append(PurgeEdit(label=tilde(hooks_dir, user_home), files=files, blocked_by=users, problem=problem))
+    p.edits.append(
+        PurgeEdit(label=tilde(hooks_dir, user_home), files=files, blocked_by=users, problem=problem)
+    )
     return p
 
 
@@ -914,12 +996,18 @@ def run_uninstall(args: argparse.Namespace, *, stdin: TextIO | None = None, out:
     if getattr(args, "purge_hooks", False):
         runs.append(_Run("hook copies", plan=purge_plan([r.plan for r in runs if r.plan], user_home, home)))
     elif hook_copies(hooks_dir)[0]:
-        trailer.append(f"switchboard's hook copies in {tilde(hooks_dir, user_home)} stay: they do nothing once no"
-                       " harness config runs them (`--purge-hooks` deletes them when none does)")
-    trailer.append(f"switchboard's own home ({tilde(Path(home), user_home)}: rooms, history, config) is not"
-                   " touched; `switchboard stop` stops the broker")
-    trailer.append("agent sessions that are already running may keep switchboard's hooks and MCP server until"
-                   " they restart")
+        trailer.append(
+            f"switchboard's hook copies in {tilde(hooks_dir, user_home)} stay: they do nothing once no"
+            " harness config runs them (`--purge-hooks` deletes them when none does)"
+        )
+    trailer.append(
+        f"switchboard's own home ({tilde(Path(home), user_home)}: rooms, history, config) is not"
+        " touched; `switchboard stop` stops the broker"
+    )
+    trailer.append(
+        "agent sessions that are already running may keep switchboard's hooks and MCP server until"
+        " they restart"
+    )
     # a summary whenever there is more than one section (`all`, or a harness plus --purge-hooks)
     return _finish(runs, args, verb="uninstall", many=len(runs) > 1, stdin=stdin, out=out, trailer=trailer)
 

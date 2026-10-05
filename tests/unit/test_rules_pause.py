@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import World
 from test_claude_adapter import claude, reg
@@ -25,6 +24,7 @@ from test_codex_adapter import TID, attach, codex
 from test_cursor_adapter import cursor, park_result, stop
 from test_devin_adapter import devin, wait_post
 from test_devin_adapter import open_wait as devin_wait
+
 from switchboard.config import Config
 from switchboard.delivery.engine import paused_text
 from switchboard.delivery.runner import Runner
@@ -187,7 +187,9 @@ def test_pausing_one_room_leaves_the_members_other_rooms_alone(w: World) -> None
     m2 = w.store.create_membership(other.id, p.id, "claude-1", "h2")
     pause(w)
     w.human("in the paused room")
-    msg = w.store.insert_message(other.id, sender_name="alice", sender_kind="human", via="web", text="in #other")
+    msg = w.store.insert_message(
+        other.id, sender_name="alice", sender_kind="human", via="web", text="in #other"
+    )
     w.actions += w.engine.on_message(msg.id)
     out = w.hook(p, "PostToolUse", ok=True)
     assert out is not None and f"id={msg.id} " in out.text

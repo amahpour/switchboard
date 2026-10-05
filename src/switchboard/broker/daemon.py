@@ -87,9 +87,7 @@ def _write_pidfile(paths: Paths) -> None:
 
 def _broker_env() -> dict[str, str]:
     return {
-        k: v
-        for k, v in os.environ.items()
-        if k not in _DROP_ENV and not k.startswith(_DROP_ENV_PREFIXES)
+        k: v for k, v in os.environ.items() if k not in _DROP_ENV and not k.startswith(_DROP_ENV_PREFIXES)
     }
 
 
@@ -107,14 +105,18 @@ def web_settings(listen: str, public_url: str) -> WebOrigin | None:
     try:
         ipaddress.IPv4Address(listen)
     except ValueError:
-        raise ValueError(f"--listen must be an IPv4 address, such as 127.0.0.1 or 0.0.0.0 (not {listen!r})") from None
+        raise ValueError(
+            f"--listen must be an IPv4 address, such as 127.0.0.1 or 0.0.0.0 (not {listen!r})"
+        ) from None
     try:
         origin = WebOrigin.parse(public_url) if public_url else None
     except ValueError as e:
         raise ValueError(f"--public-url {public_url!r}: {e}") from None
     if listen != LOOPBACK and origin is None:
-        raise ValueError(f"listening on {listen} needs --public-url: the https:// address browsers use, "
-                         "served by a proxy that terminates TLS")
+        raise ValueError(
+            f"listening on {listen} needs --public-url: the https:// address browsers use, "
+            "served by a proxy that terminates TLS"
+        )
     return origin
 
 
@@ -207,8 +209,9 @@ def run_foreground(
         actual = tcp.getsockname()[1]
         origin = public or WebOrigin.local(actual)
         _write_pidfile(paths)
-        app = create_app(paths, cfg, default_peer_policy(cfg, test_trust_uds), test_mode, port=actual,
-                         web_origin=origin)
+        app = create_app(
+            paths, cfg, default_peer_policy(cfg, test_trust_uds), test_mode, port=actual, web_origin=origin
+        )
         server = uvicorn.Server(
             uvicorn.Config(
                 app,
@@ -321,8 +324,11 @@ def start(
     except RpcError as e:
         if e.code == "forbidden" and "arrived through ssh" in e.message:
             # the SSH rules (DESIGN.md §27.5.7): `switchboard login` over this ssh login fails the same way
-            print("To sign in, run `switchboard login` in a terminal on this machine.\n"
-                  f"No link here: this command {e.message.removeprefix('human.login_link ')}.", file=out)
+            print(
+                "To sign in, run `switchboard login` in a terminal on this machine.\n"
+                f"No link here: this command {e.message.removeprefix('human.login_link ')}.",
+                file=out,
+            )
         elif e.code == "forbidden":
             print("To sign in, run `switchboard login` in your own terminal.", file=out)
         else:
@@ -408,8 +414,15 @@ def start_dialer(paths: Paths, *, test_mode: bool = False, out: Any = None) -> i
     fd = os.open(log_file, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
         # the one spawn site of a machine's dialer: this very command, detached, no shell
-        child = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=fd, stderr=fd, start_new_session=True,
-                                 env=_broker_env(), cwd="/")
+        child = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=fd,
+            stderr=fd,
+            start_new_session=True,
+            env=_broker_env(),
+            cwd="/",
+        )
     finally:
         os.close(fd)
     deadline = time.monotonic() + DIALER_START_WAIT_S
@@ -431,7 +444,9 @@ def start_dialer(paths: Paths, *, test_mode: bool = False, out: Any = None) -> i
         return 1
     state = (st or {}).get("state", "starting")
     reason = (st or {}).get("reason")
-    print(f"switchboard dialer running (pid {child.pid}): {state}{f' ({reason})' if reason else ''}", file=out)
+    print(
+        f"switchboard dialer running (pid {child.pid}): {state}{f' ({reason})' if reason else ''}", file=out
+    )
     return 0
 
 

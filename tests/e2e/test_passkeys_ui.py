@@ -17,16 +17,22 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from playwright.sync_api import Browser, BrowserContext, Page, expect
-
 from conftest import InProcBroker, make_tmp_home, sanitize_env
-from switchboard.broker.auth import WebOrigin
+from playwright.sync_api import Browser, BrowserContext, Page, expect
 from test_web_ui import PHASE_REPORTS, UI
+
+from switchboard.broker.auth import WebOrigin
 
 pytestmark = pytest.mark.e2e
 
-AUTHENTICATOR = {"protocol": "ctap2", "transport": "internal", "hasResidentKey": True, "hasUserVerification": True,
-                 "isUserVerified": True, "automaticPresenceSimulation": True}
+AUTHENTICATOR = {
+    "protocol": "ctap2",
+    "transport": "internal",
+    "hasResidentKey": True,
+    "hasUserVerification": True,
+    "isUserVerified": True,
+    "automaticPresenceSimulation": True,
+}
 
 
 @pytest.fixture(scope="module")
@@ -199,8 +205,9 @@ def test_the_sign_in_page_on_a_phone(ui: UI, hosted: InProcBroker) -> None:
     """After the claim (the test above): the passkey button at phone width, and a cancelled
     ceremony (no authenticator at all) shows its reason and lets you try again."""
     origin = hosted.state.web_origin.origin
-    page = ui.context(viewport={"width": 390, "height": 844}, device_scale_factor=3, is_mobile=True,
-                      has_touch=True).new_page()
+    page = ui.context(
+        viewport={"width": 390, "height": 844}, device_scale_factor=3, is_mobile=True, has_touch=True
+    ).new_page()
     page.goto(origin + "/")
     expect(page.locator("#passkey-btn")).to_be_visible()
     widths = page.evaluate("[document.documentElement.scrollWidth, document.documentElement.clientWidth]")

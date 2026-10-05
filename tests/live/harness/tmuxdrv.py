@@ -51,13 +51,26 @@ class Tmux:
         self.bin = shutil.which("tmux", path=path) or "tmux"
 
     def run(self, *args: str, timeout: float = 15) -> subprocess.CompletedProcess[str]:
-        return subprocess.run([self.bin, "-L", self.sock, *args], env=self.env, capture_output=True,
-                              text=True, timeout=timeout)
+        return subprocess.run(
+            [self.bin, "-L", self.sock, *args], env=self.env, capture_output=True, text=True, timeout=timeout
+        )
 
-    def new_session(self, name: str, cwd: str, env: dict[str, str], argv: list[str],
-                    width: int = 200, height: int = 50) -> None:
-        r = self.run("new-session", "-d", "-s", name, "-x", str(width), "-y", str(height), "-c", cwd,
-                     env_command(env, argv))
+    def new_session(
+        self, name: str, cwd: str, env: dict[str, str], argv: list[str], width: int = 200, height: int = 50
+    ) -> None:
+        r = self.run(
+            "new-session",
+            "-d",
+            "-s",
+            name,
+            "-x",
+            str(width),
+            "-y",
+            str(height),
+            "-c",
+            cwd,
+            env_command(env, argv),
+        )
         if r.returncode != 0:
             raise RuntimeError(f"tmux new-session failed: {r.stderr.strip()}")
         # keep the pane after the program exits, so its last screen can be read

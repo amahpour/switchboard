@@ -12,8 +12,8 @@ import socket
 from pathlib import Path
 
 import pytest
-
 from fakes.fake_link import make_pi_home
+
 from switchboard.paths import Paths
 from switchboard.remote import proto
 from switchboard.remote.config import write_satellite_conf
@@ -23,8 +23,13 @@ KEY = "A" * 43
 
 
 def welcome() -> dict:
-    return proto.welcome(version="0.0.0", link="0123456789abcdef", rooms=["#build"], harnesses=["claude"],
-                         limits={"max_conns": 64, "max_members": 8, "frame_rate": 300, "queue_lines": 5000})
+    return proto.welcome(
+        version="0.0.0",
+        link="0123456789abcdef",
+        rooms=["#build"],
+        harnesses=["claude"],
+        limits={"max_conns": 64, "max_members": 8, "frame_rate": 300, "queue_lines": 5000},
+    )
 
 
 def fds() -> set[int]:
@@ -69,8 +74,14 @@ async def one_session(s: Satellite, *, refuse: str | None = None) -> tuple[str, 
 def test_a_session_touches_no_fds_locks_or_signals_and_a_second_one_follows(tmp_path: Path) -> None:
     home = make_pi_home()
     try:
-        s = Satellite(Paths.from_home(home), "fpga-pi", test_mode=True, sessions_dir=str(home / "claude-sessions"),
-                      harden_state="none", stdio="wss")
+        s = Satellite(
+            Paths.from_home(home),
+            "fpga-pi",
+            test_mode=True,
+            sessions_dir=str(home / "claude-sessions"),
+            harden_state="none",
+            stdio="wss",
+        )
         s.paths.ensure()
         handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
 
@@ -107,14 +118,23 @@ def test_the_start_checks_of_both_paths(tmp_path: Path) -> None:
             why = start_refusal(paths, "fpga-pi", test_mode=False, environ={}, dialer=True)
             assert "dialed over ssh" in (why or "")
             # a home that dials its broker: dialer mode starts without SSH_CONNECTION; the ssh path refuses it
-            write_satellite_conf(paths, "fpga-pi", desktop="sb.example.com", broker_url="https://sb.example.com",
-                                 broker_key=KEY)
+            write_satellite_conf(
+                paths,
+                "fpga-pi",
+                desktop="sb.example.com",
+                broker_url="https://sb.example.com",
+                broker_key=KEY,
+            )
             assert start_refusal(paths, "fpga-pi", test_mode=False, environ={}, dialer=True) is None
             why = start_refusal(paths, "fpga-pi", test_mode=False, environ=ssh, fds=(r, w))
             assert why and "dials its broker" in why
-            assert "names fpga-pi" in (start_refusal(paths, "other-pi", test_mode=False, environ={}, dialer=True) or "")
+            assert "names fpga-pi" in (
+                start_refusal(paths, "other-pi", test_mode=False, environ={}, dialer=True) or ""
+            )
             (home / ".switchboard-test").unlink()
-            assert "marker" in (start_refusal(paths, "fpga-pi", test_mode=True, environ={}, dialer=True) or "")
+            assert "marker" in (
+                start_refusal(paths, "fpga-pi", test_mode=True, environ={}, dialer=True) or ""
+            )
         finally:
             os.close(r)
             os.close(w)
@@ -124,14 +144,25 @@ def test_the_start_checks_of_both_paths(tmp_path: Path) -> None:
         shutil.rmtree(home, ignore_errors=True)
 
 
-@pytest.mark.parametrize("text,why", [
-    ('name = "x-pi"\ntransport = "carrier-pigeon"\n', 'transport must be "ssh" or "wss"'),
-    ('name = "x-pi"\ntransport = "wss"\n', "broker_url must be"),
-    ('name = "x-pi"\ntransport = "wss"\nbroker_url = "https://sb.example.com/path"\n', "broker_url must be"),
-    (f'name = "x-pi"\ntransport = "wss"\nbroker_url = "https://sb.example.com"\nbroker_key = "{KEY[:-1]}"\n',
-     "broker_key must be"),
-    (f'name = "x-pi"\nbroker_url = "https://sb.example.com"\nbroker_key = "{KEY}"\n', 'only for transport = "wss"'),
-])
+@pytest.mark.parametrize(
+    "text,why",
+    [
+        ('name = "x-pi"\ntransport = "carrier-pigeon"\n', 'transport must be "ssh" or "wss"'),
+        ('name = "x-pi"\ntransport = "wss"\n', "broker_url must be"),
+        (
+            'name = "x-pi"\ntransport = "wss"\nbroker_url = "https://sb.example.com/path"\n',
+            "broker_url must be",
+        ),
+        (
+            f'name = "x-pi"\ntransport = "wss"\nbroker_url = "https://sb.example.com"\nbroker_key = "{KEY[:-1]}"\n',
+            "broker_key must be",
+        ),
+        (
+            f'name = "x-pi"\nbroker_url = "https://sb.example.com"\nbroker_key = "{KEY}"\n',
+            'only for transport = "wss"',
+        ),
+    ],
+)
 def test_a_bad_dialing_satellite_toml_is_refused(tmp_path: Path, text: str, why: str) -> None:
     from switchboard.remote.config import RemoteConfigError, read_satellite_conf
 

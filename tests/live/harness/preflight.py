@@ -14,8 +14,9 @@ ALLOWED = (
 
 
 def descendants(root: int) -> list[tuple[int, int, str]]:
-    out = subprocess.run(["/bin/ps", "-A", "-o", "pid=,ppid=,args="], capture_output=True, text=True,
-                         timeout=10).stdout
+    out = subprocess.run(
+        ["/bin/ps", "-A", "-o", "pid=,ppid=,args="], capture_output=True, text=True, timeout=10
+    ).stdout
     procs: list[tuple[int, int, str]] = []
     for line in out.splitlines():
         parts = line.strip().split(None, 2)

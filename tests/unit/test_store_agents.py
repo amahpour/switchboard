@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from conftest import FakeClock
+
 from switchboard import db
 from switchboard.store import Store, StoreError
 
@@ -18,8 +18,9 @@ def store(tmp_path: Path, clock: FakeClock) -> Store:
 
 def setup(store: Store):
     room = store.create_room("#build", "alice", 60, 6)
-    p = store.upsert_participant("test", "test:a", status="busy", agent_pid=10, agent_start=1.0,
-                                 mcp_pid=11, mcp_start=2.0)
+    p = store.upsert_participant(
+        "test", "test:a", status="busy", agent_pid=10, agent_start=1.0, mcp_pid=11, mcp_start=2.0
+    )
     m = store.create_membership(room.id, p.id, "alpha", "hash-a")
     return room, p, m
 
@@ -75,8 +76,10 @@ def test_kick_memory_follows_a_cursor_conversation(store: Store) -> None:
 
 def test_batch_confirm_and_cursor(store: Store) -> None:
     room, p, m = setup(store)
-    ids = [store.insert_message(room.id, sender_name="alice", sender_kind="human", via="web", text=f"t{i}").id
-           for i in range(3)]
+    ids = [
+        store.insert_message(room.id, sender_name="alice", sender_kind="human", via="web", text=f"t{i}").id
+        for i in range(3)
+    ]
     b = store.create_batch(m.id, path="read", kind="pull", items=[(ids[1], True), (ids[2], True)])
     assert store.inflight_offer(m.id)
     with pytest.raises(StoreError):
@@ -94,10 +97,18 @@ def test_confirm_chatter_is_handled_and_stubs_are_notified(store: Store) -> None
     room, p, m = setup(store)
     q = store.upsert_participant("test", "test:b", status="busy")
     mq = store.create_membership(room.id, q.id, "beta", "hash-b")
-    chat = store.insert_message(room.id, sender_name="beta", sender_kind="agent", via="mcp", text="c",
-                                sender_membership_id=mq.id)
-    ment = store.insert_message(room.id, sender_name="beta", sender_kind="agent", via="mcp", text="@alpha",
-                                sender_membership_id=mq.id, mentions=["alpha"])
+    chat = store.insert_message(
+        room.id, sender_name="beta", sender_kind="agent", via="mcp", text="c", sender_membership_id=mq.id
+    )
+    ment = store.insert_message(
+        room.id,
+        sender_name="beta",
+        sender_kind="agent",
+        via="mcp",
+        text="@alpha",
+        sender_membership_id=mq.id,
+        mentions=["alpha"],
+    )
     b = store.create_batch(m.id, path="hook_ctx", kind="priority", items=[(chat.id, True), (ment.id, False)])
     store.confirm_batch(b.id, "ack")
     ds = {d["message_id"]: d for d in store.deliveries(m.id)}

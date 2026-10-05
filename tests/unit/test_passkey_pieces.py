@@ -7,8 +7,8 @@ import hashlib
 import re
 
 import pytest
-
 from conftest import FakeClock
+
 from switchboard.broker.auth import WebOrigin
 from switchboard.broker.passkeys import (
     CEREMONY_TTL_S,
@@ -30,7 +30,11 @@ def test_a_claim_token_is_random_hashed_and_lives_an_hour() -> None:
     ct = ClaimTokens(clock)
     assert not ct.active and not ct.check("anything") and ct.expires_in_s() == 0.0
     tok = ct.mint()
-    assert re.fullmatch(r"[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){3}", tok) and ct.active and ct.issued == 1
+    assert (
+        re.fullmatch(r"[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){3}", tok)
+        and ct.active
+        and ct.issued == 1
+    )
     canon = tok.replace("-", "")
     assert ct._hash == hashlib.sha256(canon.encode()).digest() and canon not in repr(vars(ct))
     assert ct.check(tok) and ct.check(canon.lower()) and ct.check(" ".join(tok.split("-")))
@@ -102,7 +106,11 @@ def test_a_tampered_or_foreign_seal_is_nothing() -> None:
 
     raw = json.dumps({"s": ["not", "a", "dict"], "exp": 1e12}).encode()
     m = hmac.new(s.key, raw, h.sha256).digest()
-    forged = base64.urlsafe_b64encode(raw).decode().rstrip("=") + "." + base64.urlsafe_b64encode(m).decode().rstrip("=")
+    forged = (
+        base64.urlsafe_b64encode(raw).decode().rstrip("=")
+        + "."
+        + base64.urlsafe_b64encode(m).decode().rstrip("=")
+    )
     assert s.unseal(forged) is None
 
 
@@ -117,15 +125,18 @@ def test_used_challenges_are_remembered_until_they_expire() -> None:
 
 
 # ------------------------------------------------------------ availability
-@pytest.mark.parametrize("url,why", [
-    ("https://sb.example.com", None),
-    ("https://sb.example.com:8443", None),
-    ("http://sb.localhost:7419", None),
-    ("http://localhost:7419", None),
-    ("http://sb.test", "not a secure context"),
-    ("http://127.0.0.1:7419", "not a secure context"),
-    ("https://10.0.0.5", "names an IP address"),
-])
+@pytest.mark.parametrize(
+    "url,why",
+    [
+        ("https://sb.example.com", None),
+        ("https://sb.example.com:8443", None),
+        ("http://sb.localhost:7419", None),
+        ("http://localhost:7419", None),
+        ("http://sb.test", "not a secure context"),
+        ("http://127.0.0.1:7419", "not a secure context"),
+        ("https://10.0.0.5", "names an IP address"),
+    ],
+)
 def test_where_passkeys_can_work(url: str, why: str | None) -> None:
     got = passkeys_unavailable(WebOrigin.parse(url))
     if why is None:
@@ -153,5 +164,7 @@ def test_passkey_names_are_one_printable_line() -> None:
     assert clean_name("MacBook Pro") == "MacBook Pro"
     assert clean_name("  two   words \n\t x") == "two words x"
     assert clean_name("a" * 100) == "a" * 40
-    assert clean_name("\x00\x07") == "passkey" and clean_name(None) == "passkey" and clean_name(5) == "passkey"
+    assert (
+        clean_name("\x00\x07") == "passkey" and clean_name(None) == "passkey" and clean_name(5) == "passkey"
+    )
     assert clean_name("", "backup") == "backup"

@@ -47,20 +47,32 @@ def test_check_test_mode(tmp_home: Path, tmp_path: Path, monkeypatch: pytest.Mon
     (tmp_home / ".switchboard-test").unlink()
     assert "marker" in (check_test_mode(p, home_given=True) or "")
     outside = Path(os.path.expanduser("~")) / "not-tmp"
-    if not str(os.path.realpath(outside)).startswith(("/tmp", "/private/tmp", "/var/folders", "/private/var/folders")):
+    if not str(os.path.realpath(outside)).startswith(
+        ("/tmp", "/private/tmp", "/var/folders", "/private/var/folders")
+    ):
         assert "temp" in (check_test_mode(Paths.from_home(outside), home_given=True) or "")
 
 
-@pytest.mark.parametrize("message,want", [
-    ("human.login_link arrived through ssh or another remote login (sshd above the caller); human commands"
-     " must come from a terminal on this machine, or set [security] allow_ssh_cli = true",
-     ["run `switchboard login` in a terminal on this machine.",
-      "No link here: this command arrived through ssh or another remote login (sshd above the caller)"]),
-    ("login links are only issued to a terminal you typed in: run `switchboard login` there",
-     ["To sign in, run `switchboard login` in your own terminal."]),
-])
-def test_start_says_why_it_gave_no_login_link(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-                                              message: str, want: list[str]) -> None:
+@pytest.mark.parametrize(
+    "message,want",
+    [
+        (
+            "human.login_link arrived through ssh or another remote login (sshd above the caller); human commands"
+            " must come from a terminal on this machine, or set [security] allow_ssh_cli = true",
+            [
+                "run `switchboard login` in a terminal on this machine.",
+                "No link here: this command arrived through ssh or another remote login (sshd above the caller)",
+            ],
+        ),
+        (
+            "login links are only issued to a terminal you typed in: run `switchboard login` there",
+            ["To sign in, run `switchboard login` in your own terminal."],
+        ),
+    ],
+)
+def test_start_says_why_it_gave_no_login_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, message: str, want: list[str]
+) -> None:
     """`switchboard start` asks for a login link right after the broker is up; when the
     SSH rules (DESIGN.md §27.5.7) refuse it, the hint names the reason instead of
     sending the user to `switchboard login` over the same ssh login."""
@@ -114,9 +126,17 @@ def _ts(s: str) -> float:
 
 
 COUNTS = {"rooms": 1, "messages": 412, "memberships": 3, "deliveries": 1830, "batches": 57, "events": 960}
-CLOSED_PLAN = {"room_id": 7, "name": "#build~closed-7", "display": "#build", "state": "closed",
-               "created_at": _ts("2026-09-28 09:00"), "closed_at": _ts("2026-09-28 14:02"), "closed_by": "alice",
-               "counts": COUNTS, "backup": "/h/switchboard.db.delete-build-7.bak"}
+CLOSED_PLAN = {
+    "room_id": 7,
+    "name": "#build~closed-7",
+    "display": "#build",
+    "state": "closed",
+    "created_at": _ts("2026-09-28 09:00"),
+    "closed_at": _ts("2026-09-28 14:02"),
+    "closed_by": "alice",
+    "counts": COUNTS,
+    "backup": "/h/switchboard.db.delete-build-7.bak",
+}
 
 
 class Calls:
@@ -127,8 +147,15 @@ class Calls:
         def fake(args: object, method: str, params: dict | None = None, timeout: float = 10.0) -> object:
             params = params or {}
             self.calls.append((method, params, timeout))
-            key = method + (":plan" if params.get("dry_run") else ":apply" if "room_id" in params
-                            else ":closed" if params.get("closed") else "")
+            key = method + (
+                ":plan"
+                if params.get("dry_run")
+                else ":apply"
+                if "room_id" in params
+                else ":closed"
+                if params.get("closed")
+                else ""
+            )
             return self.answers[key]
 
         monkeypatch.setattr(cli, "_call", fake)
@@ -136,7 +163,8 @@ class Calls:
 
 
 def test_rooms_delete_prints_the_plan_and_needs_a_terminal_or_yes(
-        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     c = Calls(monkeypatch, {"room.delete:plan": CLOSED_PLAN})
     assert cli.main(["rooms", "delete", "#build"]) == 1  # pytest's stdin is no terminal
     out, err = capsys.readouterr()
@@ -146,34 +174,59 @@ def test_rooms_delete_prints_the_plan_and_needs_a_terminal_or_yes(
         "  removes 1 room, 412 message(s), 3 membership(s), 1830 delivery row(s), 57 batch(es), 960 event(s)\n"
         "  a checked backup of the whole database is written first: /h/switchboard.db.delete-build-7.bak\n"
         "  this can't be undone, except by restoring that backup\n"
-        "not applied\n")
+        "not applied\n"
+    )
     assert "--yes" in err
     assert c.calls == [("room.delete", {"room": "#build", "dry_run": True}, 30.0)]
 
 
-def test_rooms_delete_yes_applies_the_plans_room_id(monkeypatch: pytest.MonkeyPatch,
-                                                    capsys: pytest.CaptureFixture[str]) -> None:
-    plan = {**CLOSED_PLAN, "room_id": 12, "name": "#scratch", "display": "#scratch", "state": "open",
-            "closed_at": None, "closed_by": None, "created_at": _ts("2026-09-28 13:00"),
-            "backup": "/h/switchboard.db.delete-scratch-12.bak"}
+def test_rooms_delete_yes_applies_the_plans_room_id(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    plan = {
+        **CLOSED_PLAN,
+        "room_id": 12,
+        "name": "#scratch",
+        "display": "#scratch",
+        "state": "open",
+        "closed_at": None,
+        "closed_by": None,
+        "created_at": _ts("2026-09-28 13:00"),
+        "backup": "/h/switchboard.db.delete-scratch-12.bak",
+    }
     removed = {**COUNTS, "messages": 2, "memberships": 0, "deliveries": 0, "batches": 0, "events": 1}
-    c = Calls(monkeypatch, {"room.delete:plan": plan, "room.delete:apply": {
-        "room_id": 12, "name": "#scratch", "display": "#scratch", "removed": removed,
-        "backup": "/h/switchboard.db.delete-scratch-12.bak"}})
+    c = Calls(
+        monkeypatch,
+        {
+            "room.delete:plan": plan,
+            "room.delete:apply": {
+                "room_id": 12,
+                "name": "#scratch",
+                "display": "#scratch",
+                "removed": removed,
+                "backup": "/h/switchboard.db.delete-scratch-12.bak",
+            },
+        },
+    )
     assert cli.main(["rooms", "delete", "scratch", "--yes"]) == 0
     lines = capsys.readouterr().out.splitlines()
     assert lines[1] == "  #scratch: open, no agents, created 2026-09-28 13:00"
     assert lines[-2:] == [
         "deleted #scratch: 1 room, 2 message(s), 0 membership(s), 0 delivery row(s), 0 batch(es), 1 event(s)",
         "backup: /h/switchboard.db.delete-scratch-12.bak (0600, checked); it still holds the room:"
-        " remove it once you no longer need it"]
+        " remove it once you no longer need it",
+    ]
     # pinned to the room the plan showed: its id, full name and creation time
-    assert c.calls[1] == ("room.delete", {"room": "scratch", "room_id": 12, "name": "#scratch",
-                                          "created_at": plan["created_at"]}, 120.0)
+    assert c.calls[1] == (
+        "room.delete",
+        {"room": "scratch", "room_id": 12, "name": "#scratch", "created_at": plan["created_at"]},
+        120.0,
+    )
 
 
-def test_rooms_delete_on_a_satellite_home(monkeypatch: pytest.MonkeyPatch,
-                                          capsys: pytest.CaptureFixture[str]) -> None:
+def test_rooms_delete_on_a_satellite_home(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     c = Calls(monkeypatch, {})
     monkeypatch.setattr(cli, "_satellite_home", lambda args: True)
     monkeypatch.setattr(cli, "_desktop", lambda args: "desk")
@@ -182,15 +235,26 @@ def test_rooms_delete_on_a_satellite_home(monkeypatch: pytest.MonkeyPatch,
     assert c.calls == []
 
 
-def test_rooms_lists_the_closed_count_and_the_closed_rooms(monkeypatch: pytest.MonkeyPatch,
-                                                           capsys: pytest.CaptureFixture[str]) -> None:
+def test_rooms_lists_the_closed_count_and_the_closed_rooms(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     import json
 
     open_room = {"id": 3, "name": "#fpga", "members": 2, "settings": {"paused": True}}
-    closed_row = {"id": 7, "name": "#build~closed-7", "display": "#build", "created_at": 0.0,
-                  "closed_at": _ts("2026-09-28 14:02"), "closed_by": "alice", "messages": 412, "reopenable": True}
-    answers: dict[str, object] = {"room.list": {"rooms": [], "closed": 2},
-                                  "room.list:closed": {"rooms": [closed_row], "closed": 1}}
+    closed_row = {
+        "id": 7,
+        "name": "#build~closed-7",
+        "display": "#build",
+        "created_at": 0.0,
+        "closed_at": _ts("2026-09-28 14:02"),
+        "closed_by": "alice",
+        "messages": 412,
+        "reopenable": True,
+    }
+    answers: dict[str, object] = {
+        "room.list": {"rooms": [], "closed": 2},
+        "room.list:closed": {"rooms": [closed_row], "closed": 1},
+    }
     Calls(monkeypatch, answers)
     assert cli.main(["rooms"]) == 0
     assert capsys.readouterr().out == "no open rooms (2 closed: switchboard rooms --closed)\n"
@@ -201,25 +265,45 @@ def test_rooms_lists_the_closed_count_and_the_closed_rooms(monkeypatch: pytest.M
     assert cli.main(["rooms"]) == 0
     assert capsys.readouterr().out == "no rooms yet (create one in the web UI)\n"
     assert cli.main(["rooms", "--closed"]) == 0
-    assert capsys.readouterr().out == "#build~closed-7  was #build, closed 2026-09-28 14:02 by alice, 412 message(s)\n"
+    assert (
+        capsys.readouterr().out
+        == "#build~closed-7  was #build, closed 2026-09-28 14:02 by alice, 412 message(s)\n"
+    )
     assert cli.main(["rooms", "--closed", "--json"]) == 0
     assert json.loads(capsys.readouterr().out) == [closed_row]
-    answers["room.list:closed"] = {"rooms": [{**closed_row, "closed_at": None, "closed_by": None}], "closed": 1}
+    answers["room.list:closed"] = {
+        "rooms": [{**closed_row, "closed_at": None, "closed_by": None}],
+        "closed": 1,
+    }
     assert cli.main(["rooms", "--closed"]) == 0
-    assert capsys.readouterr().out == ("#build~closed-7  was #build, closed at an unknown time by ?,"
-                                       " 412 message(s)\n")
+    assert capsys.readouterr().out == (
+        "#build~closed-7  was #build, closed at an unknown time by ?, 412 message(s)\n"
+    )
     answers["room.list:closed"] = {"rooms": [], "closed": 0}
     assert cli.main(["rooms", "--closed"]) == 0
     assert capsys.readouterr().out == "no closed rooms\n"
 
 
-def test_status_shows_the_closed_rooms(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    st: dict[str, object] = {"version": "0.3.0", "pid": 1, "uptime_s": 60, "url": "http://127.0.0.1:7419/",
-                             "home": "/h", "hooks": "ok", "codex_link": "off", "rooms": [], "closed_rooms": 2}
+def test_status_shows_the_closed_rooms(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    st: dict[str, object] = {
+        "version": "0.3.0",
+        "pid": 1,
+        "uptime_s": 60,
+        "url": "http://127.0.0.1:7419/",
+        "home": "/h",
+        "hooks": "ok",
+        "codex_link": "off",
+        "rooms": [],
+        "closed_rooms": 2,
+    }
     Calls(monkeypatch, {"sys.status": st})
     assert cli.main(["status"]) == 0
     out = capsys.readouterr().out
-    assert "  rooms   none open\n" in out and out.endswith("  closed  2 room(s) (switchboard rooms --closed)\n")
+    assert "  rooms   none open\n" in out and out.endswith(
+        "  closed  2 room(s) (switchboard rooms --closed)\n"
+    )
     st["closed_rooms"] = 0
     assert cli.main(["status"]) == 0
     out = capsys.readouterr().out

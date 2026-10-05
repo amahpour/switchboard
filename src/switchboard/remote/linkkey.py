@@ -111,8 +111,9 @@ def make_key(path: Path) -> Ed25519PrivateKey:
     """A new key at ``path`` (0600, its directory 0700), replacing any key there."""
     ensure_private_dir(path.parent)
     key = Ed25519PrivateKey.generate()
-    pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
-                            serialization.NoEncryption())
+    pem = key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+    )
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
         os.unlink(tmp)

@@ -148,8 +148,9 @@ class WebOrigin:
         if port == 0:
             raise ValueError("port 0 is not an address browsers can use")
         if u.scheme == "http" and not _local_test_host(name):
-            raise ValueError("plain http:// is only for a local test host; use https:// behind a proxy that "
-                             "terminates TLS")
+            raise ValueError(
+                "plain http:// is only for a local test host; use https:// behind a proxy that terminates TLS"
+            )
         default = 443 if u.scheme == "https" else 80
         return cls(u.scheme, name if port in (None, default) else f"{name}:{port}", True)
 
@@ -260,16 +261,22 @@ class HostOriginGuard:
             await self.app(scope, receive, send)
             return
         host = _header(scope, b"host")
-        health = (kind == "http" and scope.get("path") in OPEN_PATHS
-                  and scope.get("method", "GET").upper() in ("GET", "HEAD"))
+        health = (
+            kind == "http"
+            and scope.get("path") in OPEN_PATHS
+            and scope.get("method", "GET").upper() in ("GET", "HEAD")
+        )
         if host != self.host and not health:
             if kind == "http":
                 await _plain(send, 421, f"open {self.origin}/\n")
             else:
                 await _refuse_ws(scope, send, 421, f"open {self.origin}/\n")  # -> 403
             return
-        if kind == "http" and scope.get("method", "GET").upper() in UNSAFE_METHODS \
-                and scope.get("path") not in CODE_PATHS:
+        if (
+            kind == "http"
+            and scope.get("method", "GET").upper() in UNSAFE_METHODS
+            and scope.get("path") not in CODE_PATHS
+        ):
             if _header(scope, b"origin") != self.origin or _header(scope, b"x-switchboard") != "1":
                 await _json(send, 403, {"error": "forbidden", "message": "bad origin"})
                 return

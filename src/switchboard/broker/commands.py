@@ -207,15 +207,21 @@ def _parse_catchup(text: str, raw: str) -> Command:
         if not topic:
             raise CommandError("bad_request", "/catchup: the topic is empty")
         if len(topic) > catchup.TOPIC_MAX:
-            raise CommandError("bad_request", f"/catchup: the topic is too long ({len(topic)} characters;"
-                                              f" at most {catchup.TOPIC_MAX})")
-        return Command(name="catchup", args=(agent, "topic", topic, catchup.clean_text(after[end + 1:])),
-                       raw=raw)
+            raise CommandError(
+                "bad_request",
+                f"/catchup: the topic is too long ({len(topic)} characters; at most {catchup.TOPIC_MAX})",
+            )
+        return Command(
+            name="catchup", args=(agent, "topic", topic, catchup.clean_text(after[end + 1 :])), raw=raw
+        )
     if after[0] in _SINGLE_QUOTES:
         inner = after[1:]
         end = next((i for i, ch in enumerate(inner) if ch in _SINGLE_QUOTES), len(inner))
-        raise CommandError("bad_request", f'/catchup: a topic goes in double quotes: /catchup {agent} on'
-                                          f' "{catchup.clean_text(inner[:end])}"')
+        raise CommandError(
+            "bad_request",
+            f"/catchup: a topic goes in double quotes: /catchup {agent} on"
+            f' "{catchup.clean_text(inner[:end])}"',
+        )
     parts = after.split(None, 1)
     member = _screen_name("catchup", parts[0])
     if member == agent:
@@ -277,11 +283,15 @@ def hops_state(room: Room) -> str:
 
 def _hops_show(room: Room, human: str) -> str:
     if room.hop_limit == 0:
-        text = (f"{room.name}: {hops_state(room)} (agents may message each other without limit;"
-                " /hops <n> turns it back on)")
+        text = (
+            f"{room.name}: {hops_state(room)} (agents may message each other without limit;"
+            " /hops <n> turns it back on)"
+        )
     else:
-        text = (f"{room.name}: {hops_state(room)} (the room pauses after {room.hop_limit} agent"
-                f" messages in a row with none from {human})")
+        text = (
+            f"{room.name}: {hops_state(room)} (the room pauses after {room.hop_limit} agent"
+            f" messages in a row with none from {human})"
+        )
     return text + _hops_pause_hint(room)
 
 
@@ -302,18 +312,25 @@ def _hops_set(room: Room, n: int, svc: "RoomService") -> Result:
     """Set the room's hop limit. It never un-pauses: a room the loop guard paused needs /resume."""
     old = room.hop_limit
     if n == old:
-        return Result(True, f"{room.name}: the hop limit is already {n}; {hops_state(room)}"
-                            + _hops_pause_hint(room))
+        return Result(
+            True, f"{room.name}: the hop limit is already {n}; {hops_state(room)}" + _hops_pause_hint(room)
+        )
     room = svc.store.set_hop_limit(room.id, n)
     guard_paused = room.paused and room.paused_reason == "loop guard"
     if n == 0:
         head = f"loop guard off (hop limit 0, was {old}); agents may message each other without limit"
         notice = f"turned the loop guard off (hop limit was {old})"
-        tail = ("; the room is still paused by the loop guard: /resume to continue" if guard_paused
-                else _hops_pause_hint(room))
+        tail = (
+            "; the room is still paused by the loop guard: /resume to continue"
+            if guard_paused
+            else _hops_pause_hint(room)
+        )
     else:
         if old == 0:
-            head, notice = f"loop guard on, hop limit {n}", f"turned the loop guard on with a hop limit of {n}"
+            head, notice = (
+                f"loop guard on, hop limit {n}",
+                f"turned the loop guard on with a hop limit of {n}",
+            )
         else:
             head, notice = f"hop limit set to {n} (was {old})", f"set the hop limit to {n} (was {old})"
         if guard_paused and room.hop_count < n:
@@ -354,25 +371,37 @@ def _catchup(cmd: Command, room: Room, svc: "RoomService") -> Result:
     else:
         subjects = [m for m in members if m.membership_id != agent.membership_id]
         if not subjects:
-            raise CommandError("bad_request", f"/{cmd.name}: {agent.name} is the only agent in {room.name}:"
-                                              " there is nobody to catch up on")
+            raise CommandError(
+                "bad_request",
+                f"/{cmd.name}: {agent.name} is the only agent in {room.name}: there is nobody to catch up on",
+            )
     since = catchup.window_start(mode, svc.clock.now(), agent.joined_at)
-    handles = [catchup.handle(m, svc.store.get_participant(m.participant_id), svc.cfg, agent.host)
-               for m in subjects]
+    handles = [
+        catchup.handle(m, svc.store.get_participant(m.participant_id), svc.cfg, agent.host) for m in subjects
+    ]
     topic = target if mode == "topic" else ""
     limit = svc.cfg.delivery.max_msg_chars
     base = catchup.request_text(agent.name, mode, handles, since=since, max_chars=limit, topic=topic, note="")
-    text = catchup.request_text(agent.name, mode, handles, since=since, max_chars=limit, topic=topic, note=note)
+    text = catchup.request_text(
+        agent.name, mode, handles, since=since, max_chars=limit, topic=topic, note=note
+    )
     if len(base) > limit:
-        raise CommandError("bad_request", f"/{cmd.name}: its request needs {len(base)} characters, but"
-                                          f" [delivery] max_msg_chars is {limit}")
+        raise CommandError(
+            "bad_request",
+            f"/{cmd.name}: its request needs {len(base)} characters, but [delivery] max_msg_chars is {limit}",
+        )
     if len(text) > limit:
         fits = limit - (len(text) - len(note))
-        raise CommandError("bad_request", f"/{cmd.name}: the note is too long ({len(note)} characters;"
-                                          f" at most {fits} fit in one message)")
+        raise CommandError(
+            "bad_request",
+            f"/{cmd.name}: the note is too long ({len(note)} characters; at most {fits} fit in one message)",
+        )
     lines: list[str] = []
-    what = {"member": f"{subjects[0].name}'s work", "topic": f'"{topic}" across {len(handles)} session(s)',
-            "room": "what the room did"}[mode]
+    what = {
+        "member": f"{subjects[0].name}'s work",
+        "topic": f'"{topic}" across {len(handles)} session(s)',
+        "room": "what the room did",
+    }[mode]
     lines.append(f"asked {agent.name} to catch up on {what} since {catchup.when(since)}; it got:")
     lines += [f"  {h.line()}" + (f" ({h.why})" if h.why else "") for h in handles]
     for n in parse_mentions(f"{topic} {note}", [m.name for m in subjects]):
@@ -385,9 +414,12 @@ def _catchup(cmd: Command, room: Room, svc: "RoomService") -> Result:
     warn = catchup.approvals_warning(agent.name, agent.approval_mode)
     if warn:
         lines.append(warn)
-    data: dict[str, Any] = {"agent": agent.membership_id, "mode": mode,
-                  "subjects": [m.membership_id for m in subjects],
-                  "with_id": sum(1 for h in handles if h.sid)}
+    data: dict[str, Any] = {
+        "agent": agent.membership_id,
+        "mode": mode,
+        "subjects": [m.membership_id for m in subjects],
+        "with_id": sum(1 for h in handles if h.sid),
+    }
     return Result(
         True,
         "\n".join(lines),
@@ -433,7 +465,9 @@ def apply(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
         store.set_paused(room.id, False)
         return Result(
             True,
-            f"{room.name} resumed; loop guard reset" if was else f"{room.name} was not paused; loop guard reset",
+            f"{room.name} resumed; loop guard reset"
+            if was
+            else f"{room.name} was not paused; loop guard reset",
             notice="resumed the room; loop guard reset",
             room_changed=True,
             event="resume",

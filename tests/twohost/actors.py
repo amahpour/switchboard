@@ -53,8 +53,10 @@ FAKE_HARNESS = TESTS / "fakes" / "fake_harness.py"
 PAYLOADS = TESTS / "fixtures" / "payloads" / "claude"
 
 # docs/DEMO-FPGA.md §5, DESIGN.md §27.9
-ART_RE = re.compile(r"artifact: (?P<rel>[A-Za-z0-9_./-]+) sha256:(?P<sha>[0-9a-f]{64}) size:(?P<size>\d+)"
-                    r" board:(?P<board>[A-Za-z0-9_.-]+)(?: via:(?P<via>push|pull))?")
+ART_RE = re.compile(
+    r"artifact: (?P<rel>[A-Za-z0-9_./-]+) sha256:(?P<sha>[0-9a-f]{64}) size:(?P<size>\d+)"
+    r" board:(?P<board>[A-Za-z0-9_.-]+)(?: via:(?P<via>push|pull))?"
+)
 ITEM_RE = re.compile(r"^- id=(?P<id>\d+) .*?from=(?P<from>\S+) .*?text=(?P<text>\".*\")\s*$", re.M)
 UART_RE = re.compile(r"^(PASS|FAIL) (\d+)/(\d+)")
 ID_RE = re.compile(r"^- id=(\d+) ", re.M)  # every item, a "not shown here" stub included
@@ -77,16 +79,23 @@ def watch_inbox(c: "StandInClaude", stop: threading.Event) -> None:
         frames = c.inbox.frames()
         for _conn, frame in frames[seen:]:
             body = frame["message"]["content"]
-            emit(ev="inbox", t=time.time(), head=body.splitlines()[0][:200] if body else "",
-                 ids=[int(x) for x in ID_RE.findall(body)])
+            emit(
+                ev="inbox",
+                t=time.time(),
+                head=body.splitlines()[0][:200] if body else "",
+                ids=[int(x) for x in ID_RE.findall(body)],
+            )
         seen = len(frames)
         time.sleep(0.05)
 
 
 def base_env(**extra: str) -> dict[str, str]:
     """A clean child env: no harness variables from whoever started us (§0)."""
-    env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "USER",
-                                                           "LOGNAME", "SHELL", "SWITCHBOARD_TEST")}
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k in ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "USER", "LOGNAME", "SHELL", "SWITCHBOARD_TEST")
+    }
     env.setdefault("LANG", "C.UTF-8")
     env.update(extra)
     return env
@@ -130,7 +139,7 @@ class Bench:
         facts: dict[str, Any] = {"rel": rel, "sha256": want}
         # docs/DEMO-FPGA.md §5's bench rule: relative, and no part starting with a dot
         if rel.startswith("/") or any(not p or p.startswith(".") for p in rel.split("/")):
-            return f"result: {want[:12]} verify=fail note=\"bad path\"", facts
+            return f'result: {want[:12]} verify=fail note="bad path"', facts
         pull = "skip"
         if m.group("via") == "pull":
             pull = "ok" if self.pull(rel) else "fail"
@@ -146,19 +155,38 @@ class Bench:
             return f"result: {want[:12]} pull={pull} verify=fail flash=skip uart=skip t=0s", facts
         if self.before_flash is not None:
             self.before_flash()
-        fl = subprocess.run(["openFPGALoader", "-b", self.a.board, str(path)], capture_output=True, text=True,
-                            timeout=60, env=base_env())
+        fl = subprocess.run(
+            ["openFPGALoader", "-b", self.a.board, str(path)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=base_env(),
+        )
         flash = "ok" if fl.returncode == 0 else "fail"
         facts["flash_out"] = fl.stdout.strip().splitlines()[-1:] + fl.stderr.strip().splitlines()[-1:]
         uart, uart_lines = "skip", []
         if flash == "ok":
-            ut = subprocess.run([sys.executable if self.a.uart_python is None else self.a.uart_python,
-                                 os.path.expanduser(self.a.uart_test), os.path.expanduser(self.a.tty),
-                                 str(self.a.baud)], capture_output=True, text=True, timeout=60, env=base_env())
+            ut = subprocess.run(
+                [
+                    sys.executable if self.a.uart_python is None else self.a.uart_python,
+                    os.path.expanduser(self.a.uart_test),
+                    os.path.expanduser(self.a.tty),
+                    str(self.a.baud),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env=base_env(),
+            )
             uart_lines = ut.stdout.strip().splitlines()
             v = UART_RE.match(uart_lines[0]) if uart_lines else None
-            uart = (f"pass({v.group(2)}/{v.group(3)})" if v and v.group(1) == "PASS"
-                    else f"fail({v.group(2)}/{v.group(3)})" if v else "fail")
+            uart = (
+                f"pass({v.group(2)}/{v.group(3)})"
+                if v and v.group(1) == "PASS"
+                else f"fail({v.group(2)}/{v.group(3)})"
+                if v
+                else "fail"
+            )
         dt = time.monotonic() - t0
         text = f"result: {got[:12]} pull={pull} verify=ok flash={flash} uart={uart} t={dt:.0f}s"
         if uart_lines[1:]:
@@ -173,8 +201,13 @@ class Bench:
             return False
         dest = self.drop / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
-        r = subprocess.run(["rsync", "-t", "-e", self.a.pull_ssh, f"{self.a.pull_src}:{rel}", str(dest)],
-                           capture_output=True, text=True, timeout=60, env=base_env())
+        r = subprocess.run(
+            ["rsync", "-t", "-e", self.a.pull_ssh, f"{self.a.pull_src}:{rel}", str(dest)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=base_env(),
+        )
         emit(ev="pull", rc=r.returncode, err=r.stderr.strip()[-300:])
         return r.returncode == 0
 
@@ -219,11 +252,17 @@ class StandInClaude:
         self.inbox_path = str(self.dir / "inbox.sock")
         self.inbox = FakeInbox(self.inbox_path)
         self.sid = str(uuid.uuid4())
-        env = base_env(YK_FAKE_HOME=home, YK_FAKE_SESSIONS=sessions, CLAUDECODE="1",
-                       CLAUDE_CODE_MESSAGING_SOCKET=self.inbox_path,
-                       CLAUDE_CODE_MESSAGING_TOKEN=secrets.token_hex(16), CLAUDE_CODE_SESSION_ID=self.sid)
-        self.p = subprocess.Popen([sys.executable, str(exe)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                  env=env, text=True)
+        env = base_env(
+            YK_FAKE_HOME=home,
+            YK_FAKE_SESSIONS=sessions,
+            CLAUDECODE="1",
+            CLAUDE_CODE_MESSAGING_SOCKET=self.inbox_path,
+            CLAUDE_CODE_MESSAGING_TOKEN=secrets.token_hex(16),
+            CLAUDE_CODE_SESSION_ID=self.sid,
+        )
+        self.p = subprocess.Popen(
+            [sys.executable, str(exe)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env, text=True
+        )
         hello = self.recv()
         self.pid = hello["pid"]
 
@@ -245,7 +284,9 @@ class StandInClaude:
 
     def hook(self, name: str, **over: Any) -> str:
         payload = fixture(name, self.sid, **over)
-        r = self.send({"op": "hook", "command": self._hook_command(payload["hook_event_name"]), "payload": payload})
+        r = self.send(
+            {"op": "hook", "command": self._hook_command(payload["hook_event_name"]), "payload": payload}
+        )
         return r.get("stdout", "")
 
     def set_registry(self, status: str) -> None:
@@ -283,6 +324,7 @@ def bench_inbox(a: argparse.Namespace) -> int:
     work = Bench(a)
     c = StandInClaude(a.home, os.path.expanduser(a.sessions) if a.sessions else default_sessions(a.home))
     if a.hold_s > 0:
+
         def ask_to_flash() -> None:
             """Claude asks before running openFPGALoader: its registry says ``waiting`` while
             the prompt is open (the broker holds deliveries); the owner approves after
@@ -292,12 +334,14 @@ def bench_inbox(a: argparse.Namespace) -> int:
             time.sleep(a.hold_s)
             c.set_registry("busy")
             emit(ev="approved", t=time.time())
+
         work.before_flash = ask_to_flash
     try:
         j = c.tool("join", room=a.room, screen_name=a.name)
         emit(ev="joined", ok=bool(j.get("ok")), tier=j.get("tier"), pid=c.pid, error=j.get("error"))
         if not j.get("ok"):
             return 1
+
         def hook(name: str, **over: Any) -> list[dict[str, Any]]:
             """Run a hook; what it hands the session mid-turn (``additionalContext``: messages
             that arrived while it was busy) is read as Claude would read it."""
@@ -308,8 +352,12 @@ def bench_inbox(a: argparse.Namespace) -> int:
                 ctx = json.loads(out).get("hookSpecificOutput", {}).get("additionalContext", "")
             except (ValueError, AttributeError):
                 return []
-            emit(ev="context", hook=name, head=ctx.splitlines()[0][:200] if ctx else "",
-                 ids=[int(x) for x in ID_RE.findall(ctx)])
+            emit(
+                ev="context",
+                hook=name,
+                head=ctx.splitlines()[0][:200] if ctx else "",
+                ids=[int(x) for x in ID_RE.findall(ctx)],
+            )
             got = items(ctx)
             if "not shown here" in ctx:
                 got += items(c.tool("read", room=a.room).get("text", ""))
@@ -332,8 +380,13 @@ def bench_inbox(a: argparse.Namespace) -> int:
             # Claude starts a turn from the frame: UserPromptSubmit carries its batch token
             pending = hook("UserPromptSubmit", prompt=body)
             c.set_registry("busy")
-            emit(ev="woken", via="inbox", t=time.time(), head=body.splitlines()[0][:200],
-                 ids=[int(x) for x in ID_RE.findall(body)])
+            emit(
+                ev="woken",
+                via="inbox",
+                t=time.time(),
+                head=body.splitlines()[0][:200],
+                ids=[int(x) for x in ID_RE.findall(body)],
+            )
             pending += items(body)
             pending += items(c.tool("read", room=a.room).get("text", ""))
             pending += hook("PostToolUse_mcp")
@@ -363,8 +416,9 @@ async def bench_wait(a: argparse.Namespace) -> int:
 
     stop = stdin_closed()
     work = Bench(a)
-    params = StdioServerParameters(command=sys.executable, args=["-I", "-m", "switchboard", "mcp", "--home", a.home],
-                                   env=base_env())
+    params = StdioServerParameters(
+        command=sys.executable, args=["-I", "-m", "switchboard", "mcp", "--home", a.home], env=base_env()
+    )
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w, client_info=mt.Implementation(name="bench-standin", version="1")) as s:
             await s.initialize()
@@ -445,7 +499,9 @@ def rpc(a: argparse.Namespace) -> int:
     from switchboard.paths import Paths
 
     try:
-        emit(ok=True, result=call_sync(Paths.from_home(a.home).sock, a.method, json.loads(a.params), a.timeout))
+        emit(
+            ok=True, result=call_sync(Paths.from_home(a.home).sock, a.method, json.loads(a.params), a.timeout)
+        )
     except RpcError as e:
         emit(ok=False, code=e.code, message=str(e))
         return 1
@@ -471,8 +527,12 @@ def main() -> int:
     b.add_argument("--pull-ssh", help="the ssh command rsync uses for a pull (-e)")
     b.add_argument("--jobs", type=int, default=0, help="stop after this many results (0: until stdin ends)")
     b.add_argument("--wait-s", type=int, default=50)
-    b.add_argument("--hold-s", type=float, default=0.0,
-                   help="inbox mode: an approval prompt before each flash, open this long (the registry says waiting)")
+    b.add_argument(
+        "--hold-s",
+        type=float,
+        default=0.0,
+        help="inbox mode: an approval prompt before each flash, open this long (the registry says waiting)",
+    )
     g = sub.add_parser("agent")
     g.add_argument("--home", required=True)
     g.add_argument("--room", default="#fpga")

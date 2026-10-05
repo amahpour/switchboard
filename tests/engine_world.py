@@ -21,21 +21,39 @@ class World:
         self.clock = clock
         self.cfg = cfg or Config(human_name="alice")
         self.store = Store(db.open_db(tmp_path / "y.db"), clock)
-        self.engine = Engine(self.store, clock, self.cfg, build_adapters(self.cfg), SinkRegistry(),
-                             key=KEY, test_mode=True)
+        self.engine = Engine(
+            self.store, clock, self.cfg, build_adapters(self.cfg), SinkRegistry(), key=KEY, test_mode=True
+        )
         d = self.cfg.delivery
         self.room = self.store.create_room("#build", "alice", d.budget_per_hour, d.hop_limit)
         self._pid = 50000
         self.actions: list[Action] = []
 
     # ------------------------------------------------------------ setup
-    def agent(self, name: str, *, harness: str = "test", status: str = "busy", hooks: bool = False,
-              ack: str = "next_call", room_id: int | None = None, host: str = "") -> tuple[Participant, Membership]:
+    def agent(
+        self,
+        name: str,
+        *,
+        harness: str = "test",
+        status: str = "busy",
+        hooks: bool = False,
+        ack: str = "next_call",
+        room_id: int | None = None,
+        host: str = "",
+    ) -> tuple[Participant, Membership]:
         """A joined participant; ``host`` names a remote host (its pids are pids there)."""
         self._pid += 1
         p = self.store.upsert_participant(
-            harness, session_key(harness, host, name), status=status, agent_pid=self._pid, agent_start=1.0,
-            mcp_pid=self._pid + 100000, mcp_start=2.0, tier="mcp-only", session_id=f"sid-{name}", host=host,
+            harness,
+            session_key(harness, host, name),
+            status=status,
+            agent_pid=self._pid,
+            agent_start=1.0,
+            mcp_pid=self._pid + 100000,
+            mcp_start=2.0,
+            tier="mcp-only",
+            session_id=f"sid-{name}",
+            host=host,
         )
         if hooks:
             p = self.store.update_participant(p.id, hooks_seen_at=self.clock.now())
@@ -58,16 +76,24 @@ class World:
 
     # ---------------------------------------------------------- traffic
     def human(self, text: str, mentions: tuple[str, ...] = ()) -> Message:
-        msg = self.store.insert_message(self.room.id, sender_name="alice", sender_kind="human", via="web",
-                                        text=text, mentions=mentions)
+        msg = self.store.insert_message(
+            self.room.id, sender_name="alice", sender_kind="human", via="web", text=text, mentions=mentions
+        )
         self.actions += self.engine.on_message(msg.id)
         return msg
 
     def agent_says(self, m: Membership, text: str, mentions: tuple[str, ...] = ()) -> Message:
         p = self.p(m.participant_id)
-        msg = self.store.insert_message(self.room.id, sender_name=m.screen_name, sender_kind="agent",
-                                        via="mcp", text=text, sender_membership_id=m.id,
-                                        sender_harness=p.harness, mentions=mentions)
+        msg = self.store.insert_message(
+            self.room.id,
+            sender_name=m.screen_name,
+            sender_kind="agent",
+            via="mcp",
+            text=text,
+            sender_membership_id=m.id,
+            sender_harness=p.harness,
+            mentions=mentions,
+        )
         self.actions += self.engine.on_message(msg.id)
         return msg
 
@@ -88,8 +114,11 @@ class World:
         raise AssertionError("no delivery")
 
     def resolved(self, sink_id: int | None = None) -> list[dict[str, Any]]:
-        return [a.result for a in self.actions if isinstance(a, ResolveSink)
-                and (sink_id is None or a.sink_id == sink_id)]
+        return [
+            a.result
+            for a in self.actions
+            if isinstance(a, ResolveSink) and (sink_id is None or a.sink_id == sink_id)
+        ]
 
     def take(self) -> list[Action]:
         out, self.actions = self.actions, []

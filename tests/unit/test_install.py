@@ -68,27 +68,39 @@ def test_diff_never_prints_other_values(tmp_path: Path) -> None:
 
 
 def test_mask() -> None:
-    m = common.mask({"env": {"A": "1"}, "apiKey": "x", "url": "http://x", "nested": [{"token": "t"}], "ok": "v"})
+    m = common.mask(
+        {"env": {"A": "1"}, "apiKey": "x", "url": "http://x", "nested": [{"token": "t"}], "ok": "v"}
+    )
     assert m["apiKey"] == "***" and m["url"] == "***" and m["nested"][0]["token"] == "***" and m["ok"] == "v"
     assert m["env"] == "***"  # a whole object or list under a secret-looking key is masked
 
 
 def test_mcp_command_runs_python_directly() -> None:
     e = claude.mcp_entry(sys.executable, "/opt/yk/home")
-    assert e["command"] == sys.executable and e["args"] == ["-I", "-m", "switchboard", "mcp", "--home", "/opt/yk/home"]
+    assert e["command"] == sys.executable and e["args"] == [
+        "-I",
+        "-m",
+        "switchboard",
+        "mcp",
+        "--home",
+        "/opt/yk/home",
+    ]
     assert "uv" not in os.path.basename(e["command"]) and "run" not in e["args"]
     plan = claude.plan(Path("/nonexistent-home"), PY, HOME, hook_sha12())
     cmd = plan.edits[0]
     assert isinstance(cmd, common.CommandEdit)
     assert cmd.argv[:6] == ["claude", "mcp", "add-json", "--scope", "user", "switchboard"]
-    assert json.loads(cmd.argv[6]) == {"type": "stdio", "command": PY,
-                                       "args": ["-I", "-m", "switchboard", "mcp", "--home", HOME]}
+    assert json.loads(cmd.argv[6]) == {
+        "type": "stdio",
+        "command": PY,
+        "args": ["-I", "-m", "switchboard", "mcp", "--home", HOME],
+    }
 
 
 def test_hook_command_shape_and_refusals() -> None:
     c = hook_command(PY, HOME, "abcdef012345", "claude", "Stop")
     assert c.startswith("/bin/sh -c '") and c.endswith("; exit 0'")
-    assert "exec \"$P\" -I -S \"$H\" --home \"/opt/yk/home\" --harness claude --event Stop" in c
+    assert 'exec "$P" -I -S "$H" --home "/opt/yk/home" --harness claude --event Stop' in c
     assert hook_command(PY, HOME, "abcdef012345", "claude", "Stop") == c  # byte-stable
     for bad in ("/opt/it's/home", '/opt/"q"/home', "/opt/$HOME", "relative/home", "/opt/a`b`"):
         with pytest.raises(InstallError):
@@ -125,8 +137,15 @@ def test_older_hook_version_is_replaced_not_duplicated(tmp_path: Path, tmp_home:
     uh = seeded(tmp_path, None)
     home = str(tmp_home.resolve())
     old = hook_command(PY, home, "000000000000", "claude", "Stop")
-    (uh / ".claude" / "settings.json").write_text(json.dumps(
-        {"hooks": {"Stop": [{"matcher": "", "hooks": [{"type": "command", "command": old, "timeout": 10}]}]}}))
+    (uh / ".claude" / "settings.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": old, "timeout": 10}]}]
+                }
+            }
+        )
+    )
     plan = claude.plan(uh, PY, home, hook_sha12())
     stop = json.loads(plan.edits[1].after)["hooks"]["Stop"]
     cmds = [h["command"] for g in stop for h in g["hooks"]]
@@ -156,8 +175,13 @@ def test_editable_install_is_refused(tmp_path: Path, tmp_home: Path, monkeypatch
     uh = seeded(tmp_path, None)
     assert run_install(args("--home", str(tmp_home), "--user-home", str(uh), "--yes"), out=io.StringIO()) == 1
     assert not (uh / ".claude" / "settings.json").exists()
-    assert run_install(args("--home", str(tmp_home), "--user-home", str(uh), "--yes", "--allow-editable"),
-                       out=io.StringIO()) == 0
+    assert (
+        run_install(
+            args("--home", str(tmp_home), "--user-home", str(uh), "--yes", "--allow-editable"),
+            out=io.StringIO(),
+        )
+        == 0
+    )
 
 
 def test_this_dev_venv_is_detected_as_editable() -> None:
@@ -167,8 +191,9 @@ def test_this_dev_venv_is_detected_as_editable() -> None:
 def test_no_tty_and_no_yes_refuses(tmp_path: Path, tmp_home: Path, monkeypatch) -> None:
     monkeypatch.setattr(common, "editable_install", lambda: False)
     uh = seeded(tmp_path, None)
-    rc = run_install(args("--home", str(tmp_home), "--user-home", str(uh)), stdin=io.StringIO("y\n"),
-                     out=io.StringIO())
+    rc = run_install(
+        args("--home", str(tmp_home), "--user-home", str(uh)), stdin=io.StringIO("y\n"), out=io.StringIO()
+    )
     assert rc == 1 and not (uh / ".claude" / "settings.json").exists()
 
 
@@ -196,7 +221,10 @@ def test_command_edits_never_run_with_user_home(tmp_path: Path, tmp_home: Path, 
 def test_bad_json_is_refused(tmp_path: Path, tmp_home: Path) -> None:
     uh = seeded(tmp_path, None)
     (uh / ".claude" / "settings.json").write_text("{not json")
-    assert run_install(args("--home", str(tmp_home), "--user-home", str(uh), "--dry-run"), out=io.StringIO()) == 1
+    assert (
+        run_install(args("--home", str(tmp_home), "--user-home", str(uh), "--dry-run"), out=io.StringIO())
+        == 1
+    )
 
 
 def test_every_harness_has_an_installer(tmp_home: Path, tmp_path: Path) -> None:
@@ -205,8 +233,15 @@ def test_every_harness_has_an_installer(tmp_home: Path, tmp_path: Path) -> None:
     uh.mkdir()
     for h in ("claude", "codex", "cursor", "devin"):
         out = io.StringIO()
-        assert run_install(build_parser().parse_args(["install", h, "--dry-run", "--home", str(tmp_home),
-                                                      "--user-home", str(uh)]), out=out) == 0
+        assert (
+            run_install(
+                build_parser().parse_args(
+                    ["install", h, "--dry-run", "--home", str(tmp_home), "--user-home", str(uh)]
+                ),
+                out=out,
+            )
+            == 0
+        )
         assert out.getvalue().startswith(f"switchboard install {h}:")
     assert list(uh.iterdir()) == []
 
@@ -221,12 +256,20 @@ def test_installed_config_has_no_forbidden_strings(tmp_path: Path) -> None:
 # ------------------------------------------------ re-install (review M2)
 def register(uh: Path, entry: dict) -> None:
     """What `claude mcp add-json --scope user` leaves in ~/.claude.json (plus unrelated keys)."""
-    (uh / ".claude.json").write_text(json.dumps({"numStartups": 3, "projects": {"/ws": {}},
-                                                 "mcpServers": {"other": {"command": "x", "env": {"K": "v"}},
-                                                                "switchboard": entry}}))
+    (uh / ".claude.json").write_text(
+        json.dumps(
+            {
+                "numStartups": 3,
+                "projects": {"/ws": {}},
+                "mcpServers": {"other": {"command": "x", "env": {"K": "v"}}, "switchboard": entry},
+            }
+        )
+    )
 
 
-def test_reinstall_with_everything_in_place_says_no_changes(tmp_path: Path, tmp_home: Path, monkeypatch) -> None:
+def test_reinstall_with_everything_in_place_says_no_changes(
+    tmp_path: Path, tmp_home: Path, monkeypatch
+) -> None:
     monkeypatch.setattr(common, "editable_install", lambda: False)
     monkeypatch.setattr(common.subprocess, "run", lambda *a, **k: pytest.fail("nothing to run"))
     uh = seeded(tmp_path, "settings.seed.json")
@@ -245,7 +288,9 @@ def test_reinstall_with_everything_in_place_says_no_changes(tmp_path: Path, tmp_
 
 def test_a_different_registered_entry_is_removed_then_added(tmp_path: Path) -> None:
     uh = seeded(tmp_path, None)
-    register(uh, {"type": "stdio", "command": "/old/venv/bin/python", "args": ["-I", "-m", "switchboard", "mcp"]})
+    register(
+        uh, {"type": "stdio", "command": "/old/venv/bin/python", "args": ["-I", "-m", "switchboard", "mcp"]}
+    )
     plan = claude.plan(uh, PY, HOME, hook_sha12())
     cmds = [e for e in plan.edits if isinstance(e, common.CommandEdit)]
     assert [c.argv[:3] for c in cmds] == [["claude", "mcp", "remove"], ["claude", "mcp", "add-json"]]
@@ -253,29 +298,51 @@ def test_a_different_registered_entry_is_removed_then_added(tmp_path: Path) -> N
     assert all(c.changed for c in cmds)
 
 
-@pytest.mark.parametrize("foreign", [
-    {"type": "stdio", "command": "npx", "args": ["-y", "switchboard-flags"]},
-    {"type": "http", "url": "https://example.test/mcp"},
-    {"type": "stdio", "command": "/usr/bin/python3", "args": ["-m", "switchboard"]},
-])
+@pytest.mark.parametrize(
+    "foreign",
+    [
+        {"type": "stdio", "command": "npx", "args": ["-y", "switchboard-flags"]},
+        {"type": "http", "url": "https://example.test/mcp"},
+        {"type": "stdio", "command": "/usr/bin/python3", "args": ["-m", "switchboard"]},
+    ],
+)
 def test_an_mcp_server_named_switchboard_that_isnt_ours_is_refused(tmp_path: Path, foreign: dict) -> None:
-    """"switchboard" is a common word: another tool's user-scope server of that
+    """ "switchboard" is a common word: another tool's user-scope server of that
     name is never removed (no `claude mcp remove`, no hooks written)."""
     uh = seeded(tmp_path, None)
     register(uh, foreign)
-    with pytest.raises(InstallError, match=r"~/\.claude\.json \(user scope\) already has an MCP server named"
-                                           r" switchboard that isn't switchboard's"):
+    with pytest.raises(
+        InstallError,
+        match=r"~/\.claude\.json \(user scope\) already has an MCP server named"
+        r" switchboard that isn't switchboard's",
+    ):
         claude.plan(uh, PY, HOME, hook_sha12())
     # switchboard's own entry, for another home or an older Python, is still replaced
-    register(uh, {"type": "stdio", "command": "/old/python", "args": ["-I", "-m", "switchboard", "mcp", "--home", "/x"]})
+    register(
+        uh,
+        {
+            "type": "stdio",
+            "command": "/old/python",
+            "args": ["-I", "-m", "switchboard", "mcp", "--home", "/x"],
+        },
+    )
     cmds = [e for e in claude.plan(uh, PY, HOME, hook_sha12()).edits if isinstance(e, common.CommandEdit)]
     assert [c.argv[:3] for c in cmds] == [["claude", "mcp", "remove"], ["claude", "mcp", "add-json"]]
     assert cmds[0].note == "replaces an older switchboard entry"
 
 
-def test_files_are_written_first_and_a_failed_command_is_reported(tmp_path: Path, monkeypatch, capsys) -> None:
+def test_files_are_written_first_and_a_failed_command_is_reported(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
     uh = seeded(tmp_path, None)
-    register(uh, {"type": "stdio", "command": "/old/python", "args": ["-I", "-m", "switchboard", "mcp", "--home", "/old"]})
+    register(
+        uh,
+        {
+            "type": "stdio",
+            "command": "/old/python",
+            "args": ["-I", "-m", "switchboard", "mcp", "--home", "/old"],
+        },
+    )
     plan = claude.plan(uh, PY, HOME, hook_sha12())
     ran: list[list[str]] = []
 
@@ -306,4 +373,8 @@ def test_atomic_write_does_not_follow_a_planted_temp_symlink(tmp_path: Path) -> 
     common.atomic_write(target, '{"a": 1}\n')
     assert victim.read_text() == "keep me" and target.read_text() == '{"a": 1}\n'
     assert not target.is_symlink() and stat.S_IMODE(target.stat().st_mode) == 0o640
-    assert not [p for p in tmp_path.iterdir() if p.name.startswith(".settings.json.switchboard-") and not p.is_symlink()]
+    assert not [
+        p
+        for p in tmp_path.iterdir()
+        if p.name.startswith(".settings.json.switchboard-") and not p.is_symlink()
+    ]

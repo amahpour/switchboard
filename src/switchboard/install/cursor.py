@@ -81,8 +81,11 @@ def hook_entries(python: str, home: str, sha12: str, cfg: Config | None = None) 
     out: dict[str, dict[str, Any]] = {}
     for e in ORDER:
         if e == "stop":
-            out[e] = {"command": hook_command(python, home, sha12, "cursor", e, max_wait=park + STOP_WAIT_EXTRA_S),
-                      "timeout": park + STOP_TIMEOUT_EXTRA_S, "loop_limit": None}
+            out[e] = {
+                "command": hook_command(python, home, sha12, "cursor", e, max_wait=park + STOP_WAIT_EXTRA_S),
+                "timeout": park + STOP_TIMEOUT_EXTRA_S,
+                "loop_limit": None,
+            }
         else:
             out[e] = {"command": hook_command(python, home, sha12, "cursor", e), "timeout": TIMEOUT_S}
     return out
@@ -144,7 +147,11 @@ def remove_cursor_hooks(data: dict[str, Any], home: str) -> list[str]:
         arr = hooks[event]
         if not isinstance(arr, list):
             continue
-        ours = [i for i, h in enumerate(arr) if isinstance(h, dict) and is_switchboard_hook(h.get("command"), home)]
+        ours = [
+            i
+            for i, h in enumerate(arr)
+            if isinstance(h, dict) and is_switchboard_hook(h.get("command"), home)
+        ]
         if not ours:
             continue
         lines += [f"  - hooks.{event}[{i}]: {compact(hook_view(arr[i]))}" for i in ours]
@@ -174,8 +181,12 @@ def unplan(user_home: Path, home: str, *, run_commands: bool = True) -> Plan:
     """``switchboard uninstall cursor``: the inverse of ``plan``."""
     p = Plan("cursor", verb="uninstall")
     mj = user_home / ".cursor" / "mcp.json"
-    json_removal(p, mj, user_home, home, lambda d: remove_mcp(d, home, tilde(mj, user_home), "cursor", p.notes))
-    json_removal(p, user_home / ".cursor" / "hooks.json", user_home, home, lambda d: remove_cursor_hooks(d, home))
+    json_removal(
+        p, mj, user_home, home, lambda d: remove_mcp(d, home, tilde(mj, user_home), "cursor", p.notes)
+    )
+    json_removal(
+        p, user_home / ".cursor" / "hooks.json", user_home, home, lambda d: remove_cursor_hooks(d, home)
+    )
     return p
 
 
@@ -186,18 +197,36 @@ def plan(user_home: Path, python: str, home: str, sha12: str, *, run_commands: b
     before, data = load_json_obj(mj)
     new = deep(data)
     lines = set_mcp(new, mcp_entry(python, home))
-    p.edits.append(FileEdit(path=mj, before=before, after=dump_json(new) if lines else (before or ""),
-                            display=lines, label=tilde(mj, user_home)))
+    p.edits.append(
+        FileEdit(
+            path=mj,
+            before=before,
+            after=dump_json(new) if lines else (before or ""),
+            display=lines,
+            label=tilde(mj, user_home),
+        )
+    )
     hj = user_home / ".cursor" / "hooks.json"
     hbefore, hdata = load_json_obj(hj)
     hnew = deep(hdata)
     hlines = set_cursor_hooks(hnew, hook_entries(python, home, sha12, cfg), home)
-    p.edits.append(FileEdit(path=hj, before=hbefore, after=dump_json(hnew) if hlines else (hbefore or ""),
-                            display=hlines, label=tilde(hj, user_home)))
-    p.notes.append("Cursor doesn't reload hooks.json in a running agent: this takes effect in new `agent`"
-                   " sessions; the hooks are inert until a session joins a room")
-    p.notes.append("idle Cursor sessions are reached by a parked stop hook (tier cursor:stop-park, provisional:"
-                   " parks longer than ~40 s are unproven until the Cursor re-test)")
+    p.edits.append(
+        FileEdit(
+            path=hj,
+            before=hbefore,
+            after=dump_json(hnew) if hlines else (hbefore or ""),
+            display=hlines,
+            label=tilde(hj, user_home),
+        )
+    )
+    p.notes.append(
+        "Cursor doesn't reload hooks.json in a running agent: this takes effect in new `agent`"
+        " sessions; the hooks are inert until a session joins a room"
+    )
+    p.notes.append(
+        "idle Cursor sessions are reached by a parked stop hook (tier cursor:stop-park, provisional:"
+        " parks longer than ~40 s are unproven until the Cursor re-test)"
+    )
     p.notes.append("switchboard's tools may ask for approval in Cursor (no allow rule is written)")
     return p
 
@@ -211,7 +240,8 @@ def print_args(python: str, home: str, sha12: str, workspace: Path | None = None
         "argv": [],
         "env": {},
         "files": {
-            ".cursor/mcp.json": json.dumps({"mcpServers": {"switchboard": mcp_entry(python, home)}}, indent=2) + "\n",
+            ".cursor/mcp.json": json.dumps({"mcpServers": {"switchboard": mcp_entry(python, home)}}, indent=2)
+            + "\n",
             ".cursor/hooks.json": dump_json(hooks),
         },
         "notes": ["put these files in the workspace (project-local Cursor config); nothing was written"],

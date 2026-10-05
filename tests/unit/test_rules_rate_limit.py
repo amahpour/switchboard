@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import FakeClock
 from engine_world import World
+
 from switchboard.config import Config
 from switchboard.delivery import rules
 
@@ -99,10 +99,15 @@ def test_a_refusal_queues_nothing(w: World, clock: FakeClock) -> None:
 
     def snapshot() -> tuple[Any, ...]:
         con = w.store.con
-        return (con.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
-                con.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0],
-                con.execute("SELECT COUNT(*) FROM batches").fetchone()[0],
-                w.store.room_by_id(w.room.id).hop_count, w.p(p).last_say_at, w.states(m), w.states(mq))
+        return (
+            con.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
+            con.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0],
+            con.execute("SELECT COUNT(*) FROM batches").fetchone()[0],
+            w.store.room_by_id(w.room.id).hop_count,
+            w.p(p).last_say_at,
+            w.states(m),
+            w.states(mq),
+        )
 
     before = snapshot()
     clock.advance(3)

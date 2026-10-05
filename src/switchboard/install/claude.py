@@ -72,8 +72,11 @@ def registered_entry(user_home: Path) -> dict[str, Any] | None:
 
 
 def same_entry(have: dict[str, Any], want: dict[str, Any]) -> bool:
-    return (have.get("type", "stdio") == want["type"] and have.get("command") == want["command"]
-            and have.get("args") == want["args"])
+    return (
+        have.get("type", "stdio") == want["type"]
+        and have.get("command") == want["command"]
+        and have.get("args") == want["args"]
+    )
 
 
 def plan(user_home: Path, python: str, home: str, sha12: str, *, run_commands: bool = True) -> Plan:
@@ -90,8 +93,9 @@ def plan(user_home: Path, python: str, home: str, sha12: str, *, run_commands: b
         if have is not None:
             # `claude mcp add-json` refuses an existing name: remove the old entry first
             rm = ["claude", "mcp", "remove", "--scope", "user", "switchboard"]
-            p.edits.append(CommandEdit(argv=rm, display=" ".join(rm),
-                                       note=note or "replaces an older switchboard entry"))
+            p.edits.append(
+                CommandEdit(argv=rm, display=" ".join(rm), note=note or "replaces an older switchboard entry")
+            )
         p.edits.append(CommandEdit(argv=argv, display=" ".join(argv[:6]) + f" '{entry}'", note=note))
     path = user_home / ".claude" / "settings.json"
     before, data = load_json_obj(path)
@@ -99,9 +103,12 @@ def plan(user_home: Path, python: str, home: str, sha12: str, *, run_commands: b
     lines = set_hook_groups(new, hook_events(python, home, sha12), home)
     # unchanged hooks: keep the file byte-for-byte (after == before, "no changes")
     after = dump_json(new) if lines else (before or "")
-    p.edits.append(FileEdit(path=path, before=before, after=after, display=lines,
-                            label=tilde(path, user_home)))
-    p.notes.append("hooks take effect in new Claude Code sessions; they are inert until a session joins a room")
+    p.edits.append(
+        FileEdit(path=path, before=before, after=after, display=lines, label=tilde(path, user_home))
+    )
+    p.notes.append(
+        "hooks take effect in new Claude Code sessions; they are inert until a session joins a room"
+    )
     p.notes.append("switchboard's tools may ask for approval in Claude Code (no allow rule is written)")
     return p
 
@@ -110,13 +117,17 @@ def unplan(user_home: Path, home: str, *, run_commands: bool = True) -> Plan:
     """``switchboard uninstall claude``: the inverse of ``plan``."""
     p = Plan("claude", verb="uninstall")
     path = user_home / ".claude" / "settings.json"
-    json_removal(p, path, user_home, home,
-                 lambda data: remove_hook_groups(data, home, drop_empty_hooks=True)[0])
+    json_removal(
+        p, path, user_home, home, lambda data: remove_hook_groups(data, home, drop_empty_hooks=True)[0]
+    )
     rm = ["claude", "mcp", "remove", "--scope", "user", "switchboard"]
     have = registered_entry(user_home)
     if have is not None and mcp_home(have) == home:
-        p.edits.append(CommandEdit(argv=rm, display=" ".join(rm),
-                                   note="" if run_commands else "not run with --user-home"))
+        p.edits.append(
+            CommandEdit(
+                argv=rm, display=" ".join(rm), note="" if run_commands else "not run with --user-home"
+            )
+        )
     else:
         p.edits.append(CommandEdit(argv=rm, display="claude mcp switchboard (user scope)", changed=False))
         if have is not None:

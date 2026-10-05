@@ -38,13 +38,28 @@ def files(ext: str) -> list[Path]:
 
 def test_static_files_exist() -> None:
     names = {p.name for p in STATIC.iterdir()}
-    assert {"index.html", "login.html", "setup.html", "app.js", "md.js", "diagram.js", "webauthn.js", "login.js",
-            "setup.js", "style.css", "favicon.svg", "favicon-32.png", "apple-touch-icon.png"} <= names
+    assert {
+        "index.html",
+        "login.html",
+        "setup.html",
+        "app.js",
+        "md.js",
+        "diagram.js",
+        "webauthn.js",
+        "login.js",
+        "setup.js",
+        "style.css",
+        "favicon.svg",
+        "favicon-32.png",
+        "apple-touch-icon.png",
+    } <= names
 
 
-ICON_LINKS = ('<link rel="icon" href="/static/favicon-32.png" sizes="32x32">',
-              '<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">',
-              '<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">')
+ICON_LINKS = (
+    '<link rel="icon" href="/static/favicon-32.png" sizes="32x32">',
+    '<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">',
+    '<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">',
+)
 
 
 def test_both_pages_link_the_tab_icons_and_the_icon_is_the_sidebar_mark() -> None:
@@ -64,8 +79,17 @@ def test_the_svg_icon_is_inert() -> None:
     """Opened directly, /static/favicon.svg is a document on this origin: no script, no event
     handler, no link or embedded document, no reference outside the file."""
     text = (STATIC / "favicon.svg").read_text()
-    for pat in (r"<script", r"\son\w+\s*=", r"href", r"<foreignObject", r"<use\b", r"url\(", r"javascript:",
-                r"<style", r"<image"):
+    for pat in (
+        r"<script",
+        r"\son\w+\s*=",
+        r"href",
+        r"<foreignObject",
+        r"<use\b",
+        r"url\(",
+        r"javascript:",
+        r"<style",
+        r"<image",
+    ):
         assert not re.search(pat, text, re.IGNORECASE), pat
 
 
@@ -138,13 +162,15 @@ def test_one_vetted_link_path() -> None:
     sets = [(n, m.start()) for n, t in js.items() for m in re.finditer(r"\.href\s*=(?!=)", t)]
     assert [n for n, _ in sets] == ["md.js"], sets  # exactly one assignment, in md.js
     md = js["md.js"]
-    fn = md[md.index("function mdLink("):]
+    fn = md[md.index("function mdLink(") :]
     fn = fn[: fn.index("\n  }\n") if "\n  }\n" in fn else 1200]
     assert "a.href = v.href;" in fn and "a.rel = 'noopener noreferrer nofollow';" in fn
     assert "u.protocol === 'http:' || u.protocol === 'https:'" in md
     assert "new URL(" in md
     for n, t in js.items():
-        assert not re.search(r"createElement\(\s*['\"](img|iframe|object|embed|link|style|base|form|meta|svg)['\"]", t, re.I), n
+        assert not re.search(
+            r"createElement\(\s*['\"](img|iframe|object|embed|link|style|base|form|meta|svg)['\"]", t, re.I
+        ), n
         assert not re.search(r"\.(srcdoc|srcset|action|formAction|innerText)\s*=(?!=)", t), n
         assert "setAttributeNS" not in t and "DOMParser" not in t and "createContextualFragment" not in t, n
         for ns in re.findall(r"createElementNS\(\s*['\"]([^'\"]+)", t):
@@ -170,15 +196,26 @@ def test_the_one_script_load_is_the_vendored_mermaid() -> None:
     assert d.count("const SRC = ") == 1 and f"const SRC = '/static/{MERMAID}';" in d
     # strict, no HTML labels, and a diagram can't loosen either (or restyle itself) from its own config
     assert "securityLevel: 'strict'" in d and "htmlLabels: false" in d and "secure: SECURE" in d
-    secure = d[d.index("const SECURE = ["):]
+    secure = d[d.index("const SECURE = [") :]
     secure = secure[: secure.index("];")]
-    for key in ("securityLevel", "htmlLabels", "flowchart", "journey", "theme", "themeVariables", "themeCSS",
-                "fontFamily", "dompurifyConfig"):
+    for key in (
+        "securityLevel",
+        "htmlLabels",
+        "flowchart",
+        "journey",
+        "theme",
+        "themeVariables",
+        "themeCSS",
+        "fontFamily",
+        "dompurifyConfig",
+    ):
         assert f"'{key}'" in secure, key
 
 
 def test_the_vendored_mermaid_is_the_vetted_release() -> None:
-    nested = sorted(p.relative_to(STATIC).as_posix() for p in STATIC.rglob("*") if p.is_file() and p.parent != STATIC)
+    nested = sorted(
+        p.relative_to(STATIC).as_posix() for p in STATIC.rglob("*") if p.is_file() and p.parent != STATIC
+    )
     assert nested == ["vendor/mermaid/LICENSE", MERMAID], nested
     assert hashlib.sha256((STATIC / MERMAID).read_bytes()).hexdigest() == MERMAID_SHA256
     lic = STATIC / "vendor" / "mermaid" / "LICENSE"
@@ -191,7 +228,9 @@ def test_markdown_loads_before_the_app() -> None:
     assert html.index("/static/diagram.js") < html.index("/static/app.js")
     assert "/static/md.js" not in (STATIC / "login.html").read_text()
     for page in ("login.html", "setup.html"):
-        assert "diagram.js" not in (STATIC / page).read_text() and "mermaid" not in (STATIC / page).read_text()
+        assert (
+            "diagram.js" not in (STATIC / page).read_text() and "mermaid" not in (STATIC / page).read_text()
+        )
 
 
 # Passkeys (issue #41, DESIGN.md §31): the sign-in and claim pages load exactly two same-origin
@@ -209,5 +248,8 @@ def test_the_passkey_pages_load_only_their_scripts() -> None:
     assert [n for n, t in js.items() if "navigator.credentials" in t] == ["webauthn.js"]
     assert "'X-Switchboard'" in js["webauthn.js"] and "credentials: 'same-origin'" in js["webauthn.js"]
     # the claim page reads the token after # and removes it from the address bar at once
-    assert "location.hash" in js["setup.js"] and "history.replaceState(null, '', location.pathname)" in js["setup.js"]
+    assert (
+        "location.hash" in js["setup.js"]
+        and "history.replaceState(null, '', location.pathname)" in js["setup.js"]
+    )
     assert "setup#t=" not in "".join(js.values())

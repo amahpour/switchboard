@@ -17,11 +17,22 @@ import sys
 from pathlib import Path
 from typing import Any
 
-SWITCHBOARD_TOOLS = [f"mcp__switchboard__{t}" for t in ("join", "leave", "who", "say", "read", "wait", "pass", "away")]
+SWITCHBOARD_TOOLS = [
+    f"mcp__switchboard__{t}" for t in ("join", "leave", "who", "say", "read", "wait", "pass", "away")
+]
 TEST_ALLOW = ["Bash(echo *)", "Bash(sleep *)", "Bash(false)"]
 TEST_DENY = ["SendMessage", "ListAgents"]
-RECORD_EVENTS = ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure",
-                 "Stop", "SessionEnd", "Notification", "PermissionRequest")
+RECORD_EVENTS = (
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "Stop",
+    "SessionEnd",
+    "Notification",
+    "PermissionRequest",
+)
 RAWREC = Path(__file__).resolve().parent / "rawrec.py"
 
 
@@ -52,9 +63,23 @@ def claude_mcp_config(print_args: dict[str, Any]) -> dict[str, Any]:
 
 
 def claude_argv(claude_bin: str, mcp_config: Path, settings: Path, *extra: str) -> list[str]:
-    return [claude_bin, "--model", "haiku", "--setting-sources", "project,local", "--strict-mcp-config",
-            "--permission-mode", "default", "--allowedTools", ",".join(SWITCHBOARD_TOOLS),
-            "--mcp-config", str(mcp_config), "--settings", str(settings), *extra]
+    return [
+        claude_bin,
+        "--model",
+        "haiku",
+        "--setting-sources",
+        "project,local",
+        "--strict-mcp-config",
+        "--permission-mode",
+        "default",
+        "--allowedTools",
+        ",".join(SWITCHBOARD_TOOLS),
+        "--mcp-config",
+        str(mcp_config),
+        "--settings",
+        str(settings),
+        *extra,
+    ]
 
 
 # ------------------------------------------------------------------ Devin (M5)
@@ -79,7 +104,9 @@ def devin_argv(devin_bin: str) -> list[str]:
 
 
 # ------------------------------------------------------------------ Cursor (M5)
-CURSOR_TEST_ALLOW = [f"Mcp(switchboard:{t})" for t in ("join", "leave", "who", "say", "read", "wait", "pass", "away")]
+CURSOR_TEST_ALLOW = [
+    f"Mcp(switchboard:{t})" for t in ("join", "leave", "who", "say", "read", "wait", "pass", "away")
+]
 
 
 def cursor_cli_json() -> dict[str, Any]:

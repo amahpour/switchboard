@@ -14,8 +14,8 @@ import time
 from typing import Any
 
 import pytest
-
 from conftest import InProcBroker
+
 from switchboard.broker import proc
 from switchboard.broker.agents import McpConn, cred_hash
 from switchboard.broker.peer import McpIdentity
@@ -32,16 +32,34 @@ def me() -> proc.ProcInfo:
     return i
 
 
-def mk(b: InProcBroker, harness: str, host: str, rest: str, name: str, *,
-       agent: tuple[int, float] = (4242, 100.0), mcp: tuple[int, float] = (4250, 101.0),
-       status: str = "idle", **kw: Any) -> tuple[Participant, Any, str]:
+def mk(
+    b: InProcBroker,
+    harness: str,
+    host: str,
+    rest: str,
+    name: str,
+    *,
+    agent: tuple[int, float] = (4242, 100.0),
+    mcp: tuple[int, float] = (4250, 101.0),
+    status: str = "idle",
+    **kw: Any,
+) -> tuple[Participant, Any, str]:
     """A joined participant (and its credential), written as the join path writes one."""
 
     def f() -> tuple[Participant, Any, str]:
         st = b.state.store
         room = st.get_room("#build") or st.create_room("#build", "alice", 60, 6)
-        p = st.upsert_participant(harness, session_key(harness, host, rest), host=host, agent_pid=agent[0],
-                                  agent_start=agent[1], mcp_pid=mcp[0], mcp_start=mcp[1], status=status, **kw)
+        p = st.upsert_participant(
+            harness,
+            session_key(harness, host, rest),
+            host=host,
+            agent_pid=agent[0],
+            agent_start=agent[1],
+            mcp_pid=mcp[0],
+            mcp_start=mcp[1],
+            status=status,
+            **kw,
+        )
         cred = secrets.token_urlsafe(16)
         m = st.create_membership(room.id, p.id, name, cred_hash(cred))
         b.state.agents.refresh_index()
@@ -56,10 +74,22 @@ def get(b: InProcBroker, pid: int) -> Participant:
     return p
 
 
-def ident(host: str, *, harness: str = "claude", mcp: tuple[int, float] = (4250, 101.0),
-          agent: tuple[int, float] = (4242, 100.0)) -> McpIdentity:
-    return McpIdentity(harness=harness, mcp_pid=mcp[0], mcp_start=mcp[1], agent_pid=agent[0],
-                       agent_start=agent[1], evidence="stub", host=host)
+def ident(
+    host: str,
+    *,
+    harness: str = "claude",
+    mcp: tuple[int, float] = (4250, 101.0),
+    agent: tuple[int, float] = (4242, 100.0),
+) -> McpIdentity:
+    return McpIdentity(
+        harness=harness,
+        mcp_pid=mcp[0],
+        mcp_start=mcp[1],
+        agent_pid=agent[0],
+        agent_start=agent[1],
+        evidence="stub",
+        host=host,
+    )
 
 
 class StubConn:
@@ -78,8 +108,12 @@ def test_session_keys_name_the_host(broker: InProcBroker) -> None:
     for host, want in (("", "claude:4242@100.00"), (PI, "claude@fpga-pi:4242@100.00")):
         assert a._session_key(McpConn(ident=ident(host)), None) == want
     assert a._session_key(McpConn(ident=ident(PI, harness="codex")), "t-1") == "codex@fpga-pi:t-1"
-    assert a._session_key(McpConn(ident=ident(PI, harness="cursor")), None) == "cursor@fpga-pi:agent:4242@100.00"
-    assert a._session_key(McpConn(ident=ident(PI, harness="test"), test_session="s"), None) == "test@fpga-pi:s"
+    assert (
+        a._session_key(McpConn(ident=ident(PI, harness="cursor")), None) == "cursor@fpga-pi:agent:4242@100.00"
+    )
+    assert (
+        a._session_key(McpConn(ident=ident(PI, harness="test"), test_session="s"), None) == "test@fpga-pi:s"
+    )
     assert a._session_key(McpConn(ident=ident("", harness="test"), test_session="s"), None) == "test:s"
 
 
@@ -134,9 +168,19 @@ def test_a_credential_works_only_from_its_own_host(broker: InProcBroker) -> None
 
 def test_cursor_bind_waits_for_a_remote_holder_its_host_cant_vouch_for(broker: InProcBroker) -> None:
     nonce = "0123456789abcdef"
-    holder, _m, _c = mk(broker, "cursor", PI, "conv-1", "cur-old", agent=(os.getpid(), 1.0), bind_state="bound")
-    p, _m, _c = mk(broker, "cursor", PI, "agent:4400@100.00", "cur-new", agent=(4400, 100.0),
-                   bind_state="pending", bind_nonce=nonce)
+    holder, _m, _c = mk(
+        broker, "cursor", PI, "conv-1", "cur-old", agent=(os.getpid(), 1.0), bind_state="bound"
+    )
+    p, _m, _c = mk(
+        broker,
+        "cursor",
+        PI,
+        "agent:4400@100.00",
+        "cur-new",
+        agent=(4400, 100.0),
+        bind_state="pending",
+        bind_nonce=nonce,
+    )
     ev = HookEvent(harness="cursor", event="PostToolUse", sid="conv-1", join_nonce=nonce)
     assert broker.on_loop(broker.state.agents._bind_cursor, p, ev) is None
     h = get(broker, holder.id)
@@ -144,8 +188,16 @@ def test_cursor_bind_waits_for_a_remote_holder_its_host_cant_vouch_for(broker: I
     assert get(broker, p.id).bind_state == "pending"
     # control: on this machine a holder whose agent is gone gives the conversation up
     lh, _m, _c = mk(broker, "cursor", "", "conv-2", "cur-l-old", agent=(os.getpid(), 1.0), bind_state="bound")
-    lp, _m, _c = mk(broker, "cursor", "", "agent:4401@100.00", "cur-l-new", agent=(4401, 100.0),
-                    bind_state="pending", bind_nonce=nonce)
+    lp, _m, _c = mk(
+        broker,
+        "cursor",
+        "",
+        "agent:4401@100.00",
+        "cur-l-new",
+        agent=(4401, 100.0),
+        bind_state="pending",
+        bind_nonce=nonce,
+    )
     ev2 = HookEvent(harness="cursor", event="PostToolUse", sid="conv-2", join_nonce=nonce)
     bound = broker.on_loop(broker.state.agents._bind_cursor, lp, ev2)
     assert bound is not None and bound.session_key == "cursor:conv-2" and bound.bind_state == "bound"
@@ -213,7 +265,9 @@ def test_a_join_takes_the_early_model_of_its_own_host(broker: InProcBroker) -> N
         broker.state.store.get_room("#build") or broker.state.store.create_room("#build", "alice", 60, 6)
 
     broker.on_loop(seed)
-    res = broker.on_loop(a.join, StubConn(McpConn(ident=ident(PI))), {"room": "#build", "screen_name": "bench"})
+    res = broker.on_loop(
+        a.join, StubConn(McpConn(ident=ident(PI))), {"room": "#build", "screen_name": "bench"}
+    )
     assert res["tier"] == "claude:hook"
     p = broker.on_loop(broker.state.store.find_participant, "claude", "claude@fpga-pi:4242@100.00")
     assert p is not None and p.host == PI
@@ -223,9 +277,19 @@ def test_a_join_takes_the_early_model_of_its_own_host(broker: InProcBroker) -> N
 def test_attach_keys_the_push_channel_by_host(broker: InProcBroker) -> None:
     """agents.attach: a channel is attached under its MCP process's host."""
     a = broker.state.agents
-    mc = McpConn(ident=McpIdentity(harness="claude", mcp_pid=4250, mcp_start=101.0, agent_pid=4242,
-                                   agent_start=100.0, evidence="stub", claude_socket="/tmp/yk-x.sock", host=PI),
-                 has_messaging_token=True)
+    mc = McpConn(
+        ident=McpIdentity(
+            harness="claude",
+            mcp_pid=4250,
+            mcp_start=101.0,
+            agent_pid=4242,
+            agent_start=100.0,
+            evidence="stub",
+            claude_socket="/tmp/yk-x.sock",
+            host=PI,
+        ),
+        has_messaging_token=True,
+    )
     conn = StubConn(mc)
     assert broker.on_loop(a.attach, conn, {"guard_ok": True}) == {"attached": True, "tier": "claude:inbox"}
     adapter = broker.state.engine.adapters["claude"]
