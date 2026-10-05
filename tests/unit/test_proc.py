@@ -30,6 +30,21 @@ def test_ps_fallback_agrees() -> None:
     assert abs(fast.start - slow.start) < 2.0  # ps has 1 s resolution
 
 
+@pytest.mark.skipif(proc.ps_bin() is None, reason="no ps")
+def test_a_zombie_is_not_alive_through_ps() -> None:
+    """An exited child its parent hasn't reaped yet is still listed by ps, with its start time.
+    On macOS, where proc_pidinfo fails for a zombie and info() asks ps instead, a stopped broker
+    still a zombie looked alive whenever its start's fraction of a second was under 11 ms, and
+    `switchboard stop` gave up after 10 s (test_say_tail_who_cmd_stop failed about 1 run in 90)."""
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    try:
+        os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOWAIT)  # it has exited; not reaped yet
+        assert proc._info_ps(child.pid) is None
+        assert proc.info(child.pid) is None
+    finally:
+        child.wait()
+
+
 def test_missing_pid() -> None:
     assert proc.info(0) is None
     assert proc.info(-5) is None
