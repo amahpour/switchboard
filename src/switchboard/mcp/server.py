@@ -505,6 +505,53 @@ def build_server(st: McpState) -> FastMCP:
         st.forget(res, (tid, name))
         return dumps(res)
 
+    @mcp.tool(annotations=RW)
+    async def review(
+        room: str,
+        action: str,
+        ctx: Context,
+        item: str | None = None,
+        url: str | None = None,
+        head: str | None = None,
+        title: str | None = None,
+        detail: str | None = None,
+        file: str | None = None,
+        lines: str | None = None,
+        owner: str | None = None,
+        commit: str | None = None,
+        reason: str | None = None,
+        options: list[str] | None = None,
+        recommend: int | None = None,
+    ) -> str:
+        """The room's review board for one pull request: findings and questions instead of long
+        messages. action: open (url, head), show, raise (title, detail, file, lines), ask a person
+        (title, options, recommend), concede (item, owner), contest or drop (item, reason), fix
+        (item, commit). Returns the board."""
+        await st.prime(ctx)
+        tid = st.thread_id(ctx)
+        got = st.cred_for(room, tid)
+        if isinstance(got, str):
+            return got
+        name, cred = got
+        given = {
+            "item": item,
+            "url": url,
+            "head": head,
+            "title": title,
+            "detail": detail,
+            "file": file,
+            "lines": lines,
+            "owner": owner,
+            "commit": commit,
+            "reason": reason,
+            "options": options,
+            "recommend": recommend,
+        }
+        params = {**st.base(cred, tid), "action": action, **{k: v for k, v in given.items() if v is not None}}
+        res = await st.call("agent.review", params)
+        st.forget(res, (tid, name))
+        return dumps(res)
+
     @mcp.tool(annotations=RO)
     async def read(room: str, ctx: Context, limit: int = 20) -> str:
         """Return unread room messages in full, oldest first (including those shown to you as

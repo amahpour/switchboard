@@ -63,6 +63,7 @@ from switchboard.models import (
     split_session_key,
 )
 from switchboard.remote import proto
+from switchboard.reviews import ReviewError
 
 if TYPE_CHECKING:  # pragma: no cover
     from switchboard.broker.app import BrokerState
@@ -841,6 +842,15 @@ class AgentService:
                 bits.append(f"away={sanitize(x.away, 80)}")
             lines.append(" ".join(bits))
         return {"room": room.name, "text": "\n".join(lines), "count": len(rows)}
+
+    def review(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
+        """One move on the room's review board (DESIGN.md §37): never a chat message, so it
+        wakes no one and isn't rate-limited like ``say``; the board caps its own size."""
+        _p, m, room = self._member(conn, params)
+        try:
+            return self.state.boards.agent(room, m.screen_name, params)
+        except ReviewError as e:
+            raise ServiceError("bad_request", str(e)) from None
 
     def say(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
         p, m, room = self._member(conn, params)
