@@ -6,6 +6,7 @@ end of its session; and the start checks of the ssh path and of dialer mode."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import signal
 import socket
@@ -32,8 +33,17 @@ def welcome() -> dict:
     )
 
 
-def fds() -> set[int]:
-    return {int(n) for n in os.listdir("/proc/self/fd" if os.path.isdir("/proc/self/fd") else "/dev/fd")}
+def fds() -> dict[int, tuple[int, int, int, int]]:
+    """Open descriptor identities; a scanner's own fd may disappear before ``fstat``."""
+    opened = {}
+    for name in os.listdir("/proc/self/fd" if os.path.isdir("/proc/self/fd") else "/dev/fd"):
+        fd = int(name)
+        try:
+            st = os.fstat(fd)
+        except OSError:
+            continue
+        opened[fd] = (st.st_dev, st.st_ino, st.st_mode, st.st_rdev)
+    return opened
 
 
 async def one_session(s: Satellite, *, refuse: str | None = None) -> tuple[str, list[dict], bool]:
@@ -86,16 +96,28 @@ def test_a_session_touches_no_fds_locks_or_signals_and_a_second_one_follows(tmp_
         handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
 
         async def go() -> None:
-            before = fds()
-            why, got, bound = await one_session(s)
-            assert why == "eof" and bound and got[1] == {"t": "pong", "n": 1}
-            assert not s.paths.sock.exists()  # unlinked with its session
-            why, got, bound = await one_session(s, refuse="removed")  # the dialer's next connection
-            assert why == "removed" and bound and got[-1] == {"t": "bye", "why": "shutdown"}
-            assert not s.paths.sock.exists()
-            assert fds() == before
-            loop = asyncio.get_running_loop()
-            assert not loop.remove_signal_handler(signal.SIGTERM)  # none was added
+            # Pytest can close one of its own descriptors while a session awaits I/O. Simulate
+            # that independent cleanup so this checks for leaks rather than ambient equality.
+            ambient_r, ambient_w = os.pipe()
+            try:
+                before = fds()
+                why, got, bound = await one_session(s)
+                assert why == "eof" and bound and got[1] == {"t": "pong", "n": 1}
+                assert not s.paths.sock.exists()  # unlinked with its session
+                os.close(ambient_r)
+                os.close(ambient_w)
+                why, got, bound = await one_session(s, refuse="removed")  # the dialer's next connection
+                assert why == "removed" and bound and got[-1] == {"t": "bye", "why": "shutdown"}
+                assert not s.paths.sock.exists()
+                # An unrelated descriptor may close while await yields. A surviving or new
+                # descriptor must still be one we saw before, with the same kernel identity.
+                assert all(before.get(fd) == identity for fd, identity in fds().items())
+                loop = asyncio.get_running_loop()
+                assert not loop.remove_signal_handler(signal.SIGTERM)  # none was added
+            finally:
+                for fd in (ambient_r, ambient_w):
+                    with contextlib.suppress(OSError):
+                        os.close(fd)
 
         asyncio.run(go())
         assert {sig: signal.getsignal(sig) for sig in handlers} == handlers
