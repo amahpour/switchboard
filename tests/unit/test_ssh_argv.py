@@ -237,7 +237,8 @@ def test_missing_or_open_link_files_block(tmp_path: Path) -> None:
     "extra",
     [
         f"switchboard-fpga-pi {PIN_KEY}",  # a second copy
-        "switchboard-fpga-pi ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPLdQHFnSMDnqWNbBYC4WRnBrfOsvBb3VeGsTGGvD2Yw",
+        "switchboard-fpga-pi ssh-ed25519 "
+        "AAAAC3NzaC1lZDI1NTE5AAAAIPLdQHFnSMDnqWNbBYC4WRnBrfOsvBb3VeGsTGGvD2Yw",
         f"* {PIN_KEY}",  # a wildcard
         f"@cert-authority * {PIN_KEY}",  # a CA vouching for any host
         f"@cert-authority switchboard-fpga-pi {PIN_KEY}",
@@ -261,7 +262,8 @@ def test_pin_is_exactly_one_line_and_every_line_is_in_the_hash(tmp_path: Path, e
     "line",
     [
         f"switchboard-fpga-pi {PIN_KEY} a-comment",
-        "switchboard-fpga-pi ssh-rsa AAAAC3NzaC1lZDI1NTE5AAAAIMCGkdYxdHrN6N8Lhzn9oRL0Rj6qu5M3QZQpqk2hVg8C",  # type lies
+        "switchboard-fpga-pi ssh-rsa "
+        "AAAAC3NzaC1lZDI1NTE5AAAAIMCGkdYxdHrN6N8Lhzn9oRL0Rj6qu5M3QZQpqk2hVg8C",  # type lies
         "switchboard-fpga-pi ssh-ed25519-cert-v01@openssh.com AAAA",
         "|1|abc=|def= " + PIN_KEY,  # a hashed name is not the alias
     ],
@@ -338,7 +340,8 @@ REASONS = [
         "files",
     ),
     (
-        "Unable to negotiate with 192.0.2.10 port 22: no matching host key type found. Their offer: ssh-dss\n",
+        "Unable to negotiate with 192.0.2.10 port 22: no matching host key type found."
+        " Their offer: ssh-dss\n",
         255,
         "blocked",
         "negotiate",

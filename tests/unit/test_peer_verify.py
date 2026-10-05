@@ -16,7 +16,7 @@ def fake(chain_argv: list[str]):
     procs = [
         ProcInfo(pid=100 - i, ppid=99 - i, start=1000.0 + i, uid=0, comm="x") for i in range(len(chain_argv))
     ]
-    argvs = {p.pid: a for p, a in zip(procs, chain_argv)}
+    argvs = {p.pid: a for p, a in zip(procs, chain_argv, strict=True)}
     return (lambda pid, depth: procs[:depth]), (lambda ps: {p.pid: argvs.get(p.pid, "") for p in ps})
 
 

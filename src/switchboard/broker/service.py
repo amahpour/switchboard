@@ -1,7 +1,8 @@
 """RoomService: the broker's room operations (DESIGN.md §3, §10).
 
 The human side: rooms, history, the member list (and one member's detail, for
-the web UI's Inspector), human messages and commands. Agent operations live in ``broker/agents.py`` (AgentService) and
+the web UI's Inspector), human messages and commands. Agent operations live in
+``broker/agents.py`` (AgentService) and
 plug into the same persist-then-publish flow through ``self.delivery``.
 """
 
@@ -608,7 +609,8 @@ class RoomService:
         ):
             raise ServiceError(
                 "conflict",
-                f"{name or room.name} changed since the plan (reopened, deleted or re-created); run the command again",
+                f"{name or room.name} changed since the plan (reopened, deleted or re-created);"
+                " run the command again",
             )
         members = self.store.members(room.id)
         if members:

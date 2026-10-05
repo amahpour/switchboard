@@ -370,6 +370,7 @@ class Engine:
                     counted=False,
                     reason="unread",
                 )
+                assert sink is not None
                 return self._fill_sink(p, m, room, pull, sink, pending) + unparked()
             if rules.budget_blocked(
                 pending,
@@ -1325,11 +1326,11 @@ class Engine:
             return None, out
         out += self._settle_continues(p, ev)
         if E == "PreToolUse":
-            bid = self.first_action.pop(p.id, None)
-            if bid is not None:
+            action_bid = self.first_action.pop(p.id) if p.id in self.first_action else None
+            if action_bid is not None:
                 # the agent's first action after a wake (Devin's latency mark, §12.5)
-                self.store.set_batch_times(bid, first_action_at=ev.t if ev.t else now)
-                self._event("first_action", participant_id=p.id, batch_id=bid)
+                self.store.set_batch_times(action_bid, first_action_at=ev.t if ev.t else now)
+                self._event("first_action", participant_id=p.id, batch_id=action_bid)
         elif E in TURN_BOUNDARY_EVENTS and not mid_turn:
             # the turn ended (or a new one began) with no tool call since the wake:
             # it had no first action (a later PreToolUse, e.g. the re-armed wait(), isn't it)
@@ -1644,7 +1645,9 @@ class Engine:
         m = self.store.get_membership(b.membership_id)
         p = self.store.get_participant(m.participant_id) if m is not None else None
         if m is None or p is None:
-            return None  # pragma: no cover - membership rows are deleted only with a room without members (§28), participant rows never
+            # Membership rows are deleted only with a room without members (§28);
+            # participant rows never are.
+            return None  # pragma: no cover
         return self.adapter(p).expire_due(p, b, now)
 
     # ================================================================== tick
@@ -1741,7 +1744,8 @@ class Engine:
                 if v is not None:
                     verdicts.setdefault(v, []).append(it.message_id)
             if not verdicts:
-                continue  # pragma: no cover - watch_items picked only due items (float rounding at the edge aside)
+                # watch_items picked only due items (float rounding at the edge aside)
+                continue  # pragma: no cover
             if verdicts.get("done"):
                 self.store.watchdog_done(m.id, verdicts["done"], keep_count=False)
             ids = verdicts.get("remind", [])
@@ -1781,8 +1785,8 @@ class Engine:
             if mid in self.parked_escalated or since is None or now - since < d.watchdog_s:
                 continue
             m = self.store.get_membership(mid)
-            room = self.store.room_by_id(m.room_id) if m is not None else None
-            if m is None or room is None or not m.active or room.paused or m.held:
+            parked_room = self.store.room_by_id(m.room_id) if m is not None else None
+            if m is None or parked_room is None or not m.active or parked_room.paused or m.held:
                 continue
             due = rules.parked_escalation(
                 self.store.pending_items(mid), parked_since=since, now=now, watchdog_s=d.watchdog_s
@@ -1793,7 +1797,7 @@ class Engine:
             ids = [i.message_id for i in due]
             self._event(
                 "watchdog_escalate",
-                room_id=room.id,
+                room_id=parked_room.id,
                 membership_id=m.id,
                 participant_id=m.participant_id,
                 why="parked",
@@ -1802,7 +1806,7 @@ class Engine:
             )
             out.append(
                 Notice(
-                    room.id,
+                    parked_room.id,
                     "warn",
                     f"watchdog: {m.screen_name} is parked — needs a poke ({reason})."
                     f" Waiting for it: @mention {_id_list(ids)}.",

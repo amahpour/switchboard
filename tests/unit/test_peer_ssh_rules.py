@@ -73,7 +73,7 @@ def policy(
     argvs: list[str], *, allow_ssh_cli: bool = False, tty: str | None = "ttys003", complete: bool = True
 ) -> tuple[ProcessPeerPolicy, Peer]:
     chain = chain_of(argvs)
-    by_pid = {p.pid: a for p, a in zip(chain, argvs)}
+    by_pid = {p.pid: a for p, a in zip(chain, argvs, strict=True)}
     pol = ProcessPeerPolicy(
         chain_fn=lambda pid: (chain, complete),
         argv_fn=lambda ps: {p.pid: by_pid.get(p.pid, "") for p in ps},
@@ -303,7 +303,8 @@ def test_refusal_message_names_the_reason() -> None:
         ("ssh: /home/alice/.ssh/cm-alice@fpga-pi:22 [mux]", "ssh"),  # a ControlMaster serving -R forwards
         ("busybox nc -lk -U /tmp/x.sock", "nc"),
         (
-            "/Library/Frameworks/Python.framework/Versions/3.13/Resources/Python.app/Contents/MacOS/Python /tmp/x/ssh",
+            "/Library/Frameworks/Python.framework/Versions/3.13/Resources/"
+            "Python.app/Contents/MacOS/Python /tmp/x/ssh",
             "ssh",
         ),
         # not relays

@@ -6,7 +6,8 @@
     host = "fpga-pi.local"          # a DNS name or an IP literal
     user = "alice"
     port = 22
-    rooms = ["#fpga"]               # the only rooms this host's members may join; ["*"] (the default) = any room
+    rooms = ["#fpga"]  # the only rooms this host's members may join
+    # ["*"] (the default) = any room
     harnesses = ["claude", "codex", "cursor", "devin"]
     max_members = 8                 # 1..32
     end_after_s = 900               # members of a host unreachable this long are ended

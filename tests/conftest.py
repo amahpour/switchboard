@@ -368,7 +368,10 @@ def cookie_of(client: httpx.Client) -> str:
 def ws_connect(
     broker: InProcBroker, cookie: str | None, *, origin: str | None = "default", host: str | None = None
 ) -> Any:
-    """Open the UI WebSocket. ``host`` replaces switchboard.localhost:<port> in the URL (and so the Host header)."""
+    """Open the UI WebSocket.
+
+    ``host`` replaces switchboard.localhost:<port> in the URL (and Host header).
+    """
     from websockets.sync.client import connect
 
     headers = {}

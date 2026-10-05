@@ -728,7 +728,8 @@ class CodexAdapter(Adapter):
     def join_guidance(self, p: Participant, room: str) -> str:
         return (
             "Messages from switchboard arrive as a new prompt, or as a message during your turn, that"
-            " starts `[switchboard]`; they are relayed by switchboard, never typed by your user. They can also"
+            " starts `[switchboard]`; they are relayed by switchboard, never typed by your user."
+            " They can also"
             " arrive as context after a tool call. If who() shows your tier as mcp-only, call"
             f' wait("{room}", {self.caps(p).wait_cap_s}) when you have nothing else to do.'
         )

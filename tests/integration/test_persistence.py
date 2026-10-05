@@ -30,7 +30,8 @@ def seed_agents(dbpath: Path, room_name: str) -> dict[str, int]:
                 (f"test:{name}", pid, start),
             ).lastrowid
             ids[name] = con.execute(
-                "INSERT INTO memberships(room_id, participant_id, screen_name, cred_hash, joined_at, join_msg_id)"
+                "INSERT INTO memberships(room_id, participant_id, screen_name, cred_hash,"
+                " joined_at, join_msg_id)"
                 " VALUES(?,?,?,?,0,?)",
                 (room_id, p, name, "c" * 64, last),
             ).lastrowid

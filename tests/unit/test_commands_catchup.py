@@ -383,7 +383,10 @@ def test_members_without_a_usable_id_say_why(svc: RoomService, clock: FakeClock)
     for name, why in want.items():
         m = svc.store.find_member(room.id, name)
         host = m.host or "the switchboard machine (yours)"
-        line = f"  subject: {name} · {m.harness} · no session id: ask {name} here for a short summary · host: {host}"
+        line = (
+            f"  subject: {name} · {m.harness} · no session id: ask {name} here for a short"
+            f" summary · host: {host}"
+        )
         assert line in chat(svc)[-1].text.splitlines()
         assert f"{line} ({why})" in res["text"].splitlines()
 
@@ -422,7 +425,8 @@ def test_handle_lines_per_harness_and_a_remote_host(svc: RoomService, clock: Fak
         "claude-1": f"  subject: claude-1 · claude · session {SID} · host: the switchboard machine (yours)",
         "codex-1": f"  subject: codex-1 · codex · session {TID} · host: the switchboard machine (yours)",
         "cursor-1": f"  subject: cursor-1 · cursor · session {CID} · host: the switchboard machine (yours)",
-        "devin-1": "  subject: devin-1 · devin · session brisk-otter-1 · host: the switchboard machine (yours)",
+        "devin-1": "  subject: devin-1 · devin · session brisk-otter-1 · host: the"
+        " switchboard machine (yours)",
         "bench": "  subject: bench · claude · session 5eed0000-0000-4000-8000-000000000003 · host: fpga-pi",
     }
     assert f"claude:{SID}" not in chat(svc)[0].text
@@ -494,7 +498,8 @@ def test_request_text() -> None:
     assert "date filters aren't enough" in lines[5] and "the newest 10 if none is that new" in lines[5]
     assert "Topic: search for it instead" in lines[5] and "their subagents" in lines[5]
     assert (
-        "(at most 4000 characters) with the headings Doing / Decided / Open questions / Conflicts with my work"
+        "(at most 4000 characters) with the headings Doing / Decided / Open questions /"
+        " Conflicts with my work"
         " / Next step, naming the subject in each point"
     ) in lines[6]
     assert "per session: id, message range, newest message time read" in lines[6]
@@ -597,7 +602,8 @@ def test_a_topic_goes_to_the_agent_only(svc: RoomService, clock: FakeClock) -> N
     since = clock.now() - DAY
     hs = [handle("claude-1", "claude", SID), handle("tester", "test", None, why="a test session")]
     assert res["text"].splitlines() == [
-        f'asked codex-1 to catch up on "sprint cleanup" across 2 session(s) since {catchup.when(since)}; it got:',
+        f'asked codex-1 to catch up on "sprint cleanup" across 2 session(s) since'
+        f" {catchup.when(since)}; it got:",
         f"  {hs[0].line()}",
         f"  {hs[1].line()} (a test session)",
     ]

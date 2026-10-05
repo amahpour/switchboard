@@ -268,7 +268,8 @@ def test_joined_hook_latency(broker: InProcBroker, claude: FakeClaude) -> None:
         ts.append(time.perf_counter() - t0)
     ts.sort()
     print(
-        f"joined claude hook round trip p50={ts[5] * 1000:.1f} ms max={ts[-1] * 1000:.1f} ms (n=10, via fake harness)"
+        f"joined claude hook round trip p50={ts[5] * 1000:.1f} ms"
+        f" max={ts[-1] * 1000:.1f} ms (n=10, via fake harness)"
     )
     assert ts[5] < 0.5
 
@@ -321,7 +322,8 @@ def test_codex_sessions_are_keyed_by_thread(broker: InProcBroker) -> None:
         assert cx.recv()["stdout"] == ""
         rows = q(
             broker,
-            "SELECT session_key, approval_mode, hooks_seen_at FROM participants WHERE harness='codex' ORDER BY id",
+            "SELECT session_key, approval_mode, hooks_seen_at FROM participants"
+            " WHERE harness='codex' ORDER BY id",
         )
         assert rows[0][1] == "prompting" and rows[0][2] is not None  # thread A only
         assert rows[1][1] == "unknown" and rows[1][2] is None
@@ -386,14 +388,16 @@ def test_an_unjoined_sibling_thread_cannot_touch_a_joined_thread(broker: InProcB
     cx = FakeClaude(broker, as_harness="codex")
     try:
         assert cx.tool("join", meta={"threadId": "thread-A"}, room="#build", screen_name="codex-1")["ok"]
-        rows = lambda: [
-            tuple(x)
-            for x in q(
-                broker,
-                "SELECT session_key, status, approval_mode, hooks_seen_at"  # noqa: E731
-                " FROM participants",
-            )
-        ]
+
+        def rows():
+            return [
+                tuple(x)
+                for x in q(
+                    broker,
+                    "SELECT session_key, status, approval_mode, hooks_seen_at FROM participants",
+                )
+            ]
+
         before = rows()
         assert before[0][3] is None
         for ev, extra in (

@@ -18,6 +18,7 @@ from conftest import FakeClock, InProcBroker, ws_connect
 from fakes.fake_agent import FakeAgent
 from fakes.fake_authenticator import SoftAuthenticator
 from test_passkeys import PUBLIC, RP_ID, Browser, claim_link, events, hosted_broker, stop, token_of
+from websockets.exceptions import InvalidStatus
 
 from switchboard.broker.passwords import FREE_FAILURES
 from switchboard.broker.people import ONE_TIME_TTL_S
@@ -154,7 +155,7 @@ def test_a_teammate_joins_with_a_one_time_password(hosted: InProcBroker) -> None
     for path in ("/api/me", "/api/rooms", "/api/machines", "/api/people"):
         assert bob.get(path).status_code == 401, path
     assert bob.post("/api/rooms/build/say", {"text": "hi"}).status_code == 401
-    with pytest.raises(Exception):
+    with pytest.raises((OSError, InvalidStatus)):
         ws_connect(hosted, bob.cookies["switchboard_session"], origin=PUBLIC, host="sb.example.com")
     assert bob.post("/api/me/password", {"password": "bob"}).status_code == 400
     assert bob.post("/api/me/password", {"password": BOB_PW}).status_code == 200

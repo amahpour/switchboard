@@ -85,6 +85,7 @@ class Store:
                 (name, now, created_by, budget_per_hour, budget_per_hour, now, hop_limit, rules_text),
             )
             rid = cur.lastrowid
+        assert rid is not None
         room = self.room_by_id(rid)
         assert room is not None
         return room
@@ -223,7 +224,8 @@ class Store:
     ) -> dict[str, int]:
         """Delete a room and every row that names it, in one transaction (DESIGN.md §28.6):
         only while it is still ``name`` and ``created_at`` (ids may be reused, so a room
-        re-created after a delete can have the same id and name), has no active membership (on any host, online or
+        re-created after a delete can have the same id and name), has no active
+        membership (on any host, online or
         not) and the database still has the row counts its backup was checked against
         (``expect_counts``, every table). Then the foreign keys and every table's count
         are checked again; any failure rolls it all back. Records ``room_delete`` with
@@ -389,6 +391,7 @@ class Store:
                         "INSERT INTO deliveries(membership_id, message_id, prio, mentioned) VALUES(?,?,?,?)",
                         (r["id"], mid, prio, int(mentioned)),
                     )
+        assert mid is not None
         msg = self.get_message(mid)
         assert msg is not None
         return msg
@@ -636,7 +639,8 @@ class Store:
                 " VALUES(?,?,?,?,?,?)",
                 (now, room_id, membership_id, participant_id, kind, json.dumps(data or {})),
             )
-            return int(cur.lastrowid)
+            assert cur.lastrowid is not None
+            return cur.lastrowid
 
     def recent_events(
         self,
@@ -818,7 +822,8 @@ class Store:
         now = self.clock.now()
         with db.tx(self.con):
             self.con.execute(
-                "INSERT INTO passkeys(credential_id, public_key, sign_count, name, aaguid, created_at, person_id)"
+                "INSERT INTO passkeys(credential_id, public_key, sign_count, name, aaguid,"
+                " created_at, person_id)"
                 " VALUES(?,?,?,?,?,?,?)",
                 (credential_id, public_key, int(sign_count), name, aaguid, now, person_id),
             )
@@ -1301,7 +1306,8 @@ class Store:
                     f"INSERT INTO participants({','.join(cols)}) VALUES({','.join('?' * len(cols))})",
                     vals,
                 )
-                pid = int(c.lastrowid)
+                assert c.lastrowid is not None
+                pid = c.lastrowid
             else:
                 if cur.host != host:
                     raise ValueError("a session never moves between hosts")
@@ -1416,7 +1422,8 @@ class Store:
                 " joined_at, join_msg_id) VALUES(?,?,?,?,?,?)",
                 (room_id, participant_id, screen_name, cred_hash, now, last),
             )
-            mid = int(cur.lastrowid)
+            assert cur.lastrowid is not None
+            mid = cur.lastrowid
         got = self.get_membership(mid)
         assert got is not None
         return got
@@ -1723,7 +1730,8 @@ class Store:
                 " budget_counted, created_at) VALUES(?,?,?,?,?,?,?)",
                 (membership_id, path, kind, wake_kind, wake_reason, int(counted), now),
             )
-            bid = int(cur.lastrowid)
+            assert cur.lastrowid is not None
+            bid = cur.lastrowid
             for message_id, inline in items:
                 n = self.con.execute(
                     "UPDATE deliveries SET state='offered', batch_id=?, offered_inline=?"

@@ -284,8 +284,10 @@ PLANTED = [
 PLACEHOLDERS = [
     "HOME=/Users/someone and /Users/x/.local and unix:///Users/me/.codex/x.sock and /Users/Shared/y",
     "/Users/ and /Users/$USER/.local and /Users/<user>/code and /Users/.../x",
-    "--home /opt/yk/home/hooks and $SWITCHBOARD_HOME/home/x and /home/dev/switchboard and /home/linuxbrew/.linuxbrew",
-    "~/.claude/projects/-Users-someone-code-app and <scratch>/m0/claude-inbox and tmux-<uid> and /tmp/claude-<uid>",
+    "--home /opt/yk/home/hooks and $SWITCHBOARD_HOME/home/x and /home/dev/switchboard"
+    " and /home/linuxbrew/.linuxbrew",
+    "~/.claude/projects/-Users-someone-code-app and <scratch>/m0/claude-inbox and"
+    " tmux-<uid> and /tmp/claude-<uid>",
     "<session-id>/scratchpad and 00000000-0000-0000-0000-000000000000/scratchpad and " + UUID + " alone",
     "yk-canary and private-name and canary-private and " + CANARY[:-1] + " are not the canary",
 ]

@@ -30,7 +30,10 @@ harnesses = ["devin", "claude"]
 max_members = 4
 end_after_s = 600
 """
-PUB = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMCGkdYxdHrN6N8Lhzn9oRL0Rj6qu5M3QZQpqk2hVg8C switchboard-link fpga-pi"
+PUB = (
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMCGkdYxdHrN6N8Lhzn9oRL0Rj6qu5M3QZQpqk2hVg8C"
+    " switchboard-link fpga-pi"
+)
 
 
 def test_parse_and_validate() -> None:

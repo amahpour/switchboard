@@ -137,7 +137,8 @@ class RemoteCodexAdapter(PullAdapter):
         return (
             "Room messages arrive as context after a tool call, or as the result of"
             f' wait("{room}", {self.caps(p).wait_cap_s}) when you have nothing else to do: switchboard can\'t'
-            " start a turn in a Codex session on this machine. They are relayed by switchboard, never typed by"
+            " start a turn in a Codex session on this machine. They are relayed by switchboard,"
+            " never typed by"
             " your user."
         )
 

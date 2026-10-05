@@ -434,7 +434,7 @@ def build(
 
     def rollup(field: str, pick: Any, main_only: bool) -> list[dict[str, Any]]:
         agg: dict[tuple[str, str], list[float]] = defaultdict(list)
-        for (h, tier, path, reason, label), xs in (main_samples if main_only else samples).items():
+        for (h, tier, _path, reason, label), xs in (main_samples if main_only else samples).items():
             agg[(pick(h, tier, reason), label)] += xs
         out = [{field: k, "label": lab, **_stats(xs)} for (k, lab), xs in agg.items()]
         out.sort(
@@ -477,13 +477,15 @@ def build(
     # the last model each session reported by the end of the window (one reported before the
     # window, e.g. at its join, still names it); scrubbed like any free-form string
     models: dict[int, str] = {}
-    for e in part_all:
-        if e["kind"] == "model" and e["ts"] <= end:
-            mdl = _data(e["data"]).get("model")
+    for event in part_all:
+        if event["kind"] == "model" and event["ts"] <= end:
+            mdl = _data(event["data"]).get("model")
             if isinstance(mdl, str):
-                models[e["participant_id"]] = _safe(mdl)
-    parked = _parked_spells([e for e in room_all if e["kind"] in ("parked", "unparked")], start, end)
-    open_d = defaultdict(Counter)
+                models[event["participant_id"]] = _safe(mdl)
+    parked = _parked_spells(
+        [event for event in room_all if event["kind"] in ("parked", "unparked")], start, end
+    )
+    open_d: defaultdict[int, Counter[str]] = defaultdict(Counter)
     for r in db.q(
         "SELECT d.membership_id, d.state, d.notified_at FROM deliveries d"
         " JOIN memberships m ON m.id=d.membership_id WHERE m.room_id=? AND d.state IN ('pending','offered')",
@@ -791,8 +793,9 @@ def render_markdown(rep: dict[str, Any], *, title: str | None = None, paint: Any
     L.append(
         "Each message counts once per recipient, at the first batch that reached it (deliveries held by a"
         " pause, a /hold or an approval prompt are listed separately, below). T0 is the message's"
-        " time on the broker clock. **turn start**: the new turn began (Claude: the UserPromptSubmit the inbox"
-        " message started; Codex: `thread/status` went active after `turn/start`, or the UserPromptSubmit of a"
+        " time on the broker clock. **turn start**: the new turn began (Claude: the"
+        " UserPromptSubmit the inbox message started; Codex: `thread/status` went active"
+        " after `turn/start`, or the UserPromptSubmit of a"
         " `codex queue` item). **first hook**: the first hook after a Cursor follow-up or a Devin Stop"
         " message. **in context**: a Devin `wait()` answer's PostToolUse, or mid-task context confirmed"
         " (hook ack, steer). **first action**: the tool call that followed a Devin `wait()` answer."
@@ -837,7 +840,8 @@ def render_markdown(rep: dict[str, Any], *, title: str | None = None, paint: Any
     L.append("")
     held = rep["latency"]["held"]
     L.append(
-        "Deliveries that a room pause (`/pause` or the loop guard), a `/hold` or an approval prompt open in the"
+        "Deliveries that a room pause (`/pause` or the loop guard), a `/hold` or an approval"
+        " prompt open in the"
         " recipient's session held up: their latency includes the hold, so they are kept out of the tables"
         " above. Pulls (`read()`/`say()` answers) are never held: the agent asked for them."
         f" The room was paused for {fmt_s(rep['latency']['room_paused_s'])} of the window."
@@ -913,7 +917,8 @@ def render_markdown(rep: dict[str, Any], *, title: str | None = None, paint: Any
         )
     L.append("")
     L.append(
-        "Turns are `turn_start` events (a UserPromptSubmit that began a turn: your own prompts and switchboard's"
+        "Turns are `turn_start` events (a UserPromptSubmit that began a turn: your own"
+        " prompts and switchboard's"
         " wakes; a Devin agent in its `wait()` loop stays in one turn). Wakes are batches that could start a"
         " turn or return a `wait()` (counted against the budget, with Devin re-arms); continuations are"
         " Cursor follow-ups, Devin Stop messages and re-arms. Turns and approval prompts count only while"

@@ -231,7 +231,7 @@ def hook_state_text(paths: Paths) -> str:
 
 def check_hook_copies(paths: Paths) -> list[str]:
     """Names of hook copies whose content no longer matches the hash in their name."""
-    bad = []
+    bad: list[str] = []
     try:
         entries = sorted(paths.hooks_dir.glob("switchboard_hook-*.py"))
     except OSError:

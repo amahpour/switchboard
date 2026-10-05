@@ -133,7 +133,7 @@ def build(path: Path) -> dict[str, int]:
     mu = join(build_room, cursor, "cursor-1")
     md = join(review, devin, "devin-1")
     mb = join(build_room, bot, "bot-a")
-    mg = join(build_room, gone, "helper")
+    join(build_room, gone, "helper")
     store.web_session_create(h("web-session-1"), 7 * 24 * 3600.0)
 
     # the human asks, agents answer; the engine offers, confirms and expires batches

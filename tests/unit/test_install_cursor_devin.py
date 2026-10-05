@@ -62,7 +62,7 @@ def test_golden_plan_and_diff(tmp_path: Path, harness: str, name: str, seed: boo
     plan = MODS[harness].plan(uh, PY, HOME, hook_sha12(), run_commands=False)
     out = io.StringIO()
     render_plan(plan, out)
-    for e, rel in zip(plan.edits, SEEDS[harness]):
+    for e, rel in zip(plan.edits, SEEDS[harness], strict=True):
         gold(harness, f"{name}.{Path(rel).name}.after", norm(e.after))
     gold(harness, f"{name}.diff.txt", norm(out.getvalue()))
 

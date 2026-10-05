@@ -402,8 +402,11 @@ def start_dialer(paths: Paths, *, test_mode: bool = False, out: Any = None) -> i
     out = out or sys.stdout
     pid = running_pid(paths)
     if pid is not None:
-        st = read_state(paths) or {}
-        print(f"switchboard: the dialer already runs (pid {pid}): {st.get('state', '?')}", file=out)
+        existing_state = read_state(paths) or {}
+        print(
+            f"switchboard: the dialer already runs (pid {pid}): {existing_state.get('state', '?')}",
+            file=out,
+        )
         return 0
     os.umask(0o077)
     paths.ensure()

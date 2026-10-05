@@ -20,7 +20,7 @@ class TestAgentAdapter(Adapter):
     harness = "test"
     __test__ = False  # not a pytest class
 
-    def tier(self, p: Participant) -> tuple[str, str | None]:
+    def tier(self, p: Participant | None) -> tuple[str, str | None]:
         return "mcp-only", None
 
     def context_events(self, p: Participant) -> frozenset[str]:

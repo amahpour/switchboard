@@ -385,9 +385,9 @@ def fit_batch(
                 more = True
                 break
             if shrink and inline:
-                lim = _shrink(it, recipient, room, max(0, budget - 1), item_limit)
-                limits[it.message_id] = lim
-                need = len(render_item(it, recipient, room, inline=True, limit=lim)) + 1
+                shrunk_limit = _shrink(it, recipient, room, max(0, budget - 1), item_limit)
+                limits[it.message_id] = shrunk_limit
+                need = len(render_item(it, recipient, room, inline=True, limit=shrunk_limit)) + 1
         kept.append(it)
         used += need
         lim = limits.get(it.message_id, item_limit)

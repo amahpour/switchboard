@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from test_commands import CLI, WEB, Rec, rec, svc  # noqa: F401  (fixtures)
+from test_commands import CLI, WEB, Rec
 from test_store import add_agent
 
 from switchboard import db
@@ -16,6 +16,8 @@ from switchboard.broker.commands import HELP_TEXT, Actor, CommandError, parse_co
 from switchboard.broker.hub import Subscriber
 from switchboard.broker.service import RoomService, ServiceError
 from switchboard.store import Conflict, StoreError
+
+pytest_plugins = ("test_commands",)
 
 
 class StubDelivery:

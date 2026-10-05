@@ -194,7 +194,8 @@ def cross_check(run: Path, chosen: dict[str, dict[str, Any]]) -> None:
         )
         ok = mine in rec.get(ev, set())
         print(
-            f"  params {name}: {'matches a live relay' if ok else 'NO live relay with these keys'} {sorted(mine)}"
+            f"  params {name}: {'matches a live relay' if ok else 'NO live relay with these keys'}"
+            f" {sorted(mine)}"
         )
 
 

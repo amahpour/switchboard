@@ -767,7 +767,7 @@ class RemoteLink:
         except proto.FrameError as e:
             raise LinkClosed(
                 "down", "malformed", f"{self.name}: a malformed hello from the satellite ({e.code})"
-            )
+            ) from e
         if h["proto"] != proto.LINK_PROTO:
             self.send_frame(a, proto.refuse("proto", f"link protocol {h['proto']} is not {proto.LINK_PROTO}"))
             raise LinkClosed(

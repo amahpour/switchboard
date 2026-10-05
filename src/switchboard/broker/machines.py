@@ -688,11 +688,11 @@ class MachineManager:
                 raise _End(linkkey.refuse("removed", REFUSE_TEXT["removed"]), "removed")
             if row.pending and not await self._wait_approval(ws, name):
                 return
-            row = self.state.store.machine(name)
-            if row is None or not row.approved:
+            approved_row = self.state.store.machine(name)
+            if approved_row is None or not approved_row.approved:
                 raise _End(linkkey.refuse("removed", REFUSE_TEXT["removed"]), "removed")
             await ws.send_text('{"t":"approved"}')
-            await self._relay(ws, self._link(row))
+            await self._relay(ws, self._link(approved_row))
         except _End as e:
             if e.code not in ("gone", "timeout"):
                 log.info("machines: a /link connection ended: %s", e.code)

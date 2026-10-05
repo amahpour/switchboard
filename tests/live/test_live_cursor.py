@@ -1,6 +1,7 @@
 """Live Cursor Agent CLI (DESIGN.md §12.4, §13 M5). Not yet tested live: the body
 is written and ready.
-Opt-in: ``SWITCHBOARD_LIVE=cursor SWITCHBOARD_LIVE_DIR=<tmp> uv run pytest -m live tests/live/test_live_cursor.py -s``.
+Opt-in: ``SWITCHBOARD_LIVE=cursor SWITCHBOARD_LIVE_DIR=<tmp> uv run pytest"
+``-m live tests/live/test_live_cursor.py -s``.
 
 One real ``agent --model auto`` in a private tmux server (clean env), in a
 scratch git workspace whose project-local ``.cursor/mcp.json`` and
@@ -314,7 +315,7 @@ def test_2_stop_park_followups(live: Live) -> None:
         live.wait(live.parked, 120, f"the stop hook to park ({i})")
         time.sleep(1.0)
         mid = live.say(f"ping {i}: reply in #build with the switchboard say tool, text exactly: pong {i}")
-        b = live.wait(lambda: live.batch_for(mid), 60, f"follow-up {i} confirmed")
+        b = live.wait(lambda mid=mid: live.batch_for(mid), 60, f"follow-up {i} confirmed")
         assert b["path"] == "stop_followup" and b["wake_kind"] == "stop_cont"
         lat.append(b["turn_start_at"] - live.msg_ts(mid))
     res = {

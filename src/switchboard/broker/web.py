@@ -190,6 +190,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         if page == "index.html":
             # The preference reaches <html> in the response, before CSS or app.js can paint.
             # It is an enum checked on write and by the schema, never text from a request.
+            assert w is not None
             prefs = state.store.preferences(w.person_id)
             html = (STATIC_DIR / page).read_text(encoding="utf-8")
             html = html.replace('data-theme="system"', f'data-theme="{prefs["theme"]}"', 1)
@@ -433,6 +434,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 "No setup is in progress in this browser (it takes five minutes at"
                 " most): sign in with the one-time password again.",
             )
+        assert claim is not None
         try:
             reg = wa.register_finish(cer["fido"], body.get("credential"))
         except ValueError as e:
@@ -1236,6 +1238,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 if t == "ping":
                     sub.offer({"t": "pong"})
                 elif t == "hello":
+                    assert isinstance(frame, dict)
                     if not _ws_hello(state, sub, frame):
                         break
                 else:
