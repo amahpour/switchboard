@@ -3692,6 +3692,7 @@
     d.append(el('p', 'board-detail-state', (BOARD_STATE[i.state] || i.state) + ' · ' + boardWho(i)));
     if (boardWhere(i)) d.append(el('code', 'board-where', boardWhere(i)));
     if (i.detail) d.append(mdBody(i.detail, []));
+    if (i.answer) d.append(el('p', 'board-answer', 'Answer: ' + i.answer));
     if (i.reason) d.append(el('p', 'board-reason', (i.state === 'dropped' ? 'Dropped: ' : 'Why: ') + i.reason));
     if (i.commit) d.append(el('p', 'board-reason', 'Fixed in ' + i.commit.slice(0, 12)));
     const acts = el('div', 'board-actions');

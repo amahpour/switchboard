@@ -1430,6 +1430,7 @@ def test_post_appears_when_the_board_is_settled_and_asks_first(ui: UI) -> None:
     expect(page.locator("#board .board-post")).to_have_count(0)  # Q1 is still open
     page.click('#board .board-card[data-item="Q1"]')
     page.locator('#board .board-detail button[data-option="0"]').click()
+    expect(page.locator("#board .board-detail .board-answer")).to_have_text("Answer: Before tax")
     panel = page.locator("#board .board-post")
     expect(panel).to_be_visible()
     expect(panel.locator("li")).to_have_text(["claude-1: F2, F3, Q1", "codex-1: F4"])
