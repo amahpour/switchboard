@@ -6,7 +6,8 @@
   (``push: deliver``) and the MCP server posts it into its parent session's
   inbox socket (``mcp/claude_inbox.py``); ``mcp.posted`` reports back.
   - Idle wake: only when the hook status is idle **and** the last registry
-    read (at most 0.5 s old) says ``idle``. A new turn starts in ~40 ms.
+    read (at most 0.5 s old) says ``idle`` or ``shell`` (a background shell
+    outlived the turn). A new turn starts in ~40 ms.
   - Mid-task priority: pushed only to ``bypassPermissions`` members; everyone
     else gets it as PostToolUse / PostToolUseFailure / UserPromptSubmit
     context (pull), so a queued inbox frame never straddles an approval
@@ -23,7 +24,7 @@ every 250 ms for joined Claude sessions on this machine (through the broker's
 local host view, DESIGN.md §27.5.6). Channels and registry views are keyed
 ``(host, pid)``. It sets and clears ``waiting-approval`` (``status == "waiting"``),
 and it ends a turn that fired no Stop hook (Esc) once the registry has said
-``idle`` for a second after the last hook. The ``status`` field is undocumented
+``idle`` or ``shell`` for a second after the last hook. The ``status`` field is undocumented
 (FINDINGS §2 1.5).
 
 **A Claude session on a remote host** (DESIGN.md §27.5.6, §27.7) works the same

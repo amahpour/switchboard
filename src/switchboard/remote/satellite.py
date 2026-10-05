@@ -31,7 +31,8 @@ no pty and no network socket (``tests/unit/test_satellite_static.py``).
   approval hold's enforcer on this machine whatever the desktop sends: it must
   carry ``chk``, ``chk`` must name the Claude this connection's MCP server was
   attested under at its ``mcp.hello`` (never another session's), that Claude
-  must be watched and alive, and a fresh read must say ``chk.want``. If not,
+  must be watched and alive, and a fresh read must match ``chk.want`` (for
+  Claude ``want: idle``, either ``idle`` or ``shell``). If not,
   a fresh ``reg`` frame, then this satellite's own ``mcp.posted {ok: false,
   err}`` (``stale_status``, or ``no_chk``/``bad_chk`` for a push the broker
   should never have sent), marked ``facts.lastmile`` and with a negative
@@ -749,7 +750,8 @@ class Satellite:
     def last_mile(self, lc: LocalConn, line: dict[str, Any], chk: dict[str, Any] | None) -> bool:
         """A ``deliver`` push (or any line that carries ``chk = {pid, start, want}``): relay
         it only if ``chk`` names the Claude this connection's MCP server was attested
-        under, that Claude is watched and alive, and a read now says ``want``. This machine
+        under, that Claude is watched and alive, and a read now matches ``want``.
+        For an idle wake, ``shell`` also matches: a background command can outlive the turn. This machine
         enforces the approval hold itself, whatever the desktop sends: nothing is ever
         posted into an approval prompt, and never into another session than ``chk`` names.
         A Codex MCP server's wake (issue #63) is relayed only if ``chk`` names the Codex it
