@@ -85,7 +85,8 @@ class Store:
                 (name, now, created_by, budget_per_hour, budget_per_hour, now, hop_limit, rules_text),
             )
             rid = cur.lastrowid
-        assert rid is not None
+        if rid is None:
+            raise StoreError("room insert returned no id")
         room = self.room_by_id(rid)
         assert room is not None
         return room
@@ -391,7 +392,8 @@ class Store:
                         "INSERT INTO deliveries(membership_id, message_id, prio, mentioned) VALUES(?,?,?,?)",
                         (r["id"], mid, prio, int(mentioned)),
                     )
-        assert mid is not None
+        if mid is None:
+            raise StoreError("message insert returned no id")
         msg = self.get_message(mid)
         assert msg is not None
         return msg
@@ -639,7 +641,8 @@ class Store:
                 " VALUES(?,?,?,?,?,?)",
                 (now, room_id, membership_id, participant_id, kind, json.dumps(data or {})),
             )
-            assert cur.lastrowid is not None
+            if cur.lastrowid is None:
+                raise StoreError("event insert returned no id")
             return cur.lastrowid
 
     def recent_events(
@@ -1306,7 +1309,8 @@ class Store:
                     f"INSERT INTO participants({','.join(cols)}) VALUES({','.join('?' * len(cols))})",
                     vals,
                 )
-                assert c.lastrowid is not None
+                if c.lastrowid is None:
+                    raise StoreError("participant insert returned no id")
                 pid = c.lastrowid
             else:
                 if cur.host != host:
@@ -1422,7 +1426,8 @@ class Store:
                 " joined_at, join_msg_id) VALUES(?,?,?,?,?,?)",
                 (room_id, participant_id, screen_name, cred_hash, now, last),
             )
-            assert cur.lastrowid is not None
+            if cur.lastrowid is None:
+                raise StoreError("membership insert returned no id")
             mid = cur.lastrowid
         got = self.get_membership(mid)
         assert got is not None
@@ -1730,7 +1735,8 @@ class Store:
                 " budget_counted, created_at) VALUES(?,?,?,?,?,?,?)",
                 (membership_id, path, kind, wake_kind, wake_reason, int(counted), now),
             )
-            assert cur.lastrowid is not None
+            if cur.lastrowid is None:
+                raise StoreError("batch insert returned no id")
             bid = cur.lastrowid
             for message_id, inline in items:
                 n = self.con.execute(

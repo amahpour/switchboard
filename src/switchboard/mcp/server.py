@@ -257,10 +257,9 @@ class McpState:
             res["err"] = "guard"
         elif not isinstance(text, str) or not text.startswith("[switchboard]"):
             res["err"] = "bad_text"
-        elif nonce is None:
+        elif nonce is None or not isinstance(tid, str):
             res["err"] = "not_mine"  # not a thread that joined through this process
         else:
-            assert isinstance(tid, str)
             try:
                 res["t_post"] = await codex_wake.wake(
                     self.codex_sock, tid, nonce, text, bid, self.codex_proven
@@ -434,7 +433,10 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RW_IDEM)
     async def join(room: str, screen_name: str, ctx: Context) -> str:
-        """Join a chat room when your user asks. Return the room rules and recent messages."""
+        """Join a switchboard chat room (only when your user asks).
+
+        Returns the room rules and recent messages.
+        """
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         if st.harness == "codex" and not tid:

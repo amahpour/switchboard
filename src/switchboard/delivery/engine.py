@@ -359,7 +359,7 @@ class Engine:
         )
         if rel is None:
             unread = rules.unread_stubs(pending) if sink is not None and sink.kind == "wait" else []
-            if unread:
+            if unread and sink is not None:
                 # A wait() takes peer messages announced as "not shown here" and never read:
                 # a pull like read() (whole texts, not counted), so a wait loop that skipped
                 # the read() can't sit on them until its timeout (the read-first rule, §24).
@@ -370,7 +370,6 @@ class Engine:
                     counted=False,
                     reason="unread",
                 )
-                assert sink is not None
                 return self._fill_sink(p, m, room, pull, sink, pending) + unparked()
             if rules.budget_blocked(
                 pending,

@@ -1,7 +1,7 @@
 """Live Cursor Agent CLI (DESIGN.md §12.4, §13 M5). Not yet tested live: the body
 is written and ready.
-Opt-in: ``SWITCHBOARD_LIVE=cursor SWITCHBOARD_LIVE_DIR=<tmp> uv run pytest"
-``-m live tests/live/test_live_cursor.py -s``.
+Opt-in with ``SWITCHBOARD_LIVE=cursor`` and ``SWITCHBOARD_LIVE_DIR=<tmp>``:
+``uv run pytest -m live tests/live/test_live_cursor.py -s``.
 
 One real ``agent --model auto`` in a private tmux server (clean env), in a
 scratch git workspace whose project-local ``.cursor/mcp.json`` and

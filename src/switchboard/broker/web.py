@@ -187,10 +187,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             if page != "index.html"
             else {**NO_STORE, "content-security-policy": app_csp(state.web_origin)}
         )
-        if page == "index.html":
+        if page == "index.html" and w is not None:
             # The preference reaches <html> in the response, before CSS or app.js can paint.
             # It is an enum checked on write and by the schema, never text from a request.
-            assert w is not None
             prefs = state.store.preferences(w.person_id)
             html = (STATIC_DIR / page).read_text(encoding="utf-8")
             html = html.replace('data-theme="system"', f'data-theme="{prefs["theme"]}"', 1)
@@ -426,7 +425,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return _svc_err(e)
         claim, wa = state.claim, state.webauthn
         cer = claim.ceremony(request.cookies.get(SETUP_COOKIE)) if claim is not None else None
-        if cer is None or wa is None or cer.get("fido") is None:
+        if claim is None or cer is None or wa is None or cer.get("fido") is None:
             failed("bad_claim")
             return _err(
                 403,
@@ -434,7 +433,6 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 "No setup is in progress in this browser (it takes five minutes at"
                 " most): sign in with the one-time password again.",
             )
-        assert claim is not None
         try:
             reg = wa.register_finish(cer["fido"], body.get("credential"))
         except ValueError as e:
@@ -1237,8 +1235,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 t = frame.get("t") if isinstance(frame, dict) else None
                 if t == "ping":
                     sub.offer({"t": "pong"})
-                elif t == "hello":
-                    assert isinstance(frame, dict)
+                elif t == "hello" and isinstance(frame, dict):
                     if not _ws_hello(state, sub, frame):
                         break
                 else:
