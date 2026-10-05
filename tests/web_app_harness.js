@@ -447,6 +447,21 @@ const SCENARIOS = {
     });
   },
 
+  // An unknown approval mode may also let the agent act without asking.
+  async unknown_approval_mode() {
+    const members = MEMBERS.map(function (m) { return m.name === 'codex-1' ? { ...m, approval_mode: 'unknown' } : m; });
+    const { w, ws } = await buildRoom(members);
+    const row = memberButton(w, 'codex-1');
+    const flag = findAll(w.$('buddy-list'), function (n) { return n.classList.contains('flag-unknown'); })[0];
+    click(row);
+    return report(w, ws, {
+      row: row.textContent,
+      flagLabel: flag.attrs['aria-label'],
+      chipTitle: w.$('st-approvals').title,
+      inspector: w.$('insp-body').textContent,
+    });
+  },
+
   // Header chips: Paused, and the loop guard off.
   async status_chips() {
     const { w, ws } = await buildRoom(MEMBERS);

@@ -155,6 +155,19 @@ def test_idle_wake_lands_in_pi_inbox_and_token_confirms(link: FakeLink, fc: Fake
     assert part(link)["push_expiries"] == 0
 
 
+def test_remote_background_shell_still_accepts_an_idle_inbox_wake(link: FakeLink, fc: FakeClaude) -> None:
+    """The broker and satellite must agree that shell is idle after the Stop hook."""
+    joined_idle(fc, link)
+    fc.set_registry("shell")
+    assert wait_for(lambda: (v := relayed(link)) is not None and v.status == "shell", what="shell view")
+    mid = say(link, "check the background task")
+    [(_conn, frame)] = fc.inbox.wait_frames(1)
+    body = frame["message"]["content"]
+    assert ids_in(body) == [mid]
+    assert turn_from(fc, body) == ""
+    assert wait_for(lambda: state(link, mid) == "in_context", what="confirmed shell wake")
+
+
 def test_waiting_registry_holds_and_shows_waiting_approval(link: FakeLink, fc: FakeClaude) -> None:
     joined_idle(fc, link)
     fc.hook(fixture("UserPromptSubmit"))

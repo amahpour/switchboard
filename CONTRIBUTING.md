@@ -46,6 +46,7 @@ SWITCHBOARD_IMAGE=switchboard:dev uv run pytest -m image tests/image   # about 2
 ```
 
 The UI's screenshot lands in `e2e-artifacts/image/`. CI's `image` job builds the image for linux/amd64 on every PR that runs the tests (with the build cache), runs these, and uploads the screenshot as `image-artifacts`.
+On Linux, the fixture waits for the Docker bridge and both container links to finish IPv6 address setup before opening Chromium. A proxy health check can pass earlier, while the later address change interrupts a browser request with `ERR_NETWORK_CHANGED`.
 
 **Linux:** `docker compose -f sandbox/compose.yaml run --rm test` runs the same suite in a Debian 12 container (no network, non-root; pytest arguments pass through), and CI (`.github/workflows/test.yml`) runs it on `ubuntu-latest` and `macos-latest`. See [docs/SANDBOX.md §10](docs/SANDBOX.md#10-the-linux-test-run).
 

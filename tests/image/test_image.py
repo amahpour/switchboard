@@ -29,6 +29,7 @@ import shutil
 import socket
 import ssl
 import subprocess
+import sys
 import time
 import urllib.request
 import uuid
@@ -128,6 +129,50 @@ def wait_for(what: str, fn: Any, timeout: float = WAIT_S) -> Any:
         time.sleep(0.25)
 
 
+def bridge_links_ready(bridge: str, links: list[Any], addresses: list[Any]) -> bool:
+    """All of this stack's host interfaces finished IPv6 duplicate-address detection."""
+    names = {bridge, *(link["ifname"] for link in links)}
+    if len(names) != 3:  # the bridge, broker and Caddy
+        return False
+    ready = {
+        interface["ifname"]
+        for interface in addresses
+        if any(
+            addr.get("family") == "inet6" and addr.get("scope") == "link" and not addr.get("tentative", False)
+            for addr in interface.get("addr_info", [])
+        )
+    }
+    return names <= ready
+
+
+def wait_for_docker_links(network: str) -> None:
+    """A new Linux Docker bridge changes Chromium's network while IPv6 addresses arrive.
+    Wait for the actual link event before opening a browser through the published proxy."""
+    if sys.platform != "linux" or shutil.which("ip") is None:
+        return  # Docker Desktop's bridge is in its VM, not on the browser's host
+    network_id = docker("network", "inspect", "-f", "{{.Id}}", network).stdout.strip()
+    bridge = f"br-{network_id[:12]}"
+    if subprocess.run(["ip", "link", "show", "dev", bridge], capture_output=True).returncode:
+        return  # rootless Docker keeps its bridge in another network namespace
+    disabled = Path(f"/proc/sys/net/ipv6/conf/{bridge}/disable_ipv6")
+    if disabled.exists() and disabled.read_text().strip() == "1":
+        return
+
+    def ready() -> bool:
+        links = subprocess.run(
+            ["ip", "-j", "link", "show", "master", bridge],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        addresses = subprocess.run(
+            ["ip", "-j", "-6", "addr", "show"], capture_output=True, text=True, check=True
+        )
+        return bridge_links_ready(bridge, json.loads(links.stdout), json.loads(addresses.stdout))
+
+    wait_for("Docker bridge and container links to finish IPv6 setup", ready, timeout=10.0)
+
+
 class Pinned(http.client.HTTPSConnection):
     """https to ``sb.test`` for real (SNI, Host, the certificate checked against Caddy's CA),
     with the name resolved to 127.0.0.1 here instead of by DNS."""
@@ -198,6 +243,7 @@ class Stack:
         wait_for("Caddy's local CA", lambda: docker("cp", f"{self.caddy}:{CADDY_ROOT}", str(self.ca)))
         wait_for("the broker's /healthz", lambda: self.healthz() == "ok\n")
         wait_for("the proxy", lambda: self.https("GET", "/healthz")[0] == 200)
+        wait_for_docker_links(self.net)
         return self
 
     def down(self) -> None:
@@ -341,6 +387,25 @@ def stack(image: str, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Stac
 
 
 # ----------------------------------------------------------------------- tests
+def test_browser_waits_for_the_docker_bridge_and_both_container_links() -> None:
+    """A proxy health check can pass before Linux finishes IPv6 address assignment;
+    Chromium sees the later assignment as a network change during a request."""
+    bridge = "br-example"
+    links = [{"ifname": "veth-broker"}, {"ifname": "veth-caddy"}]
+    addresses = [
+        {"ifname": name, "addr_info": [{"family": "inet6", "scope": "link", "flags": []}]}
+        for name in (bridge, "veth-broker")
+    ]
+    assert not bridge_links_ready(bridge, links, addresses)
+    addresses.append(
+        {"ifname": "veth-caddy", "addr_info": [{"family": "inet6", "scope": "link", "flags": []}]}
+    )
+    assert bridge_links_ready(bridge, links, addresses)
+    assert not bridge_links_ready(bridge, links[:1], addresses)
+    addresses[-1]["addr_info"][0]["tentative"] = True
+    assert not bridge_links_ready(bridge, links, addresses)
+
+
 def test_image_reports_its_revision_label(stack: Stack) -> None:
     """The running broker's full commit and the installed CLI agree with the OCI revision."""
     label = docker(

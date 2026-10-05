@@ -943,7 +943,7 @@
       chip.title = 'approvals are off in this session: room messages can make it act without asking';
     } else if (unknown.length) {
       chip.append(icon('warn'), el('span', null, 'Approval mode unknown: ' + unknown.join(', ')));
-      chip.title = 'approval mode unknown: treat like approvals off';
+      chip.title = 'approval mode unknown: may act without asking';
     }
   }
 
@@ -1325,9 +1325,9 @@
     attn.setAttribute('aria-label', 'Needs attention');
     const notes = [];
     if (m.approval_mode === 'bypass') {
-      notes.push(note('danger', 'warn', 'Approvals off', [' What it reads (tool output, web pages) can steer it. Room messages can make it act without asking.']));
+      notes.push(note('danger', 'warn', 'Approvals off', [' It runs commands and edits files without asking, so anything it reads (tool output, web pages, room messages) can make it act on its own.']));
     } else if (m.approval_mode === 'unknown') {
-      notes.push(note('danger', 'warn', 'Approval mode unknown', [' Treat it like approvals off.']));
+      notes.push(note('danger', 'warn', 'Approval mode unknown', [' It may run commands and edit files without asking. Treat it like approvals off.']));
     }
     if (m.parked) {
       const pokeCmd = 'read ' + r.name + ' and go back to wait()';
@@ -1504,7 +1504,7 @@
     item('A topic…', '/catchup ' + m.name + ' on "…"', '/catchup ' + m.name + ' on ""', 1);
     item('The whole room', '/catchup ' + m.name, '/catchup ' + m.name, 0);
     if (m.approval_mode === 'bypass') {
-      menu.append(el('p', 'note note-danger', m.name + ' has approvals off: session text it reads can steer it. Prefer an agent that prompts.'));
+      menu.append(el('p', 'note note-danger', m.name + ' has approvals off: transcripts it reads can make it act without asking. Prefer an agent that prompts.'));
     }
     menu.addEventListener('keydown', function (ev) {  // arrow keys move between items
       const i = items.indexOf(document.activeElement);
@@ -1772,7 +1772,7 @@
         if (flag) nl.append(flag);
         nl.append(el('span', 'm-status', statusWord(m) + ' · ' + harnessOf(m.harness)[1]));
         main.append(nl);
-        if (m.approval_mode === 'bypass') main.append(el('span', 'm-warn', 'Approvals off: what it reads can steer it'));
+        if (m.approval_mode === 'bypass') main.append(el('span', 'm-warn', 'Approvals off: acts without asking'));
         if (m.parked) main.append(el('span', 'm-warn', 'Parked — needs a poke'));
         o.append(withDot(avatar(m.harness, 'agent', m.name), m), main, tierChip(m));
         if (i === p.sel) selected = o;

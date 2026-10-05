@@ -135,6 +135,13 @@ def test_approval_flags_explain_the_risk_without_extra_member_rows() -> None:
         },
     ]
 
+def test_unknown_approval_mode_says_the_agent_may_act_without_asking() -> None:
+    out = run("unknown_approval_mode")
+    assert "Approval mode unknown" not in out["row"]
+    assert out["flagLabel"] == "Approval mode unknown: this agent may run commands and edit files without asking."
+    assert out["chipTitle"] == "approval mode unknown: may act without asking"
+    assert "It may run commands and edit files without asking" in out["inspector"]
+
 
 def test_the_status_chips_show_paused_and_the_loop_guard_off() -> None:
     out = run("status_chips")
@@ -169,6 +176,8 @@ def test_the_inspector_shows_the_member_detail_and_closes_when_it_leaves() -> No
         "read #build and go back to wait()" in out["devin"] and "codex" not in out["devin"].split("Catch")[0]
     )
     c = out["codex"]["body"]
+    assert "It runs commands and edits files without asking" in c
+    assert "anything it reads (tool output, web pages, room messages) can make it act on its own" in c
     assert out["codex"]["pos"] == "Agent 2 of 4"
     assert (
         "3f2a…c91e" in c
