@@ -767,6 +767,8 @@ def test_custom_room_rules_copy_from_settings_and_edit_on_a_phone(ui: UI) -> Non
     bounds = dialog.bounding_box()
     assert bounds is not None and abs(bounds["x"]) < 2 and abs(bounds["width"] - 390) < 2
     expect(phone.locator("#app-dialog-rules")).to_have_value("Work in a worktree.")
+    # since #140 the rules ride along once after an edit, not with every delivery
+    expect(phone.locator("#app-dialog-body")).to_contain_text("once more after each edit")
     phone.locator("#app-dialog-rules").fill("Post a PR link.")
     phone.click("#app-dialog-action")
     expect(dialog).to_be_hidden()
