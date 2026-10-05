@@ -74,6 +74,14 @@ def account(state: "BrokerState", ident: str) -> tuple[str, "PersonRow | None"]:
     return ("person", p) if p is not None and p.email is None else ("none", None)
 
 
+def email_of(state: "BrokerState", person_id: int | None) -> str | None:
+    """The email of a person, or of the owner (None), or None when they have none (#192)."""
+    if person_id is None:
+        return state.store.owner_email()
+    p = state.store.person(person_id)
+    return p.email if p is not None else None
+
+
 def name_problem(state: "BrokerState", name: Any) -> str | None:
     """Why ``name`` can't be a new person's, or None. Names look like screen names (they are
     @mentioned the same way): a-z first, then a-z, 0-9, ``_`` or ``-``, at most 24."""

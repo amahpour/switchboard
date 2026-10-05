@@ -363,7 +363,9 @@ def test_people_sign_in_with_their_email_once_they_have_one(hosted: InProcBroker
         r = signin(Browser(hosted), who, BOB_PW)
         assert r.status_code == 200 and r.json()["human"] == "bob", who
     assert signin(Browser(hosted), "bob", BOB_PW).status_code == 403
-    assert bob.get("/api/me").status_code == 200  # a session already signed in carries on
+    me = bob.get("/api/me")  # a session already signed in carries on, and knows who it signs in as
+    assert me.status_code == 200 and me.json()["email"] == "bob@example.com"
+    assert admin.get("/api/me").json()["email"] is None
     # the admin: by name until they have an email, by email after, and as admin always
     assert signin(Browser(hosted), "alice", ADMIN_PW).json()["next"] == "app"
     r = admin.post("/api/people/owner/email", {"email": "alice@example.com"})
@@ -372,6 +374,17 @@ def test_people_sign_in_with_their_email_once_they_have_one(hosted: InProcBroker
     for who in ("alice@example.com", "admin"):
         r = signin(Browser(hosted), who, ADMIN_PW)
         assert r.status_code == 200 and r.json()["human"] == "alice", who
+    # someone invited with an email set signs in with it and their one-time password, and the
+    # Choose page's hidden username (for a password manager) is that email
+    carol = add(admin, "carol")
+    assert (
+        admin.post(f"/api/people/{carol['person']['id']}/email", {"email": "carol@example.com"}).status_code
+        == 200
+    )
+    br = Browser(hosted)
+    r = signin(br, "carol@example.com", carol["password"])
+    assert r.status_code == 200 and r.json()["next"] == "setup", r.text
+    assert br.get("/api/setup/state").json()["email"] == "carol@example.com"
     # an email is one person's: not bob's for the admin, nor nonsense
     assert admin.post("/api/people/owner/email", {"email": "bob@example.com"}).status_code == 409
     assert admin.post(f"/api/people/{pid}/email", {"email": "alice@example.com"}).status_code == 409
@@ -382,7 +395,7 @@ def test_people_sign_in_with_their_email_once_they_have_one(hosted: InProcBroker
     assert signin(Browser(hosted), "bob@example.com", BOB_PW).status_code == 403
     evs = hosted.on_loop(lambda: hosted.state.store.recent_events(kinds=["people"], limit=200))
     got = sorted((e.id, e.data["person"], e.data["set"]) for e in evs if e.data.get("what") == "email")
-    assert [g[1:] for g in got] == [("bob", True), ("alice", True), ("bob", False)]
+    assert [g[1:] for g in got] == [("bob", True), ("alice", True), ("carol", True), ("bob", False)]
     assert bob.post(f"/api/people/{pid}/email", {"email": "x@example.com"}).status_code == 403
 
 

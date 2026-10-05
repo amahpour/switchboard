@@ -138,7 +138,7 @@
       return;
     }
     mode = st.mode;
-    $('setup-user').value = st.human || '';
+    $('setup-user').value = st.email || st.human || '';  // what a password manager saves: who signs in
     $('choose-lead').textContent = mode === 'claim'
       ? 'You’re the admin of this switchboard, signed in as ' + st.human + '. Choose your own password, or a passkey instead.'
       : 'Hi ' + st.human + '. Your one-time password worked. Choose your own password, or a passkey instead.';

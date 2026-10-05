@@ -339,7 +339,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         pk = state.webauthn is not None
         w = who(request)
         if w is not None and w.must_reset:
-            return _ok({"mode": "reset", "human": w.name, "passkeys_work": pk})
+            email = people.email_of(state, w.person_id)
+            return _ok({"mode": "reset", "human": w.name, "email": email, "passkeys_work": pk})
         if claim_ceremony(request) is not None:
             return _ok({"mode": "claim", "human": state.cfg.human_name, "passkeys_work": pk})
         return _ok({"mode": "link" if claim_open() else "none", "passkeys_work": pk})
@@ -1141,6 +1142,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         resp = _ok(
             {
                 "human": w.name,
+                "email": people.email_of(state, w.person_id),  # who signs in (#192, §39)
                 "admin": w.owner and state.hosted,  # the admin section (§32.3)
                 "version": __version__,
                 "commit": build_info.commit(),

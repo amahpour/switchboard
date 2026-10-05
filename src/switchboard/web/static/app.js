@@ -2678,7 +2678,7 @@
     const err = $('confirm-error');
     const ok = $('confirm-ok');
     const pk = $('confirm-passkey');
-    $('confirm-user').value = (state.me && state.me.human) || '';
+    $('confirm-user').value = (state.me && (state.me.email || state.me.human)) || '';
     input.value = '';
     err.textContent = '';
     err.classList.add('hidden');
@@ -2861,8 +2861,9 @@
     head.append(icon('key'), el('span', 'passkey-title', 'Your password'),
       el('span', 'password-state', me.password ? 'set' : 'none'));
     card.append(head);
-    card.append(el('p', 'fine', me.password ? 'You sign in with your name, ' + me.human + ', and this password.'
-      : 'None yet: you sign in with a passkey. Set one to sign in anywhere with your name, ' + me.human + '.'));
+    const login = me.email ? 'your email, ' + me.email : 'your name, ' + me.human;
+    card.append(el('p', 'fine', me.password ? 'You sign in with ' + login + ', and this password.'
+      : 'None yet: you sign in with a passkey. Set one to sign in anywhere with ' + login + '.'));
     const form = el('form', 'passkey-add');
     form.id = 'password-form';
     form.setAttribute('autocomplete', 'on');
@@ -2870,7 +2871,7 @@
     user.type = 'text';
     user.name = 'username';
     user.autocomplete = 'username';
-    user.value = me.human || '';
+    user.value = me.email || me.human || '';
     user.tabIndex = -1;
     user.readOnly = true;
     user.setAttribute('aria-hidden', 'true');

@@ -177,3 +177,8 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
     ui.problems.clear()
     sign_in(again, "bob@example.com", BOB_PW)
     expect(again.locator("#me-name")).to_have_text("bob")
+    again.click("#me-settings")
+    expect(again.locator("#app-dialog")).to_contain_text(
+        "You sign in with your email, bob@example.com, and this password."
+    )
+    expect(again.locator('#password-form input[name="username"]')).to_have_value("bob@example.com")
