@@ -218,16 +218,20 @@ def _info_linux(pid: int) -> ProcInfo | None:
 
 # ------------------------------------------------------------------ fallback
 def _info_ps(pid: int) -> ProcInfo | None:
-    out = _run_ps(["-o", "ppid=,uid=,lstart=,comm=", "-p", str(pid)]).strip()
+    out = _run_ps(["-o", "stat=,ppid=,uid=,lstart=,comm=", "-p", str(pid)]).strip()
     if not out:
         return None
     parts = out.split()
+    if parts[0].startswith("Z"):
+        # A zombie (exited, not yet reaped) is still listed, with its start time; it is not
+        # alive. On macOS proc_pidinfo fails for one, so info() asks ps (as /proc says on Linux).
+        return None
     try:
-        ppid, uid = int(parts[0]), int(parts[1])
-        start = time.mktime(time.strptime(" ".join(parts[2:7]), "%a %b %d %H:%M:%S %Y"))
+        ppid, uid = int(parts[1]), int(parts[2])
+        start = time.mktime(time.strptime(" ".join(parts[3:8]), "%a %b %d %H:%M:%S %Y"))
     except (ValueError, IndexError):
         return None
-    comm = os.path.basename(" ".join(parts[7:])) if len(parts) > 7 else ""
+    comm = os.path.basename(" ".join(parts[8:])) if len(parts) > 8 else ""
     return ProcInfo(pid=pid, ppid=ppid, start=start, uid=uid, comm=comm)
 
 
