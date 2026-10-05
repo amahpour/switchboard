@@ -448,6 +448,20 @@ class UIWorld:
         finally:
             not_test_mode(b)
 
+    def set_approval_modes(self, room: str, modes: dict[str, str]) -> None:
+        """Set seeded agents' approval modes and publish the resulting Members frame."""
+        b = self.broker
+
+        def update() -> None:
+            st = b.state
+            row = st.store.get_room(room)
+            for name, mode in modes.items():
+                member = st.store.find_member(row.id, name)
+                st.store.update_participant(member.participant_id, approval_mode=mode)
+            st.hub.members_changed(room)
+
+        b.on_loop(update)
+
     def agent_call(self, room: str, name: str, tool: str, **args: Any) -> dict[str, Any]:
         """Any tool call from an agent joined by ``add_agents`` (the review board's, #80)."""
         loop = self._loop

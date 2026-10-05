@@ -119,6 +119,19 @@ def test_the_members_list_keeps_every_flag() -> None:
     assert out["roomEmptyHidden"]
 
 
+def test_approvals_chip_counts_bypass_and_unknown_without_listing_many_names() -> None:
+    out = run("approvals_chip_cases")
+    assert out == {
+        "one": "Approvals off: codex-1",
+        "many": "Approvals off for 3 agents",
+        "mixed": "4 agents may act without asking",
+        "mixedTip": (
+            "Approvals off: claude-1, codex-1; Unknown: devin-1, bench@fpga-pi."
+            " Unknown agents may run commands and edit files without asking."
+        ),
+    }
+
+
 def test_approval_flags_explain_the_risk_without_extra_member_rows() -> None:
     out = run("member_flag_tooltips")
     assert out["warnings"] == 0
@@ -143,7 +156,8 @@ def test_unknown_approval_mode_says_the_agent_may_act_without_asking() -> None:
         out["flagLabel"]
         == "Approval mode unknown: this agent may run commands and edit files without asking."
     )
-    assert out["chipTitle"] == "approval mode unknown: may act without asking"
+    assert "Unknown: codex-1" in out["chipTip"]
+    assert "may run commands and edit files without asking" in out["chipTip"]
     assert "It may run commands and edit files without asking" in out["inspector"]
 
 
