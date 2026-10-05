@@ -24,14 +24,14 @@ The rules are in [CLAUDE.md](../../../CLAUDE.md); this is the order of work. It 
    | `src/switchboard/remote/` | `uv run pytest -m twohost tests/twohost` (Docker) |
    | timing, processes or sockets in a test | that test 20 times alone: `for i in $(seq 20); do uv run pytest -q -p no:cacheprovider <test> \|\| break; done` |
 
-   A test the change can't touch that fails under `-n auto` and passes alone: say which in the pull request and go on. One that fails alone is yours until shown otherwise.
+   A test that fails under `-n auto` and passes alone is flaky, and a flaky test is a bug whoever's change it is: find the cause and fix it, in a pull request of its own if this change didn't cause it. Never re-run it until it passes.
 
 5. **Read the diff as a reviewer** (`git diff origin/main...HEAD`), for the things tests don't catch: a value from outside with no length limit; an `else` that defaults to the permissive case; a blocking call inside `async def`; a secret in a log, an error or a URL; a test that would pass without the change; a sleep standing in for an event; a home path, a host name or a person's name. Fix what you find and nothing around it.
 
-6. **Notes and docs.** `changes/<name>.md` for anything a user would notice (never CHANGELOG.md); the README, `docs/USAGE.md` or DESIGN.md where the change moved them.
+6. **Check the docs, every time.** Search them for every name, command, setting, message and behavior the change touches: `git grep -n <name> -- '*.md'`. Fix each place that's now wrong or missing: the README and `docs/USAGE.md` for what people see, DESIGN.md for the design, SECURITY.md when the threat model moves, CONTRIBUTING.md, CLAUDE.md and this skill for how work is done. `changes/<name>.md` for anything a user would notice (never CHANGELOG.md). The pull request's Docs section says what you searched and what changed; "checked, nothing to change" is an answer, an empty section isn't.
 
 7. **Open the pull request.** `git push -u origin <branch>`, then `gh pr create` with the title and [the template](../../../.github/pull_request_template.md) filled in: what it does, the previews (pushed to `design-assets` under `pr-<number>/`, or a branch of your fork, and linked by commit SHA), the change working as a command and its output or a picture, the docs, `Closes #<n>`. The number comes with the pull request, so push the previews after opening it and edit the description.
 
-8. **Watch CI.** `gh pr checks <pr> --watch`. On red: `gh run view <run> --log-failed`, fix with a new commit, push, watch again. A test the diff can't have touched, passing alone: re-run that job once (`gh run rerun <run> --failed`) and say so; a second failure is real.
+8. **Watch CI.** `gh pr checks <pr> --watch`. On red: `gh run view <run> --log-failed`, fix with a new commit, push, watch again. A test that fails sometimes is never waved through, even one the diff can't have touched: fix it (step 4). Re-run (`gh run rerun <run> --failed`) only to unblock this pull request while that fix is open, and say so.
 
 9. **Stop.** Report the link, what it does in two sentences, the evidence, and any assumption. Don't merge. After the maintainer merges: `git worktree remove .worktrees/<name>` if there was one, and `git branch -d <branch>`.
