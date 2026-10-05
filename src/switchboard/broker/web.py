@@ -127,7 +127,7 @@ def _ok(data: Any) -> JSONResponse:
 
 
 OIDC_COOKIE = "sb_oidc"  # binds a Google sign-in's callback to the browser that started it
-GOOGLE_EMAIL_RE = re.compile(r"[^@\s]{1,64}@[^@\s]{1,189}\.[^@\s.]{2,63}")
+EMAIL_RE = re.compile(r"[^@\s]{1,64}@[^@\s]{1,189}\.[^@\s.]{2,63}")
 # The callback's answer: a same-site navigation to the app, so the new Strict cookie is sent.
 SSO_DONE_PAGE = (
     '<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/">'
@@ -632,9 +632,10 @@ def install(app: FastAPI, state: "BrokerState") -> None:
     # ---------------------------------------------------------- passwords (§32.4)
     @app.post("/api/signin/password")
     async def signin_password(request: Request) -> Response:
-        """A name and a password. The owner's one-time password from the log starts the claim
-        (``next: setup``); a person's one-time password gives a session that must choose its
-        own first (``next: setup``); anything else that's right is a session (``next: app``)."""
+        """An email (or a name) and a password. The owner's one-time password from the log starts
+        the claim (``next: setup``); a person's one-time password gives a session that must
+        choose its own first (``next: setup``); anything else that's right is a session
+        (``next: app``). Who an email or a name means (#192, §39): ``people.account``."""
         try:
             body = await _json_body(request)
         except ServiceError as e:
@@ -642,13 +643,14 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         if not state.hosted:
             return _err(403, "no_passwords", "this switchboard signs in with `switchboard login`")
         raw, pw = body.get("name"), body.get("password")
-        name = raw.strip().lower()[:40] if isinstance(raw, str) else ""
+        name = raw.strip().lower()[:254] if isinstance(raw, str) else ""
+        kind, who_p = people.account(state, name)
         wait = state.signin.wait_s(name)
         if wait > 0:
             return _err(429, "slow_down", f"too many wrong tries: wait {int(wait) + 1} s and try again")
         now = state.clock.now()
         resp: JSONResponse | None = None
-        if name and people.is_owner_name(state, name):
+        if kind == "owner":
             if state.claim is not None and state.claim.active and state.claim.check(pw):
                 if state.claim.ceremony_busy(request.cookies.get(SETUP_COOKIE)):
                     return _err(
@@ -668,7 +670,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             if verify_password(pw, state.store.owner_password_hash()):
                 resp = signed_in(None, state.cfg.human_name, "password", now)
         elif name:
-            person = state.store.person_named(name)
+            person = who_p
             if person is not None and person.must_reset:
                 typed = normalize_one_time(pw) or pw
                 if verify_password(typed, person.password_hash):
@@ -685,7 +687,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         if resp is None:
             state.signin.failed(name or "?")
             failed("bad_password")
-            return _err(403, "bad_password", "wrong name or password")
+            return _err(403, "bad_password", "wrong email or password")
         state.signin.ok(name)
         return resp
 
@@ -772,9 +774,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return None, _err(403, "reauth", "confirm it's you first")
         return w, None
 
-    @app.post("/api/people/{pid}/google")
-    async def people_google(request: Request, pid: str) -> Response:
-        """The Google email a person (or the admin, ``owner``) signs in with, or none (#70)."""
+    @app.post("/api/people/{pid}/email")
+    async def people_email(request: Request, pid: str) -> Response:
+        """The email a person (or the admin, ``owner``) is, and signs in with; or none (#192)."""
         w, no = admin(request, True)
         if no is not None:
             return no
@@ -787,7 +789,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         if raw is not None and not isinstance(raw, str):
             return _err(400, "bad_request", "email must be a string or null")
         email = raw.strip().lower() if raw else None
-        if email is not None and not GOOGLE_EMAIL_RE.fullmatch(email):
+        if email is not None and not EMAIL_RE.fullmatch(email):
             return _err(400, "bad_request", "that isn't an email address")
         if pid == "owner":
             person_id, name = None, state.cfg.human_name
@@ -801,16 +803,16 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 return _err(404, "not_found", "no such person")
             person_id, name = p.id, p.name
         try:
-            state.store.set_google_email(person_id, email)
+            state.store.set_email(person_id, email)
         except Conflict as e:
             return _err(409, "taken", str(e))
         state.store.add_event(
-            "people", data={"what": "google_email", "person": name, "by": w.name, "set": bool(email)}
+            "people", data={"what": "email", "person": name, "by": w.name, "set": bool(email)}
         )
         state.hub.notice(
             None,
             "info",
-            f"{w.name} " + (f"set {name}'s Google sign-in" if email else f"removed {name}'s Google sign-in"),
+            f"{w.name} " + (f"set {name}'s email" if email else f"removed {name}'s email"),
         )
         return _ok({"person": next(x for x in people.summary(state) if x["id"] == person_id)})
 
@@ -991,8 +993,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             log.debug("sign-in with %s: %s", state.oidc.cfg.provider, e)
             failed("sso_" + e.code)
             return sso_fail(e.code)
-        person = state.store.person_by_google_email(email)
-        if email == state.store.owner_google_email() and state.store.owner_handle() is not None:
+        person = state.store.person_by_email(email)
+        if email == state.store.owner_email() and state.store.owner_handle() is not None:
             person_id, name = None, state.cfg.human_name
         elif person is not None:
             person_id, name = person.id, person.name

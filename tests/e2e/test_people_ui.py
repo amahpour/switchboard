@@ -119,7 +119,7 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
     expect(bob.locator("#login-first")).to_be_hidden()
     expect(bob.locator("#passkey-btn")).to_be_visible()
     sign_in(bob, "bob", "WRONG-PASS-WORD-0000")
-    expect(bob.locator("#login-error")).to_have_text("wrong name or password")
+    expect(bob.locator("#login-error")).to_have_text("wrong email or password")
     bob.wait_for_timeout(300)
     assert ui.problems and all("403" in p and "/api/signin/password" in p for p in ui.problems), ui.problems
     ui.problems.clear()
@@ -152,3 +152,28 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
     page.click("#confirm-ok")
     expect(page.locator("#confirm-dialog")).to_be_hidden()
     expect(page.locator("#invite-text")).to_contain_text("Sign in as carol")
+
+    # #192: the admin sets bob's email on his card (no Google needed); from then on his email
+    # signs him in, and his name doesn't. What's typed outlives a render: "Copied" fading
+    # re-renders the sheet
+    page.click("#copy-invite")
+    bob_card = page.locator(".person-card").nth(1)
+    expect(bob_card.locator(".email-row label")).to_have_text("Email")
+    bob_card.locator('input[type="email"]').fill("Bob@Example.com")
+    expect(page.locator("#copy-invite")).to_have_attribute("aria-label", "Copy the invite")
+    expect(bob_card.locator('input[type="email"]')).to_have_value("Bob@Example.com")
+    page.click("#invite-done")
+    bob_card.locator(".email-row button").click()
+    expect(bob_card.locator(".email-result")).to_have_text("Saved")
+    again = ui.context().new_page()
+    again.goto(origin + "/")
+    expect(again.locator('label[for="signin-name"]')).to_have_text("Email")
+    hint = "No email set for you yet? Your name works for now."
+    expect(again.locator("#signin-name-hint")).to_have_text(hint)
+    sign_in(again, "bob", BOB_PW)
+    expect(again.locator("#login-error")).to_have_text("wrong email or password")
+    again.wait_for_timeout(300)
+    assert all("403" in p and "/api/signin/password" in p for p in ui.problems), ui.problems
+    ui.problems.clear()
+    sign_in(again, "bob@example.com", BOB_PW)
+    expect(again.locator("#me-name")).to_have_text("bob")

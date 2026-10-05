@@ -42,7 +42,7 @@ def google_sign_in(
 
 
 def set_google(admin: Browser, who: str | int, email: str | None) -> Any:
-    return admin.post(f"/api/people/{who}/google", {"email": email})
+    return admin.post(f"/api/people/{who}/email", {"email": email})
 
 
 def test_the_sign_in_page_offers_google_only_when_it_is_set_up(
@@ -66,7 +66,7 @@ def test_a_person_the_admin_added_signs_in_with_their_google_account(google) -> 
     bob = join_as_bob(b, admin)
     bob_id = next(p["id"] for p in admin.get("/api/people").json()["people"] if p["name"] == "bob")
     r = set_google(admin, bob_id, "Bob@Example.com")
-    assert r.status_code == 200 and r.json()["person"]["google_email"] == "bob@example.com"
+    assert r.status_code == 200 and r.json()["person"]["email"] == "bob@example.com"
 
     br, r = google_sign_in(b, issuer, "bob@example.com")
     assert r.status_code == 200 and 'http-equiv="refresh"' in r.text  # a same-site hop: the cookie is Strict
@@ -125,7 +125,7 @@ def test_only_the_admin_sets_google_emails_and_each_is_one_persons(google) -> No
     assert set_google(admin, bob_id, "bob@example.com").status_code == 200
     r = set_google(admin, "owner", "BOB@example.com")
     assert r.status_code == 409 and "already" in r.json()["message"]
-    assert set_google(admin, bob_id, None).json()["person"]["google_email"] is None
+    assert set_google(admin, bob_id, None).json()["person"]["email"] is None
     assert set_google(admin, "owner", "bob@example.com").status_code == 200
     bob.close()
 

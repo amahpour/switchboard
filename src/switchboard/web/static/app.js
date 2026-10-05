@@ -93,6 +93,8 @@
     // people (a hosted broker, §32): the admin section's list, and the one-time password just made
     people: [],
     peopleDraft: '',   // the name typed in Add someone, kept across renders
+    emailDrafts: new Map(),  // person key -> the email typed on their card, kept across renders
+    emailNotes: new Map(),   // person key -> {text, bad}: what the last save on their card said
     peopleBusy: new Map(),  // person id (or 'add') -> what is running for them
     invite: null,      // { id, name, password, invite } to send, until Done
     copiedInvite: false,
@@ -3314,26 +3316,31 @@
     return card;
   }
 
-  // Sign in with Google (#70, §38): the Google email this person signs in with, set by the
-  // admin. Only these people (and the admin's own email) can sign in with Google.
-  function googleRow(p) {
+  // Who this person is (#192, §39): the email they sign in with, set by the admin. It is also
+  // the only Google account that signs them in, when Google sign-in is on.
+  function emailRow(p) {
     const key = p.id === null ? 'owner' : String(p.id);
-    const row = el('form', 'google-row');
+    const row = el('form', 'email-row');
     row.noValidate = true;
-    const label = el('label', null, 'Google sign-in');
+    const label = el('label', null, 'Email');
     const input = el('input');
     input.type = 'email';
-    input.id = 'google-' + key;
+    input.id = 'email-' + key;
     input.placeholder = 'name@example.com';
     input.maxLength = 254;
     input.autocomplete = 'off';
-    input.value = p.google_email || '';
+    // a render (the invite's Copied fading, a save on another card) mustn't wipe what's typed
+    input.value = state.emailDrafts.has(key) ? state.emailDrafts.get(key) : (p.email || '');
+    input.dataset.focus = 'email:' + key;
+    input.addEventListener('input', function () { state.emailDrafts.set(key, input.value); });
     label.setAttribute('for', input.id);
-    const save = btn('btn', p.google_email ? 'Change' : 'Set');
+    const save = btn('btn', p.email ? 'Change' : 'Set');
     save.type = 'submit';
-    save.id = 'google-save-' + key;
-    const out = el('span', 'fine google-result');
-    out.id = 'google-result-' + key;
+    save.id = 'email-save-' + key;
+    save.dataset.focus = 'email-save:' + key;
+    const note = state.emailNotes.get(key);
+    const out = el('span', 'fine email-result' + (note && note.bad ? ' bad' : ''), note ? note.text : '');
+    out.id = 'email-result-' + key;
     out.setAttribute('role', 'status');
     row.append(label, input, save, out);
     row.addEventListener('submit', async function (ev) {
@@ -3342,18 +3349,18 @@
       save.disabled = true;
       try {
         const res = await withFreshCheck(function () {
-          return api('POST', '/api/people/' + key + '/google', { email: email || null });
+          return api('POST', '/api/people/' + key + '/email', { email: email || null });
         });
         if (!res) return;
         const i = state.people.findIndex(function (x) { return x.id === p.id; });
         if (i >= 0) state.people[i] = res.person;
-        renderPeoplePanel();
-        const again = document.getElementById('google-result-' + key);
-        if (again) again.textContent = email ? 'Saved' : 'Removed';
+        state.emailDrafts.delete(key);
+        state.emailNotes.set(key, { text: email ? 'Saved' : 'Removed' });
       } catch (e) {
-        out.textContent = String(e.message || e);
+        state.emailNotes.set(key, { text: String(e.message || e), bad: true });
       } finally {
         save.disabled = false;
+        renderPeoplePanel();
       }
     });
     return row;
@@ -3377,7 +3384,7 @@
     if (!p.admin && p.passkeys && p.sign_in !== 'passkey') bits.push(plural(p.passkeys, 'passkey', 'passkeys'));
     if (p.admin) bits.push(p.password ? 'password' : 'no password', plural(p.passkeys || 0, 'passkey', 'passkeys'));
     card.append(el('p', 'machine-step', bits.join(' · ')));
-    if (state.me && state.me.sso) card.append(googleRow(p));
+    card.append(emailRow(p));
     if (!p.admin) {
       const btns = el('div', 'dialog-buttons');
       const busy = state.peopleBusy.get(p.id);
@@ -3477,6 +3484,8 @@
   }
 
   function openPeople() {
+    state.emailDrafts.clear();
+    state.emailNotes.clear();
     openSheet('people-panel');
     renderPeoplePanel();
     loadPeople().catch(function () {});

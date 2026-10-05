@@ -799,12 +799,12 @@ class Store:
             ).rowcount
             # everyone else was added by the old owner: the new owner adds them again
             n_people = self.con.execute(
-                "UPDATE people SET removed_at=?, password_hash=NULL, must_reset=0, google_email=NULL,"
+                "UPDATE people SET removed_at=?, password_hash=NULL, must_reset=0, email=NULL,"
                 " password_expires_at=NULL WHERE removed_at IS NULL",
                 (now,),
             ).rowcount
             self.meta_delete("owner_password")
-            self.meta_delete("owner_google_email")
+            self.meta_delete("owner_email")
             self.meta_delete("owner_handle")
             self.meta_delete("owner_claimed_at")
             self.meta_set("reset_owner_applied", applied)
@@ -890,16 +890,14 @@ class Store:
         r = self.con.execute("SELECT * FROM people WHERE handle=?", (handle,)).fetchone()
         return PersonRow.from_row(r) if r else None
 
-    # ---------------------------------------------- Google sign-in (#70, §38.3)
-    # Each person, and the owner (a meta row), may have one Google email, set by the owner.
-    # An email belongs to at most one of them; a removed person's no longer counts.
-    def owner_google_email(self) -> str | None:
-        return self.meta_get("owner_google_email")
+    # ------------------------------------------------------- emails (#192, §39)
+    # Each person, and the owner (a meta row), may have one email: who they are when they sign
+    # in, with a password or with Google. One active person per email; the owner's is apart.
+    def owner_email(self) -> str | None:
+        return self.meta_get("owner_email")
 
-    def person_by_google_email(self, email: str) -> PersonRow | None:
-        r = self.con.execute(
-            "SELECT * FROM people WHERE google_email=? AND removed_at IS NULL", (email,)
-        ).fetchone()
+    def person_by_email(self, email: str) -> PersonRow | None:
+        r = self.con.execute("SELECT * FROM people WHERE email=? AND removed_at IS NULL", (email,)).fetchone()
         return PersonRow.from_row(r) if r else None
 
     def retire_one_time(self, person_id: int) -> None:
@@ -912,30 +910,30 @@ class Store:
                 (person_id,),
             )
 
-    def set_google_email(self, person_id: int | None, email: str | None) -> None:
-        """Set (or clear, with None) the Google email of a person, or of the owner (None).
-        Raises Conflict when someone else already signs in with it."""
+    def set_email(self, person_id: int | None, email: str | None) -> None:
+        """Set (or clear, with None) the email of a person, or of the owner (None). Raises
+        Conflict when someone else already has it."""
         with db.tx(self.con):
             if email is not None:
                 taken = self.con.execute(
-                    "SELECT id FROM people WHERE google_email=? AND removed_at IS NULL AND id IS NOT ?",
+                    "SELECT id FROM people WHERE email=? AND removed_at IS NULL AND id IS NOT ?",
                     (email, person_id),
                 ).fetchone()
-                owner = self.meta_get("owner_google_email")
+                owner = self.meta_get("owner_email")
                 if taken is not None or (person_id is not None and owner == email):
-                    raise Conflict("someone else already signs in with that Google email")
+                    raise Conflict("someone else already has that email")
             if person_id is None:
                 if email is None:
-                    self.con.execute("DELETE FROM meta WHERE key='owner_google_email'")
+                    self.con.execute("DELETE FROM meta WHERE key='owner_email'")
                 else:
                     self.con.execute(
-                        "INSERT INTO meta(key, value) VALUES('owner_google_email', ?)"
+                        "INSERT INTO meta(key, value) VALUES('owner_email', ?)"
                         " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                         (email,),
                     )
             else:
                 self.con.execute(
-                    "UPDATE people SET google_email=? WHERE id=? AND removed_at IS NULL", (email, person_id)
+                    "UPDATE people SET email=? WHERE id=? AND removed_at IS NULL", (email, person_id)
                 )
 
     def people(self) -> list[PersonRow]:
@@ -1002,7 +1000,7 @@ class Store:
         with db.tx(self.con):
             if (
                 self.con.execute(
-                    "UPDATE people SET removed_at=?, password_hash=NULL, must_reset=0, google_email=NULL,"
+                    "UPDATE people SET removed_at=?, password_hash=NULL, must_reset=0, email=NULL,"
                     " password_expires_at=NULL WHERE id=? AND removed_at IS NULL",
                     (now, person_id),
                 ).rowcount

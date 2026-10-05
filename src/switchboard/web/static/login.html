@@ -51,9 +51,10 @@
       one-time password from the broker&rsquo;s log (your deploy tool&rsquo;s logs view, <code>kubectl logs</code>,
       <code>docker compose logs</code>).</p>
     <form class="setup-form" id="password-form" autocomplete="on">
-      <label for="signin-name">Name</label>
+      <label for="signin-name">Email</label>
       <input type="text" id="signin-name" name="username" autocomplete="username" autocapitalize="none"
-             spellcheck="false" maxlength="40" required>
+             spellcheck="false" maxlength="254" placeholder="you@example.com" required>
+      <p class="fine" id="signin-name-hint">No email set for you yet? Your name works for now.</p>
       <label for="signin-password">Password</label>
       <input type="password" id="signin-password" name="password" autocomplete="current-password" maxlength="256"
              required>
