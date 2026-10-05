@@ -205,3 +205,58 @@ def test_the_board_routes_need_a_signed_in_person_and_the_write_header(broker: I
     finally:
         web.close()
         anon.close()
+
+
+async def test_post_waits_for_a_settled_board_and_asks_each_owner_once(broker: InProcBroker) -> None:
+    """§37.6: Post is refused until nothing is left to do, then sends one message from the person
+    that @mentions each owner with exactly its items, so each agent posts its own, once."""
+    web = broker.web_client()
+
+    def move(**body: Any) -> Any:
+        return web.post("/api/rooms/build/review", json=body, headers=broker.write_headers())
+
+    try:
+        async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            await reviewer.call("review", room="#build", action="open", url=PR)
+            await reviewer.call("review", room="#build", action="raise", title="expired codes apply")
+            await reviewer.call("review", room="#build", action="raise", title="style nit")
+            await author.call(
+                "review",
+                room="#build",
+                action="ask",
+                title="Before or after tax?",
+                options=["before", "after"],
+            )
+            r = move(action="post")
+            assert r.status_code == 400 and "isn't settled" in r.json()["message"]
+
+            await author.call("review", room="#build", action="concede", item="F1")
+            await author.call("review", room="#build", action="fix", item="F1", commit="9a1b2c3")
+            await reviewer.call("review", room="#build", action="drop", item="F2", reason="not worth it")
+            assert move(action="answer", item="Q1", option=0).status_code == 200
+            board = web.get("/api/rooms/build/review").json()["board"]
+            assert (
+                board["settled"]
+                and board["plan"] == {"claude-1": ["F1", "Q1"]}
+                and board["posted_by"] is None
+            )
+
+            r = move(action="post")
+            assert r.status_code == 200 and r.json()["board"]["posted_by"] == "alice"
+            r = move(action="post")
+            assert r.status_code == 400 and "alice already posted" in r.json()["message"]
+
+            text = (await author.read("#build"))["text"]
+            assert f"The review board for {PR} is settled." in text
+            assert (
+                "- @claude-1: F1 expired codes apply (fixed in 9a1b2c3); Q1 Before or after tax? → before"
+                in text
+            )
+            r = await reviewer.call("review", room="#build", action="show")
+            assert r["board"].splitlines()[0] == f"Review of {PR}: posted by alice: post your items now, once"
+    finally:
+        web.close()
+    post = q(broker, "SELECT sender_kind, mentions FROM messages WHERE text LIKE 'The review board for %'")
+    assert len(post) == 1 and post[0]["sender_kind"] == "human" and "claude-1" in post[0]["mentions"]

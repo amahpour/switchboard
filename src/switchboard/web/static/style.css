@@ -2439,6 +2439,11 @@ body.login {
 .board-state.s-fixed, .board-state.s-answered { color: var(--green); }
 .board-card-title { font-size: calc(13px * var(--text-scale)); }
 .board-card-meta { font-size: calc(11.5px * var(--text-scale)); color: var(--muted-2); }
+.board-post { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; padding: 12px; border-radius: 10px; border: 1px solid var(--accent); background: var(--accent-tint); }
+.board-post h3 { margin: 0; font-size: calc(14px * var(--text-scale)); }
+.board-post-lead { margin: 0; color: var(--ink-2); font-size: calc(12.5px * var(--text-scale)); }
+.board-post-list { margin: 0; padding-left: 18px; }
+.board-post .btn-primary { align-self: flex-start; }
 .board-detail { width: 340px; display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); overflow-wrap: anywhere; }
 .board-detail h3 { margin: 0; font-size: calc(14px * var(--text-scale)); }
 .board-detail-state, .board-reason { margin: 0; color: var(--muted-2); font-size: calc(12.5px * var(--text-scale)); }

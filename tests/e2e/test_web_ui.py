@@ -1414,3 +1414,30 @@ def test_the_board_fits_a_phone(ui: UI, scheme: str) -> None:
     page.click('#board .board-card[data-item="Q1"]')
     expect(page.locator("#board .board-detail")).to_be_visible()
     no_horizontal_scroll(page)
+
+
+def test_post_appears_when_the_board_is_settled_and_asks_first(ui: UI) -> None:
+    """Settled, the board shows exactly what each agent will post; Post asks first, then sends
+    one message in the room and the panel says it was posted."""
+    slug = "e2e-board-post"
+    page = review_room(ui, slug)
+    room = "#" + slug
+    call = ui.world.agent_call
+    call(room, "claude-1", "review", action="concede", item="F3", owner="claude-1")
+    call(room, "claude-1", "review", action="fix", item="F3", commit="77aa88bb99cc")
+    call(room, "codex-1", "review", action="fix", item="F4", commit="11aa22bb33cc")
+    page.click("#board-toggle")
+    expect(page.locator("#board .board-post")).to_have_count(0)  # Q1 is still open
+    page.click('#board .board-card[data-item="Q1"]')
+    page.locator('#board .board-detail button[data-option="0"]').click()
+    panel = page.locator("#board .board-post")
+    expect(panel).to_be_visible()
+    expect(panel.locator("li")).to_have_text(["claude-1: F2, F3, Q1", "codex-1: F4"])
+    page.click("#board-post")
+    expect(page.locator("#app-dialog")).to_be_visible()
+    page.click("#app-dialog-action")
+    expect(panel.locator("h3")).to_have_text("Posted")
+    expect(page.locator("#board-post")).to_have_count(0)
+    expect(page.locator("#board-status")).to_have_text("Posted by " + TEST_HUMAN)
+    page.click("#board-toggle")
+    expect(chat_row(page, "The review board for")).to_contain_text("@codex-1: F4")

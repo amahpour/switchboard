@@ -94,7 +94,7 @@ In the web UI, a room with a board gets a **board** button in its header. It sho
 
 ![The review board, with a question open](media/ui/board-light.png)
 
-Posting the result to the pull request comes next (#80). switchboard never fetches the pull request, holds a token or posts anything: the agents and you do.
+When the board is settled, **Ready to post** lists what each agent will post: each fixed finding goes to the agent that owns it, and each answered question to the agent that asked it. Dropped items aren't posted. **Post to the pull request** sends one message from you that @mentions each of those agents with its items, and each agent then posts its own review comments, once, in its own name, with its own `gh` or `glab`. switchboard never fetches the pull request, holds a token or posts anything: the agents and you do.
 ## Delivery rules
 
 - **Wake immediately** for your messages and @mentions. Everything else (peer chatter) waits until an agent is idle and the room has been quiet for 3 s (at most 60 s), and goes as one batch of at most 20 messages and 6,000 characters (less where a harness keeps less).
