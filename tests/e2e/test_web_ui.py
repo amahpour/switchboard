@@ -22,6 +22,7 @@ On any failure the fixture saves a Playwright trace (open it with ``uv run playw
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -31,7 +32,7 @@ from typing import Any
 
 import pytest
 from conftest import PHASE_REPORTS, TEST_HUMAN, sanitize_env
-from playwright.sync_api import Browser, BrowserContext, ConsoleMessage, Page, expect
+from playwright.sync_api import Browser, BrowserContext, ConsoleMessage, Page, WebSocketRoute, expect
 from ui_world import CI_URL, JS_SCHEME, PROFILE, UIWorld
 
 pytestmark = pytest.mark.e2e
@@ -948,10 +949,25 @@ def test_a_long_remote_state_leaves_the_name_readable(ui: UI, size: str) -> None
 def test_a_remote_rows_title_has_its_whole_state(ui: UI) -> None:
     """The row's title has the state in full, since the row may end it in an ellipsis, and it
     ticks with the retry countdown as the row's text does. /api/remotes answers with fpga-pi
-    down (the seeded world's is never enabled); no state change sends a remotes frame here."""
+    down (the seeded world's is never enabled), and the broker's own ``remotes`` frames don't
+    reach the page: one does come when the world's agents on fpga-pi were joined just before
+    (a liveness tick sends the member change), and it put back the real "needs enable"."""
     ctx = ui.context()
     down = {"name": "fpga-pi", "state": "down", "reason": "timeout", "retry_in_s": 30, "rtt_ms": None}
     ctx.route("**/api/remotes", lambda route: route.fulfill(json={"remotes": [down], "config_error": None}))
+
+    def no_remotes_frames(ws: WebSocketRoute) -> None:
+        server = ws.connect_to_server()  # the page's own frames still go up as they are
+
+        def down_to_page(msg: str | bytes) -> None:
+            f = json.loads(msg) if isinstance(msg, str) else None
+            if isinstance(f, dict) and f.get("t") == "remotes":
+                return
+            ws.send(msg)
+
+        server.on_message(down_to_page)
+
+    ctx.route_web_socket("**/ws", no_remotes_frames)
     page = ctx.new_page()
     page.goto(ui.world.broker.login_url())
     expect(page.locator("#st-conn")).to_have_text("Connected")
