@@ -141,7 +141,7 @@ The broker reaches out to Google (`accounts.google.com`, `oauth2.googleapis.com`
 
 1. Change the image tag in your compose file, manifest or Blueprint to the new release (the [CHANGELOG](../CHANGELOG.md) lists them), and deploy.
 2. The platform stops the old container and starts the new one. The broker shuts down cleanly on SIGTERM (`docker stop`) and exits 0.
-3. If the new release changes the database's schema, the broker migrates it on start, after a verified backup copy next to it (`switchboard.db.v2.bak` for the passkeys release, `switchboard.db.v3.bak` for the people release, [DESIGN.md §27.6](DESIGN.md), [§31.2](DESIGN.md), [§32.2](DESIGN.md)). An older release refuses a newer database, so a rollback past a schema change means restoring a backup. The admin, people, passwords and passkeys are in the database, so an upgrade keeps them.
+3. If the new release changes the database's schema, the broker migrates it on start, after a verified backup copy next to it (`switchboard.db.v2.bak` for the passkeys release, `switchboard.db.v3.bak` for the people release, [DESIGN.md §27.6](DESIGN.md), [§31.2](DESIGN.md), [§32.2](DESIGN.md)). An older release refuses a newer database, so a rollback past a schema change means restoring a backup. The admin, people, passwords and passkeys are in the database, so an upgrade keeps them. The email sign-in release (schema 12, [DESIGN.md §39](DESIGN.md#39-identity-by-email-192)) keeps everyone signing in as before until you set their email in **Admin > People**; then they sign in with the email instead of their name, so tell them first.
 
 Pin releases rather than `:latest`, so an upgrade happens when you choose.
 
