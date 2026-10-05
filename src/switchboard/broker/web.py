@@ -127,7 +127,6 @@ def _ok(data: Any) -> JSONResponse:
 
 
 OIDC_COOKIE = "sb_oidc"  # binds a Google sign-in's callback to the browser that started it
-EMAIL_RE = re.compile(r"[^@\s]{1,64}@[^@\s]{1,189}\.[^@\s.]{2,63}")
 # The callback's answer: a same-site navigation to the app, so the new Strict cookie is sent.
 SSO_DONE_PAGE = (
     '<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/">'
@@ -401,6 +400,16 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         _set_ceremony(resp, SETUP_COOKIE, cid, secure=secure())
         return resp
 
+    def claim_email(body: dict[str, Any]) -> tuple[str | None, JSONResponse | None]:
+        """The admin's email, which setup asks for (#192, §39): who they sign in as from then on.
+        Optional here, so the API and older pages still set up; nobody else may have it."""
+        email, why = people.clean_email(body.get("email"))
+        if why is not None:
+            return None, _err(400, "bad_email", why)
+        if email is not None and state.store.person_by_email(email) is not None:
+            return None, _err(409, "taken", "someone here already has that email")
+        return email, None
+
     @app.post("/api/setup/password")
     async def setup_password(request: Request) -> Response:
         """The claim with a password: the owner's own, chosen in the ceremony a sign-in with
@@ -418,12 +427,17 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 "No setup is in progress in this browser (it takes five minutes at"
                 " most): sign in with the one-time password again.",
             )
+        email, no = claim_email(body)
+        if no is not None:
+            return no
         why = password_problem(body.get("password"), state.cfg.human_name)
         if why is not None:
             return _err(400, "bad_password", why)
-        with db.tx(state.store.con):  # the owner and their password, or neither
+        with db.tx(state.store.con):  # the owner, their email and their password, or none of them
             state.store.claim_owner(bytes.fromhex(cer["handle"]))
             state.store.set_owner_password(hash_password(body["password"]))
+            if email is not None:
+                state.store.set_email(None, email)
         claim.spend()
         state.claimed()
         sid = state.sessions.create("claim")
@@ -452,6 +466,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 "No setup is in progress in this browser (it takes five minutes at"
                 " most): sign in with the one-time password again.",
             )
+        email, no = claim_email(body)
+        if no is not None:
+            return no
         try:
             reg = wa.register_finish(cer["fido"], body.get("credential"))
         except ValueError as e:
@@ -459,9 +476,11 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             failed("bad_claim")
             return _err(400, "bad_credential", f"the passkey could not be verified: {e}")
         name = clean_name(body.get("name"))
-        with db.tx(state.store.con):  # the owner and the first passkey, or neither
+        with db.tx(state.store.con):  # the owner, their email and the first passkey, or none of them
             state.store.claim_owner(bytes.fromhex(cer["handle"]))
             state.store.passkey_add(reg.credential_id, reg.public_key, name, reg.aaguid, reg.sign_count)
+            if email is not None:
+                state.store.set_email(None, email)
         claim.spend()
         state.claimed()
         now = state.clock.now()
@@ -786,12 +805,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             body = await _json_body(request)
         except ServiceError as e:
             return _svc_err(e)
-        raw = body.get("email")
-        if raw is not None and not isinstance(raw, str):
-            return _err(400, "bad_request", "email must be a string or null")
-        email = raw.strip().lower() if raw else None
-        if email is not None and not EMAIL_RE.fullmatch(email):
-            return _err(400, "bad_request", "that isn't an email address")
+        email, why = people.clean_email(body.get("email"))
+        if why is not None:
+            return _err(400, "bad_request", why)
         if pid == "owner":
             person_id, name = None, state.cfg.human_name
         else:

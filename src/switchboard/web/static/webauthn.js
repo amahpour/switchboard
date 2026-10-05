@@ -127,11 +127,12 @@
     return credentialJSON(cred);
   }
 
-  // Claim an unclaimed broker: the token from the claim link, and a new passkey named `name`.
-  async function claim(token, name) {
+  // Claim an unclaimed broker: the token from the claim link, a new passkey named `name`, and
+  // the admin's email (#192), who they sign in as from then on.
+  async function claim(token, name, email) {
     const begun = await post('/api/setup/begin', { token: token });
     const credential = await create(begun.options);
-    return post('/api/setup/finish', { credential: credential, name: name });
+    return post('/api/setup/finish', { credential: credential, name: name, email: email || null });
   }
 
   // Sign in with a passkey. From a signed-in page, the same ceremony is a fresh passkey check

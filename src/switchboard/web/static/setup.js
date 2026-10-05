@@ -17,6 +17,7 @@
   if (location.hash) history.replaceState(null, '', location.pathname);
 
   let mode = null;  // 'claim' (the admin) or 'reset' (anyone on a one-time password)
+  const EMAIL = /^[^@\s]{1,64}@[^@\s]{1,189}\.[^@\s.]{2,63}$/;  // the broker's check (people.clean_email)
 
   function show(id) {
     for (const s of document.querySelectorAll('.setup-step')) s.classList.toggle('hidden', s.id !== id);
@@ -47,9 +48,23 @@
     return 'passkey';
   }
 
+  // the admin's email (#192): asked for before anything is sent, so a typo doesn't cost a passkey
+  function adminEmail() {
+    if (mode !== 'claim') return null;
+    const email = ($('setup-email').value || '').trim().toLowerCase();
+    if (email.length > 254 || !EMAIL.test(email)) {
+      error('Type your email: you sign in with it from now on.');
+      $('setup-email').focus();
+      return undefined;
+    }
+    return email;
+  }
+
   async function savePassword(ev) {
     ev.preventDefault();
     error(null);
+    const email = adminEmail();
+    if (email === undefined) return;
     const pw = $('new-password').value;
     if (pw !== $('new-password-2').value) {
       error('The two passwords are not the same.');
@@ -59,7 +74,8 @@
     busy(true);
     $('password-btn').textContent = 'Saving…';
     try {
-      await W.post(mode === 'claim' ? '/api/setup/password' : '/api/me/password', { password: pw });
+      await W.post(mode === 'claim' ? '/api/setup/password' : '/api/me/password',
+        mode === 'claim' ? { password: pw, email: email } : { password: pw });
       location.replace('/');
     } catch (e) {
       busy(false);
@@ -74,12 +90,14 @@
 
   async function usePasskey() {
     error(null);
+    const email = adminEmail();
+    if (email === undefined) return;
     busy(true);
     const label = $('passkey-btn').querySelector('span');
     label.textContent = 'Waiting for your passkey…';
     try {
       if (mode === 'claim') {
-        const res = await W.claim(null, platformName());
+        const res = await W.claim(null, platformName(), email);
         $('backup-lead').textContent = 'This switchboard is set up (passkey "' + res.name + '"), and this browser is signed in.';
         show('step-backup');
         return;
@@ -140,15 +158,19 @@
     mode = st.mode;
     $('setup-user').value = st.email || st.human || '';  // what a password manager saves: who signs in
     $('choose-lead').textContent = mode === 'claim'
-      ? 'You’re the admin of this switchboard, signed in as ' + st.human + '. Choose your own password, or a passkey instead.'
+      ? 'You’re the admin of this switchboard, signed in as ' + st.human + '. Give your email, then choose your own password, or a passkey instead.'
       : 'Hi ' + st.human + '. Your one-time password worked. Choose your own password, or a passkey instead.';
     const passkeys = !!(st.passkeys_work && W.supported());
     for (const id of ['choose-or', 'choose-alt', 'choose-fine']) $(id).classList.toggle('hidden', !passkeys);
     $('password-form').addEventListener('submit', savePassword);
     $('passkey-btn').addEventListener('click', usePasskey);
     $('backup-form').addEventListener('submit', backup);
+    $('email-field').classList.toggle('hidden', mode !== 'claim');
+    $('setup-email').required = mode === 'claim';
+    // in a claim the email is who signs in: a password manager saves it with the password
+    $('setup-email').addEventListener('input', function () { $('setup-user').value = $('setup-email').value.trim(); });
     show('step-choose');
-    $('new-password').focus();
+    $((mode === 'claim' ? 'setup-email' : 'new-password')).focus();
   }
 
   document.addEventListener('DOMContentLoaded', load);

@@ -3384,6 +3384,10 @@
     const bits = [SIGN_IN_TEXT[p.sign_in] || p.sign_in];
     if (!p.admin && p.passkeys && p.sign_in !== 'passkey') bits.push(plural(p.passkeys, 'passkey', 'passkeys'));
     if (p.admin) bits.push(p.password ? 'password' : 'no password', plural(p.passkeys || 0, 'passkey', 'passkeys'));
+    if (!p.email) {
+      bits.push(p.admin ? 'no email yet: you sign in with your name, or admin'
+        : 'no email yet: signs in with their name');
+    }
     card.append(el('p', 'machine-step', bits.join(' · ')));
     card.append(emailRow(p));
     if (!p.admin) {

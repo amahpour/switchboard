@@ -40,6 +40,12 @@
     <form class="setup-form" id="password-form" autocomplete="on">
       <input type="text" id="setup-user" name="username" autocomplete="username" class="sr-only"
              tabindex="-1" aria-hidden="true" readonly>
+      <div class="setup-form hidden" id="email-field">
+        <label for="setup-email">Your email</label>
+        <input type="email" id="setup-email" name="email" autocomplete="email" maxlength="254" autocapitalize="none"
+               spellcheck="false" placeholder="you@example.com" aria-describedby="email-rules">
+        <p class="fine" id="email-rules">You sign in with it from now on (and <code>admin</code> still works).</p>
+      </div>
       <label for="new-password">New password</label>
       <input type="password" id="new-password" name="new-password" autocomplete="new-password" minlength="10"
              maxlength="256" required aria-describedby="password-rules">

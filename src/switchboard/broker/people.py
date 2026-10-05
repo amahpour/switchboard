@@ -10,6 +10,7 @@ Only the owner has the admin section.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -20,6 +21,8 @@ if TYPE_CHECKING:  # pragma: no cover
 
 ADMIN_ALIAS = "admin"  # the owner may sign in as "admin" too: the log's line says so (§32.4)
 ONE_TIME_TTL_S = 7 * 24 * 3600.0  # a person's one-time password works for a week
+EMAIL_RE = re.compile(r"[^@\s]{1,64}@[^@\s]{1,189}\.[^@\s.]{2,63}")
+MAX_EMAIL = 254  # the column's limit (people.email), and what an address can be
 
 
 @dataclass(frozen=True)
@@ -72,6 +75,21 @@ def account(state: "BrokerState", ident: str) -> tuple[str, "PersonRow | None"]:
         return "owner", None
     p = state.store.person_named(n)
     return ("person", p) if p is not None and p.email is None else ("none", None)
+
+
+def clean_email(raw: Any) -> tuple[str | None, str | None]:
+    """An email from a request (#192, §39): ``(email, None)`` lowercased, ``(None, None)`` for
+    none, or ``(None, why)``. Trusted as typed: nothing is sent to it."""
+    if raw is None:
+        return None, None
+    if not isinstance(raw, str):
+        return None, "email must be a string or null"
+    email = raw.strip().lower()
+    if not email:
+        return None, None
+    if len(email) > MAX_EMAIL or not EMAIL_RE.fullmatch(email):
+        return None, "that isn't an email address"
+    return email, None
 
 
 def email_of(state: "BrokerState", person_id: int | None) -> str | None:

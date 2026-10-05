@@ -130,12 +130,19 @@ def test_claim_backup_sheet_sign_out_and_sign_in(ui: UI, hosted: InProcBroker) -
     assert page.url == origin + "/setup"
     assert page.evaluate("location.hash") == ""
     expect(page.locator("#choose-lead")).to_contain_text("You’re the admin of this switchboard")
+    # #192: no email, no passkey ceremony (a typo mustn't cost a passkey on the device)
+    page.click("#passkey-btn")
+    expect(page.locator("#setup-error")).to_have_text("Type your email: you sign in with it from now on.")
+    expect(page.locator("#setup-email")).to_be_focused()
+    assert devices.credentials(laptop) == []
+    page.fill("#setup-email", "alice@example.com")
     page.click("#passkey-btn")  # a passkey instead of a password
     expect(page.locator("#step-backup")).to_be_visible()
     expect(page.locator("#backup-lead")).to_contain_text('set up (passkey "')
     assert len(devices.credentials(laptop)) == 1
     st = hosted.state
     assert st.claim is None and len(st.store.passkeys()) == 1 and st.store.owner_password_hash() is None
+    assert st.store.owner_email() == "alice@example.com"
     assert not hosted.paths.test_claim_link.exists()
 
     # the backup passkey, on another device (the laptop's authenticator would refuse: excluded)

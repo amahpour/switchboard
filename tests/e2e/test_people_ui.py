@@ -58,8 +58,11 @@ def sign_in(page: Page, name: str, password: str) -> None:
     page.click("#password-btn")
 
 
-def choose(page: Page, password: str) -> None:
+def choose(page: Page, password: str, email: str | None = None) -> None:
+    """Choose how you'll sign in: the admin's email first when given (setup asks for it, #192)."""
     expect(page.locator("#step-choose")).to_be_visible()
+    if email is not None:
+        page.fill("#setup-email", email)
     page.fill("#new-password", password)
     page.fill("#new-password-2", password)
     page.click("#password-btn")
@@ -84,6 +87,10 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
     expect(page.locator("#choose-lead")).to_contain_text(
         "You’re the admin of this switchboard, signed in as alice"
     )
+    # #192: setup asks for the admin's email first; they sign in with it from then on
+    expect(page.locator("#setup-email")).to_be_focused()
+    page.fill("#setup-email", "Alice@Example.com")
+    expect(page.locator("#setup-user")).to_have_value("Alice@Example.com")  # what a password manager saves
     # two different passwords: said here, nothing sent
     page.fill("#new-password", ADMIN_PW)
     page.fill("#new-password-2", ADMIN_PW + "!")
@@ -91,6 +98,7 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
     expect(page.locator("#setup-error")).to_have_text("The two passwords are not the same.")
     choose(page, ADMIN_PW)
     assert hosted.state.claim is None and hosted.state.store.owner_password_hash() is not None
+    assert hosted.state.store.owner_email() == "alice@example.com"
 
     # the admin section: Add someone, then the invite to send, once
     expect(page.locator("#admin-section")).to_be_visible()
@@ -111,6 +119,8 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
     expect(page.locator("#invite-text")).to_have_count(0)
     expect(page.locator(".person-card")).to_have_count(2)
     expect(page.locator(".person-card").nth(1)).to_contain_text("hasn't signed in yet: one-time password")
+    expect(page.locator(".person-card").nth(1)).to_contain_text("no email yet: signs in with their name")
+    expect(page.locator(".person-card").nth(0)).not_to_contain_text("no email yet")
 
     # bob, in another browser: the three ways in, his one-time password, then his own
     bob_ctx = ui.context()
@@ -165,6 +175,7 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
     page.click("#invite-done")
     bob_card.locator(".email-row button").click()
     expect(bob_card.locator(".email-result")).to_have_text("Saved")
+    expect(bob_card).not_to_contain_text("no email yet")
     again = ui.context().new_page()
     again.goto(origin + "/")
     expect(again.locator('label[for="signin-name"]')).to_have_text("Email")

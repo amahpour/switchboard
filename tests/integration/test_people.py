@@ -399,6 +399,42 @@ def test_people_sign_in_with_their_email_once_they_have_one(hosted: InProcBroker
     assert bob.post(f"/api/people/{pid}/email", {"email": "x@example.com"}).status_code == 403
 
 
+def test_setup_takes_the_admins_email(hosted: InProcBroker) -> None:
+    """#192: setup asks the admin for their email, and they sign in with it from then on. A bad
+    one is refused before anything is claimed (and before a passkey ceremony is used up), and
+    one over the column's 254 characters is a 400, not the database's error."""
+    br = Browser(hosted)
+    assert signin(br, "admin", token_of(claim_link(hosted))).json()["next"] == "setup"
+    long = "a" * 60 + "@" + "b" * 186 + ".example"  # the right shape, but 255 characters
+    for bad, code in [("alice", 400), (long, 400), (["a@example.com"], 400)]:
+        r = br.post("/api/setup/password", {"password": ADMIN_PW, "email": bad})
+        assert r.status_code == code and r.json()["error"] == "bad_email", (bad, r.text)
+    assert hosted.state.store.owner_handle() is None  # nothing claimed
+    r = br.post("/api/setup/password", {"password": ADMIN_PW, "email": " Alice@Example.com "})
+    assert r.status_code == 200, r.text
+    assert hosted.state.store.owner_email() == "alice@example.com"
+    assert br.get("/api/me").json()["email"] == "alice@example.com"
+    assert signin(Browser(hosted), "alice", ADMIN_PW).status_code == 403  # the name stops
+    for who in ("alice@example.com", "admin"):
+        assert signin(Browser(hosted), who, ADMIN_PW).json()["next"] == "app", who
+    # the People card's route has the same limit
+    r = br.post("/api/people/owner/email", {"email": long})
+    assert r.status_code == 400 and r.json()["error"] == "bad_request", r.text
+
+
+def test_a_passkey_setup_takes_the_admins_email(hosted: InProcBroker) -> None:
+    br = Browser(hosted)
+    assert signin(br, "admin", token_of(claim_link(hosted))).json()["next"] == "setup"
+    auth = SoftAuthenticator(RP_ID, PUBLIC)
+    r = br.post("/api/setup/begin")
+    cred = auth.register(r.json()["options"])
+    r = br.post("/api/setup/finish", {"credential": cred, "name": "Laptop", "email": "nope"})
+    assert r.status_code == 400 and r.json()["error"] == "bad_email", r.text
+    r = br.post("/api/setup/finish", {"credential": cred, "name": "Laptop", "email": "alice@example.com"})
+    assert r.status_code == 200, r.text  # the bad email didn't use the ceremony up
+    assert hosted.state.store.owner_email() == "alice@example.com"
+
+
 def test_the_desktop_has_no_people(broker: InProcBroker) -> None:
     import httpx
 
