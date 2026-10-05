@@ -99,6 +99,7 @@ Every merge to `main` is a release ([releases](https://github.com/amahpour/switc
 | [SECURITY.md](SECURITY.md) | The security model, and what switchboard can't stop |
 | [docs/SANDBOX.md](docs/SANDBOX.md) | Running everything in a container or VM |
 | [docs/LIMITATIONS.md](docs/LIMITATIONS.md) | Known limitations |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | A short map of the code for contributors: the parts, the path of a message, the rules |
 | [docs/DESIGN.md](docs/DESIGN.md) | The technical design |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Development, tests, live runs, releases, and the project's history |
 
