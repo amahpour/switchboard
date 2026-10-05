@@ -238,7 +238,7 @@ def test_the_admin_removes_someone(hosted: InProcBroker) -> None:
     bob.post("/api/rooms/build/say", {"text": "hello from bob"})
     [pid] = [p["id"] for p in admin.get("/api/people").json()["people"] if p["name"] == "bob"]
     r = admin.post(f"/api/people/{pid}/remove")
-    assert r.status_code == 200 and r.json() == {"ok": True, "sessions": 1}
+    assert r.status_code == 200 and r.json() == {"ok": True, "sessions": 1, "machines": []}
     assert bob.get("/api/me").status_code == 401
     r = signin(Browser(hosted), "bob", BOB_PW)
     assert r.status_code == 403 and r.json()["message"] == "wrong name or password"
