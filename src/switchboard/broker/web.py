@@ -897,14 +897,31 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         p = state.store.person(int(pid)) if ROOM_ID_RE.fullmatch(pid) and int(pid) <= MAX_ROOM_ID else None
         if p is None or not p.active:
             return _err(404, "not_found", "no such person")
+        theirs = state.store.machines_of(p.id)  # paired or approved by them: they go too (#178)
         gone = state.store.person_remove(p.id) or []
         for g in gone:
             state.hub.close_sessions(g)
+        removed = []
+        if state.machines is not None:
+            for name in theirs:
+                try:
+                    await state.machines.remove(name, "web", w.name, f"{p.name} was removed")
+                    removed.append(name)
+                except ServiceError:
+                    pass  # gone meanwhile
         state.store.add_event(
-            "people", data={"what": "remove", "person": p.name, "by": w.name, "sessions": len(gone)}
+            "people",
+            data={
+                "what": "remove",
+                "person": p.name,
+                "by": w.name,
+                "sessions": len(gone),
+                "machines": removed,
+            },
         )
-        state.hub.notice(None, "warn", f"{p.name} removed by {w.name}: signed out everywhere")
-        return _ok({"ok": True, "sessions": len(gone)})
+        tail = f"; their machines removed: {', '.join(removed)}" if removed else ""
+        state.hub.notice(None, "warn", f"{p.name} removed by {w.name}: signed out everywhere{tail}")
+        return _ok({"ok": True, "sessions": len(gone), "machines": removed})
 
     @app.get("/api/auth/state")
     async def auth_state() -> Response:
@@ -1061,7 +1078,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return no
         try:
             body = await _json_body(request)
-            return _ok(state.machines.mint(body.get("name")))
+            w = who(request)
+            return _ok(state.machines.mint(body.get("name"), w.person_id if w is not None else None))
         except ServiceError as e:
             return _svc_err(e)
 
@@ -1074,7 +1092,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             await _json_body(request)
             if not valid_host(name):
                 raise ServiceError("bad_request", "machine names look like work-laptop")
-            return _ok(state.machines.approve(name, "web"))
+            w = who(request)
+            by = (w.name, w.person_id) if w is not None else None
+            return _ok(state.machines.approve(name, "web", by))
         except ServiceError as e:
             return _svc_err(e)
 
@@ -1100,7 +1120,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             await _json_body(request)
             if not valid_host(name):
                 raise ServiceError("bad_request", "machine names look like work-laptop")
-            return _ok(await state.machines.remove(name, "web"))
+            w = who(request)
+            return _ok(await state.machines.remove(name, "web", w.name if w is not None else None))
         except ServiceError as e:
             return _svc_err(e)
 

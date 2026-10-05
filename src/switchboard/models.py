@@ -372,6 +372,7 @@ class MachineRow:
     removed_at: float | None
     last_seen_at: float | None
     person_id: int | None = None  # who paired it (schema 4, §32.2): None is the owner
+    approved_by: int | None = None  # who approved it (schema 11, #178): None is the owner
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "MachineRow":

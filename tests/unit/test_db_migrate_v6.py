@@ -25,7 +25,7 @@ def test_v5_preferences_gain_text_size_with_a_checked_backup(tmp_path: Path) -> 
     os.chmod(p, 0o600)
 
     con = db.open_db(p)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 10
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 11
     assert db.row_counts(con, db.V8_TABLES) == before
     assert con.execute("SELECT theme, text_size FROM preferences WHERE person_id=0").fetchone()[:] == (
         "dark",

@@ -121,6 +121,44 @@ async def test_pair_wait_approve_talk_and_remove(d: DialIn) -> None:
     assert d.machine_info() is None and d.b.state.store.machine("work-laptop").key == b""
 
 
+def test_removing_a_person_removes_the_machines_they_paired_or_approved(d: DialIn) -> None:
+    """#178: Remove ends someone at once, their machines included. bob pairs and approves a
+    machine himself; it's named as his everywhere; when the admin removes bob, it goes too:
+    its key is forgotten and its dialer is refused for good."""
+    from fakes.fake_owner import Browser
+
+    sent: list[str] = []  # room-less notices go to the web UI only: catch them at the hub
+    real = d.b.state.hub.notice
+    d.b.state.hub.notice = lambda room, level, text: (sent.append(text), real(room, level, text))[1]
+    one_time = d.api("POST", "/api/people", {"name": "bob"}).json()["password"]
+    bob = Browser(d.b, d.host, d.origin)
+    r = bob.post("/api/signin/password", {"name": "bob", "password": one_time})
+    assert r.status_code == 200, r.text
+    assert bob.post("/api/me/password", {"password": "bob's own secret 1"}).status_code == 200
+    bob_id = d.b.state.store.person_named("bob").id
+
+    r = bob.post("/api/machines/pair", {"name": "work-laptop"})
+    assert r.status_code == 200, r.text
+    assert d.join(r.json()["code"]).returncode == 0
+    assert bob.post("/api/machines/work-laptop/approve", {}).status_code == 200
+    row = d.b.state.store.machine("work-laptop")
+    assert (row.person_id, row.approved_by) == (bob_id, bob_id)
+    m = d.machine_info()
+    assert m is not None and (m["paired_by"], m["approved_by"]) == ("bob", "bob")
+    assert any(n.startswith("work-laptop approved by bob") for n in sent), sent
+    p = d.start_dialer()
+    d.wait_machine(lambda m: m["state"] == "up", what="up")
+
+    r = d.api("POST", f"/api/people/{bob_id}/remove")
+    assert r.status_code == 200 and r.json()["machines"] == ["work-laptop"], r.text
+    assert p.wait(15) == EXIT_FINAL  # the dialer was refused for good
+    assert d.machine_info() is None and d.b.state.store.machine("work-laptop").key == b""
+    admin = d.b.state.cfg.human_name
+    assert any(f"work-laptop removed by {admin} (bob was removed)" in n for n in sent), sent
+    assert f"bob removed by {admin}: signed out everywhere; their machines removed: work-laptop" in sent
+    bob.close()
+
+
 async def test_the_link_drops_and_comes_back(d: DialIn) -> None:
     d.linked()
     wait_for(d.sock.exists, what="the socket")

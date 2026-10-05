@@ -2553,7 +2553,8 @@
     if (m.version) kv(dl, 'Versions', 'switchboard ' + m.version + ' there, ' + (state.me ? state.me.version : '?') + ' here');
     const members = m.members || [];
     kv(dl, 'Members', (members.length ? members.join(', ') : 'none') + ' (max ' + (m.max_members || 8) + ')');
-    kv(dl, 'Approved', m.approved_at ? 'via ' + (m.approved_via || '?') + ' on ' + stamp(m.approved_at) : null);
+    if (m.paired_by) kv(dl, 'Paired by', m.paired_by);
+    kv(dl, 'Approved', m.approved_at ? (m.approved_by ? 'by ' + m.approved_by + ', ' : '') + 'via ' + (m.approved_via || '?') + ' on ' + stamp(m.approved_at) : null);
     card.append(dl);
     if (m.detail) {
       card.append(el('div', 'fine', 'Last line from the link (the machine may have written it):'),

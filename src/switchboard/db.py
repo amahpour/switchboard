@@ -29,7 +29,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -153,7 +153,7 @@ CREATE TABLE link_machines(
   harnesses TEXT NOT NULL DEFAULT '["claude","codex","cursor","devin"]',
   created_at REAL NOT NULL, approved_at REAL, approved_via TEXT CHECK(approved_via IN ('cli','web')),
   removed_at REAL, last_seen_at REAL,
-  person_id INTEGER);
+  person_id INTEGER, approved_by INTEGER);
 
 CREATE TABLE people(
   id INTEGER PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE,
@@ -332,6 +332,14 @@ V9_TO_V10 = (
     "UPDATE meta SET value='10' WHERE key='schema_version'",
 )
 
+# v10 -> v11 (#178, DESIGN.md §31.8): who approved a machine (a person's id; NULL: the owner, or
+# approved before this version), beside ``person_id``, who paired it. Removing a person removes
+# the machines they paired or approved.
+V10_TO_V11 = (
+    "ALTER TABLE link_machines ADD COLUMN approved_by INTEGER",
+    "UPDATE meta SET value='11' WHERE key='schema_version'",
+)
+
 
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
@@ -346,6 +354,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         7: (8, V7_TO_V8, ()),
         8: (9, V8_TO_V9, ("reviews", "review_items")),
         9: (10, V9_TO_V10, ()),
+        10: (11, V10_TO_V11, ()),
     }
     out = []
     v = frm

@@ -2796,7 +2796,7 @@ On a hosted broker (a public URL where passkeys work: `GET /api/me`'s `hosted`),
 ALTER TABLE messages ADD COLUMN sender_person_id INTEGER;    -- a human sender who isn't the admin
 ALTER TABLE web_sessions ADD COLUMN person_id INTEGER;       -- whose session; NULL: the admin
 ALTER TABLE passkeys ADD COLUMN person_id INTEGER;           -- whose passkey; NULL: the admin
-ALTER TABLE link_machines ADD COLUMN person_id INTEGER;      -- who paired it (kept for later; not set yet)
+ALTER TABLE link_machines ADD COLUMN person_id INTEGER;      -- who paired it (set since #178; NULL: the owner)
 CREATE TABLE people(
   id INTEGER PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE,
   handle BLOB NOT NULL UNIQUE,                               -- their WebAuthn user id (16 random bytes)
@@ -2831,7 +2831,7 @@ UPDATE meta SET value='4' WHERE key='schema_version';
 - `@mentions` of people are recognized like the admin's (`mention_names`).
 
 ### 32.6 Threat model (a delta to §31.6)
-- **Anyone added is trusted with every agent.** That is the design choice of §32.1: an invite is a key to steer everyone's agents, approvals-off ones included. Remove someone and they are out at once (their sessions end; their WebSockets close).
+- **Anyone added is trusted with every agent.** That is the design choice of §32.1: an invite is a key to steer everyone's agents, approvals-off ones included. Remove someone and they are out at once (their sessions end; their WebSockets close; every machine they paired or approved is removed, #178).
 - **A one-time password is a bearer secret until it's used**: shown once to the admin, 7 days, and useless after its person chose their own. The admin's is in the log for an hour at a time, as the claim link was.
 - **Passwords can be guessed online**, which passkeys can't: the limiter slows that per name and overall, and a password needs 10 characters. They are never logged; only their scrypt hashes are stored.
 - **A stolen session can't make itself permanent**: adding a passkey, changing the password, adding someone and pairing a machine all need a check in the last five minutes, and a session on a one-time password can do nothing but choose its own.
@@ -2968,3 +2968,7 @@ A Google account becomes a way in: whoever controls one the admin set can steer 
 
 ### 38.5 Tests
 `tests/unit/test_oidc.py` (the start URL; state once, per browser, 10 minutes; each ID-token check refused on its own, `alg: none` too; PKCE; the configuration; https only), `tests/integration/test_oidc_signin.py` (the routes with a fake issuer: a person, the admin, nobody else, an unverified email, a removed person, another browser, a cancel; only the admin sets emails and each is one person's; the one-time password retired), `tests/e2e/test_google_signin_ui.py` (the button, the admin's field, and bob's real browser trip through a fake Google that redirects back cross-site, landing in the app: the Strict cookie survives), `tests/unit/test_db_migrate_v10.py`. The fake issuer (`tests/fakes/fake_oidc.py`) signs real RS256 tokens and checks the secret, the redirect URI and PKCE.
+
+### 31.8.1 Who paired and approved a machine (#178)
+Each machine records who made the pairing code it used (`link_machines.person_id`, set from the code) and who approved it (`approved_by`, schema 11); NULL is the owner, and a machine approved before schema 11 counts as the owner's approval. The notices and `machine` events name that person instead of always the owner, and the Machines sheet shows **Paired by** and **Approved by**. Removing a person (`POST /api/people/{id}/remove`) removes every machine they paired or approved, through `MachineManager.remove`: its key is forgotten, its live link refused (the dialer stops for good), its members ended, and the notice says why. A machine one person paired and another approved goes with either of them; the admin pairs it again if it should stay. Tests: `test_removing_a_person_removes_the_machines_they_paired_or_approved` (bob pairs and approves `work-laptop`, the notices name him, and his removal takes the machine and its dialer with him), `tests/unit/test_db_migrate_v11.py`.
+
