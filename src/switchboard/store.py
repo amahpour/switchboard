@@ -12,7 +12,7 @@ import sqlite3
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
-from switchboard import db
+from switchboard import db, reviews
 from switchboard.clock import Clock, SystemClock
 from switchboard.models import (
     LOCAL_HOST,
@@ -1940,3 +1940,106 @@ class Store:
             sql += " AND participant_id=?"
             args.append(participant_id)
         return int(self.con.execute(sql, args).fetchone()[0])
+
+    # ------------------------------------------------------------ review boards (§37.3)
+    # A room's board is its newest review that isn't closed. Values arrive already checked by
+    # ``reviews`` (lengths, shapes); the schema's CHECKs are the last line.
+    def current_review(self, room_id: int) -> dict[str, Any] | None:
+        r = self.con.execute(
+            "SELECT * FROM reviews WHERE room_id=? AND closed_at IS NULL ORDER BY id DESC LIMIT 1", (room_id,)
+        ).fetchone()
+        return dict(r) if r else None
+
+    def open_review(self, room_id: int, url: str, head: str, opened_by: str) -> dict[str, Any]:
+        with db.tx(self.con):
+            cur = self.con.execute(
+                "INSERT INTO reviews(room_id, url, head, opened_by, opened_at) VALUES(?, ?, ?, ?, ?)",
+                (room_id, url, head, opened_by, self.clock.now()),
+            )
+        r = self.con.execute("SELECT * FROM reviews WHERE id=?", (cur.lastrowid,)).fetchone()
+        return dict(r)
+
+    def set_review(self, review_id: int, **fields: Any) -> None:
+        allowed = {"head", "closed_at", "posted_at", "posted_by"}
+        if not fields or set(fields) - allowed:
+            raise ValueError(f"unknown review fields: {sorted(set(fields) - allowed)}")
+        cols = ", ".join(f"{k}=?" for k in fields)
+        with db.tx(self.con):
+            self.con.execute(f"UPDATE reviews SET {cols} WHERE id=?", (*fields.values(), review_id))
+
+    def review_items(self, review_id: int) -> list[reviews.Item]:
+        rows = self.con.execute(
+            "SELECT * FROM review_items WHERE review_id=? ORDER BY kind, n", (review_id,)
+        ).fetchall()
+        return [_review_item(r) for r in rows]
+
+    def review_item(self, review_id: int, kind: str, n: int) -> reviews.Item | None:
+        r = self.con.execute(
+            "SELECT * FROM review_items WHERE review_id=? AND kind=? AND n=?", (review_id, kind, n)
+        ).fetchone()
+        return _review_item(r) if r else None
+
+    def add_review_item(self, review_id: int, kind: str, state: str, **fields: Any) -> reviews.Item:
+        """A new finding or question, numbered next on its board (F1, F2, ...; Q1, ...)."""
+        allowed = {"title", "detail", "file", "lines", "raised_by", "options", "recommend"}
+        if set(fields) - allowed:
+            raise ValueError(f"unknown review item fields: {sorted(set(fields) - allowed)}")
+        if "options" in fields:
+            fields["options"] = json.dumps(list(fields["options"]))
+        now = self.clock.now()
+        with db.tx(self.con):
+            if (
+                self.con.execute(
+                    "SELECT COUNT(*) FROM review_items WHERE review_id=?", (review_id,)
+                ).fetchone()[0]
+                >= reviews.MAX_ITEMS
+            ):
+                raise reviews.ReviewError(f"a board holds at most {reviews.MAX_ITEMS} items")
+            n = self.con.execute(
+                "SELECT COALESCE(MAX(n), 0) + 1 FROM review_items WHERE review_id=? AND kind=?",
+                (review_id, kind),
+            ).fetchone()[0]
+            cols = ["review_id", "kind", "n", "state", "created_at", "updated_at", *fields]
+            self.con.execute(
+                f"INSERT INTO review_items({', '.join(cols)}) VALUES({', '.join('?' * len(cols))})",
+                (review_id, kind, n, state, now, now, *fields.values()),
+            )
+        item = self.review_item(review_id, kind, n)
+        assert item is not None
+        return item
+
+    def move_review_item(self, item_id: int, state: str, **fields: Any) -> None:
+        allowed = {"owner", "commit_sha", "reason", "answer", "answered_by"}
+        if set(fields) - allowed:
+            raise ValueError(f"unknown review item fields: {sorted(set(fields) - allowed)}")
+        cols = ", ".join(f"{k}=?" for k in ("state", "updated_at", *fields))
+        with db.tx(self.con):
+            self.con.execute(
+                f"UPDATE review_items SET {cols} WHERE id=?",
+                (state, self.clock.now(), *fields.values(), item_id),
+            )
+
+
+def _review_item(r: sqlite3.Row) -> reviews.Item:
+    try:
+        opts = tuple(str(o) for o in json.loads(r["options"]))
+    except (ValueError, TypeError):
+        opts = ()
+    return reviews.Item(
+        id=r["id"],
+        n=r["n"],
+        kind=r["kind"],
+        state=r["state"],
+        title=r["title"],
+        detail=r["detail"],
+        file=r["file"],
+        lines=r["lines"],
+        raised_by=r["raised_by"],
+        owner=r["owner"],
+        commit=r["commit_sha"],
+        reason=r["reason"],
+        options=opts,
+        recommend=r["recommend"],
+        answer=r["answer"],
+        answered_by=r["answered_by"],
+    )

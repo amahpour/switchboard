@@ -20,13 +20,13 @@ def test_v6_database_gains_rules_with_a_checked_backup(tmp_path: Path) -> None:
     con.execute("INSERT INTO preferences(person_id, theme, text_size) VALUES(0, 'dark', 'large')")
     con.commit()
     assert db.schema_version(con) == 6
-    before = db.row_counts(con, db.TABLES)
+    before = db.row_counts(con, db.V8_TABLES)
     con.close()
     os.chmod(p, 0o600)
 
     con = db.open_db(p)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 8
-    assert db.row_counts(con, db.TABLES) == before
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 9
+    assert db.row_counts(con, db.V8_TABLES) == before
     assert con.execute("SELECT theme, text_size, room_rules FROM preferences WHERE person_id=0").fetchone()[
         :
     ] == ("dark", "large", "")
@@ -36,6 +36,6 @@ def test_v6_database_gains_rules_with_a_checked_backup(tmp_path: Path) -> None:
     assert backup.exists() and os.stat(backup).st_mode & 0o777 == 0o600
     old = sqlite3.connect(backup)
     assert db.schema_version(old) == 6
-    assert db.row_counts(old, db.TABLES) == before
+    assert db.row_counts(old, db.V8_TABLES) == before
     old.close()
     con.close()

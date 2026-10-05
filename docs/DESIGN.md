@@ -653,6 +653,7 @@ FastMCP 4.0.9, server name `switchboard`. Every tool returns a compact JSON stri
 | `read` | `room, limit: int=20` (max 50) | pending messages oldest first, as a batch, plus `more`; never skips | `readOnlyHint=True, openWorldHint=False` |
 | `wait` | `room, timeout_s: int=50` | a batch, or `timeout`, `paused`, `kicked` or `superseded`. `timeout_s` is clamped to the harness cap: claude 110, codex 240, cursor 50, devin 600, test 50. | `readOnlyHint=True, openWorldHint=False` |
 | `pass` | `room: str\|None=None, note: str\|None=None` | "logged, not posted"; marks this member's `in_context` deliveries `handled`. **Refused** (`ok:false, code:"read_first"`, nothing handled) while the room has a peer message that reached the member only as a "call read()" stub (§24); with no room, every room is tried and the refused ones are named | `destructiveHint=False, openWorldHint=False` |
+| `review` | `room, action`, then by action: `url, head` (open); `title, detail, file, lines` (raise); `title, detail, options, recommend` (ask); `item, owner` (concede); `item, reason` (contest, drop); `item, commit` (fix); nothing (show) | the board as text and `settled`; a refusal says what to fix (§37) | `destructiveHint=False, openWorldHint=False` |
 | `away` | `message: str\|None=None` | ok; sets or clears the away text (sanitized, max 80 chars) | `destructiveHint=False, openWorldHint=False, idempotentHint=True` |
 
 - `pass` is a Python keyword, so it is registered with `@mcp.tool(name="pass")`.
@@ -1751,7 +1752,7 @@ The real demo, with a human interjecting live and with Cursor, is repeated later
 - **`all`** runs the four in order with one combined diff, one confirmation and a summary; a harness whose config can't be parsed is reported as an error and skipped while the others apply (exit 1). Uninstall needs no `--allow-editable`: removing entries can't make edited code run. A run with more than one section (`all`, or a harness plus `--purge-hooks`) ends with the summary; it says why hook copies were kept, and "a harness command failed" without "files written" when no file changed.
 - **The diff shows only what is removed, through an allowlist.** Uninstall is the first path that prints entries the user may have edited, so a removed MCP entry shows only `command` and `args` (flagged values masked) and `***` for every other key (`env`, `headers`, `cwd`, …), and a removed hook group or handler shows the keys install writes (`matcher`, `type`, `command`, `timeout`, `loop_limit`) and `***` for any other. **Deviation (install too):** `mask()` now masks the whole value of a secret-looking key, including an object or list (an `env` block), instead of walking into it; install's own entries have no such key, so its diffs are unchanged. Every printed JSON value has non-printable characters escaped.
 - **`--purge-hooks` and `--user-home`:** the switchboard home (`--home`, else `SWITCHBOARD_HOME` or `~/.switchboard`) doesn't follow `--user-home`, so with `--user-home` the real `~`'s four hook configs are read too (never written); a reference there keeps the copies (`kept (still used by … (your real ~))`).
-- **`install devin`** says in a note that `permissions.allow` pre-approves switchboard's eight tools (they run without an approval prompt), so the grant is visible in `install all`'s combined diff too.
+- **`install devin`** says in a note that `permissions.allow` pre-approves switchboard's eight room tools (they run without an approval prompt; `review`, §37, isn't among them, so Devin asks before each move), so the grant is visible in `install all`'s combined diff too.
 
 ## 24. Read before pass (fix after M7, 2026-09-25)
 
@@ -2903,3 +2904,36 @@ Only an authenticated person may write defaults through the Origin- and `X-Switc
 The security workflow runs on code pull requests and on code merges to `main`, independently of the required `CI` aggregate in `test.yml`. It uses the same docs-only and release skip logic as that workflow. Each scanner has read-only repository permission and keeps its output as an Actions artifact for 14 days. Findings do not fail a pull request, and no SARIF is uploaded to code scanning. A scanner error remains visible in its job log, but the report-only job cannot block a merge. No repository setting or required check changes.
 
 CodeQL runs the `security-extended` queries for Python, JavaScript/TypeScript and Actions, with SARIF saved locally and the vendored Mermaid bundle excluded from source analysis. Bandit reports Python patterns. pip-audit checks the `uv.lock` export, including development packages; OSV checks the Mermaid version named by the pinned vendor comment. Trivy scans the image built from that commit. zizmor scans workflows. gitleaks scans the full Git history, redacting any discovered secrets before it saves the report. The local `scripts/security_scan.py` command runs the fast Bandit, dependency and workflow layers. There is no finding baseline or severity gate in this first step; contributors inspect the artifacts and fix or explain findings in later pull requests.
+
+## 37. A review board in a room (#80)
+
+### 37.1 What it is, and what switchboard never does
+Agents reviewing one pull request together used to settle it in chat, and by the end nobody could say which findings were open, who owned each one, or what was about to be posted (#80). A **board** holds that state instead: findings and questions, each with a state and an owner, worked by the agents through one tool and decided by a person where they can't agree. The agents do 90% of the triage; the person does the last 10%: the questions, the contested findings, and a spot-check of the evidence.
+
+switchboard never fetches the pull request, judges a finding, runs a model, holds a GitHub or GitLab token, or posts, comments, pushes, approves or merges anything. Each owner posts its own items, in its own name, with its own `gh` or `glab` (§37.6). A move is a tool call, never parsed out of prose.
+
+### 37.2 Items and moves (`switchboard/reviews.py`, pure)
+- A **finding** is `raised` by a member. The other side **concedes** it (naming an `owner`, an agent in the room, by default itself) or **contests** it (with a reason). A conceded finding is **fixed** by its owner (with the commit). Whoever raised a finding can't concede or contest it, only **drop** it (with a reason): settling it is the other side's call.
+- A **question** is **asked** by a member: a title, 2 to 4 options, and optionally the recommended one. Only a person answers or drops it.
+- A person may also rule on a contested finding (concede it, with an owner, or drop it) and drop anything. Those moves come with the web UI (§37.5).
+- **Settled:** no finding raised, contested or conceded, and no question open.
+- Labels are per board and per kind: F1, F2, … and Q1, … . Input is checked, not cut: a title over 200 characters, a URL that isn't `http(s)`, a `head` that isn't 7 to 64 hex digits, `lines` that aren't `42` or `40-58`, or options that repeat are refused with what to fix. A board holds at most 200 items.
+
+### 37.3 Storage (schema version 9)
+`reviews(id, room_id, url, head, opened_by, opened_at, closed_at, posted_at, posted_by)` and `review_items(id, review_id, kind, n, state, title, detail, file, lines, raised_by, owner, commit_sha, reason, options, recommend, answer, answered_by, created_at, updated_at)`, with each length a CHECK too. A room's board is its newest review that isn't closed. The v8→v9 migration only creates the two tables, after the usual checked backup (§27.6); a test pins that a fresh database and a migrated one have the same tables. Every move also records a `review` event.
+
+### 37.4 The tool
+`review(room, action, …)` (§6.1): `open`, `show`, `raise`, `ask`, `concede`, `contest`, `fix`, `drop`. It goes through `agent.review`, a member method like `agent.say`, so only a member of the room can call it, with its credential. Every result is the board as text, open work first, one line per item, so an agent always acts on the current state. `open` with the board's own URL and a new head moves the board to that commit. A room has one open board; another URL is refused until a person closes it.
+
+A move is a **notice** in the room ("claude-1 conceded F1, owner claude-1"), never a chat message: it isn't delivered and wakes no one, and it costs no agent a turn. The tool isn't rate-limited like `say`.
+
+`agent.review` isn't in the remote link's method allowlist (§27.3) or the dial-in one (§31), and Devin's install doesn't pre-approve `review`. Both are guards, so widening either is the maintainer's call.
+
+### 37.5 The page (next)
+The web UI's board view (lanes for the person's questions and contested findings, raised, being fixed, fixed, dropped; a card's evidence and the lines it is about) subscribes to the hub's `review` frames, which every move already publishes. The person's moves (answer, rule, drop, close) come with it.
+
+### 37.6 Posting (next)
+When the board is settled, it shows exactly what each owner will post. A person's **Post** sends one message in the room that tells each owner to post its own items, once, with its own tools. switchboard posts nothing itself.
+
+### 37.7 Tests
+`tests/unit/test_reviews.py` (the moves, settled, input checks, the board text); `tests/integration/test_review_board.py` (two scripted agents through the real tool: open to fixed, the notices, no chat message and so no delivery, every refusal's words, an owner who must be in the room); `tests/unit/test_db_migrate_v9.py` (the migration, and fresh = migrated).

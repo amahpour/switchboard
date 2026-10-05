@@ -134,6 +134,10 @@ class Hub:
     def room_settings(self, room: str, settings: dict[str, Any]) -> int:
         return self.publish("room", room, {"settings": settings})
 
+    def review(self, room: str, board: dict[str, Any]) -> int:
+        """A room's review board after a move (§37.5); the web UI subscribes to it."""
+        return self.publish("review", room, {"board": board})
+
     def rooms_changed(self, names: list[str]) -> int:
         return self.publish("rooms", None, {"rooms": names})
 

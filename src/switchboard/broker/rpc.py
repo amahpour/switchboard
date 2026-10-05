@@ -611,6 +611,7 @@ def build_methods(state: "BrokerState") -> dict[str, MethodSpec]:
         "agent.leave": MethodSpec("member", member_op("leave")),
         "agent.who": MethodSpec("member", member_op("who")),
         "agent.say": MethodSpec("member", member_op("say")),
+        "agent.review": MethodSpec("member", member_op("review")),
         "agent.read": MethodSpec("member", member_op("read")),
         "agent.wait": MethodSpec("member", agent_wait, long_poll=True),
         "agent.unwait": MethodSpec("member", member_op("unwait")),

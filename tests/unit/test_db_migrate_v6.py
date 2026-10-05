@@ -20,13 +20,13 @@ def test_v5_preferences_gain_text_size_with_a_checked_backup(tmp_path: Path) -> 
     con.execute("INSERT INTO preferences(person_id, theme) VALUES(0, 'dark')")
     con.commit()
     assert db.schema_version(con) == 5
-    before = db.row_counts(con, db.TABLES)
+    before = db.row_counts(con, db.V8_TABLES)
     con.close()
     os.chmod(p, 0o600)
 
     con = db.open_db(p)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 8
-    assert db.row_counts(con, db.TABLES) == before
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 9
+    assert db.row_counts(con, db.V8_TABLES) == before
     assert con.execute("SELECT theme, text_size FROM preferences WHERE person_id=0").fetchone()[:] == (
         "dark",
         "default",
@@ -36,6 +36,6 @@ def test_v5_preferences_gain_text_size_with_a_checked_backup(tmp_path: Path) -> 
     assert backup.exists() and os.stat(backup).st_mode & 0o777 == 0o600
     old = sqlite3.connect(backup)
     assert db.schema_version(old) == 5
-    assert db.row_counts(old, db.TABLES) == before
+    assert db.row_counts(old, db.V8_TABLES) == before
     old.close()
     con.close()

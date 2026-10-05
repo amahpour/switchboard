@@ -29,7 +29,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -167,6 +167,26 @@ CREATE TABLE preferences(
   theme TEXT NOT NULL DEFAULT 'system' CHECK(theme IN ('system','light','dark')),
   text_size TEXT NOT NULL DEFAULT 'default' CHECK(text_size IN ('small','default','large','larger')),
   room_rules TEXT NOT NULL DEFAULT '' CHECK(length(room_rules) <= 2000));
+
+CREATE TABLE reviews(
+  id INTEGER PRIMARY KEY, room_id INTEGER NOT NULL REFERENCES rooms(id),
+  url TEXT NOT NULL CHECK(length(url) <= 500), head TEXT NOT NULL DEFAULT '' CHECK(length(head) <= 64),
+  opened_by TEXT NOT NULL, opened_at REAL NOT NULL, closed_at REAL, posted_at REAL, posted_by TEXT);
+CREATE INDEX reviews_room ON reviews(room_id, id);
+CREATE TABLE review_items(
+  id INTEGER PRIMARY KEY, review_id INTEGER NOT NULL REFERENCES reviews(id),
+  kind TEXT NOT NULL CHECK(kind IN ('finding','question')), n INTEGER NOT NULL CHECK(n > 0),
+  state TEXT NOT NULL
+    CHECK(state IN ('raised','contested','conceded','fixed','dropped','open','answered')),
+  title TEXT NOT NULL CHECK(length(title) <= 200),
+  detail TEXT NOT NULL DEFAULT '' CHECK(length(detail) <= 4000),
+  file TEXT NOT NULL DEFAULT '' CHECK(length(file) <= 300),
+  lines TEXT NOT NULL DEFAULT '' CHECK(length(lines) <= 40),
+  raised_by TEXT NOT NULL, owner TEXT NOT NULL DEFAULT '', commit_sha TEXT NOT NULL DEFAULT '',
+  reason TEXT NOT NULL DEFAULT '' CHECK(length(reason) <= 500), options TEXT NOT NULL DEFAULT '[]',
+  recommend INTEGER, answer TEXT NOT NULL DEFAULT '' CHECK(length(answer) <= 500),
+  answered_by TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL, updated_at REAL NOT NULL,
+  UNIQUE(review_id, kind, n));
 """
 
 TABLES = (
@@ -184,6 +204,8 @@ TABLES = (
     "link_machines",
     "people",
     "preferences",
+    "reviews",
+    "review_items",
 )
 # the tables of a version-1 database (0.1.0, 0.2.0) and of a version-2 one (0.3.0 to 0.6.5):
 # the rows a migration must keep
@@ -191,6 +213,7 @@ V1_TABLES = TABLES[:9]
 V2_TABLES = TABLES[:10]
 V3_TABLES = TABLES[:12]
 V4_TABLES = TABLES[:13]
+V8_TABLES = TABLES[:14]
 
 # v1 -> v2 (DESIGN.md §27.6): one BEGIN IMMEDIATE, after a verified backup. The
 # columns land at the end of their tables, where the fresh schema above puts them too.
@@ -272,6 +295,30 @@ V7_TO_V8 = (
     "UPDATE meta SET value='8' WHERE key='schema_version'",
 )
 
+# v8 -> v9 (#80, DESIGN.md §37.3): a room's review boards and their items. New tables only.
+V8_TO_V9 = (
+    "CREATE TABLE reviews("
+    " id INTEGER PRIMARY KEY, room_id INTEGER NOT NULL REFERENCES rooms(id),"
+    " url TEXT NOT NULL CHECK(length(url) <= 500), head TEXT NOT NULL DEFAULT '' CHECK(length(head) <= 64),"
+    " opened_by TEXT NOT NULL, opened_at REAL NOT NULL, closed_at REAL, posted_at REAL, posted_by TEXT)",
+    "CREATE INDEX reviews_room ON reviews(room_id, id)",
+    "CREATE TABLE review_items("
+    " id INTEGER PRIMARY KEY, review_id INTEGER NOT NULL REFERENCES reviews(id),"
+    " kind TEXT NOT NULL CHECK(kind IN ('finding','question')), n INTEGER NOT NULL CHECK(n > 0),"
+    " state TEXT NOT NULL"
+    " CHECK(state IN ('raised','contested','conceded','fixed','dropped','open','answered')),"
+    " title TEXT NOT NULL CHECK(length(title) <= 200),"
+    " detail TEXT NOT NULL DEFAULT '' CHECK(length(detail) <= 4000),"
+    " file TEXT NOT NULL DEFAULT '' CHECK(length(file) <= 300),"
+    " lines TEXT NOT NULL DEFAULT '' CHECK(length(lines) <= 40),"
+    " raised_by TEXT NOT NULL, owner TEXT NOT NULL DEFAULT '', commit_sha TEXT NOT NULL DEFAULT '',"
+    " reason TEXT NOT NULL DEFAULT '' CHECK(length(reason) <= 500), options TEXT NOT NULL DEFAULT '[]',"
+    " recommend INTEGER, answer TEXT NOT NULL DEFAULT '' CHECK(length(answer) <= 500),"
+    " answered_by TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL, updated_at REAL NOT NULL,"
+    " UNIQUE(review_id, kind, n))",
+    "UPDATE meta SET value='9' WHERE key='schema_version'",
+)
+
 
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
@@ -284,6 +331,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         5: (6, V5_TO_V6, ()),
         6: (7, V6_TO_V7, ()),
         7: (8, V7_TO_V8, ()),
+        8: (9, V8_TO_V9, ("reviews", "review_items")),
     }
     out = []
     v = frm
@@ -304,6 +352,8 @@ def tables_of(version: int) -> tuple[str, ...]:
         return V3_TABLES
     if version == 4:
         return V4_TABLES
+    if version <= 8:
+        return V8_TABLES
     return TABLES
 
 

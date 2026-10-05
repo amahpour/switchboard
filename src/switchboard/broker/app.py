@@ -37,6 +37,7 @@ from switchboard.broker.passkeys import (
 from switchboard.broker.passwords import SignInLimiter
 from switchboard.broker.peer import AllowAllHumans, PeerPolicy, ProcessPeerPolicy
 from switchboard.broker.remote import RemoteManager
+from switchboard.broker.reviews import Boards
 from switchboard.broker.rpc import RpcServer
 from switchboard.broker.service import BrokerInfo, RoomService
 from switchboard.clock import Clock, SystemClock
@@ -75,6 +76,7 @@ class BrokerState:
     engine: Engine = None  # type: ignore[assignment]
     runner: Runner = None  # type: ignore[assignment]
     agents: AgentService = None  # type: ignore[assignment]
+    boards: Boards = None  # type: ignore[assignment]
     # the remote hosts' links (DESIGN.md §27.4); None until the RPC server listens
     remotes: RemoteManager | None = None
     # the machines that dial in (DESIGN.md §31.7): a hosted broker with passkeys only
@@ -217,6 +219,7 @@ def create_app(
         )
         state.runner = Runner(state)
         state.agents = AgentService(state)
+        state.boards = Boards(state)
         state.service.delivery = state.agents
         state.rpc = RpcServer(paths.sock, state)
         try:

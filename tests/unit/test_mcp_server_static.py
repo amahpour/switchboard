@@ -11,7 +11,7 @@ from switchboard import guardrails
 from switchboard.mcp import server as srv
 from switchboard.mcp.client import BrokerConn
 
-TOOLS = {"join", "leave", "who", "say", "read", "wait", "pass", "away"}
+TOOLS = {"join", "leave", "who", "say", "read", "wait", "pass", "away", "review"}
 
 
 def make(tmp_path, **kw) -> tuple[srv.McpState, object]:
@@ -35,7 +35,7 @@ async def test_tools_annotations_and_instructions(tmp_path) -> None:
         ann = {n: t.annotations.model_dump(by_alias=True, exclude_none=True) for n, t in tools.items()}
         for n in ("who", "read", "wait"):
             assert ann[n] == {"readOnlyHint": True, "openWorldHint": False}
-        for n in ("say", "pass"):
+        for n in ("say", "pass", "review"):
             assert ann[n] == {"destructiveHint": False, "openWorldHint": False}
         for n in ("join", "leave", "away"):
             assert ann[n] == {"destructiveHint": False, "openWorldHint": False, "idempotentHint": True}
