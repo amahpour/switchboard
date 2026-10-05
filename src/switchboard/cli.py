@@ -910,7 +910,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="A local group chat where you and your coding agents talk and hand work to each other.",
         parents=[common],
     )
-    p.add_argument("--version", action="version", version=_version())
+    p.add_argument("--version", action=_VersionAction)
     sub = p.add_subparsers(dest="cmd", metavar="COMMAND")
 
     s = sub.add_parser("start", parents=[common], help="start the broker (daemonizes)")
@@ -1189,6 +1189,22 @@ def _version() -> str:
     from switchboard import __version__, build_info
 
     return build_info.version_text(__version__, build_info.commit())
+
+
+class _VersionAction(argparse.Action):
+    """``--version``, worked out only when it's asked for: in a source checkout the commit comes
+    from git, and building the parser for any other command shouldn't run it."""
+
+    def __init__(self, option_strings: list[str], dest: str = argparse.SUPPRESS, **kw: Any) -> None:
+        super().__init__(
+            option_strings, dest, nargs=0, default=argparse.SUPPRESS, help="show the version and exit"
+        )
+
+    def __call__(
+        self, parser: argparse.ArgumentParser, namespace: Any, values: Any, option_string: Any = None
+    ) -> None:
+        print(_version())
+        parser.exit()
 
 
 def main(argv: list[str] | None = None) -> int:

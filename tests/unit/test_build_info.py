@@ -102,3 +102,13 @@ def test_version_and_broker_status_print_the_commit_when_known(
 def test_version_without_a_commit_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(info(), "commit", lambda: None)
     assert cli._version() == f"switchboard {__version__}"
+
+
+def test_building_the_cli_parser_runs_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every command builds the parser; only --version needs the commit, which in a source
+    checkout means running git. Asking for it up front ran git on every command, and made a test
+    that forbids subprocesses fail whenever it was the first in its process to build a parser."""
+    info().commit.cache_clear()
+    monkeypatch.setattr(info().subprocess, "run", lambda *a, **k: pytest.fail(f"ran {a!r}"))
+    args = cli.build_parser().parse_args(["status"])
+    assert args.cmd == "status"
