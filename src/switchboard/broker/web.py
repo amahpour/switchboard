@@ -55,12 +55,19 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI, Request, WebSocket
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from switchboard import __version__, build_info, db
-from switchboard.broker import people
+from switchboard.broker import oidc, people
 from switchboard.broker.auth import COOKIE_NAME, SESSION_TTL_S, app_csp, sha256_hex
 from switchboard.broker.commands import Actor
 from switchboard.broker.hub import WsSubscriber
@@ -76,6 +83,7 @@ from switchboard.broker.passwords import (
 from switchboard.broker.service import ServiceError, message_dict
 from switchboard.models import InvalidName, normalize_room, valid_host
 from switchboard.reviews import ReviewError
+from switchboard.store import Conflict
 
 if TYPE_CHECKING:  # pragma: no cover
     from switchboard.broker.app import BrokerState
@@ -116,6 +124,15 @@ def _svc_err(e: ServiceError) -> JSONResponse:
 
 def _ok(data: Any) -> JSONResponse:
     return JSONResponse(data, headers=NO_STORE)
+
+
+OIDC_COOKIE = "sb_oidc"  # binds a Google sign-in's callback to the browser that started it
+GOOGLE_EMAIL_RE = re.compile(r"[^@\s]{1,64}@[^@\s]{1,189}\.[^@\s.]{2,63}")
+# The callback's answer: a same-site navigation to the app, so the new Strict cookie is sent.
+SSO_DONE_PAGE = (
+    '<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/">'
+    '<title>switchboard</title></head><body><p>Signed in. <a href="/">Continue</a></p></body></html>'
+)
 
 
 def _set_cookie(resp: Response, sid: str, *, secure: bool) -> None:
@@ -755,6 +772,48 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return None, _err(403, "reauth", "confirm it's you first")
         return w, None
 
+    @app.post("/api/people/{pid}/google")
+    async def people_google(request: Request, pid: str) -> Response:
+        """The Google email a person (or the admin, ``owner``) signs in with, or none (#70)."""
+        w, no = admin(request, True)
+        if no is not None:
+            return no
+        assert w is not None
+        try:
+            body = await _json_body(request)
+        except ServiceError as e:
+            return _svc_err(e)
+        raw = body.get("email")
+        if raw is not None and not isinstance(raw, str):
+            return _err(400, "bad_request", "email must be a string or null")
+        email = raw.strip().lower() if raw else None
+        if email is not None and not GOOGLE_EMAIL_RE.fullmatch(email):
+            return _err(400, "bad_request", "that isn't an email address")
+        if pid == "owner":
+            person_id, name = None, state.cfg.human_name
+        else:
+            p = (
+                state.store.person(int(pid))
+                if ROOM_ID_RE.fullmatch(pid) and int(pid) <= MAX_ROOM_ID
+                else None
+            )
+            if p is None or not p.active:
+                return _err(404, "not_found", "no such person")
+            person_id, name = p.id, p.name
+        try:
+            state.store.set_google_email(person_id, email)
+        except Conflict as e:
+            return _err(409, "taken", str(e))
+        state.store.add_event(
+            "people", data={"what": "google_email", "person": name, "by": w.name, "set": bool(email)}
+        )
+        state.hub.notice(
+            None,
+            "info",
+            f"{w.name} " + (f"set {name}'s Google sign-in" if email else f"removed {name}'s Google sign-in"),
+        )
+        return _ok({"person": next(x for x in people.summary(state) if x["id"] == person_id)})
+
     @app.get("/api/people")
     async def people_list(request: Request) -> Response:
         _w, no = admin(request, False)
@@ -858,9 +917,85 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 "passkeys_work": state.webauthn is not None,
                 "claim": claim_open(),
                 "password": state.hosted,
-                "sso": "coming soon",
+                "sso": state.oidc.cfg.provider if state.oidc is not None else "coming soon",
             }
         )
+
+    # -------------------------------------------- Sign in with Google (#70, §38)
+    # Only a person the admin added, matched by the Google email the admin set for them.
+    # A failure goes back to the sign-in page with a code it explains; details go to the log.
+    def sso_fail(code: str) -> Response:
+        return RedirectResponse("/?sso=" + code, status_code=303, headers=NO_STORE)
+
+    def sso_redirect_uri() -> str:
+        return state.web_origin.origin + oidc.CALLBACK_PATH
+
+    @app.get("/auth/oidc/start", include_in_schema=False)
+    async def oidc_start() -> Response:
+        if state.oidc is None:
+            return _err(404, "not_found", "single sign-on isn't set up here")
+        bind = secrets.token_urlsafe(32)
+        try:
+            url, _state = await asyncio.to_thread(state.oidc.start, sso_redirect_uri(), sha256_hex(bind))
+        except oidc.OidcError as e:
+            log.warning("sign-in with %s: %s", state.oidc.cfg.provider, e)
+            return sso_fail(e.code)
+        resp = RedirectResponse(url, status_code=303, headers=NO_STORE)
+        # Lax, not Strict: the callback is a top-level navigation back from the provider
+        resp.set_cookie(
+            OIDC_COOKIE,
+            bind,
+            max_age=int(oidc.FLOW_TTL_S),
+            path=oidc.CALLBACK_PATH,
+            httponly=True,
+            samesite="lax",
+            secure=secure(),
+        )
+        return resp
+
+    @app.get(oidc.CALLBACK_PATH, include_in_schema=False)
+    async def oidc_callback(request: Request) -> Response:
+        if state.oidc is None:
+            return _err(404, "not_found", "single sign-on isn't set up here")
+        q = request.query_params
+        if q.get("error"):
+            return sso_fail("denied")
+        bind = request.cookies.get(OIDC_COOKIE) or ""
+        try:
+            email = await asyncio.to_thread(
+                state.oidc.finish,
+                q.get("state") or "",
+                q.get("code") or "",
+                sso_redirect_uri(),
+                sha256_hex(bind),
+            )
+        except oidc.OidcError as e:
+            # rate-limited like a bad login token: anyone can call this with a made-up state
+            log.debug("sign-in with %s: %s", state.oidc.cfg.provider, e)
+            failed("sso_" + e.code)
+            return sso_fail(e.code)
+        person = state.store.person_by_google_email(email)
+        if email == state.store.owner_google_email() and state.store.owner_handle() is not None:
+            person_id, name = None, state.cfg.human_name
+        elif person is not None:
+            person_id, name = person.id, person.name
+            if person.must_reset:  # the invite's one-time password: Google is their way in now
+                state.store.retire_one_time(person.id)
+        else:
+            failed("sso_not_allowed")
+            return sso_fail("not_allowed")
+        sid = state.sessions.create(state.oidc.cfg.provider, person_id=person_id)
+        state.passkey_checks[sha256_hex(sid)] = state.clock.now()  # just confirmed with the provider
+        state.store.add_event(
+            "login", data={"what": "session", "via": state.oidc.cfg.provider, "person": name}
+        )
+        state.hub.notice(None, "warn", f"new web login: {name} ({state.oidc.cfg.provider})")
+        # A page, not a redirect: the session cookie is SameSite=Strict, and a browser doesn't
+        # send it on a redirect that a cross-site navigation (back from the provider) started.
+        resp = HTMLResponse(SSO_DONE_PAGE, headers=NO_STORE)
+        _set_cookie(resp, sid, secure=secure())
+        resp.delete_cookie(OIDC_COOKIE, path=oidc.CALLBACK_PATH)
+        return resp
 
     # ---------------------------------------------- machines that dial in (§31.7)
     @app.post("/link/pair", include_in_schema=False)
@@ -991,6 +1126,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 # the passkeys sheet (§31.4): shown behind a public URL where passkeys work
                 "hosted": state.webauthn is not None,
                 "signin": state.hosted,  # passwords and people (§32)
+                "sso": state.oidc.cfg.provider if state.oidc is not None else None,  # §38
                 "passkeys": len(state.store.passkeys_of(w.person_id)),
                 "password": has_password,
                 "fresh": state.fresh_check(w.h),

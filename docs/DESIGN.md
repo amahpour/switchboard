@@ -2789,7 +2789,7 @@ On a hosted broker (a public URL where passkeys work: `GET /api/me`'s `hosted`),
 - **The admin section is the admin's.** Adding people, a new one-time password for someone, and removing someone.
 - **Three ways in** on the sign-in page: a name and a password, a passkey, and SSO shown as coming soon.
 - **A one-time password, then your own.** The admin's first password is printed once in the log (the claim, §31.3, now a password rather than only a link); everyone else's first one comes from the admin. Either way, the first sign-in with it can do nothing but choose a password of their own, or a passkey instead.
-- **Not in this version:** SSO (OIDC), per-room membership, roles beyond admin and everyone else, per-person budgets, each agent answering to one person (#61's sketch, if a deployment wants it later).
+- **Not in this version:** SSO (OIDC; since §38, Google), per-room membership, roles beyond admin and everyone else, per-person budgets, each agent answering to one person (#61's sketch, if a deployment wants it later).
 
 ### 32.2 Data model (schema v4)
 ```sql
@@ -2821,7 +2821,7 @@ UPDATE meta SET value='4' WHERE key='schema_version';
 - **Passkeys** are as in §31.4, per person: `/api/passkeys/begin` registers with the signed-in person's handle and excludes only their passkeys; `/api/passkey/finish` signs in whoever's passkey it is (a person's passkey clears a pending one-time password: it proves it's them).
 - **The fresh check** (§31.4) is a passkey **or** a password: `POST /api/signin/check {password}` for a signed-in browser. The app's **Confirm it's you** dialog asks for the password (with **Use a passkey** beside it when there is one); someone with no password gets their passkey at once. It guards adding a passkey, changing a password, adding someone, a new one-time password, and pairing or approving a machine.
 - **Sign out everywhere** ends that person's sessions only; `switchboard logout --all` from the container's shell still ends everyone's.
-- **SSO** is a disabled button, "Coming soon" (`GET /api/auth/state`'s `sso`).
+- **SSO** is a disabled button, "Coming soon" (`GET /api/auth/state`'s `sso`), until Sign in with Google is set up (§38).
 - **Where passwords work:** any hosted broker, passkeys or not (an IP address or plain `http://…test` gets passwords only). Machines dial in behind any public URL that is a secure context.
 - **The admin's name** is `human_name`: `SWITCHBOARD_HUMAN_NAME` in the deployment sets it over `config.toml` (a container's own user would make it `me`).
 
@@ -2947,3 +2947,24 @@ A move is a **notice** in the room ("claude-1 conceded F1, owner claude-1"), nev
 
 ### 37.7 Tests
 `tests/unit/test_reviews.py` (the moves, settled, input checks, the board text); the page's tests in §37.5; `tests/integration/test_review_board.py` (two scripted agents through the real tool: open to fixed, the notices, no chat message and so no delivery, every refusal's words, an owner who must be in the room); `tests/unit/test_db_migrate_v9.py` (the migration, and fresh = migrated).
+
+## 38. Sign in with Google (#70)
+
+### 38.1 What it is
+On a hosted broker, people the admin added can sign in with their Google account, over OpenID Connect. **Only them** (the decision on #70): the admin sets the Google email each person signs in with, and their own, in Admin > People; any other account is turned away, whatever its domain. A whole Workspace domain is #71, later. Passwords and passkeys keep working, and the admin's first sign-in is still the one-time password from the log. Nothing changes until `SWITCHBOARD_OIDC_CLIENT_ID` and its secret (`SWITCHBOARD_OIDC_CLIENT_SECRET`, or `..._FILE`) are both set (`broker/oidc.py`, `from_env`).
+
+### 38.2 The flow (`broker/oidc.py`, the two routes in `web.py`)
+- **`GET /auth/oidc/start`** makes a `state`, a `nonce` and a PKCE verifier (32 random bytes each), keeps them for 10 minutes (at most 200 sign-ins in flight; the oldest go first), sets `sb_oidc`, a random cookie whose sha256 is the flow's **binding** (`HttpOnly`, `SameSite=Lax`, its path the callback, 10 minutes), and redirects to the issuer's authorization endpoint with the S256 challenge, `scope=openid email` and `prompt=select_account`.
+- **`GET /auth/oidc/callback`** takes the flow by `state`, once (a failed try uses it up), and refuses it unless the browser's `sb_oidc` hashes to its binding, so a callback in another browser fails. It posts the code with the client secret and the verifier to the token endpoint, then checks the ID token as if TLS weren't there: an RS256 signature by a key the issuer publishes (`jwks_uri`, re-read hourly or for an unknown `kid`; `alg` must be `RS256`), `iss`, `aud` (and `azp` with several audiences), `exp` and `iat` within 2 minutes of skew, the `nonce`, and `email_verified` being `true`. The email, lowercased, must be the admin's own (`meta.owner_google_email`) or an active person's (`people.google_email`).
+- **The session** is an ordinary one (`via` = `google`), with a fresh check for the next five minutes, as a password just typed gives. The answer is a page that refreshes to `/`, not a redirect: the session cookie is `SameSite=Strict`, and a browser doesn't send it on a redirect in a chain that came from another site (Google's). A person invited with a one-time password who signs in with Google has it retired (`retire_one_time`): they're never asked to choose a password, and it stops working.
+- **A failure** goes back to the sign-in page as `/?sso=<code>`, and the page explains it (`not_allowed`, `denied`, `expired`, `unverified`, `no_email`, `token`, `provider`); the detail goes only to the debug log, and failures count like bad login tokens (one rate-limited event).
+- **The provider:** discovery (`<issuer>/.well-known/openid-configuration`, whose endpoints must be `https`), then the keys and the token endpoint, through `urllib` with the OS's trust store (`truststore`), a 10 s timeout and a 256 KiB cap, off the event loop. No new dependency: `cryptography` checks the signature. `SWITCHBOARD_OIDC_ISSUER` (https only) points it at another OpenID Connect provider.
+
+### 38.3 Storage (schema version 10)
+`people.google_email` (at most 254 characters; one active person per email, a partial unique index) and the owner's in `meta.owner_google_email`. An email belongs to at most one of them (`set_google_email`, `Conflict` otherwise). Removing a person clears theirs; resetting the owner clears every one. The admin sets them through `POST /api/people/{id|owner}/google` (`{email}` or `null`), with the same fresh check as adding a person. The People card shows a **Google sign-in** field when the broker has a provider (`/api/me`'s `sso`), and a person who signs in only that way shows as "signs in with Google".
+
+### 38.4 Threat model delta
+A Google account becomes a way in: whoever controls one the admin set can steer every agent, as that person can (§32). The broker needs outbound HTTPS to the issuer, and so do browsers. The client secret is read from the environment or a file at start and is never stored, logged, shown in a `repr` or sent anywhere but the token endpoint. What the provider says is a claim until its signature and every check above pass.
+
+### 38.5 Tests
+`tests/unit/test_oidc.py` (the start URL; state once, per browser, 10 minutes; each ID-token check refused on its own, `alg: none` too; PKCE; the configuration; https only), `tests/integration/test_oidc_signin.py` (the routes with a fake issuer: a person, the admin, nobody else, an unverified email, a removed person, another browser, a cancel; only the admin sets emails and each is one person's; the one-time password retired), `tests/e2e/test_google_signin_ui.py` (the button, the admin's field, and bob's real browser trip through a fake Google that redirects back cross-site, landing in the app: the Strict cookie survives), `tests/unit/test_db_migrate_v10.py`. The fake issuer (`tests/fakes/fake_oidc.py`) signs real RS256 tokens and checks the secret, the redirect URI and PKCE.

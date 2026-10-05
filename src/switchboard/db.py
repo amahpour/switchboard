@@ -29,7 +29,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -159,8 +159,11 @@ CREATE TABLE people(
   id INTEGER PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE,
   handle BLOB NOT NULL UNIQUE,
   password_hash TEXT, must_reset INTEGER NOT NULL DEFAULT 1, password_expires_at REAL,
-  created_at REAL NOT NULL, removed_at REAL);
+  created_at REAL NOT NULL, removed_at REAL,
+  google_email TEXT CHECK(google_email IS NULL OR length(google_email) <= 254));
 CREATE UNIQUE INDEX people_active_name ON people(name) WHERE removed_at IS NULL;
+CREATE UNIQUE INDEX people_google_email ON people(google_email)
+  WHERE removed_at IS NULL AND google_email IS NOT NULL;
 
 CREATE TABLE preferences(
   person_id INTEGER PRIMARY KEY CHECK(person_id >= 0),
@@ -319,6 +322,16 @@ V8_TO_V9 = (
     "UPDATE meta SET value='9' WHERE key='schema_version'",
 )
 
+# v9 -> v10 (#70, DESIGN.md §38.3): the Google email a person signs in with, set by the admin.
+# The owner's is a meta row, needing no statement. Every existing person starts without one.
+V9_TO_V10 = (
+    "ALTER TABLE people ADD COLUMN google_email TEXT"
+    " CHECK(google_email IS NULL OR length(google_email) <= 254)",
+    "CREATE UNIQUE INDEX people_google_email ON people(google_email)"
+    " WHERE removed_at IS NULL AND google_email IS NOT NULL",
+    "UPDATE meta SET value='10' WHERE key='schema_version'",
+)
+
 
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
@@ -332,6 +345,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         6: (7, V6_TO_V7, ()),
         7: (8, V7_TO_V8, ()),
         8: (9, V8_TO_V9, ("reviews", "review_items")),
+        9: (10, V9_TO_V10, ()),
     }
     out = []
     v = frm
@@ -354,6 +368,8 @@ def tables_of(version: int) -> tuple[str, ...]:
         return V4_TABLES
     if version <= 8:
         return V8_TABLES
+    if version == 9:
+        return TABLES
     return TABLES
 
 

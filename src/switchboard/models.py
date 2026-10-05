@@ -341,6 +341,7 @@ class PersonRow:
     password_expires_at: float | None  # a one-time password's end; None once they chose their own
     created_at: float
     removed_at: float | None
+    google_email: str | None = None  # the Google account they sign in with (#70, §38)
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "PersonRow":
