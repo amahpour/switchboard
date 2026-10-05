@@ -32,7 +32,7 @@ import hmac
 import logging
 import secrets
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from switchboard import envelope
@@ -187,17 +187,40 @@ class Engine:
         item_limit: int | None = envelope.ITEM_LIMIT,
         shrink: bool = True,
     ) -> envelope.Fit:
-        return envelope.fit_batch(
-            items,
-            room=room.name,
-            recipient=m.screen_name,
-            human_name=self.cfg.human_name,
-            peer_inline=peer_inline,
-            max_chars=max_chars,
-            item_limit=item_limit,
-            shrink=shrink,
-            room_rules=room.rules_text,
-        )
+        def fit_for(text: str) -> envelope.Fit:
+            return envelope.fit_batch(
+                items,
+                room=room.name,
+                recipient=m.screen_name,
+                human_name=self.cfg.human_name,
+                peer_inline=peer_inline,
+                max_chars=max_chars,
+                item_limit=item_limit,
+                shrink=shrink,
+                room_rules=text,
+            )
+
+        pending = m.rules_seen < room.rules_version
+        if pending and room.rules_text:
+            fit = fit_for(room.rules_text)
+            # The first item is kept even at a tiny limit. Check the final frame too:
+            # the rules are all-or-nothing, and an oversized frame must leave them unseen.
+            preview = envelope.render_batch(
+                fit.items,
+                room=room.name,
+                recipient=m.screen_name,
+                human_name=self.cfg.human_name,
+                token="x" * envelope.TOKEN_MAX,
+                peer_inline=peer_inline,
+                more=True,
+                item_limit=item_limit,
+                limits=fit.limits,
+                room_rules=room.rules_text,
+            )
+            if len(preview) <= max_chars:
+                return replace(fit, rules_version=room.rules_version)
+        fit = fit_for("")
+        return replace(fit, rules_version=room.rules_version if pending and not room.rules_text else 0)
 
     def _render(
         self,
@@ -209,8 +232,9 @@ class Engine:
         peer_inline: bool,
         item_limit: int | None = envelope.ITEM_LIMIT,
         more: bool = False,
+        mark_seen: bool = True,
     ) -> str:
-        return envelope.render_batch(
+        text = envelope.render_batch(
             fit.items,
             room=room.name,
             recipient=m.screen_name,
@@ -220,8 +244,11 @@ class Engine:
             more=more,
             item_limit=item_limit,
             limits=fit.limits,
-            room_rules=room.rules_text,
+            room_rules=fit.room_rules,
         )
+        if mark_seen and fit.rules_version:
+            self.store.mark_rules_seen(m.id, fit.rules_version)
+        return text
 
     def _rooms_of(self, participant_id: int) -> list[int]:
         return [m.room_id for m in self.store.participant_memberships(participant_id)]
@@ -559,7 +586,7 @@ class Engine:
             items=envelope.inline_flags(items, inline, fit.partial),
         )
         self._mark_peer(b, p, items)
-        text = self._render(b, fit, room, m, peer_inline=inline)
+        text = self._render(b, fit, room, m, peer_inline=inline, mark_seen=False)
         self._event(
             "offer",
             room_id=room.id,
@@ -572,7 +599,15 @@ class Engine:
             ids=_ids(items),
         )
         out: list[Action] = [
-            Push(b.id, p.id, path, text, room=room.name, sender=items[0].sender_name if items else "")
+            Push(
+                b.id,
+                p.id,
+                path,
+                text,
+                room=room.name,
+                sender=items[0].sender_name if items else "",
+                rules_version=fit.rules_version,
+            )
         ]
         if rel.counted:
             out += self._after_counted(room.id)

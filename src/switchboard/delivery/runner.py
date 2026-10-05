@@ -113,6 +113,8 @@ class Runner:
             # in the future (a far-future posted_at would stop the idle expiry)
             t_post = min(max(t_post, b.created_at), st.clock.now() + 1.0)
             st.store.refine_posted(a.batch_id, t_post)
+        if a.rules_version:
+            st.store.mark_rules_seen(b.membership_id, a.rules_version)
 
     def _notice(self, a: Notice) -> None:
         st = self.state

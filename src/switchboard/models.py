@@ -136,6 +136,7 @@ class Room:
     hop_limit: int
     last_msg_at: float | None
     rules_text: str = ""
+    rules_version: int = 1
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "Room":
@@ -154,6 +155,7 @@ class Room:
             hop_limit=r["hop_limit"],
             last_msg_at=r["last_msg_at"],
             rules_text=r["rules_text"] if "rules_text" in r.keys() else "",  # read-only old-schema reports
+            rules_version=r["rules_version"] if "rules_version" in r.keys() else 1,
         )
 
     @property
@@ -481,6 +483,7 @@ class Membership:
     held_at: float | None
     cursor_id: int
     peer_batch_boundary: int
+    rules_seen: int = 0
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "Membership":
@@ -689,6 +692,7 @@ class Push:
     text: str
     room: str = ""  # room name, for the transport's sender label
     sender: str = ""  # first item's sender (the batch is human-first ordered)
+    rules_version: int = 0  # set only after the transport accepts the whole frame
 
 
 @dataclass(frozen=True)

@@ -97,7 +97,10 @@ class Store:
         if not isinstance(text, str) or len(text) > 2000:
             raise ValueError("room rules must be at most 2000 characters")
         with db.tx(self.con):
-            self.con.execute("UPDATE rooms SET rules_text=? WHERE id=?", (text, room_id))
+            self.con.execute(
+                "UPDATE rooms SET rules_text=?, rules_version=rules_version+1 WHERE id=? AND rules_text<>?",
+                (text, room_id, text),
+            )
         room = self.room_by_id(room_id)
         assert room is not None
         return room
@@ -1415,6 +1418,14 @@ class Store:
     def get_membership(self, membership_id: int) -> Membership | None:
         r = self.con.execute("SELECT * FROM memberships WHERE id=?", (membership_id,)).fetchone()
         return Membership.from_row(r) if r else None
+
+    def mark_rules_seen(self, membership_id: int, version: int) -> None:
+        """Record only the version actually included in a join or delivery frame."""
+        with db.tx(self.con):
+            self.con.execute(
+                "UPDATE memberships SET rules_seen=MAX(rules_seen, ?) WHERE id=? AND left_at IS NULL",
+                (version, membership_id),
+            )
 
     def active_membership(self, room_id: int, participant_id: int) -> Membership | None:
         r = self.con.execute(
