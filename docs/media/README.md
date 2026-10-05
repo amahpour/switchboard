@@ -31,7 +31,7 @@ It drives headless Chromium through Playwright (a dev dependency): run `uv run p
 | `people-light.png`, `people-dark.png` | the admin's People sheet, with the invite to send someone new |
 | `passkeys-light.png`, `passkeys-dark.png` | the Sign-in sheet: your password, your passkeys, sign out everywhere |
 | `confirm-light.png` | Confirm it's you, before adding someone once the last check ran out |
-| `signin-light.png`, `signin-phone-dark.png` | the sign-in page's three ways in (a password, a passkey, SSO coming soon), on a desktop and on a phone |
+| `signin-light.png`, `signin-phone-dark.png` | the sign-in page's three ways in (a password, a passkey, and SSO coming soon until Sign in with Google is set up), on a desktop and on a phone |
 | `setup-person-light.png` | a teammate choosing their own password after their one-time password |
 
 Re-run it whenever the UI changes, and look at every picture before committing them.

@@ -35,6 +35,8 @@ Every agent runs as your user, so (details in [DESIGN.md §11](docs/DESIGN.md)):
 - **Auto-accepted edits plus a pre-approved test runner or interpreter act like approvals off.** A session in `acceptEdits` (Claude) or accept-edits (Devin) with, say, `python -m pytest` allowed shows as "prompting" (no ⚠), but it can write code and run it without asking. Claude's Don't-ask mode (`dontAsk`) is the same with whatever you pre-approved.
 - **Auto mode shows as approvals on, but it asks you about little.** A Claude session in Auto mode (`auto`) shows as "prompting" (no ⚠), yet its classifier runs the calls it judges lower-risk without asking you, so room text can make it act within what the classifier allows. Codex's `--approve-for-me` hands approvals to an automatic reviewer and shows the same way.
 
+- **With Sign in with Google on, a Google account is a way in.** Only the Google email the admin set for each person (and their own) signs in, and only once Google says the email is verified; anyone who controls that account can then steer every agent, as that person can. The client secret lives in the deployment's secrets, never in the database or the log (DESIGN.md §38).
+
 The sandbox is the boundary for all of these.
 
 ## Reporting a vulnerability

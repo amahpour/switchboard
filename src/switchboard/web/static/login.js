@@ -3,7 +3,7 @@
 // On a desktop the page shows `switchboard login`. On a hosted broker (GET /api/auth/state,
 // which needs no session and says nothing about anyone) it shows the three ways in: a name and
 // a password, a passkey (when this browser and address can use one, and someone has one), and
-// SSO, shown as coming soon. A password sign-in that needs its person to choose their own
+// Sign in with Google once it's set up (#70, §38; otherwise shown as coming soon). A password sign-in that needs its person to choose their own
 // first (the admin's one-time password from the log, or anyone's one-time password from the
 // admin) goes on to /setup. The passkey ceremony is window.SBWebAuthn.signIn (webauthn.js).
 (function () {
@@ -59,6 +59,17 @@
     }
   }
 
+  // why a Google sign-in came back here (#70): a code from /auth/oidc/callback, never its detail
+  const SSO_FAILED = {
+    not_allowed: 'That Google account isn’t set up here. Ask your admin to add it to your name.',
+    denied: 'Google sign-in was cancelled.',
+    expired: 'That sign-in took too long or started in another browser. Try again.',
+    unverified: 'Google hasn’t verified that account’s email address.',
+    no_email: 'Google didn’t share an email address for that account.',
+    token: 'Google’s answer couldn’t be checked. Try again, or ask your admin.',
+    provider: 'Google couldn’t be reached. Try again, or ask your admin.',
+  };
+
   async function load() {
     let st;
     try {
@@ -71,8 +82,18 @@
     // listeners before the form shows: a click or Enter is never lost
     $('password-form').addEventListener('submit', withPassword);
     $('passkey-btn').addEventListener('click', withPasskey);
-    // the three ways in (a password, a passkey, SSO coming soon); a passkey once it's set up
+    // the three ways in (a password, a passkey, Google when it's set up); a passkey once it's set up
     const passkeys = !!(!st.claim && st.passkeys_work && W.supported());
+    if (st.sso === 'google' || st.sso === 'sso') {
+      const b = $('sso-btn');
+      b.disabled = false;
+      b.removeAttribute('aria-describedby');
+      $('sso-soon').classList.add('hidden');
+      $('sso-label').textContent = st.sso === 'google' ? 'Sign in with Google' : 'Sign in with SSO';
+      b.addEventListener('click', function () { location.assign('/auth/oidc/start'); });
+    }
+    const why = SSO_FAILED[new URLSearchParams(location.search).get('sso') || ''];
+    if (why) error(why);
     $('passkey-btn').classList.toggle('hidden', !passkeys);
     $('login-first').classList.toggle('hidden', !st.claim);
     $('login-forgot').classList.toggle('hidden', !!st.claim);

@@ -40,6 +40,8 @@ The image sets everything but the public URL.
 | `SWITCHBOARD_PORT` | `7419` | The port it listens on. |
 | `SWITCHBOARD_HOME` | `/data/switchboard` | Its data: the database, logs and config.toml, on the `/data` volume. |
 | `SWITCHBOARD_HUMAN_NAME` | (unset: `me`) | The admin's name in the rooms. The admin signs in as it, or as `admin`. |
+| `SWITCHBOARD_OIDC_CLIENT_ID` | (unset) | Sign in with Google: your OAuth client's ID ([Sign in with Google](#sign-in-with-google)). Nothing changes until it and the secret are both set. |
+| `SWITCHBOARD_OIDC_CLIENT_SECRET` | (unset) | That client's secret, from your platform's secrets (a Kubernetes Secret, Render's secret environment). Or `SWITCHBOARD_OIDC_CLIENT_SECRET_FILE`, a file holding it. |
 | `SWITCHBOARD_RESET_OWNER` | (unset) | Recovery: set it to a new value and restart to forget the admin, everyone else, and every password, passkey and session ([Signing in](#signing-in)). It acts once per value. |
 
 They are the environment versions of `switchboard start --public-url`, `--listen` and `--port`. `config.toml` can also set `public_url` and `listen`, and a flag or variable wins over it. The container runs `switchboard start --foreground --log-stdout`: logs go to stdout, where the platform collects them, instead of `logs/broker.log`.
@@ -92,7 +94,7 @@ The disk belongs to root, so the container starts as root. Its `switchboard` com
 
 ## Signing in
 
-The sign-in page offers three ways in: your **name and password**, a **passkey** (Touch ID, Face ID, Windows Hello, your phone or a security key), and **SSO**, which is shown as coming soon.
+The sign-in page offers three ways in: your **name and password**, a **passkey** (Touch ID, Face ID, Windows Hello, your phone or a security key), and **Sign in with Google** once you set it up ([below](#sign-in-with-google)); until then it shows SSO as coming soon.
 
 A fresh broker has no admin. Until it does, it prints one line in its log:
 
@@ -124,6 +126,16 @@ What to know about the admin's one-time password:
 - **Render:** open the service's **Shell** tab and run `switchboard login`.
 
 Leave out `-t` (as in `docker exec` without `-it`) and the broker refuses: links go only to a terminal someone typed in. Whoever can exec into the container can sign in and could read its database anyway, so treat access to the platform or cluster as access to switchboard. A session from the shell can't add a passkey or change the password on its own: only your password or passkeys can confirm that. `switchboard logout --all` in the same way signs out every browser, everyone's.
+
+### Sign in with Google
+
+People you added sign in with their Google account instead of a password. Only them: the admin sets the Google email each person signs in with, and an account nobody here has is turned away, whatever its domain.
+
+1. In [Google Cloud Console](https://console.cloud.google.com/apis/credentials), create an **OAuth client ID** of type **Web application**. Under **Authorized redirect URIs**, add `https://<your public URL>/auth/oidc/callback`, exactly. The consent screen needs only the default `openid` and `email` scopes; set it to **Internal** for a Google Workspace organisation.
+2. Put its client ID in `SWITCHBOARD_OIDC_CLIENT_ID`, and its secret in `SWITCHBOARD_OIDC_CLIENT_SECRET` from your platform's secrets (in Kubernetes, a Secret referenced with `secretKeyRef`; or mount it as a file and set `SWITCHBOARD_OIDC_CLIENT_SECRET_FILE`). Restart. The log says `sign-in with google is on`.
+3. In **Admin > People**, set each person's **Google sign-in** to the email of their Google account, and your own on your row. They choose **Sign in with Google** on the sign-in page from then on. Someone you invited who signs in with Google never needs their one-time password: it stops working.
+
+The broker reaches out to Google (`accounts.google.com`, `oauth2.googleapis.com`, `www.googleapis.com`) over HTTPS when someone signs in, and so must their browser. Removing a person ends their Google sign-in too. Any OpenID Connect provider works the same way with `SWITCHBOARD_OIDC_ISSUER` set to its issuer URL (Microsoft Entra ID, Okta, GitLab, Keycloak); the button then says "Sign in with SSO".
 
 ## Upgrading
 

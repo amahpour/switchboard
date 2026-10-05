@@ -6,8 +6,8 @@
   terminal prints a one-time link, and this page shows only that. On a hosted broker
   (DESIGN.md §32.4) login.js asks GET /api/auth/state and shows the three ways in: a name and
   a password (the admin's first one is the one-time password in the broker's log; everyone
-  else's first one is a one-time password from the admin), a passkey, and SSO, which is shown
-  as coming soon. Same rules as index.html: no inline script, style or event handler; every
+  else's first one is a one-time password from the admin), a passkey, and Sign in with Google
+  when it's set up (#70; otherwise SSO, shown as coming soon). Same rules as index.html: no inline script, style or event handler; every
   link is same-origin (tests/unit/test_web_static_lint.py).
 -->
 <html lang="en" data-text-size="default">
@@ -45,7 +45,7 @@
     <div class="login-actions"><a class="btn-primary" href="/">Try again</a></div>
   </div>
 
-  <!-- a hosted broker: a password, a passkey, or (coming soon) SSO -->
+  <!-- a hosted broker: a password, a passkey, or Google when it's set up (otherwise SSO, coming soon) -->
   <div class="login-variant hidden" id="login-choose">
     <p class="login-first hidden" id="login-first">Setting this switchboard up? Sign in as <code>admin</code> with the
       one-time password from the broker&rsquo;s log (your deploy tool&rsquo;s logs view, <code>kubectl logs</code>,
@@ -69,7 +69,7 @@
       </button>
       <button type="button" class="btn" id="sso-btn" disabled aria-describedby="sso-soon">
         <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 13.5h11M3.5 13.5V6l4.5-3 4.5 3v7.5"/><path d="M6.5 13.5v-3h3v3"/></svg>
-        <span>Sign in with SSO</span>
+        <span id="sso-label">Sign in with SSO</span>
         <span class="soon" id="sso-soon">Coming soon</span>
       </button>
     </div>

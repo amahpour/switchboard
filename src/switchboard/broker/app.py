@@ -20,7 +20,7 @@ from fastapi import FastAPI
 
 from switchboard import db
 from switchboard.adapters import build_adapters
-from switchboard.broker import web
+from switchboard.broker import oidc, web
 from switchboard.broker.agents import AgentService
 from switchboard.broker.auth import HostOriginGuard, LoginTokens, SecurityHeaders, Sessions, WebOrigin
 from switchboard.broker.hosts import HostViews
@@ -87,6 +87,7 @@ class BrokerState:
     # the owner of a hosted broker (DESIGN.md §31): passkeys work behind a public URL that is a
     # secure context with a DNS name (else None); the claim link lives while there is no owner
     webauthn: WebAuthn | None = None
+    oidc: Any = None  # broker.oidc.OidcClient: Sign in with Google, when configured (§38)
     claim: ClaimTokens | None = None
     claim_out: Callable[[str], None] = field(default_factory=lambda: lambda line: print(line, flush=True))
     sealer: Sealer = None  # type: ignore[assignment]
@@ -319,6 +320,14 @@ def _owner_start(state: BrokerState, reset_owner: str | None) -> None:
             )
         else:
             state.webauthn = WebAuthn(origin)
+        try:
+            cfg = oidc.from_env()
+        except ValueError as e:
+            log.warning("Sign in with Google is off: %s", e)
+            cfg = None
+        if cfg is not None:
+            state.oidc = oidc.OidcClient(cfg)
+            log.info("sign-in with %s is on (client %s)", cfg.provider, cfg.client_id[:12])
     if reset_owner:
         applied = hashlib.sha256(reset_owner.encode("utf-8")).hexdigest()
         if state.store.reset_owner_applied() != applied:

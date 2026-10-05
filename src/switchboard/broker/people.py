@@ -76,10 +76,10 @@ def names(state: "BrokerState") -> list[str]:
 
 def password_state(p: PersonRow, now: float) -> str:
     """How a person signs in, for the admin section: ``one-time`` (not used yet),
-    ``expired`` (a one-time password past its week), ``password`` or ``passkey``."""
+    ``expired`` (a one-time password past its week), ``password``, ``google`` (#70) or ``passkey``."""
     if p.must_reset:
         return "expired" if p.password_expires_at is not None and now >= p.password_expires_at else "one-time"
-    return "password" if p.password_hash else "passkey"
+    return "password" if p.password_hash else "google" if p.google_email else "passkey"
 
 
 def summary(state: "BrokerState") -> list[dict[str, Any]]:
@@ -94,6 +94,7 @@ def summary(state: "BrokerState") -> list[dict[str, Any]]:
             "password": state.store.owner_password_hash() is not None,
             "sign_in": "admin",
             "created_at": state.store.owner_claimed_at(),
+            "google_email": state.store.owner_google_email(),
         }
     ]
     for p in state.store.people():
@@ -107,6 +108,7 @@ def summary(state: "BrokerState") -> list[dict[str, Any]]:
                 "sign_in": password_state(p, now),
                 "created_at": p.created_at,
                 "expires_at": p.password_expires_at if p.must_reset else None,
+                "google_email": p.google_email,
             }
         )
     return out

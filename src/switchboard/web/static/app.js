@@ -3209,6 +3209,7 @@
   const PERSON_NAME = /^[a-z][a-z0-9_-]{0,23}$/;
   const SIGN_IN_TEXT = {
     admin: 'the admin', password: 'signs in with a password', passkey: 'signs in with a passkey',
+    google: 'signs in with Google',
     'one-time': 'hasn\'t signed in yet: one-time password', expired: 'one-time password expired',
   };
 
@@ -3312,6 +3313,51 @@
     return card;
   }
 
+  // Sign in with Google (#70, §38): the Google email this person signs in with, set by the
+  // admin. Only these people (and the admin's own email) can sign in with Google.
+  function googleRow(p) {
+    const key = p.id === null ? 'owner' : String(p.id);
+    const row = el('form', 'google-row');
+    row.noValidate = true;
+    const label = el('label', null, 'Google sign-in');
+    const input = el('input');
+    input.type = 'email';
+    input.id = 'google-' + key;
+    input.placeholder = 'name@example.com';
+    input.maxLength = 254;
+    input.autocomplete = 'off';
+    input.value = p.google_email || '';
+    label.setAttribute('for', input.id);
+    const save = btn('btn', p.google_email ? 'Change' : 'Set');
+    save.type = 'submit';
+    save.id = 'google-save-' + key;
+    const out = el('span', 'fine google-result');
+    out.id = 'google-result-' + key;
+    out.setAttribute('role', 'status');
+    row.append(label, input, save, out);
+    row.addEventListener('submit', async function (ev) {
+      ev.preventDefault();
+      const email = String(input.value || '').trim();
+      save.disabled = true;
+      try {
+        const res = await withFreshCheck(function () {
+          return api('POST', '/api/people/' + key + '/google', { email: email || null });
+        });
+        if (!res) return;
+        const i = state.people.findIndex(function (x) { return x.id === p.id; });
+        if (i >= 0) state.people[i] = res.person;
+        renderPeoplePanel();
+        const again = document.getElementById('google-result-' + key);
+        if (again) again.textContent = email ? 'Saved' : 'Removed';
+      } catch (e) {
+        out.textContent = String(e.message || e);
+      } finally {
+        save.disabled = false;
+      }
+    });
+    return row;
+  }
+
   function personCard(p) {
     const card = el('div', 'machine-card person-card');
     card.tabIndex = -1;
@@ -3330,6 +3376,7 @@
     if (!p.admin && p.passkeys && p.sign_in !== 'passkey') bits.push(plural(p.passkeys, 'passkey', 'passkeys'));
     if (p.admin) bits.push(p.password ? 'password' : 'no password', plural(p.passkeys || 0, 'passkey', 'passkeys'));
     card.append(el('p', 'machine-step', bits.join(' · ')));
+    if (state.me && state.me.sso) card.append(googleRow(p));
     if (!p.admin) {
       const btns = el('div', 'dialog-buttons');
       const busy = state.peopleBusy.get(p.id);

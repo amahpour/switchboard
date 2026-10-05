@@ -2512,3 +2512,9 @@ body.login {
   .board-lanes { grid-template-columns: minmax(0, 1fr); }
   .board-lane.lane-you .board-card { max-width: none; }
 }
+
+/* Sign in with Google (#70): the admin sets each person's Google email on their card. */
+.google-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 4px 0; }
+.google-row label { font-size: calc(12px * var(--text-scale)); color: var(--muted-2); }
+.google-row input { flex: 1 1 200px; min-width: 0; font: inherit; color: var(--fg); background: var(--input-bg);
+  border: 1px solid var(--input-border); border-radius: 6px; padding: 5px 8px; }
