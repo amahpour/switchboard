@@ -115,14 +115,14 @@ def test_cursor_stop_timing_follows_the_homes_config(tmp_path: Path, tmp_home: P
     )
 
 
-def test_devin_hooks_and_exactly_the_eight_allow_names(tmp_path: Path) -> None:
+def test_devin_hooks_and_exactly_the_nine_allow_names(tmp_path: Path) -> None:
     uh = seeded(tmp_path, "devin", True)
     plan = devin.plan(uh, PY, HOME, hook_sha12())
     cfg = json.loads(plan.edits[1].after)
     assert cfg["shell"] == "zsh" and cfg["version"] == 1
     assert cfg["permissions"]["deny"] == ["exec(rm *)"]
     assert cfg["permissions"]["allow"] == ["read"] + [f"mcp__switchboard__{t}" for t in devin.TOOLS]
-    assert len(devin.ALLOW) == 8 and not any("*" in a for a in devin.ALLOW)
+    assert len(devin.ALLOW) == 9 and not any("*" in a for a in devin.ALLOW)
     hooks = cfg["hooks"]
     assert set(hooks) == {
         "SessionStart",

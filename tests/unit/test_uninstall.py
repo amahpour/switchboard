@@ -910,7 +910,7 @@ def test_devin_allow_names_stay_while_another_home_uses_them(tmp_path: Path, tmp
     cfg = json.loads((uh / ".config/devin/config.json").read_text())
     assert set(devin.ALLOW) <= set(cfg["permissions"]["allow"])
     assert real(other) in json.dumps(cfg["hooks"]) and real(tmp_home) not in json.dumps(cfg["hooks"])
-    assert "eight allow names stay" in out and real(other) in out
+    assert "nine allow names stay" in out and real(other) in out
     assert common.mcp_home(
         json.loads((uh / ".config/devin/mcp_config.json").read_text())["mcpServers"]["switchboard"]
     ) == real(other)
@@ -931,7 +931,7 @@ def test_devin_install_notes_the_pre_approval(tmp_path: Path, tmp_home: Path) ->
     uh = tmp_path / "uh"
     uh.mkdir()
     rc, out = install("devin", tmp_home, uh, "--dry-run")
-    assert rc == 0 and "pre-approves switchboard's eight tools" in out and "without an approval prompt" in out
+    assert rc == 0 and "pre-approves switchboard's nine tools" in out and "without an approval prompt" in out
     assert install("devin", tmp_home, uh)[0] == 0
     assert not any("pre-approves" in n for n in devin.plan(uh, PY, real(tmp_home), hook_sha12()).notes)
 

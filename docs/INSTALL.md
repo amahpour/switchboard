@@ -30,7 +30,7 @@ switchboard install all --dry-run        # or every harness whose CLI is on PATH
 
 `install all` runs the four in order (claude, codex, cursor, devin), skips a harness whose CLI (`claude`, `codex`, `cursor-agent`/`agent`, `devin`) isn't on your PATH with a note, and ends with a one-line summary per harness. It takes the same flags as `install <harness>` except `--print-args`. If `devin` is on your PATH, the combined diff includes Devin's eight `permissions.allow` names, which let switchboard's tools run in Devin without an approval prompt (a note says so).
 
-Every changed file is backed up first to `<file>.bak-switchboard-<timestamp>` (mode 0600). The diff shows only switchboard's own entries, with secret-looking values masked. Re-running with everything in place says "no changes". `install` never writes permissions, trust, sandbox or network settings, and never allowlists anything but switchboard's own eight tools in Devin. The hooks do nothing in sessions that haven't joined a room. `--print-args` prints per-launch flags or project-local files instead and writes nothing (the live tests use it).
+Every changed file is backed up first to `<file>.bak-switchboard-<timestamp>` (mode 0600). The diff shows only switchboard's own entries, with secret-looking values masked. Re-running with everything in place says "no changes". `install` never writes permissions, trust, sandbox or network settings, and never allowlists anything but switchboard's own nine tools in Devin. The hooks do nothing in sessions that haven't joined a room. `--print-args` prints per-launch flags or project-local files instead and writes nothing (the live tests use it).
 
 | Harness | What `install` changes | What you do after |
 |---|---|---|
