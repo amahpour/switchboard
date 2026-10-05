@@ -435,7 +435,7 @@ class UIWorld:
 
         async def join_all() -> None:
             for n in names:
-                a = FakeAgent(self.home, f"extra-{n}")
+                a = FakeAgent(self.home, f"extra-{room.lstrip('#')}-{n}")  # a name may recur per room
                 self._extra.append(a)
                 await a.start()
                 joined = await a.join(room, n)
@@ -447,6 +447,66 @@ class UIWorld:
             asyncio.run_coroutine_threadsafe(join_all(), loop).result(60)
         finally:
             not_test_mode(b)
+
+    def agent_call(self, room: str, name: str, tool: str, **args: Any) -> dict[str, Any]:
+        """Any tool call from an agent joined by ``add_agents`` (the review board's, #80)."""
+        loop = self._loop
+        assert loop is not None, "UIWorld is not started"
+        agent = self._extra_named.get((room, name))
+        assert agent is not None, f"{name} was not added to UIWorld"
+        result = asyncio.run_coroutine_threadsafe(agent.call(tool, room=room, **args), loop).result(30)
+        assert result.get("ok", True) is not False, result
+        return result
+
+    def seed_review(self, room: str) -> None:
+        """A review board in ``room`` (joined first by ``add_agents(room, ("claude-1", "codex-1"))``):
+        the made-up shop pull request #80's mockups use, with an item in every lane."""
+        pr = "https://example.com/shop/pull/7"
+        call = self.agent_call
+        call(room, "codex-1", "review", action="open", url=pr, head="4f2c9e1a7b30")
+        call(room, "codex-1", "review", action="raise", title="Discount is taken after tax",
+             file="shop/cart.py", lines="40-58",
+             detail="`total()` adds tax first, then subtracts the code's percentage, so a 10% code "
+                    "saves 10% of the taxed price.")  # fmt: skip
+        call(
+            room,
+            "codex-1",
+            "review",
+            action="raise",
+            title="Expired codes still apply",
+            file="shop/codes.py",
+            lines="12-19",
+            detail="`is_valid()` never checks `expires_at`.",
+        )
+        call(
+            room,
+            "codex-1",
+            "review",
+            action="raise",
+            title="Rounding drops a cent on $19.99",
+            file="shop/money.py",
+            lines="8",
+            detail="Half-up rounding, but the ledger rounds half-even.",
+        )
+        call(
+            room,
+            "codex-1",
+            "review",
+            action="raise",
+            title="Codes are case-sensitive",
+            file="shop/codes.py",
+            lines="5",
+        )
+        call(room, "claude-1", "review", action="concede", item="F2")
+        call(room, "claude-1", "review", action="fix", item="F2", commit="9a1b2c3d4e5f")
+        call(room, "claude-1", "review", action="concede", item="F4", owner="codex-1")
+        call(room, "claude-1", "review", action="contest", item="F3",
+             reason="the ledger is the one to change: half-up is what the receipt shows")  # fmt: skip
+        call(room, "codex-1", "review", action="drop", item="F1",
+             reason="moved to Q1: it's a pricing decision, not a bug")  # fmt: skip
+        call(room, "claude-1", "review", action="ask", title="Discount before or after tax?",
+             detail="Before tax: $86.40 on the $96.00 order. After tax: $88.00. Finance's sheet says before.",
+             options=["Before tax", "After tax"], recommend=0)  # fmt: skip
 
     def agent_say(self, room: str, name: str, text: str) -> int:
         """Post from an agent joined by ``add_agents``; returns the posted message id."""

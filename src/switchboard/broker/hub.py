@@ -69,7 +69,7 @@ class WsSubscriber(Subscriber):
     every remote link's state, for the header chips and the remotes panel (§27.11), and
     ``machines``: every machine that dials in (§31.7)."""
 
-    kinds: frozenset[str] = Subscriber.kinds | {"remotes", "machines"}
+    kinds: frozenset[str] = Subscriber.kinds | {"remotes", "machines", "review"}
 
     def __init__(self) -> None:
         super().__init__()
@@ -134,8 +134,9 @@ class Hub:
     def room_settings(self, room: str, settings: dict[str, Any]) -> int:
         return self.publish("room", room, {"settings": settings})
 
-    def review(self, room: str, board: dict[str, Any]) -> int:
-        """A room's review board after a move (§37.5); the web UI subscribes to it."""
+    def review(self, room: str, board: dict[str, Any] | None) -> int:
+        """A room's review board after a move, or None once it's closed (§37.5); the web UI
+        subscribes to it."""
         return self.publish("review", room, {"board": board})
 
     def rooms_changed(self, names: list[str]) -> int:

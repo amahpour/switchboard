@@ -75,6 +75,7 @@ from switchboard.broker.passwords import (
 )
 from switchboard.broker.service import ServiceError, message_dict
 from switchboard.models import InvalidName, normalize_room, valid_host
+from switchboard.reviews import ReviewError
 
 if TYPE_CHECKING:  # pragma: no cover
     from switchboard.broker.app import BrokerState
@@ -1053,6 +1054,35 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 raise ServiceError("bad_request", "text is required")
             room = state.service.set_room_rules(slug, body["text"], w.name)
             return _ok({"rules": room.rules_text})
+        except ServiceError as e:
+            return _svc_err(e)
+
+    # A room's review board (#80, §37.5): read by anyone signed in; a person's moves are
+    # theirs, posted in the room as their own messages. Agents move it through `review`.
+    @app.get("/api/rooms/{slug}/review")
+    async def room_review(request: Request, slug: str) -> Response:
+        if session(request) is None:
+            return unauthorized()
+        try:
+            room = state.service.room(slug)
+            return _ok({"board": state.boards.board(room)})
+        except ServiceError as e:
+            return _svc_err(e)
+
+    @app.post("/api/rooms/{slug}/review")
+    async def room_review_move(request: Request, slug: str) -> Response:
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        try:
+            body = await _json_body(request)
+            if set(body) - {"action", "item", "option", "owner", "reason"}:
+                raise ServiceError("bad_request", "unknown fields")
+            room = state.service.room(slug)
+            try:
+                return _ok(state.boards.person(room, w.name, w.person_id, body))
+            except ReviewError as e:
+                raise ServiceError("bad_request", str(e)) from None
         except ServiceError as e:
             return _svc_err(e)
 

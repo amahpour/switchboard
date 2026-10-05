@@ -2929,11 +2929,14 @@ A move is a **notice** in the room ("claude-1 conceded F1, owner claude-1"), nev
 
 `agent.review` isn't in the remote link's method allowlist (§27.3) or the dial-in one (§31), and Devin's install doesn't pre-approve `review`. Both are guards, so widening either is the maintainer's call.
 
-### 37.5 The page (next)
-The web UI's board view (lanes for the person's questions and contested findings, raised, being fixed, fixed, dropped; a card's evidence and the lines it is about) subscribes to the hub's `review` frames, which every move already publishes. The person's moves (answer, rule, drop, close) come with it.
+### 37.5 The page
+- **Where:** a header button, shown only when the room has a board, swaps the log for the board (`#main.board-open`); the composer stays. The lanes are Needs you (open questions and contested findings, full width, first), Raised, Being fixed, Done (fixed or answered) and Dropped. A card opens its detail beside the lanes (below them on a narrow screen): the evidence through md.js, the file and lines, the reason or commit, and the person's moves.
+- **Data:** `GET /api/rooms/{slug}/review` (any signed-in session) gives the board; the web subscriber now takes the hub's `review` frames, which every move publishes (`null` once closed). Every string on the page is an agent's: text through `textContent`, the detail through md.js, the pull request's URL through `externalLink`, the one link path (§29.4).
+- **A person's moves:** `POST /api/rooms/{slug}/review` with `action` (`answer`, `concede`, `drop`, `close`), `item`, and `option`, `owner` or `reason`; a signed-in person with the `X-Switchboard` header, like `say` (§29). `Boards.person` checks the move (`reviews.person_move`) and stores it. **Each decision is posted as that person's own message** ("Review board: Q1 (…) answered: Before tax"), through `human_say`, so it reaches the agents the way anything a person says does, with their name on it. Close is a notice, and the next `open` may name another pull request.
+- **Tests:** `test_review_board.py` (the routes: the person's answer and ruling as their messages that the agents read, close and reopen, sign-in and the write header, unknown fields); the e2e board tests (lanes, the board button, an answer and a ruling moving their cards at once and showing in the log, a drop that needs a reason, close behind a confirm, the phone in light and dark with no sideways scroll).
 
 ### 37.6 Posting (next)
 When the board is settled, it shows exactly what each owner will post. A person's **Post** sends one message in the room that tells each owner to post its own items, once, with its own tools. switchboard posts nothing itself.
 
 ### 37.7 Tests
-`tests/unit/test_reviews.py` (the moves, settled, input checks, the board text); `tests/integration/test_review_board.py` (two scripted agents through the real tool: open to fixed, the notices, no chat message and so no delivery, every refusal's words, an owner who must be in the room); `tests/unit/test_db_migrate_v9.py` (the migration, and fresh = migrated).
+`tests/unit/test_reviews.py` (the moves, settled, input checks, the board text); the page's tests in §37.5; `tests/integration/test_review_board.py` (two scripted agents through the real tool: open to fixed, the notices, no chat message and so no delivery, every refusal's words, an owner who must be in the room); `tests/unit/test_db_migrate_v9.py` (the migration, and fresh = migrated).

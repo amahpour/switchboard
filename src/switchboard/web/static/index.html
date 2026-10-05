@@ -118,6 +118,10 @@
 
       <span class="head-divider" aria-hidden="true"></span>
 
+      <button type="button" class="icon-btn head-btn hidden" id="board-toggle" aria-controls="board"
+              aria-pressed="false" aria-label="Review board" title="Show this room's review board">
+        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M6 2.5v11M10 2.5v11"/></svg>
+      </button>
       <button type="button" class="icon-btn head-btn" id="room-rules" aria-label="Room rules"
               title="Edit this room's rules">
         <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2.5h10v11H3zM5 5.5h6M5 8h6M5 10.5h4"/></svg>
@@ -152,6 +156,8 @@
 
     <div class="log-wrap">
       <div class="log" id="log" role="log" aria-live="polite" aria-relevant="additions" aria-label="Messages"></div>
+      <!-- The review board (#80): drawn by app.js when the room has one and it's shown. -->
+      <section class="board hidden" id="board" aria-label="Review board"></section>
 
       <!-- Empty room: nobody joined yet and nothing said. -->
       <div class="room-empty hidden" id="room-empty">

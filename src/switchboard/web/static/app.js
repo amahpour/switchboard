@@ -73,6 +73,8 @@
     pop: null,         // composer popover: { kind: 'palette'|'mentions', items, sel, start }
     sheetOpener: null, // the control that opened the Closed, Remotes or Passkeys sheet (focus returns to it)
     passkeyBusy: false, // an Add a passkey ceremony is under way
+    boardOpen: false,  // the active room's review board is shown instead of its log (#80)
+    boardSel: null,    // the label of the board card whose detail is open
     // machines that dial in (a hosted broker, §31.8): GET /api/machines and the `machines` event
     machinesHosted: false,
     machines: [],
@@ -995,6 +997,10 @@
     if (!state.rooms.has(name)) return;
     if (state.inspect && state.inspect.room !== name) closeInspector(false);
     closePop();
+    if (state.active !== name) {
+      state.boardOpen = false;
+      state.boardSel = null;
+    }
     state.active = name;
     state.rooms.get(name).unread = 0;
     if (location.hash !== '#' + state.rooms.get(name).slug) {
@@ -1006,6 +1012,8 @@
     renderLog();
     renderBuddies();
     renderStatus();
+    renderBoard();
+    loadBoard(state.rooms.get(name));
     $('input').focus();
   }
 
@@ -1889,6 +1897,10 @@
       // reopen (same id, same name) may land before this listing, so nothing looks changed
       loadRooms(true).catch(function () { hello(Array.from(state.rooms.keys())); });
       if (!$('closed-panel').classList.contains('hidden')) loadClosed().catch(function () {});
+    } else if (f.t === 'review') {
+      if (!r) return;
+      r.board = f.board || null;
+      if (f.room === state.active) renderBoard();
     } else if (f.t === 'remotes') {
       setRemotes(f.remotes || [], f.config_error || null);
     } else if (f.t === 'machines') {
@@ -3529,6 +3541,186 @@
     }
   }
 
+  // ------------------------------------------------------------ review board (#80, DESIGN.md §37.5)
+  // The agents move items through their `review` tool; a person answers the questions, rules on
+  // a contested finding, drops anything and closes the board. Every string here is the agents'
+  // text, so it goes in through textContent, or md.js for an item's detail (the one link path).
+  const BOARD_LANES = [
+    { key: 'you', title: 'Needs you', test: function (i) { return i.needs_person; } },
+    { key: 'raised', title: 'Raised', test: function (i) { return i.state === 'raised'; } },
+    { key: 'fixing', title: 'Being fixed', test: function (i) { return i.state === 'conceded'; } },
+    { key: 'done', title: 'Done', test: function (i) { return i.state === 'fixed' || i.state === 'answered'; } },
+    { key: 'dropped', title: 'Dropped', test: function (i) { return i.state === 'dropped'; } },
+  ];
+  const BOARD_STATE = {
+    raised: 'Raised', contested: 'Contested', conceded: 'Being fixed', fixed: 'Fixed', dropped: 'Dropped',
+    open: 'Waiting for you', answered: 'Answered',
+  };
+
+  async function loadBoard(r) {
+    if (!r) return;
+    try {
+      const res = await api('GET', '/api/rooms/' + encodeURIComponent(r.slug) + '/review');
+      r.board = res.board || null;
+    } catch (e) {
+      r.board = r.board || null;
+    }
+    if (r.name === state.active) renderBoard();
+  }
+
+  function boardWhere(i) {
+    return i.file ? i.file + (i.lines ? ':' + i.lines : '') : '';
+  }
+
+  function boardWho(i) {
+    if (i.kind === 'question') return i.state === 'answered' ? 'answered by ' + i.answered_by : 'asked by ' + i.raised_by;
+    if (i.state === 'conceded' || i.state === 'fixed') return 'owner ' + i.owner;
+    return 'raised by ' + i.raised_by;
+  }
+
+  function renderBoard() {
+    const r = activeRoom();
+    const b = r ? r.board : null;
+    const toggle = $('board-toggle');
+    toggle.classList.toggle('hidden', !b);
+    if (!b) state.boardOpen = false;
+    const open = !!(b && state.boardOpen);
+    toggle.setAttribute('aria-pressed', String(open));
+    toggle.title = open ? 'Back to the conversation' : "Show this room's review board";
+    $('main').classList.toggle('board-open', open);
+    const box = $('board');
+    box.classList.toggle('hidden', !open);
+    if (!open) {
+      box.replaceChildren();
+      return;
+    }
+    const head = el('div', 'board-head');
+    const title = el('div', 'board-title');
+    const name = el('h2', null, 'Review');
+    const link = window.SBMarkdown && window.SBMarkdown.externalLink
+      ? window.SBMarkdown.externalLink(b.url, b.url, location.hostname) : el('span', null, b.url);
+    link.classList.add('board-url');
+    title.append(name, link);
+    if (b.head) title.append(el('code', 'board-head-sha', b.head.slice(0, 12)));
+    const c = b.counts || {};
+    const status = el('span', 'chip' + (b.settled ? ' chip-ok' : c.needs_person ? ' chip-danger' : ''),
+      b.settled ? 'Settled' : c.needs_person ? c.needs_person + ' need' + (c.needs_person === 1 ? 's' : '') + ' you'
+        : c.open + ' open');
+    status.id = 'board-status';
+    const close = btn('btn', 'Close board');
+    close.id = 'board-close';
+    close.addEventListener('click', async function () {
+      const ok = await confirmDialog('Close this review board?',
+        'The board for ' + b.url + ' is kept in the history, and agents can open a new one.', 'Close board');
+      if (ok) boardMove({ action: 'close' });
+    });
+    head.append(title, status, close);
+
+    const lanes = el('div', 'board-lanes');
+    for (const lane of BOARD_LANES) {
+      const items = b.items.filter(lane.test);
+      if (lane.key === 'you' && !items.length) continue;
+      const col = el('section', 'board-lane lane-' + lane.key);
+      col.setAttribute('aria-label', lane.title);
+      const h = el('h3', 'board-lane-title', lane.title);
+      h.append(el('span', 'board-count', String(items.length)));
+      col.append(h);
+      for (const i of items) {
+        const card = btn('board-card' + (state.boardSel === i.label ? ' selected' : ''));
+        card.dataset.item = i.label;
+        card.setAttribute('aria-pressed', String(state.boardSel === i.label));
+        const top = el('span', 'board-card-top');
+        top.append(el('span', 'board-label', i.label), el('span', 'board-state s-' + i.state, BOARD_STATE[i.state] || i.state));
+        card.append(top, el('span', 'board-card-title', i.title));
+        const meta = [boardWhere(i), boardWho(i)].filter(Boolean).join(' · ');
+        card.append(el('span', 'board-card-meta', meta));
+        card.addEventListener('click', function () {
+          state.boardSel = state.boardSel === i.label ? null : i.label;
+          renderBoard();
+          const again = document.querySelector('#board .board-card[data-item="' + i.label + '"]');
+          if (again) again.focus();
+        });
+        col.append(card);
+      }
+      if (!items.length) col.append(el('p', 'board-empty', 'None'));
+      lanes.append(col);
+    }
+    const body = el('div', 'board-body');
+    body.append(lanes);
+    const sel = state.boardSel ? b.items.find(function (i) { return i.label === state.boardSel; }) : null;
+    if (sel) body.append(boardDetail(r, sel));
+    else state.boardSel = null;
+    box.replaceChildren(head, body);
+  }
+
+  function boardDetail(r, i) {
+    const d = el('aside', 'board-detail');
+    d.setAttribute('aria-label', i.label + ' detail');
+    d.append(el('h3', null, i.label + ' · ' + i.title));
+    d.append(el('p', 'board-detail-state', (BOARD_STATE[i.state] || i.state) + ' · ' + boardWho(i)));
+    if (boardWhere(i)) d.append(el('code', 'board-where', boardWhere(i)));
+    if (i.detail) d.append(mdBody(i.detail, []));
+    if (i.reason) d.append(el('p', 'board-reason', (i.state === 'dropped' ? 'Dropped: ' : 'Why: ') + i.reason));
+    if (i.commit) d.append(el('p', 'board-reason', 'Fixed in ' + i.commit.slice(0, 12)));
+    const acts = el('div', 'board-actions');
+    if (i.kind === 'question' && i.state === 'open') {
+      i.options.forEach(function (o, n) {
+        const b = btn(n === i.recommend ? 'btn-primary' : 'btn', o + (n === i.recommend ? ' (recommended)' : ''));
+        b.dataset.option = String(n);
+        b.addEventListener('click', function () { boardMove({ action: 'answer', item: i.label, option: n }); });
+        acts.append(b);
+      });
+    }
+    if (i.state === 'contested') {
+      const agents = r.members || [];
+      const label = el('label', 'board-field', 'Owner');
+      const pick = el('select');
+      pick.id = 'board-owner';
+      for (const m of agents) {
+        const o = el('option', null, m.name);
+        o.value = m.name;
+        pick.append(o);
+      }
+      label.append(pick);
+      const concede = btn('btn-primary', 'Concede');
+      concede.id = 'board-concede';
+      concede.disabled = !agents.length;
+      concede.addEventListener('click', function () { boardMove({ action: 'concede', item: i.label, owner: pick.value }); });
+      acts.append(label, concede);
+    }
+    if (['raised', 'contested', 'conceded', 'open'].indexOf(i.state) >= 0) {
+      const label = el('label', 'board-field', 'Reason to drop');
+      const reason = el('input');
+      reason.id = 'board-reason';
+      reason.type = 'text';
+      reason.maxLength = 500;
+      label.append(reason);
+      const drop = btn('btn-danger-ghost', 'Drop');
+      drop.id = 'board-drop';
+      drop.addEventListener('click', function () {
+        const why = String(reason.value || '').trim();
+        if (!why) { reason.focus(); return; }
+        boardMove({ action: 'drop', item: i.label, reason: why });
+      });
+      acts.append(label, drop);
+    }
+    if (acts.childNodes.length) d.append(acts);
+    return d;
+  }
+
+  async function boardMove(body) {
+    const r = activeRoom();
+    if (!r) return;
+    try {
+      const res = await api('POST', '/api/rooms/' + encodeURIComponent(r.slug) + '/review', body);
+      r.board = res.board || null;
+      if (!r.board) state.boardOpen = false;
+      renderBoard();
+    } catch (e) {
+      await openDialog({ kind: 'notice', title: 'Board not changed', body: String(e.message || e), action: 'Close' });
+    }
+  }
+
   async function openRoomRules() {
     const r = activeRoom();
     if (!r) return;
@@ -3698,6 +3890,11 @@
       if (r) submitText(r.settings && r.settings.paused ? '/resume' : '/pause');
     });
     $('room-rules').addEventListener('click', openRoomRules);
+    $('board-toggle').addEventListener('click', function () {
+      state.boardOpen = !state.boardOpen;
+      state.boardSel = null;
+      renderBoard();
+    });
     $('pane-toggle').addEventListener('click', togglePane);
     $('buddy-toggle').addEventListener('click', function () {
       const open = !$('app').classList.contains('sheet-open');
