@@ -1545,3 +1545,32 @@ def test_post_appears_when_the_board_is_settled_and_asks_first(ui: UI) -> None:
     expect(page.locator("#board-status")).to_have_text("Posted by " + TEST_HUMAN)
     page.click("#board-toggle")
     expect(chat_row(page, "The review board in this room")).to_contain_text("@codex-1: F4")
+
+
+def test_composer_grows_with_wrapped_text_and_shrinks_after_send(ui: UI) -> None:
+    """Issue #130: the composer stayed one line tall as text wrapped with no '\\n' in it, so the
+    earlier lines scrolled out of view inside the box. Typing a paragraph that wraps (no '\\n')
+    must grow the textarea and keep its first line on screen (scrollTop 0, no internal scroll);
+    sending shrinks it back to one line. Checked at desktop and phone widths, each in a room of
+    its own (sending actually posts a message, so #build's seeded count stays untouched)."""
+    paragraph = "the quick brown fox jumps over the lazy dog " * 5  # wraps with no '\n' in it
+    for i, options in enumerate(({}, PHONE)):
+        room = f"e2e-composer-grow-{i}"
+        ui.world.create_room("#" + room)
+        page = ui.open(room=room, **options)
+        box = page.locator("#input")
+        one_line_height = box.evaluate("el => el.clientHeight")
+
+        box.fill(paragraph)
+        box.dispatch_event("input")
+        expect(box).to_have_value(paragraph)
+        grown_height = box.evaluate("el => el.clientHeight")
+        assert grown_height > one_line_height, (options, grown_height, one_line_height)
+        # the first line stays visible: nothing scrolled inside the box while it grew
+        assert box.evaluate("el => el.scrollTop") == 0, options
+        assert box.evaluate("el => el.scrollHeight - el.clientHeight") <= 1, options
+
+        page.click("#send")
+        expect(box).to_have_value("")
+        shrunk_height = box.evaluate("el => el.clientHeight")
+        assert shrunk_height == one_line_height, (options, shrunk_height, one_line_height)

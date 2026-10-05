@@ -1267,6 +1267,7 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
   font-size: calc(13.5px * var(--text-scale));
   line-height: calc(20px * var(--text-scale));
   overflow-y: auto;
+  field-sizing: content; /* grows with wrapped text (#130); min/max-height still clamp it */
 }
 #input::placeholder { color: var(--muted); }
 #input:disabled { cursor: not-allowed; }
