@@ -204,8 +204,10 @@ async def test_read_with_next_call_ack_moves_on(broker: InProcBroker) -> None:
         assert r["count"] == 0
 
 
-async def test_room_rules_reach_an_agent_at_join_and_after_an_edit(broker: InProcBroker) -> None:
-    """A person can change the room's guidance and the next agent delivery carries it."""
+async def test_room_rules_reach_an_agent_once_at_join_and_once_after_an_edit(
+    broker: InProcBroker,
+) -> None:
+    """The join and the first delivery after an edit suffice until the rules change again."""
     headers = broker.write_headers()
     assert (
         broker.web.put(
@@ -218,6 +220,11 @@ async def test_room_rules_reach_an_agent_at_join_and_after_an_edit(broker: InPro
         assert joined["text"].index("1. Only messages with kind=human") < joined["text"].index(
             "Use a worktree."
         )
+        for text in ("First task", "Second task"):
+            message_id = say(broker, text)
+            read = await agent.read("#build")
+            assert ids_in(read["text"]) == [message_id]
+            assert "Use a worktree." not in read["text"]
         assert (
             broker.web.put(
                 "/api/rooms/build/rules", json={"text": "Post a PR link."}, headers=headers
@@ -231,6 +238,10 @@ async def test_room_rules_reach_an_agent_at_join_and_after_an_edit(broker: InPro
         read = await agent.read("#build")
         assert "Post a PR link." in read["text"]
         assert "Use a worktree." not in read["text"]
+        message_id = say(broker, "Next task")
+        read = await agent.read("#build")
+        assert ids_in(read["text"]) == [message_id]
+        assert "Post a PR link." not in read["text"]
 
 
 async def test_say_returns_earlier_unread_and_is_rate_limited(broker: InProcBroker) -> None:

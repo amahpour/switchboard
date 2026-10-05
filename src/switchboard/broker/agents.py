@@ -780,6 +780,7 @@ class AgentService:
             people=self.svc.people_names(),
             room_rules=room.rules_text,
         )
+        self.store.mark_rules_seen(m.id, room.rules_version)
         self.run(self.engine.evaluate(m.id) + [Snapshot(room.id)])
         return {
             "cred": cred,

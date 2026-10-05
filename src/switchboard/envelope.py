@@ -345,6 +345,8 @@ class Fit:
     limits: dict[int, int | None]
     partial: frozenset[int]
     more: bool
+    room_rules: str = ""
+    rules_version: int = 0
 
 
 def fit_batch(
@@ -391,7 +393,7 @@ def fit_batch(
         lim = limits.get(it.message_id, item_limit)
         if inline and lim is not None and len(visible(it.text)) > lim:
             partial.add(it.message_id)
-    return Fit(items=tuple(kept), limits=limits, partial=frozenset(partial), more=more)
+    return Fit(items=tuple(kept), limits=limits, partial=frozenset(partial), more=more, room_rules=room_rules)
 
 
 def _shrink(item: Any, recipient: str, room: str, budget: int, item_limit: int | None) -> int:

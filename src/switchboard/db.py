@@ -29,7 +29,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -42,7 +42,8 @@ CREATE TABLE rooms(
   budget_notice_window REAL,
   hop_count INTEGER NOT NULL DEFAULT 0, hop_limit INTEGER NOT NULL,
   last_msg_at REAL,
-  rules_text TEXT NOT NULL DEFAULT '' CHECK(length(rules_text) <= 2000));
+  rules_text TEXT NOT NULL DEFAULT '' CHECK(length(rules_text) <= 2000),
+  rules_version INTEGER NOT NULL DEFAULT 1 CHECK(rules_version >= 1));
 
 CREATE TABLE participants(
   id INTEGER PRIMARY KEY,
@@ -82,7 +83,8 @@ CREATE TABLE memberships(
   kicked INTEGER NOT NULL DEFAULT 0,
   held INTEGER NOT NULL DEFAULT 0, held_at REAL,
   cursor_id INTEGER NOT NULL DEFAULT 0,
-  peer_batch_boundary INTEGER NOT NULL DEFAULT -1);
+  peer_batch_boundary INTEGER NOT NULL DEFAULT -1,
+  rules_seen INTEGER NOT NULL DEFAULT 0 CHECK(rules_seen >= 0));
 CREATE UNIQUE INDEX memberships_active_name ON memberships(room_id, screen_name) WHERE left_at IS NULL;
 CREATE UNIQUE INDEX memberships_active_part ON memberships(room_id, participant_id) WHERE left_at IS NULL;
 
@@ -263,6 +265,13 @@ V6_TO_V7 = (
     "UPDATE meta SET value='7' WHERE key='schema_version'",
 )
 
+# v7 -> v8 (#140): existing members receive the current room rules once on their next batch.
+V7_TO_V8 = (
+    "ALTER TABLE rooms ADD COLUMN rules_version INTEGER NOT NULL DEFAULT 1 CHECK(rules_version >= 1)",
+    "ALTER TABLE memberships ADD COLUMN rules_seen INTEGER NOT NULL DEFAULT 0 CHECK(rules_seen >= 0)",
+    "UPDATE meta SET value='8' WHERE key='schema_version'",
+)
+
 
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
@@ -274,6 +283,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         4: (5, V4_TO_V5, ("preferences",)),
         5: (6, V5_TO_V6, ()),
         6: (7, V6_TO_V7, ()),
+        7: (8, V7_TO_V8, ()),
     }
     out = []
     v = frm
