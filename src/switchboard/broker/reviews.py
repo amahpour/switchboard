@@ -175,7 +175,7 @@ class Boards:
                     f"option must be one of {item.label}'s choices, 0 to {len(item.options) - 1}"
                 )
             fields = {"answer": item.options[choice], "answered_by": name}
-            said = f"answered: {item.options[choice]}"
+            said = f"answered with option {choice}"
         elif action == "concede":
             owner = reviews.text(params.get("owner"), "owner", 100, required=True)
             if owner not in self.store.active_names(room.id):
@@ -189,9 +189,12 @@ class Boards:
             said = f"dropped: {fields['reason']}"
         self.store.move_review_item(item.id, to, **fields)
         self.store.add_event("review", room_id=room.id, data={"item": item.label, "to": to, "by": name})
+        # Only text switchboard or this person wrote: the label, the option's number, an owner
+        # checked against the room, their own reason. Never the agents' title or options, which
+        # would reach every agent as this person's words, @mentions and all (#177).
         self.state.service.human_say(
             room.name,
-            f"Review board: {item.label} ({item.title}) {said}",
+            f'Review board: {item.label} {said}. review(action="show") shows it.',
             via="web",
             person=(name, person_id),
         )
@@ -212,7 +215,7 @@ class Boards:
         plan = reviews.post_plan(items)
         if not plan:
             raise ReviewError("nothing to post: every item was dropped")
-        text = reviews.render_post(rv["url"], plan, self.state.cfg.delivery.max_msg_chars)
+        text = reviews.render_post(plan, self.state.cfg.delivery.max_msg_chars)
         self.store.set_review(rv["id"], posted_at=self.state.clock.now(), posted_by=name)
         self.store.add_event("review", room_id=room.id, data={"post": rv["url"], "by": name})
         self.state.service.human_say(room.name, text, via="web", person=(name, person_id))

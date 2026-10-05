@@ -1473,7 +1473,7 @@ def test_a_person_answers_a_question_and_rules_on_a_finding(ui: UI) -> None:
     expect(page.locator("#board .lane-you")).to_have_count(0)  # nothing left for the person
     expect(page.locator("#board-status")).to_have_text("2 open")
     page.click("#board-toggle")
-    expect(chat_row(page, "Review board: Q1")).to_contain_text("answered: Before tax")
+    expect(chat_row(page, "Review board: Q1")).to_contain_text("answered with option 0")
     expect(chat_row(page, "Review board: F3")).to_contain_text("conceded, owner codex-1")
 
 
@@ -1528,4 +1528,4 @@ def test_post_appears_when_the_board_is_settled_and_asks_first(ui: UI) -> None:
     expect(page.locator("#board-post")).to_have_count(0)
     expect(page.locator("#board-status")).to_have_text("Posted by " + TEST_HUMAN)
     page.click("#board-toggle")
-    expect(chat_row(page, "The review board for")).to_contain_text("@codex-1: F4")
+    expect(chat_row(page, "The review board in this room")).to_contain_text("@codex-1: F4")

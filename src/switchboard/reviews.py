@@ -235,26 +235,29 @@ def post_plan(items: list[Item]) -> dict[str, list[Item]]:
     return plan
 
 
-def _post_line(i: Item, titles: bool) -> str:
-    what = f" {i.title[:60]}" if titles else ""
+def _post_line(i: Item) -> str:
+    """An item in the Post message: its label and what switchboard checked (a commit's hex, an
+    option's number), never its title or an option's text, which are an agent's (#177)."""
     if i.kind == "question":
-        return f"{i.label}{what} → {i.answer}"
-    return f"{i.label}{what}" + (f" (fixed in {i.commit[:12]})" if i.commit else "")
+        options = [n for n, o in enumerate(i.options) if o == i.answer]
+        return f"{i.label} (option {options[0]})" if options else i.label
+    return i.label + (f" (fixed in {i.commit[:12]})" if i.commit else "")
 
 
-def render_post(url: str, plan: dict[str, list[Item]], limit: int) -> str:
+def render_post(plan: dict[str, list[Item]], limit: int) -> str:
     """The one message a person's Post sends: it @mentions each owner (so each is woken once)
-    and lists exactly what that owner posts, in its own name, with its own gh or glab. If the
-    whole list is too long for one message, titles go and the labels stay."""
-    for titles in (True, False):
-        lines = [
-            f"The review board for {url} is settled. Post your items to the pull request now, once,"
-            " in your own name with your own gh or glab: one review comment per item, on its lines"
-            " where it has them. Dropped items aren't posted."
-        ]
-        for owner, items in plan.items():
-            lines.append(f"- @{owner}: " + "; ".join(_post_line(i, titles) for i in items))
-        text = "\n".join(lines)
-        if len(text) <= limit:
-            return text
-    raise ReviewError("the board is too big to post in one message: drop or close some items first")
+    and lists the labels of what that owner posts, in its own name, with its own gh or glab.
+    It carries no agent's text: not a title, an option or the pull request's URL. It goes out
+    as the person's own message, so anything an agent wrote in it would speak for them (#177);
+    the agents read those from the board itself, as other agents' text."""
+    lines = [
+        "The review board in this room is settled. Post your items to its pull request now, once,"
+        " in your own name with your own gh or glab: one review comment per item, on its lines"
+        ' where it has them. Dropped items aren\'t posted. review(action="show") has each item.'
+    ]
+    for owner, items in plan.items():
+        lines.append(f"- @{owner}: " + ", ".join(_post_line(i) for i in items))
+    text = "\n".join(lines)
+    if len(text) > limit:
+        raise ReviewError("the board is too big to post in one message: drop or close some items first")
+    return text
