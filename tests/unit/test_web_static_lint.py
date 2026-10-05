@@ -117,10 +117,53 @@ def test_html_has_no_inline_code_or_style() -> None:
             assert src.startswith("/") and not src.startswith("//"), f"{p.name}: external resource {src}"
 
 
+# The agents' icons (#62, DESIGN.md §29.9): the vendors' artwork, unaltered, and the one thing CSS
+# may load. Each is pinned by its hash; a new or changed icon is a reviewed change to this list.
+AGENT_ICONS = {
+    "agents/codex-light.png": "c721c4bf79af5c233916d71091156c2fb259bb1429283cf296fbcf4826886f8d",
+    "agents/codex-dark.png": "9938d1c9d54afd6de6c8302e9237a3bc4c39d4faa8939ce3bfc9a213ecf3f20b",
+    "agents/cursor-light.png": "1ea13e52299f52568335d08fb39b248660992bf66a0c0fe452ee382b008452d8",
+    "agents/cursor-dark.png": "ff6890b460641ae05d8e58691c3b4e4438ef7da473df6c34ab3f50334be8c9b3",
+}
+AGENT_ICON_URL = re.compile(r"url\('/static/(agents/[a-z-]+\.png)'\)")
+
+
 def test_css_loads_nothing_external() -> None:
+    """No @import, and no url() but an agent icon's: one of the pinned files, by its exact path."""
     for p in files("css"):
         text = p.read_text()
-        assert "@import" not in text and "url(" not in text
+        assert "@import" not in text
+        icons = AGENT_ICON_URL.findall(text)
+        assert set(icons) <= set(AGENT_ICONS), icons
+        assert "url(" not in AGENT_ICON_URL.sub("", text), "a url() that isn't an agent icon"
+
+
+def test_css_allows_only_the_pinned_agent_icons() -> None:
+    """The exception is that narrow: any other url(), even one below /static/agents/, still fails."""
+    for bad in (
+        "url('/static/agents/other.png')",
+        "url(/static/agents/codex-light.png)",
+        "url('https://example.com/agents/codex-light.png')",
+        "url('/static/favicon-32.png')",
+        "url('/static/agents/../app.js')",
+    ):
+        icons = AGENT_ICON_URL.findall(bad)
+        assert not set(icons) <= set(AGENT_ICONS) or "url(" in AGENT_ICON_URL.sub("", bad), bad
+
+
+def test_the_agent_icons_are_the_pinned_files() -> None:
+    """Each icon is a square PNG of at least 120 px (the Inspector's 40 px avatar on a 3x screen),
+    with transparency, and the file that was reviewed; its NOTICE names the source and owner."""
+    for name, sha in AGENT_ICONS.items():
+        b = (STATIC / name).read_bytes()
+        assert b.startswith(b"\x89PNG\r\n\x1a\n"), name
+        w, h = int.from_bytes(b[16:20], "big"), int.from_bytes(b[20:24], "big")
+        assert w == h >= 120 and b[25] == 6, (name, w, h, b[25])  # square, RGBA
+        assert hashlib.sha256(b).hexdigest() == sha, name
+    notice = (STATIC / "agents" / "NOTICE").read_text()
+    for name in AGENT_ICONS:
+        assert name.removeprefix("agents/") in notice, name
+    assert "not affiliated" in notice and "openai.com/brand" in notice and "cursor.com/brand" in notice
 
 
 def test_writes_carry_the_csrf_header() -> None:
@@ -216,7 +259,7 @@ def test_the_vendored_mermaid_is_the_vetted_release() -> None:
     nested = sorted(
         p.relative_to(STATIC).as_posix() for p in STATIC.rglob("*") if p.is_file() and p.parent != STATIC
     )
-    assert nested == ["vendor/mermaid/LICENSE", MERMAID], nested
+    assert nested == sorted(["agents/NOTICE", *AGENT_ICONS, "vendor/mermaid/LICENSE", MERMAID]), nested
     assert hashlib.sha256((STATIC / MERMAID).read_bytes()).hexdigest() == MERMAID_SHA256
     lic = STATIC / "vendor" / "mermaid" / "LICENSE"
     assert hashlib.sha256(lic.read_bytes()).hexdigest() == MERMAID_LICENSE_SHA256

@@ -104,4 +104,4 @@ Every merge to `main` is a release ([releases](https://github.com/amahpour/switc
 
 ## License
 
-MIT, see [LICENSE](LICENSE). The web UI bundles [Mermaid](https://github.com/mermaid-js/mermaid) 11.17.2 (MIT, its license in [src/switchboard/web/static/vendor/mermaid/LICENSE](src/switchboard/web/static/vendor/mermaid/LICENSE)) to draw diagrams.
+MIT, see [LICENSE](LICENSE). The web UI bundles [Mermaid](https://github.com/mermaid-js/mermaid) 11.17.2 (MIT, its license in [src/switchboard/web/static/vendor/mermaid/LICENSE](src/switchboard/web/static/vendor/mermaid/LICENSE)) to draw diagrams. Codex and Cursor agents show their vendor's icon, which belongs to OpenAI and Anysphere and isn't covered by the MIT license ([src/switchboard/web/static/agents/NOTICE](src/switchboard/web/static/agents/NOTICE)); switchboard isn't affiliated with either.

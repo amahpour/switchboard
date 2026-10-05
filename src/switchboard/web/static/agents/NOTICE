@@ -1,0 +1,22 @@
+The agents' icons (issue #62, DESIGN.md §29.9)
+
+These files show which tool an agent runs, next to its name. switchboard is not affiliated
+with, sponsored by or endorsed by OpenAI or Anysphere. The icons are their trademarks and
+artwork, not covered by switchboard's MIT license, and are used under each owner's terms.
+Each is the owner's artwork, unaltered. If an owner asks, its icon is removed and the
+monogram comes back.
+
+codex-light.png, codex-dark.png
+  The OpenAI logo (the Blossom), OpenAI's trademark, used to mark agents that run Codex,
+  an OpenAI service.
+  Source: https://openai.com/brand/ (Blossom_Light.svg and Blossom_Dark.svg). The logo path
+  is unchanged, in the clear-space box the guidelines prescribe, rendered at 256 x 256.
+  Terms: https://openai.com/brand/#usage-terms
+
+cursor-light.png, cursor-dark.png
+  The Cursor avatar, Anysphere's trademark, used to mark agents that run Cursor.
+  Source: https://cursor.com/brand ("Download brand assets", Avatars/Square/PNG/
+  AVATAR_SQUARE_2D_LIGHT.png and AVATAR_SQUARE_2D_DARK.png), unchanged.
+
+Claude Code's avatar is switchboard's own >_ glyph, not Anthropic's icon: Anthropic's terms allow
+naming Claude Code in plain text only. Devin keeps its DV tile until its icon is cleared.
