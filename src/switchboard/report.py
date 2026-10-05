@@ -41,7 +41,10 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from switchboard.store import Store
 
 STALL_S = 60.0
 
@@ -127,23 +130,17 @@ def parse_window(since: str | None, last: str | None, now: float) -> float | Non
 
 
 def open_ro(db_path: str | Path) -> sqlite3.Connection:
-    """A connection that only reads and never creates the database.
+    """A connection that only reads and never creates the database: see
+    ``db.connect_query_only`` for why it isn't ``mode=ro``."""
+    from switchboard import db
 
-    Not ``mode=ro``: after a clean broker stop SQLite has removed the WAL's
-    ``-shm`` file, and a read-only connection can't recreate it (the open
-    fails). ``mode=rw`` (the file must exist) with ``query_only`` can, and
-    refuses every write."""
     p = Path(db_path)
     if not p.is_file():
         raise ReportError("no switchboard database in that home (has the broker ever run there?)")
     try:
-        con = sqlite3.connect(f"{p.resolve().as_uri()}?mode=rw", uri=True, timeout=5.0)
-        con.execute("PRAGMA query_only = ON")
-        con.execute("SELECT COUNT(*) FROM rooms").fetchone()
+        return db.connect_query_only(p)
     except sqlite3.Error as e:
         raise ReportError(f"can't read the switchboard database: {e}") from None
-    con.row_factory = sqlite3.Row
-    return con
 
 
 # ---------------------------------------------------------------- the model
@@ -171,31 +168,10 @@ def _data(raw: Any) -> dict[str, Any]:
     return d if isinstance(d, dict) else {}
 
 
-class _Db:
-    def __init__(self, con: sqlite3.Connection):
-        self.con = con
-        con.row_factory = sqlite3.Row
-
-    def q(self, sql: str, *args: Any) -> list[sqlite3.Row]:
-        return self.con.execute(sql, args).fetchall()
-
-    def has_column(self, table: str, column: str) -> bool:
-        """Schema v1 databases (0.1.0, 0.2.0) have no ``participants.host``; the report
-        reads both and never migrates (it opens query-only)."""
-        return any(r[1] == column for r in self.con.execute(f"PRAGMA table_info({table})").fetchall())
-
-
-def _tier_timeline(db: _Db, pids: list[int]) -> dict[int, list[tuple[float, str]]]:
+def _tier_timeline(store: Store, pids: list[int]) -> dict[int, list[tuple[float, str]]]:
     """Per participant, (time, tier) from its join and tier events."""
     out: dict[int, list[tuple[float, str]]] = defaultdict(list)
-    if not pids:
-        return out
-    marks = ",".join("?" * len(pids))
-    for r in db.q(
-        f"SELECT ts, participant_id, data FROM events WHERE kind IN ('join','tier')"
-        f" AND participant_id IN ({marks}) ORDER BY id",
-        *pids,
-    ):
+    for r in store.report_tier_events(pids):
         tier = _data(r["data"]).get("tier")
         if isinstance(tier, str) and tier:
             out[r["participant_id"]].append((r["ts"], tier))
@@ -258,23 +234,22 @@ def build(
     from switchboard.models import InvalidName, display_room, room_ref, split_closed
     from switchboard.store import Ambiguous, NotFound, Store
 
-    db = _Db(con)
+    store = Store(con)
     now = time.time() if now is None else now
     # a closed room's full name, else an open room of that name, else the one closed room
     # that had it (DESIGN.md §28.5); SELECTs only, on the query-only connection
     try:
-        rid = Store(con).resolve_room(room_name).id
+        room = store.resolve_room(room_name)
     except InvalidName as e:
         raise ReportError(str(e)) from None
     except Ambiguous as e:
         raise ReportError(f"{e}; give the full name of the one to report on") from None
     except NotFound:
         raise ReportError(f"no room {room_ref(room_name)}") from None
-    room = db.q("SELECT * FROM rooms WHERE id=?", rid)[0]
-    start = max(since, room["created_at"]) if since is not None else room["created_at"]
+    rid = room.id
+    start = max(since, room.created_at) if since is not None else room.created_at
 
     # members of the room (a participant may have left and joined again: one row per membership)
-    host_col = "p.host" if db.has_column("participants", "host") else "''"
     members = [
         Member(
             membership_id=r["mid"],
@@ -290,70 +265,31 @@ def build(
             left_reason=r["left_reason"],
             host=r["host"] or "",
         )
-        for r in db.q(
-            "SELECT m.id AS mid, m.participant_id AS pid, m.screen_name, m.joined_at, m.left_at,"
-            " m.left_reason, p.harness, p.tier, p.tier_note, p.status, p.approval_mode,"
-            f" {host_col} AS host"
-            " FROM memberships m JOIN participants p ON p.id=m.participant_id"
-            " WHERE m.room_id=? AND (m.left_at IS NULL OR m.left_at>=?) ORDER BY m.id",
-            rid,
-            start,
-        )
+        for r in store.report_members(rid, start)
     ]
     by_mid = {m.membership_id: m for m in members}
     pids = sorted({m.participant_id for m in members})
-    tiers = _tier_timeline(db, pids)
+    tiers = _tier_timeline(store, pids)
 
-    msgs = {
-        r["id"]: r
-        for r in db.q(
-            "SELECT id, ts, sender_kind, sender_membership_id, kind FROM messages WHERE room_id=? AND ts>=?",
-            rid,
-            start,
-        )
-    }
-    prio = {
-        (r["membership_id"], r["message_id"]): r["prio"]
-        for r in db.q(
-            "SELECT d.membership_id, d.message_id, d.prio FROM deliveries d"
-            " JOIN memberships m ON m.id=d.membership_id WHERE m.room_id=?",
-            rid,
-        )
-    }
+    msgs = {r["id"]: r for r in store.report_messages(rid, start)}
+    prio = {(r["membership_id"], r["message_id"]): r["prio"] for r in store.report_delivery_priorities(rid)}
 
     # message ids per batch, from the offer events (M7); older databases: the deliveries' last batch
     offer_ids: dict[int, list[int]] = {}
-    for r in db.q("SELECT data FROM events WHERE kind='offer' AND room_id=? AND ts>=?", rid, start):
+    for r in store.report_offer_events(rid, start):
         d = _data(r["data"])
         if isinstance(d.get("batch_id"), int) and isinstance(d.get("ids"), list):
             offer_ids[d["batch_id"]] = [i for i in d["ids"] if isinstance(i, int)]
     last_batch: dict[int, list[int]] = defaultdict(list)
-    for r in db.q(
-        "SELECT d.batch_id, d.message_id FROM deliveries d JOIN memberships m ON m.id=d.membership_id"
-        " WHERE m.room_id=? AND d.batch_id IS NOT NULL",
-        rid,
-    ):
+    for r in store.report_delivery_batches(rid):
         last_batch[r["batch_id"]].append(r["message_id"])
 
-    batches = db.q(
-        "SELECT b.* FROM batches b JOIN memberships m ON m.id=b.membership_id"
-        " WHERE m.room_id=? AND b.created_at>=? ORDER BY b.id",
-        rid,
-        start,
-    )
+    batches = store.report_batches(rid, start)
 
     # ---- events: the room's and its members' own, from the beginning (a pause or hold that
     # began before the window still holds); everything else is about other rooms
-    cols = "SELECT id, ts, kind, room_id, membership_id, participant_id, data FROM events"
-    room_all = db.q(f"{cols} WHERE room_id=? ORDER BY id", rid)
-    part_all = (
-        db.q(
-            f"{cols} WHERE room_id IS NULL AND participant_id IN ({','.join('?' * len(pids))}) ORDER BY id",
-            *pids,
-        )
-        if pids
-        else []
-    )
+    room_all = store.report_room_events(rid)
+    part_all = store.report_participant_events(pids)
     room_ev = [e for e in room_all if e["ts"] >= start]
     # the window ends at the room's last activity (its messages, its events, the batches that
     # reached its members), so a report made later reads the same
@@ -486,11 +422,7 @@ def build(
         [event for event in room_all if event["kind"] in ("parked", "unparked")], start, end
     )
     open_d: defaultdict[int, Counter[str]] = defaultdict(Counter)
-    for r in db.q(
-        "SELECT d.membership_id, d.state, d.notified_at FROM deliveries d"
-        " JOIN memberships m ON m.id=d.membership_id WHERE m.room_id=? AND d.state IN ('pending','offered')",
-        rid,
-    ):
+    for r in store.report_open_deliveries(rid):
         k = "offered" if r["state"] == "offered" else ("stubs" if r["notified_at"] is not None else "pending")
         open_d[r["membership_id"]][k] += 1
 
@@ -556,9 +488,7 @@ def build(
     )
     # Codex holds name no participant or room: counted inside the window when a Codex agent was here
     codex_holds = (
-        db.q("SELECT COUNT(*) FROM events WHERE kind='codex_hold' AND ts>=? AND ts<=?", start, end)[0][0]
-        if any(m.harness == "codex" for m in members)
-        else 0
+        store.report_codex_hold_count(start, end) if any(m.harness == "codex" for m in members) else 0
     )
     rules_ = {
         "loop_guard": kinds.get("loop_guard", 0),
@@ -592,24 +522,24 @@ def build(
     humans = sum(1 for r in msgs.values() if r["sender_kind"] == "human" and r["kind"] == "chat")
     agent_msgs = sum(1 for r in msgs.values() if r["sender_kind"] == "agent" and r["kind"] == "chat")
     closed = None
-    if split_closed(room["name"]) is not None:
+    if split_closed(room.name) is not None:
         close_ev = [e for e in room_all if e["kind"] == "room_close"]
         last = _data(close_ev[-1]["data"]) if close_ev else {}
         closed = {
-            "name": room["name"],
+            "name": room.name,
             "at": iso(close_ev[-1]["ts"]) if close_ev else None,
             "by": _safe(last.get("by")) if isinstance(last.get("by"), str) else None,
         }
     return {
-        "room": display_room(room["name"]),
+        "room": display_room(room.name),
         "closed": closed,
         "window": {"start": iso(start), "end": iso(end), "minutes": round((end - start) / 60.0, 1)},
         "settings": {
-            "budget_per_hour": room["budget_per_hour"],
-            "budget_remaining_at_end": room["budget_remaining"],
-            "hop_limit": room["hop_limit"],
-            "paused_at_end": bool(room["paused"]),
-            "paused_reason": _safe(room["paused_reason"]),
+            "budget_per_hour": room.budget_per_hour,
+            "budget_remaining_at_end": room.budget_remaining,
+            "hop_limit": room.hop_limit,
+            "paused_at_end": room.paused,
+            "paused_reason": _safe(room.paused_reason),
         },
         "traffic": {
             "human_messages": humans,
