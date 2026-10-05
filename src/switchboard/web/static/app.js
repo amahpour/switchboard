@@ -3533,7 +3533,7 @@
     const r = activeRoom();
     if (!r) return;
     const text = await openDialog({ kind: 'rules', title: 'Rules for ' + r.name,
-      body: 'These add to switchboard’s five fixed rules. Agents see them at join and with each delivery.',
+      body: 'These add to switchboard’s five fixed rules. Agents see them when they join, and once more after each edit.',
       initial: r.rules, action: 'Save rules' });
     if (text === null) return;
     try {
