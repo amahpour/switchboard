@@ -904,11 +904,11 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
   font-weight: 700;
   line-height: 1;
 }
-.approval-flag { position: relative; cursor: help; }
+.approval-flag { cursor: help; }
 .approval-flag::after {
   content: attr(data-tooltip);
   position: absolute;
-  right: 0;
+  left: 0;
   bottom: calc(100% + 8px);
   z-index: 10;
   width: min(220px, 70vw);
@@ -1433,7 +1433,7 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 .m-open:hover .m-name { text-decoration: underline; text-underline-offset: 2px; }
 .member > .avatar { margin-top: 1px; }
 .m-main { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
-.m-name-line { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; min-width: 0; }
+.m-name-line { position: relative; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; min-width: 0; }
 .m-name { font-size: calc(13.5px * var(--text-scale)); font-weight: 600; overflow-wrap: anywhere; }
 .m-status { font-size: calc(12px * var(--text-scale)); color: var(--muted-2); }
 .m-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; font-size: calc(12px * var(--text-scale)); color: var(--muted-2); }

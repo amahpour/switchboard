@@ -280,6 +280,19 @@ def test_app_loads_connected_with_rooms_members_and_chips(ui: UI) -> None:
 
 
 def test_approval_flags_explain_on_hover_focus_and_phone_tap(ui: UI) -> None:
+    def tooltip_fits_pane(flag: Any) -> bool:
+        return flag.evaluate("""el => {
+          const host = getComputedStyle(el).position === 'relative' ? el : el.closest('.m-name-line');
+          const box = host.getBoundingClientRect();
+          const pane = el.closest('.pane-view').getBoundingClientRect();
+          const tip = getComputedStyle(el, '::after');
+          const width = parseFloat(tip.width);
+          const left = tip.left === 'auto'
+            ? box.right - parseFloat(tip.right) - width
+            : box.left + parseFloat(tip.left);
+          return left >= pane.left && left + width <= pane.right;
+        }""")
+
     page = ui.open()
     row = page.locator('#buddy-list .member[data-name="codex-1"]')
     expect(row.locator(".m-warn")).to_have_count(0)
@@ -289,6 +302,7 @@ def test_approval_flags_explain_on_hover_focus_and_phone_tap(ui: UI) -> None:
     expect(flag).to_have_attribute("aria-label", re.compile("run commands and edit files without asking"))
     flag.hover()
     assert flag.evaluate("el => getComputedStyle(el, '::after').visibility") == "visible"
+    assert tooltip_fits_pane(flag)
     page.mouse.move(0, 0)
     flag.focus()
     assert flag.evaluate("el => getComputedStyle(el, '::after').visibility") == "visible"
@@ -299,6 +313,7 @@ def test_approval_flags_explain_on_hover_focus_and_phone_tap(ui: UI) -> None:
     phone_flag = phone.locator('#buddy-list .member[data-name="codex-1"] .approval-flag')
     phone_flag.tap()
     assert phone_flag.evaluate("el => getComputedStyle(el, '::after').visibility") == "visible"
+    assert tooltip_fits_pane(phone_flag)
     expect(phone.locator("#pane")).not_to_have_class(cls("inspecting"))
 
 
