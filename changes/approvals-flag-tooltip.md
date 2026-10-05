@@ -1,1 +1,3 @@
-The Members list now shows approval warnings on a focusable flag beside each agent's name. Hover, focus, or tap it to read the warning without an extra line in every row.
+### Changed
+
+- **Approval warnings sit on a flag beside each agent's name.** The Members list no longer adds a warning line to every row: hover, focus or tap the flag to read it.
