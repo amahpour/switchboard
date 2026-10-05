@@ -3604,8 +3604,9 @@
     if (b.head) title.append(el('code', 'board-head-sha', b.head.slice(0, 12)));
     const c = b.counts || {};
     const status = el('span', 'chip' + (b.settled ? ' chip-ok' : c.needs_person ? ' chip-danger' : ''),
-      b.settled ? 'Settled' : c.needs_person ? c.needs_person + ' need' + (c.needs_person === 1 ? 's' : '') + ' you'
-        : c.open + ' open');
+      b.posted_by ? 'Posted by ' + b.posted_by
+        : b.settled ? 'Settled' : c.needs_person ? c.needs_person + ' need' + (c.needs_person === 1 ? 's' : '') + ' you'
+          : c.open + ' open');
     status.id = 'board-status';
     const close = btn('btn', 'Close board');
     close.id = 'board-close';
@@ -3646,11 +3647,42 @@
       lanes.append(col);
     }
     const body = el('div', 'board-body');
+    const owners = Object.keys(b.plan || {});
+    if (b.settled && owners.length) body.append(boardPostPanel(b, owners));
     body.append(lanes);
     const sel = state.boardSel ? b.items.find(function (i) { return i.label === state.boardSel; }) : null;
     if (sel) body.append(boardDetail(r, sel));
     else state.boardSel = null;
     box.replaceChildren(head, body);
+  }
+
+  // Settled: exactly what each agent will post, and the one button that tells them to (§37.6).
+  // switchboard posts nothing; the agents do, each in its own name.
+  function boardPostPanel(b, owners) {
+    const p = el('section', 'board-post');
+    p.setAttribute('aria-label', 'Ready to post');
+    p.append(el('h3', null, b.posted_by ? 'Posted' : 'Ready to post'));
+    p.append(el('p', 'board-post-lead', b.posted_by
+      ? b.posted_by + ' told each agent to post its items to the pull request.'
+      : 'Each agent posts its own items to the pull request, once, in its own name. Dropped items aren’t posted.'));
+    const list = el('ul', 'board-post-list');
+    for (const owner of owners) {
+      const li = el('li');
+      li.append(el('strong', null, owner), document.createTextNode(': ' + b.plan[owner].join(', ')));
+      list.append(li);
+    }
+    p.append(list);
+    if (!b.posted_by) {
+      const post = btn('btn-primary', 'Post to the pull request');
+      post.id = 'board-post';
+      post.addEventListener('click', async function () {
+        const ok = await confirmDialog('Tell the agents to post?',
+          'One message in the room asks ' + owners.join(', ') + ' to post their items to ' + b.url + ', once.', 'Post');
+        if (ok) boardMove({ action: 'post' });
+      });
+      p.append(post);
+    }
+    return p;
   }
 
   function boardDetail(r, i) {
@@ -3660,6 +3692,7 @@
     d.append(el('p', 'board-detail-state', (BOARD_STATE[i.state] || i.state) + ' · ' + boardWho(i)));
     if (boardWhere(i)) d.append(el('code', 'board-where', boardWhere(i)));
     if (i.detail) d.append(mdBody(i.detail, []));
+    if (i.answer) d.append(el('p', 'board-answer', 'Answer: ' + i.answer));
     if (i.reason) d.append(el('p', 'board-reason', (i.state === 'dropped' ? 'Dropped: ' : 'Why: ') + i.reason));
     if (i.commit) d.append(el('p', 'board-reason', 'Fixed in ' + i.commit.slice(0, 12)));
     const acts = el('div', 'board-actions');

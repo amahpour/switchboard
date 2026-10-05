@@ -196,7 +196,10 @@ def render(review: dict[str, Any], items: list[Item]) -> str:
     """The board as an agent reads it: one line per item, open work first. Short on purpose:
     the board replaces a wall of text in the room, it mustn't become one."""
     head_s = f" at {review['head'][:12]}" if review.get("head") else ""
-    out = [f"Review of {review['url']}{head_s}: " + ("settled" if settled(items) else "open")]
+    state = "settled" if settled(items) else "open"
+    if review.get("posted_by"):
+        state = f"posted by {review['posted_by']}: post your items now, once"
+    out = [f"Review of {review['url']}{head_s}: {state}"]
     order = {
         s: n
         for n, s in enumerate(("contested", "open", "raised", "conceded", "answered", "fixed", "dropped"))
@@ -217,3 +220,41 @@ def render(review: dict[str, Any], items: list[Item]) -> str:
         }[i.state]
         out.append(f"{i.label} [{i.state}] {i.title}{where}: {who}")
     return "\n".join(out)
+
+
+def post_plan(items: list[Item]) -> dict[str, list[Item]]:
+    """What each agent posts to the pull request once the board is settled (§37.6): a fixed
+    finding goes to its owner, an answered question to whoever asked it. Dropped items are never
+    posted. Owners in the order they first appear; items in board order."""
+    plan: dict[str, list[Item]] = {}
+    for i in sorted(items, key=lambda i: (i.kind, i.n)):
+        if i.state == "fixed" and i.owner:
+            plan.setdefault(i.owner, []).append(i)
+        elif i.state == "answered":
+            plan.setdefault(i.raised_by, []).append(i)
+    return plan
+
+
+def _post_line(i: Item, titles: bool) -> str:
+    what = f" {i.title[:60]}" if titles else ""
+    if i.kind == "question":
+        return f"{i.label}{what} → {i.answer}"
+    return f"{i.label}{what}" + (f" (fixed in {i.commit[:12]})" if i.commit else "")
+
+
+def render_post(url: str, plan: dict[str, list[Item]], limit: int) -> str:
+    """The one message a person's Post sends: it @mentions each owner (so each is woken once)
+    and lists exactly what that owner posts, in its own name, with its own gh or glab. If the
+    whole list is too long for one message, titles go and the labels stay."""
+    for titles in (True, False):
+        lines = [
+            f"The review board for {url} is settled. Post your items to the pull request now, once,"
+            " in your own name with your own gh or glab: one review comment per item, on its lines"
+            " where it has them. Dropped items aren't posted."
+        ]
+        for owner, items in plan.items():
+            lines.append(f"- @{owner}: " + "; ".join(_post_line(i, titles) for i in items))
+        text = "\n".join(lines)
+        if len(text) <= limit:
+            return text
+    raise ReviewError("the board is too big to post in one message: drop or close some items first")

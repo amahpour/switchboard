@@ -44,6 +44,9 @@ class Boards:
             "settled": reviews.settled(items),
             "counts": reviews.counts(items),
             "items": [item_dict(i) for i in items],
+            "plan": {owner: [i.label for i in its] for owner, its in reviews.post_plan(items).items()},
+            "posted_at": rv["posted_at"],
+            "posted_by": rv["posted_by"],
         }
 
     # ------------------------------------------------------------ agent moves
@@ -155,8 +158,10 @@ class Boards:
             self._notice(room, f"{name} closed the review board for {rv['url']}")
             self.state.hub.review(room.name, None)
             return {"ok": True, "board": None}
+        if action == "post":
+            return self._post(room, rv, name, person_id)
         if action not in ("answer", "concede", "drop"):
-            raise ReviewError("action must be answer, concede, drop or close")
+            raise ReviewError("action must be answer, concede, drop, post or close")
         kind, n = reviews.parse_label(params.get("item"))
         item = self.store.review_item(rv["id"], kind, n)
         if item is None:
@@ -190,6 +195,27 @@ class Boards:
             via="web",
             person=(name, person_id),
         )
+        b = self.board(room)
+        self.state.hub.review(room.name, b)
+        return {"ok": True, "board": b}
+
+    def _post(self, room: Room, rv: dict[str, Any], name: str, person_id: int | None) -> dict[str, Any]:
+        """A person's Post (§37.6): once, on a settled board, one message from that person that
+        @mentions each owner and lists what it posts. switchboard posts nothing itself."""
+        if rv["posted_at"] is not None:
+            raise ReviewError(f"{rv['posted_by']} already posted this board")
+        items = self.store.review_items(rv["id"])
+        if not reviews.settled(items):
+            raise ReviewError(
+                "the board isn't settled: every finding fixed or dropped, every question answered"
+            )
+        plan = reviews.post_plan(items)
+        if not plan:
+            raise ReviewError("nothing to post: every item was dropped")
+        text = reviews.render_post(rv["url"], plan, self.state.cfg.delivery.max_msg_chars)
+        self.store.set_review(rv["id"], posted_at=self.state.clock.now(), posted_by=name)
+        self.store.add_event("review", room_id=room.id, data={"post": rv["url"], "by": name})
+        self.state.service.human_say(room.name, text, via="web", person=(name, person_id))
         b = self.board(room)
         self.state.hub.review(room.name, b)
         return {"ok": True, "board": b}
