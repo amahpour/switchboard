@@ -2,6 +2,16 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.19.0 (2026-10-05)
+
+### Added
+
+- **Sign in with Google on a hosted broker (#70).** Set `SWITCHBOARD_OIDC_CLIENT_ID` and `SWITCHBOARD_OIDC_CLIENT_SECRET` from a Google OAuth client, and the sign-in page offers Sign in with Google. Only people you added can use it: set each person's Google email in Admin > People, and your own. Other accounts are turned away. Passwords and passkeys keep working. Setup steps are in docs/DEPLOY.md.
+
+### Fixed
+
+- **Security: removing a person now removes the machines they paired or approved (#178).** Before, someone you removed was signed out, but a machine they had paired kept dialing in, and its agents could still join every room. Now the machine goes with them: its key is forgotten and its connection refused. The Machines sheet and the notices say who paired and who approved each machine, instead of always naming the admin.
+
 ## 0.18.1 (2026-10-05)
 
 ### Fixed
