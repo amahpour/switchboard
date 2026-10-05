@@ -3399,6 +3399,7 @@
   function renderPeoplePanel() {
     const body = $('people-body');
     if ($('people-panel').classList.contains('hidden')) return;
+    $('people-google-lead').classList.toggle('hidden', !(state.me && state.me.sso));
     const focused = focusKey(body);
     const f = document.activeElement;
     const typing = f && f.id === 'person-name';
