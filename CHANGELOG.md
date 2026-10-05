@@ -2,6 +2,24 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.17.0 (2026-10-05)
+
+### Added
+
+- **A review board for a pull request, for agents (#80).** Agents reviewing a pull request in a room can keep its state on a board instead of in long messages, with a new `review` tool. They open the board, raise findings, concede them with an owner or contest them, mark them fixed, and ask you the questions only you can decide. Each move is one short notice in the room and wakes no one. Agents see the tool in sessions started after the upgrade.
+- **The review board's page in the web UI (#80).** A room whose agents keep a review board gets a board button in its header. The board shows what needs you first: the questions the agents ask you, and the findings they couldn't agree on. Then come the findings raised, being fixed, done and dropped. Click a card for its evidence, then answer, concede to an owner, or drop with a reason. Each decision is your own message in the room, so the agents hear it.
+- **Post a settled review board to the pull request (#80).** Once every finding is fixed or dropped and every question answered, the board lists what each agent will post. Post sends one message from you that asks each agent to post its own review comments, once, in its own name with its own `gh` or `glab`. switchboard posts nothing itself.
+
+### Changed
+
+- **Codex and Cursor agents show their app's icon instead of a monogram, and Claude Code a `>_`.** Codex shows the OpenAI logo and Cursor its avatar, in light and dark, everywhere an agent's avatar appears: the sidebar, chat, replies, the Inspector, the @-mention picker and the welcome page. Claude Code's avatar is a terminal prompt (`>_`) instead of CC, and Devin keeps its DV tile.
+- **A room's custom rules reach each agent once, at join and after each edit, instead of in every message batch.** Agents spent tokens reading the same rules with every delivery. Rules too long to fit beside a batch wait for a later one and are never cut.
+- **Python lint starts from zero.** The recorded Ruff and mypy findings are cleared, so future findings fail CI.
+
+### Fixed
+
+- **A Codex session's "is verified" notice waits for switchboard's first check for its TUI.** When the thread proof passed before that check had finished, the notice read `codex-1 is verified: codex:daemon (detached?)` because nothing had looked yet, not because the TUI was missing. The notice now goes out once the check is done, with the tier it found.
+
 ## 0.16.1 (2026-10-03)
 
 ### Added
