@@ -1646,7 +1646,7 @@ class Engine:
         if m is None or p is None:
             # Membership rows are deleted only with a room without members (§28);
             # participant rows never are.
-            return None  # pragma: no cover
+            return None  # pragma: no cover - rows deleted only with an empty room (§28)
         return self.adapter(p).expire_due(p, b, now)
 
     # ================================================================== tick
@@ -1744,7 +1744,7 @@ class Engine:
                     verdicts.setdefault(v, []).append(it.message_id)
             if not verdicts:
                 # watch_items picked only due items (float rounding at the edge aside)
-                continue  # pragma: no cover
+                continue  # pragma: no cover - only due items are picked
             if verdicts.get("done"):
                 self.store.watchdog_done(m.id, verdicts["done"], keep_count=False)
             ids = verdicts.get("remind", [])
