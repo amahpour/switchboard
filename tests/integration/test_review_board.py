@@ -118,3 +118,90 @@ async def test_a_conceded_finding_needs_an_owner_in_the_room(broker: InProcBroke
         assert r["ok"] is False and "owner must be an agent in #build" in r["error"]
         r = await author.call("review", room="#build", action="concede", item="F1", owner="codex-1")
         assert "owner codex-1" in r["board"]
+
+
+async def test_a_person_answers_rules_and_closes_from_the_web(broker: InProcBroker) -> None:
+    """The person's 10% (§37.5): answering a question and ruling on a contested finding are their
+    own messages in the room, so they reach the agents; closing the board is a notice."""
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            await reviewer.call("review", room="#build", action="open", url=PR)
+            await reviewer.call("review", room="#build", action="raise", title="rounding")
+            await author.call(
+                "review", room="#build", action="contest", item="F1", reason="banker's rounding"
+            )
+            await author.call(
+                "review",
+                room="#build",
+                action="ask",
+                title="Before or after tax?",
+                options=["before", "after"],
+            )
+
+            got = web.get("/api/rooms/build/review").json()["board"]
+            assert [(i["label"], i["state"], i["needs_person"]) for i in got["items"]] == [
+                ("F1", "contested", True),
+                ("Q1", "open", True),
+            ]
+            assert got["counts"]["needs_person"] == 2 and got["settled"] is False
+
+            def move(**body: Any) -> Any:
+                return web.post("/api/rooms/build/review", json=body, headers=broker.write_headers())
+
+            r = move(action="answer", item="Q1", option=5)
+            assert r.status_code == 400 and "0 to 1" in r.json()["message"]
+            r = move(action="answer", item="F1", option=0)
+            assert r.status_code == 400 and "can't be answered" in r.json()["message"]
+            r = move(action="answer", item="Q1", option=1)
+            assert r.status_code == 200 and r.json()["board"]["items"][1]["answer"] == "after"
+            r = move(action="concede", item="F1", owner="codex-1")
+            assert r.status_code == 200 and r.json()["board"]["items"][0]["owner"] == "codex-1"
+
+            # the agents hear both decisions as alice's own messages
+            text = (await author.read("#build"))["text"]
+            assert "Review board: Q1 (Before or after tax?) answered: after" in text
+            assert "Review board: F1 (rounding) conceded, owner codex-1" in text
+
+            r = move(action="close")
+            assert r.status_code == 200 and r.json()["board"] is None
+            assert web.get("/api/rooms/build/review").json()["board"] is None
+            # closed: the room can open a board for another pull request now
+            r = await reviewer.call("review", room="#build", action="open", url=PR + "8")
+            assert r["ok"] and r["board"].startswith(f"Review of {PR}8")
+    finally:
+        web.close()
+
+    chat = q(broker, "SELECT sender_kind, text FROM messages WHERE kind='chat' ORDER BY id")
+    assert [(r["sender_kind"], r["text"][:21]) for r in chat] == [
+        ("human", "Review board: Q1 (Bef"),
+        ("human", "Review board: F1 (rou"),
+    ]
+    assert any(
+        "alice closed the review board" in r["text"]
+        for r in q(broker, "SELECT text FROM messages WHERE kind='notice'")
+    )
+
+
+def test_the_board_routes_need_a_signed_in_person_and_the_write_header(broker: InProcBroker) -> None:
+    import httpx
+
+    anon = httpx.Client(base_url=broker.base, timeout=10.0)
+    web = broker.web_client()
+    try:
+        assert anon.get("/api/rooms/build/review").status_code == 401
+        r = anon.post("/api/rooms/build/review", json={"action": "close"}, headers=broker.write_headers())
+        assert r.status_code == 401
+        r = web.post("/api/rooms/build/review", json={"action": "close"}, headers={"Origin": broker.origin})
+        assert r.status_code == 403  # no X-Switchboard: not from the page
+        r = web.post(
+            "/api/rooms/build/review", json={"action": "close", "x": 1}, headers=broker.write_headers()
+        )
+        assert r.status_code == 400
+        r = web.post("/api/rooms/build/review", json={"action": "close"}, headers=broker.write_headers())
+        assert r.status_code == 400 and "no review board" in r.json()["message"]
+    finally:
+        web.close()
+        anon.close()

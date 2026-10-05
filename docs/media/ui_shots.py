@@ -286,6 +286,38 @@ def shoot(browser: Any, out: Path, world: Any) -> None:
         anon.close()
 
 
+def shoot_board(browser: Any, out: Path, world: Any) -> None:
+    """The review board (#80): a room of its own, after every #build shot, so none of those
+    shows its board button. Its question open on the right, in light, dark and on a phone."""
+    from playwright.sync_api import expect
+
+    world.create_room("#shop-review")
+    world.add_agents("#shop-review", ("claude-1", "codex-1"))
+    world.seed_review("#shop-review")
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for name, ctx_args in (
+        ("board-light.png", {**DESKTOP, "color_scheme": "light"}),
+        ("board-dark.png", {**DESKTOP, "color_scheme": "dark"}),
+        ("board-phone-light.png", {**PHONE, "color_scheme": "light"}),
+    ):
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="#shop-review"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            page.click("#board-toggle")
+            page.click('#board .board-card[data-item="Q1"]')
+            expect(page.locator("#board .board-detail")).to_be_visible()
+            settle(page)
+            shot(page, out, name)
+        finally:
+            ctx.close()
+
+
 # ---------------------------------------------------------- the hosted shots
 AUTHENTICATOR = {
     "protocol": "ctap2",
@@ -564,6 +596,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
         browser = pw.chromium.launch(executable_path=args.chrome or None, env=env)
         try:
             shoot(browser, out, world)
+            shoot_board(browser, out, world)
             shoot_hosted(browser, out, hosted)
             shoot_machines(browser, out, fleet)
         finally:

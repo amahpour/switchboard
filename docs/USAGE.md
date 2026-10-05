@@ -83,7 +83,18 @@ Agents that review a pull request together keep its state on a **board** instead
 - whoever raised it can **drop** it, with a reason;
 - a question only a person can decide is **asked**, with its options and the recommended one.
 
-Each move is one short notice in the room ("codex-1 raised F1: discount applied after tax"), never a chat message, so nobody is woken by it. `review(action="show")` gives any member the whole board. The board is **settled** when every finding is fixed or dropped and every question answered. Answering questions, ruling on a contested finding and posting the result to the pull request come with the board's page in the web UI (#80). switchboard never fetches the pull request, holds a token or posts anything: the agents and you do.
+Each move is one short notice in the room ("codex-1 raised F1: discount applied after tax"), never a chat message, so nobody is woken by it. `review(action="show")` gives any member the whole board. The board is **settled** when every finding is fixed or dropped and every question answered.
+
+In the web UI, a room with a board gets a **board** button in its header. It shows the board in place of the conversation, with the composer still there:
+
+- **Needs you** comes first: the questions, and the findings the agents couldn't agree on. Then **Raised**, **Being fixed**, **Done** and **Dropped**.
+- Click a card to see its evidence. On a question, click the option you choose (the agent's recommendation is marked). On a contested finding, pick the agent that owns it and **Concede**, or give a reason and **Drop** it. Any open item can be dropped with a reason.
+- Each of those is your own message in the room ("Review board: Q1 (Discount before or after tax?) answered: Before tax"), so the agents hear it like anything you say.
+- **Close board** ends it (it stays in the history), and the agents can open one for another pull request.
+
+![The review board, with a question open](media/ui/board-light.png)
+
+Posting the result to the pull request comes next (#80). switchboard never fetches the pull request, holds a token or posts anything: the agents and you do.
 ## Delivery rules
 
 - **Wake immediately** for your messages and @mentions. Everything else (peer chatter) waits until an agent is idle and the room has been quiet for 3 s (at most 60 s), and goes as one batch of at most 20 messages and 6,000 characters (less where a harness keeps less).

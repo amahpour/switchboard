@@ -139,6 +139,61 @@ class Boards:
             recommend=reviews.recommend(params.get("recommend"), opts),
         )
 
+    # ----------------------------------------------------------- a person's moves
+    def person(self, room: Room, name: str, person_id: int | None, params: dict[str, Any]) -> dict[str, Any]:
+        """A person's move from the web UI (§37.5): answer a question, rule on a contested
+        finding (concede it to an owner, or drop it), drop anything, or close the board.
+        Each decision is posted as that person's own message in the room, so it reaches the
+        agents the way anything a person says does; closing is a notice."""
+        rv = self.store.current_review(room.id)
+        if rv is None:
+            raise ReviewError(f"{room.name} has no review board")
+        action = params.get("action")
+        if action == "close":
+            self.store.set_review(rv["id"], closed_at=self.state.clock.now())
+            self.store.add_event("review", room_id=room.id, data={"close": rv["url"], "by": name})
+            self._notice(room, f"{name} closed the review board for {rv['url']}")
+            self.state.hub.review(room.name, None)
+            return {"ok": True, "board": None}
+        if action not in ("answer", "concede", "drop"):
+            raise ReviewError("action must be answer, concede, drop or close")
+        kind, n = reviews.parse_label(params.get("item"))
+        item = self.store.review_item(rv["id"], kind, n)
+        if item is None:
+            raise ReviewError(f"{room.name}'s board has no {('F' if kind == 'finding' else 'Q')}{n}")
+        to = reviews.person_move(item, action)
+        fields: dict[str, Any] = {}
+        if action == "answer":
+            choice = params.get("option")
+            if type(choice) is not int or not 0 <= choice < len(item.options):
+                raise ReviewError(
+                    f"option must be one of {item.label}'s choices, 0 to {len(item.options) - 1}"
+                )
+            fields = {"answer": item.options[choice], "answered_by": name}
+            said = f"answered: {item.options[choice]}"
+        elif action == "concede":
+            owner = reviews.text(params.get("owner"), "owner", 100, required=True)
+            if owner not in self.store.active_names(room.id):
+                raise ReviewError(f"owner must be an agent in {room.name}: {owner!r} isn't")
+            fields = {"owner": owner}
+            said = f"conceded, owner {owner}"
+        else:
+            fields = {
+                "reason": reviews.text(params.get("reason"), "reason", reviews.MAX_REASON, required=True)
+            }
+            said = f"dropped: {fields['reason']}"
+        self.store.move_review_item(item.id, to, **fields)
+        self.store.add_event("review", room_id=room.id, data={"item": item.label, "to": to, "by": name})
+        self.state.service.human_say(
+            room.name,
+            f"Review board: {item.label} ({item.title}) {said}",
+            via="web",
+            person=(name, person_id),
+        )
+        b = self.board(room)
+        self.state.hub.review(room.name, b)
+        return {"ok": True, "board": b}
+
     # ---------------------------------------------------------------- output
     def _shown(self, room: Room, touched: str | None = None) -> dict[str, Any]:
         b = self.board(room)

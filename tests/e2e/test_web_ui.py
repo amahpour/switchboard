@@ -1325,3 +1325,92 @@ def test_ask_to_fix_is_offered_only_while_sender_is_a_member(ui: UI) -> None:
     page = ui.open(room=room)
     show(page)
     expect(page.get_by_role("button", name="Ask former-agent to fix it")).to_have_count(0)
+
+
+# ------------------------------------------------------------ the review board (#80)
+def review_room(ui: UI, slug: str, **open_args: Any) -> Page:
+    """A room with a board the agents filled through their `review` tool, open on a page."""
+    ui.world.create_room("#" + slug)
+    ui.world.add_agents("#" + slug, ("claude-1", "codex-1"))
+    ui.world.seed_review("#" + slug)
+    page = ui.open(room=None, **open_args)
+    open_room(page, slug)
+    return page
+
+
+def lane_labels(page: Page, lane: str) -> list[str]:
+    return page.locator(f"#board .lane-{lane} .board-card").evaluate_all("cs => cs.map(c => c.dataset.item)")
+
+
+def test_the_review_board_shows_each_item_in_its_lane(ui: UI) -> None:
+    """The board button appears only with a board, and swaps the log for lanes: the person's
+    questions and contested findings on top, then raised, being fixed, done and dropped."""
+    page = review_room(ui, "e2e-board-lanes")
+    toggle = page.locator("#board-toggle")
+    expect(toggle).to_be_visible()
+    expect(toggle).to_have_attribute("aria-pressed", "false")
+    toggle.click()
+    expect(toggle).to_have_attribute("aria-pressed", "true")
+    expect(page.locator("#log")).to_be_hidden()
+    expect(page.locator("#board")).to_be_visible()
+    expect(page.locator("#board-status")).to_have_text("2 need you")
+    assert lane_labels(page, "you") == ["F3", "Q1"]
+    assert lane_labels(page, "raised") == []
+    assert lane_labels(page, "fixing") == ["F4"]
+    assert lane_labels(page, "done") == ["F2"]
+    assert lane_labels(page, "dropped") == ["F1"]
+    # an agent's text is text: the URL is a checked external link, the title plain
+    link = page.locator("#board .board-url")
+    expect(link).to_have_attribute("href", "https://example.com/shop/pull/7")
+    expect(link).to_have_attribute("rel", re.compile("noopener"))
+    toggle.click()
+    expect(page.locator("#log")).to_be_visible()
+    expect(page.locator("#board")).to_be_hidden()
+
+
+def test_a_person_answers_a_question_and_rules_on_a_finding(ui: UI) -> None:
+    """Answering Q1 and conceding the contested F3 move their cards at once (the board frame),
+    and each is the person's own message in the room, which reaches the agents."""
+    page = review_room(ui, "e2e-board-answer")
+    page.click("#board-toggle")
+    page.click('#board .board-card[data-item="Q1"]')
+    detail = page.locator("#board .board-detail")
+    expect(detail.locator("h3")).to_have_text("Q1 · Discount before or after tax?")
+    expect(detail.locator('button[data-option="0"]')).to_have_text("Before tax (recommended)")
+    detail.locator('button[data-option="0"]').click()
+    expect(page.locator('#board .lane-done .board-card[data-item="Q1"]')).to_be_visible()
+    page.click('#board .board-card[data-item="F3"]')
+    page.select_option("#board-owner", "codex-1")
+    page.click("#board-concede")
+    expect(page.locator('#board .lane-fixing .board-card[data-item="F3"]')).to_be_visible()
+    expect(page.locator("#board .lane-you")).to_have_count(0)  # nothing left for the person
+    expect(page.locator("#board-status")).to_have_text("2 open")
+    page.click("#board-toggle")
+    expect(chat_row(page, "Review board: Q1")).to_contain_text("answered: Before tax")
+    expect(chat_row(page, "Review board: F3")).to_contain_text("conceded, owner codex-1")
+
+
+def test_dropping_needs_a_reason_and_closing_asks_first(ui: UI) -> None:
+    page = review_room(ui, "e2e-board-drop")
+    page.click("#board-toggle")
+    page.click('#board .board-card[data-item="F4"]')
+    page.click("#board-drop")
+    expect(page.locator("#board-reason")).to_be_focused()  # no reason, no drop
+    expect(page.locator('#board .lane-fixing .board-card[data-item="F4"]')).to_be_visible()
+    page.fill("#board-reason", "out of scope for this PR")
+    page.click("#board-drop")
+    expect(page.locator('#board .lane-dropped .board-card[data-item="F4"]')).to_be_visible()
+    page.click("#board-close")
+    expect(page.locator("#app-dialog")).to_be_visible()
+    page.click("#app-dialog-action")
+    expect(page.locator("#board-toggle")).to_be_hidden()
+    expect(page.locator("#log")).to_be_visible()
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_the_board_fits_a_phone(ui: UI, scheme: str) -> None:
+    page = review_room(ui, f"e2e-board-phone-{scheme}", **PHONE, color_scheme=scheme)
+    page.click("#board-toggle")
+    page.click('#board .board-card[data-item="Q1"]')
+    expect(page.locator("#board .board-detail")).to_be_visible()
+    no_horizontal_scroll(page)
