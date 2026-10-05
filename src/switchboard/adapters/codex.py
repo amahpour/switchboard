@@ -1390,6 +1390,14 @@ class CodexAdapter(Adapter):
         except Exception:
             return self._no_clients(now, "lsof failed")
         recs = parse_lsof(out)
+        if self._lost_a_tui(recs):
+            # Linux lsof can skip a socket in one look (it reads /proc/net/unix while sockets come
+            # and go, and a client's end then shows no peer), and a hold isn't undone when the TUI
+            # shows again: look once more at once, and count a socket either look saw (#189)
+            try:
+                recs += parse_lsof(await asyncio.to_thread(_run_lsof, lsof))
+            except Exception:
+                return self._no_clients(now, "lsof failed")
         me = os.getpid()
         servers, clients = socket_peers(recs, {self.sock, real})
         clients.discard(me)
@@ -1453,6 +1461,14 @@ class CodexAdapter(Adapter):
         for key in [k for k in self._seen if k != "control" and k[1] not in acs]:
             del self._seen[key]
         return self.clients
+
+    def _lost_a_tui(self, recs: list[tuple[int, str, str]]) -> bool:
+        """A TUI of the last look that ``recs`` shows connected to no bound socket."""
+        seen: set[int] = set().union(*self._seen.values())
+        if not seen:
+            return False
+        bound = {d for _p, d, n in recs if n.startswith("/")}
+        return bool(seen - {p for p, _d, n in recs if n.startswith("->") and n[2:] in bound})
 
     async def _clients_loop(self) -> None:
         while True:

@@ -837,6 +837,52 @@ async def test_queue_tier_app_servers_are_checked_for_their_own_tuis(
     assert TID in a.suspect and a.holds[("agent", 300, 300.0)].tids == {TID}
 
 
+async def test_a_tui_one_lsof_look_misses_is_looked_for_again(
+    w: World, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Linux lsof can skip a socket in one look: it reads /proc/net/unix while sockets come and
+    go, and the TUI's end of the control socket then shows no peer. One such look held the
+    thread, and the TUI showing again didn't release it (#189: under load, after a daemon
+    restart). A TUI of the last look that a look shows connected to nothing is looked for again
+    at once; one that really quit is missing from both looks, and still held."""
+    codex(w)
+    a = wire(w)
+    attach(w)
+    a.sock = str(tmp_path / "control.sock")
+    table = {
+        100: (1, "/opt/homebrew/bin/codex app-server --listen unix://control"),
+        200: (1, "/opt/homebrew/bin/codex"),
+    }
+    whole = [(100, "0xa1", a.sock), (200, "0xb1", "->0xa1")]
+    skipped = [(100, "0xa1", a.sock), (200, "0xb1", "")]  # the TUI's end, without its peer
+    quit_ = [(100, "0xa1", a.sock)]
+    looks: list[list[tuple[int, str, str]]] = []
+
+    def run_lsof(_bin: str) -> str:
+        return "".join(f"p{pid}\nf3\nd{dev}\nn{name}\n" for pid, dev, name in looks.pop(0))
+
+    def info(pid: int) -> proc.ProcInfo | None:
+        row = table.get(pid)
+        return None if row is None else proc.ProcInfo(pid=pid, ppid=row[0], start=float(pid), uid=os.getuid())
+
+    monkeypatch.setattr(cx, "lsof_bin", lambda: "/usr/sbin/lsof")
+    monkeypatch.setattr(cx, "_run_lsof", run_lsof)
+    monkeypatch.setattr(cx.proc, "info", info)
+    monkeypatch.setattr(cx.proc, "argv_many", lambda infos: {i.pid: table[i.pid][1] for i in infos})
+
+    looks[:] = [whole]
+    assert (await a.refresh_clients()).pids == frozenset({200})  # the first look: one TUI, one thread
+    looks[:] = [skipped, whole]
+    assert (await a.refresh_clients()).pids == frozenset({200}) and looks == []  # looked again
+    assert a.suspect == {}
+    looks[:] = [whole]
+    assert (await a.refresh_clients()).ok and looks == []  # a steady look: no second one
+    looks[:] = [quit_, quit_]
+    c = await a.refresh_clients()
+    assert (c.ok, looks) == (False, [])
+    assert TID in a.suspect and a.holds["control"].tids == {TID}
+
+
 async def test_the_clients_loop_survives_an_error(
     w: World, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
