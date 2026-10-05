@@ -904,6 +904,28 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
   font-weight: 700;
   line-height: 1;
 }
+.approval-flag { cursor: help; }
+.approval-flag::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 10;
+  width: min(220px, 70vw);
+  padding: 7px 9px;
+  border: 1px solid var(--menu-border);
+  border-radius: 7px;
+  background: var(--menu-bg);
+  box-shadow: var(--menu-shadow);
+  color: var(--fg);
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 400;
+  line-height: 1.35;
+  white-space: normal;
+  visibility: hidden;
+  pointer-events: none;
+}
+.approval-flag:hover::after, .approval-flag:focus::after, .approval-flag.tip-open::after { visibility: visible; }
 .harness-name, .via, .ts { font-size: calc(11.5px * var(--text-scale)); color: var(--muted); white-space: nowrap; }
 .ts { font-variant-numeric: tabular-nums; }
 .msg-meta { display: inline-flex; align-items: baseline; gap: 5px; white-space: nowrap; }
@@ -1405,11 +1427,13 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
   color: var(--fg);
   text-align: left;
 }
-button.member { cursor: pointer; }
-button.member:hover, .member[aria-current="true"] { background: var(--row-sel); }
+.member:not(.me) { cursor: pointer; }
+.member:not(.me):hover, .member[aria-current="true"] { background: var(--row-sel); }
+.m-open { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px; padding: 0; border: 0; background: none; color: inherit; text-align: left; cursor: pointer; }
+.m-open:hover .m-name { text-decoration: underline; text-underline-offset: 2px; }
 .member > .avatar { margin-top: 1px; }
 .m-main { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
-.m-name-line { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; min-width: 0; }
+.m-name-line { position: relative; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; min-width: 0; }
 .m-name { font-size: calc(13.5px * var(--text-scale)); font-weight: 600; overflow-wrap: anywhere; }
 .m-status { font-size: calc(12px * var(--text-scale)); color: var(--muted-2); }
 .m-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; font-size: calc(12px * var(--text-scale)); color: var(--muted-2); }

@@ -294,7 +294,7 @@ function type(w, text) {
   input.dispatch('input', {});
 }
 
-function click(el) { el.dispatch('click', { target: el, preventDefault() {} }); }
+function click(el) { el.dispatch('click', { target: el, preventDefault() {}, stopPropagation() {} }); }
 
 function memberButton(w, name) {
   const b = findAll(w.$('buddy-list'), function (n) { return n.tag === 'button' && n.dataset.name === name; })[0];
@@ -436,16 +436,27 @@ const SCENARIOS = {
     });
   },
 
+  async member_flag_tooltips() {
+    const members = MEMBERS.map(function (m) { return m.name === 'bench' ? Object.assign({}, m, { approval_mode: 'unknown' }) : m; });
+    const { w, ws } = await buildRoom(members);
+    const list = w.$('buddy-list');
+    const flags = findAll(list, function (n) { return n.classList && n.classList.contains('approval-flag'); });
+    return report(w, ws, {
+      warnings: findAll(list, function (n) { return n.classList && n.classList.contains('m-warn'); }).length,
+      flags: flags.map(function (f) { return { role: f.attrs.role, tabindex: f.attrs.tabindex, label: f.attrs['aria-label'] }; }),
+    });
+  },
+
   // An unknown approval mode may also let the agent act without asking.
   async unknown_approval_mode() {
     const members = MEMBERS.map(function (m) { return m.name === 'codex-1' ? { ...m, approval_mode: 'unknown' } : m; });
     const { w, ws } = await buildRoom(members);
     const row = memberButton(w, 'codex-1');
-    const flag = findAll(row, function (n) { return n.classList.contains('flag-unknown'); })[0];
+    const flag = findAll(w.$('buddy-list'), function (n) { return n.classList.contains('flag-unknown'); })[0];
     click(row);
     return report(w, ws, {
       row: row.textContent,
-      flagTitle: flag.title,
+      flagLabel: flag.attrs['aria-label'],
       chipTitle: w.$('st-approvals').title,
       inspector: w.$('insp-body').textContent,
     });
