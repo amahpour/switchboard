@@ -28,9 +28,9 @@
   const REFETCH_MS = 800;          // Inspector refetch debounce
   const COPIED_MS = 1600;          // how long "Copied" / "Session id copied" shows
 
-  // harness key -> [avatar monogram, display name]
+  // harness key -> [avatar monogram, display name, avatar glyph (an ICONS name) shown instead]
   const HARNESS = {
-    claude: ['CC', 'Claude Code'], codex: ['CX', 'Codex'], devin: ['DV', 'Devin'],
+    claude: ['CC', 'Claude Code', 'prompt'], codex: ['CX', 'Codex'], devin: ['DV', 'Devin'],
     cursor: ['CU', 'Cursor'], test: ['TS', 'Test'], unknown: ['??', 'Unknown'],
   };
   const STATUS_WORD = {
@@ -334,6 +334,7 @@
   }
   const ICONS = {
     hash: 'M6 2.5 4.8 13.5M11.2 2.5 10 13.5M2.8 6h11M2.2 10h11',
+    prompt: 'M3.5 4.5 7 8l-3.5 3.5M8.5 12h4.5',  // >_ : Claude Code's avatar (#62), our own glyph, not Anthropic's mark
     plus: 'M8 3v10M3 8h10',
     archive: 'M2 3.5h12v3H2zM3 6.5v6h10v-6M6.5 9h3',
     server: rr(2.5, 3, 11, 4.5, 1.2) + rr(2.5, 8.5, 11, 4.5, 1.2) + 'M5 5.25h.01M5 10.75h.01',
@@ -441,7 +442,11 @@
     let a;
     if (kind === 'human') a = el('span', 'avatar human', (name || '?').charAt(0).toUpperCase());
     else if (kind === 'system') a = el('span', 'avatar sys', '⚙');
-    else a = el('span', 'avatar h-' + (HARNESS[harness] ? harness : 'unknown'), harnessOf(harness)[0]);
+    else {
+      const [mono, , glyph] = harnessOf(harness);
+      a = el('span', 'avatar h-' + (HARNESS[harness] ? harness : 'unknown'), glyph ? '' : mono);
+      if (glyph) a.append(icon(glyph));
+    }
     if (extra) for (const c of extra.split(' ')) if (c) a.classList.add(c);
     a.setAttribute('aria-hidden', 'true');
     return a;

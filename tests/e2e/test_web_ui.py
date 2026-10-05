@@ -362,6 +362,42 @@ def test_color_scheme_follows_the_system(ui: UI, scheme: str, other: str) -> Non
     assert bg2 == rgb(token2) and bg2 != bg, (bg, bg2)
 
 
+# An avatar's computed look, and the natural width of its background image once decoded (0 when
+# it has none): a decode that fails, or an image the CSP blocks, throws and fails the test.
+AVATAR_LOOK = """async (el) => {
+  const s = getComputedStyle(el);
+  const m = s.backgroundImage.match(/^url\\("(.*)"\\)$/);
+  let width = 0;
+  if (m) { const im = new Image(); im.src = m[1]; await im.decode(); width = im.naturalWidth; }
+  return {img: m ? new URL(m[1]).pathname : null, color: s.color, width};
+}"""
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_codex_and_cursor_avatars_show_their_icons(ui: UI, scheme: str) -> None:
+    """#62: a Codex or Cursor agent's avatar is its vendor's icon for the scheme, loaded from the
+    page's own origin under the CSP, with the monogram unseen. Claude Code shows our own >_ glyph
+    (Anthropic allows its name in text, not its icon), and Devin keeps its DV monogram."""
+    page = ui.open(color_scheme=scheme)
+    member = page.locator("#buddy-list .member")
+    codex = member.filter(has_text="codex-1").locator(".avatar")
+    look = codex.evaluate(AVATAR_LOOK)
+    assert look["img"] == f"/static/agents/codex-{scheme}.png" and look["width"] == 256, look
+    assert look["color"] == "rgba(0, 0, 0, 0)", look  # the CX text is there for no one to see
+    # no agent in the seeded world runs Cursor: the welcome page's card has its avatar
+    cursor = page.locator(".harness-head .avatar.h-cursor")
+    look = cursor.evaluate(AVATAR_LOOK)
+    assert look["img"] == f"/static/agents/cursor-{scheme}.png" and look["width"] == 1024, look
+    for name in ("claude-1", "devin-1"):
+        look = member.filter(has_text=name).locator(".avatar").evaluate(AVATAR_LOOK)
+        assert look["img"] is None and look["color"] != "rgba(0, 0, 0, 0)", (name, look)
+    claude = member.filter(has_text="claude-1").locator(".avatar")
+    expect(claude.locator("svg.ic-prompt")).to_be_visible()
+    expect(claude).not_to_contain_text("CC")
+    expect(page.locator(".harness-head .avatar.h-claude svg.ic-prompt")).to_have_count(1)
+    expect(member.filter(has_text="devin-1").locator(".avatar")).to_contain_text("DV")
+
+
 # The dot (.remote-state::before) of the row or card head at sel, which is the seeded fpga-pi's
 # (the only remote, never enabled: disabled), and of a clone of it in each of the other states.
 REMOTE_DOTS = """([sel, states]) => {

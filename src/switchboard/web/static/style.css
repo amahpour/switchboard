@@ -82,10 +82,13 @@
   --human-fg: #5a3d99;
   --h-claude-bg: #f7e7df;
   --h-claude-fg: #8f3a1c;
-  --h-codex-bg: #e3ecfb;
-  --h-codex-fg: #1f4e9c;
   --h-devin-bg: #e2f2e8;
   --h-devin-fg: #1d6b43;
+  /* the agents' icons (#62, DESIGN.md §29.9): the only files this stylesheet loads, each pinned */
+  --h-codex-img: url('/static/agents/codex-light.png');
+  --h-codex-tile: #ffffff;
+  --h-cursor-img: url('/static/agents/cursor-light.png');
+  --h-icon-ring: rgba(0, 0, 0, 0.08);
   --h-other-bg: #ececf0;
   --h-other-fg: #3c3c43;
 
@@ -157,10 +160,16 @@
     --human-fg: #cfbdf7;
     --h-claude-bg: #45291f;
     --h-claude-fg: #f4b89e;
-    --h-codex-bg: #1f3050;
-    --h-codex-fg: #a3c5ff;
     --h-devin-bg: #1b3a29;
     --h-devin-fg: #91ddb2;
+  --h-codex-img: url('/static/agents/codex-dark.png');
+  --h-codex-tile: #000000;
+  --h-cursor-img: url('/static/agents/cursor-dark.png');
+  --h-icon-ring: rgba(255, 255, 255, 0.1);
+    --h-codex-img: url('/static/agents/codex-dark.png');
+    --h-codex-tile: #000000;
+    --h-cursor-img: url('/static/agents/cursor-dark.png');
+    --h-icon-ring: rgba(255, 255, 255, 0.1);
     --h-other-bg: #2e2e33;
     --h-other-fg: #d0d0d6;
   }
@@ -223,8 +232,6 @@
   --human-fg: #cfbdf7;
   --h-claude-bg: #45291f;
   --h-claude-fg: #f4b89e;
-  --h-codex-bg: #1f3050;
-  --h-codex-fg: #a3c5ff;
   --h-devin-bg: #1b3a29;
   --h-devin-fg: #91ddb2;
   --h-other-bg: #2e2e33;
@@ -845,9 +852,20 @@ button:disabled, .btn:disabled, .btn-primary:disabled { opacity: .5; cursor: def
   user-select: none;
 }
 .avatar.h-claude { background: var(--h-claude-bg); color: var(--h-claude-fg); }
-.avatar.h-codex { background: var(--h-codex-bg); color: var(--h-codex-fg); }
+.avatar.h-claude .ic { width: 62%; height: 62%; stroke-width: 2; }
 .avatar.h-devin { background: var(--h-devin-bg); color: var(--h-devin-fg); }
-.avatar.h-cursor, .avatar.h-test, .avatar.h-unknown { background: var(--h-other-bg); color: var(--h-other-fg); }
+.avatar.h-test, .avatar.h-unknown { background: var(--h-other-bg); color: var(--h-other-fg); }
+/* Codex and Cursor show their vendor's icon, unaltered; the monogram stays in the DOM, unseen.
+   Claude Code keeps its CC tile: Anthropic allows its name in plain text, not its icon. */
+.avatar.h-codex, .avatar.h-cursor {
+  color: transparent;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  box-shadow: inset 0 0 0 1px var(--h-icon-ring);
+}
+.avatar.h-codex { background-color: var(--h-codex-tile); background-image: var(--h-codex-img); }
+.avatar.h-cursor { background-color: transparent; background-image: var(--h-cursor-img); }
 .avatar.human { border-radius: 50%; background: var(--human-bg); color: var(--human-fg); font-size: calc(12.5px * var(--text-scale)); font-weight: 600; }
 .avatar.sys { background: var(--chip-bg); color: var(--muted-2); font-size: calc(15px * var(--text-scale)); font-weight: 400; }
 .avatar.sm { width: 28px; height: 28px; font-size: calc(12px * var(--text-scale)); }
