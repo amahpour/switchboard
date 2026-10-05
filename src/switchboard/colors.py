@@ -11,12 +11,12 @@ the terminal or pass itself off as a switchboard line.
 When (``enabled``): ``--color always`` or ``never`` wins over everything.
 ``auto``, the default, is off when ``NO_COLOR`` is set and not empty
 (https://no-color.org), on when ``FORCE_COLOR`` or ``CLICOLOR_FORCE`` is set
-(and isn't ``0``/``false``), off for ``TERM=dumb``, and otherwise on only when
+(and isn't ``0``, ``false``, ``no`` or ``off``), off for ``TERM=dumb``, and otherwise on only when
 the stream is a terminal. So pipes and files stay plain. ``--json`` output is
 never painted, whatever the mode.
 
-Palette: the 8 basic colours (their bright variants are left to the
-terminal's theme) plus bold and dim, and no backgrounds, so it reads on dark
+Palette: six of the basic colours, red to cyan (their bright variants are left to
+the terminal's theme) plus bold and dim, and no backgrounds, so it reads on dark
 and light terminals alike.
 """
 

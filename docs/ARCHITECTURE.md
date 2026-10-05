@@ -86,7 +86,7 @@ Beside these is the [security model](../CLAUDE.md#the-security-model-in-short) (
 
 ### Where the code doesn't follow them yet
 
-Each is an open issue; don't copy the pattern, and the fix removes its mention here. SQL outside the store: `report.py` ([#167](https://github.com/amahpour/switchboard/issues/167)), `app.py` ([#168](https://github.com/amahpour/switchboard/issues/168)). Harness branches outside the adapters: the engine ([#169](https://github.com/amahpour/switchboard/issues/169)), `agents.py` ([#170](https://github.com/amahpour/switchboard/issues/170)), `catchup.py` ([#171](https://github.com/amahpour/switchboard/issues/171)). File and process I/O under the engine's `route()` call: the Codex adapter ([#172](https://github.com/amahpour/switchboard/issues/172)). No DESIGN section in the docstring: `__init__.py` ([#173](https://github.com/amahpour/switchboard/issues/173)), `__main__.py` ([#174](https://github.com/amahpour/switchboard/issues/174)), `clock.py` ([#175](https://github.com/amahpour/switchboard/issues/175)).
+Each is an open issue; don't copy the pattern, and the fix removes its mention here. SQL outside the store: `report.py` ([#167](https://github.com/amahpour/switchboard/issues/167)), `app.py` ([#168](https://github.com/amahpour/switchboard/issues/168)). Harness branches outside the adapters: the engine ([#169](https://github.com/amahpour/switchboard/issues/169)), `agents.py` ([#170](https://github.com/amahpour/switchboard/issues/170)), `catchup.py` ([#171](https://github.com/amahpour/switchboard/issues/171)). File and process I/O under the engine's `route()` call: the Codex adapter ([#172](https://github.com/amahpour/switchboard/issues/172)).
 
 ## Where to read next in DESIGN.md
 

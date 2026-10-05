@@ -1,3 +1,11 @@
+"""Entry point: ``python -m switchboard`` -> ``cli.main()`` (DESIGN.md §3).
+
+For ``satellite`` on Linux, the process makes itself non-dumpable before anything
+else is imported or read, so the window in which a same-user process could open its
+``/proc/<pid>/fd`` is as short as it can be (DESIGN.md §27.4.8); importing anything
+first would widen that window.
+"""
+
 import sys
 
 if len(sys.argv) > 1 and sys.argv[1] == "satellite" and sys.platform.startswith("linux"):
