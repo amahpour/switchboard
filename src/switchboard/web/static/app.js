@@ -465,21 +465,41 @@
     return av;
   }
 
-  function approvalsFlag(m) {
+  function approvalsFlag(m, interactive) {
+    let f;
+    let explanation;
     if (m.approval_mode === 'bypass') {
-      const f = el('span', 'flag-approvals');
-      f.setAttribute('role', 'img');
-      f.setAttribute('aria-label', 'approvals off');
-      f.title = 'approvals are off in this session: room messages can make it act without asking';
+      f = el('span', 'flag-approvals');
+      explanation = 'Approvals off: this agent can run commands and edit files without asking.';
       f.append(icon('warn'));
-      return f;
+    } else if (m.approval_mode === 'unknown') {
+      f = el('span', 'flag-unknown', '?');
+      explanation = 'Approval mode unknown: this agent may run commands and edit files without asking.';
+    } else {
+      return null;
     }
-    if (m.approval_mode === 'unknown') {
-      const f = el('span', 'flag-unknown', '?');
-      f.title = 'approval mode unknown: may act without asking';
-      return f;
+    f.setAttribute('aria-label', explanation);
+    if (interactive) {
+      f.classList.add('approval-flag');
+      f.setAttribute('role', 'button');
+      f.setAttribute('tabindex', '0');
+      f.dataset.focus = 'approval:' + m.name;
+      f.dataset.tooltip = explanation;
+      f.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        const open = f.classList.toggle('tip-open');
+        if (open) f.focus();
+        else f.blur();
+      });
+      f.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); f.click(); }
+        if (ev.key === 'Escape') { f.classList.remove('tip-open'); f.blur(); ev.stopPropagation(); }
+      });
+    } else {
+      f.setAttribute('role', 'img');
+      f.title = explanation;
     }
-    return null;
+    return f;
   }
 
   // a Codex thread proof still running reads "verifying...", as in /who (models.tier_label)
@@ -806,18 +826,20 @@
 
   // ------------------------------------------------------------- members
   function memberRow(m) {
-    const li = el('li');
-    const b = btn('member');
+    const li = el('li', 'member');
+    li.dataset.name = m.name;
+    const b = btn('m-open');
     b.dataset.name = m.name;
     b.dataset.focus = 'member:' + m.name;
     b.title = 'Open ' + label(m.name, m.host) + ' in the inspector';
     const ins = state.inspect;
-    if (ins && ins.room === state.active && ins.name === m.name) b.setAttribute('aria-current', 'true');
+    if (ins && ins.room === state.active && ins.name === m.name) li.setAttribute('aria-current', 'true');
     const main = el('span', 'm-main');
     const nameLine = el('span', 'm-name-line');
-    nameLine.append(el('span', 'm-name', m.name));
-    if (m.host) nameLine.append(hostChip(m, false));
-    const flag = approvalsFlag(m);
+    b.append(el('span', 'm-name', m.name));
+    if (m.host) b.append(hostChip(m, false));
+    nameLine.append(b);
+    const flag = approvalsFlag(m, true);
     if (flag) nameLine.append(flag);
     let st = statusWord(m) + ' · ' + harnessOf(m.harness)[1];
     if (m.queued) st += ' · ' + m.queued + ' queued';
@@ -827,8 +849,6 @@
     const chips = el('span', 'm-chips');
     chips.append(tierChip(m));
     main.append(nameLine, el('span', 'm-status', st), chips);
-    if (m.approval_mode === 'bypass') main.append(el('span', 'm-warn', 'Approvals off: acts without asking'));
-    else if (m.approval_mode === 'unknown') main.append(el('span', 'm-warn', 'Approval mode unknown: may act without asking'));
     if (m.away) main.append(el('span', 'm-away', 'Away: ' + m.away));
     if (m.parked) {
       const p = el('span', 'm-parked');
@@ -837,10 +857,10 @@
     }
     const chev = icon('chev-right');
     chev.classList.add('m-chev');
-    b.append(withDot(avatar(m.harness, 'agent', m.name), m), main, chev);
-    b.addEventListener('click', function () { openInspector(m.name, m.host || ''); });
+    li.append(withDot(avatar(m.harness, 'agent', m.name), m), main, chev);
+    b.addEventListener('click', function (ev) { ev.stopPropagation(); openInspector(m.name, m.host || ''); });
+    li.addEventListener('click', function () { openInspector(m.name, m.host || ''); });
     state.rowRefs.set(m.name, b);
-    li.append(b);
     return li;
   }
 

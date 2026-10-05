@@ -110,8 +110,7 @@ def test_a_warn_notice_is_a_red_alert_row() -> None:
 def test_the_members_list_keeps_every_flag() -> None:
     out = run("member_flags")
     b = out["buddies"]
-    assert "Approvals off" in b and "Parked — needs a poke" in b and "its turn ended without wait()" in b
-    assert "Approvals off: acts without asking" in b and "what it reads can steer it" not in b
+    assert "Approvals off" not in b and "Parked — needs a poke" in b and "its turn ended without wait()" in b
     assert "@fpga-pi" in b and "claude:inbox" in b and "codex:daemon" in b and "devin:wait-loop" in b
     assert "2 queued" in b and "1 in flight" in b
     assert out["agentsTitle"] == "Agents (4)" and out["roomSub"] == "alice and 4 agents"
@@ -133,10 +132,30 @@ def test_approvals_chip_counts_bypass_and_unknown_without_listing_many_names() -
     }
 
 
+def test_approval_flags_explain_the_risk_without_extra_member_rows() -> None:
+    out = run("member_flag_tooltips")
+    assert out["warnings"] == 0
+    assert out["flags"] == [
+        {
+            "role": "button",
+            "tabindex": "0",
+            "label": "Approvals off: this agent can run commands and edit files without asking.",
+        },
+        {
+            "role": "button",
+            "tabindex": "0",
+            "label": "Approval mode unknown: this agent may run commands and edit files without asking.",
+        },
+    ]
+
+
 def test_unknown_approval_mode_says_the_agent_may_act_without_asking() -> None:
     out = run("unknown_approval_mode")
-    assert "Approval mode unknown: may act without asking" in out["row"]
-    assert out["flagTitle"] == "approval mode unknown: may act without asking"
+    assert "Approval mode unknown" not in out["row"]
+    assert (
+        out["flagLabel"]
+        == "Approval mode unknown: this agent may run commands and edit files without asking."
+    )
     assert "Unknown: codex-1" in out["chipTip"]
     assert "may run commands and edit files without asking" in out["chipTip"]
     assert "It may run commands and edit files without asking" in out["inspector"]
