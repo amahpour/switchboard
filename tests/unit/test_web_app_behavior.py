@@ -135,10 +135,14 @@ def test_approval_flags_explain_the_risk_without_extra_member_rows() -> None:
         },
     ]
 
+
 def test_unknown_approval_mode_says_the_agent_may_act_without_asking() -> None:
     out = run("unknown_approval_mode")
     assert "Approval mode unknown" not in out["row"]
-    assert out["flagLabel"] == "Approval mode unknown: this agent may run commands and edit files without asking."
+    assert (
+        out["flagLabel"]
+        == "Approval mode unknown: this agent may run commands and edit files without asking."
+    )
     assert out["chipTitle"] == "approval mode unknown: may act without asking"
     assert "It may run commands and edit files without asking" in out["inspector"]
 
