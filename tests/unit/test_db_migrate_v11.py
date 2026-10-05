@@ -27,7 +27,7 @@ def test_machines_gain_who_approved_them_with_a_checked_backup(tmp_path: Path) -
     os.chmod(p, 0o600)
 
     con = db.open_db(p)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 11
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 12
     assert db.row_counts(con, db.TABLES) == before
     cols = [r[1] for r in con.execute("PRAGMA table_info(link_machines)")]
     assert cols[-2:] == ["person_id", "approved_by"]

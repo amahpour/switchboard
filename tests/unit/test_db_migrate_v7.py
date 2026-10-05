@@ -25,7 +25,7 @@ def test_v6_database_gains_rules_with_a_checked_backup(tmp_path: Path) -> None:
     os.chmod(p, 0o600)
 
     con = db.open_db(p)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 11
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 12
     assert db.row_counts(con, db.V8_TABLES) == before
     assert con.execute("SELECT theme, text_size, room_rules FROM preferences WHERE person_id=0").fetchone()[
         :

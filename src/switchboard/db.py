@@ -29,7 +29,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -160,10 +160,9 @@ CREATE TABLE people(
   handle BLOB NOT NULL UNIQUE,
   password_hash TEXT, must_reset INTEGER NOT NULL DEFAULT 1, password_expires_at REAL,
   created_at REAL NOT NULL, removed_at REAL,
-  google_email TEXT CHECK(google_email IS NULL OR length(google_email) <= 254));
+  email TEXT CHECK(email IS NULL OR length(email) <= 254));
 CREATE UNIQUE INDEX people_active_name ON people(name) WHERE removed_at IS NULL;
-CREATE UNIQUE INDEX people_google_email ON people(google_email)
-  WHERE removed_at IS NULL AND google_email IS NOT NULL;
+CREATE UNIQUE INDEX people_email ON people(email) WHERE removed_at IS NULL AND email IS NOT NULL;
 
 CREATE TABLE preferences(
   person_id INTEGER PRIMARY KEY CHECK(person_id >= 0),
@@ -340,6 +339,16 @@ V10_TO_V11 = (
     "UPDATE meta SET value='11' WHERE key='schema_version'",
 )
 
+# v11 -> v12 (#192, DESIGN.md §39): a person's email is who they are. The Google email (#70)
+# becomes it, for people and for the owner, so everyone who signs in with Google keeps doing so.
+V11_TO_V12 = (
+    "ALTER TABLE people RENAME COLUMN google_email TO email",
+    "DROP INDEX people_google_email",
+    "CREATE UNIQUE INDEX people_email ON people(email) WHERE removed_at IS NULL AND email IS NOT NULL",
+    "UPDATE meta SET key='owner_email' WHERE key='owner_google_email'",
+    "UPDATE meta SET value='12' WHERE key='schema_version'",
+)
+
 
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
@@ -355,6 +364,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         8: (9, V8_TO_V9, ("reviews", "review_items")),
         9: (10, V9_TO_V10, ()),
         10: (11, V10_TO_V11, ()),
+        11: (12, V11_TO_V12, ()),
     }
     out = []
     v = frm

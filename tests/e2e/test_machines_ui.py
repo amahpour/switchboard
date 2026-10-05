@@ -80,6 +80,7 @@ def owner_page(ui: UI, hosted: InProcBroker) -> tuple[Page, Devices]:
     if hosted.state.claim is not None:
         open_link(page, hosted.paths.test_claim_link.read_text().strip())
         expect(page.locator("#step-choose")).to_be_visible()
+        page.fill("#setup-email", "alice@example.com")  # setup asks for the admin's email (#192)
         page.click("#passkey-btn")  # a passkey instead of a password (§32.4)
         expect(page.locator("#step-backup")).to_be_visible()
         page.click("#skip-btn")

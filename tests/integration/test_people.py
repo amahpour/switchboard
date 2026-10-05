@@ -241,7 +241,7 @@ def test_the_admin_removes_someone(hosted: InProcBroker) -> None:
     assert r.status_code == 200 and r.json() == {"ok": True, "sessions": 1, "machines": []}
     assert bob.get("/api/me").status_code == 401
     r = signin(Browser(hosted), "bob", BOB_PW)
-    assert r.status_code == 403 and r.json()["message"] == "wrong name or password"
+    assert r.status_code == 403 and r.json()["message"] == "wrong email or password"
     assert [p["name"] for p in admin.get("/api/people").json()["people"]] == ["alice"]
     [msg] = [m for m in admin.get("/api/rooms/build/messages").json()["messages"] if m["kind"] == "chat"]
     assert msg["from"] == "bob"  # their messages keep their name
@@ -345,6 +345,94 @@ def test_sign_out_everywhere_is_your_own_sessions(hosted: InProcBroker) -> None:
 def test_the_auth_state_offers_sso_as_coming_soon(hosted: InProcBroker) -> None:
     st = Browser(hosted).get("/api/auth/state").json()
     assert (st["password"], st["passkeys_work"], st["sso"]) == (True, True, "coming soon")
+
+
+def test_people_sign_in_with_their_email_once_they_have_one(hosted: InProcBroker) -> None:
+    """#192: an email is who a person is. Once the admin sets one, it signs them in, in any
+    case, and their name stops working (so a name, which anyone can guess, isn't a second way
+    in); someone without an email yet still signs in by name. ``admin`` always works, and the
+    admin's own display name stops once the admin has an email too."""
+    admin = set_up(hosted)
+    bob = join_as_bob(hosted, admin)
+    pid = admin.get("/api/people").json()["people"][1]["id"]
+    assert signin(Browser(hosted), "bob", BOB_PW).json()["next"] == "app"  # no email yet: the name
+    assert signin(Browser(hosted), "bob@example.com", BOB_PW).status_code == 403
+    r = admin.post(f"/api/people/{pid}/email", {"email": " Bob@Example.com "})
+    assert r.status_code == 200 and r.json()["person"]["email"] == "bob@example.com", r.text
+    for who in ("bob@example.com", "BOB@example.COM"):
+        r = signin(Browser(hosted), who, BOB_PW)
+        assert r.status_code == 200 and r.json()["human"] == "bob", who
+    assert signin(Browser(hosted), "bob", BOB_PW).status_code == 403
+    me = bob.get("/api/me")  # a session already signed in carries on, and knows who it signs in as
+    assert me.status_code == 200 and me.json()["email"] == "bob@example.com"
+    assert admin.get("/api/me").json()["email"] is None
+    # the admin: by name until they have an email, by email after, and as admin always
+    assert signin(Browser(hosted), "alice", ADMIN_PW).json()["next"] == "app"
+    r = admin.post("/api/people/owner/email", {"email": "alice@example.com"})
+    assert r.status_code == 200 and r.json()["person"]["email"] == "alice@example.com", r.text
+    assert signin(Browser(hosted), "alice", ADMIN_PW).status_code == 403
+    for who in ("alice@example.com", "admin"):
+        r = signin(Browser(hosted), who, ADMIN_PW)
+        assert r.status_code == 200 and r.json()["human"] == "alice", who
+    # someone invited with an email set signs in with it and their one-time password, and the
+    # Choose page's hidden username (for a password manager) is that email
+    carol = add(admin, "carol")
+    assert (
+        admin.post(f"/api/people/{carol['person']['id']}/email", {"email": "carol@example.com"}).status_code
+        == 200
+    )
+    br = Browser(hosted)
+    r = signin(br, "carol@example.com", carol["password"])
+    assert r.status_code == 200 and r.json()["next"] == "setup", r.text
+    assert br.get("/api/setup/state").json()["email"] == "carol@example.com"
+    # an email is one person's: not bob's for the admin, nor nonsense
+    assert admin.post("/api/people/owner/email", {"email": "bob@example.com"}).status_code == 409
+    assert admin.post(f"/api/people/{pid}/email", {"email": "alice@example.com"}).status_code == 409
+    assert admin.post(f"/api/people/{pid}/email", {"email": "bob"}).status_code == 400
+    # taking it away puts the name back
+    assert admin.post(f"/api/people/{pid}/email", {"email": None}).status_code == 200
+    assert signin(Browser(hosted), "bob", BOB_PW).json()["next"] == "app"
+    assert signin(Browser(hosted), "bob@example.com", BOB_PW).status_code == 403
+    evs = hosted.on_loop(lambda: hosted.state.store.recent_events(kinds=["people"], limit=200))
+    got = sorted((e.id, e.data["person"], e.data["set"]) for e in evs if e.data.get("what") == "email")
+    assert [g[1:] for g in got] == [("bob", True), ("alice", True), ("carol", True), ("bob", False)]
+    assert bob.post(f"/api/people/{pid}/email", {"email": "x@example.com"}).status_code == 403
+
+
+def test_setup_takes_the_admins_email(hosted: InProcBroker) -> None:
+    """#192: setup asks the admin for their email, and they sign in with it from then on. A bad
+    one is refused before anything is claimed (and before a passkey ceremony is used up), and
+    one over the column's 254 characters is a 400, not the database's error."""
+    br = Browser(hosted)
+    assert signin(br, "admin", token_of(claim_link(hosted))).json()["next"] == "setup"
+    long = "a" * 60 + "@" + "b" * 186 + ".example"  # the right shape, but 255 characters
+    for bad, code in [("alice", 400), (long, 400), (["a@example.com"], 400)]:
+        r = br.post("/api/setup/password", {"password": ADMIN_PW, "email": bad})
+        assert r.status_code == code and r.json()["error"] == "bad_email", (bad, r.text)
+    assert hosted.state.store.owner_handle() is None  # nothing claimed
+    r = br.post("/api/setup/password", {"password": ADMIN_PW, "email": " Alice@Example.com "})
+    assert r.status_code == 200, r.text
+    assert hosted.state.store.owner_email() == "alice@example.com"
+    assert br.get("/api/me").json()["email"] == "alice@example.com"
+    assert signin(Browser(hosted), "alice", ADMIN_PW).status_code == 403  # the name stops
+    for who in ("alice@example.com", "admin"):
+        assert signin(Browser(hosted), who, ADMIN_PW).json()["next"] == "app", who
+    # the People card's route has the same limit
+    r = br.post("/api/people/owner/email", {"email": long})
+    assert r.status_code == 400 and r.json()["error"] == "bad_request", r.text
+
+
+def test_a_passkey_setup_takes_the_admins_email(hosted: InProcBroker) -> None:
+    br = Browser(hosted)
+    assert signin(br, "admin", token_of(claim_link(hosted))).json()["next"] == "setup"
+    auth = SoftAuthenticator(RP_ID, PUBLIC)
+    r = br.post("/api/setup/begin")
+    cred = auth.register(r.json()["options"])
+    r = br.post("/api/setup/finish", {"credential": cred, "name": "Laptop", "email": "nope"})
+    assert r.status_code == 400 and r.json()["error"] == "bad_email", r.text
+    r = br.post("/api/setup/finish", {"credential": cred, "name": "Laptop", "email": "alice@example.com"})
+    assert r.status_code == 200, r.text  # the bad email didn't use the ceremony up
+    assert hosted.state.store.owner_email() == "alice@example.com"
 
 
 def test_the_desktop_has_no_people(broker: InProcBroker) -> None:
