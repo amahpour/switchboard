@@ -98,9 +98,11 @@ def test_registry_transition_table() -> None:
     assert registry_transition("waiting-approval", t0 - 1, v("waiting"), now) is None
     # the prompt went away: declined (the turn ended, no Stop hook) or approved (tool runs)
     assert registry_transition("waiting-approval", t0 - 1, v("idle"), now) == ("idle", True)
+    assert registry_transition("waiting-approval", t0 - 1, v("shell"), now) == ("idle", True)
     assert registry_transition("waiting-approval", t0 - 1, v("busy"), now) == ("busy", False)
     # a Stop-less turn end (Esc): idle for the grace period since after the last hook
     assert registry_transition("busy", t0 - 1, v("idle"), now) == ("idle", True)
+    assert registry_transition("busy", t0 - 1, v("shell"), now) == ("idle", True)
     assert registry_transition("busy", t0 + 1, v("idle"), now) is None  # a hook came after
     assert registry_transition("busy", t0 - 1, v("idle"), t0 + REGISTRY_IDLE_GRACE_S / 2) is None
     assert registry_transition("busy", None, v("idle"), now) is None  # no hooks: no inference
@@ -207,6 +209,30 @@ def test_registry_not_idle_defers_without_parking(w: World, clock: FakeClock) ->
     w.actions += w.engine.evaluate_participant(p.id)
     [push] = pushes(w)
     assert push.path == "inbox"
+
+
+def test_shell_registry_routes_an_idle_wake_to_the_inbox(w: World) -> None:
+    """A background shell can outlive a turn; its session still accepts an idle wake."""
+    p, m, _c = claude(w, registry="shell")
+    msg = w.human("check the background task")
+    [push] = pushes(w)
+    assert push.path == "inbox" and w.states(m)[msg.id] == "offered"
+
+
+def test_shell_registry_counts_toward_idle_frame_expiry(w: World, clock: FakeClock) -> None:
+    """An unconfirmed frame cannot remain offered for the life of a background shell."""
+    p, m, _c = claude(w)
+    msg = w.human("hello?")
+    [push] = pushes(w)
+    w.store.mark_posted(push.batch_id)
+    since = clock.now()
+    reg(w, p, "shell", since=since)
+    clock.advance(w.cfg.claude.inbox_idle_expire_s + 0.1)
+    reg(w, p, "shell", since=since)
+    w.actions += w.engine.tick()
+    b = w.store.get_batch(push.batch_id)
+    assert b.state == "expired" and b.expire_reason == "idle_no_token"
+    assert w.states(m)[msg.id] == "pending"
 
 
 def test_mid_task_prompting_member_gets_hook_context_not_the_inbox(w: World) -> None:

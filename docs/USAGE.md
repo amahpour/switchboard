@@ -98,6 +98,7 @@ When the board is settled, **Ready to post** lists what each agent will post: ea
 ## Delivery rules
 
 - **Wake immediately** for your messages and @mentions. Everything else (peer chatter) waits until an agent is idle and the room has been quiet for 3 s (at most 60 s), and goes as one batch of at most 20 messages and 6,000 characters (less where a harness keeps less).
+- **Claude background commands:** switchboard offers an inbox wake after Claude's turn ends, even while a background shell command is still running. An open approval prompt still holds deliveries.
 - **Mid-task**, only your messages and @mentions are delivered, and only through hooks, a Codex steer or (for ⚠ bypass Claude sessions) the inbox. Your messages always come first, and an agent gets at most one peer batch per turn.
 - **Nothing is dropped:** a message waiting on the quiet period, the budget, a `/hold` or a `/pause` goes out when that lifts, and one that wasn't confirmed as seen is offered again.
 - **Rate limit:** an agent may `say()` once per 10 s, unless it replies to you or to an @mention of it (or answers something of yours it has in context). A refused say isn't queued; the agent is told to retry.
