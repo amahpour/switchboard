@@ -187,17 +187,14 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
     expect(page.locator("#invite-text")).to_contain_text("Sign in with carol@example.com and")
 
     # #192: the admin changes bob's email on his card; from then on the new one signs him in,
-    # and neither his old email nor his name does. What's typed outlives a render: "Copied"
-    # fading re-renders the sheet
-    # (typed first, then the copy: a re-render landing in the middle of fill() would rebuild the
-    # field, still holding bob's old email, and the typing would land after it)
+    # and neither his old email nor his name does. What's typed outlives a render: Done
+    # re-renders the sheet without carol's invite. (Done, not the copy button: its render
+    # comes from the click itself, where "Copied" and its fade wait on the clipboard and a timer)
     expect(bob_card.locator(".email-row label")).to_have_text("Email")
     bob_card.locator('input[type="email"]').fill("Robert@Example.com")
-    page.click("#copy-invite")
-    expect(page.locator("#copy-invite")).to_have_attribute("aria-label", "Copied")
-    expect(page.locator("#copy-invite")).to_have_attribute("aria-label", "Copy the invite")
-    expect(bob_card.locator('input[type="email"]')).to_have_value("Robert@Example.com")
     page.click("#invite-done")
+    expect(page.locator("#invite-text")).to_have_count(0)
+    expect(bob_card.locator('input[type="email"]')).to_have_value("Robert@Example.com")
     bob_card.locator(".email-row button").click()
     expect(bob_card.locator(".email-result")).to_have_text("Saved")
     expect(bob_card).not_to_contain_text("no email yet")
