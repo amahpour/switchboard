@@ -557,6 +557,9 @@ class CodexAdapter(Adapter):
         self.clients: Clients | None = None
         self.server_pids: set[int] = set()
         self.agent_clients: dict[int, AgentClients] = {}  # queue-tier agent pid -> its liveness
+        # queue-tier agent pids the last look found gone (or started at another time): live()
+        # tells those apart from one the clients loop hasn't looked at yet, with no I/O of its own
+        self.agents_gone: set[int] = set()
         self.suspect: dict[str, float] = {}  # thread id -> held since (a TUI left its server)
         self.holds: dict[Any, Hold] = {}  # server key -> threads held after a TUI left it
         self._seen: dict[Any, frozenset[int]] = {}  # server key -> TUI pids at the last lsof
@@ -571,6 +574,12 @@ class CodexAdapter(Adapter):
         self.bin_version: str | None = None
         self.bin_fallback = False  # the configured absolute path is gone: ``codex`` from PATH
         self._bin_tried_at: float | None = None
+        # cached so queue_guard() (route() calls it through tier(), on the engine's event
+        # loop) never stats the binary or the socket path itself: codex_bin() (the transport,
+        # the clients loop) and _resolve_bin()/_link_loop() keep bin_ok current; _link_loop()
+        # and start() keep sock_exists current (§9.3)
+        self.bin_ok = False
+        self.sock_exists = False
         self.autostart: bool | None = None
         self._active: dict[str, asyncio.Event] = {}
         self._active_at: dict[str, float] = {}
@@ -670,16 +679,18 @@ class CodexAdapter(Adapter):
 
     def queue_guard(self) -> tuple[bool, str | None, str | None]:
         """(ok, --remote socket or None, why not). ``codex queue`` must never be
-        the thing that starts a daemon (with the broker's minimal env). Pure
-        (route() calls it through tier()): a binary that vanished is looked up
-        again by ``codex_bin()`` in the transport and the clients loop."""
+        the thing that starts a daemon (with the broker's minimal env). No I/O
+        (route() calls it through tier(), on the engine's event loop): ``bin_ok``
+        and ``sock_exists`` are cached, kept current elsewhere (``codex_bin()``
+        in the transport and the clients loop; ``_link_loop()`` and ``start()``),
+        never read fresh here."""
         if not self.cfg.codex.queue_fallback:
             return False, None, "queue fallback is off"
-        if not bin_usable(self.bin_path):
+        if not self.bin_ok:
             return False, None, "codex binary not found (or not owned by you or root)"
         if self.link_state == "up":
             return True, self.sock, None
-        if os.path.lexists(self.sock):
+        if self.sock_exists:
             return False, None, "the Codex control socket isn't answering"
         if self.autostart is not False:
             return False, None, "the Codex daemon isn't running and daemon_auto_start isn't set to false"
@@ -778,7 +789,7 @@ class CodexAdapter(Adapter):
 
     # ============================================================ liveness
     def live(self, p: Participant, now: float | None = None) -> tuple[bool, str]:
-        """The liveness guard (§9.3), from cached state (route() is pure). Only a
+        """The liveness guard (§9.3), from cached state, no I/O (route() is pure). Only a
         session on this machine can be live here: a remote row's pids are pids on its
         own host, never probed on this one (§27.5.6)."""
         if p.host != LOCAL_HOST:
@@ -800,13 +811,20 @@ class CodexAdapter(Adapter):
             if self._held(tid, p, now, attached=True):
                 return False, HOLD_WHY
             return True, ""
-        # queue tier: the thread's own process (an embedded TUI or another app-server)
-        if not p.agent_pid or not self._local_view().alive(p.agent_pid, p.agent_start):
-            return False, "the Codex process is gone"
-        if p.agent_pid in self.server_pids:
+        # queue tier: the thread's own process (an embedded TUI or another app-server). No
+        # I/O here: refresh_clients() (the clients loop) already probes every queue-tier
+        # agent pid and drops one that isn't there any more (or started at a different
+        # time) from agent_clients, so its absence here doubles as "it's gone".
+        # The daemon itself (it serves the control socket) is never one of agent_clients: the
+        # clients loop leaves servers out, so this comes first.
+        if p.agent_pid is not None and p.agent_pid in self.server_pids:
             return False, "thread not loaded in the Codex daemon"
-        ac = self.agent_clients.get(p.agent_pid)
-        if ac is None or not proc.same_start(ac.start, p.agent_start) or now - ac.at > CLIENTS_FRESH_S:
+        ac = self.agent_clients.get(p.agent_pid) if p.agent_pid is not None else None
+        if ac is None:
+            if not p.agent_pid or p.agent_pid in self.agents_gone:
+                return False, "the Codex process is gone"
+            return False, "can't tell whether a Codex TUI is attached"  # not looked at yet
+        if not proc.same_start(ac.start, p.agent_start) or now - ac.at > CLIENTS_FRESH_S:
             return False, "can't tell whether a Codex TUI is attached"
         if not ac.ok:
             return False, ac.why or "no Codex TUI attached"
@@ -1280,10 +1298,12 @@ class CodexAdapter(Adapter):
                 check_socket(self.sock)
             except SocketRefused as e:
                 self._set_link("down", str(e))
+                self.sock_exists = os.path.lexists(self.sock)  # queue_guard() reads the cache
                 self.refresh_tiers()
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, LINK_BACKOFF_S[1])
                 continue
+            self.sock_exists = True  # check_socket() just confirmed it
             rpc = CodexRpc(self.sock, on_notification=self._on_note, clock=self.now)
             try:
                 await rpc.connect()
@@ -1308,6 +1328,7 @@ class CodexAdapter(Adapter):
                 )
                 log.info("codex app-server version %s (was %s)", self.server_version, prev_version)
             self._resolve_bin(force=True)  # a daemon restart may be a Codex upgrade: find the binary again
+            self.bin_ok = bin_usable(self.bin_path)
             delay = LINK_BACKOFF_S[0]
             try:
                 await self.poll()
@@ -1451,10 +1472,12 @@ class CodexAdapter(Adapter):
             bool(tuis), self.now(), len(tuis), None if tuis else "no Codex TUI attached", tuis
         )
         acs: dict[int, AgentClients] = {}
+        gone: set[int] = set()
         for a, start in agents.items():
             i = infos.get(a)
             if i is None or not proc.same_start(i.start, start):
-                continue  # gone (live() says so)
+                gone.add(a)  # gone (live() says so)
+                continue
             if not is_app_server_argv(argvs.get(a, "")):
                 acs[a] = AgentClients(start, now, True)  # the TUI itself, with its embedded app-server
             elif a in peers:
@@ -1474,6 +1497,7 @@ class CodexAdapter(Adapter):
                 ok = par is not None and is_tui_argv(argvs.get(par.pid, ""))
                 acs[a] = AgentClients(start, now, ok, True, int(ok), None if ok else "no Codex TUI attached")
         self.agent_clients = acs
+        self.agents_gone = gone
         for key in [k for k in self._seen if k != "control" and k[1] not in acs]:
             del self._seen[key]
         return self.clients
@@ -1835,11 +1859,15 @@ class CodexAdapter(Adapter):
     # ------------------------------------------------------ codex binary
     def codex_bin(self) -> str | None:
         """The codex binary for ``codex queue``: the cached one while it is
-        still there, else looked up again (with the same checks)."""
-        if bin_usable(self.bin_path):
-            return self.bin_path
-        # a cached path that vanished: look again now; nothing found last time: at most every BIN_RETRY_S
-        self._resolve_bin(force=self.bin_path is not None)
+        still there, else looked up again (with the same checks). Called from
+        the transport and the clients loop, never from ``route()``: it also
+        keeps ``bin_ok`` current, which ``queue_guard()`` reads instead of
+        stat'ing the path itself."""
+        self.bin_ok = bin_usable(self.bin_path)
+        if not self.bin_ok:
+            # a cached path that vanished: look again now; nothing found last time: at most every BIN_RETRY_S
+            self._resolve_bin(force=self.bin_path is not None)
+            self.bin_ok = bin_usable(self.bin_path)
         return self.bin_path
 
     def _resolve_bin(self, *, force: bool = False) -> None:
@@ -1926,6 +1954,8 @@ class CodexAdapter(Adapter):
         self.runner = runner
         self.clock = runner.state.clock
         self._resolve_bin(force=True)
+        self.bin_ok = bin_usable(self.bin_path)
+        self.sock_exists = os.path.lexists(self.sock)
         self.autostart = daemon_auto_start(self.cfg)
         self._set_link("down", "starting")
         loop = asyncio.get_running_loop()

@@ -217,6 +217,7 @@ def test_codex_queue_tier_is_paused(w: World) -> None:
     a = attach(w)
     a.loaded = set()
     a.bin_path = "/usr/bin/true"
+    a.bin_ok = True
     pause(w)
     w.human("queue it?")
     assert pushes(w) == []

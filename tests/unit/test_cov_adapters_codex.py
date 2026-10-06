@@ -116,6 +116,7 @@ def queue_tier(w: World) -> CodexAdapter:
     a = attach(w)
     a.loaded = set()
     a.bin_path = "/usr/bin/true"
+    a.bin_ok = True  # queue_guard() reads the cache, not a fresh stat (route() stays pure)
     return a
 
 
@@ -266,6 +267,21 @@ def test_a_queue_tier_thread_whose_process_is_the_daemon_is_not_live(w: World) -
     assert a.live(p) == (True, "")
     a.server_pids = {os.getpid()}  # its process serves the control socket: the daemon, yet not loaded
     assert a.live(p) == (False, "thread not loaded in the Codex daemon")
+    # as the clients loop leaves it: a server is never one of agent_clients (#172 review)
+    del a.agent_clients[os.getpid()]
+    assert a.live(p) == (False, "thread not loaded in the Codex daemon")
+
+
+def test_a_queue_tier_process_not_looked_at_yet_is_not_called_gone(w: World) -> None:
+    """live() does no I/O (#172): a queue-tier member whose process the clients loop hasn't
+    looked at yet (just joined) is "can't tell", not "the Codex process is gone"; it's gone
+    once a look found it gone."""
+    p, _m = codex(w, self_agent=True)
+    a = queue_tier(w)
+    del a.agent_clients[os.getpid()]
+    assert a.live(p) == (False, "can't tell whether a Codex TUI is attached")
+    a.agents_gone = {os.getpid()}
+    assert a.live(p) == (False, "the Codex process is gone")
 
 
 def test_a_held_queue_tier_thread_is_released_after_idling(w: World) -> None:
@@ -289,6 +305,7 @@ def test_an_open_wait_takes_the_batch_whatever_the_tier(w: World) -> None:
 def test_queue_tier_routing(w: World) -> None:
     gone, _ = codex(w, "codex-gone")  # its agent pid is no live process
     a = queue_tier(w)
+    a.agents_gone = {gone.agent_pid}  # as the clients loop's last look found it
     r = a.route(gone, WAKE, None, w.clock.now())
     assert r.kind == "none" and r.reason == "detached? the Codex process is gone"
     p, _m = codex(w, "codex-2", tid=TID2, self_agent=True, status="busy")
@@ -303,6 +320,35 @@ def test_queue_tier_routing(w: World) -> None:
     a.agent_clients[os.getpid()] = dataclasses.replace(a.agent_clients[os.getpid()], at=w.clock.now())
     a.loaded_at = w.clock.now()
     assert a.route(p, WAKE, None, w.clock.now()).path == "queue"
+
+
+def test_route_does_no_io_for_a_queue_tier_member(w: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    """route() runs inside engine.evaluate, on the engine's event loop, every tick that a
+    member has a pending item (DESIGN §8.2/§9.1: the engine is synchronous, route() PURE).
+    Before #172, a queue-tier member's queue_guard() stat'd the binary and (with the link
+    down) the socket path, and live() probed the process table, on every call: real I/O
+    from a function the engine treats as pure. Make each of those fail at the name route()
+    actually reaches (not the raw ``os.stat``/``os.lstat`` the interpreter and pytest itself
+    lean on throughout a run, which would take the test runner down with it too), so a
+    regression shows up here as a clean failure instead of a blocked event loop."""
+    p, _m = codex(w, self_agent=True)  # idle, hooks seen: route() should push a queue wake
+    a = queue_tier(w)  # link up, this thread not loaded, bin_ok cached True
+
+    def fail(*_a: object, **_k: object) -> None:
+        raise AssertionError("route() touched the filesystem or the process table")
+
+    monkeypatch.setattr(cx, "bin_usable", fail)
+    monkeypatch.setattr(cx.proc, "info", fail)
+    r = a.route(p, WAKE, None, w.clock.now())
+    assert r.kind == "push" and r.path == "queue"
+
+    # the same with the link down: queue_guard() must not stat the socket path either
+    a.link_state = "down"
+    a.autostart = False
+    a.sock_exists = False
+    monkeypatch.setattr(cx.os.path, "lexists", fail)
+    r = a.route(p, WAKE, None, w.clock.now())
+    assert r.kind == "push" and r.path == "queue"
 
 
 def test_no_queue_tier_when_the_fallback_is_off(tmp_path: Path, clock: FakeClock) -> None:
