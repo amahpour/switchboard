@@ -116,6 +116,7 @@ def queue_tier(w: World) -> CodexAdapter:
     a = attach(w)
     a.loaded = set()
     a.bin_path = "/usr/bin/true"
+    a.bin_ok = True  # queue_guard() reads the cache, not a fresh stat (route() stays pure)
     return a
 
 
@@ -303,6 +304,35 @@ def test_queue_tier_routing(w: World) -> None:
     a.agent_clients[os.getpid()] = dataclasses.replace(a.agent_clients[os.getpid()], at=w.clock.now())
     a.loaded_at = w.clock.now()
     assert a.route(p, WAKE, None, w.clock.now()).path == "queue"
+
+
+def test_route_does_no_io_for_a_queue_tier_member(w: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    """route() runs inside engine.evaluate, on the engine's event loop, every tick that a
+    member has a pending item (DESIGN §8.2/§9.1: the engine is synchronous, route() PURE).
+    Before #172, a queue-tier member's queue_guard() stat'd the binary and (with the link
+    down) the socket path, and live() probed the process table, on every call: real I/O
+    from a function the engine treats as pure. Make each of those fail at the name route()
+    actually reaches (not the raw ``os.stat``/``os.lstat`` the interpreter and pytest itself
+    lean on throughout a run, which would take the test runner down with it too), so a
+    regression shows up here as a clean failure instead of a blocked event loop."""
+    p, _m = codex(w, self_agent=True)  # idle, hooks seen: route() should push a queue wake
+    a = queue_tier(w)  # link up, this thread not loaded, bin_ok cached True
+
+    def fail(*_a: object, **_k: object) -> None:
+        raise AssertionError("route() touched the filesystem or the process table")
+
+    monkeypatch.setattr(cx, "bin_usable", fail)
+    monkeypatch.setattr(cx.proc, "info", fail)
+    r = a.route(p, WAKE, None, w.clock.now())
+    assert r.kind == "push" and r.path == "queue"
+
+    # the same with the link down: queue_guard() must not stat the socket path either
+    a.link_state = "down"
+    a.autostart = False
+    a.sock_exists = False
+    monkeypatch.setattr(cx.os.path, "lexists", fail)
+    r = a.route(p, WAKE, None, w.clock.now())
+    assert r.kind == "push" and r.path == "queue"
 
 
 def test_no_queue_tier_when_the_fallback_is_off(tmp_path: Path, clock: FakeClock) -> None:

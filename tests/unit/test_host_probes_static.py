@@ -34,8 +34,8 @@ EXEMPT = {
 }
 # (file, function) pairs that may probe, and why: each is about a process of this
 # machine that is not a participant row. A participant's own probes (hook_event,
-# _remember_model, check_liveness, CodexAdapter.live, ...) go through HostViews,
-# so none of those is here.
+# _remember_model, check_liveness, ...) go through HostViews, or read a cache the
+# background loop filled (CodexAdapter.live, #172), so none of those is here.
 ALLOWED: dict[tuple[str, str], str] = {
     ("broker/peer.py", "Peer.from_socket"): "the kernel peer of a connection to this broker's own socket",
     ("broker/peer.py", "ProcessPeerPolicy.__init__"): "default chain and argv readers for a local human peer",
@@ -252,7 +252,7 @@ def _with_line(rel: str, anchor: str, line: str) -> str:
         # resolver that falls back to this machine's argv for another host's chain
         (
             "adapters/codex.py",
-            "if not p.agent_pid or not self._local_view().alive(p.agent_pid, p.agent_start):",
+            "ac = self.agent_clients.get(p.agent_pid)",
             "if not proc.alive(p.agent_pid, p.agent_start): pass",
         ),
         (

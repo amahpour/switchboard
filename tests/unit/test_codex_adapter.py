@@ -137,16 +137,20 @@ def test_queue_tier_when_the_thread_is_not_loaded(w: World, monkeypatch: pytest.
     a = attach(w)
     a.loaded = set()
     a.bin_path = "/usr/bin/true"
+    a.bin_ok = True  # queue_guard() reads the cache, never a fresh stat (route() stays pure)
     assert a.tier(p) == ("codex:queue", None)
     monkeypatch.setattr(cx, "resolve_codex", lambda _name: pytest.fail("tier() looked the binary up"))
-    a.bin_path = None
+    a.bin_ok = False
     assert a.tier(p)[0] == "mcp-only"
 
 
 def test_queue_guard_never_lets_codex_queue_start_a_daemon(w: World, tmp_path: Path) -> None:
+    """queue_guard()'s decision, from its cached inputs alone: no I/O (route() calls it
+    through tier(), on the engine's event loop, so it must stay pure)."""
     a = ad(w)
-    a.bin_path = "/usr/bin/true"
+    a.bin_ok = True
     a.sock = str(tmp_path / "no-such.sock")
+    a.sock_exists = False
     a.link_state = "down"
     for autostart in (True, None):  # on, or the config can't be read: refuse
         a.autostart = autostart
@@ -157,7 +161,7 @@ def test_queue_guard_never_lets_codex_queue_start_a_daemon(w: World, tmp_path: P
     a.link_state = "up"
     assert a.queue_guard() == (True, a.sock, None)  # a live socket: always --remote it
     a.link_state = "down"
-    (tmp_path / "no-such.sock").write_text("")  # a socket file nobody answers on
+    a.sock_exists = True  # a socket file nobody answers on
     assert a.queue_guard()[0] is False
 
 
@@ -241,6 +245,7 @@ def test_queue_needs_hooks_seen_and_an_idle_thread(w: World) -> None:
     a = attach(w)
     a.loaded = set()
     a.bin_path = "/usr/bin/true"
+    a.bin_ok = True
     w.human("q1")
     assert pushes(w) == []
     assert "switchboard install codex" in (w.engine.parked_reason(m.id) or "")
@@ -658,6 +663,7 @@ def test_queue_tier_app_server_needs_its_own_tui(w: World) -> None:
     a = attach(w)
     a.loaded = set()
     a.bin_path = "/usr/bin/true"
+    a.bin_ok = True
     me = proc.info(os.getpid())
     a.agent_clients[os.getpid()] = AgentClients(
         me.start, w.clock.now(), False, True, 0, "no Codex TUI attached"
@@ -971,8 +977,10 @@ def test_the_codex_binary_is_found_again_when_its_path_vanishes(
     attach(w)  # link up
     assert a.queue_guard()[0] is True
     old.unlink()
-    # tier() and queue_guard() are pure (route() calls them): they only see the binary is gone
-    assert a.queue_guard() == (False, None, "codex binary not found (or not owned by you or root)")
+    # tier() and queue_guard() are pure (route() calls them through tier(), on the engine's
+    # event loop): the vanished binary isn't noticed until codex_bin() looks again (the
+    # transport / clients loop), not on queue_guard()'s own say-so
+    assert a.queue_guard()[0] is True  # the stale cache: still "found"
     assert a.bin_path == os.path.realpath(old)
     assert a.codex_bin() == os.path.realpath(new)  # the transport / clients loop look again
     assert a.queue_guard()[0] is True and a.bin_version == "0.157.0" and a.bin_fallback
