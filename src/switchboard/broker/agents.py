@@ -858,6 +858,11 @@ class AgentService:
         self.store.mark_handled(m.id)
         self.store.update_participant(p.id, last_say_at=now)
         mentions = rules.parse_mentions(text, self.svc.mention_names(room))
+        if rules.mentions_humans(text):
+            # @humans (issue #138) addresses every person, never an agent, from an agent's own
+            # say() the same way it does from a person's message (service.human_say): see
+            # rules.mentions_humans for why adding the literal word here is always safe.
+            mentions = sorted(set(mentions) | {rules.HUMANS_MENTION})
         msg = self.svc._post(
             room,
             sender_name=m.screen_name,

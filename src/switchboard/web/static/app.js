@@ -470,8 +470,8 @@
     return a;
   }
 
-  // The @ popover's @here/@everyone rows (issue #111): not an agent, so the people icon
-  // instead of a harness glyph, on the same .avatar.sys tile a system message uses.
+  // The @ popover's @here/@everyone/@humans rows (issues #111, #138): not an agent, so the
+  // people icon instead of a harness glyph, on the same .avatar.sys tile a system message uses.
   function broadcastAvatar() {
     const a = el('span', 'avatar sys');
     a.append(icon('people'));
@@ -561,11 +561,21 @@
     return (m.mentions || []).indexOf(me) >= 0;
   }
 
-  // Whether m is addressed to this person: an @mention (mentionsMe) or a reply to a message
-  // they sent. The one check behind the unread badges (#109) and, later, focus mode (#99), so
-  // the room list and the message log agree on what needs this person's attention.
+  // @humans (issue #138): the literal word in m.mentions, added by service.human_say and
+  // agents.py's say() alike (the same way @everyone's literal word is, issue #111) means every
+  // person in the room is addressed: this page is always a person's, so it's addressed to the
+  // viewer, from an agent or from another person, but not when it's the viewer's own message.
+  function addressesHumans(m) {
+    if ((m.mentions || []).indexOf('humans') < 0) return false;
+    return !(state.me && m.sender_kind === 'human' && m.from === state.me.human);
+  }
+
+  // Whether m is addressed to this person: an @mention (mentionsMe), @humans (addressesHumans),
+  // or a reply to a message they sent. The one check behind the unread badges (#109) and,
+  // later, focus mode (#99), so the room list and the message log agree on what needs this
+  // person's attention.
   function addressedToMe(r, m) {
-    if (mentionsMe(m)) return true;
+    if (mentionsMe(m) || addressesHumans(m)) return true;
     if (!state.me || !m.reply_to) return false;
     const parent = r.msgs.find(function (x) { return x.id === m.reply_to; });
     return !!parent && parent.sender_kind === 'human' && parent.from === state.me.human;
@@ -680,7 +690,7 @@
     line.dataset.id = String(m.id);
     line.dataset.from = who;
     askToFixDiagram(r, m, line);
-    if (mentionsMe(m)) line.classList.add('mention');
+    if (mentionsMe(m) || addressesHumans(m)) line.classList.add('mention');
     if (m.sender_kind === 'agent' && inspectedLabel() === who) line.classList.add('sel');
     // An agent message not addressed to you (the same addressedToMe check as the room badges,
     // #109) collapses while Focus is on. Rows are rebuilt whenever Focus is toggled (setFocusMode),
@@ -845,7 +855,9 @@
     r.lastId = m.id;
     if (r.msgs.length > MAX_LINES) r.msgs.splice(0, r.msgs.length - MAX_LINES);
     if (r.name !== state.active) {
-      if (m.kind === 'chat' && m.sender_kind !== 'human') {
+      // a person's message counts only when it's another person's @humans (#138); otherwise
+      // a person's messages are left out, as they were before it (#109)
+      if (m.kind === 'chat' && (m.sender_kind !== 'human' || addressesHumans(m))) {
         if (addressedToMe(r, m)) r.unread += 1;  // an @mention or a reply to you: the red count
         else r.quiet = true;                     // other agent chatter: a quiet marker, no number
       }
@@ -1792,14 +1804,18 @@
   // service.human_say and delivery.rules.broadcast_targets do on the broker; an agent's own
   // @here/@everyone is plain text, but the web composer is always a person's, so both always
   // show here. "here" above "everyone": the narrower one first, same order the popover keeps.
+  // @humans (issue #138) is the opposite direction -- every person, never an agent -- and,
+  // unlike the other two, works the same typed by an agent (agents.py's say()) as by a person;
+  // it leads the group, since it's the odd one out (who it reaches, not how many agents).
   const BROADCASTS = [
+    { name: 'humans', broadcast: true, desc: 'Every person in the room, no agents' },
     { name: 'here', broadcast: true, desc: 'Every agent online now' },
     { name: 'everyone', broadcast: true, desc: 'Every agent in the room, offline ones too' },
   ];
   const BROADCAST_NAMES = BROADCASTS.map(function (b) { return b.name; });
 
   // Broadcast entries whose name starts with `query` (matchInfo's MATCH_PREFIX rule, kept
-  // simple: there's only two of them, always shown above the member list).
+  // simple: there's only three of them, always shown above the member list).
   function matchBroadcasts(query) {
     return BROADCASTS.filter(function (b) { return !query || b.name.startsWith(query); });
   }
@@ -1807,8 +1823,9 @@
   // Who an @mention can address, lower-cased: service.mention_names on the broker (active
   // members of `r`, plus the human and everyone else on a hosted broker). "A person" has no
   // delivery row, so it's never in r.members, but parse_mentions on the broker counts it too.
-  // "here" and "everyone" are added too (issue #111): the composer is always a person's, and a
-  // person's @here/@everyone is a real broadcast, so they get the same highlight as a mention.
+  // "here", "everyone" and "humans" are added too (issues #111, #138): the composer is always
+  // a person's, and a person's own broadcast is real, so they get the same highlight as a
+  // mention (an agent's @humans is real too, issue #138, but the composer never renders one).
   function knownMentionNames(r) {
     const names = new Set(BROADCAST_NAMES);
     if (state.me && state.me.human) names.add(String(state.me.human).toLowerCase());
@@ -4331,7 +4348,7 @@
     const r = activeRoom();
     if (!r) return;
     const text = await openDialog({ kind: 'rules', title: 'Rules for ' + r.name,
-      body: 'These add to switchboard’s six fixed rules. Agents see them when they join, and once more after each edit.',
+      body: 'These add to switchboard’s seven fixed rules. Agents see them when they join, and once more after each edit.',
       initial: r.rules, action: 'Save rules' });
     if (text === null) return;
     try {

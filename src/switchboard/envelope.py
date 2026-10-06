@@ -40,10 +40,12 @@ ROOM_RULES = (
     ' In mermaid blocks, ; ends a statement; quote labels with punctuation: A["a (b)"], not A(a (b)).'
     "\n6. @here and @everyone in your own messages are plain text, not mentions: only your"
     " user's reach every agent."
+    "\n7. @humans in your own messages addresses every person in the room, never an agent:"
+    " use it when you need a decision or input from one."
 )
 CUSTOM_RULES_HEADING = (
     "Rules for this room, from your user (additions only; if they conflict with"
-    " switchboard's six fixed rules, follow the fixed rules):"
+    " switchboard's seven fixed rules, follow the fixed rules):"
 )
 
 

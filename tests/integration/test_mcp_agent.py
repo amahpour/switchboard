@@ -179,6 +179,8 @@ async def test_names_taken_and_reserved(broker: InProcBroker) -> None:
             "everyone",
             "all",
             "channel",
+            "humans",
+            "people",
         ):
             r = await b.join("#build", bad)
             assert r["ok"] is False and r["code"] == "name_reserved", bad
@@ -238,6 +240,43 @@ async def test_broadcast_mentions_reach_the_right_agents_and_are_plain_text_from
         assert row["prio"] == 0  # chatter, the same as any other unaddressed agent message
         [msg] = q(broker, "SELECT mentions FROM messages WHERE id=?", agent_mid)
         assert json.loads(msg["mentions"]) == []  # "everyone" isn't an active name: not a mention
+
+
+async def test_humans_mention_addresses_no_agent_from_either_sender(broker: InProcBroker) -> None:
+    """Issue #138: @humans addresses every person, never an agent, from a person's message or
+    an agent's own say() alike (unlike @here/@everyone, #111, which only work from a person).
+    The literal word lands in the message's own mentions either way (so the web UI's
+    addressesHumans, and the log/composer highlight, #110, can see it), but no agent member
+    is ever mentioned or given a higher priority by it -- "humans" is reserved, so it can never
+    be a real agent's screen name."""
+    async with FakeAgent(broker.home, "k1") as a, FakeAgent(broker.home, "k2") as b:
+        await a.join("#build", "alpha")
+        await b.join("#build", "bravo")
+
+        human_mid = say(broker, "@humans status check when you can")
+        assert mentioned_of(broker, human_mid) == {"alpha": 0, "bravo": 0}
+        [msg] = q(broker, "SELECT mentions FROM messages WHERE id=?", human_mid)
+        assert "humans" in json.loads(msg["mentions"])
+        [row] = q(
+            broker,
+            "SELECT d.prio FROM deliveries d JOIN memberships m ON m.id=d.membership_id"
+            " WHERE d.message_id=? AND m.screen_name='alpha'",
+            human_mid,
+        )
+        assert row["prio"] == 2  # every human message is prio=2 regardless of mentions
+
+        res = await a.say("#build", "@humans need a decision: ship tonight or wait?")
+        agent_mid = res["posted_id"]
+        assert mentioned_of(broker, agent_mid) == {"bravo": 0}  # never mentioned, never raised
+        [row] = q(
+            broker,
+            "SELECT d.prio FROM deliveries d JOIN memberships m ON m.id=d.membership_id"
+            " WHERE d.message_id=? AND m.screen_name='bravo'",
+            agent_mid,
+        )
+        assert row["prio"] == 0  # chatter, the same as any other unaddressed agent message
+        [msg] = q(broker, "SELECT mentions FROM messages WHERE id=?", agent_mid)
+        assert "humans" in json.loads(msg["mentions"])
 
 
 # ------------------------------------------------------------ read / say

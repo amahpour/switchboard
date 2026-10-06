@@ -973,9 +973,10 @@ def test_mention_popover_matches_any_part_of_a_name(ui: UI) -> None:
 
 def test_broadcast_mentions_lead_the_popover_and_style_like_a_mention_once_sent(ui: UI) -> None:
     """Issue #111: @here and @everyone show above the agents in the @ popover, each with its
-    own one-line description, and the header's count is the agents alone (2, not 4); once
-    alice actually sends one, it gets the same .md-mention style in the log as any @mention
-    (#110), through the real broker (parse_broadcast, broadcast_targets), not a fake."""
+    own one-line description, and the header's count is the agents alone (2, not 5 -- @humans,
+    issue #138, leads both of them); once alice actually sends one, it gets the same
+    .md-mention style in the log as any @mention (#110), through the real broker
+    (parse_broadcast, broadcast_targets), not a fake."""
     room = "e2e-broadcast"
     ui.world.create_room(f"#{room}")
     ui.world.add_agents(f"#{room}", ("claude-1", "codex-1"))
@@ -987,17 +988,18 @@ def test_broadcast_mentions_lead_the_popover_and_style_like_a_mention_once_sent(
     page.keyboard.type("@")
     expect(mentions).to_be_visible()
     options = mentions.locator("[role=option]")
-    expect(options).to_have_count(4)  # here, everyone, claude-1, codex-1
-    expect(options.nth(0)).to_have_attribute("id", "men-here")
-    expect(options.nth(1)).to_have_attribute("id", "men-everyone")
-    expect(mentions.locator(".pal-head .muted")).to_have_text("2")  # the 2 agents, not 4
-    # each description sits on its name's line, where an agent's status goes, so the four rows
-    # are the same height (a description under the name made the two broadcasts twice as tall)
-    expect(options.nth(0).locator(".m-name-line .m-status")).to_have_text("Every agent online now")
-    expect(options.nth(1).locator(".m-name-line .m-status")).to_have_text(
+    expect(options).to_have_count(5)  # humans, here, everyone, claude-1, codex-1
+    expect(options.nth(0)).to_have_attribute("id", "men-humans")
+    expect(options.nth(1)).to_have_attribute("id", "men-here")
+    expect(options.nth(2)).to_have_attribute("id", "men-everyone")
+    expect(mentions.locator(".pal-head .muted")).to_have_text("2")  # the 2 agents, not 5
+    # each description sits on its name's line, where an agent's status goes, so the five rows
+    # are the same height (a description under the name made the broadcasts twice as tall)
+    expect(options.nth(1).locator(".m-name-line .m-status")).to_have_text("Every agent online now")
+    expect(options.nth(2).locator(".m-name-line .m-status")).to_have_text(
         "Every agent in the room, offline ones too"
     )
-    heights = [options.nth(i).bounding_box()["height"] for i in range(4)]  # type: ignore[index]
+    heights = [options.nth(i).bounding_box()["height"] for i in range(5)]  # type: ignore[index]
     assert max(heights) - min(heights) <= 1, heights
     box.fill("")
     expect(mentions).to_be_hidden()
@@ -1006,6 +1008,40 @@ def test_broadcast_mentions_lead_the_popover_and_style_like_a_mention_once_sent(
     row = chat_row(page, "ship it")
     expect(row).to_be_visible()
     expect(row.locator(".md-mention")).to_have_text("@everyone")
+
+
+def test_humans_mention_leads_the_popover_and_styles_like_a_mention_from_an_agent(ui: UI) -> None:
+    """Issue #138: @humans shows above @here/@everyone in the @ popover, with its own one-line
+    description, and the header's count stays the agents alone (2, not 5); once an agent's own
+    say() (not alice's) sends one, it gets the same .md-mention style in the log as any
+    @mention (#110), through the real broker (rules.mentions_humans) -- proving it works from
+    an agent, unlike @here/@everyone, which are plain text from one."""
+    room = "e2e-humans"
+    ui.world.create_room(f"#{room}")
+    ui.world.add_agents(f"#{room}", ("claude-1", "codex-1"))
+    page = ui.open(room=room)
+    box = page.locator("#input")
+    box.focus()
+    mentions = page.locator("#mentions")
+
+    page.keyboard.type("@")
+    expect(mentions).to_be_visible()
+    options = mentions.locator("[role=option]")
+    expect(options).to_have_count(5)  # humans, here, everyone, claude-1, codex-1
+    expect(options.nth(0)).to_have_attribute("id", "men-humans")
+    expect(options.nth(1)).to_have_attribute("id", "men-here")
+    expect(options.nth(2)).to_have_attribute("id", "men-everyone")
+    expect(mentions.locator(".pal-head .muted")).to_have_text("2")  # the 2 agents, not 5
+    expect(options.nth(0).locator(".m-name-line .m-status")).to_have_text(
+        "Every person in the room, no agents"
+    )
+    box.fill("")
+    expect(mentions).to_be_hidden()
+
+    ui.world.agent_say(f"#{room}", "codex-1", "@humans need a decision: ship tonight or wait?")
+    row = chat_row(page, "need a decision")
+    expect(row).to_be_visible()
+    expect(row.locator(".md-mention")).to_have_text("@humans")
 
 
 def test_mention_highlight_lines_up_with_the_real_text(ui: UI) -> None:

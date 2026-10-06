@@ -24,7 +24,13 @@ from switchboard.broker.commands import Actor, CommandError
 from switchboard.broker.hub import Hub
 from switchboard.clock import Clock, SystemClock
 from switchboard.config import Config
-from switchboard.delivery.rules import broadcast_targets, parse_broadcast, parse_mentions
+from switchboard.delivery.rules import (
+    HUMANS_MENTION,
+    broadcast_targets,
+    mentions_humans,
+    parse_broadcast,
+    parse_mentions,
+)
 from switchboard.envelope import clean
 from switchboard.models import (
     CONTINUE_PATHS,
@@ -725,7 +731,9 @@ class RoomService:
         subjects, §26). ``person``: who, on a hosted broker with people (§32): their name
         and id (None: the owner); by default the owner, ``human_name``. An ``@here``/
         ``@everyone`` broadcast (issue #111) is expanded here, since every caller is a
-        person's message (a /catchup post, a review board post, or the web/CLI say)."""
+        person's message (a /catchup post, a review board post, or the web/CLI say).
+        ``@humans`` (issue #138) is expanded here too, though it works the same from an
+        agent's own ``say()`` (``broker/agents.py``), which expands it independently."""
         room = self.room(name)
         if not isinstance(text, str):
             raise ServiceError("bad_request", "text must be a string")
@@ -748,6 +756,12 @@ class RoomService:
             # rules.broadcast_targets for why no other delivery rule needs to change.
             members = [(m.name, m.status) for m in self.store.members(room.id)]
             mentions = sorted(set(mentions) | set(broadcast_targets(broadcast, members)) | {broadcast})
+        if mentions_humans(text):
+            # Addresses every person in the room, never an agent (issue #138): the literal
+            # word is the whole mechanism -- it can never match a real agent's screen name
+            # ("humans" is reserved), so it changes no delivery. app.js's addressesHumans is
+            # the only thing that reads it back off the message's own mentions.
+            mentions = sorted(set(mentions) | {HUMANS_MENTION})
         msg = self._post(
             room,
             sender_name=person[0] if person is not None else self.cfg.human_name,

@@ -77,7 +77,8 @@ def test_a_replaced_active_room_is_pruned_with_a_notice(scenario: str) -> None:
 def test_room_badges_count_only_what_is_addressed_to_you() -> None:
     """Issue #109: the red badge, the rooms toggle badge and the title count only follow an
     @mention or a reply to your own message; other agent chatter gets a quiet dot instead, with
-    no number, and opening the room clears both."""
+    no number, and opening the room clears both. Issue #138: an @humans counts too, from an agent
+    or another person, but not alice's own."""
     out = run("room_badges_addressed_vs_quiet")
 
     quiet = out["quiet"]
@@ -101,6 +102,18 @@ def test_room_badges_count_only_what_is_addressed_to_you() -> None:
     replied_other = out["repliedOther"]
     assert replied_other["tab"]["badge"] == {"text": "2", "label": "2 messages for you"}
     assert replied_other["roomsBadge"] == {"text": "2", "hidden": False}
+
+    # an agent's own @humans counts too (issue #138), the same as an @mention
+    humans = out["humans"]
+    assert humans["tab"]["badge"] == {"text": "3", "label": "3 messages for you"}
+    assert humans["title"] == "(3) switchboard — #build"
+    assert humans["roomsBadge"] == {"text": "3", "hidden": False}
+
+    # so does another person's @humans (bob's, on a hosted broker); alice's own doesn't
+    assert out["personHumans"]["tab"]["badge"] == {"text": "4", "label": "4 messages for you"}
+    assert out["personHumans"]["roomsBadge"] == {"text": "4", "hidden": False}
+    assert out["ownHumans"]["tab"]["badge"] == {"text": "4", "label": "4 messages for you"}
+    assert out["ownHumans"]["roomsBadge"] == {"text": "4", "hidden": False}
 
     opened = out["opened"]
     assert opened["tab"] == {"badge": None, "quietDot": None}
@@ -144,7 +157,8 @@ def test_focus_mode_collapses_agent_chat_not_addressed_to_you() -> None:
     """Issue #99: Focus collapses an agent chat message to one line unless it's addressed to
     alice (the same addressedToMe check behind the room badges, #109: an @mention or a reply to
     her own message). Her own messages never collapse, whether Focus is on or off. A click
-    expands only the row clicked, and turning Focus off rebuilds every row back to normal."""
+    expands only the row clicked, and turning Focus off rebuilds every row back to normal.
+    Issue #138: an agent's own @humans is addressed to her too, so it never collapses either."""
     out = run("focus_mode_collapsing")
 
     # Focus starts off: nothing is marked collapsible yet, even an agent message that would be
@@ -160,6 +174,9 @@ def test_focus_mode_collapses_agent_chat_not_addressed_to_you() -> None:
     assert "collapsible" in classes(row_by_id(rows, "12"))  # not addressed to alice: collapses
     assert "collapsible" in classes(row_by_id(rows, "13"))  # a reply to claude-1, not alice
     assert "collapsible" not in classes(row_by_id(rows, "14"))  # alice's own message
+    assert "collapsible" not in classes(row_by_id(rows, "15"))  # claude-1's own @humans: addressed
+    assert "mention" in classes(row_by_id(rows, "15"))
+    assert "mention" not in classes(row_by_id(rows, "16"))  # alice's own @humans isn't to herself
 
     # the collapsed line reads "sender, first line of text", with no Markdown rendering
     assert out["expanded"]["summaryText"] == "devin-1nothing unusual here"
@@ -342,21 +359,26 @@ def test_the_composer_highlights_only_known_mentions() -> None:
     @codex-1, picked from the @ popover rather than typed, is highlighted too. Issue #111:
     @everyone and @here highlight the same way, unconditionally -- the composer is always a
     person's, so there's no "plain text from an agent" case to tell apart here -- while @all
-    (reserved, but not a broadcast keyword) stays plain, like any other unknown name."""
+    (reserved, but not a broadcast keyword) stays plain, like any other unknown name. Issue
+    #138: @humans highlights too, for the same reason (both a person's and an agent's @humans
+    are real, so the composer never needs to tell them apart either)."""
     out = run("mention_highlight_in_composer")
     assert out["typed"]["text"] == "ask @claude-1 and @nope-one, cc @alice"
     assert out["typed"]["hl"] == ["@claude-1", "@alice"]
     assert out["picked"]["value"] == "hi @codex-1 " and out["picked"]["hl"] == ["@codex-1"]
-    assert out["broadcast"]["text"] == "@everyone look, then @here too, but not @all"
-    assert out["broadcast"]["hl"] == ["@everyone", "@here"]
+    assert out["broadcast"]["text"] == "@humans needs eyes, @everyone look, then @here too, but not @all"
+    assert out["broadcast"]["hl"] == ["@humans", "@everyone", "@here"]
 
 
 def test_broadcast_mentions_lead_the_popover_above_the_member_list() -> None:
     """Issue #111: @here and @everyone show first in the @ popover with a one-line description
     each, not counted in "Agents in #build <n>"; narrowing the query to one neither matches
-    leaves it out like any other candidate; picking one completes it like a member would."""
+    leaves it out like any other candidate; picking one completes it like a member would.
+    Issue #138: @humans leads both of them, with its own description, and its own prefix "hu"
+    (shared with no member, and not with "here"/"everyone") matches only it."""
     out = run("broadcast_popover")
     assert out["all"]["ids"] == [
+        "men-humans",
         "men-here",
         "men-everyone",
         "men-claude-1",
@@ -364,9 +386,10 @@ def test_broadcast_mentions_lead_the_popover_above_the_member_list() -> None:
         "men-devin-1",
         "men-bench",
     ]
-    assert out["all"]["count"] == "4"  # the 4 agents, not 6: the broadcasts aren't "agents in #build"
-    assert out["all"]["hereDesc"] and out["all"]["everyoneDesc"]
-    assert out["all"]["hereDesc"] != out["all"]["everyoneDesc"]
+    assert out["all"]["count"] == "4"  # the 4 agents, not 7: the broadcasts aren't "agents in #build"
+    assert out["all"]["humansDesc"] and out["all"]["hereDesc"] and out["all"]["everyoneDesc"]
+    assert len({out["all"]["humansDesc"], out["all"]["hereDesc"], out["all"]["everyoneDesc"]}) == 3
+    assert out["humansFiltered"] == ["men-humans"]  # "hu": only @humans' own prefix matches
     assert out["filtered"] == ["men-everyone"]  # "ever": only @everyone's own prefix matches
     assert out["picked"]["value"] == "hi @everyone "
 
