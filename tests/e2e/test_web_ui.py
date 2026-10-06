@@ -451,6 +451,50 @@ def test_room_badges_count_only_what_is_addressed_to_you(ui: UI) -> None:
     expect(page).to_have_title(f"switchboard — #{room}")
 
 
+def test_focus_mode_collapses_agent_chat_and_restores_on_toggle_off(ui: UI) -> None:
+    """Issue #99: Focus collapses an agent chat message not addressed to alice (the same
+    addressedToMe check as the room badges, #109) to one line; a reply to her own message stays
+    expanded either way. Clicking a collapsed line expands just that row, and turning Focus off
+    rebuilds the log, restoring every row."""
+    room = "e2e-focus"
+    ui.world.create_room(f"#{room}")
+    ui.world.add_agents(f"#{room}", ("scout",))
+    page = ui.open(room=room)
+
+    asked = ui.world.say(room, "any update on the sweep?")
+    ui.world.agent_say(f"#{room}", "scout", "on it, checking now", reply_to=asked)
+    ui.world.agent_say(f"#{room}", "scout", "the sweep found nothing unusual here")
+
+    addressed = chat_row(page, "on it, checking now")
+    unaddressed = chat_row(page, "the sweep found nothing unusual here")
+    toggle = page.locator("#focus-toggle")
+    expect(toggle).to_have_attribute("aria-pressed", "false")
+    expect(unaddressed.locator(".collapsed-line")).to_have_count(0)  # not built until Focus is on
+
+    toggle.click()
+    expect(toggle).to_have_attribute("aria-pressed", "true")
+
+    # a reply to alice's own message stays expanded; the other agent chat collapses to one line
+    expect(addressed.locator(".msg-text")).to_be_visible()
+    expect(addressed.locator(".collapsed-line")).to_have_count(0)
+    expect(unaddressed.locator(".msg-text")).to_be_hidden()
+    summary = unaddressed.locator(".collapsed-line")
+    expect(summary).to_be_visible()
+    expect(summary).to_contain_text("scout")
+    expect(summary).to_contain_text("the sweep found nothing unusual here")
+
+    # clicking the collapsed line expands only that row
+    summary.click()
+    expect(unaddressed.locator(".msg-text")).to_be_visible()
+    expect(summary).to_be_hidden()
+
+    # Focus off rebuilds the log: every row, including the one just expanded, is back to normal
+    toggle.click()
+    expect(toggle).to_have_attribute("aria-pressed", "false")
+    expect(unaddressed.locator(".msg-text")).to_be_visible()
+    expect(unaddressed.locator(".collapsed-line")).to_have_count(0)
+
+
 def test_approvals_chip_names_one_counts_several_and_includes_unknown(ui: UI) -> None:
     """The room warning stays short, counts unknown modes too, and leads to flagged members."""
     world = ui.world

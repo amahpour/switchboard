@@ -711,7 +711,8 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
 .chips::-webkit-scrollbar { display: none; }
 .head-divider { width: 1px; height: 20px; flex-shrink: 0; margin: 0 2px; background: var(--side-border); }
 .head-btn { width: 30px; height: 30px; border-radius: 7px; color: var(--ink-2); }
-#pane-toggle[aria-pressed="true"] { background: var(--btn-on); }
+#pane-toggle[aria-pressed="true"],
+#focus-toggle[aria-pressed="true"] { background: var(--btn-on); }
 
 .rooms-toggle {
   display: inline-flex;
@@ -840,6 +841,38 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
 @keyframes sb-flash {
   0%, 30% { background-color: var(--focus); }
   100% { background-color: transparent; }
+}
+
+/* Focus mode (#99): chatRow builds .collapsed-line only on a message that collapses (an agent
+   message not addressed to you), so the rule below hides every other direct child of the row
+   in its place; a click adds .expanded, which drops out of :not(.expanded) and restores each
+   child's own display (.avatar, .msg-body, .reply-to) while this one goes back to hidden. */
+.line.k-chat.collapsible:not(.expanded) > :not(.collapsed-line) { display: none; }
+.line.k-chat.collapsible:not(.expanded) > .collapsed-line { display: flex; }
+.collapsed-line {
+  display: none;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  margin: 0;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.collapsed-line:hover, .collapsed-line:focus-visible { background: var(--chip-bg); }
+.collapsed-sender { flex-shrink: 0; font-size: calc(12.5px * var(--text-scale)); font-weight: 600; color: var(--muted-2); }
+.collapsed-snippet {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(12.5px * var(--text-scale));
+  color: var(--muted);
 }
 
 /* Reply line above the header: gutter arrow, mini avatar, nick, first line. */
