@@ -428,6 +428,21 @@ def connect(path: str | os.PathLike, *, readonly: bool = False) -> sqlite3.Conne
     return con
 
 
+def connect_query_only(path: str | os.PathLike) -> sqlite3.Connection:
+    """A connection that only reads and never creates the database (``switchboard report``,
+    #167): the file must already exist (the caller checks) and every write is refused.
+
+    Not ``mode=ro``: after a clean broker stop SQLite has removed the WAL's ``-shm`` file, and
+    a true read-only connection can't recreate it (the open fails). ``mode=rw`` with
+    ``query_only`` can, and still refuses every write. The ``rooms`` table is in every schema
+    version, so a count from it also checks the connection can actually read."""
+    con = sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=rw", uri=True, timeout=5.0)
+    con.execute("PRAGMA query_only = ON")
+    con.execute("SELECT COUNT(*) FROM rooms").fetchone()
+    con.row_factory = sqlite3.Row
+    return con
+
+
 @contextmanager
 def tx(con: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     """``BEGIN IMMEDIATE … COMMIT``; rolls back on any exception.
@@ -631,5 +646,13 @@ def open_db(path: str | os.PathLike) -> sqlite3.Connection:
     return con
 
 
-def checkpoint(con: sqlite3.Connection) -> None:
-    con.execute("PRAGMA wal_checkpoint(PASSIVE)")
+CHECKPOINT_MODES = ("PASSIVE", "TRUNCATE")
+
+
+def checkpoint(con: sqlite3.Connection, mode: str = "PASSIVE") -> None:
+    """WAL checkpoint: ``PASSIVE`` (the periodic one, every 60 s) or ``TRUNCATE`` (at
+    shutdown, which also truncates the ``-wal`` file to nothing for the next start).
+    Any other mode is refused rather than passed through to SQLite (DESIGN.md §4)."""
+    if mode not in CHECKPOINT_MODES:
+        raise ValueError(f"unknown checkpoint mode: {mode!r}")
+    con.execute(f"PRAGMA wal_checkpoint({mode})")

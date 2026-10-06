@@ -35,7 +35,7 @@ machines-approve-light, machines-approve-dark, machines-up-light and machines-ph
 .png). In those, the pairing command's ``http://localhost:<port>`` reads ``https://sb.example.com``,
 the address a real deployment shows.
 
-Every wait has a deadline (Playwright's auto-waiting ``expect`` and ``wait_for_function``); a
+Every wait has a deadline (Playwright's auto-waiting ``expect`` and ``ui_world.wait_js``); a
 timeout exits non-zero. The agents, both brokers and the browser are stopped in ``finally``;
 the temp homes are removed unless ``--keep``.
 """
@@ -104,11 +104,14 @@ def isolate() -> Path:
 # ------------------------------------------------------------------ page helpers
 def settle(page: Any) -> None:
     """Fonts loaded, two frames drawn, and no CSS transition or animation still running."""
+    from ui_world import wait_js  # not page.wait_for_function: the page's CSP refuses its eval
+
     page.evaluate("document.fonts ? document.fonts.ready.then(() => true) : true")
-    page.wait_for_function(
+    wait_js(
+        page,
         "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r("
         "document.getAnimations().every(a => a.playState !== 'running')))))",
-        timeout=10_000,
+        timeout_ms=10_000,
     )
 
 
@@ -135,8 +138,10 @@ def open_build(page: Any, n_chat: int) -> None:
 
     page.evaluate("location.hash = 'build'")
     expect(page.locator("#room-title")).to_have_text("build", timeout=WAIT_MS)
-    page.wait_for_function(
-        f"document.querySelectorAll('#log .line.k-chat').length >= {n_chat}", timeout=WAIT_MS
+    from ui_world import wait_js
+
+    wait_js(
+        page, f"() => document.querySelectorAll('#log .line.k-chat').length >= {n_chat}", timeout_ms=WAIT_MS
     )
     expect(page.locator("#buddy-list .member")).to_have_count(4, timeout=WAIT_MS)
 

@@ -195,6 +195,28 @@ def test_readonly_connection_cannot_write(tmp_path: Path) -> None:
         ro.execute("INSERT INTO meta VALUES('x','y')")
 
 
+def test_checkpoint_truncate_empties_the_wal_file(tmp_path: Path) -> None:
+    """``checkpoint(con, "TRUNCATE")`` is what the broker runs at shutdown (app.py's
+    lifespan), in place of its own ``PRAGMA wal_checkpoint(TRUNCATE)``: it must still
+    leave nothing in the WAL for the next start to replay, not just checkpoint PASSIVE-
+    style. Without a mode argument at all, this call would raise a TypeError."""
+    p = tmp_path / "y.db"
+    con = db.open_db(p)
+    with db.tx(con):
+        con.execute("INSERT INTO meta(key, value) VALUES('x', 'y')")
+    wal_path = p.with_name(p.name + "-wal")
+    assert wal_path.exists()
+    assert wal_path.stat().st_size > 0  # the write is sitting in the WAL, uncheckpointed
+    db.checkpoint(con, "TRUNCATE")
+    assert wal_path.stat().st_size == 0
+
+
+def test_checkpoint_refuses_an_unknown_mode(tmp_path: Path) -> None:
+    con = db.open_db(tmp_path / "y.db")
+    with pytest.raises(ValueError, match="unknown checkpoint mode"):
+        db.checkpoint(con, "FULL")
+
+
 # ------------------------------------------ the pre-delete backup (DESIGN.md §28.6)
 def _room(name: str, rid: int):
     from switchboard.models import Room

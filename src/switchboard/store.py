@@ -2094,6 +2094,116 @@ class Store:
                 (state, self.clock.now(), *fields.values(), item_id),
             )
 
+    # ------------------------------------------------------------------ report (§12.5, §12.6; #167)
+    # Read-only queries behind `switchboard report` (report.py), on its own query-only
+    # connection (``db.connect_query_only``), which the report never migrates: a report must
+    # read the same from an old database as a new one, broker running or stopped.
+    def report_members(self, room_id: int, since: float) -> list[sqlite3.Row]:
+        """Every membership of the room that is still open, or left no earlier than ``since``
+        (one row per membership: a participant may have left and re-joined)."""
+        host_col = "p.host" if _has_column(self.con, "participants", "host") else "''"
+        return self.con.execute(
+            "SELECT m.id AS mid, m.participant_id AS pid, m.screen_name, m.joined_at, m.left_at,"
+            " m.left_reason, p.harness, p.tier, p.tier_note, p.status, p.approval_mode,"
+            f" {host_col} AS host"
+            " FROM memberships m JOIN participants p ON p.id=m.participant_id"
+            " WHERE m.room_id=? AND (m.left_at IS NULL OR m.left_at>=?) ORDER BY m.id",
+            (room_id, since),
+        ).fetchall()
+
+    def report_tier_events(self, participant_ids: Sequence[int]) -> list[sqlite3.Row]:
+        """Each participant's join and tier-change events, in order: what tier it held at any
+        given time comes from walking these."""
+        if not participant_ids:
+            return []
+        marks = ",".join("?" * len(participant_ids))
+        return self.con.execute(
+            "SELECT ts, participant_id, data FROM events WHERE kind IN ('join','tier')"
+            f" AND participant_id IN ({marks}) ORDER BY id",
+            (*participant_ids,),
+        ).fetchall()
+
+    def report_messages(self, room_id: int, since: float) -> list[sqlite3.Row]:
+        return self.con.execute(
+            "SELECT id, ts, sender_kind, sender_membership_id, kind FROM messages WHERE room_id=? AND ts>=?",
+            (room_id, since),
+        ).fetchall()
+
+    def report_delivery_priorities(self, room_id: int) -> list[sqlite3.Row]:
+        """Each delivery's priority (human/mention/chatter), for every membership the room has
+        ever had."""
+        return self.con.execute(
+            "SELECT d.membership_id, d.message_id, d.prio FROM deliveries d"
+            " JOIN memberships m ON m.id=d.membership_id WHERE m.room_id=?",
+            (room_id,),
+        ).fetchall()
+
+    def report_offer_events(self, room_id: int, since: float) -> list[sqlite3.Row]:
+        """Which message ids each batch's offer carried (schema's offer event, M7 on)."""
+        return self.con.execute(
+            "SELECT data FROM events WHERE kind='offer' AND room_id=? AND ts>=?", (room_id, since)
+        ).fetchall()
+
+    def report_delivery_batches(self, room_id: int) -> list[sqlite3.Row]:
+        """Each delivery's last batch: the fallback for a database from before the offer event."""
+        return self.con.execute(
+            "SELECT d.batch_id, d.message_id FROM deliveries d JOIN memberships m ON m.id=d.membership_id"
+            " WHERE m.room_id=? AND d.batch_id IS NOT NULL",
+            (room_id,),
+        ).fetchall()
+
+    def report_batches(self, room_id: int, since: float) -> list[sqlite3.Row]:
+        return self.con.execute(
+            "SELECT b.* FROM batches b JOIN memberships m ON m.id=b.membership_id"
+            " WHERE m.room_id=? AND b.created_at>=? ORDER BY b.id",
+            (room_id, since),
+        ).fetchall()
+
+    def report_room_events(self, room_id: int) -> list[sqlite3.Row]:
+        """Every event of the room, from its very beginning: a pause or hold that began before
+        the report's window still holds through it."""
+        return self.con.execute(
+            "SELECT id, ts, kind, room_id, membership_id, participant_id, data FROM events"
+            " WHERE room_id=? ORDER BY id",
+            (room_id,),
+        ).fetchall()
+
+    def report_participant_events(self, participant_ids: Sequence[int]) -> list[sqlite3.Row]:
+        """Each participant's own events outside any room (turns, approval prompts, Cursor
+        parks): the caller keeps only what falls inside this room's window and membership span."""
+        if not participant_ids:
+            return []
+        marks = ",".join("?" * len(participant_ids))
+        return self.con.execute(
+            "SELECT id, ts, kind, room_id, membership_id, participant_id, data FROM events"
+            f" WHERE room_id IS NULL AND participant_id IN ({marks}) ORDER BY id",
+            (*participant_ids,),
+        ).fetchall()
+
+    def report_open_deliveries(self, room_id: int) -> list[sqlite3.Row]:
+        """Deliveries still pending or offered: what was undelivered when the window ended."""
+        return self.con.execute(
+            "SELECT d.membership_id, d.state, d.notified_at FROM deliveries d"
+            " JOIN memberships m ON m.id=d.membership_id"
+            " WHERE m.room_id=? AND d.state IN ('pending','offered')",
+            (room_id,),
+        ).fetchall()
+
+    def report_codex_hold_count(self, since: float, until: float) -> int:
+        """Codex TUIs that left the daemon (a hold) in the window: these name no room or
+        participant, so the caller counts them only when a Codex agent was in the room."""
+        n = self.con.execute(
+            "SELECT COUNT(*) FROM events WHERE kind='codex_hold' AND ts>=? AND ts<=?", (since, until)
+        ).fetchone()[0]
+        return int(n)
+
+
+def _has_column(con: sqlite3.Connection, table: str, column: str) -> bool:
+    """Schema v1 databases (0.1.0, 0.2.0) have no ``participants.host`` (schema v2); the report
+    reads both and never migrates (it opens query-only, #167). ``table`` is always a literal
+    from this module, never from a caller's input."""
+    return any(r[1] == column for r in con.execute(f"PRAGMA table_info({table})").fetchall())
+
 
 def _review_item(r: sqlite3.Row) -> reviews.Item:
     try:

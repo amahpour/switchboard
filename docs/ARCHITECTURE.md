@@ -80,13 +80,13 @@ From [CLAUDE.md](../CLAUDE.md). Each rule keeps some part easy to test or to cha
 - **The engine synchronous:** it reads the store and a clock and returns actions, with no `await` and no network or process I/O, so every rule runs under a `FakeClock` and `tests/engine_sim.py` drives it through 200 seeds.
 - **Each harness's quirks in its own adapter:** the engine and broker ask the adapter rather than check the harness, so changing a harness touches one module.
 - **The hook standalone:** standard library only, nothing from switchboard, every path exits 0, because a failed import or a non-zero exit could block the harness's prompt.
-- **A module's docstring names its DESIGN section,** and a design change changes DESIGN.md (a new numbered section for a new piece).
+- **A module's docstring names its DESIGN section** (`tests/unit/test_module_docstrings.py` checks every module), and a design change changes DESIGN.md (a new numbered section for a new piece).
 
 Beside these is the [security model](../CLAUDE.md#the-security-model-in-short) ([§11](DESIGN.md#11-security-model)): switchboard never adds authority, and guards only tighten.
 
 ### Where the code doesn't follow them yet
 
-Each is an open issue; don't copy the pattern, and the fix removes its mention here. SQL outside the store: `report.py` ([#167](https://github.com/amahpour/switchboard/issues/167)), `app.py` ([#168](https://github.com/amahpour/switchboard/issues/168)). Harness branches outside the adapters: the engine ([#169](https://github.com/amahpour/switchboard/issues/169)), `agents.py` ([#170](https://github.com/amahpour/switchboard/issues/170)), `catchup.py` ([#171](https://github.com/amahpour/switchboard/issues/171)). File and process I/O under the engine's `route()` call: the Codex adapter ([#172](https://github.com/amahpour/switchboard/issues/172)).
+Each is an open issue; don't copy the pattern, and the fix removes its mention here. Harness branches outside the adapters: the engine ([#169](https://github.com/amahpour/switchboard/issues/169)), `agents.py` ([#170](https://github.com/amahpour/switchboard/issues/170)), `catchup.py` ([#171](https://github.com/amahpour/switchboard/issues/171)). File and process I/O under the engine's `route()` call: the Codex adapter ([#172](https://github.com/amahpour/switchboard/issues/172)).
 
 ## Where to read next in DESIGN.md
 
