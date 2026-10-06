@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from switchboard import envelope
-from switchboard.adapters.base import HOOK_EVENTS
+from switchboard.adapters.base import HOOK_EVENTS, start_key
 from switchboard.adapters.testagent import ACK_MODES
 from switchboard.broker import proc
 from switchboard.broker.hosts import HostViews
@@ -110,10 +110,6 @@ def _remote(conn: Any) -> bool:
 
 def cred_hash(cred: str) -> str:
     return hashlib.sha256(cred.encode()).hexdigest()
-
-
-def _start_key(start: float | None) -> str:
-    return f"{start:.2f}" if start is not None else "?"
 
 
 def _model_ok(model: Any) -> bool:
@@ -740,7 +736,7 @@ class AgentService:
             )
         self.refresh_index()
         if p.agent_pid:
-            early = self._early_models.get((p.host, p.agent_pid, _start_key(p.agent_start)))
+            early = self._early_models.get((p.host, p.agent_pid, start_key(p.agent_start)))
             if early is not None:
                 self._note_model(p, early)
         adapter.on_joined(p, nonce, not same_mcp or not rejoined)
@@ -1217,7 +1213,7 @@ class AgentService:
         if not _model_ok(model):
             return
         for pi in chain:
-            self._early_models[(host, pi.pid, _start_key(pi.start))] = model
+            self._early_models[(host, pi.pid, start_key(pi.start))] = model
         while len(self._early_models) > 256:  # bounded: oldest first
             self._early_models.pop(next(iter(self._early_models)))
 

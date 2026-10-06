@@ -21,7 +21,7 @@ from switchboard.models import session_key as make_session_key
 INLINE_PATHS = frozenset({"inbox", "wait", "read", "say"})
 
 
-def _start_key(start: float | None) -> str:
+def start_key(start: float | None) -> str:
     """A process start time as a session-key component (DESIGN.md §6.3): fixed
     precision, so a restarted process's new start never collides with the old key."""
     return f"{start:.2f}" if start is not None else "?"
@@ -109,9 +109,7 @@ class Adapter:
         """This harness's session key for a verified ``mcp.hello`` identity: by default,
         one session per agent process (claude, devin, an unknown harness). Cursor
         overrides this with a pending key until its join nonce binds a conversation id."""
-        return make_session_key(
-            self.harness, ident.host, f"{ident.agent_pid}@{_start_key(ident.agent_start)}"
-        )
+        return make_session_key(self.harness, ident.host, f"{ident.agent_pid}@{start_key(ident.agent_start)}")
 
     def existing_session(self, store: Any, ident: McpIdentity) -> Participant | None:
         """A session this verified identity already holds under a key other than what

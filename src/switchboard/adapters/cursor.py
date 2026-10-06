@@ -44,7 +44,7 @@ import hmac
 import re
 from typing import Any
 
-from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, Adapter, _start_key
+from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, Adapter, start_key
 from switchboard.broker import proc
 from switchboard.broker.peer import McpIdentity
 from switchboard.config import Config
@@ -126,7 +126,7 @@ class CursorAdapter(Adapter):
     def session_key(self, ident: McpIdentity, thread_id: str | None) -> str:
         # bound to the conversation id by the join nonce (M5); until then, the agent process
         return make_session_key(
-            self.harness, ident.host, f"{PENDING_REST}{ident.agent_pid}@{_start_key(ident.agent_start)}"
+            self.harness, ident.host, f"{PENDING_REST}{ident.agent_pid}@{start_key(ident.agent_start)}"
         )
 
     def existing_session(self, store: Any, ident: McpIdentity) -> Participant | None:
