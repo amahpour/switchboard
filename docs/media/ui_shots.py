@@ -22,6 +22,7 @@ What it does:
   Welcome view and the sign-in page use contexts of their own.
 
 The outputs: desktop-{light,dark}, markdown-{light,dark}, palette-light, mention-light,
+mention-midname-{light,dark,phone-light} (a mid-name match, #112),
 composer-multiline-{light,dark,phone-light} (the composer grown with wrapped text, #130),
 closed-light, remotes-light, inspector-light, inspector-remote-light, inspector-dark-parked,
 phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (#129), welcome-light and login-light, plus, from a hosted broker
@@ -400,6 +401,36 @@ def shoot_board(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def shoot_mentions(browser: Any, out: Path, world: Any) -> None:
+    """The @ popover on a mid-name match (issue #112): a room of its own, with agent names long
+    enough that "@skill" matches inside one, not at its start. Light, dark and a phone."""
+    from playwright.sync_api import expect
+
+    world.create_room("#ops-room")
+    world.add_agents("#ops-room", ("darius-skills-agent", "mr-owner-2"))
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for name, ctx_args in (
+        ("mention-midname-light.png", {**DESKTOP, "color_scheme": "light"}),
+        ("mention-midname-dark.png", {**DESKTOP, "color_scheme": "dark"}),
+        ("mention-midname-phone-light.png", {**PHONE, "color_scheme": "light"}),
+    ):
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="#ops-room"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            type_in(page, "@skill")
+            expect(page.locator("#mentions")).to_be_visible()
+            expect(page.locator("#men-darius-skills-agent")).to_be_visible()
+            shot(page, out, name)
+        finally:
+            ctx.close()
+
+
 # ---------------------------------------------------------- the hosted shots
 AUTHENTICATOR = {
     "protocol": "ctap2",
@@ -695,6 +726,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
         try:
             shoot(browser, out, world)
             shoot_board(browser, out, world)
+            shoot_mentions(browser, out, world)
             shoot_offline(browser, out, world)
             shoot_hosted(browser, out, hosted)
             shoot_machines(browser, out, fleet)

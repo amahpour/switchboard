@@ -246,6 +246,20 @@ def test_the_palette_and_mentions_complete_without_sending() -> None:
     assert out["commands"] == [] and out["said"] == []
 
 
+def test_mention_popover_matches_any_part_of_a_name() -> None:
+    """Issue #112: @skill must find darius-skills-agent (a word prefix), not just a name that
+    starts with "skill"; the match is case-insensitive; a prefix match ranks above a mid-name
+    one even when the mid-name match is online and the prefix match isn't; and the matched part
+    is its own node, not plain text baked into the name."""
+    out = run("mention_match_anywhere")
+    assert out["skill"] == {"options": ["men-darius-skills-agent"], "hits": ["skill"]}
+    assert out["skillCased"] == ["men-darius-skills-agent"]  # "@Skill" behaves like "@skill"
+    assert out["owner"] == ["men-mr-owner-2"]  # another word prefix, split on "-"
+    assert out["substring"] == ["men-eval-reviewer-resumed"]  # "esumed" is inside "resumed" only
+    assert out["rev"] == ["men-rev-helper", "men-eval-reviewer-resumed"]  # prefix before word prefix
+    assert out["call"] == ["men-xb-call-alpha", "men-xa-call-beta"]  # a tie: online lists first
+
+
 def test_an_argument_less_palette_command_runs() -> None:
     out = run("palette_runs")
     assert out["commands"] == ["/help"] and texts(out) == ["/helphelp text"]

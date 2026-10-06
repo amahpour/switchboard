@@ -1674,6 +1674,73 @@
     input.rows = Math.max(1, Math.min(8, lines));
   }
 
+  // Ranking for the @ mention popover (issue #112): a typed, lowercased query matches a member
+  // by (1) its exact name, (2) a prefix of the whole name (today's behavior, so existing habits
+  // keep working), (3) a prefix of one of its words, split on "-" and "_" ("skill" finds
+  // darius-skills-agent), or (4) the query anywhere in the name. The first of these that fits
+  // sets the rank and where to highlight; nothing later is tried once one has. Names are always
+  // lowercase (SCREEN_NAME_RE), so only the query needs lowercasing for case-insensitive matching.
+  // A fuzzy subsequence match (rank 5 in the issue, "hc2" -> hillclimber-2) is left out: it would
+  // need a scoring heuristic of its own, and nothing in the issue's "Done when" calls for it.
+  const MATCH_EXACT = 0;
+  const MATCH_PREFIX = 1;
+  const MATCH_WORD = 2;
+  const MATCH_SUBSTR = 3;
+
+  function matchInfo(name, query) {
+    if (!query) return { rank: MATCH_PREFIX, start: 0, len: 0 };
+    if (name === query) return { rank: MATCH_EXACT, start: 0, len: query.length };
+    if (name.startsWith(query)) return { rank: MATCH_PREFIX, start: 0, len: query.length };
+    let pos = 0;
+    for (const word of name.split(/[-_]/)) {
+      if (word.startsWith(query)) return { rank: MATCH_WORD, start: pos, len: query.length };
+      pos += word.length + 1;
+    }
+    const at = name.indexOf(query);
+    return at < 0 ? null : { rank: MATCH_SUBSTR, start: at, len: query.length };
+  }
+
+  // Within a rank, a member who is online (any status but offline) sorts first; next, one who
+  // most recently spoke in this room -- from the messages already loaded for it, the only
+  // "recently active" signal the page has without a fetch of its own. Ties keep the room's own
+  // member order, so the list doesn't jitter between keystrokes.
+  function lastSpokeAt(r, m) {
+    const msgs = r.msgs || [];
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const msg = msgs[i];
+      if (msg.sender_kind === 'agent' && msg.from === m.name && (msg.host || '') === (m.host || '')) return msg.ts || 0;
+    }
+    return 0;
+  }
+
+  function matchMembers(r, query) {
+    const scored = [];
+    r.members.forEach(function (m, i) {
+      const info = matchInfo(m.name, query);
+      if (!info) return;
+      scored.push({ m: m, rank: info.rank, i: i, online: !!m.status && m.status !== 'offline', seen: lastSpokeAt(r, m) });
+    });
+    scored.sort(function (a, b) {
+      if (a.rank !== b.rank) return a.rank - b.rank;
+      if (a.online !== b.online) return a.online ? -1 : 1;
+      if (a.seen !== b.seen) return b.seen - a.seen;
+      return a.i - b.i;
+    });
+    return scored.map(function (s) { return s.m; });
+  }
+
+  // Appends `name` to `target` as plain text, with [start, start + len) wrapped in its own
+  // <mark> node -- createElement/textContent only, per this file's security rule (no innerHTML).
+  function appendMatch(target, name, start, len) {
+    if (!len) { target.append(name); return; }
+    const before = name.slice(0, start);
+    const hit = name.slice(start, start + len);
+    const after = name.slice(start + len);
+    if (before) target.append(before);
+    target.append(el('mark', 'm-name-hit', hit));
+    if (after) target.append(after);
+  }
+
   // What should be open for the text before the caret: the palette, the mention list, or nothing.
   function updatePopover() {
     const input = $('input');
@@ -1688,12 +1755,14 @@
       return;
     }
     const caret = typeof input.selectionStart === 'number' ? input.selectionStart : v.length;
-    const mm = /(^|[\s(])@([a-z0-9_-]{0,23})$/.exec(v.slice(0, caret));
+    const mm = /(^|[\s(])@([A-Za-z0-9_-]{0,23})$/.exec(v.slice(0, caret));
     if (mm) {
       const pre = mm[2];
-      const items = r.members.filter(function (m) { return m.name.startsWith(pre); });
+      const query = pre.toLowerCase();
+      const items = matchMembers(r, query);
       if (!items.length) return closePop();
-      openPop({ kind: 'mentions', items: items, sel: keepSel('mentions', items), start: caret - pre.length - 1, end: caret });
+      openPop({ kind: 'mentions', items: items, sel: keepSel('mentions', items), start: caret - pre.length - 1, end: caret,
+                query: query });
       return;
     }
     closePop();
@@ -1809,7 +1878,10 @@
         o.setAttribute('aria-selected', String(i === p.sel));
         const main = el('span', 'm-main');
         const nl = el('span', 'm-name-line');
-        nl.append(el('span', 'm-name', m.name));
+        const nameEl = el('span', 'm-name');
+        const hit = matchInfo(m.name, p.query || '');
+        appendMatch(nameEl, m.name, hit ? hit.start : 0, hit ? hit.len : 0);
+        nl.append(nameEl);
         if (m.host) nl.append(hostChip(m, false));
         const flag = approvalsFlag(m);
         if (flag) nl.append(flag);

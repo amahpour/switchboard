@@ -758,6 +758,58 @@ def test_slash_palette_and_mentions(ui: UI) -> None:
     box.fill("")  # nothing is sent
 
 
+def test_mention_popover_matches_any_part_of_a_name(ui: UI) -> None:
+    """Issue #112: with agent names that share no common prefix with what's typed, the @
+    popover must still find a match in the middle of a name, case-insensitively, and still
+    rank a match at the start of a name above one in the middle."""
+    room = "e2e-mentions"
+    ui.world.create_room(f"#{room}")
+    ui.world.add_agents(
+        f"#{room}", ("darius-skills-agent", "mr-owner-2", "eval-reviewer-resumed", "rev-helper")
+    )
+    page = ui.open(room=room)
+    box = page.locator("#input")
+    box.focus()
+    mentions = page.locator("#mentions")
+
+    # a word inside the name ("skill" is a prefix of the "skills" word in darius-skills-agent),
+    # with the matched part marked as its own node
+    page.keyboard.type("@skill")
+    expect(mentions).to_be_visible()
+    expect(mentions.locator("[role=option]")).to_have_count(1)
+    row = page.locator("#men-darius-skills-agent")
+    expect(row).to_be_visible()
+    expect(row.locator(".m-name-hit")).to_have_text("skill")
+
+    # the same query, capitalized, matches the same one agent
+    box.fill("")
+    page.keyboard.type("@Skill")
+    expect(mentions.locator("[role=option]")).to_have_count(1)
+    expect(page.locator("#men-darius-skills-agent")).to_be_visible()
+
+    # another word inside a name, split on "-"
+    box.fill("")
+    page.keyboard.type("@owner")
+    expect(page.locator("#men-mr-owner-2")).to_be_visible()
+
+    # a substring that isn't at any word boundary (inside "resumed")
+    box.fill("")
+    page.keyboard.type("@esumed")
+    expect(mentions.locator("[role=option]")).to_have_count(1)
+    expect(page.locator("#men-eval-reviewer-resumed")).to_be_visible()
+
+    # ranking: a match at the very start of a name (rev-helper) still lists above a match in
+    # the middle of another (the "reviewer" word in eval-reviewer-resumed) for the same query
+    box.fill("")
+    page.keyboard.type("@rev")
+    options = mentions.locator("[role=option]")
+    expect(options).to_have_count(2)
+    expect(options.nth(0)).to_have_attribute("id", "men-rev-helper")
+    expect(options.nth(1)).to_have_attribute("id", "men-eval-reviewer-resumed")
+
+    box.fill("")  # nothing is sent
+
+
 def test_close_a_room_then_reopen_it(ui: UI) -> None:
     ui.world.create_room("#e2e-close")
     page = ui.open(room=None)
