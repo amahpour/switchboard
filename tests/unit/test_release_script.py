@@ -387,3 +387,12 @@ def test_a_release_gathers_the_notes_files_and_deletes_them(tmp_path: Path) -> N
     )
     assert "## 0.4.1 (2026-09-30)\n\n" + notes in (repo / "CHANGELOG.md").read_text()
     assert sorted(p.name for p in (repo / "changes").iterdir()) == ["README.md"]  # gathered, the README stays
+
+
+def test_the_install_docs_carry_no_pin_a_release_would_move() -> None:
+    """README and docs/INSTALL.md install `switchboard-chat` from PyPI, unpinned (#233). A
+    GitHub example left in them is for releases before 0.21.1, and a release must not move it
+    to the new version (the first 0.21.1 release PR did, #236)."""
+    for rel_path in ("README.md", "docs/INSTALL.md"):
+        text = (rel.ROOT / rel_path).read_text()
+        assert rel.update_pins(text, "9.9.9") == text, rel_path
