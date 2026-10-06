@@ -1464,6 +1464,8 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 .m-main { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
 .m-name-line { position: relative; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; min-width: 0; }
 .m-name { font-size: calc(13.5px * var(--text-scale)); font-weight: 600; overflow-wrap: anywhere; }
+/* the part of a mention-popover row's name that matched what was typed (issue #112) */
+.m-name-hit { background: var(--mention-bg); color: var(--mention-fg); border-radius: 3px; padding: 0 1px; }
 .m-status { font-size: calc(12px * var(--text-scale)); color: var(--muted-2); }
 .m-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; font-size: calc(12px * var(--text-scale)); color: var(--muted-2); }
 .m-chips .tier, .insp-chips .tier { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }

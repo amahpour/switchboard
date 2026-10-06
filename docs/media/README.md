@@ -23,6 +23,7 @@ It drives headless Chromium through Playwright (a dev dependency): run `uv run p
 | `inspector-remote-light.png` | bench, on the remote `fpga-pi` |
 | `markdown-light.png`, `markdown-dark.png` | the whole conversation: every Markdown construct, a blocked link and raw HTML as text |
 | `palette-light.png`, `mention-light.png` | `/` and `@co` typed in the composer |
+| `mention-midname-light.png`, `mention-midname-dark.png`, `mention-midname-phone-light.png` | `@skill` matching inside a longer name, `darius-skills-agent`, with the match highlighted (issue #112) |
 | `composer-multiline-light.png`, `composer-multiline-dark.png`, `composer-multiline-phone-light.png` | a wrapped message growing the composer (issue #130), desktop and phone |
 | `closed-light.png`, `remotes-light.png` | the Closed rooms and Remote machines sheets |
 | `welcome-light.png` | the first-run page (a second broker with no rooms) |

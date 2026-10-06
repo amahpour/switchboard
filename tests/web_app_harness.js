@@ -649,6 +649,43 @@ const SCENARIOS = {
                            mention: mention, esc: esc, commands: w.server.commands, said: w.server.said });
   },
 
+  // Issue #112: the @ popover matches any part of a name, ranked exact, whole-name prefix,
+  // word prefix (split on "-"/"_"), then substring; case-insensitively; a prefix match ranks
+  // above a mid-name one even when the mid-name match is online and the prefix match isn't;
+  // and the matched slice is its own <mark> node, never baked into the name's textContent.
+  async mention_match_anywhere() {
+    const base = MEMBERS[0];
+    const agent = function (name, status) { return Object.assign({}, base, { name: name, status: status || 'idle' }); };
+    const members = [
+      agent('darius-skills-agent'), agent('mr-owner-2'), agent('eval-reviewer-resumed'),
+      agent('rev-helper', 'offline'),  // a whole-name prefix match, but offline
+      agent('xa-call-beta', 'offline'), agent('xb-call-alpha'),  // a tied rank: only the online one should lead
+    ];
+    const { w, ws } = await buildRoom(members);
+    const options = function () {
+      return findAll(w.$('mentions'), function (n) { return n.attrs.role === 'option'; }).map(function (n) { return n.id; });
+    };
+    const hitsOf = function (name) {
+      const row = findAll(w.$('mentions'), function (n) { return n.id === 'men-' + name; })[0];
+      return findAll(row, function (n) { return n.classList.contains('m-name-hit'); }).map(function (n) { return n.textContent; });
+    };
+
+    type(w, '@skill');  // a word prefix: "skill" is a prefix of the "skills" word
+    const skill = { options: options(), hits: hitsOf('darius-skills-agent') };
+    type(w, '@Skill');  // the same query, capitalized: case-insensitive matching
+    const skillCased = options();
+    type(w, '@owner');  // another word prefix
+    const owner = options();
+    type(w, '@esumed');  // a substring that isn't at any word boundary ("resumed")
+    const substring = options();
+    type(w, '@rev');  // ranking: rev-helper's whole-name prefix beats the word-prefix match,
+    const rev = options();  // even though rev-helper is offline and the other agent is online
+    type(w, '@call');  // a ranking tie: the online agent leads the offline one
+    const call = options();
+    await settle();
+    return report(w, ws, { skill: skill, skillCased: skillCased, owner: owner, substring: substring, rev: rev, call: call });
+  },
+
   // An argument-less palette command runs at once (Enter), through the normal send path.
   async palette_runs() {
     const { w, ws } = await buildRoom(MEMBERS);
