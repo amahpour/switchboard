@@ -26,6 +26,8 @@ mention-midname-{light,dark,phone-light} (a mid-name match, #112),
 mention-highlight-{light,dark,phone-light} (a known @mention styled as you type it, #110),
 composer-multiline-{light,dark,phone-light} (the composer grown with wrapped text, #130),
 room-badges-{light,dark,phone-light} (the red count beside the quiet dot, #109),
+focus-mode-{light,dark,phone-light} (agent chat collapsed to one line, a reply to you left
+expanded, #99),
 closed-light, remotes-light, inspector-light, inspector-remote-light, inspector-dark-parked,
 phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (#129), welcome-light and login-light, plus, from a hosted broker
 (``tests/ui_world.py``'s ``HostedWorld``, with Chromium's virtual authenticators as the
@@ -497,6 +499,48 @@ def shoot_room_badges(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def shoot_focus_mode(browser: Any, out: Path, world: Any) -> None:
+    """Focus mode (#99): the header toggle collapses agent chat not addressed to the person to
+    one line - the same addressedToMe check as the room badges (#109) - while a reply to their
+    own message stays expanded. A room of its own, left with Focus on; light, dark and the
+    phone."""
+    from playwright.sync_api import expect
+    from ui_world import wait_js
+
+    world.create_room("#focus-demo")
+    world.add_agents("#focus-demo", ("scout",))
+    asked = world.say("focus-demo", "any update on the sweep?")
+    world.agent_say("#focus-demo", "scout", "on it, checking now", reply_to=asked)
+    world.agent_say("#focus-demo", "scout", "ran the full sweep: nothing out of range, logs attached")
+    world.agent_say("#focus-demo", "scout", "closing this out unless you want a second pass")
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for name, ctx_args in (
+        ("focus-mode-light.png", {**DESKTOP, "color_scheme": "light"}),
+        ("focus-mode-dark.png", {**DESKTOP, "color_scheme": "dark"}),
+        ("focus-mode-phone-light.png", {**PHONE, "color_scheme": "light"}),
+    ):
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="#focus-demo"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            expect(page.locator("#room-title")).to_have_text("focus-demo", timeout=WAIT_MS)
+            wait_js(
+                page, "() => document.querySelectorAll('#log .line.k-chat').length >= 4", timeout_ms=WAIT_MS
+            )
+            page.click("#focus-toggle")
+            expect(page.locator("#focus-toggle")).to_have_attribute("aria-pressed", "true")
+            expect(page.locator(".collapsed-line").first).to_be_visible()
+            shot(page, out, name)
+        finally:
+            ctx.close()
+
+
 # ---------------------------------------------------------- the hosted shots
 AUTHENTICATOR = {
     "protocol": "ctap2",
@@ -798,6 +842,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             # last of this world's shots: its two rooms' unread backlog would otherwise show up
             # (unread is recomputed per page load) in shoot_offline's sidebar too
             shoot_room_badges(browser, out, world)
+            shoot_focus_mode(browser, out, world)
             shoot_hosted(browser, out, hosted)
             shoot_machines(browser, out, fleet)
         finally:

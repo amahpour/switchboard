@@ -78,6 +78,10 @@
     passkeyBusy: false, // an Add a passkey ceremony is under way
     boardOpen: false,  // the active room's review board is shown instead of its log (#80)
     boardSel: null,    // the label of the board card whose detail is open
+    // Focus mode (#99): collapse agent chat not addressed to you. In memory only: no existing
+    // preference fits a plain on/off toggle, and the lint bans browser storage for a new one
+    // (§5.5, DESIGN.md §29.1), so it starts off again on every reload.
+    focusMode: false,
     // machines that dial in (a hosted broker, §31.8): GET /api/machines and the `machines` event
     machinesHosted: false,
     machines: [],
@@ -374,6 +378,8 @@
     terminal: 'M3 4.5 6.5 8 3 11.5M8.5 11.5H13',
     browser: rr(2, 3, 12, 10, 1.5) + 'M2 6.2h12',   // "web only": needs this signed-in browser
     key: circ(5.5, 8, 3) + 'M8.5 8h5.5M12 8v2.5M14 8v1.5',
+    // a viewfinder, for Focus mode (#99): four corner brackets and a center dot
+    focus: 'M2.5 5V2.5H5M11 2.5h2.5V5M13.5 11v2.5H11M5 13.5H2.5V11' + circ(8, 8, 1.3),
   };
 
   function icon(name) {
@@ -641,6 +647,24 @@
     return Object.prototype.hasOwnProperty.call(map, name) ? map[name] : null;
   }
 
+  // Focus mode (#99): the one-line stand-in for a collapsed message - its sender, then the
+  // first line of its text, built with textContent only (no Markdown), so a long or hostile
+  // message can never grow past one line. A real button: focusable, and Enter/Space activates
+  // it like a click, same as any other button here. Expands only the row it belongs to, and
+  // the row takes the focus: the button hides as it expands, which would drop it to the page.
+  function collapsedSummary(m, line) {
+    const b = btn('collapsed-line');
+    b.append(el('span', 'collapsed-sender', label(m.from, m.host)),
+      el('span', 'collapsed-snippet', firstLine(m.text, 140)));
+    b.title = 'Collapsed by Focus: click to show it in full';
+    b.addEventListener('click', function () {
+      line.classList.add('expanded');
+      line.tabIndex = -1;
+      line.focus({ preventScroll: true });
+    });
+    return b;
+  }
+
   function chatRow(r, m, prev) {
     const who = label(m.from, m.host);
     const line = el('article', 'line k-chat');
@@ -649,6 +673,13 @@
     askToFixDiagram(r, m, line);
     if (mentionsMe(m)) line.classList.add('mention');
     if (m.sender_kind === 'agent' && inspectedLabel() === who) line.classList.add('sel');
+    // An agent message not addressed to you (the same addressedToMe check as the room badges,
+    // #109) collapses while Focus is on. Rows are rebuilt whenever Focus is toggled (setFocusMode),
+    // so this only ever applies at birth: a row already on screen keeps whatever it started as.
+    if (state.focusMode && m.sender_kind === 'agent' && !addressedToMe(r, m)) {
+      line.classList.add('collapsible');
+      line.append(collapsedSummary(m, line));
+    }
     if (isCont(prev, m)) {
       line.classList.add('cont');
       line.append(messageMeta(m, true), mdBody(m.text, m.mentions));
@@ -736,23 +767,12 @@
     if (r) $('join-line').textContent = 'join switchboard room ' + r.name;
   }
 
-  function renderLog() {
+  // Build every row for r's current history from scratch. Shared by renderLog (a room switch)
+  // and setFocusMode (the Focus toggle, #99), which rebuilds in place so rows are born with or
+  // without the collapsed treatment; either caller handles the log's scroll position itself.
+  function renderRows(r) {
     const log = $('log');
     log.replaceChildren();
-    const r = activeRoom();
-    const noRooms = state.rooms.size === 0;
-    $('empty').classList.toggle('hidden', !noRooms);
-    // first run (Welcome.dc): no members pane and no composer, only the Welcome steps
-    $('app').classList.toggle('no-rooms', noRooms);
-    log.classList.toggle('hidden', noRooms);
-    const input = $('input');
-    input.disabled = noRooms;
-    $('send').disabled = noRooms;
-    $('cmd-btn').disabled = noRooms;
-    $('mention-btn').disabled = noRooms;
-    input.placeholder = noRooms ? 'Create a room first.'
-      : 'Message ' + (state.active || '') + ' — @ to mention, / for commands';
-    updateRoomEmpty();
     if (!r) return;
     let lastDay = null;
     let prev = null;
@@ -768,7 +788,45 @@
       prev = m;
     }
     log.append(frag);
+  }
+
+  function renderLog() {
+    const log = $('log');
+    const r = activeRoom();
+    const noRooms = state.rooms.size === 0;
+    $('empty').classList.toggle('hidden', !noRooms);
+    // first run (Welcome.dc): no members pane and no composer, only the Welcome steps
+    $('app').classList.toggle('no-rooms', noRooms);
+    log.classList.toggle('hidden', noRooms);
+    const input = $('input');
+    input.disabled = noRooms;
+    $('send').disabled = noRooms;
+    $('cmd-btn').disabled = noRooms;
+    $('mention-btn').disabled = noRooms;
+    input.placeholder = noRooms ? 'Create a room first.'
+      : 'Message ' + (state.active || '') + ' — @ to mention, / for commands';
+    updateRoomEmpty();
+    renderRows(r);
     log.scrollTop = log.scrollHeight;
+  }
+
+  // Focus mode (#99): collapse agent chat not addressed to you to one line, so what needs you
+  // stands out. Rebuilds the active room's rows (renderRows) so every one is born collapsed, or
+  // born plain when Focus goes off, rather than toggling a class on each: simpler, and it can
+  // never drift from what a fresh render of the same room would look like. Stays at the bottom
+  // if the log was at the bottom; otherwise its scroll position is left alone.
+  function setFocusMode(on) {
+    const log = $('log');
+    const stick = nearBottom(log);
+    state.focusMode = on;
+    renderRows(activeRoom());
+    if (stick) log.scrollTop = log.scrollHeight;
+    const b = $('focus-toggle');
+    b.setAttribute('aria-pressed', String(on));
+    b.setAttribute('aria-label', on ? 'Focus mode on' : 'Focus mode');
+    b.title = on
+      ? 'Focus is on: agent chat not addressed to you is collapsed to one line. Click to show it all.'
+      : 'Focus: collapse agent chat not addressed to you to one line';
   }
 
   function appendMsg(r, m) {
@@ -4420,6 +4478,7 @@
       state.boardSel = null;
       renderBoard();
     });
+    $('focus-toggle').addEventListener('click', function () { setFocusMode(!state.focusMode); });
     $('pane-toggle').addEventListener('click', togglePane);
     $('st-approvals').addEventListener('click', function () {
       const r = activeRoom();

@@ -27,6 +27,7 @@ It drives headless Chromium through Playwright (a dev dependency): run `uv run p
 | `mention-highlight-light.png`, `mention-highlight-dark.png`, `mention-highlight-phone-light.png` | `@claude-1` styled in the composer as it's typed, `@nobody` left plain (issue #110) |
 | `composer-multiline-light.png`, `composer-multiline-dark.png`, `composer-multiline-phone-light.png` | a wrapped message growing the composer (issue #130), desktop and phone |
 | `room-badges-light.png`, `room-badges-dark.png`, `room-badges-phone-light.png` | the sidebar's red count for a room with a message addressed to you, beside the quiet dot for a room with other agent chatter (issue #109), desktop and the phone's rooms drawer |
+| `focus-mode-light.png`, `focus-mode-dark.png`, `focus-mode-phone-light.png` | Focus on: agent chat not addressed to you collapsed to one line, a reply to your own message left expanded (issue #99), desktop and the phone |
 | `closed-light.png`, `remotes-light.png` | the Closed rooms and Remote machines sheets |
 | `welcome-light.png` | the first-run page (a second broker with no rooms) |
 | `phone-light.png`, `phone-dark-sheet.png` | a phone, and its Members sheet |

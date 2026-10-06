@@ -134,6 +134,47 @@ def test_a_quick_second_message_is_a_continuation_row() -> None:
     assert "has-reply" in classes(rows[3]) and "first" in rows[3]["text"]  # the parent's first line
 
 
+def row_by_id(rows: list[dict[str, Any]], mid: str) -> dict[str, Any]:
+    found = [r for r in rows if r["id"] == mid]
+    assert found, (mid, rows)
+    return found[0]
+
+
+def test_focus_mode_collapses_agent_chat_not_addressed_to_you() -> None:
+    """Issue #99: Focus collapses an agent chat message to one line unless it's addressed to
+    alice (the same addressedToMe check behind the room badges, #109: an @mention or a reply to
+    her own message). Her own messages never collapse, whether Focus is on or off. A click
+    expands only the row clicked, and turning Focus off rebuilds every row back to normal."""
+    out = run("focus_mode_collapsing")
+
+    # Focus starts off: nothing is marked collapsible yet, even an agent message that would be
+    before = out["before"]
+    assert not any("collapsible" in classes(r) for r in before)
+
+    on = out["on"]
+    assert on["pressed"] == "true"
+    rows = on["rows"]
+    assert "collapsible" not in classes(row_by_id(rows, "9"))  # alice's own message
+    assert "collapsible" not in classes(row_by_id(rows, "10"))  # a reply to alice: addressed
+    assert "collapsible" not in classes(row_by_id(rows, "11"))  # an @alice mention: addressed
+    assert "collapsible" in classes(row_by_id(rows, "12"))  # not addressed to alice: collapses
+    assert "collapsible" in classes(row_by_id(rows, "13"))  # a reply to claude-1, not alice
+    assert "collapsible" not in classes(row_by_id(rows, "14"))  # alice's own message
+
+    # the collapsed line reads "sender, first line of text", with no Markdown rendering
+    assert out["expanded"]["summaryText"] == "devin-1nothing unusual here"
+
+    # clicking the collapsed line expands only that row
+    expanded_rows = out["expanded"]["rows"]
+    assert "expanded" in classes(row_by_id(expanded_rows, "12"))
+    assert "expanded" not in classes(row_by_id(expanded_rows, "13"))
+
+    # Focus off rebuilds every row back to normal
+    off = out["off"]
+    assert off["pressed"] == "false"
+    assert not any("collapsible" in classes(r) for r in off["rows"])
+
+
 def test_a_warn_notice_is_a_red_alert_row() -> None:
     rows = [r for r in run("warn_notice")["rows"] if "k-notice" in classes(r)]
     assert "warn" in classes(rows[0]) and rows[0]["role"] == "alert"

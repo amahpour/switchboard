@@ -337,7 +337,8 @@ async function buildRoom(members) {
 
 function rowInfo(w) {
   return w.$('log').children.map(function (c) {
-    return { cls: c.className, role: c.attrs.role || null, text: c.textContent, from: c.dataset.from || null };
+    return { cls: c.className, role: c.attrs.role || null, text: c.textContent, from: c.dataset.from || null,
+             id: c.dataset.id || null };
   });
 }
 
@@ -424,6 +425,42 @@ const SCENARIOS = {
     ws.deliver({ t: 'msg', room: '#build', msg: chat(13, 'codex-1', 'a reply', { harness: 'codex', reply_to: 10 }) });
     await settle();
     return report(w, ws, { rows: rowInfo(w) });
+  },
+
+  // Focus mode (#99): which messages collapse (an agent message not addressed to alice - the
+  // same addressedToMe check as the room badges, #109) and which don't; a click expands just
+  // the row clicked, and Focus off rebuilds every row back to normal.
+  async focus_mode_collapsing() {
+    const { w, ws } = await buildRoom(MEMBERS);
+    ws.deliver({ t: 'msg', room: '#build', msg: { id: 9, ts: TS + 9, kind: 'chat', from: 'alice', sender_kind: 'human',
+                                                    via: 'web', text: 'any update on the sweep?', reply_to: null,
+                                                    mentions: [], host: null } });
+    ws.deliver({ t: 'msg', room: '#build', msg: chat(10, 'claude-1', 'on it, checking now', { reply_to: 9 }) });
+    ws.deliver({ t: 'msg', room: '#build',
+      msg: chat(11, 'codex-1', '@alice take a look', { harness: 'codex', mentions: ['alice'] }) });
+    ws.deliver({ t: 'msg', room: '#build', msg: chat(12, 'devin-1', 'nothing unusual here', { harness: 'devin' }) });
+    ws.deliver({ t: 'msg', room: '#build', msg: chat(13, 'codex-1', 'thanks', { harness: 'codex', reply_to: 10 }) });
+    ws.deliver({ t: 'msg', room: '#build', msg: { id: 14, ts: TS + 14, kind: 'chat', from: 'alice', sender_kind: 'human',
+                                                    via: 'web', text: 'thanks all', reply_to: null, mentions: [], host: null } });
+    await settle();
+    const before = rowInfo(w);  // Focus off: nobody is marked collapsible yet
+
+    click(w.$('focus-toggle'));
+    await settle();
+    const on = { pressed: w.$('focus-toggle').attrs['aria-pressed'], rows: rowInfo(w) };
+
+    // expand only devin-1's collapsed message (id 12) by clicking its summary
+    const devinRow = findAll(w.$('log'), function (n) { return n.dataset && n.dataset.id === '12'; })[0];
+    const summary = findAll(devinRow, function (n) { return n.classList.contains('collapsed-line'); })[0];
+    click(summary);
+    await settle();
+    const expanded = { rows: rowInfo(w), summaryText: summary.textContent };
+
+    click(w.$('focus-toggle'));
+    await settle();
+    const off = { pressed: w.$('focus-toggle').attrs['aria-pressed'], rows: rowInfo(w) };
+
+    return { before: before, on: on, expanded: expanded, off: off };
   },
 
   // A warn notice is a red row, announced (role=alert) only when it arrives live.

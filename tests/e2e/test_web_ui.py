@@ -451,6 +451,72 @@ def test_room_badges_count_only_what_is_addressed_to_you(ui: UI) -> None:
     expect(page).to_have_title(f"switchboard — #{room}")
 
 
+def test_focus_mode_collapses_agent_chat_and_restores_on_toggle_off(ui: UI) -> None:
+    """Issue #99: Focus collapses an agent chat message not addressed to alice (the same
+    addressedToMe check as the room badges, #109) to one line; a reply to her own message stays
+    expanded either way. Clicking a collapsed line expands just that row, and turning Focus off
+    rebuilds the log, restoring every row."""
+    # not "e2e-focus": test_focus_moves_to_a_neighbour_when_the_inspected_agent_goes already
+    # owns that name, and a parallel run (-n auto) can land both on the same worker's broker
+    room = "e2e-focus-mode"
+    ui.world.create_room(f"#{room}")
+    ui.world.add_agents(f"#{room}", ("scout",))
+    page = ui.open(room=room)
+
+    asked = ui.world.say(room, "any update on the sweep?")
+    ui.world.agent_say(f"#{room}", "scout", "on it, checking now", reply_to=asked)
+    ui.world.agent_say(f"#{room}", "scout", "the sweep found nothing unusual here")
+
+    addressed = chat_row(page, "on it, checking now")
+    unaddressed = chat_row(page, "the sweep found nothing unusual here")
+    toggle = page.locator("#focus-toggle")
+    expect(toggle).to_have_attribute("aria-pressed", "false")
+    expect(unaddressed.locator(".collapsed-line")).to_have_count(0)  # not built until Focus is on
+
+    toggle.click()
+    expect(toggle).to_have_attribute("aria-pressed", "true")
+
+    # a reply to alice's own message stays expanded; the other agent chat collapses to one line
+    expect(addressed.locator(".msg-text")).to_be_visible()
+    expect(addressed.locator(".collapsed-line")).to_have_count(0)
+    expect(unaddressed.locator(".msg-text")).to_be_hidden()
+    summary = unaddressed.locator(".collapsed-line")
+    expect(summary).to_be_visible()
+    expect(summary).to_contain_text("scout")
+    expect(summary).to_contain_text("the sweep found nothing unusual here")
+
+    # Enter on the collapsed line (a button) expands only that row, and the row keeps the focus:
+    # the button hides as it expands, which would otherwise drop the focus to the page
+    summary.focus()
+    page.keyboard.press("Enter")
+    expect(unaddressed.locator(".msg-text")).to_be_visible()
+    expect(summary).to_be_hidden()
+    expect(unaddressed).to_be_focused()
+
+    # Focus off rebuilds the log: every row, including the one just expanded, is back to normal
+    toggle.click()
+    expect(toggle).to_have_attribute("aria-pressed", "false")
+    expect(unaddressed.locator(".msg-text")).to_be_visible()
+    expect(unaddressed.locator(".collapsed-line")).to_have_count(0)
+
+
+def test_the_room_buttons_sit_in_one_row_on_a_phone(ui: UI) -> None:
+    """On a phone the room's buttons (rules, Focus) get a row of their own below the chips, side
+    by side. Before #223 they had no place in the phone header's grid, so each fell into
+    whichever column was next: Focus sat apart from the rules button, under the room's name."""
+    page = ui.open(**PHONE)
+    rules = page.locator("#room-rules")
+    focus = page.locator("#focus-toggle")
+    expect(rules).to_be_visible()
+    expect(focus).to_be_visible()
+    r, f, chips = rules.bounding_box(), focus.bounding_box(), page.locator("#status-chips").bounding_box()
+    assert r and f and chips
+    assert r["y"] == f["y"], (r, f)  # one row
+    assert 0 <= f["x"] - (r["x"] + r["width"]) <= 8, (r, f)  # side by side
+    assert r["y"] >= chips["y"] + chips["height"], (r, chips)  # below the chips
+    no_horizontal_scroll(page)
+
+
 def test_approvals_chip_names_one_counts_several_and_includes_unknown(ui: UI) -> None:
     """The room warning stays short, counts unknown modes too, and leads to flagged members."""
     world = ui.world
