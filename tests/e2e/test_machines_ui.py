@@ -144,7 +144,9 @@ def test_add_approve_and_remove_a_machine(ui: UI, hosted: InProcBroker, machines
         re.compile(r"^uv tool install switchboard-chat==\d+\.\d+\.\d+$")
     )
     # the package and its version never break across lines (at the hyphen, on a phone, #233)
-    expect(page.locator("#pair-install .nowrap")).to_have_text(re.compile(r"^switchboard-chat==\d+\.\d+\.\d+$"))
+    expect(page.locator("#pair-install .nowrap")).to_have_text(
+        re.compile(r"^switchboard-chat==\d+\.\d+\.\d+$")
+    )
     expect(page.locator("#pair-left")).to_have_text(re.compile(r"^(10:00|9:[0-5]\d) left$"))
     expect(page.locator("#machines-body .machine-wait")).to_contain_text(
         "Waiting for work-laptop to dial in…"
