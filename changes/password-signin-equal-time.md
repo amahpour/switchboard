@@ -1,0 +1,3 @@
+### Fixed
+
+- **Signing in with a password now costs the same time whoever you type.** Before, a wrong password for a real person with their own password ran two scrypt checks (about twice as slow), while an unknown name, an empty one, the admin before they'd set a password, or a guess while a broker's claim link was still open ran none at all — a difference easy to measure over the network, that would have told an attacker which names on a hosted broker are real people. Every attempt now runs exactly one scrypt check, real or against a dummy hash, so the time it takes says nothing about who exists.
