@@ -971,6 +971,35 @@ def test_mention_popover_matches_any_part_of_a_name(ui: UI) -> None:
     box.fill("")  # nothing is sent
 
 
+def test_broadcast_mentions_lead_the_popover_and_style_like_a_mention_once_sent(ui: UI) -> None:
+    """Issue #111: @here and @everyone show above the agents in the @ popover, each with its
+    own one-line description, and the header's count is the agents alone (2, not 4); once
+    alice actually sends one, it gets the same .md-mention style in the log as any @mention
+    (#110), through the real broker (parse_broadcast, broadcast_targets), not a fake."""
+    room = "e2e-broadcast"
+    ui.world.create_room(f"#{room}")
+    ui.world.add_agents(f"#{room}", ("claude-1", "codex-1"))
+    page = ui.open(room=room)
+    box = page.locator("#input")
+    box.focus()
+    mentions = page.locator("#mentions")
+
+    page.keyboard.type("@")
+    expect(mentions).to_be_visible()
+    options = mentions.locator("[role=option]")
+    expect(options).to_have_count(4)  # here, everyone, claude-1, codex-1
+    expect(options.nth(0)).to_have_attribute("id", "men-here")
+    expect(options.nth(1)).to_have_attribute("id", "men-everyone")
+    expect(mentions.locator(".pal-head .muted")).to_have_text("2")  # the 2 agents, not 4
+    box.fill("")
+    expect(mentions).to_be_hidden()
+
+    ui.world.say(room, "@everyone, ship it")
+    row = chat_row(page, "ship it")
+    expect(row).to_be_visible()
+    expect(row.locator(".md-mention")).to_have_text("@everyone")
+
+
 def test_mention_highlight_lines_up_with_the_real_text(ui: UI) -> None:
     """Issue #110: typing @claude-1 (an active member) wraps it in .mention-hl in the mirror
     behind #input, and that span's box lines up with where a caret right after it would sit in

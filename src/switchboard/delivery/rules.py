@@ -9,6 +9,8 @@ cap, human first, one peer batch per turn boundary, busy = priority only),
 budget, rate limit and the loop guard. M3 adds requeue (re-deliver once);
 M6 the watchdog (remind about an unanswered @mention, then tell the human)
 and the parked escalation. The read-first rule for pass() (§24) is here too.
+Issue #111 adds broadcast mentions (``@here``, ``@everyone``): who a person's
+broadcast reaches, not whether it may (the caller's job).
 """
 
 from __future__ import annotations
@@ -28,7 +30,8 @@ FRAME_RESERVE = envelope.frame_reserve("#" + "x" * 39, "y" * 40, 99)
 
 
 def parse_mentions(text: str, active_names: Iterable[str]) -> list[str]:
-    """Lower-cased active screen names @mentioned in ``text``. There is no @all."""
+    """Lower-cased active screen names @mentioned in ``text``. There is no @all (see
+    ``parse_broadcast`` below for ``@here``/``@everyone``, which are not screen names)."""
     names = {n.lower() for n in active_names}
     found = []
     for m in MENTION_RE.finditer(text or ""):
@@ -36,6 +39,40 @@ def parse_mentions(text: str, active_names: Iterable[str]) -> list[str]:
         if n in names and n not in found:
             found.append(n)
     return found
+
+
+# Broadcast mentions (DESIGN.md §8.1, issue #111): a safe start lets only a person use them
+# (checked by the caller, broker/service.py human_say -- an agent's @here/@everyone is plain
+# text, ROOM_RULES rule 6). "all" and "channel" are reserved screen names too (RESERVED_NAMES)
+# but match nothing here, same as @all always has.
+BROADCAST_NAMES = ("everyone", "here")
+
+
+def parse_broadcast(text: str) -> str | None:
+    """'everyone' or 'here' when ``@everyone``/``@here`` appears in ``text`` (the same
+    ``@word`` shape as ``MENTION_RE``, so a mid-word ``foo@here`` doesn't count). 'everyone'
+    wins when both appear, since it is the wider reach. None otherwise."""
+    found = {m.group(1).lower() for m in MENTION_RE.finditer(text or "")}
+    for name in BROADCAST_NAMES:
+        if name in found:
+            return name
+    return None
+
+
+def broadcast_targets(kind: str, members: Iterable[tuple[str, str]]) -> list[str]:
+    """Screen names a broadcast of ``kind`` ('everyone' or 'here') reaches (DESIGN.md §8.1):
+    'everyone' is every member passed in; 'here' only those whose status isn't 'offline' (the
+    same presence ``who()`` shows). ``members``: (screen_name, status) of every active
+    membership in the room. Expanding ``mentions`` with these names is the whole mechanism: a
+    human message is already prio=2 for everyone regardless of ``mentions`` (``classify``,
+    above), so a broadcast changes no delivery an ``@name`` mention wouldn't already make --
+    only which members' ``mentioned`` flag is set (the mention style, the room badges, and the
+    watchdog, §8.5)."""
+    if kind == "everyone":
+        return [n for n, _ in members]
+    if kind == "here":
+        return [n for n, s in members if s != "offline"]
+    return []
 
 
 def classify(sender_kind: str, recipient: str, mentions: Iterable[str]) -> tuple[int, bool]:

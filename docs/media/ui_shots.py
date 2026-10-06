@@ -24,6 +24,8 @@ What it does:
 The outputs: desktop-{light,dark}, markdown-{light,dark}, palette-light, mention-light,
 mention-midname-{light,dark,phone-light} (a mid-name match, #112),
 mention-highlight-{light,dark,phone-light} (a known @mention styled as you type it, #110),
+broadcast-popover-{light,dark,phone-light} (@here/@everyone above the agents in the @ popover,
+#111), broadcast-mention-{light,dark,phone-light} (a sent @everyone styled as a mention, #111),
 composer-multiline-{light,dark,phone-light} (the composer grown with wrapped text, #130),
 room-badges-{light,dark,phone-light} (the red count beside the quiet dot, #109),
 focus-mode-{light,dark,phone-light} (agent chat collapsed to one line, a reply to you left
@@ -461,6 +463,64 @@ def shoot_mention_highlight(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def shoot_broadcast_popover(browser: Any, out: Path, world: Any) -> None:
+    """@here/@everyone (issue #111): the @ popover, above the agent list, each with its own
+    one-line description. A room of its own; light, dark and the phone."""
+    from playwright.sync_api import expect
+
+    world.create_room("#ops-broadcast")
+    world.add_agents("#ops-broadcast", ("claude-1", "codex-1"))
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for name, ctx_args in (
+        ("broadcast-popover-light.png", {**DESKTOP, "color_scheme": "light"}),
+        ("broadcast-popover-dark.png", {**DESKTOP, "color_scheme": "dark"}),
+        ("broadcast-popover-phone-light.png", {**PHONE, "color_scheme": "light"}),
+    ):
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="#ops-broadcast"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            type_in(page, "@")
+            expect(page.locator("#men-here")).to_be_visible()
+            expect(page.locator("#men-everyone")).to_be_visible()
+            shot(page, out, name)
+        finally:
+            ctx.close()
+
+
+def shoot_broadcast_mention(browser: Any, out: Path, world: Any) -> None:
+    """A sent @everyone message (issue #111), styled as a mention in the log (#110) the same
+    way a real @name is. The same room as shoot_broadcast_popover, one message posted once;
+    light, dark and the phone."""
+    from playwright.sync_api import expect
+
+    world.say("ops-broadcast", "@everyone the deploy's done, status check when you can")
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for name, ctx_args in (
+        ("broadcast-mention-light.png", {**DESKTOP, "color_scheme": "light"}),
+        ("broadcast-mention-dark.png", {**DESKTOP, "color_scheme": "dark"}),
+        ("broadcast-mention-phone-light.png", {**PHONE, "color_scheme": "light"}),
+    ):
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="#ops-broadcast"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            expect(page.locator("#log .md-mention").last).to_have_text("@everyone")
+            shot(page, out, name)
+        finally:
+            ctx.close()
+
+
 def shoot_room_badges(browser: Any, out: Path, world: Any) -> None:
     """Room badges (#109): the sidebar's red count for a message addressed to the person (an
     @mention here) beside the quiet dot for other agent chatter, in the same room list, so the
@@ -838,6 +898,8 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_board(browser, out, world)
             shoot_mentions(browser, out, world)
             shoot_mention_highlight(browser, out, world)
+            shoot_broadcast_popover(browser, out, world)
+            shoot_broadcast_mention(browser, out, world)
             shoot_offline(browser, out, world)
             # last of this world's shots: its two rooms' unread backlog would otherwise show up
             # (unread is recomputed per page load) in shoot_offline's sidebar too
