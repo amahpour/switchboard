@@ -505,9 +505,9 @@ class RoomService:
             self.hub.room_settings(room.name, self.settings(room))
             self.hub.members_changed(room.name)
             if self.delivery is not None:
-                # "budget" re-evaluates at once (more may now be deliverable); "hops" never
-                # un-pauses on its own (cmds._hops_set), so it only needs the snapshot either
-                # branch of ``on_command``'s default falls through to.
+                # "budget" re-evaluates at once (more may now be deliverable); a hop limit
+                # change never un-pauses on its own (cmds._hops_set), so "hops" only needs the
+                # snapshot ``on_command``'s default branch already gives it.
                 if budget_per_hour != old_rate:
                     self.delivery.on_command(room, "budget", None)
                 if hop_limit != old_hops:
