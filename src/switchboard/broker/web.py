@@ -69,7 +69,7 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 from switchboard import __version__, build_info, db
 from switchboard.broker import oidc, people
 from switchboard.broker.auth import COOKIE_NAME, SESSION_TTL_S, app_csp, sha256_hex
-from switchboard.broker.commands import Actor
+from switchboard.broker.commands import MAX_BUDGET, MAX_HOPS, Actor
 from switchboard.broker.hub import WsSubscriber
 from switchboard.broker.passkeys import CEREMONY_TTL_S, CLAIM_GRACE_S, clean_name, sign_count_ok
 from switchboard.broker.passwords import (
@@ -1236,6 +1236,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 "password": has_password,
                 "fresh": state.fresh_check(w.h),
                 "preferences": state.store.preferences(w.person_id),
+                # what a new room this person creates would start with, and where it comes
+                # from (#131): shown in Settings beside the budget/hop-limit defaults
+                "wake_defaults": state.service.wake_defaults(w.person_id),
             }
         )
         # Slide the browser cookie along with the server-side session.
@@ -1318,7 +1321,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return unauthorized()
         try:
             body = await _json_body(request)
-            if not body or set(body) - {"theme", "text_size", "room_rules"}:
+            fields = {"theme", "text_size", "room_rules", "budget_per_hour", "hop_limit"}
+            if not body or set(body) - fields:
                 raise ServiceError("bad_request", "unknown preference")
             if "theme" in body and body["theme"] not in ("system", "light", "dark"):
                 raise ServiceError("bad_request", "theme must be system, light or dark")
@@ -1328,6 +1332,32 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 not isinstance(body["room_rules"], str) or len(body["room_rules"]) > 2000
             ):
                 raise ServiceError("bad_request", "room rules must be at most 2000 characters")
+            # null clears a default back to config.toml/the built-in one (#131); only a signed-in
+            # session reaches this route, so raising your own default needs no further check.
+            if (
+                "budget_per_hour" in body
+                and body["budget_per_hour"] is not None
+                and (
+                    isinstance(body["budget_per_hour"], bool)
+                    or not isinstance(body["budget_per_hour"], int)
+                    or not 0 <= body["budget_per_hour"] <= MAX_BUDGET
+                )
+            ):
+                raise ServiceError(
+                    "bad_request", f"budget_per_hour must be an integer from 0 to {MAX_BUDGET}, or null"
+                )
+            if (
+                "hop_limit" in body
+                and body["hop_limit"] is not None
+                and (
+                    isinstance(body["hop_limit"], bool)
+                    or not isinstance(body["hop_limit"], int)
+                    or not 0 <= body["hop_limit"] <= MAX_HOPS
+                )
+            ):
+                raise ServiceError(
+                    "bad_request", f"hop_limit must be an integer from 0 to {MAX_HOPS}, or null"
+                )
             return _ok({"preferences": state.store.set_preferences(w.person_id, body)})
         except ServiceError as e:
             return _svc_err(e)
@@ -1364,6 +1394,29 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 raise ServiceError("bad_request", "text is required")
             room = state.service.set_room_rules(slug, body["text"], w.name)
             return _ok({"rules": room.rules_text})
+        except ServiceError as e:
+            return _svc_err(e)
+
+    # The room's own budget per hour and hop limit (#131), from its settings dialog: the same
+    # Origin and X-Switchboard checks as /rules above, never reachable through chat.
+    @app.put("/api/rooms/{slug}/wake")
+    async def set_room_wake(request: Request, slug: str) -> Response:
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        try:
+            body = await _json_body(request)
+            if set(body) != {"budget_per_hour", "hop_limit"}:
+                raise ServiceError("bad_request", "budget_per_hour and hop_limit are required")
+            budget, hops = body["budget_per_hour"], body["hop_limit"]
+            if isinstance(budget, bool) or not isinstance(budget, int) or not 0 <= budget <= MAX_BUDGET:
+                raise ServiceError(
+                    "bad_request", f"budget_per_hour must be an integer from 0 to {MAX_BUDGET}"
+                )
+            if isinstance(hops, bool) or not isinstance(hops, int) or not 0 <= hops <= MAX_HOPS:
+                raise ServiceError("bad_request", f"hop_limit must be an integer from 0 to {MAX_HOPS}")
+            room = state.service.set_room_wake(slug, budget_per_hour=budget, hop_limit=hops, actor=w.name)
+            return _ok({"settings": state.service.settings(room)})
         except ServiceError as e:
             return _svc_err(e)
 

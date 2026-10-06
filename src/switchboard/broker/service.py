@@ -23,7 +23,7 @@ from switchboard.broker import commands as cmds
 from switchboard.broker.commands import Actor, CommandError
 from switchboard.broker.hub import Hub
 from switchboard.clock import Clock, SystemClock
-from switchboard.config import Config
+from switchboard.config import Config, DeliveryCfg
 from switchboard.delivery.rules import parse_mentions
 from switchboard.envelope import clean
 from switchboard.models import (
@@ -411,18 +411,37 @@ class RoomService:
         room = self.store.get_room(room_name)
         return self.settings(room) if room is not None else None
 
+    def wake_defaults(self, person_id: int | None) -> dict[str, dict[str, Any]]:
+        """What a new room this person creates starts with, and where it comes from (#131):
+        their own default from Settings if they set one, else ``[delivery]`` in config.toml,
+        else the built-in default. Shown in Settings so it's clear what applies; reused by
+        ``create_room`` so the precedence is computed in exactly one place."""
+        prefs = self.store.preferences(person_id)
+        out: dict[str, dict[str, Any]] = {}
+        builtin = DeliveryCfg()
+        for key in ("budget_per_hour", "hop_limit"):
+            own = prefs[key]
+            if own is not None:
+                out[key] = {"value": own, "source": "your default"}
+            else:
+                val = getattr(self.cfg.delivery, key)
+                source = "built-in default" if val == getattr(builtin, key) else "config.toml"
+                out[key] = {"value": val, "source": source}
+        return out
+
     # ---------------------------------------------------------------- writes
     def create_room(self, name: str, *, creator: str | None = None, person_id: int | None = None) -> Room:
         try:
             n = normalize_room(name)
         except InvalidName as e:
             raise ServiceError("bad_request", str(e)) from None
+        defaults = self.wake_defaults(person_id)
         try:
             room = self.store.create_room(
                 n,
                 creator or self.cfg.human_name,
-                self.cfg.delivery.budget_per_hour,
-                self.cfg.delivery.hop_limit,
+                defaults["budget_per_hour"]["value"],
+                defaults["hop_limit"]["value"],
                 self.store.preferences(person_id)["room_rules"],
             )
         except Conflict:
@@ -454,6 +473,45 @@ class RoomService:
             text=f"{actor} updated the room rules",
         )
         self.rooms_changed()
+        return room
+
+    def set_room_wake(self, room_name: str, *, budget_per_hour: int, hop_limit: int, actor: str) -> Room:
+        """Budget per hour and hop limit from the room's own settings dialog (#131), live and
+        without a restart: the rate ``/budget <n>`` can't set (it only ever sets what's left
+        this hour) and the hop limit ``/hops <n>`` does, saved together in one dialog. Bounds
+        and unknown fields are checked by the caller (the web route). Only a signed-in web
+        session reaches this route, the same role ``/budget`` and ``/hops`` need to raise
+        activity (``commands.required_role``), so no further role check runs here; lowering
+        needs nothing more there either."""
+        room = self.room(room_name)
+        room = self.store.refill_budget(room.id)  # judge "was" against what's really left now
+        old_rate, old_hops = room.budget_per_hour, room.hop_limit
+        changed = False
+        if budget_per_hour != old_rate:
+            room = self.store.set_budget_rate(room.id, budget_per_hour)
+            self.store.add_event(
+                "budget_set", room_id=room.id, data={"old": old_rate, "new": budget_per_hour}
+            )
+            self.post_notice(
+                room, f"{actor} set the wake budget to {budget_per_hour}/hour (was {old_rate}/hour)"
+            )
+            changed = True
+        if hop_limit != old_hops:
+            room = self.store.set_hop_limit(room.id, hop_limit)
+            self.store.add_event("hop_limit_set", room_id=room.id, data={"old": old_hops, "new": hop_limit})
+            self.post_notice(room, f"{actor} {cmds.hop_limit_notice(old_hops, hop_limit)}")
+            changed = True
+        if changed:
+            self.hub.room_settings(room.name, self.settings(room))
+            self.hub.members_changed(room.name)
+            if self.delivery is not None:
+                # "budget" re-evaluates at once (more may now be deliverable); "hops" never
+                # un-pauses on its own (cmds._hops_set), so it only needs the snapshot either
+                # branch of ``on_command``'s default falls through to.
+                if budget_per_hour != old_rate:
+                    self.delivery.on_command(room, "budget", None)
+                if hop_limit != old_hops:
+                    self.delivery.on_command(room, "hops", None)
         return room
 
     def notice_everywhere(self, text: str) -> None:
