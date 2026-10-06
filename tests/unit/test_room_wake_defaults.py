@@ -96,7 +96,7 @@ def test_set_room_wake_sets_the_rate_and_what_is_left_this_hour_together(svc: Ro
     room = svc.set_room_wake("#build", budget_per_hour=120, hop_limit=6, actor="alice")
     assert (room.budget_per_hour, room.budget_remaining) == (120, 120)
     assert "alice set the wake budget to 120/hour (was 60/hour)" in notices(svc)
-    assert events(svc, "budget_set")[-1] == {"old": 60, "new": 120}
+    assert events(svc, "budget_set")[-1] == {"old": 60, "new": 120, "per_hour": True}
 
 
 def test_set_room_wake_writes_the_same_hop_limit_notice_the_hops_command_writes(svc: RoomService) -> None:
