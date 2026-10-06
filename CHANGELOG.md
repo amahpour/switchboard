@@ -2,6 +2,24 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.20.0 (2026-10-06)
+
+### Upgrading
+
+- **Existing accounts keep working as they are.** On a hosted broker nobody has an email until the admin sets one, so after the upgrade everyone signs in as before: with their name and password, or a passkey. The admin signs in with their name or `admin`, and anyone signed in stays signed in. Emails already set for Google sign-in carry over as those accounts' emails.
+- **Tell people before you set their email.** Once the admin sets someone's email in **Admin > People**, that person signs in with the email, and their name stops working on the sign-in page. Their open sessions and their passkeys carry on. Set your own on your row too: after that you sign in with it or with `admin`, and your name stops working for you.
+- **The database moves to schema 12** on start, after a checked backup next to it (`switchboard.db.v11.bak`). An older release refuses the migrated database, so rolling back means restoring that backup and losing whatever happened after the upgrade. On a desktop broker only the schema changes.
+
+### Changed
+
+- **On a hosted broker, people sign in with their email.** Setting a broker up now asks the admin for their email. Each card in **Admin > People** has an **Email** field (it was **Google sign-in**, shown only with Google on), and a card without one says "no email yet". Once the admin sets someone's email, they type it on the sign-in page instead of their name, and their name stops working there; it's still what everyone sees in the rooms. Someone without an email yet signs in by name as before, and `admin` always signs the admin in. Emails already set for Google sign-in carry over, so those people sign in with that email by password too.
+
+### Fixed
+
+- **A Codex session on Linux no longer goes "detached?" when one check misses its TUI.** On a busy machine, Linux `lsof` sometimes skips a socket in one look, and that one look held the session's messages as if its TUI had quit, until the session was idle for 70 s or its person typed. switchboard now looks a second time before deciding a TUI is gone.
+- **The web UI no longer looks live while it's disconnected.** When the page loses its connection to the broker, the You row says "reconnecting…", the Running/Paused chip loses its colour, a band says what you see may be out of date, and the member list is dimmed as "last known". Before, only the small "Reconnecting…" in the sidebar footer said so, and everything else kept showing online. It all comes back on its own when the connection does.
+- **The composer now grows as a message wraps, not just on an explicit line break.** It stayed one line tall while you typed a long sentence, so the lines you'd already written scrolled out of view inside the box and you had to scroll a 20 px window to reread them. It now grows up to about 8 lines (then scrolls), and goes back to one line after you send.
+
 ## 0.19.0 (2026-10-05)
 
 ### Added
