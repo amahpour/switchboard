@@ -12,11 +12,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from switchboard.broker.peer import McpIdentity
 from switchboard.config import Config
 from switchboard.hook.switchboard_hook import CONTEXT_MAX as HOOK_CONTEXT_MAX
 from switchboard.models import Batch, HookEvent, Participant, Release, Route
+from switchboard.models import session_key as make_session_key
 
 INLINE_PATHS = frozenset({"inbox", "wait", "read", "say"})
+
+
+def start_key(start: float | None) -> str:
+    """A process start time as a session-key component (DESIGN.md §6.3): fixed
+    precision, so a restarted process's new start never collides with the old key."""
+    return f"{start:.2f}" if start is not None else "?"
+
 
 # Hook events whose reply may carry context, per harness (DESIGN.md §7.3,
 # broker side; the hook script has its own copy of the output table).
@@ -94,6 +103,47 @@ class Adapter:
 
     def tier(self, p: Participant | None) -> tuple[str, str | None]:
         return "mcp-only", None
+
+    # -- membership: session keys, binding (DESIGN.md §6.3) -----------------
+    def session_key(self, ident: McpIdentity, thread_id: str | None) -> str:
+        """This harness's session key for a verified ``mcp.hello`` identity: by default,
+        one session per agent process (claude, devin, an unknown harness). Cursor
+        overrides this with a pending key until its join nonce binds a conversation id."""
+        return make_session_key(self.harness, ident.host, f"{ident.agent_pid}@{start_key(ident.agent_start)}")
+
+    def existing_session(self, store: Any, ident: McpIdentity) -> Participant | None:
+        """A session this verified identity already holds under a key other than what
+        ``session_key`` computes right now (Cursor: by its MCP server's agent process,
+        until a conversation id is known) — None for harnesses whose key alone finds it."""
+        return None
+
+    def join_fields(self, existing: Participant | None) -> dict[str, Any]:
+        """Extra participant fields this harness's join needs beyond the common ones
+        (Cursor: a fresh or unbound row starts ``pending`` until its conversation binds
+        it)."""
+        return {}
+
+    def conversation_kicked(self, store: Any, room_id: int, p: Participant) -> bool:
+        """True if this session's larger identity (Cursor: its bound conversation) was
+        kicked from ``room_id`` under an earlier participant row, even though ``p``
+        itself wasn't (a resumed conversation, DESIGN.md §9.4) — False for harnesses
+        with no such identity wider than the participant row."""
+        return False
+
+    def nonce_ok(self, p: Participant, ev: HookEvent) -> bool:
+        """True if this hook event carries the join nonce ``p``'s own pending join
+        issued (Cursor's join-nonce bind) — harnesses with no such bind never have one
+        to check."""
+        return False
+
+    def bound_to(self, p: Participant, sid: str | None) -> bool:
+        """True if ``p`` is already bound to this hook's session id."""
+        return False
+
+    def conversation_key(self, p: Participant, sid: str | None) -> str | None:
+        """The session key a join-nonce bind to ``sid`` would set ``p`` to, or None for
+        a harness with no such bind, or a malformed id."""
+        return None
 
     def conn_tier(self, ident: Any, existing: Participant | None) -> tuple[str, str | None]:
         """The tier a join from this verified MCP connection gets (Claude: inbox if attached)."""

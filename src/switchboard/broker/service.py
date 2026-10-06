@@ -24,7 +24,7 @@ from switchboard.broker.commands import Actor, CommandError
 from switchboard.broker.hub import Hub
 from switchboard.clock import Clock, SystemClock
 from switchboard.config import Config, DeliveryCfg
-from switchboard.delivery.rules import parse_mentions
+from switchboard.delivery.rules import broadcast_targets, parse_broadcast, parse_mentions
 from switchboard.envelope import clean
 from switchboard.models import (
     CONTINUE_PATHS,
@@ -781,7 +781,9 @@ class RoomService:
         """A message from a human. Posted literally, never parsed as a command.
         ``skip``: memberships that get no delivery of it (only ``/catchup`` passes any: its
         subjects, §26). ``person``: who, on a hosted broker with people (§32): their name
-        and id (None: the owner); by default the owner, ``human_name``."""
+        and id (None: the owner); by default the owner, ``human_name``. An ``@here``/
+        ``@everyone`` broadcast (issue #111) is expanded here, since every caller is a
+        person's message (a /catchup post, a review board post, or the web/CLI say)."""
         room = self.room(name)
         if not isinstance(text, str):
             raise ServiceError("bad_request", "text must be a string")
@@ -796,6 +798,14 @@ class RoomService:
             )
         self.reply_target(room, reply_to)
         mentions = parse_mentions(text, self.mention_names(room))
+        broadcast = parse_broadcast(text)
+        if broadcast:
+            # A safe start (issue #111): only a person's @here/@everyone reaches every agent;
+            # from an agent it's plain text (human_say is never called for an agent's say()).
+            # Expanding mentions with the targets' own names is the whole mechanism -- see
+            # rules.broadcast_targets for why no other delivery rule needs to change.
+            members = [(m.name, m.status) for m in self.store.members(room.id)]
+            mentions = sorted(set(mentions) | set(broadcast_targets(broadcast, members)) | {broadcast})
         msg = self._post(
             room,
             sender_name=person[0] if person is not None else self.cfg.human_name,

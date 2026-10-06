@@ -518,6 +518,15 @@
     return a;
   }
 
+  // The @ popover's @here/@everyone rows (issue #111): not an agent, so the people icon
+  // instead of a harness glyph, on the same .avatar.sys tile a system message uses.
+  function broadcastAvatar() {
+    const a = el('span', 'avatar sys');
+    a.append(icon('people'));
+    a.setAttribute('aria-hidden', 'true');
+    return a;
+  }
+
   function statusKey(m) { return m.parked ? 'parked' : m.status; }
 
   function statusWord(m) { return m.parked ? 'Parked' : (STATUS_WORD[m.status] || m.status || ''); }
@@ -1828,11 +1837,29 @@
     return out;
   }
 
+  // Broadcast mentions (issue #111): a person's @here/@everyone reaches every agent, the way
+  // service.human_say and delivery.rules.broadcast_targets do on the broker; an agent's own
+  // @here/@everyone is plain text, but the web composer is always a person's, so both always
+  // show here. "here" above "everyone": the narrower one first, same order the popover keeps.
+  const BROADCASTS = [
+    { name: 'here', broadcast: true, desc: 'Every agent online now' },
+    { name: 'everyone', broadcast: true, desc: 'Every agent in the room, offline ones too' },
+  ];
+  const BROADCAST_NAMES = BROADCASTS.map(function (b) { return b.name; });
+
+  // Broadcast entries whose name starts with `query` (matchInfo's MATCH_PREFIX rule, kept
+  // simple: there's only two of them, always shown above the member list).
+  function matchBroadcasts(query) {
+    return BROADCASTS.filter(function (b) { return !query || b.name.startsWith(query); });
+  }
+
   // Who an @mention can address, lower-cased: service.mention_names on the broker (active
   // members of `r`, plus the human and everyone else on a hosted broker). "A person" has no
   // delivery row, so it's never in r.members, but parse_mentions on the broker counts it too.
+  // "here" and "everyone" are added too (issue #111): the composer is always a person's, and a
+  // person's @here/@everyone is a real broadcast, so they get the same highlight as a mention.
   function knownMentionNames(r) {
-    const names = new Set();
+    const names = new Set(BROADCAST_NAMES);
     if (state.me && state.me.human) names.add(String(state.me.human).toLowerCase());
     for (const p of state.people) names.add(String(p.name).toLowerCase());
     if (r) for (const m of r.members) names.add(String(m.name).toLowerCase());
@@ -1953,10 +1980,11 @@
     if (mm) {
       const pre = mm[2];
       const query = pre.toLowerCase();
-      const items = matchMembers(r, query);
+      const members = matchMembers(r, query);
+      const items = matchBroadcasts(query).concat(members);
       if (!items.length) return closePop();
       openPop({ kind: 'mentions', items: items, sel: keepSel('mentions', items), start: caret - pre.length - 1, end: caret,
-                query: query });
+                query: query, memberCount: members.length });
       return;
     }
     closePop();
@@ -2063,7 +2091,8 @@
       box.append(foot);
     } else {
       const head = el('div', 'pal-head');
-      head.append(el('strong', null, 'Agents in ' + (r ? r.name : '')), el('span', 'muted', String(p.items.length)));
+      const count = typeof p.memberCount === 'number' ? p.memberCount : p.items.length;
+      head.append(el('strong', null, 'Agents in ' + (r ? r.name : '')), el('span', 'muted', String(count)));
       box.append(head);
       p.items.forEach(function (m, i) {
         const o = el('div', 'pal-item mention-opt');
@@ -2076,6 +2105,17 @@
         const hit = matchInfo(m.name, p.query || '');
         appendMatch(nameEl, m.name, hit ? hit.start : 0, hit ? hit.len : 0);
         nl.append(nameEl);
+        if (m.broadcast) {
+          // @here/@everyone (issue #111): a description where a member's status goes, on the
+          // same line, and a plain icon instead of a harness avatar -- it isn't one.
+          nl.append(el('span', 'm-status', m.desc));
+          main.append(nl);
+          o.append(broadcastAvatar(), main);
+          if (i === p.sel) selected = o;
+          bindOption(o, i);
+          box.append(o);
+          return;
+        }
         if (m.host) nl.append(hostChip(m, false));
         const flag = approvalsFlag(m);
         if (flag) nl.append(flag);
@@ -4418,7 +4458,7 @@
     const r = activeRoom();
     if (!r) return;
     const text = await openDialog({ kind: 'rules', title: 'Rules for ' + r.name,
-      body: 'These add to switchboard’s five fixed rules. Agents see them when they join, and once more after each edit.',
+      body: 'These add to switchboard’s six fixed rules. Agents see them when they join, and once more after each edit.',
       initial: r.rules, action: 'Save rules' });
     if (text === null) return;
     try {
