@@ -456,6 +456,14 @@ class RoomService:
         self.rooms_changed()
         return room
 
+    def notice_everywhere(self, text: str) -> None:
+        """A stored notice in every open room (a person renamed, #114): history keeps it, and
+        anyone reading a room later sees why the names change."""
+        for room in self.store.list_rooms():
+            self._post(
+                room, sender_name="switchboard", sender_kind="system", via="system", kind="notice", text=text
+            )
+
     def rooms_changed(self) -> None:
         """Tell web clients the open rooms changed (create, close, reopen, delete)."""
         self.hub.rooms_changed([r.name for r in self.store.list_rooms()])

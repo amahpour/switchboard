@@ -807,6 +807,7 @@ class Store:
             self.meta_delete("owner_email")
             self.meta_delete("owner_first_name")
             self.meta_delete("owner_last_name")
+            self.meta_delete("owner_name")
             self.meta_delete("owner_handle")
             self.meta_delete("owner_claimed_at")
             self.meta_set("reset_owner_applied", applied)
@@ -897,6 +898,31 @@ class Store:
     # in, with a password or with Google. One active person per email; the owner's is apart.
     def owner_email(self) -> str | None:
         return self.meta_get("owner_email")
+
+    def owner_name(self) -> str | None:
+        """The owner's name in the rooms as renamed in Settings (#114), or None: then config's."""
+        return self.meta_get("owner_name")
+
+    def set_owner_name(self, name: str) -> None:
+        self.meta_set("owner_name", name)
+
+    def person_rename(self, person_id: int, name: str) -> None:
+        """A person's new name in the rooms (#114). Raises ValueError when an active person has
+        it already."""
+        with db.tx(self.con):
+            other = self.person_named(name)
+            if other is not None and other.id != person_id:
+                raise ValueError("that name is taken")
+            self.con.execute("UPDATE people SET name=? WHERE id=? AND removed_at IS NULL", (name, person_id))
+
+    def active_agent_names(self) -> list[str]:
+        """Every screen name an agent holds in an open membership, in any room."""
+        return [
+            r[0]
+            for r in self.con.execute(
+                "SELECT DISTINCT screen_name FROM memberships WHERE left_at IS NULL ORDER BY screen_name"
+            ).fetchall()
+        ]
 
     def owner_names(self) -> tuple[str | None, str | None]:
         """The owner's first and last name (#192, §39.6), or None for each not set."""

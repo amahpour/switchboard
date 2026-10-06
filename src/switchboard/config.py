@@ -116,6 +116,8 @@ class SecurityCfg:
 @dataclass(frozen=True)
 class Config:
     human_name: str = field(default_factory=default_human_name)
+    # SWITCHBOARD_HUMAN_NAME set it: then it wins over a rename in Settings too (#114, §41)
+    human_name_from_env: bool = False
     port: int = 7419
     # the web UI's listen address and public URL (DESIGN.md §30; `start --listen/--public-url`):
     # loopback and http://switchboard.localhost:<port> unless both are set
@@ -234,5 +236,5 @@ def load(paths: Paths) -> Config:
     if env:
         if not SCREEN_NAME_RE.match(env):
             raise ConfigError(f"{HUMAN_NAME_ENV} must match ^[a-z][a-z0-9_-]{{0,23}}$")
-        cfg = cfg.replace(human_name=env)
+        cfg = cfg.replace(human_name=env, human_name_from_env=True)
     return cfg

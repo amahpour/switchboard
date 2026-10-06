@@ -98,7 +98,7 @@ def test_the_admin_sets_a_google_email_and_bob_signs_in_with_it(ui: UI, google) 
     admin.click("#invite-done")
     bob_card = admin.locator(".person-card").nth(1)
     bob_card.locator('input[type="email"]').fill("Bob@Example.com")
-    bob_card.locator("button[type=submit]").click()
+    bob_card.locator(".email-row button[type=submit]").click()
     expect(admin.locator(".person-card").nth(1).locator(".email-result")).to_have_text("Saved")
     expect(admin.locator(".person-card").nth(1).locator('input[type="email"]')).to_have_value(
         "bob@example.com"
