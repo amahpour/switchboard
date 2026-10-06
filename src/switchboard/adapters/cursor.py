@@ -40,17 +40,24 @@ as *provisional* everywhere.
 
 from __future__ import annotations
 
+import hmac
+import re
 from typing import Any
 
-from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, Adapter
+from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, Adapter, _start_key
+from switchboard.broker import proc
+from switchboard.broker.peer import McpIdentity
 from switchboard.config import Config
-from switchboard.models import HookEvent, Participant, Release, Route, session_key, split_session_key
+from switchboard.models import HookEvent, Participant, Release, Route, split_session_key
+from switchboard.models import session_key as make_session_key
 
 TIER = "cursor:stop-park"
 NOTE = "provisional"
 NOTE_DEGRADED = "provisional, degraded"
 # a pending (unbound) session key's part after the harness and host: agent:<pid>@<start>
 PENDING_REST = "agent:"
+# a postToolUse join-nonce bind's conversation_id: Cursor's own id shape (DESIGN.md §6.3)
+CURSOR_SID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}")
 # the hook gives the broker its own wait budget; the park ends this much sooner
 PARK_MARGIN_S = 30.0
 MIN_PARK_S = 1.0
@@ -108,12 +115,60 @@ class CursorAdapter(Adapter):
         sid = p.session_id
         if not sid:
             return None, f"no {self.harness} session id known yet"
-        if p.bind_state != "bound" or p.session_key != session_key(self.harness, p.host, sid):
+        if p.bind_state != "bound" or p.session_key != make_session_key(self.harness, p.host, sid):
             return (
                 None,
                 "not bound to its Cursor conversation yet (after its first tool call following join())",
             )
         return sid, ""
+
+    # -------------------------------------------------------------- binding
+    def session_key(self, ident: McpIdentity, thread_id: str | None) -> str:
+        # bound to the conversation id by the join nonce (M5); until then, the agent process
+        return make_session_key(
+            self.harness, ident.host, f"{PENDING_REST}{ident.agent_pid}@{_start_key(ident.agent_start)}"
+        )
+
+    def existing_session(self, store: Any, ident: McpIdentity) -> Participant | None:
+        """The active Cursor participant of this MCP server's verified agent process: one
+        session per process until the join nonce binds it to a conversation (§6.3)."""
+        if ident.agent_pid is None:
+            return None
+        for p in store.active_participants_by_agent(self.harness, ident.host, ident.agent_pid):
+            if proc.same_start(p.agent_start, ident.agent_start):
+                return p
+        return None
+
+    def join_fields(self, existing: Participant | None) -> dict[str, Any]:
+        if existing is None or existing.bind_state != "bound":
+            # bound to its conversation by the postToolUse hook of this join (§6.3)
+            return {"bind_state": "pending"}
+        return {}
+
+    def conversation_kicked(self, store: Any, room_id: int, p: Participant) -> bool:
+        """A kick sticks to a resumed conversation (§9.4): once ``p`` is bound, an
+        earlier row of the same conversation having been kicked counts as ``p``'s own."""
+        return p.bind_state == "bound" and store.was_kicked_session(
+            room_id, self.harness, p.session_key, exclude=p.id
+        )
+
+    def nonce_ok(self, p: Participant, ev: HookEvent) -> bool:
+        """True if this hook's join nonce is the one p's own pending join issued."""
+        if not p.bind_nonce:
+            return False
+        return hmac.compare_digest(p.bind_nonce, ev.join_nonce or "")
+
+    def bound_to(self, p: Participant, sid: str | None) -> bool:
+        """True if p is already bound to this hook's conversation id."""
+        return p.bind_state == "bound" and p.session_key == make_session_key(self.harness, p.host, sid or "")
+
+    def conversation_key(self, p: Participant, sid: str | None) -> str | None:
+        """The session key a join-nonce bind to conversation ``sid`` would set, or None
+        for a malformed conversation id."""
+        sid = sid or ""
+        if not CURSOR_SID_RE.fullmatch(sid):
+            return None
+        return make_session_key(self.harness, p.host, sid)
 
     # ------------------------------------------------------------- routing
     def route(self, p: Participant, rel: Release, sink: Any, now: float) -> Route:

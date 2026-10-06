@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import hmac
 import json
 import logging
 import math
@@ -73,7 +72,6 @@ log = logging.getLogger("switchboard.agents")
 
 TEST_SESSION_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 WAIT_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
-CURSOR_SID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}")
 # mcp.posted err: a short code ("guard", "bad_text") or an exception type name
 POST_ERR_RE = re.compile(r"[A-Za-z0-9_]{1,40}")
 # a hook's reported model name (the hook relays only this shape too), for the report:
@@ -459,21 +457,9 @@ class AgentService:
             if not thread_id:
                 raise ServiceError("bad_request", "Codex calls must carry _meta.threadId")
             return session_key("codex", host, thread_id)
-        if h == "cursor":
-            # bound to the conversation id by the join nonce (M5); until then, the agent process
-            return session_key(
-                "cursor", host, f"agent:{mc.ident.agent_pid}@{_start_key(mc.ident.agent_start)}"
-            )
-        return session_key(h, host, f"{mc.ident.agent_pid}@{_start_key(mc.ident.agent_start)}")
-
-    def _cursor_session(self, mc: McpConn) -> Participant | None:
-        """The active Cursor participant of this MCP server's verified agent process."""
-        if mc.ident.agent_pid is None:
-            return None
-        for p in self.store.active_participants_by_agent("cursor", mc.ident.host, mc.ident.agent_pid):
-            if proc.same_start(p.agent_start, mc.ident.agent_start):
-                return p
-        return None
+        # every other harness's own rule (claude, devin and an unknown harness share the
+        # base default; Cursor's is pending until its join nonce binds a conversation, §6.3)
+        return self.engine.adapter_for(h, host).session_key(mc.ident, thread_id)
 
     @staticmethod
     def _same_mcp(p: Participant, ident: McpIdentity) -> bool:
@@ -636,18 +622,13 @@ class AgentService:
             # a thread id is global: no session ever moves between hosts (§27.5.4)
             raise ServiceError("conflict", "this thread is joined from another machine")
         existing = self.store.find_participant(h, key)
-        if h == "cursor":
-            # one session per agent process; once bound its key is the conversation id
-            mine = self._cursor_session(mc)
-            if mine is not None:
-                existing, key = mine, mine.session_key
+        mine = adapter.existing_session(self.store, mc.ident)
+        if mine is not None:
+            # Cursor: one session per agent process until its key is the conversation id (§6.3)
+            existing, key = mine, mine.session_key
         if existing is not None and (
             self.store.was_kicked(room.id, existing.id)
-            or (
-                h == "cursor"
-                and existing.bind_state == "bound"  # a resumed conversation (§9.4)
-                and self.store.was_kicked_session(room.id, h, existing.session_key, exclude=existing.id)
-            )
+            or adapter.conversation_kicked(self.store, room.id, existing)
         ):
             raise ServiceError("kicked", f"you were kicked from {room.name}; ask your user")
         if existing is not None and existing.active:
@@ -675,9 +656,7 @@ class AgentService:
             # a Codex thread proof belongs to the MCP process that proved it (§9.3):
             # a join from anywhere else proves the thread again
             fields["thread_proof"] = 0
-        if h == "cursor" and (existing is None or existing.bind_state != "bound"):
-            # bound to its conversation by the postToolUse hook of this join (§6.3)
-            fields["bind_state"] = "pending"
+        fields.update(adapter.join_fields(existing))
         cur = self.store.active_membership(room.id, existing.id) if existing else None
         if cur is None and link is not None:
             joined = {p.id for p in self.store.joined_participants() if p.host == host}
@@ -1113,16 +1092,18 @@ class AgentService:
         participant whose own join issued that nonce, and whose agent is in this
         hook's ancestry (checked by the resolver), can be bound; anything else
         is inert. A bound session that joins again (e.g. after a chat switch in
-        the same agent process) is re-keyed the same way."""
-        nonce, sid = ev.join_nonce or "", ev.sid or ""
-        if not p.bind_nonce or not hmac.compare_digest(p.bind_nonce, nonce):
+        the same agent process) is re-keyed the same way. The nonce rule, the "already
+        bound" check and the conversation id's key are the Cursor adapter's own
+        (``nonce_ok``, ``bound_to``, ``conversation_key``); every store write and engine
+        call here stays this method's."""
+        adapter = self.engine.adapter_for("cursor", p.host)
+        sid = ev.sid or ""
+        if not adapter.nonce_ok(p, ev):
             # not this participant's current join: only its own bound conversation may go on
-            return (
-                p if p.bind_state == "bound" and p.session_key == session_key("cursor", p.host, sid) else None
-            )
-        if not CURSOR_SID_RE.fullmatch(sid):
+            return p if adapter.bound_to(p, sid) else None
+        key = adapter.conversation_key(p, sid)
+        if key is None:
             return None
-        key = session_key("cursor", p.host, sid)
         if p.session_key == key and p.bind_state == "bound":
             self.store.update_participant(p.id, bind_nonce=None)  # single use
             return self.store.get_participant(p.id)

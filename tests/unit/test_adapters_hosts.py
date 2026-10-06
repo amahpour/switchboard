@@ -251,3 +251,38 @@ def test_cursor_bound_reads_a_key_of_any_host(w: World) -> None:
     assert [cu.bound(x) for x in (lb, lp, rb, rpend)] == [True, False, True, False]
     assert a.tier(rb) == a.tier(lb) and a.tier(rpend) == a.tier(lp)
     assert a.tier(rb)[0] == cu.TIER
+
+
+def test_cursor_session_key_names_the_host_until_bound(w: World) -> None:
+    """cursor.py CursorAdapter.session_key (moved from agents.py's _session_key, #170):
+    the pending (pre-bind) key names the host, so it can never collide with the same
+    agent pid on another machine."""
+    a = w.engine.adapters["cursor"]
+    assert isinstance(a, cu.CursorAdapter)
+    local = McpIdentity(
+        harness="cursor", mcp_pid=1, mcp_start=1.0, agent_pid=42, agent_start=100.0, evidence="s"
+    )
+    remote_i = dataclasses.replace(local, host=PI)
+    assert a.session_key(local, None) == "cursor:agent:42@100.00"
+    assert a.session_key(remote_i, None) == f"cursor@{PI}:agent:42@100.00"
+
+
+def test_cursor_existing_session_never_crosses_hosts(w: World) -> None:
+    """cursor.py CursorAdapter.existing_session (moved from agents.py's
+    _cursor_session, #170): a local agent pid must never match a remote row of the
+    same pid, and the reverse (the M8b regression this file guards against)."""
+    a = w.engine.adapters["cursor"]
+    assert isinstance(a, cu.CursorAdapter)
+    i = me()
+    local = w.store.upsert_participant(
+        "cursor", "cursor:agent:local@1", status="idle", agent_pid=i.pid, agent_start=i.start
+    )
+    rp = remote(w, "cursor", "agent:remote@1", "bench", like=local)
+    local_ident = McpIdentity(
+        harness="cursor", mcp_pid=1, mcp_start=1.0, agent_pid=i.pid, agent_start=i.start, evidence="s"
+    )
+    remote_ident = dataclasses.replace(local_ident, host=PI)
+    got_local = a.existing_session(w.store, local_ident)
+    got_remote = a.existing_session(w.store, remote_ident)
+    assert got_local is not None and got_local.id == local.id
+    assert got_remote is not None and got_remote.id == rp.id

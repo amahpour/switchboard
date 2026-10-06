@@ -14,7 +14,7 @@ from engine_world import World
 
 from switchboard.adapters.cursor import FOLLOWUP_CONFIRM_S, FOLLOWUP_RACE_S, CursorAdapter
 from switchboard.config import Config
-from switchboard.models import Notice, Release, ResolveSink
+from switchboard.models import HookEvent, Notice, Release, ResolveSink
 
 
 @pytest.fixture
@@ -53,6 +53,65 @@ def park_result(w: World, sink_id: int) -> dict[str, Any] | None:
 def batch_of(w: World, m: Any, msg: Any) -> Any:
     bid = w.delivery(m, msg)["batch_id"]
     return w.store.get_batch(bid) if bid else None
+
+
+# --------------------------------------------------- binding (moved from agents.py, #170)
+def test_join_fields_marks_a_fresh_or_unbound_row_pending(w: World) -> None:
+    """A row with no existing session, or one not yet bound to a conversation, starts
+    pending until the join's postToolUse hook binds it (DESIGN.md §6.3)."""
+    a = ad(w)
+    assert a.join_fields(None) == {"bind_state": "pending"}
+    pending, _m = cursor(w, bound=False)
+    assert a.join_fields(w.p(pending)) == {"bind_state": "pending"}
+    bound_p, _m2 = cursor(w, "cursor-2")
+    assert a.join_fields(w.p(bound_p)) == {}
+
+
+def test_conversation_kicked_needs_p_bound_to_the_kicked_conversation(w: World) -> None:
+    """A kick sticks to a resumed Cursor conversation (§9.4): a new row bound to the
+    same conversation counts; a pending row, or a bound row of another conversation,
+    doesn't (the adapter must not report a kick it isn't actually carrying)."""
+    a = ad(w)
+    key = "cursor:conv-x"
+    old = w.store.upsert_participant("cursor", key, status="idle")
+    m = w.store.create_membership(w.room.id, old.id, "cursor-x", "h-x")
+    w.store.end_membership(m.id, "kick", kicked=True)
+    w.store.update_participant(old.id, session_key=f"{key}#ended-{old.id}")
+    resumed = w.store.upsert_participant("cursor", key, bind_state="bound", status="idle")
+    assert a.conversation_kicked(w.store, w.room.id, w.p(resumed)) is True
+    pending = w.store.upsert_participant("cursor", f"{key}-p", bind_state="pending", status="idle")
+    assert a.conversation_kicked(w.store, w.room.id, w.p(pending)) is False
+    other = w.store.upsert_participant("cursor", "cursor:conv-other", bind_state="bound", status="idle")
+    assert a.conversation_kicked(w.store, w.room.id, w.p(other)) is False
+
+
+def test_nonce_ok_matches_only_its_own_pending_nonce(w: World) -> None:
+    a = ad(w)
+    p = w.p(w.store.upsert_participant("cursor", "cursor:agent:1@1.00", bind_nonce="abc123", status="idle"))
+    ev = lambda nonce: HookEvent(harness="cursor", event="PostToolUse", join_nonce=nonce)  # noqa: E731
+    assert a.nonce_ok(p, ev("abc123")) is True
+    assert a.nonce_ok(p, ev("wrong")) is False
+    assert a.nonce_ok(p, ev(None)) is False
+    no_nonce = w.p(w.store.upsert_participant("cursor", "cursor:agent:2@1.00", status="idle"))
+    assert a.nonce_ok(no_nonce, ev("abc123")) is False
+
+
+def test_bound_to_checks_the_exact_conversation(w: World) -> None:
+    a = ad(w)
+    p, _m = cursor(w, "cursor-1")  # bound to "cursor:conv-cursor-1"
+    assert a.bound_to(w.p(p), "conv-cursor-1") is True
+    assert a.bound_to(w.p(p), "conv-other") is False
+    assert a.bound_to(w.p(p), None) is False
+    pending, _m2 = cursor(w, "cursor-2", bound=False)
+    assert a.bound_to(w.p(pending), "conv-cursor-2") is False
+
+
+def test_conversation_key_rejects_a_malformed_conversation_id(w: World) -> None:
+    a = ad(w)
+    p, _m = cursor(w, "cursor-1")
+    assert a.conversation_key(w.p(p), "conv-9") == "cursor:conv-9"
+    assert a.conversation_key(w.p(p), "") is None  # empty: CURSOR_SID_RE needs at least one char
+    assert a.conversation_key(w.p(p), None) is None
 
 
 # ------------------------------------------------------------------ tiers
