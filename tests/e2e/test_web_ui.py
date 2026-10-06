@@ -32,7 +32,7 @@ from typing import Any
 
 import pytest
 from conftest import PHASE_REPORTS, TEST_HUMAN, sanitize_env
-from playwright.sync_api import Browser, BrowserContext, ConsoleMessage, Page, WebSocketRoute, expect
+from playwright.sync_api import Browser, BrowserContext, ConsoleMessage, Page, Route, WebSocketRoute, expect
 from ui_world import CI_URL, JS_SCHEME, PROFILE, UIWorld
 
 pytestmark = pytest.mark.e2e
@@ -278,6 +278,82 @@ def test_app_loads_connected_with_rooms_members_and_chips(ui: UI) -> None:
     expect(page.locator("#st-approvals")).to_contain_text("codex-1")
     expect(page.locator("#banner-bridge")).to_be_visible()
     expect(page.locator("#banner-test")).to_be_hidden()
+
+
+def test_a_dropped_socket_shows_everywhere_until_it_is_back(ui: UI) -> None:
+    """#129: when the page's socket drops, nothing may still look live. The footer said
+    "Reconnecting…" while the You row said "Human · online", the header chip kept its green dot
+    and the agents their last status. Now the You row, the chip, a band and the member list all
+    say so, a send that fails keeps its text, and all of it comes back with the socket, without
+    a reload. The test drops the socket through Playwright's WebSocket routing, and keeps it
+    down by holding the ``/api/me`` check the page makes before every reconnect (closing a
+    routed socket from its own handler never returns)."""
+    up = {"on": True}
+    live: list[WebSocketRoute] = []
+    held: list[Route] = []
+
+    def socket(ws: WebSocketRoute) -> None:
+        ws.connect_to_server()
+        live.append(ws)
+
+    def me(route: Route) -> None:
+        if up["on"]:
+            route.continue_()
+        else:
+            held.append(route)  # the broker is unreachable: the page waits here before reconnecting
+
+    def back_up() -> None:
+        up["on"] = True
+        while held:
+            held.pop().continue_()
+
+    ctx = ui.context()
+    ctx.route_web_socket("**/ws", socket)
+    ctx.route("**/api/me", me)
+    page = ctx.new_page()
+    try:
+        page.goto(ui.world.broker.login_url())
+        expect(page.locator("#st-conn")).to_have_text("Connected")
+        open_room(page, "build")
+        you = page.locator("#buddy-me .m-status")
+        expect(you).to_have_text("Human · online")
+        expect(page.locator("#agents-title")).to_have_text("Agents (4)")
+        expect(page.locator("#banner-offline")).to_be_hidden()
+
+        up["on"] = False
+        with page.expect_request("**/api/me"):  # the page's check before it reconnects, held
+            live[-1].close()  # the connection drops
+        expect(page.locator("#st-conn")).to_have_text("Reconnecting…")
+        expect(you).to_have_text("Human · reconnecting…")
+        expect(page.locator("#buddy-me .dot")).to_have_class(re.compile(r"\bs-offline\b"))
+        expect(page.locator("#st-state")).to_have_class(re.compile(r"\bstale\b"))
+        expect(page.locator("#banner-offline")).to_be_visible()
+        expect(page.locator("#banner-offline")).to_have_text(
+            "Disconnected: reconnecting… What you see may be out of date."
+        )
+        expect(page.locator("#agents-title")).to_have_text("Agents (4) · last known")
+        expect(page.locator("#buddy-list")).to_have_class(re.compile(r"\bstale\b"))
+        # a send that fails while the broker is away keeps its text, and says so
+        page.route("**/api/rooms/*/say", lambda route: route.abort())
+        page.fill("#input", "still there?")
+        page.keyboard.press("Enter")
+        expect(page.locator("#log .line.local.error").last).to_be_visible()
+        expect(page.locator("#input")).to_have_value("still there?")
+        page.unroute("**/api/rooms/*/say")
+        page.wait_for_timeout(300)  # Chromium logs the aborted send a moment later
+        assert all("/say" in p or "net::ERR_FAILED" in p for p in ui.problems), ui.problems
+        ui.problems.clear()
+
+        back_up()  # the check gets through, and the page reconnects: everything is live again
+        expect(page.locator("#st-conn")).to_have_text("Connected")
+        expect(you).to_have_text("Human · online")
+        expect(page.locator("#buddy-me .dot")).to_have_class(re.compile(r"\bs-human\b"))
+        expect(page.locator("#st-state")).not_to_have_class(re.compile(r"\bstale\b"))
+        expect(page.locator("#banner-offline")).to_be_hidden()
+        expect(page.locator("#agents-title")).to_have_text("Agents (4)")
+        expect(page.locator("#buddy-list")).not_to_have_class(re.compile(r"\bstale\b"))
+    finally:
+        back_up()  # nothing left waiting when the context closes
 
 
 def test_approvals_chip_names_one_counts_several_and_includes_unknown(ui: UI) -> None:

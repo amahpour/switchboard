@@ -21,9 +21,9 @@ What it does:
   second sign-in would post a live "new web login" notice into the open page's log); the
   Welcome view and the sign-in page use contexts of their own.
 
-The 21 outputs: desktop-{light,dark}, markdown-{light,dark}, palette-light, mention-light,
+The outputs: desktop-{light,dark}, markdown-{light,dark}, palette-light, mention-light,
 closed-light, remotes-light, inspector-light, inspector-remote-light, inspector-dark-parked,
-phone-light, phone-dark-sheet, welcome-light and login-light, plus, from a hosted broker
+phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (#129), welcome-light and login-light, plus, from a hosted broker
 (``tests/ui_world.py``'s ``HostedWorld``, with Chromium's virtual authenticators as the
 passkeys; issues #41 and #61): signin-setup-light, setup-light, people-light, people-dark,
 passkeys-light, passkeys-dark, confirm-light, signin-light, setup-person-light and
@@ -284,6 +284,63 @@ def shoot(browser: Any, out: Path, world: Any) -> None:
         shot(p, out, "login-light.png")
     finally:
         anon.close()
+
+
+def _offline_routes(down: dict[str, bool], live: list[Any], held: list[Any]) -> tuple[Any, Any]:
+    """The WebSocket route (connects, and remembers the socket) and the ``/api/me`` route (held
+    while ``down``) for one context: one-argument handlers, as Playwright calls them."""
+
+    def socket(ws: Any) -> None:
+        ws.connect_to_server()
+        live.append(ws)
+
+    def me(route: Any) -> None:
+        if down["on"]:
+            held.append(route)
+        else:
+            route.continue_()
+
+    return socket, me
+
+
+def shoot_offline(browser: Any, out: Path, world: Any) -> None:
+    """The page after its connection dropped (#129), in #build: the band, the You row, the
+    header chip and the dimmed members (light, dark), and the phone (dark). The socket is
+    closed through Playwright's WebSocket routing, and the ``/api/me`` check the page makes
+    before it reconnects is held until the shot is taken."""
+    from playwright.sync_api import expect
+
+    b, n_chat = world.broker, world.n_chat
+    base = {"timezone_id": "UTC", "color_scheme": "light", "locale": "en-US"}
+    for name, size, scheme in (
+        ("offline-light.png", DESKTOP, "light"),
+        ("offline-dark.png", DESKTOP, "dark"),
+        ("offline-phone-dark.png", PHONE, "dark"),
+    ):
+        down = {"on": False}
+        live: list[Any] = []
+        held: list[Any] = []
+        socket, me = _offline_routes(down, live, held)
+
+        ctx = browser.new_context(**{**base, "color_scheme": scheme}, **size)
+        ctx.set_default_timeout(WAIT_MS)
+        ctx.route_web_socket("**/ws", socket)
+        ctx.route("**/api/me", me)
+        try:
+            page = ctx.new_page()
+            sign_in(page, b)
+            open_build(page, n_chat)
+            down["on"] = True
+            with page.expect_request("**/api/me"):
+                live[-1].close()
+            expect(page.locator("#st-conn")).to_have_text("Reconnecting…")
+            page.evaluate("document.activeElement && document.activeElement.blur()")
+            shot(page, out, name)
+        finally:
+            down["on"] = False
+            while held:
+                held.pop().continue_()
+            ctx.close()
 
 
 def shoot_board(browser: Any, out: Path, world: Any) -> None:
@@ -599,6 +656,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
         try:
             shoot(browser, out, world)
             shoot_board(browser, out, world)
+            shoot_offline(browser, out, world)
             shoot_hosted(browser, out, hosted)
             shoot_machines(browser, out, fleet)
         finally:

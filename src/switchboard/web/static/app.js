@@ -53,6 +53,7 @@
     active: null,
     ws: null,
     wsOpen: false,
+    wsEverOpen: false,  // a socket was up once: a close now is a drop, not the first connect (#129)
     backoff: 500,
     pingTimer: null,
     remotes: [],       // GET /api/remotes and the `remotes` event: every remote link's state
@@ -873,11 +874,12 @@
       const li = el('li');
       const row = el('div', 'member me');
       const av = avatar(null, 'human', state.me.human);
-      av.append(el('span', 'dot s-human'));
+      av.append(el('span', 'dot ' + (state.wsOpen ? 's-human' : 's-offline')));
       const main = el('span', 'm-main');
       const nl = el('span', 'm-name-line');
       nl.append(el('span', 'm-name', state.me.human));
-      main.append(nl, el('span', 'm-status', 'Human · online'));
+      const conn = state.wsOpen ? 'online' : state.wsEverOpen ? 'reconnecting…' : 'connecting…';
+      main.append(nl, el('span', 'm-status', 'Human · ' + conn));
       row.append(av, main);
       li.append(row);
       me.append(li);
@@ -890,7 +892,10 @@
     state.rowRefs = new Map();
     const r = activeRoom();
     const members = r ? r.members : [];
-    $('agents-title').textContent = 'Agents (' + members.length + ')';
+    // after a drop, what the list shows is the last state the socket brought: say so until it's back
+    const stale = !state.wsOpen && state.wsEverOpen;
+    list.classList.toggle('stale', stale);
+    $('agents-title').textContent = 'Agents (' + members.length + ')' + (stale ? ' · last known' : '');
     $('members-count').textContent = String(members.length + (state.me ? 1 : 0));
     if (!members.length) {
       list.append(el('li', 'member-empty', 'Nobody yet. Ask an agent to join ' + (state.active || 'a room') + '.'));
@@ -990,6 +995,9 @@
       pt.setAttribute('aria-label', 'Pause room');
       pt.title = 'Pause: stop every agent wake until you resume';
     }
+    st.classList.toggle('stale', !state.wsOpen);
+    if (!state.wsOpen) st.title = 'Reconnecting: this is how the room was when the connection dropped';
+    $('banner-offline').classList.toggle('hidden', state.wsOpen || !state.wsEverOpen);
 
     const budget = $('st-budget');
     budget.replaceChildren();
@@ -1851,6 +1859,7 @@
     state.ws = ws;
     ws.addEventListener('open', function () {
       state.wsOpen = true;
+      state.wsEverOpen = true;
       state.backoff = 500;
       // a close, reopen, create or delete missed while the socket was down: resync, then hello all.
       // The new socket follows nothing until a hello: if the resync fails, hello the tabs we have.
@@ -1859,6 +1868,7 @@
       loadRemotes().catch(function () {});  // the events missed while the socket was down
       if (state.machinesHosted) loadMachines().catch(function () {});
       renderStatus();
+      renderBuddies();
       clearInterval(state.pingTimer);
       state.pingTimer = setInterval(function () {
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: 'ping' }));
@@ -1873,6 +1883,7 @@
       state.wsOpen = false;
       clearInterval(state.pingTimer);
       renderStatus();
+      renderBuddies();
       const wait = state.backoff;
       state.backoff = Math.min(state.backoff * 2, 10000);
       setTimeout(function () {
