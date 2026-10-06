@@ -27,7 +27,8 @@ mention-highlight-{light,dark,phone-light} (a known @mention styled as you type 
 composer-multiline-{light,dark,phone-light} (the composer grown with wrapped text, #130),
 room-badges-{light,dark,phone-light} (the red count beside the quiet dot, #109),
 focus-mode-{light,dark,phone-light} (agent chat collapsed to one line, a reply to you left
-expanded, #99),
+expanded, #99), settings-rooms-{light,dark} and wake-settings-{light,dark,phone-light} (the
+default wake budget and hop limit, and a room's own rate, #131),
 closed-light, remotes-light, inspector-light, inspector-remote-light, inspector-dark-parked,
 phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (#129), welcome-light and login-light, plus, from a hosted broker
 (``tests/ui_world.py``'s ``HostedWorld``, with Chromium's virtual authenticators as the
@@ -541,6 +542,61 @@ def shoot_focus_mode(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def shoot_wake_settings(browser: Any, out: Path, world: Any) -> None:
+    """Default wake budget and hop limit, and a room's own rate (#131): Settings' Rooms
+    section (budget and hop limit beside the existing room rules default; light, dark), and a
+    room's own Wake settings dialog with the hop-limit-0 warning showing (light, dark, phone).
+    Neither Save is clicked, so nothing here changes the seeded world for a shot after it."""
+    from playwright.sync_api import expect
+
+    world.create_room("#wake-demo")
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for name, ctx_args in (
+        ("settings-rooms-light.png", {**DESKTOP, "color_scheme": "light"}),
+        ("settings-rooms-dark.png", {**DESKTOP, "color_scheme": "dark"}),
+    ):
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            page.click("#me-settings")
+            expect(page.locator("#app-dialog")).to_be_visible()
+            page.fill("#settings-budget", "120")
+            page.fill("#settings-hops", "0")
+            page.locator("#settings-hops-warn").scroll_into_view_if_needed()
+            page.evaluate("document.activeElement && document.activeElement.blur()")
+            shot(page, out, name)
+        finally:
+            ctx.close()
+
+    for name, ctx_args in (
+        ("wake-settings-light.png", {**DESKTOP, "color_scheme": "light"}),
+        ("wake-settings-dark.png", {**DESKTOP, "color_scheme": "dark"}),
+        ("wake-settings-phone-light.png", {**PHONE, "color_scheme": "light"}),
+    ):
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="#wake-demo"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            expect(page.locator("#room-title")).to_have_text("wake-demo", timeout=WAIT_MS)
+            page.click("#room-wake")
+            expect(page.locator("#app-dialog")).to_be_visible()
+            page.fill("#app-dialog-budget", "300")
+            page.fill("#app-dialog-hops", "0")
+            expect(page.locator("#app-dialog-wake-warn")).to_be_visible()
+            page.evaluate("document.activeElement && document.activeElement.blur()")
+            shot(page, out, name)
+        finally:
+            ctx.close()
+
+
 # ---------------------------------------------------------- the hosted shots
 AUTHENTICATOR = {
     "protocol": "ctap2",
@@ -843,6 +899,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             # (unread is recomputed per page load) in shoot_offline's sidebar too
             shoot_room_badges(browser, out, world)
             shoot_focus_mode(browser, out, world)
+            shoot_wake_settings(browser, out, world)
             shoot_hosted(browser, out, hosted)
             shoot_machines(browser, out, fleet)
         finally:
