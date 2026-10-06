@@ -710,6 +710,8 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
 }
 .chips::-webkit-scrollbar { display: none; }
 .head-divider { width: 1px; height: 20px; flex-shrink: 0; margin: 0 2px; background: var(--side-border); }
+/* The room's buttons: part of the header's own row on a desktop; a row of their own on a phone */
+.head-tools { display: contents; }
 .head-btn { width: 30px; height: 30px; border-radius: 7px; color: var(--ink-2); }
 #pane-toggle[aria-pressed="true"],
 #focus-toggle[aria-pressed="true"] { background: var(--btn-on); }
@@ -2251,7 +2253,7 @@ body.login {
   .conv-head {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);
-    grid-template-areas: "nav title members" "chips chips chips";
+    grid-template-areas: "nav title members" "chips chips chips" "tools tools tools";
     align-items: center;
     height: auto;
     gap: 0;
@@ -2278,6 +2280,7 @@ body.login {
   .members-pill { grid-area: members; justify-self: end; }
   .conv-head .head-spacer, .head-divider, #pane-toggle, #pause-toggle { display: none; }
   .chips { grid-area: chips; height: 38px; margin: 0 -8px; padding: 0 12px; white-space: nowrap; }
+  .head-tools { grid-area: tools; display: flex; align-items: center; gap: 4px; padding: 0 4px 6px; }
   .chip .meter { display: none; }
   #st-approvals::after { content: attr(data-count); }
 

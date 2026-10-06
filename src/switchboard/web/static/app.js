@@ -650,13 +650,18 @@
   // Focus mode (#99): the one-line stand-in for a collapsed message - its sender, then the
   // first line of its text, built with textContent only (no Markdown), so a long or hostile
   // message can never grow past one line. A real button: focusable, and Enter/Space activates
-  // it like a click, same as any other button here. Expands only the row it belongs to.
+  // it like a click, same as any other button here. Expands only the row it belongs to, and
+  // the row takes the focus: the button hides as it expands, which would drop it to the page.
   function collapsedSummary(m, line) {
     const b = btn('collapsed-line');
     b.append(el('span', 'collapsed-sender', label(m.from, m.host)),
       el('span', 'collapsed-snippet', firstLine(m.text, 140)));
     b.title = 'Collapsed by Focus: click to show it in full';
-    b.addEventListener('click', function () { line.classList.add('expanded'); });
+    b.addEventListener('click', function () {
+      line.classList.add('expanded');
+      line.tabIndex = -1;
+      line.focus({ preventScroll: true });
+    });
     return b;
   }
 

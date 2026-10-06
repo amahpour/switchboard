@@ -485,16 +485,36 @@ def test_focus_mode_collapses_agent_chat_and_restores_on_toggle_off(ui: UI) -> N
     expect(summary).to_contain_text("scout")
     expect(summary).to_contain_text("the sweep found nothing unusual here")
 
-    # clicking the collapsed line expands only that row
-    summary.click()
+    # Enter on the collapsed line (a button) expands only that row, and the row keeps the focus:
+    # the button hides as it expands, which would otherwise drop the focus to the page
+    summary.focus()
+    page.keyboard.press("Enter")
     expect(unaddressed.locator(".msg-text")).to_be_visible()
     expect(summary).to_be_hidden()
+    expect(unaddressed).to_be_focused()
 
     # Focus off rebuilds the log: every row, including the one just expanded, is back to normal
     toggle.click()
     expect(toggle).to_have_attribute("aria-pressed", "false")
     expect(unaddressed.locator(".msg-text")).to_be_visible()
     expect(unaddressed.locator(".collapsed-line")).to_have_count(0)
+
+
+def test_the_room_buttons_sit_in_one_row_on_a_phone(ui: UI) -> None:
+    """On a phone the room's buttons (rules, Focus) get a row of their own below the chips, side
+    by side. Before #223 they had no place in the phone header's grid, so each fell into
+    whichever column was next: Focus sat apart from the rules button, under the room's name."""
+    page = ui.open(**PHONE)
+    rules = page.locator("#room-rules")
+    focus = page.locator("#focus-toggle")
+    expect(rules).to_be_visible()
+    expect(focus).to_be_visible()
+    r, f, chips = rules.bounding_box(), focus.bounding_box(), page.locator("#status-chips").bounding_box()
+    assert r and f and chips
+    assert r["y"] == f["y"], (r, f)  # one row
+    assert 0 <= f["x"] - (r["x"] + r["width"]) <= 8, (r, f)  # side by side
+    assert r["y"] >= chips["y"] + chips["height"], (r, chips)  # below the chips
+    no_horizontal_scroll(page)
 
 
 def test_approvals_chip_names_one_counts_several_and_includes_unknown(ui: UI) -> None:
