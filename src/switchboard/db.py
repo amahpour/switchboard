@@ -29,7 +29,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -170,7 +170,9 @@ CREATE TABLE preferences(
   person_id INTEGER PRIMARY KEY CHECK(person_id >= 0),
   theme TEXT NOT NULL DEFAULT 'system' CHECK(theme IN ('system','light','dark')),
   text_size TEXT NOT NULL DEFAULT 'default' CHECK(text_size IN ('small','default','large','larger')),
-  room_rules TEXT NOT NULL DEFAULT '' CHECK(length(room_rules) <= 2000));
+  room_rules TEXT NOT NULL DEFAULT '' CHECK(length(room_rules) <= 2000),
+  budget_per_hour INTEGER CHECK(budget_per_hour IS NULL OR (budget_per_hour BETWEEN 0 AND 1000000)),
+  hop_limit INTEGER CHECK(hop_limit IS NULL OR (hop_limit BETWEEN 0 AND 1000)));
 
 CREATE TABLE reviews(
   id INTEGER PRIMARY KEY, room_id INTEGER NOT NULL REFERENCES rooms(id),
@@ -360,6 +362,18 @@ V12_TO_V13 = (
     "UPDATE meta SET value='13' WHERE key='schema_version'",
 )
 
+# v13 -> v14 (#131, DESIGN.md §42): a person's own default wake budget per hour and hop limit
+# for a new room they create, NULL (not set) until they choose one; a new room then falls back
+# to `[delivery]` in config.toml, then the built-in default. Existing people start unset, which
+# keeps today's room-creation behaviour unchanged for everyone who hasn't visited Settings.
+V13_TO_V14 = (
+    "ALTER TABLE preferences ADD COLUMN budget_per_hour INTEGER"
+    " CHECK(budget_per_hour IS NULL OR (budget_per_hour >= 0 AND budget_per_hour <= 1000000))",
+    "ALTER TABLE preferences ADD COLUMN hop_limit INTEGER"
+    " CHECK(hop_limit IS NULL OR (hop_limit >= 0 AND hop_limit <= 1000))",
+    "UPDATE meta SET value='14' WHERE key='schema_version'",
+)
+
 
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
@@ -377,6 +391,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         10: (11, V10_TO_V11, ()),
         11: (12, V11_TO_V12, ()),
         12: (13, V12_TO_V13, ()),
+        13: (14, V13_TO_V14, ()),
     }
     out = []
     v = frm

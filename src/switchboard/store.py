@@ -278,6 +278,18 @@ class Store:
             self.con.execute("UPDATE rooms SET budget_remaining=? WHERE id=?", (remaining, room_id))
         return self._room_or_raise(room_id)
 
+    def set_budget_rate(self, room_id: int, rate: int) -> Room:
+        """The room's own hourly wake budget (``budget_per_hour``, #131): changing the rate
+        also sets what's left this hour to the same number, so it takes effect at once rather
+        than waiting for the next hourly refill."""
+        if rate < 0:
+            raise ValueError("budget per hour must be >= 0")
+        with db.tx(self.con):
+            self.con.execute(
+                "UPDATE rooms SET budget_per_hour=?, budget_remaining=? WHERE id=?", (rate, rate, room_id)
+            )
+        return self._room_or_raise(room_id)
+
     def set_hop_limit(self, room_id: int, limit: int) -> Room:
         """The room's loop-guard limit (``/hops n``); 0 turns the guard off. The count and
         the paused state are left alone: a lower limit trips on the next agent message."""
@@ -1072,19 +1084,27 @@ class Store:
     # ------------------------------------------------------------ preferences
     # 0 is the owner (desktop or hosted); positive ids belong to the people table.
     # Only the web route chooses the id, from its authenticated session.
-    def preferences(self, person_id: int | None) -> dict[str, str]:
+    def preferences(self, person_id: int | None) -> dict[str, Any]:
         key = person_id if person_id is not None else 0
         row = self.con.execute(
-            "SELECT theme, text_size, room_rules FROM preferences WHERE person_id=?", (key,)
+            "SELECT theme, text_size, room_rules, budget_per_hour, hop_limit FROM preferences"
+            " WHERE person_id=?",
+            (key,),
         ).fetchone()
         return {
             "theme": row["theme"] if row else "system",
             "text_size": row["text_size"] if row else "default",
             "room_rules": row["room_rules"] if row else "",
+            # NULL (never set, or explicitly cleared): a new room falls back to config.toml,
+            # then the built-in default (#131); unlike the fields above, there is no in-between
+            # default to fall back to here, since 0 is itself a meaningful budget/hop value.
+            "budget_per_hour": row["budget_per_hour"] if row else None,
+            "hop_limit": row["hop_limit"] if row else None,
         }
 
-    def set_preferences(self, person_id: int | None, changes: dict[str, str]) -> dict[str, str]:
-        if not changes or set(changes) - {"theme", "text_size", "room_rules"}:
+    def set_preferences(self, person_id: int | None, changes: dict[str, Any]) -> dict[str, Any]:
+        fields = {"theme", "text_size", "room_rules", "budget_per_hour", "hop_limit"}
+        if not changes or set(changes) - fields:
             raise ValueError("invalid preferences")
         if "theme" in changes and changes["theme"] not in ("system", "light", "dark"):
             raise ValueError("invalid theme")
@@ -1094,14 +1114,43 @@ class Store:
             not isinstance(changes["room_rules"], str) or len(changes["room_rules"]) > 2000
         ):
             raise ValueError("room rules must be at most 2000 characters")
+        if (
+            "budget_per_hour" in changes
+            and changes["budget_per_hour"] is not None
+            and (
+                isinstance(changes["budget_per_hour"], bool)
+                or not isinstance(changes["budget_per_hour"], int)
+                or not 0 <= changes["budget_per_hour"] <= 1_000_000  # commands.MAX_BUDGET
+            )
+        ):
+            raise ValueError("budget per hour must be an integer from 0 to 1000000, or null")
+        if (
+            "hop_limit" in changes
+            and changes["hop_limit"] is not None
+            and (
+                isinstance(changes["hop_limit"], bool)
+                or not isinstance(changes["hop_limit"], int)
+                or not 0 <= changes["hop_limit"] <= 1000  # commands.MAX_HOPS
+            )
+        ):
+            raise ValueError("hop limit must be an integer from 0 to 1000, or null")
         key = person_id if person_id is not None else 0
         with db.tx(self.con):
             saved = self.preferences(person_id) | changes
             self.con.execute(
-                "INSERT INTO preferences(person_id, theme, text_size, room_rules) VALUES(?, ?, ?, ?)"
+                "INSERT INTO preferences(person_id, theme, text_size, room_rules, budget_per_hour,"
+                " hop_limit) VALUES(?, ?, ?, ?, ?, ?)"
                 " ON CONFLICT(person_id) DO UPDATE SET theme=excluded.theme,"
-                " text_size=excluded.text_size, room_rules=excluded.room_rules",
-                (key, saved["theme"], saved["text_size"], saved["room_rules"]),
+                " text_size=excluded.text_size, room_rules=excluded.room_rules,"
+                " budget_per_hour=excluded.budget_per_hour, hop_limit=excluded.hop_limit",
+                (
+                    key,
+                    saved["theme"],
+                    saved["text_size"],
+                    saved["room_rules"],
+                    saved["budget_per_hour"],
+                    saved["hop_limit"],
+                ),
             )
         return self.preferences(person_id)
 
