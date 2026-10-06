@@ -88,6 +88,9 @@ def test_the_base_adapter_defaults_are_the_conservative_answers() -> None:
         ' or wait("#build", 50) to block until one arrives.'
     )
     assert a.context_events(p) == frozenset()
+    # /catchup's session id (DESIGN.md §9.1, issue #171): a harness with no adapter of its
+    # own keeps no history-tool id, whatever the row otherwise says
+    assert a.history_session_id(part(session_id="s1"), CFG) == (None, "a session of an unknown harness")
     assert a.on_hook(p, ev("Stop")) is None
     assert a.park_s(p, ev("Stop")) is None
     assert a.stop_continues(p) is False
@@ -142,10 +145,12 @@ def test_pull_adapter_takes_a_codex_thread_id_on_trust_only_as_unverified() -> N
 # ------------------------------------------------------------- test agent
 def test_the_scripted_test_agent_adapter() -> None:
     a = TestAgentAdapter(CFG)
-    p = part(harness="test", session_key="test:bot")
+    p = part(harness="test", session_key="test:bot", session_id="k1")
     assert ACK_MODES == ("next_call", "immediate", "never")
     assert a.tier(p) == ("mcp-only", None)
     assert a.context_events(p) == HOOK_CONTEXT_EVENTS["test"]
+    # /catchup never gets a test session's id, whatever the row says (issue #171)
+    assert a.history_session_id(p, CFG) == (None, "a test session")
     assert a.join_guidance(p, "#build") == (
         'scripted test agent: call read("#build") or wait("#build", 50); mid-task items can also arrive'
         " as synthetic hook context."
@@ -159,7 +164,7 @@ def test_the_scripted_test_agent_adapter() -> None:
 
 # ----------------------------------------------------------------- cursor
 def cursor_part(**kw: Any) -> Participant:
-    return part(**{"harness": "cursor", "session_key": "cursor:conv-1", **kw})
+    return part(**{"harness": "cursor", "session_key": "cursor:conv-1", "host": "", **kw})
 
 
 def test_cursor_routes_an_open_wait_to_its_sink_even_unbound() -> None:
@@ -222,6 +227,20 @@ def test_cursor_is_never_degraded_when_the_miss_limit_is_off() -> None:
     assert a.degraded(p) is False and a.tier(p) == ("cursor:stop-park", "provisional")
 
 
+def test_cursor_history_session_id_needs_the_join_nonce_binding() -> None:
+    """CursorAdapter.history_session_id (DESIGN.md §9.1, issue #171): /catchup's session id
+    for a Cursor conversation, once the join nonce bound it (§6.3); moved out of
+    catchup.session_id's harness branching."""
+    a = CursorAdapter(CFG)
+    assert a.history_session_id(cursor_part(session_id="conv-1"), CFG) == ("conv-1", "")
+    pending = cursor_part(bind_state="pending", session_key="cursor:agent:123@1.00", session_id="conv-1")
+    assert a.history_session_id(pending, CFG) == (
+        None,
+        "not bound to its Cursor conversation yet (after its first tool call following join())",
+    )
+    assert a.history_session_id(cursor_part(session_id=None), CFG) == (None, "no cursor session id known yet")
+
+
 # ------------------------------------------------------------------ devin
 def devin_part(**kw: Any) -> Participant:
     return part(**{"harness": "devin", "session_key": "devin:s1", **kw})
@@ -278,3 +297,12 @@ def test_devin_block_verdicts() -> None:
     assert a.continue_verdict(p, None, True, ev("PostToolUse", "devin")) == "confirm"
     assert a.continue_verdict(p, None, False, ev("PostToolUse", "devin")) is None
     assert a.confirm_window_s() == BLOCK_CONFIRM_S
+
+
+def test_devin_history_session_id_is_whatever_its_hooks_report() -> None:
+    """DevinAdapter.history_session_id (DESIGN.md §9.1, issue #171): /catchup's session id
+    for a Devin session is its own slug, with no quirk of its own; moved out of
+    catchup.session_id's harness branching."""
+    a = DevinAdapter(CFG)
+    assert a.history_session_id(devin_part(session_id="brisk-otter-1"), CFG) == ("brisk-otter-1", "")
+    assert a.history_session_id(devin_part(session_id=None), CFG) == (None, "no devin session id known yet")

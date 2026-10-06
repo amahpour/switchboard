@@ -127,6 +127,12 @@ class Adapter:
         """Hook events whose reply may carry priority context for this participant."""
         return frozenset()
 
+    def history_session_id(self, p: Participant, cfg: Config) -> tuple[str | None, str]:
+        """``(this harness's own session id for p, "")``, or ``(None, why not)``, for a
+        /catchup session-history request (DESIGN.md §26). The default: a harness
+        switchboard keeps no history-tool id for."""
+        return None, "a session of an unknown harness"
+
     # -- routing (pure) -----------------------------------------------------
     def route(self, p: Participant, rel: Release, sink: Any, now: float) -> Route:
         raise NotImplementedError

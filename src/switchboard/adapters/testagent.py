@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, Adapter
+from switchboard.config import Config
 from switchboard.models import Participant, Release, Route
 
 ACK_MODES = ("next_call", "immediate", "never")
@@ -25,6 +26,9 @@ class TestAgentAdapter(Adapter):
 
     def context_events(self, p: Participant) -> frozenset[str]:
         return HOOK_CONTEXT_EVENTS["test"]
+
+    def history_session_id(self, p: Participant, cfg: Config) -> tuple[str | None, str]:
+        return None, "a test session"
 
     def join_guidance(self, p: Participant, room: str) -> str:
         return (

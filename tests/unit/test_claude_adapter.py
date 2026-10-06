@@ -171,6 +171,16 @@ def test_unattached_session_is_the_hook_tier(w: World) -> None:
     assert ad(w).tier(w.p(p2)) == ("claude:inbox", None)
 
 
+def test_history_session_id_is_whatever_the_hooks_reported(w: World) -> None:
+    """ClaudeAdapter.history_session_id (DESIGN.md §9.1, issue #171): /catchup's session id
+    for a Claude session is exactly its own, with no quirk of its own; moved out of
+    catchup.session_id's harness branching."""
+    p, _m = w.agent("claude-1", harness="claude")
+    assert ad(w).history_session_id(p, w.cfg) == (p.session_id, "")
+    gone = w.store.update_participant(p.id, session_id=None)
+    assert ad(w).history_session_id(gone, w.cfg) == (None, "no claude session id known yet")
+
+
 # ---------------------------------------------------------- engine + adapter
 def test_idle_wake_goes_to_the_inbox_and_user_prompt_submit_confirms(w: World, clock: FakeClock) -> None:
     p, m, _c = claude(w)
