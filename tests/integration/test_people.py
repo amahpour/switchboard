@@ -399,6 +399,89 @@ def test_people_sign_in_with_their_email_once_they_have_one(hosted: InProcBroker
     assert bob.post(f"/api/people/{pid}/email", {"email": "x@example.com"}).status_code == 403
 
 
+def test_someone_added_by_email_signs_in_with_it(hosted: InProcBroker) -> None:
+    """#192: Add someone takes an email. Their name defaults to the email's local part, the
+    invite says to sign in with the email, and it does (with the one-time password); their
+    name doesn't. A name can be given instead of the default, and an email that's taken, isn't
+    one, or makes no usable name is refused before anyone is added."""
+    admin = set_up(hosted)
+    r = admin.post("/api/people", {"email": "Bob.Smith+sb@Example.com"})
+    assert r.status_code == 200, r.text
+    got = r.json()
+    assert (got["person"]["name"], got["person"]["email"]) == ("bob-smith-sb", "bob.smith+sb@example.com")
+    one_time = got["password"]
+    assert got["invite"] == (
+        f"You're invited to switchboard: {PUBLIC}\nSign in with bob.smith+sb@example.com and the"
+        f" one-time password {one_time} (it works for 7 days).\nRight after, you choose your own"
+        " password, or a passkey."
+    )
+    assert signin(Browser(hosted), "bob-smith-sb", one_time).status_code == 403  # not by name
+    r = signin(Browser(hosted), "bob.smith+sb@example.com", one_time)
+    assert r.status_code == 200 and r.json()["next"] == "setup", r.text
+    # a name of the admin's choosing instead of the default
+    r = admin.post("/api/people", {"email": "carol@example.com", "name": "Cee"})
+    assert r.status_code == 200 and r.json()["person"]["name"] == "cee", r.text
+    # a new one-time password's invite says the email too
+    pid = r.json()["person"]["id"]
+    r = admin.post(f"/api/people/{pid}/password", {})
+    assert r.status_code == 200 and "Sign in with carol@example.com and" in r.json()["invite"], r.text
+    # refused, and nobody added
+    n = len(admin.get("/api/people").json()["people"])
+    for body, code, err in [
+        ({"email": "carol@example.com"}, 409, "taken"),  # another person's email
+        ({"email": "alice@example.com", "name": "al"}, 200, None),  # (set up below)
+        ({"email": "not-an-email"}, 400, "bad_email"),
+        ({"email": "42@example.com"}, 400, "bad_name"),  # nothing usable before the @
+        ({"email": "dee@example.com", "name": "cee"}, 400, "bad_name"),  # a name that is taken
+        ({"email": "dee@example.com", "first_name": "x" * 65}, 400, "bad_name"),
+    ]:
+        if code == 200:
+            assert admin.post("/api/people/owner/email", {"email": "alice@example.com"}).status_code == 200
+            body = {"email": "alice@example.com", "name": "al"}
+            code, err = 409, "taken"  # the admin's own email
+        r = admin.post("/api/people", body)
+        assert r.status_code == code and r.json()["error"] == err, (body, r.text)
+    assert "choose one for them" in admin.post("/api/people", {"email": "42@example.com"}).json()["message"]
+    assert len(admin.get("/api/people").json()["people"]) == n
+
+
+def test_someone_added_with_a_first_and_last_name(hosted: InProcBroker) -> None:
+    """#192, §39.6: Add someone takes a first and a last name with the email. The name in the
+    rooms comes from the first name (accents dropped), then with the last name's initial, then
+    a digit, as each is taken; the invite greets them by first name; the People sheet, /api/me
+    and Members carry the names."""
+    admin = set_up(hosted)
+
+    def add_named(first: str, last: str, email: str) -> dict[str, Any]:
+        r = admin.post("/api/people", {"first_name": first, "last_name": last, "email": email})
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    got = add_named(" José ", "Martínez\u200b", "jose@example.com")
+    assert (got["person"]["name"], got["person"]["first_name"], got["person"]["last_name"]) == (
+        "jose",
+        "José",
+        "Martínez",
+    )
+    assert got["invite"].startswith(f"Hi José, you're invited to switchboard: {PUBLIC}\nSign in with jose@")
+    assert add_named("Jose", "Mendez", "jm@example.com")["person"]["name"] == "jose-m"
+    assert add_named("Jose", "Montoya", "jmo@example.com")["person"]["name"] == "jose2"
+    # what the admin types wins over the default
+    r = admin.post(
+        "/api/people", {"first_name": "Bob", "last_name": "Smith", "email": "b@example.com", "name": "bobby"}
+    )
+    assert r.json()["person"]["name"] == "bobby"
+    # the names reach the session, the People sheet and the room's members
+    jose = Browser(hosted)
+    assert signin(jose, "jose@example.com", got["password"]).json()["next"] == "setup"
+    assert jose.get("/api/setup/state").json()["first_name"] == "José"
+    assert jose.post("/api/me/password", {"password": BOB_PW}).status_code == 200
+    me = jose.get("/api/me").json()
+    assert (me["human"], me["first_name"], me["last_name"]) == ("jose", "José", "Martínez")
+    full = admin.get("/api/me").json()["full_names"]
+    assert full["jose"] == "José Martínez" and full["jose-m"] == "Jose Mendez" and "alice" not in full
+
+
 def test_setup_takes_the_admins_email(hosted: InProcBroker) -> None:
     """#192: setup asks the admin for their email, and they sign in with it from then on. A bad
     one is refused before anything is claimed (and before a passkey ceremony is used up), and
@@ -410,9 +493,18 @@ def test_setup_takes_the_admins_email(hosted: InProcBroker) -> None:
         r = br.post("/api/setup/password", {"password": ADMIN_PW, "email": bad})
         assert r.status_code == code and r.json()["error"] == "bad_email", (bad, r.text)
     assert hosted.state.store.owner_handle() is None  # nothing claimed
-    r = br.post("/api/setup/password", {"password": ADMIN_PW, "email": " Alice@Example.com "})
+    r = br.post("/api/setup/password", {"password": ADMIN_PW, "email": "x@example.com", "first_name": 5})
+    assert r.status_code == 400 and r.json()["error"] == "bad_name", r.text  # still nothing claimed
+    assert hosted.state.store.owner_handle() is None
+    r = br.post(
+        "/api/setup/password",
+        {"password": ADMIN_PW, "email": " Alice@Example.com ", "first_name": "Alice", "last_name": "Liddell"},
+    )
     assert r.status_code == 200, r.text
     assert hosted.state.store.owner_email() == "alice@example.com"
+    assert hosted.state.store.owner_names() == ("Alice", "Liddell")
+    me = br.get("/api/me").json()
+    assert (me["first_name"], me["last_name"]) == ("Alice", "Liddell")
     assert br.get("/api/me").json()["email"] == "alice@example.com"
     assert signin(Browser(hosted), "alice", ADMIN_PW).status_code == 403  # the name stops
     for who in ("alice@example.com", "admin"):

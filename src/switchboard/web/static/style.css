@@ -2070,6 +2070,12 @@ body.login {
 .machine-card .dialog-buttons .btn, .machine-card .dialog-buttons .btn-primary { min-width: 88px; }
 .machine-add { display: flex; flex-direction: column; gap: 6px; margin: 0; }
 .machine-row { display: flex; align-items: center; gap: 8px; }
+/* a person's full name beside the name in the rooms (#192, §39.6) */
+.m-full, .person-handle { color: var(--muted); font-size: calc(12.5px * var(--text-scale)); margin-left: 6px; }
+/* Add someone (#192): first and last name side by side, the email, then the name in the rooms */
+.person-names { display: flex; gap: 8px; }
+.person-field { display: flex; flex: 1 1 0; min-width: 0; flex-direction: column; gap: 6px; }
+@media (max-width: 420px) { .person-names { flex-direction: column; } }
 .machine-row input { flex: 1; min-width: 0; height: 32px; }
 .machine-row .btn-primary { flex-shrink: 0; }
 .machine-step { margin: 0; font-size: calc(12.5px * var(--text-scale)); color: var(--muted-2); }

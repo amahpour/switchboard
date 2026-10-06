@@ -29,7 +29,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -160,7 +160,9 @@ CREATE TABLE people(
   handle BLOB NOT NULL UNIQUE,
   password_hash TEXT, must_reset INTEGER NOT NULL DEFAULT 1, password_expires_at REAL,
   created_at REAL NOT NULL, removed_at REAL,
-  email TEXT CHECK(email IS NULL OR length(email) <= 254));
+  email TEXT CHECK(email IS NULL OR length(email) <= 254),
+  first_name TEXT CHECK(first_name IS NULL OR length(first_name) <= 64),
+  last_name TEXT CHECK(last_name IS NULL OR length(last_name) <= 64));
 CREATE UNIQUE INDEX people_active_name ON people(name) WHERE removed_at IS NULL;
 CREATE UNIQUE INDEX people_email ON people(email) WHERE removed_at IS NULL AND email IS NOT NULL;
 
@@ -349,6 +351,15 @@ V11_TO_V12 = (
     "UPDATE meta SET value='12' WHERE key='schema_version'",
 )
 
+# v12 -> v13 (#192, DESIGN.md §39.6): a person's first and last name, for the People sheet,
+# Members and the invite; the name in the rooms stays the short handle @mentions use. The
+# owner's are meta rows (owner_first_name, owner_last_name), as their email is.
+V12_TO_V13 = (
+    "ALTER TABLE people ADD COLUMN first_name TEXT CHECK(first_name IS NULL OR length(first_name) <= 64)",
+    "ALTER TABLE people ADD COLUMN last_name TEXT CHECK(last_name IS NULL OR length(last_name) <= 64)",
+    "UPDATE meta SET value='13' WHERE key='schema_version'",
+)
+
 
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
@@ -365,6 +376,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         9: (10, V9_TO_V10, ()),
         10: (11, V10_TO_V11, ()),
         11: (12, V11_TO_V12, ()),
+        12: (13, V12_TO_V13, ()),
     }
     out = []
     v = frm

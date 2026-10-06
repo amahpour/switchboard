@@ -130,11 +130,13 @@ def test_claim_backup_sheet_sign_out_and_sign_in(ui: UI, hosted: InProcBroker) -
     assert page.url == origin + "/setup"
     assert page.evaluate("location.hash") == ""
     expect(page.locator("#choose-lead")).to_contain_text("You’re the admin of this switchboard")
-    # #192: no email, no passkey ceremony (a typo mustn't cost a passkey on the device)
+    # #192: no name or email, no passkey ceremony (a typo mustn't cost a passkey on the device)
     page.click("#passkey-btn")
-    expect(page.locator("#setup-error")).to_have_text("Type your email: you sign in with it from now on.")
-    expect(page.locator("#setup-email")).to_be_focused()
+    expect(page.locator("#setup-error")).to_have_text("Give your first and last name.")
+    expect(page.locator("#setup-first")).to_be_focused()
     assert devices.credentials(laptop) == []
+    page.fill("#setup-first", "Alice")
+    page.fill("#setup-last", "Liddell")
     page.fill("#setup-email", "alice@example.com")
     page.click("#passkey-btn")  # a passkey instead of a password
     expect(page.locator("#step-backup")).to_be_visible()

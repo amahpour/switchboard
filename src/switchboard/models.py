@@ -342,6 +342,8 @@ class PersonRow:
     created_at: float
     removed_at: float | None
     email: str | None = None  # who they are: they sign in with it, Google too (#192, §39)
+    first_name: str | None = None  # shown in People, Members and the invite (#192, §39.6)
+    last_name: str | None = None
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "PersonRow":

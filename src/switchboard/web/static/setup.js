@@ -48,23 +48,31 @@
     return 'passkey';
   }
 
-  // the admin's email (#192): asked for before anything is sent, so a typo doesn't cost a passkey
-  function adminEmail() {
+  // who the admin is (#192): their first and last name and their email, asked for before
+  // anything is sent, so a typo doesn't cost a passkey
+  function adminWho() {
     if (mode !== 'claim') return null;
+    const first = ($('setup-first').value || '').trim();
+    const last = ($('setup-last').value || '').trim();
+    if (!first || !last) {
+      error('Give your first and last name.');
+      $(first ? 'setup-last' : 'setup-first').focus();
+      return undefined;
+    }
     const email = ($('setup-email').value || '').trim().toLowerCase();
     if (email.length > 254 || !EMAIL.test(email)) {
       error('Type your email: you sign in with it from now on.');
       $('setup-email').focus();
       return undefined;
     }
-    return email;
+    return { email: email, first_name: first, last_name: last };
   }
 
   async function savePassword(ev) {
     ev.preventDefault();
     error(null);
-    const email = adminEmail();
-    if (email === undefined) return;
+    const who = adminWho();
+    if (who === undefined) return;
     const pw = $('new-password').value;
     if (pw !== $('new-password-2').value) {
       error('The two passwords are not the same.');
@@ -75,7 +83,7 @@
     $('password-btn').textContent = 'Saving…';
     try {
       await W.post(mode === 'claim' ? '/api/setup/password' : '/api/me/password',
-        mode === 'claim' ? { password: pw, email: email } : { password: pw });
+        mode === 'claim' ? Object.assign({ password: pw }, who) : { password: pw });
       location.replace('/');
     } catch (e) {
       busy(false);
@@ -90,14 +98,14 @@
 
   async function usePasskey() {
     error(null);
-    const email = adminEmail();
-    if (email === undefined) return;
+    const who = adminWho();
+    if (who === undefined) return;
     busy(true);
     const label = $('passkey-btn').querySelector('span');
     label.textContent = 'Waiting for your passkey…';
     try {
       if (mode === 'claim') {
-        const res = await W.claim(null, platformName(), email);
+        const res = await W.claim(null, platformName(), who);
         $('backup-lead').textContent = 'This switchboard is set up (passkey "' + res.name + '"), and this browser is signed in.';
         show('step-backup');
         return;
@@ -158,19 +166,19 @@
     mode = st.mode;
     $('setup-user').value = st.email || st.human || '';  // what a password manager saves: who signs in
     $('choose-lead').textContent = mode === 'claim'
-      ? 'You’re the admin of this switchboard, signed in as ' + st.human + '. Give your email, then choose your own password, or a passkey instead.'
-      : 'Hi ' + st.human + '. Your one-time password worked. Choose your own password, or a passkey instead.';
+      ? 'You’re the admin of this switchboard, signed in as ' + st.human + '. Say who you are, then choose your own password, or a passkey instead.'
+      : 'Hi ' + (st.first_name || st.human) + '. Your one-time password worked. Choose your own password, or a passkey instead.';
     const passkeys = !!(st.passkeys_work && W.supported());
     for (const id of ['choose-or', 'choose-alt', 'choose-fine']) $(id).classList.toggle('hidden', !passkeys);
     $('password-form').addEventListener('submit', savePassword);
     $('passkey-btn').addEventListener('click', usePasskey);
     $('backup-form').addEventListener('submit', backup);
     $('email-field').classList.toggle('hidden', mode !== 'claim');
-    $('setup-email').required = mode === 'claim';
+    for (const id of ['setup-first', 'setup-last', 'setup-email']) $(id).required = mode === 'claim';
     // in a claim the email is who signs in: a password manager saves it with the password
     $('setup-email').addEventListener('input', function () { $('setup-user').value = $('setup-email').value.trim(); });
     show('step-choose');
-    $((mode === 'claim' ? 'setup-email' : 'new-password')).focus();
+    $((mode === 'claim' ? 'setup-first' : 'new-password')).focus();
   }
 
   document.addEventListener('DOMContentLoaded', load);

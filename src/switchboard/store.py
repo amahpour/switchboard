@@ -805,6 +805,8 @@ class Store:
             ).rowcount
             self.meta_delete("owner_password")
             self.meta_delete("owner_email")
+            self.meta_delete("owner_first_name")
+            self.meta_delete("owner_last_name")
             self.meta_delete("owner_handle")
             self.meta_delete("owner_claimed_at")
             self.meta_set("reset_owner_applied", applied)
@@ -896,6 +898,25 @@ class Store:
     def owner_email(self) -> str | None:
         return self.meta_get("owner_email")
 
+    def owner_names(self) -> tuple[str | None, str | None]:
+        """The owner's first and last name (#192, §39.6), or None for each not set."""
+        return self.meta_get("owner_first_name"), self.meta_get("owner_last_name")
+
+    def set_names(self, person_id: int | None, first_name: str | None, last_name: str | None) -> None:
+        """Set (or clear, with None) a person's first and last name, or the owner's (None)."""
+        with db.tx(self.con):
+            if person_id is None:
+                for key, value in (("owner_first_name", first_name), ("owner_last_name", last_name)):
+                    if value is None:
+                        self.meta_delete(key)
+                    else:
+                        self.meta_set(key, value)
+            else:
+                self.con.execute(
+                    "UPDATE people SET first_name=?, last_name=? WHERE id=? AND removed_at IS NULL",
+                    (first_name, last_name, person_id),
+                )
+
     def person_by_email(self, email: str) -> PersonRow | None:
         r = self.con.execute("SELECT * FROM people WHERE email=? AND removed_at IS NULL", (email,)).fetchone()
         return PersonRow.from_row(r) if r else None
@@ -943,19 +964,31 @@ class Store:
             for r in self.con.execute("SELECT * FROM people WHERE removed_at IS NULL ORDER BY created_at, id")
         ]
 
-    def person_add(self, name: str, handle: bytes, one_time_hash: str, ttl_s: float) -> PersonRow:
-        """A new person with a one-time password (its hash), good for ``ttl_s``. Raises
-        ValueError when an active person has that name already."""
+    def person_add(
+        self,
+        name: str,
+        handle: bytes,
+        one_time_hash: str,
+        ttl_s: float,
+        email: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+    ) -> PersonRow:
+        """A new person with a one-time password (its hash), good for ``ttl_s``, and their
+        email and first and last name if given (#192). Raises ValueError when an active person
+        has that name already, and Conflict when someone (the owner included) has that email."""
         if len(handle) != 16:
             raise ValueError("a person's handle is 16 bytes")
         now = self.clock.now()
         with db.tx(self.con):
             if self.person_named(name) is not None:
                 raise ValueError("that name is taken")
+            if email is not None and (self.person_by_email(email) is not None or self.owner_email() == email):
+                raise Conflict("someone else already has that email")
             cur = self.con.execute(
-                "INSERT INTO people(name, handle, password_hash, must_reset, password_expires_at, created_at)"
-                " VALUES(?,?,?,1,?,?)",
-                (name, handle, one_time_hash, now + ttl_s, now),
+                "INSERT INTO people(name, handle, password_hash, must_reset, password_expires_at,"
+                " created_at, email, first_name, last_name) VALUES(?,?,?,1,?,?,?,?,?)",
+                (name, handle, one_time_hash, now + ttl_s, now, email, first_name, last_name),
             )
             pid = int(cur.lastrowid or 0)
         got = self.person(pid)
