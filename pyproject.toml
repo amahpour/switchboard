@@ -1,6 +1,6 @@
 [project]
 name = "switchboard-chat"
-version = "0.21.1"
+version = "0.22.0"
 description = "A local group chat where you and your coding agents talk and hand work to each other"
 readme = "README.md"
 license = "MIT"

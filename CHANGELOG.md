@@ -2,6 +2,13 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.22.0 (2026-10-06)
+
+### Changed
+
+- **Settings is tabbed, and the × never scrolls away.** The one long scroll is now four groups — **Profile**, **Appearance**, **New rooms** and **Sign-in & security** (the password and passkeys, on a hosted broker or when you sign in with one) — in a rail of tabs on a desktop, with the arrow keys moving between them and **Sign out** at the foot of the rail. The × stays in a header that never scrolls, however far a group's own panel scrolls (#212). On a phone the groups show as a list with a one-line summary each; tapping one opens its own page, with **‹ Settings** to go back. Saving still works exactly as it did before: every Save button, the theme and text-size buttons, and the password and passkey controls are unchanged, and a one-save-bar-per-group follows in a later pull request.
+- **The Add a machine card installs the latest release.** Its first command is `uv tool install switchboard-chat`, without the broker's version pinned on. A machine and the broker only need to speak the same link protocol, and every release so far does. If a future release changes it, the broker refuses that machine and says to install the broker's version there.
+
 ## 0.21.1 (2026-10-06)
 
 ### Upgrading
