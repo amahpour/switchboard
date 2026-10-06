@@ -757,8 +757,44 @@ const SCENARIOS = {
     type(w, 'hi @cod');
     key(w.$('input'), 'Enter');  // completes to "hi @codex-1 " through the mentions popover
     const picked = { value: w.$('input').value, hl: hl() };
+    w.$('input').value = '';
+    // Issue #111: @here/@everyone highlight as you type too, same as a real member's name.
+    type(w, '@everyone look, then @here too, but not @all');
+    const broadcast = { text: mirror().textContent, hl: hl() };
     await settle();
-    return report(w, ws, { typed: typed, picked: picked });
+    return report(w, ws, { typed: typed, picked: picked, broadcast: broadcast });
+  },
+
+  // Issue #111: @here and @everyone show first in the @ popover, each with a one-line
+  // description, above the member list; an empty query (bare "@") lists both; narrowing to a
+  // query only one of them matches (here's own prefix "ev" has no member whose name contains
+  // it either) leaves just that one; the header's count is the matched members only, so the
+  // two broadcasts never inflate "Agents in #build <n>"; picking one completes it like a
+  // member would.
+  async broadcast_popover() {
+    const { w, ws } = await buildRoom(MEMBERS);
+    const optionIds = function () {
+      return findAll(w.$('mentions'), function (n) { return n.attrs.role === 'option'; }).map(function (n) { return n.id; });
+    };
+    const descOf = function (name) {
+      const row = findAll(w.$('mentions'), function (n) { return n.id === 'men-' + name; })[0];
+      return findAll(row, function (n) { return n.classList.contains('m-status'); })[0].textContent;
+    };
+    const count = function () {
+      return findAll(w.$('mentions'), function (n) { return n.classList.contains('muted'); })[0].textContent;
+    };
+
+    type(w, 'hi @');
+    const all = { ids: optionIds(), count: count(), hereDesc: descOf('here'), everyoneDesc: descOf('everyone') };
+
+    type(w, 'hi @ever');
+    const filtered = optionIds();
+
+    type(w, 'hi @ev');  // "everyone" (a prefix) ranks before "devin-1" (a substring match)
+    key(w.$('input'), 'Enter');
+    const picked = { value: w.$('input').value };
+    await settle();
+    return report(w, ws, { all: all, filtered: filtered, picked: picked });
   },
 
   // An argument-less palette command runs at once (Enter), through the normal send path.

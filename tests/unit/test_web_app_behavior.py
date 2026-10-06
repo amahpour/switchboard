@@ -339,11 +339,36 @@ def test_the_composer_highlights_only_known_mentions() -> None:
     """Issue #110: #input-mirror wraps @claude-1 (an active member) and @alice (the signed-in
     human) in their own .mention-hl span, the same names delivery.rules.parse_mentions would
     match, while @nope-one (nobody by that name) stays plain text with no style of its own; and
-    @codex-1, picked from the @ popover rather than typed, is highlighted too."""
+    @codex-1, picked from the @ popover rather than typed, is highlighted too. Issue #111:
+    @everyone and @here highlight the same way, unconditionally -- the composer is always a
+    person's, so there's no "plain text from an agent" case to tell apart here -- while @all
+    (reserved, but not a broadcast keyword) stays plain, like any other unknown name."""
     out = run("mention_highlight_in_composer")
     assert out["typed"]["text"] == "ask @claude-1 and @nope-one, cc @alice"
     assert out["typed"]["hl"] == ["@claude-1", "@alice"]
     assert out["picked"]["value"] == "hi @codex-1 " and out["picked"]["hl"] == ["@codex-1"]
+    assert out["broadcast"]["text"] == "@everyone look, then @here too, but not @all"
+    assert out["broadcast"]["hl"] == ["@everyone", "@here"]
+
+
+def test_broadcast_mentions_lead_the_popover_above_the_member_list() -> None:
+    """Issue #111: @here and @everyone show first in the @ popover with a one-line description
+    each, not counted in "Agents in #build <n>"; narrowing the query to one neither matches
+    leaves it out like any other candidate; picking one completes it like a member would."""
+    out = run("broadcast_popover")
+    assert out["all"]["ids"] == [
+        "men-here",
+        "men-everyone",
+        "men-claude-1",
+        "men-codex-1",
+        "men-devin-1",
+        "men-bench",
+    ]
+    assert out["all"]["count"] == "4"  # the 4 agents, not 6: the broadcasts aren't "agents in #build"
+    assert out["all"]["hereDesc"] and out["all"]["everyoneDesc"]
+    assert out["all"]["hereDesc"] != out["all"]["everyoneDesc"]
+    assert out["filtered"] == ["men-everyone"]  # "ever": only @everyone's own prefix matches
+    assert out["picked"]["value"] == "hi @everyone "
 
 
 def test_an_argument_less_palette_command_runs() -> None:

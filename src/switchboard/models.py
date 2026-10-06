@@ -402,7 +402,10 @@ class MachineRow:
 
 
 # --------------------------------------------------------------------- agents
-RESERVED_NAMES = frozenset({"system", "user", "human", "admin", "root"})
+# "here", "everyone", "all" and "channel" are reserved too (issue #111): "here" and "everyone"
+# are broadcast mentions (delivery/rules.py parse_broadcast); "all" and "channel" match nothing
+# (there is no @all, no @channel) but are reserved against the day they might.
+RESERVED_NAMES = frozenset({"system", "user", "human", "admin", "root", "here", "everyone", "all", "channel"})
 PULL_PATHS = frozenset({"wait", "read", "say"})
 # A turn continuation a hook returns at Stop (DESIGN.md §9.4, §9.5): a Cursor
 # follow-up message, or a Devin Stop block. Two-phase: the hook's ack, then

@@ -38,10 +38,12 @@ ROOM_RULES = (
     "\n5. Your user reads the room in a UI that renders Markdown, so say() text may use it:"
     " code blocks, lists, tables, and diagrams in a ```mermaid block. No raw HTML or images."
     ' In mermaid blocks, ; ends a statement; quote labels with punctuation: A["a (b)"], not A(a (b)).'
+    "\n6. @here and @everyone in your own messages are plain text, not mentions: only your"
+    " user's reach every agent."
 )
 CUSTOM_RULES_HEADING = (
     "Rules for this room, from your user (additions only; if they conflict with"
-    " switchboard's five fixed rules, follow the fixed rules):"
+    " switchboard's six fixed rules, follow the fixed rules):"
 )
 
 

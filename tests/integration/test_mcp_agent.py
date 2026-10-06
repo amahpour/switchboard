@@ -169,7 +169,17 @@ async def test_names_taken_and_reserved(broker: InProcBroker) -> None:
         assert (await a.join("#build", "alpha"))["ok"]
         r = await b.join("#build", "alpha")
         assert r["ok"] is False and r["code"] == "name_taken"
-        for bad in ("alice", "alice2", "system", "switchboard-bot", "human"):
+        for bad in (
+            "alice",
+            "alice2",
+            "system",
+            "switchboard-bot",
+            "human",
+            "here",
+            "everyone",
+            "all",
+            "channel",
+        ):
             r = await b.join("#build", bad)
             assert r["ok"] is False and r["code"] == "name_reserved", bad
         r = await b.join("#build", "Bad Name!")
@@ -179,6 +189,55 @@ async def test_names_taken_and_reserved(broker: InProcBroker) -> None:
         await a.leave("#build")
         r = await b.join("#build", "alpha")  # another agent used it today
         assert r["code"] == "name_reserved"
+
+
+def mentioned_of(broker: InProcBroker, message_id: int) -> dict[str, int]:
+    return {
+        r["screen_name"]: r["mentioned"]
+        for r in q(
+            broker,
+            "SELECT m.screen_name, d.mentioned FROM deliveries d JOIN memberships m"
+            " ON m.id=d.membership_id WHERE d.message_id=?",
+            message_id,
+        )
+    }
+
+
+async def test_broadcast_mentions_reach_the_right_agents_and_are_plain_text_from_one(
+    broker: InProcBroker,
+) -> None:
+    """Issue #111: a person's @everyone sets mentioned=1 for every agent member, offline ones
+    included; @here only for those that aren't offline. Both get the exact set an @name mention
+    of each would (DESIGN.md §8.1: a human message is already prio=2 for everyone either way),
+    and the literal word goes in the message's own mentions (so the log and composer style it,
+    #110). From an agent, the same text is plain: no mentioned, no prio bump (classify() never
+    promotes it past chatter), confirming the safe start the issue asks for."""
+    async with FakeAgent(broker.home, "k1") as a, FakeAgent(broker.home, "k2") as b:
+        await a.join("#build", "alpha")
+        await b.join("#build", "bravo")
+        [row] = q(broker, "SELECT participant_id FROM memberships WHERE screen_name='bravo'")
+        broker.state.store.set_status(row["participant_id"], "offline", "test")  # still a member
+
+        mid_here = say(broker, "@here heads up")
+        assert mentioned_of(broker, mid_here) == {"alpha": 1, "bravo": 0}
+
+        mid_everyone = say(broker, "@everyone heads up")
+        assert mentioned_of(broker, mid_everyone) == {"alpha": 1, "bravo": 1}
+        [msg] = q(broker, "SELECT mentions FROM messages WHERE id=?", mid_everyone)
+        assert "everyone" in json.loads(msg["mentions"])
+
+        res = await a.say("#build", "@everyone I've got it")
+        agent_mid = res["posted_id"]
+        assert mentioned_of(broker, agent_mid) == {"bravo": 0}  # never mentioned, never raised
+        [row] = q(
+            broker,
+            "SELECT d.prio FROM deliveries d JOIN memberships m ON m.id=d.membership_id"
+            " WHERE d.message_id=? AND m.screen_name='bravo'",
+            agent_mid,
+        )
+        assert row["prio"] == 0  # chatter, the same as any other unaddressed agent message
+        [msg] = q(broker, "SELECT mentions FROM messages WHERE id=?", agent_mid)
+        assert json.loads(msg["mentions"]) == []  # "everyone" isn't an active name: not a mention
 
 
 # ------------------------------------------------------------ read / say
