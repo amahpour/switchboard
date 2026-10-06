@@ -339,7 +339,10 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         w = who(request)
         if w is not None and w.must_reset:
             email = people.email_of(state, w.person_id)
-            return _ok({"mode": "reset", "human": w.name, "email": email, "passkeys_work": pk})
+            first = people.names_of(state, w.person_id)[0]
+            return _ok(
+                {"mode": "reset", "human": w.name, "email": email, "first_name": first, "passkeys_work": pk}
+            )
         if claim_ceremony(request) is not None:
             return _ok({"mode": "claim", "human": state.cfg.human_name, "passkeys_work": pk})
         return _ok({"mode": "link" if claim_open() else "none", "passkeys_work": pk})
@@ -400,6 +403,15 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         _set_ceremony(resp, SETUP_COOKIE, cid, secure=secure())
         return resp
 
+    def claim_names(body: dict[str, Any]) -> tuple[str | None, str | None, JSONResponse | None]:
+        """The admin's first and last name, which setup asks for with their email (§39.6)."""
+        first, why = people.clean_name_part(body.get("first_name"))
+        if why is None:
+            last, why = people.clean_name_part(body.get("last_name"))
+        if why is not None:
+            return None, None, _err(400, "bad_name", why)
+        return first, last, None
+
     def claim_email(body: dict[str, Any]) -> tuple[str | None, JSONResponse | None]:
         """The admin's email, which setup asks for (#192, §39): who they sign in as from then on.
         Optional here, so the API and older pages still set up; nobody else may have it."""
@@ -428,6 +440,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 " most): sign in with the one-time password again.",
             )
         email, no = claim_email(body)
+        if no is None:
+            first, last, no = claim_names(body)
         if no is not None:
             return no
         why = password_problem(body.get("password"), state.cfg.human_name)
@@ -438,6 +452,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             state.store.set_owner_password(hash_password(body["password"]))
             if email is not None:
                 state.store.set_email(None, email)
+            if first is not None or last is not None:
+                state.store.set_names(None, first, last)
         claim.spend()
         state.claimed()
         sid = state.sessions.create("claim")
@@ -467,6 +483,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 " most): sign in with the one-time password again.",
             )
         email, no = claim_email(body)
+        if no is None:
+            first, last, no = claim_names(body)
         if no is not None:
             return no
         try:
@@ -481,6 +499,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             state.store.passkey_add(reg.credential_id, reg.public_key, name, reg.aaguid, reg.sign_count)
             if email is not None:
                 state.store.set_email(None, email)
+            if first is not None or last is not None:
+                state.store.set_names(None, first, last)
         claim.spend()
         state.claimed()
         now = state.clock.now()
@@ -850,10 +870,28 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             body = await _json_body(request)
         except ServiceError as e:
             return _svc_err(e)
-        why = people.name_problem(state, body.get("name"))
+        # by email (#192): the name defaults to the email's local part; by name alone, as before
+        email, why = people.clean_email(body.get("email"))
+        if why is not None:
+            return _err(400, "bad_email", why)
+        first, why = people.clean_name_part(body.get("first_name"))
+        if why is None:
+            last, why = people.clean_name_part(body.get("last_name"))
         if why is not None:
             return _err(400, "bad_name", why)
-        name = body["name"].strip().lower()
+        raw = body.get("name")
+        derived = (first is not None or email is not None) and (
+            raw is None or (isinstance(raw, str) and not raw.strip())
+        )
+        if derived:
+            raw = people.name_for(state, first, last, email)
+        why = people.name_problem(state, raw)
+        if why is not None:
+            if derived:
+                why = f"{raw or 'that email'} can't be their name ({why}): choose one for them"
+            return _err(400, "bad_name", why)
+        assert isinstance(raw, str)
+        name = raw.strip().lower()
         one_time = one_time_password()
         try:
             p = state.store.person_add(
@@ -861,7 +899,12 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 secrets.token_bytes(16),
                 hash_password(normalize_one_time(one_time) or ""),
                 people.ONE_TIME_TTL_S,
+                email=email,
+                first_name=first,
+                last_name=last,
             )
+        except Conflict as e:
+            return _err(409, "taken", str(e))
         except ValueError as e:
             return _err(409, "conflict", str(e))
         state.store.add_event("people", data={"what": "add", "person": name, "by": w.name})
@@ -870,7 +913,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             {
                 "person": next(x for x in people.summary(state) if x["id"] == p.id),
                 "password": one_time,
-                "invite": people.invite_text(state.web_origin.origin, name, one_time),
+                "invite": people.invite_text(state.web_origin.origin, name, one_time, email, first),
             }
         )
 
@@ -899,7 +942,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             {
                 "person": next(x for x in people.summary(state) if x["id"] == p.id),
                 "password": one_time,
-                "invite": people.invite_text(state.web_origin.origin, p.name, one_time),
+                "invite": people.invite_text(
+                    state.web_origin.origin, p.name, one_time, p.email, p.first_name
+                ),
             }
         )
 
@@ -1159,6 +1204,10 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             {
                 "human": w.name,
                 "email": people.email_of(state, w.person_id),  # who signs in (#192, §39)
+                "first_name": people.names_of(state, w.person_id)[0],  # §39.6
+                "last_name": people.names_of(state, w.person_id)[1],
+                # everyone's full name by their name in the rooms: Members and a message's sender
+                "full_names": people.full_names(state),
                 "admin": w.owner and state.hosted,  # the admin section (§32.3)
                 "version": __version__,
                 "commit": build_info.commit(),

@@ -11,6 +11,7 @@ Only the owner has the admin section.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -23,6 +24,7 @@ ADMIN_ALIAS = "admin"  # the owner may sign in as "admin" too: the log's line sa
 ONE_TIME_TTL_S = 7 * 24 * 3600.0  # a person's one-time password works for a week
 EMAIL_RE = re.compile(r"[^@\s]{1,64}@[^@\s]{1,189}\.[^@\s.]{2,63}")
 MAX_EMAIL = 254  # the column's limit (people.email), and what an address can be
+MAX_NAME_PART = 64  # a first or a last name (the columns' limit, §39.6)
 
 
 @dataclass(frozen=True)
@@ -92,12 +94,84 @@ def clean_email(raw: Any) -> tuple[str | None, str | None]:
     return email, None
 
 
+def _slug(text: str) -> str:
+    """``text`` as a screen name: accents dropped (José -> jose), lowercase, spaces, ``.`` and
+    ``+`` as ``-``, anything else that can't be in a name dropped, a letter first, at most 24.
+    May come out empty."""
+    ascii_ = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii").lower()
+    kept = re.sub(r"[^a-z0-9_-]", "", re.sub(r"[\s.+]+", "-", ascii_))
+    kept = re.sub(r"^[^a-z]+", "", kept)
+    return re.sub(r"-{2,}", "-", kept)[:24].rstrip("-")
+
+
+def name_from_email(email: str) -> str:
+    """A name for someone added by email alone (#192): the part before the ``@``, as a screen
+    name. May come out empty or taken: the caller checks it as any name (``name_problem``)."""
+    return _slug(email.split("@", 1)[0])
+
+
+def name_for(state: "BrokerState", first_name: str | None, last_name: str | None, email: str | None) -> str:
+    """The name in the rooms for someone added with a first and last name (#192, §39.6): the
+    first name (``ari``), else with the last name's initial (``ari-m``), else with a digit
+    (``ari2`` to ``ari9``); from the email when there's no first name. The first that's free;
+    else the plain one, which ``name_problem`` then refuses with its reason."""
+    base = _slug(first_name) if first_name else name_from_email(email or "")
+    tries = [base]
+    if base and last_name and _slug(last_name):
+        tries.append(f"{base}-{_slug(last_name)[0]}"[:24])
+    tries += [f"{base[:23]}{n}" for n in range(2, 10)] if base else []
+    return next((t for t in tries if name_problem(state, t) is None), base)
+
+
+def clean_name_part(raw: Any) -> tuple[str | None, str | None]:
+    """A first or last name from a request (§39.6): ``(name, None)`` with its spaces tidied and
+    control and format characters dropped, ``(None, None)`` for none, or ``(None, why)``. Shown
+    as text only (``textContent``), never as HTML."""
+    if raw is None:
+        return None, None
+    if not isinstance(raw, str):
+        return None, "a name must be text"
+    name = " ".join("".join(c for c in raw if not unicodedata.category(c).startswith("C")).split())
+    if not name:
+        return None, None
+    if len(name) > MAX_NAME_PART:
+        return None, f"a first or last name is at most {MAX_NAME_PART} characters"
+    return name, None
+
+
+def full_name(first_name: str | None, last_name: str | None) -> str | None:
+    """ "Ari Mahpour", "Ari", or None when neither is set."""
+    return " ".join(x for x in (first_name, last_name) if x) or None
+
+
 def email_of(state: "BrokerState", person_id: int | None) -> str | None:
     """The email of a person, or of the owner (None), or None when they have none (#192)."""
     if person_id is None:
         return state.store.owner_email()
     p = state.store.person(person_id)
     return p.email if p is not None else None
+
+
+def names_of(state: "BrokerState", person_id: int | None) -> tuple[str | None, str | None]:
+    """The first and last name of a person, or of the owner (None) (§39.6)."""
+    if person_id is None:
+        return state.store.owner_names()
+    p = state.store.person(person_id)
+    return (p.first_name, p.last_name) if p is not None else (None, None)
+
+
+def full_names(state: "BrokerState") -> dict[str, str]:
+    """Each person's name in the rooms -> their full name, for those who have one (the
+    Members panel and the hover on their messages)."""
+    out: dict[str, str] = {}
+    owner = full_name(*state.store.owner_names())
+    if owner:
+        out[state.cfg.human_name] = owner
+    for p in state.store.people():
+        full = full_name(p.first_name, p.last_name)
+        if full:
+            out[p.name] = full
+    return out
 
 
 def name_problem(state: "BrokerState", name: Any) -> str | None:
@@ -139,6 +213,8 @@ def summary(state: "BrokerState") -> list[dict[str, Any]]:
             "sign_in": "admin",
             "created_at": state.store.owner_claimed_at(),
             "email": state.store.owner_email(),
+            "first_name": state.store.owner_names()[0],
+            "last_name": state.store.owner_names()[1],
         }
     ]
     for p in state.store.people():
@@ -153,15 +229,23 @@ def summary(state: "BrokerState") -> list[dict[str, Any]]:
                 "created_at": p.created_at,
                 "expires_at": p.password_expires_at if p.must_reset else None,
                 "email": p.email,
+                "first_name": p.first_name,
+                "last_name": p.last_name,
             }
         )
     return out
 
 
-def invite_text(origin: str, name: str, one_time: str) -> str:
-    """What the owner sends a new person (the admin section's Copy button)."""
+def invite_text(
+    origin: str, name: str, one_time: str, email: str | None = None, first_name: str | None = None
+) -> str:
+    """What the owner sends a new person (the admin section's Copy button): it greets them by
+    their first name, and who they sign in as is their email when they have one (#192), else
+    their name."""
+    who = f"with {email} and" if email else f"as {name} with"
+    hello = f"Hi {first_name}, you're invited" if first_name else "You're invited"
     return (
-        f"You're invited to switchboard: {origin}\n"
-        f"Sign in as {name} with the one-time password {one_time} (it works for 7 days).\n"
+        f"{hello} to switchboard: {origin}\n"
+        f"Sign in {who} the one-time password {one_time} (it works for 7 days).\n"
         "Right after, you choose your own password, or a passkey."
     )

@@ -93,7 +93,9 @@
     draft: null,       // composer text a catch-up entry replaced; it comes back after the command (fillComposer)
     // people (a hosted broker, §32): the admin section's list, and the one-time password just made
     people: [],
-    peopleDraft: '',   // the name typed in Add someone, kept across renders
+    // what's typed in Add someone, kept across renders (#192): the name follows the first name
+    // until it's typed by hand
+    peopleDraft: { first: '', last: '', email: '', name: '', nameTyped: false },
     emailDrafts: new Map(),  // person key -> the email typed on their card, kept across renders
     emailNotes: new Map(),   // person key -> {text, bad}: what the last save on their card said
     peopleBusy: new Map(),  // person id (or 'add') -> what is running for them
@@ -618,6 +620,12 @@
     });
   }
 
+  // a person's first and last name by their name in the rooms, from /api/me (§39.6), or null
+  function fullNameOf(name) {
+    const map = (state.me && state.me.full_names) || {};
+    return Object.prototype.hasOwnProperty.call(map, name) ? map[name] : null;
+  }
+
   function chatRow(r, m, prev) {
     const who = label(m.from, m.host);
     const line = el('article', 'line k-chat');
@@ -646,6 +654,8 @@
       nick.addEventListener('click', function () { openInspector(m.from, m.host || ''); });
     } else {
       nick = el('span', 'nick nick-human' + (m.sender_kind === 'system' ? ' nick-system' : ''), m.from);
+      const full = m.sender_kind === 'human' && !m.host ? fullNameOf(m.from) : null;
+      if (full) nick.title = full;  // a person's full name, on hover (#192, §39.6)
     }
     if (m.host) nick.append(el('span', 'host-tag', '@' + m.host));
     head.append(nick);
@@ -878,6 +888,8 @@
       const main = el('span', 'm-main');
       const nl = el('span', 'm-name-line');
       nl.append(el('span', 'm-name', state.me.human));
+      const meFull = fullNameOf(state.me.human);
+      if (meFull) nl.append(el('span', 'm-full', meFull));
       const conn = state.wsOpen ? 'online' : state.wsEverOpen ? 'reconnecting…' : 'connecting…';
       main.append(nl, el('span', 'm-status', 'Human · ' + conn));
       row.append(av, main);
@@ -3291,32 +3303,75 @@
       state.invite = null;
       state.copiedInvite = false;
       renderPeoplePanel();
-      tryFocus(document.getElementById('person-name'));
+      tryFocus(document.getElementById('person-first'));
     });
     btns.append(done);
     card.append(btns);
     return card;
   }
 
+  // a name in the rooms from a first name, as the broker makes it (people._slug): accents
+  // dropped, lowercase, spaces and . + as -, a letter first, at most 24
+  function slugName(text) {
+    let t = String(text || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase();
+    t = t.replace(/[\s.+]+/g, '-').replace(/[^a-z0-9_-]/g, '').replace(/^[^a-z]+/, '').replace(/-{2,}/g, '-');
+    return t.slice(0, 24).replace(/-+$/, '');
+  }
+
+  // the name in the rooms Add someone suggests (people.name_for): the first name, else with the
+  // last name's initial, else with a digit, the first that nobody here has
+  function suggestName(first, last) {
+    const base = slugName(first);
+    if (!base) return '';
+    const taken = new Set(state.people.map(function (p) { return p.name; }));
+    const tries = [base];
+    const initial = slugName(last).charAt(0);
+    if (initial) tries.push((base + '-' + initial).slice(0, 24));
+    for (let n = 2; n <= 9; n++) tries.push(base.slice(0, 23) + n);
+    return tries.find(function (t) { return !taken.has(t); }) || base;
+  }
+
   function addPersonCard() {
+    const d = state.peopleDraft;
     const card = el('div', 'machine-card');
     const head = el('div', 'remote-head');
     head.append(icon('plus'), el('span', 'remote-name', 'Add someone'));
     card.append(head);
-    const form = el('form', 'machine-add');
+    const form = el('form', 'machine-add person-add-form');
     form.setAttribute('autocomplete', 'off');
-    const label = el('label', null, 'Their name in the rooms');
-    label.htmlFor = 'person-name';
+    function field(key, id, labelText, type, placeholder, maxLength) {
+      const wrap = el('div', 'person-field');
+      const label = el('label', null, labelText);
+      label.htmlFor = id;
+      const input = el('input');
+      input.type = type;
+      input.id = id;
+      input.dataset.focus = 'add:' + key;
+      input.maxLength = maxLength;
+      input.spellcheck = false;
+      input.placeholder = placeholder;
+      input.value = d[key];
+      wrap.append(label, input);
+      return { wrap: wrap, input: input };
+    }
+    const first = field('first', 'person-first', 'First name', 'text', 'Sam', 64);
+    const last = field('last', 'person-last', 'Last name', 'text', 'Lee', 64);
+    const email = field('email', 'person-email', 'Email', 'email', 'sam@example.com', 254);
+    email.input.autocapitalize = 'none';
+    const name = field('name', 'person-name', 'Their name in the rooms', 'text', 'sam', 24);
+    name.input.autocapitalize = 'none';
+    const names = el('div', 'person-names');
+    names.append(first.wrap, last.wrap);
+    function follow() {  // the name in the rooms follows the first and last name until typed by hand
+      if (d.nameTyped) return;
+      d.name = suggestName(d.first, d.last);
+      name.input.value = d.name;
+    }
+    first.input.addEventListener('input', function () { d.first = first.input.value; follow(); });
+    last.input.addEventListener('input', function () { d.last = last.input.value; follow(); });
+    email.input.addEventListener('input', function () { d.email = email.input.value; });
+    name.input.addEventListener('input', function () { d.name = name.input.value; d.nameTyped = !!name.input.value; });
     const row = el('div', 'machine-row');
-    const input = el('input');
-    input.type = 'text';
-    input.id = 'person-name';
-    input.maxLength = 24;
-    input.spellcheck = false;
-    input.autocapitalize = 'none';
-    input.placeholder = 'sam';
-    input.value = state.peopleDraft;
-    input.addEventListener('input', function () { state.peopleDraft = input.value; });
     const busy = state.peopleBusy.get('add');
     const add = btn('btn btn-primary', busy ? 'Adding…' : 'Add');
     add.type = 'submit';
@@ -3324,15 +3379,15 @@
     add.disabled = !!busy;
     add.title = state.me && state.me.fresh ? 'makes a one-time password to send them'
       : 'asks you to confirm it\'s you first, then makes a one-time password to send them';
-    row.append(input, add);
-    form.append(label, row);
+    row.append(name.input, add);
+    form.append(names, email.wrap, name.wrap.firstChild, row);
     form.addEventListener('submit', function (ev) {
       ev.preventDefault();
-      addPerson(input.value);
+      addPerson();
     });
     card.append(form);
-    card.append(el('p', 'machine-step', 'They sign in with that name and a one-time password you send them, then'
-      + ' choose their own password or a passkey.'));
+    card.append(el('p', 'machine-step', 'They sign in with that email and a one-time password you send them, then'
+      + ' choose their own password or a passkey. Their name in the rooms is what others @mention.'));
     const out = el('div', 'fine machine-result');
     out.id = 'people-result-add';
     card.append(out);
@@ -3396,7 +3451,9 @@
     const head = el('div', 'remote-head');
     const av = el('span', 'avatar human sm', (p.name || '?').charAt(0).toUpperCase());
     av.setAttribute('aria-hidden', 'true');
-    head.append(av, el('span', 'remote-name', p.name));
+    const full = [p.first_name, p.last_name].filter(Boolean).join(' ');
+    head.append(av, el('span', 'remote-name', full || p.name));
+    if (full) head.append(el('span', 'person-handle', '@' + p.name));
     if (p.admin) head.append(el('span', 'chip person-chip', 'admin'));
     else if (p.sign_in === 'one-time' || p.sign_in === 'expired') {
       head.append(el('span', 'chip person-chip' + (p.sign_in === 'expired' ? ' bad' : ' pending'),
@@ -3446,8 +3503,20 @@
     else if (focused) refocus(body, focused);
   }
 
-  async function addPerson(raw) {
-    const name = String(raw || '').trim().toLowerCase();
+  async function addPerson() {
+    const d = state.peopleDraft;
+    const first = d.first.trim();
+    const last = d.last.trim();
+    const email = d.email.trim().toLowerCase();
+    const name = d.name.trim().toLowerCase();
+    if (!first || !last) {
+      peopleResult('add', 'Give their first and last name.', true);
+      return;
+    }
+    if (!/^[^@\s]{1,64}@[^@\s]{1,189}\.[^@\s.]{2,63}$/.test(email)) {
+      peopleResult('add', 'Give the email they\'ll sign in with.', true);
+      return;
+    }
     if (!PERSON_NAME.test(name)) {
       peopleResult('add', 'A name looks like bob or bob-k: a letter first, then letters, digits, _ or -, at most 24.', true);
       return;
@@ -3456,9 +3525,11 @@
     state.peopleBusy.set('add', 'add');
     renderPeoplePanel();
     try {
-      const res = await withFreshCheck(function () { return api('POST', '/api/people', { name: name }); });
+      const res = await withFreshCheck(function () {
+        return api('POST', '/api/people', { first_name: first, last_name: last, email: email, name: name });
+      });
       state.peopleBusy.delete('add');
-      state.peopleDraft = '';
+      state.peopleDraft = { first: '', last: '', email: '', name: '', nameTyped: false };
       state.invite = { id: res.person.id, name: res.person.name, password: res.password, invite: res.invite };
       await loadPeople().catch(function () {});
       renderPeoplePanel();
@@ -3516,7 +3587,7 @@
     openSheet('people-panel');
     renderPeoplePanel();
     loadPeople().catch(function () {});
-    if (!tryFocus(document.getElementById('person-name'))) $('people-close').focus();
+    if (!tryFocus(document.getElementById('person-first'))) $('people-close').focus();
   }
 
   // ------------------------------------------------------- closed rooms

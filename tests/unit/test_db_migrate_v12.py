@@ -33,7 +33,7 @@ def test_google_emails_become_the_accounts_emails_with_a_checked_backup(tmp_path
     os.chmod(p, 0o600)
 
     con = db.open_db(p)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 12
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 13
     assert db.row_counts(con, db.TABLES) == before
     assert dict(con.execute("SELECT name, email FROM people").fetchall()) == {
         "bob": "bob@example.com",

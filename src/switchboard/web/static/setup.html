@@ -41,6 +41,16 @@
       <input type="text" id="setup-user" name="username" autocomplete="username" class="sr-only"
              tabindex="-1" aria-hidden="true" readonly>
       <div class="setup-form hidden" id="email-field">
+        <div class="person-names">
+          <div class="person-field">
+            <label for="setup-first">First name</label>
+            <input type="text" id="setup-first" name="given-name" autocomplete="given-name" maxlength="64">
+          </div>
+          <div class="person-field">
+            <label for="setup-last">Last name</label>
+            <input type="text" id="setup-last" name="family-name" autocomplete="family-name" maxlength="64">
+          </div>
+        </div>
         <label for="setup-email">Your email</label>
         <input type="email" id="setup-email" name="email" autocomplete="email" maxlength="254" autocapitalize="none"
                spellcheck="false" placeholder="you@example.com" aria-describedby="email-rules">
