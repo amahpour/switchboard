@@ -46,7 +46,7 @@ The image sets everything but the public URL.
 
 They are the environment versions of `switchboard start --public-url`, `--listen` and `--port`. `config.toml` can also set `public_url` and `listen`, and a flag or variable wins over it. The container runs `switchboard start --foreground --log-stdout`: logs go to stdout, where the platform collects them, instead of `logs/broker.log`.
 
-The admin's name in the rooms is `me` unless you set it. The easiest way is **Settings > Your name** in the web UI, which renames you at once and keeps it across restarts. `SWITCHBOARD_HUMAN_NAME` in the deployment (the Kubernetes and Compose files have it) fixes the name instead, and Settings can't change it while it's set; leave it out to rename from Settings. Or set `human_name` in `config.toml` in the home, then restart the container:
+The admin's name in the rooms is `me` unless you set it. The easiest way is **Settings > Profile** in the web UI, which renames you at once and keeps it across restarts. `SWITCHBOARD_HUMAN_NAME` in the deployment (the Kubernetes and Compose files have it) fixes the name instead, and Settings can't change it while it's set; leave it out to rename from Settings. Or set `human_name` in `config.toml` in the home, then restart the container:
 
 ```bash
 docker exec -u switchboard switchboard sh -c 'echo "human_name = \"ari\"" >> "$SWITCHBOARD_HOME/config.toml"'

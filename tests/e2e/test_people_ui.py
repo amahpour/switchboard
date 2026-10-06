@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from conftest import InProcBroker, make_tmp_home, sanitize_env
 from playwright.sync_api import Browser, Page, expect
-from test_web_ui import PHASE_REPORTS, UI
+from test_web_ui import PHASE_REPORTS, UI, open_settings
 
 from switchboard.broker.auth import WebOrigin
 
@@ -211,7 +211,7 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
         ui.problems.clear()
     sign_in(again, "robert@example.com", BOB_PW)
     expect(again.locator("#me-name")).to_have_text("bob")
-    again.click("#me-settings")
+    open_settings(again, "security")
     expect(again.locator("#app-dialog")).to_contain_text(
         "You sign in with your email, robert@example.com, and this password."
     )

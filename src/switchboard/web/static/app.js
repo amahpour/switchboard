@@ -142,15 +142,16 @@
         form.noValidate = true;
         const title = el('h2', null, options.title);
         title.id = 'app-dialog-title';
+        let settingsFocus = null;
         if (settings) {
           const head = el('div', 'settings-head');
-          const close = btn('icon-btn', 'Close');
+          const close = btn('icon-btn', null);
           close.id = 'settings-close';
-          close.setAttribute('aria-label', 'Close Settings');
+          close.setAttribute('aria-label', 'Close settings');
+          close.append(icon('close'));
           close.addEventListener('click', function () { dlg.close('cancel'); });
-          head.append(title, close);
           form.append(head);
-          options.build(form);
+          settingsFocus = options.build(form, head, title, close, options.group);
         } else form.append(title);
         if (options.body) {
           const body = el('p', 'app-dialog-body', options.body);
@@ -287,7 +288,7 @@
         }
         if (validWake) validWake();
         dlg.showModal();
-        (settings ? $('settings-close')
+        (settings ? (settingsFocus || $('settings-close'))
           : (name || rulesInput || budgetInput || (options.danger ? cancel : action))).focus();
       });
     });
@@ -428,6 +429,9 @@
     key: circ(5.5, 8, 3) + 'M8.5 8h5.5M12 8v2.5M14 8v1.5',
     // a viewfinder, for Focus mode (#99): four corner brackets and a center dot
     focus: 'M2.5 5V2.5H5M11 2.5h2.5V5M13.5 11v2.5H11M5 13.5H2.5V11' + circ(8, 8, 1.3),
+    // Settings' groups (#232): a person (Profile) and a circle split in half (Appearance)
+    person: circ(8, 5.6, 2.6) + 'M2.3 13.5c.6-3.3 2.8-5.1 5.7-5.1s5.1 1.8 5.7 5.1',
+    contrast: circ(8, 8, 5.5) + 'M8 2.5v11',
   };
 
   function icon(name) {
@@ -3301,6 +3305,7 @@
   function renderSettingsAccount() {
     if (!$('app-dialog').open || $('app-dialog').dataset.kind !== 'settings') return;
     const body = $('settings-account');
+    if (!body) return;  // no Sign-in & security group (a desktop broker, not signed in with a password)
     const me = state.me || {};
     const n = me.passkeys || 0;
     body.replaceChildren();
@@ -3419,9 +3424,84 @@
     return 'Leave blank to use config.toml’s value, or the built-in default.';
   }
 
-  function buildSettings(container) {
-    const appearance = el('section', 'settings-section');
-    appearance.append(el('h3', null, 'Appearance'), el('p', 'fine', 'Choose how switchboard looks on every browser where you sign in.'));
+  // Settings' groups (#232): Profile, Appearance, New rooms, and Sign-in & security where
+  // there's a password or passkeys to show today (a hosted broker, or state.me.signin).
+  const SETTINGS_GROUPS = [
+    { key: 'profile', label: 'Profile', icon: 'person' },
+    { key: 'appearance', label: 'Appearance', icon: 'contrast' },
+    { key: 'rooms', label: 'New rooms', icon: 'hash' },
+    { key: 'security', label: 'Sign-in & security', icon: 'key' },
+  ];
+
+  function buildSettingsProfile(panel) {
+    // Your name (#114, DESIGN.md §41): your first and last name, and your name in the rooms,
+    // which others @mention and every agent takes your messages under
+    const me = state.me || {};
+    panel.append(el('h3', null, 'Profile'), el('p', 'fine', 'How you show up to people and agents.'));
+    function youField(id, labelText, value, maxLength) {
+      const label = el('label', 'settings-label', labelText);
+      label.setAttribute('for', id);
+      const input = el('input');
+      input.type = 'text';
+      input.id = id;
+      input.maxLength = maxLength;
+      input.spellcheck = false;
+      input.value = value || '';
+      return [label, input];
+    }
+    const [firstLabel, firstInput] = youField('settings-first', 'First name', me.first_name, 64);
+    const [lastLabel, lastInput] = youField('settings-last', 'Last name', me.last_name, 64);
+    const [nameLabel, nameInput] = youField('settings-name', 'Your name in the rooms', me.human, 24);
+    nameInput.autocapitalize = 'none';
+    const nameNote = el('p', 'fine', me.name_locked
+      ? 'Set when switchboard starts (SWITCHBOARD_HUMAN_NAME), so it can’t be changed here.'
+      : 'What others @mention, and what agents take your messages under. Your earlier messages keep the name they were sent with.');
+    nameNote.id = 'settings-name-note';
+    nameInput.readOnly = !!me.name_locked;
+    const names = el('div', 'person-names');
+    const f1 = el('div', 'person-field');
+    f1.append(firstLabel, firstInput);
+    const f2 = el('div', 'person-field');
+    f2.append(lastLabel, lastInput);
+    names.append(f1, f2);
+    const youSave = btn('btn-primary', 'Save');
+    youSave.id = 'settings-name-save';
+    const youStatus = el('span', 'fine');
+    youStatus.id = 'settings-name-status';
+    youStatus.setAttribute('role', 'status');
+    youSave.addEventListener('click', async function () {
+      const body = { first_name: firstInput.value.trim() || null, last_name: lastInput.value.trim() || null };
+      const name = nameInput.value.trim().toLowerCase();
+      const renaming = !me.name_locked && name !== String(me.human || '').toLowerCase();
+      if (renaming) {
+        if (!PERSON_NAME.test(name)) {
+          youStatus.textContent = 'A name looks like bob or bob-k: a letter first, then letters, digits, _ or -, at most 24.';
+          youStatus.classList.add('bad');
+          return;
+        }
+        body.name = name;
+      }
+      youSave.disabled = true;
+      try {
+        const call = function () { return api('POST', '/api/me/name', body); };
+        // a new name in the rooms on a hosted broker asks you to confirm it's you, as a password does
+        await (renaming && state.me && state.me.signin ? withFreshCheck(call) : call());
+        state.me = await api('GET', '/api/me');
+        renderBuddies();
+        updateTitle();
+        youStatus.textContent = 'Saved';
+        youStatus.classList.remove('bad');
+      } catch (e) {
+        youStatus.textContent = String(e.message || e);
+        youStatus.classList.add('bad');
+      } finally { youSave.disabled = false; }
+    });
+    panel.append(names, nameLabel, nameInput, nameNote, youSave, youStatus);
+  }
+
+  function buildSettingsAppearance(panel) {
+    panel.append(el('h3', null, 'Appearance'), el('p', 'fine',
+      'Saved to your account: every browser where you sign in looks the same. Changes apply at once.'));
     const themeLabel = el('span', 'settings-label', 'Theme');
     const choices = el('div', 'settings-theme-options');
     choices.setAttribute('role', 'group');
@@ -3433,7 +3513,7 @@
       option.setAttribute('aria-pressed', String(value === current));
       option.addEventListener('click', async function () {
         if (value === (((state.me || {}).preferences || {}).theme || 'system')) return;
-        for (const button of appearance.querySelectorAll('button')) button.disabled = true;
+        for (const button of panel.querySelectorAll('button')) button.disabled = true;
         try {
           const result = await api('PUT', '/api/me/preferences', { theme: value });
           state.me.preferences = result.preferences;
@@ -3446,7 +3526,7 @@
         } catch (e) {
           $('settings-error').textContent = String(e.message || e);
         } finally {
-          for (const button of appearance.querySelectorAll('button')) button.disabled = false;
+          for (const button of panel.querySelectorAll('button')) button.disabled = false;
         }
       });
       choices.append(option);
@@ -3454,7 +3534,7 @@
     const error = el('p', 'app-dialog-error');
     error.id = 'settings-error';
     error.setAttribute('role', 'alert');
-    appearance.append(themeLabel, choices, error);
+    panel.append(themeLabel, choices, error);
 
     const sizeLabel = el('span', 'settings-label', 'Text size');
     const sizeChoices = el('div', 'settings-theme-options settings-text-options');
@@ -3468,7 +3548,7 @@
       option.setAttribute('aria-pressed', String(value === currentSize));
       option.addEventListener('click', async function () {
         if (value === (((state.me || {}).preferences || {}).text_size || 'default')) return;
-        for (const button of appearance.querySelectorAll('button')) button.disabled = true;
+        for (const button of panel.querySelectorAll('button')) button.disabled = true;
         try {
           const result = await api('PUT', '/api/me/preferences', { text_size: value });
           state.me.preferences = result.preferences;
@@ -3480,16 +3560,18 @@
         } catch (e) {
           $('settings-error').textContent = String(e.message || e);
         } finally {
-          for (const button of appearance.querySelectorAll('button')) button.disabled = false;
+          for (const button of panel.querySelectorAll('button')) button.disabled = false;
         }
       });
       sizeChoices.append(option);
     }
-    appearance.append(sizeLabel, sizeChoices);
+    panel.append(sizeLabel, sizeChoices);
+  }
 
-    const rules = el('section', 'settings-section');
-    rules.append(el('h3', null, 'Rooms'),
-      el('p', 'fine', 'Copied into each room you create. Changing these does not change existing rooms.'));
+  function buildSettingsRooms(panel) {
+    panel.append(el('h3', null, 'New rooms'), el('p', 'fine',
+      'What each room you create starts with. These never change a room that exists: each room has'
+      + ' its own, in its header.'));
     const rulesLabel = el('label', 'settings-label', 'Default room rules');
     rulesLabel.setAttribute('for', 'settings-room-rules');
     const rulesInput = el('textarea', 'rules-textarea');
@@ -3557,104 +3639,234 @@
         status.classList.add('bad');
       } finally { save.disabled = false; }
     });
-    rules.append(
+    panel.append(
       rulesLabel, rulesInput, count,
       budgetLabel, budgetInput, budgetSource,
       hopsLabel, hopsInput, hopsWarn, hopsSource,
       save, status
     );
+  }
 
-    // Your name (#114, DESIGN.md §41): your first and last name, and your name in the rooms,
-    // which others @mention and every agent takes your messages under
-    const me = state.me || {};
-    const you = el('section', 'settings-section');
-    you.append(el('h3', null, 'Your name'));
-    function youField(id, labelText, value, maxLength) {
-      const label = el('label', 'settings-label', labelText);
-      label.setAttribute('for', id);
-      const input = el('input');
-      input.type = 'text';
-      input.id = id;
-      input.maxLength = maxLength;
-      input.spellcheck = false;
-      input.value = value || '';
-      return [label, input];
-    }
-    const [firstLabel, firstInput] = youField('settings-first', 'First name', me.first_name, 64);
-    const [lastLabel, lastInput] = youField('settings-last', 'Last name', me.last_name, 64);
-    const [nameLabel, nameInput] = youField('settings-name', 'Your name in the rooms', me.human, 24);
-    nameInput.autocapitalize = 'none';
-    const nameNote = el('p', 'fine', me.name_locked
-      ? 'Set when switchboard starts (SWITCHBOARD_HUMAN_NAME), so it can’t be changed here.'
-      : 'What others @mention, and what agents take your messages under. Your earlier messages keep the name they were sent with.');
-    nameNote.id = 'settings-name-note';
-    nameInput.readOnly = !!me.name_locked;
-    const names = el('div', 'person-names');
-    const f1 = el('div', 'person-field');
-    f1.append(firstLabel, firstInput);
-    const f2 = el('div', 'person-field');
-    f2.append(lastLabel, lastInput);
-    names.append(f1, f2);
-    const youSave = btn('btn-primary', 'Save');
-    youSave.id = 'settings-name-save';
-    const youStatus = el('span', 'fine');
-    youStatus.id = 'settings-name-status';
-    youStatus.setAttribute('role', 'status');
-    youSave.addEventListener('click', async function () {
-      const body = { first_name: firstInput.value.trim() || null, last_name: lastInput.value.trim() || null };
-      const name = nameInput.value.trim().toLowerCase();
-      const renaming = !me.name_locked && name !== String(me.human || '').toLowerCase();
-      if (renaming) {
-        if (!PERSON_NAME.test(name)) {
-          youStatus.textContent = 'A name looks like bob or bob-k: a letter first, then letters, digits, _ or -, at most 24.';
-          youStatus.classList.add('bad');
-          return;
-        }
-        body.name = name;
-      }
-      youSave.disabled = true;
-      try {
-        const call = function () { return api('POST', '/api/me/name', body); };
-        // a new name in the rooms on a hosted broker asks you to confirm it's you, as a password does
-        await (renaming && state.me && state.me.signin ? withFreshCheck(call) : call());
-        state.me = await api('GET', '/api/me');
-        renderBuddies();
-        updateTitle();
-        youStatus.textContent = 'Saved';
-        youStatus.classList.remove('bad');
-      } catch (e) {
-        youStatus.textContent = String(e.message || e);
-        youStatus.classList.add('bad');
-      } finally { youSave.disabled = false; }
-    });
-    you.append(names, nameLabel, nameInput, nameNote, youSave, youStatus);
-
-    const account = el('section', 'settings-section');
-    account.append(el('h3', null, 'Account'));
-    if (state.me && (state.me.signin || state.me.hosted)) {
-      account.append(el('p', 'fine', 'Your password and passkeys. Changing either may ask you to confirm it’s you.'));
-    }
+  function buildSettingsSecurity(panel) {
+    panel.append(el('h3', null, 'Sign-in & security'),
+      el('p', 'fine', 'Your password and passkeys. Changing either asks you to confirm it’s you.'));
     const signIn = el('div', 'settings-account');
     signIn.id = 'settings-account';
-    account.append(signIn);
+    panel.append(signIn);
+  }
+
+  const SETTINGS_BUILDERS = {
+    profile: buildSettingsProfile, appearance: buildSettingsAppearance,
+    rooms: buildSettingsRooms, security: buildSettingsSecurity,
+  };
+
+  // The phone list's one-line summary for a group, from the current (possibly just-typed) state.
+  function settingsGroupSummary(key) {
+    const me = state.me || {};
+    const prefs = me.preferences || {};
+    const wakeDefaults = me.wake_defaults || {};
+    if (key === 'profile') {
+      const full = [me.first_name, me.last_name].filter(Boolean).join(' ');
+      return (full ? full + ' · ' : '') + '@' + (me.human || '');
+    }
+    if (key === 'appearance') {
+      const THEME_WORD = { system: 'System', light: 'Light', dark: 'Dark' };
+      const SIZE_WORD = { small: 'Small', default: 'Default', large: 'Large', larger: 'Larger' };
+      return (THEME_WORD[prefs.theme] || 'System') + ' theme · ' + (SIZE_WORD[prefs.text_size] || 'Default') + ' text';
+    }
+    if (key === 'rooms') {
+      const rules = (prefs.room_rules || '').trim();
+      const rulesPart = rules ? firstLine(rules, 40) : 'No default rules';
+      const budget = has(prefs.budget_per_hour) ? prefs.budget_per_hour : (wakeDefaults.budget_per_hour || {}).value;
+      const hops = has(prefs.hop_limit) ? prefs.hop_limit : (wakeDefaults.hop_limit || {}).value;
+      return rulesPart + ' · ' + budget + ' wakes an hour · ' + hops + ' hops';
+    }
+    return (me.password ? 'Password set' : 'No password set') + ' · '
+      + (me.passkeys ? plural(me.passkeys, 'passkey', 'passkeys') : 'no passkeys yet');
+  }
+
+  // Builds the whole sheet: the fixed header (title, phone back button, ×), the desktop rail
+  // (a WAI-ARIA vertical tablist) beside the always-present panels, the phone list (its own
+  // plain buttons, not tabs: the rail is wide-only chrome) and the rail/list-foot (Sign out,
+  // the version). Every panel stays in the DOM; only `hidden` toggles which one shows, so a
+  // draft in one survives a switch to another (#232) and openSettings' own `/api/me` refresh.
+  function buildSettings(form, head, title, close, requestedGroup) {
+    const me = state.me || {};
+    const hasSecurity = !!(me.signin || me.hosted);
+    const groups = SETTINGS_GROUPS.filter(function (g) { return g.key !== 'security' || hasSecurity; });
+    const initial = groups.some(function (g) { return g.key === requestedGroup; }) ? requestedGroup : 'profile';
+    const jumpToGroup = !!requestedGroup;  // a caller that named a group skips the phone list too
+    let currentGroup = initial;
+
+    const back = btn('back-btn settings-back narrow-only', null);
+    back.id = 'settings-back';
+    back.classList.add('hidden');
+    back.append(icon('chev-left'), el('span', null, 'Settings'));
+    back.addEventListener('click', function () { backToList(); });
+    const titleWrap = el('div', 'settings-title-wrap');
+    titleWrap.append(back, title);
+    head.append(titleWrap, close);
+
+    // Looked up here, not by id: the tabs and panels aren't attached to the document until this
+    // whole sheet is (openDialog's dlg.replaceChildren after build returns), so getElementById
+    // can't find them yet when the initial focus and selection are set up below.
+    const tabsByKey = {};
+    const panelsByKey = {};
+    const rail = el('div', 'settings-rail wide-only');
+    rail.id = 'settings-rail';
+    rail.setAttribute('role', 'tablist');
+    rail.setAttribute('aria-orientation', 'vertical');
+    rail.setAttribute('aria-label', 'Settings groups');
+    groups.forEach(function (g) {
+      const tab = btn('settings-tab', null);
+      tab.id = 'settings-tab-' + g.key;
+      tab.dataset.group = g.key;
+      tab.setAttribute('role', 'tab');
+      tab.setAttribute('aria-controls', 'settings-panel-' + g.key);
+      tab.setAttribute('aria-selected', 'false');
+      tab.tabIndex = -1;
+      tab.append(icon(g.icon), el('span', null, g.label));
+      tab.addEventListener('click', function () { selectTab(g.key); });
+      rail.append(tab);
+      tabsByKey[g.key] = tab;
+    });
+    rail.addEventListener('keydown', function (ev) {
+      const dir = { ArrowDown: 1, ArrowUp: -1 }[ev.key];
+      const jump = { Home: 'first', End: 'last' }[ev.key];
+      if (!dir && !jump) return;
+      ev.preventDefault();
+      const tabs = Array.prototype.slice.call(rail.children);
+      const i = tabs.findIndex(function (t) { return t.getAttribute('aria-selected') === 'true'; });
+      const next = jump === 'first' ? tabs[0] : jump === 'last' ? tabs[tabs.length - 1]
+        : tabs[(i + dir + tabs.length) % tabs.length];
+      selectTab(next.dataset.group);
+      next.focus();
+    });
+
+    const panelsWrap = el('div', 'settings-panels');
+    panelsWrap.id = 'settings-panels';
+    groups.forEach(function (g) {
+      const panelEl = el('div', 'settings-panel');
+      panelEl.id = 'settings-panel-' + g.key;
+      panelEl.setAttribute('role', 'tabpanel');
+      panelEl.setAttribute('aria-labelledby', 'settings-tab-' + g.key);
+      panelEl.classList.add('hidden');
+      SETTINGS_BUILDERS[g.key](panelEl);
+      panelsWrap.append(panelEl);
+      panelsByKey[g.key] = panelEl;
+    });
+
+    const list = el('div', 'settings-list narrow-only');
+    list.id = 'settings-list';
+
+    const foot = el('div', 'settings-foot');
+    foot.id = 'settings-foot';
     const signOut = btn('btn', 'Sign out');
     signOut.id = 'settings-sign-out';
     signOut.addEventListener('click', async function () {
       try { await api('POST', '/logout', {}); } catch (e) { /* already signed out */ }
       location.replace('/');
     });
-    account.append(signOut);
-    container.append(you, appearance, rules, account);
+    const versionLine = el('p', 'settings-version fine');
+    versionLine.id = 'settings-version';
+    if (me.version) {
+      versionLine.textContent = 'switchboard ' + me.version;
+      if (me.commit) versionLine.title = 'Git commit ' + me.commit;
+    }
+    foot.append(signOut, versionLine);
+
+    // DOM order (not visual order, which the grid in style.css controls): rail, panels, list,
+    // foot. That makes Tab from the selected rail tab land in the panel, as the keyboard spec
+    // asks, and on a phone's list screen Tab reaches the foot's Sign out after the rows.
+    const body = el('div', 'settings-body');
+    body.append(rail, panelsWrap, list, foot);
+    form.append(body);
+
+    function groupByKey(key) { return groups.find(function (g) { return g.key === key; }) || groups[0]; }
+
+    function renderList() {
+      list.replaceChildren();
+      groups.forEach(function (g) {
+        const row = btn('settings-row', null);
+        row.id = 'settings-row-' + g.key;
+        const left = el('span', 'settings-row-icon');
+        left.append(icon(g.icon));
+        const main = el('span', 'settings-row-main');
+        main.append(el('span', 'settings-row-name', g.label), el('span', 'settings-row-sub', settingsGroupSummary(g.key)));
+        row.append(left, main, icon('chev-right'));
+        row.addEventListener('click', function () { openGroupPage(g.key); });
+        list.append(row);
+      });
+    }
+
+    function setActiveGroup(key) {
+      currentGroup = key;
+      groups.forEach(function (g) {
+        const tab = tabsByKey[g.key];
+        const panelEl = panelsByKey[g.key];
+        const active = g.key === key;
+        tab.setAttribute('aria-selected', String(active));
+        tab.tabIndex = active ? 0 : -1;
+        panelEl.classList.toggle('hidden', !active);
+      });
+    }
+
+    // Only the phone screens need toggling: on a desktop the rail and foot stay visible (the
+    // panels container never hides), and the list and back button stay CSS-hidden (`wide-only`).
+    function applyPhoneView(groupOpen) {
+      const onPhone = phone();
+      list.classList.toggle('hidden', !onPhone || groupOpen);
+      back.classList.toggle('hidden', !onPhone || !groupOpen);
+      panelsWrap.classList.toggle('hidden', onPhone && !groupOpen);
+      foot.classList.toggle('hidden', onPhone && groupOpen);
+    }
+
+    function selectTab(key) { setActiveGroup(key); }
+
+    function openGroupPage(key) {
+      setActiveGroup(key);
+      title.textContent = groupByKey(key).label;
+      applyPhoneView(true);
+      back.focus();
+    }
+
+    function backToList() {
+      const prevGroup = currentGroup;
+      title.textContent = 'Settings';
+      renderList();
+      applyPhoneView(false);
+      const row = list.querySelector('#settings-row-' + prevGroup);
+      if (row) row.focus();
+    }
+
+    setActiveGroup(initial);
+    let focusTarget;
+    if (phone()) {
+      if (jumpToGroup) {
+        title.textContent = groupByKey(initial).label;
+        applyPhoneView(true);
+        focusTarget = back;
+      } else {
+        title.textContent = 'Settings';
+        renderList();
+        applyPhoneView(false);
+        focusTarget = list.querySelector('#settings-row-' + initial);
+      }
+    } else {
+      title.textContent = 'Settings';
+      focusTarget = tabsByKey[initial];
+    }
+    return focusTarget;
   }
 
-  function openSettings() {
+  function openSettings(group) {
     const themeAtOpen = (((state.me || {}).preferences || {}).theme || 'system');
     const sizeAtOpen = (((state.me || {}).preferences || {}).text_size || 'default');
     const rulesAtOpen = (((state.me || {}).preferences || {}).room_rules || '');
     const budgetAtOpen = ((state.me || {}).preferences || {}).budget_per_hour;
     const hopsAtOpen = ((state.me || {}).preferences || {}).hop_limit;
     if (phone()) setNav(false);
-    openDialog({ kind: 'settings', title: 'Settings', build: buildSettings });
+    openDialog({ kind: 'settings', title: 'Settings', group: group, build: buildSettings });
     // A fresh count and check status may have changed in another tab.
     api('GET', '/api/me').then(function (me) {
       // A selection made while GET was in flight is newer than its response.
@@ -4664,7 +4876,7 @@
       }, function () {});
     });
 
-    $('me-settings').addEventListener('click', openSettings);
+    $('me-settings').addEventListener('click', function () { openSettings(); });
     $('remotes-close').addEventListener('click', function () { closeSheet('remotes-panel'); });
     $('add-machine').addEventListener('click', function () { openMachines(null); });
     $('machines-close').addEventListener('click', function () { closeSheet('machines-panel'); });
