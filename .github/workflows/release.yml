@@ -2,8 +2,9 @@
 # tests: they ran on the PR (test.yml), and main takes only PRs whose `CI` check passed.
 # - `release`: when the merge is a release PR (`release: vX.Y.Z`, opened by
 #   `.github/scripts/release.py --open-pr`), tags that commit and publishes the GitHub Release
-#   with the version's CHANGELOG section; then `publish-image` publishes its image. A tag isn't
-#   covered by main's ruleset, so the built-in token is enough.
+#   with the version's CHANGELOG section; then `publish-image` publishes its image, and
+#   `build-dist` and `publish-pypi` its package on PyPI (#233). A tag isn't covered by main's
+#   ruleset, so the built-in token is enough.
 # - `badge`: moves the README's coverage badge to the merged PR's combined coverage.
 name: release
 
@@ -62,6 +63,67 @@ jobs:
     uses: ./.github/workflows/image.yml
     with:
       version: ${{ needs.release.outputs.version }}
+
+  # After a release: its sdist and wheel, built from the new tag and checked (the name, the
+  # version, the web UI's files and the hook script, a clean install: .github/scripts/check_dist.py),
+  # then attached to the GitHub Release and handed to `publish-pypi`.
+  build-dist:
+    name: build package
+    needs: release
+    if: needs.release.outputs.version != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write   # attach the files to the GitHub Release
+    env:
+      UV_PYTHON_PREFERENCE: only-managed
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          ref: v${{ needs.release.outputs.version }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
+        with:
+          version: "0.7.13"
+          python-version: "3.13"
+      - name: Build and check the sdist and the wheel
+        run: |
+          set -eu
+          uv build --out-dir dist
+          python3 .github/scripts/check_dist.py dist
+      - name: Attach them to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.release.outputs.version }}   # through the environment, never pasted into the script
+        run: gh release upload "v$VERSION" dist/*.whl dist/*.tar.gz --clobber
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: dist
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+
+  # The package on PyPI as switchboard-chat (#233; `switchboard` there is another project), with
+  # trusted publishing: PyPI accepts this job's short-lived OIDC identity (this repo, release.yml,
+  # the `pypi` environment), so no PyPI token is stored anywhere. The `pypi` environment allows
+  # only main. A version already on PyPI can't be uploaded again: a failed run is re-run.
+  publish-pypi:
+    name: publish to PyPI
+    needs: [release, build-dist]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/switchboard-chat/
+    permissions:
+      id-token: write   # trusted publishing; nothing else
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
 
   # The README's coverage badge: coverage.json from the merged PR's CI run, committed to the
   # orphan `badges` branch (created on first use), which shields.io reads. A PR that skipped the

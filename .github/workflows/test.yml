@@ -89,6 +89,8 @@ jobs:
           node-version: "22"
       - run: uv sync --frozen
       - run: uv run --frozen python scripts/lint.py --base HEAD^1
+      # what PyPI would get (#233): the same check release.yml runs before an upload
+      - run: uv build --out-dir dist && python3 .github/scripts/check_dist.py dist
 
   test:
     needs: changes

@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from switchboard import DIST_NAME
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -28,7 +30,7 @@ def test_wheel_contents(tmp_path: Path) -> None:
         timeout=120,
     )
     assert r.returncode == 0, r.stderr
-    [whl] = list(tmp_path.glob("switchboard-*.whl"))
+    [whl] = list(tmp_path.glob(f"{DIST_NAME.replace('-', '_')}-*.whl"))  # switchboard-chat on PyPI (#233)
     names = zipfile.ZipFile(whl).namelist()
     assert "switchboard/__init__.py" in names
     assert "switchboard/hook/switchboard_hook.py" in names

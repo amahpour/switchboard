@@ -1,10 +1,23 @@
 [project]
-name = "switchboard"
+name = "switchboard-chat"
 version = "0.21.0"
 description = "A local group chat where you and your coding agents talk and hand work to each other"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
+keywords = ["coding agents", "claude code", "codex", "cursor", "devin", "mcp", "group chat"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+]
 dependencies = [
     "fastapi==0.141.1",
     "starlette==1.7.0",
@@ -16,6 +29,12 @@ dependencies = [
     "cryptography==50.0.1",
     "truststore==0.10.4",
 ]
+
+[project.urls]
+Homepage = "https://github.com/amahpour/switchboard"
+Documentation = "https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md"
+Changelog = "https://github.com/amahpour/switchboard/blob/main/CHANGELOG.md"
+Issues = "https://github.com/amahpour/switchboard/issues"
 
 [project.scripts]
 switchboard = "switchboard.cli:main"
@@ -42,6 +61,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/switchboard"]
+
+# the sdist builds the wheel and nothing more: not the screenshots, the docs or the tests (#233)
+[tool.hatch.build.targets.sdist]
+include = ["/src/switchboard", "/README.md", "/LICENSE", "/CHANGELOG.md"]
 
 [tool.uv]
 required-version = ">=0.7.13"

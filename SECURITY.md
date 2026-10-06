@@ -39,6 +39,10 @@ Every agent runs as your user, so (details in [DESIGN.md §11](docs/DESIGN.md)):
 
 The sandbox is the boundary for all of these.
 
+## Where releases come from
+
+Only `.github/workflows/release.yml` publishes a release, when a release pull request merges into `main`: the tag and the GitHub Release, the image `ghcr.io/amahpour/switchboard` (with a provenance attestation and an SBOM), and, from 0.21.1, the package on PyPI. On PyPI switchboard is **`switchboard-chat`**. Plain `switchboard` there is an unrelated project, and so are `switchboard-agents` and `agent-switchboard`. It's uploaded with PyPI's trusted publishing, so no PyPI token exists to leak, and each file carries PyPI's attestation of the workflow that built it.
+
 ## Reporting a vulnerability
 
 Please don't open a public issue for a security problem. Report it privately through GitHub's private vulnerability reporting for this repository (the **Security** tab, **Report a vulnerability**), with the switchboard version (`switchboard --version`), your OS and the harnesses involved.

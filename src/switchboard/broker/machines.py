@@ -35,7 +35,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from switchboard import __version__
+from switchboard import DIST_NAME, __version__
 from switchboard.broker.remote import PING_MISSES, PING_S, Attempt, LinkClosed, RemoteLink
 from switchboard.broker.service import ServiceError
 from switchboard.envelope import clean
@@ -59,7 +59,6 @@ REPLACED_NOTICE_S = 600.0  # a replaced link warns the rooms at most this often
 FAIL_EVENT_S = 60.0
 EVENT_S = 0.2  # the web UI's `machines` event is debounced, as `remotes` is
 FACT_LIMITS = {"hostname": 64, "os": 80, "arch": 32, "version": 40}
-INSTALL_URL = "git+https://github.com/amahpour/switchboard"
 REFUSE_TEXT = {
     "removed": "the owner removed this machine: pair it again with a new code to bring it back",
     "unknown": "this broker holds no such key for that name (the machine was removed, or never paired):"
@@ -576,7 +575,7 @@ class MachineManager:
             "expires_in_s": self.codes.ttl_s,
             "broker": origin,
             "broker_fingerprint": self.fingerprint,
-            "install": f"uv tool install {INSTALL_URL}@v{__version__}",
+            "install": f"uv tool install {DIST_NAME}=={__version__}",
             "join": f"switchboard remote join {origin} {code}",
         }
 

@@ -1966,7 +1966,7 @@ wheels = [
 ]
 
 [[package]]
-name = "switchboard"
+name = "switchboard-chat"
 version = "0.21.0"
 source = { editable = "." }
 dependencies = [

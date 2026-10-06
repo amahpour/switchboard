@@ -46,6 +46,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
 
+from switchboard import DIST_NAME
 from switchboard.colors import PLAIN, Paint, for_args
 
 MASK_RE = re.compile(r"token|key|secret|pass|auth|env|url", re.IGNORECASE)
@@ -567,7 +568,7 @@ def editable_install() -> bool:
     try:
         from importlib.metadata import distribution
 
-        raw = distribution("switchboard").read_text("direct_url.json")
+        raw = distribution(DIST_NAME).read_text("direct_url.json")
     except Exception:
         return False
     if not raw:
