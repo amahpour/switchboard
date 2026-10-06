@@ -4,4 +4,4 @@
 
 ### Upgrading
 
-- **The database moves to schema 13** on start, after a checked backup next to it (`switchboard.db.v12.bak`): people gain an empty first and last name. Nothing else changes for existing accounts.
+- **The database moves to schema 14** on start, in one step after a checked backup next to it (`switchboard.db.v12.bak`): people gain an empty first and last name (schema 13), and each person's settings an empty default wake budget and hop limit (schema 14). Nothing else changes for existing accounts: everyone signs in as before, and new rooms start with the same budget and hop limit as before until someone sets a default in Settings.
