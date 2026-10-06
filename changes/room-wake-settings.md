@@ -1,0 +1,3 @@
+### Added
+
+- **Your own wake budget and hop limit, and a room's own rate.** Settings' **Rooms** section now has **Wake budget per hour** and **Hop limit**, copied into each room you create (leave either blank to use `config.toml`'s value or the built-in default, shown next to it). A room's own values can be changed live from a new **Wake settings** button in its header, beside Room rules: it's the only way to change the hourly rate itself without editing `config.toml`, since `/budget <n>` only ever sets what's left this hour. Raising either, or turning the loop guard off with a hop limit of 0, still needs your signed-in browser, the same as `/budget` and `/hops` today; a hop limit of 0 shows the same warning wherever you set it.
