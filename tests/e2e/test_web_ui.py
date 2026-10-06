@@ -356,6 +356,46 @@ def test_a_dropped_socket_shows_everywhere_until_it_is_back(ui: UI) -> None:
         back_up()  # nothing left waiting when the context closes
 
 
+def test_room_badges_count_only_what_is_addressed_to_you(ui: UI) -> None:
+    """Issue #109: the room list's red badge counts only an @mention or a reply to the human's
+    own message; other agent chatter in a room you aren't viewing gets the quiet dot instead,
+    with no number, and opening that room clears both signals."""
+    room = "e2e-badges"
+    ui.world.create_room(f"#{room}")
+    ui.world.add_agents(f"#{room}", ("scout",))
+    page = ui.open("build")  # #build stays the active room; #e2e-badges is the one watched
+    tab = page.locator(f'#tabs .room[data-room="#{room}"]')
+    expect(tab).to_be_visible()
+
+    # two agents just talking: the quiet dot, not a red badge, and the title stays plain
+    ui.world.agent_say(f"#{room}", "scout", "the sweep is green, nothing here for you")
+    expect(tab.locator(".badge")).to_have_count(0)
+    expect(tab.locator(".dot")).to_have_count(1)
+    expect(tab).to_have_accessible_name(re.compile("new activity"))
+    expect(page).to_have_title("switchboard — #build")
+
+    # an @mention of alice (the signed-in human) is addressed to her: the red count, labeled
+    # for a screen reader, and the title counts it
+    ui.world.agent_say(f"#{room}", "scout", f"@{TEST_HUMAN} can you take a look?")
+    expect(tab.locator(".badge")).to_have_text("1")
+    expect(tab.locator(".dot")).to_have_count(0)  # the red badge replaces the quiet dot
+    expect(tab).to_have_accessible_name(re.compile("1 message for you"))
+    expect(page).to_have_title("(1) switchboard — #build")
+
+    # a reply to alice's own message is addressed to her too, with no @mention needed
+    asked = ui.world.say(room, "any update on the sweep?")
+    ui.world.agent_say(f"#{room}", "scout", "on it", reply_to=asked)
+    expect(tab.locator(".badge")).to_have_text("2")
+    expect(tab).to_have_accessible_name(re.compile("2 messages for you"))
+    expect(page).to_have_title("(2) switchboard — #build")
+
+    # opening the room clears both the red count and the quiet dot
+    tab.click()
+    expect(tab.locator(".badge")).to_have_count(0)
+    expect(tab.locator(".dot")).to_have_count(0)
+    expect(page).to_have_title(f"switchboard — #{room}")
+
+
 def test_approvals_chip_names_one_counts_several_and_includes_unknown(ui: UI) -> None:
     """The room warning stays short, counts unknown modes too, and leads to flagged members."""
     world = ui.world
