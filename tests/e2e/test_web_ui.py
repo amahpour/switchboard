@@ -202,6 +202,61 @@ def no_horizontal_scroll(page: Page) -> None:
     assert widths[0] <= widths[1] and widths[2] <= widths[3], f"horizontal scroll: {widths}"
 
 
+# Issue #110: where a caret placed after `caretPos` characters of #input's value would sit, found
+# the way caret-position libraries do it (and distinct from app.js's own #input-mirror, which is
+# what this is checking): a hidden duplicate of #input's box -- same font, padding, border,
+# width and wrapping -- holding the text up to the caret, with a zero-width marker at its end.
+# Run with page.evaluate (outside the page's CSP, per ui_world.wait_js), never page.evaluate_handle
+# kept across a mutation: it reads #input fresh every call.
+CARET_RECT_JS = """
+([selector, caretPos]) => {
+  const ta = document.querySelector(selector);
+  const cs = getComputedStyle(ta);
+  const taRect = ta.getBoundingClientRect();
+  const div = document.createElement('div');
+  div.style.position = 'fixed';
+  div.style.visibility = 'hidden';
+  div.style.left = taRect.left + 'px';
+  div.style.top = taRect.top + 'px';
+  div.style.width = cs.width;
+  div.style.height = cs.height;
+  div.style.overflow = 'hidden';
+  div.style.whiteSpace = 'pre-wrap';
+  div.style.overflowWrap = 'break-word';
+  for (const p of ['boxSizing', 'borderTopWidth', 'borderRightWidth', 'borderBottomWidth',
+                    'borderLeftWidth', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+                    'fontStyle', 'fontVariant', 'fontWeight', 'fontSize', 'lineHeight', 'fontFamily',
+                    'letterSpacing', 'wordSpacing', 'scrollbarGutter']) {
+    div.style[p] = cs[p];
+  }
+  document.body.append(div);
+  div.append(document.createTextNode(ta.value.slice(0, caretPos)));
+  const marker = document.createElement('span');
+  marker.textContent = '\\u200b';
+  div.append(marker);
+  div.scrollTop = ta.scrollTop;
+  const r = marker.getBoundingClientRect();
+  div.remove();
+  return { top: r.top, bottom: r.bottom, left: r.left };
+}
+"""
+
+
+def caret_rect(page: Page, caret_pos: int) -> dict[str, float]:
+    return page.evaluate(CARET_RECT_JS, ["#input", caret_pos])
+
+
+def assert_mention_lines_up(page: Page, caret_end: int) -> None:
+    """The highlighted span's last character must sit where a caret placed right after it would
+    be in the real (transparent) #input -- true only if the mirror and #input wrap identically,
+    on whatever line that caret ends up on."""
+    box = page.locator("#input-mirror .mention-hl").bounding_box()
+    assert box, "no .mention-hl in #input-mirror"
+    caret = caret_rect(page, caret_end)
+    assert abs((box["y"] + box["height"] / 2) - (caret["top"] + caret["bottom"]) / 2) < 2, (box, caret)
+    assert abs((box["x"] + box["width"]) - caret["left"]) < 2, (box, caret)
+
+
 # ------------------------------------------------------------------ tests
 def test_problem_watch_catches_a_csp_violation(ui: UI) -> None:
     """The guard the other tests rely on is live: an inline script the page's CSP refuses is
@@ -846,6 +901,41 @@ def test_mention_popover_matches_any_part_of_a_name(ui: UI) -> None:
     expect(options).to_have_count(2)
     expect(options.nth(0)).to_have_attribute("id", "men-rev-helper")
     expect(options.nth(1)).to_have_attribute("id", "men-eval-reviewer-resumed")
+
+    box.fill("")  # nothing is sent
+
+
+def test_mention_highlight_lines_up_with_the_real_text(ui: UI) -> None:
+    """Issue #110: typing @claude-1 (an active member) wraps it in .mention-hl in the mirror
+    behind #input, and that span's box lines up with where a caret right after it would sit in
+    the real (transparent) textarea -- true only if the two layers wrap identically -- across a
+    wrapped line and after Shift+Enter starts a fresh one. @nope (nobody by that name) never
+    gets the style."""
+    page = ui.open(room="build")
+    box = page.locator("#input")
+    box.focus()
+    mention = page.locator("#input-mirror .mention-hl")
+
+    # long enough that "@claude-1" lands on a wrapped second line, not the first
+    lead = "x" * 120
+    text = lead + " ask @claude-1 and @nope please"
+    page.keyboard.type(text)
+    expect(mention).to_have_count(1)  # @nope stays plain, with no style of its own
+    expect(mention).to_have_text("@claude-1")
+    input_box = box.bounding_box()
+    mention_box = mention.bounding_box()
+    assert input_box and mention_box
+    assert mention_box["y"] > input_box["y"] + 10, "the lead text must wrap onto a second line"
+    assert_mention_lines_up(page, text.index("@claude-1") + len("@claude-1"))
+
+    # Shift+Enter starts a fresh line; @claude-1 sits alone on it and still lines up
+    box.fill("")
+    page.keyboard.type("hi")
+    page.keyboard.press("Shift+Enter")
+    page.keyboard.type("@claude-1 and @nope")
+    expect(mention).to_have_count(1)
+    value = box.input_value()
+    assert_mention_lines_up(page, value.index("@claude-1") + len("@claude-1"))
 
     box.fill("")  # nothing is sent
 
@@ -1751,3 +1841,22 @@ def test_composer_grows_with_wrapped_text_and_shrinks_after_send(ui: UI) -> None
         expect(box).to_have_value("")
         shrunk_height = box.evaluate("el => el.clientHeight")
         assert shrunk_height == one_line_height, (options, shrunk_height, one_line_height)
+
+
+def test_the_mention_mirror_keeps_the_textarea_width_when_it_scrolls(ui: UI) -> None:
+    """#110 review: past the composer's 8 lines, #input shows a scrollbar, which takes width on
+    Linux and Windows (not with macOS's overlay ones). Unless the mirror behind it loses the same
+    width, its text, the text a person actually sees, wraps later than #input's and the caret
+    drifts off it. Both reserve the same scrollbar gutter (headless Chromium draws none, so the
+    rule itself is what's checked), and the mirror scrolls with #input."""
+    page = ui.open()
+    box = page.locator("#input")
+    gutters = box.evaluate(
+        "el => [getComputedStyle(el).scrollbarGutter,"
+        " getComputedStyle(document.getElementById('input-mirror')).scrollbarGutter]"
+    )
+    assert gutters == ["stable", "stable"], gutters
+    box.fill("\n".join(f"line {i} of a long message @claude-1 with words" for i in range(20)))
+    box.evaluate("el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll')); }")
+    top = box.evaluate("el => [el.scrollTop, document.getElementById('input-mirror').scrollTop]")
+    assert top[0] > 0 and top[0] == top[1], top  # past its 8 lines, and the mirror scrolls with it

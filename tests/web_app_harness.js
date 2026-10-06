@@ -702,6 +702,28 @@ const SCENARIOS = {
     return report(w, ws, { skill: skill, skillCased: skillCased, owner: owner, substring: substring, rev: rev, call: call });
   },
 
+  // Issue #110: the composer's mirror layer (#input-mirror) highlights an @mention only when
+  // it matches an active member or a person (the human, "alice" here) -- the same set
+  // parse_mentions on the broker would deliver to. An unknown @name is left as plain text, with
+  // no warning style of its own. Picking a known name from the @ popover (choosePop) sets
+  // #input's value by script, not by typing, and must land in the mirror just the same.
+  async mention_highlight_in_composer() {
+    const { w, ws } = await buildRoom(MEMBERS);
+    const mirror = function () { return w.$('input-mirror'); };
+    const hl = function () {
+      return findAll(mirror(), function (n) { return n.classList.contains('mention-hl'); })
+        .map(function (n) { return n.textContent; });
+    };
+    type(w, 'ask @claude-1 and @nope-one, cc @alice');
+    const typed = { text: mirror().textContent, hl: hl() };
+    w.$('input').value = '';
+    type(w, 'hi @cod');
+    key(w.$('input'), 'Enter');  // completes to "hi @codex-1 " through the mentions popover
+    const picked = { value: w.$('input').value, hl: hl() };
+    await settle();
+    return report(w, ws, { typed: typed, picked: picked });
+  },
+
   // An argument-less palette command runs at once (Enter), through the normal send path.
   async palette_runs() {
     const { w, ws } = await buildRoom(MEMBERS);

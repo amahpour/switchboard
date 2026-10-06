@@ -1088,6 +1088,7 @@
     renderStatus();
     renderBoard();
     loadBoard(state.rooms.get(name));
+    renderComposerMentions();  // the known-names set just changed with the room
     $('input').focus();
   }
 
@@ -1618,6 +1619,7 @@
     if (narrow()) setSheet(false);  // first: the phone sheet makes the composer inert while open
     input.value = text;
     autoGrow();
+    renderComposerMentions();
     input.focus();
     if (typeof input.setSelectionRange === 'function') {
       const at = text.length - (caretBack || 0);
@@ -1634,6 +1636,7 @@
     const input = $('input');
     input.value = d;
     autoGrow();
+    renderComposerMentions();
     input.focus();
     if (typeof input.setSelectionRange === 'function') input.setSelectionRange(d.length, d.length);
     return true;
@@ -1694,6 +1697,68 @@
     input.rows = 1;
     const lines = Math.ceil((input.scrollHeight - padding) / lineHeight);
     input.rows = Math.max(1, Math.min(8, lines));
+  }
+
+  // Highlight @mentions in the composer as they're typed (issue #110), with a mirror layer: a
+  // same-font, same-padding <div> behind #input, whose own text is transparent (style.css), kept
+  // in sync on every change. Mirrors md.js's MENTION / WORD_BEFORE_MENTION (itself
+  // delivery.rules.MENTION_RE): a mention starts only where the previous character isn't a
+  // letter, digit, underscore or another "@" (so user@host, or "@@", doesn't start one) and ends
+  // at the first character outside [a-z0-9_-]. Every @-prefixed candidate is found; only the
+  // ones in knownMentionNames() get the highlight, so a typo stays plain rather than warned
+  // about (there is no popover telling you it matched nothing, same as sending it would show).
+  const MENTION_CANDIDATE = /@([a-z][a-z0-9_-]{0,23})(?![a-z0-9_-])/iy;
+  const WORD_BEFORE_MENTION = /[\p{L}\p{N}_@]/u;
+
+  function scanMentionCandidates(text) {
+    const out = [];
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] !== '@' || (i > 0 && WORD_BEFORE_MENTION.test(text[i - 1]))) continue;
+      MENTION_CANDIDATE.lastIndex = i;
+      const m = MENTION_CANDIDATE.exec(text);
+      if (m) out.push({ start: i, end: i + m[0].length, name: m[1].toLowerCase() });
+    }
+    return out;
+  }
+
+  // Who an @mention can address, lower-cased: service.mention_names on the broker (active
+  // members of `r`, plus the human and everyone else on a hosted broker). "A person" has no
+  // delivery row, so it's never in r.members, but parse_mentions on the broker counts it too.
+  function knownMentionNames(r) {
+    const names = new Set();
+    if (state.me && state.me.human) names.add(String(state.me.human).toLowerCase());
+    for (const p of state.people) names.add(String(p.name).toLowerCase());
+    if (r) for (const m of r.members) names.add(String(m.name).toLowerCase());
+    return names;
+  }
+
+  // Rebuild the mirror layer from #input's current value: plain text, with each matching
+  // @mention wrapped in its own highlighted span -- createElement/textContent only, never
+  // innerHTML. Cheap enough to call on every keystroke, scroll-independent room switch and
+  // member-list update: there is no incremental state to keep right instead of just rebuilt.
+  function renderComposerMentions() {
+    const text = String($('input').value);
+    const names = knownMentionNames(activeRoom());
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    for (const c of scanMentionCandidates(text)) {
+      if (!names.has(c.name)) continue;
+      if (c.start > last) frag.append(text.slice(last, c.start));
+      frag.append(el('span', 'mention-hl', text.slice(c.start, c.end)));
+      last = c.end;
+    }
+    if (last < text.length) frag.append(text.slice(last));
+    // white-space: pre-wrap collapses a blank last line, so a trailing newline (or no text at
+    // all) needs a space after it to keep the mirror as tall as #input, caret line included.
+    if (!text || text.endsWith('\n')) frag.append(' ');
+    $('input-mirror').replaceChildren(frag);
+    fitMirror();
+  }
+
+  // The mirror scrolls with #input (past 8 lines #input scrolls). Its width needs no JS: both
+  // reserve the same scrollbar gutter in style.css (#110 review).
+  function fitMirror() {
+    $('input-mirror').scrollTop = $('input').scrollTop;
   }
 
   // Ranking for the @ mention popover (issue #112): a typed, lowercased query matches a member
@@ -1955,6 +2020,7 @@
       closePop();
       if (c.args) {
         input.value = '/' + c.cmd + ' ';
+        renderComposerMentions();
         input.focus();
       } else {
         input.value = '/' + c.cmd;
@@ -1966,6 +2032,7 @@
     const v = String(input.value);
     const ins = '@' + m.name + ' ';
     input.value = v.slice(0, p.start) + ins + v.slice(p.end);
+    renderComposerMentions();
     closePop();
     input.focus();
     if (typeof input.setSelectionRange === 'function') input.setSelectionRange(p.start + ins.length, p.start + ins.length);
@@ -2038,6 +2105,7 @@
       if (f.room === state.active) {
         renderBuddies();
         updateRoomEmpty();
+        renderComposerMentions();  // an agent just joined or left: who can be @mentioned changed
       }
       if (ins && ins.room === f.room) {
         if (!inspectedMember()) memberLeft(ins);
@@ -3416,6 +3484,7 @@
     const data = await api('GET', '/api/people');
     state.people = data.people || [];
     renderPeoplePanel();
+    renderComposerMentions();  // a newly added (or removed) person changed who can be @mentioned
   }
 
   function peopleResult(id, text, bad) {
@@ -4225,6 +4294,7 @@
       if (!text.trim()) return;
       input.value = '';
       input.rows = 1;
+      renderComposerMentions();
       closePop();
       // a draft that a catch-up entry replaced comes back once this command has gone out
       const draft = text[0] === '/' ? state.draft : null;
@@ -4233,6 +4303,7 @@
         if (!ok && !input.value) {
           input.value = text;  // give a failed message back
           autoGrow();
+          renderComposerMentions();
           if (draft && !state.draft) state.draft = draft;  // and keep the draft for the retry
         } else if (draft && !state.draft) {
           state.draft = draft;
@@ -4271,13 +4342,27 @@
     input.addEventListener('input', function () {
       autoGrow();
       updatePopover();
+      renderComposerMentions();
     });
+    // While composing with an IME, #input.composing (style.css) shows the real (native) text
+    // instead of the transparent one, since the mirror won't be rebuilt until it's final; the
+    // 'input' events most browsers fire mid-composition still keep autoGrow and the popover
+    // current either way.
+    input.addEventListener('compositionstart', function () { input.classList.add('composing'); });
+    input.addEventListener('compositionend', function () {
+      input.classList.remove('composing');
+      renderComposerMentions();
+    });
+    // The mirror has no scrollbar of its own (style.css: overflow: hidden) so it never drifts
+    // out of sync on its own; it only needs to follow #input's when that one scrolls.
+    input.addEventListener('scroll', function () { $('input-mirror').scrollTop = input.scrollTop; });
     input.addEventListener('click', updatePopover);
     input.addEventListener('blur', closePop);
     $('cmd-btn').addEventListener('click', function () {
       if (!input.value) input.value = '/';
       input.focus();
       updatePopover();
+      renderComposerMentions();
     });
     $('mention-btn').addEventListener('click', function () {
       const v = String(input.value);
@@ -4288,6 +4373,7 @@
       input.focus();
       if (typeof input.setSelectionRange === 'function') input.setSelectionRange(at + ins.length, at + ins.length);
       updatePopover();
+      renderComposerMentions();
     });
 
     $('new-room').addEventListener('click', async function () {

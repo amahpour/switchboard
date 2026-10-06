@@ -272,8 +272,15 @@
       <div class="palette hidden" id="mentions" role="listbox" aria-label="Agents"></div>
       <div class="composer-box">
         <label class="sr-only" for="input">Message</label>
-        <textarea id="input" rows="1" maxlength="4000" spellcheck="true" aria-autocomplete="list"
-                  placeholder="Message #build &mdash; @ to mention, / for commands"></textarea>
+        <!-- The mirror layer (issue #110): a same-font, same-padding copy of #input's text behind
+             it, with @mentions of active members or people wrapped in their own highlighted span.
+             #input's own text is transparent (its caret and selection still show); app.js rebuilds
+             the mirror on every input and keeps its scroll position in sync. -->
+        <div class="input-wrap">
+          <div class="input-mirror" id="input-mirror" aria-hidden="true"></div>
+          <textarea id="input" rows="1" maxlength="4000" spellcheck="true" aria-autocomplete="list"
+                    placeholder="Message #build &mdash; @ to mention, / for commands"></textarea>
+        </div>
         <div class="composer-bar">
           <button type="button" class="icon-btn" id="mention-btn" aria-label="Mention a member" title="Mention a member">
             <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.5"/><path d="M10.5 8v1a2 2 0 0 0 4 0V8a6.5 6.5 0 1 0-2.6 5.2"/></svg>
