@@ -1793,8 +1793,8 @@
   // @here/@everyone is plain text, but the web composer is always a person's, so both always
   // show here. "here" above "everyone": the narrower one first, same order the popover keeps.
   const BROADCASTS = [
-    { name: 'here', broadcast: true, desc: 'Every agent active right now' },
-    { name: 'everyone', broadcast: true, desc: 'Every agent in the room, idle or parked too' },
+    { name: 'here', broadcast: true, desc: 'Every agent online now' },
+    { name: 'everyone', broadcast: true, desc: 'Every agent in the room, offline ones too' },
   ];
   const BROADCAST_NAMES = BROADCASTS.map(function (b) { return b.name; });
 
@@ -2057,9 +2057,10 @@
         appendMatch(nameEl, m.name, hit ? hit.start : 0, hit ? hit.len : 0);
         nl.append(nameEl);
         if (m.broadcast) {
-          // @here/@everyone (issue #111): a one-line description instead of a member's status
-          // and tier, and a plain icon instead of its harness avatar -- it isn't one.
-          main.append(nl, el('span', 'm-status', m.desc));
+          // @here/@everyone (issue #111): a description where a member's status goes, on the
+          // same line, and a plain icon instead of a harness avatar -- it isn't one.
+          nl.append(el('span', 'm-status', m.desc));
+          main.append(nl);
           o.append(broadcastAvatar(), main);
           if (i === p.sel) selected = o;
           bindOption(o, i);
@@ -4330,7 +4331,7 @@
     const r = activeRoom();
     if (!r) return;
     const text = await openDialog({ kind: 'rules', title: 'Rules for ' + r.name,
-      body: 'These add to switchboard’s five fixed rules. Agents see them when they join, and once more after each edit.',
+      body: 'These add to switchboard’s six fixed rules. Agents see them when they join, and once more after each edit.',
       initial: r.rules, action: 'Save rules' });
     if (text === null) return;
     try {

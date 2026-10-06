@@ -991,6 +991,14 @@ def test_broadcast_mentions_lead_the_popover_and_style_like_a_mention_once_sent(
     expect(options.nth(0)).to_have_attribute("id", "men-here")
     expect(options.nth(1)).to_have_attribute("id", "men-everyone")
     expect(mentions.locator(".pal-head .muted")).to_have_text("2")  # the 2 agents, not 4
+    # each description sits on its name's line, where an agent's status goes, so the four rows
+    # are the same height (a description under the name made the two broadcasts twice as tall)
+    expect(options.nth(0).locator(".m-name-line .m-status")).to_have_text("Every agent online now")
+    expect(options.nth(1).locator(".m-name-line .m-status")).to_have_text(
+        "Every agent in the room, offline ones too"
+    )
+    heights = [options.nth(i).bounding_box()["height"] for i in range(4)]  # type: ignore[index]
+    assert max(heights) - min(heights) <= 1, heights
     box.fill("")
     expect(mentions).to_be_hidden()
 
