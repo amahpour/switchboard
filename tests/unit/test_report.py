@@ -602,6 +602,16 @@ def test_the_report_connection_refuses_writes(tmp_path: Path, clock: FakeClock) 
     assert con.execute("SELECT COUNT(*) FROM rooms").fetchone()[0] == 1
 
 
+def test_a_corrupt_database_is_a_report_error(tmp_path: Path) -> None:
+    """``open_ro`` wraps a low-level sqlite3 error (a file that fails to open as a database,
+    #167's ``db.connect_query_only``) in ``ReportError``, so the CLI prints a plain message
+    instead of a traceback."""
+    path = tmp_path / "switchboard.db"
+    path.write_bytes(b"not a sqlite database")
+    with pytest.raises(report.ReportError, match="can't read the switchboard database"):
+        report.open_ro(path)
+
+
 def test_unknown_room_is_an_error(w: World) -> None:
     with pytest.raises(report.ReportError):
         report.build(w.store.con, "#nope")
