@@ -1841,3 +1841,21 @@ def test_composer_grows_with_wrapped_text_and_shrinks_after_send(ui: UI) -> None
         expect(box).to_have_value("")
         shrunk_height = box.evaluate("el => el.clientHeight")
         assert shrunk_height == one_line_height, (options, shrunk_height, one_line_height)
+
+
+def test_the_mention_mirror_keeps_the_textarea_width_when_it_scrolls(ui: UI) -> None:
+    """#110 review: past the composer's 8 lines, #input shows a scrollbar, which takes width on
+    Linux and Windows (not with macOS's overlay ones). The mirror behind it has none, so unless it
+    keeps #input's inner width, its text, the text a person actually sees, wraps a few characters
+    later than #input's and the caret drifts off it. Headless Chromium draws no scrollbars, so
+    the test narrows #input's text area the way one would (#input narrower than the box around
+    it) and checks the mirror follows, and that it scrolls with #input."""
+    page = ui.open()
+    box = page.locator("#input")
+    box.fill("\n".join(f"line {i} of a long message @claude-1 with words" for i in range(20)))
+    page.evaluate("document.styleSheets[0].insertRule('#input { width: calc(100% - 15px) !important; }')")
+    mirror = page.locator("#input-mirror")
+    expect(mirror).to_have_js_property("clientWidth", box.evaluate("el => el.clientWidth"))
+    box.evaluate("el => { el.scrollTop = el.scrollHeight; }")
+    top = box.evaluate("el => [el.scrollTop, document.getElementById('input-mirror').scrollTop]")
+    assert top[0] > 0 and abs(top[0] - top[1]) <= 1, top  # past 8 lines; scrolls with it (subpixel rounding)
