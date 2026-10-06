@@ -557,6 +557,9 @@ class CodexAdapter(Adapter):
         self.clients: Clients | None = None
         self.server_pids: set[int] = set()
         self.agent_clients: dict[int, AgentClients] = {}  # queue-tier agent pid -> its liveness
+        # queue-tier agent pids the last look found gone (or started at another time): live()
+        # tells those apart from one the clients loop hasn't looked at yet, with no I/O of its own
+        self.agents_gone: set[int] = set()
         self.suspect: dict[str, float] = {}  # thread id -> held since (a TUI left its server)
         self.holds: dict[Any, Hold] = {}  # server key -> threads held after a TUI left it
         self._seen: dict[Any, frozenset[int]] = {}  # server key -> TUI pids at the last lsof
@@ -812,11 +815,15 @@ class CodexAdapter(Adapter):
         # I/O here: refresh_clients() (the clients loop) already probes every queue-tier
         # agent pid and drops one that isn't there any more (or started at a different
         # time) from agent_clients, so its absence here doubles as "it's gone".
+        # The daemon itself (it serves the control socket) is never one of agent_clients: the
+        # clients loop leaves servers out, so this comes first.
+        if p.agent_pid is not None and p.agent_pid in self.server_pids:
+            return False, "thread not loaded in the Codex daemon"
         ac = self.agent_clients.get(p.agent_pid) if p.agent_pid is not None else None
         if ac is None:
-            return False, "the Codex process is gone"
-        if p.agent_pid in self.server_pids:
-            return False, "thread not loaded in the Codex daemon"
+            if not p.agent_pid or p.agent_pid in self.agents_gone:
+                return False, "the Codex process is gone"
+            return False, "can't tell whether a Codex TUI is attached"  # not looked at yet
         if not proc.same_start(ac.start, p.agent_start) or now - ac.at > CLIENTS_FRESH_S:
             return False, "can't tell whether a Codex TUI is attached"
         if not ac.ok:
@@ -1465,10 +1472,12 @@ class CodexAdapter(Adapter):
             bool(tuis), self.now(), len(tuis), None if tuis else "no Codex TUI attached", tuis
         )
         acs: dict[int, AgentClients] = {}
+        gone: set[int] = set()
         for a, start in agents.items():
             i = infos.get(a)
             if i is None or not proc.same_start(i.start, start):
-                continue  # gone (live() says so)
+                gone.add(a)  # gone (live() says so)
+                continue
             if not is_app_server_argv(argvs.get(a, "")):
                 acs[a] = AgentClients(start, now, True)  # the TUI itself, with its embedded app-server
             elif a in peers:
@@ -1488,6 +1497,7 @@ class CodexAdapter(Adapter):
                 ok = par is not None and is_tui_argv(argvs.get(par.pid, ""))
                 acs[a] = AgentClients(start, now, ok, True, int(ok), None if ok else "no Codex TUI attached")
         self.agent_clients = acs
+        self.agents_gone = gone
         for key in [k for k in self._seen if k != "control" and k[1] not in acs]:
             del self._seen[key]
         return self.clients

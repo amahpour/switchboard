@@ -267,6 +267,21 @@ def test_a_queue_tier_thread_whose_process_is_the_daemon_is_not_live(w: World) -
     assert a.live(p) == (True, "")
     a.server_pids = {os.getpid()}  # its process serves the control socket: the daemon, yet not loaded
     assert a.live(p) == (False, "thread not loaded in the Codex daemon")
+    # as the clients loop leaves it: a server is never one of agent_clients (#172 review)
+    del a.agent_clients[os.getpid()]
+    assert a.live(p) == (False, "thread not loaded in the Codex daemon")
+
+
+def test_a_queue_tier_process_not_looked_at_yet_is_not_called_gone(w: World) -> None:
+    """live() does no I/O (#172): a queue-tier member whose process the clients loop hasn't
+    looked at yet (just joined) is "can't tell", not "the Codex process is gone"; it's gone
+    once a look found it gone."""
+    p, _m = codex(w, self_agent=True)
+    a = queue_tier(w)
+    del a.agent_clients[os.getpid()]
+    assert a.live(p) == (False, "can't tell whether a Codex TUI is attached")
+    a.agents_gone = {os.getpid()}
+    assert a.live(p) == (False, "the Codex process is gone")
 
 
 def test_a_held_queue_tier_thread_is_released_after_idling(w: World) -> None:
@@ -290,6 +305,7 @@ def test_an_open_wait_takes_the_batch_whatever_the_tier(w: World) -> None:
 def test_queue_tier_routing(w: World) -> None:
     gone, _ = codex(w, "codex-gone")  # its agent pid is no live process
     a = queue_tier(w)
+    a.agents_gone = {gone.agent_pid}  # as the clients loop's last look found it
     r = a.route(gone, WAKE, None, w.clock.now())
     assert r.kind == "none" and r.reason == "detached? the Codex process is gone"
     p, _m = codex(w, "codex-2", tid=TID2, self_agent=True, status="busy")
