@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from switchboard import DIST_NAME
 from switchboard.install import common
 from switchboard.install.common import (
     CommandEdit,
@@ -177,7 +178,7 @@ def test_editable_install_reads_direct_url(
     monkeypatch: pytest.MonkeyPatch, dist: _Dist | None, editable: bool
 ) -> None:
     def distribution(name: str) -> _Dist:
-        assert name == "switchboard"
+        assert name == DIST_NAME  # the distribution's own name, not the package's (#233)
         if dist is None:
             raise importlib.metadata.PackageNotFoundError(name)
         return dist

@@ -149,11 +149,11 @@ def make_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     (repo / "src" / "switchboard").mkdir(parents=True)
     (repo / "docs").mkdir()
-    (repo / "pyproject.toml").write_text('[project]\nname = "switchboard"\nversion = "0.4.0"\n')
+    (repo / "pyproject.toml").write_text('[project]\nname = "switchboard-chat"\nversion = "0.4.0"\n')
     (repo / "src" / "switchboard" / "__init__.py").write_text('"""x"""\n\n__version__ = "0.4.0"\n')
     (repo / "uv.lock").write_text(
         '[[package]]\nname = "other"\nversion = "1.0"\n\n'
-        '[[package]]\nname = "switchboard"\nversion = "0.4.0"\nsource = { editable = "." }\n'
+        '[[package]]\nname = "switchboard-chat"\nversion = "0.4.0"\nsource = { editable = "." }\n'
     )
     (repo / "CHANGELOG.md").write_text(CHANGELOG)
     pin = "uv tool install git+https://github.com/amahpour/switchboard@v0.4.0\n"
@@ -182,7 +182,8 @@ def test_a_release_on_a_real_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert 'version = "0.5.0"' in (repo / "pyproject.toml").read_text()
     assert '__version__ = "0.5.0"' in (repo / "src/switchboard/__init__.py").read_text()
     lock = (repo / "uv.lock").read_text()
-    assert 'name = "switchboard"\nversion = "0.5.0"' in lock and 'name = "other"\nversion = "1.0"' in lock
+    assert 'name = "switchboard-chat"\nversion = "0.5.0"' in lock
+    assert 'name = "other"\nversion = "1.0"' in lock
     assert (
         "@v0.5.0" in (repo / "README.md").read_text() and "@v0.5.0" in (repo / "docs/INSTALL.md").read_text()
     )
