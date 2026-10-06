@@ -26,6 +26,7 @@ It drives headless Chromium through Playwright (a dev dependency): run `uv run p
 | `closed-light.png`, `remotes-light.png` | the Closed rooms and Remote machines sheets |
 | `welcome-light.png` | the first-run page (a second broker with no rooms) |
 | `phone-light.png`, `phone-dark-sheet.png` | a phone, and its Members sheet |
+| `offline-light.png`, `offline-dark.png`, `offline-phone-dark.png` | #build after its connection dropped: the Disconnected band, the You row, the uncoloured chip and Members as last known (issue #129) |
 | `login-light.png` | the sign-in page |
 | `signin-setup-light.png`, `setup-light.png` | a hosted broker's sign-in page before it's set up (the admin's one-time password is in its log), and Choose how you'll sign in (issues #41, #61) |
 | `people-light.png`, `people-dark.png` | the admin's People sheet, with the invite to send someone new |
