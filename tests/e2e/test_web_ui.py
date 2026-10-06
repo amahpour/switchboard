@@ -1415,9 +1415,14 @@ def test_settings_phone_list_shows_summaries_and_back_returns_focus(ui: UI) -> N
     expect(phone.locator("#settings-row-appearance .settings-row-sub")).to_contain_text("theme")
     expect(phone.locator("#settings-row-rooms .settings-row-sub")).to_contain_text("wakes an hour")
     expect(phone.locator("#settings-row-profile")).to_be_focused()  # the default group's own row
+    # Sign out sits right below the rows, on screen: the list used to fill the sheet and push it
+    # out of reach
+    expect(phone.locator("#settings-sign-out")).to_be_in_viewport()
 
     phone.click("#settings-row-rooms")
     expect(phone.locator("#app-dialog-title")).to_have_text("New rooms")
+    # the header names the group, so the panel's own heading doesn't say it a second time
+    expect(phone.locator("#settings-panel-rooms > h3")).to_be_hidden()
     expect(phone.locator("#settings-room-rules")).to_be_visible()
     phone.locator("#settings-room-rules").fill("Summarized on the list.")
     phone.click("#settings-rules-save")
