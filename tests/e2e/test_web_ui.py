@@ -33,7 +33,7 @@ from typing import Any
 import pytest
 from conftest import PHASE_REPORTS, TEST_HUMAN, sanitize_env
 from playwright.sync_api import Browser, BrowserContext, ConsoleMessage, Page, Route, WebSocketRoute, expect
-from ui_world import CI_URL, JS_SCHEME, PROFILE, UIWorld
+from ui_world import CI_URL, JS_SCHEME, PROFILE, UIWorld, wait_js
 
 pytestmark = pytest.mark.e2e
 
@@ -177,7 +177,7 @@ def open_room(page: Page, room: str) -> None:
     expect(page.locator("#room-title")).to_have_text(room)
     if room == "build":
         expect(page.locator("#buddy-list .member")).to_have_count(4)
-        page.wait_for_function("document.querySelectorAll('#log .line.k-chat').length >= 8")
+        wait_js(page, "() => document.querySelectorAll('#log .line.k-chat').length >= 8")
 
 
 def chat_row(page: Page, text: str) -> Any:
@@ -1338,10 +1338,10 @@ def test_a_diagram_fills_the_screen_and_returns_drawn_after_exit(ui: UI) -> None
     full = box.get_by_role("button", name="Full screen")
     expect(full).to_be_visible()
     full.click()
-    page.wait_for_function("() => !!document.fullscreenElement?.classList.contains('md-diagram')")
+    wait_js(page, "() => !!document.fullscreenElement?.classList.contains('md-diagram')")
     assert box.evaluate("(b) => document.fullscreenElement === b.querySelector('.md-diagram')")
     page.evaluate("() => document.exitFullscreen()")
-    page.wait_for_function("() => document.fullscreenElement === null")
+    wait_js(page, "() => document.fullscreenElement === null")
     expect(box).to_have_class(cls("md-showing-diagram"))
     assert box.evaluate(SHADOW_SVG)
     expect(full).to_be_visible()
@@ -1358,7 +1358,7 @@ def test_a_diagram_follows_the_light_or_dark_scheme(ui: UI) -> None:
     )
     dark = box.evaluate(fill)
     page.emulate_media(color_scheme="light")
-    page.wait_for_function(f"(prev) => ({fill})(document.querySelector('#log .md-pre')) !== prev", arg=dark)
+    wait_js(page, f"(prev) => ({fill})(document.querySelector('#log .md-pre')) !== prev", dark)
     light = box.evaluate(fill)
     assert dark != light, (dark, light)
     expect(box).to_have_class(cls("md-showing-diagram"))
@@ -1376,9 +1376,7 @@ def test_a_diagram_follows_the_saved_theme_instead_of_the_system(ui: UI) -> None
         page.click("#me-settings")
         page.click("#settings-theme-dark")
         expect(page.locator("html")).to_have_attribute("data-theme", "dark")
-        page.wait_for_function(
-            f"(prev) => ({fill})(document.querySelector('#log .md-pre')) !== prev", arg=light
-        )
+        wait_js(page, f"(prev) => ({fill})(document.querySelector('#log .md-pre')) !== prev", light)
         assert box.evaluate(fill) != light
     finally:
         if page.locator("#app-dialog").is_visible():
