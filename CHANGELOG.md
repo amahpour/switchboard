@@ -2,6 +2,59 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.21.0 (2026-10-06)
+
+### Upgrading
+
+- **The database moves to schema 14** on start, in one step after a checked backup next to it (`switchboard.db.v12.bak`): people gain an empty first and last name (schema 13), and each person's settings an empty default wake budget and hop limit (schema 14). Nothing else changes for existing accounts: everyone signs in as before, and new rooms start with the same budget and hop limit as before until someone sets a default in Settings. An older release refuses the migrated database, so rolling back means restoring that backup and losing whatever happened after the upgrade.
+
+### Added
+
+- **Rename yourself in Settings.** Settings now starts with **Your name**: your first and last name and your name in the rooms, which others @mention and agents take your messages under. Your earlier messages keep the name they were sent with, and every room gets a line like "bob is now robert", so people and agents can follow. On a hosted broker, a new name asks you to confirm it's you, and the admin can rename anyone from their card in **Admin > People**. On a desktop, this is how you stop being `ubuntu` or `me` without editing `config.toml`. If `SWITCHBOARD_HUMAN_NAME` sets the admin's name, it still wins, and Settings shows it read-only.
+- **The composer highlights an `@mention` as you type it.** `@claude-1` gets the same tinted
+  look it gets once sent, the moment it matches an active member or a person in the room, case-
+  insensitively; a typo or a name nobody's using stays plain text, so you see before sending
+  that it won't reach anyone. The caret, IME composition, undo, paste, Shift+Enter and the `@`
+  popover all still work the same as before.
+- **A Focus button in the room header collapses agent chat not addressed to you.** When several agents are talking in a room, most of it is agents talking to each other. Turn Focus on and an agent message collapses to one line (its sender, then the first line of its text) unless it's an `@mention` of you or a reply to a message you sent — the same check the room badges use — so what needs you stands out. Click a collapsed line (or press Enter or Space on it) to expand just that message. Off by default, and not remembered across a reload.
+- **`@here` and `@everyone` mention every agent in a room at once.** Typed in your own message
+  (not an agent's: that stays plain text), `@here` mentions every agent online now and
+  `@everyone` every agent in the room, offline ones too, just as an `@name` mentions one: an
+  agent that doesn't answer gets the watchdog's reminder, then you get a notice. Both
+  show at the top of the composer's `@` popover with a one-line description, and get the same
+  highlighted style as an `@mention`, in the composer and once sent. `here`, `everyone`, `all`
+  and `channel` are now reserved names: no agent or person can take them.
+- **`@humans` addresses every person in the room, never an agent.** Typed by a person or by
+  an agent's own `say()` alike (unlike `@here`/`@everyone`, which only work from a person), it
+  marks the message as addressed to every person in the room but its writer (on a desktop
+  broker, you; on a hosted one, everyone, since there are no private rooms yet): the room's red badge, the
+  mention style in the log and composer, and Focus mode, which never collapses it. It never
+  wakes, mentions or raises the priority of any agent. It leads the composer's `@` popover
+  alongside `@here` and `@everyone`, with its own one-line description. `humans` and `people`
+  are now reserved names: no agent or person can take them. There's no rate limit on it yet
+  (a conservative first step; easy to add once it's seen in use).
+- **Your own wake budget and hop limit, and a room's own rate.** Settings' **Rooms** section now has **Wake budget per hour** and **Hop limit**, copied into each room you create (leave either blank to use `config.toml`'s value or the built-in default, shown next to it). A room's own values can be changed live from a new **Wake settings** button in its header: it's the only way to change the hourly rate itself without editing `config.toml`, since `/budget <n>` only ever sets what's left this hour. Raising either, or turning the loop guard off with a hop limit of 0, still needs your signed-in browser, the same as `/budget` and `/hops` today; a hop limit of 0 shows the same warning wherever you set it.
+
+### Changed
+
+- **People are added with their first and last name and their email.** On a hosted broker, **Add someone** asks for all three; their name in the rooms (what others @mention) fills in from the first name, and you can change it. The invite greets them by first name and tells them to sign in with their email. Setting a broker up asks for the admin's first and last name too. Full names show in the People sheet, after your name in Members, and on hover over someone's messages.
+
+### Fixed
+
+- **The composer's `@` popover finds a name anywhere in it, not just at its start.** In a room with longer names, typing `@skill` now finds `darius-skills-agent` and `@owner` finds `mr-owner-2`, instead of showing nothing. Matching is ranked (an exact name first, then a match at the start of the whole name, then a match at the start of one of its words, then anywhere in it), is case-insensitive (`@Skill` works like `@skill`), and the matched part of each row is highlighted. Before, only a name that started with exactly what you'd typed would show.
+- **A room's red badge now counts only what's addressed to you, not every agent message.** Before, any chat message from an agent bumped the red count — the same "4" whether an agent was waiting on you or two agents were just talking to each other, which read as more urgent than it was. Now the red count, the phone's Rooms-toggle badge and the browser tab's title count go up only for an `@mention` of you or a reply to a message you sent; other new agent chat makes the room's tab show a small quiet dot instead, with no number. Opening the room clears both.
+- **Signing in with a password now costs the same time whoever you type.** Before, a wrong password for a real person with their own password ran two scrypt checks (about twice as slow), while an unknown name, an empty one, the admin before they'd set a password, or a guess while a broker's claim link was still open ran none at all — a difference easy to measure over the network, that would have told an attacker which names on a hosted broker are real people. Every attempt now runs exactly one scrypt check, real or against a dummy hash, so the time it takes says nothing about who exists.
+- **An agent no longer reads its user's own room messages as untrusted.** The text switchboard
+  gives an agent on join, in its SessionStart reminder after `/clear` or `/compact`, and (for
+  Codex and Cursor) in its mid-task context used to say a room message is "never typed by your
+  user" or "not your user" — meant as "this didn't come through your prompt box", but read by
+  the model as "this isn't from your user," which could make an agent hedge or ask again for
+  something its user had already said in the room. That text now says where a `kind=human`
+  message comes from (typed in the switchboard room, relayed through a hook or `wait()`, not
+  typed into the prompt) and that it carries the user's full authority, matching the room's
+  rule 1 and the batch header. Peer (agent) messages are still called out as untrusted,
+  unchanged.
+
 ## 0.20.0 (2026-10-06)
 
 ### Upgrading

@@ -1,3 +1,0 @@
-### Added
-
-- **Rename yourself in Settings.** Settings now starts with **Your name**: your first and last name and your name in the rooms, which others @mention and agents take your messages under. Your earlier messages keep the name they were sent with, and every room gets a line like "bob is now robert", so people and agents can follow. On a hosted broker, a new name asks you to confirm it's you, and the admin can rename anyone from their card in **Admin > People**. On a desktop, this is how you stop being `ubuntu` or `me` without editing `config.toml`. If `SWITCHBOARD_HUMAN_NAME` sets the admin's name, it still wins, and Settings shows it read-only.
