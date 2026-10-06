@@ -226,7 +226,7 @@ CARET_RECT_JS = """
   for (const p of ['boxSizing', 'borderTopWidth', 'borderRightWidth', 'borderBottomWidth',
                     'borderLeftWidth', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
                     'fontStyle', 'fontVariant', 'fontWeight', 'fontSize', 'lineHeight', 'fontFamily',
-                    'letterSpacing', 'wordSpacing']) {
+                    'letterSpacing', 'wordSpacing', 'scrollbarGutter']) {
     div.style[p] = cs[p];
   }
   document.body.append(div);
@@ -1845,17 +1845,18 @@ def test_composer_grows_with_wrapped_text_and_shrinks_after_send(ui: UI) -> None
 
 def test_the_mention_mirror_keeps_the_textarea_width_when_it_scrolls(ui: UI) -> None:
     """#110 review: past the composer's 8 lines, #input shows a scrollbar, which takes width on
-    Linux and Windows (not with macOS's overlay ones). The mirror behind it has none, so unless it
-    keeps #input's inner width, its text, the text a person actually sees, wraps a few characters
-    later than #input's and the caret drifts off it. Headless Chromium draws no scrollbars, so
-    the test narrows #input's text area the way one would (#input narrower than the box around
-    it) and checks the mirror follows, and that it scrolls with #input."""
+    Linux and Windows (not with macOS's overlay ones). Unless the mirror behind it loses the same
+    width, its text, the text a person actually sees, wraps later than #input's and the caret
+    drifts off it. Both reserve the same scrollbar gutter (headless Chromium draws none, so the
+    rule itself is what's checked), and the mirror scrolls with #input."""
     page = ui.open()
     box = page.locator("#input")
+    gutters = box.evaluate(
+        "el => [getComputedStyle(el).scrollbarGutter,"
+        " getComputedStyle(document.getElementById('input-mirror')).scrollbarGutter]"
+    )
+    assert gutters == ["stable", "stable"], gutters
     box.fill("\n".join(f"line {i} of a long message @claude-1 with words" for i in range(20)))
-    page.evaluate("document.styleSheets[0].insertRule('#input { width: calc(100% - 15px) !important; }')")
-    mirror = page.locator("#input-mirror")
-    expect(mirror).to_have_js_property("clientWidth", box.evaluate("el => el.clientWidth"))
-    box.evaluate("el => { el.scrollTop = el.scrollHeight; }")
+    box.evaluate("el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll')); }")
     top = box.evaluate("el => [el.scrollTop, document.getElementById('input-mirror').scrollTop]")
-    assert top[0] > 0 and abs(top[0] - top[1]) <= 1, top  # past 8 lines; scrolls with it (subpixel rounding)
+    assert top[0] > 0 and top[0] == top[1], top  # past its 8 lines, and the mirror scrolls with it

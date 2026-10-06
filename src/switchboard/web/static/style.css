@@ -1281,6 +1281,10 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
   line-height: calc(20px * var(--text-scale));
   pointer-events: none; /* clicks and selection stay on #input, drawn above it */
 }
+/* Past 8 lines #input scrolls, and a scrollbar that takes width (Linux, Windows) would narrow its
+   text but not the mirror's, so the text a person sees would wrap later than the real one and
+   the caret drift off it (#110 review). Both reserve the same gutter, scrolling or not. */
+#input, #input-mirror { scrollbar-gutter: stable; }
 /* The same look as a sent message's .md-mention, minus the padding and bold weight: either
    would change this span's text width and so where the mirror wraps, which must stay pixel for
    pixel with #input's own (invisible) wrap -- the whole point of the mirror. */

@@ -1755,16 +1755,10 @@
     fitMirror();
   }
 
-  // The mirror's width is #input's inner width, not the box around it: past 8 lines #input
-  // scrolls, and a scrollbar that takes width (Linux, Windows) would otherwise leave the mirror's
-  // text, the one a person sees, wrapping later than #input's (#110 review). CSSOM, so the CSP
-  // allows it.
+  // The mirror scrolls with #input (past 8 lines #input scrolls). Its width needs no JS: both
+  // reserve the same scrollbar gutter in style.css (#110 review).
   function fitMirror() {
-    const input = $('input');
-    const mirror = $('input-mirror');
-    const w = input.clientWidth + 'px';
-    if (mirror.style.width !== w) mirror.style.width = w;
-    mirror.scrollTop = input.scrollTop;
+    $('input-mirror').scrollTop = $('input').scrollTop;
   }
 
   // Ranking for the @ mention popover (issue #112): a typed, lowercased query matches a member
@@ -4362,8 +4356,6 @@
     // The mirror has no scrollbar of its own (style.css: overflow: hidden) so it never drifts
     // out of sync on its own; it only needs to follow #input's when that one scrolls.
     input.addEventListener('scroll', function () { $('input-mirror').scrollTop = input.scrollTop; });
-    // a scrollbar coming or going, the window or the text size changing: #input's inner width moves
-    if (typeof ResizeObserver === 'function') new ResizeObserver(fitMirror).observe(input);
     input.addEventListener('click', updatePopover);
     input.addEventListener('blur', closePop);
     $('cmd-btn').addEventListener('click', function () {
