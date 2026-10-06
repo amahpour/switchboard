@@ -1039,7 +1039,8 @@ class Engine:
         room = self.store.room_by_id(s.room_id)
         name = room.name if room else "?"
         if room is not None and room.paused:
-            res = {"status": "paused", "text": paused_text(name)}
+            text = paused_text(name, reason=room.paused_reason, hop_limit=room.hop_limit)
+            res = {"status": "paused", "text": text}
         else:
             secs = int(round(s.deadline - s.opened_at))
             text = f"[switchboard] {name}: no new messages within {secs} s."
@@ -1113,8 +1114,11 @@ class Engine:
         out: list[Action] = []
         room = self.store.room_by_id(room_id)
         name = room.name if room else "?"
+        reason = room.paused_reason if room else None
+        hop_limit = room.hop_limit if room else None
         for s in self.sinks.for_room(room_id):
-            out.append(self._close_sink(s, {"status": "paused", "text": paused_text(name)}, "paused"))
+            text = paused_text(name, reason=reason, hop_limit=hop_limit)
+            out.append(self._close_sink(s, {"status": "paused", "text": text}, "paused"))
         for m in self.store.room_memberships(room_id):
             # a Cursor stop park ends too, unless another room of that session is still live
             if self.sinks.parks_for(m.participant_id) and all(
@@ -1895,8 +1899,12 @@ def _id_list(ids: list[int], n: int = 5) -> str:
     return shown + (f" and {len(ids) - n} more" if len(ids) > n else "")
 
 
-def paused_text(room: str) -> str:
-    return (
+def paused_text(room: str, *, reason: str | None = None, hop_limit: int | None = None) -> str:
+    text = (
         f"[switchboard] {room} is paused by your user. End your turn now; don't call"
         " wait() again until your user resumes the room."
     )
+    if reason == "loop guard" and hop_limit is not None:
+        # the loop guard, not a plain /pause: say how the limit (not only /resume) gets it going again
+        text += f" /hops <n> changes the limit (now {hop_limit})."
+    return text

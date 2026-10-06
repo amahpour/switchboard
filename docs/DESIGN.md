@@ -890,7 +890,7 @@ return None
 - `rules.refill(room, now)`: when `now >= budget_window_start + 3600`, set `remaining = budget_per_hour` (default 60) and move the window forward.
 - Only batches with `kind='wake'` are counted (`idle_wake`, `stop_cont`, `wait_return`, plus the Devin re-arm continue; a watchdog reminder is one of these with `wake_reason='reminder'`, §20). The count is decremented in the same transaction as the batch insert, down to a floor of 0.
 - Mid-turn priority (`steer`, `hook_ctx`, `hook_ups`, inbox while busy) and explicit pulls are not counted.
-- At 0, only wakes that contain a human item go through (and are still counted). A `budget_exhausted` event and a warn notice go out once per window.
+- At 0, only wakes that contain a human item go through (and are still counted). A `budget_exhausted` event and a warn notice ("the wake budget for this hour is used up: … Raise it with `/budget <n>` in the web UI.") go out once per window, so the notice says how to get going again, not only that wakes have stopped.
 - `/budget n` sets `remaining=n`. The interpretation (fixed window, n = what remains) is an assumption (§0).
 
 ### 8.4 Rate limit (`agent.say`)
@@ -906,7 +906,7 @@ A rejection is a normal result, `{posted:null, reason:"rate_limited", retry_afte
   - a human `chat` message (web or CLI): reset to 0;
   - `/resume`: reset to 0.
 
-  When `hop_count >= hop_limit` (6) after an insert, the room gets `paused=1, paused_reason='loop guard'`, then a `loop_guard` event, a warn notice, and the pause actions below.
+  When `hop_count >= hop_limit` (6) after an insert, the room gets `paused=1, paused_reason='loop guard'`, then a `loop_guard` event, a warn notice ("loop guard: N agent messages in a row with no message from alice. #room is paused; `/resume` in the web UI to continue. `/hops <n>` changes the limit (now N).") and the pause actions below. The notice names both ways to get going again, not only that the room is paused.
 
   `hop_limit` is per room: `[delivery] hop_limit` at creation, then `/hops <n>` (§10, §22), and `0` turns the guard off. The engine reads the room row on every agent message, so a new limit applies to the next one; a limit lowered below the current count trips on the next agent message, not at once.
 - **Requeue** (`rules.requeue(d, reason)`) puts a delivery back to `pending` for another wake. Two rules use it:
@@ -915,7 +915,7 @@ A rejection is a normal result, `{posted:null, reason:"rate_limited", retry_afte
   - A mention still `pending` because the member is parked escalates after `watchdog_s` with "claude-1 is parked — needs a poke" (once per parked spell, §20).
 - **Handled.** `agent.say` and `agent.pass` mark every `in_context` delivery of that member in the room as `handled`. Chatter is marked `handled` directly on confirmation. `agent.pass` is refused first while a peer message reached the member only as a stub (the read-first rule, §24); a refusal handles nothing and is no answer for the watchdog.
 - **`/pause`.** Sets `paused=1`, then `engine.on_command` does the following:
-  - Open `wait()` sinks resolve with `{"status":"paused"}`. A `wait()` issued **during** a pause stays open, and at its timeout returns `paused` rather than `timeout`, so a wait-loop agent can't spin. The result text tells the agent to end its turn.
+  - Open `wait()` sinks resolve with `{"status":"paused"}`. A `wait()` issued **during** a pause stays open, and at its timeout returns `paused` rather than `timeout`, so a wait-loop agent can't spin. The result text (`engine.paused_text`) tells the agent to end its turn; when `paused_reason` is `'loop guard'` it also names `/hops <n>` (with the room's current limit), so the one notice an agent does see says how the pause ends, not only that it is paused.
   - Parked Cursor stops resolve with `{}` (no continuation). As built (M6, §20): a Cursor stop hook that arrives while every room of its session is paused doesn't park, and a leave or kick that leaves a park serving only paused rooms ends it the same way.
   - Offers not yet posted are `cancelled`, and their deliveries go back to `pending`.
   - Devin re-arm, hook context and every wake stop until `/resume`.

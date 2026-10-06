@@ -113,7 +113,10 @@ def test_wakes_decrement_budget_to_a_floor_and_notice_once(w: World) -> None:
     assert w.resolved(sink.id)[0]["status"] == "messages"
     assert left(w) == 0
     notices = [a for a in w.take() if isinstance(a, Notice)]
-    assert len(notices) == 1 and "budget" in notices[0].text and notices[0].level == "warn"
+    assert len(notices) == 1 and notices[0].level == "warn"
+    # not only that wakes stopped: how to get going again (#118)
+    assert "the wake budget for this hour is used up" in notices[0].text
+    assert "Raise it with /budget <n> in the web UI." in notices[0].text
     # more chatter: blocked by the empty budget (no second notice this window)
     w.actions += w.engine.before_call(w.p(p))
     sink2, acts = w.engine.open_wait(w.p(p), w.m(m), "w2", 50)

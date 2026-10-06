@@ -322,3 +322,31 @@ def test_the_loop_guard_pause_is_the_same_pause(w: World) -> None:
     assert room.paused and room.paused_reason == "loop guard"
     assert w.resolved(s.id)[0]["status"] == "paused"
     assert park_result(w, park.sink_id) == {}
+
+
+def test_loop_guard_pause_text_also_says_how_to_raise_the_limit(w: World) -> None:
+    """An open wait() gets the same 'paused' text a manual /pause gives (above), but
+    when the loop guard caused it, the text names /hops <n> too: the one notice an
+    agent actually sees says how the pause ends, not only that the room is paused
+    (#118)."""
+    p, m = w.agent("bot")
+    s = listen(w, p, m, "w1")
+    w.store.set_budget(w.room.id, 0)  # nothing wakes the open wait() on the chatter itself
+    _pa, ma = w.agent("a")
+    for i in range(w.cfg.delivery.hop_limit):
+        w.agent_says(ma, f"hop {i}")
+    room = w.store.room_by_id(w.room.id)
+    assert room.paused and room.paused_reason == "loop guard"
+    [res] = w.resolved(s.id)
+    assert res["status"] == "paused"
+    assert f"/hops <n> changes the limit (now {room.hop_limit})." in res["text"]
+
+
+def test_a_plain_pause_text_says_nothing_about_hops(w: World) -> None:
+    """A manual /pause isn't the loop guard: /hops <n> would change nothing about it,
+    so the agent-facing text (unlike the loop guard's) doesn't mention it."""
+    p, m = w.agent("bot")
+    s = listen(w, p, m, "w1")
+    pause(w)
+    [res] = w.resolved(s.id)
+    assert res["status"] == "paused" and "/hops" not in res["text"]
