@@ -48,7 +48,7 @@ A broker hosted on a server ([docs/DEPLOY.md](DEPLOY.md)) can't reach your lapto
 # the broker's web UI: Add a machine (under Remote machines), a name, Make a pairing code.
 #   It asks you to confirm it's you first, then shows these two commands with Copy buttons.
 # the machine: install the broker's version, then pair (the code works once, for 10 minutes)
-uv tool install git+https://github.com/amahpour/switchboard@v0.6.5
+uv tool install switchboard-chat==0.21.1
 switchboard remote join https://sb.example.com 7KQ4-M2XD-9HVA
 #   Paired as work-laptop with https://sb.example.com.
 #   The broker's key, pinned here: SHA256:XM6l…uG/U

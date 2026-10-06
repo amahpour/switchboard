@@ -2779,7 +2779,8 @@
   }
 
   // a command and its Copy button. The command wraps where it must; with keepLast, its last
-  // word (the pairing code, typed by hand as often as it's pasted) never breaks
+  // word never breaks: the pairing code, typed by hand as often as it's pasted, and the package
+  // to install (`switchboard-chat==X.Y.Z`, which would otherwise break at its hyphen)
   function cmdBox(text, key, keepLast) {
     const box = el('div', 'machine-cmd');
     const code = el('code');
@@ -2814,7 +2815,7 @@
     const left = pairingLeft();
     const card = el('div', 'machine-card');
     card.append(machineHead(null, 'plus', 'Add ' + p.name, null));
-    card.append(stepLine('1', 'Install switchboard on ' + p.name + ', if it isn\'t there yet:'), cmdBox(p.install, 'install'),
+    card.append(stepLine('1', 'Install switchboard on ' + p.name + ', if it isn\'t there yet:'), cmdBox(p.install, 'install', true),
       stepLine('2', 'Pair it with this switchboard. The code works once:'), cmdBox(p.join, 'join', true));
     const wait = el('div', 'machine-wait' + (left ? '' : ' expired'));
     const t = el('span', 'machine-left', left ? mmss(left) + ' left' : '');

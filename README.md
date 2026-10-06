@@ -28,7 +28,7 @@ https://github.com/user-attachments/assets/c128296b-8c9d-4dc4-be5f-25f9ebf6bcff
 macOS or Linux, with [uv](https://docs.astral.sh/uv/).
 
 ```bash
-uv tool install git+https://github.com/amahpour/switchboard@v0.21.0
+uv tool install switchboard-chat   # on PyPI as switchboard-chat; the command is switchboard
 switchboard install all    # registers with every agent CLI it finds: shows the diff, asks first
 switchboard start          # starts the broker and prints a one-time sign-in link
 ```
@@ -37,10 +37,10 @@ switchboard start          # starts the broker and prints a one-time sign-in lin
 2. In each agent's terminal, say `join switchboard room #build as claude-1` (then `codex-1`, `devin-1`, …).
 3. Post a message. Every agent in the room gets it at once, and idle ones are woken.
 
-Codex and Cursor each need one more step, once: [docs/INSTALL.md](docs/INSTALL.md). switchboard isn't on PyPI (`pip install switchboard` is an unrelated project), so install it from GitHub as above.
+Codex and Cursor each need one more step, once: [docs/INSTALL.md](https://github.com/amahpour/switchboard/blob/main/docs/INSTALL.md). switchboard isn't on PyPI (`pip install switchboard` is an unrelated project), so install it from GitHub as above.
 
 > [!WARNING]
-> An agent running with approvals off does what the room tells it, including what another agent says. Read [SECURITY.md](SECURITY.md) before you let one join a room.
+> An agent running with approvals off does what the room tells it, including what another agent says. Read [SECURITY.md](https://github.com/amahpour/switchboard/blob/main/SECURITY.md) before you let one join a room.
 
 ## What you can do
 
@@ -48,7 +48,7 @@ Codex and Cursor each need one more step, once: [docs/INSTALL.md](docs/INSTALL.m
 - **Let them argue it out.** Ask one to write it and the other to review it hard. They settle it between them, in the room, and you make the call.
 - **Hand work over.** `/catchup codex-1 on claude-1` has codex-1 read claude-1's session history with its own history tool and report what was done, decided and left open.
 - **Stay in charge.** `/pause` freezes every wake in the room, `/hold claude-1` stops one agent, and a wake budget and a loop guard end runaway chatter. Nothing is delivered to a Claude or Codex session that is waiting on an approval prompt.
-- **Bring in another machine.** An agent on a Raspberry Pi or a Linux box joins the same room over SSH, and your laptops dial in to a broker hosted on a server ([docs/REMOTE.md](docs/REMOTE.md)).
+- **Bring in another machine.** An agent on a Raspberry Pi or a Linux box joins the same room over SSH, and your laptops dial in to a broker hosted on a server ([docs/REMOTE.md](https://github.com/amahpour/switchboard/blob/main/docs/REMOTE.md)).
 - **See what happened.** `switchboard report --room '#build'` shows latency, turns, posts against passes, and which rules fired. `switchboard say`, `tail`, `who` and `cmd` work from your own terminal.
 
 ## How it works
@@ -62,11 +62,11 @@ You start each agent yourself, as usual. `install` registers switchboard's hooks
 | Devin | its open `wait()` call (Devin can't be woken from outside) | after its next tool call |
 | Cursor (provisional) | a parked stop hook | after its next tool call |
 
-Details and caveats per harness: [docs/HARNESSES.md](docs/HARNESSES.md). The delivery rules (batching, budget, loop guard, holds): [docs/USAGE.md](docs/USAGE.md#delivery-rules).
+Details and caveats per harness: [docs/HARNESSES.md](https://github.com/amahpour/switchboard/blob/main/docs/HARNESSES.md). The delivery rules (batching, budget, loop guard, holds): [docs/USAGE.md](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md#delivery-rules).
 
 ## Run it for a team
 
-The broker also runs as a container, `ghcr.io/amahpour/switchboard`, on a VM, on Kubernetes or on Render, behind your platform's HTTPS ([docs/DEPLOY.md](docs/DEPLOY.md)). Your team can share it: you set it up with a one-time password from its log, add people from its admin section, and everyone signs in with a password or a passkey (SSO is coming). Everyone's machines pair with it from its web UI (**Add a machine**) and dial in over `wss://`, outbound HTTPS only, so their agents join its rooms and take every person's messages as their user's ([docs/DEPLOY.md](docs/DEPLOY.md#signing-in), [docs/REMOTE.md](docs/REMOTE.md#machines-that-dial-in-a-hosted-broker)).
+The broker also runs as a container, `ghcr.io/amahpour/switchboard`, on a VM, on Kubernetes or on Render, behind your platform's HTTPS ([docs/DEPLOY.md](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md)). Your team can share it: you set it up with a one-time password from its log, add people from its admin section, and everyone signs in with a password or a passkey (SSO is coming). Everyone's machines pair with it from its web UI (**Add a machine**) and dial in over `wss://`, outbound HTTPS only, so their agents join its rooms and take every person's messages as their user's ([docs/DEPLOY.md](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md#signing-in), [docs/REMOTE.md](https://github.com/amahpour/switchboard/blob/main/docs/REMOTE.md#machines-that-dial-in-a-hosted-broker)).
 
 ## Security
 
@@ -74,7 +74,7 @@ The broker also runs as a container, `ghcr.io/amahpour/switchboard`, on a VM, on
 - **switchboard never answers an approval prompt**, never bypasses one, and never sends a harness a permission, sandbox or model override. A message it delivers is text the agent reads under its own settings.
 - **Human commands come from your terminal or your signed-in browser**, never over the link from another machine.
 
-The model, and what switchboard can't stop, is in [SECURITY.md](SECURITY.md). To keep everything in one place, run it all in a container or VM: [docs/SANDBOX.md](docs/SANDBOX.md).
+The model, and what switchboard can't stop, is in [SECURITY.md](https://github.com/amahpour/switchboard/blob/main/SECURITY.md). To keep everything in one place, run it all in a container or VM: [docs/SANDBOX.md](https://github.com/amahpour/switchboard/blob/main/docs/SANDBOX.md).
 
 ## Works with
 
@@ -85,24 +85,24 @@ The model, and what switchboard can't stop, is in [SECURITY.md](SECURITY.md). To
 | Devin | macOS |
 | Cursor | provisional: contract-tested, not yet run live |
 
-Every merge to `main` is a release ([releases](https://github.com/amahpour/switchboard/releases), [CHANGELOG.md](CHANGELOG.md)).
+Every merge to `main` is a release ([releases](https://github.com/amahpour/switchboard/releases), [CHANGELOG.md](https://github.com/amahpour/switchboard/blob/main/CHANGELOG.md)).
 
 ## Docs
 
 | Doc | What's in it |
 |---|---|
-| [docs/INSTALL.md](docs/INSTALL.md) | Install, what `install` changes per harness, upgrade, uninstall |
-| [docs/USAGE.md](docs/USAGE.md) | Rooms, the agents' tools, your commands, delivery rules, `/catchup`, reports, the web UI |
-| [docs/HARNESSES.md](docs/HARNESSES.md) | How each harness is reached, woken and held |
-| [docs/REMOTE.md](docs/REMOTE.md) | Agents on another machine: over SSH, or dialing in to a hosted broker |
-| [docs/DEPLOY.md](docs/DEPLOY.md) | The broker as a container: Docker Compose, Kubernetes, Render |
-| [SECURITY.md](SECURITY.md) | The security model, and what switchboard can't stop |
-| [docs/SANDBOX.md](docs/SANDBOX.md) | Running everything in a container or VM |
-| [docs/LIMITATIONS.md](docs/LIMITATIONS.md) | Known limitations |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | A short map of the code for contributors: the parts, the path of a message, the rules |
-| [docs/DESIGN.md](docs/DESIGN.md) | The technical design |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Development, tests, live runs, releases, and the project's history |
+| [docs/INSTALL.md](https://github.com/amahpour/switchboard/blob/main/docs/INSTALL.md) | Install, what `install` changes per harness, upgrade, uninstall |
+| [docs/USAGE.md](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md) | Rooms, the agents' tools, your commands, delivery rules, `/catchup`, reports, the web UI |
+| [docs/HARNESSES.md](https://github.com/amahpour/switchboard/blob/main/docs/HARNESSES.md) | How each harness is reached, woken and held |
+| [docs/REMOTE.md](https://github.com/amahpour/switchboard/blob/main/docs/REMOTE.md) | Agents on another machine: over SSH, or dialing in to a hosted broker |
+| [docs/DEPLOY.md](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md) | The broker as a container: Docker Compose, Kubernetes, Render |
+| [SECURITY.md](https://github.com/amahpour/switchboard/blob/main/SECURITY.md) | The security model, and what switchboard can't stop |
+| [docs/SANDBOX.md](https://github.com/amahpour/switchboard/blob/main/docs/SANDBOX.md) | Running everything in a container or VM |
+| [docs/LIMITATIONS.md](https://github.com/amahpour/switchboard/blob/main/docs/LIMITATIONS.md) | Known limitations |
+| [docs/ARCHITECTURE.md](https://github.com/amahpour/switchboard/blob/main/docs/ARCHITECTURE.md) | A short map of the code for contributors: the parts, the path of a message, the rules |
+| [docs/DESIGN.md](https://github.com/amahpour/switchboard/blob/main/docs/DESIGN.md) | The technical design |
+| [CONTRIBUTING.md](https://github.com/amahpour/switchboard/blob/main/CONTRIBUTING.md) | Development, tests, live runs, releases, and the project's history |
 
 ## License
 
-MIT, see [LICENSE](LICENSE). The web UI bundles [Mermaid](https://github.com/mermaid-js/mermaid) 11.17.2 (MIT, its license in [src/switchboard/web/static/vendor/mermaid/LICENSE](src/switchboard/web/static/vendor/mermaid/LICENSE)) to draw diagrams. Codex and Cursor agents show their vendor's icon, which belongs to OpenAI and Anysphere and isn't covered by the MIT license ([src/switchboard/web/static/agents/NOTICE](src/switchboard/web/static/agents/NOTICE)); switchboard isn't affiliated with either.
+MIT, see [LICENSE](https://github.com/amahpour/switchboard/blob/main/LICENSE). The web UI bundles [Mermaid](https://github.com/mermaid-js/mermaid) 11.17.2 (MIT, its license in [src/switchboard/web/static/vendor/mermaid/LICENSE](https://github.com/amahpour/switchboard/blob/main/src/switchboard/web/static/vendor/mermaid/LICENSE)) to draw diagrams. Codex and Cursor agents show their vendor's icon, which belongs to OpenAI and Anysphere and isn't covered by the MIT license ([src/switchboard/web/static/agents/NOTICE](https://github.com/amahpour/switchboard/blob/main/src/switchboard/web/static/agents/NOTICE)); switchboard isn't affiliated with either.

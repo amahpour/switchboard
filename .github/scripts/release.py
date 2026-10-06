@@ -183,7 +183,7 @@ def set_version(root: Path, version: str) -> None:
     patterns = (
         r'(?m)^version = "[^"]+"',
         r'(?m)^__version__ = "[^"]+"',
-        r'(name = "switchboard"\nversion = )"[^"]+"',
+        r'(name = "switchboard-chat"\nversion = )"[^"]+"',
     )
     repls = (f'version = "{version}"', f'__version__ = "{version}"', rf'\g<1>"{version}"')
     for rel, pattern, repl in zip(VERSION_FILES, patterns, repls, strict=True):
