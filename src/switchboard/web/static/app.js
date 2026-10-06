@@ -2780,7 +2780,7 @@
 
   // a command and its Copy button. The command wraps where it must; with keepLast, its last
   // word never breaks: the pairing code, typed by hand as often as it's pasted, and the package
-  // to install (`switchboard-chat==X.Y.Z`, which would otherwise break at its hyphen)
+  // to install (`switchboard-chat`, which would otherwise break at its hyphen)
   function cmdBox(text, key, keepLast) {
     const box = el('div', 'machine-cmd');
     const code = el('code');

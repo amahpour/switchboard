@@ -35,7 +35,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from switchboard import DIST_NAME, __version__
+from switchboard import DIST_NAME
 from switchboard.broker.remote import PING_MISSES, PING_S, Attempt, LinkClosed, RemoteLink
 from switchboard.broker.service import ServiceError
 from switchboard.envelope import clean
@@ -575,7 +575,8 @@ class MachineManager:
             "expires_in_s": self.codes.ttl_s,
             "broker": origin,
             "broker_fingerprint": self.fingerprint,
-            "install": f"uv tool install {DIST_NAME}=={__version__}",
+            # the latest release: the link needs the same protocol, not the same release
+            "install": f"uv tool install {DIST_NAME}",
             "join": f"switchboard remote join {origin} {code}",
         }
 
