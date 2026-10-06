@@ -836,7 +836,8 @@ def test_new_room_dialog_validates_name_and_returns_focus(ui: UI) -> None:
         page.locator("#app-dialog-name").fill(room)
         # the new room opens and loads its review board: let that answer before the room is
         # closed, or it answers 404 (a console error) for a room that's gone
-        with page.expect_response(lambda r: r.url.endswith(f"/api/rooms/{room[1:]}/review")):
+        board = f"/api/rooms/{room[1:]}/review"
+        with page.expect_response(lambda r, board=board: r.url.endswith(board)):
             page.locator("#app-dialog-action").click()
         expect(page.locator(f'#tabs .room[data-room="{room}"]')).to_have_count(1)
         ui.world.command(room.removeprefix("#"), "/close")
