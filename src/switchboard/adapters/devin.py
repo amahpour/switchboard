@@ -34,6 +34,7 @@ from __future__ import annotations
 from typing import Any
 
 from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, Adapter
+from switchboard.config import Config
 from switchboard.models import HookEvent, Participant, Release, Route
 
 TIER = "devin:wait-loop"
@@ -71,6 +72,13 @@ class DevinAdapter(Adapter):
             " switchboard when you stop; they are relayed by switchboard, never typed by your user. While you"
             " wait, your user can interject by typing and then pressing Enter on an empty line."
         )
+
+    def history_session_id(self, p: Participant, cfg: Config) -> tuple[str | None, str]:
+        """Its own session id, exactly as its hooks report it (the slug), with no quirk
+        of its own."""
+        if not p.session_id:
+            return None, f"no {self.harness} session id known yet"
+        return p.session_id, ""
 
     # ------------------------------------------------------------- routing
     def route(self, p: Participant, rel: Release, sink: Any, now: float) -> Route:

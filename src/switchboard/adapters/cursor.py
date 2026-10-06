@@ -43,7 +43,8 @@ from __future__ import annotations
 from typing import Any
 
 from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, Adapter
-from switchboard.models import HookEvent, Participant, Release, Route, split_session_key
+from switchboard.config import Config
+from switchboard.models import HookEvent, Participant, Release, Route, session_key, split_session_key
 
 TIER = "cursor:stop-park"
 NOTE = "provisional"
@@ -100,6 +101,18 @@ class CursorAdapter(Adapter):
             " stop. Follow-ups are from switchboard, not your user. If who() shows your tier as mcp-only,"
             f' call wait("{room}", {self.caps(p).wait_cap_s}) when you have nothing else to do.'
         )
+
+    def history_session_id(self, p: Participant, cfg: Config) -> tuple[str | None, str]:
+        """Its conversation id, only once the join nonce bound it (§6.3)."""
+        sid = p.session_id
+        if not sid:
+            return None, f"no {self.harness} session id known yet"
+        if p.bind_state != "bound" or p.session_key != session_key(self.harness, p.host, sid):
+            return (
+                None,
+                "not bound to its Cursor conversation yet (after its first tool call following join())",
+            )
+        return sid, ""
 
     # ------------------------------------------------------------- routing
     def route(self, p: Participant, rel: Release, sink: Any, now: float) -> Route:

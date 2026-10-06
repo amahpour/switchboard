@@ -123,6 +123,7 @@ from switchboard.models import (
     Release,
     Route,
     Snapshot,
+    session_key,
     split_session_key,
     tier_label,
 )
@@ -759,6 +760,21 @@ class CodexAdapter(Adapter):
         if self.server_requests:
             s += f"; {sum(self.server_requests.values())} server request(s) left unanswered"
         return s
+
+    def history_session_id(self, p: Participant, cfg: Config) -> tuple[str | None, str]:
+        """Its thread id, only once its join is keyed by it and, while ``[codex]
+        require_thread_proof`` is on, its thread proof (§9.3) passed; never for an
+        unproven thread on another machine, whose proof is made over there (§27.7)."""
+        sid = p.session_id
+        if not sid:
+            return None, f"no {self.harness} session id known yet"
+        if p.session_key != session_key(self.harness, p.host, sid):
+            return None, "no Codex thread id known"
+        if cfg.codex.require_thread_proof and not p.thread_proof:
+            if p.host != LOCAL_HOST:
+                return None, "a Codex thread on another machine can't be verified"
+            return None, "its Codex thread isn't verified yet"
+        return sid, ""
 
     # ============================================================ liveness
     def live(self, p: Participant, now: float | None = None) -> tuple[bool, str]:

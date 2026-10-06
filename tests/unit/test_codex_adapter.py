@@ -92,6 +92,28 @@ def test_tier_without_proof_requirement(tmp_path: Path, clock: FakeClock) -> Non
     assert ad(w).tier(p) == ("codex:daemon", None)
 
 
+def test_history_session_id_needs_the_threads_own_key_and_proof(w: World) -> None:
+    """CodexAdapter.history_session_id (DESIGN.md §9.1, issue #171): /catchup's session id
+    for a Codex thread -- its own key and thread-proof quirks, moved out of
+    catchup.session_id's harness branching."""
+    a = ad(w)
+    p, _m = w.agent("codex-1", harness="codex")
+    # keyed by its join (the screen name), not yet the thread it ends up bound to
+    assert a.history_session_id(p, w.cfg) == (None, "no Codex thread id known")
+    p = w.store.update_participant(p.id, session_id=TID, session_key=f"codex:{TID}", thread_proof=0)
+    assert a.history_session_id(p, w.cfg) == (None, "its Codex thread isn't verified yet")
+    p = w.store.update_participant(p.id, thread_proof=1)
+    assert a.history_session_id(p, w.cfg) == (TID, "")
+    p = w.store.update_participant(p.id, session_id=None)
+    assert a.history_session_id(p, w.cfg) == (None, "no codex session id known yet")
+    # on another machine, unproven: its proof is made over there, never verified from here
+    pi, _m2 = w.agent("pi-codex", harness="codex", host="fpga-pi")
+    pi = w.store.update_participant(
+        pi.id, session_id="thread-P", session_key="codex@fpga-pi:thread-P", thread_proof=0
+    )
+    assert a.history_session_id(pi, w.cfg) == (None, "a Codex thread on another machine can't be verified")
+
+
 def test_daemon_tier_shows_detached_when_no_tui_is_attached(w: World) -> None:
     p, _m = codex(w)
     attach(w, clients=False)

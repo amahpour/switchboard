@@ -15,9 +15,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from switchboard.adapters import build_adapters
 from switchboard.config import Config
 from switchboard.envelope import clean
-from switchboard.models import LOCAL_HOST, Member, Participant, session_key
+from switchboard.models import LOCAL_HOST, Member, Participant
 
 TOPIC_MAX = 200  # characters, after cleaning
 WINDOW_MAX_S = 24 * 3600.0  # the window never starts more than 24 h ago
@@ -31,8 +32,6 @@ EMPTY = "–"  # an absent topic or note
 BLOCK_TITLE = "catch-up request (switchboard)"
 HEADINGS = ("Doing", "Decided", "Open questions", "Conflicts with my work", "Next step")
 
-# Harnesses whose session ids a session-history tool can know. Test and unknown sessions have none.
-_HISTORY_HARNESSES = frozenset({"claude", "codex", "cursor", "devin"})
 # Only plain ids pass: they are quoted into a message other agents read, and a history tool
 # (or a shell command an agent builds from them) must take them as one token.
 SID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
@@ -69,31 +68,18 @@ def clean_text(text: str) -> str:
 def session_id(p: Participant | None, cfg: Config) -> tuple[str | None, str]:
     """``(the harness's own session id, "")`` for a member's session, or ``(None, why not)``.
 
-    Claude: its session id (``CLAUDE_CODE_SESSION_ID``, followed through ``/clear`` by the
-    hooks). Codex: the thread id, only once its thread proof passed (§9.3) while
-    ``[codex] require_thread_proof`` is on: before that it is only what the join claimed.
-    Cursor: the conversation id, once the join nonce bound it (§6.3). Devin: its session id
-    (the slug its hooks report). Test and unknown sessions have none."""
+    Asks the member's own adapter (``Adapter.history_session_id``, DESIGN.md §9.1): each
+    harness's quirks (Cursor's join-nonce binding, Codex's thread proof) live there, not
+    here. What it returns is then filtered against ``SID_RE``, so only a plain id (one a
+    history tool, or a shell command built from it, takes as one token) is ever passed on."""
     if p is None:
         return None, "no session"
-    h = p.harness
-    if h not in _HISTORY_HARNESSES:
-        return None, "a test session" if h == "test" else "a session of an unknown harness"
-    sid = p.session_id
-    if not sid:
-        return None, f"no {h} session id known yet"
-    if h == "cursor" and (p.bind_state != "bound" or p.session_key != session_key(h, p.host, sid)):
-        return None, "not bound to its Cursor conversation yet (after its first tool call following join())"
-    if h == "codex":
-        if p.session_key != session_key(h, p.host, sid):
-            return None, "no Codex thread id known"
-        if cfg.codex.require_thread_proof and not p.thread_proof:
-            if p.host != LOCAL_HOST:
-                return None, "a Codex thread on another machine can't be verified"
-            return None, "its Codex thread isn't verified yet"
-    if not SID_RE.fullmatch(sid):
+    adapters = build_adapters(cfg)
+    adapter = adapters.get(p.harness) or adapters["unknown"]
+    sid, why = adapter.history_session_id(p, cfg)
+    if sid and not SID_RE.fullmatch(sid):
         return None, "its session id isn't in a form switchboard passes on"
-    return sid, ""
+    return sid, why
 
 
 def when(ts: float) -> str:

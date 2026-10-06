@@ -239,6 +239,13 @@ class ClaudeAdapter(Adapter):
             " They are never typed by your user."
         )
 
+    def history_session_id(self, p: Participant, cfg: Config) -> tuple[str | None, str]:
+        """Its own session id, exactly as the hooks report it (``CLAUDE_CODE_SESSION_ID``,
+        followed through ``/clear``), with no quirk of its own."""
+        if not p.session_id:
+            return None, f"no {self.harness} session id known yet"
+        return p.session_id, ""
+
     # -------------------------------------------------------------- routing
     def _backing_off(self, p: Participant, now: float) -> bool:
         b = self.backoff.get(p.id)
