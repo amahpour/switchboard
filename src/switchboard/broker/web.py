@@ -1208,6 +1208,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 "last_name": people.names_of(state, w.person_id)[1],
                 # everyone's full name by their name in the rooms: Members and a message's sender
                 "full_names": people.full_names(state),
+                # the owner's name is fixed by SWITCHBOARD_HUMAN_NAME: Settings can't rename it (#114)
+                "name_locked": w.owner and state.cfg.human_name_from_env,
                 "admin": w.owner and state.hosted,  # the admin section (§32.3)
                 "version": __version__,
                 "commit": build_info.commit(),
@@ -1226,6 +1228,75 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         # Slide the browser cookie along with the server-side session.
         _set_cookie(resp, request.cookies.get(COOKIE_NAME) or "", secure=state.web_origin.secure)
         return resp
+
+    def rename_route(body: dict[str, Any], person_id: int | None, by: str) -> Response:
+        """Rename someone and set their first and last name (#114, §41): ``name``, ``first_name``
+        and ``last_name``, each optional (a field left out stays as it is)."""
+        if not body or set(body) - {"name", "first_name", "last_name"}:
+            return _err(400, "bad_request", "give name, first_name or last_name")
+        parts: dict[str, str | None] = {}
+        for key in ("first_name", "last_name"):
+            if key in body:
+                value, why = people.clean_name_part(body[key])
+                if why is not None:
+                    return _err(400, "bad_name", why)
+                parts[key] = value
+        new = None
+        if "name" in body:
+            why = people.rename_problem(state, body["name"], person_id)
+            if why is not None:
+                return _err(400, "bad_name", why)
+            new = body["name"].strip().lower()
+            if person_id is None and state.cfg.human_name_from_env and new != state.cfg.human_name:
+                return _err(409, "locked", "SWITCHBOARD_HUMAN_NAME sets this name when switchboard starts")
+        if parts:
+            first, last = people.names_of(state, person_id)
+            state.store.set_names(person_id, parts.get("first_name", first), parts.get("last_name", last))
+        if new is not None:
+            try:
+                people.rename(state, person_id, new, by)
+            except ValueError as e:
+                return _err(409, "conflict", str(e))
+        first, last = people.names_of(state, person_id)
+        name = (
+            state.cfg.human_name if person_id is None else getattr(state.store.person(person_id), "name", "")
+        )
+        return _ok({"name": name, "first_name": first, "last_name": last})
+
+    @app.post("/api/me/name")
+    async def me_name(request: Request) -> Response:
+        """Rename yourself, and your first and last name (#114). A new name in the rooms on a
+        hosted broker needs a fresh check, as a password does: it's what you sign in with until
+        you have an email, and what every agent takes your messages under."""
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        try:
+            body = await _json_body(request)
+        except ServiceError as e:
+            return _svc_err(e)
+        renaming = "name" in body and body["name"] != w.name
+        if renaming and state.hosted and not state.fresh_check(w.h):
+            return _err(403, "reauth", "confirm it's you first")
+        return rename_route(body, w.person_id, w.name)
+
+    @app.post("/api/people/{pid}/name")
+    async def people_name(request: Request, pid: str) -> Response:
+        """The admin renames someone (or themselves, ``owner``), with a fresh check (#114)."""
+        w, no = admin(request, True)
+        if no is not None:
+            return no
+        assert w is not None
+        try:
+            body = await _json_body(request)
+        except ServiceError as e:
+            return _svc_err(e)
+        if pid == "owner":
+            return rename_route(body, None, w.name)
+        p = state.store.person(int(pid)) if ROOM_ID_RE.fullmatch(pid) and int(pid) <= MAX_ROOM_ID else None
+        if p is None or not p.active:
+            return _err(404, "not_found", "no such person")
+        return rename_route(body, p.id, w.name)
 
     @app.put("/api/me/preferences")
     async def set_preferences(request: Request) -> Response:

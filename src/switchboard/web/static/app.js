@@ -98,6 +98,8 @@
     peopleDraft: { first: '', last: '', email: '', name: '', nameTyped: false },
     emailDrafts: new Map(),  // person key -> the email typed on their card, kept across renders
     emailNotes: new Map(),   // person key -> {text, bad}: what the last save on their card said
+    nameDrafts: new Map(),   // the same for the name in the rooms on their card (#114)
+    nameNotes: new Map(),
     peopleBusy: new Map(),  // person id (or 'add') -> what is running for them
     invite: null,      // { id, name, password, invite } to send, until Done
     copiedInvite: false,
@@ -3252,6 +3254,71 @@
     });
     rules.append(rulesLabel, rulesInput, count, save, status);
 
+    // Your name (#114, DESIGN.md §41): your first and last name, and your name in the rooms,
+    // which others @mention and every agent takes your messages under
+    const me = state.me || {};
+    const you = el('section', 'settings-section');
+    you.append(el('h3', null, 'Your name'));
+    function youField(id, labelText, value, maxLength) {
+      const label = el('label', 'settings-label', labelText);
+      label.setAttribute('for', id);
+      const input = el('input');
+      input.type = 'text';
+      input.id = id;
+      input.maxLength = maxLength;
+      input.spellcheck = false;
+      input.value = value || '';
+      return [label, input];
+    }
+    const [firstLabel, firstInput] = youField('settings-first', 'First name', me.first_name, 64);
+    const [lastLabel, lastInput] = youField('settings-last', 'Last name', me.last_name, 64);
+    const [nameLabel, nameInput] = youField('settings-name', 'Your name in the rooms', me.human, 24);
+    nameInput.autocapitalize = 'none';
+    const nameNote = el('p', 'fine', me.name_locked
+      ? 'Set when switchboard starts (SWITCHBOARD_HUMAN_NAME), so it can’t be changed here.'
+      : 'What others @mention, and what agents take your messages under. Your earlier messages keep the name they were sent with.');
+    nameNote.id = 'settings-name-note';
+    nameInput.readOnly = !!me.name_locked;
+    const names = el('div', 'person-names');
+    const f1 = el('div', 'person-field');
+    f1.append(firstLabel, firstInput);
+    const f2 = el('div', 'person-field');
+    f2.append(lastLabel, lastInput);
+    names.append(f1, f2);
+    const youSave = btn('btn-primary', 'Save');
+    youSave.id = 'settings-name-save';
+    const youStatus = el('span', 'fine');
+    youStatus.id = 'settings-name-status';
+    youStatus.setAttribute('role', 'status');
+    youSave.addEventListener('click', async function () {
+      const body = { first_name: firstInput.value.trim() || null, last_name: lastInput.value.trim() || null };
+      const name = nameInput.value.trim().toLowerCase();
+      const renaming = !me.name_locked && name !== String(me.human || '').toLowerCase();
+      if (renaming) {
+        if (!PERSON_NAME.test(name)) {
+          youStatus.textContent = 'A name looks like bob or bob-k: a letter first, then letters, digits, _ or -, at most 24.';
+          youStatus.classList.add('bad');
+          return;
+        }
+        body.name = name;
+      }
+      youSave.disabled = true;
+      try {
+        const call = function () { return api('POST', '/api/me/name', body); };
+        // a new name in the rooms on a hosted broker asks you to confirm it's you, as a password does
+        await (renaming && state.me && state.me.signin ? withFreshCheck(call) : call());
+        state.me = await api('GET', '/api/me');
+        renderBuddies();
+        updateTitle();
+        youStatus.textContent = 'Saved';
+        youStatus.classList.remove('bad');
+      } catch (e) {
+        youStatus.textContent = String(e.message || e);
+        youStatus.classList.add('bad');
+      } finally { youSave.disabled = false; }
+    });
+    you.append(names, nameLabel, nameInput, nameNote, youSave, youStatus);
+
     const account = el('section', 'settings-section');
     account.append(el('h3', null, 'Account'));
     if (state.me && (state.me.signin || state.me.hosted)) {
@@ -3267,7 +3334,7 @@
       location.replace('/');
     });
     account.append(signOut);
-    container.append(appearance, rules, account);
+    container.append(you, appearance, rules, account);
   }
 
   function openSettings() {
@@ -3468,6 +3535,65 @@
 
   // Who this person is (#192, §39): the email they sign in with, set by the admin. It is also
   // the only Google account that signs them in, when Google sign-in is on.
+  // The admin renames someone, or themselves, from their card (#114, §41): their name in the
+  // rooms. Their messages keep the name they were sent under; every room gets a notice.
+  function nameRow(p) {
+    const key = p.id === null ? 'owner' : String(p.id);
+    const row = el('form', 'name-row');
+    row.noValidate = true;
+    const label = el('label', null, 'Name');
+    const input = el('input');
+    input.type = 'text';
+    input.id = 'name-' + key;
+    input.maxLength = 24;
+    input.autocomplete = 'off';
+    input.autocapitalize = 'none';
+    input.spellcheck = false;
+    input.value = state.nameDrafts.has(key) ? state.nameDrafts.get(key) : p.name;
+    input.dataset.focus = 'name:' + key;
+    input.addEventListener('input', function () { state.nameDrafts.set(key, input.value); });
+    const locked = p.id === null && state.me && state.me.name_locked;
+    input.readOnly = !!locked;
+    if (locked) input.title = 'Set when switchboard starts (SWITCHBOARD_HUMAN_NAME)';
+    label.setAttribute('for', input.id);
+    const save = btn('btn', 'Rename');
+    save.type = 'submit';
+    save.id = 'name-save-' + key;
+    save.dataset.focus = 'name-save:' + key;
+    save.disabled = !!locked;
+    const note = state.nameNotes.get(key);
+    const out = el('span', 'fine name-result' + (note && note.bad ? ' bad' : ''), note ? note.text : '');
+    out.id = 'name-result-' + key;
+    out.setAttribute('role', 'status');
+    row.append(label, input, save, out);
+    row.addEventListener('submit', async function (ev) {
+      ev.preventDefault();
+      const name = String(input.value || '').trim().toLowerCase();
+      if (name === p.name) return;
+      if (!PERSON_NAME.test(name)) {
+        state.nameNotes.set(key, { text: 'A name looks like bob or bob-k: a letter first, then letters, digits, _ or -, at most 24.', bad: true });
+        renderPeoplePanel();
+        return;
+      }
+      save.disabled = true;
+      try {
+        await withFreshCheck(function () { return api('POST', '/api/people/' + key + '/name', { name: name }); });
+        state.nameDrafts.delete(key);
+        state.nameNotes.set(key, { text: 'Renamed' });
+        if (p.id === null) state.me = await api('GET', '/api/me');
+        await loadPeople().catch(function () {});
+        renderBuddies();
+        updateTitle();
+      } catch (e) {
+        state.nameNotes.set(key, { text: String(e.message || e), bad: true });
+      } finally {
+        save.disabled = false;
+        renderPeoplePanel();
+      }
+    });
+    return row;
+  }
+
   function emailRow(p) {
     const key = p.id === null ? 'owner' : String(p.id);
     const row = el('form', 'email-row');
@@ -3540,7 +3666,7 @@
         : 'no email yet: signs in with their name');
     }
     card.append(el('p', 'machine-step', bits.join(' · ')));
-    card.append(emailRow(p));
+    card.append(nameRow(p), emailRow(p));
     if (!p.admin) {
       const btns = el('div', 'dialog-buttons');
       const busy = state.peopleBusy.get(p.id);
@@ -3656,6 +3782,8 @@
   function openPeople() {
     state.emailDrafts.clear();
     state.emailNotes.clear();
+    state.nameDrafts.clear();
+    state.nameNotes.clear();
     openSheet('people-panel');
     renderPeoplePanel();
     loadPeople().catch(function () {});

@@ -39,14 +39,14 @@ The image sets everything but the public URL.
 | `SWITCHBOARD_LISTEN` | `0.0.0.0` | The IPv4 address the broker listens on. Anything but `127.0.0.1` needs the public URL. |
 | `SWITCHBOARD_PORT` | `7419` | The port it listens on. |
 | `SWITCHBOARD_HOME` | `/data/switchboard` | Its data: the database, logs and config.toml, on the `/data` volume. |
-| `SWITCHBOARD_HUMAN_NAME` | (unset: `me`) | The admin's name in the rooms. The admin signs in as it, or as `admin`. |
+| `SWITCHBOARD_HUMAN_NAME` | (unset: `me`) | The admin's name in the rooms. The admin signs in as it, or as `admin`. While it's set, it wins over a rename in Settings, which then shows the name read-only. |
 | `SWITCHBOARD_OIDC_CLIENT_ID` | (unset) | Sign in with Google: your OAuth client's ID ([Sign in with Google](#sign-in-with-google)). Nothing changes until it and the secret are both set. |
 | `SWITCHBOARD_OIDC_CLIENT_SECRET` | (unset) | That client's secret, from your platform's secrets (a Kubernetes Secret, Render's secret environment). Or `SWITCHBOARD_OIDC_CLIENT_SECRET_FILE`, a file holding it. |
 | `SWITCHBOARD_RESET_OWNER` | (unset) | Recovery: set it to a new value and restart to forget the admin, everyone else, and every password, passkey and session ([Signing in](#signing-in)). It acts once per value. |
 
 They are the environment versions of `switchboard start --public-url`, `--listen` and `--port`. `config.toml` can also set `public_url` and `listen`, and a flag or variable wins over it. The container runs `switchboard start --foreground --log-stdout`: logs go to stdout, where the platform collects them, instead of `logs/broker.log`.
 
-The admin's name in the rooms is `me` unless you set it: `SWITCHBOARD_HUMAN_NAME` in the deployment (the Kubernetes and Compose files have it), or `human_name` in `config.toml` in the home, then restart the container:
+The admin's name in the rooms is `me` unless you set it. The easiest way is **Settings > Your name** in the web UI, which renames you at once and keeps it across restarts. `SWITCHBOARD_HUMAN_NAME` in the deployment (the Kubernetes and Compose files have it) fixes the name instead, and Settings can't change it while it's set; leave it out to rename from Settings. Or set `human_name` in `config.toml` in the home, then restart the container:
 
 ```bash
 docker exec -u switchboard switchboard sh -c 'echo "human_name = \"ari\"" >> "$SWITCHBOARD_HOME/config.toml"'

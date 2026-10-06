@@ -118,6 +118,15 @@ class BrokerState:
             or self.claim_grace.get(sid_hash, 0.0) > now
         )
 
+    def set_human_name(self, name: str) -> None:
+        """The owner's name in the rooms, from now on (#114, DESIGN.md §41): everything that holds
+        the config takes the new one. The rest reads ``state.cfg`` each time it needs the name."""
+        cfg = self.cfg.replace(human_name=name)
+        self.cfg = cfg
+        for holder in (self.service, self.engine, *(self.engine.adapters.values() if self.engine else ())):
+            if holder is not None:
+                holder.cfg = cfg
+
     def claimed(self) -> None:
         """The claim succeeded: no claim link from now on."""
         self.claim = None
@@ -218,6 +227,10 @@ def create_app(
         state.engine = Engine(
             state.store, clock, cfg, build_adapters(cfg), SinkRegistry(), test_mode=test_mode
         )
+        # a rename in Settings (#114) outlives a restart, unless SWITCHBOARD_HUMAN_NAME sets the name
+        saved = state.store.owner_name()
+        if saved and not cfg.human_name_from_env and saved != cfg.human_name:
+            state.set_human_name(saved)
         state.runner = Runner(state)
         state.agents = AgentService(state)
         state.boards = Boards(state)

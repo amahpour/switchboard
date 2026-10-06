@@ -187,6 +187,65 @@ def name_problem(state: "BrokerState", name: Any) -> str | None:
     return None
 
 
+def rename_problem(state: "BrokerState", name: Any, person_id: int | None) -> str | None:
+    """Why a person (or the owner, None) can't be renamed to ``name`` (#114, DESIGN.md §41), or
+    None. As a new person's name (``name_problem``), and: no agent in any room has it; the
+    owner's may not start an agent's name or the start of an agent CLI's (an agent can't join
+    under a name that starts with the owner's, and its own name would read as theirs)."""
+    from switchboard.config import _AGENT_PREFIXES
+
+    if not isinstance(name, str) or not SCREEN_NAME_RE.match(name.strip().lower()):
+        return "names look like bob or bob-k: a-z first, then a-z, 0-9, '_' or '-', at most 24"
+    n = name.strip().lower()
+    if person_id is None:
+        current = state.cfg.human_name
+    else:
+        p = state.store.person(person_id)
+        current = p.name if p is not None else ""
+    if n == current:
+        return None  # no change
+    if n in RESERVED_NAMES or n.startswith("switchboard") or n == ADMIN_ALIAS:
+        return f"{n} is reserved"
+    if person_id is not None and n == state.cfg.human_name.lower():
+        return f"{n} is someone here already"
+    other = state.store.person_named(n)
+    if other is not None and other.id != person_id:
+        return f"{n} is someone here already"
+    agents = state.store.active_agent_names()
+    if n in agents:
+        return f"an agent here is called {n}"
+    if person_id is None:
+        clash = next((a for a in agents if a.startswith(n)), None)
+        if clash is not None:
+            return f"an agent here is called {clash}, which would read as yours"
+        if any(p.startswith(n) for p in _AGENT_PREFIXES):
+            return f"{n} is the start of an agent's name (claude, codex, cursor, devin)"
+    return None
+
+
+def rename(state: "BrokerState", person_id: int | None, new: str, by: str) -> str | None:
+    """Rename a person (or the owner, None) to ``new``, checked by ``rename_problem`` first
+    (#114, §41): their sessions carry on under the new name, messages keep the name they were
+    sent under, and every open room gets a notice. Returns the old name, or None if unchanged."""
+    if person_id is None:
+        old = state.cfg.human_name
+    else:
+        p = state.store.person(person_id)
+        assert p is not None
+        old = p.name
+    if new == old:
+        return None
+    if person_id is None:
+        state.store.set_owner_name(new)
+        state.set_human_name(new)
+    else:
+        state.store.person_rename(person_id, new)
+    state.store.add_event("people", data={"what": "rename", "from": old, "to": new, "by": by})
+    note = f"{old} is now {new}" + ("" if by in (old, new) else f" (renamed by {by})")
+    state.service.notice_everywhere(note)
+    return old
+
+
 def names(state: "BrokerState") -> list[str]:
     """Every person's name, the owner's first: the humans in every room."""
     return [state.cfg.human_name] + [p.name for p in state.store.people()]

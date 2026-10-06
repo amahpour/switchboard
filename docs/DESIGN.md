@@ -3013,3 +3013,21 @@ Fewer ways in: a person with an email has one identifier, not two, and names, wh
 The palette is six of the basic terminal colours (red, green, yellow, blue, magenta and cyan; their bright variants left to the terminal's theme) plus bold and dim, with no backgrounds, so it reads on dark and light terminals alike. Call sites name a `Paint` role (`ok`, `warn`, `bad`, `link`, `added`, `removed`, `heading`, `prompt`, `nick`) rather than a raw colour; an agent's nick colour comes from `crc32` of its name, so it's the same colour in every process and on every run, and red stays free for warnings.
 
 Tests: `tests/unit/test_colors.py` (`enabled()`'s rules, `Paint`'s styling and reset, `nick_colour`'s stability), `tests/unit/test_cli_color.py` (each command plain when piped, with `NO_COLOR`, with `--color never` and with `--json`, and coloured with `--color always` or on a terminal; colour only ever adds switchboard's own codes, so stripping them gives back the plain output exactly; escape codes inside room text stay stripped).
+
+## 41. Renaming (#114)
+
+### 41.1 What it is
+Anyone renames themselves in **Settings > Your name**: their first and last name (§39.6) and their name in the rooms, the one @mentions use and every agent takes their messages under. The admin also renames anyone from their card in **Admin > People** (a **Name** row with **Rename**). The decisions on #114 (2026-10-06): everyone renames themselves and the admin anyone; messages keep the name they were sent under, and a rename posts a notice in every room; on a desktop broker the same field renames the one human.
+
+### 41.2 What a rename does (`people.rename`)
+- **The new name** is checked as a new person's is (`name_problem`), and more (`people.rename_problem`): no agent in any room has it; the owner's may not start any agent's current name (an agent can't join under a name that starts with the owner's, §6.3) or be the start of an agent CLI's (`claude`, `codex`, `cursor`, `devin`), as the default name isn't.
+- **A person's** is `people.name`. **The owner's** is `meta.owner_name`, which wins over `config.toml` at every start (`create_app`), and `BrokerState.set_human_name` hands the new config to everything that holds one (the state, the room service, the engine and each adapter); everything else reads `state.cfg` when it needs the name. `SWITCHBOARD_HUMAN_NAME` sets `Config.human_name_from_env`: then the variable's name wins over `owner_name`, and the owner's rename is refused (`locked`, 409); `/api/me`'s `name_locked` tells the page.
+- **Sessions carry on:** a web session holds a person id, and `who_of` reads the name each time. **History keeps the old name:** `messages.sender_name`, stored notices and events aren't rewritten. Every open room gets a stored notice, "bob is now robert" (with "(renamed by alice)" when the admin did it), and a `people` event `rename` with both names.
+- **Agents follow** at once: their `who()`, the join text and each delivery's header name people as they are now (`people.names`), and @mentions resolve against current names, so `@bob` stops reaching robert.
+- **Sign-in:** someone with no email yet (§39.3) signs in with their new name from then on, not the old one.
+
+### 41.3 Routes
+`POST /api/me/name` and `POST /api/people/{id|owner}/name` (the admin), each with `name`, `first_name` and `last_name`, all optional (a field left out stays as it is; any other field is a 400). A new name in the rooms on a hosted broker needs a fresh check, as a password does: it's what a person without an email signs in with, and what every agent hears them as. A desktop broker has no password to check.
+
+### 41.4 Tests
+`tests/integration/test_people.py`: `test_a_person_renames_themselves_and_the_agents_follow` (refused names; the session carries on; old and new messages; the notice in every room; the agent's `who()` and its next delivery; sign-in by the new name), `test_the_admin_renames_someone_and_themselves` (the admin's route, its notice, the owner's rename reaching every config holder, the fresh check, a restart keeping it), `test_a_name_set_by_the_environment_isnt_renamed`, `test_the_desktop_human_renames_themselves`; `tests/unit/test_config.py` (`human_name_from_env`); `tests/e2e/test_rename_ui.py` (Settings and a People card in a real browser).
