@@ -344,6 +344,22 @@ function rowInfo(w) {
 const CLOSE_REPLY = 'closed #build: 2 agent(s) removed (1 on fpga-pi); history kept.' +
   ' The name is free again; reopen this room from Closed rooms in the web UI';
 
+// A room tab's badge (red count, addressed to you) and quiet dot (other activity), by name.
+function tabInfo(w, name) {
+  const b = findAll(w.$('tabs'), function (n) { return n.tag === 'button' && n.dataset.room === name; })[0];
+  if (!b) return null;
+  const badge = findAll(b, function (n) { return n.classList.contains('badge'); })[0];
+  const dot = findAll(b, function (n) { return n.classList.contains('dot'); })[0];
+  return {
+    badge: badge ? { text: badge.textContent, label: badge.attrs['aria-label'] } : null,
+    quietDot: dot ? { label: dot.attrs['aria-label'] } : null,
+  };
+}
+
+function roomsBadge(w) {
+  return { text: w.$('rooms-badge').textContent, hidden: w.$('rooms-badge').classList.contains('hidden') };
+}
+
 // ---------------------------------------------------------------- scenarios
 const SCENARIOS = {
   // A rooms frame whose listing looks unchanged (the room was closed, which dropped this page's
@@ -694,6 +710,48 @@ const SCENARIOS = {
     key(w.$('input'), 'Enter');
     await settle();
     return report(w, ws, { commands: w.server.commands });
+  },
+
+  // Issue #109: the red badge, the rooms toggle badge and the title count only go up for a
+  // message addressed to you (an @mention or a reply to a message you sent, alice here, per
+  // the fake /api/me); other agent chatter in a room you're not viewing gets the quiet dot
+  // instead, with no number; opening the room clears both.
+  async room_badges_addressed_vs_quiet() {
+    const w = makeWorld([{ id: 1, name: '#build', created_at: 100 }, { id: 2, name: '#ops', created_at: 101 }]);
+    w.location.hash = '#build';
+    const ws = await boot(w);
+
+    // #ops isn't active: two agents just talking to each other is quiet, not a red count.
+    ws.deliver({ t: 'msg', room: '#ops', msg: chat(10, 'claude-1', 'just telling codex-1 the build is green') });
+    await settle();
+    const quiet = { tab: tabInfo(w, '#ops'), title: w.document.title, roomsBadge: roomsBadge(w) };
+
+    // An @mention of alice does count, alongside the earlier quiet activity.
+    ws.deliver({ t: 'msg', room: '#ops', msg: chat(11, 'claude-1', '@alice please look', { mentions: ['alice'] }) });
+    await settle();
+    const mentioned = { tab: tabInfo(w, '#ops'), title: w.document.title, roomsBadge: roomsBadge(w) };
+
+    // A reply to alice's own message counts too, even without an @mention in its text.
+    ws.deliver({ t: 'msg', room: '#ops', msg: { id: 12, ts: TS + 12, kind: 'chat', from: 'alice', sender_kind: 'human',
+                                                  via: 'web', text: 'can you check this build', reply_to: null,
+                                                  mentions: [], host: null } });
+    ws.deliver({ t: 'msg', room: '#ops', msg: chat(13, 'codex-1', 'on it', { harness: 'codex', reply_to: 12 }) });
+    await settle();
+    const replied = { tab: tabInfo(w, '#ops'), title: w.document.title, roomsBadge: roomsBadge(w) };
+
+    // A reply to someone else's message (not alice's) does not count on its own.
+    ws.deliver({ t: 'msg', room: '#ops', msg: { id: 14, ts: TS + 14, kind: 'chat', from: 'claude-1', harness: 'claude',
+                                                  sender_kind: 'agent', via: 'mcp', text: 'noted', reply_to: 10,
+                                                  mentions: [], host: null } });
+    await settle();
+    const repliedOther = { tab: tabInfo(w, '#ops'), roomsBadge: roomsBadge(w) };
+
+    // Opening the room clears both the red count and the quiet dot.
+    click(findAll(w.$('tabs'), function (n) { return n.tag === 'button' && n.dataset.room === '#ops'; })[0]);
+    await settle();
+    const opened = { tab: tabInfo(w, '#ops'), title: w.document.title, roomsBadge: roomsBadge(w) };
+
+    return { quiet: quiet, mentioned: mentioned, replied: replied, repliedOther: repliedOther, opened: opened };
   },
 
   // First run: the Welcome form creates the room named in its field.

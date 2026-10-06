@@ -47,7 +47,9 @@
 
   const state = {
     me: null,          // { human, admin, test_mode, version, commit, preferences, hosted, signin, passkeys, password, fresh }
-    rooms: new Map(),  // name -> { name, slug, id, createdAt, lastId, msgs: [], members: [], settings: {}, unread: 0 }
+    // name -> { name, slug, id, createdAt, lastId, msgs: [], members: [], settings: {},
+    //           unread: 0 (addressed to me: the red count), quiet: false (other new agent chat) }
+    rooms: new Map(),
     closed: 0,         // how many closed rooms there are (GET /api/rooms), for the Closed row
     closedRooms: [],   // GET /api/closed-rooms, as the Closed sheet shows it
     active: null,
@@ -414,7 +416,8 @@
   function room(name) {
     let r = state.rooms.get(name);
     if (!r) {
-      r = { name: name, slug: name.replace(/^#/, ''), lastId: 0, msgs: [], members: [], settings: {}, rules: '', unread: 0 };
+      r = { name: name, slug: name.replace(/^#/, ''), lastId: 0, msgs: [], members: [], settings: {}, rules: '',
+        unread: 0, quiet: false };
       state.rooms.set(name, r);
     }
     return r;
@@ -541,6 +544,16 @@
     if (!state.me || m.sender_kind === 'human') return false;
     const me = state.me.human.toLowerCase();
     return (m.mentions || []).indexOf(me) >= 0;
+  }
+
+  // Whether m is addressed to this person: an @mention (mentionsMe) or a reply to a message
+  // they sent. The one check behind the unread badges (#109) and, later, focus mode (#99), so
+  // the room list and the message log agree on what needs this person's attention.
+  function addressedToMe(r, m) {
+    if (mentionsMe(m)) return true;
+    if (!state.me || !m.reply_to) return false;
+    const parent = r.msgs.find(function (x) { return x.id === m.reply_to; });
+    return !!parent && parent.sender_kind === 'human' && parent.from === state.me.human;
   }
 
   // Markdown for every sender (human messages too), via md.js; plain text if md.js is missing.
@@ -765,7 +778,10 @@
     r.lastId = m.id;
     if (r.msgs.length > MAX_LINES) r.msgs.splice(0, r.msgs.length - MAX_LINES);
     if (r.name !== state.active) {
-      if (m.kind === 'chat' && m.sender_kind !== 'human') r.unread += 1;
+      if (m.kind === 'chat' && m.sender_kind !== 'human') {
+        if (addressedToMe(r, m)) r.unread += 1;  // an @mention or a reply to you: the red count
+        else r.quiet = true;                     // other agent chatter: a quiet marker, no number
+      }
       renderTabs();
       return;
     }
@@ -814,8 +830,12 @@
       if (r.unread > 0 && name !== state.active) {
         total += r.unread;
         const badge = el('span', 'badge', r.unread > 99 ? '99+' : r.unread);
-        badge.setAttribute('aria-label', r.unread + ' unread');
+        badge.setAttribute('aria-label', plural(r.unread, 'message', 'messages') + ' for you');
         b.append(badge);
+      } else if (r.quiet && name !== state.active) {
+        const dot = el('span', 'dot quiet');
+        dot.setAttribute('aria-label', 'new activity');
+        b.append(dot);
       }
       b.addEventListener('click', function () {
         setNav(false);
@@ -1054,7 +1074,9 @@
       state.boardSel = null;
     }
     state.active = name;
-    state.rooms.get(name).unread = 0;
+    const activeR = state.rooms.get(name);
+    activeR.unread = 0;
+    activeR.quiet = false;
     if (location.hash !== '#' + state.rooms.get(name).slug) {
       history.replaceState(null, '', '#' + state.rooms.get(name).slug);
     }

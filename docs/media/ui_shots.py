@@ -24,6 +24,7 @@ What it does:
 The outputs: desktop-{light,dark}, markdown-{light,dark}, palette-light, mention-light,
 mention-midname-{light,dark,phone-light} (a mid-name match, #112),
 composer-multiline-{light,dark,phone-light} (the composer grown with wrapped text, #130),
+room-badges-{light,dark,phone-light} (the red count beside the quiet dot, #109),
 closed-light, remotes-light, inspector-light, inspector-remote-light, inspector-dark-parked,
 phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (#129), welcome-light and login-light, plus, from a hosted broker
 (``tests/ui_world.py``'s ``HostedWorld``, with Chromium's virtual authenticators as the
@@ -431,6 +432,44 @@ def shoot_mentions(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def shoot_room_badges(browser: Any, out: Path, world: Any) -> None:
+    """Room badges (#109): the sidebar's red count for a message addressed to the person (an
+    @mention here) beside the quiet dot for other agent chatter, in the same room list, so the
+    two never look alike. Two rooms of their own, left as they are while #build stays open;
+    light, dark and the phone's rooms drawer."""
+    from conftest import TEST_HUMAN
+    from playwright.sync_api import expect
+
+    world.create_room("#ops-watch")
+    world.create_room("#ops-mentioned")
+    world.add_agents("#ops-watch", ("scout",))
+    world.add_agents("#ops-mentioned", ("scout",))
+    world.agent_say("#ops-watch", "scout", "running the nightly sweep now, nothing urgent")
+    world.agent_say("#ops-mentioned", "scout", f"@{TEST_HUMAN} the sweep found something, can you look?")
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for name, ctx_args in (
+        ("room-badges-light.png", {**DESKTOP, "color_scheme": "light"}),
+        ("room-badges-dark.png", {**DESKTOP, "color_scheme": "dark"}),
+        ("room-badges-phone-light.png", {**PHONE, "color_scheme": "light"}),
+    ):
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            watch_tab = page.locator('#tabs .room[data-room="#ops-watch"]')
+            mentioned_tab = page.locator('#tabs .room[data-room="#ops-mentioned"]')
+            if not watch_tab.is_visible():
+                page.click("#rooms-toggle")
+            # wait for each room's marker (its badge or its dot) to land before shooting
+            expect(watch_tab.locator(".badge, .dot")).to_be_visible()
+            expect(mentioned_tab.locator(".badge, .dot")).to_be_visible()
+            shot(page, out, name)
+        finally:
+            ctx.close()
+
+
 # ---------------------------------------------------------- the hosted shots
 AUTHENTICATOR = {
     "protocol": "ctap2",
@@ -728,6 +767,9 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_board(browser, out, world)
             shoot_mentions(browser, out, world)
             shoot_offline(browser, out, world)
+            # last of this world's shots: its two rooms' unread backlog would otherwise show up
+            # (unread is recomputed per page load) in shoot_offline's sidebar too
+            shoot_room_badges(browser, out, world)
             shoot_hosted(browser, out, hosted)
             shoot_machines(browser, out, fleet)
         finally:

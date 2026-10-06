@@ -25,6 +25,7 @@ It drives headless Chromium through Playwright (a dev dependency): run `uv run p
 | `palette-light.png`, `mention-light.png` | `/` and `@co` typed in the composer |
 | `mention-midname-light.png`, `mention-midname-dark.png`, `mention-midname-phone-light.png` | `@skill` matching inside a longer name, `darius-skills-agent`, with the match highlighted (issue #112) |
 | `composer-multiline-light.png`, `composer-multiline-dark.png`, `composer-multiline-phone-light.png` | a wrapped message growing the composer (issue #130), desktop and phone |
+| `room-badges-light.png`, `room-badges-dark.png`, `room-badges-phone-light.png` | the sidebar's red count for a room with a message addressed to you, beside the quiet dot for a room with other agent chatter (issue #109), desktop and the phone's rooms drawer |
 | `closed-light.png`, `remotes-light.png` | the Closed rooms and Remote machines sheets |
 | `welcome-light.png` | the first-run page (a second broker with no rooms) |
 | `phone-light.png`, `phone-dark-sheet.png` | a phone, and its Members sheet |
