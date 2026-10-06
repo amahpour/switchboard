@@ -834,7 +834,11 @@ def test_new_room_dialog_validates_name_and_returns_focus(ui: UI) -> None:
         expect(page.locator(f'#tabs .room[data-room="{room}"]')).to_have_count(0)
         new.click()
         page.locator("#app-dialog-name").fill(room)
-        page.locator("#app-dialog-action").click()
+        # the new room opens and loads its review board: let that answer before the room is
+        # closed, or it answers 404 (a console error) for a room that's gone
+        board = f"/api/rooms/{room[1:]}/review"
+        with page.expect_response(lambda r, board=board: r.url.endswith(board)):
+            page.locator("#app-dialog-action").click()
         expect(page.locator(f'#tabs .room[data-room="{room}"]')).to_have_count(1)
         ui.world.command(room.removeprefix("#"), "/close")
 
@@ -917,7 +921,8 @@ def test_custom_room_rules_copy_from_settings_and_edit_on_a_phone(ui: UI) -> Non
     page.click("#settings-close")
     page.click("#new-room")
     page.locator("#app-dialog-name").fill("#e2e-room-rules")
-    page.click("#app-dialog-action")
+    with page.expect_response(lambda r: r.url.endswith("/api/rooms/e2e-room-rules/review")):  # as above
+        page.click("#app-dialog-action")
     expect(page.locator('#tabs .room[data-room="#e2e-room-rules"]')).to_have_count(1)
 
     phone = ui.open(room="e2e-room-rules", **PHONE)
@@ -933,7 +938,8 @@ def test_custom_room_rules_copy_from_settings_and_edit_on_a_phone(ui: UI) -> Non
     phone.click("#app-dialog-action")
     expect(dialog).to_be_hidden()
     expect(phone.locator("#log")).to_contain_text(TEST_HUMAN + " updated the room rules")
-    phone.reload()
+    with phone.expect_response(lambda r: r.url.endswith("/api/rooms/e2e-room-rules/review")):
+        phone.reload()
     phone.click("#room-rules")
     expect(phone.locator("#app-dialog-rules")).to_have_value("Post a PR link.")
     phone.click("#app-dialog-cancel")
