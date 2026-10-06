@@ -429,7 +429,8 @@ const SCENARIOS = {
 
   // Focus mode (#99): which messages collapse (an agent message not addressed to alice - the
   // same addressedToMe check as the room badges, #109) and which don't; a click expands just
-  // the row clicked, and Focus off rebuilds every row back to normal.
+  // the row clicked, and Focus off rebuilds every row back to normal. Issue #138: an agent's
+  // own @humans (id 15) is addressed to alice too, so it never collapses either.
   async focus_mode_collapsing() {
     const { w, ws } = await buildRoom(MEMBERS);
     ws.deliver({ t: 'msg', room: '#build', msg: { id: 9, ts: TS + 9, kind: 'chat', from: 'alice', sender_kind: 'human',
@@ -442,6 +443,8 @@ const SCENARIOS = {
     ws.deliver({ t: 'msg', room: '#build', msg: chat(13, 'codex-1', 'thanks', { harness: 'codex', reply_to: 10 }) });
     ws.deliver({ t: 'msg', room: '#build', msg: { id: 14, ts: TS + 14, kind: 'chat', from: 'alice', sender_kind: 'human',
                                                     via: 'web', text: 'thanks all', reply_to: null, mentions: [], host: null } });
+    ws.deliver({ t: 'msg', room: '#build',
+      msg: chat(15, 'claude-1', '@humans need a decision: ship tonight or wait?', { mentions: ['humans'] }) });
     await settle();
     const before = rowInfo(w);  // Focus off: nobody is marked collapsible yet
 
@@ -759,7 +762,9 @@ const SCENARIOS = {
     const picked = { value: w.$('input').value, hl: hl() };
     w.$('input').value = '';
     // Issue #111: @here/@everyone highlight as you type too, same as a real member's name.
-    type(w, '@everyone look, then @here too, but not @all');
+    // Issue #138: @humans does too, unconditionally for the same reason -- the composer is
+    // always a person's, and both a person's and an agent's @humans are real.
+    type(w, '@humans needs eyes, @everyone look, then @here too, but not @all');
     const broadcast = { text: mirror().textContent, hl: hl() };
     await settle();
     return report(w, ws, { typed: typed, picked: picked, broadcast: broadcast });
@@ -770,7 +775,8 @@ const SCENARIOS = {
   // query only one of them matches (here's own prefix "ev" has no member whose name contains
   // it either) leaves just that one; the header's count is the matched members only, so the
   // two broadcasts never inflate "Agents in #build <n>"; picking one completes it like a
-  // member would.
+  // member would. Issue #138: @humans leads both of them, with a description of its own, and
+  // "hu" (its own prefix, shared with no member and not with "here"/"everyone") matches only it.
   async broadcast_popover() {
     const { w, ws } = await buildRoom(MEMBERS);
     const optionIds = function () {
@@ -785,7 +791,16 @@ const SCENARIOS = {
     };
 
     type(w, 'hi @');
-    const all = { ids: optionIds(), count: count(), hereDesc: descOf('here'), everyoneDesc: descOf('everyone') };
+    const all = {
+      ids: optionIds(),
+      count: count(),
+      humansDesc: descOf('humans'),
+      hereDesc: descOf('here'),
+      everyoneDesc: descOf('everyone'),
+    };
+
+    type(w, 'hi @hu');
+    const humansFiltered = optionIds();
 
     type(w, 'hi @ever');
     const filtered = optionIds();
@@ -794,7 +809,7 @@ const SCENARIOS = {
     key(w.$('input'), 'Enter');
     const picked = { value: w.$('input').value };
     await settle();
-    return report(w, ws, { all: all, filtered: filtered, picked: picked });
+    return report(w, ws, { all: all, humansFiltered: humansFiltered, filtered: filtered, picked: picked });
   },
 
   // An argument-less palette command runs at once (Enter), through the normal send path.
@@ -810,7 +825,8 @@ const SCENARIOS = {
   // Issue #109: the red badge, the rooms toggle badge and the title count only go up for a
   // message addressed to you (an @mention or a reply to a message you sent, alice here, per
   // the fake /api/me); other agent chatter in a room you're not viewing gets the quiet dot
-  // instead, with no number; opening the room clears both.
+  // instead, with no number; opening the room clears both. Issue #138: an agent's own @humans
+  // counts too, the same as an @mention.
   async room_badges_addressed_vs_quiet() {
     const w = makeWorld([{ id: 1, name: '#build', created_at: 100 }, { id: 2, name: '#ops', created_at: 101 }]);
     w.location.hash = '#build';
@@ -834,6 +850,12 @@ const SCENARIOS = {
     await settle();
     const replied = { tab: tabInfo(w, '#ops'), title: w.document.title, roomsBadge: roomsBadge(w) };
 
+    // An agent's own @humans counts too (issue #138), the same as an @mention.
+    ws.deliver({ t: 'msg', room: '#ops',
+      msg: chat(15, 'codex-1', '@humans need a decision', { harness: 'codex', mentions: ['humans'] }) });
+    await settle();
+    const humans = { tab: tabInfo(w, '#ops'), title: w.document.title, roomsBadge: roomsBadge(w) };
+
     // A reply to someone else's message (not alice's) does not count on its own.
     ws.deliver({ t: 'msg', room: '#ops', msg: { id: 14, ts: TS + 14, kind: 'chat', from: 'claude-1', harness: 'claude',
                                                   sender_kind: 'agent', via: 'mcp', text: 'noted', reply_to: 10,
@@ -846,7 +868,7 @@ const SCENARIOS = {
     await settle();
     const opened = { tab: tabInfo(w, '#ops'), title: w.document.title, roomsBadge: roomsBadge(w) };
 
-    return { quiet: quiet, mentioned: mentioned, replied: replied, repliedOther: repliedOther, opened: opened };
+    return { quiet: quiet, mentioned: mentioned, replied: replied, humans: humans, repliedOther: repliedOther, opened: opened };
   },
 
   // First run: the Welcome form creates the room named in its field.

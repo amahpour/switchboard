@@ -314,6 +314,8 @@ def test_names_people_can_have(hosted: InProcBroker) -> None:
         ("everyone", "reserved"),
         ("all", "reserved"),
         ("channel", "reserved"),
+        ("humans", "reserved"),  # issue #138: the @humans mention is a reserved name too
+        ("people", "reserved"),
         ("Bob", "someone here"),
         ("b@d", "names look like"),
         ("", "names look"),
@@ -559,6 +561,7 @@ async def test_a_person_renames_themselves_and_the_agents_follow(hosted: InProcB
             ("helper", "an agent here is called helper"),
             ("admin", "reserved"),
             ("everyone", "reserved"),  # issue #111
+            ("humans", "reserved"),  # issue #138
             ("Not A Name", "names look like"),
         ]:
             r = await asyncio.to_thread(bob.post, "/api/me/name", {"name": name})
