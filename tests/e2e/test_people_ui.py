@@ -189,9 +189,12 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
     # #192: the admin changes bob's email on his card; from then on the new one signs him in,
     # and neither his old email nor his name does. What's typed outlives a render: "Copied"
     # fading re-renders the sheet
-    page.click("#copy-invite")
+    # (typed first, then the copy: a re-render landing in the middle of fill() would rebuild the
+    # field, still holding bob's old email, and the typing would land after it)
     expect(bob_card.locator(".email-row label")).to_have_text("Email")
     bob_card.locator('input[type="email"]').fill("Robert@Example.com")
+    page.click("#copy-invite")
+    expect(page.locator("#copy-invite")).to_have_attribute("aria-label", "Copied")
     expect(page.locator("#copy-invite")).to_have_attribute("aria-label", "Copy the invite")
     expect(bob_card.locator('input[type="email"]')).to_have_value("Robert@Example.com")
     page.click("#invite-done")
