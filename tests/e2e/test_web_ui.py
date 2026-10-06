@@ -456,7 +456,9 @@ def test_focus_mode_collapses_agent_chat_and_restores_on_toggle_off(ui: UI) -> N
     addressedToMe check as the room badges, #109) to one line; a reply to her own message stays
     expanded either way. Clicking a collapsed line expands just that row, and turning Focus off
     rebuilds the log, restoring every row."""
-    room = "e2e-focus"
+    # not "e2e-focus": test_focus_moves_to_a_neighbour_when_the_inspected_agent_goes already
+    # owns that name, and a parallel run (-n auto) can land both on the same worker's broker
+    room = "e2e-focus-mode"
     ui.world.create_room(f"#{room}")
     ui.world.add_agents(f"#{room}", ("scout",))
     page = ui.open(room=room)
