@@ -22,6 +22,7 @@ What it does:
   Welcome view and the sign-in page use contexts of their own.
 
 The outputs: desktop-{light,dark}, markdown-{light,dark}, palette-light, mention-light,
+composer-multiline-{light,dark,phone-light} (the composer grown with wrapped text, #130),
 closed-light, remotes-light, inspector-light, inspector-remote-light, inspector-dark-parked,
 phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (#129), welcome-light and login-light, plus, from a hosted broker
 (``tests/ui_world.py``'s ``HostedWorld``, with Chromium's virtual authenticators as the
@@ -63,6 +64,14 @@ PHONE: dict[str, Any] = {
     "has_touch": True,
 }
 TALL = 2400  # a desktop viewport tall enough for the whole #build conversation, cropped to it
+
+# A message with no '\n' in it, long enough to wrap onto several lines (issue #130: the
+# composer growing with wrapped text, not just explicit line breaks).
+MULTILINE_MESSAGE = (
+    "Pulled the composer bug today: autoGrow only counted explicit line breaks, so a long "
+    "message that just wrapped never grew the box, and the first lines scrolled out of view "
+    "above the caret."
+)
 
 # Chromium's own HOME: macOS Chrome's network stack can hang under a HOME with no keychain,
 # so the browser alone keeps the real one (it still runs in a temporary profile).
@@ -214,6 +223,11 @@ def shoot(browser: Any, out: Path, world: Any) -> None:
         shot(page, out, "mention-light.png")
         clear_input(page)
 
+        # the composer growing with wrapped text (#130), not just explicit line breaks
+        type_in(page, MULTILINE_MESSAGE)
+        shot(page, out, "composer-multiline-light.png")
+        clear_input(page)
+
         page.click("#closed-rooms")
         expect(page.locator("#closed-body .closed-card").first).to_be_visible()
         shot(page, out, "closed-light.png")
@@ -238,6 +252,9 @@ def shoot(browser: Any, out: Path, world: Any) -> None:
         inspect(page, "devin-1")
         shot(page, out, "inspector-dark-parked.png")
         back(page)
+        type_in(page, MULTILINE_MESSAGE)
+        shot(page, out, "composer-multiline-dark.png")
+        clear_input(page)
         page.emulate_media(color_scheme="light")
 
         # the phone: a context of its own (DPR 3, touch) with this one's session cookie
@@ -249,6 +266,9 @@ def shoot(browser: Any, out: Path, world: Any) -> None:
             connected(ph)
             open_build(ph, n_chat)
             shot(ph, out, "phone-light.png")
+            type_in(ph, MULTILINE_MESSAGE)
+            shot(ph, out, "composer-multiline-phone-light.png")
+            clear_input(ph)
             ph.emulate_media(color_scheme="dark")
             ph.click("#buddy-toggle")
             expect(ph.locator("#app")).to_have_class(re.compile(r"\bsheet-open\b"))

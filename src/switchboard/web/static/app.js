@@ -1643,9 +1643,20 @@
     return d;
   }
 
+  // Grow the composer with its content, including text that wraps with no '\n' in it (#130):
+  // counting '\n' alone missed a wrapped line. field-sizing in style.css already does this in
+  // Chromium; this is the fallback for browsers without it, and measures scrollHeight instead
+  // (collapsing to one row first, since a taller box always reports its own height, not the
+  // content's). Skipped where there is no layout to measure (the node harness's fake DOM):
+  // the box simply keeps its current rows, which nothing there reads.
   function autoGrow() {
     const input = $('input');
-    const lines = String(input.value).split('\n').length;
+    if (typeof getComputedStyle !== 'function') return;
+    const style = getComputedStyle(input);
+    const lineHeight = parseFloat(style.lineHeight) || 20;
+    const padding = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+    input.rows = 1;
+    const lines = Math.ceil((input.scrollHeight - padding) / lineHeight);
     input.rows = Math.max(1, Math.min(8, lines));
   }
 
