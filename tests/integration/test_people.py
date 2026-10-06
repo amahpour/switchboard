@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -20,8 +21,10 @@ from fakes.fake_authenticator import SoftAuthenticator
 from test_passkeys import PUBLIC, RP_ID, Browser, claim_link, events, hosted_broker, stop, token_of
 from websockets.exceptions import InvalidStatus
 
+from switchboard.broker.auth import WebOrigin
 from switchboard.broker.passwords import FREE_FAILURES
 from switchboard.broker.people import ONE_TIME_TTL_S
+from switchboard.config import Config
 
 ADMIN_PW = "correct horse battery"
 BOB_PW = "bob's own secret 1"
@@ -525,6 +528,140 @@ def test_a_passkey_setup_takes_the_admins_email(hosted: InProcBroker) -> None:
     r = br.post("/api/setup/finish", {"credential": cred, "name": "Laptop", "email": "alice@example.com"})
     assert r.status_code == 200, r.text  # the bad email didn't use the ceremony up
     assert hosted.state.store.owner_email() == "alice@example.com"
+
+
+def messages(br: Browser, room: str = "build") -> list[tuple[str, str, str]]:
+    """A room's messages as a signed-in person reads them: (kind, from, text)."""
+    return [
+        (m["kind"], m["from"], m["text"]) for m in br.get(f"/api/rooms/{room}/messages").json()["messages"]
+    ]
+
+
+async def test_a_person_renames_themselves_and_the_agents_follow(hosted: InProcBroker) -> None:
+    """#114, §41: bob renames himself in Settings. His session carries on as robert; what he
+    said before keeps "bob"; every open room gets "bob is now robert"; the agents' who() and
+    their next delivery name robert. With no email yet, robert signs him in and bob doesn't.
+    A name that's another person's, an agent's, reserved or malformed is refused, and so is a
+    field that isn't one of the three."""
+    admin = await asyncio.to_thread(set_up, hosted)
+    for room in ("#build", "#ops"):
+        await asyncio.to_thread(admin.post, "/api/rooms", {"name": room})
+    bob = await asyncio.to_thread(join_as_bob, hosted, admin)
+    async with FakeAgent(hosted.home, "ka") as agent:
+        assert (await agent.join("#build", "helper"))["ok"]
+        await asyncio.to_thread(bob.post, "/api/rooms/build/say", {"text": "before"})
+        for name, why in [
+            ("alice", "someone here already"),
+            ("helper", "an agent here is called helper"),
+            ("admin", "reserved"),
+            ("Not A Name", "names look like"),
+        ]:
+            r = await asyncio.to_thread(bob.post, "/api/me/name", {"name": name})
+            assert r.status_code == 400 and why in r.json()["message"], (name, r.text)
+        r = await asyncio.to_thread(bob.post, "/api/me/name", {"name": "bob", "email": "x@example.com"})
+        assert r.status_code == 400, r.text  # only name, first_name and last_name
+        r = await asyncio.to_thread(
+            bob.post, "/api/me/name", {"name": " Robert ", "first_name": "Robert", "last_name": "Builder"}
+        )
+        assert r.status_code == 200 and r.json() == {
+            "name": "robert",
+            "first_name": "Robert",
+            "last_name": "Builder",
+        }
+        me = (await asyncio.to_thread(bob.get, "/api/me")).json()
+        assert (me["human"], me["first_name"], me["full_names"]["robert"]) == (
+            "robert",
+            "Robert",
+            "Robert Builder",
+        )
+        await asyncio.to_thread(bob.post, "/api/rooms/build/say", {"text": "after"})
+        chat = [(f, t) for k, f, t in messages(admin) if k == "chat"]
+        assert chat == [("bob", "before"), ("robert", "after")]
+        for room in ("build", "ops"):
+            assert ("notice", "switchboard", "bob is now robert") in messages(admin, room)
+        who = await agent.who("#build")
+        assert "alice and robert (your users, kind=human)" in who["text"], who["text"]
+        got = (await agent.read("#build"))["text"]
+        assert "from=robert kind=human" in got and "after" in got, got
+    # no email yet: the new name signs him in, the old one doesn't
+    assert signin(Browser(hosted), "robert", BOB_PW).json()["next"] == "app"
+    assert signin(Browser(hosted), "bob", BOB_PW).status_code == 403
+    people_ = admin.get("/api/people").json()["people"]
+    assert [p["name"] for p in people_] == ["alice", "robert"]
+
+
+def test_the_admin_renames_someone_and_themselves(hosted: InProcBroker) -> None:
+    """#114: the admin renames anyone from People (with a fresh check), and themselves; the
+    notice says who did it; the admin's new name is theirs in every session, keeps agents from
+    joining under it, and outlives a restart."""
+    admin = set_up(hosted)
+    admin.post("/api/rooms", {"name": "#build"})
+    bob = join_as_bob(hosted, admin)
+    pid = admin.get("/api/people").json()["people"][1]["id"]
+    assert bob.post(f"/api/people/{pid}/name", {"name": "rob"}).status_code == 403  # the admin's
+    r = admin.post(f"/api/people/{pid}/name", {"name": "rob"})
+    assert r.status_code == 200 and r.json()["name"] == "rob", r.text
+    assert ("notice", "switchboard", "bob is now rob (renamed by alice)") in messages(admin)
+    assert bob.get("/api/me").json()["human"] == "rob"
+    # the admin renames themselves: a name that starts an agent CLI's is refused
+    assert "start of an agent" in admin.post("/api/me/name", {"name": "cod"}).json()["message"]
+    r = admin.post("/api/me/name", {"name": "ali"})
+    assert r.status_code == 200 and r.json()["name"] == "ali", r.text
+    assert hosted.state.cfg.human_name == "ali" and hosted.state.engine.cfg.human_name == "ali"
+    assert all(a.cfg.human_name == "ali" for a in hosted.state.engine.adapters.values())
+    assert admin.get("/api/me").json()["human"] == "ali"
+    assert ("notice", "switchboard", "alice is now ali") in messages(admin)
+    assert signin(Browser(hosted), "admin", ADMIN_PW).json()["human"] == "ali"
+    assert [p["name"] for p in admin.get("/api/people").json()["people"]] == ["ali", "rob"]
+    # the admin's check ran out: renaming someone asks again
+    hosted.on_loop(lambda: hosted.state.passkey_checks.clear())
+    assert admin.post(f"/api/people/{pid}/name", {"name": "bobby"}).json()["error"] == "reauth"
+    assert admin.post("/api/me/name", {"name": "alice"}).json()["error"] == "reauth"
+    # a restart keeps the admin's new name
+    hosted.stop()
+    again = InProcBroker(hosted.home, web_origin=WebOrigin.parse(PUBLIC)).start()
+    try:
+        assert again.state.cfg.human_name == "ali"
+    finally:
+        again.stop()
+        hosted.start()
+
+
+def test_a_name_set_by_the_environment_isnt_renamed(tmp_home: Path) -> None:
+    """SWITCHBOARD_HUMAN_NAME names the owner when switchboard starts (a deployment's manifest):
+    Settings shows it but can't change it, and a rename saved before doesn't win over it."""
+    b = InProcBroker(
+        tmp_home, web_origin=WebOrigin.parse(PUBLIC), cfg=Config(human_name="alice", human_name_from_env=True)
+    ).start()
+    try:
+        admin = set_up(b)
+        assert admin.get("/api/me").json()["name_locked"] is True
+        r = admin.post("/api/me/name", {"name": "ali", "first_name": "Alice"})
+        assert r.status_code == 409 and r.json()["error"] == "locked", r.text
+        assert admin.post("/api/me/name", {"first_name": "Alice"}).status_code == 200  # names still change
+        b.on_loop(lambda: b.state.store.set_owner_name("ali"))  # as if renamed before the variable was set
+    finally:
+        b.stop()
+    b2 = InProcBroker(
+        tmp_home, web_origin=WebOrigin.parse(PUBLIC), cfg=Config(human_name="alice", human_name_from_env=True)
+    ).start()
+    try:
+        assert b2.state.cfg.human_name == "alice"
+    finally:
+        b2.stop()
+
+
+def test_the_desktop_human_renames_themselves(broker: InProcBroker) -> None:
+    """On a desktop broker the one human renames themselves from Settings, with no sign-in
+    check (there's no password to check), and it sticks."""
+    web = broker.web_client()
+    try:
+        r = web.post("/api/me/name", json={"name": "ali"}, headers=broker.write_headers())
+        assert r.status_code == 200 and r.json()["name"] == "ali", r.text
+        assert web.get("/api/me").json()["human"] == "ali"
+        assert broker.state.store.owner_name() == "ali"
+    finally:
+        web.close()
 
 
 def test_the_desktop_has_no_people(broker: InProcBroker) -> None:

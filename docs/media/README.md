@@ -31,6 +31,7 @@ It drives headless Chromium through Playwright (a dev dependency): run `uv run p
 | `login-light.png` | the sign-in page |
 | `signin-setup-light.png`, `setup-light.png` | a hosted broker's sign-in page before it's set up (the admin's one-time password is in its log), and Choose how you'll sign in (issues #41, #61) |
 | `people-light.png`, `people-dark.png` | the admin's People sheet, with the invite to send someone new |
+| `settings-name-light.png`, `settings-name-dark.png` | Settings opening on Your name: first and last name and your name in the rooms (issue #114) |
 | `passkeys-light.png`, `passkeys-dark.png` | the Sign-in sheet: your password, your passkeys, sign out everywhere |
 | `confirm-light.png` | Confirm it's you, before adding someone once the last check ran out |
 | `signin-light.png`, `signin-phone-dark.png` | the sign-in page's three ways in (a password, a passkey, and SSO coming soon until Sign in with Google is set up), on a desktop and on a phone |

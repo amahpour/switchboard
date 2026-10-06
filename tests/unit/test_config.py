@@ -240,11 +240,11 @@ def test_the_human_name_from_the_environment(tmp_path: Path, monkeypatch: pytest
 
     paths = Paths.from_home(tmp_path)
     monkeypatch.setenv(HUMAN_NAME_ENV, "ari")
-    assert load(paths).human_name == "ari"
+    assert load(paths).human_name == "ari" and load(paths).human_name_from_env  # Settings can't rename (#114)
     paths.config.write_text('human_name = "bob"\n')
     assert load(paths).human_name == "ari"
     monkeypatch.setenv(HUMAN_NAME_ENV, "")
-    assert load(paths).human_name == "bob"
+    assert load(paths).human_name == "bob" and not load(paths).human_name_from_env
     monkeypatch.setenv(HUMAN_NAME_ENV, "Not A Name")
     with pytest.raises(ConfigError, match=HUMAN_NAME_ENV):
         load(paths)
