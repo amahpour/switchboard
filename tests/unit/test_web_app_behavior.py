@@ -74,6 +74,40 @@ def test_a_replaced_active_room_is_pruned_with_a_notice(scenario: str) -> None:
     assert out["hellos"] == [{"t": "hello", "rooms": ["#build"], "after": {}}]
 
 
+def test_room_badges_count_only_what_is_addressed_to_you() -> None:
+    """Issue #109: the red badge, the rooms toggle badge and the title count only follow an
+    @mention or a reply to your own message; other agent chatter gets a quiet dot instead, with
+    no number, and opening the room clears both."""
+    out = run("room_badges_addressed_vs_quiet")
+
+    quiet = out["quiet"]
+    assert quiet["tab"]["badge"] is None
+    assert quiet["tab"]["quietDot"] == {"label": "new activity"}
+    assert quiet["title"] == "switchboard — #build"  # nothing addressed to alice: no count
+    assert quiet["roomsBadge"] == {"text": "0", "hidden": True}
+
+    mentioned = out["mentioned"]
+    assert mentioned["tab"]["badge"] == {"text": "1", "label": "1 message for you"}
+    assert mentioned["tab"]["quietDot"] is None  # the red badge replaces the quiet dot
+    assert mentioned["title"] == "(1) switchboard — #build"
+    assert mentioned["roomsBadge"] == {"text": "1", "hidden": False}
+
+    replied = out["replied"]
+    assert replied["tab"]["badge"] == {"text": "2", "label": "2 messages for you"}
+    assert replied["title"] == "(2) switchboard — #build"
+    assert replied["roomsBadge"] == {"text": "2", "hidden": False}
+
+    # one agent replying to another agent's message is not "addressed to you"
+    replied_other = out["repliedOther"]
+    assert replied_other["tab"]["badge"] == {"text": "2", "label": "2 messages for you"}
+    assert replied_other["roomsBadge"] == {"text": "2", "hidden": False}
+
+    opened = out["opened"]
+    assert opened["tab"] == {"badge": None, "quietDot": None}
+    assert opened["title"] == "switchboard — #ops"
+    assert opened["roomsBadge"] == {"text": "0", "hidden": True}
+
+
 # ------------------------------------------------------------------ the native UI (#19)
 
 

@@ -540,12 +540,12 @@ class UIWorld:
              detail="Before tax: $86.40 on the $96.00 order. After tax: $88.00. Finance's sheet says before.",
              options=["Before tax", "After tax"], recommend=0)  # fmt: skip
 
-    def agent_say(self, room: str, name: str, text: str) -> int:
+    def agent_say(self, room: str, name: str, text: str, reply_to: int | None = None) -> int:
         """Post from an agent joined by ``add_agents``; returns the posted message id."""
         loop = self._loop
         assert loop is not None, "UIWorld is not started"
         agent = self._extra_named.get((room, name))
         assert agent is not None, f"{name} was not added to UIWorld"
-        result = asyncio.run_coroutine_threadsafe(agent.say(room, text), loop).result(30)
+        result = asyncio.run_coroutine_threadsafe(agent.say(room, text, reply_to=reply_to), loop).result(30)
         assert result["ok"] and result["posted_id"], result
         return int(result["posted_id"])

@@ -585,6 +585,9 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
 .room[aria-current="page"] .ic { color: currentColor; }
 .room[aria-current="page"] .badge { background: rgba(255, 255, 255, .22); color: #ffffff; }
 .room .badge { background: var(--badge-bg); color: #ffffff; }
+/* Quiet unread marker (#109): other agents talking, nothing addressed to you - a plain dot,
+   not the red badge, so it doesn't read as more urgent than it is. */
+.room .dot.quiet { background: var(--muted); }
 .room-name, .remote-name {
   flex: 1;
   min-width: 0;
