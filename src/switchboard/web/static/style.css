@@ -467,6 +467,8 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
 #st-hops .meter-fill { background: var(--muted-2); }
 #st-state.bad { background: var(--amber-bg); color: var(--amber-fg); }
 #st-state.bad .dot { background: var(--amber-ink); }
+/* the socket is down (#129): the chip shows the last known state, with no live colour */
+#st-state.stale .dot { background: var(--muted); }
 #st-hops.bad { background: var(--danger-bg); color: var(--danger); font-weight: 500; }
 
 /* Tier and host chips (members, inspector, mentions, first run). */
@@ -1498,6 +1500,7 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 .dot.s-waiting-approval { background: var(--pane-bg); box-shadow: inset 0 0 0 2px var(--busy); }
 .dot.s-starting { background: var(--pane-bg); border-style: dashed; border-color: var(--muted); }
 .dot.s-offline { background: var(--pane-bg); box-shadow: inset 0 0 0 1.5px var(--muted); }
+.member-list.stale { opacity: 0.55; }
 .dot.s-parked { background: var(--pane-bg); border-color: var(--parked); box-shadow: 0 0 0 2px var(--pane-bg); }
 
 /* ==== 11. Inspector (spec 1.5) ======================================================= */
