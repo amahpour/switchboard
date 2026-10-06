@@ -1257,17 +1257,22 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
   box-shadow: var(--input-shadow);
 }
 .composer-box:focus-within { box-shadow: 0 0 0 3px var(--focus); }
-/* The mirror layer (issue #110): #input-mirror and #input occupy the same grid cell, so they
-   always share one box -- #input's own sizing (rows, field-sizing, min/max-height) decides the
-   cell's height and the mirror stretches to fill it, with no JS measurement of its own. */
-.input-wrap { display: grid; min-width: 0; }
-.input-wrap > * { grid-area: 1 / 1; min-width: 0; }
+/* The mirror layer (issue #110): .input-wrap stays a plain block around #input, in normal flow,
+   so #input's own sizing (rows, field-sizing, min/max-height) decides the wrap's height exactly
+   as it decided composer-box's before -- no new layout mode (a grid track, a flex basis) gets a
+   say, which would round its own width or height a hair differently than #input's direct math
+   and so wrap the (invisible) text one character sooner or later than the mirror does. The
+   mirror only needs to sit exactly over that box, which position: absolute; inset: 0 does
+   without taking part in sizing it. #input stays last in source order and position: relative
+   (so it paints over the mirror: a positioned box, 'auto' z-index, beats an in-flow static one
+   only by coming later -- the two rules together are what keeps the caret on top). */
+.input-wrap { position: relative; min-width: 0; }
 #input-mirror {
+  position: absolute;
+  inset: 0;
   margin: 0;
   padding: 0;
   border: 0;
-  min-height: 20px;
-  max-height: 168px;
   overflow: hidden;
   white-space: pre-wrap;
   overflow-wrap: break-word;
@@ -1281,6 +1286,7 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
    pixel with #input's own (invisible) wrap -- the whole point of the mirror. */
 .mention-hl { border-radius: 3px; background: var(--mention-bg); color: var(--mention-fg); }
 #input {
+  position: relative;
   display: block;
   width: 100%;
   min-height: 20px;
@@ -2262,19 +2268,22 @@ body.login {
   }
   .composer-box { display: contents; }
   /* composer-box's own box is gone, so the chrome it drew (border, pill shape, background) moves
-     to .input-wrap, now the direct flex child; #input stays borderless and transparent over the
-     mirror, as it is at every width (see section 9). */
+     to .input-wrap, now the direct flex child -- but not its padding: #input keeps the same
+     padding here it always had (so field-sizing: content, in Chromium, measures the exact box
+     it always measured; an #input padded by its *parent* instead rounded its grown height a
+     device pixel short of its own scrollHeight at this width, enough to auto-scroll by 1px and
+     hide the first line). The mirror needs that padding too, to land on the same text. */
   .input-wrap {
     flex: 1;
     min-width: 0;
     min-height: 58px;                /* two lines, as in the phone mockup */
-    padding: 8px 12px;
     border: 1px solid var(--input-border);
     border-radius: 14px;
     background: var(--input-bg);
   }
   .input-wrap:focus-within { box-shadow: 0 0 0 3px var(--focus); }
   #input-mirror, #input {
+    padding: 8px 12px;
     font-size: max(16px, calc(16px * var(--text-scale))); /* 16 px stops iOS zooming into the field */
     line-height: calc(20px * var(--text-scale));
   }
