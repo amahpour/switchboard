@@ -10,7 +10,10 @@ budget, rate limit and the loop guard. M3 adds requeue (re-deliver once);
 M6 the watchdog (remind about an unanswered @mention, then tell the human)
 and the parked escalation. The read-first rule for pass() (§24) is here too.
 Issue #111 adds broadcast mentions (``@here``, ``@everyone``): who a person's
-broadcast reaches, not whether it may (the caller's job).
+broadcast reaches, not whether it may (the caller's job). Issue #138 adds
+``@humans``, the opposite direction: it addresses every person, never an
+agent, and (unlike ``@here``/``@everyone``) works the same from a person's
+message or an agent's own ``say()``.
 """
 
 from __future__ import annotations
@@ -73,6 +76,23 @@ def broadcast_targets(kind: str, members: Iterable[tuple[str, str]]) -> list[str
     if kind == "here":
         return [n for n, s in members if s != "offline"]
     return []
+
+
+# @humans (DESIGN.md §8.1, issue #138): the opposite direction from @here/@everyone above --
+# it addresses every *person* in the room, never an agent -- and, unlike them, it works the
+# same whether a person or an agent typed it (both callers, human_say and agents.py's say(),
+# check this). "humans" is reserved (RESERVED_NAMES) so it can never be a real agent's screen
+# name: adding the literal word to a message's own ``mentions`` (what both callers do) can
+# therefore never match a membership's screen_name in store.insert_message's per-recipient
+# check, so it never sets any agent's ``mentioned``, raises its prio, or wakes it -- the web UI
+# (app.js's addressesHumans) is the only thing that ever reads it back off ``mentions``.
+HUMANS_MENTION = "humans"
+
+
+def mentions_humans(text: str) -> bool:
+    """True when ``@humans`` appears in ``text`` (the same ``@word`` shape as ``MENTION_RE``,
+    so a mid-word ``foo@humans.example`` doesn't count)."""
+    return any(m.group(1).lower() == HUMANS_MENTION for m in MENTION_RE.finditer(text or ""))
 
 
 def classify(sender_kind: str, recipient: str, mentions: Iterable[str]) -> tuple[int, bool]:
