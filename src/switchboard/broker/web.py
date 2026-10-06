@@ -675,7 +675,11 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         """An email (or a name) and a password. The owner's one-time password from the log starts
         the claim (``next: setup``); a person's one-time password gives a session that must
         choose its own first (``next: setup``); anything else that's right is a session
-        (``next: app``). Who an email or a name means (#192, §39): ``people.account``."""
+        (``next: app``). Who an email or a name means (#192, §39): ``people.account``. Exactly
+        one scrypt check runs either way (#179): the real hash when there's an account that has
+        one to check, the dummy hash otherwise — never both, never neither — so a wrong password
+        costs the same whether it's a real person's, the admin's with no password yet, one typed
+        during an open claim, or nobody's."""
         try:
             body = await _json_body(request)
         except ServiceError as e:
@@ -689,6 +693,17 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         if wait > 0:
             return _err(429, "slow_down", f"too many wrong tries: wait {int(wait) + 1} s and try again")
         now = state.clock.now()
+        if kind == "owner":
+            stored, typed = state.store.owner_password_hash(), pw
+        elif kind == "person":
+            assert who_p is not None
+            stored = who_p.password_hash
+            typed = (normalize_one_time(pw) or pw) if who_p.must_reset else pw
+        else:
+            stored, typed = None, pw
+        password_ok = stored is not None and verify_password(typed, stored)
+        if stored is None:
+            verify_password(typed, DUMMY_HASH)  # as long as a real check either way: see above
         resp: JSONResponse | None = None
         if kind == "owner":
             if state.claim is not None and state.claim.active and state.claim.check(pw):
@@ -707,23 +722,21 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                         }
                     )
                 )
-            if verify_password(pw, state.store.owner_password_hash()):
+            if password_ok:
                 resp = signed_in(None, state.cfg.human_name, "password", now)
-        elif name:
+        elif kind == "person":
             person = who_p
-            if person is not None and person.must_reset:
-                typed = normalize_one_time(pw) or pw
-                if verify_password(typed, person.password_hash):
+            assert person is not None
+            if person.must_reset:
+                if password_ok:
                     if person.password_expires_at is not None and now >= person.password_expires_at:
                         state.signin.failed(name)
                         return _err(
                             403, "expired", "this one-time password has expired: ask the admin for a new one"
                         )
                     resp = signed_in(person.id, person.name, "one-time", now, reset=True)
-            elif person is not None and verify_password(pw, person.password_hash):
+            elif password_ok:
                 resp = signed_in(person.id, person.name, "password", now)
-            else:
-                verify_password(pw, DUMMY_HASH)  # as long as a real check: the time says nothing about names
         if resp is None:
             state.signin.failed(name or "?")
             failed("bad_password")
