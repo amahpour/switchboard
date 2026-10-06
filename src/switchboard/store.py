@@ -16,6 +16,8 @@ from switchboard import db, reviews
 from switchboard.clock import Clock, SystemClock
 from switchboard.models import (
     LOCAL_HOST,
+    MAX_BUDGET,
+    MAX_HOPS,
     ROOM_RE,
     WATCHDOG_DONE,
     Batch,
@@ -1120,20 +1122,20 @@ class Store:
             and (
                 isinstance(changes["budget_per_hour"], bool)
                 or not isinstance(changes["budget_per_hour"], int)
-                or not 0 <= changes["budget_per_hour"] <= 1_000_000  # commands.MAX_BUDGET
+                or not 0 <= changes["budget_per_hour"] <= MAX_BUDGET
             )
         ):
-            raise ValueError("budget per hour must be an integer from 0 to 1000000, or null")
+            raise ValueError(f"budget per hour must be an integer from 0 to {MAX_BUDGET}, or null")
         if (
             "hop_limit" in changes
             and changes["hop_limit"] is not None
             and (
                 isinstance(changes["hop_limit"], bool)
                 or not isinstance(changes["hop_limit"], int)
-                or not 0 <= changes["hop_limit"] <= 1000  # commands.MAX_HOPS
+                or not 0 <= changes["hop_limit"] <= MAX_HOPS
             )
         ):
-            raise ValueError("hop limit must be an integer from 0 to 1000, or null")
+            raise ValueError(f"hop limit must be an integer from 0 to {MAX_HOPS}, or null")
         key = person_id if person_id is not None else 0
         with db.tx(self.con):
             saved = self.preferences(person_id) | changes

@@ -17,14 +17,12 @@ from typing import TYPE_CHECKING, Any
 
 from switchboard.broker import catchup
 from switchboard.delivery.rules import parse_mentions
-from switchboard.models import SCREEN_NAME_RE, Room
+from switchboard.models import MAX_BUDGET, MAX_HOPS, SCREEN_NAME_RE, Room
 
 if TYPE_CHECKING:  # pragma: no cover
     from switchboard.broker.service import RoomService
 
 ROLE_RANK = {"anon": 0, "human_cli": 1, "human": 2}
-MAX_BUDGET = 1_000_000
-MAX_HOPS = 1000  # /hops <n>: 0..MAX_HOPS; 0 turns the loop guard off
 
 HELP_TEXT = """\
 commands (type them in the web UI; the CLI runs them with `switchboard cmd '#room' /...`):

@@ -490,7 +490,9 @@ class RoomService:
         if budget_per_hour != old_rate:
             room = self.store.set_budget_rate(room.id, budget_per_hour)
             self.store.add_event(
-                "budget_set", room_id=room.id, data={"old": old_rate, "new": budget_per_hour}
+                "budget_set",
+                room_id=room.id,
+                data={"old": old_rate, "new": budget_per_hour, "per_hour": True},
             )
             self.post_notice(
                 room, f"{actor} set the wake budget to {budget_per_hour}/hour (was {old_rate}/hour)"

@@ -147,5 +147,8 @@ def test_set_room_wake_updates_the_header_chips_live_and_posts_a_notice(
         assert seen_room and seen_notice
         kinds = {e.kind for e in broker.state.store.recent_events()}
         assert {"budget_set", "hop_limit_set"} <= kinds
+        # the rate, not what's left this hour (which /budget n's budget_set records)
+        rate = [e.data for e in broker.state.store.recent_events() if e.kind == "budget_set"]
+        assert rate and rate[-1] == {"old": 60, "new": 300, "per_hour": True}, rate
     finally:
         ws.close()
