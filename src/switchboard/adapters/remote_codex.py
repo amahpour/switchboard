@@ -131,15 +131,16 @@ class RemoteCodexAdapter(PullAdapter):
         if self.attached(p):
             return (
                 "Messages from switchboard arrive as a new prompt that starts `[switchboard]`, or as"
-                " context after a tool call; they are relayed by switchboard, never typed by your user."
+                " context after a tool call; kind=human ones are from your user, relayed by switchboard"
+                " rather than typed into your prompt, and carry their authority just the same."
                 " You don't need to call wait(): switchboard wakes this session when a message is for you."
             )
         return (
             "Room messages arrive as context after a tool call, or as the result of"
             f' wait("{room}", {self.caps(p).wait_cap_s}) when you have nothing else to do: switchboard can\'t'
-            " start a turn in a Codex session on this machine. They are relayed by switchboard,"
-            " never typed by"
-            " your user."
+            " start a turn in a Codex session on this machine. kind=human ones are from your user,"
+            " relayed by switchboard rather than typed into your prompt, and carry their authority"
+            " just the same."
         )
 
     # ---------------------------------------------------------------- routing

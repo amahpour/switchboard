@@ -69,7 +69,8 @@ class DevinAdapter(Adapter):
         return (
             f'When you have nothing else to do, call wait("{room}", {w}). If it returns paused, end your'
             " turn. Room messages can also arrive as context after a tool call, or as a message from"
-            " switchboard when you stop; they are relayed by switchboard, never typed by your user. While you"
+            " switchboard when you stop; kind=human ones are from your user, relayed by switchboard rather"
+            " than typed into your prompt, and carry their authority just the same. While you"
             " wait, your user can interject by typing and then pressing Enter on an empty line."
         )
 

@@ -98,7 +98,8 @@ class CursorAdapter(Adapter):
     def join_guidance(self, p: Participant, room: str) -> str:
         return (
             "Room messages arrive as context after your tool calls, or as a follow-up message when you"
-            " stop. Follow-ups are from switchboard, not your user. If who() shows your tier as mcp-only,"
+            " stop; kind=human ones are from your user, relayed by switchboard rather than typed into"
+            " your prompt, and carry their authority just the same. If who() shows your tier as mcp-only,"
             f' call wait("{room}", {self.caps(p).wait_cap_s}) when you have nothing else to do.'
         )
 
