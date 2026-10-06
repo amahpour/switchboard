@@ -445,6 +445,9 @@ const SCENARIOS = {
                                                     via: 'web', text: 'thanks all', reply_to: null, mentions: [], host: null } });
     ws.deliver({ t: 'msg', room: '#build',
       msg: chat(15, 'claude-1', '@humans need a decision: ship tonight or wait?', { mentions: ['humans'] }) });
+    ws.deliver({ t: 'msg', room: '#build', msg: { id: 16, ts: TS + 16, kind: 'chat', from: 'alice', sender_kind: 'human',
+                                                    via: 'web', text: '@humans I can decide', reply_to: null,
+                                                    mentions: ['humans'], host: null } });
     await settle();
     const before = rowInfo(w);  // Focus off: nobody is marked collapsible yet
 
@@ -850,12 +853,6 @@ const SCENARIOS = {
     await settle();
     const replied = { tab: tabInfo(w, '#ops'), title: w.document.title, roomsBadge: roomsBadge(w) };
 
-    // An agent's own @humans counts too (issue #138), the same as an @mention.
-    ws.deliver({ t: 'msg', room: '#ops',
-      msg: chat(15, 'codex-1', '@humans need a decision', { harness: 'codex', mentions: ['humans'] }) });
-    await settle();
-    const humans = { tab: tabInfo(w, '#ops'), title: w.document.title, roomsBadge: roomsBadge(w) };
-
     // A reply to someone else's message (not alice's) does not count on its own.
     ws.deliver({ t: 'msg', room: '#ops', msg: { id: 14, ts: TS + 14, kind: 'chat', from: 'claude-1', harness: 'claude',
                                                   sender_kind: 'agent', via: 'mcp', text: 'noted', reply_to: 10,
@@ -863,12 +860,31 @@ const SCENARIOS = {
     await settle();
     const repliedOther = { tab: tabInfo(w, '#ops'), roomsBadge: roomsBadge(w) };
 
+    // An agent's own @humans counts too (issue #138), the same as an @mention.
+    ws.deliver({ t: 'msg', room: '#ops',
+      msg: chat(15, 'codex-1', '@humans need a decision', { harness: 'codex', mentions: ['humans'] }) });
+    await settle();
+    const humans = { tab: tabInfo(w, '#ops'), title: w.document.title, roomsBadge: roomsBadge(w) };
+
+    // So does another person's @humans (bob, on a hosted broker), but not alice's own.
+    const person = function (id, from, text) {
+      return { id: id, ts: TS + id, kind: 'chat', from: from, sender_kind: 'human', via: 'web', text: text,
+               reply_to: null, mentions: ['humans'], host: null };
+    };
+    ws.deliver({ t: 'msg', room: '#ops', msg: person(16, 'bob', '@humans can someone look') });
+    await settle();
+    const personHumans = { tab: tabInfo(w, '#ops'), roomsBadge: roomsBadge(w) };
+    ws.deliver({ t: 'msg', room: '#ops', msg: person(17, 'alice', '@humans I am on it') });
+    await settle();
+    const ownHumans = { tab: tabInfo(w, '#ops'), roomsBadge: roomsBadge(w) };
+
     // Opening the room clears both the red count and the quiet dot.
     click(findAll(w.$('tabs'), function (n) { return n.tag === 'button' && n.dataset.room === '#ops'; })[0]);
     await settle();
     const opened = { tab: tabInfo(w, '#ops'), title: w.document.title, roomsBadge: roomsBadge(w) };
 
-    return { quiet: quiet, mentioned: mentioned, replied: replied, humans: humans, repliedOther: repliedOther, opened: opened };
+    return { quiet: quiet, mentioned: mentioned, replied: replied, humans: humans, repliedOther: repliedOther,
+             personHumans: personHumans, ownHumans: ownHumans, opened: opened };
   },
 
   // First run: the Welcome form creates the room named in its field.

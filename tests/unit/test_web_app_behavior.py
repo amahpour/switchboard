@@ -77,7 +77,8 @@ def test_a_replaced_active_room_is_pruned_with_a_notice(scenario: str) -> None:
 def test_room_badges_count_only_what_is_addressed_to_you() -> None:
     """Issue #109: the red badge, the rooms toggle badge and the title count only follow an
     @mention or a reply to your own message; other agent chatter gets a quiet dot instead, with
-    no number, and opening the room clears both. Issue #138: an agent's own @humans counts too."""
+    no number, and opening the room clears both. Issue #138: an @humans counts too, from an agent
+    or another person, but not alice's own."""
     out = run("room_badges_addressed_vs_quiet")
 
     quiet = out["quiet"]
@@ -97,16 +98,22 @@ def test_room_badges_count_only_what_is_addressed_to_you() -> None:
     assert replied["title"] == "(2) switchboard — #build"
     assert replied["roomsBadge"] == {"text": "2", "hidden": False}
 
+    # one agent replying to another agent's message is not "addressed to you"
+    replied_other = out["repliedOther"]
+    assert replied_other["tab"]["badge"] == {"text": "2", "label": "2 messages for you"}
+    assert replied_other["roomsBadge"] == {"text": "2", "hidden": False}
+
     # an agent's own @humans counts too (issue #138), the same as an @mention
     humans = out["humans"]
     assert humans["tab"]["badge"] == {"text": "3", "label": "3 messages for you"}
     assert humans["title"] == "(3) switchboard — #build"
     assert humans["roomsBadge"] == {"text": "3", "hidden": False}
 
-    # one agent replying to another agent's message is not "addressed to you"
-    replied_other = out["repliedOther"]
-    assert replied_other["tab"]["badge"] == {"text": "3", "label": "3 messages for you"}
-    assert replied_other["roomsBadge"] == {"text": "3", "hidden": False}
+    # so does another person's @humans (bob's, on a hosted broker); alice's own doesn't
+    assert out["personHumans"]["tab"]["badge"] == {"text": "4", "label": "4 messages for you"}
+    assert out["personHumans"]["roomsBadge"] == {"text": "4", "hidden": False}
+    assert out["ownHumans"]["tab"]["badge"] == {"text": "4", "label": "4 messages for you"}
+    assert out["ownHumans"]["roomsBadge"] == {"text": "4", "hidden": False}
 
     opened = out["opened"]
     assert opened["tab"] == {"badge": None, "quietDot": None}
@@ -169,6 +176,7 @@ def test_focus_mode_collapses_agent_chat_not_addressed_to_you() -> None:
     assert "collapsible" not in classes(row_by_id(rows, "14"))  # alice's own message
     assert "collapsible" not in classes(row_by_id(rows, "15"))  # claude-1's own @humans: addressed
     assert "mention" in classes(row_by_id(rows, "15"))
+    assert "mention" not in classes(row_by_id(rows, "16"))  # alice's own @humans isn't to herself
 
     # the collapsed line reads "sender, first line of text", with no Markdown rendering
     assert out["expanded"]["summaryText"] == "devin-1nothing unusual here"

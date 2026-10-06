@@ -563,11 +563,11 @@
 
   // @humans (issue #138): the literal word in m.mentions, added by service.human_say and
   // agents.py's say() alike (the same way @everyone's literal word is, issue #111) means every
-  // person in the room is addressed. Since this page is always a person's, that's "addressed
-  // to me" unconditionally -- unlike mentionsMe, which a human-authored message never flips
-  // (only an agent can be @mentioned there).
+  // person in the room is addressed: this page is always a person's, so it's addressed to the
+  // viewer, from an agent or from another person, but not when it's the viewer's own message.
   function addressesHumans(m) {
-    return (m.mentions || []).indexOf('humans') >= 0;
+    if ((m.mentions || []).indexOf('humans') < 0) return false;
+    return !(state.me && m.sender_kind === 'human' && m.from === state.me.human);
   }
 
   // Whether m is addressed to this person: an @mention (mentionsMe), @humans (addressesHumans),
@@ -855,7 +855,9 @@
     r.lastId = m.id;
     if (r.msgs.length > MAX_LINES) r.msgs.splice(0, r.msgs.length - MAX_LINES);
     if (r.name !== state.active) {
-      if (m.kind === 'chat' && m.sender_kind !== 'human') {
+      // a person's message counts only when it's another person's @humans (#138); otherwise
+      // a person's messages are left out, as they were before it (#109)
+      if (m.kind === 'chat' && (m.sender_kind !== 'human' || addressesHumans(m))) {
         if (addressedToMe(r, m)) r.unread += 1;  // an @mention or a reply to you: the red count
         else r.quiet = true;                     // other agent chatter: a quiet marker, no number
       }
