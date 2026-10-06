@@ -294,6 +294,17 @@ def test_mention_popover_matches_any_part_of_a_name() -> None:
     assert out["call"] == ["men-xb-call-alpha", "men-xa-call-beta"]  # a tie: online lists first
 
 
+def test_the_composer_highlights_only_known_mentions() -> None:
+    """Issue #110: #input-mirror wraps @claude-1 (an active member) and @alice (the signed-in
+    human) in their own .mention-hl span, the same names delivery.rules.parse_mentions would
+    match, while @nope-one (nobody by that name) stays plain text with no style of its own; and
+    @codex-1, picked from the @ popover rather than typed, is highlighted too."""
+    out = run("mention_highlight_in_composer")
+    assert out["typed"]["text"] == "ask @claude-1 and @nope-one, cc @alice"
+    assert out["typed"]["hl"] == ["@claude-1", "@alice"]
+    assert out["picked"]["value"] == "hi @codex-1 " and out["picked"]["hl"] == ["@codex-1"]
+
+
 def test_an_argument_less_palette_command_runs() -> None:
     out = run("palette_runs")
     assert out["commands"] == ["/help"] and texts(out) == ["/helphelp text"]

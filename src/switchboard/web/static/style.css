@@ -1257,6 +1257,29 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
   box-shadow: var(--input-shadow);
 }
 .composer-box:focus-within { box-shadow: 0 0 0 3px var(--focus); }
+/* The mirror layer (issue #110): #input-mirror and #input occupy the same grid cell, so they
+   always share one box -- #input's own sizing (rows, field-sizing, min/max-height) decides the
+   cell's height and the mirror stretches to fill it, with no JS measurement of its own. */
+.input-wrap { display: grid; min-width: 0; }
+.input-wrap > * { grid-area: 1 / 1; min-width: 0; }
+#input-mirror {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-height: 20px;
+  max-height: 168px;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  color: var(--fg);
+  font-size: calc(13.5px * var(--text-scale));
+  line-height: calc(20px * var(--text-scale));
+  pointer-events: none; /* clicks and selection stay on #input, drawn above it */
+}
+/* The same look as a sent message's .md-mention, minus the padding and bold weight: either
+   would change this span's text width and so where the mirror wraps, which must stay pixel for
+   pixel with #input's own (invisible) wrap -- the whole point of the mirror. */
+.mention-hl { border-radius: 3px; background: var(--mention-bg); color: var(--mention-fg); }
 #input {
   display: block;
   width: 100%;
@@ -1268,12 +1291,16 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
   outline: none;
   resize: none;
   background: transparent;
-  color: var(--fg);
+  color: transparent; /* the mirror behind it shows the text; the caret stays visible below */
+  caret-color: var(--fg);
   font-size: calc(13.5px * var(--text-scale));
   line-height: calc(20px * var(--text-scale));
   overflow-y: auto;
   field-sizing: content; /* grows with wrapped text (#130); min/max-height still clamp it */
 }
+/* While composing with an IME, the candidate text is #input's own (native) rendering: show it
+   for real rather than leave it transparent over a mirror that hasn't caught up yet. */
+#input.composing { color: var(--fg); }
 #input::placeholder { color: var(--muted); }
 #input:disabled { cursor: not-allowed; }
 .composer-bar { display: flex; align-items: center; gap: 4px; }
@@ -2234,7 +2261,10 @@ body.login {
     background: var(--side-bg);
   }
   .composer-box { display: contents; }
-  #input {
+  /* composer-box's own box is gone, so the chrome it drew (border, pill shape, background) moves
+     to .input-wrap, now the direct flex child; #input stays borderless and transparent over the
+     mirror, as it is at every width (see section 9). */
+  .input-wrap {
     flex: 1;
     min-width: 0;
     min-height: 58px;                /* two lines, as in the phone mockup */
@@ -2242,10 +2272,12 @@ body.login {
     border: 1px solid var(--input-border);
     border-radius: 14px;
     background: var(--input-bg);
+  }
+  .input-wrap:focus-within { box-shadow: 0 0 0 3px var(--focus); }
+  #input-mirror, #input {
     font-size: max(16px, calc(16px * var(--text-scale))); /* 16 px stops iOS zooming into the field */
     line-height: calc(20px * var(--text-scale));
   }
-  #input:focus { box-shadow: 0 0 0 3px var(--focus); }
   .composer-bar { flex-shrink: 0; }
   #mention-btn, #cmd-btn, .composer-spacer, .composer-hint { display: none; }
   #send { width: 40px; height: 40px; margin-bottom: 9px; padding: 0; border-radius: 50%; }
