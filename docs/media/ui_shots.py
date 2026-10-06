@@ -23,6 +23,7 @@ What it does:
 
 The outputs: desktop-{light,dark}, markdown-{light,dark}, palette-light, mention-light,
 mention-midname-{light,dark,phone-light} (a mid-name match, #112),
+mention-highlight-{light,dark,phone-light} (a known @mention styled as you type it, #110),
 composer-multiline-{light,dark,phone-light} (the composer grown with wrapped text, #130),
 room-badges-{light,dark,phone-light} (the red count beside the quiet dot, #109),
 closed-light, remotes-light, inspector-light, inspector-remote-light, inspector-dark-parked,
@@ -432,6 +433,32 @@ def shoot_mentions(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def shoot_mention_highlight(browser: Any, out: Path, world: Any) -> None:
+    """The composer's mirror layer behind #input (issue #110), in #build: @claude-1 (an active
+    member) gets the same highlighted look a sent message's mention gets, the moment it's typed;
+    @nobody (no such member or person) stays plain text. Light, dark and a phone."""
+    from playwright.sync_api import expect
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for name, ctx_args in (
+        ("mention-highlight-light.png", {**DESKTOP, "color_scheme": "light"}),
+        ("mention-highlight-dark.png", {**DESKTOP, "color_scheme": "dark"}),
+        ("mention-highlight-phone-light.png", {**PHONE, "color_scheme": "light"}),
+    ):
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            open_build(page, world.n_chat)
+            type_in(page, "ask @claude-1 to take a look, cc @nobody")
+            expect(page.locator("#input-mirror .mention-hl")).to_have_text("@claude-1")
+            shot(page, out, name)
+            clear_input(page)
+        finally:
+            ctx.close()
+
+
 def shoot_room_badges(browser: Any, out: Path, world: Any) -> None:
     """Room badges (#109): the sidebar's red count for a message addressed to the person (an
     @mention here) beside the quiet dot for other agent chatter, in the same room list, so the
@@ -766,6 +793,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot(browser, out, world)
             shoot_board(browser, out, world)
             shoot_mentions(browser, out, world)
+            shoot_mention_highlight(browser, out, world)
             shoot_offline(browser, out, world)
             # last of this world's shots: its two rooms' unread backlog would otherwise show up
             # (unread is recomputed per page load) in shoot_offline's sidebar too
