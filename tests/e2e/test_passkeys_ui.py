@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 from conftest import InProcBroker, make_tmp_home, sanitize_env
 from playwright.sync_api import Browser, BrowserContext, Page, expect
-from test_web_ui import PHASE_REPORTS, UI
+from test_web_ui import PHASE_REPORTS, UI, open_settings
 
 from switchboard.broker.auth import WebOrigin
 
@@ -161,8 +161,7 @@ def test_claim_backup_sheet_sign_out_and_sign_in(ui: UI, hosted: InProcBroker) -
     # security key while the phone is put away (with both attached, Chromium may pick the phone,
     # whose passkey is excluded)
     expect(page.locator("#me-settings")).to_be_visible()
-    page.click("#me-settings")
-    expect(page.locator("#app-dialog")).to_be_visible()
+    open_settings(page, "security")
     expect(page.locator("#settings-account .passkey-count")).to_have_text("2 passkeys")
     phone_creds = devices.put_away(phone)
     key = devices.add("usb")
@@ -200,7 +199,7 @@ def test_claim_backup_sheet_sign_out_and_sign_in(ui: UI, hosted: InProcBroker) -
     assert rows["iPhone"].sign_count >= 1  # Chromium's virtual authenticator counts
 
     # Sign out everywhere, then back in
-    page.click("#me-settings")
+    open_settings(page, "security")
     page.click("#logout-all")
     expect(page.locator("#app-dialog-title")).to_have_text("Sign out everywhere?")
     page.click("#app-dialog-action")

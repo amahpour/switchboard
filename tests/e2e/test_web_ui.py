@@ -180,6 +180,18 @@ def open_room(page: Page, room: str) -> None:
         wait_js(page, "() => document.querySelectorAll('#log .line.k-chat').length >= 8")
 
 
+def open_settings(page: Page, group: str | None = None) -> None:
+    """Open Settings (#232), already at ``group``: the desktop tab, or the phone's own page for
+    it (jumping past the list, same as a caller elsewhere that names a group). ``None`` opens at
+    the default: Profile selected on a desktop, the group list on a phone."""
+    page.click("#me-settings")
+    expect(page.locator("#app-dialog")).to_be_visible()
+    if group:
+        size = page.viewport_size or {}
+        wide = size.get("width", 1440) > 760
+        page.click(f"#settings-tab-{group}" if wide else f"#settings-row-{group}")
+
+
 def chat_row(page: Page, text: str) -> Any:
     """The log row (a chat line) whose text contains ``text``."""
     return page.locator("#log .line.k-chat", has_text=text).last
@@ -1167,10 +1179,10 @@ def test_new_room_dialog_validates_name_and_returns_focus(ui: UI) -> None:
 def test_settings_theme_follows_the_person_and_sign_out_moves_inside(ui: UI) -> None:
     """Settings opens from the name, changes the first-paint theme across browsers, and signs out."""
     page = ui.open()
-    page.click("#me-settings")
+    open_settings(page, "appearance")
     dialog = page.locator("#app-dialog")
     expect(dialog).to_be_visible()
-    expect(page.locator("#app-dialog-title")).to_have_text("Settings")
+    expect(page.locator("#app-dialog-title")).to_have_text("Settings")  # the header, not the tab
     page.click("#settings-theme-dark")
     expect(page.locator("html")).to_have_attribute("data-theme", "dark")
     page.keyboard.press("Escape")
@@ -1180,6 +1192,7 @@ def test_settings_theme_follows_the_person_and_sign_out_moves_inside(ui: UI) -> 
     other = ui.open()
     expect(other.locator("html")).to_have_attribute("data-theme", "dark")
 
+    # a phone opens at the group list; the × still sits at the bottom of the sheet (#212)
     phone = ui.open(**PHONE)
     phone.click("#rooms-toggle")
     phone.click("#me-settings")
@@ -1188,12 +1201,17 @@ def test_settings_theme_follows_the_person_and_sign_out_moves_inside(ui: UI) -> 
     assert not phone.locator("#app").evaluate("e => e.classList.contains('nav-open')")
     bounds = modal.bounding_box()
     assert bounds is not None and abs(bounds["y"] + bounds["height"] - 844) < 2
+    phone.click("#settings-row-appearance")
+    expect(phone.locator("#app-dialog-title")).to_have_text("Appearance")
     phone.click("#settings-theme-light")
     expect(phone.locator("html")).to_have_attribute("data-theme", "light")
+    # Sign out sits on the list, not a group's page (#232): Back first, then the rail/list foot
+    phone.click("#settings-back")
+    expect(phone.locator("#app-dialog-title")).to_have_text("Settings")
     phone.click("#settings-sign-out")
     expect(phone.locator("#app-dialog")).to_be_hidden()
     expect(phone.locator("#login-cli")).to_be_visible()
-    other.click("#me-settings")
+    open_settings(other, "appearance")
     other.click("#settings-theme-system")  # do not change the seeded world's later tests
     expect(other.locator("html")).to_have_attribute("data-theme", "system")
 
@@ -1206,7 +1224,7 @@ def test_text_size_scales_the_whole_ui_and_survives_reload_on_a_phone(ui: UI) ->
         selector: page.locator(selector).first.evaluate("e => parseFloat(getComputedStyle(e).fontSize)")
         for selector in selectors
     }
-    page.click("#me-settings")
+    open_settings(page, "appearance")
     page.click("#settings-text-larger")
     expect(page.locator("html")).to_have_attribute("data-text-size", "larger")
     for selector, before in sizes.items():
@@ -1225,7 +1243,7 @@ def test_text_size_scales_the_whole_ui_and_survives_reload_on_a_phone(ui: UI) ->
     expect(phone.locator("html")).to_have_attribute("data-text-size", "larger")
     assert phone.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
     phone.click("#rooms-toggle")
-    phone.click("#me-settings")
+    open_settings(phone, "appearance")
     expect(phone.locator("#settings-text-larger")).to_have_attribute("aria-pressed", "true")
     phone.click("#settings-text-default")  # keep the shared seeded broker's next tests at their default
     expect(phone.locator("html")).to_have_attribute("data-text-size", "default")
@@ -1234,7 +1252,7 @@ def test_text_size_scales_the_whole_ui_and_survives_reload_on_a_phone(ui: UI) ->
 def test_custom_room_rules_copy_from_settings_and_edit_on_a_phone(ui: UI) -> None:
     """The saved default seeds a room; its own bottom-sheet editor changes only that room."""
     page = ui.open()
-    page.click("#me-settings")
+    open_settings(page, "rooms")
     page.locator("#settings-room-rules").fill("Work in a worktree.")
     expect(page.locator("#settings-rules-count")).to_have_text("19 / 2000")
     page.click("#settings-rules-save")
@@ -1264,7 +1282,7 @@ def test_custom_room_rules_copy_from_settings_and_edit_on_a_phone(ui: UI) -> Non
     phone.click("#room-rules")
     expect(phone.locator("#app-dialog-rules")).to_have_value("Post a PR link.")
     phone.click("#app-dialog-cancel")
-    page.click("#me-settings")
+    open_settings(page, "rooms")
     expect(page.locator("#settings-room-rules")).to_have_value("Work in a worktree.")
     page.locator("#settings-room-rules").fill("")
     page.click("#settings-rules-save")
@@ -1275,7 +1293,7 @@ def test_wake_defaults_copy_into_a_room_and_its_own_dialog_edits_live(ui: UI) ->
     """Settings' Rooms section seeds a new room's budget and hop limit; the room's own
     header dialog then changes just that room, live, with a notice and a hop-limit-0 warning."""
     page = ui.open()
-    page.click("#me-settings")
+    open_settings(page, "rooms")
     page.locator("#settings-budget").fill("120")
     page.locator("#settings-hops").fill("20")
     expect(page.locator("#settings-hops-warn")).to_be_hidden()
@@ -1308,7 +1326,7 @@ def test_wake_defaults_copy_into_a_room_and_its_own_dialog_edits_live(ui: UI) ->
     expect(page.locator("#st-hops")).to_contain_text("loop guard off")
 
     # a later default change never reaches back into the already-created room
-    page.click("#me-settings")
+    open_settings(page, "rooms")
     expect(page.locator("#settings-budget")).to_have_value("120")
     page.locator("#settings-budget").fill("")
     page.locator("#settings-hops").fill("")
@@ -1317,6 +1335,109 @@ def test_wake_defaults_copy_into_a_room_and_its_own_dialog_edits_live(ui: UI) ->
     expect(page.locator("#settings-rules-status")).to_have_text("Saved")
     page.click("#settings-close")
     ui.world.command("e2e-wake", "/close")
+
+
+def test_settings_shows_three_tabs_on_a_desktop_broker(ui: UI) -> None:
+    """A desktop broker has no password or passkeys to show, so Settings has no Sign-in &
+    security tab; Sign out still sits in the rail (#232)."""
+    page = ui.open()
+    open_settings(page)
+    expect(page.locator("#settings-rail [role='tab']")).to_have_count(3)
+    expect(page.locator("#settings-tab-security")).to_have_count(0)
+    expect(page.locator("#settings-sign-out")).to_be_visible()
+    page.keyboard.press("Escape")
+
+
+def test_settings_tabs_respond_to_arrow_keys_tab_and_escape(ui: UI) -> None:
+    """The rail is a WAI-ARIA tablist: Up/Down (and Home/End) move and select a tab at once
+    (automatic activation), Tab from the selected tab enters its panel, and Esc still closes."""
+    page = ui.open()
+    open_settings(page)
+    expect(page.locator("#settings-tab-profile")).to_be_focused()
+    expect(page.locator("#settings-tab-profile")).to_have_attribute("aria-selected", "true")
+    page.keyboard.press("ArrowDown")
+    expect(page.locator("#settings-tab-appearance")).to_be_focused()
+    expect(page.locator("#settings-tab-appearance")).to_have_attribute("aria-selected", "true")
+    expect(page.locator("#settings-panel-appearance")).to_be_visible()
+    expect(page.locator("#settings-tab-profile")).to_have_attribute("aria-selected", "false")
+    expect(page.locator("#settings-panel-profile")).to_be_hidden()
+    page.keyboard.press("End")
+    expect(page.locator("#settings-tab-rooms")).to_be_focused()
+    expect(page.locator("#settings-panel-rooms")).to_be_visible()
+    page.keyboard.press("Home")
+    expect(page.locator("#settings-tab-profile")).to_be_focused()
+    expect(page.locator("#settings-panel-profile")).to_be_visible()
+    page.keyboard.press("ArrowUp")  # wraps to the last tab
+    expect(page.locator("#settings-tab-rooms")).to_be_focused()
+    page.keyboard.press("Home")
+    page.keyboard.press("Tab")
+    expect(page.locator("#settings-first")).to_be_focused()  # Tab left the rail, into the panel
+    page.keyboard.press("Escape")
+    expect(page.locator("#app-dialog")).to_be_hidden()
+
+
+def test_settings_close_stays_visible_after_scrolling_a_long_panel(ui: UI) -> None:
+    """The header never scrolls (#212): the × stays in view once the active panel scrolls to
+    its end, at a height short enough that the panel really has to scroll."""
+    page = ui.open(room=None, viewport={"width": 1440, "height": 420})
+    open_settings(page, "rooms")
+    overflow = page.locator("#settings-panels").evaluate("e => e.scrollHeight - e.clientHeight")
+    assert overflow > 40, overflow  # the panel has real overflow to scroll through
+    page.locator("#settings-panels").evaluate("e => { e.scrollTop = e.scrollHeight; }")
+    expect(page.locator("#settings-close")).to_be_in_viewport()
+
+
+def test_settings_draft_survives_switching_groups_and_a_refresh(ui: UI) -> None:
+    """Every panel stays in the DOM, hidden rather than rebuilt (#232): what's typed in one
+    group survives a switch to another and back, and openSettings' own `/api/me` refresh."""
+    page = ui.open()
+    with page.expect_response(lambda r: r.url.endswith("/api/me")):
+        open_settings(page, "rooms")
+    page.locator("#settings-room-rules").fill("Draft that must survive a tab switch.")
+    page.click("#settings-tab-profile")
+    page.locator("#settings-name").fill("not-yet-saved")
+    page.click("#settings-tab-appearance")
+    page.click("#settings-tab-rooms")
+    expect(page.locator("#settings-room-rules")).to_have_value("Draft that must survive a tab switch.")
+    page.click("#settings-tab-profile")
+    expect(page.locator("#settings-name")).to_have_value("not-yet-saved")
+    page.keyboard.press("Escape")
+
+
+def test_settings_phone_list_shows_summaries_and_back_returns_focus(ui: UI) -> None:
+    """The phone list's rows summarize the current state; tapping one opens its own page, and
+    Back returns to the list with focus back on that row (#232)."""
+    phone = ui.open(**PHONE)
+    phone.click("#rooms-toggle")
+    phone.click("#me-settings")
+    expect(phone.locator("#settings-list")).to_be_visible()
+    expect(phone.locator("#settings-row-profile .settings-row-sub")).to_contain_text("@" + TEST_HUMAN)
+    expect(phone.locator("#settings-row-appearance .settings-row-sub")).to_contain_text("theme")
+    expect(phone.locator("#settings-row-rooms .settings-row-sub")).to_contain_text("wakes an hour")
+    expect(phone.locator("#settings-row-profile")).to_be_focused()  # the default group's own row
+    # Sign out sits right below the rows, on screen: the list used to fill the sheet and push it
+    # out of reach
+    expect(phone.locator("#settings-sign-out")).to_be_in_viewport()
+
+    phone.click("#settings-row-rooms")
+    expect(phone.locator("#app-dialog-title")).to_have_text("New rooms")
+    # the header names the group, so the panel's own heading doesn't say it a second time
+    expect(phone.locator("#settings-panel-rooms > h3")).to_be_hidden()
+    expect(phone.locator("#settings-room-rules")).to_be_visible()
+    phone.locator("#settings-room-rules").fill("Summarized on the list.")
+    phone.click("#settings-rules-save")
+    expect(phone.locator("#settings-rules-status")).to_have_text("Saved")
+
+    phone.click("#settings-back")
+    expect(phone.locator("#app-dialog-title")).to_have_text("Settings")
+    expect(phone.locator("#settings-row-rooms")).to_be_focused()
+    expect(phone.locator("#settings-row-rooms .settings-row-sub")).to_contain_text("Summarized on the list.")
+
+    # leave the shared seeded broker's room rules as later tests expect
+    phone.click("#settings-row-rooms")
+    phone.locator("#settings-room-rules").fill("")
+    phone.click("#settings-rules-save")
+    expect(phone.locator("#settings-rules-status")).to_have_text("Saved")
 
 
 def test_typed_and_inspector_kick_use_the_same_dialog(ui: UI) -> None:
@@ -1748,7 +1869,7 @@ def test_a_diagram_follows_the_saved_theme_instead_of_the_system(ui: UI) -> None
     )
     light = box.evaluate(fill)
     try:
-        page.click("#me-settings")
+        open_settings(page, "appearance")
         page.click("#settings-theme-dark")
         expect(page.locator("html")).to_have_attribute("data-theme", "dark")
         wait_js(page, f"(prev) => ({fill})(document.querySelector('#log .md-pre')) !== prev", light)

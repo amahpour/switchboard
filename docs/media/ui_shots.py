@@ -32,7 +32,9 @@ composer-multiline-{light,dark,phone-light} (the composer grown with wrapped tex
 room-badges-{light,dark,phone-light} (the red count beside the quiet dot, #109),
 focus-mode-{light,dark,phone-light} (agent chat collapsed to one line, a reply to you left
 expanded, #99), settings-rooms-{light,dark} and wake-settings-{light,dark,phone-light} (the
-default wake budget and hop limit, and a room's own rate, #131),
+default wake budget and hop limit, and a room's own rate, #131), settings-appearance-{light,dark},
+settings-phone-list-{light,dark} and settings-phone-rooms-light (Settings' tabbed layout and
+phone list, #232),
 closed-light, remotes-light, inspector-light, inspector-remote-light, inspector-dark-parked,
 phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (#129), welcome-light and login-light, plus, from a hosted broker
 (``tests/ui_world.py``'s ``HostedWorld``, with Chromium's virtual authenticators as the
@@ -666,8 +668,8 @@ def shoot_focus_mode(browser: Any, out: Path, world: Any) -> None:
 
 
 def shoot_wake_settings(browser: Any, out: Path, world: Any) -> None:
-    """Default wake budget and hop limit, and a room's own rate (#131): Settings' Rooms
-    section (budget and hop limit beside the existing room rules default; light, dark), and a
+    """Default wake budget and hop limit, and a room's own rate (#131): Settings' New rooms
+    group (budget and hop limit beside the existing room rules default; light, dark), and a
     room's own Wake settings dialog with the hop-limit-0 warning showing (light, dark, phone).
     Neither Save is clicked, so nothing here changes the seeded world for a shot after it."""
     from playwright.sync_api import expect
@@ -686,6 +688,7 @@ def shoot_wake_settings(browser: Any, out: Path, world: Any) -> None:
             sign_in(page, world.broker)
             page.click("#me-settings")
             expect(page.locator("#app-dialog")).to_be_visible()
+            page.click("#settings-tab-rooms")  # Settings is tabbed (#232); New rooms isn't the default
             page.fill("#settings-budget", "120")
             page.fill("#settings-hops", "0")
             page.locator("#settings-hops-warn").scroll_into_view_if_needed()
@@ -720,6 +723,59 @@ def shoot_wake_settings(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def shoot_settings_tabs(browser: Any, out: Path, world: Any) -> None:
+    """Settings' tabbed layout (#232, closes #212): the Appearance group on a desktop (light,
+    dark), and on a phone the group list and one group's own page (light)."""
+    from playwright.sync_api import expect
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for name, ctx_args in (
+        ("settings-appearance-light.png", {**DESKTOP, "color_scheme": "light"}),
+        ("settings-appearance-dark.png", {**DESKTOP, "color_scheme": "dark"}),
+    ):
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            page.click("#me-settings")
+            expect(page.locator("#app-dialog")).to_be_visible()
+            page.click("#settings-tab-appearance")
+            page.evaluate("document.activeElement && document.activeElement.blur()")
+            shot(page, out, name)
+        finally:
+            ctx.close()
+
+    for name, ctx_args in (
+        ("settings-phone-list-light.png", {**PHONE, "color_scheme": "light"}),
+        ("settings-phone-list-dark.png", {**PHONE, "color_scheme": "dark"}),
+    ):
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            page.click("#rooms-toggle")
+            page.click("#me-settings")
+            expect(page.locator("#settings-list")).to_be_visible()
+            shot(page, out, name)
+        finally:
+            ctx.close()
+
+    ctx = browser.new_context(**base, **PHONE, color_scheme="light")
+    ctx.set_default_timeout(WAIT_MS)
+    try:
+        page = ctx.new_page()
+        sign_in(page, world.broker)
+        page.click("#rooms-toggle")
+        page.click("#me-settings")
+        page.click("#settings-row-rooms")
+        expect(page.locator("#app-dialog-title")).to_have_text("New rooms")
+        shot(page, out, "settings-phone-rooms-light.png")
+    finally:
+        ctx.close()
+
+
 # ---------------------------------------------------------- the hosted shots
 AUTHENTICATOR = {
     "protocol": "ctap2",
@@ -745,9 +801,10 @@ def device(ctx: Any, page: Any) -> tuple[Any, str]:
 
 def shoot_hosted(browser: Any, out: Path, world: Any) -> None:
     """A hosted broker (issues #41, #61): the sign-in page before it's set up, Choose how you'll
-    sign in with the admin's email, the People sheet with an invite to send (light, dark), Settings with Account (light,
-    dark), Confirm it's you, the sign-in page's three ways in, a teammate's own Choose page, and
-    the sign-in page on a phone (dark). The invite's address reads https://sb.example.com."""
+    sign in with the admin's email, the People sheet with an invite to send (light, dark), Settings'
+    Profile and Sign-in & security groups (light, dark, #232), Confirm it's you, the sign-in page's
+    three ways in, a teammate's own Choose page, and the sign-in page on a phone (dark). The
+    invite's address reads https://sb.example.com."""
     from playwright.sync_api import expect
 
     base = {"timezone_id": "UTC", "color_scheme": "light", "locale": "en-US", "reduced_motion": "reduce"}
@@ -803,6 +860,7 @@ def shoot_hosted(browser: Any, out: Path, world: Any) -> None:
         page.emulate_media(color_scheme="dark")
         shot(page, out, "settings-name-dark.png")
         page.emulate_media(color_scheme="light")
+        page.click("#settings-tab-security")  # Settings is tabbed (#232); passkeys sit there now
         page.fill("#passkey-name", "iPhone")
         page.mouse.move(1, 1)
         shot(page, out, "passkeys-light.png")
@@ -1027,6 +1085,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_room_badges(browser, out, world)
             shoot_focus_mode(browser, out, world)
             shoot_wake_settings(browser, out, world)
+            shoot_settings_tabs(browser, out, world)
             shoot_hosted(browser, out, hosted)
             shoot_machines(browser, out, fleet)
         finally:

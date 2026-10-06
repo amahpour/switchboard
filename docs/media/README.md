@@ -35,8 +35,11 @@ It drives headless Chromium through Playwright (a dev dependency): run `uv run p
 | `login-light.png` | the sign-in page |
 | `signin-setup-light.png`, `setup-light.png` | a hosted broker's sign-in page before it's set up (the admin's one-time password is in its log), and Choose how you'll sign in (issues #41, #61) |
 | `people-light.png`, `people-dark.png` | the admin's People sheet, with the invite to send someone new |
-| `settings-name-light.png`, `settings-name-dark.png` | Settings opening on Your name: first and last name and your name in the rooms (issue #114) |
-| `passkeys-light.png`, `passkeys-dark.png` | the Sign-in sheet: your password, your passkeys, sign out everywhere |
+| `settings-name-light.png`, `settings-name-dark.png` | Settings opening on its default tab, Profile: first and last name and your name in the rooms (issue #114) |
+| `settings-appearance-light.png`, `settings-appearance-dark.png` | Settings' Appearance tab: theme and text size (issue #232) |
+| `passkeys-light.png`, `passkeys-dark.png` | Settings' Sign-in & security tab: your password, your passkeys, sign out everywhere |
+| `settings-phone-list-light.png`, `settings-phone-list-dark.png` | Settings as a list on a phone, each row with a one-line summary (issue #232) |
+| `settings-phone-rooms-light.png` | a phone's own page for one group (New rooms), with Back to the list (issue #232) |
 | `confirm-light.png` | Confirm it's you, before adding someone once the last check ran out |
 | `signin-light.png`, `signin-phone-dark.png` | the sign-in page's three ways in (a password, a passkey, and SSO coming soon until Sign in with Google is set up), on a desktop and on a phone |
 | `setup-person-light.png` | a teammate choosing their own password after their one-time password |
