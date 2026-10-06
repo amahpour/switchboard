@@ -93,7 +93,7 @@ def test_fixture_is_a_v3_database_with_rows_in_every_table(tmp_path: Path) -> No
 
 def test_fresh_db_keeps_the_v4_person_columns(tmp_path: Path) -> None:
     con = db.open_db(tmp_path / "switchboard.db")
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 13
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 14
     for t, col in PERSON_COLUMNS.items():
         c = {x[1]: x for x in columns(con, t)}[col]
         assert c[2] == "INTEGER" and c[3] == 0 and c[4] is None  # nullable, no default: NULL is the owner

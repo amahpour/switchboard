@@ -1271,6 +1271,54 @@ def test_custom_room_rules_copy_from_settings_and_edit_on_a_phone(ui: UI) -> Non
     ui.world.command("e2e-room-rules", "/close")
 
 
+def test_wake_defaults_copy_into_a_room_and_its_own_dialog_edits_live(ui: UI) -> None:
+    """Settings' Rooms section seeds a new room's budget and hop limit; the room's own
+    header dialog then changes just that room, live, with a notice and a hop-limit-0 warning."""
+    page = ui.open()
+    page.click("#me-settings")
+    page.locator("#settings-budget").fill("120")
+    page.locator("#settings-hops").fill("20")
+    expect(page.locator("#settings-hops-warn")).to_be_hidden()
+    page.click("#settings-rules-save")
+    expect(page.locator("#settings-rules-status")).to_have_text("Saved")
+    page.click("#settings-close")
+    page.click("#new-room")
+    page.locator("#app-dialog-name").fill("#e2e-wake")
+    with page.expect_response(lambda r: r.url.endswith("/api/rooms/e2e-wake/review")):
+        page.click("#app-dialog-action")
+    expect(page.locator('#tabs .room[data-room="#e2e-wake"]')).to_have_count(1)
+    expect(page.locator("#st-budget")).to_contain_text("120")
+    expect(page.locator("#st-hops")).to_contain_text("20")
+
+    page.click("#room-wake")
+    dialog = page.locator("#app-dialog")
+    expect(dialog).to_be_visible()
+    expect(page.locator("#app-dialog-budget")).to_have_value("120")
+    expect(page.locator("#app-dialog-hops")).to_have_value("20")
+    expect(page.locator("#app-dialog-wake-warn")).to_be_hidden()
+    page.locator("#app-dialog-hops").fill("0")
+    expect(page.locator("#app-dialog-wake-warn")).to_be_visible()
+    expect(page.locator("#app-dialog-wake-warn")).to_contain_text("loop guard off")
+    page.locator("#app-dialog-budget").fill("300")
+    page.click("#app-dialog-action")
+    expect(dialog).to_be_hidden()
+    expect(page.locator("#log")).to_contain_text(TEST_HUMAN + " set the wake budget to 300/hour")
+    expect(page.locator("#log")).to_contain_text(TEST_HUMAN + " turned the loop guard off")
+    expect(page.locator("#st-budget")).to_contain_text("300")
+    expect(page.locator("#st-hops")).to_contain_text("loop guard off")
+
+    # a later default change never reaches back into the already-created room
+    page.click("#me-settings")
+    expect(page.locator("#settings-budget")).to_have_value("120")
+    page.locator("#settings-budget").fill("")
+    page.locator("#settings-hops").fill("")
+    expect(page.locator("#settings-budget-source")).to_contain_text("built-in default")
+    page.click("#settings-rules-save")
+    expect(page.locator("#settings-rules-status")).to_have_text("Saved")
+    page.click("#settings-close")
+    ui.world.command("e2e-wake", "/close")
+
+
 def test_typed_and_inspector_kick_use_the_same_dialog(ui: UI) -> None:
     """Typed /kick and the Inspector button share the title, body, and safe Cancel focus."""
     ui.world.create_room("#e2e-dialog-kick")

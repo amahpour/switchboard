@@ -27,6 +27,9 @@
   const CONT_WINDOW_S = 300;       // a same-sender message within 5 minutes is a continuation row
   const REFETCH_MS = 800;          // Inspector refetch debounce
   const COPIED_MS = 1600;          // how long "Copied" / "Session id copied" shows
+  // the room's own wake dialog and Settings' Rooms section (#131) share this one warning,
+  // so a hop limit of 0 reads the same wherever it's set
+  const HOP_LIMIT_ZERO_WARNING = 'Hop limit 0 turns the loop guard off: agents may message each other without limit.';
 
   // harness key -> [avatar monogram, display name, avatar glyph (an ICONS name) shown instead]
   const HARNESS = {
@@ -195,6 +198,47 @@
           updateCount();
           form.append(label, rulesInput, count);
         }
+        let budgetInput = null, hopsInput = null, validWake = null;
+        if (options.kind === 'wake') {
+          const init = options.initial || {};
+          const budgetLabel = el('label', null, 'Wake budget per hour');
+          budgetLabel.setAttribute('for', 'app-dialog-budget');
+          budgetInput = el('input');
+          budgetInput.id = 'app-dialog-budget';
+          budgetInput.type = 'number';
+          budgetInput.min = '0';
+          budgetInput.max = '1000000';
+          budgetInput.inputMode = 'numeric';
+          budgetInput.value = String(init.budget_per_hour);
+          const hopsLabel = el('label', null, 'Hop limit');
+          hopsLabel.setAttribute('for', 'app-dialog-hops');
+          hopsInput = el('input');
+          hopsInput.id = 'app-dialog-hops';
+          hopsInput.type = 'number';
+          hopsInput.min = '0';
+          hopsInput.max = '1000';
+          hopsInput.inputMode = 'numeric';
+          hopsInput.value = String(init.hop_limit);
+          const wakeWarn = el('p', 'wake-warn hidden', HOP_LIMIT_ZERO_WARNING);
+          wakeWarn.id = 'app-dialog-wake-warn';
+          const wakeError = el('p', 'app-dialog-error');
+          wakeError.id = 'app-dialog-wake-error';
+          wakeError.setAttribute('role', 'status');
+          validWake = function () {
+            const b = Number(budgetInput.value);
+            const h = Number(hopsInput.value);
+            const bOk = budgetInput.value !== '' && Number.isInteger(b) && b >= 0 && b <= 1000000;
+            const hOk = hopsInput.value !== '' && Number.isInteger(h) && h >= 0 && h <= 1000;
+            wakeWarn.classList.toggle('hidden', !(hOk && h === 0));
+            wakeError.textContent = !bOk
+              ? 'Wake budget per hour must be a whole number from 0 to 1,000,000.'
+              : !hOk ? 'Hop limit must be a whole number from 0 to 1,000.' : '';
+            action.disabled = !(bOk && hOk);
+          };
+          budgetInput.addEventListener('input', validWake);
+          hopsInput.addEventListener('input', validWake);
+          form.append(budgetLabel, budgetInput, hopsLabel, hopsInput, wakeWarn, wakeError);
+        }
         const buttons = el('div', 'app-dialog-buttons');
         const cancel = btn('btn', 'Cancel');
         cancel.id = 'app-dialog-cancel';
@@ -231,7 +275,9 @@
               answer = validName();
               if (!answer) return;
             } else if (options.kind === 'rules') answer = rulesInput.value;
-            else answer = true;
+            else if (options.kind === 'wake') {
+              answer = { budget_per_hour: Number(budgetInput.value), hop_limit: Number(hopsInput.value) };
+            } else answer = true;
             dlg.close('action');
           });
         }
@@ -239,8 +285,10 @@
           name.addEventListener('input', validName);
           validName();
         }
+        if (validWake) validWake();
         dlg.showModal();
-        (settings ? $('settings-close') : (name || rulesInput || (options.danger ? cancel : action))).focus();
+        (settings ? $('settings-close')
+          : (name || rulesInput || budgetInput || (options.danger ? cancel : action))).focus();
       });
     });
     dialogQueue = next.then(function () {}, function () {});
@@ -1084,6 +1132,7 @@
     $('status-chips').classList.toggle('hidden', !r);
     $('pause-toggle').classList.toggle('hidden', !r);
     $('room-rules').classList.toggle('hidden', !r);
+    $('room-wake').classList.toggle('hidden', !r);
 
     const st = $('st-state');
     const paused = $('banner-paused');
@@ -3358,6 +3407,18 @@
     location.replace('/');
   }
 
+  // What a blank Wake budget / Hop limit default falls back to (#131): only shown with a
+  // concrete number when nobody's own default currently applies (``info.source`` says so),
+  // since a value already set by this person isn't what blank would fall back to.
+  function wakeSourceText(inputValue, info, unit) {
+    if (inputValue !== '') return '';
+    if (info && info.source !== 'your default') {
+      return 'Blank uses ' + info.value + (unit || '') + ', '
+        + (info.source === 'config.toml' ? 'from config.toml.' : 'the built-in default.');
+    }
+    return 'Leave blank to use config.toml’s value, or the built-in default.';
+  }
+
   function buildSettings(container) {
     const appearance = el('section', 'settings-section');
     appearance.append(el('h3', null, 'Appearance'), el('p', 'fine', 'Choose how switchboard looks on every browser where you sign in.'));
@@ -3427,9 +3488,9 @@
     appearance.append(sizeLabel, sizeChoices);
 
     const rules = el('section', 'settings-section');
-    rules.append(el('h3', null, 'Default room rules'),
+    rules.append(el('h3', null, 'Rooms'),
       el('p', 'fine', 'Copied into each room you create. Changing these does not change existing rooms.'));
-    const rulesLabel = el('label', 'settings-label', 'Rules');
+    const rulesLabel = el('label', 'settings-label', 'Default room rules');
     rulesLabel.setAttribute('for', 'settings-room-rules');
     const rulesInput = el('textarea', 'rules-textarea');
     rulesInput.id = 'settings-room-rules';
@@ -3440,15 +3501,54 @@
     const countRules = function () { count.textContent = rulesInput.value.length + ' / 2000'; };
     rulesInput.addEventListener('input', function () { countRules(); $('settings-rules-status').textContent = ''; });
     countRules();
+
+    const prefs0 = (state.me || {}).preferences || {};
+    const wakeDefaults = (state.me || {}).wake_defaults || {};
+    function numberField(id, labelText, max) {
+      const label = el('label', 'settings-label', labelText);
+      label.setAttribute('for', id);
+      const input = el('input');
+      input.type = 'number';
+      input.id = id;
+      input.min = '0';
+      input.max = String(max);
+      input.inputMode = 'numeric';
+      return [label, input];
+    }
+    const [budgetLabel, budgetInput] = numberField('settings-budget', 'Wake budget per hour', 1000000);
+    budgetInput.value = has(prefs0.budget_per_hour) ? String(prefs0.budget_per_hour) : '';
+    const budgetSource = el('p', 'fine');
+    budgetSource.id = 'settings-budget-source';
+    const [hopsLabel, hopsInput] = numberField('settings-hops', 'Hop limit', 1000);
+    hopsInput.value = has(prefs0.hop_limit) ? String(prefs0.hop_limit) : '';
+    const hopsWarn = el('p', 'wake-warn hidden', HOP_LIMIT_ZERO_WARNING);
+    hopsWarn.id = 'settings-hops-warn';
+    const hopsSource = el('p', 'fine');
+    hopsSource.id = 'settings-hops-source';
+    const renderWakeSources = function () {
+      budgetSource.textContent = wakeSourceText(budgetInput.value, wakeDefaults.budget_per_hour, '/hour');
+      hopsSource.textContent = wakeSourceText(hopsInput.value, wakeDefaults.hop_limit, '');
+      hopsWarn.classList.toggle('hidden', hopsInput.value !== '0');
+    };
+    renderWakeSources();
+    const clearStatus = function () { $('settings-rules-status').textContent = ''; };
+    budgetInput.addEventListener('input', function () { renderWakeSources(); clearStatus(); });
+    hopsInput.addEventListener('input', function () { renderWakeSources(); clearStatus(); });
+
     const save = btn('btn-primary', 'Save defaults');
     save.id = 'settings-rules-save';
     const status = el('span', 'fine');
     status.id = 'settings-rules-status';
     status.setAttribute('role', 'status');
     save.addEventListener('click', async function () {
+      const asNumberOrNull = function (input) { return input.value === '' ? null : Number(input.value); };
       save.disabled = true;
       try {
-        const result = await api('PUT', '/api/me/preferences', { room_rules: rulesInput.value });
+        const result = await api('PUT', '/api/me/preferences', {
+          room_rules: rulesInput.value,
+          budget_per_hour: asNumberOrNull(budgetInput),
+          hop_limit: asNumberOrNull(hopsInput),
+        });
         state.me.preferences = result.preferences;
         status.textContent = 'Saved';
         status.classList.remove('bad');
@@ -3457,7 +3557,12 @@
         status.classList.add('bad');
       } finally { save.disabled = false; }
     });
-    rules.append(rulesLabel, rulesInput, count, save, status);
+    rules.append(
+      rulesLabel, rulesInput, count,
+      budgetLabel, budgetInput, budgetSource,
+      hopsLabel, hopsInput, hopsWarn, hopsSource,
+      save, status
+    );
 
     // Your name (#114, DESIGN.md §41): your first and last name, and your name in the rooms,
     // which others @mention and every agent takes your messages under
@@ -3546,6 +3651,8 @@
     const themeAtOpen = (((state.me || {}).preferences || {}).theme || 'system');
     const sizeAtOpen = (((state.me || {}).preferences || {}).text_size || 'default');
     const rulesAtOpen = (((state.me || {}).preferences || {}).room_rules || '');
+    const budgetAtOpen = ((state.me || {}).preferences || {}).budget_per_hour;
+    const hopsAtOpen = ((state.me || {}).preferences || {}).hop_limit;
     if (phone()) setNav(false);
     openDialog({ kind: 'settings', title: 'Settings', build: buildSettings });
     // A fresh count and check status may have changed in another tab.
@@ -3576,6 +3683,26 @@
           input.value = me.preferences.room_rules;
           $('settings-rules-count').textContent = input.value.length + ' / 2000';
         }
+      }
+      const numStr = function (v) { return has(v) ? String(v) : ''; };
+      if (((state.me || {}).preferences || {}).budget_per_hour !== budgetAtOpen) {
+        me.preferences.budget_per_hour = state.me.preferences.budget_per_hour;
+      } else if (me.preferences.budget_per_hour !== budgetAtOpen) {
+        const input = $('settings-budget');
+        if (input && input.value === numStr(budgetAtOpen)) input.value = numStr(me.preferences.budget_per_hour);
+      }
+      if (((state.me || {}).preferences || {}).hop_limit !== hopsAtOpen) {
+        me.preferences.hop_limit = state.me.preferences.hop_limit;
+      } else if (me.preferences.hop_limit !== hopsAtOpen) {
+        const input = $('settings-hops');
+        if (input && input.value === numStr(hopsAtOpen)) input.value = numStr(me.preferences.hop_limit);
+      }
+      if ($('settings-budget')) {
+        $('settings-budget-source').textContent =
+          wakeSourceText($('settings-budget').value, me.wake_defaults.budget_per_hour, '/hour');
+        $('settings-hops-source').textContent =
+          wakeSourceText($('settings-hops').value, me.wake_defaults.hop_limit, '');
+        $('settings-hops-warn').classList.toggle('hidden', $('settings-hops').value !== '0');
       }
       state.me = me;
       renderSettingsAccount();
@@ -4359,6 +4486,27 @@
     }
   }
 
+  // the room's own wake budget and hop limit (#131): the header's rate and loop-guard
+  // limit, applied live; a /budget- or /hops-style notice and the updated chips arrive
+  // over the websocket once the PUT succeeds (the same "room" frame those commands push)
+  async function openRoomWake() {
+    const r = activeRoom();
+    if (!r) return;
+    const s = r.settings || {};
+    const answer = await openDialog({
+      kind: 'wake', title: 'Wake settings for ' + r.name,
+      body: 'How often agents may wake each hour, and when the loop guard pauses this room.',
+      initial: { budget_per_hour: s.budget_per_hour || 0, hop_limit: s.hop_limit || 0 },
+      action: 'Save',
+    });
+    if (!answer) return;
+    try {
+      await api('PUT', '/api/rooms/' + encodeURIComponent(r.slug) + '/wake', answer);
+    } catch (e) {
+      await openDialog({ kind: 'notice', title: 'Wake settings not saved', body: String(e.message || e), action: 'Close' });
+    }
+  }
+
   // the Welcome form's room name, without a leading '#'
   function welcomeName() {
     return String($('new-room-name').value || '').trim().replace(/^#+/, '');
@@ -4530,6 +4678,7 @@
       if (r) submitText(r.settings && r.settings.paused ? '/resume' : '/pause');
     });
     $('room-rules').addEventListener('click', openRoomRules);
+    $('room-wake').addEventListener('click', openRoomWake);
     $('board-toggle').addEventListener('click', function () {
       state.boardOpen = !state.boardOpen;
       state.boardSel = null;

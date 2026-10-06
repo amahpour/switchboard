@@ -214,6 +214,8 @@ agentsview = ""                # 0.2.0's /review; ignored since /catchup (§26),
 allow_ssh_cli = false          # §27.5.7: human commands from under a remote login (ssh, mosh, ...) on this machine (a relay peer: never)
 ```
 
+`[delivery] budget_per_hour` and `hop_limit` are a new room's defaults only when the person creating it has none of their own in Settings (§42).
+
 ---
 
 ## 3. Package layout, pyproject and CLI
@@ -1190,6 +1192,8 @@ MCP command (the same for every harness): `["<python>","-I","-m","switchboard","
 In M1, `/kick`, `/hold` and `/release` on an agent-less room return "no such member".
 
 `/hops` was added after M7 (§22), at the user's request: agents should be able to run up to about 30 messages without a pause, adjustable while the room is live. `/review` was added after M7, as milestone R1, and replaced by `/catchup` (§26).
+
+Neither command can change `budget_per_hour` itself, the rate the room's wake budget refills to each hour: `/budget n` only ever sets what's left *this* hour. The room's own settings dialog does both at once, through a REST route rather than a command (§42).
 
 ---
 
@@ -2893,7 +2897,7 @@ Clicking the signed-in person's name opens the shared native `<dialog>` from §2
 
 `preferences` is schema version 5's table: `person_id INTEGER PRIMARY KEY CHECK(person_id >= 0)` and `theme TEXT NOT NULL DEFAULT 'system' CHECK(theme IN ('system','light','dark'))`. The owner's key is 0; each other person's key is their positive `people.id`. An absent row means System, so migration v4→v5 creates the table and updates `schema_version` without rewriting people. It follows the usual checked 0600 backup and one-transaction migration. Removed people's preferences are inaccessible through authentication, like their other retained history.
 
-`GET /api/me` returns the caller's `preferences`. `PUT /api/me/preferences` accepts a nonempty subset of `theme`, `text_size`, and `room_rules`; the first two use fixed enums, and the room rules use the cap in §35. The server derives the person from the signed-in session. The existing host/origin and `X-Switchboard` checks apply to PUT. The index HTML sets the saved enums on `<html data-theme data-text-size>` before CSS paints, preventing a flash of the wrong theme or type size; the UI updates them after a successful save, and `style.css` handles the variants. No preference is stored in the browser. Mermaid redraws an open diagram when the theme changes.
+`GET /api/me` returns the caller's `preferences`. `PUT /api/me/preferences` accepts a nonempty subset of `theme`, `text_size`, `room_rules`, `budget_per_hour` and `hop_limit`; the first two use fixed enums, the room rules use the cap in §35, and the last two are the room-creation defaults in §42. The server derives the person from the signed-in session. The existing host/origin and `X-Switchboard` checks apply to PUT. The index HTML sets the saved enums on `<html data-theme data-text-size>` before CSS paints, preventing a flash of the wrong theme or type size; the UI updates them after a successful save, and `style.css` handles the variants. No preference is stored in the browser. Mermaid redraws an open diagram when the theme changes.
 
 Migration and per-person API tests use temp homes; browser tests check selection, reload, account actions, phone layout, and a diagram following the saved choice.
 
@@ -2905,7 +2909,7 @@ The signed-in app and the password-reset setup page set `data-text-size` in the 
 
 ## 35. Custom room rules (#105)
 
-The optional `preferences.room_rules` is per person. A new room copies its creator's current text to `rooms.rules_text`; later edits to either record do not change the other. Schema v7 adds both checked columns with empty defaults, a 2,000-character cap, and a v6→v7 migration after the usual verified backup. Old rooms and people start with no custom rules. Budgets and hop limits remain separate room settings.
+The optional `preferences.room_rules` is per person. A new room copies its creator's current text to `rooms.rules_text`; later edits to either record do not change the other. Schema v7 adds both checked columns with empty defaults, a 2,000-character cap, and a v6→v7 migration after the usual verified backup. Old rooms and people start with no custom rules. Budgets and hop limits remain separate room settings, each with the same copy-on-create model (§42).
 
 Only an authenticated person may write defaults through the Origin- and `X-Switchboard`-checked `PUT /api/me/preferences`, or room text through `PUT /api/rooms/{slug}/rules`. The room's header opens the shared native dialog to edit it; Settings has the defaults editor. On a phone both dialogs rise from the bottom. The human-only `room.rules` RPC backs `switchboard rooms rules ROOM [--set TEXT]`; neither an MCP member nor a remote satellite has that role. A `say()` or room command cannot change rules. A successful room edit writes a notice naming the person and refreshes browser room listings.
 
@@ -3039,3 +3043,20 @@ Anyone renames themselves in **Settings > Your name**: their first and last name
 
 ### 41.4 Tests
 `tests/integration/test_people.py`: `test_a_person_renames_themselves_and_the_agents_follow` (refused names; the session carries on; old and new messages; the notice in every room; the agent's `who()` and its next delivery; sign-in by the new name), `test_the_admin_renames_someone_and_themselves` (the admin's route, its notice, the owner's rename reaching every config holder, the fresh check, a restart keeping it), `test_a_name_set_by_the_environment_isnt_renamed`, `test_the_desktop_human_renames_themselves`; `tests/unit/test_config.py` (`human_name_from_env`); `tests/e2e/test_rename_ui.py` (Settings and a People card in a real browser).
+
+## 42. Default wake budget and hop limit, and a room's own rate (#131)
+
+A new room's `budget_per_hour` and `hop_limit` used to come only from `[delivery]` in config.toml (§2), which on a hosted broker means editing a file on the broker's machine and restarting. After a room exists, `/budget <n>` (§10) only ever sets what's left *this* hour, never the rate it refills to, so a room kept going back to config.toml's rate every hour. This gives each person their own defaults in Settings, and the room's own rate a place to change live.
+
+**Precedence for a new room:** the creator's own `preferences.budget_per_hour` / `hop_limit` if they set one, else `[delivery]` in config.toml, else the built-in default (60, 6). `RoomService.wake_defaults(person_id)` computes this once, for both `create_room` and `GET /api/me`'s `wake_defaults` field, so Settings can say "your default", "config.toml" or "built-in default" next to a blank number; `create_room` never computes the precedence a second way. On a desktop broker, the one person's Settings simply take precedence over config.toml; nothing here writes config.toml.
+
+**Storage (schema version 14):** `preferences.budget_per_hour` and `.hop_limit`, both a nullable `INTEGER` bounded like `commands.MAX_BUDGET` and `commands.MAX_HOPS`. NULL means "not set": unlike `theme` or `room_rules`, there is no single value to default an unset row to in SQL, since 0 is itself meaningful for both (no wakes until raised; the loop guard off). The v13→v14 migration adds both columns after the usual checked backup; every existing person starts unset, so every existing room keeps the room-creation behaviour it had before this issue. `PUT /api/me/preferences` accepts either field as an integer in range or `null`, which clears a chosen default back to config.toml or the built-in one.
+
+**Copy on create**, the same model and code path as custom room rules (§35): a new room's `budget_per_hour` and `hop_limit` are copied from `wake_defaults` into `rooms` at creation (`Store.create_room`), not read live from `preferences` afterward. Editing a person's defaults later never changes a room already made, and editing a room's own numbers never changes that person's defaults.
+
+**A room's own rate**, from a new button in the room's header (an in-page dialog, §29.2, rising from the bottom on a phone): Budget per hour and Hop limit, both applied live. Since `/budget <n>` can't reach the rate itself, the dialog sets `budget_per_hour` and `budget_remaining` together in one save (`Store.set_budget_rate`), so a higher or lower rate takes effect at once rather than at the next hourly refill; there is no new `/budget rate` command.
+
+`PUT /api/rooms/{slug}/wake` takes exactly `budget_per_hour` and `hop_limit` together, each an integer in the commands' own bounds; unknown fields, a missing field or an out-of-range or wrongly typed one are a 400. It needs the same signed-in web session, Origin and `X-Switchboard` checks `PUT /api/rooms/{slug}/rules` needs (§35) — never a room message, since a room message changing a setting is against §11. A changed value writes the same `budget_set` / `hop_limit_set` event and room notice `/budget <n>` and `/hops <n>` already write (`commands.hop_limit_notice` is the one function both the command and this route call, so the wording for turning the loop guard on or off is a single rule); changing only your own Settings defaults posts nothing in any room. Raising activity here needs nothing beyond the web session itself, the same role `/budget` and `/hops` need to raise (§10): every caller of this route already is one, and there is no CLI path to it at all. Setting the hop limit to 0 shows the same warning line the header's chip and Settings' own hop-limit field show ("agents may message each other without limit"), one shared string rather than three different ones.
+
+### 42.1 Tests
+`tests/unit/test_db_migrate_v14.py` (the migration; existing preferences rows keep their theme, text size and room rules, and start unset for the two new columns); `tests/unit/test_room_wake_defaults.py` (precedence over config.toml and the built-in default, copy on create in both directions, `set_room_wake`'s notices, events, the shared `hop_limit_notice` wording, and the no-op save); `tests/integration/test_web_preferences.py` (bounds, unknown and wrongly typed values, `null` clearing a default, the theme and text size beside it untouched); `tests/integration/test_web_room_wake.py` (copy on create and each person's own independence, `PUT /api/rooms/{slug}/wake`'s checked bounds, unknown fields, session and Origin/`X-Switchboard` requirements, and the live websocket push and notice); `tests/e2e/test_web_ui.py::test_wake_defaults_copy_into_a_room_and_its_own_dialog_edits_live` (Settings seeding a new room, the room's own dialog changing only that room, the hop-limit-0 warning in both places, the header chips updating live).

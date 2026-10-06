@@ -24,7 +24,7 @@ def test_v7_members_start_behind_their_room_rules(tmp_path: Path) -> None:
     con.close()
 
     migrated = db.open_db(path)
-    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 13
+    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 14
     assert db.row_counts(migrated, db.V8_TABLES) == before
     assert migrated.execute("SELECT rules_version FROM rooms WHERE id=1").fetchone()[0] == 1
     assert {row[0] for row in migrated.execute("SELECT rules_seen FROM memberships")} == {0}

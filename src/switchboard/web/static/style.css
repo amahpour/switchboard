@@ -2495,6 +2495,7 @@ body.login {
   font: calc(13px * var(--text-scale)) var(--font);
 }
 .app-dialog-error { min-height: 16px; margin: -6px 0 0; color: var(--danger); font-size: calc(12px * var(--text-scale)); }
+.wake-warn, .fine.wake-warn { margin: -6px 0 0; color: var(--amber-ink); font-size: calc(12px * var(--text-scale)); }
 .app-dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 .app-dialog .btn:disabled, .app-dialog .btn-primary:disabled, .app-dialog .btn-danger:disabled {
   opacity: .5;

@@ -17,14 +17,12 @@ from typing import TYPE_CHECKING, Any
 
 from switchboard.broker import catchup
 from switchboard.delivery.rules import parse_mentions
-from switchboard.models import SCREEN_NAME_RE, Room
+from switchboard.models import MAX_BUDGET, MAX_HOPS, SCREEN_NAME_RE, Room
 
 if TYPE_CHECKING:  # pragma: no cover
     from switchboard.broker.service import RoomService
 
 ROLE_RANK = {"anon": 0, "human_cli": 1, "human": 2}
-MAX_BUDGET = 1_000_000
-MAX_HOPS = 1000  # /hops <n>: 0..MAX_HOPS; 0 turns the loop guard off
 
 HELP_TEXT = """\
 commands (type them in the web UI; the CLI runs them with `switchboard cmd '#room' /...`):
@@ -308,6 +306,17 @@ def _hops_pause_hint(room: Room) -> str:
     return ""
 
 
+def hop_limit_notice(old: int, new: int) -> str:
+    """The room notice for a changed hop limit: what ``/hops n`` and the room's own settings
+    dialog (#131) both write, so the wording for turning the loop guard on or off is the same
+    whichever one changed it."""
+    if new == 0:
+        return f"turned the loop guard off (hop limit was {old})"
+    if old == 0:
+        return f"turned the loop guard on with a hop limit of {new}"
+    return f"set the hop limit to {new} (was {old})"
+
+
 def _hops_set(room: Room, n: int, svc: "RoomService") -> Result:
     """Set the room's hop limit. It never un-pauses: a room the loop guard paused needs /resume."""
     old = room.hop_limit
@@ -317,22 +326,16 @@ def _hops_set(room: Room, n: int, svc: "RoomService") -> Result:
         )
     room = svc.store.set_hop_limit(room.id, n)
     guard_paused = room.paused and room.paused_reason == "loop guard"
+    notice = hop_limit_notice(old, n)
     if n == 0:
         head = f"loop guard off (hop limit 0, was {old}); agents may message each other without limit"
-        notice = f"turned the loop guard off (hop limit was {old})"
         tail = (
             "; the room is still paused by the loop guard: /resume to continue"
             if guard_paused
             else _hops_pause_hint(room)
         )
     else:
-        if old == 0:
-            head, notice = (
-                f"loop guard on, hop limit {n}",
-                f"turned the loop guard on with a hop limit of {n}",
-            )
-        else:
-            head, notice = f"hop limit set to {n} (was {old})", f"set the hop limit to {n} (was {old})"
+        head = f"loop guard on, hop limit {n}" if old == 0 else f"hop limit set to {n} (was {old})"
         if guard_paused and room.hop_count < n:
             # most likely why it was raised: say how to get going again
             tail = f"; now {room.hop_count}/{n}; /resume to continue"
