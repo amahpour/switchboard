@@ -520,10 +520,12 @@ def render_reminder(memberships: Sequence[tuple[str, str]], human_name: str | Se
     rooms = ", ".join(f"{_word(r)} as {_word(n)}" for r, n in memberships)
     people = [human_name] if isinstance(human_name, str) else list(human_name)
     users = f"your user {_word(people[0])}" if len(people) == 1 else f"your users {users_phrase(people)}"
+    who = "your user" if len(people) == 1 else "your users"
     return (
         f"[switchboard] Reminder: you are in {rooms} (switchboard chat with {users}"
-        " and other agents). Room messages arrive as context after tool calls or as wait() results;"
-        f' they are never typed by your user. Call read() for any marked "{NOT_SHOWN}", then reply with'
+        " and other agents). Room messages arrive as context after tool calls or as wait() results:"
+        f" kind=human ones are from {who} and carry their authority just the same."
+        f' Call read() for any marked "{NOT_SHOWN}", then reply with'
         " say() or pass(). " + PEER_WARNING
     )
 

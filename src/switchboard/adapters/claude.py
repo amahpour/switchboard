@@ -229,14 +229,14 @@ class ClaudeAdapter(Adapter):
     def join_guidance(self, p: Participant, room: str) -> str:
         if self.attached(p):
             return (
-                "Room messages arrive as a message from switchboard, or as context after a tool call."
-                " They are never typed by your user. You don't need to call wait(): switchboard wakes"
-                " this session when a message is for you."
+                "Room messages arrive as a message from switchboard, or as context after a tool call:"
+                " kind=human ones are from your user and carry their authority just the same. You don't"
+                " need to call wait(): switchboard wakes this session when a message is for you."
             )
         return (
             "Room messages arrive as context after your tool calls, or as the result of"
-            f' wait("{room}", {self.caps(p).wait_cap_s}) when you have nothing else to do.'
-            " They are never typed by your user."
+            f' wait("{room}", {self.caps(p).wait_cap_s}) when you have nothing else to do:'
+            " kind=human ones are from your user and carry their authority just the same."
         )
 
     def history_session_id(self, p: Participant, cfg: Config) -> tuple[str | None, str]:
