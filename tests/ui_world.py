@@ -124,6 +124,24 @@ def md_messages() -> dict[str, str]:
     }
 
 
+def wait_js(page: Any, expression: str, arg: Any = None, timeout_ms: float = 15_000) -> Any:
+    """Wait until ``expression`` (what ``page.evaluate`` takes) is truthy, and return its value.
+
+    Not ``page.wait_for_function``: Playwright compiles that predicate with ``eval`` inside the
+    page, and switchboard's CSP (``script-src 'self'``, no ``'unsafe-eval'``) refuses it whenever
+    the compile runs from the page's own animation frame rather than from DevTools: a flaky
+    ``EvalError`` (7 of 12 fresh pages failed, 10 of 12 with the WebSocket routed). ``evaluate``
+    runs through DevTools, outside the page's CSP, every time."""
+    deadline = time.monotonic() + timeout_ms / 1000
+    while True:
+        value = page.evaluate(expression, arg)
+        if value:
+            return value
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"not true within {timeout_ms:.0f} ms: {expression}")
+        page.wait_for_timeout(50)
+
+
 def start_broker(home: Path) -> InProcBroker:
     """A test-mode in-process broker in ``home``, with no say() rate limit and a roomier loop
     guard, so the scripted conversation posts in one go."""
