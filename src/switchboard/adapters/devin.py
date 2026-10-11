@@ -56,6 +56,7 @@ def rearm_text(room: str, wait_s: int) -> str:
 
 class DevinAdapter(Adapter):
     harness = "devin"
+    reports_session_id = True  # the hooks' session_id is the one the history tools know
 
     def tier(self, p: Participant | None) -> tuple[str, str | None]:
         return TIER, None

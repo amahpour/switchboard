@@ -1011,10 +1011,12 @@ class Adapter(ABC):
     def join_guidance(self, p) -> str
     def route(self, p, rel: Release, sinks, now) -> Route         # PURE: push(path) | sink(id, path) | pull | none(reason)
     def on_hook(self, p, ev: HookEvent) -> HookDecision | None    # harness gating (Cursor stop status, Devin taint)
+    reports_session_id: bool; reports_approval_mode: bool         # what its hooks may set (claude, devin, test; claude, codex)
+    def ends_session(self, ev) -> bool                            # SessionEnd → offline (not Claude's reason=clear)
     async def send(self, p, batch, text) -> None                  # transport for push routes
     async def start(self, runner) -> None; async def stop(self) -> None   # background status sources
 ```
-`claim_for_hook(pid, ev)` updates status first. It then calls `adapter.on_hook`, then `rules.releasable`, and returns a `HookOut(kind, text, batch_id, ack)` only for events that §7.3 allows to print. Every re-evaluation the event triggers (its confirmations, expiries and the status change) runs once at the end, after the status is set and the event's own context was claimed (M3 review fix).
+The engine asks the adapter these questions rather than branching on the harness name, so a harness's quirks live in its adapter (#169, moving one harness at a time). `claim_for_hook(pid, ev)` updates status first. It then calls `adapter.on_hook`, then `rules.releasable`, and returns a `HookOut(kind, text, batch_id, ack)` only for events that §7.3 allows to print. Every re-evaluation the event triggers (its confirmations, expiries and the status change) runs once at the end, after the status is set and the event's own context was claimed (M3 review fix).
 
 ### 9.2 Claude (M3), tiers `claude:inbox` and `claude:hook`
 - **Tier choice.** `claude:inbox` needs a verified MCP peer (§5.3), `has_messaging_token`, a successful `mcp.attach`, and the local refusal guard passing. Otherwise the tier is `claude:hook`.

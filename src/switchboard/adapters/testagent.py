@@ -19,6 +19,7 @@ ACK_MODES = ("next_call", "immediate", "never")
 
 class TestAgentAdapter(Adapter):
     harness = "test"
+    reports_session_id = True
     __test__ = False  # not a pytest class
 
     def tier(self, p: Participant | None) -> tuple[str, str | None]:

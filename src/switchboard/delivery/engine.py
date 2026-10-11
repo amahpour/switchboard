@@ -1230,9 +1230,9 @@ class Engine:
         adapter = self.adapter(p)
         was_idle = p.status in ("idle", "starting")
         upd: dict[str, Any] = {"hooks_seen_at": now, "last_seen": now}
-        if ev.sid and p.harness in ("claude", "devin", "test"):
+        if ev.sid and adapter.reports_session_id:
             upd["session_id"] = ev.sid[:128]
-        if ev.permission_mode and p.harness in ("claude", "codex"):
+        if ev.permission_mode and adapter.reports_approval_mode:
             upd["approval_mode"] = approval_mode_of(ev.permission_mode)
         # Codex: input steered into a running turn (a turn/steer, or a turn/start
         # merged into a busy turn) fires UserPromptSubmit with that turn's own id.
@@ -1356,7 +1356,7 @@ class Engine:
             if not tainted:
                 new, bump = "idle", p.status != "idle"
         elif E == "SessionEnd":
-            if not (p.harness == "claude" and ev.reason == "clear"):
+            if adapter.ends_session(ev):
                 new = "offline"
         p = self.store.get_participant(p.id) or p
         if new is not None and (p.status != "waiting-approval" or new == "offline"):

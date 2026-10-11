@@ -82,6 +82,11 @@ class Adapter:
     # At most one unconfirmed push frame per session, across its rooms (Claude:
     # a second frame would queue behind the turn the first one starts).
     serial_push = False
+    # What this harness's hooks may set on the session (§6.3): its own session id (one the
+    # history tools know it by), and its approval mode (only Claude's and Codex's hooks carry
+    # a ``permission_mode``).
+    reports_session_id = False
+    reports_approval_mode = False
 
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -190,6 +195,11 @@ class Adapter:
     def on_hook(self, p: Participant, ev: HookEvent) -> dict[str, Any] | None:
         """Harness-specific side effects of a hook event (Codex: holds, thread proof)."""
         return None
+
+    def ends_session(self, ev: HookEvent) -> bool:
+        """True if this SessionEnd takes the session offline (§7.4). Claude's ``/clear``
+        keeps the process and its binding, so its ``reason=clear`` doesn't."""
+        return True
 
     # -- stop-time delivery (M5: Cursor stop park, Devin Stop block) ----------
     def park_s(self, p: Participant, ev: HookEvent) -> float | None:

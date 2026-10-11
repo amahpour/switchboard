@@ -527,6 +527,7 @@ class Orphan:
 class CodexAdapter(Adapter):
     harness = "codex"
     serial_push = True  # one turn/start, steer or queue item in flight per thread
+    reports_approval_mode = True  # the session id is the thread, proven on its own (§9.3)
 
     def __init__(self, cfg: Config):
         super().__init__(cfg)

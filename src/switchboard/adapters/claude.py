@@ -55,7 +55,7 @@ from switchboard.broker import proc
 from switchboard.claude_registry import REGISTRY_IDLE, registry_status
 from switchboard.clock import Clock, SystemClock
 from switchboard.config import Config
-from switchboard.models import LOCAL_HOST, Action, Batch, Participant, Release, Route
+from switchboard.models import LOCAL_HOST, Action, Batch, HookEvent, Participant, Release, Route
 from switchboard.remote.proto import STALE_STATUS
 
 log = logging.getLogger("switchboard.claude")
@@ -142,6 +142,8 @@ def registry_transition(
 class ClaudeAdapter(Adapter):
     harness = "claude"
     serial_push = True  # one inbox frame in flight per session (§9.2)
+    reports_session_id = True  # followed through /clear by the hooks (§6.3)
+    reports_approval_mode = True
 
     def __init__(self, cfg: Config):
         super().__init__(cfg)
@@ -245,6 +247,10 @@ class ClaudeAdapter(Adapter):
         if not p.session_id:
             return None, f"no {self.harness} session id known yet"
         return p.session_id, ""
+
+    def ends_session(self, ev: HookEvent) -> bool:
+        """``/clear`` keeps the process, so the binding holds and the session stays (§6.3)."""
+        return ev.reason != "clear"
 
     # -------------------------------------------------------------- routing
     def _backing_off(self, p: Participant, now: float) -> bool:
