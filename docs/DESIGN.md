@@ -1018,6 +1018,8 @@ class Adapter(ABC):
     def followup_limit(self) -> int; def followup_missed(self, acked_at, reason, now) -> bool
     def degraded_text(self, name, n) -> str                       # missed stop follow-ups degrade (Cursor)
     derives_tier: bool                                            # tier follows from the row (Cursor, Devin)
+    def is_mid_turn(self, p, ev, was_idle) -> bool                # input steered into the running turn (Codex)
+    local_only: bool                                              # another host's session takes <harness>@remote (Codex)
     async def send(self, p, batch, text) -> None                  # transport for push routes
     async def start(self, runner) -> None; async def stop(self) -> None   # background status sources
 ```

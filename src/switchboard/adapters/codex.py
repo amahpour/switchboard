@@ -524,8 +524,16 @@ class Orphan:
 
 
 # ------------------------------------------------------------------ adapter
+def steered(p: Participant, ev: HookEvent, was_idle: bool) -> bool:
+    """Input steered into a running turn (a turn/steer, or a turn/start merged into a busy
+    turn) fires UserPromptSubmit with that turn's own id: mid-turn input, not a new turn
+    (M4 live)."""
+    return ev.ev == "UserPromptSubmit" and bool(ev.gen) and (ev.gen or "")[:128] == p.gen and not was_idle
+
+
 class CodexAdapter(Adapter):
     harness = "codex"
+    local_only = True  # the push paths all talk to this machine's app-server
     serial_push = True  # one turn/start, steer or queue item in flight per thread
     reports_approval_mode = True  # the session id is the thread, proven on its own (§9.3)
 
@@ -912,6 +920,9 @@ class CodexAdapter(Adapter):
                 return Route("defer", reason="codex queue failed; retrying")
             return Route("push", path="queue")
         return Route("none", reason=note or "idle and not listening: call wait() or poke it")
+
+    def is_mid_turn(self, p: Participant, ev: HookEvent, was_idle: bool) -> bool:
+        return steered(p, ev, was_idle)
 
     def on_hook(self, p: Participant, ev: HookEvent) -> dict[str, Any] | None:
         tid = thread_of(p)

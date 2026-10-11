@@ -1,7 +1,8 @@
 """The engine asks a session's adapter what its hooks mean, not its harness name (#169,
 DESIGN.md §9.1): which hooks set the session id and the approval mode, which SessionEnd
 takes it offline, which hook starts a background subagent, how a Stop re-arms, when missed
-stop follow-ups degrade a session, and whose tier follows from its row. A harness added with
+stop follow-ups degrade a session, whose tier follows from its row, which prompt is input
+into the running turn, and which harness needs another adapter on another host. A harness added with
 its own adapter needs no edit to the engine.
 """
 
@@ -14,6 +15,7 @@ from conftest import FakeClock
 from engine_world import World
 
 from switchboard.adapters import REMOTE_CODEX, PullAdapter
+from switchboard.adapters.codex import steered
 from switchboard.adapters.cursor import CursorAdapter
 from switchboard.config import Config
 from switchboard.models import HookEvent, Notice, Participant
@@ -45,6 +47,16 @@ class ListeningAdapter(PullAdapter):
 
     def rearm_text(self, room: str, wait_s: int) -> str:
         return f"listen in {room}"
+
+
+class SteeredAdapter(PullAdapter):
+    """Codex's answers, on the unknown harness: steered input, and push paths that reach
+    only this machine."""
+
+    local_only = True
+
+    def is_mid_turn(self, p: Participant, ev: HookEvent, was_idle: bool) -> bool:
+        return steered(p, ev, was_idle)
 
 
 class FollowupAdapter(CursorAdapter):
@@ -151,6 +163,33 @@ def test_missed_follow_ups_degrade_by_the_adapters_limit_and_text(tmp_path: Path
     assert w.p(p).unconfirmed_followups == 0 and w.p(p).tier_note == "provisional"
 
 
+def test_input_into_the_running_turn_is_not_a_new_turn(w: World, clock: FakeClock) -> None:
+    """Fails if only a session named Codex's can have mid-turn input: the prompt would end
+    the turn and take back the pull answer the agent is reading."""
+    w.engine.adapters["unknown"] = SteeredAdapter("unknown", w.cfg)
+    p, m = w.agent("bot", harness="unknown", status="idle", hooks=True)
+    w.hook(p, "UserPromptSubmit", gen="t1")
+    w.human("x")
+    _t, bid, *_ = w.engine.pull(w.p(p), w.m(m), "read", 20)
+    clock.advance(1)
+    w.hook(p, "UserPromptSubmit", gen="t1")  # steered into turn t1
+    assert w.store.get_batch(bid).state == "offered"
+    w.hook(p, "UserPromptSubmit", gen="t2")  # a new turn
+    assert w.store.get_batch(bid).state == "expired"
+
+
+def test_a_local_only_harness_on_another_host_gets_its_remote_adapter(w: World) -> None:
+    """Fails if only Codex is looked up as ``<harness>@remote``."""
+    local, remote = SteeredAdapter("unknown", w.cfg), PullAdapter("unknown", w.cfg)
+    w.engine.adapters["unknown"] = local
+    w.engine.adapters["unknown@remote"] = remote
+    assert w.engine.adapter_for("unknown", "") is local
+    assert w.engine.adapter_for("unknown", "pi") is remote
+    del w.engine.adapters["unknown@remote"]  # none registered: the unknown harness's, not this one
+    assert w.engine.adapter_for("unknown", "pi") is w.engine.adapters["unknown"] is local
+    assert w.engine.adapter_for("claude", "pi") is w.engine.adapters["claude"]
+
+
 def test_each_harness_answers_as_the_engine_did_by_name(w: World) -> None:
     """The move changes nothing: the harnesses the engine named before #169 answer yes."""
     ads = w.engine.adapters
@@ -166,3 +205,5 @@ def test_each_harness_answers_as_the_engine_did_by_name(w: World) -> None:
     assert {h for h, a in ads.items() if a.derives_tier} == {"cursor", "devin"}
     assert {h for h, a in ads.items() if a.followup_limit()} == {"cursor"}
     assert ads["cursor"].followup_limit() == w.cfg.cursor.max_unconfirmed_followups
+    assert {h for h, a in ads.items() if a.local_only} == {"codex"}
+    assert w.engine.adapter_for("codex", "pi") is ads[REMOTE_CODEX]

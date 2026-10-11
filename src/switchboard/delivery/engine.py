@@ -146,12 +146,13 @@ class Engine:
         return self.adapter_for(p.harness, getattr(p, "host", ""))
 
     def adapter_for(self, harness: str, host: str = "") -> Adapter:
-        """The adapter of a ``harness`` session on ``host`` ('' for this machine). A Codex
-        session on another host has its own pull-only adapter (DESIGN.md §27.7): the
-        Codex push paths all talk to this machine's app-server."""
-        if harness == "codex" and host:
-            return self.adapters.get("codex@remote") or self.adapters["unknown"]
-        return self.adapters.get(harness) or self.adapters["unknown"]
+        """The adapter of a ``harness`` session on ``host`` ('' for this machine). A harness
+        whose push paths reach only this machine (Codex's app-server) has a pull-only
+        adapter for its sessions on other hosts (DESIGN.md §27.7)."""
+        adapter = self.adapters.get(harness) or self.adapters["unknown"]
+        if host and adapter.local_only:
+            return self.adapters.get(f"{harness}@remote") or self.adapters["unknown"]
+        return adapter
 
     def token(self, b: Batch) -> str:
         return envelope.batch_token(self.key, b.id, b.membership_id)
@@ -1223,16 +1224,8 @@ class Engine:
             upd["session_id"] = ev.sid[:128]
         if ev.permission_mode and adapter.reports_approval_mode:
             upd["approval_mode"] = approval_mode_of(ev.permission_mode)
-        # Codex: input steered into a running turn (a turn/steer, or a turn/start
-        # merged into a busy turn) fires UserPromptSubmit with that turn's own id.
-        # It is mid-turn input, not a new turn (M4 live).
-        mid_turn = (
-            E == "UserPromptSubmit"
-            and p.harness == "codex"
-            and bool(ev.gen)
-            and (ev.gen or "")[:128] == p.gen
-            and not was_idle
-        )
+        # input into the running turn (Codex's steers) is not a new turn
+        mid_turn = adapter.is_mid_turn(p, ev, was_idle)
         gen = (ev.gen or "")[:128] or None
         if E == "UserPromptSubmit" and not mid_turn:
             upd.update(

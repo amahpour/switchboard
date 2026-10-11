@@ -87,6 +87,9 @@ class Adapter:
     # a ``permission_mode``).
     reports_session_id = False
     reports_approval_mode = False
+    # Its push paths reach only this machine: a session on another host takes the pull-only
+    # adapter registered as ``<harness>@remote``, or the unknown harness's (Codex, §27.7).
+    local_only = False
     # Its tier follows from the participant row alone (Cursor's binding and degraded spell,
     # Devin's wait loop), so the engine re-derives it when the row changes (§9.4).
     derives_tier = False
@@ -198,6 +201,11 @@ class Adapter:
     def on_hook(self, p: Participant, ev: HookEvent) -> dict[str, Any] | None:
         """Harness-specific side effects of a hook event (Codex: holds, thread proof)."""
         return None
+
+    def is_mid_turn(self, p: Participant, ev: HookEvent, was_idle: bool) -> bool:
+        """True if this UserPromptSubmit is input into the running turn, not a new turn
+        (Codex's steered input, §9.3): the prompt id, the taint and the pull answers stay."""
+        return False
 
     def starts_subagent(self, ev: HookEvent) -> bool:
         """True if this hook starts a background subagent whose hooks carry the prompt's own

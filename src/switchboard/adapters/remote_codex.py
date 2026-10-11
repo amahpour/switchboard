@@ -36,6 +36,7 @@ import asyncio
 from typing import Any
 
 from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, PullAdapter, SendError
+from switchboard.adapters.codex import steered
 from switchboard.clock import Clock, SystemClock
 from switchboard.config import Config
 from switchboard.models import Batch, HookEvent, Participant, Release, Route, split_session_key
@@ -172,6 +173,9 @@ class RemoteCodexAdapter(PullAdapter):
         if self._backing_off(p, now):
             return Route("defer", reason="the wake failed on its machine; retrying")
         return Route("push", path=PATH)
+
+    def is_mid_turn(self, p: Participant, ev: HookEvent, was_idle: bool) -> bool:
+        return steered(p, ev, was_idle)
 
     def on_hook(self, p: Participant, ev: HookEvent) -> dict[str, Any] | None:
         E = ev.ev
