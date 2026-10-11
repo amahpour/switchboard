@@ -8,6 +8,7 @@ console errors, page errors and CSP violations.
 
 from __future__ import annotations
 
+import re
 import shutil
 from collections.abc import Iterator
 from typing import Any
@@ -215,6 +216,16 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
     bob_card.locator(".email-row button").click()
     expect(bob_card.locator(".email-result")).to_have_text("Saved")
     expect(bob_card).not_to_contain_text("no email yet")
+    # Enter saves from the field itself, which keeps focus: the answer shows at once, though
+    # background redraws wait while a field is being edited (#256)
+    email_input.fill("not an email")
+    email_input.press("Enter")
+    expect(bob_card.locator(".email-result")).to_have_class(re.compile(r"\bbad\b"))
+    expect(bob_card.locator('input[type="email"]')).to_be_focused()
+    # the browser logs the refused save's 400; nothing else is expected here
+    assert all("400" in p and "/email" in p for p in ui.problems), ui.problems
+    ui.problems.clear()
+    email_input.fill("Robert@Example.com")
     again = ui.context().new_page()
     again.goto(origin + "/")
     expect(again.locator('label[for="signin-name"]')).to_have_text("Email")
