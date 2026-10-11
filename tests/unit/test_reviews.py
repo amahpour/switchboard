@@ -155,3 +155,51 @@ def test_a_post_too_long_for_one_message_is_refused() -> None:
     items = [replace(finding("fixed", owner="claude-1", n=n), title="t" * 200) for n in range(1, 30)]
     with pytest.raises(ReviewError, match="too big"):
         reviews.render_post(reviews.post_plan(items), 100)
+
+
+# ------------------------------------------------------------ the forge a board's URL names (#247)
+@pytest.mark.parametrize(
+    ("url", "want"),
+    [
+        ("https://github.com/example-org/shop/pull/7", ("github", "example-org/shop", 7)),
+        ("https://github.com/example-org/shop/pull/7/files", ("github", "example-org/shop", 7)),
+        ("https://github.com/example-org/shop/pull/7?w=1#discussion_r1", ("github", "example-org/shop", 7)),
+        ("https://www.github.com/a/b.c/pull/12345", ("github", "a/b.c", 12345)),
+        ("https://gitlab.com/group/project/-/merge_requests/3", ("gitlab", "group/project", 3)),
+        ("https://gitlab.com/group/sub/project/-/merge_requests/3/diffs", ("gitlab", "group/sub/project", 3)),
+        ("https://git.example.com/team/app/-/merge_requests/41", ("gitlab", "team/app", 41)),
+        ("http://git.example.com:8080/team/app/-/merge_requests/41", ("gitlab", "team/app", 41)),
+    ],
+)
+def test_a_github_pr_or_a_gitlab_mr_is_recognized_from_its_url(url: str, want: tuple[str, str, int]) -> None:
+    """The header shows the forge's mark, the repository and the number. It reads them from the
+    URL's shape alone; switchboard never fetches the pull request (§37.1)."""
+    f = reviews.forge(url)
+    assert f is not None and (f["kind"], f["repo"], f["number"]) == want
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://example.com/shop/pull/7",  # /pull/ on a host that isn't GitHub's
+        "https://github.com/example-org/shop/issues/7",
+        "https://github.com/example-org/shop/pull/",
+        "https://github.com/example-org/shop/pull/0",
+        "https://github.com/example-org/shop/pull/7abc",
+        "https://github.com/example-org/pull/7",
+        "https://github.com/example-org/../pull/7",
+        "https://github.com/a%2Fb/shop/pull/7",
+        "https://user:pw@github.com/example-org/shop/pull/7",
+        "https://gitlab.com/project/-/merge_requests/3",  # a project always has a namespace
+        "https://gitlab.com/group/project/merge_requests/3",  # no /-/
+        "https://gitlab.com/group/project/-/issues/3",
+        "https://gitlab.com/group/./-/merge_requests/3",
+        "ftp://github.com/example-org/shop/pull/7",
+        "https://github.com:notaport/example-org/shop/pull/7",
+        "not a url",
+    ],
+)
+def test_anything_else_is_shown_as_its_url(url: str) -> None:
+    """Not recognized, so the page shows the URL itself and no mark: a wrong mark would say
+    the link goes somewhere it doesn't."""
+    assert reviews.forge(url) is None

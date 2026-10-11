@@ -38,6 +38,7 @@ class Boards:
         return {
             "id": rv["id"],
             "url": rv["url"],
+            "forge": reviews.forge(rv["url"]),
             "head": rv["head"],
             "opened_by": rv["opened_by"],
             "opened_at": rv["opened_at"],

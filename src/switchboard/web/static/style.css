@@ -66,6 +66,7 @@
   --mention-fg: #0b57c4;
   --mention-bg: #e7eefb;
   --green: #2e9d4e;
+  --forge-gitlab: #e24329;  /* GitLab's own orange, the same in both themes (#247) */
   --busy: #d98a1c;
   --parked: #c26a00;
   --danger: #b3261e;
@@ -2667,9 +2668,31 @@ body.login {
 #main.board-open #log, #main.board-open #room-empty { display: none; }
 .board { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 12px 20px 14px; overflow: auto; }
 .board-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.board-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 1; }
+/* the title takes its own row when the status and Close don't fit beside it (a phone), and
+   the commit wraps under the link before the repository's name is cut (#247) */
+.board-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; flex: 1 1 260px; }
 .board-title h2 { margin: 0; font-size: calc(15px * var(--text-scale)); }
 .board-url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* a recognized pull request or merge request (#247): the forge's mark, the repository (which
+   may shorten) and the number (which never does) */
+.board-pr {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: center;
+  padding: 3px 9px 3px 7px;
+  border: 1px solid var(--side-border);
+  border-radius: 999px;
+  color: var(--fg);
+  text-decoration: none;
+  font-size: calc(13px * var(--text-scale));
+}
+.board-pr:hover { border-color: var(--muted); }
+.board-pr:hover .board-pr-repo { text-decoration: underline; }
+.board-pr .mark { width: 16px; height: 16px; flex: none; fill: currentColor; }
+.board-pr.forge-gitlab .mark { fill: var(--forge-gitlab); }
+.board-pr-repo { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.board-pr-num { flex: none; color: var(--muted-2); font-variant-numeric: tabular-nums; }
 .board-head-sha { color: var(--muted-2); font-size: calc(12px * var(--text-scale)); }
 .chip.chip-ok { background: var(--accent-tint); color: var(--green); }
 .board-body { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: start; }
@@ -2713,6 +2736,7 @@ body.login {
 }
 @media (max-width: 760px) {
   .board { padding: 10px 12px 12px; }
+  .board-title { flex-basis: 100%; }  /* its own row; the status and Close go under it (#247) */
   .board-lanes { grid-template-columns: minmax(0, 1fr); }
   .board-lane.lane-you .board-card { max-width: none; }
 }

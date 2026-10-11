@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 # Lengths, cut at the boundary: everything here comes from an agent or a person.
 MAX_URL = 500
@@ -26,6 +27,14 @@ MAX_ITEMS = 200  # per review: a board, not a log
 HEAD_RE = re.compile(r"^[0-9a-f]{7,64}$")
 LINES_RE = re.compile(r"^[1-9][0-9]{0,6}(-[1-9][0-9]{0,6})?$")
 URL_RE = re.compile(r"^https?://[^\s<>\"']+$")
+# The forge a board's URL names, from its path (forge()): a GitHub pull request, or a GitLab
+# merge request on any host (the "/-/" segment is GitLab's). A name is plain ASCII, never
+# percent-encoded, and never only dots.
+_NAME = r"[A-Za-z0-9_.-]{1,100}"
+GITHUB_PR_RE = re.compile(rf"^/({_NAME})/({_NAME})/pull/([1-9][0-9]{{0,8}})(?:/[^?#]*)?$")
+GITLAB_MR_RE = re.compile(
+    rf"^/((?:{_NAME}/){{1,20}}{_NAME})/-/merge_requests/([1-9][0-9]{{0,8}})(?:/[^?#]*)?$"
+)
 
 KINDS = ("finding", "question")
 FINDING_STATES = ("raised", "contested", "conceded", "fixed", "dropped")
@@ -134,6 +143,29 @@ def recommend(value: Any, opts: tuple[str, ...]) -> int | None:
     if type(value) is not int or not 0 <= value < len(opts):
         raise ReviewError(f"recommend must be an option's index, 0 to {len(opts) - 1}")
     return value
+
+
+def forge(value: str) -> dict[str, Any] | None:
+    """The pull request or merge request a board's URL names, from the URL's shape alone (it is
+    never fetched, §37.1): ``{"kind": "github" | "gitlab", "repo", "number"}``. None for anything
+    else, which the page shows as the URL itself, with no mark (#247)."""
+    try:
+        parts = urlsplit(value)
+        parts.port  # noqa: B018 - raises ValueError on a port that isn't a number
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https") or not parts.hostname or parts.username or parts.password:
+        return None
+    host = parts.hostname.lower()
+    if host in ("github.com", "www.github.com"):
+        m = GITHUB_PR_RE.match(parts.path)
+        kind, repo, number = ("github", f"{m[1]}/{m[2]}", m[3]) if m else ("", "", "")
+    else:
+        m = GITLAB_MR_RE.match(parts.path)
+        kind, repo, number = ("gitlab", m[1], m[2]) if m else ("", "", "")
+    if not kind or any(set(seg) == {"."} for seg in repo.split("/")):
+        return None
+    return {"kind": kind, "repo": repo, "number": int(number)}
 
 
 def parse_label(value: Any) -> tuple[str, int]:

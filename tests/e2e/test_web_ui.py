@@ -2120,6 +2120,56 @@ def test_post_appears_when_the_board_is_settled_and_asks_first(ui: UI) -> None:
     expect(chat_row(page, "The review board in this room")).to_contain_text("@codex-1: F4")
 
 
+@pytest.mark.parametrize(
+    ("pr", "kind", "repo", "ref"),
+    [
+        ("https://github.com/example-org/shop/pull/7", "github", "example-org/shop", "#7"),
+        (
+            "https://gitlab.com/example-group/sub/shop/-/merge_requests/12",
+            "gitlab",
+            "example-group/sub/shop",
+            "!12",
+        ),
+    ],
+)
+@pytest.mark.parametrize("size", ["desktop", "phone"])
+def test_the_board_header_names_the_forge_repository_and_number(
+    ui: UI, pr: str, kind: str, repo: str, ref: str, size: str
+) -> None:
+    """#247: a GitHub pull request or a GitLab merge request shows as the forge's mark, the
+    repository and the number, in the same checked link, with the short commit after it. On a
+    phone the number stays whole and nothing scrolls sideways."""
+    slug = f"e2e-board-forge-{kind}-{size}"
+    page = review_room(ui, slug, pr=pr, **(PHONE if size == "phone" else {}))
+    page.click("#board-toggle")
+    link = page.locator("#board .board-head a.board-pr")
+    expect(link).to_be_visible()
+    expect(link).to_have_attribute("href", pr)
+    expect(link).to_have_attribute("rel", re.compile("noopener"))
+    expect(link).to_have_class(re.compile("forge-" + kind))
+    expect(link.locator("svg.mark-" + kind)).to_have_count(1)
+    expect(link.locator(".board-pr-repo")).to_have_text(repo)
+    expect(link.locator(".board-pr-num")).to_have_text(ref)
+    name = "GitHub pull request" if kind == "github" else "GitLab merge request"
+    expect(link).to_have_attribute("aria-label", f"{name} {repo} {ref}")
+    sha = page.locator("#board .board-head-sha")
+    expect(sha).to_have_text("4f2c9e1")
+    expect(sha).to_have_attribute("title", "4f2c9e1a7b30")
+    cut = "e => e.scrollWidth > e.clientWidth"
+    assert not link.locator(".board-pr-num").evaluate(cut)  # the number is never cut
+    assert not link.locator(".board-pr-repo").evaluate(cut)  # nor a name this short, on a phone too
+    no_horizontal_scroll(page)
+
+
+def test_a_url_that_names_no_forge_is_shown_as_it_is(ui: UI) -> None:
+    """Not GitHub's or GitLab's shape, so no mark: the URL itself, as before (#247)."""
+    page = review_room(ui, "e2e-board-forge-none")
+    page.click("#board-toggle")
+    link = page.locator("#board .board-url")
+    expect(link).to_have_text("https://example.com/shop/pull/7")
+    expect(page.locator("#board .board-pr, #board svg.mark")).to_have_count(0)
+
+
 @pytest.mark.parametrize("size", ["desktop", "phone"])
 def test_a_long_pull_request_url_wraps_in_the_board_dialogs(ui: UI, size: str) -> None:
     """#246: the Post and Close confirms name the pull request's URL, and a long one (a GitLab
