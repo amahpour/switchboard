@@ -8,6 +8,7 @@ judges a finding, holds a token or posts anything: the agents and the people do 
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -79,6 +80,7 @@ class Item:
     recommend: int | None  # index into options
     answer: str
     answered_by: str
+    created_at: float = 0.0
 
     @property
     def label(self) -> str:
@@ -160,12 +162,72 @@ def forge(value: str) -> dict[str, Any] | None:
     if host in ("github.com", "www.github.com"):
         m = GITHUB_PR_RE.match(parts.path)
         kind, repo, number = ("github", f"{m[1]}/{m[2]}", m[3]) if m else ("", "", "")
+        origin = "https://github.com"
     else:
         m = GITLAB_MR_RE.match(parts.path)
         kind, repo, number = ("gitlab", m[1], m[2]) if m else ("", "", "")
+        origin = f"{parts.scheme}://{host}" + (f":{parts.port}" if parts.port else "")
     if not kind or any(set(seg) == {"."} for seg in repo.split("/")):
         return None
-    return {"kind": kind, "repo": repo, "number": int(number)}
+    # base: the repository's own page, which a card's links start from (#250)
+    return {"kind": kind, "repo": repo, "number": int(number), "base": f"{origin}/{repo}"}
+
+
+def lines_url(f: dict[str, Any] | None, file: str, lines: str) -> str | None:
+    """A finding's lines in the PR's or MR's own diff, where the forge draws them in color (#250).
+    GitHub names a file in a PR's diff by the SHA-256 of its path and the new side's lines by
+    ``R<n>``; GitLab names a file by the SHA-1 of its path, and its line anchors need the old
+    side's number too, which a board doesn't have, so a GitLab link opens the file. The path is
+    only hashed, and every other part comes from ``forge``, so nothing an agent wrote is in it."""
+    if f is None or not file:
+        return None
+    if f["kind"] == "github":
+        anchor = "diff-" + hashlib.sha256(file.encode()).hexdigest()
+        if lines:
+            start, _, end = lines.partition("-")
+            anchor += f"R{start}" + (f"-R{end}" if end else "")
+        return f"{f['base']}/pull/{f['number']}/files#{anchor}"
+    digest = hashlib.sha1(file.encode()).hexdigest()  # noqa: S324 - GitLab's own file anchor, not security
+    return f"{f['base']}/-/merge_requests/{f['number']}/diffs#{digest}"
+
+
+def commit_url(f: dict[str, Any] | None, sha: str) -> str | None:
+    """A fix's commit on the forge: in the PR on GitHub, the commit's page on GitLab (#250)."""
+    if f is None or not sha:
+        return None
+    if f["kind"] == "github":
+        return f"{f['base']}/pull/{f['number']}/commits/{sha}"
+    return f"{f['base']}/-/commit/{sha}"
+
+
+# what each move a board records reads as on a card's history (#250)
+HISTORY_VERBS = {
+    "conceded": "conceded it",
+    "contested": "contested it",
+    "fixed": "fixed it",
+    "dropped": "dropped it",
+    "answered": "answered it",
+}
+MAX_HISTORY = 12
+
+
+def history(item: Item, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Who did what to ``item``, in order: who raised or asked it, then each move the board's
+    events record for its label (``{ts, data: {item, to, by}}``). Only the moves a board makes
+    are named; anything else in an event is left out. Capped at ``MAX_HISTORY`` lines."""
+    out: list[dict[str, Any]] = [
+        {
+            "by": item.raised_by,
+            "did": "raised it" if item.kind == "finding" else "asked it",
+            "at": item.created_at,
+        }
+    ]
+    for e in events:
+        d = e.get("data") or {}
+        did = HISTORY_VERBS.get(d.get("to"))  # type: ignore[arg-type]
+        if d.get("item") == item.label and did and isinstance(d.get("by"), str):
+            out.append({"by": d["by"], "did": did, "at": e.get("ts")})
+    return out[:1] + out[1:][-(MAX_HISTORY - 1) :]
 
 
 def board_reason(name: str, version: str | None, tools: tuple[str, ...] | None) -> str | None:

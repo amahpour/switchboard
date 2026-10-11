@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
 
 import pytest
@@ -225,3 +226,79 @@ def test_a_list_without_review_names_the_version_and_what_is_missing() -> None:
 
 def test_a_list_with_review_can_use_the_board() -> None:
     assert reviews.board_reason("claude-1", "0.23.0", ("join", "review", "say")) is None
+
+
+# ------------------------------------------- a card's links and history (#250)
+GH = reviews.forge("https://github.com/example-org/shop/pull/7")
+GL = reviews.forge("https://git.example.com:8443/group/sub/shop/-/merge_requests/12")
+
+
+def test_the_forge_carries_the_repositorys_web_base() -> None:
+    assert GH is not None and GH["base"] == "https://github.com/example-org/shop"
+    assert GL is not None and GL["base"] == "https://git.example.com:8443/group/sub/shop"
+
+
+@pytest.mark.parametrize(
+    ("file", "lines", "anchor"),
+    [
+        ("shop/codes.py", "12-19", "R12-R19"),
+        ("shop/money.py", "8", "R8"),
+        ("shop/money.py", "", ""),
+        ("docs/a file.md", "3", "R3"),
+    ],
+)
+def test_github_lines_link_to_the_pull_requests_files_view(file: str, lines: str, anchor: str) -> None:
+    """GitHub names a file in a PR's diff by the SHA-256 of its path, and its new side's lines
+    by R<n>: the link opens the colored diff at those lines."""
+    digest = hashlib.sha256(file.encode()).hexdigest()
+    assert reviews.lines_url(GH, file, lines) == (
+        f"https://github.com/example-org/shop/pull/7/files#diff-{digest}{anchor}"
+    )
+
+
+def test_gitlab_lines_link_to_the_merge_requests_diff_at_the_file() -> None:
+    """GitLab names a file in an MR's diff by the SHA-1 of its path. Its line anchors also need
+    the old side's line number, which a board doesn't have, so the link opens the file."""
+    digest = hashlib.sha1(b"shop/codes.py").hexdigest()
+    assert reviews.lines_url(GL, "shop/codes.py", "12-19") == (
+        f"https://git.example.com:8443/group/sub/shop/-/merge_requests/12/diffs#{digest}"
+    )
+
+
+def test_no_forge_or_no_file_means_no_lines_link() -> None:
+    assert reviews.lines_url(None, "shop/codes.py", "12") is None
+    assert reviews.lines_url(GH, "", "12") is None
+
+
+def test_a_fix_links_to_its_commit() -> None:
+    assert reviews.commit_url(GH, "9a1b2c3d4e5f") == (
+        "https://github.com/example-org/shop/pull/7/commits/9a1b2c3d4e5f"
+    )
+    assert reviews.commit_url(GL, "9a1b2c3d4e5f") == (
+        "https://git.example.com:8443/group/sub/shop/-/commit/9a1b2c3d4e5f"
+    )
+    assert reviews.commit_url(GH, "") is None and reviews.commit_url(None, "9a1b2c3d4e5f") is None
+
+
+def test_an_items_history_is_who_did_what_in_order() -> None:
+    """The card's short history: who raised it, then each move on it from the board's events,
+    with no other item's moves and nothing an event doesn't say."""
+    f = replace(finding(raised_by="codex-1"), n=2, created_at=100.0)
+    events = [
+        {"ts": 110.0, "data": {"item": "F2", "to": "conceded", "by": "claude-1"}},
+        {"ts": 115.0, "data": {"item": "F1", "to": "dropped", "by": "codex-1"}},
+        {"ts": 120.0, "data": {"open": "https://x", "by": "codex-1"}},
+        {"ts": 130.0, "data": {"item": "F2", "to": "fixed", "by": "claude-1"}},
+        {"ts": 131.0, "data": {"item": "F2", "to": "made-up", "by": "claude-1"}},
+    ]
+    assert reviews.history(f, events) == [
+        {"by": "codex-1", "did": "raised it", "at": 100.0},
+        {"by": "claude-1", "did": "conceded it", "at": 110.0},
+        {"by": "claude-1", "did": "fixed it", "at": 130.0},
+    ]
+    q = replace(question(), raised_by="claude-1", created_at=5.0)
+    events = [{"ts": 9.0, "data": {"item": "Q1", "to": "answered", "by": "alice"}}]
+    assert reviews.history(q, events) == [
+        {"by": "claude-1", "did": "asked it", "at": 5.0},
+        {"by": "alice", "did": "answered it", "at": 9.0},
+    ]

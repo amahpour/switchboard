@@ -4,6 +4,7 @@ record, and every refusal says what to fix."""
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -130,7 +131,12 @@ async def test_the_board_names_the_forge_its_url_points_at(broker: InProcBroker)
             url = "https://gitlab.com/example-group/sub/shop/-/merge_requests/12"
             await reviewer.call("review", room="#build", action="open", url=url)
             got = web.get("/api/rooms/build/review").json()["board"]
-            assert got["forge"] == {"kind": "gitlab", "repo": "example-group/sub/shop", "number": 12}
+            assert got["forge"] == {
+                "kind": "gitlab",
+                "repo": "example-group/sub/shop",
+                "number": 12,
+                "base": "https://gitlab.com/example-group/sub/shop",
+            }
             assert got["url"] == url
     finally:
         web.close()
@@ -379,5 +385,39 @@ async def test_an_agent_cant_run_review(broker: InProcBroker) -> None:
             assert web.get("/api/rooms/build/review").json()["board"] is None
             rows = q(broker, "SELECT sender_kind, text FROM messages WHERE kind='chat'")
             assert [(x["sender_kind"], x["text"]) for x in rows] == [("agent", f"/review {PR}")]
+    finally:
+        web.close()
+
+
+async def test_a_cards_links_and_history_come_with_the_board(broker: InProcBroker) -> None:
+    """#250: each item carries its lines in the PR's own diff, its fix's commit, and who did
+    what to it, in order, from the moves the board recorded."""
+    web = broker.web_client()
+    pr = "https://github.com/example-org/shop/pull/7"
+    try:
+        async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            await reviewer.call("review", room="#build", action="open", url=pr)
+            await reviewer.call(
+                "review",
+                room="#build",
+                action="raise",
+                title="expired codes",
+                file="shop/codes.py",
+                lines="12-19",
+            )
+            await author.call("review", room="#build", action="concede", item="F1")
+            await author.call("review", room="#build", action="fix", item="F1", commit="9a1b2c3d4e5f")
+            item = web.get("/api/rooms/build/review").json()["board"]["items"][0]
+            digest = hashlib.sha256(b"shop/codes.py").hexdigest()
+            assert item["lines_url"] == f"{pr}/files#diff-{digest}R12-R19"
+            assert item["commit_url"] == f"{pr}/commits/9a1b2c3d4e5f"
+            assert [(h["by"], h["did"]) for h in item["history"]] == [
+                ("codex-1", "raised it"),
+                ("claude-1", "conceded it"),
+                ("claude-1", "fixed it"),
+            ]
+            assert all(isinstance(h["at"], float) for h in item["history"])
     finally:
         web.close()

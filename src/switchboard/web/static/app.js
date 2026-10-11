@@ -4590,12 +4590,14 @@
   // The agents move items through their `review` tool; a person answers the questions, rules on
   // a contested finding, drops anything and closes the board. Every string here is the agents'
   // text, so it goes in through textContent, or md.js for an item's detail (the one link path).
+  // Three lanes in one row, read as the life of a finding (#250): the agents' work, what only a
+  // person can decide, and what's done. Dropped items are settled too: muted, with their reason.
   const BOARD_LANES = [
-    { key: 'you', title: 'Needs you', test: function (i) { return i.needs_person; } },
-    { key: 'raised', title: 'Raised', test: function (i) { return i.state === 'raised'; } },
-    { key: 'fixing', title: 'Being fixed', test: function (i) { return i.state === 'conceded'; } },
-    { key: 'done', title: 'Done', test: function (i) { return i.state === 'fixed' || i.state === 'answered'; } },
-    { key: 'dropped', title: 'Dropped', test: function (i) { return i.state === 'dropped'; } },
+    { key: 'working', title: 'Agents working', empty: 'Nothing in progress',
+      test: function (i) { return !i.needs_person && (i.state === 'raised' || i.state === 'conceded'); } },
+    { key: 'you', title: 'Needs you', empty: 'Nothing needs you', test: function (i) { return i.needs_person; } },
+    { key: 'settled', title: 'Settled', empty: 'Nothing settled yet',
+      test: function (i) { return i.state === 'fixed' || i.state === 'answered' || i.state === 'dropped'; } },
   ];
   const BOARD_STATE = {
     raised: 'Raised', contested: 'Contested', conceded: 'Being fixed', fixed: 'Fixed', dropped: 'Dropped',
@@ -4695,8 +4697,11 @@
     const lanes = el('div', 'board-lanes');
     for (const lane of BOARD_LANES) {
       const items = b.items.filter(lane.test);
-      if (lane.key === 'you' && !items.length) continue;
-      const col = el('section', 'board-lane lane-' + lane.key);
+      // the dropped ones last in Settled: finished, and never posted
+      if (lane.key === 'settled') {
+        items.sort(function (x, y) { return (x.state === 'dropped') - (y.state === 'dropped'); });
+      }
+      const col = el('section', 'board-lane lane-' + lane.key + (items.length ? '' : ' lane-clear'));
       col.setAttribute('aria-label', lane.title);
       const h = el('h3', 'board-lane-title', lane.title);
       h.append(el('span', 'board-count', String(items.length)));
@@ -4708,8 +4713,9 @@
         const top = el('span', 'board-card-top');
         top.append(el('span', 'board-label', i.label), el('span', 'board-state s-' + i.state, BOARD_STATE[i.state] || i.state));
         card.append(top, el('span', 'board-card-title', i.title));
-        const meta = [boardWhere(i), boardWho(i)].filter(Boolean).join(' · ');
+        const meta = i.state === 'dropped' && i.reason ? i.reason : [boardWhere(i), boardWho(i)].filter(Boolean).join(' · ');
         card.append(el('span', 'board-card-meta', meta));
+        if (i.state === 'dropped') card.classList.add('dropped');
         card.addEventListener('click', function () {
           state.boardSel = state.boardSel === i.label ? null : i.label;
           renderBoard();
@@ -4718,7 +4724,7 @@
         });
         col.append(card);
       }
-      if (!items.length) col.append(el('p', 'board-empty', 'None'));
+      if (!items.length) col.append(el('p', 'board-empty', lane.empty));
       lanes.append(col);
     }
     const body = el('div', 'board-body');
@@ -4761,16 +4767,72 @@
     return p;
   }
 
+  // A link to the PR or MR (#250): the one checked link path (§29.4), with the forge's mark
+  function forgeLink(b, url, text) {
+    const f = b.forge;
+    const a = window.SBMarkdown && window.SBMarkdown.externalLink
+      ? window.SBMarkdown.externalLink(text, url, location.hostname) : el('span', null, text);
+    if (f && FORGE_NAME[f.kind] && String(a.tagName || '').toUpperCase() === 'A') {
+      a.classList.add('board-link', 'forge-' + f.kind);
+      a.replaceChildren(mark(f.kind), el('span', null, text));
+    }
+    return a;
+  }
+
+  function boardRow(dl, label, value) {
+    const dd = el('dd');
+    dd.append(value);
+    dl.append(el('dt', null, label), dd);
+  }
+
+  // A card's detail is short and links out (#250): one line on what's wrong, its lines on the
+  // PR or MR where the forge draws the colored diff, the fix's commit, and who did what. A
+  // contested finding shows both sides side by side, above the person's choice.
   function boardDetail(r, i) {
+    const b = r.board;
+    const forge = b.forge && FORGE_NAME[b.forge.kind];
     const d = el('aside', 'board-detail');
     d.setAttribute('aria-label', i.label + ' detail');
-    d.append(el('h3', null, i.label + ' · ' + i.title));
-    d.append(el('p', 'board-detail-state', (BOARD_STATE[i.state] || i.state) + ' · ' + boardWho(i)));
-    if (boardWhere(i)) d.append(el('code', 'board-where', boardWhere(i)));
-    if (i.detail) d.append(mdBody(i.detail, []));
+    const top = el('div', 'board-detail-top');
+    top.append(el('span', 'board-state s-' + i.state, BOARD_STATE[i.state] || i.state), el('h3', null, i.label + ' · ' + i.title));
+    d.append(top, el('p', 'board-detail-state', boardWho(i)));
+    const contested = i.state === 'contested';
+    if (i.detail && !contested) d.append(mdBody(i.detail, []));
+    const rows = el('dl', 'board-rows');
+    const where = boardWhere(i);
+    if (where) {
+      boardRow(rows, 'Lines', i.lines_url && forge
+        ? forgeLink(b, i.lines_url, 'View ' + where + ' on ' + forge) : el('code', 'board-where', where));
+    }
+    if (i.commit) {
+      boardRow(rows, 'Fix', i.commit_url && forge
+        ? forgeLink(b, i.commit_url, i.commit.slice(0, 7) + ' on ' + forge) : el('code', null, i.commit.slice(0, 12)));
+    }
+    if (rows.childNodes.length) d.append(rows);
+    if (contested) {
+      const by = (i.history || []).filter(function (h) { return h.did === 'contested it'; }).pop();
+      const sides = el('div', 'board-sides');
+      const raised = el('div', 'board-side');
+      raised.append(el('p', 'board-side-who', i.raised_by + ' · raised it'));
+      raised.append(i.detail ? mdBody(i.detail, []) : el('p', null, i.title));
+      const against = el('div', 'board-side');
+      against.append(el('p', 'board-side-who', (by ? by.by : 'the other side') + ' · contests it'), el('p', null, i.reason));
+      sides.append(raised, against);
+      d.append(sides);
+    }
     if (i.answer) d.append(el('p', 'board-answer', 'Answer: ' + i.answer));
-    if (i.reason) d.append(el('p', 'board-reason', (i.state === 'dropped' ? 'Dropped: ' : 'Why: ') + i.reason));
-    if (i.commit) d.append(el('p', 'board-reason', 'Fixed in ' + i.commit.slice(0, 12)));
+    if (i.reason && !contested) d.append(el('p', 'board-reason', (i.state === 'dropped' ? 'Dropped: ' : 'Why: ') + i.reason));
+    if (i.history && i.history.length) {
+      const ol = el('ol', 'board-history');
+      ol.setAttribute('aria-label', 'History');
+      for (const h of i.history) {
+        const li = el('li');
+        li.append(el('strong', null, h.by), document.createTextNode(' ' + h.did));
+        if (h.at) li.append(el('span', 'board-history-at', hhmm(h.at)));
+        ol.append(li);
+      }
+      d.append(ol);
+    }
     const acts = el('div', 'board-actions');
     if (i.kind === 'question' && i.state === 'open') {
       i.options.forEach(function (o, n) {

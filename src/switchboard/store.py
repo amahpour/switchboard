@@ -2162,6 +2162,15 @@ class Store:
         with db.tx(self.con):
             self.con.execute(f"UPDATE reviews SET {cols} WHERE id=?", (*fields.values(), review_id))
 
+    def review_events(self, room_id: int, since: float) -> list[Event]:
+        """The room's ``review`` events from ``since`` (a board's opening) on, oldest first: the
+        moves a card's history is read from (#250)."""
+        rows = self.con.execute(
+            "SELECT * FROM events WHERE room_id=? AND kind='review' AND ts>=? ORDER BY id",
+            (room_id, since),
+        ).fetchall()
+        return [Event.from_row(r) for r in rows]
+
     def review_items(self, review_id: int) -> list[reviews.Item]:
         rows = self.con.execute(
             "SELECT * FROM review_items WHERE review_id=? ORDER BY kind, n", (review_id,)
@@ -2347,4 +2356,5 @@ def _review_item(r: sqlite3.Row) -> reviews.Item:
         recommend=r["recommend"],
         answer=r["answer"],
         answered_by=r["answered_by"],
+        created_at=r["created_at"],
     )

@@ -2703,10 +2703,12 @@ body.login {
 .board-head-sha { color: var(--muted-2); font-size: calc(12px * var(--text-scale)); }
 .chip.chip-ok { background: var(--accent-tint); color: var(--green); }
 .board-body { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: start; }
-.board-lanes { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; align-items: start; min-width: 0; }
+/* three lanes in one row, never wrapped (#250): Agents working, Needs you, Settled */
+.board-lanes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; align-items: start; min-width: 0; }
 .board-lane { display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 10px; background: var(--side-bg); border: 1px solid var(--side-border); min-width: 0; }
-.board-lane.lane-you { grid-column: 1 / -1; background: var(--danger-bg); border-color: var(--danger); }
-.board-lane.lane-you .board-card { max-width: 420px; }
+.board-lane.lane-you:not(.lane-clear) { background: var(--danger-bg); border-color: var(--danger); }
+.board-card.dropped { opacity: .62; }
+.board-card.dropped .board-card-title { text-decoration: line-through; text-decoration-color: var(--muted); }
 .board-lane-title { display: flex; align-items: center; gap: 6px; margin: 0; font-size: calc(12.5px * var(--text-scale)); font-weight: 600; color: var(--ink-2); }
 .board-count { color: var(--muted-2); font-weight: 400; font-variant-numeric: tabular-nums; }
 /* a member that can't use the board, and why (#249) */
@@ -2735,6 +2737,22 @@ body.login {
 .board-post .btn-primary { align-self: flex-start; }
 .board-detail { width: 340px; display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); overflow-wrap: anywhere; }
 .board-detail h3 { margin: 0; font-size: calc(14px * var(--text-scale)); }
+.board-detail-top { display: flex; flex-direction: column; gap: 2px; }
+/* a card's rows (#250): Lines and Fix, each a link to the PR or MR with the forge's mark */
+.board-rows { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 10px; margin: 0; align-items: baseline; }
+.board-rows dt { color: var(--muted-2); font-size: calc(12px * var(--text-scale)); font-weight: 600; }
+.board-rows dd { margin: 0; min-width: 0; }
+.board-link { display: inline-flex; align-items: center; gap: 6px; font-size: calc(12.5px * var(--text-scale)); }
+.board-link .mark { width: 14px; height: 14px; flex: none; fill: currentColor; }
+.board-link.forge-gitlab .mark { fill: var(--forge-gitlab); }
+/* a contested finding: both sides side by side, above the person's choice */
+.board-sides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.board-side { padding: 8px 10px; border-radius: 8px; background: var(--side-bg); border: 1px solid var(--side-border); font-size: calc(12.5px * var(--text-scale)); min-width: 0; }
+.board-side > p { margin: 0; }
+.board-side > .board-side-who { margin: 0 0 4px; font-weight: 600; }
+.board-history { margin: 0; padding: 8px 0 0 18px; border-top: 1px solid var(--line); color: var(--muted-2); font-size: calc(12px * var(--text-scale)); display: flex; flex-direction: column; gap: 2px; }
+.board-history strong { color: var(--fg); font-weight: 600; }
+.board-history-at { margin-left: 6px; font-variant-numeric: tabular-nums; }
 .board-answer { margin: 0; font-weight: 600; }
 .board-detail-state, .board-reason { margin: 0; color: var(--muted-2); font-size: calc(12.5px * var(--text-scale)); }
 .board-where { align-self: flex-start; }
@@ -2749,7 +2767,8 @@ body.login {
   .board { padding: 10px 12px 12px; }
   .board-title { flex-basis: 100%; }  /* its own row; the status and Close go under it (#247) */
   .board-lanes { grid-template-columns: minmax(0, 1fr); }
-  .board-lane.lane-you .board-card { max-width: none; }
+  .board-lane.lane-you { order: -1; }  /* stacked on a phone: what needs you first */
+  .board-sides { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* Who someone is (#192): the admin sets each person's email on their card. */

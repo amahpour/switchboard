@@ -22,6 +22,7 @@ On any failure the fixture saves a Playwright trace (open it with ``uv run playw
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -2100,8 +2101,8 @@ def test_the_board_names_a_member_that_cant_use_it(ui: UI) -> None:
 
 
 def test_the_review_board_shows_each_item_in_its_lane(ui: UI) -> None:
-    """The board button appears only with a board, and swaps the log for lanes: the person's
-    questions and contested findings on top, then raised, being fixed, done and dropped."""
+    """The board button appears only with a board, and swaps the log for three lanes: Agents
+    working, Needs you (questions and contested findings) and Settled (#250)."""
     page = review_room(ui, "e2e-board-lanes")
     toggle = page.locator("#board-toggle")
     expect(toggle).to_be_visible()
@@ -2111,11 +2112,16 @@ def test_the_review_board_shows_each_item_in_its_lane(ui: UI) -> None:
     expect(page.locator("#log")).to_be_hidden()
     expect(page.locator("#board")).to_be_visible()
     expect(page.locator("#board-status")).to_have_text("2 need you")
+    # three lanes, the life of a finding (#250); a dropped item is settled, last and muted
+    assert lane_labels(page, "working") == ["F4"]
     assert lane_labels(page, "you") == ["F3", "Q1"]
-    assert lane_labels(page, "raised") == []
-    assert lane_labels(page, "fixing") == ["F4"]
-    assert lane_labels(page, "done") == ["F2"]
-    assert lane_labels(page, "dropped") == ["F1"]
+    assert lane_labels(page, "settled") == ["F2", "F1"]
+    expect(page.locator('#board .lane-settled .board-card[data-item="F1"]')).to_have_class(
+        re.compile(r"\bdropped\b")
+    )
+    expect(page.locator('#board .board-card[data-item="F1"] .board-card-meta')).to_have_text(
+        "moved to Q1: it's a pricing decision, not a bug"
+    )
     # an agent's text is text: the URL is a checked external link, the title plain
     link = page.locator("#board .board-url")
     expect(link).to_have_attribute("href", "https://example.com/shop/pull/7")
@@ -2123,6 +2129,64 @@ def test_the_review_board_shows_each_item_in_its_lane(ui: UI) -> None:
     toggle.click()
     expect(page.locator("#log")).to_be_visible()
     expect(page.locator("#board")).to_be_hidden()
+
+
+def test_the_three_lanes_sit_in_one_row_and_stack_on_a_phone(ui: UI) -> None:
+    """#250: on a desktop the lanes are one row, in the order a finding lives (no lane wraps
+    under another); on a phone they stack, with Needs you first."""
+    page = review_room(ui, "e2e-board-row")
+    page.click("#board-toggle")
+    tops = page.locator("#board .board-lane").evaluate_all(
+        "ls => ls.map(l => [l.className.match(/lane-(\\w+)/)[1], Math.round(l.getBoundingClientRect().top),"
+        " Math.round(l.getBoundingClientRect().left)])"
+    )
+    assert [t[0] for t in sorted(tops, key=lambda t: t[2])] == ["working", "you", "settled"]
+    assert len({t[1] for t in tops}) == 1, tops
+    phone = review_room(ui, "e2e-board-row-phone", **PHONE)
+    phone.click("#board-toggle")
+    tops = phone.locator("#board .board-lane").evaluate_all(
+        "ls => ls.map(l => [l.className.match(/lane-(\\w+)/)[1], Math.round(l.getBoundingClientRect().top)])"
+    )
+    assert [t[0] for t in sorted(tops, key=lambda t: t[1])] == ["you", "working", "settled"]
+    no_horizontal_scroll(phone)
+
+
+def test_a_card_links_to_its_lines_and_fix_and_shows_its_history(ui: UI) -> None:
+    """#250: a fixed finding's detail links to its lines in the PR's own diff and to its fix's
+    commit, both with GitHub's mark, through the checked link path, and says who did what."""
+    pr = "https://github.com/example-org/shop/pull/7"
+    page = review_room(ui, "e2e-board-card", pr=pr)
+    page.click("#board-toggle")
+    page.click('#board .board-card[data-item="F2"]')
+    detail = page.locator("#board .board-detail")
+    lines = detail.locator("dd a.board-link").first
+    digest = hashlib.sha256(b"shop/codes.py").hexdigest()
+    expect(lines).to_have_attribute("href", f"{pr}/files#diff-{digest}R12-R19")
+    expect(lines).to_have_text("View shop/codes.py:12-19 on GitHub")
+    expect(lines).to_have_attribute("rel", re.compile("noopener"))
+    expect(lines.locator("svg.mark-github")).to_have_count(1)
+    fix = detail.locator("dd a.board-link").nth(1)
+    expect(fix).to_have_attribute("href", f"{pr}/commits/9a1b2c3d4e5f")
+    expect(fix).to_have_text("9a1b2c3 on GitHub")
+    expect(detail.locator(".board-history li strong")).to_have_text(["codex-1", "claude-1", "claude-1"])
+    expect(detail.locator(".board-history li")).to_contain_text(["raised it", "conceded it", "fixed it"])
+
+
+def test_a_contested_finding_shows_both_sides(ui: UI) -> None:
+    """#250: the raiser's case and the contest's reason, side by side, above the choice. With
+    no forge, the lines are text, not a link."""
+    page = review_room(ui, "e2e-board-sides")
+    page.click("#board-toggle")
+    page.click('#board .board-card[data-item="F3"]')
+    sides = page.locator("#board .board-detail .board-side")
+    expect(sides).to_have_count(2)
+    expect(sides.nth(0).locator(".board-side-who")).to_have_text("codex-1 · raised it")
+    expect(sides.nth(0)).to_contain_text("Half-up rounding, but the ledger rounds half-even.")
+    expect(sides.nth(1).locator(".board-side-who")).to_have_text("claude-1 · contests it")
+    expect(sides.nth(1)).to_contain_text("the ledger is the one to change: half-up is what the receipt shows")
+    expect(page.locator("#board .board-detail .board-where")).to_have_text("shop/money.py:8")
+    expect(page.locator("#board .board-detail a.board-link")).to_have_count(0)
+    expect(page.locator("#board-concede")).to_be_visible()
 
 
 def test_a_person_answers_a_question_and_rules_on_a_finding(ui: UI) -> None:
@@ -2135,12 +2199,14 @@ def test_a_person_answers_a_question_and_rules_on_a_finding(ui: UI) -> None:
     expect(detail.locator("h3")).to_have_text("Q1 · Discount before or after tax?")
     expect(detail.locator('button[data-option="0"]')).to_have_text("Before tax (recommended)")
     detail.locator('button[data-option="0"]').click()
-    expect(page.locator('#board .lane-done .board-card[data-item="Q1"]')).to_be_visible()
+    expect(page.locator('#board .lane-settled .board-card[data-item="Q1"]')).to_be_visible()
     page.click('#board .board-card[data-item="F3"]')
     page.select_option("#board-owner", "codex-1")
     page.click("#board-concede")
-    expect(page.locator('#board .lane-fixing .board-card[data-item="F3"]')).to_be_visible()
-    expect(page.locator("#board .lane-you")).to_have_count(0)  # nothing left for the person
+    expect(page.locator('#board .lane-working .board-card[data-item="F3"]')).to_be_visible()
+    expect(page.locator("#board .lane-you .board-card")).to_have_count(0)  # nothing left for the person
+    expect(page.locator("#board .lane-you")).to_have_class(re.compile(r"\blane-clear\b"))
+    expect(page.locator("#board .lane-you .board-empty")).to_have_text("Nothing needs you")
     expect(page.locator("#board-status")).to_have_text("2 open")
     page.click("#board-toggle")
     expect(chat_row(page, "Review board: Q1")).to_contain_text("answered with option 0")
@@ -2153,10 +2219,10 @@ def test_dropping_needs_a_reason_and_closing_asks_first(ui: UI) -> None:
     page.click('#board .board-card[data-item="F4"]')
     page.click("#board-drop")
     expect(page.locator("#board-reason")).to_be_focused()  # no reason, no drop
-    expect(page.locator('#board .lane-fixing .board-card[data-item="F4"]')).to_be_visible()
+    expect(page.locator('#board .lane-working .board-card[data-item="F4"]')).to_be_visible()
     page.fill("#board-reason", "out of scope for this PR")
     page.click("#board-drop")
-    expect(page.locator('#board .lane-dropped .board-card[data-item="F4"]')).to_be_visible()
+    expect(page.locator('#board .lane-settled .board-card[data-item="F4"].dropped')).to_be_visible()
     page.click("#board-close")
     expect(page.locator("#app-dialog")).to_be_visible()
     page.click("#app-dialog-action")

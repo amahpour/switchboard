@@ -35,16 +35,18 @@ class Boards:
         if rv is None:
             return None
         items = self.store.review_items(rv["id"])
+        f = reviews.forge(rv["url"])
+        events = [{"ts": e.ts, "data": e.data} for e in self.store.review_events(room.id, rv["opened_at"])]
         return {
             "id": rv["id"],
             "url": rv["url"],
-            "forge": reviews.forge(rv["url"]),
+            "forge": f,
             "head": rv["head"],
             "opened_by": rv["opened_by"],
             "opened_at": rv["opened_at"],
             "settled": reviews.settled(items),
             "counts": reviews.counts(items),
-            "items": [item_dict(i) for i in items],
+            "items": [item_dict(i, f, events) for i in items],
             "plan": {owner: [i.label for i in its] for owner, its in reviews.post_plan(items).items()},
             "posted_at": rv["posted_at"],
             "posted_by": rv["posted_by"],
@@ -254,7 +256,10 @@ def action_past(action: str) -> str:
     return {"concede": "conceded", "contest": "contested", "fix": "fixed", "drop": "dropped"}[action]
 
 
-def item_dict(i: reviews.Item) -> dict[str, Any]:
+def item_dict(
+    i: reviews.Item, f: dict[str, Any] | None = None, events: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """An item as the page reads it, with its links on the forge and its history (#250)."""
     return {
         "label": i.label,
         "kind": i.kind,
@@ -272,4 +277,7 @@ def item_dict(i: reviews.Item) -> dict[str, Any]:
         "answer": i.answer,
         "answered_by": i.answered_by,
         "needs_person": i.needs_person,
+        "lines_url": reviews.lines_url(f, i.file, i.lines),
+        "commit_url": reviews.commit_url(f, i.commit),
+        "history": reviews.history(i, events or []),
     }
