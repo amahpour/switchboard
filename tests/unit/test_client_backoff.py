@@ -41,6 +41,11 @@ def sock_dir() -> Iterator[Path]:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _accepting(task: asyncio.Task[Any]) -> bool:
+    """A task of the event loop's own, finishing an accepted connection."""
+    return getattr(task.get_coro(), "__qualname__", "").endswith("._accept_connection2")
+
+
 class FakeBroker:
     """A Unix socket server that runs ``script(n, reader, writer)`` for its n-th connection
     (1-based) and records when each connection was accepted and closed."""
@@ -59,6 +64,11 @@ class FakeBroker:
 
     async def __aexit__(self, *exc: Any) -> None:
         assert self.server is not None
+        # Let accepts already under way finish first. One that finishes after close() builds a
+        # transport the closed server can't attach (asyncio's _attach asserts), so it's left
+        # half-made, and its __del__ raised later, in whichever test the garbage collector ran.
+        while any(_accepting(t) for t in asyncio.all_tasks()):
+            await asyncio.sleep(0)
         self.server.close()
         for t in list(self.tasks):
             t.cancel()
