@@ -123,6 +123,26 @@ class Adapter:
         it)."""
         return {}
 
+    def join_conflict(self, store: Any, thread_id: str | None, host: str) -> str | None:
+        """Why this verified identity cannot join on ``host``, or None."""
+        return None
+
+    def rebind_fields(self, existing: Participant | None, *, same_mcp: bool) -> dict[str, Any]:
+        """Fields to reset when a join moves to another MCP process."""
+        return {}
+
+    def credential_error(self, p: Participant, params: dict[str, Any]) -> str | None:
+        """Why this call's harness identity does not match its membership credential."""
+        return None
+
+    def keep_on_mcp_disconnect(self, p: Participant) -> bool:
+        """Whether another channel keeps this session's status after MCP disconnects."""
+        return False
+
+    def rejoin_notice(self, p: Participant, name: str, *, same_mcp: bool) -> str | None:
+        """A notice for a rotated membership after an MCP process change, or None."""
+        return None
+
     def conversation_kicked(self, store: Any, room_id: int, p: Participant) -> bool:
         """True if this session's larger identity (Cursor: its bound conversation) was
         kicked from ``room_id`` under an earlier participant row, even though ``p``

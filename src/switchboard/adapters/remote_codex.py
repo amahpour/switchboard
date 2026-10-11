@@ -36,6 +36,7 @@ import asyncio
 from typing import Any
 
 from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, PullAdapter, SendError
+from switchboard.adapters.codex import CodexMembership
 from switchboard.clock import Clock, SystemClock
 from switchboard.config import Config
 from switchboard.models import Batch, HookEvent, Participant, Release, Route, split_session_key
@@ -65,7 +66,7 @@ def thread_of(p: Participant) -> str:
     return parts[2] if parts is not None and parts[0] == "codex" and parts[1] else ""
 
 
-class RemoteCodexAdapter(PullAdapter):
+class RemoteCodexAdapter(CodexMembership, PullAdapter):
     serial_push = True  # one wake in flight per thread
 
     def __init__(self, cfg: Config):
