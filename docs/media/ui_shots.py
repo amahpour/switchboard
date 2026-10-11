@@ -773,6 +773,7 @@ def shoot_settings_tabs(browser: Any, out: Path, world: Any) -> None:
         page.click("#me-settings")
         page.click("#settings-row-rooms")
         expect(page.locator("#app-dialog-title")).to_have_text("New rooms")
+        page.fill("#settings-room-rules", "A draft for the next room.")
         shot(page, out, "settings-phone-rooms-light.png")
     finally:
         ctx.close()

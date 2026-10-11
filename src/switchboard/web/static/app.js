@@ -3458,6 +3458,49 @@
     { key: 'security', label: 'Sign-in & security', icon: 'key' },
   ];
 
+  function settingsSaveBar(panel, key, fields, save, status, afterReset) {
+    const content = el('div', 'settings-panel-content');
+    while (panel.firstChild) content.append(panel.firstChild);
+    const bar = el('div', 'settings-savebar');
+    const dirty = el('span', 'settings-savebar-dirty', 'Unsaved changes');
+    dirty.id = 'settings-' + key + '-dirty';
+    const discard = btn('btn', 'Discard');
+    discard.id = 'settings-' + key + '-discard';
+    bar.append(dirty, status, discard, save);
+    panel.append(content, bar);
+    let saved = fields.map(function (field) { return field.value; });
+    let busy = false;
+    let saveWasFocused = false;
+    function update() {
+      const changed = fields.some(function (field, i) { return field.value !== saved[i]; });
+      dirty.classList.toggle('hidden', !changed);
+      discard.disabled = busy || !changed;
+      save.disabled = busy || !changed;
+    }
+    fields.forEach(function (field) {
+      field.addEventListener('input', function () { status.textContent = ''; update(); });
+    });
+    discard.addEventListener('click', function () {
+      fields.forEach(function (field, i) { field.value = saved[i]; });
+      status.textContent = '';
+      status.classList.remove('bad');
+      if (afterReset) afterReset();
+      update();
+      fields[0].focus();
+    });
+    update();
+    return {
+      saving: function (value) {
+        if (value) saveWasFocused = document.activeElement === save;
+        busy = value;
+        update();
+        if (!value && saveWasFocused && save.disabled) fields[0].focus();
+        if (!value) saveWasFocused = false;
+      },
+      saved: function (values) { saved = values; update(); },
+    };
+  }
+
   function buildSettingsProfile(panel) {
     // Your name (#114, DESIGN.md §41): your first and last name, and your name in the rooms,
     // which others @mention and every agent takes your messages under
@@ -3494,10 +3537,12 @@
     const youStatus = el('span', 'fine');
     youStatus.id = 'settings-name-status';
     youStatus.setAttribute('role', 'status');
+    const bar = settingsSaveBar(panel, 'profile', [firstInput, lastInput, nameInput], youSave, youStatus);
     youSave.addEventListener('click', async function () {
-      const body = { first_name: firstInput.value.trim() || null, last_name: lastInput.value.trim() || null };
-      const name = nameInput.value.trim().toLowerCase();
-      const renaming = !me.name_locked && name !== String(me.human || '').toLowerCase();
+      const submitted = [firstInput.value, lastInput.value, nameInput.value];
+      const body = { first_name: submitted[0].trim() || null, last_name: submitted[1].trim() || null };
+      const name = submitted[2].trim().toLowerCase();
+      const renaming = !me.name_locked && name !== String((state.me || {}).human || '').toLowerCase();
       if (renaming) {
         if (!PERSON_NAME.test(name)) {
           youStatus.textContent = 'A name looks like bob or bob-k: a letter first, then letters, digits, _ or -, at most 24.';
@@ -3506,7 +3551,7 @@
         }
         body.name = name;
       }
-      youSave.disabled = true;
+      bar.saving(true);
       try {
         const call = function () { return api('POST', '/api/me/name', body); };
         // a new name in the rooms on a hosted broker asks you to confirm it's you, as a password does
@@ -3516,12 +3561,14 @@
         updateTitle();
         youStatus.textContent = 'Saved';
         youStatus.classList.remove('bad');
+        bar.saved(submitted);
       } catch (e) {
         youStatus.textContent = String(e.message || e);
         youStatus.classList.add('bad');
-      } finally { youSave.disabled = false; }
+      } finally { bar.saving(false); }
     });
-    panel.append(names, nameLabel, nameInput, nameNote, youSave, youStatus);
+    // Fields belong in the scrolling content; the bar stays at its foot.
+    panel.querySelector('.settings-panel-content').append(names, nameLabel, nameInput, nameNote);
   }
 
   function buildSettingsAppearance(panel) {
@@ -3642,34 +3689,36 @@
     budgetInput.addEventListener('input', function () { renderWakeSources(); clearStatus(); });
     hopsInput.addEventListener('input', function () { renderWakeSources(); clearStatus(); });
 
-    const save = btn('btn-primary', 'Save defaults');
+    const save = btn('btn-primary', 'Save');
     save.id = 'settings-rules-save';
     const status = el('span', 'fine');
     status.id = 'settings-rules-status';
     status.setAttribute('role', 'status');
+    panel.append(
+      rulesLabel, rulesInput, count,
+      budgetLabel, budgetInput, budgetSource,
+      hopsLabel, hopsInput, hopsWarn, hopsSource
+    );
+    const bar = settingsSaveBar(panel, 'rules', [rulesInput, budgetInput, hopsInput], save, status,
+      function () { countRules(); renderWakeSources(); });
     save.addEventListener('click', async function () {
-      const asNumberOrNull = function (input) { return input.value === '' ? null : Number(input.value); };
-      save.disabled = true;
+      const submitted = [rulesInput.value, budgetInput.value, hopsInput.value];
+      bar.saving(true);
       try {
         const result = await api('PUT', '/api/me/preferences', {
-          room_rules: rulesInput.value,
-          budget_per_hour: asNumberOrNull(budgetInput),
-          hop_limit: asNumberOrNull(hopsInput),
+          room_rules: submitted[0],
+          budget_per_hour: submitted[1] === '' ? null : Number(submitted[1]),
+          hop_limit: submitted[2] === '' ? null : Number(submitted[2]),
         });
         state.me.preferences = result.preferences;
         status.textContent = 'Saved';
         status.classList.remove('bad');
+        bar.saved(submitted);
       } catch (e) {
         status.textContent = String(e.message || e);
         status.classList.add('bad');
-      } finally { save.disabled = false; }
+      } finally { bar.saving(false); }
     });
-    panel.append(
-      rulesLabel, rulesInput, count,
-      budgetLabel, budgetInput, budgetSource,
-      hopsLabel, hopsInput, hopsWarn, hopsSource,
-      save, status
-    );
   }
 
   function buildSettingsSecurity(panel) {
@@ -3777,6 +3826,13 @@
       panelEl.setAttribute('aria-labelledby', 'settings-tab-' + g.key);
       panelEl.classList.add('hidden');
       SETTINGS_BUILDERS[g.key](panelEl);
+      // a group without a save bar (Appearance, Sign-in & security) scrolls in the same padded
+      // box as one with a bar, which settingsSaveBar builds
+      if (!panelEl.querySelector('.settings-panel-content')) {
+        const content = el('div', 'settings-panel-content');
+        while (panelEl.firstChild) content.append(panelEl.firstChild);
+        panelEl.append(content);
+      }
       panelsWrap.append(panelEl);
       panelsByKey[g.key] = panelEl;
     });

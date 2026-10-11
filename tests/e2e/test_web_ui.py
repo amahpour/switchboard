@@ -1381,9 +1381,13 @@ def test_settings_close_stays_visible_after_scrolling_a_long_panel(ui: UI) -> No
     its end, at a height short enough that the panel really has to scroll."""
     page = ui.open(room=None, viewport={"width": 1440, "height": 420})
     open_settings(page, "rooms")
-    overflow = page.locator("#settings-panels").evaluate("e => e.scrollHeight - e.clientHeight")
+    overflow = page.locator("#settings-panel-rooms .settings-panel-content").evaluate(
+        "e => e.scrollHeight - e.clientHeight"
+    )
     assert overflow > 40, overflow  # the panel has real overflow to scroll through
-    page.locator("#settings-panels").evaluate("e => { e.scrollTop = e.scrollHeight; }")
+    page.locator("#settings-panel-rooms .settings-panel-content").evaluate(
+        "e => { e.scrollTop = e.scrollHeight; }"
+    )
     expect(page.locator("#settings-close")).to_be_in_viewport()
 
 
@@ -1404,6 +1408,66 @@ def test_settings_draft_survives_switching_groups_and_a_refresh(ui: UI) -> None:
     page.keyboard.press("Escape")
 
 
+@pytest.mark.parametrize("group", ["profile", "appearance", "rooms"])
+def test_every_settings_group_has_its_padded_scrolling_box(ui: UI, group: str) -> None:
+    """A group with no save bar (Appearance) is laid out like one with a bar: its controls sit
+    inside the padded box that scrolls, not against the rail's edge (#257's review)."""
+    page = ui.open(room="build")
+    open_settings(page, group)
+    panel = page.locator(f"#settings-panel-{group}")
+    expect(panel).to_be_visible()
+    content = panel.locator(":scope > .settings-panel-content")
+    expect(content).to_have_count(1)
+    assert content.evaluate("e => getComputedStyle(e).overflowY") == "auto"
+    inset = content.evaluate(
+        "e => e.firstElementChild.getBoundingClientRect().left - e.getBoundingClientRect().left"
+    )
+    assert inset >= 16, inset
+    page.keyboard.press("Escape")
+
+
+def test_settings_save_bars_discard_only_their_own_draft(ui: UI) -> None:
+    """Each editable group has a disabled Save until dirty; switching groups retains both
+    drafts, and Discard resets only the current group before Save persists the other."""
+    page = ui.open()
+    open_settings(page)
+    expect(page.locator("#settings-name-save")).to_be_disabled()
+    page.locator("#settings-first").fill("Draft first")
+    expect(page.locator("#settings-profile-dirty")).to_have_text("Unsaved changes")
+    expect(page.locator("#settings-name-save")).to_be_enabled()
+    page.click("#settings-tab-rooms")
+    expect(page.locator("#settings-rules-save")).to_be_disabled()
+    page.locator("#settings-room-rules").fill("Draft rules")
+    page.click("#settings-tab-profile")
+    expect(page.locator("#settings-first")).to_have_value("Draft first")
+    page.click("#settings-profile-discard")
+    expect(page.locator("#settings-name-save")).to_be_disabled()
+    page.click("#settings-tab-rooms")
+    expect(page.locator("#settings-room-rules")).to_have_value("Draft rules")
+    page.click("#settings-rules-discard")
+    expect(page.locator("#settings-room-rules")).to_have_value("")
+    expect(page.locator("#settings-rules-save")).to_be_disabled()
+    page.keyboard.press("Escape")
+
+
+def test_settings_phone_save_bar_stays_visible_and_back_restores_focus(ui: UI) -> None:
+    """On a phone the dirty bar stays at the foot while rules scroll, and Back returns focus
+    to the group row without losing the draft."""
+    phone = ui.open(**PHONE)
+    phone.click("#rooms-toggle")
+    phone.click("#me-settings")
+    phone.click("#settings-row-rooms")
+    phone.locator("#settings-room-rules").fill("Phone draft")
+    phone.locator("#settings-room-rules").evaluate("e => e.scrollIntoView()")
+    expect(phone.locator("#settings-rules-save")).to_be_in_viewport()
+    expect(phone.locator("#settings-rules-discard")).to_be_in_viewport()
+    phone.click("#settings-back")
+    expect(phone.locator("#settings-row-rooms")).to_be_focused()
+    phone.click("#settings-row-rooms")
+    expect(phone.locator("#settings-room-rules")).to_have_value("Phone draft")
+    phone.click("#settings-rules-discard")
+
+
 def test_settings_phone_list_shows_summaries_and_back_returns_focus(ui: UI) -> None:
     """The phone list's rows summarize the current state; tapping one opens its own page, and
     Back returns to the list with focus back on that row (#232)."""
@@ -1422,7 +1486,7 @@ def test_settings_phone_list_shows_summaries_and_back_returns_focus(ui: UI) -> N
     phone.click("#settings-row-rooms")
     expect(phone.locator("#app-dialog-title")).to_have_text("New rooms")
     # the header names the group, so the panel's own heading doesn't say it a second time
-    expect(phone.locator("#settings-panel-rooms > h3")).to_be_hidden()
+    expect(phone.locator("#settings-panel-rooms h3")).to_be_hidden()
     expect(phone.locator("#settings-room-rules")).to_be_visible()
     phone.locator("#settings-room-rules").fill("Summarized on the list.")
     phone.click("#settings-rules-save")
