@@ -16,6 +16,7 @@ ROOM_RE = re.compile(r"^#[a-z0-9][a-z0-9_-]{0,31}$")
 # or remotes.toml names can reach it. Use it with fullmatch only (a trailing '\n' must fail).
 CLOSED_ROOM_RE = re.compile(r"(#[a-z0-9][a-z0-9_-]{0,31})~closed-([1-9][0-9]{0,18})")
 SCREEN_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,23}$")
+NAME_REUSE_S = 24 * 3600.0  # a departed agent's screen name is reserved for a day
 # A remote host's name (DESIGN.md §27.5.1): the config name of a remote in remotes.toml.
 # It never contains '@' or ':', so it can't be confused with a session key's parts.
 # The broker's own machine is the empty host ''.

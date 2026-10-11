@@ -938,6 +938,16 @@ class Store:
             ).fetchall()
         ]
 
+    def agent_name_reserved(self, name: str, since: float) -> bool:
+        """An agent holds this name in any room, or left it within the reuse window."""
+        return (
+            self.con.execute(
+                "SELECT 1 FROM memberships WHERE screen_name=? AND (left_at IS NULL OR left_at>=?) LIMIT 1",
+                (name, since),
+            ).fetchone()
+            is not None
+        )
+
     def owner_names(self) -> tuple[str | None, str | None]:
         """The owner's first and last name (#192, §39.6), or None for each not set."""
         return self.meta_get("owner_first_name"), self.meta_get("owner_last_name")

@@ -45,6 +45,7 @@ from switchboard.envelope import TOKEN_RE, clean, sanitize
 from switchboard.models import (
     HARNESSES,
     LOCAL_HOST,
+    NAME_REUSE_S,
     RESERVED_NAMES,
     SCREEN_NAME_RE,
     VERIFYING,
@@ -77,7 +78,6 @@ POST_ERR_RE = re.compile(r"[A-Za-z0-9_]{1,40}")
 # a hook's reported model name (the hook relays only this shape too), for the report:
 # an "@" may carry a version (claude-...@20250514), never a domain (nothing email-shaped)
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:+-]{0,63}(?:@[A-Za-z0-9_:+-]{1,32})?")
-NAME_REUSE_S = 24 * 3600.0
 AWAY_MAX = 80
 LIVENESS_S = 2.0
 
@@ -607,7 +607,12 @@ class AgentService:
                 "screen names look like claude-1: a-z first, then a-z, 0-9, '_' or '-', at most 24",
             )
         human = self.cfg.human_name.lower()
-        if name in RESERVED_NAMES or name.startswith("switchboard") or name.startswith(human):
+        if (
+            name in RESERVED_NAMES
+            or name.startswith("switchboard")
+            or name.startswith(human)
+            or any(name.startswith(person.lower()) for person in self.svc.people_names())
+        ):
             raise ServiceError("name_reserved", f"{name} is reserved; pick another screen name")
         tid = params.get("thread_id")
         tid = tid if isinstance(tid, str) and 0 < len(tid) <= 128 else None

@@ -40,6 +40,7 @@ phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (
 (``tests/ui_world.py``'s ``HostedWorld``, with Chromium's virtual authenticators as the
 passkeys; issues #41 and #61): signin-setup-light, setup-light, people-light, people-dark,
 passkeys-light, passkeys-dark, people-opening-{light,dark,phone-light} (initial People fetch held),
+people-name-clash-{light,dark,phone-light} (an agent holds the requested person's name),
 people-edit-{light,dark,phone-light} (Copy's fade timer while an email is selected),
 confirm-light, signin-light, setup-person-light and
 signin-phone-dark, and from a second one at
@@ -809,6 +810,7 @@ def shoot_hosted(browser: Any, out: Path, world: Any) -> None:
     three ways in, a teammate's own Choose page, and the sign-in page on a phone (dark). The
     invite's address reads https://sb.example.com."""
     from playwright.sync_api import expect
+    from ui_world import wait_js
 
     base = {"timezone_id": "UTC", "color_scheme": "light", "locale": "en-US", "reduced_motion": "reduce"}
     origin = world.origin
@@ -880,6 +882,42 @@ def shoot_hosted(browser: Any, out: Path, world: Any) -> None:
         page.set_viewport_size(PHONE["viewport"])
         email.scroll_into_view_if_needed()
         shot(page, out, "people-edit-phone-light.png")
+        page.set_viewport_size(DESKTOP["viewport"])
+        # A real agent holds robert in #build. Adding a person under that name shows the
+        # broker's refusal (#180); the before shot instead shows the unintended invite.
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+
+        from fakes.fake_agent import FakeAgent
+
+        async def agent_holds_robert() -> None:
+            async with FakeAgent(world.broker.home, "shots-name-collision") as agent:
+                reply = await agent.join("#build", "robert")
+                assert reply["ok"], reply
+
+        world.set_test_mode(True)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            executor.submit(lambda: asyncio.run(agent_holds_robert())).result()
+        world.set_test_mode(False)
+        page.fill("#person-first", "Bob")
+        page.fill("#person-last", "Builder")
+        page.fill("#person-email", "bob2@example.com")
+        page.fill("#person-name", "robert")
+        page.click("#person-add")
+        wait_js(
+            page,
+            """() => !!document.querySelector('#invite-done') ||
+          !!document.querySelector('#people-result-add')?.textContent.trim()""",
+        )
+        if page.locator("#invite-done").is_visible():
+            page.click("#invite-done")  # never put a one-time password in a preview
+        as_deployed(page)
+        shot(page, out, "people-name-clash-light.png")
+        page.emulate_media(color_scheme="dark")
+        shot(page, out, "people-name-clash-dark.png")
+        page.emulate_media(color_scheme="light")
+        page.set_viewport_size(PHONE["viewport"])
+        shot(page, out, "people-name-clash-phone-light.png")
         page.set_viewport_size(DESKTOP["viewport"])
         page.keyboard.press("Escape")
         # Hold the initial People refresh to show what is visible on a slow connection.

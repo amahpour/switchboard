@@ -25,6 +25,7 @@ from switchboard.broker.auth import WebOrigin
 from switchboard.broker.passwords import FREE_FAILURES
 from switchboard.broker.people import ONE_TIME_TTL_S
 from switchboard.config import Config
+from switchboard.models import NAME_REUSE_S
 
 ADMIN_PW = "correct horse battery"
 BOB_PW = "bob's own secret 1"
@@ -215,6 +216,40 @@ async def test_every_person_is_every_agents_user(hosted: InProcBroker) -> None:
         assert "from=bob kind=human" in text and "to_you=yes" in text and "please run the tests" in text
         who = await agent.who("#build")
         assert "alice and bob (your users, kind=human)" in who["text"]
+
+
+async def test_an_agent_cannot_join_as_a_person_or_take_their_name_prefix(hosted: InProcBroker) -> None:
+    admin = await asyncio.to_thread(set_up, hosted)
+    await asyncio.to_thread(admin.post, "/api/rooms", {"name": "#build"})
+    await asyncio.to_thread(add, admin, "bob")
+    async with FakeAgent(hosted.home, "name-clash") as agent:
+        for name in ("bob", "bobby"):
+            reply = await agent.join("#build", name)
+            assert reply["code"] == "name_reserved", reply
+        assert (await agent.join("#build", "helper"))["ok"]
+        await asyncio.to_thread(admin.post, "/api/rooms/build/say", {"text": "@bob please check"})
+        got = await agent.read("#build")
+        assert "from=alice kind=human to_you=no" in got["text"], got
+        assert "to_you=yes" not in got["text"], got
+
+
+async def test_a_person_cannot_take_an_agents_live_or_recent_name(
+    ticking: tuple[InProcBroker, FakeClock],
+) -> None:
+    broker, clock = ticking
+    admin = await asyncio.to_thread(set_up, broker)
+    await asyncio.to_thread(admin.post, "/api/rooms", {"name": "#build"})
+    async with FakeAgent(broker.home, "person-clash") as agent:
+        assert (await agent.join("#build", "bob"))["ok"]
+        for active in (True, False):
+            reply = await asyncio.to_thread(admin.post, "/api/people", {"name": "bob"})
+            assert reply.status_code == 400 and "agent" in reply.json()["message"], reply.text
+            if active:
+                await agent.leave("#build")
+        clock.advance(NAME_REUSE_S + 1)
+        admin = Browser(broker)
+        assert (await asyncio.to_thread(signin, admin, "alice", ADMIN_PW)).status_code == 200
+        assert (await asyncio.to_thread(admin.post, "/api/people", {"name": "bob"})).status_code == 200
 
 
 def test_the_admin_gives_a_new_one_time_password(hosted: InProcBroker) -> None:
