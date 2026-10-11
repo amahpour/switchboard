@@ -15,7 +15,7 @@ import unicodedata
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from switchboard.models import RESERVED_NAMES, SCREEN_NAME_RE, PersonRow
+from switchboard.models import NAME_REUSE_S, RESERVED_NAMES, SCREEN_NAME_RE, PersonRow
 
 if TYPE_CHECKING:  # pragma: no cover
     from switchboard.broker.app import BrokerState
@@ -184,6 +184,8 @@ def name_problem(state: "BrokerState", name: Any) -> str | None:
         return f"{n} is reserved"
     if state.store.person_named(n) is not None:
         return f"{n} is someone here already"
+    if state.store.agent_name_reserved(n, state.clock.now() - NAME_REUSE_S):
+        return f"an agent here is called {n}"
     return None
 
 

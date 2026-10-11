@@ -2709,6 +2709,10 @@ body.login {
 .board-lane.lane-you .board-card { max-width: 420px; }
 .board-lane-title { display: flex; align-items: center; gap: 6px; margin: 0; font-size: calc(12.5px * var(--text-scale)); font-weight: 600; color: var(--ink-2); }
 .board-count { color: var(--muted-2); font-weight: 400; font-variant-numeric: tabular-nums; }
+/* a member that can't use the board, and why (#249) */
+.board-unable { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border-radius: 8px; background: var(--amber-bg); color: var(--amber-ink); }
+.board-unable-line { display: flex; align-items: flex-start; gap: 8px; margin: 0; font-size: calc(12.5px * var(--text-scale)); line-height: 1.45; }
+.board-unable-line .ic { margin-top: 1px; }
 .board-empty { margin: 0; color: var(--muted-2); font-size: calc(12px * var(--text-scale)); }
 .board-card {
   display: flex; flex-direction: column; gap: 4px; padding: 9px 10px; text-align: left; width: 100%;

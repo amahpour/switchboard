@@ -30,6 +30,7 @@ from switchboard.delivery.engine import STOP_BUSY_SRCS
 FAST = Config(human_name="alice").with_delivery(quiet_s=0.0, max_hold_s=0.0)
 SECRET = "the quick secret text 7f3a"  # a message body that must never appear in a detail
 MEMBER_KEYS = {
+    "board_why",  # why it can't use the review board, or None (#249)
     "name",
     "harness",
     "status",

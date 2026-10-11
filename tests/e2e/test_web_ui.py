@@ -2082,6 +2082,23 @@ def lane_labels(page: Page, lane: str) -> list[str]:
     return page.locator(f"#board .lane-{lane} .board-card").evaluate_all("cs => cs.map(c => c.dataset.item)")
 
 
+def test_the_board_names_a_member_that_cant_use_it(ui: UI) -> None:
+    """#249: a member whose switchboard lists no tools (from before the list) can't move cards,
+    so the board says so, at once when it joins, and says nothing about the ones that can."""
+    slug = "e2e-board-unable"
+    page = review_room(ui, slug)
+    page.click("#board-toggle")
+    expect(page.locator("#board-unable")).to_have_count(0)  # claude-1 and codex-1 list review
+    ui.world.add_old_agent("#" + slug, "codex-2")
+    line = page.locator('#board-unable .board-unable-line[data-member="codex-2"]')
+    expect(line).to_have_text(
+        "codex-2 can't use the board: its switchboard is older than this one and doesn't list its"
+        " tools. Upgrade it, then restart its session."
+    )
+    expect(page.locator("#board-unable .board-unable-line")).to_have_count(1)
+    expect(line.locator("svg.ic-warn, span.ic-warn")).to_have_count(1)
+
+
 def test_the_review_board_shows_each_item_in_its_lane(ui: UI) -> None:
     """The board button appears only with a board, and swaps the log for lanes: the person's
     questions and contested findings on top, then raised, being fixed, done and dropped."""

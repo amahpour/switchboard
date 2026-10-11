@@ -346,6 +346,7 @@ class UIWorld:
         self._error: BaseException | None = None
         self._extra: list[Any] = []  # agents add_agents() joined later; closed with the others
         self._extra_named: dict[tuple[str, str], Any] = {}
+        self._old: list[Any] = []  # raw sockets standing in for MCP servers from before #249
         # a signed-in client for the helpers below, made before any browser opens: every sign-in
         # posts a live "new web login" notice, which an open page would show in its log
         self.web: httpx.Client | None = None
@@ -376,6 +377,9 @@ class UIWorld:
         if self.web is not None:
             self.web.close()
             self.web = None
+        for old in self._old:
+            old.close()
+        self._old.clear()
         # the agents first (their coroutine closes them), then the brokers they talk to
         if self._loop is not None and self._stop is not None and not self._loop.is_closed():
             try:
@@ -463,6 +467,27 @@ class UIWorld:
         b.on_loop(test_mode_on)
         try:
             asyncio.run_coroutine_threadsafe(join_all(), loop).result(60)
+        finally:
+            not_test_mode(b)
+
+    def add_old_agent(self, room: str, name: str) -> None:
+        """Join ``name`` to ``room`` as an MCP server from before #249 would: its mcp.hello lists
+        no tools, so the review board names it as a member that can't use the board. A raw
+        socket of this process, kept open until ``stop()``."""
+        from switchboard.mcp.client import Stream
+
+        b = self.broker
+
+        def test_mode_on() -> None:
+            b.state.test_mode = True
+            b.state.info.test_mode = True
+
+        s = Stream(b.paths.sock, timeout=5)
+        self._old.append(s)
+        b.on_loop(test_mode_on)
+        try:
+            s.call("mcp.hello", {"harness": "test", "test_session": f"old-{name}"}, 5)
+            s.call("agent.join", {"room": room, "screen_name": name}, 5)
         finally:
             not_test_mode(b)
 

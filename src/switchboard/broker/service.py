@@ -105,6 +105,8 @@ class DeliveryHooks(Protocol):
 
     def parked_reason(self, membership_id: int) -> str | None: ...
 
+    def board_reason(self, member: Member) -> str | None: ...
+
 
 def _hhmmss(ts: float | None) -> str:
     return time.strftime("%H:%M:%S", time.localtime(ts)) if ts else "--:--:--"
@@ -155,6 +157,8 @@ def member_dict(m: Member) -> dict[str, Any]:
         "parked_reason": m.parked_reason,
         # the member's host: '' for this machine, else the remote's name (§27.11)
         "host": m.host,
+        # why it can't use the review board, or None (#249): switchboard's own words
+        "board_why": m.board_why,
     }
 
 
@@ -315,14 +319,18 @@ class RoomService:
         return [member_dict(m) for m in self.member_rows(room.id)]
 
     def member_rows(self, room_id: int) -> list[Member]:
-        """Buddy-list rows, with the engine's parked state overlaid."""
+        """Buddy-list rows, with the engine's parked state, and whether each can use the review
+        board, overlaid."""
         rows = self.store.members(room_id)
         if self.delivery is None:
             return rows
         out = []
         for m in rows:
             why = self.delivery.parked_reason(m.membership_id)
-            out.append(dataclasses.replace(m, parked=why is not None, parked_reason=why) if why else m)
+            if why:
+                m = dataclasses.replace(m, parked=True, parked_reason=why)
+            board = self.delivery.board_reason(m)
+            out.append(dataclasses.replace(m, board_why=board) if board else m)
         return out
 
     def member_detail(self, room_name: str, name: str) -> dict[str, Any]:

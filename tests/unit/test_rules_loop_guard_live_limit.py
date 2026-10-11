@@ -18,7 +18,7 @@ from switchboard.broker.commands import Actor
 from switchboard.broker.hub import Hub
 from switchboard.broker.service import BrokerInfo, RoomService
 from switchboard.config import Config
-from switchboard.models import Message, Notice, Room
+from switchboard.models import Member, Message, Notice, Room
 
 WEB = Actor(role="human", via="web")
 CLI = Actor(role="human_cli", via="cli", chain="zsh ← Terminal")
@@ -56,6 +56,9 @@ class Shim:
 
     def parked_reason(self, membership_id: int) -> str | None:
         return self.w.engine.parked_reason(membership_id)
+
+    def board_reason(self, member: Member) -> str | None:
+        return None  # no MCP servers here, so no claims about their tools (#249)
 
 
 @pytest.fixture

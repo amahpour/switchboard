@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from switchboard import envelope
+from switchboard import envelope, reviews
 from switchboard.adapters.base import HOOK_EVENTS, start_key
 from switchboard.adapters.testagent import ACK_MODES
 from switchboard.broker import proc
@@ -45,11 +45,13 @@ from switchboard.envelope import TOKEN_RE, clean, sanitize
 from switchboard.models import (
     HARNESSES,
     LOCAL_HOST,
+    NAME_REUSE_S,
     RESERVED_NAMES,
     SCREEN_NAME_RE,
     VERIFYING,
     Action,
     HookEvent,
+    Member,
     Membership,
     Message,
     Notice,
@@ -77,7 +79,6 @@ POST_ERR_RE = re.compile(r"[A-Za-z0-9_]{1,40}")
 # a hook's reported model name (the hook relays only this shape too), for the report:
 # an "@" may carry a version (claude-...@20250514), never a domain (nothing email-shaped)
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:+-]{0,63}(?:@[A-Za-z0-9_:+-]{1,32})?")
-NAME_REUSE_S = 24 * 3600.0
 AWAY_MAX = 80
 LIVENESS_S = 2.0
 
@@ -96,16 +97,44 @@ class McpConn:
     test_ack: str = "next_call"
     inbox_attached: bool = False  # Claude: this connection is the session's push channel
     codex_attached: bool = False  # remote Codex (issue #63): this connection wakes its threads
+    # what the MCP server says it is and offers (#249): claims, shown to a person, granting nothing
+    version: str | None = None
+    tools: tuple[str, ...] | None = None
 
     @property
     def harness(self) -> str:
         return self.ident.harness
 
 
+def _mcp_key(host: str, pid: int | None, start: float | None) -> tuple[str, int, str]:
+    """One MCP process: its host, pid and start time (to the hundredth, as stored)."""
+    return (host, pid or 0, f"{start or 0.0:.2f}")
+
+
 def _remote(conn: Any) -> bool:
     """A connection carried by a remote host's link (DESIGN.md §27.5.2); a stand-in
     without the flag is a local one."""
     return getattr(conn, "remote", False) is True
+
+
+TOOL_NAME_RE = re.compile(r"^[a-z][a-z_]{0,31}$")
+VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$")
+MAX_TOOLS = 64
+
+
+def tools_claim(value: Any) -> tuple[str, ...] | None:
+    """The tools an MCP server says it offers (``mcp.hello``'s ``tools``, #249). A claim, used
+    only to tell a person which members can't use the review board; the method table still
+    decides what a member may call. Not a list: None, an unknown, which counts as unable. A name
+    that isn't one is dropped; at most ``MAX_TOOLS`` are read."""
+    if not isinstance(value, list):
+        return None
+    return tuple(sorted({v for v in value[:MAX_TOOLS] if isinstance(v, str) and TOOL_NAME_RE.match(v)}))
+
+
+def version_claim(value: Any) -> str | None:
+    """The switchboard version an MCP server says it runs, or None: only to name it to a person."""
+    return value if isinstance(value, str) and VERSION_RE.match(value) else None
 
 
 def cred_hash(cred: str) -> str:
@@ -126,6 +155,8 @@ class AgentService:
         # a SessionStart's model from a session that hasn't joined yet (Claude reports its
         # model only there, before any join): (host, pid, start) of each process above the hook
         self._early_models: dict[tuple[str, int, str], str] = {}
+        # an MCP process's claims in its latest mcp.hello: (conn id, version, tools) (#249)
+        self._mcp_claims: dict[tuple[str, int, str], tuple[int, str | None, tuple[str, ...] | None]] = {}
         rec = os.environ.get("SWITCHBOARD_RECORD_PAYLOADS")
         self.record_dir = Path(rec) if rec and state.test_mode else None
         self.refresh_index()
@@ -188,6 +219,18 @@ class AgentService:
     def parked_reason(self, membership_id: int) -> str | None:
         return self.engine.parked_reason(membership_id)
 
+    def board_reason(self, member: Member) -> str | None:
+        """Why ``member`` can't use the review board, from its MCP server's claims (#249). None
+        when it can, or when its MCP process isn't connected now: an offline member shows as
+        offline already, and its claims went with its connection."""
+        p = self.store.get_participant(member.participant_id)
+        if p is None or p.mcp_pid is None or p.mcp_start is None:
+            return None
+        claim = self._mcp_claims.get(_mcp_key(p.host, p.mcp_pid, p.mcp_start))
+        if claim is None:
+            return None
+        return reviews.board_reason(member.name, claim[1], claim[2])
+
     # ================================================================= mcp
     def hello(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
         claimed = params.get("harness")
@@ -236,8 +279,16 @@ class AgentService:
             session_id=sid[:128] if isinstance(sid, str) else None,
             test_session=test_session,
             test_ack=ack,
+            version=version_claim(params.get("version")),
+            tools=tools_claim(params.get("tools")),
         )
         conn.mcp = mc
+        # the claims are about the MCP process's code: its members are told apart by it (#249)
+        self._mcp_claims[_mcp_key(ident.host, ident.mcp_pid, ident.mcp_start)] = (
+            conn.id,
+            mc.version,
+            mc.tools,
+        )
         # A reconnecting MCP server (same process) picks its sessions up again.
         mine = self.store.participants_by_mcp(ident.host, ident.mcp_pid, ident.mcp_start)
         for p in mine:
@@ -308,6 +359,9 @@ class AgentService:
                 self.run(self.engine.close_conn_sinks(conn.id))
             return
         conn.mcp = None
+        key = _mcp_key(mc.ident.host, mc.ident.mcp_pid, mc.ident.mcp_start)
+        if self._mcp_claims.get(key, (None,))[0] == conn.id:
+            del self._mcp_claims[key]  # a newer connection of the same process keeps its own
         if mc.inbox_attached:
             self._detach(conn, mc)
         if mc.codex_attached:
@@ -607,7 +661,12 @@ class AgentService:
                 "screen names look like claude-1: a-z first, then a-z, 0-9, '_' or '-', at most 24",
             )
         human = self.cfg.human_name.lower()
-        if name in RESERVED_NAMES or name.startswith("switchboard") or name.startswith(human):
+        if (
+            name in RESERVED_NAMES
+            or name.startswith("switchboard")
+            or name.startswith(human)
+            or any(name.startswith(person.lower()) for person in self.svc.people_names())
+        ):
             raise ServiceError("name_reserved", f"{name} is reserved; pick another screen name")
         tid = params.get("thread_id")
         tid = tid if isinstance(tid, str) and 0 < len(tid) <= 128 else None
