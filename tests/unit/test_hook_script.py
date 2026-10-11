@@ -6,6 +6,8 @@ from __future__ import annotations
 import io
 import json
 import os
+import resource
+import shlex
 import shutil
 import statistics
 import subprocess
@@ -331,11 +333,42 @@ def _timings(home: Path, n: int) -> list[float]:
     return out
 
 
+def _child_cpu(run: Any) -> float:
+    """The CPU ``run()`` spends in child processes (user + system), from the children's rusage.
+    A pytest worker runs one test at a time, so the delta is that run's alone."""
+    before = resource.getrusage(resource.RUSAGE_CHILDREN)
+    run()
+    after = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return (after.ru_utime - before.ru_utime) + (after.ru_stime - before.ru_stime)
+
+
+def _added_cpu(home: Path, n: int) -> list[float]:
+    """What one hook run costs beyond starting its interpreter: each hook run's CPU minus that of
+    a bare ``python -I -S`` started the same way, one after the other. A loaded machine makes
+    both cost more alike, so the difference keeps to what the hook itself does."""
+    payload = load("claude", "PostToolUse_bash")
+    bare = f"{shlex.quote(sys.executable)} -I -S -c pass"
+    out = []
+    for _ in range(n):
+        base = _child_cpu(lambda: subprocess.run(bare, shell=True, env=child_env(), check=True, timeout=20))
+        results: list[Any] = []
+        hook = _child_cpu(lambda: results.append(run_hook(home, "claude", "PostToolUse", payload)))
+        assert results[0].returncode == 0
+        out.append(hook - base)
+    return out
+
+
 def test_hook_latency_loose(home, stub) -> None:
-    ts = _timings(home, 30)
-    p95 = statistics.quantiles(ts, n=100, method="inclusive")[94]
-    print(f"hook p50={statistics.median(ts) * 1000:.1f} ms p95={p95 * 1000:.1f} ms (n=30, incl. shell spawn)")
-    assert p95 < 0.3
+    """A loose bound on what one hook run adds, in every run: its CPU beyond a bare interpreter
+    start, not the wall clock, which a loaded machine (two suites at once) pushed past the old
+    bound with nothing wrong in the hook (p95 0.37 s against 0.3 s). A heavy import or a slow
+    loop in the hook fails it (a 178 ms one does), where the old bound let it through. The
+    wall clock is ``test_hook_latency_strict``'s (opt-in)."""
+    added = _added_cpu(home, 30)
+    med = statistics.median(added)
+    print(f"hook adds {med * 1000:.1f} ms of CPU (median of 30, beyond a bare python -I -S)")
+    # about 9 ms here, idle or with every core busy; the old wall-clock bound let ~250 ms through
+    assert med < 0.1
 
 
 @pytest.mark.perf
