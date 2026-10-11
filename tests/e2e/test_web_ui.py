@@ -1827,6 +1827,65 @@ def test_empty_room_copy_keeps_its_icon(ui: UI) -> None:
 
 # ------------------------------------------------------------------ Mermaid diagrams (issue #57)
 FENCE = "```"
+
+
+# A browser that refuses the clipboard write (no permission, an unfocused page, plain http on a
+# LAN address): what every copy button must survive (#224)
+REFUSE_CLIPBOARD = """() => Object.defineProperty(navigator.clipboard, 'writeText', {
+  configurable: true, value: () => Promise.reject(new DOMException('denied', 'NotAllowedError')) })"""
+SELECTED = "() => String(window.getSelection())"
+COPY_FAILED = "Couldn’t copy: the text is selected, copy it by hand"
+
+
+def test_a_refused_copy_says_so_and_selects_the_join_line(ui: UI) -> None:
+    """#224: the join hint's Copy used to stay as it was when the write was refused, so the
+    person pasted whatever the clipboard held before. It says so, and selects the line."""
+    ui.world.create_room("#e2e-copy-refused")
+    page = ui.open(room="e2e-copy-refused")
+    page.evaluate(REFUSE_CLIPBOARD)
+    copy = page.locator("#copy-join")
+    copy.click()
+    expect(copy.locator("span")).to_have_text("Couldn’t copy")
+    expect(copy).to_have_attribute("aria-label", COPY_FAILED)
+    expect(copy).to_have_class(re.compile(r"\bcopy-failed\b"))
+    expect(copy.locator("svg")).to_have_count(1)  # the label changed, not the icon
+    assert page.evaluate(SELECTED) == page.locator("#join-line").inner_text()
+    expect(copy.locator("span")).to_have_text("Copy", timeout=10_000)  # back after a moment
+    expect(copy).not_to_have_class(re.compile(r"\bcopy-failed\b"))
+
+
+def test_a_refused_session_id_copy_selects_the_whole_id(ui: UI) -> None:
+    """The Inspector shows a long session id shortened; a refused copy shows all of it,
+    selected, so a copy by hand gets the real id (#224)."""
+    page = ui.open()
+    page.click('#buddy-list .member[data-name="bench"]')
+    _, _tier, _, _, _host, sid = PROFILE["bench"]
+    body = page.locator("#insp-body")
+    code = body.locator("code.sess")
+    expect(code).to_have_attribute("title", sid)  # the detail landed
+    page.evaluate(REFUSE_CLIPBOARD)
+    copy = body.locator('.copy-btn[data-focus="copy-session"]')
+    copy.click()
+    expect(copy).to_have_attribute("aria-label", COPY_FAILED)
+    expect(copy.locator("svg.ic-warn")).to_have_count(1)
+    expect(code).to_have_text(sid)
+    assert page.evaluate(SELECTED) == sid
+
+
+def test_a_refused_code_block_copy_selects_the_code(ui: UI) -> None:
+    room = "e2e-copy-code"
+    ui.world.create_room("#" + room)
+    ui.world.add_agents("#" + room, ("coder",))
+    ui.world.agent_say("#" + room, "coder", f"{FENCE}sh\nuv run pytest -q\n{FENCE}")
+    page = ui.open(room=room)
+    page.evaluate(REFUSE_CLIPBOARD)
+    btn = page.locator("#log .md-pre button.md-copy").last
+    btn.click()
+    expect(btn).to_have_text("Couldn’t copy")
+    expect(btn).to_have_attribute("aria-label", "Couldn’t copy: the code is selected, copy it by hand")
+    assert page.evaluate(SELECTED).strip() == "uv run pytest -q"
+
+
 FLOW = "flowchart LR\n  H[alice posts] --> B(broker)\n  B -->|idle| W[wake the agent]\n  B -->|busy| Q[queue]"
 SEQ = "sequenceDiagram\n  alice->>claude-1: review the parser\n  claude-1-->>alice: two nits"
 SHADOW_SVG = (

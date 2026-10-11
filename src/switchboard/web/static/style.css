@@ -1708,6 +1708,8 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 }
 .copy-btn:hover { background: var(--row-sel); color: var(--fg); }
 .copy-btn .ic { width: 14px; height: 14px; }
+/* a copy the browser refused (#224): the warning icon, in amber, with the text selected */
+.copy-btn.copy-failed, #copy-join.copy-failed { color: var(--amber-ink); }
 .queue-toggle {
   display: inline-flex;
   align-items: center;

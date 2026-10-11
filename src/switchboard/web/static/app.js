@@ -365,6 +365,26 @@
   function narrow() { return mq('(max-width: 1100px)'); }  // the pane is an overlay (drawer or sheet)
   function phone() { return mq('(max-width: 760px)'); }    // rooms drawer, bottom sheet
 
+  // A copy the browser refused (no permission, an unfocused page, plain http on a LAN address,
+  // no navigator.clipboard): the button says so, and the text is selected so it can be copied by
+  // hand (#224). Before, nothing changed, and the person pasted whatever was on the clipboard.
+  const COPY_FAILED = 'Couldn’t copy: the text is selected, copy it by hand';
+
+  function copyFailed(button, source, label) {
+    button.setAttribute('aria-label', COPY_FAILED);
+    button.title = COPY_FAILED;
+    button.classList.add('copy-failed');
+    if (label) label.textContent = 'Couldn’t copy';
+    else button.replaceChildren(icon('warn'));
+    if (!source || typeof window.getSelection !== 'function' || typeof document.createRange !== 'function') return;
+    const sel = window.getSelection();
+    if (!sel) return;
+    const range = document.createRange();
+    range.selectNodeContents(source);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
   function clipboardWrite(text) {
     if (typeof navigator === 'undefined' || !navigator.clipboard || !navigator.clipboard.writeText) {
       return Promise.reject(new Error('no clipboard'));
@@ -1552,7 +1572,7 @@
           ui.pokeCopied = true;
           renderInspector();
           setTimeout(function () { ui.pokeCopied = false; renderInspector(); }, COPIED_MS);
-        }, function () {});
+        }, function () { copyFailed(copy, cmdCode); });
       });
       const cmdCode = el('code', null, pokeCmd);
       cmdCode.title = pokeCmd;  // the box ellipsizes a long room name; the title and the copy keep it whole
@@ -1592,7 +1612,10 @@
           ui.copied = true;
           renderInspector();
           setTimeout(function () { ui.copied = false; renderInspector(); }, COPIED_MS);
-        }, function () {});
+        }, function () {
+          code.textContent = sid;  // the box shows it shortened: select all of it
+          copyFailed(copy, code);
+        });
       });
       box.append(code, copy);
       fact(dl, 'Session', box);
@@ -2829,7 +2852,7 @@
           state.copiedCmd = null;
           renderMachinesPanel();
         }, COPIED_MS);
-      }, function () {});
+      }, function () { copyFailed(copy, code); });
     });
     box.append(code, copy);
     return box;
@@ -4058,7 +4081,7 @@
           state.copiedInvite = false;
           renderPeoplePanel();
         }, COPIED_MS);
-      }, function () {});
+      }, function () { copyFailed(copy, code); });
     });
     box.append(code, copy);
     card.append(box);
@@ -5082,7 +5105,15 @@
       clipboardWrite($('join-line').textContent).then(function () {
         lbl.textContent = 'Copied';
         setTimeout(function () { lbl.textContent = 'Copy'; }, COPIED_MS);
-      }, function () {});
+      }, function () {
+        copyFailed(b, $('join-line'), lbl);
+        setTimeout(function () {
+          lbl.textContent = 'Copy';
+          b.classList.remove('copy-failed');
+          unsetAttr(b, 'aria-label');
+          b.title = '';
+        }, 2 * COPIED_MS);
+      });
     });
 
     $('me-settings').addEventListener('click', function () { openSettings(); });

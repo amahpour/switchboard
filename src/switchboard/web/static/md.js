@@ -982,12 +982,33 @@
     btn.type = 'button';
     btn.textContent = 'Copy';
     btn.setAttribute('aria-label', 'Copy code');
+    // a copy the browser refuses says so, and selects the code to copy by hand (#224)
+    function failed() {
+      btn.textContent = 'Couldn’t copy';
+      btn.setAttribute('aria-label', 'Couldn’t copy: the code is selected, copy it by hand');
+      if (typeof window.getSelection === 'function' && typeof document.createRange === 'function') {
+        const sel = window.getSelection();
+        if (sel) {
+          const range = document.createRange();
+          range.selectNodeContents(code);
+          sel.removeAllRanges();
+          sel.addRange(range);
+        }
+      }
+      setTimeout(function () {
+        btn.textContent = 'Copy';
+        btn.setAttribute('aria-label', 'Copy code');
+      }, 3200);
+    }
     btn.addEventListener('click', function () {
-      if (typeof navigator === 'undefined' || !navigator.clipboard) return;
+      if (typeof navigator === 'undefined' || !navigator.clipboard || !navigator.clipboard.writeText) {
+        failed();
+        return;
+      }
       navigator.clipboard.writeText(b.text).then(function () {
         btn.textContent = 'Copied';
         setTimeout(function () { btn.textContent = 'Copy'; }, 1600);
-      }, function () {});
+      }, failed);
     });
     head.append(lang);
     // a ```mermaid block can also be shown as its diagram, on request (diagram.js, issue #57)
