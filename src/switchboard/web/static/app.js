@@ -1075,7 +1075,7 @@
     const r = activeRoom();
     $('room-title').textContent = r ? r.name.replace(/^#/, '') : (state.rooms.size ? '' : 'Get started');
     // a private room's header shows its lock, as the sidebar does (§44)
-    const glyph = document.querySelector('.head-hash path');
+    const glyph = typeof document.querySelector === 'function' ? document.querySelector('.head-hash path') : null;
     if (glyph) glyph.setAttribute('d', ICONS[r && r.private ? 'lock' : 'hash']);
     $('room-sub').textContent = r && state.me ? state.me.human + ' and ' + plural(r.members.length, 'agent', 'agents') : '';
   }
