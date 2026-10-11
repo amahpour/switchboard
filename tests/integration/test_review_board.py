@@ -120,6 +120,22 @@ async def test_a_conceded_finding_needs_an_owner_in_the_room(broker: InProcBroke
         assert "owner codex-1" in r["board"]
 
 
+async def test_the_board_names_the_forge_its_url_points_at(broker: InProcBroker) -> None:
+    """The page's header draws the forge's mark, the repository and the number from the board's
+    data (#247); they come from the URL's shape, and nothing is fetched."""
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "k1") as reviewer:
+            await reviewer.join("#build", "codex-1")
+            url = "https://gitlab.com/example-group/sub/shop/-/merge_requests/12"
+            await reviewer.call("review", room="#build", action="open", url=url)
+            got = web.get("/api/rooms/build/review").json()["board"]
+            assert got["forge"] == {"kind": "gitlab", "repo": "example-group/sub/shop", "number": 12}
+            assert got["url"] == url
+    finally:
+        web.close()
+
+
 async def test_a_person_answers_rules_and_closes_from_the_web(broker: InProcBroker) -> None:
     """The person's 10% (§37.5): answering a question and ruling on a contested finding are their
     own messages in the room, so they reach the agents; closing the board is a notice."""
@@ -147,6 +163,7 @@ async def test_a_person_answers_rules_and_closes_from_the_web(broker: InProcBrok
                 ("Q1", "open", True),
             ]
             assert got["counts"]["needs_person"] == 2 and got["settled"] is False
+            assert got["forge"] is None  # example.com is neither GitHub nor GitLab (#247)
 
             def move(**body: Any) -> Any:
                 return web.post("/api/rooms/build/review", json=body, headers=broker.write_headers())
