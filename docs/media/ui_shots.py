@@ -39,7 +39,8 @@ closed-light, remotes-light, inspector-light, inspector-remote-light, inspector-
 phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (#129), welcome-light and login-light, plus, from a hosted broker
 (``tests/ui_world.py``'s ``HostedWorld``, with Chromium's virtual authenticators as the
 passkeys; issues #41 and #61): signin-setup-light, setup-light, people-light, people-dark,
-passkeys-light, passkeys-dark, confirm-light, signin-light, setup-person-light and
+passkeys-light, passkeys-dark, people-opening-{light,dark,phone-light} (initial People fetch held),
+confirm-light, signin-light, setup-person-light and
 signin-phone-dark, and from a second one at
 ``http://localhost:<port>``, with test machines that dial in (``tests/fakes/fake_machine.py``:
 made-up facts, the real dialer): machines-pairing-light, machines-pairing-dark,
@@ -851,6 +852,30 @@ def shoot_hosted(browser: Any, out: Path, world: Any) -> None:
         shot(page, out, "people-dark.png")
         page.emulate_media(color_scheme="light")
         page.click("#invite-done")
+        page.keyboard.press("Escape")
+        # Hold the initial People refresh to show what is visible on a slow connection.
+        page.evaluate("""() => {
+          const original = window.fetch;
+          window.fetch = (...args) => {
+            if (String(args[0]).endsWith('/api/people') &&
+                (!args[1] || !args[1].method || args[1].method === 'GET')) {
+              return new Promise(resolve => {
+                window.releasePeople = () => { window.fetch = original; resolve(original(...args)); };
+              });
+            }
+            return original(...args);
+          };
+        }""")
+        page.click("#open-people")
+        shot(page, out, "people-opening-light.png")
+        page.emulate_media(color_scheme="dark")
+        shot(page, out, "people-opening-dark.png")
+        page.emulate_media(color_scheme="light")
+        page.set_viewport_size(PHONE["viewport"])
+        shot(page, out, "people-opening-phone-light.png")
+        page.set_viewport_size(DESKTOP["viewport"])
+        page.evaluate("() => window.releasePeople()")
+        expect(page.locator("#person-first")).to_be_visible()
         page.keyboard.press("Escape")
         page.click("#me-settings")
         expect(page.locator("#app-dialog")).to_be_visible()

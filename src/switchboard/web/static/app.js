@@ -3935,10 +3935,10 @@
     'one-time': 'hasn\'t signed in yet: one-time password', expired: 'one-time password expired',
   };
 
-  async function loadPeople() {
+  async function loadPeople(render) {
     const data = await api('GET', '/api/people');
     state.people = data.people || [];
-    renderPeoplePanel();
+    if (render !== false) renderPeoplePanel();
     renderComposerMentions();  // a newly added (or removed) person changed who can be @mentioned
   }
 
@@ -4331,9 +4331,14 @@
     state.nameDrafts.clear();
     state.nameNotes.clear();
     openSheet('people-panel');
-    renderPeoplePanel();
-    loadPeople().catch(function () {});
-    if (!tryFocus(document.getElementById('person-first'))) $('people-close').focus();
+    // Wait for the first refresh before mounting editable inputs. Replacing a form while a
+    // person types can drop its selection and append their new text to the old value.
+    $('people-body').replaceChildren(el('p', 'fine', 'Loading people…'));
+    $('people-close').focus();
+    loadPeople(false).catch(function () {}).then(function () {
+      renderPeoplePanel();
+      if (!$('people-panel').classList.contains('hidden')) tryFocus(document.getElementById('person-first'));
+    });
   }
 
   // ------------------------------------------------------- closed rooms
