@@ -314,6 +314,53 @@ def test_wrong_passwords_slow_down(ticking: tuple[InProcBroker, FakeClock]) -> N
     assert signin(br, "alice", ADMIN_PW).status_code == 200
 
 
+def test_known_browser_can_sign_in_during_strangers_account_lockout(
+    ticking: tuple[InProcBroker, FakeClock],
+) -> None:
+    broker, _clock = ticking
+    admin = set_up(broker)
+    stranger = Browser(broker)
+    for _ in range(FREE_FAILURES):
+        assert signin(stranger, "admin", "not it at all").status_code == 403
+    assert signin(stranger, "admin", ADMIN_PW).status_code == 429
+    assert signin(admin, "admin", ADMIN_PW).status_code == 200
+
+
+def test_one_trusted_browser_cannot_exhaust_anothers_guessing_budget(
+    ticking: tuple[InProcBroker, FakeClock],
+) -> None:
+    broker, _clock = ticking
+    first = set_up(broker)
+    second = Browser(broker)
+    assert signin(second, "admin", ADMIN_PW).status_code == 200
+    for _ in range(FREE_FAILURES):
+        assert signin(first, "admin", "not it at all").status_code == 403
+    assert signin(first, "admin", ADMIN_PW).status_code == 429
+    assert signin(second, "admin", ADMIN_PW).status_code == 200
+
+
+def test_wrong_names_cannot_pause_every_password_sign_in(
+    ticking: tuple[InProcBroker, FakeClock],
+) -> None:
+    broker, _clock = ticking
+    set_up(broker)
+    stranger = Browser(broker)
+    for i in range(101):
+        assert signin(stranger, f"absent{i}", "not it at all").status_code == 403
+    assert signin(Browser(broker), "admin", ADMIN_PW).status_code == 200
+
+
+def test_signed_in_password_check_has_its_own_guessing_budget(
+    ticking: tuple[InProcBroker, FakeClock],
+) -> None:
+    broker, _clock = ticking
+    admin = set_up(broker)
+    stranger = Browser(broker)
+    for _ in range(FREE_FAILURES):
+        assert signin(stranger, "admin", "not it at all").status_code == 403
+    assert admin.post("/api/signin/check", {"password": ADMIN_PW}).status_code == 200
+
+
 def test_admin_names_share_one_password_guessing_budget(ticking: tuple[InProcBroker, FakeClock]) -> None:
     broker, _clock = ticking
     set_up(broker)

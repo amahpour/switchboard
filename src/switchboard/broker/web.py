@@ -100,6 +100,8 @@ BAD_TOKEN_EVENT_S = 60.0
 SETUP_COOKIE = "switchboard_setup"
 PASSKEY_COOKIE = "switchboard_passkey"
 ADD_COOKIE = "switchboard_passkey_add"
+DEVICE_COOKIE = "switchboard_device"
+DEVICE_TTL_S = 30 * 24 * 3600
 HASH_RE = re.compile(r"[0-9a-f]{64}")  # a remote's config_hash (sha256 hex)
 ROOM_ID_RE = re.compile(r"[1-9][0-9]{0,18}")  # a room id in /api/closed-rooms/{rid}/reopen
 MAX_ROOM_ID = 2**63 - 1  # SQLite's INTEGER: 19 digits can be more (OverflowError, not 400)
@@ -176,6 +178,32 @@ async def _json_body(request: Request) -> dict[str, Any]:
 
 
 def install(app: FastAPI, state: "BrokerState") -> None:
+    password_work = asyncio.Semaphore(2)  # a flood waits for scrypt capacity; it cannot pause everyone
+
+    async def check_password(typed: Any, stored: str | None) -> bool:
+        async with password_work:
+            matched = await asyncio.to_thread(verify_password, typed, stored or DUMMY_HASH)
+        return stored is not None and matched
+
+    def device_id(request: Request, account: str) -> str | None:
+        sealed = state.sealer.unseal(request.cookies.get(DEVICE_COOKIE))
+        if sealed is None or sealed.get("kind") != "signin_device" or sealed.get("account") != account:
+            return None
+        value = sealed.get("id")
+        return value if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]{22}", value) else None
+
+    def trust_device(resp: Response, account: str, current: str | None = None) -> None:
+        value = current or secrets.token_urlsafe(16)
+        resp.set_cookie(
+            DEVICE_COOKIE,
+            state.sealer.seal({"kind": "signin_device", "account": account, "id": value}, DEVICE_TTL_S),
+            max_age=DEVICE_TTL_S,
+            path="/",
+            httponly=True,
+            samesite="strict",
+            secure=secure(),
+        )
+
     def who(request: Request) -> people.Who | None:
         """Whoever this request's session is, if it's a live one (a removed person's is not),
         even one that must choose its own password first."""
@@ -463,6 +491,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         log.warning("switchboard set up: the admin chose a password")
         resp = _ok({"ok": True, "human": state.cfg.human_name})
         _set_cookie(resp, sid, secure=secure())
+        trust_device(resp, "owner")
         _drop_cookie(resp, SETUP_COOKIE, secure=secure())
         return resp
 
@@ -586,6 +615,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             )
             state.hub.notice(None, "warn", f'new web login: {name} (passkey "{row.name}")')
             _set_cookie(resp, sid, secure=secure())
+        trust_device(resp, password_bucket(row.person_id), device_id(request, password_bucket(row.person_id)))
         _drop_cookie(resp, PASSKEY_COOKIE, secure=secure())
         return resp
 
@@ -697,10 +727,11 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             if kind != "none"
             else f"name:{name or '?'}"
         )
-        wait = state.signin.wait_s(key)
+        trusted = device_id(request, key)
+        budget = f"device:{trusted}" if trusted is not None else key
+        wait = state.signin.wait_s(budget)
         if wait > 0:
             return _err(429, "slow_down", f"too many wrong tries: wait {int(wait) + 1} s and try again")
-        now = state.clock.now()
         if kind == "owner":
             stored, typed = state.store.owner_password_hash(), pw
         elif kind == "person":
@@ -709,9 +740,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             typed = (normalize_one_time(pw) or pw) if who_p.must_reset else pw
         else:
             stored, typed = None, pw
-        password_ok = stored is not None and verify_password(typed, stored)
-        if stored is None:
-            verify_password(typed, DUMMY_HASH)  # as long as a real check either way: see above
+        password_ok = await check_password(typed, stored)  # one scrypt check, queued behind a small cap
+        now = state.clock.now()
         resp: JSONResponse | None = None
         if kind == "owner":
             if state.claim is not None and state.claim.active and state.claim.check(pw):
@@ -719,7 +749,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                     return _err(
                         409, "busy", "Someone is setting up this switchboard from another browser right now."
                     )
-                state.signin.ok(key)
+                state.signin.ok(budget)
                 return start_claim(
                     _ok(
                         {
@@ -738,7 +768,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             if person.must_reset:
                 if password_ok:
                     if person.password_expires_at is not None and now >= person.password_expires_at:
-                        state.signin.failed(key)
+                        state.signin.failed(budget)
                         return _err(
                             403, "expired", "this one-time password has expired: ask the admin for a new one"
                         )
@@ -746,10 +776,11 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             elif password_ok:
                 resp = signed_in(person.id, person.name, "password", now)
         if resp is None:
-            state.signin.failed(key)
+            state.signin.failed(budget)
             failed("bad_password")
             return _err(403, "bad_password", "wrong email or password")
-        state.signin.ok(key)
+        state.signin.ok(budget)
+        trust_device(resp, key, trusted)
         return resp
 
     def signed_in(
@@ -781,7 +812,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             body = await _json_body(request)
         except ServiceError as e:
             return _svc_err(e)
-        key = password_bucket(w.person_id)
+        key = f"check:{w.h}"
         wait = state.signin.wait_s(key)
         if wait > 0:
             return _err(429, "slow_down", f"too many wrong tries: wait {int(wait) + 1} s and try again")
@@ -790,7 +821,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             if w.person_id is None
             else getattr(state.store.person(w.person_id), "password_hash", None)
         )
-        if not verify_password(body.get("password"), stored):
+        if not await check_password(body.get("password"), stored):
             state.signin.failed(key)
             failed("bad_password")
             return _err(403, "bad_password", "wrong password")
