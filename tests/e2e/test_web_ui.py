@@ -1408,6 +1408,24 @@ def test_settings_draft_survives_switching_groups_and_a_refresh(ui: UI) -> None:
     page.keyboard.press("Escape")
 
 
+@pytest.mark.parametrize("group", ["profile", "appearance", "rooms"])
+def test_every_settings_group_has_its_padded_scrolling_box(ui: UI, group: str) -> None:
+    """A group with no save bar (Appearance) is laid out like one with a bar: its controls sit
+    inside the padded box that scrolls, not against the rail's edge (#257's review)."""
+    page = ui.open(room="build")
+    open_settings(page, group)
+    panel = page.locator(f"#settings-panel-{group}")
+    expect(panel).to_be_visible()
+    content = panel.locator(":scope > .settings-panel-content")
+    expect(content).to_have_count(1)
+    assert content.evaluate("e => getComputedStyle(e).overflowY") == "auto"
+    inset = content.evaluate(
+        "e => e.firstElementChild.getBoundingClientRect().left - e.getBoundingClientRect().left"
+    )
+    assert inset >= 16, inset
+    page.keyboard.press("Escape")
+
+
 def test_settings_save_bars_discard_only_their_own_draft(ui: UI) -> None:
     """Each editable group has a disabled Save until dirty; switching groups retains both
     drafts, and Discard resets only the current group before Save persists the other."""

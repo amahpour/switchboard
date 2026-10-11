@@ -3823,6 +3823,13 @@
       panelEl.setAttribute('aria-labelledby', 'settings-tab-' + g.key);
       panelEl.classList.add('hidden');
       SETTINGS_BUILDERS[g.key](panelEl);
+      // a group without a save bar (Appearance, Sign-in & security) scrolls in the same padded
+      // box as one with a bar, which settingsSaveBar builds
+      if (!panelEl.querySelector('.settings-panel-content')) {
+        const content = el('div', 'settings-panel-content');
+        while (panelEl.firstChild) content.append(panelEl.firstChild);
+        panelEl.append(content);
+      }
       panelsWrap.append(panelEl);
       panelsByKey[g.key] = panelEl;
     });
