@@ -138,6 +138,7 @@ class Room:
     last_msg_at: float | None
     rules_text: str = ""
     rules_version: int = 1
+    private: bool = False  # seen only by its people (§44, #74)
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "Room":
@@ -157,6 +158,7 @@ class Room:
             last_msg_at=r["last_msg_at"],
             rules_text=r["rules_text"] if "rules_text" in r.keys() else "",  # read-only old-schema reports
             rules_version=r["rules_version"] if "rules_version" in r.keys() else 1,
+            private=bool(r["private"]) if "private" in r.keys() else False,
         )
 
     @property

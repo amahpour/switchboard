@@ -3075,3 +3075,38 @@ A new room's `budget_per_hour` and `hop_limit` used to come only from `[delivery
 
 ### 42.1 Tests
 `tests/unit/test_db_migrate_v14.py` (the migration; existing preferences rows keep their theme, text size and room rules, and start unset for the two new columns); `tests/unit/test_room_wake_defaults.py` (precedence over config.toml and the built-in default, copy on create in both directions, `set_room_wake`'s notices, events, the shared `hop_limit_notice` wording, and the no-op save); `tests/integration/test_web_preferences.py` (bounds, unknown and wrongly typed values, `null` clearing a default, the theme and text size beside it untouched); `tests/integration/test_web_room_wake.py` (copy on create and each person's own independence, `PUT /api/rooms/{slug}/wake`'s checked bounds, unknown fields, session and Origin/`X-Switchboard` requirements, and the live websocket push and notice); `tests/e2e/test_web_ui.py::test_wake_defaults_copy_into_a_room_and_its_own_dialog_edits_live` (Settings seeding a new room, the room's own dialog changing only that room, the hop-limit-0 warning in both places, the header chips updating live).
+
+## 44. Private rooms (#74)
+
+### 44.1 What it is
+On a hosted broker with people (§32) every room was open to everyone signed in. A **private** room is seen only by its people, like a Slack private channel: a side project, a customer's work, two people and their agents. A room is private from its creation, by the **Private** box in New room (`POST /api/rooms` with `private: true`), and stays so: there's no switching either way, so no history ever changes audience. A desktop broker has one person, so it refuses `private` ("private rooms are for a hosted broker, with people").
+
+### 44.2 Who sees what
+- **Storage (schema 15):** `rooms.private` (0 or 1; every room that existed stays 0) and `room_people(room_id, person_id, added_by, added_at)`, a person keyed as `preferences` keys them (0: the owner). The creator is the first person, in the same transaction, so a private room is never made with nobody in it. The v14→v15 migration only adds the column and the table, after the usual checked backup (§27.6).
+- **The gate:** `RoomService.visible(room, viewer)`: a public room for everyone signed in, a private one for its people. `room_for(name, viewer)` raises "no such room: #x", the words for a room that doesn't exist, so a private room's name isn't confirmed either; a closed private room's "reopen it" hint is held back the same way. Every route that takes a room calls it first (`web.py`'s `viewer()`, -1 when there's no live person, so it fails closed to the public rooms): the messages, the members and a member's detail, the review board and its moves, say, command, rules, wake settings, the room's people and reopening a closed room. `GET /api/rooms` and the closed-rooms list show only what the viewer sees.
+- **The WebSocket:** a page's subscriber carries its person; `_ws_hello` never subscribes it to a private room it isn't in, and replays nothing of one. The `rooms` frame every page gets names only public rooms (each page reads its own list back). When a person leaves, `Hub.unsubscribe_person` drops the room from their pages at once.
+- **People:** any of a private room's people adds another or removes one (`POST /api/rooms/{slug}/people`, `{action, name}`), and anyone may leave; the last person can't (close the room instead). Each is a notice in the room and a `room_people` event.
+- **The local CLI** and the broker itself see every room: they are the machine's owner, who holds the database anyway.
+
+### 44.3 Agents
+- **An agent's person** (`RoomService.host_person`): the person who made the pairing code of the machine it runs on (`link_machines.person_id`, #178); an agent on the broker's own machine or an SSH remote is the owner's.
+- **The machine's welcome** (§28.8), which names the open rooms to a remote link with `"*"`, names a private room only to a machine whose person is in it.
+- **Joining:** `AgentService.join` takes a private room only for an agent whose person is in it, and tells any other "no such room #x: ask your user to create it", as for a room that isn't there.
+- **Leaving:** when a person leaves or is removed from a private room, their agents' memberships there end (`person_left`, a leave line "left: its person is no longer in the room"). Removing someone from switchboard (`person_gone`) takes them out of every private room, with their agents.
+- **Who they answer to:** an agent's join text, `who()` and @mentions name the room's people (`room_humans`), not everyone on the broker.
+
+### 44.4 The admin
+`GET /api/private-rooms` (the admin section) lists every private room's name, people and creator, and **Admin > People** shows them, never what's in them. The admin can always read the database, so the page doesn't pretend otherwise: privacy is from other people, not from whoever runs the server. A private room the admin isn't in is closed or deleted from the CLI (§28).
+
+### 44.5 Not in it, and the choices made
+- No switching a room between public and private (a history would change audience).
+- Agents on the broker's own machine are the admin's, not chosen at join.
+- `/catchup` stays inside its room (its subjects are members); an invitation (#117) into a private room is for later: whichever of the two lands second adds that check.
+- Private rooms count against nothing new: the wake budget is per room already.
+- A direct message is a small private room.
+
+### 44.6 Threat model delta
+New: a person's view of the rooms is narrower. Unchanged: an agent in a private room and a public one can repeat what it read (SECURITY.md); the admin, the CLI and the database see everything. Every route that takes a room goes through `room_for`, so a new route that forgets it shows a private room to everyone: the integration tests list each route.
+
+### 44.7 Tests
+`test_private_rooms.py` (a non-member refused by every REST route with the words of a missing room; the WebSocket hello and the `rooms` frame; an agent of a non-member refused, then joining once its person is added, and leaving with them; adding and removing people, the last one kept; the admin's list and a removed person leaving; a desktop broker; existing rooms public; a machine's welcome naming only its person's private rooms); `test_db_migrate_v15.py` (the migration, and the store's people); `test_private_rooms_ui.py` (e2e: the Private box, the lock, the people with Add and Leave, the admin's card, a phone).

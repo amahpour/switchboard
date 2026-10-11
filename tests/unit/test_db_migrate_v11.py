@@ -22,13 +22,13 @@ def test_machines_gain_who_approved_them_with_a_checked_backup(tmp_path: Path) -
         con.execute(stmt)
     con.commit()
     assert db.schema_version(con) == 10
-    before = db.row_counts(con, db.TABLES)
+    before = db.row_counts(con, db.V14_TABLES)
     con.close()
     os.chmod(p, 0o600)
 
     con = db.open_db(p)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 14
-    assert db.row_counts(con, db.TABLES) == before
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 15
+    assert db.row_counts(con, db.V14_TABLES) == before
     cols = [r[1] for r in con.execute("PRAGMA table_info(link_machines)")]
     assert cols[-2:] == ["person_id", "approved_by"]
     assert {r[0] for r in con.execute("SELECT approved_by FROM link_machines")} <= {None}

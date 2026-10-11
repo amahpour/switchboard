@@ -285,16 +285,156 @@ class RoomService:
             "last_id": self.store.last_message_id(room.id),
             "settings": self.settings(room),
             "rules": room.rules_text,
+            # a private room's people, who alone see it (§44); None for a public room
+            "private": room.private,
+            "people": self.room_people_names(room) if room.private else None,
         }
 
-    def rooms(self) -> list[dict[str, Any]]:
-        return [self.room_dict(r) for r in self.store.list_rooms()]
+    def rooms(self, viewer: int | None = None) -> list[dict[str, Any]]:
+        """The open rooms ``viewer`` sees (§44): every public one, and the private ones they're in."""
+        return [self.room_dict(r) for r in self.store.list_rooms() if self.visible(r, viewer)]
 
-    def closed_room_dicts(self) -> list[dict[str, Any]]:
-        """The closed rooms, newest first (the web's Closed rooms panel, ``switchboard rooms
-        --closed``; DESIGN.md §28.4)."""
+    # ------------------------------------------------------------ private rooms (§44)
+    def visible(self, room: Room, viewer: int | None) -> bool:
+        """Can ``viewer`` see ``room``: a person's id, 0 the owner, as a web session is keyed?
+        None is the local CLI and the broker itself, run by the machine's owner, who holds the
+        database anyway (§44.4). A public room, everyone signed in; a private one, its people."""
+        return not room.private or viewer is None or viewer in self.store.room_people(room.id)
+
+    def room_for(self, name: str, viewer: int | None) -> Room:
+        """``room(name)``, for ``viewer``: a private room they aren't in is "no such room", in the
+        words of one that doesn't exist, so its name isn't confirmed either."""
+        try:
+            room = self.room(name)
+        except ServiceError as e:
+            # a closed private room's "reopen it from Closed rooms" hint would confirm it too
+            closed = self.store.closed_rooms(normalize_room(name)) if e.code == "not_found" else []
+            if closed and not any(self.visible(r, viewer) for r in closed):
+                raise ServiceError("not_found", f"no such room: {normalize_room(name)}") from None
+            raise
+        if not self.visible(room, viewer):
+            raise ServiceError("not_found", f"no such room: {room.name}")
+        return room
+
+    @staticmethod
+    def person_key(person_id: int | None) -> int:
+        """A web session's person as ``room_people`` keys them: 0 for the owner."""
+        return 0 if person_id is None else person_id
+
+    def person_name(self, key: int) -> str | None:
+        if key == 0:
+            return self.cfg.human_name
+        p = self.store.person(key)
+        return p.name if p is not None and p.removed_at is None else None
+
+    def person_by_name(self, name: str) -> int | None:
+        """The key of the person called ``name`` (any case), or None."""
+        n = name.strip().lower().lstrip("@")
+        if n == self.cfg.human_name.lower():
+            return 0
+        p = self.store.person_named(n)
+        return p.id if p is not None else None
+
+    def room_people_names(self, room: Room) -> list[str]:
+        return [n for k in self.store.room_people(room.id) if (n := self.person_name(k)) is not None]
+
+    def room_humans(self, room: Room) -> list[str]:
+        """The people an agent in ``room`` answers to: everyone in a public room (§32), the
+        room's own people in a private one (§44)."""
+        return self.room_people_names(room) if room.private else self.people_names()
+
+    def host_person(self, host: str) -> int:
+        """Whose agents run on ``host`` (§44.3): a machine that dialed in is the person's who made
+        its pairing code (#178); this machine and an SSH remote are the owner's."""
+        if not host:
+            return 0
+        m = self.store.machine(host)
+        return m.person_id if m is not None and m.person_id is not None else 0
+
+    def add_room_person(self, room: Room, name: str, by: int) -> str:
+        """Add a person to a private room (any of its people may, §44.2)."""
+        if not room.private:
+            raise ServiceError("bad_request", f"{room.name} isn't private: everyone signed in sees it")
+        key = self.person_by_name(name)
+        if key is None:
+            raise ServiceError("not_found", f"no such person: {name.strip().lstrip('@')}")
+        who, by_name = self.person_name(key), self.person_name(by) or "someone"
+        if not self.store.room_person_add(room.id, key, by):
+            raise ServiceError("conflict", f"{who} is in {room.name} already")
+        self.store.add_event("room_people", room_id=room.id, data={"what": "add", "person": key, "by": by})
+        self.post_notice(room, f"{by_name} added {who} to {room.name}")
+        self.rooms_changed()
+        return f"added {who}"
+
+    def remove_room_person(self, room: Room, name: str, by: int) -> str:
+        """Take a person out of a private room, with their agents (§44.3). A person may leave."""
+        if not room.private:
+            raise ServiceError("bad_request", f"{room.name} isn't private")
+        key = self.person_by_name(name)
+        people = self.store.room_people(room.id)
+        if key is None or key not in people:
+            raise ServiceError("not_found", f"{name.strip().lstrip('@')} isn't in {room.name}")
+        if people == [key]:
+            raise ServiceError(
+                "bad_request", f"the last person can't leave {room.name}: /close it instead, from the room"
+            )
+        self._drop_person(room, key)
+        who, by_name = self.person_name(key), self.person_name(by) or "someone"
+        self.store.add_event("room_people", room_id=room.id, data={"what": "remove", "person": key, "by": by})
+        self.post_notice(
+            room, f"{who} left {room.name}" if key == by else f"{by_name} removed {who} from {room.name}"
+        )
+        self.rooms_changed()
+        return f"removed {who}" if key != by else f"you left {room.name}"
+
+    def _drop_person(self, room: Room, key: int) -> None:
+        """``key`` out of ``room``: their row, their agents' memberships, their pages' subscriptions."""
+        self.store.room_person_remove(room.id, key)
+        for m in self.store.members(room.id):
+            p = self.store.get_participant(m.participant_id)
+            if p is None or self.host_person(p.host) != key:
+                continue
+            self.store.end_membership(m.membership_id, "person_left")
+            if self.delivery is not None:
+                self.delivery.on_membership_ended(m.membership_id, "person_left")
+            self._post(
+                room,
+                sender_name=m.name,
+                sender_kind="agent",
+                sender_harness=m.harness,
+                sender_membership_id=m.membership_id,
+                via="system",
+                kind="leave",
+                text="left: its person is no longer in the room",
+                sender_host=m.host or None,
+            )
+        self.hub.unsubscribe_person(room.name, key)
+        self.hub.members_changed(room.name)
+
+    def person_gone(self, person_id: int) -> None:
+        """Someone removed from switchboard leaves every private room, with their agents (§44.3)."""
+        for rid in self.store.rooms_of_person(person_id):
+            room = self.store.room_by_id(rid)
+            if room is not None:
+                self._drop_person(room, person_id)
+                self.post_notice(room, f"a person removed from switchboard left {room.name}")
+        self.rooms_changed()
+
+    def private_rooms(self) -> list[dict[str, Any]]:
+        """For the admin (§44.4): every private room's name and people, never its contents."""
+        out = []
+        for r in self.store.list_rooms():
+            if r.private:
+                out.append({"name": r.name, "people": self.room_people_names(r), "created_by": r.created_by})
+        return out
+
+    def closed_room_dicts(self, viewer: int | None = None) -> list[dict[str, Any]]:
+        """The closed rooms ``viewer`` sees, newest first (the web's Closed rooms panel,
+        ``switchboard rooms --closed``; DESIGN.md §28.4, §44)."""
         out = []
         for r in self.store.list_rooms(closed=True):
+            if not self.visible(r, viewer):
+                continue
             ev = self.store.latest_close_event(r.id)
             out.append(
                 {
@@ -445,7 +585,10 @@ class RoomService:
         return out
 
     # ---------------------------------------------------------------- writes
-    def create_room(self, name: str, *, creator: str | None = None, person_id: int | None = None) -> Room:
+    def create_room(
+        self, name: str, *, creator: str | None = None, person_id: int | None = None, private: bool = False
+    ) -> Room:
+        """``private`` (§44): seen only by its people, the creator first; it stays private."""
         try:
             n = normalize_room(name)
         except InvalidName as e:
@@ -458,6 +601,7 @@ class RoomService:
                 defaults["budget_per_hour"]["value"],
                 defaults["hop_limit"]["value"],
                 self.store.preferences(person_id)["room_rules"],
+                private_for=self.person_key(person_id) if private else None,
             )
         except Conflict:
             raise ServiceError("conflict", f"{n} already exists") from None
@@ -540,8 +684,10 @@ class RoomService:
             )
 
     def rooms_changed(self) -> None:
-        """Tell web clients the open rooms changed (create, close, reopen, delete)."""
-        self.hub.rooms_changed([r.name for r in self.store.list_rooms()])
+        """Tell web clients the open rooms changed (create, close, reopen, delete). A private
+        room's name isn't in the frame, which goes to every page (§44): each page reads its own
+        list back from GET /api/rooms."""
+        self.hub.rooms_changed([r.name for r in self.store.list_rooms() if not r.private])
 
     def close_room(self, room: Room, actor: Actor) -> str:
         """``/close`` (DESIGN.md §28.3): every member leaves (reason ``closed``, not kicked, the
@@ -851,7 +997,7 @@ class RoomService:
     def mention_names(self, room: Room) -> list[str]:
         """Names an @mention can address: active members, plus the human (for UI highlighting;
         the human has no delivery rows)."""
-        return self.store.active_names(room.id) + self.people_names()
+        return self.store.active_names(room.id) + self.room_humans(room)
 
     def people_names(self) -> list[str]:
         """The humans (§32): the owner, then everyone the owner added on a hosted broker."""
