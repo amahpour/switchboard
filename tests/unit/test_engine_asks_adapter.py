@@ -1,7 +1,8 @@
 """The engine asks a session's adapter what its hooks mean, not its harness name (#169,
 DESIGN.md §9.1): which hooks set the session id and the approval mode, which SessionEnd
-takes it offline, which hook starts a background subagent, and how a Stop re-arms. A harness
-added with its own adapter needs no edit to the engine.
+takes it offline, which hook starts a background subagent, how a Stop re-arms, when missed
+stop follow-ups degrade a session, and whose tier follows from its row. A harness added with
+its own adapter needs no edit to the engine.
 """
 
 from __future__ import annotations
@@ -13,7 +14,9 @@ from conftest import FakeClock
 from engine_world import World
 
 from switchboard.adapters import REMOTE_CODEX, PullAdapter
-from switchboard.models import HookEvent, Participant
+from switchboard.adapters.cursor import CursorAdapter
+from switchboard.config import Config
+from switchboard.models import HookEvent, Notice, Participant
 
 
 class OtherAdapter(PullAdapter):
@@ -42,6 +45,16 @@ class ListeningAdapter(PullAdapter):
 
     def rearm_text(self, room: str, wait_s: int) -> str:
         return f"listen in {room}"
+
+
+class FollowupAdapter(CursorAdapter):
+    """Cursor's stop follow-ups, on the unknown harness, degraded after one miss."""
+
+    def followup_limit(self) -> int:
+        return 1
+
+    def degraded_text(self, name: str, n: int) -> str:
+        return f"{name} missed {n}"
 
 
 @pytest.fixture
@@ -115,6 +128,29 @@ def test_a_stop_re_arms_with_the_adapters_text_and_cap(listening: World) -> None
     assert w.hook(p, "Stop", gen="g1") is None  # one per prompt
 
 
+def test_missed_follow_ups_degrade_by_the_adapters_limit_and_text(tmp_path: Path, clock: FakeClock) -> None:
+    """Fails if the engine takes the limit and the notice from Cursor's config and text, or
+    re-derives the tier and ends the degraded spell only for a session named Cursor's."""
+    w = World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0))
+    w.engine.adapters["unknown"] = FollowupAdapter(w.cfg)
+    p, _m = w.agent("bot", harness="unknown", status="busy", hooks=True)
+    p = w.store.update_participant(p.id, session_key="cursor:conv-bot", bind_state="bound")
+    w.actions += w.engine.refresh_tier(p.id)
+    assert w.p(p).tier_note == "provisional"
+    w.human("try")
+    out = w.hook(p, "Stop", status="completed", loop_count=0, max_wait_s=630.0)
+    sink = w.engine.sinks.get(out.sink_id)
+    assert sink is not None and not sink.open
+    w.engine.on_hook_ack(sink.result["batch_id"], sink.result["ack"])
+    w.take()
+    w.hook(p, "Stop", status="completed", loop_count=0, max_wait_s=630.0)  # the follow-up never ran
+    assert w.p(p).unconfirmed_followups == 1
+    assert any(isinstance(a, Notice) and a.text == "bot missed 1" for a in w.take())
+    assert w.p(p).tier_note == "provisional, degraded"
+    w.hook(p, "UserPromptSubmit", gen="g2")  # the human's next prompt ends the spell
+    assert w.p(p).unconfirmed_followups == 0 and w.p(p).tier_note == "provisional"
+
+
 def test_each_harness_answers_as_the_engine_did_by_name(w: World) -> None:
     """The move changes nothing: the harnesses the engine named before #169 answer yes."""
     ads = w.engine.adapters
@@ -127,3 +163,6 @@ def test_each_harness_answers_as_the_engine_did_by_name(w: World) -> None:
     assert {h for h, a in ads.items() if a.rearm_caps() != (0, 0)} == {"devin"}
     dv = w.cfg.devin
     assert ads["devin"].rearm_caps() == (dv.rearm_max_per_prompt, dv.rearm_max_per_hour)
+    assert {h for h, a in ads.items() if a.derives_tier} == {"cursor", "devin"}
+    assert {h for h, a in ads.items() if a.followup_limit()} == {"cursor"}
+    assert ads["cursor"].followup_limit() == w.cfg.cursor.max_unconfirmed_followups

@@ -37,7 +37,6 @@ from typing import Any
 
 from switchboard import envelope
 from switchboard.adapters.base import Adapter
-from switchboard.adapters.cursor import FOLLOWUP_RACE_S
 from switchboard.clock import Clock
 from switchboard.config import Config
 from switchboard.delivery import rules
@@ -718,19 +717,16 @@ class Engine:
             cont is not None
             and b.path == "stop_followup"
             and state == "expired"
-            and self._missed(cont, reason)
+            and self._missed(m, cont, reason)
         ):
             out += self._followup_expired(m, reason)
         again = self.evaluate_participant(m.participant_id) if push else self.evaluate(m.id)
         return out + again + [Snapshot(m.room_id)]
 
-    def _missed(self, cont: Cont, reason: str) -> bool:
-        """Does this expiry count as a follow-up Cursor never ran? The human typing
-        right after it was printed is a race, not evidence (§9.4); typing a while
-        later, with no hook of the follow-up turn in between, is."""
-        if reason != "human_prompt":
-            return True
-        return cont.acked_at is not None and self.now() - cont.acked_at >= FOLLOWUP_RACE_S
+    def _missed(self, m: Membership, cont: Cont, reason: str) -> bool:
+        """Does this expiry count as a stop follow-up the harness never ran (§9.4)?"""
+        p = self.store.get_participant(m.participant_id)
+        return p is not None and self.adapter(p).followup_missed(cont.acked_at, reason, self.now())
 
     def _undo_stop_busy(self, participant_id: int, since: float, src: str) -> list[Action]:
         """A stop continuation or re-arm set the member busy (a turn should start).
@@ -744,32 +740,26 @@ class Engine:
         return self.set_status(p, "idle", src, bump=True)
 
     def _followup_expired(self, m: Membership, reason: str) -> list[Action]:
-        """A Cursor follow-up that was never confirmed. After
-        ``max_unconfirmed_followups`` in a row the member is degraded: no more
-        parks until the human's next prompt in that session (§9.4)."""
+        """A stop follow-up that was never confirmed. After the adapter's
+        ``followup_limit`` in a row the member is degraded: no more parks until the
+        human's next prompt in that session (Cursor, §9.4)."""
         p = self.store.get_participant(m.participant_id)
         if p is None:
             return []  # pragma: no cover - participant rows are never deleted
+        adapter = self.adapter(p)
         n = p.unconfirmed_followups + 1
         self.store.update_participant(p.id, unconfirmed_followups=n)
-        limit = self.cfg.cursor.max_unconfirmed_followups
+        limit = adapter.followup_limit()
         out: list[Action] = []
         if limit and n == limit:
             self._event("tier", participant_id=p.id, what="degraded", reason=reason, n=n)
-            out.append(
-                Notice(
-                    m.room_id,
-                    "warn",
-                    f"{m.screen_name}: {n} stop follow-ups in a row were not confirmed; no more"
-                    " follow-ups until your next prompt in that Cursor session",
-                )
-            )
+            out.append(Notice(m.room_id, "warn", adapter.degraded_text(m.screen_name, n)))
         return out + self.refresh_tier(p.id)
 
     def refresh_tier(self, participant_id: int) -> list[Action]:
         """Re-derive a participant's tier from its adapter (binding, degraded, ...)."""
         p = self.store.get_participant(participant_id)
-        if p is None or p.harness not in ("cursor", "devin"):
+        if p is None or not self.adapter(p).derives_tier:
             return []
         tier, note = self.adapter(p).tier(p)
         if (tier, note) == (p.tier, p.tier_note):
@@ -1250,12 +1240,9 @@ class Engine:
                 gen_tainted=int(gen is not None and gen in self.tainted_gens.get(p.id, {})),
                 rearms_in_gen=0,
             )
-            limit = self.cfg.cursor.max_unconfirmed_followups
-            if (
-                p.harness == "cursor"
-                and p.unconfirmed_followups
-                and (not limit or p.unconfirmed_followups >= limit)
-            ):
+            # only a harness with stop follow-ups (Cursor) counts unconfirmed ones
+            limit = adapter.followup_limit()
+            if p.unconfirmed_followups and (not limit or p.unconfirmed_followups >= limit):
                 # the human's prompt ends a degraded spell (§9.4); below the limit the
                 # count stands: only a confirmed follow-up breaks a run of misses
                 upd["unconfirmed_followups"] = 0

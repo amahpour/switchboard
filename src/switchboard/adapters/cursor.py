@@ -88,10 +88,27 @@ def bound(p: Participant) -> bool:
 
 class CursorAdapter(Adapter):
     harness = "cursor"
+    derives_tier = True  # from its binding and its degraded spell
 
     def degraded(self, p: Participant) -> bool:
-        n = self.cfg.cursor.max_unconfirmed_followups
+        n = self.followup_limit()
         return n > 0 and p.unconfirmed_followups >= n
+
+    def followup_limit(self) -> int:
+        return self.cfg.cursor.max_unconfirmed_followups
+
+    def followup_missed(self, acked_at: float | None, reason: str, now: float) -> bool:
+        """The human typing right after a follow-up was printed is a race, not evidence;
+        typing a while later, with no hook of the follow-up turn in between, is."""
+        if reason != "human_prompt":
+            return True
+        return acked_at is not None and now - acked_at >= FOLLOWUP_RACE_S
+
+    def degraded_text(self, name: str, n: int) -> str:
+        return (
+            f"{name}: {n} stop follow-ups in a row were not confirmed; no more"
+            " follow-ups until your next prompt in that Cursor session"
+        )
 
     # -------------------------------------------------------- capabilities
     def tier(self, p: Participant | None) -> tuple[str, str | None]:

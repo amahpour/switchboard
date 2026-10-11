@@ -87,6 +87,9 @@ class Adapter:
     # a ``permission_mode``).
     reports_session_id = False
     reports_approval_mode = False
+    # Its tier follows from the participant row alone (Cursor's binding and degraded spell,
+    # Devin's wait loop), so the engine re-derives it when the row changes (§9.4).
+    derives_tier = False
 
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -215,6 +218,22 @@ class Adapter:
     def stop_continues(self, p: Participant) -> bool:
         """True if this harness's Stop hook may return a continue at once (Devin)."""
         return False
+
+    def followup_limit(self) -> int:
+        """Unconfirmed stop follow-ups in a row that degrade the session: no more parks
+        until the human's next prompt in it (Cursor, §9.4). 0: never."""
+        return 0
+
+    def followup_missed(self, acked_at: float | None, reason: str, now: float) -> bool:
+        """True if this expiry counts as a stop follow-up the harness never ran."""
+        return True
+
+    def degraded_text(self, name: str, n: int) -> str:
+        """The warn notice when ``followup_limit`` misses in a row degrade the session."""
+        return (
+            f"{name}: {n} stop follow-ups in a row were not confirmed; no more follow-ups"
+            " until your next prompt"
+        )
 
     def rearm_caps(self) -> tuple[int, int]:
         """How many "keep listening" re-arms a Stop with nothing to deliver may return:

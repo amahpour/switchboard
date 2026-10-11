@@ -1015,6 +1015,9 @@ class Adapter(ABC):
     def ends_session(self, ev) -> bool                            # SessionEnd → offline (not Claude's reason=clear)
     def starts_subagent(self, ev) -> bool                         # taints the prompt (Devin's background run_subagent)
     def rearm_caps(self) -> tuple[int, int]; def rearm_text(self, room, wait_s) -> str   # Stop re-arm (Devin)
+    def followup_limit(self) -> int; def followup_missed(self, acked_at, reason, now) -> bool
+    def degraded_text(self, name, n) -> str                       # missed stop follow-ups degrade (Cursor)
+    derives_tier: bool                                            # tier follows from the row (Cursor, Devin)
     async def send(self, p, batch, text) -> None                  # transport for push routes
     async def start(self, runner) -> None; async def stop(self) -> None   # background status sources
 ```
