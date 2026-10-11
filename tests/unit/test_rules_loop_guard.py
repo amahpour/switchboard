@@ -134,7 +134,28 @@ def test_loop_guard_pause_answers_open_waits(w: World) -> None:
     for i in range(6):
         w.agent_says(ma, f"chatter {i}")
     [res] = w.resolved(sink.id)
-    assert res["status"] == "paused" and "paused" in res["text"]
+    # #239: it names the loop guard, not the user, and gives no hint how to lift it
+    assert res == {
+        "status": "paused",
+        "text": "[switchboard] #build is paused: the loop guard stopped it after 6 agent messages in a"
+        " row. End your turn now; don't call wait() again until your user resumes the room.",
+    }
+
+
+def test_a_wait_opened_after_the_loop_guard_tripped_names_it_at_its_timeout(w: World) -> None:
+    """A wait() that opens while the guard holds the room returns paused at its timeout, with
+    the same words as one the trip closed (#239)."""
+    _pa, ma = w.agent("a")
+    pc, mc = w.agent("c")
+    for i in range(6):
+        w.agent_says(ma, f"chatter {i}")
+    sink, acts = w.engine.open_wait(w.p(pc), w.m(mc), "wc", 30)
+    w.actions += acts
+    w.clock.advance(30)
+    w.actions += w.engine.tick()
+    [res] = w.resolved(sink.id)
+    assert res["status"] == "paused" and "the loop guard stopped it after 6 agent messages" in res["text"]
+    assert "your user" not in res["text"].split(".")[0]  # nobody paused it
 
 
 def test_a_hop_limit_of_zero_turns_the_guard_off(tmp_path: Path, clock: FakeClock) -> None:

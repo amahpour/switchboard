@@ -1040,7 +1040,7 @@ class Engine:
         room = self.store.room_by_id(s.room_id)
         name = room.name if room else "?"
         if room is not None and room.paused:
-            res = {"status": "paused", "text": paused_text(name)}
+            res = {"status": "paused", "text": paused_text(room)}
         else:
             secs = int(round(s.deadline - s.opened_at))
             text = f"[switchboard] {name}: no new messages within {secs} s."
@@ -1086,7 +1086,7 @@ class Engine:
         if msg.sender_kind == "agent" and rules.hop_tripped(room):
             out += self.pause_room(
                 room.id,
-                "loop guard",
+                LOOP_GUARD_REASON,
                 event="loop_guard",
                 notice=f"loop guard: {room.hop_count} agent messages in a row"
                 f" with no message from {self._a_human()}. {room.name}"
@@ -1113,9 +1113,8 @@ class Engine:
         """/pause (or the loop guard): open waits return 'paused', unposted offers are cancelled."""
         out: list[Action] = []
         room = self.store.room_by_id(room_id)
-        name = room.name if room else "?"
         for s in self.sinks.for_room(room_id):
-            out.append(self._close_sink(s, {"status": "paused", "text": paused_text(name)}, "paused"))
+            out.append(self._close_sink(s, {"status": "paused", "text": paused_text(room)}, "paused"))
         for m in self.store.room_memberships(room_id):
             # a Cursor stop park ends too, unless another room of that session is still live
             if self.sinks.parks_for(m.participant_id) and all(
@@ -1896,8 +1895,18 @@ def _id_list(ids: list[int], n: int = 5) -> str:
     return shown + (f" and {len(ids) - n} more" if len(ids) > n else "")
 
 
-def paused_text(room: str) -> str:
-    return (
-        f"[switchboard] {room} is paused by your user. End your turn now; don't call"
-        " wait() again until your user resumes the room."
-    )
+LOOP_GUARD_REASON = "loop guard"  # the reason on_message's trip pauses a room with
+
+
+def paused_text(room: Room | None) -> str:
+    """What an open wait() returns while ``room`` is paused. It names the room's real cause: a
+    person's /pause, or the loop guard, which nobody ran (#239). It never says how to lift the
+    guard: agents can't run /hops, and the guard is there to stop them looping."""
+    name = room.name if room is not None else "?"
+    end = "End your turn now; don't call wait() again until your user resumes the room."
+    if room is not None and room.paused_reason == LOOP_GUARD_REASON:
+        return (
+            f"[switchboard] {name} is paused: the loop guard stopped it after {room.hop_count} agent"
+            f" messages in a row. {end}"
+        )
+    return f"[switchboard] {name} is paused by your user. {end}"

@@ -68,8 +68,13 @@ def test_open_waits_return_paused_at_once(w: World, harness: str) -> None:
     s = listen(w, p, m, "w1")
     pause(w)
     [res] = w.resolved(s.id)
-    assert res == {"status": "paused", "text": paused_text("#build")}
-    assert "End your turn now" in res["text"] and not s.open
+    assert res == {"status": "paused", "text": paused_text(w.store.room_by_id(w.room.id))}
+    # a person's /pause keeps its words (#239)
+    assert res["text"] == (
+        "[switchboard] #build is paused by your user. End your turn now; don't call wait() again"
+        " until your user resumes the room."
+    )
+    assert not s.open
 
 
 def test_a_wait_during_the_pause_stays_open_and_returns_paused_at_its_timeout(w: World) -> None:
