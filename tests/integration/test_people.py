@@ -279,6 +279,15 @@ def test_wrong_passwords_slow_down(ticking: tuple[InProcBroker, FakeClock]) -> N
     assert signin(br, "alice", ADMIN_PW).status_code == 200
 
 
+def test_admin_names_share_one_password_guessing_budget(ticking: tuple[InProcBroker, FakeClock]) -> None:
+    broker, _clock = ticking
+    set_up(broker)
+    browser = Browser(broker)
+    for _ in range(FREE_FAILURES):
+        assert signin(browser, "admin", "wrong secret").status_code == 403
+    assert signin(browser, "alice", ADMIN_PW).status_code == 429
+
+
 def test_a_passkey_instead_of_a_password(hosted: InProcBroker) -> None:
     admin = set_up(hosted)
     one_time = add(admin, "bob")["password"]

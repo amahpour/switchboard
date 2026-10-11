@@ -10,9 +10,10 @@ for a chosen password, and the sign-in limiter.
   reads one back as typed (any case, with or without dashes or spaces, I and L for 1, O for 0).
 - ``password_problem``: why a chosen password won't do, or None.
 - ``SignInLimiter``: failed sign-ins, in memory. After ``FREE_FAILURES`` failures for one
-  name within ``WINDOW_S``, that name waits (30 s, doubling to 15 min) before the next try;
+  account within ``WINDOW_S``, it waits (30 s, doubling to 15 min) before the next try;
+  each later failure keeps the backoff until a success or 24 hours without a failure;
   more than ``GLOBAL_FAILURES`` failures a minute over all names pause every password
-  sign-in for ``GLOBAL_PAUSE_S``. A success clears the name. Unknown names count like known
+  sign-in for ``GLOBAL_PAUSE_S``. A success clears the account. Unknown names count like known
   ones, so the answer never says which names exist.
 """
 
@@ -21,8 +22,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import re
 import secrets
 from collections import deque
+from pathlib import Path
 from typing import Any
 
 from switchboard.clock import Clock, SystemClock
@@ -40,6 +43,16 @@ FIRST_WAIT_S, MAX_WAIT_S = 30.0, 15 * 60.0
 GLOBAL_FAILURES = 100
 GLOBAL_PAUSE_S = 10.0
 MAX_TRACKED = 10_000
+QUIET_RESET_S = 24 * 3600.0
+
+# SHA-256 of casefolded passwords at least 10 characters long from the NCSC 100k list;
+# source and Open Government Licence v3 attribution: common_passwords.NOTICE.
+# Binary digests keep the bundled list free of credential-looking strings.
+_COMMON_BYTES = Path(__file__).with_name("common_passwords.bin").read_bytes()
+if len(_COMMON_BYTES) % 32:
+    raise RuntimeError("invalid common-password blocklist")
+COMMON_PASSWORD_HASHES = frozenset(_COMMON_BYTES[i : i + 32] for i in range(0, len(_COMMON_BYTES), 32))
+_SEASON_YEAR = re.compile(r"(?:spring|summer|autumn|fall|winter)(?:19|20)\d\d[!?1]?")
 
 
 def _b64(b: bytes) -> str:
@@ -109,11 +122,16 @@ def password_problem(password: Any, name: str) -> str | None:
         return "don't use your name"
     if normalize_one_time(password) is not None:
         return "choose your own password, not a one-time one"
+    folded = password.strip().casefold()
+    if hashlib.sha256(folded.encode("utf-8")).digest() in COMMON_PASSWORD_HASHES or _SEASON_YEAR.fullmatch(
+        folded
+    ):
+        return "choose a less common password"
     return None
 
 
 class SignInLimiter:
-    """Failed password sign-ins per name and overall (module docstring)."""
+    """Failed password sign-ins per account key and overall (module docstring)."""
 
     def __init__(self, clock: Clock | None = None):
         self.clock = clock or SystemClock()
@@ -125,7 +143,7 @@ class SignInLimiter:
         """Seconds until ``name`` may try again (0: now)."""
         now = self.clock.now()
         until = self._paused_until
-        e = self._names.get(name.lower())
+        e = self._names.get(name.lower()[:64])
         if e is not None:
             until = max(until, e[1])
         return max(0.0, until - now)
@@ -134,12 +152,14 @@ class SignInLimiter:
         now = self.clock.now()
         key = name.lower()[:64]
         fails, until, locks = self._names.get(key, (deque(), 0.0, 0))
+        if fails and fails[-1] <= now - QUIET_RESET_S:
+            fails, until, locks = deque(), 0.0, 0
         fails.append(now)
         while fails and fails[0] <= now - WINDOW_S:
             fails.popleft()
-        if len(fails) >= FREE_FAILURES:
-            until = now + min(FIRST_WAIT_S * 2**locks, MAX_WAIT_S)
-            locks += 1
+        if len(fails) >= FREE_FAILURES or locks:
+            until = now + min(FIRST_WAIT_S * 2 ** min(locks, 5), MAX_WAIT_S)
+            locks = min(locks + 1, 5)
         self._names[key] = (fails, until, locks)
         self._all.append(now)
         while self._all and self._all[0] <= now - 60.0:
@@ -154,7 +174,9 @@ class SignInLimiter:
 
     def _prune(self, now: float) -> None:
         for k in [
-            k for k, (f, u, _l) in self._names.items() if u <= now and (not f or f[-1] <= now - WINDOW_S)
+            k
+            for k, (f, u, locks) in self._names.items()
+            if u <= now and (not f or f[-1] <= now - (QUIET_RESET_S if locks else WINDOW_S))
         ]:
             del self._names[k]
         while len(self._names) > MAX_TRACKED:  # still full: forget the oldest

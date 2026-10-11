@@ -40,6 +40,7 @@ phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (
 (``tests/ui_world.py``'s ``HostedWorld``, with Chromium's virtual authenticators as the
 passkeys; issues #41 and #61): signin-setup-light, setup-light, people-light, people-dark,
 passkeys-light, passkeys-dark, people-opening-{light,dark,phone-light} (initial People fetch held),
+common-password-{light,dark,phone-light} (a common chosen password refused, #181),
 people-edit-{light,dark,phone-light} (Copy's fade timer while an email is selected),
 confirm-light, signin-light, setup-person-light and
 signin-phone-dark, and from a second one at
@@ -977,6 +978,39 @@ PEOPLE_AS_DEPLOYED_JS = """([from, to]) => {
 }"""
 
 
+def shoot_common_password(browser: Any, out: Path, world: Any) -> None:
+    """A common chosen password is refused; on the old broker it completed setup (#181)."""
+    from playwright.sync_api import expect
+
+    ctx = browser.new_context(timezone_id="UTC", color_scheme="light", locale="en-US", **DESKTOP)
+    ctx.set_default_timeout(WAIT_MS)
+    try:
+        page = ctx.new_page()
+        page.goto(world.origin + "/")
+        page.fill("#signin-password", world.claim_link().split("#t=", 1)[1])
+        page.click("#password-btn")
+        expect(page.locator("#step-choose")).to_be_visible()
+        page.fill("#setup-first", "Alice")
+        page.fill("#setup-last", "Liddell")
+        page.fill("#setup-email", "alice@example.com")
+        page.fill("#new-password", "password123")
+        page.fill("#new-password-2", "password123")
+        with page.expect_response(lambda r: r.url.endswith("/api/setup/password")) as result:
+            page.click("#password-btn")
+        if result.value.status == 200:
+            connected(page)  # before: the weak password was accepted
+        else:
+            expect(page.locator("#setup-error")).to_contain_text("less common")
+        shot(page, out, "common-password-light.png")
+        page.emulate_media(color_scheme="dark")
+        shot(page, out, "common-password-dark.png")
+        page.emulate_media(color_scheme="light")
+        page.set_viewport_size(PHONE["viewport"])
+        shot(page, out, "common-password-phone-light.png")
+    finally:
+        ctx.close()
+
+
 # -------------------------------------------------------- the machines' shots
 AS_DEPLOYED = "https://sb.example.com"
 
@@ -1115,12 +1149,14 @@ def run(args: argparse.Namespace, pw: Any) -> None:
     out.mkdir(parents=True, exist_ok=True)
     world = UIWorld(keep=args.keep)
     hosted = HostedWorld(keep=args.keep)
+    weak = HostedWorld(keep=args.keep)
     # a second hosted broker, for the machines that dial in: behind localhost, which their
     # dialers (other processes) resolve too
     fleet = HostedWorld(keep=args.keep, host="localhost")
     try:
         world.start()
         hosted.start()
+        weak.start()
         fleet.start()
         env = {**os.environ, "TZ": "UTC", "HOME": REAL_HOME or os.environ["HOME"]}
         browser = pw.chromium.launch(executable_path=args.chrome or None, env=env)
@@ -1141,15 +1177,17 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_wake_settings(browser, out, world)
             shoot_settings_tabs(browser, out, world)
             shoot_hosted(browser, out, hosted)
+            shoot_common_password(browser, out, weak)
             shoot_machines(browser, out, fleet)
         finally:
             browser.close()
     finally:
         fleet.stop()
+        weak.stop()
         hosted.stop()
         world.stop()
         if args.keep:
-            print(f"kept: {world.home} {world.home2} {hosted.home} {fleet.home}", file=sys.stderr)
+            print(f"kept: {world.home} {world.home2} {hosted.home} {weak.home} {fleet.home}", file=sys.stderr)
 
 
 def main() -> None:

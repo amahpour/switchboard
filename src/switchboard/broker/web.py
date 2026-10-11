@@ -670,6 +670,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         return resp
 
     # ---------------------------------------------------------- passwords (§32.4)
+    def password_bucket(person_id: int | None) -> str:
+        return "owner" if person_id is None else f"person:{person_id}"
+
     @app.post("/api/signin/password")
     async def signin_password(request: Request) -> Response:
         """An email (or a name) and a password. The owner's one-time password from the log starts
@@ -689,7 +692,12 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         raw, pw = body.get("name"), body.get("password")
         name = raw.strip().lower()[:254] if isinstance(raw, str) else ""
         kind, who_p = people.account(state, name)
-        wait = state.signin.wait_s(name)
+        key = (
+            password_bucket(who_p.id if who_p is not None else None)
+            if kind != "none"
+            else f"name:{name or '?'}"
+        )
+        wait = state.signin.wait_s(key)
         if wait > 0:
             return _err(429, "slow_down", f"too many wrong tries: wait {int(wait) + 1} s and try again")
         now = state.clock.now()
@@ -711,7 +719,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                     return _err(
                         409, "busy", "Someone is setting up this switchboard from another browser right now."
                     )
-                state.signin.ok(name)
+                state.signin.ok(key)
                 return start_claim(
                     _ok(
                         {
@@ -730,7 +738,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             if person.must_reset:
                 if password_ok:
                     if person.password_expires_at is not None and now >= person.password_expires_at:
-                        state.signin.failed(name)
+                        state.signin.failed(key)
                         return _err(
                             403, "expired", "this one-time password has expired: ask the admin for a new one"
                         )
@@ -738,10 +746,10 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             elif password_ok:
                 resp = signed_in(person.id, person.name, "password", now)
         if resp is None:
-            state.signin.failed(name or "?")
+            state.signin.failed(key)
             failed("bad_password")
             return _err(403, "bad_password", "wrong email or password")
-        state.signin.ok(name)
+        state.signin.ok(key)
         return resp
 
     def signed_in(
@@ -773,7 +781,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             body = await _json_body(request)
         except ServiceError as e:
             return _svc_err(e)
-        wait = state.signin.wait_s(w.name)
+        key = password_bucket(w.person_id)
+        wait = state.signin.wait_s(key)
         if wait > 0:
             return _err(429, "slow_down", f"too many wrong tries: wait {int(wait) + 1} s and try again")
         stored = (
@@ -782,10 +791,10 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             else getattr(state.store.person(w.person_id), "password_hash", None)
         )
         if not verify_password(body.get("password"), stored):
-            state.signin.failed(w.name)
+            state.signin.failed(key)
             failed("bad_password")
             return _err(403, "bad_password", "wrong password")
-        state.signin.ok(w.name)
+        state.signin.ok(key)
         state.passkey_checks[w.h] = state.clock.now()
         state.store.add_event("login", data={"what": "password_check", "person": w.name})
         return _ok({"ok": True})
