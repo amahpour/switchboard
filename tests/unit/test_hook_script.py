@@ -348,13 +348,13 @@ def _added_cpu(home: Path, n: int) -> list[float]:
     both cost more alike, so the difference keeps to what the hook itself does."""
     payload = load("claude", "PostToolUse_bash")
     bare = f"{shlex.quote(sys.executable)} -I -S -c pass"
+    results: list[Any] = []
     out = []
     for _ in range(n):
         base = _child_cpu(lambda: subprocess.run(bare, shell=True, env=child_env(), check=True, timeout=20))
-        results: list[Any] = []
         hook = _child_cpu(lambda: results.append(run_hook(home, "claude", "PostToolUse", payload)))
-        assert results[0].returncode == 0
         out.append(hook - base)
+    assert len(results) == n and all(r.returncode == 0 for r in results)
     return out
 
 
