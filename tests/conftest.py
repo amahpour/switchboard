@@ -1,5 +1,6 @@
 """Shared fixtures (DESIGN.md §12).
 
+- ``restore_umask`` (autouse): every test starts and ends with the run's umask.
 - ``clean_env`` (autouse): strips agent-harness variables from os.environ and
   points HOME at a temp dir, so nothing here can reach the build session's
   Claude inbox or the user's real harness config. It also pins the login name
@@ -110,6 +111,22 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]) ->
 def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
     sanitize_env(monkeypatch, tmp_path_factory)
     yield
+
+
+# The umask this run started with.
+_START_UMASK = os.umask(0o022)
+os.umask(_START_UMASK)
+
+
+@pytest.fixture(autouse=True)
+def restore_umask() -> Iterator[None]:
+    """Every test starts with the run's umask and leaves it so. ``cli.main``, the daemon and the
+    satellite set 0o077 for their own process; a test that ran one in-process used to leave it
+    set for every later test in its worker, so a test that made a directory without a mode
+    passed or failed by the order the tests ran in."""
+    os.umask(_START_UMASK)
+    yield
+    os.umask(_START_UMASK)
 
 
 def child_env(home: str | os.PathLike | None = None, **extra: str) -> dict[str, str]:
