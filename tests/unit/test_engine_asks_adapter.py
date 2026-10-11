@@ -2,7 +2,8 @@
 DESIGN.md §9.1): which hooks set the session id and the approval mode, which SessionEnd
 takes it offline, which hook starts a background subagent, how a Stop re-arms, when missed
 stop follow-ups degrade a session, whose tier follows from its row, which prompt is input
-into the running turn, and which harness needs another adapter on another host. A harness added with
+into the running turn, which harness needs another adapter on another host, how a pull
+answer is confirmed, and whose status its sinks give. A harness added with
 its own adapter needs no edit to the engine.
 """
 
@@ -57,6 +58,16 @@ class SteeredAdapter(PullAdapter):
 
     def is_mid_turn(self, p: Participant, ev: HookEvent, was_idle: bool) -> bool:
         return steered(p, ev, was_idle)
+
+
+class ScriptedAdapter(PullAdapter):
+    """The test agent's answers, on the unknown harness: its status from its sinks, and
+    pull answers confirmed at once."""
+
+    sink_status = True
+
+    def pull_ack(self, p: Participant, mode: str | None) -> str:
+        return "immediate"
 
 
 class FollowupAdapter(CursorAdapter):
@@ -190,6 +201,20 @@ def test_a_local_only_harness_on_another_host_gets_its_remote_adapter(w: World) 
     assert w.engine.adapter_for("claude", "pi") is w.engine.adapters["claude"]
 
 
+def test_an_adapter_can_take_its_status_from_sinks_and_confirm_pulls_at_once(w: World) -> None:
+    """Fails if only a session named the test agent's gets either: with hooks seen, its
+    status would follow its hooks, and a pull answer would wait for one."""
+    w.engine.adapters["unknown"] = ScriptedAdapter("unknown", w.cfg)
+    p, m = w.agent("bot", harness="unknown", status="busy", hooks=True)
+    w.human("x")
+    _t, bid, *_ = w.engine.pull(w.p(p), w.m(m), "read", 20)
+    assert w.store.get_batch(bid).state == "confirmed"
+    sink, _acts = w.engine.open_wait(w.p(p), w.m(m), "w1", 30)
+    assert w.p(p).status == "idle"  # an open wait() is idle
+    w.engine.sink_timeout(sink.id)
+    assert w.p(p).status == "busy"  # anything else is busy
+
+
 def test_each_harness_answers_as_the_engine_did_by_name(w: World) -> None:
     """The move changes nothing: the harnesses the engine named before #169 answer yes."""
     ads = w.engine.adapters
@@ -207,3 +232,13 @@ def test_each_harness_answers_as_the_engine_did_by_name(w: World) -> None:
     assert ads["cursor"].followup_limit() == w.cfg.cursor.max_unconfirmed_followups
     assert {h for h, a in ads.items() if a.local_only} == {"codex"}
     assert w.engine.adapter_for("codex", "pi") is ads[REMOTE_CODEX]
+    assert {h for h, a in ads.items() if a.sink_status} == {"test"}
+    p = w.p(w.agent("bot")[0])
+    assert {h for h, a in ads.items() if a.pull_ack(p, None) != "hooks"} == {"test"}
+    assert [ads["test"].pull_ack(p, m) for m in (None, "next_call", "immediate", "never", "odd")] == [
+        "next_call",
+        "next_call",
+        "immediate",
+        "never",
+        "next_call",
+    ]

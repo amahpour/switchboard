@@ -90,6 +90,9 @@ class Adapter:
     # Its push paths reach only this machine: a session on another host takes the pull-only
     # adapter registered as ``<harness>@remote``, or the unknown harness's (Codex, §27.7).
     local_only = False
+    # Its status is inferred from its sinks, not its hooks: an open wait() is idle, anything
+    # else busy (the scripted test agent, §9.6).
+    sink_status = False
     # Its tier follows from the participant row alone (Cursor's binding and degraded spell,
     # Devin's wait loop), so the engine re-derives it when the row changes (§9.4).
     derives_tier = False
@@ -193,6 +196,13 @@ class Adapter:
         /catchup session-history request (DESIGN.md §26). The default: a harness
         switchboard keeps no history-tool id for."""
         return None, "a session of an unknown harness"
+
+    def pull_ack(self, p: Participant, mode: str | None) -> str:
+        """How a wait/read/say answer to ``p`` is confirmed (§8.7): ``hooks`` (its hooks,
+        or its next switchboard call while none were ever seen), ``next_call``,
+        ``immediate`` or ``never``. ``mode`` is the ``--ack`` its MCP server claimed (§9.6),
+        which only the test agent's adapter takes."""
+        return "hooks"
 
     # -- routing (pure) -----------------------------------------------------
     def route(self, p: Participant, rel: Release, sink: Any, now: float) -> Route:

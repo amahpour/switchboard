@@ -20,10 +20,14 @@ ACK_MODES = ("next_call", "immediate", "never")
 class TestAgentAdapter(Adapter):
     harness = "test"
     reports_session_id = True
+    sink_status = True
     __test__ = False  # not a pytest class
 
     def tier(self, p: Participant | None) -> tuple[str, str | None]:
         return "mcp-only", None
+
+    def pull_ack(self, p: Participant, mode: str | None) -> str:
+        return mode if mode in ACK_MODES else "next_call"
 
     def context_events(self, p: Participant) -> frozenset[str]:
         return HOOK_CONTEXT_EVENTS["test"]

@@ -615,16 +615,12 @@ class Engine:
 
     def _arm_pull(self, b: Batch, p: Participant) -> list[Action]:
         """How a pull batch (wait/read/say) will be confirmed (§8.7, §9.6)."""
-        if p.harness == "test":
-            mode = self.ack_modes.get(p.id, "next_call")
-            if mode == "immediate":
-                return self.on_confirm(b.id, "test:immediate")
-            if mode == "never":
-                self.pull_deadlines[b.id] = self.now() + self.d.pull_ack_s
-            return []
-        if p.hooks_seen_at is not None:
+        ack = self.adapter(p).pull_ack(p, self.ack_modes.get(p.id))
+        if ack == "immediate":
+            return self.on_confirm(b.id, f"{p.harness}:immediate")
+        if ack == "never" or (ack == "hooks" and p.hooks_seen_at is not None):
             self.pull_deadlines[b.id] = self.now() + self.d.pull_ack_s
-        # no hooks ever seen: the member's next switchboard call confirms it
+        # next_call, or no hooks ever seen: the member's next switchboard call confirms it
         return []
 
     # ========================================================== confirmation
@@ -789,14 +785,11 @@ class Engine:
 
     def before_call(self, p: Participant) -> list[Action]:
         """An agent.* call is evidence that earlier pull answers reached the model
-        when there is no hook to say so (test ``--ack next_call``; hook-less harnesses).
+        when there is no hook to say so (``pull_ack`` ``next_call``; hook-less sessions).
         It also confirms the session's acked stop continuations (``_call_confirms``)."""
         out = self._call_confirms(p)
-        mode = self.ack_modes.get(p.id) if p.harness == "test" else None
-        if p.harness == "test":
-            if mode not in (None, "next_call"):
-                return out
-        elif p.hooks_seen_at is not None:
+        ack = self.adapter(p).pull_ack(p, self.ack_modes.get(p.id))
+        if ack in ("immediate", "never") or (ack == "hooks" and p.hooks_seen_at is not None):
             return out
         for m in self.store.participant_memberships(p.id):
             for b in self.store.offered_batches(m.id, PULL_PATHS):
@@ -972,11 +965,10 @@ class Engine:
         # loops wait() inside one prompt (Claude when idle, Devin's wait loop)
         # would otherwise get one chatter batch per prompt and then only
         # timeouts. Wakes stay bounded by the budget and the loop guard.
-        if p.harness == "test" or p.hooks_seen_at is None:
+        sink_status = self.adapter(p).sink_status
+        if sink_status or p.hooks_seen_at is None:
             # status is inferred from sinks
-            self.store.set_status(
-                p.id, "idle" if p.harness == "test" else p.status, "sink", bump_boundary=True
-            )
+            self.store.set_status(p.id, "idle" if sink_status else p.status, "sink", bump_boundary=True)
         else:
             self.store.bump_boundary(p.id)
         out += self.evaluate(m.id)
@@ -1019,7 +1011,7 @@ class Engine:
         s = self.sinks.close(sink.id, result, reason)
         if s is not None:
             p = self.store.get_participant(s.participant_id)
-            if p is not None and p.harness == "test" and p.status == "idle" and p.active:
+            if p is not None and self.adapter(p).sink_status and p.status == "idle" and p.active:
                 self.store.set_status(p.id, "busy", "sink")
         return ResolveSink(sink.id, result or {"status": "cancelled"})
 

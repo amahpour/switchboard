@@ -78,7 +78,7 @@ From [CLAUDE.md](../CLAUDE.md). Each rule keeps some part easy to test or to cha
 - **SQL only in `store.py`,** with the schema, migrations and connection helpers in `db.py`: one file changes with the schema, and the store's tests run every query.
 - **Policy pure in `rules.py`:** no store, clock or I/O, so each rule has a plain unit test.
 - **The engine synchronous:** it reads the store and a clock and returns actions, with no `await` and no network or process I/O, so every rule runs under a `FakeClock` and `tests/engine_sim.py` drives it through 200 seeds.
-- **Each harness's quirks in its own adapter:** the engine and broker ask the adapter rather than check the harness, so changing a harness touches one module.
+- **Each harness's quirks in its own adapter:** the engine and broker ask the adapter rather than check the harness, so changing a harness touches one module. `tests/unit/test_engine_names_no_harness.py` holds the engine to it.
 - **The hook standalone:** standard library only, nothing from switchboard, every path exits 0, because a failed import or a non-zero exit could block the harness's prompt.
 - **A module's docstring names its DESIGN section** (`tests/unit/test_module_docstrings.py` checks every module), and a design change changes DESIGN.md (a new numbered section for a new piece).
 
@@ -86,7 +86,7 @@ Beside these is the [security model](../CLAUDE.md#the-security-model-in-short) (
 
 ### Where the code doesn't follow them yet
 
-Each is an open issue; don't copy the pattern, and the fix removes its mention here. Harness branches outside the adapters: the engine ([#169](https://github.com/amahpour/switchboard/issues/169); which hooks set a session id or an approval mode, Claude's `/clear`, Devin's subagent taint and Stop re-arm, Cursor's missed follow-ups and tier refresh, and Codex's steered input and remote adapter, moved to the adapters), `agents.py`'s Codex and `mcp.hello`/attach branches ([#170](https://github.com/amahpour/switchboard/issues/170); the Cursor branches moved to `adapters/cursor.py`).
+Each is an open issue; don't copy the pattern, and the fix removes its mention here. Harness branches outside the adapters: `agents.py`'s Codex and `mcp.hello`/attach branches ([#170](https://github.com/amahpour/switchboard/issues/170); the Cursor branches moved to `adapters/cursor.py`).
 
 ## Where to read next in DESIGN.md
 
