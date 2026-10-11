@@ -40,6 +40,7 @@ phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (
 (``tests/ui_world.py``'s ``HostedWorld``, with Chromium's virtual authenticators as the
 passkeys; issues #41 and #61): signin-setup-light, setup-light, people-light, people-dark,
 passkeys-light, passkeys-dark, people-opening-{light,dark,phone-light} (initial People fetch held),
+people-edit-{light,dark,phone-light} (Copy's fade timer while an email is selected),
 confirm-light, signin-light, setup-person-light and
 signin-phone-dark, and from a second one at
 ``http://localhost:<port>``, with test machines that dial in (``tests/fakes/fake_machine.py``:
@@ -851,7 +852,34 @@ def shoot_hosted(browser: Any, out: Path, world: Any) -> None:
         page.emulate_media(color_scheme="dark")
         shot(page, out, "people-dark.png")
         page.emulate_media(color_scheme="light")
+        ctx.grant_permissions(["clipboard-read", "clipboard-write"], origin=origin)
+        page.evaluate("""() => {
+          const original = window.setTimeout;
+          window.setTimeout = (fn, delay, ...args) => {
+            if (delay === 1600 && !window.releaseCopy) {
+              window.setTimeout = original;
+              window.releaseCopy = () => fn(...args);
+              return 0;
+            }
+            return original(fn, delay, ...args);
+          };
+        }""")
+        page.click("#copy-invite")
+        expect(page.locator("#copy-invite")).to_have_attribute("aria-label", "Copied")
         page.click("#invite-done")
+        email = page.locator(".person-card").nth(1).locator('input[type="email"]')
+        email.click()
+        email.press("ControlOrMeta+A")
+        page.evaluate("() => window.releaseCopy()")
+        page.keyboard.insert_text("robert@example.com")
+        shot(page, out, "people-edit-light.png")
+        page.emulate_media(color_scheme="dark")
+        shot(page, out, "people-edit-dark.png")
+        page.emulate_media(color_scheme="light")
+        page.set_viewport_size(PHONE["viewport"])
+        email.scroll_into_view_if_needed()
+        shot(page, out, "people-edit-phone-light.png")
+        page.set_viewport_size(DESKTOP["viewport"])
         page.keyboard.press("Escape")
         # Hold the initial People refresh to show what is visible on a slow connection.
         page.evaluate("""() => {

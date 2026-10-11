@@ -4232,12 +4232,29 @@
     return card;
   }
 
+  let peopleRenderPending = false;
   function renderPeoplePanel() {
     const body = $('people-body');
     if ($('people-panel').classList.contains('hidden')) return;
     $('people-google-lead').classList.toggle('hidden', !(state.me && state.me.sso));
-    const focused = focusKey(body);
     const f = document.activeElement;
+    if (f && body.contains(f) && f.matches('input, textarea')) {
+      // A Copy timer or a late fetch can arrive between selecting an input's text and typing.
+      // Replacing the input at that point drops the selection, so wait until editing ends.
+      if (!peopleRenderPending) {
+        peopleRenderPending = true;
+        f.addEventListener('blur', function () {
+          requestAnimationFrame(function () {
+            if (!peopleRenderPending) return;
+            peopleRenderPending = false;
+            renderPeoplePanel();
+          });
+        }, { once: true });
+      }
+      return;
+    }
+    peopleRenderPending = false;
+    const focused = focusKey(body);
     const typing = f && f.id === 'person-name';
     body.replaceChildren();
     if (state.invite) body.append(inviteCard(state.invite));

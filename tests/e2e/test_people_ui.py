@@ -125,6 +125,19 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
         " one-time password "
     )
     bob_otp = invite.split("one-time password ", 1)[1].split(" ", 1)[0]
+    # Hold Copy's fade timer: its callback re-renders People. Releasing it after selecting an
+    # email must not replace the focused input and turn a replacement into an append.
+    page.evaluate("""() => {
+      const original = window.setTimeout;
+      window.setTimeout = (fn, delay, ...args) => {
+        if (delay === 1600 && !window.releaseCopy) {
+          window.setTimeout = original;
+          window.releaseCopy = () => fn(...args);
+          return 0;
+        }
+        return original(fn, delay, ...args);
+      };
+    }""")
     page.click("#copy-invite")
     expect(page.locator("#copy-invite")).to_have_attribute("aria-label", "Copied")
     assert page.evaluate("navigator.clipboard.readText()") == invite
@@ -191,7 +204,11 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
     # re-renders the sheet without carol's invite. (Done, not the copy button: its render
     # comes from the click itself, where "Copied" and its fade wait on the clipboard and a timer)
     expect(bob_card.locator(".email-row label")).to_have_text("Email")
-    bob_card.locator('input[type="email"]').fill("Robert@Example.com")
+    email_input = bob_card.locator('input[type="email"]')
+    email_input.click()
+    email_input.press("ControlOrMeta+A")
+    page.evaluate("() => window.releaseCopy()")
+    page.keyboard.insert_text("Robert@Example.com")
     page.click("#invite-done")
     expect(page.locator("#invite-text")).to_have_count(0)
     expect(bob_card.locator('input[type="email"]')).to_have_value("Robert@Example.com")
