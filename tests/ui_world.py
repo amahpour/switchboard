@@ -490,10 +490,9 @@ class UIWorld:
         assert result.get("ok", True) is not False, result
         return result
 
-    def seed_review(self, room: str) -> None:
+    def seed_review(self, room: str, pr: str = "https://example.com/shop/pull/7") -> None:
         """A review board in ``room`` (joined first by ``add_agents(room, ("claude-1", "codex-1"))``):
         the made-up shop pull request #80's mockups use, with an item in every lane."""
-        pr = "https://example.com/shop/pull/7"
         call = self.agent_call
         call(room, "codex-1", "review", action="open", url=pr, head="4f2c9e1a7b30")
         call(room, "codex-1", "review", action="raise", title="Discount is taken after tax",

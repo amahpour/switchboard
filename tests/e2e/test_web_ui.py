@@ -2001,11 +2001,14 @@ def test_ask_to_fix_is_offered_only_while_sender_is_a_member(ui: UI) -> None:
 
 
 # ------------------------------------------------------------ the review board (#80)
-def review_room(ui: UI, slug: str, **open_args: Any) -> Page:
+def review_room(ui: UI, slug: str, pr: str | None = None, **open_args: Any) -> Page:
     """A room with a board the agents filled through their `review` tool, open on a page."""
     ui.world.create_room("#" + slug)
     ui.world.add_agents("#" + slug, ("claude-1", "codex-1"))
-    ui.world.seed_review("#" + slug)
+    if pr:
+        ui.world.seed_review("#" + slug, pr)
+    else:
+        ui.world.seed_review("#" + slug)
     page = ui.open(room=None, **open_args)
     open_room(page, slug)
     return page
@@ -2115,6 +2118,33 @@ def test_post_appears_when_the_board_is_settled_and_asks_first(ui: UI) -> None:
     expect(page.locator("#board-status")).to_have_text("Posted by " + TEST_HUMAN)
     page.click("#board-toggle")
     expect(chat_row(page, "The review board in this room")).to_contain_text("@codex-1: F4")
+
+
+@pytest.mark.parametrize("size", ["desktop", "phone"])
+def test_a_long_pull_request_url_wraps_in_the_board_dialogs(ui: UI, size: str) -> None:
+    """#246: the Post and Close confirms name the pull request's URL, and a long one (a GitLab
+    merge request in a subgroup) didn't wrap, so the dialog scrolled sideways. It wraps. (No
+    hyphens in it: the browser already breaks a line after one.)"""
+    pr = "https://gitlab.com/somegroup/somesubgroup/someproject/-/merge_requests/1234"
+    slug = "e2e-board-long-url-" + size
+    page = review_room(ui, slug, pr=pr, **(PHONE if size == "phone" else {}))
+    room = "#" + slug
+    call = ui.world.agent_call
+    call(room, "claude-1", "review", action="concede", item="F3", owner="claude-1")
+    call(room, "claude-1", "review", action="fix", item="F3", commit="77aa88bb99cc")
+    call(room, "codex-1", "review", action="fix", item="F4", commit="11aa22bb33cc")
+    page.click("#board-toggle")
+    page.click('#board .board-card[data-item="Q1"]')
+    page.locator('#board .board-detail button[data-option="0"]').click()
+    dialog = page.locator("#app-dialog")
+    sideways = "d => d.scrollWidth - d.clientWidth"
+    for opener in ("#board-post", "#board-close"):
+        page.click(opener)
+        expect(dialog).to_be_visible()
+        expect(dialog.locator(".app-dialog-body")).to_contain_text(pr)
+        assert dialog.evaluate(sideways) <= 0, opener
+        page.keyboard.press("Escape")
+        expect(dialog).to_be_hidden()
 
 
 def test_composer_grows_with_wrapped_text_and_shrinks_after_send(ui: UI) -> None:
