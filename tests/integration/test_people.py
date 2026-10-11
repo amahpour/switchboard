@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Iterator
+import threading
+import time
+from collections.abc import Callable, Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -21,8 +24,9 @@ from fakes.fake_authenticator import SoftAuthenticator
 from test_passkeys import PUBLIC, RP_ID, Browser, claim_link, events, hosted_broker, stop, token_of
 from websockets.exceptions import InvalidStatus
 
+from switchboard.broker import web
 from switchboard.broker.auth import WebOrigin
-from switchboard.broker.passwords import FREE_FAILURES
+from switchboard.broker.passwords import FREE_FAILURES, hash_password
 from switchboard.broker.people import ONE_TIME_TTL_S
 from switchboard.config import Config
 from switchboard.models import NAME_REUSE_S
@@ -312,6 +316,132 @@ def test_wrong_passwords_slow_down(ticking: tuple[InProcBroker, FakeClock]) -> N
     assert signin(br, "nobody", "not it at all").status_code == 403  # other names are not held up
     clock.advance(31.0)
     assert signin(br, "alice", ADMIN_PW).status_code == 200
+
+
+def test_known_browser_can_sign_in_during_strangers_account_lockout(
+    ticking: tuple[InProcBroker, FakeClock],
+) -> None:
+    broker, _clock = ticking
+    admin = set_up(broker)
+    stranger = Browser(broker)
+    for _ in range(FREE_FAILURES):
+        assert signin(stranger, "admin", "not it at all").status_code == 403
+    assert signin(stranger, "admin", ADMIN_PW).status_code == 429
+    assert signin(admin, "admin", ADMIN_PW).status_code == 200
+
+
+def test_one_trusted_browser_cannot_exhaust_anothers_guessing_budget(
+    ticking: tuple[InProcBroker, FakeClock],
+) -> None:
+    broker, _clock = ticking
+    first = set_up(broker)
+    second = Browser(broker)
+    assert signin(second, "admin", ADMIN_PW).status_code == 200
+    for _ in range(FREE_FAILURES):
+        assert signin(first, "admin", "not it at all").status_code == 403
+    assert signin(first, "admin", ADMIN_PW).status_code == 429
+    assert signin(second, "admin", ADMIN_PW).status_code == 200
+
+
+def test_wrong_names_cannot_pause_every_password_sign_in(
+    ticking: tuple[InProcBroker, FakeClock],
+) -> None:
+    broker, _clock = ticking
+    set_up(broker)
+    stranger = Browser(broker)
+    for i in range(101):
+        assert signin(stranger, f"absent{i}", "not it at all").status_code == 403
+    assert signin(Browser(broker), "admin", ADMIN_PW).status_code == 200
+
+
+def test_signed_in_password_check_has_its_own_guessing_budget(
+    ticking: tuple[InProcBroker, FakeClock],
+) -> None:
+    broker, _clock = ticking
+    admin = set_up(broker)
+    stranger = Browser(broker)
+    for _ in range(FREE_FAILURES):
+        assert signin(stranger, "admin", "not it at all").status_code == 403
+    assert admin.post("/api/signin/check", {"password": ADMIN_PW}).status_code == 200
+
+
+def test_parallel_guesses_cannot_outrun_the_guessing_budget(ticking: tuple[InProcBroker, FakeClock]) -> None:
+    """Fails if a password check awaits before its failure counts: every guess of a burst sees
+    no wait yet and is checked, so an account's five free tries become as many as are sent."""
+    broker, _clock = ticking
+    set_up(broker)
+    strangers = [Browser(broker) for _ in range(20)]
+    with ThreadPoolExecutor(len(strangers)) as pool:
+        codes = list(pool.map(lambda br: signin(br, "admin", "not it at all").status_code, strangers))
+    assert set(codes) <= {403, 429}
+    assert codes.count(403) <= FREE_FAILURES
+
+
+def held_checks(
+    monkeypatch: pytest.MonkeyPatch, held: Callable[[Any], bool]
+) -> tuple[threading.Event, threading.Event]:
+    """Password checks of a ``held`` password wait in scrypt's thread until ``gate`` is set;
+    ``entered`` is set once one is waiting there."""
+    gate, entered, real = threading.Event(), threading.Event(), web.verify_password
+
+    def verify(typed: Any, stored: str) -> bool:
+        if held(typed):
+            entered.set()
+            gate.wait(10)
+        return real(typed, stored)
+
+    monkeypatch.setattr(web, "verify_password", verify)
+    return gate, entered
+
+
+def until(cond: Callable[[], bool]) -> None:
+    deadline = time.monotonic() + 10
+    while not cond():
+        assert time.monotonic() < deadline, "timed out"
+        time.sleep(0.01)
+
+
+def test_a_flood_of_made_up_names_does_not_hold_up_a_known_browser(
+    ticking: tuple[InProcBroker, FakeClock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Strangers' checks fill their queue and the rest are refused before scrypt; the admin's
+    own browser checks on a worker of its own. Fails if the flood queues without end, or the
+    known browser waits behind it."""
+    broker, _clock = ticking
+    admin = set_up(broker)
+    gate, _entered = held_checks(monkeypatch, lambda typed: typed == "not it at all")
+    n = web.OPEN_CHECKS_MAX + 8
+    strangers = [Browser(broker) for _ in range(n)]
+    pool = ThreadPoolExecutor(n)
+    try:
+        futs: list[Future[Any]] = [
+            pool.submit(signin, br, f"absent{i}", "not it at all") for i, br in enumerate(strangers)
+        ]
+        until(lambda: sum(f.done() for f in futs) >= 8)  # the queue is full: the rest were refused
+        assert signin(admin, "admin", ADMIN_PW).status_code == 200
+    finally:
+        gate.set()
+        pool.shutdown()
+    codes = [f.result().status_code for f in futs]
+    assert codes.count(429) == 8 and codes.count(403) == web.OPEN_CHECKS_MAX
+    assert all(f.result().json()["error"] == "busy" for f in futs if f.result().status_code == 429)
+
+
+def test_a_password_changed_while_it_was_checked_does_not_sign_in(
+    ticking: tuple[InProcBroker, FakeClock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The check runs off the event loop now, so the password can change under it: the old
+    one, checked against the old hash, must not sign in. Fails without the re-read."""
+    broker, _clock = ticking
+    set_up(broker)
+    gate, entered = held_checks(monkeypatch, lambda typed: typed == ADMIN_PW)
+    with ThreadPoolExecutor(1) as pool:
+        fut = pool.submit(signin, Browser(broker), "admin", ADMIN_PW)
+        assert entered.wait(10)
+        changed = hash_password("a new admin password 1")
+        broker.on_loop(lambda: broker.state.store.set_owner_password(changed))
+        gate.set()
+        assert fut.result().status_code == 403
 
 
 def test_admin_names_share_one_password_guessing_budget(ticking: tuple[InProcBroker, FakeClock]) -> None:
