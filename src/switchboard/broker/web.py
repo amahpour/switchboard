@@ -102,6 +102,7 @@ PASSKEY_COOKIE = "switchboard_passkey"
 ADD_COOKIE = "switchboard_passkey_add"
 DEVICE_COOKIE = "switchboard_device"
 DEVICE_TTL_S = 30 * 24 * 3600
+OPEN_CHECKS_MAX = 32  # strangers' password checks running or queued; past this, refused before scrypt
 HASH_RE = re.compile(r"[0-9a-f]{64}")  # a remote's config_hash (sha256 hex)
 ROOM_ID_RE = re.compile(r"[1-9][0-9]{0,18}")  # a room id in /api/closed-rooms/{rid}/reopen
 MAX_ROOM_ID = 2**63 - 1  # SQLite's INTEGER: 19 digits can be more (OverflowError, not 400)
@@ -178,11 +179,34 @@ async def _json_body(request: Request) -> dict[str, Any]:
 
 
 def install(app: FastAPI, state: "BrokerState") -> None:
-    password_work = asyncio.Semaphore(2)  # a flood waits for scrypt capacity; it cannot pause everyone
+    # scrypt work (#182). Strangers share two workers and a bounded queue: a flood past it is
+    # refused before any scrypt runs, so it can't grow without end. A browser the broker already
+    # trusts (its device cookie, or a session's own check) has a worker of its own, so a flood
+    # under made-up names doesn't hold it up. One check at a time per guessing budget: every
+    # failure is counted before that budget's next try, so parallel guesses can't outrun it.
+    open_work, trusted_work = asyncio.Semaphore(2), asyncio.Semaphore(1)
+    open_checks = [0]
+    checking: set[str] = set()
 
-    async def check_password(typed: Any, stored: str | None) -> bool:
-        async with password_work:
-            matched = await asyncio.to_thread(verify_password, typed, stored or DUMMY_HASH)
+    def refuse_check(budget: str, trusted: bool) -> Response | None:
+        """A 429 when this budget has a check in flight, or strangers' checks are full."""
+        if budget in checking:
+            return _err(429, "slow_down", "this sign-in is being checked: try again in a moment")
+        if not trusted and open_checks[0] >= OPEN_CHECKS_MAX:
+            return _err(429, "busy", "too many sign-ins right now: try again in a few seconds")
+        return None
+
+    async def check_password(typed: Any, stored: str | None, budget: str, trusted: bool) -> bool:
+        """One scrypt check, the dummy hash when there's no real one (#179). The caller has
+        ``refuse_check``ed and records the outcome before its next ``await``."""
+        checking.add(budget)
+        open_checks[0] += 0 if trusted else 1
+        try:
+            async with trusted_work if trusted else open_work:
+                matched = await asyncio.to_thread(verify_password, typed, stored or DUMMY_HASH)
+        finally:
+            checking.discard(budget)
+            open_checks[0] -= 0 if trusted else 1
         return stored is not None and matched
 
     def device_id(request: Request, account: str) -> str | None:
@@ -732,6 +756,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         wait = state.signin.wait_s(budget)
         if wait > 0:
             return _err(429, "slow_down", f"too many wrong tries: wait {int(wait) + 1} s and try again")
+        refused = refuse_check(budget, trusted is not None)
+        if refused is not None:
+            return refused
         if kind == "owner":
             stored, typed = state.store.owner_password_hash(), pw
         elif kind == "person":
@@ -740,7 +767,15 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             typed = (normalize_one_time(pw) or pw) if who_p.must_reset else pw
         else:
             stored, typed = None, pw
-        password_ok = await check_password(typed, stored)  # one scrypt check, queued behind a small cap
+        password_ok = await check_password(typed, stored, budget, trusted is not None)
+        # nothing below awaits until the outcome is recorded (``check_password``); a password
+        # changed while this one was checked doesn't count
+        if kind == "owner":
+            password_ok = password_ok and state.store.owner_password_hash() == stored
+        elif kind == "person":
+            assert who_p is not None
+            current = state.store.person(who_p.id)
+            password_ok = password_ok and current is not None and current.password_hash == stored
         now = state.clock.now()
         resp: JSONResponse | None = None
         if kind == "owner":
@@ -816,12 +851,15 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         wait = state.signin.wait_s(key)
         if wait > 0:
             return _err(429, "slow_down", f"too many wrong tries: wait {int(wait) + 1} s and try again")
+        refused = refuse_check(key, True)
+        if refused is not None:
+            return refused
         stored = (
             state.store.owner_password_hash()
             if w.person_id is None
             else getattr(state.store.person(w.person_id), "password_hash", None)
         )
-        if not await check_password(body.get("password"), stored):
+        if not await check_password(body.get("password"), stored, key, True):
             state.signin.failed(key)
             failed("bad_password")
             return _err(403, "bad_password", "wrong password")
