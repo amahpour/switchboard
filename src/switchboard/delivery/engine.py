@@ -710,6 +710,11 @@ class Engine:
                             f"{m.screen_name}: deliveries not confirmed; check `switchboard status`",
                         )
                     )
+        if cont is not None and reason in TIMER_EXPIRIES:
+            # the continuation set the member busy; with no hook since, no turn ran
+            # (an expiry a hook caused leaves the status to that hook). Set idle
+            # before publishing the miss count, which readers use to observe expiry.
+            out += self._undo_stop_busy(m.participant_id, cont.created_at, f"expired:{reason}")
         if (
             cont is not None
             and b.path == "stop_followup"
@@ -717,10 +722,6 @@ class Engine:
             and self._missed(cont, reason)
         ):
             out += self._followup_expired(m, reason)
-        if cont is not None and reason in TIMER_EXPIRIES:
-            # the continuation set the member busy; with no hook since, no turn ran
-            # (an expiry a hook caused leaves the status to that hook)
-            out += self._undo_stop_busy(m.participant_id, cont.created_at, f"expired:{reason}")
         again = self.evaluate_participant(m.participant_id) if push else self.evaluate(m.id)
         return out + again + [Snapshot(m.room_id)]
 

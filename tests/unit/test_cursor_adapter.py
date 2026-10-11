@@ -365,6 +365,29 @@ def test_dropped_followups_degrade_the_member_across_human_prompts(w: World, clo
     assert w.p(p).unconfirmed_followups == 0 and w.p(p).tier_note == "provisional"
 
 
+def test_expired_followup_is_idle_before_the_miss_becomes_visible(
+    w: World, clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reader that sees the missed-followup count must not still see the stale busy state.
+    The integration test polls the count, then reads the status in another query."""
+    p, _m = cursor(w, status="busy")
+    w.human("try")
+    res = park_result(w, stop(w, p).sink_id)
+    w.engine.on_hook_ack(res["batch_id"], res["ack"])
+    seen: list[str] = []
+    original = w.engine._followup_expired
+
+    def observe(m: Any, reason: str) -> list[Any]:
+        seen.append(w.p(p).status)
+        return original(m, reason)
+
+    monkeypatch.setattr(w.engine, "_followup_expired", observe)
+    clock.advance(FOLLOWUP_CONFIRM_S + 1)
+    w.engine.tick()
+    assert seen == ["idle"]
+    assert w.p(p).unconfirmed_followups == 1
+
+
 def test_a_confirmed_followup_breaks_a_run_of_misses(w: World, clock: FakeClock) -> None:
     p, _m = cursor(w, status="busy")
     w.human("one")
