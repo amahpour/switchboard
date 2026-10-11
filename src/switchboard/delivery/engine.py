@@ -38,7 +38,6 @@ from typing import Any
 from switchboard import envelope
 from switchboard.adapters.base import Adapter
 from switchboard.adapters.cursor import FOLLOWUP_RACE_S
-from switchboard.adapters.devin import rearm_text as devin_rearm_text
 from switchboard.clock import Clock
 from switchboard.config import Config
 from switchboard.delivery import rules
@@ -1260,7 +1259,7 @@ class Engine:
                 # the human's prompt ends a degraded spell (§9.4); below the limit the
                 # count stands: only a confirmed follow-up breaks a run of misses
                 upd["unconfirmed_followups"] = 0
-        if E == "PreToolUse" and ev.subagent_bg and p.harness == "devin":
+        if adapter.starts_subagent(ev):
             self._taint(p.id, gen or p.gen)
             if gen is None or gen == p.gen:
                 upd["gen_tainted"] = 1
@@ -1272,11 +1271,10 @@ class Engine:
         adapter.on_hook(p, ev)
         if "unconfirmed_followups" in upd:
             out += self.refresh_tier(p.id)
-        # Devin: a hook of a prompt that started a background subagent may be the
-        # subagent's (F§6 5.2): no context, no continue, no re-deliver for it.
-        tainted = p.harness == "devin" and (
-            bool(p.gen_tainted) or (gen is not None and gen in self.tainted_gens.get(p.id, {}))
-        )
+        # A hook of a prompt that started a background subagent may be the subagent's
+        # (Devin, F§6 5.2): no context, no continue, no re-deliver for it. Only
+        # ``adapter.starts_subagent`` taints a prompt, so only such a harness has one.
+        tainted = bool(p.gen_tainted) or (gen is not None and gen in self.tainted_gens.get(p.id, {}))
         stale_sub = tainted and gen is not None and gen != p.gen
         if not stale_sub:
             # A parked stop hook of this session ends at any hook of it: a newer
@@ -1402,7 +1400,7 @@ class Engine:
         return out
 
     def _taint(self, participant_id: int, gen: str | None) -> None:
-        """Remember a Devin prompt that started a background subagent (newest last, capped)."""
+        """Remember a prompt that started a background subagent (newest last, capped)."""
         if not gen:
             return
         gens = self.tainted_gens.setdefault(participant_id, {})
@@ -1523,15 +1521,15 @@ class Engine:
             if rel.counted:
                 out += self._after_counted(room.id)
             return HookOut("continue", text, b.id, ack), out + [Snapshot(room.id)]
-        dv = self.cfg.devin
-        if not dv.rearm or p.rearms_in_gen >= dv.rearm_max_per_prompt:
+        per_prompt, per_hour = adapter.rearm_caps()
+        if p.rearms_in_gen >= per_prompt:
             return None, out
         # a per-session hourly cap on top of the per-prompt one: re-arms spend the
         # room's shared budget, and the per-prompt count resets at every prompt
         now = self.now()
         recent = [t for t in self.rearm_log.get(p.id, []) if now - t < REARM_WINDOW_S]
         self.rearm_log[p.id] = recent
-        if len(recent) >= dv.rearm_max_per_hour:
+        if len(recent) >= per_hour:
             return None, out
         for m in ms:
             room = self.store.refill_budget(m.room_id)
@@ -1546,7 +1544,7 @@ class Engine:
             out += self.set_status(p, "busy", "stop:rearm")
             self.rearm_busy[p.id] = now
             out += self._after_counted(room.id)
-            text = devin_rearm_text(room.name, caps.wait_cap_s)
+            text = adapter.rearm_text(room.name, caps.wait_cap_s)
             return HookOut("continue", text), out + [Snapshot(room.id)]
         return None, out
 

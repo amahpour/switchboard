@@ -196,6 +196,12 @@ class Adapter:
         """Harness-specific side effects of a hook event (Codex: holds, thread proof)."""
         return None
 
+    def starts_subagent(self, ev: HookEvent) -> bool:
+        """True if this hook starts a background subagent whose hooks carry the prompt's own
+        ids (Devin's ``run_subagent``, §9.5): the engine taints that prompt, so no context,
+        continue or re-delivery can reach the subagent."""
+        return False
+
     def ends_session(self, ev: HookEvent) -> bool:
         """True if this SessionEnd takes the session offline (§7.4). Claude's ``/clear``
         keeps the process and its binding, so its ``reason=clear`` doesn't."""
@@ -209,6 +215,15 @@ class Adapter:
     def stop_continues(self, p: Participant) -> bool:
         """True if this harness's Stop hook may return a continue at once (Devin)."""
         return False
+
+    def rearm_caps(self) -> tuple[int, int]:
+        """How many "keep listening" re-arms a Stop with nothing to deliver may return:
+        ``(per prompt, per hour)`` for one session, ``(0, 0)`` for none (Devin, §9.5)."""
+        return 0, 0
+
+    def rearm_text(self, room: str, wait_s: int) -> str:
+        """The re-arm a Stop continues with, when ``rearm_caps`` allows one."""
+        raise NotImplementedError(f"{self.harness} has no Stop re-arm")
 
     def redeliver_on_stop(self, p: Participant, ev: HookEvent) -> bool:
         """Stop re-delivers unanswered priority items once (§8.5) unless this says no."""
