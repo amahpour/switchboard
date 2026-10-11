@@ -10,11 +10,9 @@ for a chosen password, and the sign-in limiter.
   reads one back as typed (any case, with or without dashes or spaces, I and L for 1, O for 0).
 - ``password_problem``: why a chosen password won't do, or None.
 - ``SignInLimiter``: failed sign-ins, in memory. After ``FREE_FAILURES`` failures for one
-  account within ``WINDOW_S``, it waits (30 s, doubling to 15 min) before the next try;
-  each later failure keeps the backoff until a success or 24 hours without a failure;
-  more than ``GLOBAL_FAILURES`` failures a minute over all names pause every password
-  sign-in for ``GLOBAL_PAUSE_S``. A success clears the account. Unknown names count like known
-  ones, so the answer never says which names exist.
+  account or trusted device within ``WINDOW_S``, it waits (30 s, doubling to 15 min) before
+  the next try; each later failure keeps the backoff until a success or 24 hours without a
+  failure. A success clears that budget. Unknown names count like known ones.
 """
 
 from __future__ import annotations
@@ -40,8 +38,6 @@ ONE_TIME_CHARS = 16
 FREE_FAILURES = 5
 WINDOW_S = 15 * 60.0
 FIRST_WAIT_S, MAX_WAIT_S = 30.0, 15 * 60.0
-GLOBAL_FAILURES = 100
-GLOBAL_PAUSE_S = 10.0
 MAX_TRACKED = 10_000
 QUIET_RESET_S = 24 * 3600.0
 
@@ -131,18 +127,16 @@ def password_problem(password: Any, name: str) -> str | None:
 
 
 class SignInLimiter:
-    """Failed password sign-ins per account key and overall (module docstring)."""
+    """Failed password sign-ins per account, trusted device or live session."""
 
     def __init__(self, clock: Clock | None = None):
         self.clock = clock or SystemClock()
         self._names: dict[str, tuple[deque[float], float, int]] = {}  # name -> (failures, until, locks)
-        self._all: deque[float] = deque()
-        self._paused_until = 0.0
 
     def wait_s(self, name: str) -> float:
         """Seconds until ``name`` may try again (0: now)."""
         now = self.clock.now()
-        until = self._paused_until
+        until = 0.0
         e = self._names.get(name.lower()[:64])
         if e is not None:
             until = max(until, e[1])
@@ -161,11 +155,6 @@ class SignInLimiter:
             until = now + min(FIRST_WAIT_S * 2 ** min(locks, 5), MAX_WAIT_S)
             locks = min(locks + 1, 5)
         self._names[key] = (fails, until, locks)
-        self._all.append(now)
-        while self._all and self._all[0] <= now - 60.0:
-            self._all.popleft()
-        if len(self._all) > GLOBAL_FAILURES:
-            self._paused_until = now + GLOBAL_PAUSE_S
         if len(self._names) > MAX_TRACKED:
             self._prune(now)
 
