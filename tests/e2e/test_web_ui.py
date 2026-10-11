@@ -602,7 +602,7 @@ def test_approval_flags_explain_on_hover_focus_and_phone_tap(ui: UI) -> None:
     page.mouse.move(0, 0)
     flag.focus()
     assert flag.evaluate("el => getComputedStyle(el, '::after').visibility") == "visible"
-    expect(page.locator(".pane-foot")).to_contain_text("question mark")
+    expect(page.locator(".pane-foot")).to_have_count(0)  # the flag explains itself (#211)
 
     phone = ui.open(**PHONE)
     phone.click("#buddy-toggle")
@@ -1809,6 +1809,24 @@ def test_a_catchup_entry_keeps_the_draft_and_esc_brings_it_back(ui: UI) -> None:
     page.keyboard.press("Escape")
     expect(box).to_have_value("a half-written note")
     box.fill("")  # nothing is sent
+
+
+def test_the_tier_badge_says_how_the_agent_is_woken(ui: UI) -> None:
+    """#211: the Members list has no help paragraph under it. Each tier badge says, on hover,
+    how switchboard wakes that agent, and the Inspector says it under the badge, for a phone."""
+    page = ui.open()
+    expect(page.locator("#buddy .pane-foot, #pane .pane-foot")).to_have_count(0)
+    expect(page.locator("#buddy-list")).not_to_contain_text("Select an agent to inspect it")
+    badge = page.locator('#buddy-list .member[data-name="claude-1"] code.tier')
+    expect(badge).to_have_attribute(
+        "title", "How switchboard wakes it: Claude Code’s own inbox: switchboard wakes it at once"
+    )
+    devin = page.locator('#buddy-list .member[data-name="devin-1"] code.tier')
+    expect(devin).to_have_attribute("title", re.compile("Devin waits in wait"))
+    page.click('#buddy-list .member[data-name="claude-1"]')
+    expect(page.locator("#insp-tier-how")).to_have_text(
+        "Claude Code’s own inbox: switchboard wakes it at once"
+    )
 
 
 def test_empty_room_copy_keeps_its_icon(ui: UI) -> None:

@@ -620,12 +620,31 @@
     return f;
   }
 
+  // How switchboard wakes an agent of each delivery tier, in a line (#211): the badge says it
+  // on hover, the Inspector under the badge, instead of a paragraph under the Members list
+  const TIER_HOW = {
+    'claude:inbox': 'Claude Code’s own inbox: switchboard wakes it at once',
+    'claude:hook': 'Claude Code without its inbox: it hears new messages at its next tool call, your next prompt, or wait()',
+    'codex:daemon': 'Codex’s own app-server: switchboard starts a turn when it’s idle',
+    'codex:queue': 'Codex’s queue: switchboard queues the message as its next prompt',
+    'codex:link': 'Codex on another machine: woken through that machine’s own app-server',
+    'codex:hook': 'Codex on another machine without its app-server: it hears new messages at its next hook',
+    'cursor:stop-park': 'Cursor: when its turn ends, switchboard holds it and hands it the next message',
+    'devin:wait-loop': 'Devin waits in wait(): a new message answers it',
+    'mcp-only': 'switchboard can’t wake it: it gets messages when it calls read() or wait()',
+  };
+
+  function tierHow(m) {
+    if (m.tier_note === 'verifying...') return 'switchboard is checking that this join came from its Codex thread';
+    return TIER_HOW[m.tier] || 'switchboard is still working out how to wake it';
+  }
+
   // a Codex thread proof still running reads "verifying...", as in /who (models.tier_label)
   function tierChip(m) {
     const t = m.tier_note === 'verifying...' ? m.tier_note
       : (m.tier || 'no tier yet') + (m.tier_note ? ' (' + m.tier_note + ')' : '');
     const c = el('code', 'tier', t);
-    c.title = 'delivery tier: how switchboard wakes this agent';
+    c.title = 'How switchboard wakes it: ' + tierHow(m);
     return c;
   }
 
@@ -1545,8 +1564,11 @@
     }
     const idText = el('div');
     idText.append(nameH, el('p', 'insp-status', statusWord(m) + since + ' · ' + harnessOf(m.harness)[1]));
-    // the chips get the pane's full width (InspectorStates.dc), so tier + host + Held fit on one row
-    id.append(withDot(avatar(m.harness, 'agent', m.name, 'lg'), m), idText, chips);
+    // the chips get the pane's full width (InspectorStates.dc), so tier + host + Held fit on one row;
+    // under them, what the tier means, which a phone can't hover for (#211)
+    const how = el('p', 'insp-tier-how', tierHow(m));
+    how.id = 'insp-tier-how';
+    id.append(withDot(avatar(m.harness, 'agent', m.name, 'lg'), m), idText, chips, how);
 
     // 2. needs attention
     const attn = el('section', 'insp-attn');

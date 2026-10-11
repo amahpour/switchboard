@@ -1510,13 +1510,6 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 .back-btn .ic { width: 16px; height: 16px; stroke-width: 1.7; }
 .pane-view > .group-label { margin-bottom: -8px; }
 .group-label { padding: 0 6px; font-size: calc(11.5px * var(--text-scale)); font-weight: 600; color: var(--muted); }
-.pane-foot {
-  margin: auto -12px 0;
-  padding: 12px 16px 0;
-  border-top: 1px solid var(--line);
-  font-size: calc(11.5px * var(--text-scale));
-  color: var(--muted);
-}
 .sheet-grip { display: block; flex-shrink: 0; align-self: center; width: 36px; height: 5px; margin-top: 7px; border-radius: 3px; background: var(--quote-rule); }
 
 .member-list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
@@ -1605,6 +1598,7 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 .insp-id > :not(.avatar) { grid-column: 2; }
 /* tier, host and Held chips span the pane under the avatar (InspectorStates.dc), so they rarely wrap */
 .insp-id > .insp-chips { grid-column: 1 / -1; margin-top: 10px; }
+.insp-id > .insp-tier-how { grid-column: 1 / -1; margin: 6px 0 0; color: var(--muted-2); font-size: calc(12px * var(--text-scale)); }
 #insp-name, .insp-id h2 {
   display: flex;
   align-items: center;
