@@ -4008,7 +4008,7 @@
     done.addEventListener('click', function () {
       state.invite = null;
       state.copiedInvite = false;
-      renderPeoplePanel();
+      renderPeoplePanel(true);
       tryFocus(document.getElementById('person-first'));
     });
     btns.append(done);
@@ -4139,7 +4139,7 @@
       if (name === p.name) return;
       if (!PERSON_NAME.test(name)) {
         state.nameNotes.set(key, { text: 'A name looks like bob or bob-k: a letter first, then letters, digits, _ or -, at most 24.', bad: true });
-        renderPeoplePanel();
+        renderPeoplePanel(true);
         return;
       }
       save.disabled = true;
@@ -4155,7 +4155,7 @@
         state.nameNotes.set(key, { text: String(e.message || e), bad: true });
       } finally {
         save.disabled = false;
-        renderPeoplePanel();
+        renderPeoplePanel(true);
       }
     });
     return row;
@@ -4203,7 +4203,7 @@
         state.emailNotes.set(key, { text: String(e.message || e), bad: true });
       } finally {
         save.disabled = false;
-        renderPeoplePanel();
+        renderPeoplePanel(true);
       }
     });
     return row;
@@ -4253,12 +4253,32 @@
     return card;
   }
 
-  function renderPeoplePanel() {
+  let peopleRenderPending = false;
+  // byUser: the redraw answers the person's own action (a submit, Add, Remove), so it runs at
+  // once even from a focused field (Enter submits from the field): otherwise its "Saved" or its
+  // error would wait for the field to lose focus. Every other redraw is in the background.
+  function renderPeoplePanel(byUser) {
     const body = $('people-body');
     if ($('people-panel').classList.contains('hidden')) return;
     $('people-google-lead').classList.toggle('hidden', !(state.me && state.me.sso));
-    const focused = focusKey(body);
     const f = document.activeElement;
+    if (!byUser && f && body.contains(f) && f.matches('input, textarea')) {
+      // A Copy timer or a late fetch can arrive between selecting an input's text and typing.
+      // Replacing the input at that point drops the selection, so wait until editing ends.
+      if (!peopleRenderPending) {
+        peopleRenderPending = true;
+        f.addEventListener('blur', function () {
+          requestAnimationFrame(function () {
+            if (!peopleRenderPending) return;
+            peopleRenderPending = false;
+            renderPeoplePanel();
+          });
+        }, { once: true });
+      }
+      return;
+    }
+    peopleRenderPending = false;
+    const focused = focusKey(body);
     const typing = f && f.id === 'person-name';
     body.replaceChildren();
     if (state.invite) body.append(inviteCard(state.invite));
@@ -4288,7 +4308,7 @@
     }
     if (state.peopleBusy.get('add')) return;
     state.peopleBusy.set('add', 'add');
-    renderPeoplePanel();
+    renderPeoplePanel(true);
     try {
       const res = await withFreshCheck(function () {
         return api('POST', '/api/people', { first_name: first, last_name: last, email: email, name: name });
@@ -4297,11 +4317,11 @@
       state.peopleDraft = { first: '', last: '', email: '', name: '', nameTyped: false };
       state.invite = { id: res.person.id, name: res.person.name, password: res.password, invite: res.invite };
       await loadPeople().catch(function () {});
-      renderPeoplePanel();
+      renderPeoplePanel(true);
       tryFocus(document.getElementById('copy-invite'));
     } catch (e) {
       state.peopleBusy.delete('add');
-      renderPeoplePanel();
+      renderPeoplePanel(true);
       peopleResult('add', String(e.message || e), true);
     }
   }
@@ -4311,17 +4331,17 @@
       'They are signed out everywhere, and their password stops working. Their passkeys still sign them in.',
       'Reset password', true)) return;
     state.peopleBusy.set(p.id, 'reset');
-    renderPeoplePanel();
+    renderPeoplePanel(true);
     try {
       const res = await withFreshCheck(function () { return api('POST', '/api/people/' + p.id + '/password', {}); });
       state.peopleBusy.delete(p.id);
       state.invite = { id: p.id, name: p.name, password: res.password, invite: res.invite };
       await loadPeople().catch(function () {});
-      renderPeoplePanel();
+      renderPeoplePanel(true);
       tryFocus(document.getElementById('copy-invite'));
     } catch (e) {
       state.peopleBusy.delete(p.id);
-      renderPeoplePanel();
+      renderPeoplePanel(true);
       peopleResult(p.id, String(e.message || e), true);
     }
   }
@@ -4331,17 +4351,17 @@
       'They are signed out everywhere at once, and their password and passkeys stop working. Their messages stay.',
       'Remove', true)) return;
     state.peopleBusy.set(p.id, 'remove');
-    renderPeoplePanel();
+    renderPeoplePanel(true);
     try {
       await api('POST', '/api/people/' + p.id + '/remove', {});
       state.peopleBusy.delete(p.id);
       if (state.invite && state.invite.id === p.id) state.invite = null;
       await loadPeople().catch(function () {});
-      renderPeoplePanel();
+      renderPeoplePanel(true);
       tryFocus($('people-close'));
     } catch (e) {
       state.peopleBusy.delete(p.id);
-      renderPeoplePanel();
+      renderPeoplePanel(true);
       peopleResult(p.id, String(e.message || e), true);
     }
   }
