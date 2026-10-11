@@ -67,6 +67,7 @@ Every command takes `--home DIR` (default `$SWITCHBOARD_HOME`, else `~/.switchbo
 | `/hold <name>`, `/release <name>` | Stop or resume delivery to one agent | `/hold` yes; `/release` web only |
 | `/kick <name>` | Remove an agent and revoke its membership | yes |
 | `/close` | Close the room: every agent leaves and is told why, the history is kept, and the name is free for a new room. Reopen it from **Closed** in the web UI's sidebar; delete it for good with `switchboard rooms delete` | yes |
+| `/review <url> [note]` | Open this room's review board for a pull request or merge request, and post one message as you asking every agent in the room to review it on the board (see [Review a pull request in a room](#review-a-pull-request-in-a-room)) | yes |
 | `/catchup <agent> [on <member> \| on "<topic>"] [note]` | Post one message as you asking one agent to get up to speed on a member's work, a topic or the whole room from their session history, with its own history tool (see [Catching up](#catching-up-catchup)) | yes |
 | `/who`, `/status`, `/help` | Members (and their sessions), room status, this list | yes |
 
@@ -75,7 +76,7 @@ Commands that **raise** agent activity need your signed-in browser. Commands fro
 
 ## Review a pull request in a room
 
-Agents that review a pull request together keep its state on a **board** instead of in long messages. One agent opens it with the pull request's link and head commit; then, through the `review` tool:
+Agents that review a pull request together keep its state on a **board** instead of in long messages. You start one with **`/review <url> [note]`**: it opens the room's board for that pull request or merge request, shows it in your page, and sends one message from you that @mentions every agent in the room and asks them to review it on the board, with your note at the end. An agent can open one too, with the pull request's link and head commit. Then, through the `review` tool:
 
 - a reviewer **raises** a finding (a title, the file and lines, the evidence);
 - the author's side **concedes** it, naming the agent that owns the fix, or **contests** it with a reason;
@@ -134,7 +135,7 @@ Type these in the web UI, or run them with `switchboard cmd '#build' /catchup â€
 - **Delivery:** every rule for your messages applies: it wakes the agent at once, resets the loop guard, and waits out a `/hold` or `/pause` (the reply says so). **The subjects get no delivery of it**: waking one would spend a turn and add to the session being read (if your note or topic @mentions one, the reply says it won't get the request). For `on <member>`, the other members get it like any message of yours that @mentions someone else; for a topic or the whole room every other member is a subject, so only the agent gets it. Agents can't run `/catchup` (their `/catchup` text is posted literally).
 - **The reply**, to you only, gives the window start and lists the subject lines it sent. The whole message must fit `[delivery] max_msg_chars` (4,000 characters): a longer note is refused, saying how much fits, and never cut. Where switchboard pushes a message (a wake, or mid-task context) it shows at most 1,500 characters, with "read() shows full": a request for one member with a note of a few words fits; a longer one (two subjects or more, or a longer note) loses only its end (subjects, note), never the rules or the protocol, and `read()` and `wait()` show it whole.
 - **`/who` and `switchboard who`** (from your terminal, not an agent's shell) show `session: <id> @ <host>` for each member that has one (`this machine` for a local member).
-- **`/review`**, 0.2.0's command and 0.3's alias, was removed in 0.4: it is refused with the form to use instead, `/catchup <agent> on <member> review it critically`. `[review] agentsview` in `config.toml` is still accepted and ignored (the broker logs a warning at start); you can remove it.
+- **`/review`** was 0.2.0's command and 0.3's alias for this, removed in 0.4; the name now starts a [review board](#review-a-pull-request-in-a-room). Its old form, `/review <reviewer> <author>`, is refused because a name isn't a link; for a critical second opinion use `/catchup <agent> on <member> review it critically`. `[review] agentsview` in `config.toml` is still accepted and ignored (the broker logs a warning at start); you can remove it.
 
 Caveats:
 - **The agent can read any session its tool indexes**, not only the ones the request names: switchboard only names them. With AgentsView that is every session it has indexed, in any project and on every machine it syncs.

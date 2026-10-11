@@ -100,22 +100,29 @@ class Boards:
     def _open(self, room: Room, actor: str, params: dict[str, Any]) -> dict[str, Any]:
         url = reviews.url(params.get("url"))
         head = reviews.head(params.get("head"))
+        self._open_board(room, actor, url, head, "a person closes it before another opens")
+        return self._shown(room)
+
+    def _open_board(self, room: Room, by: str, url: str, head: str, then: str) -> None:
+        """The room's board for ``url``, opened by ``by`` (an agent or a person), or the open one
+        when it's for ``url`` already. Another URL is refused until that board is closed."""
         rv = self.store.current_review(room.id)
         if rv is not None and rv["url"] != url:
-            raise ReviewError(
-                f"{room.name} already has a board for {rv['url']}: a person closes it before another opens"
-            )
+            raise ReviewError(f"{room.name} already has a board for {rv['url']}: {then}")
         if rv is None:
-            self.store.open_review(room.id, url, head, actor)
-            self._notice(
-                room, f"{actor} opened a review board for {url}" + (f" at {head[:12]}" if head else "")
-            )
+            self.store.open_review(room.id, url, head, by)
+            self._notice(room, f"{by} opened a review board for {url}" + (f" at {head[:12]}" if head else ""))
         elif head and head != rv["head"]:
             # a new head: the same board, its checks now about a newer commit (§37.4)
             self.store.set_review(rv["id"], head=head)
-            self._notice(room, f"{actor} moved the review board to {head[:12]}")
-        self.store.add_event("review", room_id=room.id, data={"open": url, "head": head, "by": actor})
-        return self._shown(room)
+            self._notice(room, f"{by} moved the review board to {head[:12]}")
+        self.store.add_event("review", room_id=room.id, data={"open": url, "head": head, "by": by})
+
+    def person_open(self, room: Room, name: str, url: str) -> None:
+        """A person's ``/review`` (§37.8): the board opens, or stays, for ``url``, and every page
+        showing the room gets it at once."""
+        self._open_board(room, name, reviews.url(url), "", "close it before another opens")
+        self.state.hub.review(room.name, self.board(room))
 
     def _add(self, rv: dict[str, Any], actor: str, action: str, params: dict[str, Any]) -> reviews.Item:
         title = reviews.text(params.get("title"), "title", reviews.MAX_TITLE, required=True)

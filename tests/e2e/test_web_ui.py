@@ -2197,6 +2197,49 @@ def test_a_long_pull_request_url_wraps_in_the_board_dialogs(ui: UI, size: str) -
         expect(dialog).to_be_hidden()
 
 
+def test_a_person_starts_a_review_from_the_composer(ui: UI) -> None:
+    """#248: /review <url> opens the room's board in this page (no board button needed first),
+    and one message from the person asks the room's agents to review it on the board."""
+    slug = "e2e-board-review-cmd"
+    pr = "https://github.com/example-org/shop/pull/7"
+    ui.world.create_room("#" + slug)
+    ui.world.add_agents("#" + slug, ("claude-1", "codex-1"))
+    page = ui.open(room=None)
+    open_room(page, slug)
+    expect(page.locator("#board-toggle")).to_be_hidden()
+    page.fill("#input", f"/review {pr} the tax order matters most")
+    page.keyboard.press("Enter")
+    expect(page.locator("#board")).to_be_visible()
+    expect(page.locator("#log")).to_be_hidden()
+    expect(page.locator("#board-toggle")).to_have_attribute("aria-pressed", "true")
+    expect(page.locator("#board .board-head a")).to_have_attribute("href", pr)
+    status = page.locator("#board-status")
+    expect(status).to_have_text("No findings yet")  # empty is waiting, not settled
+    expect(status).not_to_have_class(re.compile(r"\bchip-ok\b"))
+    page.click("#board-toggle")
+    row = chat_row(page, "together on this room's review board")  # the URL renders as a link
+    expect(row).to_contain_text("@claude-1")
+    expect(row.locator("a.md-link")).to_have_attribute("href", pr)
+    expect(row).to_contain_text("Note: the tax order matters most")
+    expect(page.locator("#log .line.local").last).to_contain_text(
+        f"opened the review board for {pr} and asked claude-1 and codex-1 to review it"
+    )
+
+
+def test_review_inside_a_sentence_says_how_to_start_one(ui: UI) -> None:
+    """A /review in the middle of a message is text to the agents, as /catchup is: the page
+    says how to start a review board instead of the catch-up hint."""
+    slug = "e2e-board-review-hint"
+    ui.world.create_room("#" + slug)
+    page = ui.open(room=slug)
+    page.fill("#input", "could someone /review this one")
+    page.keyboard.press("Enter")
+    expect(page.locator("#log .line.local").last).to_contain_text(
+        "To start a review board, send: /review <url of the pull request or merge request> [note]."
+    )
+    expect(page.locator("#board")).to_be_hidden()
+
+
 def test_composer_grows_with_wrapped_text_and_shrinks_after_send(ui: UI) -> None:
     """Issue #130: the composer stayed one line tall as text wrapped with no '\\n' in it, so the
     earlier lines scrolled out of view inside the box. Typing a paragraph that wraps (no '\\n')

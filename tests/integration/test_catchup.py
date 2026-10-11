@@ -229,13 +229,14 @@ async def test_a_held_agent_keeps_the_request_queued(broker: InProcBroker, claud
         assert ids_in(got["text"]) == [msg["id"]]
 
 
-async def test_review_was_removed_in_0_4(broker: InProcBroker, claude: FakeClaude) -> None:
-    """0.3's /review alias is gone: it is refused with the /catchup form to use, and nothing is posted."""
+async def test_reviews_old_form_posts_nothing(broker: InProcBroker, claude: FakeClaude) -> None:
+    """0.3's /review alias is gone, and the name opens a review board now (#248): the old form
+    is refused as a URL that isn't one, and nothing is posted or recorded as a catch-up."""
     async with FakeAgent(broker.home, "ag") as ag:
         await ag.join("#build", "reviewer")
         r = web_cmd(broker, "/review reviewer claude-1 focus on the error paths")
         assert r.status_code == 400
-        assert "/review was removed in 0.4: use /catchup <agent> on <member> review it critically" in r.text
+        assert "/review: url must be an http(s) link to the pull request or merge request" in r.text
         assert human_chat(broker) == [] and catchup_events(broker) == []
 
 

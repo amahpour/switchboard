@@ -234,6 +234,7 @@ def create_app(
         state.runner = Runner(state)
         state.agents = AgentService(state)
         state.boards = Boards(state)
+        state.service.boards = state.boards
         state.service.delivery = state.agents
         state.rpc = RpcServer(paths.sock, state)
         try:
