@@ -46,6 +46,7 @@ def ui(browser: Browser, hosted: InProcBroker, request: pytest.FixtureRequest) -
 
 
 def test_rename_yourself_in_settings_and_someone_from_people(ui: UI, hosted: InProcBroker) -> None:
+    """A late initial People fetch must not replace a rename input while it is being edited."""
     origin = hosted.state.web_origin.origin
     one_time = hosted.paths.test_claim_link.read_text().strip().split("#t=", 1)[1]
     page = ui.context().new_page()
@@ -78,7 +79,22 @@ def test_rename_yourself_in_settings_and_someone_from_people(ui: UI, hosted: InP
     expect(page.locator("#log")).to_contain_text("alice is now ali")
 
     # People: the admin renames bob on his card
+    page.evaluate("""() => {
+      const original = window.fetch;
+      window.fetch = (...args) => {
+        if (String(args[0]).endsWith('/api/people') &&
+            (!args[1] || !args[1].method || args[1].method === 'GET')) {
+          return new Promise(resolve => {
+            window.releasePeople = () => { window.fetch = original; resolve(original(...args)); };
+          });
+        }
+        return original(...args);
+      };
+    }""")
     page.click("#open-people")
+    expect(page.locator("#person-first")).to_have_count(0)  # no form until the initial fetch settles
+    page.evaluate("() => window.releasePeople()")
+    expect(page.locator("#person-first")).to_be_visible()
     bob = page.locator(".person-card").nth(1)
     expect(bob.locator(".person-handle")).to_have_text("@bob")
     bob.locator('input[id^="name-"]').fill("rob")
