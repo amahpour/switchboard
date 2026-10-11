@@ -507,8 +507,10 @@ def build(
         "hold": kinds.get("hold", 0),
         "release": kinds.get("release", 0),
         "kick": kinds.get("kick", 0),
-        # /catchup requests; 0.2.0's /review events count here too (§26)
-        "catchup": kinds.get("catchup", 0) + kinds.get("review", 0),
+        # /catchup requests; 0.2.0's /review events count here too (§26). Those carry the
+        # reviewer; a review board's moves (§37) are ``review`` events too, and aren't requests (#259)
+        "catchup": kinds.get("catchup", 0)
+        + sum(1 for e in room_ev if e["kind"] == "review" and "reviewer" in _data(e["data"])),
         "approval_holds": len(holds_approval),
         "codex_holds": codex_holds,
         "rearm": kinds.get("rearm", 0),

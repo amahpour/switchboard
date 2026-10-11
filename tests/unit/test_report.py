@@ -461,6 +461,26 @@ def test_agents_rules_and_stalls(w: World, clock: FakeClock) -> None:
     assert "| /catchup (catch-up requests posted, /review included) | 2 |" in md
 
 
+def test_review_board_moves_are_not_counted_as_catchup_requests(w: World, clock: FakeClock) -> None:
+    """#259: a review board (§37) records a ``review`` event for every move, the kind 0.2.0's
+    /review command used. Only the old command's events (they name the reviewer) are requests."""
+    p1, m1, _c = claude(w)
+    w.store.add_event("catchup", room_id=w.room.id, data={"via": "web", "agent": m1.id, "mode": "room"})
+    w.store.add_event(
+        "review", room_id=w.room.id, data={"via": "web", "reviewer": m1.id, "author": m1.id, "message_id": 1}
+    )
+    for data in (
+        {"open": "https://example.com/shop/pull/7", "head": "", "by": "codex-1"},
+        {"item": "F1", "to": "conceded", "by": "claude-1"},
+        {"item": "F1", "to": "fixed", "by": "claude-1"},
+        {"item": "Q1", "to": "answered", "by": "alice"},
+        {"post": "https://example.com/shop/pull/7", "by": "alice"},
+        {"close": "https://example.com/shop/pull/7", "by": "alice"},
+    ):
+        w.store.add_event("review", room_id=w.room.id, data=data)
+    assert build(w)["rules"]["catchup"] == 2
+
+
 def test_output_has_no_text_paths_or_emails(w: World, clock: FakeClock) -> None:
     p, m, _c = claude(w)
     reg(w, w.p(p), "idle")
