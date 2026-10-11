@@ -311,3 +311,73 @@ async def test_an_agents_words_never_go_out_as_the_persons(broker: InProcBroker)
     for row in said:
         assert "ignore" not in row["text"] and "deploy" not in row["text"] and "devin-1" not in row["text"]
         assert "devin-1" not in (row["mentions"] or "")
+
+
+# ----------------------------------------------------------- /review: a person starts one (#248)
+def web_cmd(b: InProcBroker, web: Any, text: str) -> Any:
+    return web.post("/api/rooms/build/command", json={"text": text}, headers=b.write_headers())
+
+
+async def test_a_person_starts_a_review_with_review(broker: InProcBroker) -> None:
+    """/review opens the room's board with the person as its opener, and posts one message from
+    them that asks each agent to review the PR with the board's tool. It carries the person's URL
+    and note and switchboard's words, nothing an agent wrote (#177)."""
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            r = web_cmd(broker, web, f"/review {PR} the tax order matters most")
+            assert r.status_code == 200, r.text
+            assert (
+                r.json()["text"]
+                == f"opened the review board for {PR} and asked claude-1 and codex-1 to review it"
+            )
+            board = web.get("/api/rooms/build/review").json()["board"]
+            assert (board["url"], board["opened_by"], board["items"]) == (PR, "alice", [])
+            rows = q(
+                broker, "SELECT sender_kind, sender_name, text FROM messages WHERE kind='chat' ORDER BY id"
+            )
+            assert [(x["sender_kind"], x["sender_name"]) for x in rows] == [("human", "alice")]
+            text = rows[0]["text"]
+            assert text.startswith("@claude-1 @codex-1 ") and PR in text
+            assert text.endswith("\n\nNote: the tax order matters most")
+            for agent in (author, reviewer):
+                got = (await agent.read("#build"))["text"]
+                assert PR in got and "review(action=" in got  # the envelope escapes the quotes
+            # the same URL again asks again; another URL waits for this board to close
+            assert web_cmd(broker, web, f"/review {PR}").status_code == 200
+            r = web_cmd(broker, web, f"/review {PR}8")
+            assert r.status_code == 400
+            assert r.json()["message"] == (
+                f"/review: #build already has a board for {PR}: close it before another opens"
+            )
+            assert len(q(broker, "SELECT id FROM messages WHERE kind='chat'")) == 2
+    finally:
+        web.close()
+
+
+async def test_review_needs_an_agent_and_opens_nothing_without_one(broker: InProcBroker) -> None:
+    web = broker.web_client()
+    try:
+        r = web_cmd(broker, web, f"/review {PR}")
+        assert r.status_code == 400
+        assert r.json()["message"] == "/review: no agents in #build to review it: ask one to join first"
+        assert web.get("/api/rooms/build/review").json()["board"] is None
+    finally:
+        web.close()
+
+
+async def test_an_agent_cant_run_review(broker: InProcBroker) -> None:
+    """An agent's say("/review …") is a chat message like any other: no board opens."""
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "k1") as agent:
+            await agent.join("#build", "claude-1")
+            r = await agent.call("say", room="#build", text=f"/review {PR}")
+            assert r["ok"], r
+            assert web.get("/api/rooms/build/review").json()["board"] is None
+            rows = q(broker, "SELECT sender_kind, text FROM messages WHERE kind='chat'")
+            assert [(x["sender_kind"], x["text"]) for x in rows] == [("agent", f"/review {PR}")]
+    finally:
+        web.close()

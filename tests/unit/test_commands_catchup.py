@@ -5,7 +5,7 @@ session exactly (harness, the harness's own id, host) with one window start, and
 ordinary human chat message that @mentions the agent, with fixed rules and a fixed protocol
 first. The subjects get no delivery of it. switchboard never looks for or runs a
 session-history tool.
-``/review``, its alias in 0.3, was removed in 0.4.
+``/review``, its alias in 0.3, was removed in 0.4 (the name opens a review board now, #248).
 """
 
 from __future__ import annotations
@@ -278,7 +278,8 @@ def test_help_lists_catchup_with_the_four_examples() -> None:
     ]
     i = lines.index(examples[0])
     assert lines[i : i + 4] == examples
-    assert "/review" not in HELP_TEXT and "agentsview" not in HELP_TEXT
+    # /review is the review board's now (§37.8), not 0.3's alias for this
+    assert "/review <reviewer>" not in HELP_TEXT and "agentsview" not in HELP_TEXT
     # every example parses as what it says
     assert [parse_command(x.strip().split("  ")[0]).args[1] for x in examples] == [
         "member",
@@ -292,15 +293,15 @@ def test_help_lists_catchup_with_the_four_examples() -> None:
 
 
 # ------------------------------------------------------- the old alias
-@pytest.mark.parametrize(
-    "text", ["/review codex-1 claude-1", "  /REVIEW @Codex-1 @claude-1 focus  ", "/review"]
-)
-def test_review_was_removed_in_0_4_and_points_at_catchup(text: str) -> None:
+@pytest.mark.parametrize("text", ["/review codex-1 claude-1", "  /REVIEW @Codex-1 @claude-1 focus  "])
+def test_reviews_old_form_is_refused_with_the_new_one(text: str) -> None:
+    """0.3's /review <reviewer> <author> was /catchup's alias, removed in 0.4; /review opens a
+    review board now (#248), so the old form is refused as a URL that isn't one."""
     with pytest.raises(CommandError) as e:
         parse_command(text)
     assert (e.value.code, e.value.message) == (
         "bad_request",
-        "/review was removed in 0.4: use /catchup <agent> on <member> review it critically",
+        "/review: url must be an http(s) link to the pull request or merge request",
     )
 
 

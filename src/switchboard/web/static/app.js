@@ -1815,6 +1815,9 @@
       detail: 'Raises agent activity, so it needs this signed-in browser.' },
     { group: 'Agents', cmd: 'kick', args: '<name>', desc: 'Remove an agent and revoke its membership', pill: '', usage: '/kick <name>',
       detail: 'Asks first. Removes it from {room} and revokes its membership.' },
+    { group: 'Agents', cmd: 'review', args: '<url> [note]', desc: 'Start a review board for a PR or MR', pill: '',
+      usage: '/review <url> [note]',
+      detail: 'Opens the board here, and one message asks each agent in {room} to review it on the board.' },
     { group: 'Agents', cmd: 'catchup', args: '<agent> [on …]', desc: 'Get one agent up to speed from session history', pill: '',
       usage: '/catchup <agent> [on <member> | on "<topic>"] [note]',
       detail: 'e.g. /catchup bench on claude-1 — the member being read is not woken.' },
@@ -4456,6 +4459,8 @@
   // -------------------------------------------------------------- input
   const CATCHUP_HINT = 'Commands run only at the start of a message, and agents can’t run them. ' +
     'To catch an agent up, send: /catchup <agent> on <member> (or on "<topic>"; /help lists every form).';
+  const REVIEW_HINT = 'Commands run only at the start of a message, and agents can’t run them. ' +
+    'To start a review board, send: /review <url of the pull request or merge request> [note].';
 
   // opts.confirmed: the Inspector already asked about a /kick
   async function send(text, opts) {
@@ -4483,12 +4488,19 @@
         // a done /close prunes this room, and the new view would wipe the reply: prune first
         if (res.ok && verb.toLowerCase() === '/close') await loadRooms().catch(function () {});
         renderLocal(verb, !res.ok, res.text);
+        // a person's /review opened the room's board (#248): show it, in this page only
+        if (res.ok && verb.toLowerCase() === '/review' && r.name === state.active) {
+          state.boardOpen = true;
+          loadBoard(r);
+        }
       } else {
         const body = { text: text };
         if (opts && opts.reply_to !== undefined) body.reply_to = opts.reply_to;
         await api('POST', path + '/say', body);
-        // "/catchup" inside a sentence is only text to the agents: say how to run it
-        if (/(^|\s)\/(catchup|review)\b/i.test(text)) renderLocal('/catchup', false, CATCHUP_HINT);
+        // "/catchup" or "/review" inside a sentence is only text to the agents: say how to run it
+        const inline = /(^|\s)\/(catchup|review)\b/i.exec(text);
+        if (inline && inline[2].toLowerCase() === 'review') renderLocal('/review', false, REVIEW_HINT);
+        else if (inline) renderLocal('/catchup', false, CATCHUP_HINT);
       }
       return true;
     } catch (e) {
@@ -4593,10 +4605,13 @@
       title.append(sha);
     }
     const c = b.counts || {};
-    const status = el('span', 'chip' + (b.settled ? ' chip-ok' : c.needs_person ? ' chip-danger' : ''),
+    // a board a person just started with /review (#248) has nothing on it: not settled, waiting
+    const empty = !b.items.length;
+    const status = el('span', 'chip' + (empty ? '' : b.settled ? ' chip-ok' : c.needs_person ? ' chip-danger' : ''),
       b.posted_by ? 'Posted by ' + b.posted_by
-        : b.settled ? 'Settled' : c.needs_person ? c.needs_person + ' need' + (c.needs_person === 1 ? 's' : '') + ' you'
-          : c.open + ' open');
+        : empty ? 'No findings yet'
+          : b.settled ? 'Settled' : c.needs_person ? c.needs_person + ' need' + (c.needs_person === 1 ? 's' : '') + ' you'
+            : c.open + ' open');
     status.id = 'board-status';
     const close = btn('btn', 'Close board');
     close.id = 'board-close';

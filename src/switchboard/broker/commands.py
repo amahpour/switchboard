@@ -4,9 +4,10 @@ Reachable only through ``human.command`` over the UDS (peer-checked) or an
 authenticated web session. An agent's ``say("/pause")`` is stored literally
 and never parsed. Commands that reduce activity need ``human_cli``; commands
 that raise it need ``human`` (the web session, or test trust). ``/catchup``
-(§26) posts one chat message as the human, so it needs what ``switchboard say``
-needs: ``human_cli`` (``/review``, its alias in 0.3, was removed in 0.4).
-``/close`` (§28.3) ends every membership, so it reduces activity: ``human_cli``.
+(§26) and ``/review`` (§37.8) post one chat message as the human, so they need what
+``switchboard say`` needs: ``human_cli``. (``/review`` was ``/catchup``'s alias in 0.3,
+removed in 0.4; it opens a review board now.) ``/close`` (§28.3) ends every membership,
+so it reduces activity: ``human_cli``.
 """
 
 from __future__ import annotations
@@ -15,9 +16,11 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from switchboard import reviews
 from switchboard.broker import catchup
 from switchboard.delivery.rules import parse_mentions
 from switchboard.models import MAX_BUDGET, MAX_HOPS, SCREEN_NAME_RE, Room
+from switchboard.reviews import ReviewError
 
 if TYPE_CHECKING:  # pragma: no cover
     from switchboard.broker.service import RoomService
@@ -45,6 +48,9 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
     /catchup codex-1 on "sprint cleanup"        on a topic, across the room
     /catchup codex-1                            on the room since it joined
     /catchup codex-1 on claude-1 pick it apart  plus a critical second opinion
+  /review <url> [note]
+                      open this room's review board for a pull request or merge
+                      request, and ask its agents to review it on the board
   /who                list members
   /status             room and delivery status
   /help               this list
@@ -53,7 +59,7 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
 _NO_ARGS = frozenset({"pause", "resume", "who", "status", "help", "close"})
 _ONE_NAME = frozenset({"kick", "hold", "release"})
 _ONE_NUMBER = {"budget": MAX_BUDGET, "hops": MAX_HOPS}  # /name [n], 0 <= n <= max
-KNOWN = _NO_ARGS | _ONE_NAME | set(_ONE_NUMBER) | {"catchup"}
+KNOWN = _NO_ARGS | _ONE_NAME | set(_ONE_NUMBER) | {"catchup", "review"}
 
 _STATIC_ROLES = {
     "pause": "human_cli",
@@ -66,11 +72,10 @@ _STATIC_ROLES = {
     "status": "human_cli",
     "help": "human_cli",
     "catchup": "human_cli",  # posts a human chat message, like `switchboard say`
+    "review": "human_cli",  # the same: one chat message, and a board (§37.8)
 }
 
-
-# /review was /catchup's alias in 0.3 (§26); a human who types it from habit gets the new form
-REVIEW_REMOVED = "/review was removed in 0.4: use /catchup <agent> on <member> review it critically"
+REVIEW_USAGE = "/review <url> [note]"
 
 
 class CommandError(Exception):
@@ -128,13 +133,13 @@ def parse_command(text: str) -> Command:
     if not parts:
         raise CommandError("bad_request", "empty command; try /help")
     name, args = parts[0].lower(), tuple(parts[1:])
-    if name == "review":
-        raise CommandError("bad_request", REVIEW_REMOVED)
     if name not in KNOWN:
         raise CommandError("bad_request", f"unknown command /{name}; try /help")
     if name == "catchup":
         # parsed from the raw text: a quoted topic keeps its spaces
         return _parse_catchup(raw[1:].split(None, 1)[1] if args else "", raw)
+    if name == "review":
+        return _parse_review(raw)
     if name in _NO_ARGS and args:
         raise CommandError("bad_request", f"/{name} takes no arguments")
     if name in _ONE_NAME:
@@ -226,6 +231,63 @@ def _parse_catchup(text: str, raw: str) -> Command:
         raise CommandError("bad_request", "/catchup: an agent can't catch up on itself; name another member")
     note = catchup.clean_text(parts[1]) if len(parts) > 1 else ""
     return Command(name="catchup", args=(agent, "member", member, note), raw=raw)
+
+
+def _parse_review(raw: str) -> Command:
+    """``/review <url> [note...]`` (§37.8): ``args`` ``(url, note)``, the URL checked as the
+    board's ``open`` checks it, the note cleaned like chat text."""
+    words = raw[1:].split(None, 2)
+    if len(words) < 2:
+        raise CommandError("bad_request", f"usage: {REVIEW_USAGE}")
+    try:
+        url = reviews.url(words[1])
+    except ReviewError as e:
+        raise CommandError("bad_request", f"/review: {e}") from None
+    note = catchup.clean_text(words[2]) if len(words) > 2 else ""
+    return Command(name="review", args=(url, note), raw=raw)
+
+
+def review_request(agents: list[str], url: str, note: str) -> str:
+    """The message ``/review`` posts as the person: switchboard's words, the person's URL and
+    their note, and no agent's text (#177). The mentions wake each agent once."""
+    text = (
+        " ".join("@" + a for a in agents)
+        + f" Please review {url} together on this room's review board. Raise each finding with"
+        ' review(action="raise"), with its file and lines; concede or contest each other\'s; ask'
+        ' with review(action="ask") what only a person can decide. review(action="show") shows'
+        " the board."
+    )
+    return text + (f"\n\nNote: {note}" if note else "")
+
+
+def _review(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
+    """Open the room's board for the URL, as the person, and hand back the request to post
+    (§37.8). Every check comes before the board opens, so a refusal leaves nothing behind."""
+    url, note = cmd.args
+    agents = [m.name for m in svc.store.members(room.id)]
+    if not agents:
+        raise CommandError(
+            "bad_request", f"/review: no agents in {room.name} to review it: ask one to join first"
+        )
+    text = review_request(agents, url, note)
+    limit = svc.cfg.delivery.max_msg_chars
+    if len(text) > limit:
+        fits = max(limit - (len(text) - len(note)), 0)
+        raise CommandError(
+            "bad_request",
+            f"/review: the note is too long ({len(note)} characters; at most {fits} fit in one message)",
+        )
+    if svc.boards is None:  # a RoomService on its own, as the human side's unit tests build it
+        raise CommandError("bad_request", "/review: this broker has no review boards")
+    try:
+        svc.boards.person_open(room, actor.who(svc.cfg.human_name), url)
+    except ReviewError as e:
+        raise CommandError("bad_request", f"/review: {e}") from None
+    who = " and ".join([", ".join(agents[:-1]), agents[-1]] if len(agents) > 1 else agents)
+    lines = [f"opened the review board for {url} and asked {who} to review it"]
+    if room.paused:
+        lines.append(f"{room.name} is paused: the request goes out after /resume")
+    return Result(True, "\n".join(lines), post=text)
 
 
 def hops_raise(new: int, old: int) -> bool:
@@ -501,6 +563,8 @@ def apply(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
         return _hops_set(room, int(cmd.args[0]), svc)
     if name == "catchup":
         return _catchup(cmd, room, svc)
+    if name == "review":
+        return _review(cmd, room, actor, svc)
     # one-name commands
     target = cmd.args[0]
     member = store.find_member(room.id, target)
