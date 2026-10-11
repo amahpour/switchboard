@@ -2298,6 +2298,7 @@
         renderBuddies();
         updateRoomEmpty();
         renderComposerMentions();  // an agent just joined or left: who can be @mentioned changed
+        if (state.boardOpen) renderBoard();  // who can use the board may have changed (#249)
       }
       if (ins && ins.room === f.room) {
         if (!inspectedMember()) memberLeft(ins);
@@ -4678,6 +4679,19 @@
     });
     head.append(title, status, close);
 
+    // members whose switchboard can't move cards (#249): the board would stand still for them,
+    // while they argue in chat instead. Each line is switchboard's own text (member_dict).
+    const unable = (r.members || []).filter(function (m) { return m.board_why; });
+    const notes = el('div', 'board-unable');
+    notes.id = 'board-unable';
+    notes.setAttribute('role', 'note');
+    for (const m of unable) {
+      const line = el('p', 'board-unable-line');
+      line.dataset.member = m.name;
+      line.append(icon('warn'), el('span', null, m.board_why));
+      notes.append(line);
+    }
+
     const lanes = el('div', 'board-lanes');
     for (const lane of BOARD_LANES) {
       const items = b.items.filter(lane.test);
@@ -4714,7 +4728,8 @@
     const sel = state.boardSel ? b.items.find(function (i) { return i.label === state.boardSel; }) : null;
     if (sel) body.append(boardDetail(r, sel));
     else state.boardSel = null;
-    box.replaceChildren(head, body);
+    if (unable.length) box.replaceChildren(head, notes, body);
+    else box.replaceChildren(head, body);
   }
 
   // Settled: exactly what each agent will post, and the one button that tells them to (§37.6).

@@ -203,3 +203,25 @@ def test_anything_else_is_shown_as_its_url(url: str) -> None:
     """Not recognized, so the page shows the URL itself and no mark: a wrong mark would say
     the link goes somewhere it doesn't."""
     assert reviews.forge(url) is None
+
+
+# ------------------------------------------- the members that can't use the board (#249)
+def test_a_member_without_a_tool_list_cant_use_the_board() -> None:
+    """A switchboard from before the list says nothing about its tools: an unknown, which
+    counts as unable (it fails closed), and the person is told what to do."""
+    assert reviews.board_reason("codex-1", None, None) == (
+        "codex-1 can't use the board: its switchboard is older than this one and doesn't list its"
+        " tools. Upgrade it, then restart its session."
+    )
+
+
+def test_a_list_without_review_names_the_version_and_what_is_missing() -> None:
+    assert reviews.board_reason("codex-1", "0.16.2", ("join", "say")) == (
+        "codex-1 can't use the board: its switchboard (0.16.2) has no review tool. Upgrade it,"
+        " then restart its session."
+    )
+    assert "(version unknown)" in (reviews.board_reason("codex-1", None, ()) or "")
+
+
+def test_a_list_with_review_can_use_the_board() -> None:
+    assert reviews.board_reason("claude-1", "0.23.0", ("join", "review", "say")) is None

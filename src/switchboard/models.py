@@ -240,6 +240,7 @@ class Member:
     parked: bool = False
     parked_reason: str | None = None
     host: str = ""  # the participant's host: '' for this machine (DESIGN.md §27.6)
+    board_why: str | None = None  # why it can't use the review board, from its MCP server (#249)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

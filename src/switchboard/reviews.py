@@ -168,6 +168,21 @@ def forge(value: str) -> dict[str, Any] | None:
     return {"kind": kind, "repo": repo, "number": int(number)}
 
 
+def board_reason(name: str, version: str | None, tools: tuple[str, ...] | None) -> str | None:
+    """Why the member ``name`` can't use the board, from what its MCP server said in ``mcp.hello``
+    (#249), or None when it can. A server that lists no tools predates the list, and an unknown
+    counts as unable (it fails closed). It's a list, not a version comparison: it says exactly
+    what's missing."""
+    fix = "Upgrade it, then restart its session."
+    if tools is None:
+        why = "its switchboard is older than this one and doesn't list its tools"
+    elif "review" not in tools:
+        why = f"its switchboard ({version or 'version unknown'}) has no review tool"
+    else:
+        return None
+    return f"{name} can't use the board: {why}. {fix}"
+
+
 def parse_label(value: Any) -> tuple[str, int]:
     """'F3' -> ('finding', 3); 'q1' -> ('question', 1)."""
     m = re.fullmatch(r"([FfQq])([1-9][0-9]{0,3})", value.strip()) if isinstance(value, str) else None

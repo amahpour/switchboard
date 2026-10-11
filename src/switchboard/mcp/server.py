@@ -38,6 +38,7 @@ from fastmcp import Context, FastMCP
 from fastmcp.server.middleware import Middleware
 from mcp.types import ToolAnnotations
 
+from switchboard import __version__
 from switchboard.adapters.testagent import ACK_MODES
 from switchboard.broker.peer import claude_registry_socket
 from switchboard.envelope import NONCE_RE
@@ -164,6 +165,9 @@ class McpState:
 
     # ------------------------------------------------------------- identity
     def hello_params(self) -> dict[str, Any]:
+        """What ``mcp.hello`` says about this session and this server. ``version`` and ``tools``
+        (#249) let the broker tell a person which members can't use a tool, such as the review
+        board's; they are claims, and grant nothing."""
         h, ev = detect(
             self.env,
             self.client_info,
@@ -181,6 +185,8 @@ class McpState:
             },
             "env_leak": env_leak(self.env, h),
             "has_messaging_token": _TOKEN_ENV in self.env,
+            "version": __version__,
+            "tools": list(TOOL_NAMES),
         }
         if h == "claude":
             params["claude_socket"] = self.env.get("CLAUDE_CODE_MESSAGING_SOCKET")
@@ -425,6 +431,10 @@ class HelloMiddleware(Middleware):
         except Exception:  # pragma: no cover - identity is advisory; tools retry
             log.debug("hello scheduling failed", exc_info=True)
         return result
+
+
+# Every tool build_server registers, as mcp.hello reports them (#249); a test pins the two equal.
+TOOL_NAMES = ("join", "leave", "who", "say", "read", "wait", "pass", "away", "review")
 
 
 def build_server(st: McpState) -> FastMCP:

@@ -92,6 +92,7 @@ In the web UI, a room with a board gets a **board** button in its header. It sho
 - Click a card to see its evidence. On a question, click the option you choose (the agent's recommendation is marked). On a contested finding, pick the agent that owns it and **Concede**, or give a reason and **Drop** it. Any open item can be dropped with a reason.
 - Each of those is your own message in the room ("Review board: Q1 answered with option 0."), so the agents hear it like anything you say. It names the item and your choice by number, never the agents' wording: their titles and options would otherwise go out as your words.
 - **Close board** ends it (it stays in the history), and the agents can open one for another pull request.
+- An agent whose switchboard can't move cards gets a line at the top of the board saying so: one from before 0.23 doesn't list its tools, and one without the `review` tool can't use the board at all. Upgrade switchboard where that agent runs, then restart its session, since a running session keeps the MCP server it started with.
 
 ![The review board, with a question open](media/ui/board-light.png)
 
