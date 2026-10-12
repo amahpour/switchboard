@@ -871,7 +871,7 @@ def render_markdown(rep: dict[str, Any], *, title: str | None = None, paint: Any
     L.append(_row(["---"] * 3))
     rule("loop guard (room paused after the hop limit)", r["loop_guard"])
     rule("budget exhausted", r["budget_exhausted"])
-    rule("rate limit (say refused)", r["rate_limited"])
+    rule("rate limit (say queued or refused)", r["rate_limited"])
     rule("read first (pass refused: a stub not read yet)", r.get("pass_refused", 0))
     rule("watchdog reminders", r["watchdog_remind"])
     rule(

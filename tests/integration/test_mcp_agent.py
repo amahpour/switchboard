@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -354,8 +355,9 @@ async def test_say_returns_earlier_unread_and_is_rate_limited(broker: InProcBrok
         assert r_ex["posted_id"]
         await a.pass_("#build")
         r2 = await a.say("#build", "one more thought")
-        assert r2["ok"] and r2["posted_id"] is None and r2["reason"] == "rate_limited"
-        assert 0 < r2["retry_after_s"] <= 10
+        # rate limited: queued, to be posted when the limit allows (#feedback H1), not dropped
+        assert r2["ok"] and r2["posted_id"] is None and r2["queued"] is True
+        assert 0 < r2["post_in_s"] <= 10 and "don't send it again" in r2["note"]
         r3 = await a.say("#build", "replying to you", reply_to=h1)  # replies to the human are exempt
         assert r3["posted_id"]
         [row] = q(broker, "SELECT COUNT(*) FROM events WHERE kind='rate_limited'")
@@ -532,7 +534,7 @@ async def test_synthetic_hook_gets_priority_context_and_acks_it(broker: InProcBr
         await b.join("#build", "beta")
         chatter = (await b.say("#build", "just chatting"))["posted_id"]
         ment = await b.say("#build", "@alpha your turn", reply_to=None)
-        assert ment["reason"] == "rate_limited"  # beta just spoke
+        assert ment["queued"] is True  # beta just spoke: the mention waits out the rate limit
         hid = say(broker, "@alpha human here")
         res = hook(broker, {"harness": "test", "event": "PostToolUse", "sid": "ka", "ok": True}, ack=True)
         assert res["out"]["kind"] == "context" and ids_in(res["out"]["text"]) == [hid]
@@ -766,3 +768,44 @@ async def test_mcp_server_reconnects_after_a_broker_restart(broker: InProcBroker
             await asyncio.sleep(0.3)
         # the credential persisted and works from the same MCP process
         assert r.get("ok") and ids_in(r["text"]) == [mid], r
+
+
+async def wait_until(cond: Callable[[], bool], timeout: float) -> None:
+    """Poll for a condition (an event, not a "by now" sleep), failing after ``timeout`` s."""
+    deadline = time.monotonic() + timeout
+    while not cond():
+        assert time.monotonic() < deadline, "timed out"
+        await asyncio.sleep(0.05)
+
+
+@pytest.fixture
+def quick(tmp_home: Path) -> Iterator[InProcBroker]:
+    """A broker whose say rate limit is half a second, so a queued say posts within the test."""
+    b = InProcBroker(tmp_home, Config(human_name="alice").with_delivery(rate_limit_s=0.5)).start()
+    web = b.web_client()
+    assert web.post("/api/rooms", json={"name": "#build"}, headers=b.write_headers()).status_code == 200
+    b.web = web  # type: ignore[attr-defined]
+    yield b
+    web.close()
+    b.stop()
+
+
+async def test_a_rate_limited_say_is_queued_and_posted_in_order(quick: InProcBroker) -> None:
+    """An agent's say inside the rate limit used to be dropped (``posted_id: null``), and lost
+    unless the agent sent it again. Now it waits its turn: posted, in order, once the limit allows.
+    A burst past the queue's cap is still refused. Fails while a rate-limited say is dropped."""
+    async with FakeAgent(quick.home, "k1") as a:
+        await a.join("#build", "tester")
+        first = await a.say("#build", "one")
+        assert first["posted_id"]
+        replies = [await a.say("#build", t) for t in ("two", "three", "four", "five")]
+        assert [r.get("queued") for r in replies[:3]] == [True, True, True]
+        assert replies[3]["posted_id"] is None and replies[3]["reason"] == "rate_limited"
+        assert "already wait" in replies[3]["note"]
+
+        def posted() -> list[str]:
+            msgs = quick.web.get("/api/rooms/build/messages").json()["messages"]
+            return [m["text"] for m in msgs if m["from"] == "tester" and m["kind"] == "chat"]
+
+        await wait_until(lambda: len(posted()) == 4, timeout=10)
+        assert posted() == ["one", "two", "three", "four"]  # five was refused, the rest in order

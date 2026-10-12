@@ -845,8 +845,8 @@ class Engine:
         """The rate limit on say() (§8.4): None if the say may go ahead, else the
         seconds until it may (and a ``rate_limited`` event). Replying to the
         human, or to a message that @mentions the sender, is exempt, as is a
-        member with priority items in context it hasn't answered yet. Nothing is
-        queued: the say is refused and the agent may try again."""
+        member with priority items in context it hasn't answered yet. A refused
+        say is queued by ``AgentService.say`` and posted when the limit allows."""
         exempt = rules.rate_limit_exempt(
             reply_to_kind=reply_to.sender_kind if reply_to is not None else None,
             reply_to_mentions=reply_to.mentions if reply_to is not None else (),

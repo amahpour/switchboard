@@ -22,6 +22,7 @@ import math
 import os
 import re
 import secrets
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -137,6 +138,10 @@ def version_claim(value: Any) -> str | None:
     return value if isinstance(value, str) and VERSION_RE.match(value) else None
 
 
+# a rate-limited say() waits its turn (§8.4); a burst past this many per member is refused
+MAX_QUEUED_SAYS = 3
+
+
 def cred_hash(cred: str) -> str:
     return hashlib.sha256(cred.encode()).hexdigest()
 
@@ -159,6 +164,8 @@ class AgentService:
         self._mcp_claims: dict[tuple[str, int, str], tuple[int, str | None, tuple[str, ...] | None]] = {}
         rec = os.environ.get("SWITCHBOARD_RECORD_PAYLOADS")
         self.record_dir = Path(rec) if rec and state.test_mode else None
+        # membership id -> its rate-limited says waiting their turn: (text, reply_to), oldest first
+        self._queued_says: dict[int, deque[tuple[str, int | None]]] = {}
         self.refresh_index()
 
     # ------------------------------------------------------------ plumbing
@@ -916,19 +923,80 @@ class AgentService:
             )
         reply_to = params.get("reply_to")
         target = self.svc.reply_target(room, reply_to)
-        now = self.state.clock.now()
-        retry = self.engine.check_say(p, m, target)  # the rate limit (DESIGN.md §8.4)
+        # the rate limit (DESIGN.md §8.4): a say it refuses waits in a short queue. One it lets
+        # through (a reply to a person, or to a mention of this agent) goes now, even ahead of it
+        retry = self.engine.check_say(p, m, target)
         if retry is not None:
             utext, bid, count, _more, acts = self.engine.pull(p, m, "say", 50)
             self.run(acts)
+            unread = {"unread_text": utext if count else None, "batch_id": bid, "count": count}
+            queue = self._queued_says.setdefault(m.id, deque())
+            if len(queue) >= MAX_QUEUED_SAYS:
+                return {
+                    "posted_id": None,
+                    "reason": "rate_limited",
+                    "retry_after_s": retry,
+                    "note": f"{len(queue)} of your messages already wait to be posted: this one wasn't",
+                    **unread,
+                }
+            queue.append((text, reply_to))
+            wait = retry + (len(queue) - 1) * self.cfg.delivery.rate_limit_s
+            if len(queue) == 1:
+                self._schedule_say(m.id, retry)
             return {
                 "posted_id": None,
-                "reason": "rate_limited",
-                "retry_after_s": retry,
-                "unread_text": utext if count else None,
-                "batch_id": bid,
-                "count": count,
+                "queued": True,
+                "post_in_s": round(wait, 1),
+                "note": f"rate limited: it's posted for you in about {wait:.0f} s; don't send it again",
+                **unread,
             }
+        msg = self._post_say(p, m, room, text, reply_to)
+        utext, bid, count, _more, acts = self.engine.pull(p, m, "say", 50, before_id=msg.id)
+        self.run(acts)
+        return {"posted_id": msg.id, "unread_text": utext if count else None, "batch_id": bid, "count": count}
+
+    def _say_wait(self, p: Participant) -> float | None:
+        """Seconds until ``p`` may say again by the rate limit alone (no event: a queued say's
+        own refusal was its event)."""
+        return rules.check_rate_limit(
+            p.last_say_at, self.state.clock.now(), self.cfg.delivery.rate_limit_s, False
+        )
+
+    def _schedule_say(self, membership_id: int, delay: float) -> None:
+        asyncio.get_running_loop().call_later(max(delay, 0.0), self._post_queued_say, membership_id)
+
+    def _post_queued_say(self, membership_id: int) -> None:
+        """Post the oldest queued say of this member once the rate limit allows, then schedule the
+        next. Dropped, not posted, if the member left (or its room closed) meanwhile."""
+        queue = self._queued_says.get(membership_id)
+        if not queue:
+            self._queued_says.pop(membership_id, None)
+            return
+        m = self.store.get_membership(membership_id)
+        p = self.store.get_participant(m.participant_id) if m is not None else None
+        room = self.store.room_by_id(m.room_id) if m is not None else None
+        if m is None or p is None or room is None or not m.active:
+            log.info("dropped %d queued say(s) of membership %d: it ended", len(queue), membership_id)
+            self._queued_says.pop(membership_id, None)
+            return
+        wait = self._say_wait(p)
+        if wait is not None:
+            self._schedule_say(membership_id, wait)
+            return
+        text, reply_to = queue.popleft()
+        target = self.store.get_message(reply_to) if reply_to is not None else None
+        self._post_say(p, m, room, text, reply_to if target is not None else None)
+        if queue:
+            self._schedule_say(membership_id, self.cfg.delivery.rate_limit_s)
+        else:
+            self._queued_says.pop(membership_id, None)
+
+    def _post_say(
+        self, p: Participant, m: Membership, room: Room, text: str, reply_to: int | None
+    ) -> Message:
+        """Post an agent's say: what it had pending counts as answered, and the message goes out
+        like any other (the delivery, the wake budget and the loop guard)."""
+        now = self.state.clock.now()
         self.store.mark_handled(m.id)
         self.store.update_participant(p.id, last_say_at=now)
         mentions = rules.parse_mentions(text, self.svc.mention_names(room))
@@ -949,9 +1017,7 @@ class AgentService:
             mentions=mentions,
             sender_host=p.host or None,
         )
-        utext, bid, count, _more, acts = self.engine.pull(p, m, "say", 50, before_id=msg.id)
-        self.run(acts)
-        return {"posted_id": msg.id, "unread_text": utext if count else None, "batch_id": bid, "count": count}
+        return msg
 
     def read(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
         p, m, _room = self._member(conn, params)
