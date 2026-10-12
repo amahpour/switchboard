@@ -1509,6 +1509,14 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 .back-btn:hover { background: var(--row-sel); }
 .back-btn .ic { width: 16px; height: 16px; stroke-width: 1.7; }
 .pane-view > .group-label { margin-bottom: -8px; }
+/* a private room's people (§44), the admin's list of them, and the dialog's checkbox */
+.private-rooms-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: calc(13px * var(--text-scale)); }
+.room-people { display: flex; flex-direction: column; gap: 8px; }
+.person-row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; }
+.person-row .m-name { flex: 1; min-width: 0; }
+.btn-ghost-sm { height: 26px; padding: 0 10px; font-size: calc(12px * var(--text-scale)); }
+.invite-btn { align-self: flex-start; margin: 2px 6px 0; }
+.app-dialog .check-row { display: flex; align-items: center; gap: 8px; font-weight: 500; }
 .group-label { padding: 0 6px; font-size: calc(11.5px * var(--text-scale)); font-weight: 600; color: var(--muted); }
 .sheet-grip { display: block; flex-shrink: 0; align-self: center; width: 36px; height: 5px; margin-top: 7px; border-radius: 3px; background: var(--quote-rule); }
 

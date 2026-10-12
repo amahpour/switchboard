@@ -637,13 +637,16 @@ class AgentService:
                     f"members on {host} may join only {allowed}"
                     " (the rooms of its remotes.toml entry on the desktop)",
                 )
+        # whose agent this is (§44.3): a private room takes only its own people's agents, and
+        # says "no such room" to any other, as it does to the people who aren't in it
+        person = self.svc.host_person(host)
         try:
             room = self.svc.room(raw_room)
         except ServiceError as e:
             if e.code == "not_found":
                 n = raw_room.strip().lower()
                 n = n if n.startswith("#") else "#" + n
-                if self.store.closed_rooms(n):
+                if any(self.svc.visible(r, person) for r in self.store.closed_rooms(n)):
                     raise ServiceError(
                         "not_found", f"{n} was closed by {self.cfg.human_name}: ask your user to reopen it"
                     ) from None
@@ -651,6 +654,10 @@ class AgentService:
                     "not_found", f"no such room {clean(n)[:40]}: ask your user to create it"
                 ) from None
             raise
+        if not self.svc.visible(room, person):
+            raise ServiceError(
+                "not_found", f"no such room {clean(room.name)[:40]}: ask your user to create it"
+            )
         name = params.get("screen_name")
         name = name.strip().lower().lstrip("@") if isinstance(name, str) else ""
         if not SCREEN_NAME_RE.match(name):
@@ -803,7 +810,7 @@ class AgentService:
             guidance=adapter.join_guidance(p, room.name),
             test_mode=self.state.test_mode,
             rejoined=rejoined,
-            people=self.svc.people_names(),
+            people=self.svc.room_humans(room),
             room_rules=room.rules_text,
         )
         self.store.mark_rules_seen(m.id, room.rules_version)
@@ -841,7 +848,7 @@ class AgentService:
     def who(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
         _p, _m, room = self._member(conn, params)
         rows = self.svc.member_rows(room.id)
-        humans = self.svc.people_names()
+        humans = self.svc.room_humans(room)
         who = (
             f"{envelope._word(humans[0])} (your user, kind=human)"
             if len(humans) == 1

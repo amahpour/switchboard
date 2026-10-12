@@ -75,6 +75,7 @@ class WsSubscriber(Subscriber):
         super().__init__()
         # a hello may replay up to 500 lines for each of 64 rooms
         self.q = asyncio.Queue(maxsize=WS_QUEUE_MAX)
+        self.person: int | None = None  # whose page (0: the owner), for private rooms (§44)
 
     def format(self, kind: str, room: str | None, data: dict[str, Any]) -> Any:
         if kind in ("rooms", "remotes", "machines"):
@@ -138,6 +139,12 @@ class Hub:
         """A room's review board after a move, or None once it's closed (§37.5); the web UI
         subscribes to it."""
         return self.publish("review", room, {"board": board})
+
+    def unsubscribe_person(self, room: str, person: int) -> None:
+        """A person left a private room (§44): their pages stop getting its frames at once."""
+        for sub in self.subs:
+            if isinstance(sub, WsSubscriber) and sub.person == person:
+                sub.rooms.discard(room)
 
     def rooms_changed(self, names: list[str]) -> int:
         return self.publish("rooms", None, {"rooms": names})
