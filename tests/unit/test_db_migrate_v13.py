@@ -24,13 +24,13 @@ def test_people_gain_empty_first_and_last_names_with_a_checked_backup(tmp_path: 
     )
     con.commit()
     assert db.schema_version(con) == 12
-    before = db.row_counts(con, db.TABLES)
+    before = db.row_counts(con, db.V14_TABLES)
     con.close()
     os.chmod(p, 0o600)
 
     con = db.open_db(p)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 14
-    assert db.row_counts(con, db.TABLES) == before
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 15
+    assert db.row_counts(con, db.V14_TABLES) == before
     row = con.execute("SELECT name, email, first_name, last_name FROM people").fetchone()
     assert tuple(row) == ("bob", "bob@example.com", None, None)
     assert p.with_name(p.name + ".v12.bak").exists()

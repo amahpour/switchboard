@@ -493,10 +493,14 @@ class RemoteLink:
         """The rooms named in the welcome frame (the satellite only shows them). With ``"*"``
         the open rooms, since the frame format allows room names only (at most 64). A closed
         room's name fails ROOM_RE and a satellite refuses the whole frame (``bad_rooms``):
-        ``list_rooms`` leaves them out, and the filter is a second guard (§28.8)."""
+        ``list_rooms`` leaves them out, and the filter is a second guard (§28.8). A private room
+        is named only to a machine whose person is in it (§44.3)."""
         if ANY_ROOM not in self.entry.rooms:
             return list(self.entry.rooms)
-        return [r.name for r in self.st.store.list_rooms() if ROOM_RE.fullmatch(r.name)][:64]
+        # a private room only for a machine whose person is in it (§44): its name stays theirs
+        svc, person = self.st.service, self.st.service.host_person(self.entry.name)
+        rooms = self.st.store.list_rooms()
+        return [r.name for r in rooms if ROOM_RE.fullmatch(r.name) and svc.visible(r, person)][:64]
 
     def notice(self, text: str, level: str = "info") -> None:
         """A notice in each of the remote's rooms that exists."""

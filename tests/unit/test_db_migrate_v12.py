@@ -28,13 +28,13 @@ def test_google_emails_become_the_accounts_emails_with_a_checked_backup(tmp_path
     con.execute("INSERT INTO meta(key, value) VALUES('owner_google_email', 'alice@example.com')")
     con.commit()
     assert db.schema_version(con) == 11
-    before = db.row_counts(con, db.TABLES)
+    before = db.row_counts(con, db.V14_TABLES)
     con.close()
     os.chmod(p, 0o600)
 
     con = db.open_db(p)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 14
-    assert db.row_counts(con, db.TABLES) == before
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 15
+    assert db.row_counts(con, db.V14_TABLES) == before
     assert dict(con.execute("SELECT name, email FROM people").fetchall()) == {
         "bob": "bob@example.com",
         "carol": None,
