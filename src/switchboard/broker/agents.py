@@ -876,13 +876,30 @@ class AgentService:
         return {"room": room.name, "text": "\n".join(lines), "count": len(rows)}
 
     def review(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
-        """One move on the room's review board (DESIGN.md §37): never a chat message, so it
-        wakes no one and isn't rate-limited like ``say``; the board caps its own size."""
-        _p, m, room = self._member(conn, params)
+        """One move on the room's review board (DESIGN.md §37). A move that's another agent's to
+        answer (a raise, a concession to another owner, a fix) is posted as this agent's message
+        naming them, so it wakes them as a say() would, under the room's budget and loop guard;
+        any other move is a notice that wakes no one. Not rate-limited like ``say``: the board
+        caps its own size."""
+        p, m, room = self._member(conn, params)
         try:
-            return self.state.boards.agent(room, m.screen_name, params)
+            res = self.state.boards.agent(room, m.screen_name, params)
         except ReviewError as e:
             raise ServiceError("bad_request", str(e)) from None
+        handoff = res.pop("handoff", None)
+        if handoff is not None:
+            self.svc._post(
+                room,
+                sender_name=m.screen_name,
+                sender_kind="agent",
+                sender_harness=p.harness,
+                sender_membership_id=m.id,
+                via="mcp",
+                text=handoff["text"][: self.cfg.delivery.max_msg_chars],
+                mentions=handoff["mentions"],
+                sender_host=p.host or None,
+            )
+        return res
 
     def say(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
         p, m, room = self._member(conn, params)

@@ -1,9 +1,11 @@
 """A review board worked through the real ``review`` tool by two scripted agents against an
-in-process broker (#80, DESIGN.md §37): moves are notices that wake no one, the board is the
-record, and every refusal says what to fix."""
+in-process broker (#80, DESIGN.md §37): a move that's another agent's to answer is the mover's
+message to them, any other is a notice that wakes no one, the board is the record, and every
+refusal says what to fix."""
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import sqlite3
 from pathlib import Path
@@ -74,13 +76,18 @@ async def test_a_board_from_open_to_settled(broker: InProcBroker) -> None:
     notices = [m["text"] for m in q(broker, "SELECT text FROM messages WHERE kind='notice' ORDER BY id")]
     assert [n for n in notices if "F1" in n or "Q1" in n or "board" in n] == [
         f"codex-1 opened a review board for {PR} at abc1234",
-        "codex-1 raised F1: discount applied after tax",
         "claude-1 asked Q1: Discount before or after tax?",
         "claude-1 conceded F1, owner claude-1",
-        "claude-1 fixed F1 in def5678",
     ]
-    # no move is a chat message, so none was ever delivered to anyone
-    assert q(broker, "SELECT COUNT(*) FROM messages WHERE kind='chat'")[0][0] == 0
+    # the raise was the author's to answer and the fix the raiser's to check: each was the
+    # mover's own message naming them, so it was delivered; the other moves woke no one
+    chat = q(broker, "SELECT sender_name, text, mentions FROM messages WHERE kind='chat' ORDER BY id")
+    assert [(r["sender_name"], r["text"]) for r in chat] == [
+        ("codex-1", 'Review board: F1 raised: discount applied after tax. @claude-1: concede or contest it.'
+                    ' review(action="show") shows the board.'),
+        ("claude-1", 'Review board: F1 fixed in def5678. @codex-1: check the fix.'
+                     ' review(action="show") shows the board.'),
+    ]  # fmt: skip
     rows = q(broker, "SELECT kind, n, state, owner, commit_sha FROM review_items ORDER BY kind, n")
     assert [tuple(r) for r in rows] == [
         ("finding", 1, "fixed", "claude-1", "def5678"),
@@ -199,6 +206,7 @@ async def test_a_person_answers_rules_and_closes_from_the_web(broker: InProcBrok
 
     chat = q(broker, "SELECT sender_kind, text FROM messages WHERE kind='chat' ORDER BY id")
     assert [(r["sender_kind"], r["text"][:21]) for r in chat] == [
+        ("agent", "Review board: F1 rais"),  # the raise, the author's to answer
         ("human", "Review board: Q1 answ"),
         ("human", "Review board: F1 conc"),
     ]
@@ -274,7 +282,9 @@ async def test_post_waits_for_a_settled_board_and_asks_each_owner_once(broker: I
             text = (await author.read("#build"))["text"]
             assert "The review board in this room is settled." in text
             assert "- @claude-1: F1 (fixed in 9a1b2c3), Q1 (option 0)" in text
-            assert PR not in text and "expired codes" not in text  # no agent's text as alice's (#177)
+            # no agent's text as alice's (#177); codex-1's own raise names its title as codex-1
+            mine = [line for line in text.splitlines() if " from=alice " in line]
+            assert mine and not any(PR in line or "expired codes" in line for line in mine)
             r = await reviewer.call("review", room="#build", action="show")
             assert r["board"].splitlines()[0] == f"Review of {PR}: posted by alice: post your items now, once"
     finally:
@@ -421,3 +431,16 @@ async def test_a_cards_links_and_history_come_with_the_board(broker: InProcBroke
             assert all(isinstance(h["at"], float) for h in item["history"])
     finally:
         web.close()
+
+
+async def test_a_raise_wakes_the_agent_listening_in_wait(broker: InProcBroker) -> None:
+    """The author waits in wait(), as an idle agent does; the reviewer only raises a finding on
+    the board, and says nothing. Fails while a move is only a notice: the wait times out."""
+    async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
+        await author.join("#build", "claude-1")
+        await reviewer.join("#build", "codex-1")
+        await reviewer.call("review", room="#build", action="open", url=PR)
+        listening = author.wait_task("#build", 20)
+        await reviewer.call("review", room="#build", action="raise", title="discount applied after tax")
+        got = await asyncio.wait_for(listening, 15)
+        assert "F1 raised: discount applied after tax" in (got.get("text") or "")

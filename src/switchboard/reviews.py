@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
@@ -271,6 +272,32 @@ def agent_move(item: Item, move: str, actor: str) -> str:
     if move == "drop" and actor != item.raised_by:
         raise ReviewError(f"only {item.raised_by}, who raised {item.label}, or a person can drop it")
     return to
+
+
+def handoff(item: Item, actor: str, agents: Sequence[str]) -> tuple[tuple[str, ...], str] | None:
+    """After an agent's move on ``item`` (its state now), who has to act next and the line
+    that tells them, or None when it's nobody's move or a person's (§37.4). A raised finding
+    is the other agents' to concede or contest; a finding conceded to another agent is that
+    owner's to fix; a fix is its raiser's to check. Questions and contested findings wait for
+    a person, who sees them on the page, and a move that leaves the next step with the mover
+    wakes nobody. ``agents``: the room's active agents."""
+    show = 'review(action="show") shows the board.'
+    if item.kind != "finding":
+        return None
+    if item.state == "raised":
+        who = tuple(a for a in agents if a != actor)
+        verb, then = f"raised: {item.title}", "concede or contest it"
+    elif item.state == "conceded":
+        who = (item.owner,) if item.owner and item.owner != actor and item.owner in agents else ()
+        verb, then = f"conceded, owner {item.owner}", "it's yours to fix"
+    elif item.state == "fixed":
+        who = (item.raised_by,) if item.raised_by != actor and item.raised_by in agents else ()
+        verb, then = f"fixed in {item.commit[:12]}", "check the fix"
+    else:
+        return None
+    if not who:
+        return None
+    return who, f"Review board: {item.label} {verb}. {' '.join('@' + a for a in who)}: {then}. {show}"
 
 
 def person_move(item: Item, move: str) -> str:

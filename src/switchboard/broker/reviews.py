@@ -1,8 +1,10 @@
 """The broker side of a review board (DESIGN.md §37): applies agents' moves through the
 ``review`` tool, keeps the rows, and tells the room in one short line per move.
 
-The rules are in ``switchboard.reviews`` (pure); the SQL in ``store.py``. A move never posts a
-chat message, so it never wakes anyone: the line is a notice, and the board is read on demand
+The rules are in ``switchboard.reviews`` (pure); the SQL in ``store.py``. A move that hands the
+next step to another agent (``reviews.handoff``: a raise, a concession to another owner, a fix)
+comes back with the line that wakes them, which ``AgentService.review`` posts as the mover's own
+message; any other move is a notice, which wakes no one. The board is read on demand
 (``review(action="show")``) or, for a person, in the web UI.
 """
 
@@ -55,7 +57,8 @@ class Boards:
     # ------------------------------------------------------------ agent moves
     def agent(self, room: Room, actor: str, params: dict[str, Any]) -> dict[str, Any]:
         """One ``review`` tool call from the member ``actor`` of ``room``. Returns the board as
-        text (what the agent reads), or raises ReviewError with what to fix."""
+        text (what the agent reads), with ``handoff`` (who must act next, and the line that tells
+        them) when the move is someone else's to answer; or raises ReviewError with what to fix."""
         action = params.get("action")
         if action not in ACTIONS:
             raise ReviewError(f"action must be one of: {', '.join(ACTIONS)}")
@@ -69,8 +72,7 @@ class Boards:
         if action in ("raise", "ask"):
             item = self._add(rv, actor, action, params)
             verb = "raised" if item.kind == "finding" else "asked"
-            self._notice(room, f"{actor} {verb} {item.label}: {item.title}")
-            return self._shown(room, touched=item.label)
+            return self._told(room, item, actor, f"{actor} {verb} {item.label}: {item.title}")
         kind, n = reviews.parse_label(params.get("item"))
         item = self.store.review_item(rv["id"], kind, n)
         if item is None:
@@ -96,8 +98,21 @@ class Boards:
             "fixed": f" in {fields.get('commit_sha', '')[:12]}",
             "contested": ": a person decides",
         }.get(to, "")
-        self._notice(room, f"{actor} {action_past(action)} {item.label}{tail}")
-        return self._shown(room, touched=item.label)
+        moved = self.store.review_item(rv["id"], kind, n)
+        assert moved is not None
+        return self._told(room, moved, actor, f"{actor} {action_past(action)} {item.label}{tail}")
+
+    def _told(self, room: Room, item: reviews.Item, actor: str, notice: str) -> dict[str, Any]:
+        """The board after ``actor``'s move on ``item``, and how the room hears of it: the line
+        for whoever acts next (posted by the caller as the mover's message, so it wakes them),
+        or the notice when that's nobody (§37.4)."""
+        handoff = reviews.handoff(item, actor, self.store.active_names(room.id))
+        if handoff is None:
+            self._notice(room, notice)
+        out = self._shown(room, touched=item.label)
+        if handoff is not None:
+            out["handoff"] = {"mentions": list(handoff[0]), "text": handoff[1]}
+        return out
 
     def _open(self, room: Room, actor: str, params: dict[str, Any]) -> dict[str, Any]:
         url = reviews.url(params.get("url"))

@@ -302,3 +302,37 @@ def test_an_items_history_is_who_did_what_in_order() -> None:
         {"by": "claude-1", "did": "asked it", "at": 5.0},
         {"by": "alice", "did": "answered it", "at": 9.0},
     ]
+
+
+AGENTS = ("claude-1", "codex-1")
+
+
+def test_a_raised_finding_is_the_other_agents_to_answer() -> None:
+    """Fails while a raise wakes no one: the author listening in wait() never hears of it."""
+    who, text = reviews.handoff(finding(), "codex-1", AGENTS) or ((), "")
+    assert who == ("claude-1",)
+    assert text == (
+        "Review board: F1 raised: off by one. @claude-1: concede or contest it."
+        ' review(action="show") shows the board.'
+    )
+
+
+def test_a_concession_wakes_another_owner_and_a_fix_wakes_its_raiser() -> None:
+    conceded = finding("conceded", owner="claude-1")
+    assert reviews.handoff(conceded, "codex-1", AGENTS) is not None
+    assert reviews.handoff(conceded, "codex-1", AGENTS)[0] == ("claude-1",)  # type: ignore[index]
+    assert reviews.handoff(conceded, "claude-1", AGENTS) is None  # the owner conceded it: theirs already
+    fixed = replace(finding("fixed", owner="claude-1"), commit="def5678abcdef0123")
+    who, text = reviews.handoff(fixed, "claude-1", AGENTS) or ((), "")
+    assert who == ("codex-1",) and "F1 fixed in def5678abcde. @codex-1: check the fix." in text
+
+
+def test_a_person_s_items_and_a_move_nobody_answers_wake_no_agent() -> None:
+    """Questions and contested findings are a person's (the page shows them); a drop ends a
+    finding; an agent no longer in the room isn't woken."""
+    assert reviews.handoff(question(), "codex-1", AGENTS) is None
+    assert reviews.handoff(finding("contested"), "claude-1", AGENTS) is None
+    assert reviews.handoff(finding("dropped"), "codex-1", AGENTS) is None
+    assert reviews.handoff(finding(), "codex-1", ("codex-1",)) is None  # alone in the room
+    gone = replace(finding("fixed", owner="claude-1"), commit="def5678")
+    assert reviews.handoff(gone, "claude-1", ("claude-1",)) is None  # the raiser left
