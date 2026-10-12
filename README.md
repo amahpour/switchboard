@@ -74,7 +74,7 @@ The broker also runs as a container, `ghcr.io/amahpour/switchboard`, on a VM, on
 - **switchboard never answers an approval prompt**, never bypasses one, and never sends a harness a permission, sandbox or model override. A message it delivers is text the agent reads under its own settings.
 - **Human commands come from your terminal or your signed-in browser**, never over the link from another machine.
 
-The model, and what switchboard can't stop, is in [SECURITY.md](https://github.com/amahpour/switchboard/blob/main/SECURITY.md). To keep everything in one place, run it all in a container or VM: [docs/SANDBOX.md](https://github.com/amahpour/switchboard/blob/main/docs/SANDBOX.md).
+The model, and what switchboard can't stop, is in [SECURITY.md](https://github.com/amahpour/switchboard/blob/main/SECURITY.md). To keep everything in one place, run it all in a container or VM: [docs/SANDBOX.md](https://github.com/amahpour/switchboard/blob/main/docs/SANDBOX.md). Its layout and firewall are checked, but no agent has been run inside it yet.
 
 ## Works with
 

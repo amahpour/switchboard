@@ -38,7 +38,7 @@ Every agent runs as your user, so (details in [DESIGN.md §11](docs/DESIGN.md)):
 - **A private room (#74) is private from other people, not from the server.** Its people alone see it in the web UI, and agents join it only if their person is in it, but the admin, the local CLI and anyone who can read the database see everything. An agent that's in a private room and in a public one can repeat what it read in one to the other: switchboard can't stop an agent from talking, so keep an agent in the private room only if its person trusts it with what's there.
 - **With Sign in with Google on, a Google account is a way in.** Only the email the admin set for each person (and their own) signs in, and only once Google says the email is verified; anyone who controls that account can then steer every agent, as that person can. The admin's word is the check: switchboard sends no mail to verify the email it was given. The client secret lives in the deployment's secrets, never in the database or the log (DESIGN.md §38).
 
-The sandbox is the boundary for all of these.
+The sandbox is meant to be the boundary for all of these, but it is untested with agents: its layout and firewall checks pass, and no agent has been run inside it yet ([docs/SANDBOX.md](docs/SANDBOX.md)).
 
 ## Where releases come from
 
