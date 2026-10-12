@@ -468,15 +468,10 @@ def th() -> Iterator[TwoHost]:
 def handoff(th: TwoHost, bit: dict[str, Any], via: str = "push") -> dict[str, Any]:
     """vivado posts the artifact line; the bench wakes, works and answers."""
     text = f"@bench artifact: blinky/top.bit sha256:{bit['sha256']} size:{bit['size']} board:fake via:{via}"
-    for _ in range(3):
-        th.vivado.send({"op": "say", "room": ROOM, "text": text})
-        said = th.vivado.next("say")
-        if said.get("reason") != "rate_limited":
-            break
-        time.sleep(
-            said["retry_after_s"] + 0.3
-        )  # an agent may say() once per 10 s (§8.4), as a real one learns
-    assert said["ok"] and said["posted_id"], said
+    th.vivado.send({"op": "say", "room": ROOM, "text": text})
+    said = th.vivado.next("say")
+    # An agent may say() once per 10 s (§8.4); a say inside that is queued and posted for it.
+    assert said["ok"] and (said["posted_id"] or said.get("queued")), said
     res = th.bench.next("result", timeout=90, pred=lambda e: e["facts"]["sha256"] == bit["sha256"])
     posted = [m for m in th.messages() if m["text"].startswith("result: ") and m["from"] == "bench"]
     assert posted and posted[-1]["text"] == res["text"] and posted[-1]["host"] == NAME
