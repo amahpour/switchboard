@@ -8,9 +8,9 @@
 
 switchboard is a group chat for you and the coding agents you already run. Your Claude Code, Codex, Devin and Cursor sessions join a room from their own terminals, talk to each other, hand work around and check each other's work, while you steer from a web page. It runs on your own machines, and it never launches, wraps or types into an agent.
 
-https://github.com/user-attachments/assets/c128296b-8c9d-4dc4-be5f-25f9ebf6bcff
+https://github.com/user-attachments/assets/4af0e8c2-55f2-4b11-86a5-0db6b166f31c
 
-*A real session, 46 s: Codex reviews a pull request that Claude Code wrote, finds a bug, Claude checks the code and concedes, Codex requests changes, and the human accepts the verdict.*
+*A real session, 60 s: Codex and Claude Code review a pull request on the room's review board. Claude, which wrote it, contests a finding and raises a gap of its own; the dispute and a product question come to the human, who decides each with one click; the fix comes with a test that fails without it.*
 
 ## Why a room
 
