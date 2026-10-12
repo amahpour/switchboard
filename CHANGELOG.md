@@ -2,6 +2,39 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.23.0 (2026-10-12)
+
+### Upgrading
+
+- **The database moves to schema 15** at the first start, after a checked backup: rooms gain a `private` flag (every existing room stays public) and a table of a private room's people. An older release refuses the migrated database, so rolling back means restoring that backup (`switchboard.db.v14.bak`).
+
+### Added
+
+- **`/review <url> [note]` starts a review board.** Type it in a room: it opens the room's board for that pull request or merge request, shows it to you, and sends one message from you asking every agent in the room to review it on the board, with your note. Before, only an agent could open a board. The old `/review <reviewer> <author>` form, removed in 0.4, now gets the new form's usage instead.
+- **The review board names the agents that can't use it.** Each agent's switchboard now tells the broker which tools it has, and the board shows a line for any agent without the `review` tool, or whose switchboard is too old to say. Before, such an agent argued in chat, and the board looked stuck. Upgrade switchboard where that agent runs, then restart its session.
+- **Private rooms on a hosted broker.** Tick **Private** in **New room** for a room only the people you add see: its name, history and agents. Its **People** list under Members adds and removes people; an agent joins only if its person is in the room, and leaves with them. Everyone else sees no such room. The admin sees each private room's name and people in **Admin > People**, never what's in it.
+
+### Changed
+
+- **The review board's header names the pull request.** A GitHub pull request or a GitLab merge request shows as the forge's logo, the repository and the number (`example-org/shop #7`, `group/shop !12`), linked, with the short commit after it. Before, it was the bare URL, cut short on a phone. Any other URL shows as before.
+- **Settings shows when Profile or New rooms has unsaved changes.** Each group now has Discard and Save in a bar that stays visible while its fields scroll. Switching groups keeps drafts, and Discard resets only the current group.
+- **The review board is three lanes, and a card links out.** The lanes are Agents working, Needs you and Settled, in one row; dropped items sit in Settled, muted, with their reason. A card shows what's wrong, a link to its lines in the pull request's or merge request's own diff, a link to the fix's commit, and who did what, and a contested finding shows both sides side by side. Before, there were five lanes, the person's on a row of its own, and a card's detail was a wall of text.
+- **The Members list explains its badges itself.** The paragraph of help under the list is gone. Hovering a delivery tier says how switchboard wakes that agent (for example "Claude Code's own inbox: switchboard wakes it at once"), and the Inspector says it under the badge, where a phone can read it. The approval flags already explain themselves on hover, focus or tap.
+
+### Fixed
+
+- **A long pull request URL wraps in the review board's dialogs.** The Post and Close confirms name the PR or MR, and a long link without hyphens, such as a GitLab merge request in a subgroup, ran off the dialog's edge and scrolled it sideways. Every dialog's title and text now wrap a long URL or path.
+- **Opening People no longer interrupts typing in a name field.** Its first refresh completes before the editable cards appear, so a slow response cannot replace a field while it is being edited.
+- **Copy feedback no longer interrupts edits in People.** When its brief "Copied" label clears, a name or email field being edited keeps its text selection and focus.
+- Agents can no longer join under a person's name on a hosted broker. Adding a person also refuses a name held by an agent or used by one in the past day.
+- Password sign-in limits now follow the account across its aliases and keep their backoff after the first wait. Choosing a common password is refused with a clear message.
+- **`switchboard report` no longer counts review-board moves as catch-up requests.** Every move on a board (open, raise, concede, fix, a person's answer, close) records an event of the kind 0.2.0's `/review` command used, so the "/catchup" row counted each one. It counts only real requests now.
+- **A loop-guard pause no longer tells agents their user paused the room.** An agent waiting in a room the loop guard stopped was told "#room is paused by your user", and could apologize for, or report, a pause nobody made. It now says the loop guard stopped the room after so many agent messages in a row. A pause you make with `/pause` reads as before.
+- **A copy that the browser refuses says so.** Every copy button (the join line, an invite, a machine's commands, the Inspector's session id and poke command, a code block in a message) used to stay as it was when the clipboard write was refused, so you pasted whatever was on the clipboard before. It now says "Couldn't copy" and selects the text, so you can copy it by hand. The session id is shown in full first.
+- **A stranger's wrong passwords no longer lock out a browser that has signed in before or pause every password sign-in.** Browsers that have signed in before have their own guessing limits and their own password worker, a flood of strangers' tries is turned away before it costs a password check, and an existing session can confirm its password even while strangers guess its account.
+- **The review board moves while agents wait.** A finding raised against an agent, a finding conceded to another agent to fix, and a fix waiting for its raiser's check now wake the agent who acts next, as one short message from the agent that moved. Before, every move was a notice, so an agent listening for the room never heard about a finding raised against it, and a review kept on the board stood still.
+- **A long answer on the review board wraps.** A question's options are sentences, and a long one ran past the card's detail and was cut off, so you couldn't read the choice you were making. Each option now takes its own row and wraps.
+
 ## 0.22.0 (2026-10-06)
 
 ### Changed
