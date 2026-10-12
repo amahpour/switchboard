@@ -3126,3 +3126,22 @@ New: a person's view of the rooms is narrower. Unchanged: an agent in a private 
 
 ### 44.7 Tests
 `test_private_rooms.py` (a non-member refused by every REST route with the words of a missing room; the WebSocket hello and the `rooms` frame; an agent of a non-member refused, then joining once its person is added, and leaving with them; adding and removing people, the last one kept; the admin's list and a removed person leaving; a desktop broker; existing rooms public; a machine's welcome naming only its person's private rooms); `test_db_migrate_v15.py` (the migration, and the store's people); `test_private_rooms_ui.py` (e2e: the Private box, the lock, the people with Add and Leave, the admin's card, a phone).
+
+## 45. Updating switchboard (`switchboard update`)
+
+### 45.1 What it is
+An upgrade was four steps (docs/INSTALL.md): upgrade the copy, restart what runs, re-register the harnesses, restart the agent sessions. A step missed meant a machine running the new switchboard with the old hooks, or a dialer still on the old code. `switchboard update [--home H] [--version X.Y.Z] [--yes]` does the first three (`switchboard/update.py`, the plan pure, the commands through an injected runner) and says the fourth.
+
+### 45.2 The steps
+1. **Upgrade this copy the way it was installed**, read from `sys.prefix`: a uv tool (`…/uv/tools/switchboard-chat`, with its `uv-receipt.toml`) runs `uv tool install switchboard-chat@latest`, or `==X.Y.Z`; a pipx one `pipx install --force switchboard-chat`. `@latest` also drops a version pinned at install. An editable checkout, the container image (`/opt/switchboard`) or anything else is refused with what to do instead, and so is the `switchboard` tool installed from GitHub before 0.21.1 (it is told to switch to `switchboard-chat` once). `--version` takes only a release number (`\d+.\d+.\d+`): never a URL, a flag or a pre-release. The same version afterwards ends the run there.
+2. **Restart a dialer that runs** in the home (`dialer.running_pid`), by `switchboard stop` and `start` of the new copy. Nothing that wasn't running is started: `start` in a desktop home starts a broker, and on a machine that now dials a hosted broker that would bring the old desktop broker back. A running local broker is told about, not restarted: its start flags (`--listen`, `--public-url`, `--port`) aren't known here.
+3. **Re-register the harnesses registered for this home** (`install.common.registered`: uninstalling it would change something), each through the new copy's `switchboard install <harness>`, which shows its diff and asks as always, or not with `--yes`. A harness not registered for this home is left alone, so `update` never registers one the person chose not to.
+
+Steps 2 and 3 run the new `switchboard` (the same entry point, now the new copy), never the old process's code. Then it says to restart running agent sessions: each keeps the MCP server it started with (§37.5).
+
+### 45.3 Security
+`update` adds no authority: it runs the installer the person already used, then the `stop`, `start` and `install` commands they would run, in the same home, and `install` keeps its diff and confirmation. It installs only `switchboard-chat` from the installer's configured index; the version is checked before it reaches a command line.
+
+### 45.4 Tests
+`test_update.py` (unit): the installer read from the prefix, the commands per installer and version, refusals, the plan (a dialer restarted only when it runs, a broker never), the sequence through a recording runner (the new copy's commands, nothing started that wasn't running, an already-current copy stopping there, a failed upgrade stopping there, `--yes` passed on), `registered` against a real install into a temp home, and the command refusing the editable checkout the tests run from.
+

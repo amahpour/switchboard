@@ -32,6 +32,7 @@ An agent's normal replies are never posted, only `say()`. Its text starting with
 | Command | What it does |
 |---|---|
 | `switchboard status` | Is the broker up, its version and build commit, which port, which rooms, the Codex link |
+| `switchboard update [--version X.Y.Z] [--yes]` | Upgrade switchboard, restart this home's dialer if one runs, and re-register the harnesses registered for it ([docs/INSTALL.md](INSTALL.md)). It starts nothing that wasn't running |
 | `switchboard login [--open]` | A fresh one-time sign-in link |
 | `switchboard logout --all` | Sign out every browser |
 | `switchboard rooms` | List open rooms |

@@ -760,6 +760,15 @@ class _Run:
     rc: int | None = None
 
 
+def registered(harness: str, home: str, user_home: Path | None = None) -> bool:
+    """True if ``harness`` is registered with switchboard for ``home``: uninstalling it would
+    change something (``switchboard update`` re-registers exactly these). Reads, never writes."""
+    try:
+        return _module(harness).unplan(user_home or Path.home(), home, run_commands=False).changed
+    except InstallError:
+        return False
+
+
 def cli_on_path(harness: str) -> str | None:
     for name in CLI_NAMES[harness]:
         if shutil.which(name):

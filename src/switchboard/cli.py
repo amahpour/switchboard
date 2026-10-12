@@ -870,6 +870,61 @@ def cmd_install(args: argparse.Namespace) -> int:
     return common.run_install(args)
 
 
+def cmd_update(args: argparse.Namespace) -> int:
+    """``switchboard update`` (DESIGN.md §45): upgrade this copy, restart what already runs in the
+    home, re-register the harnesses registered for it."""
+    import shutil
+
+    from switchboard import __version__, update
+    from switchboard.install import common
+
+    paths = _paths(args)
+    home = str(paths.home)
+    try:
+        inst = update.installer(sys.prefix, common.editable_install())
+        tool = update.which(inst.kind)
+    except update.UpdateError as e:
+        print(f"switchboard: {e}", file=sys.stderr)
+        return EXIT_ERR
+
+    def state() -> update.Plan:
+        satellite = _satellite_home(args)
+        dialing = satellite and _dialing(args) is not None
+        dialer_running = broker_running = False
+        if dialing:
+            from switchboard.remote.dialer import running_pid
+
+            dialer_running = running_pid(paths) is not None
+        elif not satellite:  # an SSH satellite has nothing of its own running: the desktop dials it
+            from switchboard.mcp.client import ping
+
+            broker_running = ping(paths.sock, timeout=1.0) is not None
+        return update.plan(
+            dialing=dialing,
+            dialer_running=dialer_running,
+            broker_running=broker_running,
+            registered=[h for h in common.HARNESSES if common.registered(h, home)],
+        )
+
+    # the same entry point, which the upgrade repoints at the new copy
+    exe = sys.argv[0] if os.path.basename(sys.argv[0]) == "switchboard" else shutil.which("switchboard")
+    try:
+        return update.run(
+            home=home,
+            home_given=_home_given(args),
+            version=args.to_version,
+            yes=args.yes,
+            current=__version__,
+            inst=inst,
+            tool=tool,
+            exe=exe or "switchboard",
+            state=state,
+        )
+    except update.UpdateError as e:
+        print(f"switchboard: {e}", file=sys.stderr)
+        return EXIT_ERR
+
+
 def cmd_uninstall(args: argparse.Namespace) -> int:
     from switchboard.install import common
 
@@ -1044,6 +1099,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="allow an editable/source install of switchboard (agents could edit its code)",
     )
     s.set_defaults(func=cmd_install)
+
+    s = sub.add_parser(
+        "update",
+        parents=[common],
+        help="upgrade switchboard, restart what already runs in this home, re-register its harnesses",
+    )
+    s.add_argument(
+        "--version", dest="to_version", metavar="X.Y.Z", default=None, help="a release (default: the newest)"
+    )
+    s.add_argument("--yes", action="store_true", help="re-register the harnesses without asking")
+    s.set_defaults(func=cmd_update)
 
     s = sub.add_parser(
         "uninstall",
