@@ -161,6 +161,7 @@
         let name = null;
         let validName = null;
         let rulesInput = null;
+        let privateBox = null;
         if (options.kind === 'room') {
           const label = el('label', null, 'Name');
           label.setAttribute('for', 'app-dialog-name');
@@ -174,6 +175,15 @@
           error.id = 'app-dialog-error';
           error.setAttribute('role', 'status');
           form.append(label, name, error);
+          if (state.me && state.me.signin) {
+            // a hosted broker with people (§44): a room only the people you add see
+            const row = el('label', 'check-row');
+            privateBox = el('input');
+            privateBox.type = 'checkbox';
+            privateBox.id = 'app-dialog-private';
+            row.append(privateBox, el('span', null, 'Private: only the people you add see it'));
+            form.append(row);
+          }
           validName = function () {
             const value = String(name.value || '').trim().toLowerCase();
             const room = value.startsWith('#') ? value : '#' + value;
@@ -240,6 +250,19 @@
           hopsInput.addEventListener('input', validWake);
           form.append(budgetLabel, budgetInput, hopsLabel, hopsInput, wakeWarn, wakeError);
         }
+        let personPick = null;
+        if (options.kind === 'person') {
+          const label = el('label', null, 'Person');
+          label.setAttribute('for', 'app-dialog-person');
+          personPick = el('select');
+          personPick.id = 'app-dialog-person';
+          for (const n of options.people) {
+            const o = el('option', null, n);
+            o.value = n;
+            personPick.append(o);
+          }
+          form.append(label, personPick);
+        }
         const buttons = el('div', 'app-dialog-buttons');
         const cancel = btn('btn', 'Cancel');
         cancel.id = 'app-dialog-cancel';
@@ -273,9 +296,11 @@
           form.addEventListener('submit', function (ev) {
             ev.preventDefault();
             if (options.kind === 'room') {
-              answer = validName();
-              if (!answer) return;
+              const room = validName();
+              if (!room) return;
+              answer = privateBox ? { name: room, private: privateBox.checked } : room;
             } else if (options.kind === 'rules') answer = rulesInput.value;
+            else if (options.kind === 'person') answer = personPick.value;
             else if (options.kind === 'wake') {
               answer = { budget_per_hour: Number(budgetInput.value), hop_limit: Number(hopsInput.value) };
             } else answer = true;
@@ -289,7 +314,7 @@
         if (validWake) validWake();
         dlg.showModal();
         (settings ? (settingsFocus || $('settings-close'))
-          : (name || rulesInput || budgetInput || (options.danger ? cancel : action))).focus();
+          : (name || rulesInput || budgetInput || personPick || (options.danger ? cancel : action))).focus();
       });
     });
     dialogQueue = next.then(function () {}, function () {});
@@ -447,6 +472,7 @@
     terminal: 'M3 4.5 6.5 8 3 11.5M8.5 11.5H13',
     browser: rr(2, 3, 12, 10, 1.5) + 'M2 6.2h12',   // "web only": needs this signed-in browser
     key: circ(5.5, 8, 3) + 'M8.5 8h5.5M12 8v2.5M14 8v1.5',
+    lock: rr(3.5, 7, 9, 6.5, 1.5) + 'M5.5 7V5a2.5 2.5 0 0 1 5 0v2',  // a private room (§44)
     // a viewfinder, for Focus mode (#99): four corner brackets and a center dot
     focus: 'M2.5 5V2.5H5M11 2.5h2.5V5M13.5 11v2.5H11M5 13.5H2.5V11' + circ(8, 8, 1.3),
     // Settings' groups (#232): a person (Profile) and a circle split in half (Appearance)
@@ -1017,7 +1043,8 @@
       b.dataset.room = name;
       b.title = name;
       if (name === state.active) b.setAttribute('aria-current', 'page');
-      b.append(icon('hash'), el('span', 'room-name', name.replace(/^#/, '')));
+      b.append(icon(r.private ? 'lock' : 'hash'), el('span', 'room-name', name.replace(/^#/, '')));
+      if (r.private) b.title = name + ' (private: only its people see it)';
       if (r.unread > 0 && name !== state.active) {
         total += r.unread;
         const badge = el('span', 'badge', r.unread > 99 ? '99+' : r.unread);
@@ -1047,6 +1074,9 @@
     document.title = (unread ? '(' + unread + ') ' : '') + base;
     const r = activeRoom();
     $('room-title').textContent = r ? r.name.replace(/^#/, '') : (state.rooms.size ? '' : 'Get started');
+    // a private room's header shows its lock, as the sidebar does (§44)
+    const glyph = typeof document.querySelector === 'function' ? document.querySelector('.head-hash path') : null;
+    if (glyph) glyph.setAttribute('d', ICONS[r && r.private ? 'lock' : 'hash']);
     $('room-sub').textContent = r && state.me ? state.me.human + ' and ' + plural(r.members.length, 'agent', 'agents') : '';
   }
 
@@ -1133,6 +1163,65 @@
     renderApprovalsChip(members);
     renderBuddyPill(members);
     updateTitle();
+    renderRoomPeople();
+  }
+
+  // A private room's people (§44): who sees it, with Remove, Leave and Add a person. A public
+  // room shows nothing here: everyone signed in sees it.
+  function renderRoomPeople() {
+    const r = activeRoom();
+    const box = $('room-people');
+    const show = !!(r && r.private && r.people);
+    box.classList.toggle('hidden', !show);
+    if (!show) { box.replaceChildren(); return; }
+    const focused = focusKey(box);
+    const title = el('div', 'group-label', 'People (' + r.people.length + ') · private');
+    const list = el('ul', 'member-list');
+    for (const n of r.people) {
+      const li = el('li', 'person-row');
+      li.dataset.name = n;
+      li.append(icon('person'), el('span', 'm-name', n));
+      const mine = state.me && n === state.me.human;
+      const b = btn('btn btn-ghost-sm', mine ? 'Leave' : 'Remove');
+      b.dataset.focus = 'room-person:' + n;
+      b.setAttribute('aria-label', mine ? 'Leave ' + r.name : 'Remove ' + n + ' from ' + r.name);
+      b.addEventListener('click', function () { roomPeople(r, 'remove', n); });
+      li.append(b);
+      list.append(li);
+    }
+    const add = btn('btn invite-btn', 'Add a person');
+    add.id = 'room-people-add';
+    add.dataset.focus = 'room-people-add';
+    add.addEventListener('click', function () { addRoomPerson(r); });
+    box.replaceChildren(title, list, add);
+    refocus(box, focused);
+  }
+
+  async function roomPeople(r, action, name) {
+    try {
+      const res = await api('POST', '/api/rooms/' + encodeURIComponent(r.slug) + '/people',
+        { action: action, name: name });
+      if (res.room) { r.people = res.room.people; renderRoomPeople(); }
+      await loadRooms().catch(function () {});
+    } catch (e) {
+      await openDialog({ kind: 'notice', title: 'People not changed', body: String(e.message || e), action: 'Close' });
+    }
+  }
+
+  async function addRoomPerson(r) {
+    let everyone;
+    try {
+      everyone = (await api('GET', '/api/rooms/' + encodeURIComponent(r.slug) + '/members')).people || [];
+    } catch (e) { everyone = []; }
+    const others = everyone.filter(function (n) { return r.people.indexOf(n) < 0; });
+    if (!others.length) {
+      await openDialog({ kind: 'notice', title: 'Everyone is in it', body: 'Everyone on this switchboard is in ' + r.name + ' already.', action: 'Close' });
+      return;
+    }
+    const answer = await openDialog({ kind: 'person', title: 'Add a person to ' + r.name,
+      body: 'They see the room, its history and its agents, and their agents can join it.',
+      people: others, action: 'Add' });
+    if (answer) roomPeople(r, 'add', answer);
   }
 
   // narrow: the Members pill (people icon, count, and a red badge for agents needing attention)
@@ -4064,8 +4153,29 @@
   async function loadPeople(render) {
     const data = await api('GET', '/api/people');
     state.people = data.people || [];
+    // every private room's name and people, for the admin (§44.4); never its contents
+    try { state.privateRooms = (await api('GET', '/api/private-rooms')).rooms || []; } catch (e) { state.privateRooms = []; }
     if (render !== false) renderPeoplePanel();
     renderComposerMentions();  // a newly added (or removed) person changed who can be @mentioned
+  }
+
+  // The admin's view of private rooms (§44.4): their names and people, never what's in them.
+  // Privacy is from other people, not from whoever runs the server, who can read the database.
+  function privateRoomsCard(rooms) {
+    const card = el('div', 'machine-card private-rooms-card');
+    card.id = 'private-rooms';
+    const head = el('div', 'remote-head');
+    head.append(icon('lock'), el('span', 'remote-name', 'Private rooms'));
+    card.append(head, el('p', 'fine', 'Only their people see them. You see their names and people here, not what’s in them.'));
+    const list = el('ul', 'private-rooms-list');
+    for (const r of rooms) {
+      const li = el('li');
+      li.dataset.room = r.name;
+      li.append(el('strong', null, r.name), document.createTextNode(' · ' + (r.people.length ? r.people.join(', ') : 'nobody')));
+      list.append(li);
+    }
+    card.append(list);
+    return card;
   }
 
   function peopleResult(id, text, bad) {
@@ -4389,6 +4499,7 @@
     if (state.invite) body.append(inviteCard(state.invite));
     body.append(addPersonCard());
     for (const p of state.people) body.append(personCard(p));
+    if (state.privateRooms && state.privateRooms.length) body.append(privateRoomsCard(state.privateRooms));
     if (typing) tryFocus(document.getElementById('person-name'));
     else if (focused) refocus(body, focused);
   }
@@ -4618,9 +4729,9 @@
     return p;
   }
 
-  async function createRoom(name) {
+  async function createRoom(name, isPrivate) {
     try {
-      const res = await api('POST', '/api/rooms', { name: name });
+      const res = await api('POST', '/api/rooms', isPrivate ? { name: name, private: true } : { name: name });
       await loadRooms();
       selectRoom(res.room.name);
       $('input').focus();
@@ -5106,8 +5217,9 @@
     });
 
     $('new-room').addEventListener('click', async function () {
-      const name = await openDialog({ kind: 'room', title: 'New room', action: 'Create room' });
-      if (name) createRoom(name);
+      const answer = await openDialog({ kind: 'room', title: 'New room', action: 'Create room' });
+      if (answer && typeof answer === 'object') createRoom(answer.name, answer.private);
+      else if (answer) createRoom(answer);
     });
     // first run: the Welcome form creates the room named in its field ("Create #build" by default)
     $('create-form').addEventListener('submit', function (ev) {
@@ -5236,6 +5348,8 @@
       r.createdAt = l.created_at;
       r.settings = l.settings || {};
       r.rules = l.rules || '';
+      r.private = !!l.private;  // seen only by its people (§44)
+      r.people = Array.isArray(l.people) ? l.people : null;
     }
     const was = state.active;
     const pruned = was !== null && gone.has(was);  // a replaced active room counts as pruned
