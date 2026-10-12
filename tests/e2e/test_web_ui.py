@@ -2395,6 +2395,32 @@ def test_a_url_that_names_no_forge_is_shown_as_it_is(ui: UI) -> None:
 
 
 @pytest.mark.parametrize("size", ["desktop", "phone"])
+def test_a_long_option_wraps_inside_the_question_s_detail(ui: UI, size: str) -> None:
+    """A question's options are buttons, which never wrapped: a long one ran past the detail
+    panel and was cut off, as a recorded review showed (2026-10-11). Each wraps inside it."""
+    slug = "e2e-board-long-option-" + size
+    page = review_room(ui, slug, **(PHONE if size == "phone" else {}))
+    long = "Allow only when the invitee's person belongs to the destination private room"
+    other = "Disallow private rooms as invite sources and destinations"
+    ui.world.agent_call(
+        "#" + slug, "codex-1", "review", action="ask", title="Should invites support private rooms?",
+        options=[long, other], recommend=0,
+    )  # fmt: skip
+    page.click("#board-toggle")
+    page.click('#board .board-card[data-item="Q2"]')
+    detail = page.locator("#board .board-detail")
+    expect(detail.locator('button[data-option="0"]')).to_have_text(long + " (recommended)")
+    # each option's left and right margin inside the detail, and how much of its text is hidden
+    edges = detail.evaluate("""d => { const r = d.getBoundingClientRect();
+        return [...d.querySelectorAll('button[data-option]')].map(b => {
+          const q = b.getBoundingClientRect();
+          return [q.left - r.left, r.right - q.right, b.scrollWidth - b.clientWidth]; }); }""")
+    for left, right, hidden in edges:
+        assert left >= 0 and right >= 0 and hidden <= 0, edges
+    no_horizontal_scroll(page)
+
+
+@pytest.mark.parametrize("size", ["desktop", "phone"])
 def test_a_long_pull_request_url_wraps_in_the_board_dialogs(ui: UI, size: str) -> None:
     """#246: the Post and Close confirms name the pull request's URL, and a long one (a GitLab
     merge request in a subgroup) didn't wrap, so the dialog scrolled sideways. It wraps. (No
