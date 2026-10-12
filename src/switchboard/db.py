@@ -29,7 +29,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -43,7 +43,8 @@ CREATE TABLE rooms(
   hop_count INTEGER NOT NULL DEFAULT 0, hop_limit INTEGER NOT NULL,
   last_msg_at REAL,
   rules_text TEXT NOT NULL DEFAULT '' CHECK(length(rules_text) <= 2000),
-  rules_version INTEGER NOT NULL DEFAULT 1 CHECK(rules_version >= 1));
+  rules_version INTEGER NOT NULL DEFAULT 1 CHECK(rules_version >= 1),
+  private INTEGER NOT NULL DEFAULT 0 CHECK(private IN (0, 1)));
 
 CREATE TABLE participants(
   id INTEGER PRIMARY KEY,
@@ -174,6 +175,11 @@ CREATE TABLE preferences(
   budget_per_hour INTEGER CHECK(budget_per_hour IS NULL OR (budget_per_hour BETWEEN 0 AND 1000000)),
   hop_limit INTEGER CHECK(hop_limit IS NULL OR (hop_limit BETWEEN 0 AND 1000)));
 
+CREATE TABLE room_people(
+  room_id INTEGER NOT NULL REFERENCES rooms(id), person_id INTEGER NOT NULL CHECK(person_id >= 0),
+  added_by INTEGER NOT NULL CHECK(added_by >= 0), added_at REAL NOT NULL,
+  PRIMARY KEY(room_id, person_id));
+
 CREATE TABLE reviews(
   id INTEGER PRIMARY KEY, room_id INTEGER NOT NULL REFERENCES rooms(id),
   url TEXT NOT NULL CHECK(length(url) <= 500), head TEXT NOT NULL DEFAULT '' CHECK(length(head) <= 64),
@@ -212,6 +218,7 @@ TABLES = (
     "preferences",
     "reviews",
     "review_items",
+    "room_people",
 )
 # the tables of a version-1 database (0.1.0, 0.2.0) and of a version-2 one (0.3.0 to 0.6.5):
 # the rows a migration must keep
@@ -220,6 +227,7 @@ V2_TABLES = TABLES[:10]
 V3_TABLES = TABLES[:12]
 V4_TABLES = TABLES[:13]
 V8_TABLES = TABLES[:14]
+V14_TABLES = TABLES[:16]  # before room_people (v15)
 
 # v1 -> v2 (DESIGN.md §27.6): one BEGIN IMMEDIATE, after a verified backup. The
 # columns land at the end of their tables, where the fresh schema above puts them too.
@@ -374,6 +382,18 @@ V13_TO_V14 = (
     "UPDATE meta SET value='14' WHERE key='schema_version'",
 )
 
+# v14 -> v15 (#74, DESIGN.md §44): a room can be private, seen only by its people. Every
+# existing room stays public (the default), so nothing anyone sees changes; ``room_people``
+# lists a private room's people by id, 0 being the owner, as ``preferences`` keys them.
+V14_TO_V15 = (
+    "ALTER TABLE rooms ADD COLUMN private INTEGER NOT NULL DEFAULT 0 CHECK(private IN (0, 1))",
+    "CREATE TABLE room_people("
+    " room_id INTEGER NOT NULL REFERENCES rooms(id), person_id INTEGER NOT NULL CHECK(person_id >= 0),"
+    " added_by INTEGER NOT NULL CHECK(added_by >= 0), added_at REAL NOT NULL,"
+    " PRIMARY KEY(room_id, person_id))",
+    "UPDATE meta SET value='15' WHERE key='schema_version'",
+)
+
 
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
@@ -392,6 +412,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         11: (12, V11_TO_V12, ()),
         12: (13, V12_TO_V13, ()),
         13: (14, V13_TO_V14, ()),
+        14: (15, V14_TO_V15, ("room_people",)),
     }
     out = []
     v = frm
@@ -414,8 +435,8 @@ def tables_of(version: int) -> tuple[str, ...]:
         return V4_TABLES
     if version <= 8:
         return V8_TABLES
-    if version == 9:
-        return TABLES
+    if version <= 14:
+        return V14_TABLES
     return TABLES
 
 

@@ -74,24 +74,78 @@ class Store:
 
     # ------------------------------------------------------------------ rooms
     def create_room(
-        self, name: str, created_by: str, budget_per_hour: int, hop_limit: int, rules_text: str = ""
+        self,
+        name: str,
+        created_by: str,
+        budget_per_hour: int,
+        hop_limit: int,
+        rules_text: str = "",
+        *,
+        private_for: int | None = None,
     ) -> Room:
+        """``private_for``: a private room (§44), whose first person is this one (0: the owner),
+        in the same transaction, so it's never private with nobody in it."""
         now = self.clock.now()
+        private = int(private_for is not None)
         with db.tx(self.con):
             if self.get_room(name) is not None:
                 raise Conflict(f"{name} already exists")
             cur = self.con.execute(
                 "INSERT INTO rooms(name, created_at, created_by, budget_per_hour,"
-                " budget_remaining, budget_window_start, hop_limit, rules_text)"
-                " VALUES(?,?,?,?,?,?,?,?)",
-                (name, now, created_by, budget_per_hour, budget_per_hour, now, hop_limit, rules_text),
+                " budget_remaining, budget_window_start, hop_limit, rules_text, private)"
+                " VALUES(?,?,?,?,?,?,?,?,?)",
+                (
+                    name,
+                    now,
+                    created_by,
+                    budget_per_hour,
+                    budget_per_hour,
+                    now,
+                    hop_limit,
+                    rules_text,
+                    private,
+                ),
             )
             rid = cur.lastrowid
+            if private_for is not None and rid is not None:
+                self.con.execute(
+                    "INSERT INTO room_people(room_id, person_id, added_by, added_at) VALUES(?,?,?,?)",
+                    (rid, private_for, private_for, now),
+                )
         if rid is None:
             raise StoreError("room insert returned no id")
         room = self.room_by_id(rid)
         assert room is not None
         return room
+
+    # ------------------------------------------------------------ a private room's people (§44)
+    def room_people(self, room_id: int) -> list[int]:
+        """A private room's people, by id (0: the owner), in the order they were added."""
+        rows = self.con.execute(
+            "SELECT person_id FROM room_people WHERE room_id=? ORDER BY added_at, rowid", (room_id,)
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    def room_person_add(self, room_id: int, person_id: int, added_by: int) -> bool:
+        """False if they were in it already."""
+        with db.tx(self.con):
+            cur = self.con.execute(
+                "INSERT OR IGNORE INTO room_people(room_id, person_id, added_by, added_at) VALUES(?,?,?,?)",
+                (room_id, person_id, added_by, self.clock.now()),
+            )
+            return cur.rowcount == 1
+
+    def room_person_remove(self, room_id: int, person_id: int) -> bool:
+        with db.tx(self.con):
+            cur = self.con.execute(
+                "DELETE FROM room_people WHERE room_id=? AND person_id=?", (room_id, person_id)
+            )
+            return cur.rowcount == 1
+
+    def rooms_of_person(self, person_id: int) -> list[int]:
+        """The private rooms ``person_id`` is in, by id."""
+        rows = self.con.execute("SELECT room_id FROM room_people WHERE person_id=?", (person_id,)).fetchall()
+        return [r[0] for r in rows]
 
     def get_room(self, name: str) -> Room | None:
         r = self.con.execute("SELECT * FROM rooms WHERE name=?", (name,)).fetchone()
