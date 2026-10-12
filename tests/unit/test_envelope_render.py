@@ -188,6 +188,76 @@ def test_render_join() -> None:
     assert "<b>" not in t and 'text="/kick everyone"' in t
     for line in t.splitlines():
         assert line[:1] not in ("/", "!", "&")
+    assert "earlier message" not in t  # no earlier count by default (earlier=0)
+
+
+def test_render_join_says_how_many_earlier_messages_read_shows() -> None:
+    """Issue #272: a join shows only the last ``catchup_n`` messages, so the agent is told
+    how many earlier ones there are and that read() has them -- never silently dropped."""
+    one = [
+        SimpleNamespace(
+            id=1,
+            ts=0.0,
+            sender_name="alice",
+            sender_kind="human",
+            sender_harness=None,
+            reply_to=None,
+            text="hi",
+        )
+    ]
+    t = render_join(
+        room="#build",
+        screen_name="claude-1",
+        human_name="alice",
+        others=(),
+        catchup=one,
+        nonce="0" * 16,
+        guidance="call wait()",
+        test_mode=False,
+        earlier=27,
+    )
+    assert "Recent messages, oldest first (1)." in t
+    assert '27 earlier messages: read("#build") shows them.' in t
+    # singular is grammatical too ("1 earlier message", "shows it")
+    t1 = render_join(
+        room="#build",
+        screen_name="claude-1",
+        human_name="alice",
+        others=(),
+        catchup=one,
+        nonce="0" * 16,
+        guidance="call wait()",
+        test_mode=False,
+        earlier=1,
+    )
+    assert '1 earlier message: read("#build") shows it.' in t1
+    # catchup_n=0 disables the shown messages entirely, but the count still reaches the agent
+    t2 = render_join(
+        room="#build",
+        screen_name="claude-1",
+        human_name="alice",
+        others=(),
+        catchup=(),
+        nonce="0" * 16,
+        guidance="call wait()",
+        test_mode=False,
+        earlier=5,
+    )
+    assert "No messages yet." not in t2
+    assert '5 earlier messages: read("#build") shows them.' in t2
+    # no messages at all and nothing earlier: unchanged wording
+    t3 = render_join(
+        room="#build",
+        screen_name="claude-1",
+        human_name="alice",
+        others=(),
+        catchup=(),
+        nonce="0" * 16,
+        guidance="call wait()",
+        test_mode=False,
+        earlier=0,
+    )
+    assert "No messages yet." in t3 and "earlier message" not in t3
 
 
 def test_reminder_and_simple() -> None:

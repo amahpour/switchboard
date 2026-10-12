@@ -807,12 +807,15 @@ class AgentService:
         others = [(x.name, x.harness, x.host) for x in self.store.members(room.id) if x.membership_id != m.id]
         hist = [x for x in self.store.history(room.id, None, 400) if x.kind == "chat"]
         catchup = hist[-self.cfg.delivery.catchup_n :] if self.cfg.delivery.catchup_n else []
+        # the catch-up window is short (issue #272); how many more read() has stays accurate
+        earlier = max(0, self.store.count_messages(room.id, kind="chat") - len(catchup))
         text = envelope.render_join(
             room=room.name,
             screen_name=m.screen_name,
             human_name=self.cfg.human_name,
             others=others,
             catchup=catchup,
+            earlier=earlier,
             nonce=nonce,
             guidance=adapter.join_guidance(p, room.name),
             test_mode=self.state.test_mode,

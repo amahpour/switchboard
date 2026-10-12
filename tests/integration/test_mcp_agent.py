@@ -128,7 +128,10 @@ async def test_join_gives_rules_catchup_nonce_banner_and_never_the_cred(broker: 
         assert j["ok"] and j["room"] == "#build" and j["tier"] == "mcp-only"
         text = j["text"]
         assert "Room rules:" in text and "untrusted" in text and "worktree" in text
-        assert ids_in(text) == ids[-30:]
+        # issue #272: the catch-up window is the last 8 messages, and the rest say how many
+        # more there are and that read() shows them (35 posted, 8 shown, 27 earlier)
+        assert ids_in(text) == ids[-8:]
+        assert '27 earlier messages: read("#build") shows them.' in text
         assert NONCE_RE.search(text) and "[TEST MODE]" in text
         await a.read("#build")
         await a.say("#build", "hello")
@@ -137,6 +140,27 @@ async def test_join_gives_rules_catchup_nonce_banner_and_never_the_cred(broker: 
         assert len(cred) >= 40 and cred not in all_outputs(a) and "cred" not in json.dumps(j)
     rows = q(broker, "SELECT cred_hash FROM memberships WHERE screen_name='tester'")
     assert rows[0][0] in (hashlib.sha256(cred.encode()).hexdigest(), None)
+
+
+async def test_join_into_a_realistic_room_fits_the_6000_char_budget(broker: InProcBroker) -> None:
+    """DESIGN.md's join budget (issue #272, the token-budget spike #141): modeled on the
+    spike's measured room (88 chat messages; lengths with median 469 characters, mean 613,
+    p90 1,497), a join must stay within 6,000 characters. With the old last-30 catch-up this
+    same room's join measured about 12,700 characters, over double the budget; the last-8
+    catch-up plus the earlier-count line brings it back under."""
+    for i in range(80):
+        say(broker, f"earlier message {i}")
+    # the catch-up window: mostly near the spike's median (469), one p90-sized message (1,497)
+    lengths = [469, 350, 300, 250, 1497, 400, 380, 300]
+    for n in lengths:
+        say(broker, "x" * n)
+    async with FakeAgent(broker.home, "k1") as a:
+        j = await a.join("#build", "tester")
+        assert j["ok"]
+        text = j["text"]
+        assert len(ids_in(text)) == 8
+        assert "80 earlier messages" in text
+        assert len(text) <= 6000
 
 
 async def test_rejoin_rotates_the_credential(broker: InProcBroker) -> None:

@@ -485,13 +485,19 @@ class Store:
             ).fetchall()
         return [Message.from_row(r) for r in rows]
 
-    def count_messages(self, room_id: int, after: int = 0, before: int | None = None) -> int:
-        """Messages in one room with ``after < id < before`` (ids are global, so count rows)."""
+    def count_messages(
+        self, room_id: int, after: int = 0, before: int | None = None, kind: str | None = None
+    ) -> int:
+        """Messages in one room with ``after < id < before`` (ids are global, so count rows).
+        ``kind`` restricts the count to one message kind (e.g. ``"chat"``) when given."""
         sql = "SELECT COUNT(*) FROM messages WHERE room_id=? AND id>?"
-        args: list[int] = [room_id, int(after)]
+        args: list[Any] = [room_id, int(after)]
         if before is not None:
             sql += " AND id<?"
             args.append(int(before))
+        if kind is not None:
+            sql += " AND kind=?"
+            args.append(kind)
         return int(self.con.execute(sql, args).fetchone()[0])
 
     def last_message_id(self, room_id: int) -> int:

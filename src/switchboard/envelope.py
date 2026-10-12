@@ -470,13 +470,16 @@ def render_join(
     rejoined: bool = False,
     people: Sequence[str] = (),
     room_rules: str = "",
+    earlier: int = 0,
 ) -> str:
     """The join() result: rules, catch-up, how delivery works, and the join nonce.
 
     ``others`` are ``(name, harness)`` or ``(name, harness, host)``: a member on
     another machine is listed ``name (harness@host)`` (DESIGN.md §27.11). ``people``: on a
-    hosted broker with several (§32), all of them, each one this agent's user. The
-    membership credential is never part of this text.
+    hosted broker with several (§32), all of them, each one this agent's user. ``catchup`` is
+    the last few chat messages (``catchup_n``, 8 by default); ``earlier`` is how many more chat
+    messages the room has, so a busy room's whole history doesn't ride along on every join
+    (issue #272) -- ``read()`` shows them. The membership credential is never part of this text.
     """
     r = _word(room)
     me = _word(screen_name)
@@ -502,8 +505,11 @@ def render_join(
     if catchup:
         lines.append(f"Recent messages, oldest first ({len(catchup)}). {PEER_WARNING}")
         lines.extend(render_catchup_line(m, screen_name) for m in catchup)
-    else:
+    elif not earlier:
         lines.append("No messages yet.")
+    if earlier:
+        what = _n(earlier, "earlier message", "earlier messages")
+        lines.append(f'{what}: read("{r}") shows {"it" if earlier == 1 else "them"}.')
     lines.append("How messages reach you: " + guidance)
     lines.append(PASS_ADVICE)
     lines.append(f"join yk:j{nonce}")

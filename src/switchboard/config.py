@@ -52,7 +52,7 @@ class DeliveryCfg:
     hop_limit: int = 6
     watchdog_s: float = 120.0
     watchdog_max: int = 2
-    catchup_n: int = 30
+    catchup_n: int = 8
     max_msg_chars: int = 4000
     offer_backstop_s: float = 1800.0
     hook_ack_s: float = 5.0

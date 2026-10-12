@@ -26,7 +26,7 @@ def test_defaults_match_design() -> None:
         2,
     )
     assert (d.catchup_n, d.max_msg_chars, d.offer_backstop_s, d.hook_ack_s, d.pull_ack_s) == (
-        30,
+        8,  # issue #272: a smaller join catch-up, within DESIGN.md's 6,000-character join budget
         4000,
         1800,
         5.0,
