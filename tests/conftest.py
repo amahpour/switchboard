@@ -1,6 +1,10 @@
 """Shared fixtures (DESIGN.md §12).
 
 - ``restore_umask`` (autouse): every test starts and ends with the run's umask.
+- ``fail_on_unraisable_exception`` (autouse): ``gc.collect(1)`` after every test, so a leaked
+  object's ``__del__`` fails the test that leaked it (pyproject.toml's ``filterwarnings`` turns
+  the ``PytestUnraisableExceptionWarning`` into an error), not a later test the collector happens
+  to run in (#277).
 - ``clean_env`` (autouse): strips agent-harness variables from os.environ and
   points HOME at a temp dir, so nothing here can reach the build session's
   Claude inbox or the user's real harness config. It also pins the login name
@@ -17,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import gc
 import os
 import shutil
 import signal
@@ -127,6 +132,29 @@ def restore_umask() -> Iterator[None]:
     os.umask(_START_UMASK)
     yield
     os.umask(_START_UMASK)
+
+
+@pytest.fixture(autouse=True)
+def fail_on_unraisable_exception() -> Iterator[None]:
+    """Collect garbage after every test (issue #277, found fixing #276).
+
+    An object whose ``__del__`` raises (a leaked asyncio transport, say) reports a
+    ``PytestUnraisableExceptionWarning`` the moment the garbage collector reclaims it, not when it
+    leaked — and ``filterwarnings`` (pyproject.toml) now turns that warning into a test failure.
+    Autouse and undeclared, so this fixture is set up before (and torn down after) every other
+    function-scoped fixture a test requests, including ``broker``'s own teardown; the explicit
+    collect here, rather than leaving it to whichever later test's allocations next cross the
+    collector's threshold, attributes the failure to the test that actually leaked the object.
+
+    ``gc.collect(1)``, not a full ``gc.collect()``: generation 2 holds every long-lived object
+    the process has ever promoted (every import's classes and module globals), and a full
+    collection re-scans all of it on every single test, measured at ~0.25s/test (about 13
+    minutes over this suite) against ~1ms/test for generations 0 and 1 alone. An object this
+    test leaked was allocated during it and has not yet survived a collection, so it is still in
+    generation 0 (or, if the test's own code already triggered an automatic collection, freshly
+    promoted to 1); either is well within what ``gc.collect(1)`` reaches."""
+    yield
+    gc.collect(1)
 
 
 def child_env(home: str | os.PathLike | None = None, **extra: str) -> dict[str, str]:
