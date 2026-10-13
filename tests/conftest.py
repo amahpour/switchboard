@@ -32,13 +32,13 @@ import tempfile
 import threading
 import time
 import types
+import zlib
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
-from xdist.scheduler.loadfile import LoadFileScheduling
 
 import switchboard.config
 from switchboard.config import Config
@@ -106,14 +106,38 @@ def sanitize_env(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempP
 PHASE_REPORTS = pytest.StashKey[dict[str, pytest.TestReport]]()
 
 
+def _e2e_parallel(config: pytest.Config) -> bool:
+    # Only the exact opt-in expression means every selected test is an e2e test. A broader
+    # expression may also select unit tests, which need ordinary test-level load balancing.
+    return config.getoption("markexpr") == "e2e" and bool(config.getoption("numprocesses", None))
+
+
 @pytest.hookimpl(tryfirst=True)
-def pytest_xdist_make_scheduler(config: pytest.Config, log: Any) -> LoadFileScheduling | None:
-    """Keep each module-scoped e2e world on one worker instead of cloning it eight times.
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    if config.getoption("markexpr") != "e2e" or not hasattr(config, "workerinput"):
+        return
+    # The controller supplies LoadGroupScheduling. A worker parses its own -n auto command
+    # and xdist resets --dist to "no" there; enable xdist's group suffix before its collection
+    # hook reads the marks. This hook's tryfirst ordering is required for that handoff.
+    config.option.loadgroup = True
+    for item in items:
+        if item.get_closest_marker("e2e") is None:
+            continue
+        name = item.path.name
+        group = f"{name}-{zlib.crc32(item.name.encode('utf-8')) % 3}" if name == "test_web_ui.py" else name
+        item.add_marker(pytest.mark.xdist_group(group))
+
+
+@pytest.hookimpl(tryfirst=True, optionalhook=True)
+def pytest_xdist_make_scheduler(config: pytest.Config, log: Any) -> Any:
+    """Share the large e2e module across three worlds; keep small modules together.
 
     The default unit/integration suite keeps xdist's ordinary test-level load balancing.
     """
-    if config.getoption("markexpr") == "e2e" and config.getoption("numprocesses"):
-        return LoadFileScheduling(config, log)
+    if _e2e_parallel(config):
+        from xdist.scheduler.loadgroup import LoadGroupScheduling
+
+        return LoadGroupScheduling(config, log)
     return None
 
 

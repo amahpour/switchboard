@@ -12,8 +12,8 @@ an in-process test-mode broker in a temp home, seeded with three rooms (``#docs`
 never-enabled remote and four scripted agents with a Markdown-rich conversation in ``#build``.
 Every test gets fresh browser contexts from the ``ui`` fixture, each signed in through its own
 one-time login link. Tests that change state (a hold, a close) undo it or use a room of their own.
-Extra agents joined for a test close with its browser contexts; parallel e2e runs assign one
-worker per module so the seeded world is not duplicated across workers.
+Extra agents joined for a test close with its browser contexts; parallel e2e runs divide this
+large module across three workers, while each small module stays on one worker.
 
 Every page is watched: a console error, an uncaught page error or a CSP violation (reported by
 a ``securitypolicyviolation`` listener the context injects) fails the test, listed per page.
