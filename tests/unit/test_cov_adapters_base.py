@@ -97,6 +97,10 @@ def test_the_base_adapter_defaults_are_the_conservative_answers() -> None:
     assert a.redeliver_on_stop(p, ev("Stop")) is True
     assert a.closes_waits(p, ev("PostToolUse")) is False
     assert a.is_wait_pre(ev("PreToolUse")) is False
+    # a harness with no join-nonce bind of its own never claims one (#170), even when the
+    # event happens to carry a join_nonce (the hook script's join-tool match isn't harness-gated)
+    assert a.join_nonce_bind(ev("PostToolUse")) is False
+    assert a.join_nonce_bind(ev("PostToolUse", join_nonce="abc123")) is False
     assert a.pull_confirms("wait", "tu-1", ev("PostToolUse")) is True
     assert a.continue_verdict(p, 3, True, ev("Stop")) is None
     assert a.confirm_window_s() == 180.0
@@ -147,6 +151,9 @@ def test_the_scripted_test_agent_adapter() -> None:
     a = TestAgentAdapter(CFG)
     p = part(harness="test", session_key="test:bot", session_id="k1")
     assert ACK_MODES == ("next_call", "immediate", "never")
+    # keyed by --test-session, not by process (moved from agents.py's _session_key, #170)
+    assert a.session_key(SimpleNamespace(host=""), None, test_session="bot") == "test:bot"
+    assert a.session_key(SimpleNamespace(host="fpga-pi"), None, test_session="bot") == "test@fpga-pi:bot"
     assert a.tier(p) == ("mcp-only", None)
     assert a.context_events(p) == HOOK_CONTEXT_EVENTS["test"]
     # /catchup never gets a test session's id, whatever the row says (issue #171)

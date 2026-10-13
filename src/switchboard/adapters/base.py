@@ -119,10 +119,14 @@ class Adapter:
         return "mcp-only", None
 
     # -- membership: session keys, binding (DESIGN.md §6.3) -----------------
-    def session_key(self, ident: McpIdentity, thread_id: str | None) -> str:
+    def session_key(
+        self, ident: McpIdentity, thread_id: str | None, *, test_session: str | None = None
+    ) -> str:
         """This harness's session key for a verified ``mcp.hello`` identity: by default,
         one session per agent process (claude, devin, an unknown harness). Cursor
-        overrides this with a pending key until its join nonce binds a conversation id."""
+        overrides this with a pending key until its join nonce binds a conversation id;
+        the scripted test agent (``test_session``, its ``--test-session``) keys by that
+        instead of its process."""
         return make_session_key(self.harness, ident.host, f"{ident.agent_pid}@{start_key(ident.agent_start)}")
 
     def existing_session(self, store: Any, ident: McpIdentity) -> Participant | None:
@@ -162,6 +166,12 @@ class Adapter:
         kicked from ``room_id`` under an earlier participant row, even though ``p``
         itself wasn't (a resumed conversation, DESIGN.md §9.4) — False for harnesses
         with no such identity wider than the participant row."""
+        return False
+
+    def join_nonce_bind(self, ev: HookEvent) -> bool:
+        """True if this hook event is this harness's join-nonce bind (Cursor's
+        ``postToolUse`` for ``MCP:join``, carrying ``join_nonce``) — harnesses with no
+        such bind never claim one, however the event's own fields happen to look."""
         return False
 
     def nonce_ok(self, p: Participant, ev: HookEvent) -> bool:
