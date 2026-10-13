@@ -284,6 +284,7 @@ def test_start_hands_the_settings_to_the_broker_and_prints_its_url(
     assert cmd[cmd.index("--listen") + 1] == "0.0.0.0"
     assert cmd[cmd.index("--public-url") + 1] == "https://sb.example.com"
     assert "switchboard is running (pid 4242) at https://sb.example.com/" in out.getvalue()
+    assert "broker on this machine" in out.getvalue()
 
 
 def test_start_says_where_a_running_broker_is(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -293,6 +294,7 @@ def test_start_says_where_a_running_broker_is(tmp_path: Path, monkeypatch: pytes
     out = io.StringIO()
     assert daemon.start(Paths.from_home(tmp_path / "home"), out=out) == 0
     assert "already running (pid 7) at https://sb.example.com/" in out.getvalue()
+    assert "broker on this machine" in out.getvalue()
     # a broker from before #34 has no url in its ping
     monkeypatch.setattr(daemon, "ping", lambda *a, **kw: {"pid": 7, "port": 7419})
     out = io.StringIO()

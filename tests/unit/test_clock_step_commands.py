@@ -60,6 +60,7 @@ def test_dialer_commands_keep_the_same_process_after_clock_step(
         )
         assert daemon.start_dialer(paths, out=out) == 0
         assert "already runs" in out.getvalue()
+        assert "link to https://sb.example.com" in out.getvalue()
     elif command == "remote join":
         assert f"dialer runs (pid {pid})" in (join.home_problem(paths) or "")
     else:

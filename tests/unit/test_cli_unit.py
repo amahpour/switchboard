@@ -37,6 +37,36 @@ def test_parser_accepts_home_before_or_after_the_verb() -> None:
     assert a.foreground and a.port == 0 and a.test_mode and a.test_trust_uds
 
 
+@pytest.mark.parametrize("command", (("join",), ("remote", "join")))
+def test_join_commands_share_arguments_and_appear_in_help(
+    command: tuple[str, ...], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Both public spellings accept the same pairing options, including an explicit home."""
+    parser = cli.build_parser()
+    args = parser.parse_args(
+        [*command, "https://sb.example.com", "7KQ4-M2XD-9HVA", "--no-start", "--home", "/tmp/machine"]
+    )
+    assert args.url == "https://sb.example.com" and args.code == "7KQ4-M2XD-9HVA"
+    assert args.no_start and args.home == "/tmp/machine"
+    assert args.func in (cli.cmd_remote, cli.cmd_remote_join)
+    with pytest.raises(SystemExit) as done:
+        parser.parse_args([*command, "--help"])
+    assert done.value.code == 0
+    assert "--no-start" in capsys.readouterr().out
+    parser.print_help()
+    assert "join" in capsys.readouterr().out
+
+
+def test_start_help_explains_both_home_modes(capsys: pytest.CaptureFixture[str]) -> None:
+    """The detailed start help tells a hosted machine what start does in its paired home."""
+    with pytest.raises(SystemExit) as done:
+        cli.build_parser().parse_args(["start", "--help"])
+    assert done.value.code == 0
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "broker on this machine" in help_text
+    assert "link to a hosted broker" in help_text
+
+
 def test_check_test_mode(tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     p = Paths.from_home(tmp_home)
     assert check_test_mode(p, home_given=True) is None

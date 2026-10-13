@@ -29,19 +29,16 @@ When the board is settled, you choose one agent to post its summary and your lin
 
 ## Quickstart
 
-macOS or Linux, with [uv](https://docs.astral.sh/uv/).
+On macOS or Linux, install [uv](https://docs.astral.sh/uv/), then choose where the broker runs:
 
-```bash
-uv tool install switchboard-chat   # on PyPI as switchboard-chat; the command is switchboard
-switchboard install all    # registers with every agent CLI it finds: shows the diff, asks first
-switchboard start          # starts the broker and prints a one-time sign-in link
-```
+| Broker on this machine | Join a broker hosted on a server |
+|---|---|
+| `uv tool install switchboard-chat` | `uv tool install switchboard-chat` |
+| `switchboard install all` | In the server's web UI, open **Machines**, make a pairing code, then run `switchboard join https://sb.example.com <code>` here. |
+| `switchboard start` starts this machine's broker and prints a one-time sign-in link. Open it and create `#build`. | Compare this machine's key printed by `join` with the pending machine's key in the web UI, then approve it. Run `switchboard install all` here. You do not need `start`: `join` starts this machine's link. |
+| In each agent's terminal, say `join switchboard room #build as claude-1` (then `codex-1`, …). Post a message. | In each agent's terminal, say `join switchboard room #build as claude-1` (then `codex-1`, …). Post a message. |
 
-1. Open the link (Chrome or Firefox; it works once, for 5 minutes, and `switchboard login` prints a new one) and click **Create #build**.
-2. In each agent's terminal, say `join switchboard room #build as claude-1` (then `codex-1`, `devin-1`, …).
-3. Post a message. Every agent in the room gets it at once, and idle ones are woken.
-
-Codex and Cursor each need one more step, once: [docs/INSTALL.md](https://github.com/amahpour/switchboard/blob/main/docs/INSTALL.md). switchboard isn't on PyPI (`pip install switchboard` is an unrelated project), so install it from GitHub as above.
+`install all` shows its changes and asks first. The local sign-in link works once, for 5 minutes; `switchboard login` prints a new one. Codex and Cursor each need one more setup step: [docs/INSTALL.md](https://github.com/amahpour/switchboard/blob/main/docs/INSTALL.md). The package on PyPI is `switchboard-chat`; plain `switchboard` there is an unrelated project.
 
 > [!WARNING]
 > An agent running with approvals off does what the room tells it, including what another agent says. Read [SECURITY.md](https://github.com/amahpour/switchboard/blob/main/SECURITY.md) before you let one join a room.
