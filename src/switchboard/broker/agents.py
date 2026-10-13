@@ -62,12 +62,13 @@ from switchboard.models import (
     Snapshot,
     behind_by_minor,
     canonical_event,
+    has_feature,
     join_code_hash,
     normalize_room,
     split_session_key,
 )
 from switchboard.remote import proto
-from switchboard.reviews import ReviewError
+from switchboard.reviews import ProofRequired, ReviewError
 
 if TYPE_CHECKING:  # pragma: no cover
     from switchboard.broker.app import BrokerState
@@ -140,6 +141,26 @@ def tools_claim(value: Any) -> tuple[str, ...] | None:
 def version_claim(value: Any) -> str | None:
     """The switchboard version an MCP server says it runs, or None: only to name it to a person."""
     return value if isinstance(value, str) and VERSION_RE.fullmatch(value) else None
+
+
+def name_reserved_text(name: str, room: str, code: str | None, claim: str | None) -> str:
+    """Why a join was refused a reserved name, and what to do. The way back (``resume=``) is named
+    only to a session whose MCP server has it (``claim``, its claimed version, is 0.25.0 or later):
+    an older one keeps the ``join`` schema it started with and refuses the call, so it is told to
+    update, and to pick another name meanwhile (#340). A caller that gave ``code`` has the
+    parameter already."""
+    text = f"{name} was used by another agent in {room} today; pick another"
+    if code is not None:
+        return text + " (that join code isn't this name's)"
+    if has_feature(claim, "join.resume"):
+        return (
+            text + ", or, if it was you before a restart, join again with resume= set to"
+            " the code at the end of that join's answer (yk:j...)"
+        )
+    return (
+        f"{text}. If it was you before a restart, {envelope.OLDER_SWITCHBOARD} and its join can't"
+        f" take a name back. {envelope.RESTART_UPDATES}"
+    )
 
 
 # a rate-limited say() waits its turn (§8.4); a burst past this many per member is refused
@@ -809,16 +830,7 @@ class AgentService:
             if holder is not None:
                 resumed = self._reclaim(holder, code, h, host)
                 if resumed is None:
-                    raise ServiceError(
-                        "name_reserved",
-                        f"{name} was used by another agent in {room.name} today; pick another"
-                        + (
-                            " (that join code isn't this name's)"
-                            if code is not None
-                            else ", or, if it was you before a restart, join again with resume= set to"
-                            " the code at the end of that join's answer (yk:j...)"
-                        ),
-                    )
+                    raise ServiceError("name_reserved", name_reserved_text(name, room.name, code, mc.version))
         elif cur.screen_name.lower() != name:
             raise ServiceError(
                 "bad_request",
@@ -907,6 +919,7 @@ class AgentService:
             catchup=catchup,
             earlier=earlier,
             earlier_before=earlier_before,
+            can_page=has_feature(mc.version, "read.before"),
             nonce=nonce,
             guidance=adapter.join_guidance(p, room.name),
             test_mode=self.state.test_mode,
@@ -992,6 +1005,16 @@ class AgentService:
         p, m, room = self._member(conn, params)
         try:
             res = self.state.boards.agent(room, m.screen_name, params)
+        except ProofRequired as e:
+            if has_feature(self._mcp(conn).version, "review.proof"):
+                raise ServiceError("bad_request", str(e)) from None
+            # its review tool has no proof field, so "proof is required" can't be followed (#340)
+            raise ServiceError(
+                "bad_request",
+                "fix needs proof, a test's name or an http(s) link, but"
+                f" {envelope.OLDER_SWITCHBOARD} and its review tool has no proof field."
+                f" {envelope.RESTART_UPDATES}",
+            ) from None
         except ReviewError as e:
             raise ServiceError("bad_request", str(e)) from None
         handoff = res.pop("handoff", None)

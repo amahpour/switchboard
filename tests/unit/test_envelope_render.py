@@ -239,6 +239,7 @@ def test_render_join_says_how_many_earlier_messages_and_the_exact_read_call() ->
         test_mode=False,
         earlier=27,
         earlier_before=42,
+        can_page=True,
     )
     assert "Recent messages, oldest first (1)." in t
     assert '27 earlier messages: read("#build", before=42) shows them.' in t
@@ -254,6 +255,7 @@ def test_render_join_says_how_many_earlier_messages_and_the_exact_read_call() ->
         test_mode=False,
         earlier=1,
         earlier_before=42,
+        can_page=True,
     )
     assert '1 earlier message: read("#build", before=42) shows it.' in t1
     # catchup_n=0 disables the shown messages entirely, but the count and a working call still
@@ -269,6 +271,7 @@ def test_render_join_says_how_many_earlier_messages_and_the_exact_read_call() ->
         test_mode=False,
         earlier=5,
         earlier_before=100,
+        can_page=True,
     )
     assert "No messages yet." not in t2
     assert '5 earlier messages: read("#build", before=100) shows them.' in t2
@@ -286,6 +289,31 @@ def test_render_join_says_how_many_earlier_messages_and_the_exact_read_call() ->
     )
     assert "No messages yet." in t3 and "earlier message" not in t3
     assert envelope.PEER_WARNING in t3  # even a quiet room gives every harness the safety line
+
+
+def test_render_join_does_not_name_before_to_a_session_that_cannot_use_it() -> None:
+    """#340: ``can_page`` is off unless the caller says the session's ``read`` has ``before``, so
+    a renderer called without it never names a parameter that may not exist. The line still says
+    how many earlier messages there are, and that the session is old, in the words every other
+    hint to an old session uses (singular and plural)."""
+    for earlier, them in ((27, "them"), (1, "it")):
+        t = render_join(
+            room="#build",
+            screen_name="claude-1",
+            human_name="alice",
+            others=(),
+            catchup=(),
+            nonce="0" * 16,
+            guidance="call wait()",
+            test_mode=False,
+            earlier=earlier,
+            earlier_before=100,
+        )
+        what = "27 earlier messages" if earlier == 27 else "1 earlier message"
+        assert (
+            f"{what}: {envelope.OLDER_SWITCHBOARD} and can't page back to {them}. {envelope.RESTART_UPDATES}"
+        ) in t
+        assert "before=" not in t
 
 
 def test_reminder_and_simple() -> None:
