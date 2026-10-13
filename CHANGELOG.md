@@ -2,6 +2,17 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.27.0 (2026-10-13)
+
+### Changed
+
+- **The open card on the review board can be made wider.** It was a fixed 340 px, with a contested finding's two sides squeezed to a few words a line while the lanes beside it had room to spare. It now opens at a share of the board's width, and the line between the card and the lanes can be dragged (or moved with the arrow keys, Home and End) to trade room between them; a double-click puts it back. In a narrow card the two sides go one above the other, and when the board is too narrow for both, the card goes under the lanes instead of crushing them.
+
+### Fixed
+
+- **The room's name stays whole in the header.** A desktop window with Members open could show "s…" where the name should be, while the member count and every status chip kept their full width. Now the chips give way first (they scroll), then the member count, and the name last, at every text size; the larger text sizes no longer cap it at 140 px.
+- **The rename dialog opens without an error.** Clicking a room's name showed "#name already exists. Pick another name." in red before you had typed anything, because the name in the box was the room's own. Now nothing is shown and **Rename** stays off until the name is a different one; another room's name is refused as before.
+
 ## 0.26.0 (2026-10-13)
 
 ### Upgrading
