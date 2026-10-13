@@ -74,6 +74,7 @@
     detail: null,      // { room, name, data } from GET /api/rooms/{slug}/members/{name}
     inspSeq: 0,        // only the newest detail response is applied
     inspTimer: null,
+    statusTimer: null,
     inspUi: null,      // { menu, queueOpen, copied, pokeCopied }
     insp: {},          // references to Inspector nodes built here (ids are not looked up)
     rowRefs: new Map(),  // member name -> its row button, for focus on "back"
@@ -1089,6 +1090,14 @@
   }
 
   // ------------------------------------------------------------- members
+  function statusLineStale(m) {
+    if (!m.status_line) return false;
+    if (m.status_line_stale) return true;
+    if (m._statusDeadline === undefined && Number.isFinite(m.status_line_remaining_s))
+      m._statusDeadline = performance.now() + m.status_line_remaining_s * 1000;
+    return m._statusDeadline !== undefined && performance.now() >= m._statusDeadline;
+  }
+
   function memberRow(m) {
     const li = el('li', 'member');
     li.dataset.name = m.name;
@@ -1116,6 +1125,11 @@
     // what it says it runs, only when it matters (#299): the Inspector always has both
     const claim = claimLine(m);
     if (claim) main.append(el('span', 'm-claim', claim));
+    if (m.status_line) {
+      const work = el('span', 'm-work', m.status_line);
+      if (statusLineStale(m)) work.append(el('span', 'm-work-stale', 'Stale'));
+      main.append(work);
+    }
     if (m.away) main.append(el('span', 'm-away', 'Away: ' + m.away));
     if (m.parked) {
       const p = el('span', 'm-parked');
@@ -1132,6 +1146,8 @@
   }
 
   function renderBuddies() {
+    if (state.statusTimer) clearTimeout(state.statusTimer);
+    state.statusTimer = null;
     const me = $('buddy-me');
     me.replaceChildren();
     if (state.me) {
@@ -1167,6 +1183,12 @@
       list.append(el('li', 'member-empty', 'Nobody yet. Ask an agent to join ' + (state.active || 'a room') + '.'));
     }
     for (const m of members) list.append(memberRow(m));
+    const nextStatus = members.filter(function (m) {
+      return m.status_line && !statusLineStale(m) && m._statusDeadline !== undefined;
+    }).map(function (m) { return m._statusDeadline - performance.now(); });
+    if (nextStatus.length) {
+      state.statusTimer = setTimeout(renderBuddies, Math.max(1, Math.ceil(Math.min(...nextStatus))));
+    }
     refocus(list, focused);
     const bypass = members.some(function (m) { return m.approval_mode === 'bypass'; });
     const prompting = members.some(function (m) { return m.approval_mode === 'prompting'; });

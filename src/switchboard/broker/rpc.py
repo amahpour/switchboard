@@ -617,6 +617,7 @@ def build_methods(state: "BrokerState") -> dict[str, MethodSpec]:
         "agent.unwait": MethodSpec("member", member_op("unwait")),
         "agent.pass": MethodSpec("member", member_op("pass_")),
         "agent.away": MethodSpec("member", member_op("away")),
+        "agent.status": MethodSpec("member", member_op("status")),
         # a long poll: a Cursor stop hook parks here until a follow-up (or its end)
         "hook.event": MethodSpec("hook", hook_event, long_poll=True),
         "hook.ack": MethodSpec("hook", hook_ack),

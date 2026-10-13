@@ -1553,6 +1553,8 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 .m-name-hit { background: var(--mention-bg); color: var(--mention-fg); border-radius: 3px; padding: 0 1px; }
 .m-status { font-size: calc(12px * var(--text-scale)); color: var(--muted-2); }
 .m-claim { font-size: calc(11px * var(--text-scale)); color: var(--muted-2); overflow-wrap: anywhere; }
+.m-work { font-size: calc(12px * var(--text-scale)); overflow-wrap: anywhere; }
+.m-work-stale { margin-left: 7px; color: var(--muted-2); font-size: calc(11px * var(--text-scale)); }
 .m-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; font-size: calc(12px * var(--text-scale)); color: var(--muted-2); }
 .m-chips .tier, .insp-chips .tier { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .m-warn { font-size: calc(12px * var(--text-scale)); font-weight: 500; color: var(--danger); line-height: 1.35; }
