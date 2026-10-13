@@ -48,7 +48,9 @@ async def test_tools_annotations_and_instructions(tmp_path) -> None:
 
 
 async def test_tool_list_fits_the_review_budget(tmp_path) -> None:
-    """The review schema must not make every agent turn carry the old oversized tool list."""
+    """Every agent turn carries the tool list, so it has a budget: 3,500 characters (#274 set
+    3,000, and the tools added since had squeezed the descriptions into fragments, so the
+    maintainer raised it). A new tool or parameter has to fit; each description stays a sentence."""
     _st, server = make(tmp_path)
     async with Client(server, mode="legacy") as c:
         tools = await c.list_tools()
@@ -61,7 +63,7 @@ async def test_tool_list_fits_the_review_budget(tmp_path) -> None:
         )
         for t in tools
     )
-    assert size <= 3000, size
+    assert size <= 3500, size
     review = next(t for t in tools if t.name == "review")
     assert "where" in review.input_schema["properties"]
     assert "file" not in review.input_schema["properties"]
