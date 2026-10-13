@@ -29,7 +29,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -44,7 +44,8 @@ CREATE TABLE rooms(
   last_msg_at REAL,
   rules_text TEXT NOT NULL DEFAULT '' CHECK(length(rules_text) <= 2000),
   rules_version INTEGER NOT NULL DEFAULT 1 CHECK(rules_version >= 1),
-  private INTEGER NOT NULL DEFAULT 0 CHECK(private IN (0, 1)));
+  private INTEGER NOT NULL DEFAULT 0 CHECK(private IN (0, 1)),
+  renamed_from TEXT NOT NULL DEFAULT '[]');
 
 CREATE TABLE participants(
   id INTEGER PRIMARY KEY,
@@ -408,6 +409,13 @@ V16_TO_V17 = (
     "UPDATE meta SET value='17' WHERE key='schema_version'",
 )
 
+# v17 -> v18 (#316): keep former names on the room so existing MCP sessions can continue
+# using their old room key and a new join can be directed to the current name.
+V17_TO_V18 = (
+    "ALTER TABLE rooms ADD COLUMN renamed_from TEXT NOT NULL DEFAULT '[]'",
+    "UPDATE meta SET value='18' WHERE key='schema_version'",
+)
+
 
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
@@ -429,6 +437,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         14: (15, V14_TO_V15, ("room_people",)),
         15: (16, V15_TO_V16, ()),
         16: (17, V16_TO_V17, ()),
+        17: (18, V17_TO_V18, ()),
     }
     out = []
     v = frm

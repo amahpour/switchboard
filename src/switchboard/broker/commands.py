@@ -31,6 +31,7 @@ HELP_TEXT = """\
 commands (type them in the web UI; the CLI runs them with `switchboard cmd '#room' /...`):
   /pause              freeze every agent wake in this room
   /resume             unfreeze the room and reset the loop guard (web only)
+  /rename <new-name>  rename this room (web only)
   /budget             show the wake budget
   /budget <n>         set the wakes left this hour (raising it is web only)
   /hops               show the loop guard: agent messages in a row / the limit
@@ -59,11 +60,12 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
 _NO_ARGS = frozenset({"pause", "resume", "who", "status", "help", "close"})
 _ONE_NAME = frozenset({"kick", "hold", "release"})
 _ONE_NUMBER = {"budget": MAX_BUDGET, "hops": MAX_HOPS}  # /name [n], 0 <= n <= max
-KNOWN = _NO_ARGS | _ONE_NAME | set(_ONE_NUMBER) | {"catchup", "review"}
+KNOWN = _NO_ARGS | _ONE_NAME | set(_ONE_NUMBER) | {"catchup", "review", "rename"}
 
 _STATIC_ROLES = {
     "pause": "human_cli",
     "resume": "human",
+    "rename": "human",
     "kick": "human_cli",
     "close": "human_cli",  # every agent leaves: it reduces activity, like /kick (§28.3)
     "hold": "human_cli",
@@ -140,6 +142,8 @@ def parse_command(text: str) -> Command:
         return _parse_catchup(raw[1:].split(None, 1)[1] if args else "", raw)
     if name == "review":
         return _parse_review(raw)
+    if name == "rename" and len(args) != 1:
+        raise CommandError("bad_request", "usage: /rename <new-name>")
     if name in _NO_ARGS and args:
         raise CommandError("bad_request", f"/{name} takes no arguments")
     if name in _ONE_NAME:
@@ -508,6 +512,9 @@ def apply(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
     name = cmd.name
     if name == "close":
         return Result(True, svc.close_room(room, actor), done=True)
+    if name == "rename":
+        renamed = svc.rename_room(room, cmd.args[0], actor.who(svc.cfg.human_name))
+        return Result(True, f"{room.name} renamed to {renamed.name}", done=True)
     if name == "help":
         return Result(True, HELP_TEXT)
     if name == "who":

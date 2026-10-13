@@ -651,7 +651,8 @@ class AgentService:
             # the allowlists hold for every call, not only at join: a membership its remote no
             # longer allows (the manager ends those at reload) never works over the link (§27.5.2)
             link = getattr(conn, "link", None)
-            if link is None or not link.entry.allows_room(room.name):
+            names = (room.name, *self.store.room_aliases(room.id))
+            if link is None or not any(link.entry.allows_room(name) for name in names):
                 raise ServiceError(
                     "forbidden",
                     f"members on {p.host} may no longer use {room.name}"
@@ -693,6 +694,11 @@ class AgentService:
             if e.code == "not_found":
                 n = raw_room.strip().lower()
                 n = n if n.startswith("#") else "#" + n
+                alias = self.store.room_by_alias(n)
+                if alias is not None and self.svc.visible(alias, person):
+                    raise ServiceError(
+                        "not_found", f"{n} was renamed to {alias.name}: join {alias.name} instead"
+                    ) from None
                 if any(self.svc.visible(r, person) for r in self.store.closed_rooms(n)):
                     raise ServiceError(
                         "not_found", f"{n} was closed by {self.cfg.human_name}: ask your user to reopen it"

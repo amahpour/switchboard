@@ -37,7 +37,9 @@ settings-phone-list-{light,dark} and settings-phone-rooms-light (Settings' tabbe
 phone list, #232),
 closed-light, remotes-light, inspector-light, inspector-claude-{light,dark,phone-light} (Claude Code's
 bubble with its name written under it, #62), inspector-remote-light, inspector-dark-parked,
-phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (#129), welcome-light and login-light, plus, from a hosted broker
+room-rename-before-{light,dark,phone-light}, room-rename-after-{light,dark,phone-light} (#316),
+phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (#129),
+welcome-light and login-light, plus, from a hosted broker
 (``tests/ui_world.py``'s ``HostedWorld``, with Chromium's virtual authenticators as the
 passkeys; issues #41 and #61): signin-setup-light, setup-light, people-light, people-dark,
 passkeys-light, passkeys-dark, people-opening-{light,dark,phone-light} (initial People fetch held),
@@ -764,6 +766,39 @@ def shoot_wake_settings(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def shoot_room_rename(browser: Any, out: Path, world: Any) -> None:
+    """The small title dialog and its result (#316), before and after in light, dark and phone."""
+    from playwright.sync_api import expect
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for suffix, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        old, new = "#sprint-" + suffix + "-typo", "#sprint-" + suffix
+        world.create_room(old)
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="' + old + '"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            page.click("#room-title-button")
+            expect(page.locator("#app-dialog-name")).to_be_focused()
+            page.fill("#app-dialog-name", new)
+            shot(page, out, "room-rename-before-" + suffix + ".png")
+            page.click("#app-dialog-action")
+            expect(page.locator("#room-title")).to_have_text(new[1:])
+            expect(page.locator("#log")).to_contain_text("renamed " + old + " to " + new)
+            shot(page, out, "room-rename-after-" + suffix + ".png")
+        finally:
+            ctx.close()
+
+
 def shoot_settings_tabs(browser: Any, out: Path, world: Any) -> None:
     """Settings' tabbed layout (#232, closes #212): the Appearance group on a desktop (light,
     dark), and on a phone the group list and one group's own page (light)."""
@@ -1251,6 +1286,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_room_badges(browser, out, world)
             shoot_focus_mode(browser, out, world)
             shoot_wake_settings(browser, out, world)
+            shoot_room_rename(browser, out, world)
             shoot_settings_tabs(browser, out, world)
             shoot_hosted(browser, out, hosted)
             shoot_common_password(browser, out, weak)

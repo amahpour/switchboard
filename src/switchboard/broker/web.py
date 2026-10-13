@@ -1494,6 +1494,21 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         except ServiceError as e:
             return _svc_err(e)
 
+    @app.put("/api/rooms/{slug}/name")
+    async def rename_room(request: Request, slug: str) -> Response:
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        try:
+            body = await _json_body(request)
+            if set(body) != {"name"} or not isinstance(body["name"], str):
+                raise ServiceError("bad_request", "name is required")
+            room = state.service.room_for(slug, viewer(request))
+            renamed = state.service.rename_room(room, body["name"], w.name)
+            return _ok({"room": state.service.room_dict(renamed)})
+        except ServiceError as e:
+            return _svc_err(e)
+
     # The room's own budget per hour and hop limit (#131), from its settings dialog: the same
     # Origin and X-Switchboard checks as /rules above, never reachable through chat.
     @app.put("/api/rooms/{slug}/wake")
