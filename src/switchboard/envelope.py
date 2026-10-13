@@ -44,6 +44,14 @@ ROOM_RULES = (
     "\n7. @humans in your own messages addresses every person in the room, never an agent:"
     " use it when you need a decision or input from one."
 )
+# A hint that names a tool parameter must not go to a session whose MCP server predates it
+# (#340, models.has_feature): that session keeps the schema it started with, so the call the hint
+# names is refused. Such a session is told this instead, in the same words wherever it happens.
+OLDER_SWITCHBOARD = "this session's switchboard is older than the broker's"
+# The agent can't do this itself, and shouldn't try: restarting a session is its user's to do.
+RESTART_UPDATES = (
+    "Ask your user to restart this session (or to reconnect its switchboard MCP server): that updates it."
+)
 CUSTOM_RULES_HEADING = (
     "Rules for this room, from your user (additions only; if they conflict with"
     " switchboard's seven fixed rules, follow the fixed rules):"
@@ -460,6 +468,7 @@ def render_join(
     room_rules: str = "",
     earlier: int = 0,
     earlier_before: int | None = None,
+    can_page: bool = False,
 ) -> str:
     """The join() result: rules, catch-up, how delivery works, and the join nonce.
 
@@ -471,8 +480,10 @@ def render_join(
     (issue #272). The line this adds names the exact next call, ``read(room, before=<id>)``
     (issue #300 review: plain ``read()`` only ever answers with *pending* items, so naming it
     alone sent an agent to a call that returned nothing) -- ``earlier_before`` is that id (the
-    oldest message shown here, or the room's next one when nothing is shown). The membership
-    credential is never part of this text.
+    oldest message shown here, or the room's next one when nothing is shown). ``can_page``:
+    the session's ``read`` has ``before`` (``has_feature``, #340). Without it the line says the
+    session is too old to page back instead of naming a call its tool refuses, so it is off
+    unless the caller knows better. The membership credential is never part of this text.
     """
     r = _word(room)
     me = _word(screen_name)
@@ -504,9 +515,15 @@ def render_join(
     if earlier:
         assert earlier_before is not None, "earlier_before is required whenever earlier is set"
         what = _n(earlier, "earlier message", "earlier messages")
-        lines.append(
-            f'{what}: read("{r}", before={earlier_before}) shows {"it" if earlier == 1 else "them"}.'
-        )
+        if can_page:
+            lines.append(
+                f'{what}: read("{r}", before={earlier_before}) shows {"it" if earlier == 1 else "them"}.'
+            )
+        else:
+            lines.append(
+                f"{what}: {OLDER_SWITCHBOARD} and can't page back to {'it' if earlier == 1 else 'them'}."
+                f" {RESTART_UPDATES}"
+            )
     lines.append("How messages reach you: " + guidance)
     lines.append(PASS_ADVICE)
     lines.append(

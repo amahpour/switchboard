@@ -66,6 +66,11 @@ class ReviewError(ValueError):
     """A move that isn't allowed, or input that doesn't fit. The message is for the caller."""
 
 
+class ProofRequired(ReviewError):
+    """A fix came without its proof (#251). Its own class so the agent service can tell a session
+    whose ``review`` tool has no ``proof`` field to update, not to send one (#340)."""
+
+
 @dataclass(frozen=True)
 class Item:
     id: int
@@ -125,7 +130,9 @@ def url(value: Any) -> str:
 
 def proof(value: Any) -> str:
     """A test's name or an http(s) proof link; the broker checks shape, not its contents."""
-    p = text(value, "proof", MAX_PROOF, required=True)
+    p = text(value, "proof", MAX_PROOF)
+    if not p:
+        raise ProofRequired("proof is required")
     if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", p) and not URL_RE.fullmatch(p):
         raise ReviewError("proof link must be an http(s) URL, or give the test's name")
     return p

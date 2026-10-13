@@ -1,7 +1,8 @@
 """#304 (DESIGN.md §6.1): an agent restarted into a new session takes its name back with the join
 code its earlier join answered with, in each room it was in; without that code, or with any other,
 the name stays reserved; and a code never moves a name to another machine, harness or a kicked
-agent. Stand-in Claude sessions (tests/fakes/fake_claude.py) against an in-process broker."""
+agent. The refusal tells a session to use ``resume`` only if its MCP server has it (#340).
+Stand-in Claude sessions (tests/fakes/fake_claude.py) against an in-process broker."""
 
 from __future__ import annotations
 
@@ -16,8 +17,10 @@ from conftest import InProcBroker
 from fakes.fake_agent import FakeAgent
 from fakes.fake_claude import FakeClaude
 
+from switchboard import __version__
 from switchboard.broker.agents import cred_hash
 from switchboard.config import Config
+from switchboard.mcp.client import RpcError, Stream
 from switchboard.models import session_key
 
 FAST = Config(human_name="alice").with_delivery(quiet_s=0.0, max_hold_s=0.0)
@@ -161,3 +164,78 @@ def test_a_code_never_moves_a_name_to_another_machine_harness_or_a_kicked_agent(
         assert r["ok"], r  # the right code, same machine and harness, not kicked here
     finally:
         new.close()
+
+
+# ----------------------------------------------- the refusal's hint follows the caller (#340)
+OLDER = "this session's switchboard is older than the broker's"
+
+
+def planner_left(b: InProcBroker) -> None:
+    """Another session held ``planner`` in #build and left, so the name is reserved for a day."""
+    with Stream(b.paths.sock, timeout=5) as holder:
+        holder.call("mcp.hello", {"harness": "test", "test_session": "holder"}, 5)
+        joined = holder.call("agent.join", {"room": "#build", "screen_name": "planner"}, 5)
+        holder.call("agent.leave", {"cred": joined["cred"]}, 5)
+
+
+def refusal_for(b: InProcBroker, claim: dict[str, Any], **join: Any) -> str:
+    """The ``name_reserved`` text a session gets when its MCP server's ``mcp.hello`` claims
+    ``claim`` (a version, or nothing) and it joins as ``planner`` after the holder left."""
+    planner_left(b)
+    with Stream(b.paths.sock, timeout=5) as s:
+        s.call("mcp.hello", {"harness": "test", "test_session": "caller", **claim}, 5)
+        with pytest.raises(RpcError) as refused:
+            s.call("agent.join", {"room": "#build", "screen_name": "planner", **join}, 5)
+    assert refused.value.code == "name_reserved", refused.value
+    return refused.value.message
+
+
+@pytest.mark.parametrize("version", [__version__, "0.25.0", "0.25.7", "1.0.0"])
+def test_a_session_that_has_resume_is_told_to_use_it(broker: InProcBroker, version: str) -> None:
+    """A session whose MCP server is from 0.25.0 or later has the ``resume`` parameter, so the
+    refusal still tells it to use that, as it has since #304. A fix that always dropped the hint
+    would leave current sessions with no way to learn how to take their name back."""
+    text = refusal_for(broker, {"version": version})
+    assert "join again with resume= set to the code" in text and "pick another" in text, text
+    assert OLDER not in text, text
+
+
+@pytest.mark.parametrize("version", ["0.24.9", "0.24.0", "0.23.0", "0.1.0"])
+def test_a_session_from_before_resume_is_not_told_to_use_it(broker: InProcBroker, version: str) -> None:
+    """The bug (#340): a session whose MCP server is from before 0.25.0 was told to join again
+    with ``resume=``, a parameter its ``join`` tool doesn't have, so the call was refused and the
+    agent joined under another name. It is told its switchboard is older than the broker's, that
+    a restart updates it, and that it can still pick another name; ``resume`` isn't named."""
+    text = refusal_for(broker, {"version": version})
+    assert "resume" not in text, text
+    assert OLDER in text and "Ask your user to restart this session" in text and "pick another" in text, text
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        pytest.param({}, id="absent"),
+        pytest.param({"version": None}, id="null"),
+        pytest.param({"version": 25}, id="not a string"),
+        pytest.param({"version": "not a version!"}, id="not a version"),
+        pytest.param({"version": "0.25"}, id="no patch number"),
+        pytest.param({"version": "dev"}, id="a word"),
+        pytest.param({"version": "9" * 40}, id="too long"),
+    ],
+)
+def test_a_session_that_does_not_say_its_version_is_not_told_to_use_resume(
+    broker: InProcBroker, claim: dict[str, Any]
+) -> None:
+    """A claim is not trusted to be there or to parse. A version the broker can't read counts as
+    too old: the conservative answer names no parameter the session may not have, and the cost of
+    being wrong is one restart, not an agent stuck on a call its tool refuses."""
+    text = refusal_for(broker, claim)
+    assert "resume" not in text, text
+    assert OLDER in text and "pick another" in text, text
+
+
+def test_a_wrong_code_is_answered_the_same_whatever_the_version(broker: InProcBroker) -> None:
+    """A caller that passes ``resume`` has the parameter, whatever version it claims, so its
+    refusal says the code isn't this name's, as before, and doesn't tell it to update."""
+    text = refusal_for(broker, {"version": "0.24.0"}, resume="yk:j" + "0" * 16)
+    assert "isn't this name's" in text and OLDER not in text, text

@@ -9,7 +9,7 @@ import json
 import re
 import sqlite3
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from switchboard import __version__
 
@@ -35,6 +35,32 @@ def behind_by_minor(claim: str | None, broker: str = __version__) -> bool:
     if old is None or current is None:
         return False
     return (int(old[1]), int(old[2])) < (int(current[1]), int(current[2]))
+
+
+# The first release whose MCP server has each tool parameter that broker text tells an agent to
+# use (DESIGN.md §6.1, #340). A session keeps the MCP server it started with, so after `switchboard update` it
+# can be older than the broker, and a hint naming a parameter its tool lacks sends it to a call
+# its own schema refuses. Add a line here before writing a hint that names a newer parameter
+# (the release is the first tag that contains the commit that added it).
+Feature = Literal["join.resume", "read.before", "review.proof"]
+FEATURE_SINCE: dict[Feature, tuple[int, int]] = {
+    "join.resume": (0, 25),  # #304
+    "read.before": (0, 25),  # #300
+    "review.proof": (0, 26),  # #251
+}
+_MAX_CLAIM = 32  # a version claim is cut to this (agents.VERSION_RE) before it gets here
+
+
+def has_feature(claim: str | None, feature: Feature) -> bool:
+    """Whether an MCP server that claims release ``claim`` has ``feature``. Fails closed: a claim
+    that is missing, not a string, too long or not ``X.Y.Z`` (with an optional suffix, ignored
+    as ``behind_by_minor`` does) has nothing, so a hint is never sent on a guess. The claim comes
+    from the session, which can say anything; it grants nothing, it only picks the wording.
+    A ``feature`` that is not in ``FEATURE_SINCE`` is a bug in the caller and raises ``KeyError``."""
+    if not isinstance(claim, str) or len(claim) > _MAX_CLAIM:
+        return False
+    got = RELEASE_RE.fullmatch(claim)
+    return got is not None and (int(got[1]), int(got[2])) >= FEATURE_SINCE[feature]
 
 
 # A remote host's name (DESIGN.md §27.5.1): the config name of a remote in remotes.toml.
