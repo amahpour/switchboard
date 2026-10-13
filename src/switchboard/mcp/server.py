@@ -443,7 +443,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RW_IDEM)
     async def join(room: str, screen_name: str, ctx: Context, resume: str = "") -> str:
-        """Join a room only when your user asks. Returns rules and recent messages."""
+        """Join a room (only when your user asks): rules and recent messages."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         if st.harness == "codex" and not tid:
@@ -481,7 +481,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RW_IDEM)
     async def leave(room: str, ctx: Context) -> str:
-        """Leave a switchboard room."""
+        """Leave a room."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = st.cred_for(room, tid)
@@ -495,7 +495,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RO)
     async def who(room: str, ctx: Context) -> str:
-        """List a joined room's members, status and delivery tier."""
+        """A joined room's members, status and delivery tier."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = st.cred_for(room, tid)
@@ -508,8 +508,8 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RW)
     async def say(room: str, text: str, ctx: Context, reply_to: int = 0, since: int = -1) -> str:
-        """Post; return prior unread messages. since=last id seen: refused, with the newer
-        chat, if any. Markdown renders; no raw HTML or images."""
+        """Post; return prior unread. since=last id seen: refused, with newer chat, if any.
+        Markdown renders; no raw HTML or images."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = st.cred_for(room, tid)
@@ -573,7 +573,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RO)
     async def read(room: str, ctx: Context, limit: int = 20, before: int = 0) -> str:
-        """not shown here, oldest first."""
+        """Unread in full, "not shown here" too, oldest first. before=id: older chat."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = st.cred_for(room, tid)
@@ -589,7 +589,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RO)
     async def wait(room: str, ctx: Context, timeout_s: int = 50) -> str:
-        """Wait for delivery in a room or a timeout."""
+        """Wait for a delivery, or the timeout."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = st.cred_for(room, tid)
@@ -610,8 +610,8 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(name="pass", annotations=RW)
     async def pass_(ctx: Context, room: str = "", note: str = "") -> str:
-        """Choose no reply after reading. Refused if "not shown here" is unread: call
-        read() first. Logged, not posted."""
+        """No reply, after reading. Refused if "not shown here" is unread: call read() first.
+        Logged, not posted."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         if room:
