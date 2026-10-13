@@ -989,6 +989,55 @@ class AgentService:
                 "bad_request",
                 f"message too long ({len(text)} > {self.cfg.delivery.max_msg_chars} characters)",
             )
+        if "since" in params:
+            try:
+                since = rules.since_id(params["since"], self.store.last_message_id(room.id))
+            except ValueError as e:
+                raise ServiceError("bad_request", str(e)) from None
+            # Look at delivery rows, including already-read ones: only chat this member could
+            # see may make a composed answer stale. Refuse before rate limiting or queueing.
+            newer = self.store.visible_items_since(m.id, since)
+            if newer:
+                overflow = len(newer) > 50
+                fit = envelope.fit_batch(
+                    newer[:50],
+                    room=room.name,
+                    recipient=m.screen_name,
+                    human_name=self.cfg.human_name,
+                    peer_inline=True,
+                    max_chars=self.cfg.delivery.pull_max_chars,
+                    item_limit=None,
+                    shrink=False,
+                )
+                more = overflow or fit.more
+                handback = envelope.render_batch(
+                    fit.items,
+                    room=room.name,
+                    recipient=m.screen_name,
+                    human_name=self.cfg.human_name,
+                    token=None,
+                    peer_inline=True,
+                    item_limit=None,
+                    limits=fit.limits,
+                )
+                return {
+                    "ok": False,
+                    "code": "stale",
+                    "error": "newer messages arrived; revise your post and send it again",
+                    "posted_id": None,
+                    "text": handback,
+                    "batch_id": None,
+                    "count": len(fit.items),
+                    "more": more,
+                    **(
+                        {
+                            "next_since": fit.items[-1].message_id,
+                            "note": "more newer messages: retry say with next_since to see them",
+                        }
+                        if more
+                        else {}
+                    ),
+                }
         reply_to = params.get("reply_to")
         target = self.svc.reply_target(room, reply_to)
         # the rate limit (DESIGN.md §8.4): a say it refuses waits in a short queue. One it lets

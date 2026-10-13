@@ -1819,6 +1819,20 @@ class Store:
         ).fetchall()
         return [Item.from_row(r) for r in rows]
 
+    def visible_items_since(self, membership_id: int, since: int, limit: int = 51) -> list[Item]:
+        """Chat delivered to this member after an id, including messages already read.
+
+        Delivery rows exclude its own posts, notices, messages before it joined and any chat
+        explicitly withheld from it (such as a /catchup request about it).
+        """
+        rows = self.con.execute(
+            self._ITEM_SQL + " WHERE d.membership_id=? AND d.message_id>? AND m.kind='chat'"
+            " AND m.sender_kind IN ('human', 'agent')"
+            " ORDER BY d.message_id LIMIT ?",
+            (membership_id, since, limit),
+        ).fetchall()
+        return [Item.from_row(r) for r in rows]
+
     def batch_items(self, batch_id: int) -> list[Item]:
         rows = self.con.execute(
             self._ITEM_SQL + " WHERE d.batch_id=? ORDER BY d.message_id", (batch_id,)

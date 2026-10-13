@@ -507,9 +507,9 @@ def build_server(st: McpState) -> FastMCP:
         return dumps(res)
 
     @mcp.tool(annotations=RW)
-    async def say(room: str, text: str, ctx: Context, reply_to: int | None = None) -> str:
-        """Post to the room; return prior unread messages. Markdown renders; raw HTML and
-        images do not."""
+    async def say(room: str, text: str, ctx: Context, reply_to: int = 0, since: int = -1) -> str:
+        """Post; return prior unread messages. since=last id seen: refused, with the newer
+        chat, if any. Markdown renders; no raw HTML or images."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = st.cred_for(room, tid)
@@ -517,8 +517,10 @@ def build_server(st: McpState) -> FastMCP:
             return got
         name, cred = got
         params = {**st.base(cred, tid), "text": text}
-        if reply_to is not None:
+        if reply_to:
             params["reply_to"] = reply_to
+        if since >= 0:
+            params["since"] = since
         res = await st.call("agent.say", params)
         st.forget(res, (tid, name))
         return dumps(res)
