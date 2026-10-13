@@ -359,6 +359,30 @@ class McpState:
             return err(f'you are not in {name}: call join("{name}", your_screen_name) first', "not_member")
         return name, cred
 
+    async def find_cred(self, room: str, tid: str | None) -> tuple[str, str] | str:
+        """``cred_for``, and when the name is unknown here, a room this session is in that was
+        renamed to it (#316). A rename keeps the membership, but this server holds its credential
+        under the name it joined with, while everything the agent reads after the rename uses the
+        new one. So on a miss, each held membership is asked what its room is called now
+        (``agent.who`` already answers with it), and a match is kept under the new name too. Both
+        names work from then on; a room this session never joined is still ``not_member``."""
+        got = self.cred_for(room, tid)
+        if not isinstance(got, str):
+            return got
+        try:
+            name = normalize_room(room)
+        except InvalidName:
+            return got
+        for (t, held), cred in list(self.creds.items()):
+            if t != tid:
+                continue
+            res = await self.call("agent.who", self.base(cred, tid))
+            self.forget(res, (t, held))
+            if res.get("ok") is not False and res.get("room") == name:
+                self.creds[(tid, name)] = cred
+                return name, cred
+        return got
+
     def base(self, cred: str, tid: str | None) -> dict[str, Any]:
         p: dict[str, Any] = {"cred": cred}
         if tid:
@@ -486,7 +510,7 @@ def build_server(st: McpState) -> FastMCP:
         """Leave a room."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
-        got = st.cred_for(room, tid)
+        got = await st.find_cred(room, tid)
         if isinstance(got, str):
             return got
         name, cred = got
@@ -500,7 +524,7 @@ def build_server(st: McpState) -> FastMCP:
         """Room members, status and tier."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
-        got = st.cred_for(room, tid)
+        got = await st.find_cred(room, tid)
         if isinstance(got, str):
             return got
         name, cred = got
@@ -514,7 +538,7 @@ def build_server(st: McpState) -> FastMCP:
         No HTML/images."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
-        got = st.cred_for(room, tid)
+        got = await st.find_cred(room, tid)
         if isinstance(got, str):
             return got
         name, cred = got
@@ -549,7 +573,7 @@ def build_server(st: McpState) -> FastMCP:
         fix(item,commit)."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
-        got = st.cred_for(room, tid)
+        got = await st.find_cred(room, tid)
         if isinstance(got, str):
             return got
         name, cred = got
@@ -577,7 +601,7 @@ def build_server(st: McpState) -> FastMCP:
         """Unread in full incl. "not shown here", oldest first; before=id gets older chat."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
-        got = st.cred_for(room, tid)
+        got = await st.find_cred(room, tid)
         if isinstance(got, str):
             return got
         name, cred = got
@@ -593,7 +617,7 @@ def build_server(st: McpState) -> FastMCP:
         """Wait for delivery or timeout."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
-        got = st.cred_for(room, tid)
+        got = await st.find_cred(room, tid)
         if isinstance(got, str):
             return got
         name, cred = got
@@ -615,7 +639,7 @@ def build_server(st: McpState) -> FastMCP:
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         if room:
-            got = st.cred_for(room, tid)
+            got = await st.find_cred(room, tid)
             if isinstance(got, str):
                 return got
             targets = [got]

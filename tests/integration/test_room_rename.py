@@ -33,6 +33,33 @@ async def test_rename_keeps_an_existing_agent_and_redirects_new_joins(broker: In
     web.close()
 
 
+async def test_an_agent_can_use_the_new_name_without_joining_again(broker: InProcBroker) -> None:
+    """After a rename, everything an agent reads names the room by its new name, but its MCP
+    server held the membership under the name it joined with, so following that text answered
+    "you are not in #new". The server now asks its memberships what their rooms are called and
+    adopts the new name: both names work, nothing is re-joined, and a room the agent was never
+    in is still refused."""
+    web = broker.web_client()
+    headers = broker.write_headers()
+    assert web.post("/api/rooms", json={"name": "#old"}, headers=headers).status_code == 200
+    async with FakeAgent(broker.home, "room-rename-follow") as agent:
+        assert (await agent.join("#old", "worker"))["ok"]
+        assert web.put("/api/rooms/old/name", json={"name": "#new"}, headers=headers).status_code == 200
+        text = (await agent.read("#new"))["text"]  # the name the notice itself taught it
+        assert "renamed #old to #new" in text
+        who = await agent.who("#new")
+        assert who["ok"] and who["room"] == "#new", who
+        assert (await agent.who("#old"))["ok"]  # the old key still works
+        said = await agent.say("#new", "found it")
+        assert said["ok"], said
+        other = await agent.who("#never-joined")
+        assert not other["ok"] and other["code"] == "not_member", other
+        rows = web.get("/api/rooms/new/messages").json()["messages"]
+        assert [m["kind"] for m in rows].count("join") == 1  # it never joined again
+        assert any(m["text"] == "found it" for m in rows)
+    web.close()
+
+
 async def test_rename_command_is_web_only_and_aliases_survive_another_rename(broker: InProcBroker) -> None:
     """Only a browser can rename; all old MCP room keys keep their memberships."""
     web = broker.web_client()

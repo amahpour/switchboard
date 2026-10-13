@@ -4,6 +4,7 @@ the renames touch no other test's world. Marker ``e2e``."""
 
 from __future__ import annotations
 
+import re
 import shutil
 from collections.abc import Iterator
 from typing import Any
@@ -88,11 +89,18 @@ def test_room_title_renames_with_keyboard_and_keeps_focus(
     expect(title_button).to_be_focused()
     expect(page.locator('#tabs .room[data-room="' + new + '"]')).to_have_count(1)
     assert page.evaluate("location.hash") == new
+    # the composer names the room it posts to: it kept the old name until the page was reloaded
+    expect(page.locator("#input")).to_have_attribute(
+        "placeholder", re.compile("^Message " + re.escape(new) + " ")
+    )
     final = new + "-cmd"
     page.fill("#input", "/rename " + final)
     page.keyboard.press("Enter")
     expect(title).to_have_text(final[1:])
     assert page.evaluate("location.hash") == final
+    expect(page.locator("#input")).to_have_attribute(
+        "placeholder", re.compile("^Message " + re.escape(final) + " ")
+    )
 
 
 @pytest.fixture(scope="module")

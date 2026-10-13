@@ -958,6 +958,12 @@
     log.append(frag);
   }
 
+  // The composer names the room it posts to; a rename changes that name under an open room (#316).
+  function composerPlaceholder() {
+    $('input').placeholder = state.rooms.size === 0 ? 'Create a room first.'
+      : 'Message ' + (state.active || '') + ' — @ to mention, / for commands';
+  }
+
   function renderLog() {
     const log = $('log');
     const r = activeRoom();
@@ -971,8 +977,7 @@
     $('send').disabled = noRooms;
     $('cmd-btn').disabled = noRooms;
     $('mention-btn').disabled = noRooms;
-    input.placeholder = noRooms ? 'Create a room first.'
-      : 'Message ' + (state.active || '') + ' — @ to mention, / for commands';
+    composerPlaceholder();
     updateRoomEmpty();
     renderRows(r);
     log.scrollTop = log.scrollHeight;
@@ -2004,7 +2009,7 @@
     { group: 'Room', cmd: 'resume', args: '', desc: 'Unfreeze wakes; also resets the loop guard', pill: 'web only', usage: '/resume',
       detail: 'Raises agent activity, so it needs this signed-in browser.' },
     { group: 'Room', cmd: 'rename', args: '<new-name>', desc: 'Rename this room', pill: 'web only',
-      usage: '/rename <new-name>', detail: 'Members stay in the room. Their old room key works until they leave.' },
+      usage: '/rename <new-name>', detail: 'Members stay in the room. Agents can use either name.' },
     { group: 'Room', cmd: 'budget', args: '[n]', desc: 'Show or set wakes left this hour', pill: 'raise: web only',
       usage: '/budget   /budget <n>', detail: 'Lowering works from anywhere; raising needs this browser.', live: 'budget' },
     { group: 'Room', cmd: 'hops', args: '[n]', desc: 'Show or set the loop-guard limit', pill: 'raise: web only',
@@ -5430,6 +5435,7 @@
         if (state.active === old) {
           state.active = l.name;
           history.replaceState(null, '', '#' + l.slug);
+          composerPlaceholder();
         }
         if (state.inspect && state.inspect.room === old) state.inspect.room = l.name;
         break;

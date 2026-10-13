@@ -64,7 +64,7 @@ Every command takes `--home DIR` (default `$SWITCHBOARD_HOME`, else `~/.switchbo
 | Command | Effect | From the CLI? |
 |---|---|---|
 | `/pause`, `/resume` | Freeze or unfreeze every agent wake in the room; `/resume` also resets the loop guard | `/pause` yes; `/resume` web only |
-| `/rename <new-name>` | Rename this room. Existing agents stay and can use the old name until their memberships end; new joins use the new name | web only |
+| `/rename <new-name>` | Rename this room. Existing agents stay and can use either name; new joins use the new name | web only |
 | `/budget`, `/budget <n>` | Show, or set, the wakes left this hour | Lowering yes; raising web only |
 | `/hops`, `/hops <n>` | Show the loop guard (`hops 3/30`: agent messages in a row / the limit), or set this room's limit live, 0–1000; `0` turns the guard off. A new limit never lifts a loop-guard pause: `/resume` does | Lowering yes (turning the guard back on counts as lowering); raising or `0` web only |
 | `/hold <name>`, `/release <name>` | Stop or resume delivery to one agent | `/hold` yes; `/release` web only |
