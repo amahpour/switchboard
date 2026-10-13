@@ -1,6 +1,6 @@
 ---
 name: record-verification
-description: Record a short, captioned screen recording of a web UI change working, for a pull request's Verification section - a throwaway broker, headless Chromium, a scenario file of clicks and captions, and an MP4, an inline GIF and a sheet of its steps. Use when a change is to something a person does in the web UI (a click path, a dialog, a layout that responds), or when asked to record the verification.
+description: Record a short, captioned screen recording of a web UI change working, for a pull request's Verification section - a throwaway broker, headless Chromium, a scenario file of clicks and captions, and an MP4 and a sheet of its steps, never committed to the repository. Use when a change is to something a person does in the web UI (a click path, a dialog, a layout that responds), or when asked to record the verification.
 argument-hint: "<what to show, or the pull request's number>"
 ---
 
@@ -19,7 +19,7 @@ The tests' output goes in the section either way. A recording shows the change w
 
 1. **Write the captions first.** One change, three to six steps, under thirty seconds. A caption says what the person does or what to look at, in plain words, and it is a claim: the picture under it has to show it. For a fix, captions that name the action ("Open Members again") rather than the result ("the name stays whole") read true on `main` as well, so one file records both.
 
-2. **Write the scenario**, a file of its own outside the repo's tree (it travels with the recording, step 6):
+2. **Write the scenario**, a file of its own outside the repo's tree (it is pasted into the pull request, step 6):
 
    ```python
    """What this shows, in a line."""
@@ -58,20 +58,17 @@ The tests' output goes in the section either way. A recording shows the change w
 
    `--dark` and `--phone` (390x844) change the theme and the size; `--name` names the files. It starts a broker and a browser, so on a shared machine it waits its turn like a test suite ([CONTRIBUTING.md](../../../CONTRIBUTING.md), "Sharing a machine"). A wait that times out exits non-zero: fix the scenario, don't lengthen a pause.
 
-4. **Look at it before you post it.** Open `<name>.steps.png`: the picture at the end of each step, caption and all. For each one: does it show what its caption says? Is anything cut off, covered by a tip, or caught mid-animation? Is everything in it test data? Then watch the GIF once if you can.
+4. **Look at it before you post it.** Open `<name>.steps.png`: the picture at the end of each step, caption and all. For each one: does it show what its caption says? Is anything cut off, covered by a tip, or caught mid-animation? Is everything in it test data? Then watch the recording once if you can.
 
    A recording often shows something nobody asked about: a name cut to one letter, an error in a dialog nobody has typed in yet. That is a finding. Fix it if this change caused it, file an issue if it didn't, and never rewrite the scenario to steer around it.
 
 5. **For a fix, record the bug too,** when the same clicks show it: in a worktree of `origin/main`, the same file with `--name <name>-before`. If the scenario can't run there (it waits for something the fix adds), a still of the bug is enough.
 
-6. **Post it.** Push the `.gif`, the `.mp4` and the scenario file to `design-assets` under `pr-<number>/` (or a branch of your fork), as the previews are, and link them by commit SHA. In the pull request's Verification:
+6. **Post it, and keep it out of git.** A recording is never committed or pushed, to any branch: not the pull request's, not `design-assets`, not a fork's. A side branch is still the repository, and every full clone downloads it. The stills stay the only pictures in git.
 
-   ```markdown
-   | `main` | this branch |
-   |---|---|
-   | ![before: the name reads "s…"](https://raw.githubusercontent.com/<owner>/switchboard/<sha>/pr-<number>/<name>-before.gif) | ![after: the name stays whole](https://raw.githubusercontent.com/<owner>/switchboard/<sha>/pr-<number>/<name>.gif) |
+   - **In the pull request,** a recording appears only as a GitHub attachment: the `.mp4` dragged into the description or a comment in a signed-in browser. GitHub keeps an attachment outside the repository and plays it inline. Put each one on a line of its own, under a sentence that says what it shows, for someone who can't play it; for a fix, the one from `main` first.
+   - **With no signed-in browser** (most agents), don't look for another place to put it. Leave the files where you made them, write in the Verification "A recording of this exists and is not attached yet", and tell the maintainer in your report where the files are. The path goes in the report, never in the pull request: it is a public repo.
+   - **The scenario** is a few lines of text: paste it into the Verification inside a `<details>` block, so the recording can be made again.
+   - **The steps sheet** is for your own check in step 4. It isn't posted.
 
-   MP4: [before](…), [after](…). Scenario: [`<name>.py`](…).
-   ```
-
-   The alt text says what the recording shows, for someone who can't play it. A GIF plays inline; the MP4 is the sharp copy. A short scenario makes a GIF of a few hundred kilobytes: one of several megabytes is a scenario that is too long.
+   A short scenario makes an MP4 of a few hundred kilobytes: one of several megabytes is a scenario that is too long.

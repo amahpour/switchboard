@@ -83,6 +83,7 @@
     sheetOpener: null, // the control that opened the Closed, Remotes or Passkeys sheet (focus returns to it)
     passkeyBusy: false, // an Add a passkey ceremony is under way
     boardOpen: false,  // the active room's review board is shown instead of its log (#80)
+    boardDetailW: null,  // the open card's width, set with its divider (#343): a step, 'max', or null (its share)
     boardSel: null,    // the label of the board card whose detail is open
     // Focus mode (#99): collapse agent chat not addressed to you. In memory only: no existing
     // preference fits a plain on/off toggle, and the lint bans browser storage for a new one
@@ -4911,6 +4912,7 @@
 
   function renderBoard() {
     const handoffFocused = document.activeElement && document.activeElement.id === 'board-handoff';
+    const dividerFocused = document.activeElement && document.activeElement.id === 'board-divider';
     const r = activeRoom();
     const b = r ? r.board : null;
     const toggle = $('board-toggle');
@@ -4923,6 +4925,7 @@
     const box = $('board');
     box.classList.toggle('hidden', !open);
     if (!open) {
+      boardParts = null;
       box.replaceChildren();
       return;
     }
@@ -5016,14 +5019,130 @@
     const body = el('div', 'board-body');
     body.append(lanes);
     const sel = state.boardSel ? b.items.find(function (i) { return i.label === state.boardSel; }) : null;
-    if (sel) body.append(boardDetail(r, sel));
-    else state.boardSel = null;
+    boardParts = null;
+    if (sel) {
+      // the card beside the lanes, with the divider that trades width between them (#343)
+      const divider = boardDivider();
+      const detail = boardDetail(r, sel);
+      body.classList.add('has-detail');
+      body.append(divider, detail);
+      boardParts = { body: body, divider: divider, detail: detail, rung: null };
+      applyBoardDetailW();
+    } else state.boardSel = null;
     if (unable.length) box.replaceChildren(head, notes, body);
     else box.replaceChildren(head, body);
+    syncBoardDivider();
     if (handoffFocused) {
       const handoff = $('board-handoff');
       if (handoff) handoff.focus();
     }
+    // every board event redraws the board: the divider keeps the focus it had
+    if (dividerFocused && boardParts) boardParts.divider.focus();
+  }
+
+  // The open card's width (#343). It was a fixed 340 px, cramped on a wide window. The card now
+  // takes a share of the board, and the divider between it and the lanes is dragged, or moved
+  // with the arrow keys, to trade width between the two. This page never writes a style (the
+  // CSP, and the static test that keeps it honest), so the width is one of a ladder of classes
+  // on the board's body, dw-0 (340 px) to dw-60 in steps of 24 px, or dw-max for all the lanes
+  // can spare; style.css has the ladder and the same numbers. It is kept in state, so a redraw
+  // and the next card open at it, and it lasts while the page is open.
+  const BOARD_DETAIL_MIN = 340;  // the card's old fixed width, and dw-0
+  const BOARD_LANES_MIN = 420;   // three lanes, each wide enough for a title to read a word at a time
+  const BOARD_DIVIDER = 18;      // the divider's track and the gap on each side of it
+  const BOARD_STEP = 24;         // one rung of the ladder, and one press of an arrow key
+  const BOARD_STEPS = 60;        // the top rung, 1780 px
+  let boardParts = null;         // { body, divider, detail, rung } while a card is open
+
+  // What the card's width may be now, or null when there is nothing to resize: no card is
+  // open, or the board is too narrow and the card sits under the lanes.
+  function boardDetailRange() {
+    const parts = boardParts;
+    if (!parts || typeof parts.body.getBoundingClientRect !== 'function') return null;
+    const whole = parts.body.getBoundingClientRect();
+    const max = Math.floor(whole.width) - BOARD_DIVIDER - BOARD_LANES_MIN;
+    if (max < BOARD_DETAIL_MIN) return null;
+    const card = parts.detail.getBoundingClientRect();
+    return { min: BOARD_DETAIL_MIN, max: max, now: Math.round(card.width), left: card.left, right: whole.right };
+  }
+
+  function applyBoardDetailW() {
+    const parts = boardParts;
+    if (!parts) return;
+    if (parts.rung) parts.body.classList.remove(parts.rung);
+    parts.rung = state.boardDetailW === null ? null : 'dw-' + state.boardDetailW;
+    if (parts.rung) parts.body.classList.add(parts.rung);
+  }
+
+  // px goes to the nearest rung within the range; null goes back to the card's share of the board
+  function setBoardDetailW(px) {
+    const range = boardDetailRange();
+    if (!range) return;
+    if (px === null) state.boardDetailW = null;
+    else if (px >= range.max) state.boardDetailW = 'max';
+    else {
+      const rung = Math.round((Math.max(range.min, px) - BOARD_DETAIL_MIN) / BOARD_STEP);
+      state.boardDetailW = Math.min(BOARD_STEPS, rung);
+    }
+    applyBoardDetailW();
+    syncBoardDivider();
+  }
+
+  // a separator that takes focus says where it is and how far it can go
+  function syncBoardDivider() {
+    const range = boardDetailRange();
+    if (!range) return;
+    const d = boardParts.divider;
+    d.setAttribute('aria-valuemin', String(range.min));
+    d.setAttribute('aria-valuemax', String(range.max));
+    d.setAttribute('aria-valuenow', String(range.now));
+    d.setAttribute('aria-valuetext', 'The open card is ' + range.now + ' pixels wide');
+  }
+
+  function boardDivider() {
+    const d = el('div', 'board-divider');
+    d.id = 'board-divider';
+    d.tabIndex = 0;
+    d.setAttribute('role', 'separator');
+    d.setAttribute('aria-orientation', 'vertical');
+    d.setAttribute('aria-label', 'Resize the open card');
+    d.title = 'Drag to resize the open card. Double-click to reset.';
+    d.addEventListener('pointerdown', function (e) {
+      const from = boardDetailRange();
+      if (!from || (e.button !== undefined && e.button !== 0)) return;
+      e.preventDefault();  // no text selection while dragging
+      d.focus();
+      // The listeners are on the window, not the divider: a board event redraws the board
+      // mid-drag, and the divider under the pointer is then a new element.
+      const grab = from.left - e.clientX;  // the pointer stays this far from the card's edge
+      const move = function (ev) {
+        const range = boardDetailRange();
+        if (range) setBoardDetailW(range.right - ev.clientX - grab);
+      };
+      const stop = function () {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', stop);
+        window.removeEventListener('pointercancel', stop);
+        document.documentElement.classList.remove('board-resizing');
+      };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', stop);
+      window.addEventListener('pointercancel', stop);
+      document.documentElement.classList.add('board-resizing');
+    });
+    d.addEventListener('keydown', function (e) {
+      const range = boardDetailRange();
+      if (!range) return;
+      // Left moves the divider left, which widens the card; Home and End are its limits
+      const to = e.key === 'ArrowLeft' ? range.now + BOARD_STEP
+        : e.key === 'ArrowRight' ? range.now - BOARD_STEP
+          : e.key === 'Home' ? range.min : e.key === 'End' ? range.max : null;
+      if (to === null) return;
+      e.preventDefault();
+      setBoardDetailW(to);
+    });
+    d.addEventListener('dblclick', function () { setBoardDetailW(null); });
+    return d;
   }
 
   // One agent posts the reviewed summary and each person-decided line (§37.6).
@@ -5469,6 +5588,8 @@
       renderInspector();
     });
     if (typeof window.addEventListener === 'function') window.addEventListener('resize', setOverlay);
+    // the divider's limits follow the window (#343)
+    if (typeof window.addEventListener === 'function') window.addEventListener('resize', syncBoardDivider);
     setPaneView(false);
     setOverlay();
     updateWelcome();

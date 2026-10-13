@@ -4,10 +4,11 @@
     uv run --group record python docs/media/ui_record.py rename-room --out /tmp/recordings
     uv run --group record python docs/media/ui_record.py path/to/my_change.py --out /tmp/recordings
 
-Writes ``<out>/<name>.mp4``, ``<out>/<name>.gif`` (a GIF plays inline in a pull request) and
-``<out>/<name>.steps.png`` (the picture at the end of each step, side by side: what an agent, or
-anyone without a video player, looks at before posting the recording). Run by hand, never by
-pytest or CI. It needs Playwright's Chromium (``uv run playwright install chromium``) and the
+Writes ``<out>/<name>.mp4``, ``<out>/<name>.gif`` (a smaller copy) and ``<out>/<name>.steps.png``
+(the picture at the end of each step, side by side: what an agent, or anyone without a video
+player, looks at before posting the recording). None of them is ever committed, to any branch:
+a recording reaches a pull request only as a GitHub attachment. Run by hand, never by pytest or
+CI. It needs Playwright's Chromium (``uv run playwright install chromium``) and the
 ``record`` dependency group, which is not part of the regular setup: it adds ``imageio-ffmpeg``
 (its own ffmpeg binary) and ``pillow`` (the caption bar and click marks).
 
@@ -18,8 +19,8 @@ What it does, as ``ui_shots.py`` does for still pictures:
 - **The real page in headless Chromium,** while a scenario clicks and types through the change.
   A scenario is a function ``scenario(take, world)``: a few ``take.step("caption")`` lines with
   the clicks between them. ``rename_room`` below is the worked example; a pull request's own
-  scenario is a file given by path, and it goes with the recording (``design-assets``, under
-  ``pr-<number>/``), not into this script. Every wait has a deadline; a timeout exits non-zero.
+  scenario is a file given by path, pasted into the pull request, not added to this script.
+  Every wait has a deadline; a timeout exits non-zero.
 - **The browser's own screencast frames,** each with the time it was drawn. Playwright's video
   recorder says nothing about when its first frame was taken, so captions drifted seconds off
   the picture; frames with their own clock line up exactly, and they are sharper.
