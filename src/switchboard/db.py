@@ -29,7 +29,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -71,6 +71,8 @@ CREATE TABLE participants(
   push_expiries INTEGER NOT NULL DEFAULT 0,
   hooks_seen_at REAL, last_say_at REAL, created_at REAL NOT NULL, last_seen REAL, ended_at REAL,
   host TEXT NOT NULL DEFAULT '',
+  status_line TEXT,
+  status_line_at REAL,
   UNIQUE(harness, session_key));
 CREATE INDEX participants_host_mcp ON participants(host, mcp_pid) WHERE ended_at IS NULL;
 
@@ -400,6 +402,11 @@ V15_TO_V16 = (
     "ALTER TABLE memberships ADD COLUMN join_code_hash TEXT",
     "UPDATE meta SET value='16' WHERE key='schema_version'",
 )
+V16_TO_V17 = (
+    "ALTER TABLE participants ADD COLUMN status_line TEXT",
+    "ALTER TABLE participants ADD COLUMN status_line_at REAL",
+    "UPDATE meta SET value='17' WHERE key='schema_version'",
+)
 
 
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
@@ -421,6 +428,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         13: (14, V13_TO_V14, ()),
         14: (15, V14_TO_V15, ("room_people",)),
         15: (16, V15_TO_V16, ()),
+        16: (17, V16_TO_V17, ()),
     }
     out = []
     v = frm
