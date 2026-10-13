@@ -426,15 +426,25 @@ def test_hook_context_fits_the_hook_limit_and_every_acked_item_was_shown_whole(w
 
 def test_a_cut_item_is_notified_not_delivered_and_read_shows_it_whole(w: World) -> None:
     p, m = w.agent("claude-1", harness="claude", status="busy", hooks=True)
-    long = w.human("y" * 3000)  # over the 1,500-char item limit of hook context
+    long = w.human("y" * 3001)  # above the 3,000-char addressed-message limit
     out = w.hook(p, "PostToolUse", ok=True)
-    assert "1500 more chars; read() shows full" in out.text
+    assert "1501 more chars; read() shows full" in out.text
     w.actions += w.engine.on_hook_ack(out.batch_id, out.ack)
     d = w.delivery(m, long)
     assert d["state"] == "pending" and d["notified_at"] is not None  # seen in part: pull-only now
     assert w.hook(p, "PostToolUse", ok=True) is None  # no second push of the same item
     text, *_ = w.engine.pull(w.p(p), w.m(m), "read", 20)
-    assert "y" * 3000 in text and "more chars" not in text
+    assert "y" * 3001 in text and "more chars" not in text
+
+
+def test_addressed_inline_message_is_in_context_without_read(w: World) -> None:
+    """A 3,000-character human message fits the hook context and is confirmed in full (#298)."""
+    p, m = w.agent("claude-1", harness="claude", status="busy", hooks=True)
+    msg = w.human("y" * 3000)
+    out = w.hook(p, "PostToolUse", ok=True)
+    assert "y" * 3000 in out.text and "read() shows full" not in out.text
+    w.actions += w.engine.on_hook_ack(out.batch_id, out.ack)
+    assert w.delivery(m, msg)["state"] == "in_context"
 
 
 def test_a_single_huge_escape_heavy_item_is_cut_to_fit(w: World) -> None:

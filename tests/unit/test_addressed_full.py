@@ -11,15 +11,23 @@ from switchboard import envelope
 
 def batch(it, *, peer_inline: bool = True) -> str:
     return envelope.render_batch(
-        [it], room="#build", recipient="bot", human_name="alice",
-        token="yk:b7.0123abcd", peer_inline=peer_inline,
+        [it],
+        room="#build",
+        recipient="bot",
+        human_name="alice",
+        token="yk:b7.0123abcd",
+        peer_inline=peer_inline,
     )
 
 
 def fitted(it, *, peer_inline: bool = True, max_chars: int = 6000) -> envelope.Fit:
     return envelope.fit_batch(
-        [it], room="#build", recipient="bot", human_name="alice",
-        peer_inline=peer_inline, max_chars=max_chars,
+        [it],
+        room="#build",
+        recipient="bot",
+        human_name="alice",
+        peer_inline=peer_inline,
+        max_chars=max_chars,
     )
 
 
@@ -39,7 +47,9 @@ def test_addressed_under_3000_is_whole_but_chatter_and_oversized_text_stay_cut()
         assert fitted(it).partial == {it.message_id}
 
     # Elevated paths still require read() for peer stubs, including an @mention.
-    assert 'text=(not shown here; call read("#build"))' in batch(item(5, 1, text="m" * 2400), peer_inline=False)
+    assert 'text=(not shown here; call read("#build"))' in batch(
+        item(5, 1, text="m" * 2400), peer_inline=False
+    )
 
 
 def test_addressed_extra_delivery_chars_replace_a_read_round_trip() -> None:
@@ -50,10 +60,17 @@ def test_addressed_extra_delivery_chars_replace_a_read_round_trip() -> None:
     old_cut = envelope.sanitize(it.text, envelope.ITEM_LIMIT)
     old_size = len(delivered) - len(envelope.sanitize(it.text, None)) + len(old_cut)
     extra_chars = len(delivered) - old_size
-    read_round_trip = len(envelope.render_batch(
-        [it], room="#build", recipient="bot", human_name="alice",
-        token="yk:b8.0123abcd", peer_inline=True, item_limit=None,
-    ))
+    read_round_trip = len(
+        envelope.render_batch(
+            [it],
+            room="#build",
+            recipient="bot",
+            human_name="alice",
+            token="yk:b8.0123abcd",
+            peer_inline=True,
+            item_limit=None,
+        )
+    )
     assert 750 <= extra_chars <= 800
     assert extra_chars < read_round_trip
     assert fitted(it).partial == frozenset()  # no cut needing read() before a meaningful pass
@@ -68,7 +85,12 @@ def test_addressed_full_still_escapes_untrusted_text_and_fits_the_batch_cap() ->
     assert fit.partial == {1}
     assert fit.limits[1] < 2503
     rendered = envelope.render_batch(
-        fit.items, room="#build", recipient="bot", human_name="alice",
-        token="yk:b7.0123abcd", peer_inline=True, limits=fit.limits,
+        fit.items,
+        room="#build",
+        recipient="bot",
+        human_name="alice",
+        token="yk:b7.0123abcd",
+        peer_inline=True,
+        limits=fit.limits,
     )
     assert len(rendered) <= 6000

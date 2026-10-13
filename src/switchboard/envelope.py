@@ -25,6 +25,7 @@ NONCE_RE = re.compile(r"yk:j([0-9a-f]{16})")
 _YK_RE = re.compile(r"yk:", re.IGNORECASE)
 
 ITEM_LIMIT = 1500
+ADDRESSED_FULL_LIMIT = 3000
 _DROP_CATEGORIES = frozenset({"Cc", "Cf", "Co", "Cs"})
 _KEEP = frozenset("\n\t")
 _LINE_SEPS = frozenset("  ")
@@ -151,6 +152,17 @@ def to_you(item: Any, recipient: str) -> bool:
     return item.sender_kind == "human" and not item.mentions
 
 
+def delivery_limit(item: Any, recipient: str, limit: int | None = ITEM_LIMIT) -> int | None:
+    """Inline addressed text up to 3,000 clean characters is shown whole (#298).
+
+    A larger addressed item and chatter keep the ordinary per-item cut. A
+    smaller fitted limit or an alternate caller limit is never widened.
+    """
+    if limit == ITEM_LIMIT and to_you(item, recipient) and len(visible(item.text)) <= ADDRESSED_FULL_LIMIT:
+        return ADDRESSED_FULL_LIMIT
+    return limit
+
+
 def render_item(item: Any, recipient: str, room: str, *, inline: bool, limit: int | None = ITEM_LIMIT) -> str:
     """One list line. ``inline=False`` renders a "call read()" stub instead of the text;
     ``limit`` caps the shown text (None: all of it)."""
@@ -259,7 +271,11 @@ def render_batch(
             n_peer += 1
         else:
             n_stub += 1
-        lim = limits.get(it.message_id, item_limit)
+        lim = (
+            limits[it.message_id]
+            if it.message_id in limits
+            else (delivery_limit(it, recipient, item_limit) if inline else item_limit)
+        )
         body.append(render_item(it, recipient, room, inline=inline, limit=lim))
     reminder = any(getattr(it, "reminded", False) for it in items)
     # the header names the person the human lines are from; with several, "your users" (§32)
@@ -382,19 +398,20 @@ def fit_batch(
     more = False
     for it in items:
         inline = peer_inline or it.sender_kind != "agent"
-        line = render_item(it, recipient, room, inline=inline, limit=item_limit)
+        limit = delivery_limit(it, recipient, item_limit) if inline else item_limit
+        line = render_item(it, recipient, room, inline=inline, limit=limit)
         need = len(line) + 1
         if used + need > budget:
             if kept:
                 more = True
                 break
             if shrink and inline:
-                shrunk_limit = _shrink(it, recipient, room, max(0, budget - 1), item_limit)
+                shrunk_limit = _shrink(it, recipient, room, max(0, budget - 1), limit)
                 limits[it.message_id] = shrunk_limit
                 need = len(render_item(it, recipient, room, inline=True, limit=shrunk_limit)) + 1
         kept.append(it)
         used += need
-        lim = limits.get(it.message_id, item_limit)
+        lim = limits.get(it.message_id, limit)
         if inline and lim is not None and len(visible(it.text)) > lim:
             partial.add(it.message_id)
     return Fit(items=tuple(kept), limits=limits, partial=frozenset(partial), more=more, room_rules=room_rules)
