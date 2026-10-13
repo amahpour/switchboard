@@ -671,8 +671,9 @@ def test_turn_start_needs_a_fresh_idle_status(w: W) -> None:
     # occasionally still beat (a flat 1 s sleep here once raced a slow round trip and found the
     # delivery still "offered", not yet reverted: #277's suite run, PR #307).
     assert wait_for(lambda: w.part()["status"] == "waiting-approval")  # learned from the read
+    # the status and the delivery's revert are separate writes: wait for the revert too
+    assert wait_for(lambda: w.delivery(mid) == "pending"), w.delivery(mid)
     assert w.d.calls("turn/start") == [] and w.d.calls("turn/steer") == []
-    assert w.delivery(mid) == "pending"
     w.d.end_turn(TID, "interrupted")
     assert wait_for(lambda: w.d.calls("turn/start"))
 
