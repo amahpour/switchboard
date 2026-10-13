@@ -265,5 +265,5 @@ async def test_a_remote_agent_works_the_review_board() -> None:
             assert (await a.join("#fpga", "bench"))["ok"]
             r = await a.call("review", room="#fpga", action="open", url="https://example.com/pr/7")
             assert r["ok"], r
-            r = await a.call("review", room="#fpga", action="raise", title="flash timing", lines="12")
+            r = await a.call("review", room="#fpga", action="raise", title="flash timing", where=":12")
             assert r["ok"] and r["item"] == "F1" and "raised by bench" in r["board"], r

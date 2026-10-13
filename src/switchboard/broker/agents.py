@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import logging
 import math
@@ -75,6 +76,8 @@ log = logging.getLogger("switchboard.agents")
 
 TEST_SESSION_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 WAIT_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
+# the code at the end of a join's answer ("join yk:j<16 hex>"), given back to reclaim a name (#304)
+JOIN_CODE_RE = re.compile(r"^(?:yk:j)?([0-9a-f]{16})$")
 # mcp.posted err: a short code ("guard", "bad_text") or an exception type name
 POST_ERR_RE = re.compile(r"[A-Za-z0-9_]{1,40}")
 # a hook's reported model name (the hook relays only this shape too), for the report:
@@ -526,6 +529,24 @@ class AgentService:
             and proc.same_start(p.mcp_start, ident.mcp_start)
         )
 
+    def _reclaim(self, holder: Membership, code: str | None, harness: str, host: str) -> Membership | None:
+        """The membership whose reserved name a join may take back (#304, DESIGN.md §6.1), or None.
+
+        Only with the code that membership's own join answer ended with, which only the session
+        that read that answer has, and only for the same harness on the same machine (so the
+        same person): never a name another session or machine used. Not from a kicked agent,
+        and not while the old membership is still in the room."""
+        if code is None or holder.join_code_hash is None or holder.active or holder.kicked:
+            return None
+        if not hmac.compare_digest(holder.join_code_hash, cred_hash(code)):
+            return None
+        old = self.store.get_participant(holder.participant_id)
+        if old is None or old.harness != harness or (old.host or "") != (host or ""):
+            return None
+        if self.store.was_kicked(holder.room_id, old.id):
+            return None
+        return holder
+
     def _check_same_session(self, existing: Participant, mc: McpConn) -> None:
         """A re-join may take over a session's memberships (rotating the
         credential) only from the MCP process that holds it (a broker
@@ -680,6 +701,17 @@ class AgentService:
             or any(name.startswith(person.lower()) for person in self.svc.people_names())
         ):
             raise ServiceError("name_reserved", f"{name} is reserved; pick another screen name")
+        resume = params.get("resume")
+        code: str | None = None
+        if resume is not None:
+            got = (
+                JOIN_CODE_RE.match(resume.strip()) if isinstance(resume, str) and len(resume) <= 40 else None
+            )
+            if got is None:
+                raise ServiceError(
+                    "bad_request", "resume is the join code from your earlier join: yk:j and 16 hex"
+                )
+            code = got.group(1)
         tid = params.get("thread_id")
         tid = tid if isinstance(tid, str) and 0 < len(tid) <= 128 else None
         key = self._session_key(mc, tid)
@@ -740,16 +772,27 @@ class AgentService:
                     f"{host} already has {len(joined)} member(s), its limit"
                     " (max_members in remotes.toml on the desktop)",
                 )
+        resumed: Membership | None = None
         if cur is None:
             other = self.store.active_membership_by_name(room.id, name)
             if other is not None and (existing is None or other.participant_id != existing.id):
                 raise ServiceError("name_taken", f"{name} is taken in {room.name}; pick another screen name")
-            if self.store.name_used_by_other(
+            holder = self.store.last_holder_of(
                 room.id, name, existing.id if existing else -1, now - NAME_REUSE_S
-            ):
-                raise ServiceError(
-                    "name_reserved", f"{name} was used by another agent in {room.name} today; pick another"
-                )
+            )
+            if holder is not None:
+                resumed = self._reclaim(holder, code, h, host)
+                if resumed is None:
+                    raise ServiceError(
+                        "name_reserved",
+                        f"{name} was used by another agent in {room.name} today; pick another"
+                        + (
+                            " (that join code isn't this name's)"
+                            if code is not None
+                            else ", or, if it was you before a restart, join again with resume= set to"
+                            " the code at the end of that join's answer (yk:j...)"
+                        ),
+                    )
         elif cur.screen_name.lower() != name:
             raise ServiceError(
                 "bad_request",
@@ -764,7 +807,7 @@ class AgentService:
         rejoined = cur is not None
         if cur is not None:
             # the same verified session again (an MCP reconnect): rotate the credential
-            self.store.rotate_cred(cur.id, cred_hash(cred))
+            self.store.rotate_cred(cur.id, cred_hash(cred), cred_hash(nonce))
             m = cur
             self.run(self.engine.expire_pull_batches(p.id, "rejoin"))
             self.store.add_event(
@@ -774,7 +817,7 @@ class AgentService:
             if notice is not None:
                 self.run([Notice(room.id, "info", notice)])
         else:
-            m = self.store.create_membership(room.id, p.id, name, cred_hash(cred))
+            m = self.store.create_membership(room.id, p.id, name, cred_hash(cred), cred_hash(nonce))
             # a Codex thread proof about to run shows as "verifying...", not "mcp-only"; the
             # event says so, so the proof that passes announces it here (§9.3)
             verifying = note == VERIFYING
@@ -783,7 +826,12 @@ class AgentService:
                 room_id=room.id,
                 membership_id=m.id,
                 participant_id=p.id,
-                data={"harness": h, "tier": tier, **({"verifying": True} if verifying else {})},
+                data={
+                    "harness": h,
+                    "tier": tier,
+                    **({"verifying": True} if verifying else {}),
+                    **({"resumed": resumed.id} if resumed is not None else {}),
+                },
             )
             where = f"{h} on {host}" if host else h
             shown = VERIFYING if verifying else tier
@@ -795,7 +843,8 @@ class AgentService:
                 sender_membership_id=m.id,
                 via="mcp",
                 kind="join",
-                text=f"joined ({where}, {shown})",
+                # peers see it's the same agent, not a new one to brief from the start (#304)
+                text=f"joined ({where}, {shown})" + (", back after a restart" if resumed is not None else ""),
                 sender_host=host or None,
             )
         self.refresh_index()
