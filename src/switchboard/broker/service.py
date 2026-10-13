@@ -107,6 +107,8 @@ class DeliveryHooks(Protocol):
 
     def board_reason(self, member: Member) -> str | None: ...
 
+    def member_claims(self, member: Member) -> tuple[str | None, tuple[str, ...] | None]: ...
+
 
 def _hhmmss(ts: float | None) -> str:
     return time.strftime("%H:%M:%S", time.localtime(ts)) if ts else "--:--:--"
@@ -159,6 +161,8 @@ def member_dict(m: Member) -> dict[str, Any]:
         "host": m.host,
         # why it can't use the review board, or None (#249): switchboard's own words
         "board_why": m.board_why,
+        "version_claim": m.version_claim or "unknown",
+        "tools_claim": list(m.tools_claim) if m.tools_claim is not None else None,
     }
 
 
@@ -470,7 +474,8 @@ class RoomService:
             if why:
                 m = dataclasses.replace(m, parked=True, parked_reason=why)
             board = self.delivery.board_reason(m)
-            out.append(dataclasses.replace(m, board_why=board) if board else m)
+            version, tools = self.delivery.member_claims(m)
+            out.append(dataclasses.replace(m, board_why=board, version_claim=version, tools_claim=tools))
         return out
 
     def member_detail(self, room_name: str, name: str) -> dict[str, Any]:

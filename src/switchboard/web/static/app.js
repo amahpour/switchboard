@@ -1113,6 +1113,9 @@
     const chips = el('span', 'm-chips');
     chips.append(tierChip(m));
     main.append(nameLine, el('span', 'm-status', st), chips);
+    main.append(el('span', 'm-claim', 'Switchboard (reported): ' + (m.version_claim || 'unknown')));
+    main.append(el('span', 'm-claim', 'Tools (reported): ' +
+      (m.tools_claim === null || m.tools_claim === undefined ? 'unknown' : (m.tools_claim.join(', ') || 'none'))));
     if (m.away) main.append(el('span', 'm-away', 'Away: ' + m.away));
     if (m.parked) {
       const p = el('span', 'm-parked');

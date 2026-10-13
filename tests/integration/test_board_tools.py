@@ -13,6 +13,7 @@ from conftest import InProcBroker
 from fakes.fake_agent import FakeAgent
 from fakes.fake_link import FakeLink, wait_for
 
+from switchboard import __version__
 from switchboard.config import Config
 from switchboard.mcp.client import Stream
 
@@ -78,3 +79,61 @@ async def test_a_remote_members_list_arrives_through_the_link() -> None:
                 old.call("mcp.hello", {"harness": "test", "test_session": "old-pi"})
                 old.call("agent.join", {"room": "#fpga", "screen_name": "codex-1"})
                 assert next(m for m in link.members() if m["name"] == "codex-1")["board_why"] == OLD
+
+
+async def test_who_and_members_show_each_mcp_servers_bounded_claims(broker: InProcBroker) -> None:
+    async with FakeAgent(broker.home, "current") as current:
+        await current.join("#build", "claude-1")
+        with Stream(broker.paths.sock, timeout=5) as old:
+            old.call(
+                "mcp.hello",
+                {
+                    "harness": "test",
+                    "test_session": "old-claims",
+                    "version": "0.23.0",
+                    "tools": ["join", "say", "say", "bad tool", "x" * 33],
+                },
+                5,
+            )
+            old.call("agent.join", {"room": "#build", "screen_name": "codex-1"}, 5)
+            got = members(broker)
+            assert got["claude-1"]["version_claim"] == __version__
+            assert "review" in got["claude-1"]["tools_claim"]
+            assert got["codex-1"]["version_claim"] == "0.23.0"
+            assert got["codex-1"]["tools_claim"] == ["join", "say"]
+            who = (await current.who("#build"))["text"]
+            assert f"version_claim={__version__}" in who
+            assert "version_claim=0.23.0 tools_claim=join,say" in who
+        with Stream(broker.paths.sock, timeout=5) as unknown:
+            unknown.call("mcp.hello", {"harness": "test", "test_session": "unknown-claims"}, 5)
+            unknown.call("agent.join", {"room": "#build", "screen_name": "devin-1"}, 5)
+            assert members(broker)["devin-1"]["version_claim"] == "unknown"
+            assert members(broker)["devin-1"]["tools_claim"] is None
+            assert "version_claim=unknown tools_claim=unknown" in (await current.who("#build"))["text"]
+
+
+async def test_join_upgrade_note_is_once_for_behind_and_absent_for_current(broker: InProcBroker) -> None:
+    with Stream(broker.paths.sock, timeout=5) as old:
+        old.call(
+            "mcp.hello",
+            {
+                "harness": "test",
+                "test_session": "behind-note",
+                "version": "0.23.9",
+                "tools": [],
+            },
+            5,
+        )
+        first = old.call("agent.join", {"room": "#build", "screen_name": "codex-1"}, 5)
+        assert first["room"] == "#build"
+        old.call("agent.join", {"room": "#build", "screen_name": "codex-1"}, 5)
+        history = broker.web.get("/api/rooms/build/messages").json()["messages"]  # type: ignore[attr-defined]
+        notes = [m["text"] for m in history if "switchboard update" in m["text"]]
+        assert notes == [
+            "codex-1 reports switchboard 0.23.9; run switchboard update where it runs,"
+            " then restart its session."
+        ]
+    async with FakeAgent(broker.home, "current-note") as current:
+        await current.join("#build", "claude-1")
+        history = broker.web.get("/api/rooms/build/messages").json()["messages"]  # type: ignore[attr-defined]
+        assert len([m for m in history if "switchboard update" in m["text"]]) == 1

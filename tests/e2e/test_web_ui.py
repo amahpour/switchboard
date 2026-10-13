@@ -36,6 +36,8 @@ from conftest import PHASE_REPORTS, TEST_HUMAN, sanitize_env
 from playwright.sync_api import Browser, BrowserContext, ConsoleMessage, Page, Route, WebSocketRoute, expect
 from ui_world import CI_URL, JS_SCHEME, PROFILE, UIWorld, wait_js
 
+from switchboard import __version__
+
 pytestmark = pytest.mark.e2e
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -2216,6 +2218,25 @@ def test_the_board_names_a_member_that_cant_use_it(ui: UI) -> None:
     )
     expect(page.locator("#board-unable .board-unable-line")).to_have_count(1)
     expect(line.locator("svg.ic-warn, span.ic-warn")).to_have_count(1)
+
+
+def test_members_show_reported_versions_and_tools_in_light_dark_and_phone(ui: UI) -> None:
+    room = "e2e-member-claims"
+    ui.world.create_room("#" + room)
+    ui.world.add_agents("#" + room, ("claude-1",))
+    ui.world.add_old_agent("#" + room, "codex-1")
+    for options in ({"color_scheme": "light"}, {"color_scheme": "dark"}, {**PHONE, "color_scheme": "light"}):
+        page = ui.open(room=room, **options)
+        if "viewport" in options:
+            page.click("#buddy-toggle")
+        current = page.locator('#buddy-list .member[data-name="claude-1"]')
+        old = page.locator('#buddy-list .member[data-name="codex-1"]')
+        expect(current.locator(".m-claim").first).to_have_text(f"Switchboard (reported): {__version__}")
+        expect(current.locator(".m-claim").last).to_contain_text("review")
+        expect(old.locator(".m-claim").first).to_have_text("Switchboard (reported): unknown")
+        expect(old.locator(".m-claim").last).to_have_text("Tools (reported): unknown")
+        expect(old.locator(".m-claim").last).to_be_visible()
+        no_horizontal_scroll(page)
 
 
 def test_the_review_board_shows_each_item_in_its_lane(ui: UI) -> None:
