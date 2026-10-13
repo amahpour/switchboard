@@ -568,9 +568,8 @@ def build_server(st: McpState) -> FastMCP:
         options: list[str] = EMPTY_OPTIONS,
         recommend: int = -1,
     ) -> str:
-        """open(url,head), show, raise(title,detail,where=path:line),
-        ask(title,options,recommend), concede(item,owner), contest/drop(item,reason),
-        fix(item,commit,proof=test|http-url), confirm(item)."""
+        """open(url,head), show, raise(title,detail,where=path:40-58), ask(title,options,recommend),
+        concede(item,owner), contest/drop(item,reason), fix(item,commit,proof=test|url), confirm(item)."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = await st.find_cred(room, tid)
