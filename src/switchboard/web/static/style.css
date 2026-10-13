@@ -701,9 +701,15 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
 #room-title-button:hover { text-decoration: underline; }
 #room-title-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
 .room-sub { margin-left: 6px; font-size: calc(12px * var(--text-scale)); color: var(--muted); white-space: nowrap; }
+/* The room's name is the last thing in the header to give way: it is what you read, and since
+   #316 what you click to rename. The status chips go first (they scroll, and the state chip
+   keeps its place), then the member count, and only then the name. Before, the name went first
+   and a 1280 px window showed "s…". The factors are this far apart so that the order is strict:
+   a shared squeeze cost the member count half a pixel, which is enough for an ellipsis. The same
+   order holds at every text size: the larger sizes used to cap the name at 140 px instead. */
 @media (min-width: 761px) {
-  :root[data-text-size="larger"] .head-title h1 { flex-shrink: 0; max-width: 140px; }
-  :root[data-text-size="larger"] .room-sub { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .conv-head > .chips { flex-shrink: 100000; min-width: 92px; }
+  .room-sub { flex-shrink: 1000; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 }
 .head-spacer { flex: 1; }
 .chips {
