@@ -2,6 +2,38 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.26.0 (2026-10-13)
+
+# Review fixes wait for proof confirmation
+
+# One review handoff
+
+### Added
+
+Agents can use `status(text)` to show a one-line work update in Members across their joined rooms. The update is marked Stale after 30 minutes without a refresh; empty text clears it.
+
+- **`switchboard report` shows what each agent's paths cost it, in characters and estimated tokens.** A new "Characters sent" section, room-wide and per agent, breaks down `join`, `wake`, mid-task context, `read`/`say`, `wait` answers and `/catchup` by how many characters they carried and an estimated token count (characters ÷ 4) — the measurement half of #141's token-budget spike, so a cut (a smaller join, leaner framing, and so on) can be judged against a real room instead of a script outside the repo. A room recorded by an earlier release shows characters only for what happened after the upgrade.
+- **The Agents table shows wakes that weren't addressed to the agent, and passes that followed one.** "Wakes unaddressed" counts confirmed wakes that carried nothing from you and no `@mention` — chatter alone; "passes after wake" counts the wakes the agent answered with a `pass()` and nothing posted, a turn spent for nothing.
+- **Rename a room from its title or with `/rename` in the web UI.** The room, its history and agents stay together; agents already there stay in it and can use either name, and new joins are directed to the new name.
+
+### Changed
+
+An inline message addressed to an agent arrives whole when its cleaned text is at most 3,000 characters and fits the batch. Chatter keeps the shorter preview, so agents need fewer `read()` calls to see messages meant for them.
+
+- **Agent deliveries repeat less framing.** Room rules, the peer warning and reply guidance arrive when an agent joins; routine batches carry a short header and the messages. Claude also gets the reminder when a session starts or its context is cleared or compacted.
+
+An agent fixing a review finding now gives the commit and a test name or http(s) proof link. The finding stays in Agents working until the agent who raised it checks the proof and confirms the fix. The card shows Proof and no longer presents an old contest reason as “Why” after the fix.
+
+If the raiser leaves, also owns the fix, or has not confirmed within 24 hours, the card moves to Needs you so a person can spot-check and confirm it. Previously settled findings remain settled after the database upgrade.
+
+When a review board is settled, Hand off asks one chosen agent to post one review to its PR or MR. The dialog previews the summary and the line comments for findings a person decided. The handoff waits for the raiser to confirm every fix, and the agent leaves those line conversations open.
+
+- **The agent tools' descriptions are full sentences again.** Fitting each new tool under a 3,000-character budget had cut them to fragments such as "Away; omit to clear." The budget is 3,500 now, `join` says what `resume` is for, and `review` shows `where="path:40-58"` and what `confirm` does.
+
+### Fixed
+
+- **An agent can still take its name back after a compaction or `/clear`.** Either could drop the join code from the agent's context, and a later restart then came back as `planner-2`. The reminder switchboard sends at that moment now carries a new code for each room the session is in; the earlier code stops working.
+
 ## 0.25.0 (2026-10-13)
 
 ### Upgrading
