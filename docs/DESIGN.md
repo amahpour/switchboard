@@ -415,7 +415,8 @@ CREATE TABLE batches(                                     -- one offer of N mess
   budget_counted INTEGER NOT NULL DEFAULT 0,
   state TEXT NOT NULL DEFAULT 'offered' CHECK(state IN ('offered','confirmed','expired','cancelled')),
   created_at REAL NOT NULL, posted_at REAL, confirmed_at REAL, expired_at REAL, expire_reason TEXT,
-  turn_start_at REAL, first_action_at REAL, evidence TEXT);
+  turn_start_at REAL, first_action_at REAL, evidence TEXT,
+  chars INTEGER);               -- the rendered text's length, set once right after it's rendered (v17, §12.6, #275)
 
 CREATE TABLE deliveries(                                  -- per-recipient receipt, two-phase
   membership_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
@@ -455,7 +456,7 @@ CREATE TABLE remotes(                                     -- v2: the owner's con
 
 The engine checks all three before every offer (§8.2).
 
-**Event kinds** (audit trail, and the source for the M7 report): `msg join leave kick hold release pause resume budget_set budget_exhausted loop_guard hop_limit_set rate_limited pass pass_refused status turn_start first_action offer posted confirm expire requeue watchdog_remind watchdog_escalate bind tier codex_link login hook_hash room_close room_reopen room_delete` (§28.2; `room_delete` has `room_id` NULL).
+**Event kinds** (audit trail, and the source for the M7 report): `msg join join_chars leave kick hold release pause resume budget_set budget_exhausted loop_guard hop_limit_set rate_limited pass pass_refused status turn_start first_action offer posted confirm expire requeue watchdog_remind watchdog_escalate bind tier codex_link login hook_hash room_close room_reopen room_delete` (§28.2; `room_delete` has `room_id` NULL; `join_chars`, `{"chars": n}`, is the length of each `join()` answer, §12.6).
 
 **Restart semantics.** On startup:
 - every `offered` batch becomes `expired` (reason `restart`), and its deliveries go back to `pending` with `attempts+1`;
@@ -1482,11 +1483,17 @@ Built from `messages`, `batches`, `deliveries`, `events` and `participants`:
 - per-message latency p50 and p95 by harness × tier × path × wake reason, using `statistics.quantiles(n=100, method="inclusive")` when n ≥ 2 (n=1 shows the single value; n=0 shows "n/a"), always with n;
 - total agent turns (`turn_start` events per participant);
 - posts vs passes per agent;
+- **characters by path, and an estimated token count** (characters ÷ 4; issue #275, the measuring cut of #141's token-budget spike), per agent and for the room: `join`, `wake`, mid-task context, `read`, `wait` answers and `/catchup`.
+  - `batches.chars` holds a batch's rendered length, set once by `engine._render` right after it renders the text (`store.set_batch_chars`), so it is the length of what the agent was handed. A database older than schema v17 reads it as `NULL`, the way `report_members` names `host` for one older than v2; a batch without a length is left out, not counted as empty.
+  - A batch's path is told by `wait` first (a `wait()` answer is `wait` even when it carried a wake, which is how a Devin agent is woken), then by its kind (`wake`, or `priority` for mid-task context), then `read()` and `say()` answers together as `read`.
+  - `join()`'s answer isn't a batch: a `join_chars` event (`{"chars": n}`) carries its length, on every call, a first join or a rejoin alike.
+  - Neither is `/catchup`'s request: it is an ordinary human message, so its length is `LENGTH(text)` computed in SQL (`report_messages`), never the text itself, counted on the agent its `catchup` event names (`data.agent`, `data.message_id`);
+- per agent, a turn spent for nothing, from `batches`, `deliveries` and `events` alone: of the confirmed wakes, how many carried nothing addressed to the agent, chatter alone with no @mention and nothing from the human (`wakes.unaddressed`, from `deliveries.prio` and the `offer` events' message ids, the same ones the latency measure reads); and the wakes the agent answered with a `pass()` and nothing posted (`passes_after_wake`), from a time-ordered walk of each membership's confirmed wakes (`confirmed_at`), chat posts and `pass` events: a wake is open until the agent posts or passes, the first pass while it is open counts once, a post closes it uncounted;
 - rule firings: counts of `loop_guard`, `budget_exhausted`, `rate_limited`, `watchdog_*`, `requeue`, `expire` by reason, holds and pauses;
 - stalls (`waiting-approval` longer than 60 s), undelivered and parked items;
 - the model per participant.
 
-Output is markdown, or JSON with `--json`. It contains no message text and no absolute paths.
+Output is markdown, or JSON with `--json`. It contains no message text and no absolute paths. The JSON carries the characters as `characters` (the room's) and each agent's `chars`, both `{path: {n, chars, tokens_est}}` for the paths that happened, the unaddressed wakes as `agents[].wakes.unaddressed` and the passes as `agents[].passes_after_wake`.
 
 `--room` resolves by the §28.5 rules, so it also takes a closed room's full name (`#build~closed-7`), or its base name when no open room has it. A closed room's report says so: a `closed` block (`name`, `at`, `by`) in JSON, and `(closed)` in the markdown header (§28.7).
 

@@ -168,6 +168,35 @@ async def test_catchup_wakes_the_agent_not_the_subject(broker: InProcBroker, cla
         assert (await ag.pass_("#build"))["ok"]
 
 
+async def test_the_report_counts_a_catchup_request_on_the_agent_it_went_to(
+    broker: InProcBroker, claude: FakeClaude
+) -> None:
+    """``switchboard report``'s characters by path (issue #275) count a /catchup request, its
+    own length, on the agent asked to catch up and not on the subject (who is never sent it),
+    and the wait() answer that carried it as that agent's ``wait`` characters. Fails without
+    the change: the report had no characters, and the event named no agent for them."""
+    from switchboard import report
+
+    async with FakeAgent(broker.home, "ag") as ag:
+        await ag.join("#build", "catcher")
+        t = ag.wait_task("#build", 20)
+        await until_waiting(broker, "catcher")
+        assert web_cmd(broker, "/catchup catcher on claude-1").status_code == 200
+        [msg] = human_chat(broker)
+        got = await asyncio.wait_for(t, 5)
+    con = report.open_ro(broker.paths.db)
+    try:
+        rep = report.build(con, "#build")
+    finally:
+        con.close()
+    by_name = {a["name"]: a for a in rep["agents"]}
+    request = by_name["catcher"]["chars"]["catchup"]
+    assert request == {"n": 1, "chars": len(msg["text"]), "tokens_est": round(len(msg["text"]) / 4)}
+    assert by_name["catcher"]["chars"]["wait"]["chars"] == len(got["text"]) > len(msg["text"])
+    assert "catchup" not in by_name["claude-1"]["chars"] and "wait" not in by_name["claude-1"]["chars"]
+    assert rep["characters"]["catchup"] == request
+
+
 async def test_room_wide_wakes_only_the_agent(broker: InProcBroker, claude: FakeClaude) -> None:
     async with FakeAgent(broker.home, "ag") as ag, FakeAgent(broker.home, "by") as by:
         await ag.join("#build", "catcher")

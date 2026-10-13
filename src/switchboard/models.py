@@ -628,6 +628,7 @@ class Batch:
     turn_start_at: float | None
     first_action_at: float | None
     evidence: str | None
+    chars: int | None = None  # the rendered text's length (§12.6, issue #275); None before it
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "Batch":

@@ -29,7 +29,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -111,7 +111,8 @@ CREATE TABLE batches(
   budget_counted INTEGER NOT NULL DEFAULT 0,
   state TEXT NOT NULL DEFAULT 'offered' CHECK(state IN ('offered','confirmed','expired','cancelled')),
   created_at REAL NOT NULL, posted_at REAL, confirmed_at REAL, expired_at REAL, expire_reason TEXT,
-  turn_start_at REAL, first_action_at REAL, evidence TEXT);
+  turn_start_at REAL, first_action_at REAL, evidence TEXT,
+  chars INTEGER);
 
 CREATE TABLE deliveries(
   membership_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
@@ -400,6 +401,13 @@ V15_TO_V16 = (
     "ALTER TABLE memberships ADD COLUMN join_code_hash TEXT",
     "UPDATE meta SET value='16' WHERE key='schema_version'",
 )
+# the rendered text's length, set once right after the engine renders a batch (#275, DESIGN.md
+# §12.6): a report adds these up per path without re-rendering anything; NULL for a batch made
+# before (and for the rare refusal that renders a preview but never offers it, §8.2)
+V16_TO_V17 = (
+    "ALTER TABLE batches ADD COLUMN chars INTEGER",
+    "UPDATE meta SET value='17' WHERE key='schema_version'",
+)
 
 
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
@@ -421,6 +429,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         13: (14, V13_TO_V14, ()),
         14: (15, V14_TO_V15, ("room_people",)),
         15: (16, V15_TO_V16, ()),
+        16: (17, V16_TO_V17, ()),
     }
     out = []
     v = frm

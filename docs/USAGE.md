@@ -44,7 +44,7 @@ An agent's normal replies are never posted, only `say()`. Its text starting with
 | `switchboard tail '#build' [-n N] [--after ID] [--json] [--no-follow]` | Print the room and follow it: `[14:02:11] <alice> text` |
 | `switchboard who '#build'` | Members (with each one's session, `session: <id> @ <host>`, when it has one: see [Catching up](#catching-up-catchup)) |
 | `switchboard cmd '#build' /pause` | Run a command (below). Everything after the room is the command, words starting with `-` included; put options such as `--home` before the room. A word the shell kept together (it has a space) goes on in double quotes, so `/catchup codex-1 on "sprint cleanup"` works as typed |
-| `switchboard report --room '#build' [--last 2h] [--json] [--out FILE]` | Latency, turns, posts vs passes and rules fired (below); a closed room's name works too |
+| `switchboard report --room '#build' [--last 2h] [--json] [--out FILE]` | Latency, characters by path and an estimated token count, turns, posts vs passes and rules fired (below); a closed room's name works too |
 | `switchboard stop` | Stop the broker |
 
 **Colour.** On a terminal, switchboard colours its own framing so the output is easy to scan:
@@ -153,6 +153,8 @@ Caveats:
 `switchboard report --room '#build' [--since ISO | --last 2h] [--json] [--out FILE]` reads the database (read-only; the broker may be stopped) and prints markdown or JSON:
 - **per-message latency** from send to the recipient, p50/p95/max with n, by harness, by tier, by reason (your messages, @mentions, chatter) and in detail per path. Each message counts once per recipient, at the first batch that reached it. The measure depends on the path: *turn start* (Claude inbox, Codex `turn/start` and `codex queue`), *first hook* (Cursor follow-up, Devin Stop message), *in context* and *first action* (a Devin `wait()` answer), *in context* (mid-task), *pulled* (the agent's own `read()`/`say()`);
 - **per agent:** the model its hooks reported (Devin reports none), turns, wakes and continuations, mid-task deliveries, posts vs passes, rate-limited says, parked spells ("needs a poke") and their time, what was still undelivered at the end;
+- **characters by path, and an estimated token count** (characters ÷ 4; issue #275, part of #141's token-budget work): `join` (the `join()` answer, every call), `wake`, mid-task context, `read`/`say`, `wait` answers and `/catchup` (counted on the agent asked to catch up), room-wide and per agent;
+- **of the confirmed wakes, how many weren't addressed to the agent** — no `@mention`, nothing from the human, chatter alone — and **the wakes it answered with a `pass()` and nothing posted** ("passes after wake"): a turn spent for nothing;
 - **rules that fired:** loop guard, budget, rate limit, watchdog, re-deliver, expiries by reason, pauses, holds, `/catchup` requests (0.2.0's `/review` requests included), Devin re-arms, parked spells, Cursor parks;
 - **stalls:** approval prompts open longer than 60 s (Claude and Codex report these).
 

@@ -247,6 +247,9 @@ class Engine:
         )
         if mark_seen and fit.rules_version:
             self.store.mark_rules_seen(m.id, fit.rules_version)
+        # every batch's rendered length, once (issue #275): a report adds these up per path
+        # without re-rendering anything
+        self.store.set_batch_chars(b.id, len(text))
         return text
 
     def _rooms_of(self, participant_id: int) -> list[int]:

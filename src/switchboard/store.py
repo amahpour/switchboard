@@ -2099,6 +2099,12 @@ class Store:
                 (self.clock.now() if t is None else t, batch_id),
             )
 
+    def set_batch_chars(self, batch_id: int, chars: int) -> None:
+        """The rendered text's length, set once right after ``engine._render`` produces it
+        (``switchboard report``'s characters-by-path measure, §12.6, issue #275)."""
+        with db.tx(self.con):
+            self.con.execute("UPDATE batches SET chars=? WHERE id=?", (chars, batch_id))
+
     def refine_posted(self, batch_id: int, t: float) -> None:
         """The transport's own post time (e.g. the MCP server's ``t_post``), if later."""
         with db.tx(self.con):
@@ -2357,8 +2363,12 @@ class Store:
         ).fetchall()
 
     def report_messages(self, room_id: int, since: float) -> list[sqlite3.Row]:
+        """Never ``text`` itself (§12.6's "no message text"): ``LENGTH(text)`` is computed in
+        SQL, for the characters-by-path measure a `/catchup` request's own length feeds
+        (issue #275), without ever bringing the text into Python."""
         return self.con.execute(
-            "SELECT id, ts, sender_kind, sender_membership_id, kind FROM messages WHERE room_id=? AND ts>=?",
+            "SELECT id, ts, sender_kind, sender_membership_id, kind, LENGTH(text) AS chars"
+            " FROM messages WHERE room_id=? AND ts>=?",
             (room_id, since),
         ).fetchall()
 
@@ -2386,8 +2396,16 @@ class Store:
         ).fetchall()
 
     def report_batches(self, room_id: int, since: float) -> list[sqlite3.Row]:
+        """``chars`` (schema v17, issue #275) as ``NULL`` for a database older than that,
+        the same way ``report_members`` names ``host`` (schema v2): the report reads any
+        schema as it is and never migrates it (#167)."""
+        chars_col = "b.chars" if _has_column(self.con, "batches", "chars") else "NULL"
         return self.con.execute(
-            "SELECT b.* FROM batches b JOIN memberships m ON m.id=b.membership_id"
+            "SELECT b.id, b.membership_id, b.path, b.kind, b.wake_kind, b.wake_reason,"
+            " b.budget_counted, b.state, b.created_at, b.posted_at, b.confirmed_at,"
+            f" b.expired_at, b.expire_reason, b.turn_start_at, b.first_action_at, b.evidence,"
+            f" {chars_col} AS chars"
+            " FROM batches b JOIN memberships m ON m.id=b.membership_id"
             " WHERE m.room_id=? AND b.created_at>=? ORDER BY b.id",
             (room_id, since),
         ).fetchall()
