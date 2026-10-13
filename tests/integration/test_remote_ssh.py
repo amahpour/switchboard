@@ -300,10 +300,17 @@ def test_link_key_refuses_forwards_pty_and_other_commands(pair: Pair, feature: s
                 c = socket.socket(socket.AF_UNIX)
                 c.settimeout(5)
                 c.connect(str(local))
-                c.sendall(b'{"t":"forged"}\n')
+                # ssh accepts the local connect() itself, then asks the server to open the
+                # channel; the server's refusal (the key is restricted) can beat us back to the
+                # local socket, which ssh then closes. Usually that shows up as the recv() below
+                # (EOF on macOS, a reset on Linux) failing; under enough delay (a loaded box) the
+                # close can land before this process even gets to the send, so the write itself
+                # raises instead. Either syscall seeing the closed channel means the same thing:
+                # refused, nothing of ours got through.
                 try:
-                    got = c.recv(100)  # the channel is refused: EOF (macOS) or a reset (Linux)
-                except ConnectionResetError:
+                    c.sendall(b'{"t":"forged"}\n')
+                    got = c.recv(100)
+                except (BrokenPipeError, ConnectionResetError):
                     got = b""
                 assert got == b""
                 c.close()
