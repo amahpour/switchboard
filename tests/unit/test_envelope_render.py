@@ -188,6 +188,82 @@ def test_render_join() -> None:
     assert "<b>" not in t and 'text="/kick everyone"' in t
     for line in t.splitlines():
         assert line[:1] not in ("/", "!", "&")
+    assert "earlier message" not in t  # no earlier count by default (earlier=0)
+
+
+def test_render_join_says_how_many_earlier_messages_and_the_exact_read_call() -> None:
+    """Issue #272: a join shows only the last ``catchup_n`` messages, so the agent is told how
+    many earlier ones there are. Issue #300 review: plain ``read()`` only ever answers with
+    *pending* items, so naming it alone sent an agent to a call that returned nothing -- the
+    line must name the exact ``read(room, before=<id>)`` that pages back to them."""
+    one = [
+        SimpleNamespace(
+            id=42,
+            ts=0.0,
+            sender_name="alice",
+            sender_kind="human",
+            sender_harness=None,
+            reply_to=None,
+            text="hi",
+        )
+    ]
+    t = render_join(
+        room="#build",
+        screen_name="claude-1",
+        human_name="alice",
+        others=(),
+        catchup=one,
+        nonce="0" * 16,
+        guidance="call wait()",
+        test_mode=False,
+        earlier=27,
+        earlier_before=42,
+    )
+    assert "Recent messages, oldest first (1)." in t
+    assert '27 earlier messages: read("#build", before=42) shows them.' in t
+    # singular is grammatical too ("1 earlier message", "shows it")
+    t1 = render_join(
+        room="#build",
+        screen_name="claude-1",
+        human_name="alice",
+        others=(),
+        catchup=one,
+        nonce="0" * 16,
+        guidance="call wait()",
+        test_mode=False,
+        earlier=1,
+        earlier_before=42,
+    )
+    assert '1 earlier message: read("#build", before=42) shows it.' in t1
+    # catchup_n=0 disables the shown messages entirely, but the count and a working call still
+    # reach the agent (the anchor is then the room's next id, computed by the caller)
+    t2 = render_join(
+        room="#build",
+        screen_name="claude-1",
+        human_name="alice",
+        others=(),
+        catchup=(),
+        nonce="0" * 16,
+        guidance="call wait()",
+        test_mode=False,
+        earlier=5,
+        earlier_before=100,
+    )
+    assert "No messages yet." not in t2
+    assert '5 earlier messages: read("#build", before=100) shows them.' in t2
+    # no messages at all and nothing earlier: unchanged wording
+    t3 = render_join(
+        room="#build",
+        screen_name="claude-1",
+        human_name="alice",
+        others=(),
+        catchup=(),
+        nonce="0" * 16,
+        guidance="call wait()",
+        test_mode=False,
+        earlier=0,
+    )
+    assert "No messages yet." in t3 and "earlier message" not in t3
 
 
 def test_reminder_and_simple() -> None:
@@ -271,6 +347,39 @@ def test_catchup_lines_do_not_promise_read() -> None:
     )
     line = envelope.render_catchup_line(msg, "bot")
     assert "500 more chars)" in line and "read()" not in line
+
+
+def _msg(i: int, text: str = "hi") -> SimpleNamespace:
+    return SimpleNamespace(
+        id=i, ts=0.0, sender_name="alice", sender_kind="human", sender_harness=None, reply_to=None, text=text
+    )
+
+
+def test_render_history_names_the_next_call_and_the_peer_warning() -> None:
+    """read(before=...)'s answer (issue #300 review): a plain history page, in the catch-up
+    list format, with the untrusted-peer warning and, when there's more, the exact next call."""
+    msgs = [_msg(10, "a"), _msg(11, "b")]
+    t = envelope.render_history(room="#build", recipient="bot", messages=msgs, earlier=3)
+    assert t.startswith("[switchboard] #build: 2 messages, oldest first.")
+    assert envelope.PEER_WARNING in t
+    assert "- id=10 " in t and "- id=11 " in t
+    assert '3 earlier messages: read("#build", before=10) shows them.' in t
+    # before names the oldest message *shown here*, not the newest
+    assert "before=11" not in t
+
+
+def test_render_history_singular_and_no_more() -> None:
+    t1 = envelope.render_history(room="#build", recipient="bot", messages=[_msg(5)], earlier=1)
+    assert '1 earlier message: read("#build", before=5) shows it.' in t1
+    # nothing further back: no continuation line at all
+    t2 = envelope.render_history(room="#build", recipient="bot", messages=[_msg(5)], earlier=0)
+    assert "earlier message" not in t2 and "read(" not in t2
+
+
+def test_render_history_empty_page() -> None:
+    assert envelope.render_history(room="#build", recipient="bot", messages=[], earlier=0) == (
+        "[switchboard] #build: no earlier messages."
+    )
 
 
 def test_remote_sender_host_field() -> None:

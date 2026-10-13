@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import logging
 import math
@@ -40,7 +41,7 @@ from switchboard.broker.peer import (
     verify_mcp_peer,
 )
 from switchboard.broker.proc import ProcInfo
-from switchboard.broker.service import ServiceError
+from switchboard.broker.service import MAX_MESSAGE_ID, ServiceError
 from switchboard.delivery import rules
 from switchboard.envelope import TOKEN_RE, clean, sanitize
 from switchboard.models import (
@@ -76,6 +77,8 @@ log = logging.getLogger("switchboard.agents")
 
 TEST_SESSION_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 WAIT_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
+# the code at the end of a join's answer ("join yk:j<16 hex>"), given back to reclaim a name (#304)
+JOIN_CODE_RE = re.compile(r"^(?:yk:j)?([0-9a-f]{16})$")
 # mcp.posted err: a short code ("guard", "bad_text") or an exception type name
 POST_ERR_RE = re.compile(r"[A-Za-z0-9_]{1,40}")
 # a hook's reported model name (the hook relays only this shape too), for the report:
@@ -150,6 +153,17 @@ def cred_hash(cred: str) -> str:
 def _model_ok(model: Any) -> bool:
     """A hook-reported model name worth recording: short and identifier-shaped."""
     return isinstance(model, str) and len(model) <= 64 and MODEL_RE.fullmatch(model) is not None
+
+
+def clamp_before(value: Any) -> int:
+    """``read(before=...)``'s cursor must be a message id (issue #300 review): it picks a
+    different call (a history page, not the normal pending-items answer), so a wrong type is
+    refused rather than silently falling back the way ``limit`` does. ``type(value) is not
+    int`` rather than ``isinstance``, so a bool (``True``/``False``) is refused too, not read
+    as 1/0. A valid int is clamped to a message id's range, as ``reply_to`` is (service.py)."""
+    if type(value) is not int:
+        raise ServiceError("bad_request", "before must be a message id")
+    return max(0, min(value, MAX_MESSAGE_ID))
 
 
 class AgentService:
@@ -535,6 +549,24 @@ class AgentService:
             and proc.same_start(p.mcp_start, ident.mcp_start)
         )
 
+    def _reclaim(self, holder: Membership, code: str | None, harness: str, host: str) -> Membership | None:
+        """The membership whose reserved name a join may take back (#304, DESIGN.md §6.1), or None.
+
+        Only with the code that membership's own join answer ended with, which only the session
+        that read that answer has, and only for the same harness on the same machine (so the
+        same person): never a name another session or machine used. Not from a kicked agent,
+        and not while the old membership is still in the room."""
+        if code is None or holder.join_code_hash is None or holder.active or holder.kicked:
+            return None
+        if not hmac.compare_digest(holder.join_code_hash, cred_hash(code)):
+            return None
+        old = self.store.get_participant(holder.participant_id)
+        if old is None or old.harness != harness or (old.host or "") != (host or ""):
+            return None
+        if self.store.was_kicked(holder.room_id, old.id):
+            return None
+        return holder
+
     def _check_same_session(self, existing: Participant, mc: McpConn) -> None:
         """A re-join may take over a session's memberships (rotating the
         credential) only from the MCP process that holds it (a broker
@@ -689,6 +721,17 @@ class AgentService:
             or any(name.startswith(person.lower()) for person in self.svc.people_names())
         ):
             raise ServiceError("name_reserved", f"{name} is reserved; pick another screen name")
+        resume = params.get("resume")
+        code: str | None = None
+        if resume is not None:
+            got = (
+                JOIN_CODE_RE.match(resume.strip()) if isinstance(resume, str) and len(resume) <= 40 else None
+            )
+            if got is None:
+                raise ServiceError(
+                    "bad_request", "resume is the join code from your earlier join: yk:j and 16 hex"
+                )
+            code = got.group(1)
         tid = params.get("thread_id")
         tid = tid if isinstance(tid, str) and 0 < len(tid) <= 128 else None
         key = self._session_key(mc, tid)
@@ -749,16 +792,27 @@ class AgentService:
                     f"{host} already has {len(joined)} member(s), its limit"
                     " (max_members in remotes.toml on the desktop)",
                 )
+        resumed: Membership | None = None
         if cur is None:
             other = self.store.active_membership_by_name(room.id, name)
             if other is not None and (existing is None or other.participant_id != existing.id):
                 raise ServiceError("name_taken", f"{name} is taken in {room.name}; pick another screen name")
-            if self.store.name_used_by_other(
+            holder = self.store.last_holder_of(
                 room.id, name, existing.id if existing else -1, now - NAME_REUSE_S
-            ):
-                raise ServiceError(
-                    "name_reserved", f"{name} was used by another agent in {room.name} today; pick another"
-                )
+            )
+            if holder is not None:
+                resumed = self._reclaim(holder, code, h, host)
+                if resumed is None:
+                    raise ServiceError(
+                        "name_reserved",
+                        f"{name} was used by another agent in {room.name} today; pick another"
+                        + (
+                            " (that join code isn't this name's)"
+                            if code is not None
+                            else ", or, if it was you before a restart, join again with resume= set to"
+                            " the code at the end of that join's answer (yk:j...)"
+                        ),
+                    )
         elif cur.screen_name.lower() != name:
             raise ServiceError(
                 "bad_request",
@@ -773,7 +827,7 @@ class AgentService:
         rejoined = cur is not None
         if cur is not None:
             # the same verified session again (an MCP reconnect): rotate the credential
-            self.store.rotate_cred(cur.id, cred_hash(cred))
+            self.store.rotate_cred(cur.id, cred_hash(cred), cred_hash(nonce))
             m = cur
             self.run(self.engine.expire_pull_batches(p.id, "rejoin"))
             self.store.add_event(
@@ -783,7 +837,7 @@ class AgentService:
             if notice is not None:
                 self.run([Notice(room.id, "info", notice)])
         else:
-            m = self.store.create_membership(room.id, p.id, name, cred_hash(cred))
+            m = self.store.create_membership(room.id, p.id, name, cred_hash(cred), cred_hash(nonce))
             # a Codex thread proof about to run shows as "verifying...", not "mcp-only"; the
             # event says so, so the proof that passes announces it here (§9.3)
             verifying = note == VERIFYING
@@ -792,7 +846,12 @@ class AgentService:
                 room_id=room.id,
                 membership_id=m.id,
                 participant_id=p.id,
-                data={"harness": h, "tier": tier, **({"verifying": True} if verifying else {})},
+                data={
+                    "harness": h,
+                    "tier": tier,
+                    **({"verifying": True} if verifying else {}),
+                    **({"resumed": resumed.id} if resumed is not None else {}),
+                },
             )
             where = f"{h} on {host}" if host else h
             shown = VERIFYING if verifying else tier
@@ -804,7 +863,8 @@ class AgentService:
                 sender_membership_id=m.id,
                 via="mcp",
                 kind="join",
-                text=f"joined ({where}, {shown})",
+                # peers see it's the same agent, not a new one to brief from the start (#304)
+                text=f"joined ({where}, {shown})" + (", back after a restart" if resumed is not None else ""),
                 sender_host=host or None,
             )
             if behind_by_minor(mc.version):
@@ -827,12 +887,20 @@ class AgentService:
         others = [(x.name, x.harness, x.host) for x in self.store.members(room.id) if x.membership_id != m.id]
         hist = [x for x in self.store.history(room.id, None, 400) if x.kind == "chat"]
         catchup = hist[-self.cfg.delivery.catchup_n :] if self.cfg.delivery.catchup_n else []
+        # the catch-up window is short (issue #272); how many more there are, and the exact
+        # read(before=...) that pages back to them, stay accurate (issue #300 review)
+        earlier = max(0, self.store.count_messages(room.id, kind="chat") - len(catchup))
+        earlier_before = None
+        if earlier:
+            earlier_before = catchup[0].id if catchup else self.store.last_message_id(room.id) + 1
         text = envelope.render_join(
             room=room.name,
             screen_name=m.screen_name,
             human_name=self.cfg.human_name,
             others=others,
             catchup=catchup,
+            earlier=earlier,
+            earlier_before=earlier_before,
             nonce=nonce,
             guidance=adapter.join_guidance(p, room.name),
             test_mode=self.state.test_mode,
@@ -943,6 +1011,55 @@ class AgentService:
                 "bad_request",
                 f"message too long ({len(text)} > {self.cfg.delivery.max_msg_chars} characters)",
             )
+        if "since" in params:
+            try:
+                since = rules.since_id(params["since"], self.store.last_message_id(room.id))
+            except ValueError as e:
+                raise ServiceError("bad_request", str(e)) from None
+            # Look at delivery rows, including already-read ones: only chat this member could
+            # see may make a composed answer stale. Refuse before rate limiting or queueing.
+            newer = self.store.visible_items_since(m.id, since)
+            if newer:
+                overflow = len(newer) > 50
+                fit = envelope.fit_batch(
+                    newer[:50],
+                    room=room.name,
+                    recipient=m.screen_name,
+                    human_name=self.cfg.human_name,
+                    peer_inline=True,
+                    max_chars=self.cfg.delivery.pull_max_chars,
+                    item_limit=None,
+                    shrink=False,
+                )
+                more = overflow or fit.more
+                handback = envelope.render_batch(
+                    fit.items,
+                    room=room.name,
+                    recipient=m.screen_name,
+                    human_name=self.cfg.human_name,
+                    token=None,
+                    peer_inline=True,
+                    item_limit=None,
+                    limits=fit.limits,
+                )
+                return {
+                    "ok": False,
+                    "code": "stale",
+                    "error": "newer messages arrived; revise your post and send it again",
+                    "posted_id": None,
+                    "text": handback,
+                    "batch_id": None,
+                    "count": len(fit.items),
+                    "more": more,
+                    **(
+                        {
+                            "next_since": fit.items[-1].message_id,
+                            "note": "more newer messages: retry say with next_since to see them",
+                        }
+                        if more
+                        else {}
+                    ),
+                }
         reply_to = params.get("reply_to")
         target = self.svc.reply_target(room, reply_to)
         # the rate limit (DESIGN.md §8.4): a say it refuses waits in a short queue. One it lets
@@ -1042,11 +1159,23 @@ class AgentService:
         return msg
 
     def read(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
-        p, m, _room = self._member(conn, params)
+        p, m, room = self._member(conn, params)
         limit = params.get("limit", 20)
         if isinstance(limit, bool) or not isinstance(limit, int):
             limit = 20
-        text, bid, count, more, acts = self.engine.pull(p, m, "read", max(1, min(limit, 50)))
+        limit = max(1, min(limit, 50))
+        before = params.get("before")
+        if before is not None:
+            # a history view (issue #300 review), not a delivery: no batch, nothing marked or
+            # confirmed, and it never satisfies pass()'s read-first rule (§24)
+            before = clamp_before(before)
+            msgs = self.store.chat_history_before(room.id, before, limit)
+            earlier = self.store.count_messages(room.id, before=msgs[0].id, kind="chat") if msgs else 0
+            text = envelope.render_history(
+                room=room.name, recipient=m.screen_name, messages=msgs, earlier=earlier
+            )
+            return {"text": text, "batch_id": None, "count": len(msgs), "more": earlier > 0}
+        text, bid, count, more, acts = self.engine.pull(p, m, "read", limit)
         self.run(acts)
         return {"text": text, "batch_id": bid, "count": count, "more": more}
 

@@ -96,10 +96,19 @@ markers = [
     "image: the container image behind a TLS proxy, tests/image (opt-in: -m image; needs Docker and Playwright's Chromium)",
 ]
 addopts = "-m 'not live and not perf and not twohost and not e2e and not image'"
+# A warning doesn't fail anything on its own, so each one here either fails the suite or is a
+# named, understood exception. error::PytestUnraisableExceptionWarning (#277): a leaked object's
+# __del__ raising (an asyncio transport whose server was already closed, #276) printed a warning
+# in whichever test the garbage collector happened to run, so nothing failed and nobody could
+# tell where it came from; tests/conftest.py's gc.collect(1) after every test makes that test fail.
+#
 # pytest-cov turns this ResourceWarning (ignored by default) back on. A recorded warning
 # keeps its sqlite3.Connection, and so its files, open until the run ends: over 1,024
 # fds by the unit tests, past what select() takes. Keep it off, as it is without --cov.
-filterwarnings = ["ignore:unclosed database in <sqlite3.Connection object at:ResourceWarning"]
+filterwarnings = [
+    "error::pytest.PytestUnraisableExceptionWarning",
+    "ignore:unclosed database in <sqlite3.Connection object at:ResourceWarning",
+]
 
 [tool.coverage.run]
 source = ["switchboard"]

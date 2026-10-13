@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
 from switchboard import reviews
+from switchboard.broker.reviews import Boards
 from switchboard.reviews import Item, ReviewError
 
 
@@ -101,6 +103,38 @@ def test_recommend_must_point_at_an_option() -> None:
     for bad in (2, -1, True, "0"):
         with pytest.raises(ReviewError):
             reviews.recommend(bad, ("a", "b"))
+
+
+def test_where_keeps_the_existing_file_and_line_checks() -> None:
+    """The compact field stores the same checked path and range as the older two fields."""
+    assert reviews.where("shop/cart.py:40-58") == ("shop/cart.py", "40-58")
+    assert reviews.where("shop/cart.py:42") == ("shop/cart.py", "42")
+    assert reviews.where("shop/cart.py") == ("shop/cart.py", "")
+    assert reviews.where(":42") == ("", "42")
+    assert reviews.where("") == ("", "")
+    for value, why in (
+        ("shop/cart.py:40-12", "lower number"),
+        ("shop/cart.py:0", "line or a range"),
+        ("x" * 301 + ":42", "file is too long"),
+    ):
+        with pytest.raises(ReviewError, match=why):
+            reviews.where(value)
+
+
+def test_compact_where_and_legacy_fields_share_broker_checks() -> None:
+    """An older MCP server can still send two fields to the new broker for one release."""
+
+    class Store:
+        def add_review_item(self, *_args, **fields):
+            return fields
+
+    board = Boards(SimpleNamespace(store=Store()))
+    base = {"title": "off by one"}
+    new = board._add({"id": 7}, "codex-1", "raise", {**base, "where": "shop/cart.py:40-58"})
+    old = board._add({"id": 7}, "codex-1", "raise", {**base, "file": "shop/cart.py", "lines": "40-58"})
+    assert new == old
+    with pytest.raises(ReviewError, match="use where or file and lines"):
+        board._add({"id": 7}, "codex-1", "raise", {**base, "where": "a.py:3", "file": "b.py"})
 
 
 def test_the_board_text_puts_open_work_first_and_stays_short() -> None:

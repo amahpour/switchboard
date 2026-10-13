@@ -145,14 +145,24 @@ class Boards:
         title = reviews.text(params.get("title"), "title", reviews.MAX_TITLE, required=True)
         detail = reviews.text(params.get("detail"), "detail", reviews.MAX_DETAIL)
         if action == "raise":
+            if "where" in params and ("file" in params or "lines" in params):
+                raise ReviewError("use where or file and lines, not both")
+            file, lines = (
+                reviews.where(params["where"])
+                if "where" in params
+                else (
+                    reviews.text(params.get("file"), "file", reviews.MAX_FILE),
+                    reviews.lines(params.get("lines")),
+                )
+            )
             return self.store.add_review_item(
                 rv["id"],
                 "finding",
                 "raised",
                 title=title,
                 detail=detail,
-                file=reviews.text(params.get("file"), "file", reviews.MAX_FILE),
-                lines=reviews.lines(params.get("lines")),
+                file=file,
+                lines=lines,
                 raised_by=actor,
             )
         opts = reviews.options(params.get("options"))

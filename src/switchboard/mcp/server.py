@@ -442,11 +442,8 @@ def build_server(st: McpState) -> FastMCP:
     mcp.add_middleware(HelloMiddleware(st))
 
     @mcp.tool(annotations=RW_IDEM)
-    async def join(room: str, screen_name: str, ctx: Context) -> str:
-        """Join a switchboard chat room (only when your user asks).
-
-        Returns the room rules and recent messages.
-        """
+    async def join(room: str, screen_name: str, ctx: Context, resume: str = "") -> str:
+        """Join a room (only when your user asks): rules and recent messages."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         if st.harness == "codex" and not tid:
@@ -455,7 +452,13 @@ def build_server(st: McpState) -> FastMCP:
                 "bad_request",
             )
         res = await st.call(
-            "agent.join", {"room": room, "screen_name": screen_name, **({"thread_id": tid} if tid else {})}
+            "agent.join",
+            {
+                "room": room,
+                "screen_name": screen_name,
+                **({"thread_id": tid} if tid else {}),
+                **({"resume": resume} if resume else {}),
+            },
         )
         if not res.get("ok"):
             return dumps(res)
@@ -478,7 +481,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RW_IDEM)
     async def leave(room: str, ctx: Context) -> str:
-        """Leave a switchboard room."""
+        """Leave a room."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = st.cred_for(room, tid)
@@ -492,7 +495,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RO)
     async def who(room: str, ctx: Context) -> str:
-        """List the members of a room you joined, with status and delivery tier."""
+        """A joined room's members, status and delivery tier."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = st.cred_for(room, tid)
@@ -504,11 +507,9 @@ def build_server(st: McpState) -> FastMCP:
         return dumps(res)
 
     @mcp.tool(annotations=RW)
-    async def say(room: str, text: str, ctx: Context, reply_to: int | None = None) -> str:
-        """Post a message to the room and return messages that arrived before it.
-
-        Markdown renders for your user (code blocks, lists, tables; no raw HTML or images).
-        """
+    async def say(room: str, text: str, ctx: Context, reply_to: int = 0, since: int = -1) -> str:
+        """Post; return prior unread. since=last id seen: refused, with newer chat, if any.
+        Markdown renders; no raw HTML or images."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = st.cred_for(room, tid)
@@ -516,8 +517,10 @@ def build_server(st: McpState) -> FastMCP:
             return got
         name, cred = got
         params = {**st.base(cred, tid), "text": text}
-        if reply_to is not None:
+        if reply_to:
             params["reply_to"] = reply_to
+        if since >= 0:
+            params["since"] = since
         res = await st.call("agent.say", params)
         st.forget(res, (tid, name))
         return dumps(res)
@@ -527,23 +530,21 @@ def build_server(st: McpState) -> FastMCP:
         room: str,
         action: str,
         ctx: Context,
-        item: str | None = None,
-        url: str | None = None,
-        head: str | None = None,
-        title: str | None = None,
-        detail: str | None = None,
-        file: str | None = None,
-        lines: str | None = None,
-        owner: str | None = None,
-        commit: str | None = None,
-        reason: str | None = None,
+        item: str = "",
+        url: str = "",
+        head: str = "",
+        title: str = "",
+        detail: str = "",
+        where: str = "",
+        owner: str = "",
+        commit: str = "",
+        reason: str = "",
         options: list[str] | None = None,
         recommend: int | None = None,
     ) -> str:
-        """The room's review board for one pull request: findings and questions instead of long
-        messages. action: open (url, head), show, raise (title, detail, file, lines), ask a person
-        (title, options, recommend), concede (item, owner), contest or drop (item, reason), fix
-        (item, commit). Returns the board."""
+        """Review board: open(url, head), show, raise(title, detail, where="path:40-58"),
+        ask(title, options, recommend), concede(item, owner), contest/drop(item, reason),
+        fix(item, commit). Returns the board."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = st.cred_for(room, tid)
@@ -556,36 +557,39 @@ def build_server(st: McpState) -> FastMCP:
             "head": head,
             "title": title,
             "detail": detail,
-            "file": file,
-            "lines": lines,
+            "where": where,
             "owner": owner,
             "commit": commit,
             "reason": reason,
             "options": options,
             "recommend": recommend,
         }
-        params = {**st.base(cred, tid), "action": action, **{k: v for k, v in given.items() if v is not None}}
+        params = {**st.base(cred, tid), "action": action, **{k: v for k, v in given.items() if v}}
+        if recommend is not None:
+            params["recommend"] = recommend
         res = await st.call("agent.review", params)
         st.forget(res, (tid, name))
         return dumps(res)
 
     @mcp.tool(annotations=RO)
-    async def read(room: str, ctx: Context, limit: int = 20) -> str:
-        """Return unread room messages in full, oldest first (including those shown to you as
-        "not shown here"). Never skips any."""
+    async def read(room: str, ctx: Context, limit: int = 20, before: int = 0) -> str:
+        """Unread in full, "not shown here" too, oldest first. before=id: older chat."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = st.cred_for(room, tid)
         if isinstance(got, str):
             return got
         name, cred = got
-        res = await st.call("agent.read", {**st.base(cred, tid), "limit": max(1, min(int(limit), 50))})
+        params = {**st.base(cred, tid), "limit": max(1, min(int(limit), 50))}
+        if before:
+            params["before"] = before
+        res = await st.call("agent.read", params)
         st.forget(res, (tid, name))
         return dumps(res)
 
     @mcp.tool(annotations=RO)
     async def wait(room: str, ctx: Context, timeout_s: int = 50) -> str:
-        """Block until a room message is delivered to you, or the timeout passes."""
+        """Wait for a delivery, or the timeout."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = st.cred_for(room, tid)
@@ -605,12 +609,12 @@ def build_server(st: McpState) -> FastMCP:
         return dumps(res)
 
     @mcp.tool(name="pass", annotations=RW)
-    async def pass_(ctx: Context, room: str | None = None, note: str | None = None) -> str:
-        """Choose not to respond (a good default), after reading the messages. Refused while a
-        message shown to you as "not shown here" is unread: call read() first. Logged, not posted."""
+    async def pass_(ctx: Context, room: str = "", note: str = "") -> str:
+        """No reply, after reading. Refused if "not shown here" is unread: call read() first.
+        Logged, not posted."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
-        if room is not None:
+        if room:
             got = st.cred_for(room, tid)
             if isinstance(got, str):
                 return got
@@ -630,8 +634,8 @@ def build_server(st: McpState) -> FastMCP:
         return dumps(pass_summary(results))
 
     @mcp.tool(annotations=RW_IDEM)
-    async def away(ctx: Context, message: str | None = None) -> str:
-        """Set (or clear, with no message) your away message, e.g. "running tests"."""
+    async def away(ctx: Context, message: str = "") -> str:
+        """Set your away message; omit it to clear."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         creds = [c for (t, _r), c in st.creds.items() if t == tid]

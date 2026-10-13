@@ -14,10 +14,13 @@ from pathlib import Path
 
 import pytest
 from conftest import human_cli_denied_here
-from fakes.fake_agent import FakeAgent
+from fakes.fake_agent import FakeAgent, ids_in
 from fakes.fake_link import FakeLink, SatDriver, wait_for
 
 from switchboard.broker.remote import LinkClosed
+from switchboard.config import Config
+
+FAST = Config(human_name="alice").with_delivery(quiet_s=0.0, max_hold_s=0.0)
 
 
 def lines(link: FakeLink, kind: str) -> list[str]:
@@ -99,6 +102,30 @@ async def test_satellite_killed_members_offline_then_back_with_same_creds() -> N
         assert joins == ["bench joined (test on fpga-pi, mcp-only)"] and leaves == []
         assert not any("rejoined" in t for t in link.notices())
         assert any("link down" in t and "its members are offline" in t for t in link.notices())
+
+
+async def test_remote_member_pages_back_through_history_with_before() -> None:
+    """``read(before=...)`` crosses the link like any other ``agent.read`` call (issue #300
+    review): it is already in ``REMOTE_METHODS`` (DESIGN.md §27.5.2), and the link carries a
+    member's raw request line through unchanged, so a member on another machine pages back
+    through a room's history the same way a local one does."""
+    with FakeLink(kind="inproc", broker_cfg=FAST) as link:
+        web = link.broker.web_client()
+        ids = [
+            web.post(
+                "/api/rooms/fpga/say", json={"text": f"m{i}"}, headers=link.broker.write_headers()
+            ).json()["id"]
+            for i in range(10)
+        ]
+        web.close()
+        async with FakeAgent(link.pi, "bench") as a:
+            j = await a.join("#fpga", "bench")
+            assert j["ok"] and ids_in(j["text"]) == ids[-8:]
+            anchor = ids[-8]
+            assert f'2 earlier messages: read("#fpga", before={anchor}) shows them.' in j["text"]
+            r = await a.read("#fpga", before=anchor)
+            assert r["ok"] and r["batch_id"] is None and not r["more"]
+            assert ids_in(r["text"]) == ids[:2]
 
 
 async def test_broker_restart_remote_rows_offline_not_ended_then_back() -> None:

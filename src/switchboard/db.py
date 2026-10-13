@@ -29,7 +29,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -85,7 +85,8 @@ CREATE TABLE memberships(
   held INTEGER NOT NULL DEFAULT 0, held_at REAL,
   cursor_id INTEGER NOT NULL DEFAULT 0,
   peer_batch_boundary INTEGER NOT NULL DEFAULT -1,
-  rules_seen INTEGER NOT NULL DEFAULT 0 CHECK(rules_seen >= 0));
+  rules_seen INTEGER NOT NULL DEFAULT 0 CHECK(rules_seen >= 0),
+  join_code_hash TEXT);
 CREATE UNIQUE INDEX memberships_active_name ON memberships(room_id, screen_name) WHERE left_at IS NULL;
 CREATE UNIQUE INDEX memberships_active_part ON memberships(room_id, participant_id) WHERE left_at IS NULL;
 
@@ -393,6 +394,12 @@ V14_TO_V15 = (
     " PRIMARY KEY(room_id, person_id))",
     "UPDATE meta SET value='15' WHERE key='schema_version'",
 )
+# the join code each membership was given, hashed, so the same agent can take its name back
+# after a restart (#304, DESIGN.md §6.1); NULL for one made before
+V15_TO_V16 = (
+    "ALTER TABLE memberships ADD COLUMN join_code_hash TEXT",
+    "UPDATE meta SET value='16' WHERE key='schema_version'",
+)
 
 
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
@@ -413,6 +420,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         12: (13, V12_TO_V13, ()),
         13: (14, V13_TO_V14, ()),
         14: (15, V14_TO_V15, ("room_people",)),
+        15: (16, V15_TO_V16, ()),
     }
     out = []
     v = frm

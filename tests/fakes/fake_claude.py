@@ -76,7 +76,9 @@ class FakeClaude:
                 YK_FAKE_SESSIONS=self.sessions_dir,
                 CLAUDECODE="1",
                 CLAUDE_CODE_MESSAGING_SOCKET=self.inbox_path,
-                CLAUDE_CODE_SESSION_ID=SID,
+                CLAUDE_CODE_SESSION_ID=(env or {}).get(
+                    "CLAUDE_CODE_SESSION_ID", SID
+                ),  # another id is a restart
             )
             if token:
                 extra["CLAUDE_CODE_MESSAGING_TOKEN"] = TOKEN

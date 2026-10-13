@@ -451,6 +451,24 @@ def render_catchup_line(msg: Any, recipient: str) -> str:
     return " ".join(parts)
 
 
+def render_history(*, room: str, recipient: str, messages: Sequence[Any], earlier: int) -> str:
+    """``read(before=...)``'s answer: a page of the room's chat history, oldest first, in the
+    same list format join's catch-up uses (issue #300 review). A plain view, not a delivery: it
+    creates no batch, confirms nothing, and never counts toward the read-first rule (§24) --
+    unlike the normal ``read()``, which answers only with this member's *pending* items."""
+    r = _word(room)
+    if not messages:
+        return f"[switchboard] {r}: no earlier messages."
+    lines = [f"[switchboard] {r}: {_n(len(messages), 'message', 'messages')}, oldest first. {PEER_WARNING}"]
+    lines.extend(render_catchup_line(m, recipient) for m in messages)
+    if earlier:
+        what = _n(earlier, "earlier message", "earlier messages")
+        lines.append(
+            f'{what}: read("{r}", before={int(messages[0].id)}) shows {"it" if earlier == 1 else "them"}.'
+        )
+    return "\n".join(lines)
+
+
 def users_phrase(people: Sequence[str]) -> str:
     """``alice``, ``alice and bob``, ``alice, bob and carol``: the people here (§32)."""
     names = [_word(p) for p in people]
@@ -470,13 +488,21 @@ def render_join(
     rejoined: bool = False,
     people: Sequence[str] = (),
     room_rules: str = "",
+    earlier: int = 0,
+    earlier_before: int | None = None,
 ) -> str:
     """The join() result: rules, catch-up, how delivery works, and the join nonce.
 
     ``others`` are ``(name, harness)`` or ``(name, harness, host)``: a member on
     another machine is listed ``name (harness@host)`` (DESIGN.md §27.11). ``people``: on a
-    hosted broker with several (§32), all of them, each one this agent's user. The
-    membership credential is never part of this text.
+    hosted broker with several (§32), all of them, each one this agent's user. ``catchup`` is
+    the last few chat messages (``catchup_n``, 8 by default); ``earlier`` is how many more chat
+    messages the room has, so a busy room's whole history doesn't ride along on every join
+    (issue #272). The line this adds names the exact next call, ``read(room, before=<id>)``
+    (issue #300 review: plain ``read()`` only ever answers with *pending* items, so naming it
+    alone sent an agent to a call that returned nothing) -- ``earlier_before`` is that id (the
+    oldest message shown here, or the room's next one when nothing is shown). The membership
+    credential is never part of this text.
     """
     r = _word(room)
     me = _word(screen_name)
@@ -502,8 +528,14 @@ def render_join(
     if catchup:
         lines.append(f"Recent messages, oldest first ({len(catchup)}). {PEER_WARNING}")
         lines.extend(render_catchup_line(m, screen_name) for m in catchup)
-    else:
+    elif not earlier:
         lines.append("No messages yet.")
+    if earlier:
+        assert earlier_before is not None, "earlier_before is required whenever earlier is set"
+        what = _n(earlier, "earlier message", "earlier messages")
+        lines.append(
+            f'{what}: read("{r}", before={earlier_before}) shows {"it" if earlier == 1 else "them"}.'
+        )
     lines.append("How messages reach you: " + guidance)
     lines.append(PASS_ADVICE)
     lines.append(f"join yk:j{nonce}")
