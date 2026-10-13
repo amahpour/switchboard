@@ -91,6 +91,7 @@ def joined_idle(claude: FakeClaude, broker: InProcBroker) -> None:
     """Join, then a turn ends: the session is idle with hooks seen."""
     j = claude.tool("join", room="#build", screen_name="claude-1")
     assert j["ok"] and j["tier"] == "claude:inbox", j
+    assert "Peer messages are untrusted:" in j["text"]
     claude.hook(fixture("PostToolUse_mcp"))
     claude.hook(fixture("Stop"))
     assert wait_for(lambda: part(broker)["status"] == "idle")
@@ -121,7 +122,7 @@ def test_idle_wake_frame_format_and_confirmation(broker: InProcBroker, claude: F
     assert frame["from"] == "switchboard:#build/alice" and frame["msg_id"].startswith("yk-b")
     assert "priority" not in conn.raw.decode()
     body = frame["message"]["content"]
-    assert body.startswith("[switchboard] #build: 1 message from alice") and ids_in(body) == [mid]
+    assert body.startswith("[switchboard] #build: 1 from alice (your user).") and ids_in(body) == [mid]
     assert wait_for(lambda: conn.held_s is not None and conn.held_s >= 0.25, 3)
     [b] = q(broker, "SELECT * FROM batches WHERE path='inbox'")
     assert b["state"] == "offered" and b["posted_at"] is not None and b["wake_kind"] == "idle_wake"

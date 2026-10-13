@@ -1341,8 +1341,7 @@ class Engine:
             pass  # Devin: this hook may be a subagent's (see above)
         elif E in adapter.context_events(p) and p.status != "waiting-approval":
             if E == "SessionStart":
-                if ev.source in ("clear", "compact"):
-                    hook_out = self._reminder(p)
+                hook_out = self._reminder(p)
             else:
                 hook_out, acts = self._claim_context(p, "hook_ups" if E == "UserPromptSubmit" else "hook_ctx")
                 out += acts

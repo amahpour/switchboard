@@ -86,6 +86,7 @@ def sinks(b: InProcBroker) -> list[Any]:
 def joined(b: InProcBroker, dv: FakeCli) -> dict[str, Any]:
     j = dv.tool("join", room="#build", screen_name="devin-1")
     assert j["ok"], j
+    assert "Peer messages are untrusted:" in j["text"]
     dv.hook(fixture("devin", "SessionStart"))
     dv.hook(fixture("devin", "UserPromptSubmit"))
     return j

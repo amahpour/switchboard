@@ -1,7 +1,5 @@
-"""pass() is the default (DESIGN.md §8.6): every woken agent
-is told that pass() is a good default and that it should speak only when it adds
-something new. The advice is part of every batch header, on every path, and of
-the join() result."""
+"""pass() advice reaches a session at join and after a Claude SessionStart (§8.6),
+without riding on each delivery path."""
 
 from __future__ import annotations
 
@@ -55,28 +53,28 @@ def texts_on_every_path(w: World) -> dict[str, str]:
     return out
 
 
-def test_every_path_carries_the_advice(w: World) -> None:
+def test_every_path_omits_repeated_advice(w: World) -> None:
     got = texts_on_every_path(w)
     assert {"inbox", "turn_start", "wait", "stop_followup", "hook_ctx"} <= set(got)
     for path, text in got.items():
         assert text.startswith("[switchboard]"), path
-        assert ADVICE in text.splitlines()[0], path  # in the header, before any message
+        assert ADVICE not in text, path
 
 
-def test_devin_stop_block_and_a_steer_carry_it(w: World) -> None:
+def test_devin_stop_block_and_a_steer_omit_repeated_advice(w: World) -> None:
     pd, md = devin(w)
     w.hook(pd, "UserPromptSubmit", gen="g1")
     w.human("for devin")
     out = w.hook(pd, "Stop", gen="g1")
-    assert out is not None and out.kind == "continue" and ADVICE in out.text.splitlines()[0]
+    assert out is not None and out.kind == "continue" and ADVICE not in out.text
     px, mx = codex(w, status="busy")
     attach(w, view="busy")
     w.human("steer this")
     [push] = [a for a in w.take() if isinstance(a, Push)]
-    assert push.path == "steer" and ADVICE in push.text.splitlines()[0]
+    assert push.path == "steer" and ADVICE not in push.text
 
 
-def test_stub_only_reminder_and_again_headers_carry_it(w: World) -> None:
+def test_stub_only_reminder_and_again_batches_keep_flags_without_advice(w: World) -> None:
     stub = envelope.render_batch(
         [item(1, 1)],
         room="#build",
@@ -85,17 +83,18 @@ def test_stub_only_reminder_and_again_headers_carry_it(w: World) -> None:
         token="yk:b1.00000000",
         peer_inline=False,
     )
-    assert 'Call read("#build")' in stub and ADVICE in stub.splitlines()[0]
+    assert 'read("#build") before say() or pass()' in stub and ADVICE not in stub
     again = dataclasses.replace(item(2, 2), redelivered=True)
     rem = dataclasses.replace(item(3, 1), reminders=1)
     for it in (again, rem):
         text = envelope.render_batch(
             [it], room="#build", recipient="bot", human_name="alice", token="yk:b1.00000000", peer_inline=True
         )
-        assert ADVICE in text.splitlines()[0]
+        assert ADVICE not in text
+        assert "unanswered" in text
 
 
-def test_every_rendered_batch_has_it_in_its_header() -> None:
+def test_every_rendered_batch_omits_session_advice() -> None:
     rng = random.Random(1234)
     for _ in range(300):
         n = rng.randint(1, 8)
@@ -114,7 +113,7 @@ def test_every_rendered_batch_has_it_in_its_header() -> None:
             more=rng.random() < 0.3,
         )
         head = text.splitlines()[0]
-        assert head.startswith("[switchboard]") and head.endswith(ADVICE)
+        assert head.startswith("[switchboard]") and ADVICE not in text
 
 
 def test_the_join_result_carries_it() -> None:
@@ -129,3 +128,4 @@ def test_the_join_result_carries_it() -> None:
         test_mode=False,
     )
     assert ADVICE in text
+    assert ADVICE in envelope.render_reminder([("#build", "bot")], "alice")

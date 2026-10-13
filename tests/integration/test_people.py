@@ -216,7 +216,7 @@ async def test_every_person_is_every_agents_user(hosted: InProcBroker) -> None:
         got = await agent.read("#build")
         assert got["ok"]
         text = got["text"]
-        assert "1 message from bob (your user, relayed by switchboard)" in text, text
+        assert "1 from bob (your user)" in text, text
         assert "from=bob kind=human" in text and "to_you=yes" in text and "please run the tests" in text
         who = await agent.who("#build")
         assert "alice and bob (your users, kind=human)" in who["text"]

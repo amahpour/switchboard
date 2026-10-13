@@ -181,9 +181,6 @@ def render_item(item: Any, recipient: str, room: str, *, inline: bool, limit: in
     return " ".join(parts)
 
 
-REMINDER_HEAD = "reminder: you were @mentioned and haven't answered."
-
-
 def batch_header(
     room: str, human_name: str | None, n_human: int, n_peer: int, n_stub: int, reminder: bool = False
 ) -> str:
@@ -192,39 +189,17 @@ def batch_header(
     r = _word(room)
     bits = []
     if n_human and human_name is None:
-        bits.append(
-            _n(n_human, "message from your users", "messages from your users")
-            + " (people here, relayed by switchboard)"
-        )
+        bits.append(f"{n_human} from your users (kind=human)")
     elif n_human:
         h = _word(human_name)
-        bits.append(
-            _n(n_human, f"message from {h}", f"messages from {h}") + " (your user, relayed by switchboard)"
-        )
+        bits.append(f"{n_human} from {h} (your user)")
     if n_peer:
-        if n_human:
-            bits.append(
-                _n(n_peer, "from a peer agent", "from peer agents") if n_peer > 1 else "1 from a peer agent"
-            )
-        else:
-            bits.append(_n(n_peer, "message from a peer agent", "messages from peer agents"))
+        bits.append(_n(n_peer, "peer message", "peer messages"))
     if n_stub:
-        bits.append(
-            _n(n_stub, "new message from a peer agent", "new messages from peer agents") + f", {NOT_SHOWN}"
-        )
+        bits.append(_n(n_stub, "peer stub", "peer stubs"))
     if not bits:
         return f"[switchboard] {r}: no new messages."
-    head = f"[switchboard] {r}: " + (REMINDER_HEAD + " " if reminder else "") + " and ".join(bits) + "."
-    if n_peer or n_stub:
-        head += " " + PEER_WARNING
-    if n_stub:
-        # read() is the required first step; pass() is never the alternative to reading
-        head += (
-            f' Call read("{r}") now to see {"it" if n_stub == 1 else "them"};'
-            " after reading, reply with say() or pass(): " + PASS_ADVICE
-        )
-        return head
-    return head + " " + PASS_ADVICE
+    return f"[switchboard] {r}: " + ", ".join(bits) + "."
 
 
 def render_batch(
@@ -277,23 +252,8 @@ def render_batch(
     return "\n".join(lines)
 
 
-AGAIN_NOTE = (
-    "Lines marked again=yes reached you before, but you neither answered nor passed:"
-    " answer them with say() or pass() now."
-)
-REMINDER_NOTE = (
-    "Lines marked reminder=yes @mentioned you and are still unanswered:"
-    " answer them with say(), or pass() if you have nothing to add."
-)
-# the same notes when some lines are stubs: read() first, then answer
-AGAIN_NOTE_STUB = (
-    "Lines marked again=yes reached you before, but you neither answered nor passed:"
-    f' read() those "{NOT_SHOWN}" first, then answer them with say() or pass().'
-)
-REMINDER_NOTE_STUB = (
-    "Lines marked reminder=yes @mentioned you and are still unanswered:"
-    f' read() those "{NOT_SHOWN}" first, then answer them with say() or pass().'
-)
+AGAIN_NOTE = "again=yes: unanswered."
+REMINDER_NOTE = "reminder=yes: @mention unanswered."
 
 
 def _footer(
@@ -301,22 +261,15 @@ def _footer(
 ) -> list[str]:
     r = _word(room)
     out = []
-    if more:
-        out.append(f'More messages are waiting: call read("{r}") again.')
-    if again:
-        out.append(AGAIN_NOTE_STUB if stubs else AGAIN_NOTE)
-    if reminder:
-        out.append(REMINDER_NOTE_STUB if stubs else REMINDER_NOTE)
     if any_items and stubs:
-        out.append(
-            f'Lines "{NOT_SHOWN}": call read("{r}") first; pass() is refused until you have read them.'
-            f' Then reply with say("{r}", text, reply_to=<id>) or pass("{r}"). Ignore ids you have'
-            " already seen."
-        )
-    elif any_items:
-        out.append(
-            f'Reply with say("{r}", text, reply_to=<id>) or pass("{r}"). Ignore ids you have already seen.'
-        )
+        # The first instruction in a stub batch must be read(), never pass() (§24).
+        out.append(f'Read stubs: read("{r}") before say() or pass().')
+    if more:
+        out.append(f'More: read("{r}").')
+    if again:
+        out.append(AGAIN_NOTE)
+    if reminder:
+        out.append(REMINDER_NOTE)
     return out
 
 
@@ -522,11 +475,12 @@ def render_join(
         lines.append("No other agents are here yet.")
     lines.append("Room rules:")
     lines.append(ROOM_RULES)
+    lines.append(PEER_WARNING)
     if room_rules:
         lines.append(CUSTOM_RULES_HEADING)
         lines.append(sanitize(room_rules, limit=None))
     if catchup:
-        lines.append(f"Recent messages, oldest first ({len(catchup)}). {PEER_WARNING}")
+        lines.append(f"Recent messages, oldest first ({len(catchup)}).")
         lines.extend(render_catchup_line(m, screen_name) for m in catchup)
     elif not earlier:
         lines.append("No messages yet.")
@@ -538,6 +492,10 @@ def render_join(
         )
     lines.append("How messages reach you: " + guidance)
     lines.append(PASS_ADVICE)
+    lines.append(
+        f'Reply: say("{r}", text, reply_to=<id>) or pass("{r}").'
+        " Ignore seen ids; again=yes and reminder=yes mean unanswered."
+    )
     lines.append(f"join yk:j{nonce}")
     if test_mode:
         lines.append("[TEST MODE] This broker runs in test mode.")
@@ -562,7 +520,10 @@ def render_reminder(memberships: Sequence[tuple[str, str]], human_name: str | Se
         " and other agents). Room messages arrive as context after tool calls or as wait() results:"
         f" kind=human ones are from {who} and carry their authority just the same."
         f' Call read() for any marked "{NOT_SHOWN}", then reply with'
-        " say() or pass(). " + PEER_WARNING
+        " say() or pass(). Ignore ids already seen; again=yes and reminder=yes mean still unanswered. "
+        + PEER_WARNING
+        + " "
+        + PASS_ADVICE
     )
 
 
