@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from switchboard import __version__, envelope, reviews
+from switchboard import envelope, reviews
 from switchboard.adapters.base import HOOK_EVENTS, start_key
 from switchboard.adapters.testagent import ACK_MODES
 from switchboard.broker import proc
@@ -59,6 +59,7 @@ from switchboard.models import (
     Participant,
     Room,
     Snapshot,
+    behind_by_minor,
     canonical_event,
     normalize_room,
     session_key,
@@ -121,7 +122,6 @@ def _remote(conn: Any) -> bool:
 TOOL_NAME_RE = re.compile(r"^[a-z][a-z_]{0,31}$")
 VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$")
 MAX_TOOLS = 64
-RELEASE_RE = re.compile(r"^(\d{1,4})\.(\d{1,4})\.\d{1,4}(?:[.+_-].*)?$")
 
 
 def tools_claim(value: Any) -> tuple[str, ...] | None:
@@ -137,14 +137,6 @@ def tools_claim(value: Any) -> tuple[str, ...] | None:
 def version_claim(value: Any) -> str | None:
     """The switchboard version an MCP server says it runs, or None: only to name it to a person."""
     return value if isinstance(value, str) and VERSION_RE.fullmatch(value) else None
-
-
-def behind_by_minor(claim: str | None, broker: str = __version__) -> bool:
-    """A reported release is behind the broker by at least a minor version, not a patch."""
-    old, current = RELEASE_RE.fullmatch(claim or ""), RELEASE_RE.fullmatch(broker)
-    if old is None or current is None:
-        return False
-    return (int(old[1]), int(old[2])) < (int(current[1]), int(current[2]))
 
 
 # a rate-limited say() waits its turn (§8.4); a burst past this many per member is refused

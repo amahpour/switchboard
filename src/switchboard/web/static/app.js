@@ -1113,9 +1113,9 @@
     const chips = el('span', 'm-chips');
     chips.append(tierChip(m));
     main.append(nameLine, el('span', 'm-status', st), chips);
-    main.append(el('span', 'm-claim', 'Switchboard (reported): ' + (m.version_claim || 'unknown')));
-    main.append(el('span', 'm-claim', 'Tools (reported): ' +
-      (m.tools_claim === null || m.tools_claim === undefined ? 'unknown' : (m.tools_claim.join(', ') || 'none'))));
+    // what it says it runs, only when it matters (#299): the Inspector always has both
+    const claim = claimLine(m);
+    if (claim) main.append(el('span', 'm-claim', claim));
     if (m.away) main.append(el('span', 'm-away', 'Away: ' + m.away));
     if (m.parked) {
       const p = el('span', 'm-parked');
@@ -1572,6 +1572,30 @@
     if (ins.room === state.active) renderLocal(label(ins.name, ins.host) + ' left ' + ins.room);
   }
 
+  // A reported release behind this broker's by a minor version or more, not a patch (#299; the
+  // broker's behind_by_minor, which posts the join note, is the same rule).
+  function versionBehind(claim) {
+    const re = /^(\d{1,4})\.(\d{1,4})\.\d{1,4}/;
+    const old = re.exec(claim || ''), cur = re.exec((state.me && state.me.version) || '');
+    if (!old || !cur) return false;
+    return Number(old[1]) < Number(cur[1]) || (Number(old[1]) === Number(cur[1]) && Number(old[2]) < Number(cur[2]));
+  }
+
+  // A member's reported switchboard, when it's behind this broker or has no review tool (#299).
+  function claimLine(m) {
+    const noReview = Array.isArray(m.tools_claim) && m.tools_claim.indexOf('review') < 0;
+    if (versionBehind(m.version_claim)) {
+      return 'switchboard ' + m.version_claim + ', behind: switchboard update upgrades it' +
+        (noReview ? ' (no review tool)' : '');
+    }
+    return noReview ? 'no review tool: switchboard update upgrades it' : '';
+  }
+
+  function toolsText(tools) {
+    if (tools === null || tools === undefined) return 'unknown';
+    return tools.length ? tools.join(', ') : 'none';
+  }
+
   function fact(dl, k, v) {
     const dd = el('dd');
     if (typeof v === 'string') dd.textContent = v;
@@ -1745,6 +1769,9 @@
       fact(dl, 'Session', el('span', 'muted', (d.session && d.session.why) || 'none'));
     }
     fact(dl, 'Joined', has(dm.joined_at) ? dayTime(dm.joined_at) : '—');
+    // what its MCP server reports, a claim (#299)
+    fact(dl, 'switchboard', (m.version_claim || 'unknown') + (versionBehind(m.version_claim) ? ' (behind)' : ''));
+    fact(dl, 'Tools', toolsText(m.tools_claim));
     const what = dm.last_seen_what === 'seen' ? 'status' : dm.last_seen_what;
     fact(dl, 'Last seen', has(dm.last_seen) ? hhmm(dm.last_seen) + (what ? ' · ' + what : '') : '—');
     const queued = m.queued || 0;

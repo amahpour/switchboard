@@ -470,10 +470,13 @@ class UIWorld:
         finally:
             not_test_mode(b)
 
-    def add_old_agent(self, room: str, name: str) -> None:
+    def add_old_agent(
+        self, room: str, name: str, version: str | None = None, tools: list[str] | None = None
+    ) -> None:
         """Join ``name`` to ``room`` as an MCP server from before #249 would: its mcp.hello lists
-        no tools, so the review board names it as a member that can't use the board. A raw
-        socket of this process, kept open until ``stop()``."""
+        no tools, so the review board names it as a member that can't use the board. With
+        ``version`` and ``tools``, it reports those instead (#299). A raw socket of this process,
+        kept open until ``stop()``."""
         from switchboard.mcp.client import Stream
 
         b = self.broker
@@ -486,7 +489,11 @@ class UIWorld:
         self._old.append(s)
         b.on_loop(test_mode_on)
         try:
-            s.call("mcp.hello", {"harness": "test", "test_session": f"old-{name}"}, 5)
+            claims = {
+                **({"version": version} if version is not None else {}),
+                **({"tools": tools} if tools is not None else {}),
+            }
+            s.call("mcp.hello", {"harness": "test", "test_session": f"old-{name}", **claims}, 5)
             s.call("agent.join", {"room": room, "screen_name": name}, 5)
         finally:
             not_test_mode(b)

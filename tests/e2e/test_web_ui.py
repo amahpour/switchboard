@@ -2220,23 +2220,34 @@ def test_the_board_names_a_member_that_cant_use_it(ui: UI) -> None:
     expect(line.locator("svg.ic-warn, span.ic-warn")).to_have_count(1)
 
 
-def test_members_show_reported_versions_and_tools_in_light_dark_and_phone(ui: UI) -> None:
+def test_members_name_a_member_behind_and_the_inspector_shows_every_claim(ui: UI) -> None:
+    """#299: a Members row says what a member runs only when it matters (behind this broker by a
+    minor release, or without the review tool), so a room of current agents stays one line each;
+    the Inspector always shows the reported version and tools. Light, dark and the phone. (The
+    world's old agents share one process, and claims are per MCP process: so only one here.)"""
     room = "e2e-member-claims"
     ui.world.create_room("#" + room)
     ui.world.add_agents("#" + room, ("claude-1",))
-    ui.world.add_old_agent("#" + room, "codex-1")
+    ui.world.add_old_agent("#" + room, "codex-1", version="0.9.0", tools=["join", "say", "read"])
     for options in ({"color_scheme": "light"}, {"color_scheme": "dark"}, {**PHONE, "color_scheme": "light"}):
         page = ui.open(room=room, **options)
         if "viewport" in options:
             page.click("#buddy-toggle")
         current = page.locator('#buddy-list .member[data-name="claude-1"]')
         old = page.locator('#buddy-list .member[data-name="codex-1"]')
-        expect(current.locator(".m-claim").first).to_have_text(f"Switchboard (reported): {__version__}")
-        expect(current.locator(".m-claim").last).to_contain_text("review")
-        expect(old.locator(".m-claim").first).to_have_text("Switchboard (reported): unknown")
-        expect(old.locator(".m-claim").last).to_have_text("Tools (reported): unknown")
-        expect(old.locator(".m-claim").last).to_be_visible()
+        expect(current.locator(".m-claim")).to_have_count(0)
+        expect(old.locator(".m-claim")).to_have_text(
+            "switchboard 0.9.0, behind: switchboard update upgrades it (no review tool)"
+        )
         no_horizontal_scroll(page)
+        old.click()
+        facts = page.locator("#insp-body .insp-facts")
+        expect(facts).to_contain_text("0.9.0 (behind)")
+        expect(facts).to_contain_text("join, read, say")
+        page.click("#insp-back")
+        current.click()
+        expect(facts).to_contain_text(__version__)
+        expect(facts).to_contain_text("review")
 
 
 def test_the_review_board_shows_each_item_in_its_lane(ui: UI) -> None:
