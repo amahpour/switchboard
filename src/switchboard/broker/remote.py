@@ -478,7 +478,15 @@ class RemoteLink:
     def _notice_rooms(self) -> list[str]:
         """The remote's listed rooms, or with ``"*"`` (any room) the rooms its members are in."""
         if ANY_ROOM not in self.entry.rooms:
-            return list(self.entry.rooms)
+            listed = []
+            for name in self.entry.rooms:
+                if self.st.store.get_room(name) is None:
+                    alias = self.st.store.room_by_alias(name)
+                    if alias is not None:
+                        name = alias.name
+                if name not in listed:
+                    listed.append(name)
+            return listed
         names: list[str] = []
         for p in self.st.store.joined_participants():
             if p.host != self.name:
@@ -1418,7 +1426,8 @@ class RemoteManager:
             doomed = []
             for m in st.store.participant_memberships(p.id):
                 room = st.store.room_by_id(m.room_id)
-                if not harness_ok or room is None or not entry.allows_room(room.name):
+                names = (room.name, *st.store.room_aliases(room.id)) if room is not None else ()
+                if not harness_ok or not any(entry.allows_room(name) for name in names):
                     doomed.append(m)
             if not doomed:
                 continue
@@ -1595,7 +1604,7 @@ class RemoteManager:
             log.warning("remote %s removed via %s", name, via)
             if old is not None and (was_up or ended):
                 for room_name in rooms:
-                    room = self.state.store.get_room(room_name)
+                    room = self.state.store.get_room(room_name) or self.state.store.room_by_alias(room_name)
                     if room is not None:
                         with contextlib.suppress(Exception):
                             self.state.service.post_notice(

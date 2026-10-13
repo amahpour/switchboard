@@ -17,6 +17,7 @@ https://github.com/user-attachments/assets/4af0e8c2-55f2-4b11-86a5-0db6b166f31c
 - **Your agents, not a vendor's.** `switchboard install` registers a hook and an MCP server with each CLI, and that's all. The sessions stay yours: your logins, your approval settings, your terminals, your machines. Nothing hosted runs your agents for you or reads your code.
 - **Agents that check each other.** An idle agent is woken by name. It can review another's change, take over its work, or read its session history with `/catchup`, and it answers in the room where you can see it.
 - **You run the team.** Hand off, pause the room, hold one agent, cap the wake budget, watch every delivery. Anything you can type as a command, the web page does too.
+- **Fix a room name.** Click its title to rename it; agents already there stay in it, and can use either name.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/media/ui/desktop-dark.png">

@@ -89,7 +89,7 @@ class Store:
         now = self.clock.now()
         private = int(private_for is not None)
         with db.tx(self.con):
-            if self.get_room(name) is not None:
+            if self.get_room(name) is not None or self.room_by_alias(name) is not None:
                 raise Conflict(f"{name} already exists")
             cur = self.con.execute(
                 "INSERT INTO rooms(name, created_at, created_by, budget_per_hour,"
@@ -151,6 +151,41 @@ class Store:
     def get_room(self, name: str) -> Room | None:
         r = self.con.execute("SELECT * FROM rooms WHERE name=?", (name,)).fetchone()
         return Room.from_row(r) if r else None
+
+    def room_by_alias(self, name: str) -> Room | None:
+        """A current open room that used to have ``name``; current names win at callers."""
+        rows = self.con.execute("SELECT * FROM rooms WHERE instr(name, '~')=0").fetchall()
+        for row in rows:
+            if name in json.loads(row["renamed_from"]):
+                return Room.from_row(row)
+        return None
+
+    def room_aliases(self, room_id: int) -> list[str]:
+        row = self.con.execute("SELECT renamed_from FROM rooms WHERE id=?", (room_id,)).fetchone()
+        return json.loads(row[0]) if row else []
+
+    def rename_open_room(self, room_id: int, new_name: str, *, expect: str) -> Room:
+        """Change an open room's name and save its former names atomically (#316)."""
+        if ROOM_RE.fullmatch(new_name) is None:
+            raise ValueError(f"not a room name: {new_name!r}")
+        with db.tx(self.con):
+            room = self.room_by_id(room_id)
+            if room is None or room.closed or room.name != expect:
+                raise Conflict(f"room {room_id} is not {expect}")
+            other = self.get_room(new_name) or self.room_by_alias(new_name)
+            if other is not None and other.id != room_id:
+                raise Conflict(f"{new_name} already exists")
+            aliases = self.room_aliases(room_id)
+            aliases = [n for n in aliases if n != new_name]
+            aliases.append(expect)
+            try:
+                self.con.execute(
+                    "UPDATE rooms SET name=?, renamed_from=? WHERE id=?",
+                    (new_name, json.dumps(aliases), room_id),
+                )
+            except sqlite3.IntegrityError:
+                raise Conflict(f"{new_name} already exists") from None
+            return self._room_or_raise(room_id)
 
     def set_room_rules(self, room_id: int, text: str) -> Room:
         if not isinstance(text, str) or len(text) > 2000:
@@ -217,7 +252,9 @@ class Store:
         with db.tx(self.con):
             try:
                 n = self.con.execute(
-                    "UPDATE rooms SET name=? WHERE id=? AND name=?", (new_name, room_id, expect)
+                    "UPDATE rooms SET name=?, renamed_from=CASE WHEN ? THEN '[]' ELSE renamed_from END"
+                    " WHERE id=? AND name=?",
+                    (new_name, int(split_closed(new_name) is not None), room_id, expect),
                 ).rowcount
             except sqlite3.IntegrityError:
                 raise Conflict(f"{new_name} already exists") from None
@@ -395,12 +432,14 @@ class Store:
         skip_memberships: Iterable[int] = (),
         sender_host: str | None = None,
         sender_person_id: int | None = None,
+        deliver_notice: bool = False,
     ) -> Message:
         """Persist a message and its per-recipient delivery rows in one transaction.
 
         Classification (§8.1): for every active membership other than the sender,
         prio 2 for a human message, 1 when the member is @mentioned, else 0.
-        join/leave/notice messages are never delivered to agents. ``skip_memberships``
+        Join/leave/notice messages are not delivered to agents, except a room-rename notice
+        explicitly passed with ``deliver_notice`` (#316). ``skip_memberships``
         get no delivery row either (the subjects of a ``/catchup`` request, §26).
         ``sender_host`` is a remote agent sender's host (§27.6); None on this machine.
         ``sender_person_id`` is a human sender other than the owner (§32.2); every person
@@ -408,6 +447,8 @@ class Store:
         """
         if sender_host is not None and not valid_host(sender_host):
             raise ValueError(f"not a host name: {sender_host!r}")
+        if deliver_notice and (kind != "notice" or sender_kind != "system"):
+            raise ValueError("only a system notice may be delivered")
         skip = {int(x) for x in skip_memberships}
         now = self.clock.now()
         mentions_l = sorted({m.lower() for m in mentions})
@@ -446,6 +487,7 @@ class Store:
                     )
                 else:
                     self.con.execute("UPDATE rooms SET last_msg_at=? WHERE id=?", (now, room_id))
+            if kind == "chat" or deliver_notice:
                 rows = self.con.execute(
                     "SELECT id, screen_name FROM memberships WHERE room_id=? AND left_at IS NULL",
                     (room_id,),

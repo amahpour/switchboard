@@ -63,13 +63,20 @@ def test_a_non_member_cant_see_read_or_post_by_any_web_route(hosted: InProcBroke
         r = admin.post(path, body)
         assert (r.status_code, r.json()) == (404, NOPE), path
     for path, body in (("/api/rooms/secret/rules", {"text": "x"}),
-                       ("/api/rooms/secret/wake", {"budget_per_hour": 1, "hop_limit": 1})):  # fmt: skip
+                       ("/api/rooms/secret/wake", {"budget_per_hour": 1, "hop_limit": 1}),
+                       ("/api/rooms/secret/name", {"name": "#hidden"})):  # fmt: skip
         r = admin.c.put(path, json=body, headers=admin.headers(True))
         assert (r.status_code, r.json()) == (404, NOPE), path
     # and bob's message stayed his room's
     assert [
         m["text"] for m in bob.get("/api/rooms/secret/messages").json()["messages"] if m["kind"] == "chat"
     ] == ["only us"]
+    renamed = bob.c.put("/api/rooms/secret/name", json={"name": "#hidden"}, headers=bob.headers(True))
+    assert renamed.status_code == 200 and renamed.json()["room"]["name"] == "#hidden"
+    assert admin.get("/api/rooms/hidden/messages").json() == {
+        "error": "not_found",
+        "message": "no such room: #hidden",
+    }
 
 
 def test_the_websocket_never_subscribes_a_non_member(hosted: InProcBroker) -> None:

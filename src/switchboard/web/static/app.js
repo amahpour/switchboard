@@ -23,6 +23,7 @@
 
 (function () {
   const $ = (id) => document.getElementById(id);
+  const roomTitleButton = $('room-title-button');
   const MAX_LINES = 2000;
   const CONT_WINDOW_S = 300;       // a same-sender message within 5 minutes is a continuation row
   const REFETCH_MS = 800;          // Inspector refetch debounce
@@ -164,7 +165,7 @@
         let validName = null;
         let rulesInput = null;
         let privateBox = null;
-        if (options.kind === 'room') {
+        if (options.kind === 'room' || options.kind === 'rename') {
           const label = el('label', null, 'Name');
           label.setAttribute('for', 'app-dialog-name');
           name = el('input');
@@ -172,12 +173,13 @@
           name.type = 'text';
           name.autocomplete = 'off';
           name.placeholder = '#build';
+          name.value = options.initial || '';
           name.setAttribute('aria-describedby', 'app-dialog-error');
           const error = el('p', 'app-dialog-error');
           error.id = 'app-dialog-error';
           error.setAttribute('role', 'status');
           form.append(label, name, error);
-          if (state.me && state.me.signin) {
+          if (options.kind === 'room' && state.me && state.me.signin) {
             // a hosted broker with people (§44): a room only the people you add see
             const row = el('label', 'check-row');
             privateBox = el('input');
@@ -297,7 +299,7 @@
           });
           form.addEventListener('submit', function (ev) {
             ev.preventDefault();
-            if (options.kind === 'room') {
+            if (options.kind === 'room' || options.kind === 'rename') {
               const room = validName();
               if (!room) return;
               answer = privateBox ? { name: room, private: privateBox.checked } : room;
@@ -956,6 +958,12 @@
     log.append(frag);
   }
 
+  // The composer names the room it posts to; a rename changes that name under an open room (#316).
+  function composerPlaceholder() {
+    $('input').placeholder = state.rooms.size === 0 ? 'Create a room first.'
+      : 'Message ' + (state.active || '') + ' — @ to mention, / for commands';
+  }
+
   function renderLog() {
     const log = $('log');
     const r = activeRoom();
@@ -969,8 +977,7 @@
     $('send').disabled = noRooms;
     $('cmd-btn').disabled = noRooms;
     $('mention-btn').disabled = noRooms;
-    input.placeholder = noRooms ? 'Create a room first.'
-      : 'Message ' + (state.active || '') + ' — @ to mention, / for commands';
+    composerPlaceholder();
     updateRoomEmpty();
     renderRows(r);
     log.scrollTop = log.scrollHeight;
@@ -1082,7 +1089,11 @@
     const base = state.active ? 'switchboard — ' + state.active : 'switchboard';
     document.title = (unread ? '(' + unread + ') ' : '') + base;
     const r = activeRoom();
-    $('room-title').textContent = r ? r.name.replace(/^#/, '') : (state.rooms.size ? '' : 'Get started');
+    const heading = $('room-title');
+    if (r && roomTitleButton) {
+      roomTitleButton.textContent = r.name.replace(/^#/, '');
+      if (roomTitleButton.parentNode !== heading) heading.replaceChildren(roomTitleButton);
+    } else heading.textContent = r ? r.name.replace(/^#/, '') : (state.rooms.size ? '' : 'Get started');
     // a private room's header shows its lock, as the sidebar does (§44)
     const glyph = typeof document.querySelector === 'function' ? document.querySelector('.head-hash path') : null;
     if (glyph) glyph.setAttribute('d', ICONS[r && r.private ? 'lock' : 'hash']);
@@ -1997,6 +2008,8 @@
       detail: 'Open wait() calls return “paused”; read() still works.' },
     { group: 'Room', cmd: 'resume', args: '', desc: 'Unfreeze wakes; also resets the loop guard', pill: 'web only', usage: '/resume',
       detail: 'Raises agent activity, so it needs this signed-in browser.' },
+    { group: 'Room', cmd: 'rename', args: '<new-name>', desc: 'Rename this room', pill: 'web only',
+      usage: '/rename <new-name>', detail: 'Members stay in the room. Agents can use either name.' },
     { group: 'Room', cmd: 'budget', args: '[n]', desc: 'Show or set wakes left this hour', pill: 'raise: web only',
       usage: '/budget   /budget <n>', detail: 'Lowering works from anywhere; raising needs this browser.', live: 'budget' },
     { group: 'Room', cmd: 'hops', args: '[n]', desc: 'Show or set the loop-guard limit', pill: 'raise: web only',
@@ -4759,7 +4772,8 @@
         const verb = text.split(/\s+/)[0];
         const res = await api('POST', path + '/command', { text: text });
         // a done /close prunes this room, and the new view would wipe the reply: prune first
-        if (res.ok && verb.toLowerCase() === '/close') await loadRooms().catch(function () {});
+        if (res.ok && (verb.toLowerCase() === '/close' || verb.toLowerCase() === '/rename'))
+          await loadRooms().catch(function () {});
         renderLocal(verb, !res.ok, res.text);
         // a person's /review opened the room's board (#248): show it, in this page only
         if (res.ok && verb.toLowerCase() === '/review' && r.name === state.active) {
@@ -4798,6 +4812,21 @@
     } catch (e) {
       if (state.rooms.size) renderLocal(String(e.message || e), true);
       else await openDialog({ kind: 'notice', title: 'Room not created',
+        body: String(e.message || e), action: 'Close' });
+    }
+  }
+
+  async function openRoomRename() {
+    const r = activeRoom();
+    if (!r) return;
+    const answer = await openDialog({ kind: 'rename', title: 'Rename ' + r.name,
+      initial: r.name, action: 'Rename' });
+    if (!answer) return;
+    try {
+      await api('PUT', '/api/rooms/' + encodeURIComponent(r.slug) + '/name', { name: answer });
+      await loadRooms();
+    } catch (e) {
+      await openDialog({ kind: 'notice', title: 'Room not renamed',
         body: String(e.message || e), action: 'Close' });
     }
   }
@@ -5325,6 +5354,7 @@
     });
     $('room-rules').addEventListener('click', openRoomRules);
     $('room-wake').addEventListener('click', openRoomWake);
+    if (roomTitleButton) roomTitleButton.addEventListener('click', openRoomRename);
     $('board-toggle').addEventListener('click', function () {
       state.boardOpen = !state.boardOpen;
       state.boardSel = null;
@@ -5392,6 +5422,25 @@
     state.closed = data.closed || 0;
     const listed = new Map();
     for (const r of data.rooms) listed.set(r.name, r);
+    // A rename keeps the id and creation time. Move the existing view instead of treating its
+    // old name as a closed room: keep history, unread state, board and the active tab.
+    for (const l of data.rooms) {
+      if (state.rooms.has(l.name)) continue;
+      for (const [old, r] of state.rooms) {
+        if (r.id !== l.id || r.createdAt !== l.created_at) continue;
+        state.rooms.delete(old);
+        r.name = l.name;
+        r.slug = l.slug;
+        state.rooms.set(l.name, r);
+        if (state.active === old) {
+          state.active = l.name;
+          history.replaceState(null, '', '#' + l.slug);
+          composerPlaceholder();
+        }
+        if (state.inspect && state.inspect.room === old) state.inspect.room = l.name;
+        break;
+      }
+    }
     const gone = new Set();
     for (const [name, r] of Array.from(state.rooms)) {
       const l = listed.get(name);

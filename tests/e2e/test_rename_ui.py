@@ -4,19 +4,103 @@ the renames touch no other test's world. Marker ``e2e``."""
 
 from __future__ import annotations
 
+import re
 import shutil
 from collections.abc import Iterator
 from typing import Any
 
+import httpx
 import pytest
 from conftest import InProcBroker, make_tmp_home, sanitize_env
 from playwright.sync_api import Browser, expect
 from test_people_ui import ADMIN_PW, choose, sign_in
-from test_web_ui import PHASE_REPORTS, UI
+from test_private_rooms_ui import admin_page
+from test_web_ui import PHASE_REPORTS, PHONE, UI
 
 from switchboard.broker.auth import WebOrigin
 
 pytestmark = pytest.mark.e2e
+
+
+@pytest.fixture(scope="module")
+def room_hosted(
+    playwright: Any, tmp_path_factory: pytest.TempPathFactory
+) -> Iterator[tuple[InProcBroker, str]]:
+    """A signed-in browser for the room title tests, separate from the person-rename world."""
+    with pytest.MonkeyPatch.context() as mp:
+        sanitize_env(mp, tmp_path_factory)
+        home = make_tmp_home()
+        b = InProcBroker(home, web_origin=lambda port: WebOrigin.parse(f"http://sb.localhost:{port}")).start()
+        b.on_loop(lambda: b.state.service.create_room("#build"))
+        origin = b.state.web_origin.origin
+        one_time = b.paths.test_claim_link.read_text().strip().split("#t=", 1)[1]
+        headers = {"Origin": origin, "X-Switchboard": "1"}
+        with httpx.Client(base_url=origin, headers=headers) as client:
+            assert (
+                client.post("/api/signin/password", json={"name": "admin", "password": one_time}).status_code
+                == 200
+            )
+            assert client.post("/api/setup/password", json={"password": ADMIN_PW}).status_code == 200
+            cookie = client.cookies.get("switchboard_session")
+        assert cookie
+        try:
+            yield b, cookie
+        finally:
+            b.stop()
+            shutil.rmtree(home, ignore_errors=True)
+
+
+@pytest.mark.parametrize("theme,phone", [("light", False), ("dark", False), ("light", True)])
+def test_room_title_renames_with_keyboard_and_keeps_focus(
+    ui: UI, room_hosted: tuple[InProcBroker, str], theme: str, phone: bool
+) -> None:
+    """Clicking the title opens a small dialog; Escape cancels and Enter renames in each view."""
+    old = "#room-" + theme + ("-phone" if phone else "")
+    new = old + "-new"
+    hosted, _cookie = room_hosted
+    hosted.on_loop(lambda: hosted.state.service.create_room(old))
+    page = admin_page(ui, room_hosted, **(PHONE if phone else {}))
+    if phone:
+        page.click("#rooms-toggle")
+    page.locator('#tabs .room[data-room="' + old + '"]').click()
+    page.evaluate("theme => { document.documentElement.dataset.theme = theme; }", theme)
+    title = page.locator("#room-title")
+    title_button = page.locator("#room-title-button")
+    expect(title).to_have_text(old[1:])
+    if phone:
+        rooms_box = page.locator("#rooms-toggle").bounding_box()
+        title_box = title.bounding_box()
+        members_box = page.locator("#buddy-toggle").bounding_box()
+        assert rooms_box and title_box and members_box
+        assert rooms_box["x"] + rooms_box["width"] <= title_box["x"]
+        assert title_box["x"] + title_box["width"] <= members_box["x"]
+    title_button.click()
+    expect(page.locator("#app-dialog-name")).to_be_focused()
+    page.keyboard.press("Escape")
+    expect(title_button).to_be_focused()
+    title_button.click()
+    page.fill("#app-dialog-name", "bad name")
+    expect(page.locator("#app-dialog-action")).to_be_disabled()
+    page.fill("#app-dialog-name", "build")
+    expect(page.locator("#app-dialog-action")).to_be_disabled()
+    page.fill("#app-dialog-name", new)
+    page.keyboard.press("Enter")
+    expect(title).to_have_text(new[1:])
+    expect(title_button).to_be_focused()
+    expect(page.locator('#tabs .room[data-room="' + new + '"]')).to_have_count(1)
+    assert page.evaluate("location.hash") == new
+    # the composer names the room it posts to: it kept the old name until the page was reloaded
+    expect(page.locator("#input")).to_have_attribute(
+        "placeholder", re.compile("^Message " + re.escape(new) + " ")
+    )
+    final = new + "-cmd"
+    page.fill("#input", "/rename " + final)
+    page.keyboard.press("Enter")
+    expect(title).to_have_text(final[1:])
+    assert page.evaluate("location.hash") == final
+    expect(page.locator("#input")).to_have_attribute(
+        "placeholder", re.compile("^Message " + re.escape(final) + " ")
+    )
 
 
 @pytest.fixture(scope="module")
