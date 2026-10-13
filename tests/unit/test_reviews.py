@@ -7,6 +7,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+from conftest import FakeClock
 
 from switchboard import reviews
 from switchboard.broker.reviews import Boards
@@ -17,7 +18,7 @@ def finding(state: str = "raised", raised_by: str = "codex-1", owner: str = "", 
     return Item(
         id=n, n=n, kind="finding", state=state, title="off by one", detail="", file="a.py", lines="3-4",
         raised_by=raised_by, owner=owner, commit="", reason="", options=(), recommend=None, answer="",
-        answered_by="",
+        answered_by="", confirmed_by="legacy" if state == "fixed" else "",
     )  # fmt: skip
 
 
@@ -46,6 +47,39 @@ def test_only_the_owner_marks_a_conceded_finding_fixed() -> None:
         reviews.agent_move(f, "fix", "codex-1")
     with pytest.raises(ReviewError, match="can't be fixed from there"):
         reviews.agent_move(finding("raised"), "fix", "codex-1")
+
+
+def test_a_new_fix_waits_for_the_raiser_to_confirm_before_settling() -> None:
+    """A fix is recorded, but the board stays open until its independent raiser checks it."""
+    fixed = replace(
+        finding("fixed", owner="claude-1"), proof="tests/test_cart.py::test_total", confirmed_by=""
+    )
+    assert not reviews.settled([fixed])
+    assert reviews.agent_move(fixed, "confirm", "codex-1") == "fixed"
+    with pytest.raises(ReviewError, match="raised F1"):
+        reviews.agent_move(fixed, "confirm", "claude-1")
+    assert reviews.settled([replace(fixed, confirmed_by="codex-1")])
+
+
+def test_an_unconfirmed_fix_moves_to_needs_you_after_one_day() -> None:
+    """A FakeClock proves the boundary without sleeping or waiting for a browser timer."""
+    clock = FakeClock()
+    fixed = replace(finding("fixed", owner="claude-1"), confirmed_by="", updated_at=clock.now())
+    assert not reviews.needs_person(fixed, {"codex-1", "claude-1"}, clock.now())
+    clock.advance(reviews.FIX_CONFIRM_TIMEOUT_S - 1)
+    assert not reviews.needs_person(fixed, {"codex-1", "claude-1"}, clock.now())
+    clock.advance(1)
+    assert reviews.needs_person(fixed, {"codex-1", "claude-1"}, clock.now())
+    assert reviews.counts([fixed], {"codex-1", "claude-1"}, clock.now())["needs_person"] == 1
+
+
+def test_proof_accepts_a_test_name_or_http_link_only() -> None:
+    """A proof link has a checked scheme; switchboard does not fetch or judge the proof."""
+    assert reviews.proof("tests/test_cart.py::test_total") == "tests/test_cart.py::test_total"
+    assert reviews.proof("https://example.com/proof") == "https://example.com/proof"
+    for value in ("", "ftp://example.com/proof", "javascript:alert(1)", "x" * 501):
+        with pytest.raises(ReviewError):
+            reviews.proof(value)
 
 
 def test_a_contested_finding_can_still_be_conceded_but_not_contested_again() -> None:
@@ -356,7 +390,7 @@ def test_a_concession_wakes_another_owner_and_a_fix_wakes_its_raiser() -> None:
     assert reviews.handoff(conceded, "codex-1", AGENTS) is not None
     assert reviews.handoff(conceded, "codex-1", AGENTS)[0] == ("claude-1",)  # type: ignore[index]
     assert reviews.handoff(conceded, "claude-1", AGENTS) is None  # the owner conceded it: theirs already
-    fixed = replace(finding("fixed", owner="claude-1"), commit="def5678abcdef0123")
+    fixed = replace(finding("fixed", owner="claude-1"), commit="def5678abcdef0123", confirmed_by="")
     who, text = reviews.handoff(fixed, "claude-1", AGENTS) or ((), "")
     assert who == ("codex-1",) and "F1 fixed in def5678abcde. @codex-1: check the fix." in text
 
@@ -368,5 +402,5 @@ def test_a_person_s_items_and_a_move_nobody_answers_wake_no_agent() -> None:
     assert reviews.handoff(finding("contested"), "claude-1", AGENTS) is None
     assert reviews.handoff(finding("dropped"), "codex-1", AGENTS) is None
     assert reviews.handoff(finding(), "codex-1", ("codex-1",)) is None  # alone in the room
-    gone = replace(finding("fixed", owner="claude-1"), commit="def5678")
+    gone = replace(finding("fixed", owner="claude-1"), commit="def5678", confirmed_by="")
     assert reviews.handoff(gone, "claude-1", ("claude-1",)) is None  # the raiser left

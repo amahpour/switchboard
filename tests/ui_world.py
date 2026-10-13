@@ -568,7 +568,16 @@ class UIWorld:
             where="shop/codes.py:5",
         )
         call(room, "claude-1", "review", action="concede", item="F2")
-        call(room, "claude-1", "review", action="fix", item="F2", commit="9a1b2c3d4e5f")
+        call(
+            room,
+            "claude-1",
+            "review",
+            action="fix",
+            item="F2",
+            commit="9a1b2c3d4e5f",
+            proof="tests/test_codes.py::test_expiry",
+        )
+        call(room, "codex-1", "review", action="confirm", item="F2")
         call(room, "claude-1", "review", action="concede", item="F4", owner="codex-1")
         call(room, "claude-1", "review", action="contest", item="F3",
              reason="the ledger is the one to change: half-up is what the receipt shows")  # fmt: skip

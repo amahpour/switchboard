@@ -2333,7 +2333,7 @@ class Store:
         return item
 
     def move_review_item(self, item_id: int, state: str, **fields: Any) -> None:
-        allowed = {"owner", "commit_sha", "reason", "answer", "answered_by"}
+        allowed = {"owner", "commit_sha", "proof", "confirmed_by", "reason", "answer", "answered_by"}
         if set(fields) - allowed:
             raise ValueError(f"unknown review item fields: {sorted(set(fields) - allowed)}")
         cols = ", ".join(f"{k}=?" for k in ("state", "updated_at", *fields))
@@ -2475,10 +2475,13 @@ def _review_item(r: sqlite3.Row) -> reviews.Item:
         raised_by=r["raised_by"],
         owner=r["owner"],
         commit=r["commit_sha"],
+        proof=r["proof"],
+        confirmed_by=r["confirmed_by"],
         reason=r["reason"],
         options=opts,
         recommend=r["recommend"],
         answer=r["answer"],
         answered_by=r["answered_by"],
         created_at=r["created_at"],
+        updated_at=r["updated_at"],
     )

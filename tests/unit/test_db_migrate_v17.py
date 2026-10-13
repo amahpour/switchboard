@@ -30,7 +30,7 @@ def test_participants_gain_an_empty_status_line_with_a_checked_backup(tmp_path: 
     os.chmod(p, 0o600)
 
     con = db.open_db(p)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 17
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 18
     assert db.row_counts(con, db.TABLES) == before
     unset = "SELECT COUNT(*) FROM participants WHERE status_line IS NULL AND status_line_at IS NULL"
     assert con.execute(unset).fetchone()[0] == people

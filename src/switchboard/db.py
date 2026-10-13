@@ -29,7 +29,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -201,6 +201,8 @@ CREATE TABLE review_items(
   reason TEXT NOT NULL DEFAULT '' CHECK(length(reason) <= 500), options TEXT NOT NULL DEFAULT '[]',
   recommend INTEGER, answer TEXT NOT NULL DEFAULT '' CHECK(length(answer) <= 500),
   answered_by TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL, updated_at REAL NOT NULL,
+  proof TEXT NOT NULL DEFAULT '' CHECK(length(proof) <= 500),
+  confirmed_by TEXT NOT NULL DEFAULT '' CHECK(length(confirmed_by) <= 100),
   UNIQUE(review_id, kind, n));
 """
 
@@ -407,6 +409,13 @@ V16_TO_V17 = (
     "ALTER TABLE participants ADD COLUMN status_line_at REAL",
     "UPDATE meta SET value='17' WHERE key='schema_version'",
 )
+V17_TO_V18 = (
+    "ALTER TABLE review_items ADD COLUMN proof TEXT NOT NULL DEFAULT '' CHECK(length(proof) <= 500)",
+    "ALTER TABLE review_items ADD COLUMN confirmed_by TEXT NOT NULL DEFAULT ''"
+    " CHECK(length(confirmed_by) <= 100)",
+    "UPDATE review_items SET confirmed_by='legacy' WHERE state='fixed'",
+    "UPDATE meta SET value='18' WHERE key='schema_version'",
+)
 
 
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
@@ -429,6 +438,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         14: (15, V14_TO_V15, ("room_people",)),
         15: (16, V15_TO_V16, ()),
         16: (17, V16_TO_V17, ()),
+        17: (18, V17_TO_V18, ()),
     }
     out = []
     v = frm
