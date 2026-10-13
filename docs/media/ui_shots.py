@@ -35,7 +35,8 @@ expanded, #99), settings-rooms-{light,dark} and wake-settings-{light,dark,phone-
 default wake budget and hop limit, and a room's own rate, #131), settings-appearance-{light,dark},
 settings-phone-list-{light,dark} and settings-phone-rooms-light (Settings' tabbed layout and
 phone list, #232),
-closed-light, remotes-light, inspector-light, inspector-remote-light, inspector-dark-parked,
+closed-light, remotes-light, inspector-light, inspector-claude-{light,dark,phone-light} (Claude Code's
+bubble with its name written under it, #62), inspector-remote-light, inspector-dark-parked,
 phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (#129), welcome-light and login-light, plus, from a hosted broker
 (``tests/ui_world.py``'s ``HostedWorld``, with Chromium's virtual authenticators as the
 passkeys; issues #41 and #61): signin-setup-light, setup-light, people-light, people-dark,
@@ -342,6 +343,42 @@ def _offline_routes(down: dict[str, bool], live: list[Any], held: list[Any]) -> 
             route.continue_()
 
     return socket, me
+
+
+def shoot_claude_avatar(browser: Any, out: Path, world: Any) -> None:
+    """Claude Code's avatar: switchboard's bubble everywhere, and on the Inspector's large one the
+    name written under it, light, dark and the phone."""
+    from playwright.sync_api import expect
+
+    b, n_chat = world.broker, world.n_chat
+    base = {"timezone_id": "UTC", "color_scheme": "light", "locale": "en-US"}
+    desk = browser.new_context(**base, **DESKTOP)
+    desk.set_default_timeout(WAIT_MS)
+    page = desk.new_page()
+    try:
+        sign_in(page, b)
+        open_build(page, n_chat)
+        inspect(page, "claude-1")
+        shot(page, out, "inspector-claude-light.png")
+        page.emulate_media(color_scheme="dark")
+        fresh(page, n_chat)
+        inspect(page, "claude-1")
+        shot(page, out, "inspector-claude-dark.png")
+        phone_ctx = browser.new_context(**base, **PHONE, storage_state=desk.storage_state())
+        phone_ctx.set_default_timeout(WAIT_MS)
+        try:
+            ph = phone_ctx.new_page()
+            ph.goto(b.base + "/")
+            connected(ph)
+            open_build(ph, n_chat)
+            ph.click("#buddy-toggle")
+            expect(ph.locator("#app")).to_have_class(re.compile(r"\bsheet-open\b"))
+            inspect(ph, "claude-1")
+            shot(ph, out, "inspector-claude-phone-light.png")
+        finally:
+            phone_ctx.close()
+    finally:
+        desk.close()
 
 
 def shoot_offline(browser: Any, out: Path, world: Any) -> None:
@@ -1207,6 +1244,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_broadcast_mention(browser, out, world)
             shoot_humans_popover(browser, out, world)
             shoot_humans_mention(browser, out, world)
+            shoot_claude_avatar(browser, out, world)
             shoot_offline(browser, out, world)
             # last of this world's shots: its two rooms' unread backlog would otherwise show up
             # (unread is recomputed per page load) in shoot_offline's sidebar too

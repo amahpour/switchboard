@@ -81,8 +81,8 @@
   --scroll-thumb: #c9c9cf;
   --human-bg: #ece6f7;
   --human-fg: #5a3d99;
-  --h-claude-bg: #f7e7df;
-  --h-claude-fg: #8f3a1c;
+  --h-claude-bg: #b9573a;
+  --h-claude-fg: #ffffff;
   --h-devin-bg: #e2f2e8;
   --h-devin-fg: #1d6b43;
   /* the agents' icons (#62, DESIGN.md §29.9): the only files this stylesheet loads, each pinned */
@@ -159,8 +159,8 @@
     --scroll-thumb: #4a4a50;
     --human-bg: #342a4d;
     --human-fg: #cfbdf7;
-    --h-claude-bg: #45291f;
-    --h-claude-fg: #f4b89e;
+    --h-claude-bg: #b9573a;
+    --h-claude-fg: #ffffff;
     --h-devin-bg: #1b3a29;
     --h-devin-fg: #91ddb2;
   --h-codex-img: url('/static/agents/codex-dark.png');
@@ -231,8 +231,8 @@
   --scroll-thumb: #4a4a50;
   --human-bg: #342a4d;
   --human-fg: #cfbdf7;
-  --h-claude-bg: #45291f;
-  --h-claude-fg: #f4b89e;
+  --h-claude-bg: #b9573a;
+  --h-claude-fg: #ffffff;
   --h-devin-bg: #1b3a29;
   --h-devin-fg: #91ddb2;
   --h-other-bg: #2e2e33;
@@ -919,11 +919,19 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
   user-select: none;
 }
 .avatar.h-claude { background: var(--h-claude-bg); color: var(--h-claude-fg); }
-.avatar.h-claude .ic { width: 62%; height: 62%; stroke-width: 2; }
+.avatar.h-claude .ic { width: 66%; height: 66%; stroke-width: 1.6; }
+/* The Inspector's avatar writes the name under the bubble, so it grows to 48 px and sits the word
+   high enough to clear the status dot; white on this tile is 4.6:1. */
+.avatar.lg.named {
+  width: 48px; height: 48px; border-radius: 12px;
+  flex-direction: column; justify-content: flex-start; gap: 2px; padding-top: 6px;
+}
+.avatar.named .ic { width: 24px; height: 24px; flex: none; }
+.av-word { font-size: calc(9.5px * var(--text-scale)); font-weight: 700; line-height: 1; }
 .avatar.h-devin { background: var(--h-devin-bg); color: var(--h-devin-fg); }
 .avatar.h-test, .avatar.h-unknown { background: var(--h-other-bg); color: var(--h-other-fg); }
 /* Codex and Cursor show their vendor's icon, unaltered; the monogram stays in the DOM, unseen.
-   Claude Code keeps its CC tile: Anthropic allows its name in plain text, not its icon. */
+   Claude Code has switchboard's own bubble: Anthropic allows its name in plain text, not its icon. */
 .avatar.h-codex, .avatar.h-cursor {
   color: transparent;
   background-position: center;
@@ -1597,7 +1605,7 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 
 .insp-id {
   display: grid;
-  grid-template-columns: 40px minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);  /* 40 px, or 48 for a named avatar */
   column-gap: 12px;
   row-gap: 0;
   align-items: center;
