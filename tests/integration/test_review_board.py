@@ -14,8 +14,11 @@ from typing import Any
 import pytest
 from conftest import InProcBroker
 from fakes.fake_agent import FakeAgent
+from test_passkeys import hosted_broker, stop
+from test_people import join_as_bob, set_up
 
 from switchboard.config import Config
+from switchboard.models import session_key
 
 FAST = Config(human_name="alice").with_delivery(quiet_s=0.0, max_hold_s=0.0)
 PR = "https://example.com/shop/pull/7"
@@ -38,6 +41,53 @@ def q(b: InProcBroker, sql: str, *args: Any) -> list[sqlite3.Row]:
         return con.execute(sql, args).fetchall()
     finally:
         con.close()
+
+
+def test_handoff_poster_belongs_to_the_person_who_clicks() -> None:
+    """In a shared room, a person's handoff cannot assign another person's agent."""
+    hosted = hosted_broker()
+    try:
+        alice = set_up(hosted)
+        join_as_bob(hosted, alice)
+        assert alice.post("/api/rooms", {"name": "#build"}).status_code == 200
+
+        def seed() -> None:
+            store = hosted.state.store
+            room = store.get_room("#build")
+            assert room is not None
+            bob_id = store.person_named("bob").id
+            store.machine_pair("bobs-laptop", b"b" * 32, "fp-bob", {}, person_id=bob_id)
+            for name, host in (("claude-1", ""), ("codex-1", "bobs-laptop")):
+                participant = store.upsert_participant("test", session_key("test", host, name), host=host)
+                store.create_membership(room.id, participant.id, name, "hash-" + name)
+            review = store.open_review(room.id, PR, "", "codex-1")
+            store.add_review_item(
+                review["id"],
+                "finding",
+                "dropped",
+                title="done",
+                raised_by="codex-1",
+                file="shop/cart.py",
+                lines="40-58",
+            )
+            store.add_event("review", room_id=room.id, data={"item": "F1", "to": "conceded", "by": "alice"})
+            store.add_event(
+                "review", room_id=room.id, data={"item": "F1", "to": "confirmed", "by": "codex-1"}
+            )
+            hosted.state.agents.refresh_index()
+
+        hosted.on_loop(seed)
+        board = alice.get("/api/rooms/build/review").json()["board"]
+        assert board["agent_people"] == {"claude-1": 0, "codex-1": hosted.state.store.person_named("bob").id}
+        assert len(board["plan"]["comments"]) == 1
+        assert "alice conceded" in board["plan"]["comments"][0]["body"]
+        assert "codex-1 confirmed" not in board["plan"]["comments"][0]["body"]
+        denied = alice.post("/api/rooms/build/review", {"action": "handoff", "agent": "codex-1"})
+        assert denied.status_code == 400 and "your agent" in denied.json()["message"]
+        accepted = alice.post("/api/rooms/build/review", {"action": "handoff"})
+        assert accepted.status_code == 200 and accepted.json()["board"]["posted_by"] == "claude-1"
+    finally:
+        stop(hosted)
 
 
 async def test_fix_requires_proof_and_the_raiser_confirms_it(broker: InProcBroker) -> None:
@@ -301,9 +351,60 @@ def test_the_board_routes_need_a_signed_in_person_and_the_write_header(broker: I
         anon.close()
 
 
-async def test_post_waits_for_a_settled_board_and_asks_each_owner_once(broker: InProcBroker) -> None:
-    """§37.6: Post is refused until nothing is left to do, then sends one message from the person
-    that @mentions each owner with exactly its items, so each agent posts its own, once."""
+async def test_one_handoff_waits_for_confirmation_and_wakes_only_the_chosen_agent(
+    broker: InProcBroker,
+) -> None:
+    """A person decides on a line; only the selected agent gets one plan after the raiser confirms."""
+    web = broker.web_client()
+
+    def move(**body: Any) -> Any:
+        return web.post("/api/rooms/build/review", json=body, headers=broker.write_headers())
+
+    try:
+        async with (
+            FakeAgent(broker.home, "handoff-author") as author,
+            FakeAgent(broker.home, "handoff-reviewer") as reviewer,
+        ):
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            await author.call("review", room="#build", action="open", url=PR)
+            await reviewer.call(
+                "review", room="#build", action="raise", title="wrong tax", where="shop/cart.py:40-58"
+            )
+            await author.call("review", room="#build", action="contest", item="F1", reason="old claim")
+            assert move(action="concede", item="F1", owner="claude-1", agent="codex-1").status_code == 400
+            assert move(action="concede", item="F1", owner="claude-1").status_code == 200
+            await author.call(
+                "review", room="#build", action="fix", item="F1", commit="abc1234", proof="test_tax"
+            )
+            denied = move(action="handoff", agent="codex-1")
+            assert denied.status_code == 400 and "isn't settled" in denied.json()["message"]
+            await reviewer.call("review", room="#build", action="confirm", item="F1")
+            board = web.get("/api/rooms/build/review").json()["board"]
+            assert board["settled"] and board["opened_by"] == "claude-1"
+            assert board["plan"]["comments"][0]["line"] == 58
+            assert "wrong tax" in board["plan"]["summary"]
+            assert move(action="handoff", agent="unknown").status_code == 400
+            done = move(action="handoff", agent="codex-1")
+            assert done.status_code == 200 and done.json()["board"]["posted_by"] == "codex-1"
+            again = move(action="handoff", agent="claude-1")
+            assert again.status_code == 400 and "already handed off" in again.json()["message"]
+            after = await reviewer.call("review", room="#build", action="raise", title="late finding")
+            assert not after["ok"] and "already handed off" in after["error"]
+            shown = await reviewer.call("review", room="#build", action="show")
+            assert "wrong tax" in shown["board"] and "shop/cart.py:58" in shown["board"]
+    finally:
+        web.close()
+    rows = q(
+        broker, "SELECT text, mentions FROM messages WHERE sender_kind='human' AND text LIKE '%Hand off%'"
+    )
+    assert len(rows) == 1 and "codex-1" in rows[0]["mentions"]
+    assert "claude-1" not in rows[0]["mentions"]
+    assert "wrong tax" not in rows[0]["text"] and PR not in rows[0]["text"]
+
+
+async def test_handoff_summarizes_all_items_and_defaults_to_the_opener(broker: InProcBroker) -> None:
+    """§37.6: a settled board sends one selected agent its summary, including dropped items."""
     web = broker.web_client()
 
     def move(**body: Any) -> Any:
@@ -323,7 +424,7 @@ async def test_post_waits_for_a_settled_board_and_asks_each_owner_once(broker: I
                 title="Before or after tax?",
                 options=["before", "after"],
             )
-            r = move(action="post")
+            r = move(action="handoff")
             assert r.status_code == 400 and "isn't settled" in r.json()["message"]
 
             await author.call("review", room="#build", action="concede", item="F1")
@@ -334,33 +435,35 @@ async def test_post_waits_for_a_settled_board_and_asks_each_owner_once(broker: I
             await reviewer.call("review", room="#build", action="drop", item="F2", reason="not worth it")
             assert move(action="answer", item="Q1", option=0).status_code == 200
             board = web.get("/api/rooms/build/review").json()["board"]
-            assert (
-                board["settled"]
-                and board["plan"] == {"claude-1": ["F1", "Q1"]}
-                and board["posted_by"] is None
-            )
+            assert board["settled"] and board["opened_by"] == "codex-1"
+            assert board["plan"]["labels"] == ["F1", "F2", "Q1"]
+            assert "F2 Dropped" in board["plan"]["summary"] and board["posted_by"] is None
 
-            r = move(action="post")
-            assert r.status_code == 200 and r.json()["board"]["posted_by"] == "alice"
-            r = move(action="post")
-            assert r.status_code == 400 and "alice already posted" in r.json()["message"]
+            r = move(action="handoff")  # no agent supplied: the active opener is the default
+            assert r.status_code == 200 and r.json()["board"]["posted_by"] == "codex-1"
+            r = move(action="handoff", agent="claude-1")
+            assert r.status_code == 400 and "already handed off" in r.json()["message"]
 
-            text = (await author.read("#build"))["text"]
-            assert "The review board in this room is settled." in text
-            assert "- @claude-1: F1 (fixed in 9a1b2c3), Q1 (option 0)" in text
-            # no agent's text as alice's (#177); codex-1's own raise names its title as codex-1
+            text = (await reviewer.read("#build"))["text"]
+            assert "@codex-1" in text and "Items: F1, F2, Q1" in text
+            # no agent's text as alice's (#177); the chosen agent reads the full plan via show
             mine = [line for line in text.splitlines() if " from=alice " in line]
             assert mine and not any(PR in line or "expired codes" in line for line in mine)
             r = await reviewer.call("review", room="#build", action="show")
-            assert r["board"].splitlines()[0] == f"Review of {PR}: posted by alice: post your items now, once"
+            assert (
+                r["board"].splitlines()[0]
+                == f"Review of {PR}: handed off to codex-1: post one review now, once"
+            )
+            assert "F2 Dropped: style nit" in r["board"]
     finally:
         web.close()
-    post = q(broker, "SELECT sender_kind, mentions FROM messages WHERE text LIKE 'The review board in %'")
-    assert len(post) == 1 and post[0]["sender_kind"] == "human" and "claude-1" in post[0]["mentions"]
+    messages = q(broker, "SELECT sender_kind, mentions FROM messages WHERE text LIKE 'Hand off:%'")
+    assert len(messages) == 1 and messages[0]["sender_kind"] == "human"
+    assert "codex-1" in messages[0]["mentions"] and "claude-1" not in messages[0]["mentions"]
 
 
 async def test_an_agents_words_never_go_out_as_the_persons(broker: InProcBroker) -> None:
-    """#177: a person's answer, ruling and Post are their own messages (kind=human), which every
+    """#177: a person's answer, ruling and handoff are their own messages (kind=human), which every
     agent takes as its user's. An agent's title, option text or URL in them would let it speak
     for the person and @mention whom it likes. None of it is in them; only owners are mentioned."""
     web = broker.web_client()
@@ -391,7 +494,7 @@ async def test_an_agents_words_never_go_out_as_the_persons(broker: InProcBroker)
                 "review", room="#build", action="fix", item="F1", commit="def5678", proof="test_safe"
             )
             await reviewer.call("review", room="#build", action="confirm", item="F1")
-            assert move(action="post").status_code == 200
+            assert move(action="handoff").status_code == 200
     finally:
         web.close()
     said = q(broker, "SELECT text, mentions FROM messages WHERE sender_kind='human' ORDER BY id")

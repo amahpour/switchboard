@@ -2521,7 +2521,7 @@ body.login {
   overflow-wrap: anywhere;
 }
 .app-dialog label { font-size: calc(12px * var(--text-scale)); font-weight: 600; }
-.app-dialog input {
+.app-dialog input, .app-dialog select {
   height: 36px;
   padding: 0 10px;
   border: 1px solid var(--input-border);
@@ -2531,6 +2531,11 @@ body.login {
   font: calc(13px * var(--text-scale)) var(--font);
 }
 .app-dialog-error { min-height: 16px; margin: -6px 0 0; color: var(--danger); font-size: calc(12px * var(--text-scale)); }
+.handoff-label { margin: 2px 0 -6px; font-size: calc(13px * var(--text-scale)); }
+.handoff-summary { margin: 0; padding: 10px; border-radius: 7px; background: var(--side-bg); font: calc(12px * var(--text-scale)) / 1.5 var(--font); white-space: pre-wrap; overflow-wrap: anywhere; }
+.handoff-comments { margin: 0; padding-left: 20px; font-size: calc(12px * var(--text-scale)); overflow-wrap: anywhere; }
+.handoff-comments li + li { margin-top: 8px; }
+.handoff-comments p { margin: 2px 0 0; }
 .wake-warn, .fine.wake-warn { margin: -6px 0 0; color: var(--amber-ink); font-size: calc(12px * var(--text-scale)); }
 .app-dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 .app-dialog .btn:disabled, .app-dialog .btn-primary:disabled, .app-dialog .btn-danger:disabled {
@@ -2752,11 +2757,10 @@ body.login {
 .board-state.s-fixed, .board-state.s-answered { color: var(--green); }
 .board-card-title { font-size: calc(13px * var(--text-scale)); }
 .board-card-meta { font-size: calc(11.5px * var(--text-scale)); color: var(--muted-2); }
-.board-post { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; padding: 12px; border-radius: 10px; border: 1px solid var(--accent); background: var(--accent-tint); }
-.board-post h3 { margin: 0; font-size: calc(14px * var(--text-scale)); }
-.board-post-lead { margin: 0; color: var(--ink-2); font-size: calc(12.5px * var(--text-scale)); }
-.board-post-list { margin: 0; padding-left: 18px; }
-.board-post .btn-primary { align-self: flex-start; }
+.board-handoff { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent-tint); }
+.board-handoff h4 { margin: 0; font-size: calc(13px * var(--text-scale)); }
+.board-handoff-lead { margin: 0; color: var(--ink-2); font-size: calc(12px * var(--text-scale)); overflow-wrap: anywhere; }
+.board-handoff .btn-primary { align-self: flex-start; }
 .board-detail { width: 340px; display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); overflow-wrap: anywhere; }
 .board-detail h3 { margin: 0; font-size: calc(14px * var(--text-scale)); }
 .board-detail-top { display: flex; flex-direction: column; gap: 2px; }

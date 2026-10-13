@@ -2468,9 +2468,47 @@ def test_the_board_fits_a_phone(ui: UI, scheme: str) -> None:
     no_horizontal_scroll(page)
 
 
-def test_post_appears_when_the_board_is_settled_and_asks_first(ui: UI) -> None:
-    """Settled, the board shows exactly what each agent will post; Post asks first, then sends
-    one message in the room and the panel says it was posted."""
+@pytest.mark.parametrize("size", ["desktop", "phone"])
+def test_one_handoff_dialog_previews_the_review_and_chooses_its_agent(ui: UI, size: str) -> None:
+    """The settled lane offers one review, with exact text and a chosen poster; Esc returns focus."""
+    slug = "e2e-board-handoff-" + size
+    page = review_room(ui, slug, **(PHONE if size == "phone" else {}))
+    room = "#" + slug
+    call = ui.world.agent_call
+    call(room, "claude-1", "review", action="concede", item="F3")
+    call(room, "claude-1", "review", action="fix", item="F3", commit="abc1234", proof="test_rounding")
+    page.click("#board-toggle")
+    button = page.locator("#board-handoff")
+    expect(button).to_be_disabled()  # the raiser has not confirmed F3
+    call(room, "codex-1", "review", action="confirm", item="F3")
+    call(room, "codex-1", "review", action="fix", item="F4", commit="def5678", proof="test_case")
+    page.click('#board .board-card[data-item="F4"]')
+    page.click("#board-confirm")  # a person checks the raiser's own fix, on shop/codes.py:5
+    page.click('#board .board-card[data-item="Q1"]')
+    page.locator('#board .board-detail button[data-option="0"]').click()
+    expect(button).to_be_enabled()
+    button.click()
+    dialog = page.locator("#app-dialog")
+    expect(dialog).to_be_visible()
+    expect(dialog.locator(".handoff-summary")).to_contain_text("F3 Fixed")
+    expect(dialog.locator(".handoff-comment")).to_contain_text("shop/codes.py:5")
+    expect(dialog.locator("#app-dialog-agent")).to_have_value("codex-1")  # the board opener
+    if size == "phone":
+        no_horizontal_scroll(page)
+    page.keyboard.press("Escape")
+    expect(dialog).to_be_hidden()
+    expect(button).to_be_focused()
+    button.click()
+    dialog.locator("#app-dialog-agent").select_option("claude-1")
+    page.click("#app-dialog-action")
+    expect(page.locator("#board-status")).to_have_text("Handed off to claude-1")
+    expect(page.locator("#board-handoff")).to_have_count(0)
+    page.click("#board-toggle")
+    expect(chat_row(page, "Hand off")).to_contain_text("@claude-1")
+
+
+def test_handoff_unlocks_only_after_every_item_is_settled(ui: UI) -> None:
+    """The Settled lane waits for the question and both fix confirmations before handoff."""
     slug = "e2e-board-post"
     page = review_room(ui, slug)
     room = "#" + slug
@@ -2480,23 +2518,22 @@ def test_post_appears_when_the_board_is_settled_and_asks_first(ui: UI) -> None:
     call(room, "codex-1", "review", action="fix", item="F4", commit="11aa22bb33cc", proof="test_case")
     call(room, "codex-1", "review", action="confirm", item="F3")
     page.click("#board-toggle")
-    expect(page.locator("#board .board-post")).to_have_count(0)  # Q1 is still open
+    button = page.locator("#board-handoff")
+    expect(button).to_be_disabled()  # Q1 and F4 still need a person
     page.click('#board .board-card[data-item="F4"]')
     page.click("#board-confirm")  # the raiser also owns F4, so a person checks it
     page.click('#board .board-card[data-item="Q1"]')
     page.locator('#board .board-detail button[data-option="0"]').click()
     expect(page.locator("#board .board-detail .board-answer")).to_have_text("Answer: Before tax")
-    panel = page.locator("#board .board-post")
-    expect(panel).to_be_visible()
-    expect(panel.locator("li")).to_have_text(["claude-1: F2, F3, Q1", "codex-1: F4"])
-    page.click("#board-post")
+    expect(button).to_be_enabled()
+    page.click("#board-handoff")
     expect(page.locator("#app-dialog")).to_be_visible()
+    expect(page.locator("#app-dialog .handoff-summary")).to_contain_text("Q1 Answered")
     page.click("#app-dialog-action")
-    expect(panel.locator("h3")).to_have_text("Posted")
-    expect(page.locator("#board-post")).to_have_count(0)
-    expect(page.locator("#board-status")).to_have_text("Posted by " + TEST_HUMAN)
+    expect(page.locator("#board-handoff")).to_have_count(0)
+    expect(page.locator("#board-status")).to_have_text("Handed off to codex-1")
     page.click("#board-toggle")
-    expect(chat_row(page, "The review board in this room")).to_contain_text("@codex-1: F4")
+    expect(chat_row(page, "Hand off")).to_contain_text("@codex-1")
 
 
 @pytest.mark.parametrize(
@@ -2577,7 +2614,7 @@ def test_a_long_option_wraps_inside_the_question_s_detail(ui: UI, size: str) -> 
 
 @pytest.mark.parametrize("size", ["desktop", "phone"])
 def test_a_long_pull_request_url_wraps_in_the_board_dialogs(ui: UI, size: str) -> None:
-    """#246: the Post and Close confirms name the pull request's URL, and a long one (a GitLab
+    """#246: the Hand off and Close dialogs name the pull request's URL, and a long one (a GitLab
     merge request in a subgroup) didn't wrap, so the dialog scrolled sideways. It wraps. (No
     hyphens in it: the browser already breaks a line after one.)"""
     pr = "https://gitlab.com/somegroup/somesubgroup/someproject/-/merge_requests/1234"
@@ -2596,7 +2633,7 @@ def test_a_long_pull_request_url_wraps_in_the_board_dialogs(ui: UI, size: str) -
     page.locator('#board .board-detail button[data-option="0"]').click()
     dialog = page.locator("#app-dialog")
     sideways = "d => d.scrollWidth - d.clientWidth"
-    for opener in ("#board-post", "#board-close"):
+    for opener in ("#board-handoff", "#board-close"):
         page.click(opener)
         expect(dialog).to_be_visible()
         expect(dialog.locator(".app-dialog-body")).to_contain_text(pr)

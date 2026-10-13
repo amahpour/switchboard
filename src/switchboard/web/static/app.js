@@ -267,6 +267,31 @@
           }
           form.append(label, personPick);
         }
+        let handoffPick = null;
+        if (options.kind === 'handoff') {
+          const label = el('label', null, 'Posted by');
+          label.setAttribute('for', 'app-dialog-agent');
+          handoffPick = el('select');
+          handoffPick.id = 'app-dialog-agent';
+          for (const agent of options.agents) {
+            const option = el('option', null, agent);
+            option.value = agent;
+            handoffPick.append(option);
+          }
+          handoffPick.value = options.initial;
+          const summaryLabel = el('h3', 'handoff-label', 'Review summary');
+          const summary = el('pre', 'handoff-summary', options.plan.summary);
+          const commentsLabel = el('h3', 'handoff-label', 'Line comments · leave conversations open');
+          const comments = el('ul', 'handoff-comments');
+          for (const comment of options.plan.comments) {
+            const row = el('li', 'handoff-comment');
+            row.append(el('strong', null, comment.file + ':' + comment.line),
+              el('p', null, comment.body));
+            comments.append(row);
+          }
+          if (!options.plan.comments.length) comments.append(el('li', null, 'No line comments.'));
+          form.append(label, handoffPick, summaryLabel, summary, commentsLabel, comments);
+        }
         const buttons = el('div', 'app-dialog-buttons');
         const cancel = btn('btn', 'Cancel');
         cancel.id = 'app-dialog-cancel';
@@ -287,7 +312,8 @@
           dlg.onclose = null;
           dlg.dataset.kind = '';
           const returnTo = settings && phone() ? $('rooms-toggle')
-            : (opener && opener.id === 'insp-kick' ? $('insp-kick') : opener);
+            : options.kind === 'handoff' ? $('board-handoff')
+              : (opener && opener.id === 'insp-kick' ? $('insp-kick') : opener);
           if (returnTo && typeof returnTo.focus === 'function') returnTo.focus();
           resolve(dlg.returnValue === 'action' ? answer : null);
         };
@@ -305,6 +331,7 @@
               answer = privateBox ? { name: room, private: privateBox.checked } : room;
             } else if (options.kind === 'rules') answer = rulesInput.value;
             else if (options.kind === 'person') answer = personPick.value;
+            else if (options.kind === 'handoff') answer = handoffPick.value;
             else if (options.kind === 'wake') {
               answer = { budget_per_hour: Number(budgetInput.value), hop_limit: Number(hopsInput.value) };
             } else answer = true;
@@ -318,7 +345,7 @@
         if (validWake) validWake();
         dlg.showModal();
         (settings ? (settingsFocus || $('settings-close'))
-          : (name || rulesInput || budgetInput || personPick || (options.danger ? cancel : action))).focus();
+          : (name || rulesInput || budgetInput || personPick || handoffPick || (options.danger ? cancel : action))).focus();
       });
     });
     dialogQueue = next.then(function () {}, function () {});
@@ -4878,6 +4905,7 @@
   }
 
   function renderBoard() {
+    const handoffFocused = document.activeElement && document.activeElement.id === 'board-handoff';
     const r = activeRoom();
     const b = r ? r.board : null;
     const toggle = $('board-toggle');
@@ -4919,7 +4947,7 @@
     // a board a person just started with /review (#248) has nothing on it: not settled, waiting
     const empty = !b.items.length;
     const status = el('span', 'chip' + (empty ? '' : b.settled ? ' chip-ok' : c.needs_person ? ' chip-danger' : ''),
-      b.posted_by ? 'Posted by ' + b.posted_by
+      b.posted_by ? 'Handed off to ' + b.posted_by
         : empty ? 'No findings yet'
           : b.settled ? 'Settled' : c.needs_person ? c.needs_person + ' need' + (c.needs_person === 1 ? 's' : '') + ' you'
             : c.open + ' open');
@@ -4958,6 +4986,7 @@
       const h = el('h3', 'board-lane-title', lane.title);
       h.append(el('span', 'board-count', String(items.length)));
       col.append(h);
+      if (lane.key === 'settled' && b.items.length) col.append(boardHandoffPanel(b));
       for (const i of items) {
         const card = btn('board-card' + (state.boardSel === i.label ? ' selected' : ''));
         card.dataset.item = i.label;
@@ -4980,41 +5009,49 @@
       lanes.append(col);
     }
     const body = el('div', 'board-body');
-    const owners = Object.keys(b.plan || {});
-    if (b.settled && owners.length) body.append(boardPostPanel(b, owners));
     body.append(lanes);
     const sel = state.boardSel ? b.items.find(function (i) { return i.label === state.boardSel; }) : null;
     if (sel) body.append(boardDetail(r, sel));
     else state.boardSel = null;
     if (unable.length) box.replaceChildren(head, notes, body);
     else box.replaceChildren(head, body);
+    if (handoffFocused) {
+      const handoff = $('board-handoff');
+      if (handoff) handoff.focus();
+    }
   }
 
-  // Settled: exactly what each agent will post, and the one button that tells them to (§37.6).
-  // switchboard posts nothing; the agents do, each in its own name.
-  function boardPostPanel(b, owners) {
-    const p = el('section', 'board-post');
-    p.setAttribute('aria-label', 'Ready to post');
-    p.append(el('h3', null, b.posted_by ? 'Posted' : 'Ready to post'));
-    p.append(el('p', 'board-post-lead', b.posted_by
-      ? b.posted_by + ' told each agent to post its items to the pull request.'
-      : 'Each agent posts its own items to the pull request, once, in its own name. Dropped items aren’t posted.'));
-    const list = el('ul', 'board-post-list');
-    for (const owner of owners) {
-      const li = el('li');
-      li.append(el('strong', null, owner), document.createTextNode(': ' + b.plan[owner].join(', ')));
-      list.append(li);
-    }
-    p.append(list);
+  // One agent posts the reviewed summary and each person-decided line (§37.6).
+  function boardHandoffPanel(b) {
+    const mine = (b.agents || []).filter(function (agent) {
+      return b.agent_people[agent] === state.me.person_id;
+    });
+    const defaultAgent = mine.includes(b.opened_by) ? b.opened_by : mine[0];
+    const p = el('section', 'board-handoff');
+    p.setAttribute('aria-label', 'Hand off review');
+    p.append(el('h4', null, 'Hand off'));
+    const lead = el('p', 'board-handoff-lead', b.posted_by
+      ? b.posted_by + ' was asked to post one review, with line comments left open.'
+      : !b.settled ? 'Wait for confirmed fixes and every question to be decided.'
+        : !mine.length ? 'One of your agents must be in this room to post the review.'
+          : 'One agent posts the settled summary and comments where you decided.');
+    lead.id = 'board-handoff-status';
+    lead.tabIndex = -1;
+    p.append(lead);
     if (!b.posted_by) {
-      const post = btn('btn-primary', 'Post to the pull request');
-      post.id = 'board-post';
-      post.addEventListener('click', async function () {
-        const ok = await confirmDialog('Tell the agents to post?',
-          'One message in the room asks ' + owners.join(', ') + ' to post their items to ' + b.url + ', once.', 'Post');
-        if (ok) boardMove({ action: 'post' });
+      const handoff = btn('btn-primary', 'Hand off');
+      handoff.id = 'board-handoff';
+      handoff.disabled = !b.settled || !mine.length;
+      handoff.addEventListener('click', async function () {
+        const agent = await openDialog({ kind: 'handoff', title: 'Hand off this review',
+          body: 'One agent will post this review to ' + b.url + '. The line conversations stay open.',
+          action: 'Hand off', agents: mine, initial: defaultAgent, plan: b.plan });
+        if (agent && await boardMove({ action: 'handoff', agent: agent })) {
+          const status = $('board-handoff-status');
+          if (status) status.focus();
+        }
       });
-      p.append(post);
+      p.append(handoff);
     }
     return p;
   }
@@ -5150,8 +5187,10 @@
       r.board = res.board || null;
       if (!r.board) state.boardOpen = false;
       renderBoard();
+      return true;
     } catch (e) {
       await openDialog({ kind: 'notice', title: 'Board not changed', body: String(e.message || e), action: 'Close' });
+      return false;
     }
   }
 

@@ -37,7 +37,11 @@ class Boards:
         if rv is None:
             return None
         items = self.store.review_items(rv["id"])
-        active = set(self.store.active_names(room.id))
+        agent_people = {
+            member.name: self.state.service.host_person(member.host) for member in self.store.members(room.id)
+        }
+        agents = list(agent_people)
+        active = set(agents)
         now = self.state.clock.now()
         f = reviews.forge(rv["url"])
         events = [{"ts": e.ts, "data": e.data} for e in self.store.review_events(room.id, rv["opened_at"])]
@@ -51,7 +55,9 @@ class Boards:
             "settled": reviews.settled(items),
             "counts": reviews.counts(items, active, now),
             "items": [item_dict(i, f, events, active, now) for i in items],
-            "plan": {owner: [i.label for i in its] for owner, its in reviews.post_plan(items).items()},
+            "plan": reviews.handoff_plan(items, events, self.store.room_agent_names_ever(room.id)),
+            "agents": agents,
+            "agent_people": agent_people,
             "posted_at": rv["posted_at"],
             "posted_by": rv["posted_by"],
         }
@@ -71,6 +77,8 @@ class Boards:
             raise ReviewError(f'{room.name} has no review board: open one with action="open" and the url')
         if action == "show":
             return self._shown(room)
+        if rv["posted_at"] is not None:
+            raise ReviewError("this board was already handed off: no more moves")
         if action in ("raise", "ask"):
             item = self._add(rv, actor, action, params)
             verb = "raised" if item.kind == "finding" else "asked"
@@ -135,6 +143,8 @@ class Boards:
         """The room's board for ``url``, opened by ``by`` (an agent or a person), or the open one
         when it's for ``url`` already. Another URL is refused until that board is closed."""
         rv = self.store.current_review(room.id)
+        if rv is not None and rv["posted_at"] is not None:
+            raise ReviewError("this board was already handed off: close it before opening another")
         if rv is not None and rv["url"] != url:
             raise ReviewError(f"{room.name} already has a board for {rv['url']}: {then}")
         if rv is None:
@@ -204,10 +214,12 @@ class Boards:
             self._notice(room, f"{name} closed the review board for {rv['url']}")
             self.state.hub.review(room.name, None)
             return {"ok": True, "board": None}
-        if action == "post":
-            return self._post(room, rv, name, person_id)
+        if action == "handoff":
+            return self._handoff(room, rv, name, person_id, params)
+        if rv["posted_at"] is not None:
+            raise ReviewError("this board was already handed off: no more moves")
         if action not in ("answer", "concede", "confirm", "drop"):
-            raise ReviewError("action must be answer, concede, confirm, drop, post or close")
+            raise ReviewError("action must be answer, concede, confirm, drop, handoff or close")
         kind, n = reviews.parse_label(params.get("item"))
         item = self.store.review_item(rv["id"], kind, n)
         if item is None:
@@ -247,7 +259,12 @@ class Boards:
         self.store.add_event(
             "review",
             room_id=room.id,
-            data={"item": item.label, "to": "confirmed" if action == "confirm" else to, "by": name},
+            data={
+                "item": item.label,
+                "to": "confirmed" if action == "confirm" else to,
+                "by": name,
+                "person": True,
+            },
         )
         # Only text switchboard or this person wrote: the label, the option's number, an owner
         # checked against the room, their own reason. Never the agents' title or options, which
@@ -262,22 +279,37 @@ class Boards:
         self.state.hub.review(room.name, b)
         return {"ok": True, "board": b}
 
-    def _post(self, room: Room, rv: dict[str, Any], name: str, person_id: int | None) -> dict[str, Any]:
-        """A person's Post (§37.6): once, on a settled board, one message from that person that
-        @mentions each owner and lists what it posts. switchboard posts nothing itself."""
+    def _handoff(
+        self, room: Room, rv: dict[str, Any], name: str, person_id: int | None, params: dict[str, Any]
+    ) -> dict[str, Any]:
+        """One person's handoff to one agent, after every finding and question is settled."""
         if rv["posted_at"] is not None:
-            raise ReviewError(f"{rv['posted_by']} already posted this board")
+            raise ReviewError(f"this board was already handed off to {rv['posted_by']}")
         items = self.store.review_items(rv["id"])
         if not reviews.settled(items):
             raise ReviewError(
                 "the board isn't settled: every finding confirmed or dropped, every question answered"
             )
-        plan = reviews.post_plan(items)
-        if not plan:
-            raise ReviewError("nothing to post: every item was dropped")
-        text = reviews.render_post(plan, self.state.cfg.delivery.max_msg_chars)
-        self.store.set_review(rv["id"], posted_at=self.state.clock.now(), posted_by=name)
-        self.store.add_event("review", room_id=room.id, data={"post": rv["url"], "by": name})
+        if not items:
+            raise ReviewError("nothing to hand off: the board has no items")
+        person_key = self.state.service.person_key(person_id)
+        agents = [
+            member.name
+            for member in self.store.members(room.id)
+            if self.state.service.host_person(member.host) == person_key
+        ]
+        chosen = reviews.text(params.get("agent"), "agent", 100) or (
+            rv["opened_by"] if rv["opened_by"] in agents else (agents[0] if agents else "")
+        )
+        if chosen not in agents:
+            raise ReviewError(f"posted by must be your agent in {room.name}: {chosen!r} isn't")
+        events = [{"data": e.data} for e in self.store.review_events(room.id, rv["opened_at"])]
+        plan = reviews.handoff_plan(items, events, self.store.room_agent_names_ever(room.id))
+        text = reviews.render_handoff(plan, chosen, self.state.cfg.delivery.max_msg_chars)
+        self.store.set_review(rv["id"], posted_at=self.state.clock.now(), posted_by=chosen)
+        self.store.add_event(
+            "review", room_id=room.id, data={"handoff": rv["url"], "by": name, "agent": chosen}
+        )
         self.state.service.human_say(room.name, text, via="web", person=(name, person_id))
         b = self.board(room)
         self.state.hub.review(room.name, b)

@@ -48,6 +48,8 @@ people-name-clash-{light,dark,phone-light} (an agent holds the requested person'
 people-edit-{light,dark,phone-light} (Copy's fade timer while an email is selected),
 proof-before-{light,dark,phone-light} and proof-after-{light,dark,phone-light} (a contested
 review finding before its fix, then a fix's proof waiting for confirmation, #251),
+handoff-dialog-{light,dark,phone-light} and handoff-after-{light,dark,phone-light} (the one
+review summary and Posted by choice, then the selected agent's handoff, #252),
 confirm-light, signin-light, setup-person-light and
 signin-phone-dark, and from a second one at
 ``http://localhost:<port>``, with test machines that dial in (``tests/fakes/fake_machine.py``:
@@ -502,6 +504,60 @@ def shoot_proof_board(browser: Any, out: Path, world: Any) -> None:
                 page.locator("#board .board-detail").scroll_into_view_if_needed()
             settle(page)
             shot(page, out, "proof-after-" + slug + ".png")
+        finally:
+            ctx.close()
+
+
+def shoot_handoff_board(browser: Any, out: Path, world: Any) -> None:
+    """#252: the exact one-review plan in the dialog, then the chosen agent's handoff."""
+    from playwright.sync_api import expect
+
+    for slug, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        room = "#handoff-" + slug
+        world.create_room(room)
+        world.add_agents(room, ("claude-1", "codex-1"))
+        call = world.agent_call
+        call(room, "codex-1", "review", action="open", url="https://example.com/shop/pull/7")
+        call(room, "codex-1", "review", action="raise", title="Tax is applied before discount",
+             where="shop/cart.py:40-58", detail="The receipt uses the discounted total.")  # fmt: skip
+        call(
+            room, "claude-1", "review", action="contest", item="F1", reason="The old order matched the ledger"
+        )
+        ctx = browser.new_context(timezone_id="UTC", locale="en-US", **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="' + room + '"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            page.click("#board-toggle")
+            page.click('#board .board-card[data-item="F1"]')
+            page.select_option("#board-owner", "claude-1")
+            page.click("#board-concede")
+            expect(page.locator('#board .board-card[data-item="F1"]')).to_contain_text("Being fixed")
+            call(room, "claude-1", "review", action="fix", item="F1", commit="abc1234",
+                 proof="tests/test_cart.py::test_tax_order")  # fmt: skip
+            call(room, "codex-1", "review", action="confirm", item="F1")
+            expect(page.locator('#board .lane-settled .board-card[data-item="F1"]')).to_contain_text(
+                "confirmed by codex-1"
+            )
+            handoff = page.locator("#board-handoff")
+            expect(handoff).to_be_enabled()
+            handoff.click()
+            expect(page.locator("#app-dialog .handoff-comment")).to_contain_text("shop/cart.py:58")
+            if slug == "phone-light":
+                page.locator("#app-dialog-agent").scroll_into_view_if_needed()
+            shot(page, out, "handoff-dialog-" + slug + ".png")
+            page.click("#app-dialog-action")
+            expect(page.locator("#board-status")).to_have_text("Handed off to codex-1")
+            page.locator("#board .board-handoff").scroll_into_view_if_needed()
+            shot(page, out, "handoff-after-" + slug + ".png")
         finally:
             ctx.close()
 
@@ -1325,6 +1381,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot(browser, out, world)
             shoot_board(browser, out, world)
             shoot_proof_board(browser, out, world)
+            shoot_handoff_board(browser, out, world)
             shoot_mentions(browser, out, world)
             shoot_mention_highlight(browser, out, world)
             shoot_broadcast_popover(browser, out, world)

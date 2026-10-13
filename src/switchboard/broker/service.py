@@ -989,7 +989,7 @@ class RoomService:
         subjects, §26). ``person``: who, on a hosted broker with people (§32): their name
         and id (None: the owner); by default the owner, ``human_name``. An ``@here``/
         ``@everyone`` broadcast (issue #111) is expanded here, since every caller is a
-        person's message (a /catchup post, a review board post, or the web/CLI say).
+        person's message (a /catchup post, a review board handoff, or the web/CLI say).
         ``@humans`` (issue #138) is expanded here too, though it works the same from an
         agent's own ``say()`` (``broker/agents.py``), which expands it independently."""
         room = self.room(name)

@@ -386,7 +386,7 @@ def render(review: dict[str, Any], items: list[Item]) -> str:
     head_s = f" at {review['head'][:12]}" if review.get("head") else ""
     state = "settled" if settled(items) else "open"
     if review.get("posted_by"):
-        state = f"posted by {review['posted_by']}: post your items now, once"
+        state = f"handed off to {review['posted_by']}: post one review now, once"
     out = [f"Review of {review['url']}{head_s}: {state}"]
     order = {
         s: n
@@ -410,45 +410,84 @@ def render(review: dict[str, Any], items: list[Item]) -> str:
         }[i.state]
         proof_s = f"; proof: {i.proof}" if i.state == "fixed" and i.proof else ""
         out.append(f"{i.label} [{i.state}] {i.title}{where}: {who}{proof_s}")
+    if review.get("posted_by") and review.get("plan"):
+        plan = review["plan"]
+        out.extend(("Handoff summary to post:", plan["summary"], "Line comments to leave open:"))
+        out.extend(f"- {c['file']}:{c['line']}: {c['body']}" for c in plan["comments"])
+        if not plan["comments"]:
+            out.append("- none")
     return "\n".join(out)
 
 
-def post_plan(items: list[Item]) -> dict[str, list[Item]]:
-    """What each agent posts to the pull request once the board is settled (§37.6): a fixed
-    finding goes to its owner, an answered question to whoever asked it. Dropped items are never
-    posted. Owners in the order they first appear; items in board order."""
-    plan: dict[str, list[Item]] = {}
-    for i in sorted(items, key=lambda i: (i.kind, i.n)):
-        if i.state == "fixed" and i.confirmed_by and i.owner:
-            plan.setdefault(i.owner, []).append(i)
-        elif i.state == "answered":
-            plan.setdefault(i.raised_by, []).append(i)
-    return plan
+def handoff_plan(
+    items: list[Item], events: list[dict[str, Any]], agent_names_ever: set[str] | None = None
+) -> dict[str, Any]:
+    """The exact summary and line comments one agent is asked to post (§37.6).
 
-
-def _post_line(i: Item) -> str:
-    """An item in the Post message: its label and what switchboard checked (a commit's hex, an
-    option's number), never its title or an option's text, which are an agent's (#177)."""
-    if i.kind == "question":
-        options = [n for n, o in enumerate(i.options) if o == i.answer]
-        return f"{i.label} (option {options[0]})" if options else i.label
-    return i.label + (f" (fixed in {i.commit[:12]})" if i.commit else "")
-
-
-def render_post(plan: dict[str, list[Item]], limit: int) -> str:
-    """The one message a person's Post sends: it @mentions each owner (so each is woken once)
-    and lists the labels of what that owner posts, in its own name, with its own gh or glab.
-    It carries no agent's text: not a title, an option or the pull request's URL. It goes out
-    as the person's own message, so anything an agent wrote in it would speak for them (#177);
-    the agents read those from the board itself, as other agents' text."""
-    lines = [
-        "The review board in this room is settled. Post your items to its pull request now, once,"
-        " in your own name with your own gh or glab: one review comment per item, on its lines"
-        ' where it has them. Dropped items aren\'t posted. review(action="show") has each item.'
+    Titles and other agent-written text stay in this board/tool data, never in the person's
+    handoff chat message (#177). Older events lack the person marker; a name never held by an
+    agent in the room identifies those older person moves conservatively.
+    """
+    done = [
+        i
+        for i in sorted(items, key=lambda i: (i.kind, i.n))
+        if i.state in ("dropped", "answered") or (i.state == "fixed" and i.confirmed_by)
     ]
-    for owner, items in plan.items():
-        lines.append(f"- @{owner}: " + ", ".join(_post_line(i) for i in items))
-    text = "\n".join(lines)
-    if len(text) > limit:
-        raise ReviewError("the board is too big to post in one message: drop or close some items first")
-    return text
+    lines = ["Review board summary"]
+    for i in done:
+        if i.state == "fixed":
+            outcome = f"Fixed: {i.title} — commit {i.commit}"
+            if i.proof:
+                outcome += f"; proof: {i.proof}"
+        elif i.state == "answered":
+            outcome = f"Answered: {i.title} — {i.answer}"
+        else:
+            outcome = f"Dropped: {i.title}" + (f" — {i.reason}" if i.reason else "")
+        lines.append(f"- {i.label} {outcome}")
+    decisions: dict[str, list[str]] = {}
+    for event in events:
+        data = event.get("data") or {}
+        if data.get("to") not in ("conceded", "dropped", "confirmed"):
+            continue
+        label, actor = data.get("item"), data.get("by")
+        if not isinstance(label, str) or not isinstance(actor, str):
+            continue
+        person = data.get("person") is True or (
+            "person" not in data and agent_names_ever is not None and actor not in agent_names_ever
+        )
+        if person:
+            decisions.setdefault(label, []).append(f"{actor} {data['to']} this finding")
+    comments = []
+    for i in done:
+        if i.kind != "finding" or not i.file or not i.lines or i.label not in decisions:
+            continue
+        result = (
+            f"Fixed in {i.commit}; proof: {i.proof}."
+            if i.state == "fixed"
+            else f"Dropped: {i.reason}."
+            if i.state == "dropped"
+            else ""
+        )
+        comments.append(
+            {
+                "item": i.label,
+                "file": i.file,
+                "line": int(i.lines.rsplit("-", 1)[-1]),
+                "body": f"{i.label}: {'; '.join(decisions[i.label])}. {result}",
+            }
+        )
+    return {"summary": "\n".join(lines), "comments": comments, "labels": [i.label for i in done]}
+
+
+def render_handoff(plan: dict[str, Any], agent: str, limit: int) -> str:
+    """One human message wakes only the chosen agent, with checked labels and no agent text."""
+    labels = ", ".join(plan["labels"])
+    decisions = ", ".join(c["item"] for c in plan["comments"]) or "none"
+    message = (
+        f"Hand off: @{agent}, post one review to this board's PR or MR with your own gh or glab, "
+        'once. review(action="show") has the exact summary and line comments; leave those '
+        f"conversations open. Items: {labels}. Person-decided lines: {decisions}."
+    )
+    if len(message) > limit:
+        raise ReviewError("the board is too big to hand off in one message: close some items first")
+    return message
