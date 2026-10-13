@@ -19,9 +19,9 @@ SQLite connection (the broker may be running or stopped):
 - **characters by path** (§12.6, issue #275): what ``join``, ``wake``, mid-task
   context, ``read()``/``say()``, a ``wait()`` answer and a ``/catchup`` request
   cost each agent to read, in characters and an estimated token count
-  (characters ÷ 4), from ``batches.chars`` (set once, right after the engine
-  renders a batch) plus a ``join_chars`` event and the catch-up request's own
-  message length -- no new text is recorded to measure this;
+  (characters ÷ 4), from the ``chars`` each batch's ``offer`` event carries (the
+  length of the text the engine rendered) plus a ``join_chars`` event and the
+  catch-up request's own message length -- no text is recorded to measure this;
 - per agent, a turn spent for nothing: of the confirmed wakes, how many carried
   nothing addressed to the agent (chatter alone, "unaddressed"), and the wakes
   it answered with a ``pass()`` and nothing posted ("passes after wake"), both
@@ -362,12 +362,17 @@ def build(
     msgs = {r["id"]: r for r in store.report_messages(rid, start)}
     prio = {(r["membership_id"], r["message_id"]): r["prio"] for r in store.report_delivery_priorities(rid)}
 
-    # message ids per batch, from the offer events (M7); older databases: the deliveries' last batch
+    # message ids per batch, from the offer events (M7); older databases: the deliveries' last batch.
+    # The same events carry the length of the text each batch handed over (``chars``, #275); an
+    # offer from before that has none, and counts for nothing in the characters measure.
     offer_ids: dict[int, list[int]] = {}
+    offer_chars: dict[int, int] = {}
     for r in store.report_offer_events(rid, start):
         d = _data(r["data"])
         if isinstance(d.get("batch_id"), int) and isinstance(d.get("ids"), list):
             offer_ids[d["batch_id"]] = [i for i in d["ids"] if isinstance(i, int)]
+        if isinstance(d.get("batch_id"), int) and type(d.get("chars")) is int:
+            offer_chars[d["batch_id"]] = d["chars"]
     last_batch: dict[int, list[int]] = defaultdict(list)
     for r in store.report_delivery_batches(rid):
         last_batch[r["batch_id"]].append(r["message_id"])
@@ -381,18 +386,19 @@ def build(
     room_ev = [e for e in room_all if e["ts"] >= start]
 
     # ---- characters by path (§12.6, issue #275): join, catch-up and each batch kind/path, in
-    # characters and an estimated token count (characters ÷ 4), per agent. Join and catch-up
-    # aren't batches: join's own ``join_chars`` event carries its length, and a catch-up
-    # request is an ordinary human message, so its length comes from the message it posted.
+    # characters and an estimated token count (characters ÷ 4), per agent. A batch's length is
+    # its offer event's ``chars``. Join and catch-up aren't batches: join's own ``join_chars``
+    # event carries its length, and a catch-up request is an ordinary human message, so its
+    # length comes from the message it posted.
     chars: dict[int, dict[str, list[int]]] = defaultdict(lambda: defaultdict(list))
     for b in batches:
         cpath = _char_path(b)
-        if cpath is not None and b["chars"] is not None:
-            chars[b["membership_id"]][cpath].append(b["chars"])
+        if cpath is not None and b["id"] in offer_chars:
+            chars[b["membership_id"]][cpath].append(offer_chars[b["id"]])
     for cev in room_ev:
         if cev["kind"] == "join_chars" and cev["membership_id"] is not None:
             c = _data(cev["data"]).get("chars")
-            if isinstance(c, int):
+            if type(c) is int:
                 chars[cev["membership_id"]]["join"].append(c)
         elif cev["kind"] == "catchup":
             d = _data(cev["data"])
@@ -950,7 +956,7 @@ def render_markdown(rep: dict[str, Any], *, title: str | None = None, paint: Any
         " context delivered while it was busy. `read`: `read()`/`say()` answers. `wait answers`:"
         " what a `wait()` call returned, the wakes of an agent that waits included. `catch-up`: a"
         " `/catchup` request, counted on the agent asked to catch up. A path with nothing to show"
-        " is left out."
+        " is left out, and so is a delivery recorded by a release before this measure existed."
     )
     L.append("")
     L.append(_row(["path", "n", "characters", "tokens (est)"]))

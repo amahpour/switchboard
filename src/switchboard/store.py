@@ -2099,12 +2099,6 @@ class Store:
                 (self.clock.now() if t is None else t, batch_id),
             )
 
-    def set_batch_chars(self, batch_id: int, chars: int) -> None:
-        """The rendered text's length, set once right after ``engine._render`` produces it
-        (``switchboard report``'s characters-by-path measure, §12.6, issue #275)."""
-        with db.tx(self.con):
-            self.con.execute("UPDATE batches SET chars=? WHERE id=?", (chars, batch_id))
-
     def refine_posted(self, batch_id: int, t: float) -> None:
         """The transport's own post time (e.g. the MCP server's ``t_post``), if later."""
         with db.tx(self.con):
@@ -2396,16 +2390,8 @@ class Store:
         ).fetchall()
 
     def report_batches(self, room_id: int, since: float) -> list[sqlite3.Row]:
-        """``chars`` (schema v17, issue #275) as ``NULL`` for a database older than that,
-        the same way ``report_members`` names ``host`` (schema v2): the report reads any
-        schema as it is and never migrates it (#167)."""
-        chars_col = "b.chars" if _has_column(self.con, "batches", "chars") else "NULL"
         return self.con.execute(
-            "SELECT b.id, b.membership_id, b.path, b.kind, b.wake_kind, b.wake_reason,"
-            " b.budget_counted, b.state, b.created_at, b.posted_at, b.confirmed_at,"
-            f" b.expired_at, b.expire_reason, b.turn_start_at, b.first_action_at, b.evidence,"
-            f" {chars_col} AS chars"
-            " FROM batches b JOIN memberships m ON m.id=b.membership_id"
+            "SELECT b.* FROM batches b JOIN memberships m ON m.id=b.membership_id"
             " WHERE m.room_id=? AND b.created_at>=? ORDER BY b.id",
             (room_id, since),
         ).fetchall()

@@ -71,6 +71,7 @@ def offer(
     wake_kind: str | None = None,
     reason: str | None = None,
     counted: bool = False,
+    chars: int | None = None,
 ) -> int:
     ids = [x.id for x in msgs]
     b = w.store.create_batch(
@@ -87,7 +88,15 @@ def offer(
         room_id=w.room.id,
         membership_id=m.id,
         participant_id=m.participant_id,
-        data={"batch_id": b.id, "path": path, "n": len(ids), "counted": counted, "ids": ids},
+        data={
+            "batch_id": b.id,
+            "path": path,
+            "n": len(ids),
+            "counted": counted,
+            "ids": ids,
+            # the rendered length every offer event carries (#275); none: an offer from before
+            **({} if chars is None else {"chars": chars}),
+        },
     )
     return b.id
 
@@ -464,33 +473,25 @@ def test_agents_rules_and_stalls(w: World, clock: FakeClock) -> None:
 
 # ------------------------------------------- characters, unaddressed wakes, passes (issue #275)
 def test_characters_by_path_and_the_token_estimate(w: World, clock: FakeClock) -> None:
-    """A report adds up each path's rendered length (``batches.chars``, the ``join_chars``
-    event and a /catchup request's own message length) and estimates its tokens, characters
-    ÷ 4. A ``wait()`` answer counts as ``wait`` by its path even when it carried a wake (a
-    Devin agent's wakes all arrive that way), and ``say()`` answers count with ``read()``'s.
-    Fails without the change: nothing recorded any of these lengths."""
+    """A report adds up each path's rendered length (the ``chars`` of each batch's offer event,
+    the ``join_chars`` event and a /catchup request's own message length) and estimates its
+    tokens, characters ÷ 4. A ``wait()`` answer counts as ``wait`` by its path even when it
+    carried a wake (a Devin agent's wakes all arrive that way), and ``say()`` answers count with
+    ``read()``'s. Fails without the change: nothing recorded any of these lengths."""
     p, m, _c = claude(w)
     w.store.add_event(
         "join_chars", room_id=w.room.id, membership_id=m.id, participant_id=p.id, data={"chars": 1200}
     )
-    wake_msg = quiet_msg(w, "ping")
-    wake_b = offer(w, m, [wake_msg], path="inbox", kind="wake", wake_kind="idle_wake", reason="human")
-    w.store.set_batch_chars(wake_b, 400)
-    mid_msg = quiet_msg(w, "steer")
-    mid_b = w.store.create_batch(m.id, path="hook_ctx", kind="priority", items=[(mid_msg.id, True)])
-    w.store.set_batch_chars(mid_b.id, 80)
-    read_msg = quiet_msg(w, "catch me up")
-    read_b = w.store.create_batch(m.id, path="read", kind="pull", items=[(read_msg.id, True)])
-    w.store.set_batch_chars(read_b.id, 200)
-    say_msg = quiet_msg(w, "while you were posting")
-    say_b = w.store.create_batch(m.id, path="say", kind="pull", items=[(say_msg.id, True)])
-    w.store.set_batch_chars(say_b.id, 40)
-    wait_msg = quiet_msg(w, "wait reply")
-    wait_b = offer(w, m, [wait_msg], path="wait", kind="wake", wake_kind="wait_return", reason="human")
-    w.store.set_batch_chars(wait_b, 160)
-    stub_msg = quiet_msg(w, "an unread stub")
-    stub_b = w.store.create_batch(m.id, path="wait", kind="pull", items=[(stub_msg.id, True)])
-    w.store.set_batch_chars(stub_b.id, 40)
+
+    def delivered(text: str, *, path: str, kind: str, chars: int, wake_kind: str | None = None) -> None:
+        offer(w, m, [quiet_msg(w, text)], path=path, kind=kind, wake_kind=wake_kind, chars=chars)
+
+    delivered("ping", path="inbox", kind="wake", wake_kind="idle_wake", chars=400)
+    delivered("steer", path="hook_ctx", kind="priority", chars=80)
+    delivered("catch me up", path="read", kind="pull", chars=200)
+    delivered("while you were posting", path="say", kind="pull", chars=40)
+    delivered("wait reply", path="wait", kind="wake", wake_kind="wait_return", chars=160)
+    delivered("an unread stub", path="wait", kind="pull", chars=40)
     catchup_msg = quiet_msg(w, "x" * 500)
     w.store.add_event(
         "catchup",
@@ -516,22 +517,17 @@ def test_characters_by_path_and_the_token_estimate(w: World, clock: FakeClock) -
 
 
 def test_characters_are_per_agent_and_a_missing_length_counts_for_nothing(w: World, clock: FakeClock) -> None:
-    """Each agent has its own characters; a batch whose length was never stored (one made
-    before schema v17) adds nothing, not zero characters to ``n``; a catch-up request is
-    counted on the agent its event names, not on the subject; and no message text leaks."""
+    """Each agent has its own characters; an offer without a length (one made before this
+    measure) adds nothing, not zero characters to ``n``; a catch-up request is counted on the
+    agent its event names, not on the subject; and no message text leaks."""
     p1, m1, _c = claude(w)
     p2, m2 = w.agent("codex-1", harness="codex", status="idle", hooks=True)
     w.store.add_event(
         "join_chars", room_id=w.room.id, membership_id=m1.id, participant_id=p1.id, data={"chars": 1000}
     )
-    one = quiet_msg(w, "one")
-    b1 = offer(w, m1, [one], path="inbox", kind="wake", wake_kind="idle_wake", reason="human")
-    w.store.set_batch_chars(b1, 300)
-    two = quiet_msg(w, "two")
-    offer(w, m2, [two], path="turn_start", kind="wake", wake_kind="idle_wake", reason="human")  # no length
-    three = quiet_msg(w, "three")
-    b3 = w.store.create_batch(m2.id, path="say", kind="pull", items=[(three.id, True)])
-    w.store.set_batch_chars(b3.id, 92)
+    offer(w, m1, [quiet_msg(w, "one")], path="inbox", kind="wake", wake_kind="idle_wake", chars=300)
+    offer(w, m2, [quiet_msg(w, "two")], path="turn_start", kind="wake", wake_kind="idle_wake")  # no length
+    offer(w, m2, [quiet_msg(w, "three")], path="say", kind="pull", chars=92)
     request = quiet_msg(w, "CATCHUP-MARKER " + "y" * 485)
     w.store.add_event(
         "catchup",
@@ -558,15 +554,16 @@ def test_characters_are_per_agent_and_a_missing_length_counts_for_nothing(w: Wor
     assert "CATCHUP-MARKER" not in json.dumps(rep) + report.render_markdown(rep)
 
 
-def test_the_engine_stores_the_length_of_the_text_it_pushes(w: World, clock: FakeClock) -> None:
-    """``batches.chars`` is the length of the very text the agent was handed, stored when the
-    engine renders it: nothing in the report can add up what was never stored."""
+def test_the_engine_records_the_length_of_the_text_it_pushes(w: World, clock: FakeClock) -> None:
+    """The offer event's ``chars`` is the length of the very text the agent was handed: nothing
+    in the report can add up what was never recorded."""
     p, m, _c = claude(w)
     reg(w, w.p(p), "idle")
     w.human("ping")
     [push] = pushes(w)
-    got = w.store.get_batch(push.batch_id)
-    assert got is not None and got.chars == len(push.text) > 0
+    [offered] = w.store.recent_events(room_id=w.room.id, kinds=["offer"])
+    assert offered.data["batch_id"] == push.batch_id
+    assert offered.data["chars"] == len(push.text) > 0
 
 
 def test_wakes_not_addressed_to_the_agent(w: World, clock: FakeClock) -> None:
