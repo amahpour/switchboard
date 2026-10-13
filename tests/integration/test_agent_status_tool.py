@@ -10,6 +10,7 @@ from conftest import InProcBroker
 from fakes.fake_agent import FakeAgent
 
 from switchboard.config import Config
+from switchboard.mcp.client import RpcError, Stream
 
 
 @pytest.fixture
@@ -48,3 +49,17 @@ async def test_status_is_one_bounded_line_across_a_sessions_rooms(broker: InProc
         assert cleared["status_line"] is None
         assert member(broker, "build")["status_line"] is None
         assert member(broker, "docs")["status_line"] is None
+
+
+def test_status_text_that_isnt_a_string_is_a_bad_request(broker: InProcBroker) -> None:
+    """The broker checks the text itself (the MCP tool's schema is the client's): a number or a
+    list is refused as ``bad_request``. The code and the message were once passed the wrong way
+    round, so the error's code was the sentence."""
+    with Stream(broker.paths.sock, timeout=5) as s:
+        s.call("mcp.hello", {"harness": "test", "test_session": "status-raw"}, 5)
+        cred = s.call("agent.join", {"room": "#build", "screen_name": "worker"}, 5)["cred"]
+        for bad in (7, ["CI green"], None):
+            with pytest.raises(RpcError) as ei:
+                s.call("agent.status", {"cred": cred, "text": bad}, 5)
+            assert ei.value.code == "bad_request" and "status text" in ei.value.message, bad
+        assert member(broker, "build")["status_line"] is None

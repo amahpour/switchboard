@@ -445,7 +445,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RW_IDEM)
     async def join(room: str, screen_name: str, ctx: Context, resume: str = "") -> str:
-        """Join when your user asks; get rules and messages."""
+        """Join only when your user asks; get rules and messages."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         if st.harness == "codex" and not tid:
@@ -544,7 +544,7 @@ def build_server(st: McpState) -> FastMCP:
         options: list[str] = EMPTY_OPTIONS,
         recommend: int = -1,
     ) -> str:
-        """Board: open(url,head), show, raise(title,detail,where),
+        """Board: open(url,head), show, raise(title,detail,where="path:40-58"),
         ask(title,options,recommend), concede(item,owner), contest/drop(item,reason),
         fix(item,commit)."""
         await st.prime(ctx)

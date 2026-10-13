@@ -1246,7 +1246,7 @@ class AgentService:
         p, _m, _room = self._member(conn, params)
         raw = params.get("text")
         if not isinstance(raw, str):
-            raise ServiceError("status text must be a string", "bad_request")
+            raise ServiceError("bad_request", "status text must be a string")
         line = " ".join(clean(raw).split())[:160] or None
         self.store.update_participant(
             p.id, status_line=line, status_line_at=self.store.clock.now() if line else None
