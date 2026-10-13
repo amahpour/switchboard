@@ -862,6 +862,35 @@ def test_phone_layout_drawer_and_members_sheet(ui: UI) -> None:
     no_horizontal_scroll(page)
 
 
+def test_agent_status_line_ages_in_members_light_dark_and_phone(ui: UI) -> None:
+    room = "e2e-status-line"
+    ui.world.create_room("#" + room)
+    ui.world.add_agents("#" + room, ("claude-1", "codex-1"))
+    ui.world.agent_status("#" + room, "claude-1", "CI 31/39 green, merge queued")
+    ui.world.agent_status("#" + room, "codex-1", "Waiting for review")
+
+    def almost_stale() -> None:
+        b = ui.world.broker
+        r = b.state.store.get_room("#" + room)
+        assert r is not None
+        m = b.state.store.find_member(r.id, "codex-1")
+        assert m is not None
+        b.state.store.update_participant(m.participant_id, status_line_at=b.state.clock.now() - 1799)
+
+    ui.world.broker.on_loop(almost_stale)
+    for options in ({"color_scheme": "light"}, {"color_scheme": "dark"}, {**PHONE, "color_scheme": "light"}):
+        page = ui.open(room=room, **options)
+        if "viewport" in options:
+            page.click("#buddy-toggle")
+        fresh = page.locator('#buddy-list .member[data-name="claude-1"] .m-work')
+        old = page.locator('#buddy-list .member[data-name="codex-1"] .m-work')
+        expect(fresh).to_contain_text("CI 31/39 green, merge queued")
+        expect(fresh.locator(".m-work-stale")).to_have_count(0)
+        expect(old).to_contain_text("Waiting for review")
+        expect(old.locator(".m-work-stale")).to_have_text("Stale", timeout=5000)
+        no_horizontal_scroll(page)
+
+
 def test_inspector_shows_the_member_detail(ui: UI) -> None:
     page = ui.open()
     with page.expect_response(lambda r: r.url.endswith("/api/rooms/build/members/bench")) as got:
