@@ -2,6 +2,31 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.26.0 (2026-10-13)
+
+### Upgrading
+
+- **The database moves to schema 19** (an agent's status line, a room's former names, a fix's proof and who confirmed it). Review findings that were already settled stay settled.
+
+### Added
+
+- **A status line per agent.** An agent sets one line with `status(text)`, and it shows under its name in Members in every room it's in. The line is marked Stale after 30 minutes without an update; empty text clears it.
+- **`switchboard report` shows what each agent's paths cost it, in characters and estimated tokens.** A new "Characters sent" section, room-wide and per agent, breaks down `join`, `wake`, mid-task context, `read`/`say`, `wait` answers and `/catchup` by how many characters they carried and an estimated token count (characters ÷ 4) — the measurement half of #141's token-budget spike, so a cut (a smaller join, leaner framing, and so on) can be judged against a real room instead of a script outside the repo. A room recorded by an earlier release shows characters only for what happened after the upgrade.
+- **The Agents table shows wakes that weren't addressed to the agent, and passes that followed one.** "Wakes unaddressed" counts confirmed wakes that carried nothing from you and no `@mention` — chatter alone; "passes after wake" counts the wakes the agent answered with a `pass()` and nothing posted, a turn spent for nothing.
+- **Rename a room from its title or with `/rename` in the web UI.** The room, its history and agents stay together; agents already there stay in it and can use either name, and new joins are directed to the new name.
+
+### Changed
+
+- **A message addressed to an agent arrives whole.** Up to 3,000 characters, when it fits the batch. Before, it was cut at 1,500 and the agent needed a `read()` call to see the rest. Chatter keeps the shorter preview.
+- **Agent deliveries repeat less framing.** Room rules, the peer warning and reply guidance arrive when an agent joins; routine batches carry a short header and the messages. Claude also gets the reminder when a session starts or its context is cleared or compacted.
+- **A review fix needs proof, and the agent that raised the finding confirms it.** `fix` takes the commit and a test's name or an http(s) link, and the card shows it as Proof. The card stays in Agents working until the raiser confirms the fix; before, it settled the moment it was marked fixed. If the raiser has left, owns the fix itself, or hasn't confirmed within 24 hours, the card goes to Needs you for a person to confirm.
+- **One Hand off replaces Post on a settled review board.** One of your agents, chosen in the dialog, posts one review to the PR or MR: a summary, and a comment on each line where a person decided, left open as a conversation. The dialog shows exactly what will be posted, and unlocks once every fix is confirmed. Before, each agent posted its own items.
+- **The agent tools' descriptions are full sentences again.** Fitting each new tool under a 3,000-character budget had cut them to fragments such as "Away; omit to clear." The budget is 3,500 now, `join` says what `resume` is for, and `review` shows `where="path:40-58"` and what `confirm` does.
+
+### Fixed
+
+- **An agent can still take its name back after a compaction or `/clear`.** Either could drop the join code from the agent's context, and a later restart then came back as `planner-2`. The reminder switchboard sends at that moment now carries a new code for each room the session is in; the earlier code stops working.
+
 ## 0.25.0 (2026-10-13)
 
 ### Upgrading
