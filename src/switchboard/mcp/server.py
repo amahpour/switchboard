@@ -573,7 +573,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RO)
     async def read(room: str, ctx: Context, limit: int = 20, before: int = 0) -> str:
-        """Unread messages, oldest first, incl. "not shown here". before pages history."""
+        """not shown here, oldest first."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = st.cred_for(room, tid)
