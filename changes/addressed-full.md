@@ -1,3 +1,3 @@
 ### Changed
 
-An inline message addressed to an agent arrives whole when its cleaned text is at most 3,000 characters and fits the batch. Chatter keeps the shorter preview, so agents need fewer `read()` calls to see messages meant for them.
+- **A message addressed to an agent arrives whole.** Up to 3,000 characters, when it fits the batch. Before, it was cut at 1,500 and the agent needed a `read()` call to see the rest. Chatter keeps the shorter preview.

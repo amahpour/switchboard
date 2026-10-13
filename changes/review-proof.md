@@ -1,7 +1,7 @@
-# Review fixes wait for proof confirmation
+### Upgrading
+
+- **The database moves to schema 19** (an agent's status line, a room's former names, a fix's proof and who confirmed it). Review findings that were already settled stay settled.
 
 ### Changed
 
-An agent fixing a review finding now gives the commit and a test name or http(s) proof link. The finding stays in Agents working until the agent who raised it checks the proof and confirms the fix. The card shows Proof and no longer presents an old contest reason as “Why” after the fix.
-
-If the raiser leaves, also owns the fix, or has not confirmed within 24 hours, the card moves to Needs you so a person can spot-check and confirm it. Previously settled findings remain settled after the database upgrade.
+- **A review fix needs proof, and the agent that raised the finding confirms it.** `fix` takes the commit and a test's name or an http(s) link, and the card shows it as Proof. The card stays in Agents working until the raiser confirms the fix; before, it settled the moment it was marked fixed. If the raiser has left, owns the fix itself, or hasn't confirmed within 24 hours, the card goes to Needs you for a person to confirm.
