@@ -12,6 +12,8 @@ an in-process test-mode broker in a temp home, seeded with three rooms (``#docs`
 never-enabled remote and four scripted agents with a Markdown-rich conversation in ``#build``.
 Every test gets fresh browser contexts from the ``ui`` fixture, each signed in through its own
 one-time login link. Tests that change state (a hold, a close) undo it or use a room of their own.
+Extra agents joined for a test close with its browser contexts; parallel e2e runs assign one
+worker per module so the seeded world is not duplicated across workers.
 
 Every page is watched: a console error, an uncaught page error or a CSP violation (reported by
 a ``securitypolicyviolation`` listener the context injects) fails the test, listed per page.
@@ -136,22 +138,26 @@ class UI:
         return ARTIFACTS / re.sub(r"[^A-Za-z0-9_.-]+", "-", test_id).strip("-")
 
     def finish(self, failed: bool, test_id: str) -> None:
-        """Stop tracing and close every context; on a failure keep a trace and screenshots."""
+        """Close this test's contexts and agents; on failure keep traces and screenshots."""
         out = self.artifacts_dir(test_id)
-        for i, ctx in enumerate(self.contexts):
-            try:
-                if failed:
-                    out.mkdir(parents=True, exist_ok=True)
-                    for j, p in enumerate(ctx.pages):
-                        try:
-                            p.screenshot(path=str(out / f"context{i}-page{j}.png"), full_page=True)
-                        except Exception as e:  # a crashed page: the trace still has its frames
-                            (out / f"context{i}-page{j}.txt").write_text(f"no screenshot: {e}\n")
-                    ctx.tracing.stop(path=str(out / f"context{i}-trace.zip"))
-                else:
-                    ctx.tracing.stop()
-            finally:
-                ctx.close()
+        try:
+            for i, ctx in enumerate(self.contexts):
+                try:
+                    if failed:
+                        out.mkdir(parents=True, exist_ok=True)
+                        for j, p in enumerate(ctx.pages):
+                            try:
+                                p.screenshot(path=str(out / f"context{i}-page{j}.png"), full_page=True)
+                            except Exception as e:  # a crashed page: the trace still has its frames
+                                (out / f"context{i}-page{j}.txt").write_text(f"no screenshot: {e}\n")
+                        ctx.tracing.stop(path=str(out / f"context{i}-trace.zip"))
+                    else:
+                        ctx.tracing.stop()
+                finally:
+                    ctx.close()
+        finally:
+            if self.world is not None:
+                self.world.close_extra_agents()
         if failed:
             print(f"\ne2e artifacts: {out}")
 
@@ -170,6 +176,33 @@ def ui(browser: Browser, world: UIWorld, request: pytest.FixtureRequest) -> Iter
 
 
 # ------------------------------------------------------------------ helpers
+def test_extra_agents_can_be_released_before_the_world_stops(browser: Browser, world: UIWorld) -> None:
+    """Close an added MCP process with its test, or each worker retains one per prior test.
+
+    The browser context and its page must end at the same boundary; the seeded world stays up.
+    """
+    room = "e2e-extra-agent-lifetime"
+    world.create_room(room)
+    world.add_agents(f"#{room}", ("scout",))
+    ui = UI(browser, world)
+    failed = True
+    try:
+        page = ui.open(room)
+        agent = world._extra_named[(f"#{room}", "scout")]
+        assert agent._stack is not None
+        assert len(ui.browser.contexts) == 1
+        assert len(ui.browser.contexts[0].pages) == 1
+        failed = False
+    finally:
+        ui.finish(failed, "e2e-extra-agent-lifetime")
+
+    assert agent._stack is None
+    assert not world._extra
+    assert not world._extra_named
+    assert not ui.browser.contexts
+    assert page.is_closed()
+
+
 def open_room(page: Page, room: str) -> None:
     """Click a room in the sidebar (opening the drawer first at phone width) and wait for its
     header (and, for #build, its seeded log and members)."""

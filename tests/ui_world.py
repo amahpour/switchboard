@@ -31,7 +31,8 @@ What ``UIWorld.start()`` builds:
 The agents' MCP sessions must stay open for their memberships to stay live, and their stdio
 transports belong to the event loop and task that opened them. So the agents live in one
 background thread running one coroutine: it starts them, seeds the broker, reports ready and
-then waits for ``stop()``, which lets the same coroutine close them. The caller's own thread
+then waits for ``stop()``, which lets the same coroutine close the four seeded agents. Agents
+added for a test are closed after that test on the same loop. The caller's own thread
 stays free for synchronous work (Playwright's sync API, httpx).
 """
 
@@ -344,7 +345,7 @@ class UIWorld:
         self._stop: asyncio.Event | None = None
         self._ready = threading.Event()
         self._error: BaseException | None = None
-        self._extra: list[Any] = []  # agents add_agents() joined later; closed with the others
+        self._extra: list[Any] = []  # agents add_agents() joined for the current test
         self._extra_named: dict[tuple[str, str], Any] = {}
         self._old: list[Any] = []  # raw sockets standing in for MCP servers from before #249
         # a signed-in client for the helpers below, made before any browser opens: every sign-in
@@ -397,6 +398,22 @@ class UIWorld:
             for d in (self.home, self.home2):
                 shutil.rmtree(d, ignore_errors=True)
 
+    def close_extra_agents(self) -> None:
+        """Release agents added by one UI test while keeping the seeded world alive."""
+        loop = self._loop
+        assert loop is not None and not loop.is_closed(), "UIWorld is not started"
+
+        async def close_all() -> None:
+            for agent in self._extra:
+                await agent.close()
+
+        asyncio.run_coroutine_threadsafe(close_all(), loop).result(30)
+        self._extra.clear()
+        self._extra_named.clear()
+        for old in self._old:
+            old.close()
+        self._old.clear()
+
     def _agents_thread(self) -> None:
         asyncio.run(self._agents_main())
 
@@ -443,7 +460,7 @@ class UIWorld:
     def add_agents(self, room: str, names: tuple[str, ...]) -> None:
         """Join more scripted test agents to ``room`` (which must exist), in order, for a test
         that kicks or loses members without touching #build's four. They run on the agents'
-        loop and close with the others in ``stop()``. Joining a ``--harness test`` agent needs
+        loop and close after the test (or in ``stop()``). Joining a ``--harness test`` agent needs
         test mode, so the broker is in it only while they join (as during the seeding)."""
         from fakes.fake_agent import FakeAgent
 

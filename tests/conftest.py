@@ -38,6 +38,7 @@ from typing import Any
 
 import httpx
 import pytest
+from xdist.scheduler.loadfile import LoadFileScheduling
 
 import switchboard.config
 from switchboard.config import Config
@@ -103,6 +104,17 @@ def sanitize_env(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempP
 # Each test phase's report ("setup", "call", "teardown"), kept on the item, so a fixture's
 # teardown can tell whether its test failed (tests/e2e saves a trace and a screenshot then).
 PHASE_REPORTS = pytest.StashKey[dict[str, pytest.TestReport]]()
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_xdist_make_scheduler(config: pytest.Config, log: Any) -> LoadFileScheduling | None:
+    """Keep each module-scoped e2e world on one worker instead of cloning it eight times.
+
+    The default unit/integration suite keeps xdist's ordinary test-level load balancing.
+    """
+    if config.getoption("markexpr") == "e2e" and config.getoption("numprocesses"):
+        return LoadFileScheduling(config, log)
+    return None
 
 
 @pytest.hookimpl(wrapper=True, tryfirst=True)
