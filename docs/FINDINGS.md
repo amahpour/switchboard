@@ -182,7 +182,7 @@ It works unchanged in `bypassPermissions` (it is not held, unlike the inbox sock
 
 The Monitor deadline also wakes the idle session ("Monitor expired … Re-arm it …"), which costs one model turn per deadline. The background-Bash notification carries only an output-file path, so the model spends a Read first.
 
-Open questions: `source=compact`, and whether listeners survive `/compact`, were not tested.
+`source=compact` (tested on 2.1.296, #304): `/compact` fires `PreCompact` (`trigger: manual`), then `SessionStart` with `source: compact` and the **same** session id, and no `SessionEnd`. The process, the MCP server and the inbox listener all survive: a message posted right after woke the session through the inbox in about 30 ms. Not tested: an automatic compaction (`trigger: auto`).
 
 ---
 

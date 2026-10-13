@@ -270,6 +270,15 @@ def test_reminder_and_simple() -> None:
     r = envelope.render_reminder([("#build", "claude-1")], "alice")
     assert r.startswith("[switchboard] Reminder: you are in #build as claude-1")
     assert r.index('"not shown here"') < r.index("pass()")
+    assert "resume" not in r  # no codes given, nothing said about them
+    # #304: with a fresh code per room, the reminder says how to keep the names after a restart
+    two = [("#build", "claude-1"), ("#docs", "writer")]
+    codes = {"#build": "ab" * 8, "#docs": "cd" * 8}
+    r2 = envelope.render_reminder(two, "alice", codes)
+    assert r2.endswith(
+        " After a restart, join again with resume=<code> to keep your name:"
+        f" #build yk:j{'ab' * 8}, #docs yk:j{'cd' * 8}."
+    )
     assert envelope.render_simple("/pause now").startswith("[switchboard] /pause")
 
 

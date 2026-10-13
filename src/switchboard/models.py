@@ -4,6 +4,7 @@ value types (DESIGN.md §4, §8).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -20,6 +21,12 @@ CLOSED_ROOM_RE = re.compile(r"(#[a-z0-9][a-z0-9_-]{0,31})~closed-([1-9][0-9]{0,1
 SCREEN_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,23}$")
 NAME_REUSE_S = 24 * 3600.0  # a departed agent's screen name is reserved for a day
 RELEASE_RE = re.compile(r"^(\d{1,4})\.(\d{1,4})\.\d{1,4}(?:[.+_-].*)?$")
+
+
+def join_code_hash(code: str) -> str:
+    """What a membership keeps of the join code it was given (#304): only the session that read
+    the code can give it back as ``resume``."""
+    return hashlib.sha256(code.encode()).hexdigest()
 
 
 def behind_by_minor(claim: str | None, broker: str = __version__) -> bool:

@@ -62,6 +62,7 @@ from switchboard.models import (
     Snapshot,
     behind_by_minor,
     canonical_event,
+    join_code_hash,
     normalize_room,
     split_session_key,
 )
@@ -557,7 +558,7 @@ class AgentService:
         and not while the old membership is still in the room."""
         if code is None or holder.join_code_hash is None or holder.active or holder.kicked:
             return None
-        if not hmac.compare_digest(holder.join_code_hash, cred_hash(code)):
+        if not hmac.compare_digest(holder.join_code_hash, join_code_hash(code)):
             return None
         old = self.store.get_participant(holder.participant_id)
         if old is None or old.harness != harness or (old.host or "") != (host or ""):
@@ -826,7 +827,7 @@ class AgentService:
         rejoined = cur is not None
         if cur is not None:
             # the same verified session again (an MCP reconnect): rotate the credential
-            self.store.rotate_cred(cur.id, cred_hash(cred), cred_hash(nonce))
+            self.store.rotate_cred(cur.id, cred_hash(cred), join_code_hash(nonce))
             m = cur
             self.run(self.engine.expire_pull_batches(p.id, "rejoin"))
             self.store.add_event(
@@ -836,7 +837,7 @@ class AgentService:
             if notice is not None:
                 self.run([Notice(room.id, "info", notice)])
         else:
-            m = self.store.create_membership(room.id, p.id, name, cred_hash(cred), cred_hash(nonce))
+            m = self.store.create_membership(room.id, p.id, name, cred_hash(cred), join_code_hash(nonce))
             # a Codex thread proof about to run shows as "verifying...", not "mcp-only"; the
             # event says so, so the proof that passes announces it here (§9.3)
             verifying = note == VERIFYING

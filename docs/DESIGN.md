@@ -666,7 +666,7 @@ FastMCP 4.0.9, server name `switchboard`. Every tool returns a compact JSON stri
 - **Screen names.** They must match `^[a-z][a-z0-9_-]{0,23}$`.
   - Reserved: `system`, `user`, `human`, `admin`, `root`, `here`, `everyone`, `all`, `channel`, `humans`, `people`, any `switchboard*` prefix, and any prefix equal to `human_name`. `here`/`everyone`/`all`/`channel` are broadcast mentions, or reserved against the day they might be (issue #111); `humans` is the `@humans` mention and `people` is reserved alongside it the same way (issue #138). None are screen names an agent or a person can ever take (`RESERVED_NAMES`, checked at join, and in `broker/people.py` for adding or renaming a person).
   - A name that a **different** participant used in the room within the last 24 h is refused with `name_reserved`, so a new agent isn't taken for an old one.
-  - **Unless it's the same agent after a restart (#304).** Each membership keeps a hash of the join code its join answer ended with (`yk:j<nonce>`, `memberships.join_code_hash`, schema v16). A join with `resume` set to that code takes the name back, if the old membership has left (not kicked) and its participant ran the same harness on the same machine (so the same person). Only a session that read the old join's answer has the code; another session, machine or harness gets `name_reserved`, and so does a membership made before v16, which has no code. The join line says "back after a restart", so peers don't brief it from the start. The refusal says how, so the code costs no tokens until it's needed.
+  - **Unless it's the same agent after a restart (#304).** Each membership keeps a hash of the join code its join answer ended with (`yk:j<nonce>`, `memberships.join_code_hash`, schema v16). A join with `resume` set to that code takes the name back, if the old membership has left (not kicked) and its participant ran the same harness on the same machine (so the same person). Only a session that read the old join's answer has the code; another session, machine or harness gets `name_reserved`, and so does a membership made before v16, which has no code. The join line says "back after a restart", so peers don't brief it from the start. The refusal says how, so the code costs no tokens until it's needed. **A compaction or `/clear` may drop that code from the agent's context**, so the reminder switchboard sends then (§7.3's SessionStart context) mints a new code for each room the session is in and lists them (`Engine._reminder`, `Store.set_join_code`); the earlier code stops working, since only the newest can still be in context.
   - On a hosted broker, an agent also cannot use any person's name or a name starting with it. This includes an agent joining from a remote machine.
 - **Re-join.** A `join` from the verified **same** participant that already has an active membership **rotates** the credential: the old one is revoked and a new one issued (the MCP-reconnect case). A join from any other participant gets `name_taken`. An existing credential is never returned. A kicked participant cannot re-join.
 
@@ -697,7 +697,7 @@ Rules, in order:
 
 | Harness | `session_key` | `session_id` source | Binding |
 |---|---|---|---|
-| Claude | `claude:<agent_pid>@<agent_start>`, the verified claude process | env at start; updated by hooks (`SessionStart`, `UserPromptSubmit`) | Hooks resolve by ancestry (§5.3). `/clear` keeps the process, so the binding holds; `SessionEnd reason=clear` does not leave the room. `--resume` starts a new process and needs a new `join` (documented; no rebind RPC). |
+| Claude | `claude:<agent_pid>@<agent_start>`, the verified claude process | env at start; updated by hooks (`SessionStart`, `UserPromptSubmit`) | Hooks resolve by ancestry (§5.3). `/clear` keeps the process, so the binding holds; `SessionEnd reason=clear` does not leave the room. `/compact` keeps the process and the session id too (#304). `--resume` starts a new process and needs a new `join`; its `resume` code gives the name back (§6.1, #304). |
 | Codex | `codex:<thread_id>` from `_meta.threadId` on **every** call. One server may serve many threads, so creds are kept in `dict[(thread_id, room)] → cred`. | same; hook stdin `session_id` equals it | The MCP peer must be a direct child of codex. Push tiers also need `thread_proof` (§9.3). Hooks disambiguate by `session_id` among participants under the same daemon pid. Per-terminal env is never used (daemon env leak). |
 | Cursor | `cursor:<conversation_id>`, bound after join | hook stdin | `join` creates the participant with `bind_state='pending'` and a random `bind_nonce`, and puts `yk:j<nonce>` in the result. A `postToolUse` hook for `tool_name == "MCP:join"` whose peer ancestry contains that participant's agent pid sends the nonce (extracted from `tool_output`) and `conversation_id`. The broker then sets the key and `bound`. Until then the tools work in `mcp-only`. |
 | Devin | `devin:<acp_pid>@<acp_start>` | the hooks' `session_id` | Hooks resolve by ancestry. `/new` and `/clear` respawn acp and the MCP server, which ends the old participant (below); the agent must re-join. |
@@ -800,7 +800,7 @@ The broker returns only `{kind, text}`, and the hook builds the JSON itself. The
 
 | Harness | Events that may print `context` | Shape | Events that may print `continue` | Shape |
 |---|---|---|---|---|
-| claude | SessionStart (only `source` = clear or compact: a membership reminder), UserPromptSubmit, PostToolUse, PostToolUseFailure | `{"hookSpecificOutput":{"hookEventName":E,"additionalContext":T}}` | – | – |
+| claude | SessionStart (only `source` = clear or compact: a membership reminder, with a fresh join code per room, #304), UserPromptSubmit, PostToolUse, PostToolUseFailure | `{"hookSpecificOutput":{"hookEventName":E,"additionalContext":T}}` | – | – |
 | codex | PostToolUse | same nested shape (developer role; at most 5,000 characters, F§4b 3.9) | – | – |
 | devin | PostToolUse | nested shape; the top-level form is ignored (F§6 5.1) | Stop | `{"decision":"block","reason":T}` |
 | cursor | postToolUse, postToolUseFailure | `{"additional_context":T}` (at most 8,000 characters) | stop | `{"followup_message":T}` |
@@ -1451,7 +1451,7 @@ live/              harness/{tmuxdrv.py, cleanenv.sh, profiles.py, preflight.py, 
   - idle wake: n=5, turn start p50 < 2 s;
   - mid-task priority in default mode arrives through PostToolUse context at the next tool boundary (ack plus the model echoing the id);
   - approval hold: the agent is asked to run a command that prompts; a human post is held; the driver declines with Esc; the message is delivered afterwards;
-  - `/clear` keeps the binding.
+  - `/clear` keeps the binding, and so does `/compact`, with the same session id (#304).
 - **Codex:**
   - idle `turn/start`, n=5, turn start p50 < 1 s;
   - a steer during `sleep 5`;

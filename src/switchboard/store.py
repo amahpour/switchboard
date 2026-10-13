@@ -1765,6 +1765,15 @@ class Store:
                 (cred_hash, join_code_hash, membership_id),
             )
 
+    def set_join_code(self, membership_id: int, join_code_hash: str) -> None:
+        """A new join code for a membership that's still in its room (a reminder after a
+        compaction or /clear hands the session a fresh one, #304); the earlier code stops working."""
+        with db.tx(self.con):
+            self.con.execute(
+                "UPDATE memberships SET join_code_hash=? WHERE id=? AND left_at IS NULL",
+                (join_code_hash, membership_id),
+            )
+
     def last_holder_of(self, room_id: int, name: str, participant_id: int, since: float) -> Membership | None:
         """The latest membership of another participant that held ``name`` in this room at any
         time since ``since`` (the one a join code can reclaim the name from, #304)."""

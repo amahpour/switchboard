@@ -5,6 +5,7 @@ the real broker (DESIGN.md §7, §12.2, §12.3)."""
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import shutil
 import sqlite3
@@ -209,6 +210,56 @@ def test_session_start_clear_prints_a_membership_reminder(broker: InProcBroker, 
     assert claude.hook(fixture("SessionStart_startup")) == ""
     out = json.loads(claude.hook(fixture("SessionStart_clear")))
     assert "#build as claude-1" in out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_session_start_compact_keeps_the_session_and_prints_the_reminder(
+    broker: InProcBroker, claude: FakeClaude
+) -> None:
+    """#304: a compaction is the same Claude session. Recorded on 2.1.296: PreCompact, then
+    SessionStart with ``source: compact`` and the same session id, and no SessionEnd. So the
+    participant, its membership and its name stay, and the hook hands back the reminder of which
+    rooms it is in and under which names, which the compacted context may no longer say. Fails if
+    a compaction is taken for a new session, or the reminder stops covering it."""
+    claude.tool("join", room="#build", screen_name="claude-1")
+    start = fixture("SessionStart_startup")
+    assert claude.hook(start) == ""
+    before = part(broker)
+    out = json.loads(claude.hook(fixture("SessionStart_compact", session_id=start["session_id"])))
+    assert "#build as claude-1" in out["hookSpecificOutput"]["additionalContext"]
+    after = part(broker)
+    assert after["id"] == before["id"] and after["ended_at"] is None
+    assert after["session_id"] == before["session_id"]
+    assert q(broker, "SELECT screen_name FROM memberships WHERE left_at IS NULL")[0][0] == "claude-1"
+    assert member(broker)["name"] == "claude-1"
+
+
+def test_the_reminder_carries_a_fresh_join_code_that_reclaims_the_name(
+    broker: InProcBroker, claude: FakeClaude
+) -> None:
+    """#304: after a compaction the join's own code may be gone from the agent's context, so a
+    later restart would come back as claude-2. The reminder mints a new code for each room; the
+    session that restarts joins with it and is claude-1 again, and the join's first code, which
+    the reminder replaced, no longer works. Fails if the reminder carries no code, a code the
+    broker doesn't accept, or leaves the old one valid."""
+    first = claude.tool("join", room="#build", screen_name="claude-1")
+    old_code = re.search(r"yk:j[0-9a-f]{16}", first["text"]).group(0)
+    start = fixture("SessionStart_startup")
+    claude.hook(start)
+    out = json.loads(claude.hook(fixture("SessionStart_compact", session_id=start["session_id"])))
+    text = out["hookSpecificOutput"]["additionalContext"]
+    got = re.search(r"resume=<code> to keep your name: #build (yk:j[0-9a-f]{16})\.", text)
+    assert got is not None and got.group(1) != old_code, text
+    claude.p.kill()  # the session ends: a restart is another process
+    claude.p.wait(5)
+    assert wait_for(lambda: part(broker)["ended_at"] is not None, 10)
+    again = FakeClaude(broker, env={"CLAUDE_CODE_SESSION_ID": "00000000-0000-4000-8000-00000000c3d0"})
+    try:
+        r = again.tool("join", room="#build", screen_name="claude-1", resume=old_code)
+        assert r["code"] == "name_reserved", r
+        r = again.tool("join", room="#build", screen_name="claude-1", resume=got.group(1))
+        assert r["ok"] and r["screen_name"] == "claude-1", r
+    finally:
+        again.close()
 
 
 def test_read_is_confirmed_by_the_posttooluse_that_carries_its_token(

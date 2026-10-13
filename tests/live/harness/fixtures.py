@@ -109,6 +109,8 @@ SELECT: list[tuple[str, str, Any]] = [
     ("SessionStart_startup", "SessionStart", lambda p: p.get("source") == "startup"),
     ("SessionStart_clear", "SessionStart", lambda p: p.get("source") == "clear"),
     ("SessionStart_resume", "SessionStart", lambda p: p.get("source") == "resume"),
+    ("SessionStart_compact", "SessionStart", lambda p: p.get("source") == "compact"),
+    ("PreCompact", "PreCompact", lambda p: True),
     ("UserPromptSubmit", "UserPromptSubmit", lambda p: not is_inbox_prompt(p)),
     ("UserPromptSubmit_inbox", "UserPromptSubmit", is_inbox_prompt),
     ("PreToolUse_bash", "PreToolUse", tool_is("Bash")),

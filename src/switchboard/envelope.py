@@ -16,7 +16,7 @@ import json
 import re
 import time
 import unicodedata
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -567,9 +567,14 @@ def _other(o: Sequence[str]) -> str:
     return f"{_word(name)} ({_word(harness)}@{_word(host)})" if host else f"{_word(name)} ({_word(harness)})"
 
 
-def render_reminder(memberships: Sequence[tuple[str, str]], human_name: str | Sequence[str]) -> str:
+def render_reminder(
+    memberships: Sequence[tuple[str, str]],
+    human_name: str | Sequence[str],
+    codes: Mapping[str, str] | None = None,
+) -> str:
     """SessionStart (clear/compact) context: which rooms this session is in. ``human_name``
-    may be every person here (§32)."""
+    may be every person here (§32). ``codes``: a fresh join code by room (#304), since the
+    context that held the join's own may be gone."""
     rooms = ", ".join(f"{_word(r)} as {_word(n)}" for r, n in memberships)
     people = [human_name] if isinstance(human_name, str) else list(human_name)
     users = f"your user {_word(people[0])}" if len(people) == 1 else f"your users {users_phrase(people)}"
@@ -579,8 +584,17 @@ def render_reminder(memberships: Sequence[tuple[str, str]], human_name: str | Se
         " and other agents). Room messages arrive as context after tool calls or as wait() results:"
         f" kind=human ones are from {who} and carry their authority just the same."
         f' Call read() for any marked "{NOT_SHOWN}", then reply with'
-        " say() or pass(). " + PEER_WARNING
+        " say() or pass(). " + PEER_WARNING + _resume_note(memberships, codes)
     )
+
+
+def _resume_note(memberships: Sequence[tuple[str, str]], codes: Mapping[str, str] | None) -> str:
+    """How to keep these names after a restart: each room's current join code."""
+    have = [(r, codes[r]) for r, _n in memberships if codes and r in codes]
+    if not have:
+        return ""
+    listed = ", ".join(f"{_word(r)} yk:j{c}" for r, c in have)
+    return f" After a restart, join again with resume=<code> to keep your name: {listed}."
 
 
 def render_read_first(room: str, ids: Sequence[int]) -> str:

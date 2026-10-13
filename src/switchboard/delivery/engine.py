@@ -61,6 +61,7 @@ from switchboard.models import (
     Room,
     Snapshot,
     display_room,
+    join_code_hash,
 )
 from switchboard.store import Store
 
@@ -1541,14 +1542,20 @@ class Engine:
         return out
 
     def _reminder(self, p: Participant) -> HookOut | None:
-        pairs = []
+        """After /clear or a compaction: which rooms the session is in, and a fresh join code for
+        each (#304). The context that held the join's own code may be gone, and without one a
+        later restart can't take the name back; the earlier code stops working."""
+        pairs, codes = [], {}
         for m in self.store.participant_memberships(p.id):
             room = self.store.room_by_id(m.room_id)
             if room is not None:
                 pairs.append((room.name, m.screen_name))
+                code = secrets.token_hex(8)
+                self.store.set_join_code(m.id, join_code_hash(code))
+                codes[room.name] = code
         if not pairs:
             return None
-        return HookOut("context", envelope.render_reminder(pairs, self._humans()))
+        return HookOut("context", envelope.render_reminder(pairs, self._humans(), codes))
 
     def _claim_context(self, p: Participant, path: str) -> tuple[HookOut | None, list[Action]]:
         """Mid-task priority items for the model, as hook context (one room per hook call)."""

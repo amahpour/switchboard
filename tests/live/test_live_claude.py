@@ -11,7 +11,8 @@ Scenarios, in order:
 3. mid-task priority in default mode: PostToolUse context at the next tool boundary;
 4. approval hold: a human post is held while a permission prompt is open;
    the driver declines with Esc (never approves) and the post arrives after;
-5. ``/clear`` keeps the binding (and the inbox);
+5. ``/clear`` keeps the binding (and the inbox); 5b. so does ``/compact``, with the same
+   session id (#304);
 6. ``/exit``, then (optional) ``--resume`` plus an MCP timeout, to record the
    SessionStart(resume) and PostToolUseFailure(mcp timeout) payloads.
 
@@ -560,6 +561,46 @@ def test_5_clear_keeps_the_binding(live: Live) -> None:
     res["model_acked"] = live.agent_said(rf"ack CLEAR-{tag}", mid)
     live.results["scenarios"]["clear"] = res
     print("clear", res)
+
+
+def test_5b_compact_keeps_the_binding(live: Live) -> None:
+    """#304: a context compaction (``/compact``) is the same process and the same MCP server, so
+    the participant, its membership and its name stay, and a message still wakes it. Records the
+    SessionStart(compact) payload, and whether the session id changes."""
+    live.wait_settled(150)
+    before = live.part()
+    n0 = len(live.raw_events())
+    live.type("/compact")
+    live.wait(
+        lambda: any(
+            e["event"] == "SessionStart" and e["payload"].get("source") == "compact"
+            for e in live.raw_events()[n0:]
+        ),
+        180,
+        "SessionStart(compact)",
+    )
+    live.wait_settled(60)
+    after = live.part()
+    assert after["id"] == before["id"] and after["ended_at"] is None and after["tier"] == "claude:inbox"
+    assert live.q("SELECT left_at FROM memberships WHERE id=?", live.mid)[0][0] is None
+    ends = [e for e in live.raw_events()[n0:] if e["event"] == "SessionEnd"]
+    tag = secrets.token_hex(3)
+    mid = live.say(
+        f"COMPACT-{tag}: call the switchboard say tool (room #build) with the text: ack COMPACT-{tag}."
+        " Use only that tool; no shell commands."
+    )
+    b = live.wait(lambda: live.confirmed_batch_for(mid), 30, "a wake after /compact")
+    res = {
+        "same_participant": True,
+        "session_id_changed": after["session_id"] != before["session_id"],
+        "session_end_events": [e["payload"].get("reason") for e in ends],
+        "path": b["path"],
+        "turn_start_ms": round((b["turn_start_at"] - live.msg_ts(mid)) * 1000, 1),
+    }
+    live.wait_settled(150)
+    res["model_acked"] = live.agent_said(rf"ack COMPACT-{tag}", mid)
+    live.results["scenarios"]["compact"] = res
+    print("compact", res)
 
 
 def test_6_exit_and_resume_for_the_fixtures(live: Live) -> None:

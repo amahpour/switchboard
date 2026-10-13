@@ -32,6 +32,7 @@ RECORD_EVENTS = (
     "SessionEnd",
     "Notification",
     "PermissionRequest",
+    "PreCompact",
 )
 RAWREC = Path(__file__).resolve().parent / "rawrec.py"
 
