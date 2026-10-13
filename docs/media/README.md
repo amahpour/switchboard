@@ -59,7 +59,7 @@ uv run python docs/media/cli_shots.py --out /tmp/cli-shots
 
 ## Recordings of a change working (`ui_record.py`)
 
-`ui_record.py` records a change to the web UI in use, for a pull request's Verification ([CLAUDE.md](../../CLAUDE.md), and the [`record-verification`](../../.claude/skills/record-verification/SKILL.md) skill for the whole procedure). It is run by hand; the recordings go to `design-assets` with the pull request's previews, never here.
+`ui_record.py` records a change to the web UI in use, for a pull request's Verification ([CLAUDE.md](../../CLAUDE.md), and the [`record-verification`](../../.claude/skills/record-verification/SKILL.md) skill for the whole procedure). It is run by hand, and what it writes is never committed, to any branch: a recording reaches a pull request only as a GitHub attachment, which lives outside the repository.
 
 ```bash
 uv run --group record python docs/media/ui_record.py --list
@@ -69,8 +69,8 @@ uv run --group record python docs/media/ui_record.py path/to/my_change.py --out 
 
 - **Its own dependency group.** `record` adds `imageio-ffmpeg` (which carries an ffmpeg binary) and `pillow`. The regular setup (`uv sync`) doesn't install it, and nothing in `src/`, the tests or CI imports it.
 - **The same isolation and seeded broker** as `ui_shots.py` (`tests/ui_world.py`): a throwaway home, alice and the stand-in agents, headless Chromium.
-- **A scenario** is a function `scenario(take, world)`: `take.step("caption")` lines with clicks and typing between them, and Playwright's `expect` for every wait. `rename-room`, in the script, is the worked example. A pull request's own scenario is a `.py` file given by path, and it is pushed with the recording rather than added to the script.
-- **What it writes:** `<name>.mp4`; `<name>.gif`, which plays inline in a pull request; and `<name>.steps.png`, the picture at the end of each step, to check that each shows what its caption says.
+- **A scenario** is a function `scenario(take, world)`: `take.step("caption")` lines with clicks and typing between them, and Playwright's `expect` for every wait. `rename-room`, in the script, is the worked example. A pull request's own scenario is a `.py` file given by path, pasted into the pull request rather than added to the script.
+- **What it writes:** `<name>.mp4`, the recording; `<name>.gif`, a smaller copy for a chat or an email; and `<name>.steps.png`, the picture at the end of each step, to check that each shows what its caption says.
 - **How:** the browser's own screencast frames, each with the time it was drawn, joined by ffmpeg. The caption sits in a bar under the page, never over it, and each click gets a ring, since a headless page has no pointer. The sign-in and the way to the room are cut off the front. `tests/unit/test_ui_record.py` checks the timing and the caption wrapping without a browser.
 
 ## The tab icon (`make_icons.py`)
