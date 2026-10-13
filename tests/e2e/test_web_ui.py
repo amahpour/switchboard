@@ -1685,6 +1685,30 @@ def test_the_room_name_is_the_last_thing_the_header_shortens(ui: UI) -> None:
     assert title.evaluate(whole), "the name is cut at the larger text size"
 
 
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_a_phone_shows_a_room_name_that_fits(ui: UI, scheme: str) -> None:
+    """#333: the phone's header was three equal columns, so the title had a third of the screen
+    (about 125 px) whatever Rooms and the members pill needed, and #sprint-grooming read
+    "sprint-groo…" with empty space on both sides. The side columns now take what their buttons
+    need and the title has the rest. Fails if a 15-letter name is cut at 390 px, or if the title
+    runs under either button."""
+    room = "sprint-grooming-" + scheme[0]
+    ui.world.create_room("#" + room)
+    page = ui.open(room=room, color_scheme=scheme, **PHONE)
+    title = page.locator("#room-title-button")
+    expect(title).to_have_text(room)
+    assert title.evaluate("el => el.scrollWidth <= el.clientWidth + 1"), "the name is cut on a phone"
+    parts = ("#rooms-toggle", "#room-title", "#buddy-toggle")
+    nav, name, members = (page.locator(part).bounding_box() for part in parts)
+    assert nav and name and members
+    assert nav["x"] + nav["width"] <= name["x"] and name["x"] + name["width"] <= members["x"]
+    # at the largest text size the name can't fit: it ends in an ellipsis, between the buttons
+    page.evaluate("document.documentElement.dataset.textSize = 'larger'")
+    nav, name, members = (page.locator(part).bounding_box() for part in parts)
+    assert nav and name and members
+    assert nav["x"] + nav["width"] <= name["x"] + 1 and name["x"] + name["width"] <= members["x"] + 1
+
+
 def test_a_remote_rows_title_has_its_whole_state(ui: UI) -> None:
     """The row's title has the state in full, since the row may end it in an ellipsis, and it
     ticks with the retry countdown as the row's text does. /api/remotes answers with fpga-pi

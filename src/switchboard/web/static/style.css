@@ -2279,7 +2279,11 @@ body.login {
 
   .conv-head {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    /* The side columns are as wide as Rooms and the members pill need, and the title has the
+       rest (#333). Three equal columns gave it a third of the phone, about 125 px, and cut a
+       15-letter room name that would have fit. The title is centred between the two buttons,
+       so it sits a few pixels off the screen's centre when they differ in width. */
+    grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-areas: "nav title members" "chips chips chips" "tools tools tools";
     align-items: center;
     height: auto;
