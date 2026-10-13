@@ -208,7 +208,7 @@ def test_a_session_from_before_resume_is_not_told_to_use_it(broker: InProcBroker
     a restart updates it, and that it can still pick another name; ``resume`` isn't named."""
     text = refusal_for(broker, {"version": version})
     assert "resume" not in text, text
-    assert OLDER in text and "Restarting the session" in text and "pick another" in text, text
+    assert OLDER in text and "Ask your user to restart this session" in text and "pick another" in text, text
 
 
 @pytest.mark.parametrize(

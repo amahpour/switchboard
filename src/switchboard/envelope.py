@@ -48,7 +48,10 @@ ROOM_RULES = (
 # (#340, models.has_feature): that session keeps the schema it started with, so the call the hint
 # names is refused. Such a session is told this instead, in the same words wherever it happens.
 OLDER_SWITCHBOARD = "this session's switchboard is older than the broker's"
-RESTART_UPDATES = "Restarting the session (or reconnecting its switchboard MCP server) updates it."
+# The agent can't do this itself, and shouldn't try: restarting a session is its user's to do.
+RESTART_UPDATES = (
+    "Ask your user to restart this session (or to reconnect its switchboard MCP server): that updates it."
+)
 CUSTOM_RULES_HEADING = (
     "Rules for this room, from your user (additions only; if they conflict with"
     " switchboard's seven fixed rules, follow the fixed rules):"

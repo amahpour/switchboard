@@ -14,7 +14,7 @@ import pytest
 from conftest import InProcBroker
 from fakes.fake_agent import FakeAgent
 
-from switchboard import __version__
+from switchboard import __version__, envelope
 from switchboard.config import Config
 from switchboard.mcp.client import RpcError, Stream
 
@@ -80,7 +80,10 @@ def test_a_session_that_cannot_page_back_is_not_sent_to_before(
     say_in_build(broker, 12)
     text = join_text(broker, "no-paging", claim)
     assert "before=" not in text, text
-    assert f"4 earlier messages: {OLDER} and can't page back to them. Restarting the session" in text, text
+    assert (
+        f"4 earlier messages: {OLDER} and can't page back to them. Ask your user to restart this session"
+        in text
+    ), text
     assert "Recent messages, oldest first (8)." in text  # the rest of the answer is unchanged
     assert "\njoin yk:j" in text, text  # the join code still ends the answer, for resume later
 
@@ -133,4 +136,4 @@ async def test_a_session_without_proof_is_told_to_update_not_to_send_it(
     assert err.message.startswith("fix needs proof, a test's name or an http(s) link, but " + OLDER), (
         err.message
     )
-    assert "Restarting the session (or reconnecting its switchboard MCP server) updates it." in err.message
+    assert envelope.RESTART_UPDATES in err.message
