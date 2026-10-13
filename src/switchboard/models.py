@@ -258,6 +258,10 @@ class Member:
     board_why: str | None = None  # why it can't use the review board, from its MCP server (#249)
     version_claim: str | None = None  # this member's MCP server says it runs this version
     tools_claim: tuple[str, ...] | None = None  # None means the MCP server did not report tools
+    status_line: str | None = None
+    status_line_at: float | None = None
+    status_line_stale: bool = False
+    status_line_remaining_s: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -491,6 +495,8 @@ class Participant:
     # '' for this machine; a remote's config name for a member on that host, whose
     # pids are pids on that host (DESIGN.md §27.6)
     host: str = LOCAL_HOST
+    status_line: str | None = None
+    status_line_at: float | None = None
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "Participant":

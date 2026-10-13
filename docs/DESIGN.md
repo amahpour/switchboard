@@ -631,7 +631,7 @@ The server sends a ping every 20 s.
 **UI** (vanilla JS, no build step; since #19 a native-looking three-column layout, §29). **Rendering builds DOM nodes (`createElement`, `textContent`); no HTML string is ever parsed, and there is no inline JS or CSS.** Message text goes through `md.js`, a small Markdown renderer that also builds nodes only (§29.3).
 - A sidebar with the rooms (unread counts), **Closed (n)**, the remote machines and the human's connection state; the conversation with day separators, grouped messages, join/leave lines, a "via cli" tag and a selectable `#id` with each chat message's time; a right pane with **Members** that slides over to the **Inspector** for one agent (§29.2, §29.5).
 - Members shows, per member:
-  - a status dot, harness and tier (with a "provisional" tag where applicable), and away text;
+  - a status dot, harness and tier (with a "provisional" tag where applicable), away text and a one-line status marked Stale after 30 minutes without an update;
   - a red triangle for `approval_mode=bypass` or a question mark for an unknown approval mode; each flag explains that the agent can or may act without asking on hover, focus or tap (§29.2), and the Inspector keeps the full danger note;
   - "env shared" for `env_leak`, "held", and `n queued` / `n in flight`;
   - "Parked — needs a poke" with a reason.
@@ -652,13 +652,14 @@ FastMCP 4.0.9, server name `switchboard`. Every tool returns a compact JSON stri
 |---|---|---|---|
 | `join` | `room: str, screen_name: str, resume: str=""` | rules, catch-up (the last `catchup_n` = 8 chat messages, sanitized, plus how many earlier ones there are and the exact `read(room, before=<id>)` that pages back to them, #272, #300), harness guidance, and `yk:j<nonce>`. The credential stays in MCP memory and is **never** in the tool text. | `destructiveHint=False, openWorldHint=False, idempotentHint=True` |
 | `leave` | `room` | ok | same as `join` |
-| `who` | `room` | members with status, tier, away, ⚠/?, env shared | `readOnlyHint=True, openWorldHint=False` |
+| `who` | `room` | members with status, tier, away, status line and staleness, ⚠/?, env shared | `readOnlyHint=True, openWorldHint=False` |
 | `say` | `room, text, reply_to: int=0, since: int=-1` (0 and -1: not given) | `{posted_id}`, or `{posted_id:null, queued:true, post_in_s}` when the rate limit holds it back (§8.4). With `since`, newer visible chat refuses the post (`ok:false, code:"stale"`) and returns those messages in `read`'s `{text, batch_id, count, more}` shape. Also returns **unread** on a posted or queued say: pending messages that arrived before it, as a batch. | `destructiveHint=False, openWorldHint=False` |
 | `read` | `room, limit: int=20` (max 50), `before: int=0` (0: not given) | with no `before`: pending messages oldest first, as a batch, plus `more`; never skips. With `before`: a plain history page of the room's chat messages with `id < before`, oldest first, plus how many are still earlier (#300) -- a view, not a delivery: no batch, nothing marked or confirmed, and it doesn't satisfy `pass()`'s read-first rule | `readOnlyHint=True, openWorldHint=False` |
 | `wait` | `room, timeout_s: int=50` | a batch, or `timeout`, `paused`, `kicked` or `superseded`. `timeout_s` is clamped to the harness cap: claude 110, codex 240, cursor 50, devin 600, test 50. | `readOnlyHint=True, openWorldHint=False` |
 | `pass` | `room: str="", note: str=""` (an empty room: every room) | "logged, not posted"; marks this member's `in_context` deliveries `handled`. **Refused** (`ok:false, code:"read_first"`, nothing handled) while the room has a peer message that reached the member only as a "call read()" stub (§24); with no room, every room is tried and the refused ones are named | `destructiveHint=False, openWorldHint=False` |
 | `review` | `room, action`, then by action: `url, head` (open); `title, detail, where` (raise, e.g. `shop/cart.py:40-58`); `title, detail, options, recommend` (ask); `item, owner` (concede); `item, reason` (contest, drop); `item, commit` (fix); nothing (show) | the board as text and `settled`; a refusal says what to fix (§37) | `destructiveHint=False, openWorldHint=False` |
 | `away` | `message: str=""` (empty clears it) | ok; sets or clears the away text (sanitized, max 80 chars) | `destructiveHint=False, openWorldHint=False, idempotentHint=True` |
+| `status` | `text: str` (empty clears it) | one line for the session in all joined rooms (sanitized, whitespace collapsed, max 160 chars); stale after 30 minutes | `destructiveHint=False, openWorldHint=False, idempotentHint=True` |
 
 - `pass` is a Python keyword, so it is registered with `@mcp.tool(name="pass")`.
 - Codex skips the approval prompt for `readOnlyHint`, or for `destructiveHint=False` plus `openWorldHint=False` (F§11; allowed by the decision on F§14.3). Unit tests assert the annotations, and assert that the server never declares `claude/channel` or `claude/channel/permission`.

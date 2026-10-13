@@ -44,6 +44,7 @@ OPEN_DELIVERY_STATES = ("pending", "offered", "in_context")
 ROOM_DELETE_TABLES = ("rooms", "messages", "memberships", "deliveries", "batches", "events")
 CONFIG_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 REASON_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+STATUS_LINE_STALE_S = 30 * 60
 
 
 class StoreError(Exception):
@@ -531,6 +532,7 @@ class Store:
         rows = self.con.execute(
             "SELECT m.id AS membership_id, m.participant_id, m.room_id, m.screen_name,"
             " m.held, m.joined_at, p.harness, p.status, p.tier, p.tier_note, p.away,"
+            " p.status_line, p.status_line_at,"
             " p.approval_mode, p.env_leak, p.host,"
             " (SELECT COUNT(*) FROM deliveries d WHERE d.membership_id=m.id"
             "   AND d.state='pending') AS queued,"
@@ -558,6 +560,18 @@ class Store:
                 queued=r["queued"],
                 inflight=r["inflight"],
                 host=r["host"],
+                status_line=r["status_line"],
+                status_line_at=r["status_line_at"],
+                status_line_stale=bool(
+                    r["status_line"]
+                    and r["status_line_at"] is not None
+                    and self.clock.now() - r["status_line_at"] >= STATUS_LINE_STALE_S
+                ),
+                status_line_remaining_s=(
+                    max(0.0, STATUS_LINE_STALE_S - max(0.0, self.clock.now() - r["status_line_at"]))
+                    if r["status_line"] and r["status_line_at"] is not None
+                    else None
+                ),
             )
             for r in rows
         ]
@@ -1491,6 +1505,8 @@ class Store:
             "approval_mode",
             "env_leak",
             "away",
+            "status_line",
+            "status_line_at",
             "boundary_seq",
             "gen",
             "gen_tainted",

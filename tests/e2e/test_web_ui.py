@@ -830,7 +830,6 @@ def test_phone_layout_drawer_and_members_sheet(ui: UI) -> None:
     app = page.locator("#app")
     no_horizontal_scroll(page)
 
-
     # the sidebar is a drawer, hidden until the Rooms toggle; Esc closes it
     expect(page.locator("#sidebar")).to_be_hidden()
     page.click("#rooms-toggle")
