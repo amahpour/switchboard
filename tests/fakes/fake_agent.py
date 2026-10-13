@@ -102,8 +102,8 @@ class FakeAgent:
     async def say(self, room: str, text: str, reply_to: int | None = None) -> dict[str, Any]:
         return await self.call("say", room=room, text=text, reply_to=reply_to)
 
-    async def read(self, room: str, limit: int | None = None) -> dict[str, Any]:
-        return await self.call("read", room=room, limit=limit)
+    async def read(self, room: str, limit: int | None = None, before: int | None = None) -> dict[str, Any]:
+        return await self.call("read", room=room, limit=limit, before=before)
 
     async def wait(self, room: str, timeout_s: int | None = None) -> dict[str, Any]:
         return await self.call("wait", room=room, timeout_s=timeout_s)

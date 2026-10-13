@@ -485,6 +485,19 @@ class Store:
             ).fetchall()
         return [Message.from_row(r) for r in rows]
 
+    def chat_history_before(self, room_id: int, before: int, limit: int) -> list[Message]:
+        """Up to ``limit`` chat messages in one room with ``id < before``, oldest first: the
+        history page ``read(before=...)`` answers with, paging back past what ``join()`` already
+        showed (issue #300 review -- ``read()`` alone only ever answers with *pending* items, so
+        the join's "N earlier" line must name a call that actually returns something)."""
+        limit = max(1, min(int(limit), 50))
+        rows = self.con.execute(
+            "SELECT * FROM (SELECT * FROM messages WHERE room_id=? AND kind='chat' AND id<?"
+            " ORDER BY id DESC LIMIT ?) ORDER BY id",
+            (room_id, int(before), limit),
+        ).fetchall()
+        return [Message.from_row(r) for r in rows]
+
     def count_messages(
         self, room_id: int, after: int = 0, before: int | None = None, kind: str | None = None
     ) -> int:

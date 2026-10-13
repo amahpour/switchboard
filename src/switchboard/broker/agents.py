@@ -40,7 +40,7 @@ from switchboard.broker.peer import (
     verify_mcp_peer,
 )
 from switchboard.broker.proc import ProcInfo
-from switchboard.broker.service import ServiceError
+from switchboard.broker.service import MAX_MESSAGE_ID, ServiceError
 from switchboard.delivery import rules
 from switchboard.envelope import TOKEN_RE, clean, sanitize
 from switchboard.models import (
@@ -149,6 +149,17 @@ def cred_hash(cred: str) -> str:
 def _model_ok(model: Any) -> bool:
     """A hook-reported model name worth recording: short and identifier-shaped."""
     return isinstance(model, str) and len(model) <= 64 and MODEL_RE.fullmatch(model) is not None
+
+
+def clamp_before(value: Any) -> int:
+    """``read(before=...)``'s cursor must be a message id (issue #300 review): it picks a
+    different call (a history page, not the normal pending-items answer), so a wrong type is
+    refused rather than silently falling back the way ``limit`` does. ``type(value) is not
+    int`` rather than ``isinstance``, so a bool (``True``/``False``) is refused too, not read
+    as 1/0. A valid int is clamped to a message id's range, as ``reply_to`` is (service.py)."""
+    if type(value) is not int:
+        raise ServiceError("bad_request", "before must be a message id")
+    return max(0, min(value, MAX_MESSAGE_ID))
 
 
 class AgentService:
@@ -807,8 +818,12 @@ class AgentService:
         others = [(x.name, x.harness, x.host) for x in self.store.members(room.id) if x.membership_id != m.id]
         hist = [x for x in self.store.history(room.id, None, 400) if x.kind == "chat"]
         catchup = hist[-self.cfg.delivery.catchup_n :] if self.cfg.delivery.catchup_n else []
-        # the catch-up window is short (issue #272); how many more read() has stays accurate
+        # the catch-up window is short (issue #272); how many more there are, and the exact
+        # read(before=...) that pages back to them, stay accurate (issue #300 review)
         earlier = max(0, self.store.count_messages(room.id, kind="chat") - len(catchup))
+        earlier_before = None
+        if earlier:
+            earlier_before = catchup[0].id if catchup else self.store.last_message_id(room.id) + 1
         text = envelope.render_join(
             room=room.name,
             screen_name=m.screen_name,
@@ -816,6 +831,7 @@ class AgentService:
             others=others,
             catchup=catchup,
             earlier=earlier,
+            earlier_before=earlier_before,
             nonce=nonce,
             guidance=adapter.join_guidance(p, room.name),
             test_mode=self.state.test_mode,
@@ -1023,11 +1039,23 @@ class AgentService:
         return msg
 
     def read(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
-        p, m, _room = self._member(conn, params)
+        p, m, room = self._member(conn, params)
         limit = params.get("limit", 20)
         if isinstance(limit, bool) or not isinstance(limit, int):
             limit = 20
-        text, bid, count, more, acts = self.engine.pull(p, m, "read", max(1, min(limit, 50)))
+        limit = max(1, min(limit, 50))
+        before = params.get("before")
+        if before is not None:
+            # a history view (issue #300 review), not a delivery: no batch, nothing marked or
+            # confirmed, and it never satisfies pass()'s read-first rule (§24)
+            before = clamp_before(before)
+            msgs = self.store.chat_history_before(room.id, before, limit)
+            earlier = self.store.count_messages(room.id, before=msgs[0].id, kind="chat") if msgs else 0
+            text = envelope.render_history(
+                room=room.name, recipient=m.screen_name, messages=msgs, earlier=earlier
+            )
+            return {"text": text, "batch_id": None, "count": len(msgs), "more": earlier > 0}
+        text, bid, count, more, acts = self.engine.pull(p, m, "read", limit)
         self.run(acts)
         return {"text": text, "batch_id": bid, "count": count, "more": more}
 

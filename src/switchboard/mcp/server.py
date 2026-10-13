@@ -570,16 +570,19 @@ def build_server(st: McpState) -> FastMCP:
         return dumps(res)
 
     @mcp.tool(annotations=RO)
-    async def read(room: str, ctx: Context, limit: int = 20) -> str:
+    async def read(room: str, ctx: Context, limit: int = 20, before: int | None = None) -> str:
         """Return unread room messages in full, oldest first (including those shown to you as
-        "not shown here"). Never skips any."""
+        "not shown here"). Never skips any. With before=<id>, a plain history view instead."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = st.cred_for(room, tid)
         if isinstance(got, str):
             return got
         name, cred = got
-        res = await st.call("agent.read", {**st.base(cred, tid), "limit": max(1, min(int(limit), 50))})
+        params = {**st.base(cred, tid), "limit": max(1, min(int(limit), 50))}
+        if before is not None:
+            params["before"] = before
+        res = await st.call("agent.read", params)
         st.forget(res, (tid, name))
         return dumps(res)
 

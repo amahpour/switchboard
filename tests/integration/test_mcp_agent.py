@@ -129,9 +129,10 @@ async def test_join_gives_rules_catchup_nonce_banner_and_never_the_cred(broker: 
         text = j["text"]
         assert "Room rules:" in text and "untrusted" in text and "worktree" in text
         # issue #272: the catch-up window is the last 8 messages, and the rest say how many
-        # more there are and that read() shows them (35 posted, 8 shown, 27 earlier)
+        # more there are (35 posted, 8 shown, 27 earlier) and the exact read(before=...) that
+        # pages back to them (issue #300 review: plain read() only answers with pending items)
         assert ids_in(text) == ids[-8:]
-        assert '27 earlier messages: read("#build") shows them.' in text
+        assert f'27 earlier messages: read("#build", before={ids[-8]}) shows them.' in text
         assert NONCE_RE.search(text) and "[TEST MODE]" in text
         await a.read("#build")
         await a.say("#build", "hello")
@@ -152,15 +153,98 @@ async def test_join_into_a_realistic_room_fits_the_6000_char_budget(broker: InPr
         say(broker, f"earlier message {i}")
     # the catch-up window: mostly near the spike's median (469), one p90-sized message (1,497)
     lengths = [469, 350, 300, 250, 1497, 400, 380, 300]
-    for n in lengths:
-        say(broker, "x" * n)
+    ids = [say(broker, "x" * n) for n in lengths]
     async with FakeAgent(broker.home, "k1") as a:
         j = await a.join("#build", "tester")
         assert j["ok"]
         text = j["text"]
-        assert len(ids_in(text)) == 8
-        assert "80 earlier messages" in text
+        assert ids_in(text) == ids
+        assert f'80 earlier messages: read("#build", before={ids[0]}) shows them.' in text
         assert len(text) <= 6000
+
+
+# ---------------------------------------------------- read(before=...): history (issue #300)
+async def test_join_then_read_before_pages_back_through_the_rest_of_the_history(
+    broker: InProcBroker,
+) -> None:
+    """The exact call the join's "N earlier messages" line names must actually work: it pages
+    back from the oldest message shown at join, oldest first, and says how many are still
+    earlier than that (issue #300 review)."""
+    ids = [say(broker, f"m{i}") for i in range(12)]  # 12 posted, 8 shown at join, 4 earlier
+    async with FakeAgent(broker.home, "k1") as a:
+        j = await a.join("#build", "tester")
+        assert ids_in(j["text"]) == ids[-8:]
+        line = f'4 earlier messages: read("#build", before={ids[-8]}) shows them.'
+        assert line in j["text"]
+        r = await a.read("#build", before=ids[-8])
+        assert r["ok"] and r["batch_id"] is None and r["count"] == 4 and not r["more"]
+        assert ids_in(r["text"]) == ids[:4]
+        assert "m0" in r["text"] and "m3" in r["text"]
+        assert r["text"].startswith("[switchboard] #build: 4 messages, oldest first.")
+        assert "earlier message" not in r["text"]  # nothing further back than this page
+        # a second page further back, from the oldest id this page showed: empty, no "more"
+        r2 = await a.read("#build", before=ids[0])
+        assert r2["ok"] and r2["count"] == 0 and not r2["more"]
+        assert r2["text"] == "[switchboard] #build: no earlier messages."
+
+
+async def test_history_read_does_not_satisfy_the_read_first_rule(broker: InProcBroker) -> None:
+    """A history page is a plain view (issue #300 review): even one that happens to include a
+    stubbed peer @mention's own text doesn't confirm, mark or otherwise count as the read()
+    pass()'s read-first rule needs (DESIGN.md §24) -- only the normal, pending-items read()
+    does that."""
+    async with FakeAgent(broker.home, "ka") as a, FakeAgent(broker.home, "kb") as b:
+        await a.join("#build", "alpha")
+        await b.join("#build", "beta")
+        mid = (await b.say("#build", "@alpha the parser drops port 0"))["posted_id"]
+        text = stub_by_hook(broker, "ka", mid)
+        assert "drops port 0" not in text
+        assert states(broker, "alpha")[mid] == "pending"
+        hist = await a.read("#build", before=mid + 1)
+        assert hist["ok"] and hist["batch_id"] is None
+        assert ids_in(hist["text"]) == [mid] and "drops port 0" in hist["text"]
+        # still pending, and pass() is still refused: the history view changed nothing
+        assert states(broker, "alpha")[mid] == "pending"
+        r = await a.pass_("#build")
+        assert r["ok"] is False and r["code"] == "read_first"
+        # the real read() (no before) is what the read-first rule actually needs
+        rd = await a.read("#build")
+        assert ids_in(rd["text"]) == [mid]
+        r = await a.pass_("#build")
+        assert r["ok"] and states(broker, "alpha")[mid] == "handled"
+
+
+async def test_history_read_never_returns_another_rooms_messages(broker: InProcBroker) -> None:
+    assert (
+        broker.web.post("/api/rooms", json={"name": "#side"}, headers=broker.write_headers()).status_code
+        == 200
+    )
+    side_id = broker.web.post(
+        "/api/rooms/side/say", json={"text": "side room secret"}, headers=broker.write_headers()
+    ).json()["id"]
+    build_ids = [say(broker, f"build {i}") for i in range(3)]
+    async with FakeAgent(broker.home, "k1") as a:
+        await a.join("#build", "tester")
+        r = await a.read("#build", before=max(*build_ids, side_id) + 1)
+        assert r["ok"]
+        assert ids_in(r["text"]) == build_ids
+        assert "side room secret" not in r["text"] and f"id={side_id}" not in r["text"]
+
+
+async def test_history_read_clamps_a_huge_or_negative_before(broker: InProcBroker) -> None:
+    """A real harness's ``before`` always arrives as a Python int (the MCP tool's own
+    ``int | None`` schema), but its value is still a claim: clamped to a message id's range
+    rather than trusted outright (issue #300 review, ``clamp_before``), the same way
+    ``reply_to`` is bounded in service.py. Unclamped, a value past SQLite's 64-bit integer
+    range raises ``OverflowError`` at the query instead of answering cleanly."""
+    ids = [say(broker, f"m{i}") for i in range(3)]
+    async with FakeAgent(broker.home, "k1") as a:
+        await a.join("#build", "tester")
+        huge = await a.read("#build", before=2**64)
+        assert huge["ok"] and ids_in(huge["text"]) == ids
+        negative = await a.read("#build", before=-5)
+        assert negative["ok"] and negative["count"] == 0
+        assert negative["text"] == "[switchboard] #build: no earlier messages."
 
 
 async def test_rejoin_rotates_the_credential(broker: InProcBroker) -> None:
