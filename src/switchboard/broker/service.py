@@ -625,6 +625,41 @@ class RoomService:
         self.rooms_changed()
         return room
 
+    def rename_room(self, room: Room, name: str, actor: str) -> Room:
+        """Rename an open room, keeping its id, members, history, settings and review board."""
+        try:
+            new_name = normalize_room(name)
+        except InvalidName as e:
+            raise ServiceError("bad_request", str(e)) from None
+        if new_name == room.name:
+            raise ServiceError("conflict", f"{new_name} already exists")
+        with db.tx(self.store.con):
+            try:
+                renamed = self.store.rename_open_room(room.id, new_name, expect=room.name)
+            except Conflict:
+                raise ServiceError("conflict", f"{new_name} already exists") from None
+            msg = self.store.insert_message(
+                room.id,
+                sender_name="switchboard",
+                sender_kind="system",
+                via="system",
+                kind="notice",
+                text=f"{actor} renamed {room.name} to {new_name}",
+                deliver_notice=True,
+            )
+            self.store.add_event(
+                "room_rename",
+                room_id=room.id,
+                data={"from": room.name, "to": new_name, "by": actor},
+            )
+        # Subscribers follow the old name until the rooms frame tells pages to subscribe again.
+        self.hub.message(room.name, message_dict(msg))
+        self.hub.drop_room(room.name)
+        self.rooms_changed()
+        if self.delivery is not None:
+            self.delivery.on_command(renamed, "rename", None)
+        return renamed
+
     def set_room_rules(self, room_name: str, text: str, actor: str) -> Room:
         if not isinstance(text, str) or len(text) > 2000:
             raise ServiceError("bad_request", "room rules must be at most 2000 characters")

@@ -972,10 +972,11 @@ def test_slash_palette_and_mentions(ui: UI) -> None:
     expect(box).to_have_attribute("aria-expanded", "true")
     page.keyboard.press("ArrowDown")
     page.keyboard.press("ArrowDown")
+    page.keyboard.press("ArrowDown")
     expect(page.locator("#pal-budget")).to_have_attribute("aria-selected", "true")
     expect(page.locator("#pal-pause")).to_have_attribute("aria-selected", "false")
     page.keyboard.press("ArrowUp")
-    expect(page.locator("#pal-resume")).to_have_attribute("aria-selected", "true")
+    expect(page.locator("#pal-rename")).to_have_attribute("aria-selected", "true")
     page.keyboard.press("ArrowDown")
     page.keyboard.press("Enter")
     expect(box).to_have_value("/budget ")  # a command with arguments waits for them
