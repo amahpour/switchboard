@@ -92,6 +92,8 @@ class World:
     def join(self, *, prove: bool = True) -> dict[str, Any]:
         if self.d is not None:
             self.d.add_thread(TID)
+            if prove:
+                self.d.expect_proof(TID)  # no read sees the thread before the join's result
         assert self.cx is not None
         r = self.cx.tool("join", meta={"threadId": TID}, room="#fpga", screen_name="cx")
         assert r["ok"], r

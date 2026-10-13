@@ -145,6 +145,8 @@ class W:
     def join(self, *, attach: bool = True, prove: bool = True, loaded: bool = True) -> dict[str, Any]:
         if self.d is not None:
             self.d.add_thread(TID, loaded=loaded)
+            if prove:
+                self.d.expect_proof(TID)
         self.cx = FakeClaude(self.b, as_harness="codex")
         if attach and self.d is not None:
             self.cx.p.stdin.write(json.dumps({"op": "attach", "path": self.sock}) + "\n")
@@ -805,6 +807,7 @@ def test_the_first_thread_proof_is_announced_once(w: W, monkeypatch: pytest.Monk
     with the tier it has then; the same membership proven again (a join from a new MCP
     server, which keeps it: "re-joined", no join line) posts none."""
     monkeypatch.setattr(codex_mod, "PROOF_AT_S", (0.2, 0.5, 4.0))  # time to look before the last try
+    w.d.expect_proof(TID)  # the proof read waits for the join's result, however long the looks take
     r = w.join(prove=False)
     assert lines(w, "join") == ["joined (codex, verifying...)"]
     assert w.tier() == ("mcp-only", "verifying...") and w.member()["tier_note"] == "verifying..."
@@ -818,6 +821,7 @@ def test_the_first_thread_proof_is_announced_once(w: W, monkeypatch: pytest.Monk
     assert "verifying" not in who_text(w)
     # the MCP server restarts: a join from the new one proves the thread again
     new_mcp_server(w)
+    w.d.expect_proof(TID)
     r2 = w.cx.tool("join", meta={"threadId": TID}, room="#build", screen_name="codex-1")
     assert r2["ok"], r2
     assert w.part()["thread_proof"] == 0 and w.tier() == ("mcp-only", "verifying...")
@@ -838,6 +842,7 @@ def test_a_rejoin_that_says_verifying_is_announced_again(w: W, monkeypatch: pyte
     assert wait_for(lambda: verified(w) == ["codex-1 is verified: codex:daemon"]), lines(w, "notice")
     assert w.cx is not None and w.cx.tool("leave", meta={"threadId": TID}, room="#build")["ok"]
     new_mcp_server(w)
+    w.d.expect_proof(TID)
     r = w.cx.tool("join", meta={"threadId": TID}, room="#build", screen_name="codex-1")
     assert r["ok"], r
     assert lines(w, "join") == ["joined (codex, verifying...)"] * 2
@@ -1059,6 +1064,7 @@ def test_a_rejoin_after_the_session_ended_is_not_stuck_on_session_ended(tmp_home
         assert wait_for(lambda: w.part()["ended_at"] is not None)
         assert lines(w, "leave") == ["left (session ended)"]
         tui = daemon_comes_back(w)
+        w.d.expect_proof(TID)
         r = tui.tool("join", meta={"threadId": TID}, room="#build", screen_name="codex-1")
         assert r["ok"], r
         w.d.prove(TID, r["text"])
