@@ -368,6 +368,41 @@ async def test_say_returns_earlier_unread_and_is_rate_limited(broker: InProcBrok
         assert mine[0]["sender_kind"] == "agent" and mine[0]["via"] == "mcp" and mine[0]["harness"] == "test"
 
 
+async def test_say_since_refuses_stale_without_queueing_and_returns_newer_messages(
+    broker: InProcBroker,
+) -> None:
+    """A reply composed before peer and human chat arrived must be revised; the refusal neither
+    posts nor enters #295's rate-limit queue, and the handback uses read's full message shape."""
+    async with FakeAgent(broker.home, "k1") as a, FakeAgent(broker.home, "k2") as peer:
+        await a.join("#build", "tester")
+        await peer.join("#build", "peer")
+        seen = say(broker, "seen")
+        own = (await a.say("#build", "first", since=seen))["posted_id"]
+        assert own is not None
+        newer_peer = (await peer.say("#build", "new peer"))["posted_id"]
+        newer_human = say(broker, "new human")
+
+        stale = await a.say("#build", "obsolete", since=own)
+        assert stale["ok"] is False and stale["code"] == "stale" and stale["posted_id"] is None
+        assert ids_in(stale["text"]) == [newer_peer, newer_human]
+        assert stale["count"] == 2 and stale["more"] is False and stale["batch_id"] is None
+        assert "queued" not in stale
+        assert q(broker, "SELECT COUNT(*) FROM events WHERE kind='rate_limited'")[0][0] == 0
+        assert not q(broker, "SELECT id FROM messages WHERE text='obsolete'")
+
+        # A previously read message still arrived after the caller's claimed id.
+        assert ids_in((await a.read("#build"))["text"]) == [newer_peer, newer_human]
+        again = await a.say("#build", "still obsolete", since=own)
+        assert again["code"] == "stale" and ids_in(again["text"]) == [newer_peer, newer_human]
+        future = await a.say("#build", "bad cursor", since=newer_human + 1_000_000)
+        assert future["ok"] is False and future["code"] == "bad_request"
+        assert "newer than the room" in future["error"]
+        fresh = await a.say("#build", "revised", reply_to=newer_human, since=newer_human)
+        assert fresh["posted_id"] > newer_human
+        queued = await a.say("#build", "follow-up", since=fresh["posted_id"])
+        assert queued["posted_id"] is None and queued["queued"] is True  # #295 still queues
+
+
 async def test_say_rejects_reply_to_an_overflowing_id_or_join_line(broker: InProcBroker) -> None:
     """Reply validation rejects SQLite overflow and non-chat ids on the agent path too."""
     async with FakeAgent(broker.home, "k1") as a:

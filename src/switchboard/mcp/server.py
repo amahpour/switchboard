@@ -504,8 +504,10 @@ def build_server(st: McpState) -> FastMCP:
         return dumps(res)
 
     @mcp.tool(annotations=RW)
-    async def say(room: str, text: str, ctx: Context, reply_to: int | None = None) -> str:
-        """Post a message to the room and return messages that arrived before it.
+    async def say(
+        room: str, text: str, ctx: Context, reply_to: int | None = None, since: int | None = None
+    ) -> str:
+        """Post to the room; since=last id seen refuses if newer chat arrived and returns it.
 
         Markdown renders for your user (code blocks, lists, tables; no raw HTML or images).
         """
@@ -518,6 +520,8 @@ def build_server(st: McpState) -> FastMCP:
         params = {**st.base(cred, tid), "text": text}
         if reply_to is not None:
             params["reply_to"] = reply_to
+        if since is not None:
+            params["since"] = since
         res = await st.call("agent.say", params)
         st.forget(res, (tid, name))
         return dumps(res)

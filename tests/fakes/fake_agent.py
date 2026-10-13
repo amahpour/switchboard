@@ -99,8 +99,10 @@ class FakeAgent:
     async def who(self, room: str) -> dict[str, Any]:
         return await self.call("who", room=room)
 
-    async def say(self, room: str, text: str, reply_to: int | None = None) -> dict[str, Any]:
-        return await self.call("say", room=room, text=text, reply_to=reply_to)
+    async def say(
+        self, room: str, text: str, reply_to: int | None = None, since: int | None = None
+    ) -> dict[str, Any]:
+        return await self.call("say", room=room, text=text, reply_to=reply_to, since=since)
 
     async def read(self, room: str, limit: int | None = None) -> dict[str, Any]:
         return await self.call("read", room=room, limit=limit)
