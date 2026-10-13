@@ -527,7 +527,9 @@ class Orphan:
 class CodexMembership:
     """Thread identity and binding shared by local and remote Codex adapters (§6.3, §27.7)."""
 
-    def session_key(self, ident: McpIdentity, thread_id: str | None) -> str:
+    def session_key(
+        self, ident: McpIdentity, thread_id: str | None, *, test_session: str | None = None
+    ) -> str:
         if not thread_id:
             raise ValueError("Codex calls must carry _meta.threadId")
         return session_key("codex", ident.host, thread_id)

@@ -11,8 +11,10 @@ from __future__ import annotations
 from typing import Any
 
 from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, Adapter
+from switchboard.broker.peer import McpIdentity
 from switchboard.config import Config
 from switchboard.models import Participant, Release, Route
+from switchboard.models import session_key as make_session_key
 
 ACK_MODES = ("next_call", "immediate", "never")
 
@@ -25,6 +27,12 @@ class TestAgentAdapter(Adapter):
 
     def tier(self, p: Participant | None) -> tuple[str, str | None]:
         return "mcp-only", None
+
+    def session_key(
+        self, ident: McpIdentity, thread_id: str | None, *, test_session: str | None = None
+    ) -> str:
+        # keyed by --test-session, not by process: several scripted agents may share one (§9.6)
+        return make_session_key(self.harness, ident.host, str(test_session))
 
     def pull_ack(self, p: Participant, mode: str | None) -> str:
         return mode if mode in ACK_MODES else "next_call"
