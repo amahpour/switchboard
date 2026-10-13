@@ -40,6 +40,67 @@ def q(b: InProcBroker, sql: str, *args: Any) -> list[sqlite3.Row]:
         con.close()
 
 
+async def test_fix_requires_proof_and_the_raiser_confirms_it(broker: InProcBroker) -> None:
+    """Two real tool clients leave a new fix open until the raiser records its proof check."""
+    async with (
+        FakeAgent(broker.home, "proof-author") as author,
+        FakeAgent(broker.home, "proof-reviewer") as reviewer,
+    ):
+        await author.join("#build", "claude-1")
+        await reviewer.join("#build", "codex-1")
+        await reviewer.call("review", room="#build", action="open", url=PR)
+        await reviewer.call("review", room="#build", action="raise", title="wrong total")
+        await author.call("review", room="#build", action="concede", item="F1")
+        refused = await author.call("review", room="#build", action="fix", item="F1", commit="abc1234")
+        assert not refused["ok"] and "proof" in refused["error"]
+        fixed = await author.call(
+            "review",
+            room="#build",
+            action="fix",
+            item="F1",
+            commit="abc1234",
+            proof="tests/test_cart.py::test_total",
+        )
+        assert fixed["ok"] and not fixed["settled"]
+        other = await author.call("review", room="#build", action="confirm", item="F1")
+        assert not other["ok"] and "codex-1" in other["error"]
+        checked = await reviewer.call("review", room="#build", action="confirm", item="F1")
+        assert checked["ok"] and checked["settled"]
+    row = q(broker, "SELECT proof, confirmed_by, reason FROM review_items WHERE kind='finding'")[0]
+    assert tuple(row) == ("tests/test_cart.py::test_total", "codex-1", "")
+
+
+async def test_a_person_confirms_only_when_the_raiser_cannot(broker: InProcBroker) -> None:
+    """The person cannot preempt an active independent raiser, but can check after they leave."""
+    web = broker.web_client()
+    try:
+        async with (
+            FakeAgent(broker.home, "person-author") as author,
+            FakeAgent(broker.home, "person-reviewer") as reviewer,
+        ):
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            await reviewer.call("review", room="#build", action="open", url=PR)
+            await reviewer.call("review", room="#build", action="raise", title="wrong total")
+            await author.call("review", room="#build", action="concede", item="F1")
+            await author.call(
+                "review", room="#build", action="fix", item="F1", commit="abc1234", proof="test_total"
+            )
+            path = "/api/rooms/build/review"
+            denied = web.post(path, json={"action": "confirm", "item": "F1"}, headers=broker.write_headers())
+            assert denied.status_code == 400 and "codex-1" in denied.json()["message"]
+            await reviewer.leave("#build")
+            board = web.get(path).json()["board"]
+            assert board["items"][0]["needs_person"]
+            confirmed = web.post(
+                path, json={"action": "confirm", "item": "F1"}, headers=broker.write_headers()
+            )
+            assert confirmed.status_code == 200 and confirmed.json()["board"]["settled"]
+            assert confirmed.json()["board"]["items"][0]["confirmed_by"] == "alice"
+    finally:
+        web.close()
+
+
 async def test_a_board_from_open_to_settled(broker: InProcBroker) -> None:
     async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
         await author.join("#build", "claude-1")
@@ -67,7 +128,9 @@ async def test_a_board_from_open_to_settled(broker: InProcBroker) -> None:
         assert "F1 [conceded]" in r["board"] and "owner claude-1" in r["board"]
         r = await reviewer.call("review", room="#build", action="fix", item="F1", commit="def5678")
         assert r["ok"] is False and "claude-1's to fix" in r["error"]
-        r = await author.call("review", room="#build", action="fix", item="F1", commit="def5678")
+        r = await author.call(
+            "review", room="#build", action="fix", item="F1", commit="def5678", proof="test_discount"
+        )
         assert "F1 [fixed]" in r["board"] and r["settled"] is False  # Q1 is still a person's
 
         r = await author.call("review", room="#build", action="show")
@@ -264,7 +327,10 @@ async def test_post_waits_for_a_settled_board_and_asks_each_owner_once(broker: I
             assert r.status_code == 400 and "isn't settled" in r.json()["message"]
 
             await author.call("review", room="#build", action="concede", item="F1")
-            await author.call("review", room="#build", action="fix", item="F1", commit="9a1b2c3")
+            await author.call(
+                "review", room="#build", action="fix", item="F1", commit="9a1b2c3", proof="test_expired"
+            )
+            await reviewer.call("review", room="#build", action="confirm", item="F1")
             await reviewer.call("review", room="#build", action="drop", item="F2", reason="not worth it")
             assert move(action="answer", item="Q1", option=0).status_code == 200
             board = web.get("/api/rooms/build/review").json()["board"]
@@ -315,10 +381,16 @@ async def test_an_agents_words_never_go_out_as_the_persons(broker: InProcBroker)
                 "review", room="#build", action="ask", title=bait, options=[bait, "@devin-1 no"], recommend=0
             )
             await author.call("review", room="#build", action="concede", item="F2")
-            await author.call("review", room="#build", action="fix", item="F2", commit="abc1234")
+            await author.call(
+                "review", room="#build", action="fix", item="F2", commit="abc1234", proof="test_safe"
+            )
+            await reviewer.call("review", room="#build", action="confirm", item="F2")
             assert move(action="answer", item="Q1", option=0).status_code == 200
             assert move(action="concede", item="F1", owner="claude-1").status_code == 200
-            await author.call("review", room="#build", action="fix", item="F1", commit="def5678")
+            await author.call(
+                "review", room="#build", action="fix", item="F1", commit="def5678", proof="test_safe"
+            )
+            await reviewer.call("review", room="#build", action="confirm", item="F1")
             assert move(action="post").status_code == 200
     finally:
         web.close()
@@ -417,7 +489,9 @@ async def test_a_cards_links_and_history_come_with_the_board(broker: InProcBroke
                 where="shop/codes.py:12-19",
             )
             await author.call("review", room="#build", action="concede", item="F1")
-            await author.call("review", room="#build", action="fix", item="F1", commit="9a1b2c3d4e5f")
+            await author.call(
+                "review", room="#build", action="fix", item="F1", commit="9a1b2c3d4e5f", proof="test_expired"
+            )
             item = web.get("/api/rooms/build/review").json()["board"]["items"][0]
             digest = hashlib.sha256(b"shop/codes.py").hexdigest()
             assert item["lines_url"] == f"{pr}/files#diff-{digest}R12-R19"

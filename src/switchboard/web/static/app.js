@@ -2505,7 +2505,12 @@
         renderBuddies();
         updateRoomEmpty();
         renderComposerMentions();  // an agent just joined or left: who can be @mentioned changed
-        if (state.boardOpen) renderBoard();  // who can use the board may have changed (#249)
+        if (state.boardOpen) {
+          renderBoard();  // who can use the board may have changed (#249)
+          // A departing raiser can put an unconfirmed fix in Needs you (#251).
+          if (r.board && r.board.items.some(function (i) { return i.state === 'fixed' && !i.confirmed_by; }))
+            loadBoard(r);
+        }
       }
       if (ins && ins.room === f.room) {
         if (!inspectedMember()) memberLeft(ins);
@@ -4839,10 +4844,11 @@
   // person can decide, and what's done. Dropped items are settled too: muted, with their reason.
   const BOARD_LANES = [
     { key: 'working', title: 'Agents working', empty: 'Nothing in progress',
-      test: function (i) { return !i.needs_person && (i.state === 'raised' || i.state === 'conceded'); } },
+      test: function (i) { return !i.needs_person && (i.state === 'raised' || i.state === 'conceded' ||
+        (i.state === 'fixed' && !i.confirmed_by)); } },
     { key: 'you', title: 'Needs you', empty: 'Nothing needs you', test: function (i) { return i.needs_person; } },
     { key: 'settled', title: 'Settled', empty: 'Nothing settled yet',
-      test: function (i) { return i.state === 'fixed' || i.state === 'answered' || i.state === 'dropped'; } },
+      test: function (i) { return (i.state === 'fixed' && !!i.confirmed_by) || i.state === 'answered' || i.state === 'dropped'; } },
   ];
   const BOARD_STATE = {
     raised: 'Raised', contested: 'Contested', conceded: 'Being fixed', fixed: 'Fixed', dropped: 'Dropped',
@@ -4866,7 +4872,8 @@
 
   function boardWho(i) {
     if (i.kind === 'question') return i.state === 'answered' ? 'answered by ' + i.answered_by : 'asked by ' + i.raised_by;
-    if (i.state === 'conceded' || i.state === 'fixed') return 'owner ' + i.owner;
+    if (i.state === 'fixed') return i.confirmed_by ? 'confirmed by ' + i.confirmed_by : 'owner ' + i.owner + ' · awaiting confirmation';
+    if (i.state === 'conceded') return 'owner ' + i.owner;
     return 'raised by ' + i.raised_by;
   }
 
@@ -5053,6 +5060,11 @@
       boardRow(rows, 'Fix', i.commit_url && forge
         ? forgeLink(b, i.commit_url, i.commit.slice(0, 7) + ' on ' + forge) : el('code', null, i.commit.slice(0, 12)));
     }
+    if (i.proof) {
+      const link = /^https?:\/\//i.test(i.proof) && window.SBMarkdown && window.SBMarkdown.externalLink;
+      boardRow(rows, 'Proof', link
+        ? window.SBMarkdown.externalLink('Open proof', i.proof, location.hostname) : el('code', null, i.proof));
+    }
     if (rows.childNodes.length) d.append(rows);
     if (contested) {
       const by = (i.history || []).filter(function (h) { return h.did === 'contested it'; }).pop();
@@ -5066,7 +5078,7 @@
       d.append(sides);
     }
     if (i.answer) d.append(el('p', 'board-answer', 'Answer: ' + i.answer));
-    if (i.reason && !contested) d.append(el('p', 'board-reason', (i.state === 'dropped' ? 'Dropped: ' : 'Why: ') + i.reason));
+    if (i.reason && i.state === 'dropped') d.append(el('p', 'board-reason', 'Dropped: ' + i.reason));
     if (i.history && i.history.length) {
       const ol = el('ol', 'board-history');
       ol.setAttribute('aria-label', 'History');
@@ -5103,6 +5115,12 @@
       concede.disabled = !agents.length;
       concede.addEventListener('click', function () { boardMove({ action: 'concede', item: i.label, owner: pick.value }); });
       acts.append(label, concede);
+    }
+    if (i.state === 'fixed' && !i.confirmed_by && i.needs_person) {
+      const confirm = btn('btn-primary', 'Confirm fix');
+      confirm.id = 'board-confirm';
+      confirm.addEventListener('click', function () { boardMove({ action: 'confirm', item: i.label }); });
+      acts.append(confirm);
     }
     if (['raised', 'contested', 'conceded', 'open'].indexOf(i.state) >= 0) {
       const label = el('label', 'board-field', 'Reason to drop');
@@ -5359,6 +5377,7 @@
       state.boardOpen = !state.boardOpen;
       state.boardSel = null;
       renderBoard();
+      if (state.boardOpen) loadBoard(activeRoom());  // recheck a fix's 24-hour deadline
     });
     $('focus-toggle').addEventListener('click', function () { setFocusMode(!state.focusMode); });
     $('pane-toggle').addEventListener('click', togglePane);

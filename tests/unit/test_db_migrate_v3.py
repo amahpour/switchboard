@@ -147,9 +147,9 @@ def test_the_backup_is_written_before_the_first_statement(tmp_path: Path) -> Non
     con.set_trace_callback(None)
     con.close()
     alters = [ok for sql, ok in seen if sql.lstrip().upper().startswith(("ALTER", "CREATE TABLE"))]
-    assert len(alters) == 3 + 5 + 1 + 1 + 2 + 2 + 2 + 1 + 1 + 1 + 2 + 2 + 2 + 1 + 2 + 1 and all(
+    assert len(alters) == 3 + 5 + 1 + 1 + 2 + 2 + 2 + 1 + 1 + 1 + 2 + 2 + 2 + 1 + 2 + 1 + 2 and all(
         alters
-    )  # v2 -> ... -> v18
+    )  # v2 -> ... -> v19
     assert dump(bak) == original
     c = sqlite3.connect(bak)
     assert c.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
@@ -192,7 +192,7 @@ def test_migration_needs_a_backup_path(tmp_path: Path) -> None:
     original = make_v2(p)
     con = db.connect(p)
     with pytest.raises(
-        db.SchemaError, match="schema version 2 needs a migration to version 18, and a migration"
+        db.SchemaError, match="schema version 2 needs a migration to version 19, and a migration"
     ):
         db.migrate(con)
     con.close()

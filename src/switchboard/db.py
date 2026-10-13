@@ -29,7 +29,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -202,6 +202,8 @@ CREATE TABLE review_items(
   reason TEXT NOT NULL DEFAULT '' CHECK(length(reason) <= 500), options TEXT NOT NULL DEFAULT '[]',
   recommend INTEGER, answer TEXT NOT NULL DEFAULT '' CHECK(length(answer) <= 500),
   answered_by TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL, updated_at REAL NOT NULL,
+  proof TEXT NOT NULL DEFAULT '' CHECK(length(proof) <= 500),
+  confirmed_by TEXT NOT NULL DEFAULT '' CHECK(length(confirmed_by) <= 100),
   UNIQUE(review_id, kind, n));
 """
 
@@ -408,12 +410,20 @@ V16_TO_V17 = (
     "ALTER TABLE participants ADD COLUMN status_line_at REAL",
     "UPDATE meta SET value='17' WHERE key='schema_version'",
 )
-
 # v17 -> v18 (#316): keep former names on the room so existing MCP sessions can continue
 # using their old room key and a new join can be directed to the current name.
 V17_TO_V18 = (
     "ALTER TABLE rooms ADD COLUMN renamed_from TEXT NOT NULL DEFAULT '[]'",
     "UPDATE meta SET value='18' WHERE key='schema_version'",
+)
+
+# v18 -> v19 (#251): fixed findings carry their proof and wait for confirmation.
+V18_TO_V19 = (
+    "ALTER TABLE review_items ADD COLUMN proof TEXT NOT NULL DEFAULT '' CHECK(length(proof) <= 500)",
+    "ALTER TABLE review_items ADD COLUMN confirmed_by TEXT NOT NULL DEFAULT ''"
+    " CHECK(length(confirmed_by) <= 100)",
+    "UPDATE review_items SET confirmed_by='legacy' WHERE state='fixed'",
+    "UPDATE meta SET value='19' WHERE key='schema_version'",
 )
 
 
@@ -438,6 +448,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         15: (16, V15_TO_V16, ()),
         16: (17, V16_TO_V17, ()),
         17: (18, V17_TO_V18, ()),
+        18: (19, V18_TO_V19, ()),
     }
     out = []
     v = frm

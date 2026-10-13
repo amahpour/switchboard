@@ -22,9 +22,11 @@ MAX_DETAIL = 4000
 MAX_FILE = 300
 MAX_LINES = 40
 MAX_REASON = 500
+MAX_PROOF = 500
 MAX_OPTION = 200
 MAX_OPTIONS = 4
 MAX_ITEMS = 200  # per review: a board, not a log
+FIX_CONFIRM_TIMEOUT_S = 24 * 60 * 60
 
 HEAD_RE = re.compile(r"^[0-9a-f]{7,64}$")
 LINES_RE = re.compile(r"^[1-9][0-9]{0,6}(-[1-9][0-9]{0,6})?$")
@@ -51,6 +53,7 @@ AGENT_MOVES = {
     "contest": (frozenset({"raised"}), "contested"),
     "fix": (frozenset({"conceded"}), "fixed"),
     "drop": (frozenset({"raised", "contested", "conceded"}), "dropped"),
+    "confirm": (frozenset({"fixed"}), "fixed"),
 }
 PERSON_MOVES = {
     "concede": (frozenset({"raised", "contested"}), "conceded"),
@@ -82,6 +85,9 @@ class Item:
     answer: str
     answered_by: str
     created_at: float = 0.0
+    updated_at: float = 0.0
+    proof: str = ""
+    confirmed_by: str = ""
 
     @property
     def label(self) -> str:
@@ -89,7 +95,11 @@ class Item:
 
     @property
     def needs_person(self) -> bool:
-        return (self.kind == "question" and self.state == "open") or self.state == "contested"
+        return (
+            (self.kind == "question" and self.state == "open")
+            or self.state == "contested"
+            or (self.state == "fixed" and not self.confirmed_by and self.raised_by == self.owner)
+        )
 
 
 def text(value: Any, what: str, limit: int, *, required: bool = False) -> str:
@@ -111,6 +121,14 @@ def url(value: Any) -> str:
     if not URL_RE.match(u):
         raise ReviewError("url must be an http(s) link to the pull request or merge request")
     return u
+
+
+def proof(value: Any) -> str:
+    """A test's name or an http(s) proof link; the broker checks shape, not its contents."""
+    p = text(value, "proof", MAX_PROOF, required=True)
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", p) and not URL_RE.fullmatch(p):
+        raise ReviewError("proof link must be an http(s) URL, or give the test's name")
+    return p
 
 
 def head(value: Any) -> str:
@@ -217,6 +235,7 @@ HISTORY_VERBS = {
     "conceded": "conceded it",
     "contested": "contested it",
     "fixed": "fixed it",
+    "confirmed": "confirmed it",
     "dropped": "dropped it",
     "answered": "answered it",
 }
@@ -282,6 +301,11 @@ def agent_move(item: Item, move: str, actor: str) -> str:
         raise ReviewError(f"{item.label} is {item.owner}'s to fix")
     if move == "drop" and actor != item.raised_by:
         raise ReviewError(f"only {item.raised_by}, who raised {item.label}, or a person can drop it")
+    if move == "confirm":
+        if item.confirmed_by:
+            raise ReviewError(f"{item.label} is already confirmed by {item.confirmed_by}")
+        if actor != item.raised_by or actor == item.owner:
+            raise ReviewError(f"only {item.raised_by}, who raised {item.label}, can confirm its fix")
     return to
 
 
@@ -301,7 +325,7 @@ def handoff(item: Item, actor: str, agents: Sequence[str]) -> tuple[tuple[str, .
     elif item.state == "conceded":
         who = (item.owner,) if item.owner and item.owner != actor and item.owner in agents else ()
         verb, then = f"conceded, owner {item.owner}", "it's yours to fix"
-    elif item.state == "fixed":
+    elif item.state == "fixed" and not item.confirmed_by:
         who = (item.raised_by,) if item.raised_by != actor and item.raised_by in agents else ()
         verb, then = f"fixed in {item.commit[:12]}", "check the fix"
     else:
@@ -324,15 +348,32 @@ def person_move(item: Item, move: str) -> str:
 
 def settled(items: list[Item]) -> bool:
     """Nothing left to do: every finding fixed or dropped, every question answered or dropped."""
-    return not any(i.state in OPEN_FINDING or i.state == "open" for i in items)
+    return not any(
+        i.state in OPEN_FINDING or i.state == "open" or (i.state == "fixed" and not i.confirmed_by)
+        for i in items
+    )
 
 
-def counts(items: list[Item]) -> dict[str, int]:
+def needs_person(item: Item, active: set[str] | None = None, now: float | None = None) -> bool:
+    """A fix waits for a person's check when its independent raiser cannot confirm in time."""
+    if item.needs_person:
+        return True
+    return bool(
+        item.state == "fixed"
+        and not item.confirmed_by
+        and (
+            (active is not None and item.raised_by not in active)
+            or (now is not None and now - item.updated_at >= FIX_CONFIRM_TIMEOUT_S)
+        )
+    )
+
+
+def counts(items: list[Item], active: set[str] | None = None, now: float | None = None) -> dict[str, int]:
     out = {"needs_person": 0, "open": 0, "fixed": 0, "dropped": 0, "answered": 0}
     for i in items:
-        if i.needs_person:
+        if needs_person(i, active, now):
             out["needs_person"] += 1
-        if i.state in OPEN_FINDING or i.state == "open":
+        if i.state in OPEN_FINDING or i.state == "open" or (i.state == "fixed" and not i.confirmed_by):
             out["open"] += 1
         elif i.state in ("fixed", "dropped", "answered"):
             out[i.state] += 1
@@ -357,7 +398,9 @@ def render(review: dict[str, Any], items: list[Item]) -> str:
             "raised": f"raised by {i.raised_by}",
             "contested": f"raised by {i.raised_by}, contested: a person decides",
             "conceded": f"owner {i.owner}",
-            "fixed": f"fixed by {i.owner}" + (f" in {i.commit[:12]}" if i.commit else ""),
+            "fixed": f"fixed by {i.owner}"
+            + (f" in {i.commit[:12]}" if i.commit else "")
+            + (f", confirmed by {i.confirmed_by}" if i.confirmed_by else ", awaiting confirmation"),
             "dropped": "dropped" + (f": {i.reason}" if i.reason else ""),
             "open": "for a person: "
             + " | ".join(
@@ -365,7 +408,8 @@ def render(review: dict[str, Any], items: list[Item]) -> str:
             ),
             "answered": f"answered by {i.answered_by}: {i.answer}",
         }[i.state]
-        out.append(f"{i.label} [{i.state}] {i.title}{where}: {who}")
+        proof_s = f"; proof: {i.proof}" if i.state == "fixed" and i.proof else ""
+        out.append(f"{i.label} [{i.state}] {i.title}{where}: {who}{proof_s}")
     return "\n".join(out)
 
 
@@ -375,7 +419,7 @@ def post_plan(items: list[Item]) -> dict[str, list[Item]]:
     posted. Owners in the order they first appear; items in board order."""
     plan: dict[str, list[Item]] = {}
     for i in sorted(items, key=lambda i: (i.kind, i.n)):
-        if i.state == "fixed" and i.owner:
+        if i.state == "fixed" and i.confirmed_by and i.owner:
             plan.setdefault(i.owner, []).append(i)
         elif i.state == "answered":
             plan.setdefault(i.raised_by, []).append(i)

@@ -469,7 +469,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RW_IDEM)
     async def join(room: str, screen_name: str, ctx: Context, resume: str = "") -> str:
-        """Join only when your user asks; get rules and messages."""
+        """Join only on user request; get rules/messages."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         if st.harness == "codex" and not tid:
@@ -521,7 +521,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RO)
     async def who(room: str, ctx: Context) -> str:
-        """Room members, status and tier."""
+        """Members/status/tier."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = await st.find_cred(room, tid)
@@ -534,8 +534,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RW)
     async def say(room: str, text: str, ctx: Context, reply_to: int = 0, since: int = -1) -> str:
-        """Post Markdown; get unread. since=last seen id refuses stale posts, returns newer chat.
-        No HTML/images."""
+        """Post Markdown, get unread; since=id rejects stale posts, returns new chat. No HTML/images."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = await st.find_cred(room, tid)
@@ -564,13 +563,13 @@ def build_server(st: McpState) -> FastMCP:
         where: str = "",
         owner: str = "",
         commit: str = "",
+        proof: str = "",
         reason: str = "",
         options: list[str] = EMPTY_OPTIONS,
         recommend: int = -1,
     ) -> str:
-        """Board: open(url,head), show, raise(title,detail,where="path:40-58"),
-        ask(title,options,recommend), concede(item,owner), contest/drop(item,reason),
-        fix(item,commit)."""
+        """open(url,head), show, raise(title,detail,where=path:40-58), ask(title,options,recommend),
+        concede(item,owner), contest/drop(item,reason), fix(item,commit,proof=test|url), confirm(item)."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = await st.find_cred(room, tid)
@@ -586,6 +585,7 @@ def build_server(st: McpState) -> FastMCP:
             "where": where,
             "owner": owner,
             "commit": commit,
+            "proof": proof,
             "reason": reason,
             "options": options,
         }
@@ -598,7 +598,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RO)
     async def read(room: str, ctx: Context, limit: int = 20, before: int = 0) -> str:
-        """Unread in full incl. "not shown here", oldest first; before=id gets older chat."""
+        """Full unread oldest first incl. "not shown here"; before=id reads older chat."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = await st.find_cred(room, tid)
@@ -635,7 +635,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(name="pass", annotations=RW)
     async def pass_(ctx: Context, room: str = "", note: str = "") -> str:
-        """No reply; logged, not posted. Refused if "not shown here" unread: read() first."""
+        """No reply; logged, not posted. Refused on "not shown here": read() first."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         if room:
@@ -659,7 +659,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RW_IDEM)
     async def away(ctx: Context, message: str = "") -> str:
-        """Set away message; omit to clear."""
+        """Away; omit to clear."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         creds = [c for (t, _r), c in st.creds.items() if t == tid]
@@ -672,7 +672,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RW_IDEM)
     async def status(text: str, ctx: Context) -> str:
-        """Set status in all rooms; empty clears."""
+        """Status all rooms; empty clears."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         creds = [c for (t, _r), c in st.creds.items() if t == tid]

@@ -46,6 +46,8 @@ passkeys-light, passkeys-dark, people-opening-{light,dark,phone-light} (initial 
 common-password-{light,dark,phone-light} (a common chosen password refused, #181),
 people-name-clash-{light,dark,phone-light} (an agent holds the requested person's name),
 people-edit-{light,dark,phone-light} (Copy's fade timer while an email is selected),
+proof-before-{light,dark,phone-light} and proof-after-{light,dark,phone-light} (a contested
+review finding before its fix, then a fix's proof waiting for confirmation, #251),
 confirm-light, signin-light, setup-person-light and
 signin-phone-dark, and from a second one at
 ``http://localhost:<port>``, with test machines that dial in (``tests/fakes/fake_machine.py``:
@@ -451,6 +453,55 @@ def shoot_board(browser: Any, out: Path, world: Any) -> None:
             expect(page.locator("#board .board-detail")).to_be_visible()
             settle(page)
             shot(page, out, name)
+        finally:
+            ctx.close()
+
+
+def shoot_proof_board(browser: Any, out: Path, world: Any) -> None:
+    """#251: a contested card before the fix, then the proof awaiting the raiser's check."""
+    from playwright.sync_api import expect
+
+    for slug, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        room = "#proof-" + slug
+        world.create_room(room)
+        world.add_agents(room, ("claude-1", "codex-1"))
+        world.seed_review(room)
+        ctx = browser.new_context(timezone_id="UTC", locale="en-US", **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="' + room + '"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            page.click("#board-toggle")
+            page.click('#board .board-card[data-item="F3"]')
+            expect(page.locator("#board .board-side")).to_have_count(2)
+            if slug == "phone-light":
+                page.locator("#board .board-detail").scroll_into_view_if_needed()
+            settle(page)
+            shot(page, out, "proof-before-" + slug + ".png")
+            world.agent_call(room, "claude-1", "review", action="concede", item="F3")
+            world.agent_call(
+                room,
+                "claude-1",
+                "review",
+                action="fix",
+                item="F3",
+                commit="abc1234",
+                proof="tests/test_money.py::test_rounding",
+            )
+            expect(page.locator('#board .lane-working .board-card[data-item="F3"]')).to_be_visible()
+            expect(page.locator("#board .board-detail .board-rows")).to_contain_text("Proof")
+            if slug == "phone-light":
+                page.locator("#board .board-detail").scroll_into_view_if_needed()
+            settle(page)
+            shot(page, out, "proof-after-" + slug + ".png")
         finally:
             ctx.close()
 
@@ -1273,6 +1324,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
         try:
             shoot(browser, out, world)
             shoot_board(browser, out, world)
+            shoot_proof_board(browser, out, world)
             shoot_mentions(browser, out, world)
             shoot_mention_highlight(browser, out, world)
             shoot_broadcast_popover(browser, out, world)

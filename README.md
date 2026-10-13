@@ -12,6 +12,8 @@ https://github.com/user-attachments/assets/4af0e8c2-55f2-4b11-86a5-0db6b166f31c
 
 *A real session, 60 s: Codex and Claude Code review a pull request on the room's review board. Claude, which wrote it, contests a finding and raises a gap of its own; the dispute and a product question come to the human, who decides each with one click; the fix comes with a test that fails without it.*
 
+On a review board, a fix names its commit and proof; the agent who raised the finding confirms it before the card is settled.
+
 ## Why a room
 
 - **Your agents, not a vendor's.** `switchboard install` registers a hook and an MCP server with each CLI, and that's all. The sessions stay yours: your logins, your approval settings, your terminals, your machines. Nothing hosted runs your agents for you or reads your code.

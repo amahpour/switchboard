@@ -19,7 +19,7 @@ from switchboard.reviews import ReviewError
 
 log = logging.getLogger(__name__)
 
-ACTIONS = ("open", "show", "raise", "ask", "concede", "contest", "fix", "drop")
+ACTIONS = ("open", "show", "raise", "ask", "concede", "contest", "fix", "confirm", "drop")
 
 
 class Boards:
@@ -37,6 +37,8 @@ class Boards:
         if rv is None:
             return None
         items = self.store.review_items(rv["id"])
+        active = set(self.store.active_names(room.id))
+        now = self.state.clock.now()
         f = reviews.forge(rv["url"])
         events = [{"ts": e.ts, "data": e.data} for e in self.store.review_events(room.id, rv["opened_at"])]
         return {
@@ -47,8 +49,8 @@ class Boards:
             "opened_by": rv["opened_by"],
             "opened_at": rv["opened_at"],
             "settled": reviews.settled(items),
-            "counts": reviews.counts(items),
-            "items": [item_dict(i, f, events) for i in items],
+            "counts": reviews.counts(items, active, now),
+            "items": [item_dict(i, f, events, active, now) for i in items],
             "plan": {owner: [i.label for i in its] for owner, its in reviews.post_plan(items).items()},
             "posted_at": rv["posted_at"],
             "posted_by": rv["posted_by"],
@@ -89,15 +91,24 @@ class Boards:
             if not commit:
                 raise ReviewError("fix needs the commit that fixes it")
             fields["commit_sha"] = commit
+            fields["proof"] = reviews.proof(params.get("proof"))
+            fields["reason"] = ""  # a conceded contest's reason no longer describes the fix
+        elif action == "confirm":
+            fields["confirmed_by"] = actor
         elif action in ("contest", "drop"):
             fields["reason"] = reviews.text(params.get("reason"), "reason", reviews.MAX_REASON, required=True)
         self.store.move_review_item(item.id, to, **fields)
-        self.store.add_event("review", room_id=room.id, data={"item": item.label, "to": to, "by": actor})
+        self.store.add_event(
+            "review",
+            room_id=room.id,
+            data={"item": item.label, "to": "confirmed" if action == "confirm" else to, "by": actor},
+        )
         tail = {
             "conceded": f", owner {fields.get('owner')}",
             "fixed": f" in {fields.get('commit_sha', '')[:12]}",
             "contested": ": a person decides",
-        }.get(to, "")
+            "confirmed": f" by {actor}",
+        }.get("confirmed" if action == "confirm" else to, "")
         moved = self.store.review_item(rv["id"], kind, n)
         assert moved is not None
         return self._told(room, moved, actor, f"{actor} {action_past(action)} {item.label}{tail}")
@@ -195,13 +206,20 @@ class Boards:
             return {"ok": True, "board": None}
         if action == "post":
             return self._post(room, rv, name, person_id)
-        if action not in ("answer", "concede", "drop"):
-            raise ReviewError("action must be answer, concede, drop, post or close")
+        if action not in ("answer", "concede", "confirm", "drop"):
+            raise ReviewError("action must be answer, concede, confirm, drop, post or close")
         kind, n = reviews.parse_label(params.get("item"))
         item = self.store.review_item(rv["id"], kind, n)
         if item is None:
             raise ReviewError(f"{room.name}'s board has no {('F' if kind == 'finding' else 'Q')}{n}")
-        to = reviews.person_move(item, action)
+        if action == "confirm":
+            if item.kind != "finding" or item.state != "fixed" or item.confirmed_by:
+                raise ReviewError(f"{item.label} has no fix awaiting confirmation")
+            if not reviews.needs_person(item, set(self.store.active_names(room.id)), self.state.clock.now()):
+                raise ReviewError(f"{item.raised_by}, who raised {item.label}, confirms while in the room")
+            to = "fixed"
+        else:
+            to = reviews.person_move(item, action)
         fields: dict[str, Any] = {}
         if action == "answer":
             choice = params.get("option")
@@ -217,13 +235,20 @@ class Boards:
                 raise ReviewError(f"owner must be an agent in {room.name}: {owner!r} isn't")
             fields = {"owner": owner}
             said = f"conceded, owner {owner}"
+        elif action == "confirm":
+            fields = {"confirmed_by": name}
+            said = "confirmed"
         else:
             fields = {
                 "reason": reviews.text(params.get("reason"), "reason", reviews.MAX_REASON, required=True)
             }
             said = f"dropped: {fields['reason']}"
         self.store.move_review_item(item.id, to, **fields)
-        self.store.add_event("review", room_id=room.id, data={"item": item.label, "to": to, "by": name})
+        self.store.add_event(
+            "review",
+            room_id=room.id,
+            data={"item": item.label, "to": "confirmed" if action == "confirm" else to, "by": name},
+        )
         # Only text switchboard or this person wrote: the label, the option's number, an owner
         # checked against the room, their own reason. Never the agents' title or options, which
         # would reach every agent as this person's words, @mentions and all (#177).
@@ -245,7 +270,7 @@ class Boards:
         items = self.store.review_items(rv["id"])
         if not reviews.settled(items):
             raise ReviewError(
-                "the board isn't settled: every finding fixed or dropped, every question answered"
+                "the board isn't settled: every finding confirmed or dropped, every question answered"
             )
         plan = reviews.post_plan(items)
         if not plan:
@@ -278,11 +303,21 @@ class Boards:
 
 
 def action_past(action: str) -> str:
-    return {"concede": "conceded", "contest": "contested", "fix": "fixed", "drop": "dropped"}[action]
+    return {
+        "concede": "conceded",
+        "contest": "contested",
+        "fix": "fixed",
+        "confirm": "confirmed",
+        "drop": "dropped",
+    }[action]
 
 
 def item_dict(
-    i: reviews.Item, f: dict[str, Any] | None = None, events: list[dict[str, Any]] | None = None
+    i: reviews.Item,
+    f: dict[str, Any] | None = None,
+    events: list[dict[str, Any]] | None = None,
+    active: set[str] | None = None,
+    now: float | None = None,
 ) -> dict[str, Any]:
     """An item as the page reads it, with its links on the forge and its history (#250)."""
     return {
@@ -296,12 +331,14 @@ def item_dict(
         "raised_by": i.raised_by,
         "owner": i.owner,
         "commit": i.commit,
+        "proof": i.proof,
+        "confirmed_by": i.confirmed_by,
         "reason": i.reason,
         "options": list(i.options),
         "recommend": i.recommend,
         "answer": i.answer,
         "answered_by": i.answered_by,
-        "needs_person": i.needs_person,
+        "needs_person": reviews.needs_person(i, active, now),
         "lines_url": reviews.lines_url(f, i.file, i.lines),
         "commit_url": reviews.commit_url(f, i.commit),
         "history": reviews.history(i, events or []),

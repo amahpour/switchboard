@@ -2348,8 +2348,57 @@ def test_a_card_links_to_its_lines_and_fix_and_shows_its_history(ui: UI) -> None
     fix = detail.locator("dd a.board-link").nth(1)
     expect(fix).to_have_attribute("href", f"{pr}/commits/9a1b2c3d4e5f")
     expect(fix).to_have_text("9a1b2c3 on GitHub")
-    expect(detail.locator(".board-history li strong")).to_have_text(["codex-1", "claude-1", "claude-1"])
-    expect(detail.locator(".board-history li")).to_contain_text(["raised it", "conceded it", "fixed it"])
+    expect(detail.locator(".board-history li strong")).to_have_text(
+        ["codex-1", "claude-1", "claude-1", "codex-1"]
+    )
+    expect(detail.locator(".board-history li")).to_contain_text(
+        ["raised it", "conceded it", "fixed it", "confirmed it"]
+    )
+    expect(detail.locator(".board-rows")).to_contain_text("Proof")
+    expect(detail.locator(".board-rows")).to_contain_text("tests/test_codes.py::test_expiry")
+
+
+def test_a_conceded_fix_shows_proof_without_the_old_contest_reason(ui: UI) -> None:
+    """The fixed card stays in Agents working, shows proof, then moves when its raiser confirms."""
+    room = "#e2e-proof-card"
+    page = review_room(ui, room[1:])
+    call = ui.world.agent_call
+    call(room, "claude-1", "review", action="concede", item="F3", owner="claude-1")
+    call(
+        room,
+        "claude-1",
+        "review",
+        action="fix",
+        item="F3",
+        commit="abc1234",
+        proof="tests/test_money.py::test_rounding",
+    )
+    page.click("#board-toggle")
+    card = page.locator('#board .lane-working .board-card[data-item="F3"]')
+    expect(card).to_be_visible()
+    card.click()
+    detail = page.locator("#board .board-detail")
+    expect(detail.locator(".board-rows")).to_contain_text("tests/test_money.py::test_rounding")
+    expect(detail.locator(".board-reason")).to_have_count(0)
+    call(room, "codex-1", "review", action="confirm", item="F3")
+    expect(page.locator('#board .lane-settled .board-card[data-item="F3"]')).to_be_visible()
+
+
+def test_a_departed_raiser_puts_the_fix_in_needs_you(ui: UI) -> None:
+    """The live board offers a person's proof check as soon as the independent raiser leaves."""
+    room = "#e2e-proof-raiser-left"
+    page = review_room(ui, room[1:])
+    call = ui.world.agent_call
+    call(room, "claude-1", "review", action="concede", item="F3")
+    call(room, "claude-1", "review", action="fix", item="F3", commit="abc1234", proof="test_rounding")
+    page.click("#board-toggle")
+    expect(page.locator('#board .lane-working .board-card[data-item="F3"]')).to_be_visible()
+    call(room, "codex-1", "leave")
+    card = page.locator('#board .lane-you .board-card[data-item="F3"]')
+    expect(card).to_be_visible()
+    card.click()
+    page.click("#board-confirm")
+    expect(page.locator('#board .lane-settled .board-card[data-item="F3"]')).to_be_visible()
 
 
 def test_a_contested_finding_shows_both_sides(ui: UI) -> None:
@@ -2427,10 +2476,13 @@ def test_post_appears_when_the_board_is_settled_and_asks_first(ui: UI) -> None:
     room = "#" + slug
     call = ui.world.agent_call
     call(room, "claude-1", "review", action="concede", item="F3", owner="claude-1")
-    call(room, "claude-1", "review", action="fix", item="F3", commit="77aa88bb99cc")
-    call(room, "codex-1", "review", action="fix", item="F4", commit="11aa22bb33cc")
+    call(room, "claude-1", "review", action="fix", item="F3", commit="77aa88bb99cc", proof="test_rounding")
+    call(room, "codex-1", "review", action="fix", item="F4", commit="11aa22bb33cc", proof="test_case")
+    call(room, "codex-1", "review", action="confirm", item="F3")
     page.click("#board-toggle")
     expect(page.locator("#board .board-post")).to_have_count(0)  # Q1 is still open
+    page.click('#board .board-card[data-item="F4"]')
+    page.click("#board-confirm")  # the raiser also owns F4, so a person checks it
     page.click('#board .board-card[data-item="Q1"]')
     page.locator('#board .board-detail button[data-option="0"]').click()
     expect(page.locator("#board .board-detail .board-answer")).to_have_text("Answer: Before tax")
@@ -2534,9 +2586,12 @@ def test_a_long_pull_request_url_wraps_in_the_board_dialogs(ui: UI, size: str) -
     room = "#" + slug
     call = ui.world.agent_call
     call(room, "claude-1", "review", action="concede", item="F3", owner="claude-1")
-    call(room, "claude-1", "review", action="fix", item="F3", commit="77aa88bb99cc")
-    call(room, "codex-1", "review", action="fix", item="F4", commit="11aa22bb33cc")
+    call(room, "claude-1", "review", action="fix", item="F3", commit="77aa88bb99cc", proof="test_rounding")
+    call(room, "codex-1", "review", action="fix", item="F4", commit="11aa22bb33cc", proof="test_case")
+    call(room, "codex-1", "review", action="confirm", item="F3")
     page.click("#board-toggle")
+    page.click('#board .board-card[data-item="F4"]')
+    page.click("#board-confirm")
     page.click('#board .board-card[data-item="Q1"]')
     page.locator('#board .board-detail button[data-option="0"]').click()
     dialog = page.locator("#app-dialog")
