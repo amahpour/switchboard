@@ -131,6 +131,17 @@ def lines(value: Any) -> str:
     return v
 
 
+def where(value: Any) -> tuple[str, str]:
+    """Split a compact finding location, then apply the existing file and line checks."""
+    location = text(value, "where", MAX_FILE + MAX_LINES + 1)
+    if not location:
+        return "", ""
+    path, sep, span = location.rpartition(":")
+    if not sep:
+        return text(location, "file", MAX_FILE), ""
+    return text(path, "file", MAX_FILE), lines(span)
+
+
 def options(value: Any) -> tuple[str, ...]:
     if not isinstance(value, list) or not 2 <= len(value) <= MAX_OPTIONS:
         raise ReviewError(f"options must be a list of 2 to {MAX_OPTIONS} choices")

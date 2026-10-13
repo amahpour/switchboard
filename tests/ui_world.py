@@ -521,7 +521,7 @@ class UIWorld:
         call = self.agent_call
         call(room, "codex-1", "review", action="open", url=pr, head="4f2c9e1a7b30")
         call(room, "codex-1", "review", action="raise", title="Discount is taken after tax",
-             file="shop/cart.py", lines="40-58",
+             where="shop/cart.py:40-58",
              detail="`total()` adds tax first, then subtracts the code's percentage, so a 10% code "
                     "saves 10% of the taxed price.")  # fmt: skip
         call(
@@ -530,8 +530,7 @@ class UIWorld:
             "review",
             action="raise",
             title="Expired codes still apply",
-            file="shop/codes.py",
-            lines="12-19",
+            where="shop/codes.py:12-19",
             detail="`is_valid()` never checks `expires_at`.",
         )
         call(
@@ -540,8 +539,7 @@ class UIWorld:
             "review",
             action="raise",
             title="Rounding drops a cent on $19.99",
-            file="shop/money.py",
-            lines="8",
+            where="shop/money.py:8",
             detail="Half-up rounding, but the ledger rounds half-even.",
         )
         call(
@@ -550,8 +548,7 @@ class UIWorld:
             "review",
             action="raise",
             title="Codes are case-sensitive",
-            file="shop/codes.py",
-            lines="5",
+            where="shop/codes.py:5",
         )
         call(room, "claude-1", "review", action="concede", item="F2")
         call(room, "claude-1", "review", action="fix", item="F2", commit="9a1b2c3d4e5f")
