@@ -103,6 +103,44 @@ def test_room_title_renames_with_keyboard_and_keeps_focus(
     )
 
 
+@pytest.mark.parametrize("phone", [False, True])
+def test_the_rename_dialog_opens_without_an_error(
+    ui: UI, room_hosted: tuple[InProcBroker, str], phone: bool
+) -> None:
+    """The dialog opens with the room's own name in the box. It shared New room's check, which
+    asks only whether some room has that name, so it opened saying "#x already exists. Pick
+    another name." before anyone had typed (#334). The room's own name now shows nothing and
+    leaves Rename disabled, however it is typed, and another room's name is refused as before.
+    Fails if the room's own name counts as taken."""
+    room = "#own-name" + ("-phone" if phone else "")
+    hosted, _cookie = room_hosted
+    hosted.on_loop(lambda: hosted.state.service.create_room(room))
+    page = admin_page(ui, room_hosted, **(PHONE if phone else {}))
+    if phone:
+        page.click("#rooms-toggle")
+    page.locator('#tabs .room[data-room="' + room + '"]').click()
+    expect(page.locator("#room-title")).to_have_text(room[1:])
+    page.locator("#room-title-button").click()
+    name, error, rename = (page.locator("#app-dialog-" + part) for part in ("name", "error", "action"))
+    expect(name).to_be_focused()
+    expect(name).to_have_value(room)
+    expect(error).to_be_empty()  # nobody has typed: nothing in red
+    expect(rename).to_be_disabled()  # and nothing to save yet
+    name.fill("build")
+    expect(error).to_have_text("#build already exists. Pick another name.")
+    expect(rename).to_be_disabled()
+    name.fill(room[1:].upper())  # the same name without its # and in capitals is still this room
+    expect(error).to_be_empty()
+    expect(rename).to_be_disabled()
+    page.keyboard.press("Enter")  # Enter on the unchanged name does nothing
+    expect(page.locator("#app-dialog")).to_be_visible()
+    name.fill(room + "-2")
+    expect(error).to_be_empty()
+    expect(rename).to_be_enabled()
+    page.keyboard.press("Escape")
+    expect(page.locator("#room-title")).to_have_text(room[1:])
+
+
 @pytest.fixture(scope="module")
 def hosted(playwright: Any, tmp_path_factory: pytest.TempPathFactory) -> Iterator[InProcBroker]:
     with pytest.MonkeyPatch.context() as mp:

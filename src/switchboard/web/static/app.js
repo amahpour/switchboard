@@ -192,10 +192,15 @@
             const value = String(name.value || '').trim().toLowerCase();
             const room = value.startsWith('#') ? value : '#' + value;
             const valid = /^#[a-z0-9][a-z0-9_-]{0,31}$/.test(room);
+            // Renaming: the name the dialog opens with is taken, by this room. That is nothing to
+            // warn about (it said "already exists" before anyone had typed, #334) and nothing
+            // to save, so Rename waits for a different name.
+            const same = options.kind === 'rename' && room === String(options.initial || '').toLowerCase();
+            const taken = !same && state.rooms.has(room);
             error.textContent = !value ? '' : !valid
               ? 'Use a name like #build: letters, numbers, _ or -, up to 32 characters.'
-              : state.rooms.has(room) ? room + ' already exists. Pick another name.' : '';
-            action.disabled = !valid || state.rooms.has(room);
+              : taken ? room + ' already exists. Pick another name.' : '';
+            action.disabled = !valid || taken || same;
             return action.disabled ? null : room;
           };
         }
