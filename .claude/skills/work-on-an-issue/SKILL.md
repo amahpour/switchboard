@@ -18,7 +18,7 @@ The rules are in [CLAUDE.md](../../../CLAUDE.md); this is the order of work. It 
 
    | It touches | Also |
    |---|---|
-   | `src/switchboard/web/static/` | `uv run pytest -m e2e tests/e2e`, and `uv run python docs/media/ui_shots.py --out <dir>` for the previews |
+   | `src/switchboard/web/static/` | `uv run pytest -m e2e tests/e2e`, and `uv run python docs/media/ui_shots.py --out <dir>` for the previews; for something a person does there (a click path, a dialog), a recording of it working too: the [`record-verification`](../record-verification/SKILL.md) skill |
    | CLI output | `uv run python docs/media/cli_shots.py --out <dir>` for the previews |
    | `Dockerfile`, `deploy/` | `uv run pytest -m image tests/image` (Docker) |
    | `src/switchboard/remote/` | `uv run pytest -m twohost tests/twohost` (Docker) |
@@ -32,7 +32,7 @@ The rules are in [CLAUDE.md](../../../CLAUDE.md); this is the order of work. It 
 
 6. **Check the docs, every time.** Search them for every name, command, setting, message and behavior the change touches: `git grep -n <name> -- '*.md'`. Fix each place that's now wrong or missing: the README and `docs/USAGE.md` for what people see, DESIGN.md for the design, `docs/ARCHITECTURE.md` when a part, the path of a message or a rule moves, SECURITY.md when the threat model moves, CONTRIBUTING.md, CLAUDE.md and this skill for how work is done. `changes/<name>.md` for anything a user would notice (never CHANGELOG.md). The pull request's Docs section says what you searched and what changed; "checked, nothing to change" is an answer, an empty section isn't.
 
-7. **Open the pull request.** `git push -u origin <branch>`, then `gh pr create` with the title and [the template](../../../.github/pull_request_template.md) filled in: what it does, the previews (pushed to `design-assets` under `pr-<number>/`, or a branch of your fork, and linked by commit SHA), the change working as a command and its output or a picture, the docs, `Closes #<n>`. The number comes with the pull request, so push the previews after opening it and edit the description.
+7. **Open the pull request.** `git push -u origin <branch>`, then `gh pr create` with the title and [the template](../../../.github/pull_request_template.md) filled in: what it does, the previews (pushed to `design-assets` under `pr-<number>/`, or a branch of your fork, and linked by commit SHA), the change working as a command and its output, a picture or a recording, the docs, `Closes #<n>`. The number comes with the pull request, so push the previews after opening it and edit the description.
 
 8. **Watch CI.** `gh pr checks <pr> --watch`. On red: `gh run view <run> --log-failed`, fix with a new commit, push, watch again. A test that fails sometimes is never waved through, even one the diff can't have touched: fix it (step 4). Re-run (`gh run rerun <run> --failed`) only to unblock this pull request while that fix is open, and say so.
 

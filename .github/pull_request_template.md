@@ -14,8 +14,10 @@
 
 ## Verification
 
-<!-- The change working: the command and what it printed, or a picture. For a bug fix, the
-     failing case passing. Then the tests added, each seen to fail without the change. -->
+<!-- The change working: the command and what it printed, or a picture. For something a person
+     does in the web UI, a short recording (docs/media/ui_record.py, the record-verification
+     skill). For a bug fix, the failing case passing. Then the tests added, each seen to fail
+     without the change. -->
 
 ```console
 $ uv run pytest -q -n auto
