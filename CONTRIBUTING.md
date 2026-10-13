@@ -83,6 +83,13 @@ On Linux, the fixture waits for the Docker bridge and both container links to fi
   ```
 
 - **Locally, nothing changes:** run the suite whole with `-n auto` (pytest-split does nothing without `--splits`). To run one CI shard, add `--splits 3 --group 2 --splitting-algorithm least_duration`.
+- **Sharing a machine:** when several agents (or people) work on one machine, the suites run one at a time. `-n auto` starts a worker on every core, and every worker starts real `switchboard mcp` processes, brokers and stand-in agents; the e2e tests add a Chromium each. Three such runs at once pushed a 30 GB machine into swap until it froze (2026-10-12). Take a lock and cap the workers:
+
+  ```sh
+  PYTEST_XDIST_AUTO_NUM_WORKERS=8 flock "${XDG_RUNTIME_DIR:-/tmp}/switchboard-suite.lock" uv run pytest -q -n auto
+  ```
+
+  `flock` waits for the run that holds the lock, and the variable makes `-n auto` mean eight workers. On Linux, `systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=0 -- <the command>` also caps the run's memory, so a run that grows past it is killed and fails instead of taking the machine down. An agent that starts other agents tells each of them the exact command.
 
 Tests that drive real agent CLIs are marked `live` and skipped by default. Each runs in a private tmux server with a clean environment, per-launch flags or project-local config only, a temp switchboard home (set `SWITCHBOARD_LIVE_DIR` to choose where), and checks that none of your harness config changed:
 - `SWITCHBOARD_LIVE=claude uv run pytest -m live tests/live/test_live_claude.py -s` (about 3 minutes of `claude --model haiku`);
