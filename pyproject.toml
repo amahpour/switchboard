@@ -54,6 +54,12 @@ dev = [
     "ruff>=0.16.10",
     "mypy>=2.4.0",
 ]   # exact versions frozen in the committed uv.lock
+# Not part of the regular setup: only docs/media/ui_record.py (screen recordings of a change
+# working, for a pull request) needs it. `uv run --group record python docs/media/ui_record.py`.
+record = [
+    "imageio-ffmpeg>=0.6.0",
+    "pillow>=11.0.0",
+]
 
 [build-system]
 requires = ["hatchling"]
