@@ -1301,6 +1301,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         resp = _ok(
             {
                 "human": w.name,
+                "person_id": state.service.person_key(w.person_id),
                 "email": people.email_of(state, w.person_id),  # who signs in (#192, §39)
                 "first_name": people.names_of(state, w.person_id)[0],  # §39.6
                 "last_name": people.names_of(state, w.person_id)[1],
@@ -1552,7 +1553,12 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return unauthorized()
         try:
             body = await _json_body(request)
-            if set(body) - {"action", "item", "option", "owner", "reason"}:
+            allowed = (
+                {"action", "agent"}
+                if body.get("action") == "handoff"
+                else {"action", "item", "option", "owner", "reason"}
+            )
+            if set(body) - allowed:
                 raise ServiceError("bad_request", "unknown fields")
             room = state.service.room_for(slug, viewer(request))
             try:
