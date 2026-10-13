@@ -1584,11 +1584,11 @@
   // A member's reported switchboard, when it's behind this broker or has no review tool (#299).
   function claimLine(m) {
     const noReview = Array.isArray(m.tools_claim) && m.tools_claim.indexOf('review') < 0;
+    const fix = ': run switchboard update there';
     if (versionBehind(m.version_claim)) {
-      return 'switchboard ' + m.version_claim + ', behind: switchboard update upgrades it' +
-        (noReview ? ' (no review tool)' : '');
+      return 'switchboard ' + m.version_claim + (noReview ? ' (behind, no review tool)' : ' (behind)') + fix;
     }
-    return noReview ? 'no review tool: switchboard update upgrades it' : '';
+    return noReview ? 'no review tool' + fix : '';
   }
 
   function toolsText(tools) {

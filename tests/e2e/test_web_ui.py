@@ -2237,7 +2237,7 @@ def test_members_name_a_member_behind_and_the_inspector_shows_every_claim(ui: UI
         old = page.locator('#buddy-list .member[data-name="codex-1"]')
         expect(current.locator(".m-claim")).to_have_count(0)
         expect(old.locator(".m-claim")).to_have_text(
-            "switchboard 0.9.0, behind: switchboard update upgrades it (no review tool)"
+            "switchboard 0.9.0 (behind, no review tool): run switchboard update there"
         )
         no_horizontal_scroll(page)
         old.click()
