@@ -208,7 +208,7 @@ def batch_header(
     if n_peer:
         bits.append(_n(n_peer, "peer message", "peer messages"))
     if n_stub:
-        bits.append(_n(n_stub, "peer stub", "peer stubs"))
+        bits.append(f"{n_stub} not shown")
     if not bits:
         return f"[switchboard] {r}: no new messages."
     return f"[switchboard] {r}: " + ", ".join(bits) + "."
@@ -279,7 +279,7 @@ def _footer(
     out = []
     if any_items and stubs:
         # The first instruction in a stub batch must be read(), never pass() (§24).
-        out.append(f'Read stubs: read("{r}") before say() or pass().')
+        out.append(f'Not shown: read("{r}") before say() or pass().')
     if more:
         out.append(f'More: read("{r}").')
     if again:

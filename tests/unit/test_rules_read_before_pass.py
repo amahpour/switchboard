@@ -72,8 +72,8 @@ def read(w: World, p: Any, m: Any) -> tuple[str, int | None]:
 
 def says_read_first(text: str, room: str = "#build") -> None:
     """A stub batch: read() first, and pass() never offered as the alternative to reading."""
-    foot = next(line for line in text.splitlines() if line.startswith("Read stubs:"))
-    assert foot == f'Read stubs: read("{room}") before say() or pass().'
+    foot = next(line for line in text.splitlines() if line.startswith("Not shown:"))
+    assert foot == f'Not shown: read("{room}") before say() or pass().'
     assert foot.index(f'read("{room}")') < foot.index("pass()")
     assert ", or pass(" not in text and envelope.PASS_ADVICE not in text
 

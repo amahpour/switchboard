@@ -1178,7 +1178,7 @@ async def test_a_turn_start_stub_must_be_read_before_pass(w: W) -> None:
         [call] = w.d.calls("turn/start")
         text = call["input"][0]["text"]
         assert f"id={mid}" in text and "drops 0" not in text  # a stub: no peer text in the user role
-        assert 'Read stubs: read("#build") before say() or pass().' in text
+        assert 'Not shown: read("#build") before say() or pass().' in text
         assert ", or pass(" not in text
         assert w.delivery(mid) == "pending"  # notified: read() only
         r = w.cx.tool("pass", meta={"threadId": TID}, room="#build")

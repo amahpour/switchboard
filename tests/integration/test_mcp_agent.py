@@ -714,7 +714,7 @@ async def test_a_stubbed_peer_message_must_be_read_before_pass(broker: InProcBro
         mid = (await b.say("#build", "@alpha the parser drops port 0"))["posted_id"]
         text = stub_by_hook(broker, "ka", mid)
         assert "drops port 0" not in text and ", or pass(" not in text
-        assert 'Read stubs: read("#build") before say() or pass().' in text
+        assert 'Not shown: read("#build") before say() or pass().' in text
         assert states(broker, "alpha")[mid] == "pending"  # a notified stub: read() only
         r = await a.pass_("#build")
         assert r["ok"] is False and r["code"] == "read_first"

@@ -58,8 +58,8 @@ def test_mixed_peer_only_and_stub_only_headers() -> None:
     peer = render([item(2, 0)]).splitlines()[0]
     assert "1 peer message" in peer and PEER_WARNING not in peer
     stub = render([item(2, 1), item(3, 0)], inline=False).splitlines()[0]
-    assert stub == "[switchboard] #build: 2 peer stubs."
-    assert 'Read stubs: read("#build") before say() or pass().' in render([item(2, 1)], inline=False)
+    assert stub == "[switchboard] #build: 2 not shown."
+    assert 'Not shown: read("#build") before say() or pass().' in render([item(2, 1)], inline=False)
 
 
 def test_stubs_make_read_the_first_step_never_pass_instead() -> None:
@@ -68,10 +68,10 @@ def test_stubs_make_read_the_first_step_never_pass_instead() -> None:
         t = render(items, inline=False)
         foot = t.splitlines()[-1]
         assert ", or pass(" not in t
-        assert foot == 'Read stubs: read("#build") before say() or pass().'
+        assert foot == 'Not shown: read("#build") before say() or pass().'
         assert foot.index('read("#build")') < foot.index("pass()")
     one = render([item(1, 2), item(2, 1)], inline=False).splitlines()[0]
-    assert "1 peer stub." in one
+    assert "1 not shown." in one
     # re-delivered and reminded stubs: read first there too
     again = dataclasses.replace(item(4, 1), redelivered=True, reminders=1)
     t = render([again], inline=False)
@@ -104,7 +104,7 @@ def test_every_stub_rendering_puts_read_before_pass() -> None:
         if not any(it.sender_kind == "agent" for it in items):
             assert "not shown here" not in t
             continue
-        foot = next(line for line in t.splitlines() if line.startswith("Read stubs:"))
+        foot = next(line for line in t.splitlines() if line.startswith("Not shown:"))
         assert ", or pass(" not in t and foot.index("read(") < foot.index("pass()")
         assert envelope.frame_reserve("#build", "alice", len(items)) >= len(t) - sum(
             len(x) + 1 for x in t.splitlines()[2:] if x.startswith("- id=")
