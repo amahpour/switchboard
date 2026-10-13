@@ -442,10 +442,11 @@ def build_server(st: McpState) -> FastMCP:
     mcp.add_middleware(HelloMiddleware(st))
 
     @mcp.tool(annotations=RW_IDEM)
-    async def join(room: str, screen_name: str, ctx: Context) -> str:
+    async def join(room: str, screen_name: str, ctx: Context, resume: str | None = None) -> str:
         """Join a switchboard chat room (only when your user asks).
 
-        Returns the room rules and recent messages.
+        Returns the room rules and recent messages. resume: your earlier join's yk:j code, to
+        keep your name after a restart.
         """
         await st.prime(ctx)
         tid = st.thread_id(ctx)
@@ -455,7 +456,13 @@ def build_server(st: McpState) -> FastMCP:
                 "bad_request",
             )
         res = await st.call(
-            "agent.join", {"room": room, "screen_name": screen_name, **({"thread_id": tid} if tid else {})}
+            "agent.join",
+            {
+                "room": room,
+                "screen_name": screen_name,
+                **({"thread_id": tid} if tid else {}),
+                **({"resume": resume} if resume is not None else {}),
+            },
         )
         if not res.get("ok"):
             return dumps(res)

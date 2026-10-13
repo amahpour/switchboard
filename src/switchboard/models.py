@@ -506,6 +506,7 @@ class Membership:
     cursor_id: int
     peer_batch_boundary: int
     rules_seen: int = 0
+    join_code_hash: str | None = None  # the join code it was given, hashed (#304)
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "Membership":

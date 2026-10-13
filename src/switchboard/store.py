@@ -1651,15 +1651,20 @@ class Store:
 
     # ------------------------------------------------------------ memberships
     def create_membership(
-        self, room_id: int, participant_id: int, screen_name: str, cred_hash: str
+        self,
+        room_id: int,
+        participant_id: int,
+        screen_name: str,
+        cred_hash: str,
+        join_code_hash: str | None = None,
     ) -> Membership:
         now = self.clock.now()
         with db.tx(self.con):
             last = self.last_message_id(room_id)
             cur = self.con.execute(
                 "INSERT INTO memberships(room_id, participant_id, screen_name, cred_hash,"
-                " joined_at, join_msg_id) VALUES(?,?,?,?,?,?)",
-                (room_id, participant_id, screen_name, cred_hash, now, last),
+                " joined_at, join_msg_id, join_code_hash) VALUES(?,?,?,?,?,?,?)",
+                (room_id, participant_id, screen_name, cred_hash, now, last, join_code_hash),
             )
             if cur.lastrowid is None:
                 raise StoreError("membership insert returned no id")
@@ -1732,12 +1737,24 @@ class Store:
         rows = self.con.execute("SELECT * FROM memberships WHERE left_at IS NULL ORDER BY id").fetchall()
         return [Membership.from_row(r) for r in rows]
 
-    def rotate_cred(self, membership_id: int, cred_hash: str) -> None:
+    def rotate_cred(self, membership_id: int, cred_hash: str, join_code_hash: str | None = None) -> None:
+        """A re-join's new credential, and the new join code it was given (#304)."""
         with db.tx(self.con):
             self.con.execute(
-                "UPDATE memberships SET cred_hash=? WHERE id=? AND left_at IS NULL",
-                (cred_hash, membership_id),
+                "UPDATE memberships SET cred_hash=?, join_code_hash=COALESCE(?, join_code_hash)"
+                " WHERE id=? AND left_at IS NULL",
+                (cred_hash, join_code_hash, membership_id),
             )
+
+    def last_holder_of(self, room_id: int, name: str, participant_id: int, since: float) -> Membership | None:
+        """The latest membership of another participant that held ``name`` in this room at any
+        time since ``since`` (the one a join code can reclaim the name from, #304)."""
+        r = self.con.execute(
+            "SELECT * FROM memberships WHERE room_id=? AND screen_name=? AND participant_id<>?"
+            " AND (left_at IS NULL OR left_at>=?) ORDER BY joined_at DESC, id DESC LIMIT 1",
+            (room_id, name, participant_id, since),
+        ).fetchone()
+        return Membership.from_row(r) if r else None
 
     def name_used_by_other(self, room_id: int, name: str, participant_id: int, since: float) -> bool:
         """True if another participant held ``name`` in this room at any time since ``since``."""
