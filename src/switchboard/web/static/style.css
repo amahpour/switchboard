@@ -2706,7 +2706,7 @@ body.login {
 
 /* The review board (#80, DESIGN.md §37.5): shown in place of the log; the composer stays. */
 #main.board-open #log, #main.board-open #room-empty { display: none; }
-.board { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 12px 20px 14px; overflow: auto; }
+.board { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 12px 20px 14px; overflow: auto; container: board / inline-size; }
 .board-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 /* the title takes its own row when the status and Close don't fit beside it (a phone), and
    the commit wraps under the link before the repository's name is cut (#247) */
@@ -2735,7 +2735,38 @@ body.login {
 .board-pr-num { flex: none; color: var(--muted-2); font-variant-numeric: tabular-nums; }
 .board-head-sha { color: var(--muted-2); font-size: calc(12px * var(--text-scale)); }
 .chip.chip-ok { background: var(--accent-tint); color: var(--green); }
-.board-body { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: start; }
+/* The open card beside the lanes (#343). The card was a fixed 340 px: cramped on a wide window,
+   and on a narrower one it left the lanes about 110 px each. Now it takes a share of the board,
+   the divider between the two is dragged (or moved with the arrow keys) to trade one for the
+   other, and when both can't have their smallest width the card goes under the lanes (the
+   container rule below). 438px is the lanes' smallest width (420) and the divider's track with
+   its two gaps (18): app.js has the same numbers. The page's script never writes a style, so
+   the divider picks the width from a ladder of classes, the way a meter's fill does: dw-0 is
+   340 px, each rung 24 px more, and dw-max is all the lanes can spare. */
+.board-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px 4px; align-items: start; }
+.board-body.has-detail { grid-template-columns: minmax(0, 1fr) 10px clamp(340px, var(--board-detail-w, min(45%, 560px)), calc(100% - 438px)); }
+.board-divider { position: relative; align-self: stretch; min-height: 48px; border-radius: 5px; cursor: col-resize; touch-action: none; }
+.board-divider::before { content: ""; position: absolute; top: 0; bottom: 0; left: 4px; width: 2px; border-radius: 1px; background: var(--line); }
+.board-divider:hover::before, .board-divider:focus-visible::before, .board-resizing .board-divider::before { background: var(--accent); }
+.board-divider:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select: none; }
+.board-body.dw-0 { --board-detail-w: 340px; } .board-body.dw-1 { --board-detail-w: 364px; } .board-body.dw-2 { --board-detail-w: 388px; } .board-body.dw-3 { --board-detail-w: 412px; }
+.board-body.dw-4 { --board-detail-w: 436px; } .board-body.dw-5 { --board-detail-w: 460px; } .board-body.dw-6 { --board-detail-w: 484px; } .board-body.dw-7 { --board-detail-w: 508px; }
+.board-body.dw-8 { --board-detail-w: 532px; } .board-body.dw-9 { --board-detail-w: 556px; } .board-body.dw-10 { --board-detail-w: 580px; } .board-body.dw-11 { --board-detail-w: 604px; }
+.board-body.dw-12 { --board-detail-w: 628px; } .board-body.dw-13 { --board-detail-w: 652px; } .board-body.dw-14 { --board-detail-w: 676px; } .board-body.dw-15 { --board-detail-w: 700px; }
+.board-body.dw-16 { --board-detail-w: 724px; } .board-body.dw-17 { --board-detail-w: 748px; } .board-body.dw-18 { --board-detail-w: 772px; } .board-body.dw-19 { --board-detail-w: 796px; }
+.board-body.dw-20 { --board-detail-w: 820px; } .board-body.dw-21 { --board-detail-w: 844px; } .board-body.dw-22 { --board-detail-w: 868px; } .board-body.dw-23 { --board-detail-w: 892px; }
+.board-body.dw-24 { --board-detail-w: 916px; } .board-body.dw-25 { --board-detail-w: 940px; } .board-body.dw-26 { --board-detail-w: 964px; } .board-body.dw-27 { --board-detail-w: 988px; }
+.board-body.dw-28 { --board-detail-w: 1012px; } .board-body.dw-29 { --board-detail-w: 1036px; } .board-body.dw-30 { --board-detail-w: 1060px; } .board-body.dw-31 { --board-detail-w: 1084px; }
+.board-body.dw-32 { --board-detail-w: 1108px; } .board-body.dw-33 { --board-detail-w: 1132px; } .board-body.dw-34 { --board-detail-w: 1156px; } .board-body.dw-35 { --board-detail-w: 1180px; }
+.board-body.dw-36 { --board-detail-w: 1204px; } .board-body.dw-37 { --board-detail-w: 1228px; } .board-body.dw-38 { --board-detail-w: 1252px; } .board-body.dw-39 { --board-detail-w: 1276px; }
+.board-body.dw-40 { --board-detail-w: 1300px; } .board-body.dw-41 { --board-detail-w: 1324px; } .board-body.dw-42 { --board-detail-w: 1348px; } .board-body.dw-43 { --board-detail-w: 1372px; }
+.board-body.dw-44 { --board-detail-w: 1396px; } .board-body.dw-45 { --board-detail-w: 1420px; } .board-body.dw-46 { --board-detail-w: 1444px; } .board-body.dw-47 { --board-detail-w: 1468px; }
+.board-body.dw-48 { --board-detail-w: 1492px; } .board-body.dw-49 { --board-detail-w: 1516px; } .board-body.dw-50 { --board-detail-w: 1540px; } .board-body.dw-51 { --board-detail-w: 1564px; }
+.board-body.dw-52 { --board-detail-w: 1588px; } .board-body.dw-53 { --board-detail-w: 1612px; } .board-body.dw-54 { --board-detail-w: 1636px; } .board-body.dw-55 { --board-detail-w: 1660px; }
+.board-body.dw-56 { --board-detail-w: 1684px; } .board-body.dw-57 { --board-detail-w: 1708px; } .board-body.dw-58 { --board-detail-w: 1732px; } .board-body.dw-59 { --board-detail-w: 1756px; }
+.board-body.dw-60 { --board-detail-w: 1780px; }
+.board-body.dw-max { --board-detail-w: 100%; }
 /* three lanes in one row, never wrapped (#250): Agents working, Needs you, Settled */
 .board-lanes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; align-items: start; min-width: 0; }
 .board-lane { display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 10px; background: var(--side-bg); border: 1px solid var(--side-border); min-width: 0; }
@@ -2767,7 +2798,7 @@ body.login {
 .board-handoff h4 { margin: 0; font-size: calc(13px * var(--text-scale)); }
 .board-handoff-lead { margin: 0; color: var(--ink-2); font-size: calc(12px * var(--text-scale)); overflow-wrap: anywhere; }
 .board-handoff .btn-primary { align-self: flex-start; }
-.board-detail { width: 340px; display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); overflow-wrap: anywhere; }
+.board-detail { min-width: 0; container: card / inline-size; display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); overflow-wrap: anywhere; }
 .board-detail h3 { margin: 0; font-size: calc(14px * var(--text-scale)); }
 .board-detail-top { display: flex; flex-direction: column; gap: 2px; }
 /* a card's rows (#250): Lines and Fix, each a link to the PR or MR with the forge's mark */
@@ -2794,9 +2825,18 @@ body.login {
 .board-actions button[data-option] { flex: 1 1 100%; max-width: 100%; height: auto; min-height: 32px; padding: 7px 12px; line-height: 1.3; white-space: normal; text-align: left; justify-content: flex-start; overflow-wrap: anywhere; }
 .board-field { display: flex; flex-direction: column; gap: 4px; font-size: calc(12px * var(--text-scale)); color: var(--muted-2); flex: 1 1 160px; }
 .board-field input, .board-field select { font: inherit; color: var(--fg); background: var(--input-bg); border: 1px solid var(--input-border); border-radius: 6px; padding: 6px 8px; min-width: 0; }
-@media (max-width: 1100px) {
-  .board-body { grid-template-columns: minmax(0, 1fr); }
-  .board-detail { width: auto; }
+/* a contested finding's two sides go one above the other in a card under 440 px: side by side
+   in 340 px left each about 150 px, a few words to a line. The query measures the card inside
+   its padding and border (26 px), so 440 px of card is 414 px here. */
+@container card (max-width: 413px) {
+  .board-sides { grid-template-columns: minmax(0, 1fr); }
+}
+/* under 778 px of board (340 + 18 + 420) the card and the lanes can't both have their smallest
+   width: the card goes under the lanes, and there is nothing to drag. This follows the board's
+   own width, so opening Members counts; it replaces a rule on the window's width (1100 px). */
+@container board (max-width: 777px) {
+  .board-body.has-detail { grid-template-columns: minmax(0, 1fr); }
+  .board-divider { display: none; }
 }
 @media (max-width: 760px) {
   .board { padding: 10px 12px 12px; }

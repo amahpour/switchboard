@@ -2447,6 +2447,127 @@ def test_a_contested_finding_shows_both_sides(ui: UI) -> None:
     expect(page.locator("#board-concede")).to_be_visible()
 
 
+def _width(loc: Any) -> float:
+    box = loc.bounding_box()
+    assert box is not None
+    return float(box["width"])
+
+
+def test_the_open_card_is_resized_by_its_divider(ui: UI) -> None:
+    """#343: the open card was a fixed 340 px, cramped beside lanes with room to spare. It opens
+    at a share of the board now, and the divider between the two trades width: dragged, or with
+    the arrow keys, Home and End. The widths are rungs 24 px apart (the page writes no styles,
+    so each is a class). The card never goes under 340 px or the lanes under 420, the next card
+    opens at the width this one was left at, and a double-click goes back to the share. Fails
+    if the card's width is fixed, if a limit doesn't hold, or if a redraw of the board (every
+    click on a card is one) forgets the width."""
+    page = review_room(ui, "e2e-board-divider", viewport={"width": 1600, "height": 900})
+    page.click("#board-toggle")
+    page.click('#board .board-card[data-item="F3"]')
+    detail, lanes, divider = (
+        page.locator("#board " + part) for part in (".board-detail", ".board-lanes", "#board-divider")
+    )
+    opened, both = _width(detail), _width(detail) + _width(lanes)
+    assert opened > 400, opened  # a share of the board, not the old 340 px
+    expect(divider).to_have_attribute("role", "separator")
+    expect(divider).to_have_attribute("aria-valuenow", str(round(opened)))
+    expect(divider).to_have_attribute("aria-valuemin", "340")
+    # the keys: Home is the card's smallest width, Left widens it a rung, Right narrows it
+    divider.focus()
+    page.keyboard.press("Home")
+    assert abs(_width(detail) - 340) <= 1
+    page.keyboard.press("ArrowRight")  # and no narrower
+    assert abs(_width(detail) - 340) <= 1
+    page.keyboard.press("ArrowLeft")
+    page.keyboard.press("ArrowLeft")
+    assert abs(_width(detail) - 388) <= 1
+    page.keyboard.press("ArrowRight")
+    assert abs(_width(detail) - 364) <= 1
+    expect(divider).to_have_attribute("aria-valuenow", "364")
+    # drag it 100 px to the left: the card gains them (to the nearest rung), the lanes lose them
+    grip = divider.bounding_box()
+    assert grip is not None
+    x, y = grip["x"] + grip["width"] / 2, grip["y"] + 20
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x - 100, y, steps=5)
+    page.mouse.up()
+    assert abs(_width(detail) - 464) <= 12, _width(detail)
+    assert abs(_width(detail) + _width(lanes) - both) <= 1  # what one gains the other loses
+    expect(divider).to_have_attribute("aria-valuenow", str(round(_width(detail))))
+    expect(divider).to_be_focused()  # the drag left the focus on it, for the keys
+    # End, and a drag far past it, stop where the lanes are at their smallest
+    page.keyboard.press("End")
+    assert abs(_width(lanes) - 420) <= 1, _width(lanes)
+    expect(divider).to_have_attribute("aria-valuenow", divider.get_attribute("aria-valuemax") or "")
+    page.keyboard.press("ArrowLeft")  # already at the limit
+    assert abs(_width(lanes) - 420) <= 1
+    page.keyboard.press("ArrowRight")
+    grip = divider.bounding_box()
+    assert grip is not None
+    page.mouse.move(grip["x"] + 5, grip["y"] + 20)
+    page.mouse.down()
+    page.mouse.move(grip["x"] - 700, grip["y"] + 20, steps=5)
+    page.mouse.up()
+    assert abs(_width(lanes) - 420) <= 1
+    # the next card opens at the width this one was left at
+    page.keyboard.press("Home")
+    page.keyboard.press("ArrowLeft")
+    page.click('#board .board-card[data-item="Q1"]')
+    expect(page.locator("#board .board-detail h3")).to_contain_text("Q1")
+    assert abs(_width(detail) - 364) <= 1, _width(detail)
+    # a double-click goes back to the card's share of the board
+    divider.dblclick()
+    assert abs(_width(detail) - opened) <= 1
+
+
+def test_a_contested_findings_sides_stack_in_a_narrow_card(ui: UI) -> None:
+    """#343: side by side in a 340 px card, each side of a contested finding got about 150 px, a
+    few words to a line. Under 440 px of card the sides go one above the other, each the card's
+    width; from 440 px they sit side by side, as #250 drew them. Fails if a narrow card keeps
+    two columns."""
+    page = review_room(ui, "e2e-board-sides-stack", viewport={"width": 1600, "height": 900})
+    page.click("#board-toggle")
+    page.click('#board .board-card[data-item="F3"]')
+    sides = page.locator("#board .board-detail .board-side")
+    expect(sides).to_have_count(2)
+    assert _width(page.locator("#board .board-detail")) >= 440
+    first, second = sides.nth(0).bounding_box(), sides.nth(1).bounding_box()
+    assert first and second
+    assert abs(first["y"] - second["y"]) <= 1 and second["x"] > first["x"]  # side by side
+    page.locator("#board-divider").focus()
+    page.keyboard.press("Home")  # the card at its narrowest, 340 px
+    first, second = sides.nth(0).bounding_box(), sides.nth(1).bounding_box()
+    assert first and second
+    assert second["y"] >= first["y"] + first["height"], (first, second)  # one above the other
+    assert first["width"] > 280 and abs(first["x"] - second["x"]) <= 1
+
+
+def test_the_open_card_goes_under_the_lanes_when_both_cannot_fit(ui: UI) -> None:
+    """#343: in a 1280 px window with Members open the board is about 700 px wide, and a 340 px
+    card beside the lanes left them about 110 px each, titles wrapping every few letters. Under
+    778 px of board the card goes under the lanes, which keep the board's width, and there is no
+    divider. The rule follows the board's width, not the window's: closing Members puts the
+    card back beside the lanes. Fails if the lanes are squeezed beside the card."""
+    page = review_room(ui, "e2e-board-under", viewport={"width": 1280, "height": 800})
+    page.click("#board-toggle")
+    page.click('#board .board-card[data-item="Q1"]')
+    detail, lanes, divider = (
+        page.locator("#board " + part) for part in (".board-detail", ".board-lanes", "#board-divider")
+    )
+    expect(detail).to_be_visible()
+    expect(divider).to_be_hidden()
+    lanes_box, card_box = lanes.bounding_box(), detail.bounding_box()
+    assert lanes_box and card_box
+    assert card_box["y"] >= lanes_box["y"] + lanes_box["height"], (lanes_box, card_box)
+    assert lanes_box["width"] > 600 and abs(card_box["width"] - lanes_box["width"]) <= 1
+    page.click("#pane-toggle")  # Members closes: the board is wide enough for both
+    expect(divider).to_be_visible()
+    lanes_box, card_box = lanes.bounding_box(), detail.bounding_box()
+    assert lanes_box and card_box
+    assert card_box["x"] >= lanes_box["x"] + lanes_box["width"] and lanes_box["width"] >= 420
+
+
 def test_a_person_answers_a_question_and_rules_on_a_finding(ui: UI) -> None:
     """Answering Q1 and conceding the contested F3 move their cards at once (the board frame),
     and each is the person's own message in the room, which reaches the agents."""
