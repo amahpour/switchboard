@@ -47,6 +47,27 @@ async def test_tools_annotations_and_instructions(tmp_path) -> None:
         assert init.server_info.name == "switchboard"
 
 
+async def test_tool_list_fits_the_review_budget(tmp_path) -> None:
+    """The review schema must not make every agent turn carry the old oversized tool list."""
+    _st, server = make(tmp_path)
+    async with Client(server, mode="legacy") as c:
+        tools = await c.list_tools()
+    size = sum(
+        len(
+            json.dumps(
+                {"name": t.name, "description": t.description, "inputSchema": t.input_schema},
+                separators=(",", ":"),
+            )
+        )
+        for t in tools
+    )
+    assert size <= 3000, size
+    review = next(t for t in tools if t.name == "review")
+    assert "where" in review.input_schema["properties"]
+    assert "file" not in review.input_schema["properties"]
+    assert "lines" not in review.input_schema["properties"]
+
+
 def test_instructions_are_tiny() -> None:
     assert len(srv.INSTRUCTIONS) < 570
     assert "Markdown ok" in srv.INSTRUCTIONS  # the web UI renders say() text as Markdown (§29)
