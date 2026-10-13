@@ -665,10 +665,15 @@ def test_turn_start_needs_a_fresh_idle_status(w: W) -> None:
         w.d.threads[TID]["turns"].append({"id": "turn-x", "status": "inProgress", "items": []})
         w.d.threads[TID]["status"] = {"type": "active", "activeFlags": ["waitingOnApproval"]}
     mid = w.say("idle? not really")
-    time.sleep(1.0)
+    # The push the cached "idle" view invites does a fresh thread/read before turn/start, finds
+    # "waitingOnApproval" and holds instead: wait for that fresh read's own result (the status
+    # it learns), not a fixed sleep timed to outlast the round trip, which a loaded box can
+    # occasionally still beat (a flat 1 s sleep here once raced a slow round trip and found the
+    # delivery still "offered", not yet reverted: #277's suite run, PR #307).
+    assert wait_for(lambda: w.part()["status"] == "waiting-approval")  # learned from the read
+    # the status and the delivery's revert are separate writes: wait for the revert too
+    assert wait_for(lambda: w.delivery(mid) == "pending"), w.delivery(mid)
     assert w.d.calls("turn/start") == [] and w.d.calls("turn/steer") == []
-    assert w.delivery(mid) == "pending"
-    assert w.part()["status"] == "waiting-approval"  # learned from the read
     w.d.end_turn(TID, "interrupted")
     assert wait_for(lambda: w.d.calls("turn/start"))
 

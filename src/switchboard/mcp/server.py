@@ -443,7 +443,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RW_IDEM)
     async def join(room: str, screen_name: str, ctx: Context, resume: str = "") -> str:
-        """Join a room only when your user asks. Returns rules and recent messages."""
+        """Join a room (only when your user asks): rules and recent messages."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         if st.harness == "codex" and not tid:
@@ -481,7 +481,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RW_IDEM)
     async def leave(room: str, ctx: Context) -> str:
-        """Leave a switchboard room."""
+        """Leave a room."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = st.cred_for(room, tid)
@@ -495,7 +495,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RO)
     async def who(room: str, ctx: Context) -> str:
-        """List a joined room's members, status and delivery tier."""
+        """A joined room's members, status and delivery tier."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = st.cred_for(room, tid)
@@ -507,9 +507,9 @@ def build_server(st: McpState) -> FastMCP:
         return dumps(res)
 
     @mcp.tool(annotations=RW)
-    async def say(room: str, text: str, ctx: Context, reply_to: int | None = None) -> str:
-        """Post to the room; return prior unread messages. Markdown renders; raw HTML and
-        images do not."""
+    async def say(room: str, text: str, ctx: Context, reply_to: int = 0, since: int = -1) -> str:
+        """Post; return prior unread. since=last id seen: refused, with newer chat, if any.
+        Markdown renders; no raw HTML or images."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = st.cred_for(room, tid)
@@ -517,8 +517,10 @@ def build_server(st: McpState) -> FastMCP:
             return got
         name, cred = got
         params = {**st.base(cred, tid), "text": text}
-        if reply_to is not None:
+        if reply_to:
             params["reply_to"] = reply_to
+        if since >= 0:
+            params["since"] = since
         res = await st.call("agent.say", params)
         st.forget(res, (tid, name))
         return dumps(res)
@@ -570,21 +572,24 @@ def build_server(st: McpState) -> FastMCP:
         return dumps(res)
 
     @mcp.tool(annotations=RO)
-    async def read(room: str, ctx: Context, limit: int = 20) -> str:
-        """Read unread messages in full, oldest first, including "not shown here"."""
+    async def read(room: str, ctx: Context, limit: int = 20, before: int = 0) -> str:
+        """Unread in full, "not shown here" too, oldest first. before=id: older chat."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = st.cred_for(room, tid)
         if isinstance(got, str):
             return got
         name, cred = got
-        res = await st.call("agent.read", {**st.base(cred, tid), "limit": max(1, min(int(limit), 50))})
+        params = {**st.base(cred, tid), "limit": max(1, min(int(limit), 50))}
+        if before:
+            params["before"] = before
+        res = await st.call("agent.read", params)
         st.forget(res, (tid, name))
         return dumps(res)
 
     @mcp.tool(annotations=RO)
     async def wait(room: str, ctx: Context, timeout_s: int = 50) -> str:
-        """Wait for delivery in a room or a timeout."""
+        """Wait for a delivery, or the timeout."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = st.cred_for(room, tid)
@@ -605,8 +610,8 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(name="pass", annotations=RW)
     async def pass_(ctx: Context, room: str = "", note: str = "") -> str:
-        """Choose no reply after reading. Refused if "not shown here" is unread: call
-        read() first. Logged, not posted."""
+        """No reply, after reading. Refused if "not shown here" is unread: call read() first.
+        Logged, not posted."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         if room:

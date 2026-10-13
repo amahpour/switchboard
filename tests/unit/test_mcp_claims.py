@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from switchboard import __version__
-from switchboard.broker.agents import MAX_TOOLS, tools_claim, version_claim
+from switchboard.broker.agents import MAX_TOOLS, behind_by_minor, tools_claim, version_claim
 from switchboard.mcp import server as srv
 from switchboard.mcp.client import BrokerConn
 
@@ -23,6 +23,7 @@ from switchboard.mcp.client import BrokerConn
         ([], ()),
         (["say", "review", "join", "review"], ("join", "review", "say")),
         (["review", 7, None, "Review", "re view", "x" * 33, "../x"], ("review",)),
+        (["say\n"], ()),  # a trailing newline cannot break a who() row
     ],
 )
 def test_the_tool_list_is_a_checked_claim(value: Any, want: tuple[str, ...] | None) -> None:
@@ -38,10 +39,27 @@ def test_the_tool_list_is_read_up_to_a_count() -> None:
 @pytest.mark.parametrize(
     ("value", "want"),
     [("0.22.0", "0.22.0"), ("0.23.0.dev3+g1a2b3c", "0.23.0.dev3+g1a2b3c"), (None, None), (22, None),
-     ("", None), ("0.22 beta", None), ("<b>", None), ("1" * 33, None)],
+     ("", None), ("0.22 beta", None), ("<b>", None), ("1" * 33, None), ("0.23.0\n", None)],
 )  # fmt: skip
 def test_the_version_is_a_checked_claim(value: Any, want: str | None) -> None:
     assert version_claim(value) == want
+
+
+@pytest.mark.parametrize(
+    ("claim", "broker", "behind"),
+    [
+        ("0.22.9", "0.24.0", True),
+        ("0.23.0", "0.24.0", True),
+        ("0.24.0", "0.24.0", False),
+        ("0.24.0.dev3", "0.24.0", False),
+        ("0.24.0", "0.24.9", False),
+        ("1.9.0", "2.0.0", True),
+        (None, "0.24.0", False),
+        ("odd", "0.24.0", False),
+    ],
+)
+def test_upgrade_note_compares_reported_minor_release(claim: str | None, broker: str, behind: bool) -> None:
+    assert behind_by_minor(claim, broker) is behind
 
 
 async def test_the_server_reports_the_tools_it_registers_and_its_version(tmp_path) -> None:

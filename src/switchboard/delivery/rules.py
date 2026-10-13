@@ -26,6 +26,17 @@ from switchboard.models import Item, Release, Room
 
 MENTION_RE = re.compile(r"(?<![\w@])@([a-z][a-z0-9_-]{0,23})(?![a-z0-9_-])", re.IGNORECASE)
 
+
+def since_id(value: object, last_id: int) -> int:
+    """Check an opt-in say cursor before it can reach SQLite; negative ids mean the start."""
+    if type(value) is not int:
+        raise ValueError("since must be a message id")
+    cursor = min(max(value, 0), 2**63 - 1)
+    if cursor > last_id:
+        raise ValueError("since is newer than the room's last message")
+    return cursor
+
+
 # Header, token line and footer of a batch, for the longest room and human
 # names (the envelope's fit_batch checks the real rendering; this only makes
 # the release's estimate conservative).

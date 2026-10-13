@@ -485,13 +485,32 @@ class Store:
             ).fetchall()
         return [Message.from_row(r) for r in rows]
 
-    def count_messages(self, room_id: int, after: int = 0, before: int | None = None) -> int:
-        """Messages in one room with ``after < id < before`` (ids are global, so count rows)."""
+    def chat_history_before(self, room_id: int, before: int, limit: int) -> list[Message]:
+        """Up to ``limit`` chat messages in one room with ``id < before``, oldest first: the
+        history page ``read(before=...)`` answers with, paging back past what ``join()`` already
+        showed (issue #300 review -- ``read()`` alone only ever answers with *pending* items, so
+        the join's "N earlier" line must name a call that actually returns something)."""
+        limit = max(1, min(int(limit), 50))
+        rows = self.con.execute(
+            "SELECT * FROM (SELECT * FROM messages WHERE room_id=? AND kind='chat' AND id<?"
+            " ORDER BY id DESC LIMIT ?) ORDER BY id",
+            (room_id, int(before), limit),
+        ).fetchall()
+        return [Message.from_row(r) for r in rows]
+
+    def count_messages(
+        self, room_id: int, after: int = 0, before: int | None = None, kind: str | None = None
+    ) -> int:
+        """Messages in one room with ``after < id < before`` (ids are global, so count rows).
+        ``kind`` restricts the count to one message kind (e.g. ``"chat"``) when given."""
         sql = "SELECT COUNT(*) FROM messages WHERE room_id=? AND id>?"
-        args: list[int] = [room_id, int(after)]
+        args: list[Any] = [room_id, int(after)]
         if before is not None:
             sql += " AND id<?"
             args.append(int(before))
+        if kind is not None:
+            sql += " AND kind=?"
+            args.append(kind)
         return int(self.con.execute(sql, args).fetchone()[0])
 
     def last_message_id(self, room_id: int) -> int:
@@ -1797,6 +1816,20 @@ class Store:
         rows = self.con.execute(
             self._ITEM_SQL + " WHERE d.membership_id=? AND d.state='pending' ORDER BY d.message_id",
             (membership_id,),
+        ).fetchall()
+        return [Item.from_row(r) for r in rows]
+
+    def visible_items_since(self, membership_id: int, since: int, limit: int = 51) -> list[Item]:
+        """Chat delivered to this member after an id, including messages already read.
+
+        Delivery rows exclude its own posts, notices, messages before it joined and any chat
+        explicitly withheld from it (such as a /catchup request about it).
+        """
+        rows = self.con.execute(
+            self._ITEM_SQL + " WHERE d.membership_id=? AND d.message_id>? AND m.kind='chat'"
+            " AND m.sender_kind IN ('human', 'agent')"
+            " ORDER BY d.message_id LIMIT ?",
+            (membership_id, since, limit),
         ).fetchall()
         return [Item.from_row(r) for r in rows]
 

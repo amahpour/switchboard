@@ -10,6 +10,8 @@ import sqlite3
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from switchboard import __version__
+
 ROOM_RE = re.compile(r"^#[a-z0-9][a-z0-9_-]{0,31}$")
 # A closed room keeps its row under ``#<name>~closed-<its id>`` (DESIGN.md §28.2). '~' is
 # outside ROOM_RE, so the name is free again and nothing an agent, an MCP call, a web route
@@ -17,6 +19,17 @@ ROOM_RE = re.compile(r"^#[a-z0-9][a-z0-9_-]{0,31}$")
 CLOSED_ROOM_RE = re.compile(r"(#[a-z0-9][a-z0-9_-]{0,31})~closed-([1-9][0-9]{0,18})")
 SCREEN_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,23}$")
 NAME_REUSE_S = 24 * 3600.0  # a departed agent's screen name is reserved for a day
+RELEASE_RE = re.compile(r"^(\d{1,4})\.(\d{1,4})\.\d{1,4}(?:[.+_-].*)?$")
+
+
+def behind_by_minor(claim: str | None, broker: str = __version__) -> bool:
+    """A reported release is behind the broker by at least a minor version, not a patch."""
+    old, current = RELEASE_RE.fullmatch(claim or ""), RELEASE_RE.fullmatch(broker)
+    if old is None or current is None:
+        return False
+    return (int(old[1]), int(old[2])) < (int(current[1]), int(current[2]))
+
+
 # A remote host's name (DESIGN.md §27.5.1): the config name of a remote in remotes.toml.
 # It never contains '@' or ':', so it can't be confused with a session key's parts.
 # The broker's own machine is the empty host ''.
@@ -243,6 +256,8 @@ class Member:
     parked_reason: str | None = None
     host: str = ""  # the participant's host: '' for this machine (DESIGN.md §27.6)
     board_why: str | None = None  # why it can't use the review board, from its MCP server (#249)
+    version_claim: str | None = None  # this member's MCP server says it runs this version
+    tools_claim: tuple[str, ...] | None = None  # None means the MCP server did not report tools
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

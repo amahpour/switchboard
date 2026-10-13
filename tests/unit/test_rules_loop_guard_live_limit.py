@@ -60,6 +60,9 @@ class Shim:
     def board_reason(self, member: Member) -> str | None:
         return None  # no MCP servers here, so no claims about their tools (#249)
 
+    def member_claims(self, member: Member) -> tuple[str | None, tuple[str, ...] | None]:
+        return None, None  # no MCP servers in this engine-only world
+
 
 @pytest.fixture
 def svc(w: World, clock: FakeClock) -> RoomService:
