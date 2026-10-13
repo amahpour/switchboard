@@ -270,7 +270,7 @@ class Boards:
         items = self.store.review_items(rv["id"])
         if not reviews.settled(items):
             raise ReviewError(
-                "the board isn't settled: every finding fixed or dropped, every question answered"
+                "the board isn't settled: every finding confirmed or dropped, every question answered"
             )
         plan = reviews.post_plan(items)
         if not plan:
