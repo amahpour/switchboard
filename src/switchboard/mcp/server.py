@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any
 from fastmcp import Context, FastMCP
 from fastmcp.server.middleware import Middleware
 from mcp.types import ToolAnnotations
+from pydantic import Field
 
 from switchboard import __version__
 from switchboard.adapters.testagent import ACK_MODES
@@ -84,6 +85,7 @@ CLIENT_INFO_META_KEY = "io.modelcontextprotocol/clientInfo"
 RO = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 RW = ToolAnnotations(destructive_hint=False, open_world_hint=False)
 RW_IDEM = ToolAnnotations(destructive_hint=False, open_world_hint=False, idempotent_hint=True)
+EMPTY_OPTIONS: Any = Field(default_factory=list)
 
 _ENV_KEYS = ("CLAUDECODE", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_SESSION_ID")
 _TOKEN_ENV = "CLAUDE_CODE_MESSAGING_TOKEN"
@@ -434,7 +436,7 @@ class HelloMiddleware(Middleware):
 
 
 # Every tool build_server registers, as mcp.hello reports them (#249); a test pins the two equal.
-TOOL_NAMES = ("join", "leave", "who", "say", "read", "wait", "pass", "away", "review")
+TOOL_NAMES = ("join", "leave", "who", "say", "read", "wait", "pass", "away", "review", "status")
 
 
 def build_server(st: McpState) -> FastMCP:
@@ -443,7 +445,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RW_IDEM)
     async def join(room: str, screen_name: str, ctx: Context, resume: str = "") -> str:
-        """Join a room (only when your user asks): rules and recent messages."""
+        """Join only when your user asks; get rules and messages."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         if st.harness == "codex" and not tid:
@@ -495,7 +497,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RO)
     async def who(room: str, ctx: Context) -> str:
-        """A joined room's members, status and delivery tier."""
+        """Room members, status and tier."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = st.cred_for(room, tid)
@@ -508,8 +510,8 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RW)
     async def say(room: str, text: str, ctx: Context, reply_to: int = 0, since: int = -1) -> str:
-        """Post; return prior unread. since=last id seen: refused, with newer chat, if any.
-        Markdown renders; no raw HTML or images."""
+        """Post Markdown; get unread. since=last seen id refuses stale posts, returns newer chat.
+        No HTML/images."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = st.cred_for(room, tid)
@@ -539,12 +541,12 @@ def build_server(st: McpState) -> FastMCP:
         owner: str = "",
         commit: str = "",
         reason: str = "",
-        options: list[str] | None = None,
-        recommend: int | None = None,
+        options: list[str] = EMPTY_OPTIONS,
+        recommend: int = -1,
     ) -> str:
-        """Review board: open(url, head), show, raise(title, detail, where="path:40-58"),
-        ask(title, options, recommend), concede(item, owner), contest/drop(item, reason),
-        fix(item, commit). Returns the board."""
+        """Board: open(url,head), show, raise(title,detail,where="path:40-58"),
+        ask(title,options,recommend), concede(item,owner), contest/drop(item,reason),
+        fix(item,commit)."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = st.cred_for(room, tid)
@@ -562,10 +564,9 @@ def build_server(st: McpState) -> FastMCP:
             "commit": commit,
             "reason": reason,
             "options": options,
-            "recommend": recommend,
         }
         params = {**st.base(cred, tid), "action": action, **{k: v for k, v in given.items() if v}}
-        if recommend is not None:
+        if recommend != -1:
             params["recommend"] = recommend
         res = await st.call("agent.review", params)
         st.forget(res, (tid, name))
@@ -573,7 +574,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RO)
     async def read(room: str, ctx: Context, limit: int = 20, before: int = 0) -> str:
-        """Unread in full, "not shown here" too, oldest first. before=id: older chat."""
+        """Unread in full incl. "not shown here", oldest first; before=id gets older chat."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = st.cred_for(room, tid)
@@ -589,7 +590,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RO)
     async def wait(room: str, ctx: Context, timeout_s: int = 50) -> str:
-        """Wait for a delivery, or the timeout."""
+        """Wait for delivery or timeout."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = st.cred_for(room, tid)
@@ -610,8 +611,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(name="pass", annotations=RW)
     async def pass_(ctx: Context, room: str = "", note: str = "") -> str:
-        """No reply, after reading. Refused if "not shown here" is unread: call read() first.
-        Logged, not posted."""
+        """No reply; logged, not posted. Refused if "not shown here" unread: read() first."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         if room:
@@ -635,7 +635,7 @@ def build_server(st: McpState) -> FastMCP:
 
     @mcp.tool(annotations=RW_IDEM)
     async def away(ctx: Context, message: str = "") -> str:
-        """Set your away message; omit it to clear."""
+        """Set away message; omit to clear."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         creds = [c for (t, _r), c in st.creds.items() if t == tid]
@@ -645,6 +645,16 @@ def build_server(st: McpState) -> FastMCP:
         if message:
             params["message"] = message[:200]
         return dumps(await st.call("agent.away", params))
+
+    @mcp.tool(annotations=RW_IDEM)
+    async def status(text: str, ctx: Context) -> str:
+        """Set status in all rooms; empty clears."""
+        await st.prime(ctx)
+        tid = st.thread_id(ctx)
+        creds = [c for (t, _r), c in st.creds.items() if t == tid]
+        if not creds:
+            return err("join a room first", "not_member")
+        return dumps(await st.call("agent.status", {**st.base(creds[0], tid), "text": text}))
 
     return mcp
 

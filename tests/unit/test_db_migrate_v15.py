@@ -29,7 +29,7 @@ def test_rooms_stay_public_and_gain_an_empty_people_table_with_a_checked_backup(
     os.chmod(p, 0o600)
 
     con = db.open_db(p)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 16
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 17
     assert db.row_counts(con, db.V14_TABLES) == before
     assert con.execute("SELECT COUNT(*) FROM rooms WHERE private=0").fetchone()[0] == rooms
     assert con.execute("SELECT COUNT(*) FROM room_people").fetchone()[0] == 0

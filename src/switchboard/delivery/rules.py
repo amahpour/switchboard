@@ -133,7 +133,8 @@ def human_first(items: Iterable[Item]) -> list[Item]:
 def item_cost(item: Item, limit: int | None = envelope.ITEM_LIMIT) -> int:
     """Characters the item's rendered (inline, sanitized) envelope line takes:
     escaping can make text up to six times longer than it was typed."""
-    return len(envelope.render_item(item, "", "", inline=True, limit=limit)) + 1
+    shown_limit = envelope.delivery_limit(item, "", limit)
+    return len(envelope.render_item(item, "", "", inline=True, limit=shown_limit)) + 1
 
 
 def cap(items: Sequence[Item], max_msgs: int, max_chars: int) -> list[Item]:

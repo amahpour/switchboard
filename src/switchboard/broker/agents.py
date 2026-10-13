@@ -1242,6 +1242,18 @@ class AgentService:
         self.run([Snapshot(r) for r in {x.room_id for x in self.store.participant_memberships(p.id)}])
         return {"away": away}
 
+    def status(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
+        p, _m, _room = self._member(conn, params)
+        raw = params.get("text")
+        if not isinstance(raw, str):
+            raise ServiceError("bad_request", "status text must be a string")
+        line = " ".join(clean(raw).split())[:160] or None
+        self.store.update_participant(
+            p.id, status_line=line, status_line_at=self.store.clock.now() if line else None
+        )
+        self.run([Snapshot(r) for r in {x.room_id for x in self.store.participant_memberships(p.id)}])
+        return {"status_line": line}
+
     # =============================================================== hooks
     async def hook_event(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
         inert: dict[str, Any] = {"out": None}

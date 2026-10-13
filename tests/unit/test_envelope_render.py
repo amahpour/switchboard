@@ -319,8 +319,8 @@ def test_fit_batch_cuts_a_lone_oversized_item_and_marks_it_partial() -> None:
     assert envelope.inline_flags(f.items, True, f.partial) == [(1, envelope.INLINE_CUT)]
     assert envelope.inline_flags([item(2, 1)], False) == [(2, envelope.STUB)]
     assert envelope.inline_flags([item(3, 1)], True) == [(3, envelope.INLINE)]
-    # an item over the 1,500-char item limit is partial even when it fits
-    f = fit([item(2, 2, text="q" * 2000)], 6000)
+    # unaddressed chatter over the 1,500-char item limit is partial even when it fits
+    f = fit([item(2, 0, text="q" * 2000)], 6000)
     assert f.partial == {2} and 2 not in f.limits
 
 
