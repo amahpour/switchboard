@@ -55,7 +55,7 @@ class Boards:
             "settled": reviews.settled(items),
             "counts": reviews.counts(items, active, now),
             "items": [item_dict(i, f, events, active, now) for i in items],
-            "plan": reviews.handoff_plan(items, events),
+            "plan": reviews.handoff_plan(items, events, self.store.room_agent_names_ever(room.id)),
             "agents": agents,
             "agent_people": agent_people,
             "posted_at": rv["posted_at"],
@@ -304,7 +304,7 @@ class Boards:
         if chosen not in agents:
             raise ReviewError(f"posted by must be your agent in {room.name}: {chosen!r} isn't")
         events = [{"data": e.data} for e in self.store.review_events(room.id, rv["opened_at"])]
-        plan = reviews.handoff_plan(items, events)
+        plan = reviews.handoff_plan(items, events, self.store.room_agent_names_ever(room.id))
         text = reviews.render_handoff(plan, chosen, self.state.cfg.delivery.max_msg_chars)
         self.store.set_review(rv["id"], posted_at=self.state.clock.now(), posted_by=chosen)
         self.store.add_event(

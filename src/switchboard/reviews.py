@@ -419,11 +419,14 @@ def render(review: dict[str, Any], items: list[Item]) -> str:
     return "\n".join(out)
 
 
-def handoff_plan(items: list[Item], events: list[dict[str, Any]]) -> dict[str, Any]:
+def handoff_plan(
+    items: list[Item], events: list[dict[str, Any]], agent_names_ever: set[str] | None = None
+) -> dict[str, Any]:
     """The exact summary and line comments one agent is asked to post (§37.6).
 
     Titles and other agent-written text stay in this board/tool data, never in the person's
-    handoff chat message (#177). Only events marked as a person's move create line comments.
+    handoff chat message (#177). Older events lack the person marker; a name never held by an
+    agent in the room identifies those older person moves conservatively.
     """
     done = [
         i
@@ -444,10 +447,15 @@ def handoff_plan(items: list[Item], events: list[dict[str, Any]]) -> dict[str, A
     decisions: dict[str, list[str]] = {}
     for event in events:
         data = event.get("data") or {}
-        if data.get("person") is not True or data.get("to") not in ("conceded", "dropped", "confirmed"):
+        if data.get("to") not in ("conceded", "dropped", "confirmed"):
             continue
         label, actor = data.get("item"), data.get("by")
-        if isinstance(label, str) and isinstance(actor, str):
+        if not isinstance(label, str) or not isinstance(actor, str):
+            continue
+        person = data.get("person") is True or (
+            "person" not in data and agent_names_ever is not None and actor not in agent_names_ever
+        )
+        if person:
             decisions.setdefault(label, []).append(f"{actor} {data['to']} this finding")
     comments = []
     for i in done:

@@ -61,12 +61,27 @@ def test_handoff_poster_belongs_to_the_person_who_clicks() -> None:
                 participant = store.upsert_participant("test", session_key("test", host, name), host=host)
                 store.create_membership(room.id, participant.id, name, "hash-" + name)
             review = store.open_review(room.id, PR, "", "codex-1")
-            store.add_review_item(review["id"], "finding", "dropped", title="done", raised_by="codex-1")
+            store.add_review_item(
+                review["id"],
+                "finding",
+                "dropped",
+                title="done",
+                raised_by="codex-1",
+                file="shop/cart.py",
+                lines="40-58",
+            )
+            store.add_event("review", room_id=room.id, data={"item": "F1", "to": "conceded", "by": "alice"})
+            store.add_event(
+                "review", room_id=room.id, data={"item": "F1", "to": "confirmed", "by": "codex-1"}
+            )
             hosted.state.agents.refresh_index()
 
         hosted.on_loop(seed)
         board = alice.get("/api/rooms/build/review").json()["board"]
         assert board["agent_people"] == {"claude-1": 0, "codex-1": hosted.state.store.person_named("bob").id}
+        assert len(board["plan"]["comments"]) == 1
+        assert "alice conceded" in board["plan"]["comments"][0]["body"]
+        assert "codex-1 confirmed" not in board["plan"]["comments"][0]["body"]
         denied = alice.post("/api/rooms/build/review", {"action": "handoff", "agent": "codex-1"})
         assert denied.status_code == 400 and "your agent" in denied.json()["message"]
         accepted = alice.post("/api/rooms/build/review", {"action": "handoff"})

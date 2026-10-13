@@ -256,6 +256,26 @@ def test_one_handoff_plan_summarizes_confirmed_work_and_person_decisions() -> No
     ]
 
 
+def test_an_open_board_from_before_handoff_keeps_its_person_decided_line() -> None:
+    """Older review events lack the person marker; past room memberships distinguish agents."""
+    item = replace(
+        finding("fixed", owner="claude-1"),
+        title="wrong tax",
+        file="shop/cart.py",
+        lines="40-58",
+        commit="abc1234",
+        proof="test_tax",
+    )
+    events = [
+        {"data": {"item": "F1", "to": "conceded", "by": "alice"}},
+        {"data": {"item": "F1", "to": "confirmed", "by": "codex-1"}},
+    ]
+    plan = reviews.handoff_plan([item], events, agent_names_ever={"claude-1", "codex-1"})
+    assert len(plan["comments"]) == 1
+    assert "alice conceded" in plan["comments"][0]["body"]
+    assert "codex-1 confirmed" not in plan["comments"][0]["body"]
+
+
 def test_one_handoff_message_carries_only_checked_labels_and_one_agent_mention() -> None:
     """#177: a human handoff cannot repeat an agent's title, option, proof or PR URL."""
     item = replace(

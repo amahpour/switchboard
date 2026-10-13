@@ -570,6 +570,13 @@ class Store:
         ).fetchall()
         return [r[0] for r in rows]
 
+    def room_agent_names_ever(self, room_id: int) -> set[str]:
+        """Names held by an agent in this room, including ended memberships (§37.6)."""
+        rows = self.con.execute(
+            "SELECT DISTINCT screen_name FROM memberships WHERE room_id=?", (room_id,)
+        ).fetchall()
+        return {r[0] for r in rows}
+
     def members(self, room_id: int) -> list[Member]:
         rows = self.con.execute(
             "SELECT m.id AS membership_id, m.participant_id, m.room_id, m.screen_name,"
