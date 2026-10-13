@@ -890,7 +890,10 @@ async def test_a_tui_one_lsof_look_misses_is_looked_for_again(
     go, and the TUI's end of the control socket then shows no peer. One such look held the
     thread, and the TUI showing again didn't release it (#189: under load, after a daemon
     restart). A TUI of the last look that a look shows connected to nothing is looked for again
-    at once; one that really quit is missing from both looks, and still held."""
+    at once; one that really quit is missing from both looks, and still held. The
+    first look after a daemon restart needs that second look too: there is no
+    previous TUI set to compare against, but a transient miss must not hold the
+    reloaded thread for the entire hold window."""
     codex(w)
     a = wire(w)
     attach(w)
@@ -916,6 +919,10 @@ async def test_a_tui_one_lsof_look_misses_is_looked_for_again(
     monkeypatch.setattr(cx.proc, "info", info)
     monkeypatch.setattr(cx.proc, "argv_many", lambda infos: {i.pid: table[i.pid][1] for i in infos})
 
+    looks[:] = [skipped, whole]
+    assert (await a.refresh_clients()).pids == frozenset({200}) and looks == []  # first look after restart
+    assert a.suspect == {}
+    a._seen.clear()  # another link restart: a complete first look needs no retry
     looks[:] = [whole]
     assert (await a.refresh_clients()).pids == frozenset({200})  # the first look: one TUI, one thread
     looks[:] = [skipped, whole]
@@ -923,6 +930,13 @@ async def test_a_tui_one_lsof_look_misses_is_looked_for_again(
     assert a.suspect == {}
     looks[:] = [whole]
     assert (await a.refresh_clients()).ok and looks == []  # a steady look: no second one
+    looks[:] = [quit_, quit_]
+    c = await a.refresh_clients()
+    assert (c.ok, looks) == (False, [])
+    assert TID in a.suspect and a.holds["control"].tids == {TID}
+    a.suspect.clear()
+    a.holds.clear()
+    a._seen.clear()  # no TUI in either first look: the liveness hold still applies
     looks[:] = [quit_, quit_]
     c = await a.refresh_clients()
     assert (c.ok, looks) == (False, [])

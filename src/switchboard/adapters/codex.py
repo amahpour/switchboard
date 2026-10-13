@@ -1480,10 +1480,17 @@ class CodexAdapter(CodexMembership, Adapter):
         except Exception:
             return self._no_clients(now, "lsof failed")
         recs = parse_lsof(out)
-        if self._lost_a_tui(recs):
+        first_control_look_short = (
+            "control" not in self._seen
+            and self.link_state == "up"
+            and self.loaded_at is not None
+            and len(socket_peers(recs, {self.sock, real})[1] - {os.getpid()}) < len(self.user_threads())
+        )
+        if self._lost_a_tui(recs) or first_control_look_short:
             # Linux lsof can skip a socket in one look (it reads /proc/net/unix while sockets come
             # and go, and a client's end then shows no peer), and a hold isn't undone when the TUI
-            # shows again: look once more at once, and count a socket either look saw (#189)
+            # shows again. The first look after a daemon restart has no previous TUI set, so a
+            # shortage of socket peers also needs a second look. Count either look's sockets.
             try:
                 recs += parse_lsof(await asyncio.to_thread(_run_lsof, lsof))
             except Exception:
