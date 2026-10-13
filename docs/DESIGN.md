@@ -709,6 +709,13 @@ and reconnect notice. `AgentService` still checks the common process takeover ru
 persists a join. A local Codex thread stays under `CodexLink` when its MCP connection closes;
 the remote adapter lets that participant go offline.
 
+`CursorAdapter` in `adapters/cursor.py` similarly supplies the one-session-per-process lookup
+(`existing_session`) and the join-nonce bind's own decisions (`join_nonce_bind`, `nonce_ok`,
+`bound_to`, `conversation_key`); `AgentService`'s `hook_event` and `_bind_cursor` keep only the
+store writes, kick carry-over and notices common to any such bind. `TestAgentAdapter.session_key`
+supplies the scripted test agent's key from its `--test-session`, the one harness `session_key`
+needs outside `(ident, thread_id)` (#170).
+
 **Re-joining a session** (the same `session_key`) rotates its credential and takes over its memberships only from the MCP process that holds it (a broker reconnect), or once that MCP process is gone (an MCP restart), and never while another live agent process holds the session. Otherwise `join` fails with `conflict`. Once the holder is gone, what the resuming process gets depends on whether the liveness sweep (every `LIVENESS_S` = 2 s) has ended the old session yet. Both outcomes are intended, and in both the resuming process becomes the thread's only active participant:
   - **Not ended yet:** it takes over the still-active membership ("You rejoined", same membership, credential rotated).
   - **Already ended:** the join is fresh ("You joined", a new membership).

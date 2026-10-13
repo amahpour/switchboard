@@ -85,6 +85,15 @@ def test_conversation_kicked_needs_p_bound_to_the_kicked_conversation(w: World) 
     assert a.conversation_kicked(w.store, w.room.id, w.p(other)) is False
 
 
+def test_join_nonce_bind_claims_only_an_event_carrying_a_nonce(w: World) -> None:
+    """``agents.hook_event`` asks this before resolving a hook to a participant (#170:
+    the harness check used to be hardcoded there); Cursor's own ``postToolUse`` for
+    ``MCP:join`` is the only hook that ever carries one."""
+    a = ad(w)
+    assert a.join_nonce_bind(HookEvent(harness="cursor", event="PostToolUse", join_nonce="abc123")) is True
+    assert a.join_nonce_bind(HookEvent(harness="cursor", event="PostToolUse")) is False
+
+
 def test_nonce_ok_matches_only_its_own_pending_nonce(w: World) -> None:
     a = ad(w)
     p = w.p(w.store.upsert_participant("cursor", "cursor:agent:1@1.00", bind_nonce="abc123", status="idle"))

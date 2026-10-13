@@ -140,7 +140,9 @@ class CursorAdapter(Adapter):
         return sid, ""
 
     # -------------------------------------------------------------- binding
-    def session_key(self, ident: McpIdentity, thread_id: str | None) -> str:
+    def session_key(
+        self, ident: McpIdentity, thread_id: str | None, *, test_session: str | None = None
+    ) -> str:
         # bound to the conversation id by the join nonce (M5); until then, the agent process
         return make_session_key(
             self.harness, ident.host, f"{PENDING_REST}{ident.agent_pid}@{start_key(ident.agent_start)}"
@@ -168,6 +170,10 @@ class CursorAdapter(Adapter):
         return p.bind_state == "bound" and store.was_kicked_session(
             room_id, self.harness, p.session_key, exclude=p.id
         )
+
+    def join_nonce_bind(self, ev: HookEvent) -> bool:
+        """The ``postToolUse`` for ``MCP:join`` carries the nonce (DESIGN.md §6.3)."""
+        return bool(ev.join_nonce)
 
     def nonce_ok(self, p: Participant, ev: HookEvent) -> bool:
         """True if this hook's join nonce is the one p's own pending join issued."""

@@ -63,7 +63,6 @@ from switchboard.models import (
     behind_by_minor,
     canonical_event,
     normalize_room,
-    session_key,
     split_session_key,
 )
 from switchboard.remote import proto
@@ -531,12 +530,12 @@ class AgentService:
     # ======================================================== membership
     def _session_key(self, mc: McpConn, thread_id: str | None) -> str:
         h, host = mc.harness, mc.ident.host
-        if h == "test":
-            return session_key("test", host, str(mc.test_session))
-        # Each harness's rule: Codex keys by thread, Cursor starts pending, and
-        # claude, devin and unknown use the base process key (§6.3).
+        # Each harness's rule: Codex keys by thread, Cursor starts pending, the test
+        # agent by its --test-session, and claude, devin and unknown by process (§6.3).
         try:
-            return self.engine.adapter_for(h, host).session_key(mc.ident, thread_id)
+            return self.engine.adapter_for(h, host).session_key(
+                mc.ident, thread_id, test_session=mc.test_session
+            )
         except ValueError as e:
             raise ServiceError("bad_request", str(e)) from e
 
@@ -1302,7 +1301,7 @@ class AgentService:
             for p in self.store.joined_participants()
             if p.host == host
         ]
-        nonce_bind = harness == "cursor" and bool(ev.join_nonce)
+        nonce_bind = self.engine.adapter_for(harness, host).join_nonce_bind(ev)
         c = resolve_hook_participant(
             get_chain(), harness, ev.sid, cands, join_nonce_bind=nonce_bind, argv_fn=argv_fn, host=host
         )
@@ -1346,7 +1345,8 @@ class AgentService:
         return conn.host, chain, argv_fn
 
     def _held_elsewhere(self, harness: str, rest: str, host: str) -> Participant | None:
-        """An active Cursor conversation on another host, this machine included (§27.5.4)."""
+        """An active session of ``harness`` with this global id (a Cursor conversation) on
+        another host than ``host``, this machine included (§27.5.4)."""
         for p in self.store.active_participants():
             if p.harness != harness or p.host == host:
                 continue
@@ -1387,7 +1387,7 @@ class AgentService:
         bound" check and the conversation id's key are the Cursor adapter's own
         (``nonce_ok``, ``bound_to``, ``conversation_key``); every store write and engine
         call here stays this method's."""
-        adapter = self.engine.adapter_for("cursor", p.host)
+        adapter = self.engine.adapter_for(p.harness, p.host)
         sid = ev.sid or ""
         if not adapter.nonce_ok(p, ev):
             # not this participant's current join: only its own bound conversation may go on
@@ -1398,7 +1398,7 @@ class AgentService:
         if p.session_key == key and p.bind_state == "bound":
             self.store.update_participant(p.id, bind_nonce=None)  # single use
             return self.store.get_participant(p.id)
-        if self._held_elsewhere("cursor", sid, p.host) is not None:
+        if self._held_elsewhere(p.harness, sid, p.host) is not None:
             # a conversation id is global: no session ever moves between hosts (§27.5.4)
             self.store.add_event(
                 "bind",
