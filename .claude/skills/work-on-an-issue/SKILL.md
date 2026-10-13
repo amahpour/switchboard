@@ -24,6 +24,8 @@ The rules are in [CLAUDE.md](../../../CLAUDE.md); this is the order of work. It 
    | `src/switchboard/remote/` | `uv run pytest -m twohost tests/twohost` (Docker) |
    | timing, processes or sockets in a test | that test 20 times alone: `for i in $(seq 20); do uv run pytest -q -p no:cacheprovider <test> \|\| break; done` |
 
+   On a machine other agents share, one suite at a time: take the lock and cap the workers before any of these ([CONTRIBUTING.md](../../../CONTRIBUTING.md), "Sharing a machine"). Several `-n auto` runs at once can freeze the machine.
+
    A test that fails under `-n auto` and passes alone is flaky, and a flaky test is a bug whoever's change it is: find the cause and fix it, in a pull request of its own if this change didn't cause it. Never re-run it until it passes.
 
 5. **Read the diff as a reviewer** (`git diff origin/main...HEAD`), for the things tests don't catch: a value from outside with no length limit; an `else` that defaults to the permissive case; a blocking call inside `async def`; a secret in a log, an error or a URL; a test that would pass without the change, or whose setup quietly drops what it checks; a sleep standing in for an event; a home path, a host name or a person's name. For what a person sees: the phone preview, a walk by keyboard (where the focus goes when a click hides what had it), and every user-facing line checked against what the code does (a count, who a feature reaches). And the issue: every "Done when" met, or the pull request says which one isn't and why. Fix what you find and nothing around it.
