@@ -113,7 +113,7 @@ def test_the_reported_model_is_recorded_once_per_change(broker: InProcBroker, cl
     rows = q(broker, "SELECT participant_id, data FROM events WHERE kind='model'")
     assert [json.loads(r["data"]) for r in rows] == [{"model": start["model"]}]
     assert rows[0]["participant_id"] == part(broker)["id"]
-    assert claude.hook(start) == ""  # the same model again: no second event
+    assert "#build as claude-1" in claude.hook(start)  # the same model, but a fresh session reminder
     assert len(q(broker, "SELECT id FROM events WHERE kind='model'")) == 1
     claude.hook({**start, "model": "claude-sonnet-4-6"})
     assert len(q(broker, "SELECT id FROM events WHERE kind='model'")) == 2
@@ -123,7 +123,7 @@ def test_the_reported_model_is_recorded_once_per_change(broker: InProcBroker, cl
 
 def test_status_transitions_from_recorded_payloads(broker: InProcBroker, claude: FakeClaude) -> None:
     claude.tool("join", room="#build", screen_name="claude-1")
-    assert claude.hook(fixture("SessionStart_startup")) == ""
+    assert "#build as claude-1" in claude.hook(fixture("SessionStart_startup"))
     assert part(broker)["status"] == "idle"
     claude.hook(fixture("UserPromptSubmit"))
     p = part(broker)
@@ -207,7 +207,7 @@ def test_failed_tools_also_carry_context(broker: InProcBroker, claude: FakeClaud
 
 def test_session_start_clear_prints_a_membership_reminder(broker: InProcBroker, claude: FakeClaude) -> None:
     claude.tool("join", room="#build", screen_name="claude-1")
-    assert claude.hook(fixture("SessionStart_startup")) == ""
+    assert "#build as claude-1" in claude.hook(fixture("SessionStart_startup"))
     out = json.loads(claude.hook(fixture("SessionStart_clear")))
     assert "#build as claude-1" in out["hookSpecificOutput"]["additionalContext"]
 
@@ -222,7 +222,7 @@ def test_session_start_compact_keeps_the_session_and_prints_the_reminder(
     a compaction is taken for a new session, or the reminder stops covering it."""
     claude.tool("join", room="#build", screen_name="claude-1")
     start = fixture("SessionStart_startup")
-    assert claude.hook(start) == ""
+    claude.hook(start)
     before = part(broker)
     out = json.loads(claude.hook(fixture("SessionStart_compact", session_id=start["session_id"])))
     assert "#build as claude-1" in out["hookSpecificOutput"]["additionalContext"]

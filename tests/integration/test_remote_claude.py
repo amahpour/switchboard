@@ -143,7 +143,7 @@ def test_idle_wake_lands_in_pi_inbox_and_token_confirms(link: FakeLink, fc: Fake
     assert set(frame) == {"type", "message", "from", "msg_id"}
     assert frame["from"] == "switchboard:#fpga/alice" and "chk" not in conn.raw.decode()
     body = frame["message"]["content"]
-    assert body.startswith("[switchboard] #fpga: 1 message from alice") and ids_in(body) == [mid]
+    assert body.startswith("[switchboard] #fpga: 1 from alice (your user).") and ids_in(body) == [mid]
     [b] = inbox_batches(link)
     assert b["state"] == "offered" and b["wake_kind"] == "idle_wake" and b["posted_at"] is not None
     # the turn starts from the frame: the Pi hook's UserPromptSubmit carries the token

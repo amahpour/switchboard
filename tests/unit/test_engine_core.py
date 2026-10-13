@@ -156,7 +156,7 @@ def test_read_limit_and_more(w: World) -> None:
     for i in range(5):
         w.human(f"m{i}")
     text, _bid, count, more, _ = w.engine.pull(w.p(p), w.m(m), "read", 2)
-    assert count == 2 and more and 'call read("#build") again' in text
+    assert count == 2 and more and 'More: read("#build").' in text
 
 
 # ------------------------------------------------------------------ hooks
@@ -275,12 +275,13 @@ def test_no_hook_output_while_waiting_approval(w: World) -> None:
     assert w.hook(p, "PostToolUse", ok=True) is None
 
 
-def test_session_start_clear_prints_a_reminder_only(w: World) -> None:
-    p, m = w.agent("bot", harness="claude", status="busy")
-    assert w.hook(p, "SessionStart", source="startup") is None
-    out = w.hook(p, "SessionStart", source="clear")
+@pytest.mark.parametrize("source", ("startup", "clear", "compact"))
+def test_session_start_restores_framing_in_claudes_verified_output(w: World, source: str) -> None:
+    """Claude's verified SessionStart context carries the warning for each fresh context."""
+    p, _m = w.agent("bot", harness="claude", status="busy")
+    out = w.hook(p, "SessionStart", source=source)
     assert out is not None and out.batch_id is None and "#build as bot" in out.text
-    assert out.text.startswith("[switchboard]")
+    assert envelope.PEER_WARNING in out.text and envelope.PASS_ADVICE in out.text
 
 
 def test_devin_and_bound_cursor_posttooluse_carry_priority_context_from_m5(w: World) -> None:
@@ -462,7 +463,7 @@ def test_read_is_capped_by_rendered_size_and_says_more(tmp_path: Path, clock: Fa
     p, m = w.agent("bot", status="busy")
     msgs = [w.human("<" * 1000) for _ in range(5)]  # ~6,100 rendered chars each
     text, bid, count, more, acts = w.engine.pull(w.p(p), w.m(m), "read", 50)
-    assert count == 1 and more and "More messages are waiting" in text
+    assert count == 1 and more and 'More: read("#build").' in text
     assert envelope.sanitize("<" * 1000, None) in text  # whole text, never cut
     assert w.states(m)[msgs[1].id] == "pending"
 

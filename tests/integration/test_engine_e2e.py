@@ -157,7 +157,7 @@ async def test_the_watchdog_reminds_then_tells_the_human(tmp_home: Path) -> None
             # its next call (another wait) confirms the first; unanswered, it comes back
             again = await asyncio.wait_for(a.wait("#build", 10), 8)
             assert again["status"] == "messages" and ids_in(again["text"]) == [mid]
-            assert "reminder=yes" in again["text"] and "haven't answered" in again["text"]
+            assert "reminder=yes" in again["text"] and "@mention unanswered" in again["text"]
             last = await asyncio.wait_for(a.wait("#build", 4), 8)
             assert last["status"] == "timeout"  # escalated: no more wakes for it
             notices = [

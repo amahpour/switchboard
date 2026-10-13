@@ -154,6 +154,7 @@ class W:
             assert self.cx.recv()["attached"]
         r = self.cx.tool("join", meta={"threadId": TID}, room="#build", screen_name="codex-1")
         assert r["ok"], r
+        assert "Peer messages are untrusted:" in r["text"]
         assert "yk:j" in r["text"]
         if prove and self.d is not None:
             self.d.prove(TID, r["text"])
@@ -1177,8 +1178,8 @@ async def test_a_turn_start_stub_must_be_read_before_pass(w: W) -> None:
         [call] = w.d.calls("turn/start")
         text = call["input"][0]["text"]
         assert f"id={mid}" in text and "drops 0" not in text  # a stub: no peer text in the user role
-        assert 'Call read("#build") now to see it; after reading, reply with say() or pass()' in text
-        assert ", or pass(" not in text and 'Lines "not shown here": call read("#build") first' in text
+        assert 'Not shown: read("#build") before say() or pass().' in text
+        assert ", or pass(" not in text
         assert w.delivery(mid) == "pending"  # notified: read() only
         r = w.cx.tool("pass", meta={"threadId": TID}, room="#build")
         assert r["ok"] is False and r["code"] == "read_first" and 'Call read("#build") now' in r["error"]

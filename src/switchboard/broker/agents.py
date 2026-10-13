@@ -909,6 +909,11 @@ class AgentService:
             room_rules=room.rules_text,
         )
         self.store.mark_rules_seen(m.id, room.rules_version)
+        # the join text's length (issue #275, DESIGN.md §12.6): every join() answer, first one
+        # or a rejoin/reconnect alike, so a report can add these up as its own path
+        self.store.add_event(
+            "join_chars", room_id=room.id, membership_id=m.id, participant_id=p.id, data={"chars": len(text)}
+        )
         self.run(self.engine.evaluate(m.id) + [Snapshot(room.id)])
         return {
             "cred": cred,

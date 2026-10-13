@@ -163,6 +163,34 @@ async def test_join_into_a_realistic_room_fits_the_6000_char_budget(broker: InPr
         assert len(text) <= 6000
 
 
+async def test_the_report_counts_what_join_wait_and_read_handed_the_agent(broker: InProcBroker) -> None:
+    """``switchboard report``'s characters by path (issue #275) are what the agent was really
+    handed: the length of its join() answer, of a wait() answer (a wake the broker released to
+    an open wait, so path ``wait``) and of a read() answer, each as the agent received it.
+    Fails without the change: nothing stored a join's length or a batch's."""
+    from switchboard import report
+
+    say(broker, "history to catch up on")
+    async with FakeAgent(broker.home, "k1", ack="immediate") as a:
+        j = await a.join("#build", "tester")
+        say(broker, "for the wait")
+        w = await a.wait("#build", 5)
+        assert w["status"] == "messages"
+        say(broker, "for the read")
+        r = await a.read("#build")
+        assert r["count"] == 1
+    con = report.open_ro(broker.paths.db)
+    try:
+        rep = report.build(con, "#build")
+    finally:
+        con.close()
+    [ag] = rep["agents"]
+    for path, text in (("join", j["text"]), ("wait", w["text"]), ("read", r["text"])):
+        assert ag["chars"][path] == {"n": 1, "chars": len(text), "tokens_est": round(len(text) / 4)}, path
+    assert set(ag["chars"]) == {"join", "wait", "read"}
+    assert rep["characters"] == ag["chars"]
+
+
 # ---------------------------------------------------- read(before=...): history (issue #300)
 async def test_join_then_read_before_pages_back_through_the_rest_of_the_history(
     broker: InProcBroker,
@@ -714,7 +742,7 @@ async def test_a_stubbed_peer_message_must_be_read_before_pass(broker: InProcBro
         mid = (await b.say("#build", "@alpha the parser drops port 0"))["posted_id"]
         text = stub_by_hook(broker, "ka", mid)
         assert "drops port 0" not in text and ", or pass(" not in text
-        assert 'Call read("#build") now to see it; after reading, reply with say() or pass()' in text
+        assert 'Not shown: read("#build") before say() or pass().' in text
         assert states(broker, "alpha")[mid] == "pending"  # a notified stub: read() only
         r = await a.pass_("#build")
         assert r["ok"] is False and r["code"] == "read_first"

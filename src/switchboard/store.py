@@ -2382,8 +2382,12 @@ class Store:
         ).fetchall()
 
     def report_messages(self, room_id: int, since: float) -> list[sqlite3.Row]:
+        """Never ``text`` itself (§12.6's "no message text"): ``LENGTH(text)`` is computed in
+        SQL, for the characters-by-path measure a `/catchup` request's own length feeds
+        (issue #275), without ever bringing the text into Python."""
         return self.con.execute(
-            "SELECT id, ts, sender_kind, sender_membership_id, kind FROM messages WHERE room_id=? AND ts>=?",
+            "SELECT id, ts, sender_kind, sender_membership_id, kind, LENGTH(text) AS chars"
+            " FROM messages WHERE room_id=? AND ts>=?",
             (room_id, since),
         ).fetchall()
 

@@ -93,7 +93,7 @@ def test_reminded_marks_and_the_envelope() -> None:
         peer_inline=True,
     )
     head = text.splitlines()[0]
-    assert head.startswith("[switchboard] #build: " + envelope.REMINDER_HEAD) and envelope.PASS_ADVICE in head
+    assert head.startswith("[switchboard] #build: ") and envelope.PASS_ADVICE not in text
     assert "reminder=yes" in text and envelope.REMINDER_NOTE in text
     plain = envelope.render_batch(
         [item()], room="#build", recipient="bot", human_name="alice", token="yk:b1.00000000", peer_inline=True
@@ -165,7 +165,7 @@ def test_remind_twice_then_escalate_to_the_human(w: World) -> None:
         tick(w, 1)
         res = seen(w, p, m, s)
         assert f"id={msg.id} " in res["text"] and "reminder=yes" in res["text"]
-        assert envelope.REMINDER_HEAD in res["text"] and envelope.PASS_ADVICE in res["text"]
+        assert envelope.REMINDER_NOTE in res["text"] and envelope.PASS_ADVICE not in res["text"]
         b = w.store.get_batch(res["batch_id"])
         assert (b.kind, b.wake_kind, b.wake_reason, b.budget_counted) == (
             "wake",
@@ -524,7 +524,7 @@ def test_an_answer_after_the_escalation_drops_the_reminder_mark(tmp_path: Path, 
     w.store.mark_handled(m.id)  # say() (or pass()) without reading it first
     text, *_ = w.engine.pull(w.p(p), w.m(m), "say", 50)  # the say() result's unread
     assert f"id={msg.id} " in text  # still unread...
-    assert "reminder=yes" not in text and envelope.REMINDER_HEAD not in text  # ...but answered
+    assert "reminder=yes" not in text  # ...but answered
     assert envelope.REMINDER_NOTE not in text
     assert w.delivery(m, msg)["reminders"] == WATCHDOG_DONE
 

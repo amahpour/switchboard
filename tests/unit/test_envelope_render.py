@@ -21,46 +21,66 @@ def render(items, inline=True, token="yk:b7.0123abcd", recipient="bot"):
     )
 
 
+def test_batch_framing_stays_under_200_characters_without_message_lines() -> None:
+    """Issue #273: repeated delivery instructions consumed nearly half of small wakes."""
+    cases = (
+        ([item(1, 2)], True),
+        ([item(1, 0)], True),
+        ([item(1, 2), item(2, 1)], False),
+        ([dataclasses.replace(item(2, 1), redelivered=True, reminders=1)], False),
+    )
+    for items, inline in cases:
+        text = render_batch(
+            items,
+            room="#build",
+            recipient="bot",
+            human_name="alice",
+            token="yk:b999999999999.ffffffff",
+            peer_inline=inline,
+            more=True,
+        )
+        framing = "\n".join(line for line in text.splitlines() if not line.startswith("- id="))
+        assert len(framing) <= 200, (len(framing), framing)
+        assert envelope.PEER_WARNING not in framing
+        assert envelope.PASS_ADVICE not in framing
+
+
 def test_human_only_header_is_never_framed_untrusted() -> None:
     t = render([item(1, 2, text="do it")])
     head = t.splitlines()[0]
-    assert head.startswith("[switchboard] #build: 1 message from alice (your user, relayed by switchboard).")
-    assert PEER_WARNING not in head and head.endswith(PASS_ADVICE)
+    assert head == "[switchboard] #build: 1 from alice (your user)."
+    assert PEER_WARNING not in t and PASS_ADVICE not in t
 
 
 def test_mixed_peer_only_and_stub_only_headers() -> None:
     mixed = render([item(1, 2), item(2, 0), item(3, 0)]).splitlines()[0]
-    assert "1 message from alice" in mixed and "2 from peer agents" in mixed and PEER_WARNING in mixed
+    assert "1 from alice (your user)" in mixed and "2 peer messages" in mixed
     peer = render([item(2, 0)]).splitlines()[0]
-    assert "1 message from a peer agent" in peer and PEER_WARNING in peer
+    assert "1 peer message" in peer and PEER_WARNING not in peer
     stub = render([item(2, 1), item(3, 0)], inline=False).splitlines()[0]
-    assert "2 new messages from peer agents, not shown here." in stub
-    assert 'Call read("#build") now to see them; after reading, reply with say() or pass()' in stub
-    assert stub.endswith(PASS_ADVICE) and PEER_WARNING in stub
+    assert stub == "[switchboard] #build: 2 not shown."
+    assert 'Not shown: read("#build") before say() or pass().' in render([item(2, 1)], inline=False)
 
 
 def test_stubs_make_read_the_first_step_never_pass_instead() -> None:
     """The live bug: "Call read(...) to see them, or pass(...)" let a model pass unread (§24)."""
     for items in ([item(2, 1)], [item(2, 1), item(3, 0)], [item(1, 2), item(2, 1)]):
         t = render(items, inline=False)
-        head, foot = t.splitlines()[0], t.splitlines()[-1]
-        assert ", or pass(" not in t and 'or pass("#build")' not in head
-        assert head.index('Call read("#build") now') < head.index("pass()")
-        assert foot.startswith('Lines "not shown here": call read("#build") first; pass() is refused')
-        assert foot.index('read("#build")') < foot.index('pass("#build")')
+        foot = t.splitlines()[-1]
+        assert ", or pass(" not in t
+        assert foot == 'Not shown: read("#build") before say() or pass().'
+        assert foot.index('read("#build")') < foot.index("pass()")
     one = render([item(1, 2), item(2, 1)], inline=False).splitlines()[0]
-    assert "1 new message from a peer agent, not shown here." in one and "now to see it;" in one
+    assert "1 not shown." in one
     # re-delivered and reminded stubs: read first there too
     again = dataclasses.replace(item(4, 1), redelivered=True, reminders=1)
     t = render([again], inline=False)
-    assert envelope.AGAIN_NOTE_STUB in t and envelope.REMINDER_NOTE_STUB in t
-    assert envelope.AGAIN_NOTE not in t and envelope.REMINDER_NOTE not in t
-    for note in (envelope.AGAIN_NOTE_STUB, envelope.REMINDER_NOTE_STUB):
-        assert note.index("read()") < note.index("pass()")
-    # inline batches keep the plain footer and notes
+    assert t.index('read("#build") before say() or pass()') < t.index(envelope.AGAIN_NOTE)
+    assert envelope.AGAIN_NOTE in t and envelope.REMINDER_NOTE in t
+    # inline batches keep only the compact unanswered notes
     t = render([again], inline=True)
-    assert envelope.AGAIN_NOTE in t and "not shown here" not in t
-    assert t.splitlines()[-1].startswith('Reply with say("#build", text, reply_to=<id>) or pass("#build").')
+    assert envelope.AGAIN_NOTE in t and envelope.REMINDER_NOTE in t and "not shown here" not in t
+    assert PASS_ADVICE not in t
 
 
 def test_every_stub_rendering_puts_read_before_pass() -> None:
@@ -84,9 +104,8 @@ def test_every_stub_rendering_puts_read_before_pass() -> None:
         if not any(it.sender_kind == "agent" for it in items):
             assert "not shown here" not in t
             continue
-        head = t.splitlines()[0]
-        assert ", or pass(" not in t and head.index("read(") < head.index("pass()")
-        assert t.splitlines()[-1].startswith('Lines "not shown here": call read("#build") first')
+        foot = next(line for line in t.splitlines() if line.startswith("Not shown:"))
+        assert ", or pass(" not in t and foot.index("read(") < foot.index("pass()")
         assert envelope.frame_reserve("#build", "alice", len(items)) >= len(t) - sum(
             len(x) + 1 for x in t.splitlines()[2:] if x.startswith("- id=")
         )
@@ -100,7 +119,7 @@ def test_list_lines_and_footer() -> None:
     assert lines[2].startswith("- id=118 at=") and "from=alice kind=human to_you=yes prio=human" in lines[2]
     assert lines[2].endswith('text="please add validation"')
     assert "kind=agent" in lines[3] and "to_you=no prio=chatter" in lines[3]
-    assert lines[-1].startswith('Reply with say("#build", text, reply_to=<id>) or pass("#build").')
+    assert lines[-1].startswith("- id=119 ") and PASS_ADVICE not in t
 
 
 def test_stubs_hide_peer_text_but_not_human_text() -> None:
@@ -182,6 +201,8 @@ def test_render_join() -> None:
     assert t.startswith("[switchboard] You joined #build as claude-1.")
     assert "Room rules:" in t and "worktree" in t and "codex-1 (codex)" in t
     assert 'A message marked "not shown here" must be read with read() first' in t
+    assert 'say("#build", text, reply_to=<id>) or pass("#build")' in t
+    assert t.count(envelope.PEER_WARNING) == 1
     assert "Markdown" in t  # room rule 5 (DESIGN.md §29)
     assert "join yk:j0123456789abcdef" in t and "[TEST MODE]" in t
     assert envelope.NONCE_RE.search(t).group(1) == "0123456789abcdef"
@@ -264,6 +285,7 @@ def test_render_join_says_how_many_earlier_messages_and_the_exact_read_call() ->
         earlier=0,
     )
     assert "No messages yet." in t3 and "earlier message" not in t3
+    assert envelope.PEER_WARNING in t3  # even a quiet room gives every harness the safety line
 
 
 def test_reminder_and_simple() -> None:

@@ -248,6 +248,8 @@ class Engine:
         )
         if mark_seen and fit.rules_version:
             self.store.mark_rules_seen(m.id, fit.rules_version)
+        # each caller records ``chars=len(text)`` in the batch's ``offer`` event: what the agent
+        # was handed, for ``switchboard report``'s characters by path (DESIGN.md §12.6, #275)
         return text
 
     def _rooms_of(self, participant_id: int) -> list[int]:
@@ -480,6 +482,7 @@ class Engine:
             path=b.path,
             n=len(items),
             counted=rel.counted,
+            chars=len(text),
             ids=_ids(items),
         )
         out += self._arm_pull(b, p)
@@ -532,6 +535,7 @@ class Engine:
             path=b.path,
             n=len(items),
             counted=rel.counted,
+            chars=len(text),
             ids=_ids(items),
         )
         # the follow-up starts a turn: busy until a hook says otherwise
@@ -596,6 +600,7 @@ class Engine:
             path=path,
             n=len(items),
             counted=rel.counted,
+            chars=len(text),
             ids=_ids(items),
         )
         out: list[Action] = [
@@ -923,6 +928,7 @@ class Engine:
             path=path,
             n=len(items),
             counted=False,
+            chars=len(text),
             ids=_ids(items),
         )
         out += self._arm_pull(b, p)
@@ -1342,8 +1348,7 @@ class Engine:
             pass  # Devin: this hook may be a subagent's (see above)
         elif E in adapter.context_events(p) and p.status != "waiting-approval":
             if E == "SessionStart":
-                if ev.source in ("clear", "compact"):
-                    hook_out = self._reminder(p)
+                hook_out = self._reminder(p)
             else:
                 hook_out, acts = self._claim_context(p, "hook_ups" if E == "UserPromptSubmit" else "hook_ctx")
                 out += acts
@@ -1488,6 +1493,7 @@ class Engine:
                 path=b.path,
                 n=len(items),
                 counted=rel.counted,
+                chars=len(text),
                 ids=_ids(items),
             )
             out += self.set_status(p, "busy", "stop:block")
@@ -1613,6 +1619,7 @@ class Engine:
             path=path,
             n=len(items),
             counted=False,
+            chars=len(text),
             ids=_ids(items),
         )
         return HookOut("context", text, b.id, ack), [Snapshot(room.id)]

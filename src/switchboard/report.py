@@ -16,6 +16,16 @@ SQLite connection (the broker may be running or stopped):
 - per agent: turns (``turn_start`` events), wakes and continuations, posts vs
   passes, rate-limited says, what was still undelivered at the end, the model
   its hooks reported;
+- **characters by path** (§12.6, issue #275): what ``join``, ``wake``, mid-task
+  context, ``read()``/``say()``, a ``wait()`` answer and a ``/catchup`` request
+  cost each agent to read, in characters and an estimated token count
+  (characters ÷ 4), from the ``chars`` each batch's ``offer`` event carries (the
+  length of the text the engine rendered) plus a ``join_chars`` event and the
+  catch-up request's own message length -- no text is recorded to measure this;
+- per agent, a turn spent for nothing: of the confirmed wakes, how many carried
+  nothing addressed to the agent (chatter alone, "unaddressed"), and the wakes
+  it answered with a ``pass()`` and nothing posted ("passes after wake"), both
+  from ``batches``, ``deliveries`` and ``events`` alone;
 - rules that fired: loop guard, budget, rate limit, watchdog, re-deliver,
   expiries by reason, pauses, holds (``/hold`` and approval prompts), Devin
   re-arms, parked spells ("needs a poke"), Cursor parks;
@@ -38,6 +48,7 @@ import sqlite3
 import statistics
 import time
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -64,6 +75,22 @@ LINK_EVIDENCE, LINK_TIER = "link:turn/start", "codex:link"
 PRIO_REASON = {2: "human", 1: "mention", 0: "chatter"}
 LABEL_ORDER = ("turn start", "first hook", "first action", "in context", "pulled")
 REASON_ORDER = ("human", "mention", "chatter")
+
+# characters by path (§12.6, issue #275: token-budget measurement cut 5 of #141's spike).
+# "join" (the join() answer, every call) and "catchup" (a /catchup request, counted on its
+# agent) aren't batches; everything else is a rendered batch: a wait() answer by its path,
+# a wake or mid-task context by its kind, a read()/say() answer by ``PULL_PATHS`` (the same
+# grouping as the latency tables' "pulled").
+CHAR_PATH_ORDER = ("join", "wake", "mid_task", "read", "wait", "catchup")
+CHAR_PATH_LABEL = {
+    "join": "join",
+    "wake": "wake",
+    "mid_task": "mid-task context",
+    "read": "read",
+    "wait": "wait answers",
+    "catchup": "catch-up",
+}
+CHARS_PER_TOKEN = 4.0  # the spike's estimate: characters ÷ 4
 
 _PATH_RE = re.compile(r"(?:~|/(?:Users|home|private|tmp|var|opt|Volumes|root))/[^\s\"',;)]*")
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
@@ -227,6 +254,67 @@ def _stats(xs: list[float]) -> dict[str, Any]:
     }
 
 
+def _char_path(b: sqlite3.Row) -> str | None:
+    """Which characters-by-path bucket a batch falls in (§12.6): a ``wait()`` answer by its
+    path first (a wake that a ``wait()`` returned, a Devin agent's usual, is a ``wait`` batch
+    of kind ``wake``), then a wake or mid-task context by its kind, then a ``read()``/``say()``
+    answer. ``None`` for a batch this report doesn't bucket."""
+    if b["path"] == "wait":
+        return "wait"
+    if b["kind"] == "wake":
+        return "wake"
+    if b["kind"] == "priority":
+        return "mid_task"
+    if b["path"] in PULL_PATHS:
+        return "read"
+    return None
+
+
+def _chars_stats(xs: list[int]) -> dict[str, Any]:
+    total = sum(xs)
+    return {"n": len(xs), "chars": total, "tokens_est": round(total / CHARS_PER_TOKEN)}
+
+
+def _chars_by_path(chars: dict[str, list[int]]) -> dict[str, Any]:
+    """``{path: {n, chars, tokens_est}}``, only the paths that happened, in ``CHAR_PATH_ORDER``."""
+    return {path: _chars_stats(chars[path]) for path in CHAR_PATH_ORDER if chars.get(path)}
+
+
+def _passes_after_wake(
+    batches: Sequence[sqlite3.Row], msgs: dict[int, sqlite3.Row], room_ev: Sequence[sqlite3.Row]
+) -> Counter[int]:
+    """Per membership, the wakes the agent answered with a ``pass()`` and nothing posted
+    (issue #275): a turn spent for nothing. Walks each membership's confirmed wakes (when they
+    reached it), chat posts and passes in time order. A wake is open until the agent posts or
+    passes; the first pass while one is open counts once (a second ``pass()`` in the same turn
+    is not a second wasted turn), and a post closes it uncounted. Ties break
+    wake-before-post-before-pass, so a pass timestamped with the wake that caused it still counts."""
+    ORDER = {"wake": 0, "post": 1, "pass": 2}
+    evs: dict[int, list[tuple[float, int]]] = defaultdict(list)
+    for b in batches:
+        if b["kind"] == "wake" and b["state"] == "confirmed" and b["confirmed_at"] is not None:
+            evs[b["membership_id"]].append((b["confirmed_at"], ORDER["wake"]))
+    for msg in msgs.values():
+        mid_ = msg["sender_membership_id"]
+        if msg["sender_kind"] == "agent" and msg["kind"] == "chat" and mid_ is not None:
+            evs[mid_].append((msg["ts"], ORDER["post"]))
+    for e in room_ev:
+        if e["kind"] == "pass" and e["membership_id"] is not None:
+            evs[e["membership_id"]].append((e["ts"], ORDER["pass"]))
+    out: Counter[int] = Counter()
+    for mid_, pts in evs.items():
+        pending = False
+        for _, kind in sorted(pts):
+            if kind == ORDER["wake"]:
+                pending = True
+            elif kind == ORDER["post"]:
+                pending = False
+            elif pending:  # kind == ORDER["pass"]: the wake is spent
+                out[mid_] += 1
+                pending = False
+    return out
+
+
 def build(
     con: sqlite3.Connection, room_name: str, *, since: float | None = None, now: float | None = None
 ) -> dict[str, Any]:
@@ -274,12 +362,17 @@ def build(
     msgs = {r["id"]: r for r in store.report_messages(rid, start)}
     prio = {(r["membership_id"], r["message_id"]): r["prio"] for r in store.report_delivery_priorities(rid)}
 
-    # message ids per batch, from the offer events (M7); older databases: the deliveries' last batch
+    # message ids per batch, from the offer events (M7); older databases: the deliveries' last batch.
+    # The same events carry the length of the text each batch handed over (``chars``, #275); an
+    # offer from before that has none, and counts for nothing in the characters measure.
     offer_ids: dict[int, list[int]] = {}
+    offer_chars: dict[int, int] = {}
     for r in store.report_offer_events(rid, start):
         d = _data(r["data"])
         if isinstance(d.get("batch_id"), int) and isinstance(d.get("ids"), list):
             offer_ids[d["batch_id"]] = [i for i in d["ids"] if isinstance(i, int)]
+        if isinstance(d.get("batch_id"), int) and type(d.get("chars")) is int:
+            offer_chars[d["batch_id"]] = d["chars"]
     last_batch: dict[int, list[int]] = defaultdict(list)
     for r in store.report_delivery_batches(rid):
         last_batch[r["batch_id"]].append(r["message_id"])
@@ -291,6 +384,46 @@ def build(
     room_all = store.report_room_events(rid)
     part_all = store.report_participant_events(pids)
     room_ev = [e for e in room_all if e["ts"] >= start]
+
+    # ---- characters by path (§12.6, issue #275): join, catch-up and each batch kind/path, in
+    # characters and an estimated token count (characters ÷ 4), per agent. A batch's length is
+    # its offer event's ``chars``. Join and catch-up aren't batches: join's own ``join_chars``
+    # event carries its length, and a catch-up request is an ordinary human message, so its
+    # length comes from the message it posted.
+    chars: dict[int, dict[str, list[int]]] = defaultdict(lambda: defaultdict(list))
+    for b in batches:
+        cpath = _char_path(b)
+        if cpath is not None and b["id"] in offer_chars:
+            chars[b["membership_id"]][cpath].append(offer_chars[b["id"]])
+    for cev in room_ev:
+        if cev["kind"] == "join_chars" and cev["membership_id"] is not None:
+            c = _data(cev["data"]).get("chars")
+            if type(c) is int:
+                chars[cev["membership_id"]]["join"].append(c)
+        elif cev["kind"] == "catchup":
+            d = _data(cev["data"])
+            agent_mid = d.get("agent")
+            msg = msgs.get(d.get("message_id")) if isinstance(d.get("message_id"), int) else None
+            if msg is not None and isinstance(agent_mid, int):
+                chars[agent_mid]["catchup"].append(msg["chars"])
+
+    # ---- wakes not addressed to the agent (issue #275): every item in the wake was chatter --
+    # no @mention, nothing from the human -- so it cost a turn for nothing the agent was asked
+    # to do. ``prio`` already carries (human, mention, chatter) per recipient (§8.1).
+    wake_total: Counter[int] = Counter()
+    wake_addressed: Counter[int] = Counter()
+    for b in batches:
+        if b["kind"] != "wake" or b["state"] != "confirmed":
+            continue
+        ids = offer_ids.get(b["id"]) or last_batch.get(b["id"], [])
+        wake_total[b["membership_id"]] += 1
+        if any(prio.get((b["membership_id"], mid_), 0) >= 1 for mid_ in ids):
+            wake_addressed[b["membership_id"]] += 1
+
+    # ---- wakes answered with a pass() and nothing posted (issue #275): a turn spent for
+    # nothing
+    passes_after_wake = _passes_after_wake(batches, msgs, room_ev)
+
     # the window ends at the room's last activity (its messages, its events, the batches that
     # reached its members), so a report made later reads the same
     batch_times = [
@@ -453,6 +586,10 @@ def build(
                     + rearms.get(m.membership_id, 0),
                     "by_kind": dict(sorted(Counter(b["wake_kind"] or "-" for b in wakes).items())),
                     "reminders": sum(1 for b in wakes if b["wake_reason"] == "reminder"),
+                    # of the confirmed wakes, how many carried nothing addressed to this agent
+                    # (no @mention, nothing from the human): issue #275
+                    "unaddressed": wake_total.get(m.membership_id, 0)
+                    - wake_addressed.get(m.membership_id, 0),
                 },
                 "continuations": sum(1 for b in mb if b["path"] in CONTINUE_PATHS)
                 + rearms.get(m.membership_id, 0),
@@ -461,7 +598,11 @@ def build(
                 "pulls": sum(1 for b in mb if b["kind"] == "pull"),
                 "posts": posts.get(m.membership_id, 0),
                 "passes": passes.get(m.membership_id, 0),
+                # wakes the agent answered with a pass() and nothing posted: a turn spent for
+                # nothing (issue #275)
+                "passes_after_wake": passes_after_wake.get(m.membership_id, 0),
                 "rate_limited": rate_limited.get(m.membership_id, 0),
+                "chars": _chars_by_path(chars.get(m.membership_id, {})),
                 "parked": {
                     "spells": len(parked.get(m.membership_id, [])),
                     "seconds": round(sum(x for x, _ in parked.get(m.membership_id, [])), 1),
@@ -532,6 +673,12 @@ def build(
             "at": iso(close_ev[-1]["ts"]) if close_ev else None,
             "by": _safe(last.get("by")) if isinstance(last.get("by"), str) else None,
         }
+    # room-wide characters by path (§12.6, issue #275): every agent's added up
+    room_chars: dict[str, list[int]] = defaultdict(list)
+    for per_mid in chars.values():
+        for cpath, xs in per_mid.items():
+            room_chars[cpath] += xs
+
     return {
         "room": display_room(room.name),
         "closed": closed,
@@ -549,6 +696,7 @@ def build(
             "passes": sum(passes.values()),
             "members": len(members),
         },
+        "characters": _chars_by_path(room_chars),
         "latency": {
             "by_harness": by_harness,
             "by_tier": by_tier,
@@ -798,6 +946,45 @@ def render_markdown(rep: dict[str, Any], *, title: str | None = None, paint: Any
     else:
         L.append("None.")
     L.append("")
+    L.append("## Characters sent (token-budget measurement, issue #275)")
+    L.append("")
+    L.append(
+        "What each agent's path cost it to read, in characters and an estimated token count"
+        f" (characters ÷ {CHARS_PER_TOKEN:.0f}). `join`: the `join()` answer (rules and recent"
+        " messages), every call, first join or a rejoin. `wake`: what woke an idle agent (an inbox"
+        " frame, a Codex turn, a Cursor or Devin continuation). `mid-task context`: a steer or hook"
+        " context delivered while it was busy. `read`: `read()`/`say()` answers. `wait answers`:"
+        " what a `wait()` call returned, the wakes of an agent that waits included. `catch-up`: a"
+        " `/catchup` request, counted on the agent asked to catch up. A path with nothing to show"
+        " is left out, and so is a delivery recorded by a release before this measure existed."
+    )
+    L.append("")
+    L.append(_row(["path", "n", "characters", "tokens (est)"]))
+    L.append(_row(["---"] * 4))
+    chars_room = rep["characters"]
+    if chars_room:
+        for path in CHAR_PATH_ORDER:
+            if path in chars_room:
+                c = chars_room[path]
+                L.append(_row([CHAR_PATH_LABEL[path], c["n"], c["chars"], c["tokens_est"]]))
+    else:
+        L.append(_row(["(none)", "0", "0", "0"]))
+    L.append("")
+    L.append("### By agent")
+    L.append("")
+    any_agent_chars = any(a["chars"] for a in rep["agents"])
+    if any_agent_chars:
+        L.append(_row(["agent", "path", "n", "characters", "tokens (est)"]))
+        L.append(_row(["---"] * 5))
+        for a in rep["agents"]:
+            who = f"{a['name']}@{a['host']}" if a.get("host") else a["name"]
+            for path in CHAR_PATH_ORDER:
+                if path in a["chars"]:
+                    c = a["chars"][path]
+                    L.append(_row([who, CHAR_PATH_LABEL[path], c["n"], c["chars"], c["tokens_est"]]))
+    else:
+        L.append("None.")
+    L.append("")
     L.append("## Agents")
     L.append("")
     L.append(
@@ -809,17 +996,19 @@ def render_markdown(rep: dict[str, Any], *, title: str | None = None, paint: Any
                 "tier at end",
                 "turns",
                 "wakes (confirmed/offered)",
+                "wakes unaddressed",
                 "continuations",
                 "mid-task",
                 "posts",
                 "passes",
+                "passes after wake",
                 "rate-limited",
                 "parked",
                 "undelivered at end",
             ]
         )
     )
-    L.append(_row(["---"] * 13))
+    L.append(_row(["---"] * 15))
     for a in rep["agents"]:
         wk = a["wakes"]
         und = a["undelivered_at_end"]
@@ -837,10 +1026,12 @@ def render_markdown(rep: dict[str, Any], *, title: str | None = None, paint: Any
                     tier,
                     a["turns"],
                     f"{wk['confirmed']}/{wk['offered']}",
+                    wk["unaddressed"],
                     a["continuations"],
                     a["mid_task"],
                     a["posts"],
                     a["passes"],
+                    a["passes_after_wake"],
                     a["rate_limited"],
                     pk_s,
                     und_s,
@@ -853,7 +1044,10 @@ def render_markdown(rep: dict[str, Any], *, title: str | None = None, paint: Any
         " prompts and switchboard's"
         " wakes; a Devin agent in its `wait()` loop stays in one turn). Wakes are batches that could start a"
         " turn or return a `wait()` (counted against the budget, with Devin re-arms); continuations are"
-        " Cursor follow-ups, Devin Stop messages and re-arms. Turns and approval prompts count only while"
+        ' Cursor follow-ups, Devin Stop messages and re-arms. "Wakes unaddressed": of the confirmed wakes,'
+        " how many carried nothing addressed to this agent (no @mention, nothing from the human) --"
+        ' woken for chatter alone. "Passes after wake": confirmed wakes the agent answered with a `pass()`'
+        " and nothing posted, a turn spent for nothing. Turns and approval prompts count only while"
         ' the agent was a member of the room, inside the window. "Parked": spells with messages waiting'
         ' and no way to wake the agent ("needs a poke"), and their total time. "Undelivered": pending'
         " (wake-eligible), stubs (already announced, `read()` only) or offered at the end."
