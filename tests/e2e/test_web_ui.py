@@ -710,7 +710,7 @@ AVATAR_LOOK = """async (el) => {
 @pytest.mark.parametrize("scheme", ["light", "dark"])
 def test_codex_and_cursor_avatars_show_their_icons(ui: UI, scheme: str) -> None:
     """#62: a Codex or Cursor agent's avatar is its vendor's icon for the scheme, loaded from the
-    page's own origin under the CSP, with the monogram unseen. Claude Code shows our own >_ glyph
+    page's own origin under the CSP, with the monogram unseen. Claude Code shows our own bubble
     (Anthropic allows its name in text, not its icon), and Devin keeps its DV monogram."""
     page = ui.open(color_scheme=scheme)
     member = page.locator("#buddy-list .member")
@@ -726,10 +726,51 @@ def test_codex_and_cursor_avatars_show_their_icons(ui: UI, scheme: str) -> None:
         look = member.filter(has_text=name).locator(".avatar").evaluate(AVATAR_LOOK)
         assert look["img"] is None and look["color"] != "rgba(0, 0, 0, 0)", (name, look)
     claude = member.filter(has_text="claude-1").locator(".avatar")
-    expect(claude.locator("svg.ic-prompt")).to_be_visible()
+    expect(claude.locator("svg.ic-bubble")).to_be_visible()
     expect(claude).not_to_contain_text("CC")
-    expect(page.locator(".harness-head .avatar.h-claude svg.ic-prompt")).to_have_count(1)
+    expect(claude).not_to_contain_text("Claude")  # a 32 px row has no room for the word
+    expect(page.locator(".harness-head .avatar.h-claude svg.ic-bubble")).to_have_count(1)
     expect(member.filter(has_text="devin-1").locator(".avatar")).to_contain_text("DV")
+
+
+# Where the Inspector's avatar, its word and the name beside it sit, in CSS pixels.
+NAMED_AVATAR_BOXES = """() => {
+  const box = e => {
+    const r = e.getBoundingClientRect();
+    return {l: r.left, r: r.right, t: r.top, b: r.bottom};
+  };
+  const av = document.querySelector('#insp-body .insp-id > .avatar');
+  const word = av.querySelector('.av-word');
+  return {av: box(av), word: word && box(word), name: box(document.getElementById('insp-name')),
+          wordFits: !!word && word.scrollWidth <= word.clientWidth + 0.5};
+}"""
+
+
+@pytest.mark.parametrize("phone", [False, True])
+def test_the_inspector_writes_claude_under_claude_code_s_bubble(ui: UI, phone: bool) -> None:
+    """#62: the Inspector's large Claude Code avatar writes "Claude" under the bubble, inside the
+    tile, without the tile running into the agent's name; another harness's large avatar has no
+    word. Fails if the word is missing, spills out of its 48 px tile, or the avatar column stays
+    40 px so the tile overlaps the name."""
+    page = ui.open(**PHONE) if phone else ui.open()
+    if phone:
+        page.click("#buddy-toggle")
+    with page.expect_response(lambda r: "/members/claude-1" in r.url and r.request.method == "GET"):
+        page.click('#buddy-list .member[data-name="claude-1"]')
+    expect(page.locator("#insp-name")).to_contain_text("claude-1")
+    av = page.locator("#insp-body .insp-id > .avatar.h-claude")
+    expect(av.locator("svg.ic-bubble")).to_be_visible()
+    expect(av.locator(".av-word")).to_have_text("Claude")
+    boxes = page.evaluate(NAMED_AVATAR_BOXES)
+    a, w, n = boxes["av"], boxes["word"], boxes["name"]
+    assert boxes["wordFits"], boxes
+    assert a["l"] <= w["l"] and w["r"] <= a["r"] and a["t"] <= w["t"] and w["b"] <= a["b"], boxes
+    assert a["r"] < n["l"], boxes  # the tile stops before the name starts
+    page.click("#insp-back")
+    with page.expect_response(lambda r: "/members/codex-1" in r.url and r.request.method == "GET"):
+        page.click('#buddy-list .member[data-name="codex-1"]')
+    expect(page.locator("#insp-name")).to_contain_text("codex-1")
+    expect(page.locator("#insp-body .insp-id > .avatar .av-word")).to_have_count(0)
 
 
 # The dot (.remote-state::before) of the row or card head at sel, which is the seeded fpga-pi's

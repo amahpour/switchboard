@@ -18,5 +18,6 @@ cursor-light.png, cursor-dark.png
   Source: https://cursor.com/brand ("Download brand assets", Avatars/Square/PNG/
   AVATAR_SQUARE_2D_LIGHT.png and AVATAR_SQUARE_2D_DARK.png), unchanged.
 
-Claude Code's avatar is switchboard's own >_ glyph, not Anthropic's icon: Anthropic's terms allow
-naming Claude Code in plain text only. Devin keeps its DV tile until its icon is cleared.
+Claude Code's avatar is switchboard's own chat-bubble drawing, not Anthropic's icon, with "Claude"
+written under it in plain text on the Inspector: Anthropic's terms allow naming Claude Code in
+plain text only. Devin keeps its DV tile until its icon is cleared.

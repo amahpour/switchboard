@@ -47,6 +47,8 @@ class FakeCodexDaemon:
         self.auto_idle_s: float | None = None  # after turn/start, go idle after this long
         # 0.156.1: thread/read lists an in-progress turn (id, status) without its items (M4 live)
         self.hide_in_progress_items = True
+        # tid -> set once the join's tool result is in the thread (expect_proof / prove)
+        self.proof_gates: dict[str, threading.Event] = {}
         self.lock = threading.Lock()
 
     # ------------------------------------------------------------ lifecycle
@@ -127,6 +129,14 @@ class FakeCodexDaemon:
         with self.lock:
             self.threads[tid]["turns"][-1]["items"].append(item)
 
+    def expect_proof(self, tid: str) -> None:
+        """A join is on its way: hold ``thread/read`` of ``tid`` until ``prove`` puts its result
+        in the history. Real Codex appends an MCP tool's result as it gets it, so no read sees
+        the thread without it; the test learns the nonce only after a subprocess round trip,
+        which under load outlasts the fast proof schedule (attempts at 0.2, 0.5 and 1 s)."""
+        with self.lock:
+            self.proof_gates[tid] = threading.Event()
+
     def prove(self, tid: str, join_text: str) -> None:
         """The join's MCP tool result, as it would appear in the thread's history."""
         self.add_item(
@@ -140,6 +150,10 @@ class FakeCodexDaemon:
                 "result": {"content": [{"type": "text", "text": join_text}]},
             },
         )
+        with self.lock:
+            gate = self.proof_gates.pop(tid, None)
+        if gate is not None:
+            gate.set()
 
     def begin_turn(self, tid: str) -> str:
         """The human typed a prompt: a turn in progress."""
@@ -230,6 +244,11 @@ class FakeCodexDaemon:
                     continue
                 if "id" not in msg:
                     continue  # a notification (initialized)
+                if msg["method"] == "thread/read":
+                    with self.lock:
+                        gate = self.proof_gates.get((msg.get("params") or {}).get("threadId"))
+                    if gate is not None:  # bounded: a test that never proves still gets an answer
+                        await asyncio.get_running_loop().run_in_executor(None, gate.wait, 10.0)
                 out = self._answer(msg["method"], msg.get("params") or {})
                 out["id"] = msg["id"]
                 await ws.send(json.dumps(out))

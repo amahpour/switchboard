@@ -49,7 +49,7 @@ async def test_a_board_from_open_to_settled(broker: InProcBroker) -> None:
         assert r["ok"] and r["board"].startswith(f"Review of {PR} at abc1234: settled")
         r = await reviewer.call(
             "review", room="#build", action="raise", title="discount applied after tax",
-            file="shop/cart.py", lines="40-58", detail="total() taxes first",
+            where="shop/cart.py:40-58", detail="total() taxes first",
         )  # fmt: skip
         assert (
             r["item"] == "F1" and "F1 [raised] discount applied after tax (shop/cart.py:40-58)" in r["board"]
@@ -414,8 +414,7 @@ async def test_a_cards_links_and_history_come_with_the_board(broker: InProcBroke
                 room="#build",
                 action="raise",
                 title="expired codes",
-                file="shop/codes.py",
-                lines="12-19",
+                where="shop/codes.py:12-19",
             )
             await author.call("review", room="#build", action="concede", item="F1")
             await author.call("review", room="#build", action="fix", item="F1", commit="9a1b2c3d4e5f")
