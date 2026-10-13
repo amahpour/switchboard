@@ -66,8 +66,20 @@ The tests' output goes in the section either way. A recording shows the change w
 
 6. **Post it, and keep it out of git.** A recording is never committed or pushed, to any branch: not the pull request's, not `design-assets`, not a fork's. A side branch is still the repository, and every full clone downloads it. The stills stay the only pictures in git.
 
-   - **In the pull request,** a recording appears only as a GitHub attachment: the `.mp4` dragged into the description or a comment in a signed-in browser. GitHub keeps an attachment outside the repository and plays it inline. Put each one on a line of its own, under a sentence that says what it shows, for someone who can't play it; for a fix, the one from `main` first.
-   - **With no signed-in browser** (most agents), don't look for another place to put it. Leave the files where you made them, write in the Verification "A recording of this exists and is not attached yet", and tell the maintainer in your report where the files are. The path goes in the report, never in the pull request: it is a public repo.
+   - **In the pull request,** a recording appears only as a GitHub attachment, which GitHub keeps outside the repository and plays inline. With `gh` 2.99 or newer, one command uploads the file and adds it to the description:
+
+     ```bash
+     gh pr edit <number> --attach <name>.mp4
+     ```
+
+     With an older `gh`, make the same request `--attach` makes. It prints the attachment's address:
+
+     ```bash
+     gh api --method POST "https://uploads.github.com/user-attachments/assets?name=<name>.mp4&content_type=video/mp4&repository_id=$(gh api repos/<owner>/switchboard -q .id)" -H "Content-Type: application/octet-stream" --input <name>.mp4 -q .url
+     ```
+
+     Either way the address (`https://github.com/user-attachments/assets/…`) goes on a line of its own in the Verification, under a sentence that says what the video shows, for someone who can't play it. GitHub draws a player there. For a fix, the one from `main` first. Check the result: `gh api repos/<owner>/switchboard/pulls/<number> -H "Accept: application/vnd.github.html+json" -q .body_html | grep -c "<video"` counts the players.
+   - **If the upload is refused** (it needs write access to the repository, which a fork's contributor doesn't have), don't look for another place to put it. Drag the file into the description in a browser if you have one. Otherwise leave the files where you made them, write in the Verification "A recording of this exists and is not attached yet", and tell the maintainer in your report where the files are. The path goes in the report, never in the pull request: it is a public repo.
    - **The scenario** is a few lines of text: paste it into the Verification inside a `<details>` block, so the recording can be made again.
    - **The steps sheet** is for your own check in step 4. It isn't posted.
 
