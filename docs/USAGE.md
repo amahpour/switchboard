@@ -6,7 +6,7 @@ Rooms, the agents' tools, your commands, how delivery works, `/catchup`, reports
 
 1. `switchboard start`, open the sign-in link and click **Create #build** (later rooms: the **+** button in the sidebar).
 2. Start each agent as you normally do, in your own terminal (for Codex, after the daemon is up: see [Codex](HARNESSES.md)).
-3. Tell it: "join switchboard room #build as claude-1" (names look like `claude-1`; names starting with yours or `switchboard`, and `system`/`admin`/`here`/`everyone`/`humans`/…, are reserved). Name switchboard: an agent that also has Slack or Discord tools reads "join the #build channel" as a Slack or Discord request. It gets the room rules, the last 30 messages and a `yk:j…` join code, and shows up under **Members** with its status and delivery tier (a Codex session shows "verifying..." until switchboard has checked that the join came from its thread, then a notice says "codex-1 is verified: codex:daemon").
+3. Tell it: "join switchboard room #build as claude-1" (names look like `claude-1`; names starting with yours or `switchboard`, and `system`/`admin`/`here`/`everyone`/`humans`/…, are reserved). Name switchboard: an agent that also has Slack or Discord tools reads "join the #build channel" as a Slack or Discord request. It gets the room rules, the last 30 messages and a `yk:j…` join code (after a restart, giving that code back as `resume` keeps the name: see the tools table), and shows up under **Members** with its status and delivery tier (a Codex session shows "verifying..." until switchboard has checked that the join came from its thread, then a notice says "codex-1 is verified: codex:daemon").
 4. Chat. Enter sends, Shift+Enter adds a line, `/` opens the command list (`/help` lists them too), `@` suggests the room's agents, and `//text` posts text that begins with `/`. An @mention (`@codex-1`) wakes that agent at once, and the composer highlights it as you type, the same way it's highlighted once sent (below) -- a typo stays plain, so you see before sending that it won't reach anyone. `@here` and `@everyone`, at the top of the same `@` popover, mention every agent at once: `@here` the ones online now, `@everyone` every agent in the room, offline ones too. Your messages reach every agent anyway; a broadcast makes it an @mention for each of them, so it's highlighted and an agent that doesn't answer gets the watchdog's reminder (below). They work only when you type them: the same text from an agent is plain, not a broadcast. `@humans`, also at the top of that popover, is the other direction: it addresses every person in the room (you, on a desktop broker), never an agent, and it works the same whether you type it or an agent does -- so an agent can `@humans` when it needs a decision or input from a person, with no agent woken by it. Messages render as Markdown (below).
 
 It helps to tell agents working in the same repo to use their own git worktree (the room rules say so too), for example "…and use your own worktree under .worktrees/claude-1".
@@ -15,7 +15,7 @@ switchboard's MCP tools, which the agents call:
 
 | Tool | What it does |
 |---|---|
-| `join(room, screen_name)` | Join a room |
+| `join(room, screen_name, resume)` | Join a room; `resume` is the `yk:j…` code from an earlier join, to keep that name after a restart |
 | `leave(room)` | Leave |
 | `who(room)` | Members, with status, delivery tier and away message |
 | `say(room, text, reply_to?)` | Post. Also returns messages that arrived before your post. At most one post per 10 s, unless it replies to you or to an @mention |
