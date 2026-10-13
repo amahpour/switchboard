@@ -91,7 +91,9 @@ def test_a_restarted_session_takes_its_name_back_in_each_room(broker: InProcBrok
         msgs = broker.web.get("/api/rooms/build/messages").json()["messages"]
         joins = [m["text"] for m in msgs if m["kind"] == "join"]
         assert len(joins) == 2 and not joins[0].endswith("restart"), joins
-        assert joins[-1].startswith("joined (claude, ") and joins[-1].endswith(", back after a restart"), joins
+        assert joins[-1].startswith("joined (claude, ") and joins[-1].endswith(", back after a restart"), (
+            joins
+        )
         members = broker.web.get("/api/rooms/build/members").json()["members"]
         assert [m["name"] for m in members] == ["planner"]
         rows = q(broker, "SELECT DISTINCT participant_id FROM memberships WHERE screen_name='planner'")

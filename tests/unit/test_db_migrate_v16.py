@@ -32,6 +32,8 @@ def test_memberships_gain_a_null_join_code_with_a_checked_backup(tmp_path: Path)
     con = db.open_db(p)
     assert db.schema_version(con) == db.SCHEMA_VERSION == 16
     assert db.row_counts(con, db.TABLES) == before
-    assert con.execute("SELECT COUNT(*) FROM memberships WHERE join_code_hash IS NULL").fetchone()[0] == members
+    assert (
+        con.execute("SELECT COUNT(*) FROM memberships WHERE join_code_hash IS NULL").fetchone()[0] == members
+    )
     assert p.with_name(p.name + ".v15.bak").exists()
     con.close()

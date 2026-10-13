@@ -704,9 +704,13 @@ class AgentService:
         resume = params.get("resume")
         code: str | None = None
         if resume is not None:
-            got = JOIN_CODE_RE.match(resume.strip()) if isinstance(resume, str) and len(resume) <= 40 else None
+            got = (
+                JOIN_CODE_RE.match(resume.strip()) if isinstance(resume, str) and len(resume) <= 40 else None
+            )
             if got is None:
-                raise ServiceError("bad_request", "resume is the join code from your earlier join: yk:j and 16 hex")
+                raise ServiceError(
+                    "bad_request", "resume is the join code from your earlier join: yk:j and 16 hex"
+                )
             code = got.group(1)
         tid = params.get("thread_id")
         tid = tid if isinstance(tid, str) and 0 < len(tid) <= 128 else None
@@ -773,7 +777,9 @@ class AgentService:
             other = self.store.active_membership_by_name(room.id, name)
             if other is not None and (existing is None or other.participant_id != existing.id):
                 raise ServiceError("name_taken", f"{name} is taken in {room.name}; pick another screen name")
-            holder = self.store.last_holder_of(room.id, name, existing.id if existing else -1, now - NAME_REUSE_S)
+            holder = self.store.last_holder_of(
+                room.id, name, existing.id if existing else -1, now - NAME_REUSE_S
+            )
             if holder is not None:
                 resumed = self._reclaim(holder, code, h, host)
                 if resumed is None:
