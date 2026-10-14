@@ -18,6 +18,7 @@ from switchboard.models import (
     LOCAL_HOST,
     MAX_BUDGET,
     MAX_HOPS,
+    MAX_PINS,
     ROOM_RE,
     WATCHDOG_DONE,
     Batch,
@@ -30,6 +31,7 @@ from switchboard.models import (
     Participant,
     PasskeyRow,
     PersonRow,
+    Pin,
     RemoteRow,
     Room,
     room_ref,
@@ -295,6 +297,7 @@ class Store:
         ),
         ("batches", f"batches WHERE membership_id IN ({_ROOM_MEMBERSHIPS})", 1),
         ("events", f"events WHERE room_id=? OR membership_id IN ({_ROOM_MEMBERSHIPS})", 2),
+        ("pins", "pins WHERE room_id=?", 1),
         ("messages", "messages WHERE room_id=?", 1),
         ("memberships", "memberships WHERE room_id=?", 1),
         ("rooms", "rooms WHERE id=?", 1),
@@ -561,6 +564,40 @@ class Store:
             "SELECT COALESCE(MAX(id), 0) FROM messages WHERE room_id=?", (room_id,)
         ).fetchone()
         return int(r[0])
+
+    # ------------------------------------------------------------ pinned decisions (#292, §45)
+    def pins(self, room_id: int) -> list[Pin]:
+        """A room's pins, in message order (the order they were said in)."""
+        rows = self.con.execute(
+            "SELECT m.*, p.pinned_by, p.pinned_at FROM pins p JOIN messages m ON m.id=p.message_id"
+            " WHERE p.room_id=? ORDER BY m.id",
+            (room_id,),
+        ).fetchall()
+        return [Pin(Message.from_row(r), r["pinned_by"], r["pinned_at"]) for r in rows]
+
+    def pin_add(self, room_id: int, message_id: int, pinned_by: str, *, limit: int = MAX_PINS) -> bool:
+        """Pin ``message_id`` in its room: False if it already was, ``Conflict`` once the room has
+        ``limit`` pins. The count and the insert are one transaction, so two pins at once can't
+        both take the last place."""
+        with db.tx(self.con):
+            if self.con.execute(
+                "SELECT 1 FROM pins WHERE room_id=? AND message_id=?", (room_id, message_id)
+            ).fetchone():
+                return False
+            n = int(self.con.execute("SELECT COUNT(*) FROM pins WHERE room_id=?", (room_id,)).fetchone()[0])
+            if n >= limit:
+                raise Conflict(f"{n} messages are pinned already")
+            self.con.execute(
+                "INSERT INTO pins(room_id, message_id, pinned_by, pinned_at) VALUES(?,?,?,?)",
+                (room_id, message_id, pinned_by[:100], self.clock.now()),
+            )
+            return True
+
+    def pin_remove(self, room_id: int, message_id: int) -> bool:
+        """False if it wasn't pinned."""
+        with db.tx(self.con):
+            cur = self.con.execute("DELETE FROM pins WHERE room_id=? AND message_id=?", (room_id, message_id))
+            return cur.rowcount == 1
 
     # ---------------------------------------------------- memberships (reads)
     def active_names(self, room_id: int) -> list[str]:

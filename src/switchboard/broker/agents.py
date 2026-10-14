@@ -909,6 +909,7 @@ class AgentService:
         if earlier:
             earlier_before = catchup[0].id if catchup else self.store.last_message_id(room.id) + 1
         text = envelope.render_join(
+            pins=[x.message for x in self.store.pins(room.id)],
             room=room.name,
             screen_name=m.screen_name,
             human_name=self.cfg.human_name,

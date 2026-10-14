@@ -29,7 +29,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 22
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -206,6 +206,11 @@ CREATE TABLE review_items(
   confirmed_by TEXT NOT NULL DEFAULT '' CHECK(length(confirmed_by) <= 100),
   outdated_head TEXT NOT NULL DEFAULT '' CHECK(length(outdated_head) <= 64),
   UNIQUE(review_id, kind, n));
+
+CREATE TABLE pins(
+  room_id INTEGER NOT NULL REFERENCES rooms(id), message_id INTEGER NOT NULL REFERENCES messages(id),
+  pinned_by TEXT NOT NULL CHECK(length(pinned_by) <= 100), pinned_at REAL NOT NULL,
+  PRIMARY KEY(room_id, message_id));
 """
 
 TABLES = (
@@ -226,6 +231,7 @@ TABLES = (
     "reviews",
     "review_items",
     "room_people",
+    "pins",
 )
 # the tables of a version-1 database (0.1.0, 0.2.0) and of a version-2 one (0.3.0 to 0.6.5):
 # the rows a migration must keep
@@ -235,6 +241,7 @@ V3_TABLES = TABLES[:12]
 V4_TABLES = TABLES[:13]
 V8_TABLES = TABLES[:14]
 V14_TABLES = TABLES[:16]  # before room_people (v15)
+V21_TABLES = TABLES[:17]  # before pins (v22)
 
 # v1 -> v2 (DESIGN.md §27.6): one BEGIN IMMEDIATE, after a verified backup. The
 # columns land at the end of their tables, where the fresh schema above puts them too.
@@ -434,6 +441,21 @@ V19_TO_V20 = (
     "UPDATE meta SET value='20' WHERE key='schema_version'",
 )
 
+# v20 -> v21 is #293's (advisory claims), which is not on main yet: this step is its place in the
+# chain, so this branch builds and migrates on its own. Whoever merges the claims change second
+# replaces it with that change's statements.
+V20_TO_V21 = ("UPDATE meta SET value='21' WHERE key='schema_version'",)
+
+# v21 -> v22 (#292, DESIGN.md §45): a room's pinned decisions, at most five, by message. The
+# table is new, so every existing room starts with none.
+V21_TO_V22 = (
+    "CREATE TABLE pins("
+    " room_id INTEGER NOT NULL REFERENCES rooms(id), message_id INTEGER NOT NULL REFERENCES messages(id),"
+    " pinned_by TEXT NOT NULL CHECK(length(pinned_by) <= 100), pinned_at REAL NOT NULL,"
+    " PRIMARY KEY(room_id, message_id))",
+    "UPDATE meta SET value='22' WHERE key='schema_version'",
+)
+
 
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
@@ -458,6 +480,8 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         17: (18, V17_TO_V18, ()),
         18: (19, V18_TO_V19, ()),
         19: (20, V19_TO_V20, ()),
+        20: (21, V20_TO_V21, ()),
+        21: (22, V21_TO_V22, ("pins",)),
     }
     out = []
     v = frm
@@ -482,6 +506,8 @@ def tables_of(version: int) -> tuple[str, ...]:
         return V8_TABLES
     if version <= 14:
         return V14_TABLES
+    if version <= 21:
+        return V21_TABLES
     return TABLES
 
 

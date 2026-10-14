@@ -266,6 +266,19 @@ class Message:
         )
 
 
+MAX_PINS = 5  # a room's pinned decisions (#292, DESIGN.md §45)
+
+
+@dataclass(frozen=True)
+class Pin:
+    """A message a person pinned in its room (#292): shown to every agent that joins, and in the
+    web UI's room header."""
+
+    message: Message
+    pinned_by: str
+    pinned_at: float
+
+
 @dataclass(frozen=True)
 class Member:
     """An active membership joined with its participant: the buddy-list row."""
