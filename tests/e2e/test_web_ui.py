@@ -2772,6 +2772,36 @@ def test_a_person_answers_a_question_and_rules_on_a_finding(ui: UI) -> None:
     expect(chat_row(page, "Review board: F3")).to_contain_text("conceded, owner codex-1")
 
 
+def test_a_person_reassigns_a_finding_rules_it_fixed_and_the_owner_isnt_its_raiser_by_default(
+    ui: UI,
+) -> None:
+    """#371: the Owner picker preselected the room's first agent, often the raiser, so a person's
+    concede gave the fix to the agent that asked for it. It now preselects another agent. A
+    conceded finding can be reassigned, or ruled fixed by the person, which settles it. Fails if
+    the raiser is preselected, or a conceded card offers neither."""
+    slug = "e2e-board-unstick"
+    ui.world.create_room("#" + slug)
+    ui.world.add_agents("#" + slug, ("codex-1", "claude-1", "devin-1"))  # the raiser first, as in #371
+    ui.world.seed_review("#" + slug)
+    page = ui.open(room=None)
+    open_room(page, slug)
+    page.click("#board-toggle")
+    page.click('#board .board-card[data-item="F3"]')  # raised by codex-1, contested by claude-1
+    expect(page.locator("#board-owner")).to_have_value("claude-1")
+    page.click("#board-concede")
+    card = page.locator('#board .lane-working .board-card[data-item="F3"]')
+    expect(card).to_contain_text("owner claude-1")
+    # the card stays open on F3, now with what a conceded finding offers
+    expect(page.locator("#board-reassign-owner")).to_have_value("devin-1")  # not its owner or raiser
+    page.click("#board-reassign")
+    expect(card).to_contain_text("owner devin-1")
+    page.click("#board-mark-fixed")
+    expect(page.locator('#board .lane-settled .board-card[data-item="F3"]')).to_be_visible()
+    page.click("#board-toggle")
+    expect(chat_row(page, "Review board: F3 reassigned")).to_contain_text("reassigned to devin-1")
+    expect(chat_row(page, "Review board: F3 marked")).to_contain_text("marked fixed")
+
+
 def test_dropping_needs_a_reason_and_closing_asks_first(ui: UI) -> None:
     page = review_room(ui, "e2e-board-drop")
     page.click("#board-toggle")

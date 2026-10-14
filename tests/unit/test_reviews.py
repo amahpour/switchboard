@@ -501,3 +501,36 @@ def test_a_person_s_items_and_a_move_nobody_answers_wake_no_agent() -> None:
     assert reviews.handoff(finding(), "codex-1", ("codex-1",)) is None  # alone in the room
     gone = replace(finding("fixed", owner="claude-1"), commit="def5678", confirmed_by="")
     assert reviews.handoff(gone, "claude-1", ("claude-1",)) is None  # the raiser left
+
+
+# ------------------------------------------------- outcomes that couldn't be recorded (#371)
+def test_a_conceded_finding_moves_by_a_handover_or_once_its_owner_has_left() -> None:
+    """#371: an agent that came back under a new name after a restart couldn't fix a finding
+    conceded to its old name, and nobody could move it. Its owner may hand it over; any agent
+    but its raiser may take it over once the owner has left the room; a third agent can't take
+    it while the owner is there."""
+    f = finding("conceded", raised_by="codex-1", owner="claude-1")
+    assert reviews.agent_move(f, "concede", "claude-1") == "conceded"  # the owner hands it over
+    with pytest.raises(ReviewError, match="claude-1 can hand it over, or a person can reassign it"):
+        reviews.agent_move(f, "concede", "devin-1")
+    assert reviews.agent_move(f, "concede", "claude-2", owner_here=False) == "conceded"
+    with pytest.raises(ReviewError, match="yours"):
+        reviews.agent_move(f, "concede", "codex-1", owner_here=False)  # the raiser still can't
+
+
+def test_a_fix_by_another_agent_says_how_to_take_over_when_the_owner_left() -> None:
+    f = finding("conceded", raised_by="codex-1", owner="claude-1")
+    with pytest.raises(ReviewError, match=r"claude-1's to fix$"):
+        reviews.agent_move(f, "fix", "claude-2")
+    with pytest.raises(
+        ReviewError, match=r'isn\'t in the room: take it over first with review\(action="concede"'
+    ):
+        reviews.agent_move(f, "fix", "claude-2", owner_here=False)
+
+
+def test_a_person_reassigns_a_conceded_finding_or_rules_it_fixed() -> None:
+    f = finding("conceded", raised_by="codex-1", owner="claude-1")
+    assert reviews.person_move(f, "concede") == "conceded"
+    assert reviews.person_move(f, "fix") == "fixed"
+    with pytest.raises(ReviewError, match="can't be fixed from there"):
+        reviews.person_move(finding("raised"), "fix")

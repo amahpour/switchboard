@@ -1,0 +1,4 @@
+### Fixed
+
+- **Every review board outcome can be recorded again.** A board could get stuck with findings no one could move: an agent that came back under a new name after a restart couldn't fix a finding conceded to its old name, a person couldn't change a finding's owner once conceded, and a person couldn't confirm a fix while its raiser was in the room. Now a finding's owner can hand it over, any agent but the raiser can take it over once its owner has left the room, and in the web UI a person can **Reassign** a conceded finding, **Mark fixed** to settle it, or **Confirm fix** on any fix.
+- **The owner picker no longer starts on the finding's raiser.** Conceding a contested finding in the web UI preselected the room's first agent, often the one that raised it, so the fix went to the agent that asked for it. It now starts on another agent.

@@ -49,16 +49,20 @@ OPEN_FINDING = frozenset({"raised", "contested", "conceded"})
 # An agent's moves on a finding, from -> to. A person may also rule on a contested finding
 # (to conceded, with an owner, or to dropped) and drop anything; only a person answers.
 AGENT_MOVES = {
-    "concede": (frozenset({"raised", "contested"}), "conceded"),
+    # from conceded: a handover by its owner, or a takeover once the owner has left (#371)
+    "concede": (frozenset({"raised", "contested", "conceded"}), "conceded"),
     "contest": (frozenset({"raised"}), "contested"),
     "fix": (frozenset({"conceded"}), "fixed"),
     "drop": (frozenset({"raised", "contested", "conceded"}), "dropped"),
     "confirm": (frozenset({"fixed"}), "fixed"),
 }
 PERSON_MOVES = {
-    "concede": (frozenset({"raised", "contested"}), "conceded"),
+    # from conceded: a person reassigns its owner (#371)
+    "concede": (frozenset({"raised", "contested", "conceded"}), "conceded"),
     "drop": (frozenset({"raised", "contested", "conceded", "open"}), "dropped"),
     "answer": (frozenset({"open"}), "answered"),
+    # a person's ruling that it's fixed, and so settled: confirmed by them (#371)
+    "fix": (frozenset({"conceded"}), "fixed"),
 }
 
 
@@ -241,6 +245,7 @@ def commit_url(f: dict[str, Any] | None, sha: str) -> str | None:
 # what each move a board records reads as on a card's history (#250)
 HISTORY_VERBS = {
     "conceded": "conceded it",
+    "reassigned": "reassigned it",
     "contested": "contested it",
     "fixed": "fixed it",
     "confirmed": "confirmed it",
@@ -292,10 +297,13 @@ def parse_label(value: Any) -> tuple[str, int]:
     return ("finding" if m.group(1) in "Ff" else "question"), int(m.group(2))
 
 
-def agent_move(item: Item, move: str, actor: str) -> str:
+def agent_move(item: Item, move: str, actor: str, owner_here: bool = True) -> str:
     """The state an agent's ``move`` takes ``item`` to, or ReviewError. Rules beyond the
     table: a question is a person's to answer or drop; whoever raised a finding can't concede
-    or contest it (that's the other side's call), only drop it; only its owner marks it fixed."""
+    or contest it (that's the other side's call), only drop it; only its owner marks it fixed.
+    A conceded finding moves to another owner (#371) when its owner hands it over, or when the
+    owner has left the room (``owner_here`` False: a restart brings an agent back under a new
+    name, and the finding would otherwise be no one's to fix)."""
     if move not in AGENT_MOVES:
         raise ReviewError(f"unknown move {move!r}")
     if item.kind == "question":
@@ -305,7 +313,16 @@ def agent_move(item: Item, move: str, actor: str) -> str:
         raise ReviewError(f"{item.label} is {item.state}: it can't be {to} from there")
     if move in ("concede", "contest") and actor == item.raised_by:
         raise ReviewError(f"{item.label} is yours: you can drop it, not {move} it")
+    if move == "concede" and item.state == "conceded" and actor != item.owner and owner_here:
+        raise ReviewError(
+            f"{item.label} is {item.owner}'s: {item.owner} can hand it over, or a person can reassign it"
+        )
     if move == "fix" and actor != item.owner:
+        if not owner_here:
+            raise ReviewError(
+                f"{item.label} is {item.owner}'s to fix, and {item.owner} isn't in the room: take it"
+                f' over first with review(action="concede", item="{item.label}")'
+            )
         raise ReviewError(f"{item.label} is {item.owner}'s to fix")
     if move == "drop" and actor != item.raised_by:
         raise ReviewError(f"only {item.raised_by}, who raised {item.label}, or a person can drop it")

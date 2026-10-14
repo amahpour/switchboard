@@ -87,12 +87,16 @@ class Boards:
         item = self.store.review_item(rv["id"], kind, n)
         if item is None:
             raise ReviewError(f"{room.name}'s board has no {('F' if kind == 'finding' else 'Q')}{n}")
-        to = reviews.agent_move(item, action, actor)
+        here = self.store.active_names(room.id)
+        to = reviews.agent_move(item, action, actor, owner_here=item.owner in here)
         fields: dict[str, Any] = {}
+        reassigned = action == "concede" and item.state == "conceded"
         if action == "concede":
             owner = reviews.text(params.get("owner"), "owner", 100) or actor
-            if owner not in self.store.active_names(room.id):
+            if owner not in here:
                 raise ReviewError(f"owner must be an agent in {room.name}: {owner!r} isn't")
+            if reassigned and owner == item.owner:
+                raise ReviewError(f"{item.label} is {owner}'s already: name the agent who takes it over")
             fields["owner"] = owner
         elif action == "fix":
             commit = reviews.head(params.get("commit"))
@@ -106,19 +110,21 @@ class Boards:
         elif action in ("contest", "drop"):
             fields["reason"] = reviews.text(params.get("reason"), "reason", reviews.MAX_REASON, required=True)
         self.store.move_review_item(item.id, to, **fields)
-        self.store.add_event(
-            "review",
-            room_id=room.id,
-            data={"item": item.label, "to": "confirmed" if action == "confirm" else to, "by": actor},
-        )
+        shown = "confirmed" if action == "confirm" else "reassigned" if reassigned else to
+        self.store.add_event("review", room_id=room.id, data={"item": item.label, "to": shown, "by": actor})
+        moved = self.store.review_item(rv["id"], kind, n)
+        assert moved is not None
+        if reassigned:  # a handover, or a takeover from an owner who left (#371)
+            gone = "" if item.owner in here else ", who left the room"
+            return self._told(
+                room, moved, actor, f"{actor} moved {item.label} from {item.owner}{gone} to {fields['owner']}"
+            )
         tail = {
             "conceded": f", owner {fields.get('owner')}",
             "fixed": f" in {fields.get('commit_sha', '')[:12]}",
             "contested": ": a person decides",
             "confirmed": f" by {actor}",
-        }.get("confirmed" if action == "confirm" else to, "")
-        moved = self.store.review_item(rv["id"], kind, n)
-        assert moved is not None
+        }.get(shown, "")
         return self._told(room, moved, actor, f"{actor} {action_past(action)} {item.label}{tail}")
 
     def _told(self, room: Room, item: reviews.Item, actor: str, notice: str) -> dict[str, Any]:
@@ -219,17 +225,17 @@ class Boards:
             return self._handoff(room, rv, name, person_id, params)
         if rv["posted_at"] is not None:
             raise ReviewError("this board was already handed off: no more moves")
-        if action not in ("answer", "concede", "confirm", "drop"):
-            raise ReviewError("action must be answer, concede, confirm, drop, handoff or close")
+        if action not in ("answer", "concede", "confirm", "drop", "fix"):
+            raise ReviewError("action must be answer, concede, confirm, fix, drop, handoff or close")
         kind, n = reviews.parse_label(params.get("item"))
         item = self.store.review_item(rv["id"], kind, n)
         if item is None:
             raise ReviewError(f"{room.name}'s board has no {('F' if kind == 'finding' else 'Q')}{n}")
+        reassigned = action == "concede" and item.state == "conceded"
         if action == "confirm":
+            # a person may confirm any fix, the raiser's check or not: a person's ruling (#371)
             if item.kind != "finding" or item.state != "fixed" or item.confirmed_by:
                 raise ReviewError(f"{item.label} has no fix awaiting confirmation")
-            if not reviews.needs_person(item, set(self.store.active_names(room.id)), self.state.clock.now()):
-                raise ReviewError(f"{item.raised_by}, who raised {item.label}, confirms while in the room")
             to = "fixed"
         else:
             to = reviews.person_move(item, action)
@@ -246,11 +252,20 @@ class Boards:
             owner = reviews.text(params.get("owner"), "owner", 100, required=True)
             if owner not in self.store.active_names(room.id):
                 raise ReviewError(f"owner must be an agent in {room.name}: {owner!r} isn't")
+            if reassigned and owner == item.owner:
+                raise ReviewError(f"{item.label} is {owner}'s already")
             fields = {"owner": owner}
-            said = f"conceded, owner {owner}"
+            said = f"reassigned to {owner}" if reassigned else f"conceded, owner {owner}"
         elif action == "confirm":
             fields = {"confirmed_by": name}
             said = "confirmed"
+        elif action == "fix":
+            # a person's ruling that it's fixed: settled at once, with the commit when they give one
+            commit = reviews.head(params.get("commit"))
+            fields = {"confirmed_by": name, "reason": ""}
+            if commit:
+                fields["commit_sha"] = commit
+            said = "marked fixed" + (f" in {commit[:12]}" if commit else "")
         else:
             fields = {
                 "reason": reviews.text(params.get("reason"), "reason", reviews.MAX_REASON, required=True)
@@ -262,7 +277,7 @@ class Boards:
             room_id=room.id,
             data={
                 "item": item.label,
-                "to": "confirmed" if action == "confirm" else to,
+                "to": "confirmed" if action == "confirm" else "reassigned" if reassigned else to,
                 "by": name,
                 "person": True,
             },

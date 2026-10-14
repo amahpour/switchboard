@@ -5498,25 +5498,54 @@
         acts.append(b);
       });
     }
-    if (i.state === 'contested') {
-      const agents = r.members || [];
-      const label = el('label', 'board-field', 'Owner');
+    // the agents a finding can go to, the first preselected: not its raiser, whose finding it is,
+    // nor (on a reassign) its current owner (#371: the raiser was preselected, so a person's
+    // concede gave the fix to the agent that asked for it)
+    function ownerPick(id, skip) {
+      const agents = (r.members || []).map(function (m) { return m.name; });
       const pick = el('select');
-      pick.id = 'board-owner';
-      for (const m of agents) {
-        const o = el('option', null, m.name);
-        o.value = m.name;
+      pick.id = id;
+      const order = agents.filter(function (n) { return skip.indexOf(n) < 0; })
+        .concat(agents.filter(function (n) { return skip.indexOf(n) >= 0; }));
+      for (const n of order) {
+        const o = el('option', null, n);
+        o.value = n;
         pick.append(o);
       }
+      return pick;
+    }
+    if (i.state === 'contested') {
+      const label = el('label', 'board-field', 'Owner');
+      const pick = ownerPick('board-owner', [i.raised_by]);
       label.append(pick);
       const concede = btn('btn-primary', 'Concede');
       concede.id = 'board-concede';
-      concede.disabled = !agents.length;
+      concede.disabled = !pick.options.length;
       concede.addEventListener('click', function () { boardMove({ action: 'concede', item: i.label, owner: pick.value }); });
       acts.append(label, concede);
     }
-    if (i.state === 'fixed' && !i.confirmed_by && i.needs_person) {
-      const confirm = btn('btn-primary', 'Confirm fix');
+    if (i.state === 'conceded') {
+      // a person reassigns it (its owner left, or should hand over), or rules it fixed (#371)
+      const label = el('label', 'board-field', 'Owner');
+      const pick = ownerPick('board-reassign-owner', [i.owner, i.raised_by]);
+      label.append(pick);
+      const reassign = btn('btn', 'Reassign');
+      reassign.id = 'board-reassign';
+      reassign.disabled = !pick.options.length;
+      reassign.title = 'Give ' + i.label + ' to another agent to fix';
+      reassign.addEventListener('click', function () {
+        if (pick.value === i.owner) { pick.focus(); return; }
+        boardMove({ action: 'concede', item: i.label, owner: pick.value });
+      });
+      const fixed = btn('btn', 'Mark fixed');
+      fixed.id = 'board-mark-fixed';
+      fixed.title = 'Settle ' + i.label + ' as fixed, on your say: no agent needs to confirm it';
+      fixed.addEventListener('click', function () { boardMove({ action: 'fix', item: i.label }); });
+      acts.append(label, reassign, fixed);
+    }
+    if (i.state === 'fixed' && !i.confirmed_by) {
+      // any fix: when its raiser can't check it (needs_person), or as a person's own ruling (#371)
+      const confirm = btn(i.needs_person ? 'btn-primary' : 'btn', 'Confirm fix');
       confirm.id = 'board-confirm';
       confirm.addEventListener('click', function () { boardMove({ action: 'confirm', item: i.label }); });
       acts.append(confirm);
