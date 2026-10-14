@@ -82,7 +82,9 @@ class World:
         self.actions += self.engine.on_message(msg.id)
         return msg
 
-    def agent_says(self, m: Membership, text: str, mentions: tuple[str, ...] = ()) -> Message:
+    def agent_says(
+        self, m: Membership, text: str, mentions: tuple[str, ...] = (), reply_to: int | None = None
+    ) -> Message:
         p = self.p(m.participant_id)
         msg = self.store.insert_message(
             self.room.id,
@@ -93,6 +95,7 @@ class World:
             sender_membership_id=m.id,
             sender_harness=p.harness,
             mentions=mentions,
+            reply_to=reply_to,
         )
         self.actions += self.engine.on_message(msg.id)
         return msg

@@ -64,7 +64,7 @@ Also: `cli.py`; `install/` ([§9.7](DESIGN.md#97-install-targets-switchboard-ins
 1. **Posted** in the web UI (`web.py`), with `switchboard say`, or by an agent's `say` through its MCP server and the socket.
 2. **Stored and classified** in one transaction: the message, and a delivery row for each other member with its priority (a person, an @mention, or chatter) ([§8.1](DESIGN.md#81-classification-on-insert-in-the-same-transaction-as-the-message)).
 3. **Fanned out** by the hub to browsers and `tail`.
-4. **Decided per recipient.** `rules.releasable` says whether anything can go now (nothing in a paused room or to a held member, no wake past the budget unless a person wrote, priority only to a busy agent), the adapter's `route()` says how, and the engine returns an action ([§8.2](DESIGN.md#82-engine-core-and-runner)).
+4. **Decided per recipient.** `rules.releasable` says whether anything can go now (nothing in a paused room or to a held member, no wake past the budget unless a person wrote, priority only to a busy agent, other agents' chatter held a few minutes unless it addresses the recipient), the adapter's `route()` says how, and the engine returns an action ([§8.2](DESIGN.md#82-engine-core-and-runner)).
 5. **Delivered** by the runner through the adapter, or by the agent's hook at its next tool call, or at its next `read()`, `wait()` or `say()`.
 6. **Confirmed** only by evidence from the session that got it, such as the batch token in its next hook, or back to pending: duplicates are possible, skips are not ([§8.7](DESIGN.md#87-offers-confirmation-and-expiry-two-phase-ack-event-based)).
 7. **Answered** with `say()`, back to step 1, or `pass()`.
@@ -86,7 +86,7 @@ Beside these is the [security model](../CLAUDE.md#the-security-model-in-short) (
 
 ### Where the code doesn't follow them yet
 
-Each is an open issue; don't copy the pattern, and the fix removes its mention here. Harness branches outside the adapters: `agents.py`'s `join` and `hook_event` still name the scripted test agent ([#360](https://github.com/amahpour/switchboard/issues/360); session keys, binding, `mcp.hello` and attach moved to the adapters, #170).
+None now: #170 and #360 moved the last harness branches out of `agents.py` into the adapters, and `tests/unit/test_adapter_hello_attach.py` keeps the methods they left clean. When one turns up, it is an open issue and is listed here, so nobody copies the pattern, until its fix removes the mention.
 
 ## Where to read next in DESIGN.md
 

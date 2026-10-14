@@ -304,6 +304,7 @@ class Member:
     board_why: str | None = None  # why it can't use the review board, from its MCP server (#249)
     version_claim: str | None = None  # this member's MCP server says it runs this version
     tools_claim: tuple[str, ...] | None = None  # None means the MCP server did not report tools
+    wakes_at: float | None = None  # when held chatter wakes it (#137), from the engine
     status_line: str | None = None
     status_line_at: float | None = None
     status_line_stale: bool = False
@@ -613,6 +614,7 @@ class Item:
     reminders: int = 0
     in_context_at: float | None = None
     sender_host: str | None = None  # a remote agent sender's host (DESIGN.md §27.11)
+    reply_to_me: bool = False  # a reply to the recipient's own message (#137, §8.2)
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "Item":
@@ -621,7 +623,7 @@ class Item:
         except (ValueError, IndexError, KeyError):
             mentions = ()
         opt: dict[str, Any] = {}
-        for k in ("redelivered", "reminders", "in_context_at", "sender_host"):
+        for k in ("redelivered", "reminders", "in_context_at", "sender_host", "reply_to_me"):
             try:
                 opt[k] = r[k]
             except (IndexError, KeyError):
@@ -646,6 +648,7 @@ class Item:
             reminders=int(opt.get("reminders") or 0),
             in_context_at=opt.get("in_context_at"),
             sender_host=opt.get("sender_host"),
+            reply_to_me=bool(opt.get("reply_to_me") or 0),
         )
 
     @property

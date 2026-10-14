@@ -510,6 +510,8 @@
     door: 'M3.5 14V2.5h8V14M1.5 14h13M9 8.5h.01',
     info: circ(8, 8, 6) + 'M8 7.3V11M8 5h.01',
     warn: 'M8 2.3 14.6 13.6H1.4L8 2.3ZM8 6.6v3.2M8 11.8h.01',
+    // a bell, for Wake now (#137): the body, the rim and the clapper
+    bell: 'M4.5 11V7a3.5 3.5 0 0 1 7 0v4l1.5 1.5h-10L4.5 11ZM6.5 13.5a1.5 1.5 0 0 0 3 0',
     hourglass: 'M4.5 2.5h7M4.5 13.5h7M5.5 2.5c0 3 5 3 5 5.5s-5 2.5-5 5.5M10.5 2.5c0 3-5 3-5 5.5s5 2.5 5 5.5',
     history: 'M2.5 8a5.5 5.5 0 1 0 1.7-4M2.5 2.5V5.5h3M8 5.5V8l2 1.5',
     kick: circ(6.5, 5, 2.5) + 'M1.5 13.5c.4-2.4 2.3-3.8 5-3.8 1.2 0 2.2.3 3 .8M11 10l3.5 3.5M14.5 10 11 13.5',
@@ -1275,6 +1277,8 @@
     if (flag) nameLine.append(flag);
     let st = statusWord(m) + ' · ' + harnessOf(m.harness)[1];
     if (m.queued) st += ' · ' + m.queued + ' queued';
+    // the hold on agents' chatter (#137): when those messages wake it, unless you wake it first
+    if (m.wakes_at) st += ' · wakes at ' + hhmm(m.wakes_at);
     if (m.inflight) st += ' · ' + m.inflight + ' in flight';
     if (m.held) st += ' · held';
     if (m.env_leak) st += ' · env shared';
@@ -2068,6 +2072,16 @@
       hold.title = 'Hold: stop delivery to ' + m.name + '; messages wait until you release it';
     }
     hold.addEventListener('click', function () { submitText((m.held ? '/release ' : '/hold ') + m.name); });
+    // Wake now (#137): only while agents' chatter waits on the hold for this member
+    let wake = null;
+    if (m.wakes_at) {
+      wake = btn('btn');
+      wake.id = 'insp-wake';
+      wake.dataset.focus = 'wake';
+      wake.append(icon('bell'), 'Wake now');
+      wake.title = 'Wake now: ' + m.name + ' gets its waiting messages now, not at ' + hhmm(m.wakes_at) + ' (web only)';
+      wake.addEventListener('click', function () { submitText('/wake ' + m.name); });
+    }
     const cu = btn('btn');
     cu.id = 'insp-catchup';
     cu.dataset.focus = 'catchup';
@@ -2077,6 +2091,7 @@
     cu.title = '/catchup ' + m.name + ' on a member, a topic or the room';
     cu.append(icon('history'), 'Catch up on…', icon('chev-down'));
     cu.addEventListener('click', function () { setMenu(!ui.menu); });
+    if (wake) row.append(wake);
     row.append(hold, cu);
     refs.hold = hold;
     refs.catchup = cu;
@@ -2138,7 +2153,9 @@
     });
     refs.kick = kick;
     const fine = el('p', 'fine');
-    fine.append('Same as ', el('code', null, '/hold'), ', ', el('code', null, '/catchup'), ' and ', el('code', null, '/kick'), ' in the composer.');
+    fine.append('Same as ');
+    if (wake) fine.append(el('code', null, '/wake'), ', ');
+    fine.append(el('code', null, '/hold'), ', ', el('code', null, '/catchup'), ' and ', el('code', null, '/kick'), ' in the composer.');
     actions.append(menu, row, kick, fine);
 
     body.replaceChildren(id);
@@ -2217,6 +2234,9 @@
       detail: 'Nothing is dropped: held messages go out on /release.' },
     { group: 'Agents', cmd: 'release', args: '<name>', desc: 'Resume delivery to a held agent', pill: 'web only', usage: '/release <name>',
       detail: 'Raises agent activity, so it needs this signed-in browser.' },
+    { group: 'Agents', cmd: 'wake', args: '<name>', desc: 'Wake an agent now for its waiting messages', pill: 'web only',
+      usage: '/wake <name>',
+      detail: 'Agents’ messages that don’t address it wait a few minutes to arrive together; this sends them now.' },
     { group: 'Agents', cmd: 'kick', args: '<name>', desc: 'Remove an agent and revoke its membership', pill: '', usage: '/kick <name>',
       detail: 'Asks first. Removes it from {room} and revokes its membership.' },
     { group: 'Agents', cmd: 'review', args: '<url> [note]', desc: 'Start a review board for a PR or MR', pill: '',
@@ -4467,11 +4487,11 @@
     return card;
   }
 
-  // Who still signs in by name (#240, DESIGN.md §39.3): a person with no email. The next release
-  // drops name sign-in, so the admin is told how many there are, and who, while there is time to set
-  // their emails. The admin isn't counted: `admin` signs them in whatever happens. This follows the
-  // broker's rule (people.account): a name signs in only someone with no email.
-  function peopleByName() {
+  // Who can't sign in (#240, DESIGN.md §39.3): a person with no email, since only an email (or
+  // `admin`) signs anyone in. The admin is told how many there are, and who, so they can set the
+  // emails. The admin isn't counted: `admin` signs them in whatever happens. This follows the
+  // broker's rule (people.account).
+  function peopleWithoutEmail() {
     return state.people.filter(function (p) { return !p.admin && !p.email; });
   }
 
@@ -4481,12 +4501,12 @@
 
   // Each name goes to that person's Email field, where the admin sets it: their cards are further
   // down, and focus lands in the field, not on a button that is about to disappear.
-  function byNameNote(who) {
+  function noEmailNote(who) {
     const one = who.length === 1;
-    const list = el('ul', 'by-name-list');
+    const list = el('ul', 'no-email-list');
     for (const p of who) {
       const b = btn('btn btn-ghost-sm', personLabel(p));
-      b.dataset.focus = 'by-name:' + p.id;
+      b.dataset.focus = 'no-email:' + p.id;
       b.title = 'Go to the Email field of ' + p.name;
       b.setAttribute('aria-label', 'Set an email for ' + personLabel(p));
       b.addEventListener('click', function () {
@@ -4500,13 +4520,13 @@
       li.append(b);
       list.append(li);
     }
-    const title = one ? '1 person still signs in by name' : who.length + ' people still sign in by name';
+    const title = one ? '1 person can’t sign in' : who.length + ' people can’t sign in';
     const n = note('amber', 'info', title, [
-      el('p', null, 'Name sign-in goes away in the next release. After that, someone with no email can’t sign in,'
-        + ' so set an email for ' + (one ? 'them' : 'each of them') + ' first. You can still sign in as admin.'),
+      el('p', null, 'They have no email, and only an email signs someone in.'
+        + ' Set one for ' + (one ? 'them' : 'each of them') + '.'),
       list,
     ]);
-    n.id = 'by-name-note';
+    n.id = 'no-email-note';
     return n;
   }
 
@@ -4776,8 +4796,8 @@
     if (!p.admin && p.passkeys && p.sign_in !== 'passkey') bits.push(plural(p.passkeys, 'passkey', 'passkeys'));
     if (p.admin) bits.push(p.password ? 'password' : 'no password', plural(p.passkeys || 0, 'passkey', 'passkeys'));
     if (!p.email) {
-      bits.push(p.admin ? 'no email yet: you sign in with your name until the next release, or with admin'
-        : 'no email yet: signs in with their name, until the next release');
+      bits.push(p.admin ? 'no email yet: you sign in as admin'
+        : 'no email yet: can’t sign in until you set one');
     }
     card.append(el('p', 'machine-step', bits.join(' · ')));
     card.append(nameRow(p), emailRow(p));
@@ -4829,8 +4849,8 @@
     const typing = f && f.id === 'person-name';
     body.replaceChildren();
     if (state.invite) body.append(inviteCard(state.invite));
-    const byName = peopleByName();
-    if (byName.length) body.append(byNameNote(byName));
+    const noEmail = peopleWithoutEmail();
+    if (noEmail.length) body.append(noEmailNote(noEmail));
     body.append(addPersonCard());
     for (const p of state.people) body.append(personCard(p));
     if (state.privateRooms && state.privateRooms.length) body.append(privateRoomsCard(state.privateRooms));

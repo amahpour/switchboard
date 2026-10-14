@@ -124,7 +124,7 @@ def test_parked_escalation_waits_for_both_the_message_and_the_parking() -> None:
 # ------------------------------------------------------------------- engine
 @pytest.fixture
 def w(tmp_path: Path, clock: FakeClock) -> World:
-    return World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0))
+    return World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0, unaddressed_hold_s=0.0))
 
 
 def listen(w: World, p: Any, m: Any, wid: str) -> Any:

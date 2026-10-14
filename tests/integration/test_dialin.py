@@ -130,9 +130,9 @@ def test_removing_a_person_removes_the_machines_they_paired_or_approved(d: DialI
     sent: list[str] = []  # room-less notices go to the web UI only: catch them at the hub
     real = d.b.state.hub.notice
     d.b.state.hub.notice = lambda room, level, text: (sent.append(text), real(room, level, text))[1]
-    one_time = d.api("POST", "/api/people", {"name": "bob"}).json()["password"]
+    one_time = d.api("POST", "/api/people", {"name": "bob", "email": "bob@example.com"}).json()["password"]
     bob = Browser(d.b, d.host, d.origin)
-    r = bob.post("/api/signin/password", {"name": "bob", "password": one_time})
+    r = bob.post("/api/signin/password", {"name": "bob@example.com", "password": one_time})
     assert r.status_code == 200, r.text
     assert bob.post("/api/me/password", {"password": "bob's own secret 1"}).status_code == 200
     bob_id = d.b.state.store.person_named("bob").id

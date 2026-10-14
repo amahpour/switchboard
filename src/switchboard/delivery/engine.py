@@ -110,6 +110,8 @@ class Engine:
         self.key = key or secrets.token_bytes(32)
         self.test_mode = test_mode
         self.parked: dict[int, str] = {}  # membership_id -> reason
+        # /wake (#137): membership_id -> the newest message id the person's ask covers
+        self.wake_now: dict[int, int] = {}
         self.parked_since: dict[int, float] = {}  # membership_id -> when this parked spell began
         self._parked_at: dict[int, tuple[int, int]] = {}  # membership_id -> (room, participant) of its spell
         self.parked_escalated: set[int] = set()  # told the human about this parked spell (§8.5)
@@ -160,6 +162,26 @@ class Engine:
 
     def parked_reason(self, membership_id: int) -> str | None:
         return self.parked.get(membership_id)
+
+    def wakes_at(self, membership_id: int) -> float | None:
+        """When the hold on unaddressed chatter (#137) lets this member's waiting messages wake
+        it, for the member list; None when nothing waits on the hold. Only for a member that
+        such a wake would reach now: idle, not held or parked (no wake path: the Inspector says to
+        poke it instead), in a room that isn't paused and has budget, and not already in its own
+        wait() (which gets chatter without the hold)."""
+        m = self.store.get_membership(membership_id)
+        if m is None or not m.active or m.held or membership_id in self.parked:
+            return None
+        p = self.store.get_participant(m.participant_id)
+        room = self.store.room_by_id(m.room_id)
+        if p is None or room is None or room.paused or room.budget_remaining <= 0:
+            return None
+        sink = self.sinks.open_for(p.id, m.id)
+        if not rules.is_idle(rules.effective_status(p.status, sink is not None)):
+            return None
+        if not rules.peer_ok(m.peer_batch_boundary, p.boundary_seq):
+            return None
+        return rules.chatter_wakes_at(self.store.pending_items(m.id), self._hold_s(sink))
 
     # the humans (DESIGN.md §32): the owner, and on a hosted broker everyone the owner added
     def _humans(self) -> list[str]:
@@ -358,6 +380,8 @@ class Engine:
             max_hold_s=self.d.max_hold_s,
             batch_max_msgs=self.d.batch_max_msgs,
             max_chars=min(self.d.batch_max_chars, caps.ctx_max_chars),
+            hold_s=self._hold_s(sink),
+            wake_now=self._wake_now(m.id, pending),
         )
         if rel is None:
             unread = rules.unread_stubs(pending) if sink is not None and sink.kind == "wait" else []
@@ -403,6 +427,24 @@ class Engine:
         else:  # pull: the next hook / tool call claims it; defer: re-evaluated later
             out += unparked()
         return out
+
+    def _hold_s(self, sink: Sink | None) -> float:
+        """The hold on unaddressed chatter (#137) is for wakes that start a turn. An agent already
+        in its own wait() call asked for messages: holding them would only time the call out,
+        and the agent's next wait() costs as much as the delivery would have."""
+        return 0.0 if sink is not None and sink.kind == "wait" else self.d.unaddressed_hold_s
+
+    def _wake_now(self, membership_id: int, pending: list[Item]) -> bool:
+        """``/wake`` (#137) covers the chatter that was waiting when the person asked, and holds
+        until that has gone out: a busy agent gets it at its next idle moment. Chatter that
+        arrives after the ask waits on the hold as usual, so the ask can't outlive its messages."""
+        mark = self.wake_now.get(membership_id)
+        if mark is None:
+            return False
+        if not any(d.prio == 0 and d.notified_at is None and d.message_id <= mark for d in pending):
+            del self.wake_now[membership_id]
+            return False
+        return True
 
     def evaluate_participant(self, participant_id: int) -> list[Action]:
         out: list[Action] = []
@@ -1128,10 +1170,16 @@ class Engine:
         if name == "hold" and membership_id is not None:
             self._unpark(membership_id)
             return [Snapshot(room_id)]
+        if name == "wake" and membership_id is not None:
+            waiting = [i.message_id for i in self.store.pending_items(membership_id) if i.prio == 0]
+            if waiting:
+                self.wake_now[membership_id] = max(waiting)
+            return self.evaluate(membership_id) + [Snapshot(room_id)]
         return [Snapshot(room_id)]
 
     def on_membership_ended(self, membership_id: int, reason: str) -> list[Action]:
         """Leave, kick or session end: open waits get told, nothing more is offered."""
+        self.wake_now.pop(membership_id, None)
         m = self.store.get_membership(membership_id)
         out: list[Action] = []
         status = "kicked" if reason == "kick" else "left"
@@ -1442,8 +1490,9 @@ class Engine:
             room = self.store.refill_budget(m.room_id)
             if room.paused or m.held or self.store.inflight_offer(m.id):
                 continue
+            pending = self.store.pending_items(m.id)
             rel = rules.releasable(
-                self.store.pending_items(m.id),
+                pending,
                 room=room,
                 eff="idle",
                 peer_batch_boundary=m.peer_batch_boundary,
@@ -1453,6 +1502,8 @@ class Engine:
                 max_hold_s=self.d.max_hold_s,
                 batch_max_msgs=self.d.batch_max_msgs,
                 max_chars=min(self.d.batch_max_chars, caps.ctx_max_chars),
+                hold_s=self.d.unaddressed_hold_s,
+                wake_now=self._wake_now(m.id, pending),
             )
             if rel is None or rel.kind != "wake":
                 continue
@@ -1583,6 +1634,7 @@ class Engine:
                 max_hold_s=self.d.max_hold_s,
                 batch_max_msgs=self.d.batch_max_msgs,
                 max_chars=min(self.d.batch_max_chars, caps.ctx_max_chars),
+                hold_s=self.d.unaddressed_hold_s,
             )
             if rel is None:
                 continue

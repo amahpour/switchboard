@@ -159,7 +159,9 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
     expect(bob.locator("#login-first")).to_be_hidden()
     expect(bob.locator("#passkey-btn")).to_be_visible()
     sign_in(bob, "bob@example.com", "WRONG-PASS-WORD-0000")
-    expect(bob.locator("#login-error")).to_have_text("wrong email or password")
+    expect(bob.locator("#login-error")).to_have_text(
+        "wrong email or password (no email set for you yet? ask the admin to set one)"
+    )
     bob.wait_for_timeout(300)
     assert ui.problems and all("403" in p and "/api/signin/password" in p for p in ui.problems), ui.problems
     ui.problems.clear()
@@ -229,11 +231,13 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
     again = ui.context().new_page()
     again.goto(origin + "/")
     expect(again.locator('label[for="signin-name"]')).to_have_text("Email")
-    hint = "No email set for you yet? Your name works for now."
+    hint = "No email set for you yet? Ask the admin to set one. The admin can sign in as admin."
     expect(again.locator("#signin-name-hint")).to_have_text(hint)
     for old in ("bob", "bob@example.com"):
         sign_in(again, old, BOB_PW)
-        expect(again.locator("#login-error")).to_have_text("wrong email or password")
+        expect(again.locator("#login-error")).to_have_text(
+            "wrong email or password (no email set for you yet? ask the admin to set one)"
+        )
         again.wait_for_timeout(300)
         assert all("403" in p and "/api/signin/password" in p for p in ui.problems), ui.problems
         ui.problems.clear()

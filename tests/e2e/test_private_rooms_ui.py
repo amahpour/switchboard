@@ -112,11 +112,12 @@ def person_cookie(hosted: tuple[InProcBroker, str], name: str) -> str:
     origin = b.state.web_origin.origin
     h = {"Origin": origin, "X-Switchboard": "1"}
     with httpx.Client(base_url=origin, headers=h, cookies={"switchboard_session": admin}) as c:
-        added = c.post("/api/people", json={"name": name})
+        added = c.post("/api/people", json={"name": name, "email": f"{name}@example.com"})
         assert added.status_code == 200, added.text
         one_time = added.json()["password"]
     with httpx.Client(base_url=origin, headers=h) as c:
-        assert c.post("/api/signin/password", json={"name": name, "password": one_time}).status_code == 200
+        signed = c.post("/api/signin/password", json={"name": f"{name}@example.com", "password": one_time})
+        assert signed.status_code == 200, signed.text
         chosen = c.post("/api/me/password", json={"password": "correct horse " + name})
         assert chosen.status_code == 200, chosen.text
         cookie = c.cookies.get("switchboard_session")

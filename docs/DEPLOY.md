@@ -23,7 +23,7 @@ your machines ─wss─▶ Render's router, Caddy, an ingress             the br
 ```bash
 docker run -d --name switchboard -p 127.0.0.1:7419:7419 -v switchboard:/data \
   -e SWITCHBOARD_PUBLIC_URL=http://switchboard.localhost:7419 \
-  ghcr.io/amahpour/switchboard:0.28.0
+  ghcr.io/amahpour/switchboard:0.29.0
 docker logs switchboard
 ```
 
@@ -55,7 +55,7 @@ docker restart switchboard
 
 ## Deploy it
 
-Each example pins a release (`ghcr.io/amahpour/switchboard:0.28.0`). Every release moves these pins, and `:latest` follows the newest release.
+Each example pins a release (`ghcr.io/amahpour/switchboard:0.29.0`). Every release moves these pins, and `:latest` follows the newest release.
 
 ### A VM with Docker Compose
 
@@ -104,7 +104,7 @@ switchboard isn't set up yet. Sign in at https://sb.example.com as admin with th
 
 1. **Set it up.** Take the newest such line from wherever you read the container's logs (your deploy tool's logs view, `kubectl logs`, `docker logs`, Render's Logs tab), sign in as `admin` with that one-time password, give your name and email, and choose your own password, or a passkey instead. That makes you the admin and signs that browser in; you sign in with that email from then on (`admin` still works). The link in the same line does the same without typing.
 2. **Add people** from **Admin > People** in the sidebar. Give their first and last name and their email; their name in the rooms (what others @mention) fills in from the first name, and you can change it. Send them the invite it shows: the address, the email they sign in with and a one-time password, good for 7 days. They sign in with it and choose their own password or a passkey. Their card's **Email** can be changed later; from then on the new one signs them in. You see the one-time password once; **New one-time password** makes another (and signs them out everywhere, for a forgotten password), and **Remove** signs them out everywhere at once, ends their password and passkeys, and removes every machine they paired or approved (it shows **Paired by** and **Approved by** in the Machines sheet). Their messages stay.
-3. **From then on**, everyone signs in with their email and password, or a passkey. Someone with no email set yet signs in with their name until you set one (their card says "no email yet"), but name sign-in goes away in the next release: **Admin > People** says how many people still sign in by name and lists them, so you can set their emails first. `admin` always works for you. The key button next to sign-off in the app opens the Sign-in sheet: change your password, add a passkey (both ask you to confirm it's you first, unless you did in the last five minutes), or **Sign out everywhere**, which signs out every browser you're signed in to and nobody else.
+3. **From then on**, everyone signs in with their email and password, or a passkey. A name signs no one in: someone with no email set can't sign in until you set one, and **Admin > People** says how many people that is and lists them. `admin` always works for you. The key button next to sign-off in the app opens the Sign-in sheet: change your password, add a passkey (both ask you to confirm it's you first, unless you did in the last five minutes), or **Sign out everywhere**, which signs out every browser you're signed in to and nobody else.
 4. **Once set up, no one-time password is ever printed again.** Upgrades and restarts keep the admin and everyone else: people, passwords and passkeys live in the database on the volume, with your rooms. Only a brand-new, empty volume isn't set up.
 
 Everyone signed in is equal apart from the admin section: they post under their own name, run every room command, pair and approve their machines, and **every agent takes every person's messages as its user's** (`kind=human`). That fits a team on a private network; don't hand out invites to people you wouldn't let steer your agents.
@@ -167,7 +167,7 @@ To restore, stop the broker, put the copy at `$SWITCHBOARD_HOME/switchboard.db` 
 
 ## The image
 
-- **Where:** `ghcr.io/amahpour/switchboard:<version>` and `:latest`, for linux/amd64 and linux/arm64. The release job builds it from the release's tag, with a provenance attestation and an SBOM. Inspect them with `docker buildx imagetools inspect ghcr.io/amahpour/switchboard:0.28.0 --format '{{json .Provenance}}'` (or `.SBOM`).
+- **Where:** `ghcr.io/amahpour/switchboard:<version>` and `:latest`, for linux/amd64 and linux/arm64. The release job builds it from the release's tag, with a provenance attestation and an SBOM. Inspect them with `docker buildx imagetools inspect ghcr.io/amahpour/switchboard:0.29.0 --format '{{json .Provenance}}'` (or `.SBOM`).
 - **What's in it:** Python 3.13 (Debian slim) with switchboard installed from its wheel and the exact dependencies in `uv.lock`, plus tini. No uv, compiler, git, ssh or shell tools beyond the base image's.
 - **Who it runs as:** the `switchboard` user (uid and gid 10001), always.
   - Started as root, as Render and plain `docker run` do, the image's `switchboard` command ([deploy/image/switchboard.sh](../deploy/image/switchboard.sh)) first makes `$SWITCHBOARD_HOME` that user's private directory. It then drops to that user with no capabilities and no way back through setuid.

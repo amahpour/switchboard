@@ -1,6 +1,6 @@
-"""Admin > People says who still signs in by name (#240, DESIGN.md §39.3): a hosted broker's
-admin is told how many people have no email, so a name still signs them in, who they are, and
-that name sign-in goes away in the next release, with a way to each person's Email field.
+"""Admin > People says who can't sign in (#240, DESIGN.md §39.3): a hosted broker's admin is told
+how many people have no email, since only an email signs someone in, and who they are, with a way
+to each person's Email field.
 Marker ``e2e``, opt-in; the ``UI`` fixture class of tests/e2e/test_web_ui.py watches every page
 for console errors, page errors and CSP violations.
 """
@@ -93,25 +93,25 @@ def admin_people(ui: UI, hosted: tuple[InProcBroker, str, dict[str, int]], **opt
 
 
 @pytest.mark.parametrize("phone", [False, True])
-def test_people_says_who_still_signs_in_by_name_and_follows_their_emails(
+def test_people_says_who_cant_sign_in_and_follows_their_emails(
     ui: UI, hosted: tuple[InProcBroker, str, dict[str, int]], phone: bool
 ) -> None:
-    """#240: the release before name sign-in is dropped has to tell the admin who still depends
-    on it. People shows a note with how many people have no email (bob and carol here; dave has
-    one, and the admin is not counted, since ``admin`` always signs them in), names them, and says
-    it goes away in the next release. Each name goes to that person's Email field, by mouse or by
+    """#240: a name signs no one in, so People tells the admin who can't sign in: a note with how
+    many people have no email (bob and carol here; dave has one, and the admin is not counted,
+    since ``admin`` always signs them in), naming them. Each name goes to that person's Email
+    field, by mouse or by
     keyboard, and the note follows each Save: one fewer, then gone. Fails if the note is missing,
     counts the admin or someone with an email, doesn't name people, doesn't reach the Email field,
     or doesn't update (a phone must not scroll sideways either)."""
     _b, _cookie, ids = hosted
     page = admin_people(ui, hosted, **(PHONE if phone else {}))
-    note = page.locator("#by-name-note")
+    note = page.locator("#no-email-note")
     expect(note).to_be_visible()
-    expect(note.locator("strong").first).to_have_text("2 people still sign in by name")
-    expect(note).to_contain_text("Name sign-in goes away in the next release")
+    expect(note.locator("strong").first).to_have_text("2 people can’t sign in")
+    expect(note).to_contain_text("only an email signs someone in")
     expect(note.locator("li button")).to_have_text(["bob", "Carol Ng"])
     # the cards say the same, one by one (bob and carol; neither dave nor the admin)
-    expect(page.locator(".person-card", has_text="no email yet")).to_have_count(3)  # + the admin's, by name
+    expect(page.locator(".person-card", has_text="no email yet")).to_have_count(3)  # + the admin's, as admin
     if phone:  # the note and its buttons fit the screen
         assert page.evaluate(
             "() => { const b = document.querySelector('#people-panel .sheet-body');"
@@ -130,7 +130,7 @@ def test_people_says_who_still_signs_in_by_name_and_follows_their_emails(
     page.fill(f"#email-{ids['bob']}", "bob@example.com")
     page.keyboard.press("Enter")
     expect(page.locator(f"#email-result-{ids['bob']}")).to_have_text("Saved")
-    expect(note.locator("strong").first).to_have_text("1 person still signs in by name")
+    expect(note.locator("strong").first).to_have_text("1 person can’t sign in")
     expect(note.locator("li button")).to_have_text(["Carol Ng"])
     expect(page.locator(f"#email-{ids['bob']}")).to_be_focused()
 
@@ -138,6 +138,6 @@ def test_people_says_who_still_signs_in_by_name_and_follows_their_emails(
     page.fill(f"#email-{ids['carol']}", "carol@example.com")
     page.keyboard.press("Enter")
     expect(page.locator(f"#email-result-{ids['carol']}")).to_have_text("Saved")
-    expect(page.locator("#by-name-note")).to_have_count(0)
+    expect(page.locator("#no-email-note")).to_have_count(0)
     expect(page.locator(".person-card", has_text="no email yet")).to_have_count(1)
     expect(page.locator(f"#email-{ids['carol']}")).to_be_focused()

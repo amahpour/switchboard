@@ -126,8 +126,10 @@ def is_idle(eff: str) -> bool:
 
 
 def human_first(items: Iterable[Item]) -> list[Item]:
-    """Human items first, then mentions, then chatter; each group by message id."""
-    return sorted(items, key=lambda i: (-i.prio, i.message_id))
+    """Human items first, then mentions, then replies to the member's own messages, then the
+    rest of the chatter; each group by message id. A reply releases chatter at once under the
+    hold (#137), so a batch cap must keep it, not the older chatter it brought along."""
+    return sorted(items, key=lambda i: (-i.prio, not i.reply_to_me, i.message_id))
 
 
 def item_cost(item: Item, limit: int | None = envelope.ITEM_LIMIT) -> int:
@@ -176,14 +178,34 @@ def peer_ok(peer_batch_boundary: int, boundary_seq: int) -> bool:
     return peer_batch_boundary < boundary_seq
 
 
-def chatter_due(room: Room, chatter: Sequence[Item], now: float, quiet_s: float, max_hold_s: float) -> bool:
+def chatter_due(
+    room: Room, chatter: Sequence[Item], now: float, quiet_s: float, max_hold_s: float, hold_s: float = 0.0
+) -> bool:
     """Chatter goes out once the room has been quiet for ``quiet_s``, or the oldest
-    item has waited ``max_hold_s``."""
+    item has waited ``max_hold_s``.
+
+    With ``hold_s`` set (issue #137), only chatter that addresses the member (a reply to its
+    own message) goes by that rule. The rest waits until its oldest item has waited ``hold_s``:
+    agents' chatter collects into one batch instead of a turn per message, and the member
+    still gets it sooner at any wake it has for something else."""
     if not chatter:
         return False
-    quiet = room.last_msg_at is None or now - room.last_msg_at >= quiet_s
-    held_long = now - chatter[0].ts >= max_hold_s
-    return quiet or held_long
+    addressed = [c for c in chatter if c.reply_to_me] if hold_s > 0 else list(chatter)
+    if addressed:
+        quiet = room.last_msg_at is None or now - room.last_msg_at >= quiet_s
+        if quiet or now - addressed[0].ts >= max_hold_s:
+            return True
+    return hold_s > 0 and any(now - c.ts >= hold_s for c in chatter if not c.reply_to_me)
+
+
+def chatter_wakes_at(pending: Sequence[Item], hold_s: float) -> float | None:
+    """When the hold (issue #137) lets an idle member's waiting chatter wake it, for the member
+    list: None when nothing is held, or something other than the hold decides (a priority item
+    wakes at once, a reply by the quiet period)."""
+    eligible = [d for d in pending if d.notified_at is None]
+    if hold_s <= 0 or not eligible or any(d.prio >= 1 or d.reply_to_me for d in eligible):
+        return None
+    return min(d.ts for d in eligible) + hold_s
 
 
 def releasable(
@@ -198,6 +220,8 @@ def releasable(
     max_hold_s: float,
     batch_max_msgs: int,
     max_chars: int,
+    hold_s: float = 0.0,
+    wake_now: bool = False,
 ) -> Release | None:
     """What may go out to one member now (DESIGN.md §8.2), or None.
 
@@ -205,7 +229,10 @@ def releasable(
     - Busy (mid-task): priority items only, never chatter, not counted.
     - Idle: priority items wake at once (humans even at budget 0), plus
       chatter if this turn boundary hasn't had a peer batch yet; chatter
-      alone waits for the quiet period (or the max hold) and needs budget.
+      alone waits for the quiet period (or the max hold, or ``hold_s`` when
+      it doesn't address the member) and needs budget.
+    - ``wake_now``: a person asked for this member's chatter now (``/wake``, #137): like
+      their own message, it skips the hold, the budget and the one-peer-batch rule.
     """
     eligible = [d for d in pending if d.notified_at is None]
     prio = [d for d in eligible if d.prio >= 1]
@@ -221,9 +248,11 @@ def releasable(
     if not is_idle(eff):
         return None
     if prio and (any(d.prio == 2 for d in prio) or room.budget_remaining > 0):
-        return done(prio + (chatter if ok else []), "wake", True)
+        return done(prio + (chatter if ok or wake_now else []), "wake", True)
+    if chatter and wake_now:
+        return done(chatter, "wake", True)
     if chatter and ok and room.budget_remaining > 0:
-        if chatter_due(room, chatter, now, quiet_s, max_hold_s):
+        if chatter_due(room, chatter, now, quiet_s, max_hold_s, hold_s):
             return done(chatter, "wake", True)
     return None
 

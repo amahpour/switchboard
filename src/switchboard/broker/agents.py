@@ -80,6 +80,8 @@ log = logging.getLogger("switchboard.agents")
 WAIT_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 # the code at the end of a join's answer ("join yk:j<16 hex>"), given back to reclaim a name (#304)
 JOIN_CODE_RE = re.compile(r"^(?:yk:j)?([0-9a-f]{16})$")
+# the refusal for a screen name SCREEN_NAME_RE doesn't match: an example name, not a harness rule
+BAD_SCREEN_NAME = "screen names look like claude-1: a-z first, then a-z, 0-9, '_' or '-', at most 24"
 # mcp.posted err: a short code ("guard", "bad_text") or an exception type name
 POST_ERR_RE = re.compile(r"[A-Za-z0-9_]{1,40}")
 # a hook's reported model name (the hook relays only this shape too), for the report:
@@ -162,15 +164,36 @@ def version_claim(value: Any) -> str | None:
     return value if isinstance(value, str) and VERSION_RE.fullmatch(value) else None
 
 
-def name_reserved_text(name: str, room: str, code: str | None, claim: str | None) -> str:
+# Why a join code didn't bring a name back (#370), each its own words: one sentence for all of them
+# hid what to do. The ones after "mismatch" are said only to a caller whose code matched, so a
+# guess learns nothing about the name's last holder.
+RECLAIM_WHY = {
+    "no_code": "that join has no code on record: it was made before join codes could bring a name back",
+    "mismatch": (
+        "that join code isn't this name's current one: after a /clear or a compaction, switchboard's"
+        " reminder gives each room a fresh code and the earlier one stops working, so use the newest"
+        " code you were given"
+    ),
+    "kicked": "that agent was kicked from this room, so its name can't be taken back",
+    "harness": (
+        "that code is from another harness's session: a code brings a name back only to the same harness"
+    ),
+    "host": "that code is from a session on another machine: a code brings a name back only on the same one",
+    "gone": "that session is no longer on record",
+}
+
+
+def name_reserved_text(
+    name: str, room: str, code: str | None, claim: str | None, why: str | None = None
+) -> str:
     """Why a join was refused a reserved name, and what to do. The way back (``resume=``) is named
     only to a session whose MCP server has it (``claim``, its claimed version, is 0.25.0 or later):
     an older one keeps the ``join`` schema it started with and refuses the call, so it is told to
     update, and to pick another name meanwhile (#340). A caller that gave ``code`` has the
-    parameter already."""
+    parameter already, and is told why it didn't work (``why``, a ``RECLAIM_WHY`` key, #370)."""
     text = f"{name} was used by another agent in {room} today; pick another"
     if code is not None:
-        return text + " (that join code isn't this name's)"
+        return f"{text} ({RECLAIM_WHY.get(why or 'mismatch', RECLAIM_WHY['mismatch'])})"
     if has_feature(claim, "join.resume"):
         return (
             text + ", or, if it was you before a restart, join again with resume= set to"
@@ -280,6 +303,9 @@ class AgentService:
 
     def parked_reason(self, membership_id: int) -> str | None:
         return self.engine.parked_reason(membership_id)
+
+    def wakes_at(self, membership_id: int) -> float | None:
+        return self.engine.wakes_at(membership_id)
 
     def board_reason(self, member: Member) -> str | None:
         """Why ``member`` can't use the review board, from its MCP server's claims (#249). None
@@ -567,23 +593,37 @@ class AgentService:
             and proc.same_start(p.mcp_start, ident.mcp_start)
         )
 
-    def _reclaim(self, holder: Membership, code: str | None, harness: str, host: str) -> Membership | None:
-        """The membership whose reserved name a join may take back (#304, DESIGN.md §6.1), or None.
+    def _reclaim(
+        self, holder: Membership, code: str | None, harness: str, host: str
+    ) -> tuple[Membership | None, str | None]:
+        """The membership whose reserved name a join may take back (#304, DESIGN.md §6.1), or None
+        with why not (a ``RECLAIM_WHY`` key, #370; None when no code was given).
 
-        Only with the code that membership's own join answer ended with, which only the session
-        that read that answer has, and only for the same harness on the same machine (so the
-        same person): never a name another session or machine used. Not from a kicked agent,
-        and not while the old membership is still in the room."""
-        if code is None or holder.join_code_hash is None or holder.active or holder.kicked:
-            return None
+        Only with the code that membership's own join answer ended with (or the newest a reminder
+        gave it), which only the session that read it has, and only for the same harness on the
+        same machine (so the same person): never a name another session or machine used. Not
+        from a kicked agent, and not while the old membership is still in the room. The code is
+        checked before anything about the holder is said, so a wrong one learns only that."""
+        if code is None:
+            return None, None
+        if holder.active:
+            return None, "mismatch"  # the caller checks this first (name_taken); never a reclaim
+        if holder.join_code_hash is None:
+            return None, "no_code"
         if not hmac.compare_digest(holder.join_code_hash, join_code_hash(code)):
-            return None
+            return None, "mismatch"
+        if holder.kicked:
+            return None, "kicked"
         old = self.store.get_participant(holder.participant_id)
-        if old is None or old.harness != harness or (old.host or "") != (host or ""):
-            return None
+        if old is None:
+            return None, "gone"
+        if old.harness != harness:
+            return None, "harness"
+        if (old.host or "") != (host or ""):
+            return None, "host"
         if self.store.was_kicked(holder.room_id, old.id):
-            return None
-        return holder
+            return None, "kicked"
+        return holder, None
 
     def _check_same_session(self, existing: Participant, mc: McpConn) -> None:
         """A re-join may take over a session's memberships (rotating the
@@ -733,10 +773,7 @@ class AgentService:
         name = params.get("screen_name")
         name = name.strip().lower().lstrip("@") if isinstance(name, str) else ""
         if not SCREEN_NAME_RE.match(name):
-            raise ServiceError(
-                "bad_request",
-                "screen names look like claude-1: a-z first, then a-z, 0-9, '_' or '-', at most 24",
-            )
+            raise ServiceError("bad_request", BAD_SCREEN_NAME)
         human = self.cfg.human_name.lower()
         if (
             name in RESERVED_NAMES
@@ -790,7 +827,9 @@ class AgentService:
             session_id=(tid or mc.session_id),
             host=mc.ident.host,
         )
-        if h == "test" or (existing is not None and existing.hooks_seen_at is not None):
+        # a harness whose status comes from its sinks (the test agent) starts busy, as does a
+        # session whose hooks were already seen: its next hook or wait() says otherwise
+        if adapter.sink_status or (existing is not None and existing.hooks_seen_at is not None):
             fields.update(status="busy", status_at=now, status_src="join")
         elif existing is None or existing.status == "offline":
             fields.update(status="starting", status_at=now, status_src="join")
@@ -825,9 +864,11 @@ class AgentService:
                 room.id, name, existing.id if existing else -1, now - NAME_REUSE_S
             )
             if holder is not None:
-                resumed = self._reclaim(holder, code, h, host)
+                resumed, why = self._reclaim(holder, code, h, host)
                 if resumed is None:
-                    raise ServiceError("name_reserved", name_reserved_text(name, room.name, code, mc.version))
+                    raise ServiceError(
+                        "name_reserved", name_reserved_text(name, room.name, code, mc.version, why)
+                    )
         elif cur.screen_name.lower() != name:
             raise ServiceError(
                 "bad_request",
@@ -1314,10 +1355,10 @@ class AgentService:
     async def hook_event(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
         inert: dict[str, Any] = {"out": None}
         harness = params.get("harness")
-        if harness == "test" and not self.state.test_mode:
-            return inert
         if not isinstance(harness, str) or harness not in HOOK_EVENTS:
             return inert
+        if self.engine.adapter_for(harness).test_only and not self.state.test_mode:
+            return inert  # a scripted stand-in's hook counts only in test mode (§9.6)
         raw_event = params.get("event")
         event = canonical_event(raw_event if isinstance(raw_event, str) else "")
         if event not in HOOK_EVENTS[harness]:
@@ -1328,7 +1369,8 @@ class AgentService:
             if got is None:
                 return inert
             host, chain, argv_fn = got
-            if harness == "test" and not getattr(getattr(conn, "link", None), "sat_test_mode", False):
+            sat_test_mode = getattr(getattr(conn, "link", None), "sat_test_mode", False)
+            if self.engine.adapter_for(harness, host).test_only and not sat_test_mode:
                 return inert
             pid: int | None = chain[0].pid
         else:

@@ -118,6 +118,7 @@ def test_required_roles(svc: RoomService) -> None:
             "/budget 61",
             "/hold a",
             "/release a",
+            "/wake a",
             "/who",
             "/status",
             "/help",
@@ -134,6 +135,7 @@ def test_required_roles(svc: RoomService) -> None:
         "/budget 61": "human",
         "/hold a": "human_cli",
         "/release a": "human",
+        "/wake a": "human",  # a wake now raises activity, like /release (#137)
         "/who": "human_cli",
         "/status": "human_cli",
         "/help": "human_cli",
@@ -199,7 +201,7 @@ def test_budget_role_uses_the_refilled_window(svc: RoomService, clock: FakeClock
 
 
 def test_member_commands_on_agent_less_room(svc: RoomService) -> None:
-    for t in ["/kick claude-1", "/hold claude-1", "/release claude-1"]:
+    for t in ["/kick claude-1", "/hold claude-1", "/release claude-1", "/wake claude-1"]:
         with pytest.raises(ServiceError) as e:
             svc.command("#build", t, WEB)
         assert e.value.code == "not_found" and "no such member" in e.value.message

@@ -39,6 +39,7 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
                       (raising it or turning it off is web only)
   /hold <name>        stop delivering to one agent (messages stay queued)
   /release <name>     resume delivery to a held agent (web only)
+  /wake <name>        wake an agent now for the messages waiting for it (web only)
   /kick <name>        remove an agent and revoke its membership
   /close              close this room: every agent leaves, the history is kept;
                       reopen it from Closed rooms in the web UI
@@ -61,7 +62,7 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
   //text              post text that starts with a single /"""
 
 _NO_ARGS = frozenset({"pause", "resume", "who", "status", "help", "close"})
-_ONE_NAME = frozenset({"kick", "hold", "release"})
+_ONE_NAME = frozenset({"kick", "hold", "release", "wake"})
 _ONE_NUMBER = {"budget": MAX_BUDGET, "hops": MAX_HOPS}  # /name [n], 0 <= n <= max
 _ONE_MESSAGE = frozenset({"pin", "unpin"})  # /name <message id>
 KNOWN = _NO_ARGS | _ONE_NAME | set(_ONE_NUMBER) | _ONE_MESSAGE | {"catchup", "review", "rename"}
@@ -74,6 +75,7 @@ _STATIC_ROLES = {
     "close": "human_cli",  # every agent leaves: it reduces activity, like /kick (§28.3)
     "hold": "human_cli",
     "release": "human",
+    "wake": "human",  # raises activity: a wake now, past the hold and the budget (#137)
     "who": "human_cli",
     "status": "human_cli",
     "help": "human_cli",
@@ -678,6 +680,25 @@ def apply(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
             notice=f"released {member.name}",
             members_changed=True,
             event="release",
+            event_data={"membership_id": member.membership_id},
+        )
+    if name == "wake":
+        # §8.2, #137: what a person's own message would do for the chatter waiting on the hold
+        if member.held:
+            return Result(True, f"{member.name} is held: /release {member.name} first")
+        if room.paused:
+            return Result(True, f"{room.name} is paused: /resume first")
+        waiting = [
+            i for i in store.pending_items(member.membership_id) if i.prio == 0 and i.notified_at is None
+        ]
+        if not waiting:
+            return Result(True, f"nothing is waiting for {member.name}")
+        n = len(waiting)
+        return Result(
+            True,
+            f"waking {member.name} for {n} waiting message{'s' if n != 1 else ''}",
+            members_changed=True,
+            event="wake",
             event_data={"membership_id": member.membership_id},
         )
     if name == "kick":

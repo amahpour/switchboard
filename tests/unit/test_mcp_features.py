@@ -117,6 +117,21 @@ def test_the_reserved_name_hint_after_a_wrong_code_is_the_same_for_every_version
     """A caller that gave a code has the parameter, whatever it claims: the answer is that the
     code isn't the name's, and it isn't told to update."""
     text = name_reserved_text(*NAMED, "0" * 16, claim)
-    assert text == (
-        "planner was used by another agent in #build today; pick another (that join code isn't this name's)"
-    )
+    assert text.startswith(
+        "planner was used by another agent in #build today; pick another (that join code isn't this"
+        " name's current one: after a /clear or a compaction"
+    ), text
+    assert "older than the broker" not in text
+
+
+def test_each_reason_a_code_failed_has_its_own_words() -> None:
+    """#370: every way a code fails to bring a name back read "that join code isn't this name's",
+    so an agent with a good but retired code, or one from before join codes, couldn't tell what
+    to do. Each reason now names itself, and an unknown one reads as a wrong code."""
+    from switchboard.broker.agents import RECLAIM_WHY
+
+    texts = {why: name_reserved_text(*NAMED, "0" * 16, None, why) for why in RECLAIM_WHY}
+    assert len(set(texts.values())) == len(RECLAIM_WHY)
+    assert "no code on record" in texts["no_code"] and "was kicked" in texts["kicked"]
+    assert "another harness" in texts["harness"] and "another machine" in texts["host"]
+    assert name_reserved_text(*NAMED, "0" * 16, None, "what?") == texts["mismatch"]
