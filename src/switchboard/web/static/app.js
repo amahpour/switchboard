@@ -4334,6 +4334,49 @@
     return card;
   }
 
+  // Who still signs in by name (#240, DESIGN.md §39.3): a person with no email. The next release
+  // drops name sign-in, so the admin is told how many there are, and who, while there is time to set
+  // their emails. The admin isn't counted: `admin` signs them in whatever happens. This follows the
+  // broker's rule (people.account): a name signs in only someone with no email.
+  function peopleByName() {
+    return state.people.filter(function (p) { return !p.admin && !p.email; });
+  }
+
+  function personLabel(p) {
+    return [p.first_name, p.last_name].filter(Boolean).join(' ') || p.name;
+  }
+
+  // Each name goes to that person's Email field, where the admin sets it: their cards are further
+  // down, and focus lands in the field, not on a button that is about to disappear.
+  function byNameNote(who) {
+    const one = who.length === 1;
+    const list = el('ul', 'by-name-list');
+    for (const p of who) {
+      const b = btn('btn btn-ghost-sm', personLabel(p));
+      b.dataset.focus = 'by-name:' + p.id;
+      b.title = 'Go to the Email field of ' + p.name;
+      b.setAttribute('aria-label', 'Set an email for ' + personLabel(p));
+      b.addEventListener('click', function () {
+        const input = document.getElementById('email-' + p.id);
+        if (!input) return;
+        const card = input.closest('.person-card');
+        if (card) card.scrollIntoView({ block: 'start' });
+        tryFocus(input);
+      });
+      const li = el('li');
+      li.append(b);
+      list.append(li);
+    }
+    const title = one ? '1 person still signs in by name' : who.length + ' people still sign in by name';
+    const n = note('amber', 'info', title, [
+      el('p', null, 'Name sign-in goes away in the next release. After that, someone with no email can’t sign in,'
+        + ' so set an email for ' + (one ? 'them' : 'each of them') + ' first. You can still sign in as admin.'),
+      list,
+    ]);
+    n.id = 'by-name-note';
+    return n;
+  }
+
   function peopleResult(id, text, bad) {
     const n = document.getElementById('people-result-' + id);
     if (n) {
@@ -4600,8 +4643,8 @@
     if (!p.admin && p.passkeys && p.sign_in !== 'passkey') bits.push(plural(p.passkeys, 'passkey', 'passkeys'));
     if (p.admin) bits.push(p.password ? 'password' : 'no password', plural(p.passkeys || 0, 'passkey', 'passkeys'));
     if (!p.email) {
-      bits.push(p.admin ? 'no email yet: you sign in with your name, or admin'
-        : 'no email yet: signs in with their name');
+      bits.push(p.admin ? 'no email yet: you sign in with your name until the next release, or with admin'
+        : 'no email yet: signs in with their name, until the next release');
     }
     card.append(el('p', 'machine-step', bits.join(' · ')));
     card.append(nameRow(p), emailRow(p));
@@ -4653,6 +4696,8 @@
     const typing = f && f.id === 'person-name';
     body.replaceChildren();
     if (state.invite) body.append(inviteCard(state.invite));
+    const byName = peopleByName();
+    if (byName.length) body.append(byNameNote(byName));
     body.append(addPersonCard());
     for (const p of state.people) body.append(personCard(p));
     if (state.privateRooms && state.privateRooms.length) body.append(privateRoomsCard(state.privateRooms));
