@@ -471,7 +471,10 @@ def handoff_plan(
     lines = ["Review board summary"]
     for i in done:
         if i.state == "fixed":
-            outcome = f"Fixed: {i.title} — commit {i.commit}"
+            # a person's own ruling has no agent's proof, and may have no commit either (#371)
+            outcome = f"Fixed: {i.title}" + (
+                f" — commit {i.commit}" if i.commit else f", on {i.confirmed_by}'s say"
+            )
             if i.proof:
                 outcome += f"; proof: {i.proof}"
         elif i.state == "answered":
@@ -496,13 +499,14 @@ def handoff_plan(
     for i in done:
         if i.kind != "finding" or not i.file or not i.lines or i.label not in decisions:
             continue
-        result = (
+        fixed = (
             f"Fixed in {i.commit}; proof: {i.proof}."
-            if i.state == "fixed"
-            else f"Dropped: {i.reason}."
-            if i.state == "dropped"
-            else ""
+            if i.proof
+            else f"Fixed in {i.commit}, on {i.confirmed_by}'s say."  # a person's ruling (#371)
+            if i.commit
+            else f"Fixed, on {i.confirmed_by}'s say."
         )
+        result = fixed if i.state == "fixed" else f"Dropped: {i.reason}." if i.state == "dropped" else ""
         comments.append(
             {
                 "item": i.label,
