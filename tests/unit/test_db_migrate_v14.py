@@ -30,7 +30,7 @@ def test_preferences_gain_null_budget_and_hop_defaults_with_a_checked_backup(tmp
     os.chmod(p, 0o600)
 
     con = db.open_db(p)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 20
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 21
     assert db.row_counts(con, db.V14_TABLES) == before
     row = con.execute(
         "SELECT theme, text_size, room_rules, budget_per_hour, hop_limit FROM preferences WHERE person_id=0"

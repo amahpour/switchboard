@@ -25,13 +25,13 @@ def test_participants_gain_an_empty_status_line_with_a_checked_backup(tmp_path: 
     assert db.schema_version(con) == 16
     people = con.execute("SELECT COUNT(*) FROM participants").fetchone()[0]
     assert people > 0  # the fixture has participants, so "all NULL" means something
-    before = db.row_counts(con, db.TABLES)
+    before = db.row_counts(con, db.TABLES[:-1])
     con.close()
     os.chmod(p, 0o600)
 
     con = db.open_db(p)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 20
-    assert db.row_counts(con, db.TABLES) == before
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 21
+    assert db.row_counts(con, db.TABLES[:-1]) == before
     unset = "SELECT COUNT(*) FROM participants WHERE status_line IS NULL AND status_line_at IS NULL"
     assert con.execute(unset).fetchone()[0] == people
     assert p.with_name(p.name + ".v16.bak").exists()

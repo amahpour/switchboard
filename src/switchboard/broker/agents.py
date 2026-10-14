@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from switchboard import envelope, reviews
+from switchboard import claims, envelope, reviews
 from switchboard.adapters.base import HOOK_EVENTS, start_key
 from switchboard.broker import proc
 from switchboard.broker.hosts import HostViews
@@ -1285,6 +1285,29 @@ class AgentService:
         )
         self.run([Snapshot(r) for r in {x.room_id for x in self.store.participant_memberships(p.id)}])
         return {"status_line": line}
+
+    def claim(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
+        """Advisory outside work, per room: only its member may renew or release it (§47)."""
+        _p, m, room = self._member(conn, params)
+        try:
+            key = claims.normalize_key(params.get("key"))
+            ttl = claims.normalize_ttl(params.get("ttl"))
+        except claims.ClaimError as e:
+            raise ServiceError("bad_request", str(e)) from None
+        decision = self.store.move_claim(room.id, m.id, key, ttl)
+        if decision.action == "held":
+            raise ServiceError("conflict", f"{key} is claimed by {decision.holder}")
+        if decision.action == "limit":
+            raise ServiceError("bad_request", f"a member can hold at most {claims.MEMBER_MAX} claims")
+        self.state.hub.members_changed(room.name)
+        return {
+            "ok": True,
+            "room": room.name,
+            "key": key,
+            "holder": m.screen_name,
+            "released": decision.action == "released",
+            "expires_at": decision.expires_at if ttl else None,
+        }
 
     # =============================================================== hooks
     async def hook_event(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:

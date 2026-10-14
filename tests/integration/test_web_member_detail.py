@@ -33,6 +33,7 @@ MEMBER_KEYS = {
     "board_why",  # why it can't use the review board, or None (#249)
     "version_claim",
     "tools_claim",
+    "claims",
     "status_line",
     "status_line_stale",
     "status_line_remaining_s",

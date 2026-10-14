@@ -295,6 +295,7 @@ class Member:
     status_line_at: float | None = None
     status_line_stale: bool = False
     status_line_remaining_s: float | None = None
+    claims: tuple[dict[str, Any], ...] = ()  # advisory outside work held by this membership (§46)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

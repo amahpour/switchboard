@@ -22,13 +22,13 @@ def test_rooms_start_with_no_aliases_after_checked_backup(tmp_path: Path) -> Non
             con.execute(stmt)
     con.commit()
     assert db.schema_version(con) == 17
-    before = db.row_counts(con, db.TABLES)
+    before = db.row_counts(con, db.TABLES[:-1])
     con.close()
     os.chmod(p, 0o600)
 
     con = db.open_db(p)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 20
-    assert db.row_counts(con, db.TABLES) == before
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 21
+    assert db.row_counts(con, db.TABLES[:-1]) == before
     assert con.execute("SELECT COUNT(*) FROM rooms WHERE renamed_from <> '[]'").fetchone()[0] == 0
     assert p.with_name(p.name + ".v17.bak").exists()
     con.close()

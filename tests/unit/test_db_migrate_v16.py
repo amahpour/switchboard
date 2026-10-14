@@ -25,13 +25,13 @@ def test_memberships_gain_a_null_join_code_with_a_checked_backup(tmp_path: Path)
     assert db.schema_version(con) == 15
     members = con.execute("SELECT COUNT(*) FROM memberships").fetchone()[0]
     assert members > 0  # the fixture has memberships, so "all NULL" means something
-    before = db.row_counts(con, db.TABLES)
+    before = db.row_counts(con, db.TABLES[:-1])
     con.close()
     os.chmod(p, 0o600)
 
     con = db.open_db(p)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 20
-    assert db.row_counts(con, db.TABLES) == before
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 21
+    assert db.row_counts(con, db.TABLES[:-1]) == before
     assert (
         con.execute("SELECT COUNT(*) FROM memberships WHERE join_code_hash IS NULL").fetchone()[0] == members
     )

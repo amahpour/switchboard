@@ -12,7 +12,7 @@ import sqlite3
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
-from switchboard import db, reviews
+from switchboard import claims, db, reviews
 from switchboard.clock import Clock, SystemClock
 from switchboard.models import (
     LOCAL_HOST,
@@ -296,6 +296,7 @@ class Store:
         ("batches", f"batches WHERE membership_id IN ({_ROOM_MEMBERSHIPS})", 1),
         ("events", f"events WHERE room_id=? OR membership_id IN ({_ROOM_MEMBERSHIPS})", 2),
         ("messages", "messages WHERE room_id=?", 1),
+        ("claims", "claims WHERE room_id=?", 1),
         ("memberships", "memberships WHERE room_id=?", 1),
         ("rooms", "rooms WHERE id=?", 1),
     )
@@ -631,6 +632,44 @@ class Store:
                 return m
         return None
 
+    def claims_for_room(self, room_id: int) -> list[claims.Claim]:
+        """Active claims for the buddy list and claim policy, with their current holder."""
+        rows = self.con.execute(
+            "SELECT c.key, c.membership_id, m.screen_name, c.expires_at"
+            " FROM claims c JOIN memberships m ON m.id=c.membership_id"
+            " WHERE c.room_id=? AND c.expires_at>? AND m.left_at IS NULL ORDER BY c.key",
+            (room_id, self.clock.now()),
+        ).fetchall()
+        return [claims.Claim(r[0], r[1], r[2], r[3]) for r in rows]
+
+    def move_claim(self, room_id: int, membership_id: int, key: str, ttl: int) -> claims.Decision:
+        """Apply the pure policy in one transaction; expired or ended claims cannot block."""
+        now = self.clock.now()
+        key_norm = key.casefold()
+        with db.tx(self.con):
+            self.con.execute(
+                "DELETE FROM claims WHERE expires_at<=? OR membership_id IN"
+                " (SELECT id FROM memberships WHERE left_at IS NOT NULL)",
+                (now,),
+            )
+            decision = claims.decide(self.claims_for_room(room_id), membership_id, key, ttl, now)
+            if decision.action == "acquired":
+                self.con.execute(
+                    "INSERT INTO claims(room_id,key_norm,key,membership_id,expires_at) VALUES(?,?,?,?,?)",
+                    (room_id, key_norm, key, membership_id, decision.expires_at),
+                )
+            elif decision.action == "renewed":
+                self.con.execute(
+                    "UPDATE claims SET expires_at=? WHERE room_id=? AND key_norm=? AND membership_id=?",
+                    (decision.expires_at, room_id, key_norm, membership_id),
+                )
+            elif decision.action == "released":
+                self.con.execute(
+                    "DELETE FROM claims WHERE room_id=? AND key_norm=? AND membership_id=?",
+                    (room_id, key_norm, membership_id),
+                )
+        return decision
+
     def set_held(self, membership_id: int, held: bool) -> None:
         now = self.clock.now()
         with db.tx(self.con):
@@ -648,6 +687,7 @@ class Store:
         ``left_at IS NULL``)."""
         now = self.clock.now()
         with db.tx(self.con):
+            self.con.execute("DELETE FROM claims WHERE membership_id=?", (membership_id,))
             self.con.execute(
                 "UPDATE memberships SET left_at=?, left_reason=?,"
                 " cred_hash=CASE WHEN ? THEN cred_hash ELSE NULL END,"

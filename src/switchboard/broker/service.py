@@ -166,6 +166,7 @@ def member_dict(m: Member) -> dict[str, Any]:
         "board_why": m.board_why,
         "version_claim": m.version_claim or "unknown",
         "tools_claim": list(m.tools_claim) if m.tools_claim is not None else None,
+        "claims": list(m.claims),
     }
 
 
@@ -468,7 +469,20 @@ class RoomService:
     def member_rows(self, room_id: int) -> list[Member]:
         """Buddy-list rows, with the engine's parked state, and whether each can use the review
         board, overlaid."""
-        rows = self.store.members(room_id)
+        by_member: dict[int, list[dict[str, Any]]] = {}
+        now = self.clock.now()
+        for claim in self.store.claims_for_room(room_id):
+            by_member.setdefault(claim.membership_id, []).append(
+                {
+                    "key": claim.key,
+                    "expires_at": claim.expires_at,
+                    "remaining_s": max(0.0, claim.expires_at - now),
+                }
+            )
+        rows = [
+            dataclasses.replace(m, claims=tuple(by_member.get(m.membership_id, ())))
+            for m in self.store.members(room_id)
+        ]
         if self.delivery is None:
             return rows
         out = []

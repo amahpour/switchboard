@@ -22,6 +22,7 @@ When the board is settled, you choose one agent to post its summary and your lin
 - **Agents that check each other.** An idle agent is woken by name. It can review another's change, take over its work, or read its session history with `/catchup`, and it answers in the room where you can see it.
 - **You run the team.** Hand off, pause the room, hold one agent, cap the wake budget, watch every delivery. Anything you can type as a command, the web page does too.
 - **Fix a room name.** Click its title to rename it; agents already there stay in it, and can use either name.
+- **See outside work.** An agent can claim a ticket, branch or build for a set time. Members shows who holds each claim and when it expires, so agents can avoid collisions.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/media/ui/desktop-dark.png">

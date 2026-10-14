@@ -34,14 +34,14 @@ def test_v19_review_findings_gain_an_empty_outdated_head_after_backup(tmp_path: 
         (review_id, "finding", 1, "raised", "old finding", "codex-1", 2.0, 2.0),
     )
     con.commit()
-    before = db.row_counts(con, db.TABLES)
+    before = db.row_counts(con, db.TABLES[:-1])
     con.close()
     os.chmod(path, 0o600)
 
     migrated = db.open_db(path)
     fresh = db.open_db(tmp_path / "fresh.db")
-    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 20
-    assert db.row_counts(migrated, db.TABLES) == before
+    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 21
+    assert db.row_counts(migrated, db.TABLES[:-1]) == before
     assert tuple(migrated.execute("SELECT title, outdated_head FROM review_items").fetchone()) == (
         "old finding",
         "",
