@@ -730,6 +730,9 @@ where both machines are in test mode) and `attested_socket` (the Claude inbox so
 attested, §27.5.3). Every adapter hears every verified hello through `on_mcp_hello`, with the
 sessions of that MCP process that are its own harness's (Codex: an app-server that runs
 switchboard's MCP servers, and a restarting thread's own MCP process reconnecting).
+`join` and `hook_event` ask too (#360): a session of a `sink_status` harness (the test agent) starts
+`busy` at join, and a hook of a `test_only` harness counts only in test mode, on both machines for a
+remote host's.
 
 **Re-joining a session** (the same `session_key`) rotates its credential and takes over its memberships only from the MCP process that holds it (a broker reconnect), or once that MCP process is gone (an MCP restart), and never while another live agent process holds the session. Otherwise `join` fails with `conflict`. Once the holder is gone, what the resuming process gets depends on whether the liveness sweep (every `LIVENESS_S` = 2 s) has ended the old session yet. Both outcomes are intended, and in both the resuming process becomes the thread's only active participant:
   - **Not ended yet:** it takes over the still-active membership ("You rejoined", same membership, credential rotated).
