@@ -467,7 +467,7 @@ def _catchup(cmd: Command, room: Room, svc: "RoomService") -> Result:
     topic = target if mode == "topic" else ""
     limit = svc.cfg.delivery.max_msg_chars
     base = catchup.request_text(agent.name, mode, handles, since=since, max_chars=limit, topic=topic, note="")
-    # the room's pinned messages ride along (#292, §47) when the request still fits with them
+    # the room's pinned messages ride along (#292, §48) when the request still fits with them
     pins = [p.message for p in svc.store.pins(room.id)]
     with_pins = catchup.request_text(
         agent.name,
@@ -549,7 +549,7 @@ def _catchup(cmd: Command, room: Room, svc: "RoomService") -> Result:
 
 
 def _pin(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
-    """``/pin <id>`` and ``/unpin <id>`` (#292, §47). A pin is stored, shown in the room header and
+    """``/pin <id>`` and ``/unpin <id>`` (#292, §48). A pin is stored, shown in the room header and
     at every join and ``/catchup``; the room gets a notice saying who pinned what, so the log
     keeps the record. Already pinned, or not pinned, changes nothing and says so."""
     mid = int(cmd.args[0])

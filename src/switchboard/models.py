@@ -266,7 +266,7 @@ class Message:
         )
 
 
-MAX_PINS = 5  # a room's pinned decisions (#292, DESIGN.md §47)
+MAX_PINS = 5  # a room's pinned decisions (#292, DESIGN.md §48)
 
 
 @dataclass(frozen=True)
@@ -308,6 +308,7 @@ class Member:
     status_line_at: float | None = None
     status_line_stale: bool = False
     status_line_remaining_s: float | None = None
+    claims: tuple[dict[str, Any], ...] = ()  # advisory outside work held by this membership (§46)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

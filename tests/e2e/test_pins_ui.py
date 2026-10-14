@@ -1,4 +1,4 @@
-"""Pinned decisions in a real browser (#292, DESIGN.md §47): Pin and Unpin on a message, the strip
+"""Pinned decisions in a real browser (#292, DESIGN.md §48): Pin and Unpin on a message, the strip
 under the room header with a link to each pinned message and Unpin, the cap of five, a second page
 following live, and the keyboard. A hosted broker of its own (a signed-in admin, no agents running:
 the one agent message is posted by a stand-in that has left). Marker ``e2e``."""

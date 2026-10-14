@@ -149,9 +149,9 @@ def test_the_backup_is_written_before_the_first_statement(tmp_path: Path) -> Non
     alters = [ok for sql, ok in seen if sql.lstrip().upper().startswith(("ALTER", "CREATE TABLE"))]
     assert len(
         alters
-    ) == 3 + 5 + 1 + 1 + 2 + 2 + 2 + 1 + 1 + 1 + 2 + 2 + 2 + 1 + 2 + 1 + 2 + 1 + 0 + 1 and all(
+    ) == 3 + 5 + 1 + 1 + 2 + 2 + 2 + 1 + 1 + 1 + 2 + 2 + 2 + 1 + 2 + 1 + 2 + 1 + 1 + 1 and all(
         alters
-    )  # v2 -> ... -> v22 (v21 has none: it is #293's place)
+    )  # v2 -> ... -> v22
     assert dump(bak) == original
     c = sqlite3.connect(bak)
     assert c.execute("PRAGMA journal_mode").fetchone()[0] == "delete"

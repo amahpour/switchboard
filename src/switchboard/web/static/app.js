@@ -798,7 +798,7 @@
     return meta;
   }
 
-  // ----------------------------------------------------------- pinned decisions (#292, §47)
+  // ----------------------------------------------------------- pinned decisions (#292, §48)
   // A person pins a chat message: every agent that joins is shown it, and the room's header lists
   // it. The button is the same as typing /pin <id>, and goes through it, so the broker's rules
   // (a person's web session, at most five) are the only ones. The buttons and the strip follow the
@@ -1251,6 +1251,12 @@
     return m._statusDeadline !== undefined && performance.now() >= m._statusDeadline;
   }
 
+  function claimDeadline(c) {
+    if (c._deadline === undefined && Number.isFinite(c.remaining_s))
+      c._deadline = performance.now() + c.remaining_s * 1000;
+    return c._deadline;
+  }
+
   function memberRow(m) {
     const li = el('li', 'member');
     li.dataset.name = m.name;
@@ -1282,6 +1288,11 @@
       const work = el('span', 'm-work', m.status_line);
       if (statusLineStale(m)) work.append(el('span', 'm-work-stale', 'Stale'));
       main.append(work);
+    }
+    for (const c of m.claims || []) {
+      if (!Number.isFinite(claimDeadline(c)) || claimDeadline(c) <= performance.now()) continue;
+      const until = new Date(c.expires_at * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      main.append(el('span', 'm-claim-entry', 'Claim: ' + c.key + ' · Expires ' + until));
     }
     if (m.away) main.append(el('span', 'm-away', 'Away: ' + m.away));
     if (m.parked) {
@@ -1339,8 +1350,12 @@
     const nextStatus = members.filter(function (m) {
       return m.status_line && !statusLineStale(m) && m._statusDeadline !== undefined;
     }).map(function (m) { return m._statusDeadline - performance.now(); });
-    if (nextStatus.length) {
-      state.statusTimer = setTimeout(renderBuddies, Math.max(1, Math.ceil(Math.min(...nextStatus))));
+    const nextClaims = members.flatMap(function (m) {
+      return (m.claims || []).map(claimDeadline).filter(function (d) { return d > performance.now(); })
+        .map(function (d) { return d - performance.now(); });
+    });
+    if (nextStatus.length || nextClaims.length) {
+      state.statusTimer = setTimeout(renderBuddies, Math.max(1, Math.ceil(Math.min(...nextStatus, ...nextClaims))));
     }
     refocus(list, focused);
     const bypass = members.some(function (m) { return m.approval_mode === 'bypass'; });

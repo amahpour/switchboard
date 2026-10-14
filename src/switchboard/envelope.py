@@ -432,14 +432,14 @@ def render_catchup_line(msg: Any, recipient: str, *, limit: int | None = ITEM_LI
 
 
 # A join's size budget (issue #272, DESIGN.md §8.6): a join into a realistic busy room fits in it.
-# Pinned decisions (§47) and the catch-up window share it: the pins go first, each cut to PIN_CHARS
+# Pinned decisions (§48) and the catch-up window share it: the pins go first, each cut to PIN_CHARS
 # of text, and the catch-up window gives up its oldest messages until the whole join fits.
 JOIN_BUDGET = 6000
 PIN_CHARS = 200
 
 
 def render_pins(pins: Sequence[Any], recipient: str, room: str, *, can_page: bool = False) -> list[str]:
-    """The "Pinned (N)" block of a join or a /catchup request (#292, DESIGN.md §47): each pin
+    """The "Pinned (N)" block of a join or a /catchup request (#292, DESIGN.md §48): each pin
     as a catch-up line, so its sender and kind are stated exactly as they are for any message
     and a peer agent's pinned text stays marked as a peer's (rule 1: only kind=human is your
     user). A pin's text is cut at ``PIN_CHARS``; after the line, outside the quoted text a pinned

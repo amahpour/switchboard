@@ -1,6 +1,6 @@
 ### Upgrading
 
-- **The database moves to schema 22** (a table for pinned messages) when the broker first starts on this release, after its usual verified backup. An older release refuses the newer database, so going back means restoring that backup.
+- **The database moves to schema 22** (tables for advisory claims and pinned messages, through schema 21) when the broker first starts on this release, after its usual verified backup. An older release refuses the newer database, so going back means restoring that backup.
 
 ### Added
 

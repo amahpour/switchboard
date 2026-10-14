@@ -1,5 +1,5 @@
 """Schema 22 (#292) adds a room's pinned decisions and keeps every existing row. Schema 21 is
-#293's (advisory claims) and not on this branch: its step only keeps the chain whole."""
+#293's (advisory claims)."""
 
 from __future__ import annotations
 
@@ -29,14 +29,15 @@ def database_at(path: Path, version: int) -> sqlite3.Connection:
 
 @pytest.mark.parametrize("version", [20, 21])
 def test_an_older_database_gains_an_empty_pins_table_after_a_backup(tmp_path: Path, version: int) -> None:
-    """The step from 20 goes through 21 (#293's place). The messages and rooms are as they were, the
+    """The step from 20 goes through 21 (#293's claims). The messages and rooms are as they were, the
     pins table is empty and has the fresh schema's columns, and the backup of the old file is made.
     Fails if the chain skips a version, forgets to create the table, or counts it in a database
     that doesn't have it yet."""
     path = tmp_path / "switchboard.db"
     con = database_at(path, version)
     before = db.row_counts(con, db.tables_of(version))
-    assert "pins" not in db.tables_of(version) and db.tables_of(version)[-1] == "room_people"
+    assert "pins" not in db.tables_of(version)
+    assert db.tables_of(version)[-1] == ("room_people" if version == 20 else "claims")
     con.commit()
     con.close()
     os.chmod(path, 0o600)

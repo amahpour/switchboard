@@ -11,7 +11,7 @@ from switchboard import guardrails
 from switchboard.mcp import server as srv
 from switchboard.mcp.client import BrokerConn
 
-TOOLS = {"join", "leave", "who", "say", "read", "wait", "pass", "away", "review", "status"}
+TOOLS = {"join", "leave", "who", "say", "read", "wait", "pass", "away", "review", "status", "claim"}
 
 
 def make(tmp_path, **kw) -> tuple[srv.McpState, object]:
@@ -35,7 +35,7 @@ async def test_tools_annotations_and_instructions(tmp_path) -> None:
         ann = {n: t.annotations.model_dump(by_alias=True, exclude_none=True) for n, t in tools.items()}
         for n in ("who", "read", "wait"):
             assert ann[n] == {"readOnlyHint": True, "openWorldHint": False}
-        for n in ("say", "pass", "review"):
+        for n in ("say", "pass", "review", "claim"):
             assert ann[n] == {"destructiveHint": False, "openWorldHint": False}
         for n in ("join", "leave", "away", "status"):
             assert ann[n] == {"destructiveHint": False, "openWorldHint": False, "idempotentHint": True}
@@ -48,9 +48,8 @@ async def test_tools_annotations_and_instructions(tmp_path) -> None:
 
 
 async def test_tool_list_fits_the_review_budget(tmp_path) -> None:
-    """Every agent turn carries the tool list, so it has a budget: 3,500 characters (#274 set
-    3,000, and the tools added since had squeezed the descriptions into fragments, so the
-    maintainer raised it). A new tool or parameter has to fit; each description stays a sentence."""
+    """Every agent turn carries the tool list. The maintainer approved 3,700 for one claim
+    tool in #293; another tool or parameter must still fit, with every description a sentence."""
     _st, server = make(tmp_path)
     async with Client(server, mode="legacy") as c:
         tools = await c.list_tools()
@@ -63,7 +62,7 @@ async def test_tool_list_fits_the_review_budget(tmp_path) -> None:
         )
         for t in tools
     )
-    assert size <= 3500, size
+    assert size <= 3700, size
     review = next(t for t in tools if t.name == "review")
     assert "where" in review.input_schema["properties"]
     assert "file" not in review.input_schema["properties"]

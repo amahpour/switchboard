@@ -460,7 +460,7 @@ class HelloMiddleware(Middleware):
 
 
 # Every tool build_server registers, as mcp.hello reports them (#249); a test pins the two equal.
-TOOL_NAMES = ("join", "leave", "who", "say", "read", "wait", "pass", "away", "review", "status")
+TOOL_NAMES = ("join", "leave", "who", "claim", "say", "read", "wait", "pass", "away", "review", "status")
 
 
 def build_server(st: McpState) -> FastMCP:
@@ -530,6 +530,19 @@ def build_server(st: McpState) -> FastMCP:
             return got
         name, cred = got
         res = await st.call("agent.who", st.base(cred, tid))
+        st.forget(res, (tid, name))
+        return dumps(res)
+
+    @mcp.tool(annotations=RW)
+    async def claim(room: str, key: str, ttl: int, ctx: Context) -> str:
+        """Claim outside work for ttl; 0 releases."""
+        await st.prime(ctx)
+        tid = st.thread_id(ctx)
+        got = await st.find_cred(room, tid)
+        if isinstance(got, str):
+            return got
+        name, cred = got
+        res = await st.call("agent.claim", {**st.base(cred, tid), "key": key, "ttl": ttl})
         st.forget(res, (tid, name))
         return dumps(res)
 

@@ -162,7 +162,7 @@ def request_text(
     part comes first (the block title, the rules, the protocol with ``max_chars`` as the reply
     limit), then the window start (UTC), one ``subject:`` line per session, ``topic:`` and
     ``note:`` (``–`` when there is none), then the room's pinned messages when there are any
-    (#292, §47), as a join shows them: each a catch-up line, a peer's text still a peer's. No
+    (#292, §48), as a join shows them: each a catch-up line, a peer's text still a peer's. No
     angle brackets: agents see ``<`` and ``>`` escaped (``envelope.sanitize``)."""
     lines = [headline(agent, mode, subjects), BLOCK_TITLE, f"  {RULES}"]
     lines += [f"  {s.format(max_chars=max_chars)}" for s in PROTOCOL]

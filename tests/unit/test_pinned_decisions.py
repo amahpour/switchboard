@@ -1,4 +1,4 @@
-"""Pinned decisions (#292, DESIGN.md §47), below the broker: the store keeps at most five pins
+"""Pinned decisions (#292, DESIGN.md §48), below the broker: the store keeps at most five pins
 per room in message order and deletes them with the room, and the join renders them as catch-up
 lines inside its size budget."""
 

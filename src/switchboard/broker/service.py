@@ -148,7 +148,7 @@ PIN_TEXT_MAX = 300  # a pin's text in the room header: the strip shows its first
 
 
 def pin_dict(p: Pin) -> dict[str, Any]:
-    """One pinned message as the web UI's header strip shows it (#292, DESIGN.md §47): who said
+    """One pinned message as the web UI's header strip shows it (#292, DESIGN.md §48): who said
     it, who pinned it, and its text display-cleaned and cut (the message itself has the rest)."""
     m = p.message
     text = clean(m.text)
@@ -189,6 +189,7 @@ def member_dict(m: Member) -> dict[str, Any]:
         "board_why": m.board_why,
         "version_claim": m.version_claim or "unknown",
         "tools_claim": list(m.tools_claim) if m.tools_claim is not None else None,
+        "claims": list(m.claims),
     }
 
 
@@ -321,7 +322,7 @@ class RoomService:
             "people": self.room_people_names(room) if room.private else None,
         }
 
-    # ------------------------------------------------------ pinned decisions (#292, §47)
+    # ------------------------------------------------------ pinned decisions (#292, §48)
     def pins_payload(self, room: Room) -> list[dict[str, Any]]:
         return [pin_dict(p) for p in self.store.pins(room.id)]
 
@@ -520,7 +521,20 @@ class RoomService:
     def member_rows(self, room_id: int) -> list[Member]:
         """Buddy-list rows, with the engine's parked state, and whether each can use the review
         board, overlaid."""
-        rows = self.store.members(room_id)
+        by_member: dict[int, list[dict[str, Any]]] = {}
+        now = self.clock.now()
+        for claim in self.store.claims_for_room(room_id):
+            by_member.setdefault(claim.membership_id, []).append(
+                {
+                    "key": claim.key,
+                    "expires_at": claim.expires_at,
+                    "remaining_s": max(0.0, claim.expires_at - now),
+                }
+            )
+        rows = [
+            dataclasses.replace(m, claims=tuple(by_member.get(m.membership_id, ())))
+            for m in self.store.members(room_id)
+        ]
         if self.delivery is None:
             return rows
         out = []

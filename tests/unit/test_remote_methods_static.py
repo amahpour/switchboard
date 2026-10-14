@@ -31,6 +31,7 @@ EXACT = {
     "agent.pass",
     "agent.away",
     "agent.status",
+    "agent.claim",
     "agent.review",
     "hook.event",
     "hook.ack",
