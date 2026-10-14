@@ -248,6 +248,49 @@ async def test_findings_deferred_to_a_ticket_settle_the_board(broker: InProcBrok
         web.close()
 
 
+async def test_an_agent_reports_the_pull_request_and_a_merge_closes_the_board(broker: InProcBroker) -> None:
+    """#291: the board read settled while a person had threads open on the PR, stayed open after
+    the merge, and agents passed CI on from memory. An agent reports what gh shows: the board
+    says it, as that agent's, with how many threads are open; a new CI result is one line in the
+    room; a reported merge closes the board with one line naming who reported it. A state the
+    board doesn't know is refused. Fails if a report is dropped, unattributed, or a merge leaves
+    the board open."""
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "kp-a") as author, FakeAgent(broker.home, "kp-r") as reviewer:
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            await reviewer.call("review", room="#build", action="open", url=PR)
+            r = await author.call("review", room="#build", action="report", state="approved")
+            assert r.get("ok") is False and "state must be one of" in r["error"], r
+            r = await author.call(
+                "review", room="#build", action="report", state="open", threads=2, ci="failing"
+            )
+            assert r["ok"] and "2 open on the PR, CI failing (per claude-1" in r["board"], r
+            page = web.get("/api/rooms/build/review").json()["board"]
+            assert page["report"].startswith("2 open on the PR, CI failing (per claude-1")
+            assert (page["pr_threads"], page["pr_ci"], page["reported_by"]) == (2, "failing", "claude-1")
+            r = await reviewer.call("review", room="#build", action="report", ci="failing")
+            assert r["ok"], r  # the same CI result again: no second line
+            r = await reviewer.call("review", room="#build", action="report", ci="passing", threads=0)
+            assert r["ok"] and "no threads open on the PR, CI passing (per codex-1" in r["board"], r
+            r = await author.call("review", room="#build", action="report", state="merged")
+            assert r["ok"] and r.get("closed") is True, r
+            assert web.get("/api/rooms/build/review").json()["board"] is None
+        texts = [
+            m["text"]
+            for m in web.get("/api/rooms/build/messages").json()["messages"]
+            if m["kind"] == "notice"
+        ]
+        ci_lines = [t for t in texts if "reports CI" in t]
+        assert ci_lines == [f"claude-1 reports CI failing on {PR}", f"codex-1 reports CI passing on {PR}"], (
+            texts
+        )
+        assert f"claude-1 reports {PR} merged: the review board is closed" in texts, texts
+    finally:
+        web.close()
+
+
 async def test_a_board_from_open_to_settled(broker: InProcBroker) -> None:
     async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
         await author.join("#build", "claude-1")

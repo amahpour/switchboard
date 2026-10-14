@@ -19,7 +19,7 @@ from switchboard.reviews import ReviewError
 
 log = logging.getLogger(__name__)
 
-ACTIONS = ("open", "show", "raise", "ask", "concede", "contest", "fix", "confirm", "drop", "defer")
+ACTIONS = ("open", "show", "raise", "ask", "concede", "contest", "fix", "confirm", "drop", "defer", "report")
 
 
 class Boards:
@@ -60,6 +60,13 @@ class Boards:
             "agent_people": agent_people,
             "posted_at": rv["posted_at"],
             "posted_by": rv["posted_by"],
+            # what an agent last read off the pull request (#291): its claim, shown as its own
+            "pr_state": rv["pr_state"],
+            "pr_threads": rv["pr_threads"],
+            "pr_ci": rv["pr_ci"],
+            "reported_by": rv["reported_by"],
+            "reported_at": rv["reported_at"],
+            "report": reviews.report_line(rv, now),
         }
 
     # ------------------------------------------------------------ agent moves
@@ -77,6 +84,8 @@ class Boards:
             raise ReviewError(f'{room.name} has no review board: open one with action="open" and the url')
         if action == "show":
             return self._shown(room)
+        if action == "report":  # also after the handoff: the merge that closes the board comes then
+            return self._report(room, rv, actor, params)
         if rv["posted_at"] is not None:
             raise ReviewError("this board was already handed off: no more moves")
         if action in ("raise", "ask"):
@@ -141,6 +150,29 @@ class Boards:
             "confirmed": f" by {actor}",
         }.get(shown, "")
         return self._told(room, moved, actor, f"{actor} {action_past(action)} {item.label}{tail}")
+
+    def _report(self, room: Room, rv: dict[str, Any], actor: str, params: dict[str, Any]) -> dict[str, Any]:
+        """What ``actor`` read off the pull request with its own gh or glab (#291, §37.11): stored
+        as its claim, with its name and the time. A merge or a close ends the board, and a new CI
+        result is said in the room, each in one line naming who reported it, so agents cite the
+        board instead of passing CI on from memory. switchboard fetches nothing itself."""
+        fields = reviews.report(params)
+        now = self.state.clock.now()
+        self.store.set_review(rv["id"], **fields, reported_by=actor, reported_at=now)
+        self.store.add_event("review", room_id=room.id, data={"report": dict(fields), "by": actor})
+        url = rv["url"]
+        if fields.get("pr_ci") and fields["pr_ci"] != rv["pr_ci"]:
+            self._notice(room, f"{actor} reports CI {fields['pr_ci']} on {url}")
+        if fields.get("pr_state") in ("merged", "closed"):
+            self.store.set_review(rv["id"], closed_at=now)
+            self._notice(room, f"{actor} reports {url} {fields['pr_state']}: the review board is closed")
+            self.state.hub.review(room.name, None)
+            return {
+                "ok": True,
+                "closed": True,
+                "board": f"{url} is {fields['pr_state']}: the board is closed.",
+            }
+        return self._shown(room)
 
     def _told(self, room: Room, item: reviews.Item, actor: str, notice: str) -> dict[str, Any]:
         """The board after ``actor``'s move on ``item``, and how the room hears of it: the line
@@ -365,7 +397,7 @@ class Boards:
         out: dict[str, Any] = {
             "ok": True,
             "settled": b["settled"],
-            "board": reviews.render(b, items),
+            "board": reviews.render(b, items, self.state.clock.now()),
         }
         if touched:
             out["item"] = touched

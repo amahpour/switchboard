@@ -42,7 +42,7 @@ def test_v22_review_findings_gain_an_empty_deferred_to_after_a_backup(tmp_path: 
 
     migrated = db.open_db(path)
     fresh = db.open_db(tmp_path / "fresh.db")
-    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 23
+    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 24
     assert db.row_counts(migrated, db.tables_of(22)) == before
     row = migrated.execute("SELECT state, reason, deferred_to FROM review_items").fetchone()
     assert tuple(row) == ("dropped", "not a bug", "")

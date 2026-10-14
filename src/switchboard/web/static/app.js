@@ -5201,6 +5201,13 @@
       sha.title = b.head;
       title.append(sha);
     }
+    // what an agent last read off the pull request (#291): its claim, named as its, never checked
+    if (b.report) {
+      const rep = el('span', 'board-report', b.report);
+      rep.id = 'board-report';
+      rep.title = b.reported_by + ' read this off the pull request with its own tools; switchboard fetches nothing';
+      title.append(rep);
+    }
     const c = b.counts || {};
     // a board a person just started with /review (#248) has nothing on it: not settled, waiting
     const empty = !b.items.length;

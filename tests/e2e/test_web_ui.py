@@ -2868,6 +2868,17 @@ def test_a_person_defers_a_finding_to_a_follow_up_ticket(ui: UI) -> None:
     expect(chat_row(page, "Review board: F3 deferred")).to_contain_text("deferred to SHOP-123")
 
 
+def test_the_board_header_says_what_an_agent_reported_and_whose_it_is(ui: UI) -> None:
+    """#291: the header shows what an agent last read off the pull request, named as that
+    agent's, so a person sees "settled here, 2 open on the PR". Fails without the line."""
+    page = review_room(ui, "e2e-board-report")
+    ui.world.agent_call("#e2e-board-report", "claude-1", "review", action="report", threads=2, ci="failing")
+    page.click("#board-toggle")
+    report = page.locator("#board-report")
+    expect(report).to_have_text(re.compile(r"^2 open on the PR, CI failing \(per claude-1, "))
+    expect(report).to_have_attribute("title", re.compile(r"^claude-1 read this off the pull request"))
+
+
 def test_dropping_needs_a_reason_and_closing_asks_first(ui: UI) -> None:
     page = review_room(ui, "e2e-board-drop")
     page.click("#board-toggle")

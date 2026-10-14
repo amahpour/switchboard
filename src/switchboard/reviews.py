@@ -149,6 +149,56 @@ def proof(value: Any) -> str:
     return p
 
 
+# What an agent reads off the pull request with its own gh or glab and reports (#291, §37.11):
+# switchboard holds no token and polls no forge, so these are the reporting agent's claims, shown
+# as theirs. A value it doesn't know is refused, never taken for one it does.
+PR_STATES = ("open", "merged", "closed")
+CI_STATES = ("passing", "failing", "running", "none")
+MAX_THREADS = 999
+
+
+def report(params: dict[str, Any]) -> dict[str, Any]:
+    """A report's checked fields (``pr_state``, ``pr_threads``, ``pr_ci``, the ones given), or
+    ReviewError: at least one, each from its list or a count from 0 to 999."""
+    out: dict[str, Any] = {}
+    state = params.get("state")
+    if state not in (None, ""):
+        if state not in PR_STATES:
+            raise ReviewError(f"state must be one of: {', '.join(PR_STATES)}")
+        out["pr_state"] = state
+    threads = params.get("threads")
+    if threads not in (None, -1):
+        if type(threads) is not int or not 0 <= threads <= MAX_THREADS:
+            raise ReviewError(f"threads must be the count of unresolved threads, 0 to {MAX_THREADS}")
+        out["pr_threads"] = threads
+    ci = params.get("ci")
+    if ci not in (None, ""):
+        if ci not in CI_STATES:
+            raise ReviewError(f"ci must be one of: {', '.join(CI_STATES)}")
+        out["pr_ci"] = ci
+    if not out:
+        raise ReviewError("report needs state, threads or ci, as gh or glab shows them")
+    return out
+
+
+def report_line(review: dict[str, Any], now: float) -> str:
+    """The latest report, as the agent and the page read it: "2 open on the PR, CI failing (per
+    claude-1, 3 min ago)". Empty when no agent has reported."""
+    if not review.get("reported_by"):
+        return ""
+    bits = []
+    if review.get("pr_state") in ("merged", "closed"):
+        bits.append(str(review["pr_state"]))
+    if review.get("pr_threads") is not None:
+        n = int(review["pr_threads"])
+        bits.append(f"{n} open on the PR" if n else "no threads open on the PR")
+    if review.get("pr_ci"):
+        bits.append(f"CI {review['pr_ci']}")
+    mins = max(0, int((now - float(review.get("reported_at") or now)) // 60))
+    age = "just now" if mins == 0 else f"{mins} min ago" if mins < 120 else f"{mins // 60} h ago"
+    return f"{', '.join(bits) or review.get('pr_state') or 'reported'} (per {review['reported_by']}, {age})"
+
+
 def head(value: Any) -> str:
     h = text(value, "head", 64).lower()
     if h and not HEAD_RE.match(h):
@@ -421,7 +471,7 @@ def counts(items: list[Item], active: set[str] | None = None, now: float | None 
     return out
 
 
-def render(review: dict[str, Any], items: list[Item]) -> str:
+def render(review: dict[str, Any], items: list[Item], now: float | None = None) -> str:
     """The board as an agent reads it: one line per item, open work first. Short on purpose:
     the board replaces a wall of text in the room, it mustn't become one."""
     head_s = f" at {review['head'][:12]}" if review.get("head") else ""
@@ -429,6 +479,9 @@ def render(review: dict[str, Any], items: list[Item]) -> str:
     if review.get("posted_by"):
         state = f"handed off to {review['posted_by']}: post one review now, once"
     out = [f"Review of {review['url']}{head_s}: {state}"]
+    line = report_line(review, now if now is not None else float(review.get("reported_at") or 0))
+    if line:
+        out.append(f"The pull request: {line}")
     order = {
         s: n
         for n, s in enumerate(("contested", "open", "raised", "conceded", "answered", "fixed", "dropped"))

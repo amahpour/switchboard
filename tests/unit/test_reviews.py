@@ -566,3 +566,30 @@ def test_a_finding_is_deferred_by_its_raiser_or_a_person_and_settles() -> None:
     assert "deferred to SHOP-123" in text, text
     plan = reviews.handoff_plan([deferred], [])
     assert "- F1 Deferred: off by one — to SHOP-123" in plan["summary"], plan["summary"]
+
+
+# ------------------------------------------- what an agent reads off the pull request (#291)
+def test_a_report_takes_only_what_it_knows_and_says_whose_it_is() -> None:
+    """#291: the board fell behind the pull request (settled while threads were open, open after
+    the merge, CI passed on from memory). An agent reports what gh or glab shows; a value the
+    board doesn't know is refused, never taken for one it does, and the line says whose claim it
+    is and how old."""
+    assert reviews.report({"state": "open", "threads": 2, "ci": "failing"}) == {
+        "pr_state": "open",
+        "pr_threads": 2,
+        "pr_ci": "failing",
+    }
+    assert reviews.report({"threads": 0}) == {"pr_threads": 0}
+    for bad in ({"state": "approved"}, {"ci": "green"}, {"threads": 1000}, {"threads": "2"}, {}):
+        with pytest.raises(ReviewError):
+            reviews.report(bad)
+    rv = {
+        "reported_by": "claude-1",
+        "reported_at": 1000.0,
+        "pr_state": "open",
+        "pr_threads": 2,
+        "pr_ci": "failing",
+    }
+    assert reviews.report_line(rv, 1000.0 + 180) == "2 open on the PR, CI failing (per claude-1, 3 min ago)"
+    assert reviews.report_line({**rv, "pr_threads": 0, "pr_ci": ""}, 1010.0).startswith("no threads open")
+    assert reviews.report_line({"reported_by": ""}, 0.0) == ""

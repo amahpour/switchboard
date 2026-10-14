@@ -2831,6 +2831,7 @@ body.login {
 .board-pr-repo { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .board-pr-num { flex: none; color: var(--muted-2); font-variant-numeric: tabular-nums; }
 .board-head-sha { color: var(--muted-2); font-size: calc(12px * var(--text-scale)); }
+.board-report { font-size: calc(12px * var(--text-scale)); color: var(--muted-2); min-width: 0; overflow-wrap: anywhere; }
 .chip.chip-ok { background: var(--accent-tint); color: var(--green); }
 /* The open card beside the lanes (#343). The card was a fixed 340 px: cramped on a wide window,
    and on a narrower one it left the lanes about 110 px each. Now it takes a share of the board,

@@ -49,7 +49,8 @@ async def test_tools_annotations_and_instructions(tmp_path) -> None:
 
 async def test_tool_list_fits_the_review_budget(tmp_path) -> None:
     """Every agent turn carries the tool list. The maintainer approved 3,700 for one claim
-    tool in #293; another tool or parameter must still fit, with every description a sentence."""
+    tool in #293, and 3,900 for review's report in #291 ("Raise it", 2026-10-14); another tool
+    or parameter must still fit, with every description a sentence."""
     _st, server = make(tmp_path)
     async with Client(server, mode="legacy") as c:
         tools = await c.list_tools()
@@ -62,7 +63,8 @@ async def test_tool_list_fits_the_review_budget(tmp_path) -> None:
         )
         for t in tools
     )
-    assert size <= 3700, size
+    # 3,700 for claims (#293); 3,900 for review's report (#291), the maintainer's yes: "Raise it"
+    assert size <= 3900, size
     review = next(t for t in tools if t.name == "review")
     assert "where" in review.input_schema["properties"]
     assert "file" not in review.input_schema["properties"]

@@ -3067,6 +3067,10 @@ An agent can call `review(action="open", url=<same URL>, head=<new SHA>)` on an 
 
 This first part has no forge connection or token: only an agent supplies the new head. The broker does not poll GitHub or GitLab for threads, CI or merge state. A unit test covers the mark and migration; the e2e test changes the head while the board is open in Chromium and checks the page.
 
+
+### 37.11 What an agent reads off the pull request (#291, second part)
+
+switchboard holds no forge token and polls no forge (#252). The agent that has `gh` or `glab` reads the pull request and reports it: `review(action="report", state, threads, ci)`, with `state` one of `open`, `merged`, `closed`, `threads` the unresolved threads (0 to 999) and `ci` one of `passing`, `failing`, `running`, `none`. Any of the three, at least one; a value the board doesn't know is refused (`reviews.report`), never taken for one it does. A report is stored on the board's row with who sent it and when (`reviews.pr_state`, `pr_threads`, `pr_ci`, `reported_by`, `reported_at`, schema 24), and shown as that agent's claim, with its age: "2 open on the PR, CI failing (per claude-1, 3 min ago)" in `show` and in the page's header (`reviews.report_line`). A new CI result is one notice in the room, naming who reported it, so agents cite the board instead of passing CI on from memory. A reported merge or close ends the board (`closed_at`) with one notice naming the reporter. A report is taken after the handoff too, since the merge comes then. The tool's description names it, within the tool list's budget, raised to 3,900 characters for it with the maintainer's yes ("Raise it", 2026-10-14).
 ## 38. Sign in with Google (#70)
 
 ### 38.1 What it is

@@ -582,11 +582,15 @@ def build_server(st: McpState) -> FastMCP:
         reason: str = "",
         options: list[str] = EMPTY_OPTIONS,
         recommend: int = -1,
+        state: str = "",
+        threads: int = -1,
+        ci: str = "",
     ) -> str:
         """One pull request's review board. action: open(url, head), show,
         raise(title, detail, where="path:40-58"), ask(title, options, recommend),
         concede(item, owner), contest/drop(item, reason), defer(item, reason=ticket),
-        fix(item, commit, proof: test name or link), confirm(item) by its raiser."""
+        fix(item, commit, proof: test name or link), confirm(item) by its raiser,
+        report(state, threads, ci) as gh/glab shows the PR."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = await st.find_cred(room, tid)
@@ -609,6 +613,12 @@ def build_server(st: McpState) -> FastMCP:
         params = {**st.base(cred, tid), "action": action, **{k: v for k, v in given.items() if v}}
         if recommend != -1:
             params["recommend"] = recommend
+        if state:
+            params["state"] = state
+        if threads != -1:
+            params["threads"] = threads
+        if ci:
+            params["ci"] = ci
         res = await st.call("agent.review", params)
         st.forget(res, (tid, name))
         return dumps(res)

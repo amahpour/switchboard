@@ -2413,7 +2413,17 @@ class Store:
         return dict(r)
 
     def set_review(self, review_id: int, **fields: Any) -> None:
-        allowed = {"head", "closed_at", "posted_at", "posted_by"}
+        allowed = {
+            "head",
+            "closed_at",
+            "posted_at",
+            "posted_by",
+            "pr_state",
+            "pr_threads",
+            "pr_ci",
+            "reported_by",
+            "reported_at",
+        }
         if not fields or set(fields) - allowed:
             raise ValueError(f"unknown review fields: {sorted(set(fields) - allowed)}")
         cols = ", ".join(f"{k}=?" for k in fields)
