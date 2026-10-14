@@ -1533,6 +1533,12 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 .room-people { display: flex; flex-direction: column; gap: 8px; }
 .person-row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; }
 .person-row .m-name { flex: 1; min-width: 0; }
+/* a person with a page open now, and one without (#354): the dot the agents' rows use, smaller */
+.p-dot { flex: 0 0 auto; width: 8px; height: 8px; margin: 0 3px; border-radius: 50%; }
+.p-dot.on { background: var(--green); }
+.p-dot.off { box-shadow: inset 0 0 0 1.5px var(--muted); }
+.p-you { color: var(--muted-2); font-size: calc(11.5px * var(--text-scale)); }
+#room-people-more { align-self: flex-start; margin-left: 6px; }
 .btn-ghost-sm { height: 26px; padding: 0 10px; font-size: calc(12px * var(--text-scale)); }
 .invite-btn { align-self: flex-start; margin: 2px 6px 0; }
 .app-dialog .check-row { display: flex; align-items: center; gap: 8px; font-weight: 500; }

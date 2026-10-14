@@ -623,6 +623,7 @@ A **Closed (n)** row in the sidebar (hidden while no room is closed; before #19 
 - `{"t":"notice","room":…,"level":"info|warn","text":…}` (`room` is null for broker-wide notices such as "new web login"; transient only: a notice that is also a room message goes out once, as the `msg` frame, §22)
 - `{"t":"rooms","rooms":[…]}` when a room is created (added in M1), closed, reopened or deleted (§28), so open tabs can subscribe with another `hello` (the page sends one for every tab on each such frame), and the page reloads its room list, prunes tabs by id and `created_at` and refreshes an open Closed panel
 - `{"t":"remotes","remotes":[…],"config_error":…}`: every remote's state, as `GET /api/remotes`, whenever a link's state, its first RTT, the remote's hooks report, a host's member names or the set of remotes changes, or `remotes.toml` stops parsing; debounced to 200 ms (M8f); never on an idle link's liveness ticks; to browsers only, never to UDS tails
+- `{"t":"people","people":[…],"online":[…]}` on a hosted broker only (§44.8): every person's name, the owner's first, and those with a page open. Sent to every open page when one connects or closes and when a person is added, removed or renamed.
 - `{"t":"pong"}`
 
 A `hello` subscribes the listed rooms (it is additive) and replays, per room, the messages after `after[room]` (or the newest 500 without `after`), then a `room` and a `members` frame. If more than 500 messages are newer than `after`, it replays the newest 500 after a notice saying how many were skipped, so the live stream never has a hole.
@@ -3158,10 +3159,17 @@ On a hosted broker with people (§32) every room was open to everyone signed in.
 - A direct message is a small private room.
 
 ### 44.6 Threat model delta
-New: a person's view of the rooms is narrower. Unchanged: an agent in a private room and a public one can repeat what it read (SECURITY.md); the admin, the CLI and the database see everything. Every route that takes a room goes through `room_for`, so a new route that forgets it shows a private room to everyone: the integration tests list each route.
+New: a person's view of the rooms is narrower, and (§44.8) every signed-in person sees who else has a page open. Unchanged: an agent in a private room and a public one can repeat what it read (SECURITY.md); the admin, the CLI and the database see everything. Every route that takes a room goes through `room_for`, so a new route that forgets it shows a private room to everyone: the integration tests list each route.
 
 ### 44.7 Tests
 `test_private_rooms.py` (a non-member refused by every REST route with the words of a missing room; the WebSocket hello and the `rooms` frame; an agent of a non-member refused, then joining once its person is added, and leaving with them; adding and removing people, the last one kept; the admin's list and a removed person leaving; a desktop broker; existing rooms public; a machine's welcome naming only its person's private rooms); `test_db_migrate_v15.py` (the migration, and the store's people); `test_private_rooms_ui.py` (e2e: the Private box, the lock, the people with Add and Leave, the admin's card, a phone).
+
+### 44.8 The people in a public room (#354)
+A public room used to list nobody: "everyone signed in sees it" was the whole answer, so the other people in a room were only names on messages. On a hosted broker the Members pane now lists a room's people for every room: a private room's are its people, with Add, Remove and Leave as before; a public room's are everyone signed up, with no actions. Each row has a dot for a page open now, and those people come first; over ten people a public list shows ten and a "N more" button. A desktop broker has one person and no list.
+
+- **The frame.** `web.people_frame` builds `{"people": [names], "online": [names]}` from `people.names` and `Hub.online_persons` (the person each open WebSocket belongs to), and `people_changed` publishes it to every page as a `people` frame (§5.5). It is broker-wide, not per room, and not sent on a desktop broker.
+- **What is new to know.** The names were already every signed-in page's to have (a room's members answer carries them for `@` completion). Who has a page open is new: every signed-in person can see it, whatever rooms they can see, and it says nothing about which room someone has open. It is a claim about a browser tab, not about attention.
+- **Tests:** `test_people.py::test_every_page_hears_who_is_on_the_broker_and_who_has_a_page_open` (the frame on connecting, on another page arriving and leaving, a second tab, a person added, and none on a desktop broker); `test_private_rooms_ui.py::test_a_public_room_lists_people_and_who_is_here` (two signed-in pages, desktop and phone).
 
 ## 45. Updating switchboard (`switchboard update`)
 

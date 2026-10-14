@@ -22,6 +22,7 @@ from conftest import FakeClock, InProcBroker, ws_connect
 from fakes.fake_agent import FakeAgent
 from fakes.fake_authenticator import SoftAuthenticator
 from test_passkeys import PUBLIC, RP_ID, Browser, claim_link, events, hosted_broker, stop, token_of
+from test_public_url import ws as public_ws
 from websockets.exceptions import InvalidStatus
 
 from switchboard.broker import web
@@ -81,6 +82,49 @@ def join_as_bob(b: InProcBroker, admin: Browser) -> Browser:
     assert r.status_code == 200 and r.json()["next"] == "setup", r.text
     assert bob.post("/api/me/password", {"password": BOB_PW}).status_code == 200
     return bob
+
+
+def next_people(sock: Any, want: Callable[[dict[str, Any]], bool]) -> dict[str, Any]:
+    """The next ``people`` frame on a page's socket that ``want`` accepts; other frames, and
+    people frames from before the change being waited for, are read past."""
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        frame = json.loads(sock.recv(timeout=10))
+        if frame.get("t") == "people" and want(frame):
+            return frame
+    raise AssertionError("no such people frame")
+
+
+def test_every_page_hears_who_is_on_the_broker_and_who_has_a_page_open(
+    hosted: InProcBroker, broker: InProcBroker
+) -> None:
+    """#354: the Members pane lists a public room's people, so every open page is told who is
+    on the broker and which of them has a page open: when it connects, when anyone connects or
+    leaves, and when the admin adds someone. Fails if a page isn't told on connecting, if the
+    others aren't told when one arrives or goes, or if a desktop broker (one person, no list)
+    sends the frame at all."""
+    admin = set_up(hosted)
+    bob = join_as_bob(hosted, admin)
+    me = admin.get("/api/me").json()["human"]
+    a = public_ws(hosted, admin.cookies["switchboard_session"])
+    try:
+        first = next_people(a, lambda f: True)
+        assert (first["people"], first["online"]) == ([me, "bob"], [me])
+        b = public_ws(hosted, bob.cookies["switchboard_session"])
+        try:
+            assert next_people(a, lambda f: "bob" in f["online"])["online"] == [me, "bob"]
+            assert next_people(b, lambda f: True)["online"] == [me, "bob"]
+            second = public_ws(hosted, bob.cookies["switchboard_session"])  # bob's second tab
+            second.close()
+        finally:
+            b.close()
+        # a second tab closing didn't take bob away; his last page closing does
+        assert next_people(a, lambda f: "bob" not in f["online"])["online"] == [me]
+        add(admin, "carol")
+        assert next_people(a, lambda f: "carol" in f["people"])["people"] == [me, "bob", "carol"]
+    finally:
+        a.close()
+    assert web.people_frame(broker.state) is None  # a desktop broker has one person and no list
 
 
 # ------------------------------------------------------------------- the admin

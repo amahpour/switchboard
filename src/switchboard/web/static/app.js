@@ -83,6 +83,9 @@
     sheetOpener: null, // the control that opened the Closed, Remotes or Passkeys sheet (focus returns to it)
     passkeyBusy: false, // an Add a passkey ceremony is under way
     boardOpen: false,  // the active room's review board is shown instead of its log (#80)
+    everyone: [],        // every person on a hosted broker, from the `people` frame (#354); empty on a desktop
+    online: new Set(),   // those of them with a page open now
+    peopleAll: false,    // a long People list is shown whole
     boardDetailW: null,  // the open card's width, set with its divider (#343): a step, 'max', or null (its share)
     boardSel: null,    // the label of the board card whose detail is open
     // Focus mode (#99): collapse agent chat not addressed to you. In memory only: no existing
@@ -1243,21 +1246,44 @@
     renderRoomPeople();
   }
 
-  // A private room's people (§44): who sees it, with Remove, Leave and Add a person. A public
-  // room shows nothing here: everyone signed in sees it.
+  // A room's people. A private room's (§44) are who sees it, with Remove, Leave and Add a person.
+  // A public room on a hosted broker lists everyone signed up, since everyone sees it (#354):
+  // before, it showed nobody, and the other people in a room were only names on messages. Each
+  // row has a dot for a page open now, and those people come first. A desktop broker has one
+  // person and shows no list.
+  const PEOPLE_SHOWN = 10;  // a longer public list starts with this many, then "N more"
+
   function renderRoomPeople() {
     const r = activeRoom();
     const box = $('room-people');
-    const show = !!(r && r.private && r.people);
+    const isPrivate = !!(r && r.private && r.people);
+    const everyone = isPrivate ? r.people : (r && state.everyone.length > 1 ? state.everyone : null);
+    const show = !!everyone;
     box.classList.toggle('hidden', !show);
     if (!show) { box.replaceChildren(); return; }
     const focused = focusKey(box);
-    const title = el('div', 'group-label', 'People (' + r.people.length + ') · private');
+    const stale = !state.wsOpen && state.wsEverOpen;  // as the agents' list: what was last known
+    const title = el('div', 'group-label',
+      'People (' + everyone.length + ')' + (isPrivate ? ' · private' : '') + (stale ? ' · last known' : ''));
     const list = el('ul', 'member-list');
-    for (const n of r.people) {
+    list.classList.toggle('stale', stale);
+    const here = function (n) { return state.online.has(n); };
+    // those with a page open first, each group in the order it came
+    const ordered = everyone.filter(here).concat(everyone.filter(function (n) { return !here(n); }));
+    const cut = !isPrivate && !state.peopleAll && ordered.length > PEOPLE_SHOWN;
+    for (const n of (cut ? ordered.slice(0, PEOPLE_SHOWN) : ordered)) {
       const li = el('li', 'person-row');
       li.dataset.name = n;
-      li.append(icon('person'), el('span', 'm-name', n));
+      const dot = el('span', 'p-dot ' + (here(n) ? 'on' : 'off'));
+      dot.setAttribute('role', 'img');
+      dot.setAttribute('aria-label', here(n) ? 'online' : 'offline');
+      dot.title = here(n) ? 'Has switchboard open now' : 'Not here now';
+      li.append(dot, el('span', 'm-name', n));
+      if (!isPrivate) {
+        if (state.me && n === state.me.human) li.append(el('span', 'p-you', 'you'));
+        list.append(li);
+        continue;
+      }
       const mine = state.me && n === state.me.human;
       const b = btn('btn btn-ghost-sm', mine ? 'Leave' : 'Remove');
       b.dataset.focus = 'room-person:' + n;
@@ -1266,11 +1292,23 @@
       li.append(b);
       list.append(li);
     }
-    const add = btn('btn invite-btn', 'Add a person');
-    add.id = 'room-people-add';
-    add.dataset.focus = 'room-people-add';
-    add.addEventListener('click', function () { addRoomPerson(r); });
-    box.replaceChildren(title, list, add);
+    if (isPrivate) {
+      const add = btn('btn invite-btn', 'Add a person');
+      add.id = 'room-people-add';
+      add.dataset.focus = 'room-people-add';
+      add.addEventListener('click', function () { addRoomPerson(r); });
+      box.replaceChildren(title, list, add);
+    } else if (ordered.length > PEOPLE_SHOWN) {
+      const more = btn('btn btn-ghost-sm', cut ? (ordered.length - PEOPLE_SHOWN) + ' more' : 'Show fewer');
+      more.id = 'room-people-more';
+      more.dataset.focus = 'room-people-more';
+      more.setAttribute('aria-expanded', String(!cut));
+      more.addEventListener('click', function () {
+        state.peopleAll = !state.peopleAll;
+        renderRoomPeople();
+      });
+      box.replaceChildren(title, list, more);
+    } else box.replaceChildren(title, list);
     refocus(box, focused);
   }
 
@@ -2569,6 +2607,11 @@
       if (f.room === state.active) renderBoard();
     } else if (f.t === 'remotes') {
       setRemotes(f.remotes || [], f.config_error || null);
+    } else if (f.t === 'people') {
+      // who is on this switchboard, and who has a page open (#354): the People list
+      state.everyone = Array.isArray(f.people) ? f.people.filter(function (n) { return typeof n === 'string'; }) : [];
+      state.online = new Set(Array.isArray(f.online) ? f.online : []);
+      renderRoomPeople();
     } else if (f.t === 'machines') {
       setMachines(f.machines || [], f.codes || []);
     }

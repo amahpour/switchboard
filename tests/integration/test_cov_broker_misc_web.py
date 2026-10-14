@@ -189,6 +189,7 @@ def ws_endpoint(hub: Hub) -> Any:
         hub=hub,
         store=types.SimpleNamespace(web_session_person=lambda h: None),  # the owner's session (§32)
         cfg=types.SimpleNamespace(human_name="alice"),
+        hosted=False,  # a desktop broker: no people frame on connecting or leaving (#354)
     )
     app = FastAPI()
     webmod.install(app, state)  # type: ignore[arg-type]

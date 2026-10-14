@@ -7,6 +7,7 @@ browser's Host and Origin. So these requests go to 127.0.0.1:<port> with ``Host:
 
 from __future__ import annotations
 
+import json
 import shutil
 import signal
 import socket
@@ -162,6 +163,9 @@ def test_the_websocket_needs_the_public_host_and_origin(public: InProcBroker) ->
     sid = sign_in(public)
     conn = ws(public, sid)
     try:
+        # a hosted broker's first frame says who is on it and who has a page open (#354)
+        hello = json.loads(conn.recv(timeout=5))  # type: ignore[attr-defined]
+        assert hello == {"t": "people", "people": ["alice"], "online": ["alice"]}
         conn.send('{"t":"ping"}')  # type: ignore[attr-defined]
         assert conn.recv(timeout=5) == '{"t": "pong"}'  # type: ignore[attr-defined]
     finally:

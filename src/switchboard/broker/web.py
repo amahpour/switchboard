@@ -1006,6 +1006,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return _err(409, "conflict", str(e))
         state.store.add_event("people", data={"what": "add", "person": name, "by": w.name})
         state.hub.notice(None, "info", f"{name} added by {w.name}")
+        people_changed(state)
         return _ok(
             {
                 "person": next(x for x in people.summary(state) if x["id"] == p.id),
@@ -1083,6 +1084,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         )
         tail = f"; their machines removed: {', '.join(removed)}" if removed else ""
         state.hub.notice(None, "warn", f"{p.name} removed by {w.name}: signed out everywhere{tail}")
+        people_changed(state)
         return _ok({"ok": True, "sessions": len(gone), "machines": removed})
 
     @app.get("/api/auth/state")
@@ -1359,6 +1361,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 people.rename(state, person_id, new, by)
             except ValueError as e:
                 return _err(409, "conflict", str(e))
+            people_changed(state)
         first, last = people.names_of(state, person_id)
         name = (
             state.cfg.human_name if person_id is None else getattr(state.store.person(person_id), "name", "")
@@ -1768,6 +1771,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         sub.sid_hash = sid_hash
         sub.person = 0 if w.person_id is None else w.person_id  # whose page, for private rooms (§44)
         state.hub.add(sub)
+        people_changed(state)  # this page learns who is here, and the others that it is
 
         async def close(code: int) -> None:
             if ws.client_state == WebSocketState.CONNECTED:
@@ -1798,6 +1802,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             pass
         finally:
             state.hub.remove(sub)  # queues the close sentinel
+            people_changed(state)
             try:
                 await asyncio.wait_for(sender, 1.0)
             except (asyncio.TimeoutError, Exception):
@@ -1820,6 +1825,26 @@ def _qint(request: Request, key: str) -> int | None:
     if n < 0:
         raise ServiceError("bad_request", f"{key} must be >= 0")
     return n
+
+
+def people_frame(state: "BrokerState") -> dict[str, Any] | None:
+    """Everyone on a hosted broker, and which of them has a page open (§44.8, #354): what the
+    Members pane lists under People. None on a desktop broker, which has one person. The names
+    are no news to a signed-in page (a room's members answer has them, for @ completion); who
+    is connected is, and every signed-in person gets it, whatever rooms they can see."""
+    if not state.hosted:
+        return None
+    here = state.hub.online_persons()
+    online = [state.cfg.human_name] if 0 in here else []
+    online += [p.name for p in state.store.people() if p.id in here]
+    return {"people": people.names(state), "online": online}
+
+
+def people_changed(state: "BrokerState") -> None:
+    """Tell every open page: someone connected or left, or was added, removed or renamed."""
+    frame = people_frame(state)
+    if frame is not None:
+        state.hub.publish("people", None, frame)
 
 
 def _ws_hello(state: "BrokerState", sub: WsSubscriber, frame: dict[str, Any]) -> bool:
