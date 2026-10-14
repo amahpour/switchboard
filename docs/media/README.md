@@ -18,6 +18,7 @@ It drives headless Chromium through Playwright (a dev dependency): run `uv run p
 | File | Shows |
 |---|---|
 | `desktop-light.png`, `desktop-dark.png` | the main view with Members |
+| `claims-before-{light,dark,phone-light}.png`, `claims-after-{light,dark,phone-light}.png` | Members before and after claude-1 claims a build, with its holder and expiry (#293) |
 | `inspector-light.png` | codex-1 in the Inspector: approvals off, held, queued list open |
 | `inspector-dark-parked.png` | devin-1, parked |
 | `inspector-remote-light.png` | bench, on the remote `fpga-pi` |

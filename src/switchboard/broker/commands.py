@@ -53,6 +53,9 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
   /review <url> [note]
                       open this room's review board for a pull request or merge
                       request, and ask its agents to review it on the board
+  /pin <id>           pin a chat message (its #number): every agent that joins is shown
+                      it, and the web UI lists it in the room header; at most 5 (web only)
+  /unpin <id>         unpin it
   /who                list members
   /status             room and delivery status
   /help               this list
@@ -61,7 +64,8 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
 _NO_ARGS = frozenset({"pause", "resume", "who", "status", "help", "close"})
 _ONE_NAME = frozenset({"kick", "hold", "release", "wake"})
 _ONE_NUMBER = {"budget": MAX_BUDGET, "hops": MAX_HOPS}  # /name [n], 0 <= n <= max
-KNOWN = _NO_ARGS | _ONE_NAME | set(_ONE_NUMBER) | {"catchup", "review", "rename"}
+_ONE_MESSAGE = frozenset({"pin", "unpin"})  # /name <message id>
+KNOWN = _NO_ARGS | _ONE_NAME | set(_ONE_NUMBER) | _ONE_MESSAGE | {"catchup", "review", "rename"}
 
 _STATIC_ROLES = {
     "pause": "human_cli",
@@ -77,6 +81,10 @@ _STATIC_ROLES = {
     "help": "human_cli",
     "catchup": "human_cli",  # posts a human chat message, like `switchboard say`
     "review": "human_cli",  # the same: one chat message, and a board (§37.8)
+    # a pin puts a message in front of every agent that joins, which raises what agents act on:
+    # a person's web session (#292). Taking one away reduces it, as /kick and /hold do.
+    "pin": "human",
+    "unpin": "human_cli",
 }
 
 REVIEW_USAGE = "/review <url> [note]"
@@ -120,6 +128,7 @@ class Result:
     warnings: tuple[str, ...] = ()  # warn-level room notices, posted after ``post``
     room_changed: bool = False
     members_changed: bool = False
+    pins_changed: bool = False  # a pin or an unpin: the page's header strip is sent again
     event: str | None = None
     event_data: dict = field(default_factory=dict)
     # the command published everything itself (/close): ``RoomService.command`` returns the
@@ -154,6 +163,13 @@ def parse_command(text: str) -> Command:
         if not SCREEN_NAME_RE.match(args[0].lower().lstrip("@")):
             raise CommandError("bad_request", f"/{name}: not a valid screen name")
         args = (args[0].lower().lstrip("@"),)
+    if name in _ONE_MESSAGE:
+        if len(args) != 1 or not args[0].lstrip("#").isascii() or not args[0].lstrip("#").isdigit():
+            raise CommandError("bad_request", f"usage: /{name} <message id>, the #number on a message")
+        digits = args[0].lstrip("#").lstrip("0") or "0"
+        if len(digits) > 19 or int(digits) < 1:  # a message id is a positive SQLite integer
+            raise CommandError("bad_request", f"/{name}: not a message id")
+        args = (digits,)
     if name in _ONE_NUMBER:
         top = _ONE_NUMBER[name]
         if len(args) > 1:
@@ -453,8 +469,32 @@ def _catchup(cmd: Command, room: Room, svc: "RoomService") -> Result:
     topic = target if mode == "topic" else ""
     limit = svc.cfg.delivery.max_msg_chars
     base = catchup.request_text(agent.name, mode, handles, since=since, max_chars=limit, topic=topic, note="")
+    # the room's pinned messages ride along (#292, §48) when the request still fits with them
+    pins = [p.message for p in svc.store.pins(room.id)]
+    with_pins = catchup.request_text(
+        agent.name,
+        mode,
+        handles,
+        since=since,
+        max_chars=limit,
+        topic=topic,
+        note="",
+        pins=pins,
+        room=room.name,
+    )
+    left_out = bool(pins) and len(with_pins) > limit
+    if len(base) > limit or left_out:
+        pins = []
     text = catchup.request_text(
-        agent.name, mode, handles, since=since, max_chars=limit, topic=topic, note=note
+        agent.name,
+        mode,
+        handles,
+        since=since,
+        max_chars=limit,
+        topic=topic,
+        note=note,
+        pins=pins,
+        room=room.name,
     )
     if len(base) > limit:
         raise CommandError(
@@ -475,6 +515,12 @@ def _catchup(cmd: Command, room: Room, svc: "RoomService") -> Result:
     }[mode]
     lines.append(f"asked {agent.name} to catch up on {what} since {catchup.when(since)}; it got:")
     lines += [f"  {h.line()}" + (f" ({h.why})" if h.why else "") for h in handles]
+    if pins:
+        lines.append(f"  and the room's {len(pins)} pinned message(s)")
+    elif left_out:
+        lines.append(
+            f"  the room's pinned messages are left out: with them the request is over {limit} characters"
+        )
     for n in parse_mentions(f"{topic} {note}", [m.name for m in subjects]):
         # the topic or note @mentions a subject, but subjects get no delivery of the request
         lines.append(f"{n} won't get this request (it is about its work): post to it separately")
@@ -501,6 +547,37 @@ def _catchup(cmd: Command, room: Room, svc: "RoomService") -> Result:
         warnings=(warn,) if warn else (),
         event="catchup",
         event_data=data,
+    )
+
+
+def _pin(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
+    """``/pin <id>`` and ``/unpin <id>`` (#292, §48). A pin is stored, shown in the room header and
+    at every join and ``/catchup``; the room gets a notice saying who pinned what, so the log
+    keeps the record. Already pinned, or not pinned, changes nothing and says so."""
+    mid = int(cmd.args[0])
+    who = actor.who(svc.cfg.human_name)
+    if cmd.name == "pin":
+        changed, msg = svc.pin_message(room, mid, who)
+        if not changed:
+            return Result(True, f"message {mid} is already pinned in {room.name}")
+        return Result(
+            True,
+            f"pinned message {mid} ({msg.sender_name}'s) in {room.name}: agents that join are shown it",
+            notice=f"pinned message {mid} ({msg.sender_name}'s)",
+            pins_changed=True,
+            event="pin",
+            event_data={"message_id": mid},
+        )
+    changed, msg = svc.unpin_message(room, mid)
+    if not changed:
+        return Result(True, f"message {mid} isn't pinned in {room.name}")
+    return Result(
+        True,
+        f"unpinned message {mid} in {room.name}",
+        notice=f"unpinned message {mid} ({msg.sender_name}'s)",
+        pins_changed=True,
+        event="unpin",
+        event_data={"message_id": mid},
     )
 
 
@@ -574,6 +651,8 @@ def apply(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
         return _catchup(cmd, room, svc)
     if name == "review":
         return _review(cmd, room, actor, svc)
+    if name in _ONE_MESSAGE:
+        return _pin(cmd, room, actor, svc)
     # one-name commands
     target = cmd.args[0]
     member = store.find_member(room.id, target)

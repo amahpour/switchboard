@@ -429,6 +429,45 @@ def shoot_offline(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def shoot_claims(browser: Any, out: Path, world: Any) -> None:
+    """Outside-work claims (#293): Members before and after one agent claims a build."""
+    from playwright.sync_api import expect
+
+    room = "#ops-claims"
+    world.create_room(room)
+    world.add_agents(room, ("claude-1", "codex-1"))
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for stage in ("before", "after"):
+        if stage == "after":
+            result = world.agent_call(room, "claude-1", "claim", key="build", ttl=3600)
+            assert result["ok"], result
+        for theme, ctx_args in (
+            ("light", {**DESKTOP, "color_scheme": "light"}),
+            ("dark", {**DESKTOP, "color_scheme": "dark"}),
+            ("phone-light", {**PHONE, "color_scheme": "light"}),
+        ):
+            ctx = browser.new_context(**base, **ctx_args)
+            ctx.set_default_timeout(WAIT_MS)
+            try:
+                page = ctx.new_page()
+                sign_in(page, world.broker)
+                tab = page.locator(f'#tabs .room[data-room="{room}"]')
+                if not tab.is_visible():
+                    page.click("#rooms-toggle")
+                tab.click()
+                if theme == "phone-light":
+                    page.click("#buddy-toggle")
+                mark = page.locator('#buddy-list .member[data-name="claude-1"] .m-claim-entry')
+                if stage == "after":
+                    expect(mark).to_contain_text("Claim: build · Expires")
+                else:
+                    expect(mark).to_have_count(0)
+                settle(page)
+                shot(page, out, f"claims-{stage}-{theme}.png")
+            finally:
+                ctx.close()
+
+
 def shoot_board(browser: Any, out: Path, world: Any) -> None:
     """The review board (#80): a room of its own, after every #build shot, so none of those
     shows its board button. Its question open on the right, in light, dark and on a phone."""
@@ -1432,6 +1471,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot(browser, out, world)
             shoot_board(browser, out, world)
             shoot_outdated_board(browser, out, world)
+            shoot_claims(browser, out, world)
             shoot_proof_board(browser, out, world)
             shoot_handoff_board(browser, out, world)
             shoot_mentions(browser, out, world)

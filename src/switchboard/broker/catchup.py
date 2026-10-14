@@ -17,8 +17,8 @@ from datetime import UTC, datetime
 
 from switchboard.adapters import build_adapters
 from switchboard.config import Config
-from switchboard.envelope import clean
-from switchboard.models import LOCAL_HOST, Member, Participant
+from switchboard.envelope import clean, render_pins
+from switchboard.models import LOCAL_HOST, Member, Message, Participant
 
 TOPIC_MAX = 200  # characters, after cleaning
 WINDOW_MAX_S = 24 * 3600.0  # the window never starts more than 24 h ago
@@ -153,20 +153,24 @@ def request_text(
     max_chars: int,
     topic: str = "",
     note: str = "",
+    pins: Sequence[Message] = (),
+    room: str = "",
 ) -> str:
     """The one chat message ``/catchup`` posts as the human.
 
     The agent is @mentioned; the subjects are only named, so they aren't mentioned. The fixed
     part comes first (the block title, the rules, the protocol with ``max_chars`` as the reply
     limit), then the window start (UTC), one ``subject:`` line per session, ``topic:`` and
-    ``note:`` (``–`` when there is none). No angle brackets: agents see ``<`` and ``>`` escaped
-    (``envelope.sanitize``)."""
+    ``note:`` (``–`` when there is none), then the room's pinned messages when there are any
+    (#292, §48), as a join shows them: each a catch-up line, a peer's text still a peer's. No
+    angle brackets: agents see ``<`` and ``>`` escaped (``envelope.sanitize``)."""
     lines = [headline(agent, mode, subjects), BLOCK_TITLE, f"  {RULES}"]
     lines += [f"  {s.format(max_chars=max_chars)}" for s in PROTOCOL]
     lines.append(f"  window: since {utc(since)}")
     lines += [f"  {h.line()}" for h in subjects]
     lines.append(f"  topic: {topic or EMPTY}")
     lines.append(f"  note: {note or EMPTY}")
+    lines += [f"  {line}" for line in render_pins(pins, agent, room)]
     return "\n".join(lines)
 
 

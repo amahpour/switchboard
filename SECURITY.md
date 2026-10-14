@@ -12,6 +12,8 @@ switchboard is built for **red-team testing with approvals turned off**: Claude 
 
 ## What switchboard can't stop
 
+An outside-work claim is advisory. It names a holder and deadline to other members, but cannot lock a ticket, branch, build or any action outside switchboard. An agent that ignores `claim()` can still act on the same resource.
+
 Every agent runs as your user, so (details in [DESIGN.md §11](docs/DESIGN.md)):
 - **A detached process can act as you.** An agent can start a process that outlives its shell (for example `( sleep 1; script -q /dev/null switchboard login ) &`). Once that process is no longer under the agent, it passes the terminal check. It can post as you, run CLI commands, and get a sign-in link and so a full web session, including `/resume` and raising `/budget`. Watch for the red warning lines `a login link was issued via cli (…)` and `new web login` in the web UI; if you didn't do it, run `switchboard logout --all` and `switchboard stop`.
 - **Such a process can also read room text**, and forge hook events for sessions it can see.

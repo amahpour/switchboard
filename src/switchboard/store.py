@@ -12,12 +12,13 @@ import sqlite3
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
-from switchboard import db, reviews
+from switchboard import claims, db, reviews
 from switchboard.clock import Clock, SystemClock
 from switchboard.models import (
     LOCAL_HOST,
     MAX_BUDGET,
     MAX_HOPS,
+    MAX_PINS,
     ROOM_RE,
     WATCHDOG_DONE,
     Batch,
@@ -30,6 +31,7 @@ from switchboard.models import (
     Participant,
     PasskeyRow,
     PersonRow,
+    Pin,
     RemoteRow,
     Room,
     room_ref,
@@ -295,7 +297,9 @@ class Store:
         ),
         ("batches", f"batches WHERE membership_id IN ({_ROOM_MEMBERSHIPS})", 1),
         ("events", f"events WHERE room_id=? OR membership_id IN ({_ROOM_MEMBERSHIPS})", 2),
+        ("pins", "pins WHERE room_id=?", 1),
         ("messages", "messages WHERE room_id=?", 1),
+        ("claims", "claims WHERE room_id=?", 1),
         ("memberships", "memberships WHERE room_id=?", 1),
         ("rooms", "rooms WHERE id=?", 1),
     )
@@ -562,6 +566,40 @@ class Store:
         ).fetchone()
         return int(r[0])
 
+    # ------------------------------------------------------------ pinned decisions (#292, §48)
+    def pins(self, room_id: int) -> list[Pin]:
+        """A room's pins, in message order (the order they were said in)."""
+        rows = self.con.execute(
+            "SELECT m.*, p.pinned_by, p.pinned_at FROM pins p JOIN messages m ON m.id=p.message_id"
+            " WHERE p.room_id=? ORDER BY m.id",
+            (room_id,),
+        ).fetchall()
+        return [Pin(Message.from_row(r), r["pinned_by"], r["pinned_at"]) for r in rows]
+
+    def pin_add(self, room_id: int, message_id: int, pinned_by: str, *, limit: int = MAX_PINS) -> bool:
+        """Pin ``message_id`` in its room: False if it already was, ``Conflict`` once the room has
+        ``limit`` pins. The count and the insert are one transaction, so two pins at once can't
+        both take the last place."""
+        with db.tx(self.con):
+            if self.con.execute(
+                "SELECT 1 FROM pins WHERE room_id=? AND message_id=?", (room_id, message_id)
+            ).fetchone():
+                return False
+            n = int(self.con.execute("SELECT COUNT(*) FROM pins WHERE room_id=?", (room_id,)).fetchone()[0])
+            if n >= limit:
+                raise Conflict(f"{n} messages are pinned already")
+            self.con.execute(
+                "INSERT INTO pins(room_id, message_id, pinned_by, pinned_at) VALUES(?,?,?,?)",
+                (room_id, message_id, pinned_by[:100], self.clock.now()),
+            )
+            return True
+
+    def pin_remove(self, room_id: int, message_id: int) -> bool:
+        """False if it wasn't pinned."""
+        with db.tx(self.con):
+            cur = self.con.execute("DELETE FROM pins WHERE room_id=? AND message_id=?", (room_id, message_id))
+            return cur.rowcount == 1
+
     # ---------------------------------------------------- memberships (reads)
     def active_names(self, room_id: int) -> list[str]:
         rows = self.con.execute(
@@ -631,6 +669,44 @@ class Store:
                 return m
         return None
 
+    def claims_for_room(self, room_id: int) -> list[claims.Claim]:
+        """Active claims for the buddy list and claim policy, with their current holder."""
+        rows = self.con.execute(
+            "SELECT c.key, c.membership_id, m.screen_name, c.expires_at"
+            " FROM claims c JOIN memberships m ON m.id=c.membership_id"
+            " WHERE c.room_id=? AND c.expires_at>? AND m.left_at IS NULL ORDER BY c.key",
+            (room_id, self.clock.now()),
+        ).fetchall()
+        return [claims.Claim(r[0], r[1], r[2], r[3]) for r in rows]
+
+    def move_claim(self, room_id: int, membership_id: int, key: str, ttl: int) -> claims.Decision:
+        """Apply the pure policy in one transaction; expired or ended claims cannot block."""
+        now = self.clock.now()
+        key_norm = key.casefold()
+        with db.tx(self.con):
+            self.con.execute(
+                "DELETE FROM claims WHERE expires_at<=? OR membership_id IN"
+                " (SELECT id FROM memberships WHERE left_at IS NOT NULL)",
+                (now,),
+            )
+            decision = claims.decide(self.claims_for_room(room_id), membership_id, key, ttl, now)
+            if decision.action == "acquired":
+                self.con.execute(
+                    "INSERT INTO claims(room_id,key_norm,key,membership_id,expires_at) VALUES(?,?,?,?,?)",
+                    (room_id, key_norm, key, membership_id, decision.expires_at),
+                )
+            elif decision.action == "renewed":
+                self.con.execute(
+                    "UPDATE claims SET expires_at=? WHERE room_id=? AND key_norm=? AND membership_id=?",
+                    (decision.expires_at, room_id, key_norm, membership_id),
+                )
+            elif decision.action == "released":
+                self.con.execute(
+                    "DELETE FROM claims WHERE room_id=? AND key_norm=? AND membership_id=?",
+                    (room_id, key_norm, membership_id),
+                )
+        return decision
+
     def set_held(self, membership_id: int, held: bool) -> None:
         now = self.clock.now()
         with db.tx(self.con):
@@ -648,6 +724,7 @@ class Store:
         ``left_at IS NULL``)."""
         now = self.clock.now()
         with db.tx(self.con):
+            self.con.execute("DELETE FROM claims WHERE membership_id=?", (membership_id,))
             self.con.execute(
                 "UPDATE memberships SET left_at=?, left_reason=?,"
                 " cred_hash=CASE WHEN ? THEN cred_hash ELSE NULL END,"

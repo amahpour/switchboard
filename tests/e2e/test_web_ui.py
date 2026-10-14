@@ -925,6 +925,53 @@ def test_agent_status_line_ages_in_members_light_dark_and_phone(ui: UI) -> None:
         no_horizontal_scroll(page)
 
 
+def test_members_shows_each_claim_holder_and_expiry(ui: UI) -> None:
+    """The claimed outside work is visible beside its holder in light, dark and phone views."""
+    room = "e2e-claims"
+    ui.world.create_room("#" + room)
+    ui.world.add_agents("#" + room, ("claude-1", "codex-1"))
+    live = ui.open(room=room, color_scheme="light")
+    expect(live.locator("#buddy-list .m-claim-entry")).to_have_count(0)
+    wait_for(
+        lambda: ui.world.broker.on_loop(
+            lambda: any(
+                "#" + room in sub.rooms and "members" in sub.kinds and not sub.closed
+                for sub in ui.world.broker.state.hub.subs
+            )
+        ),
+        what="the browser's members subscription",
+    )
+    result = ui.world.agent_call("#" + room, "claude-1", "claim", key="build", ttl=3600)
+    assert result["ok"], result
+    pages = [live]
+    for options in ({"color_scheme": "dark"}, {**PHONE, "color_scheme": "light"}):
+        pages.append(ui.open(room=room, **options))
+    for page in pages:
+        # A phone keeps Members in its bottom sheet.
+        if page.viewport_size and page.viewport_size["width"] < 760:
+            page.click("#buddy-toggle")
+        holder = page.locator('#buddy-list .member[data-name="claude-1"]')
+        expect(holder.locator(".m-claim-entry")).to_contain_text("build")
+        expect(holder.locator(".m-claim-entry")).to_contain_text("Expires")
+        expect(page.locator('#buddy-list .member[data-name="codex-1"] .m-claim-entry')).to_have_count(0)
+        no_horizontal_scroll(page)
+    wait_for(
+        lambda: (
+            ui.world.broker.on_loop(
+                lambda: sum(
+                    "#" + room in sub.rooms and "members" in sub.kinds and not sub.closed
+                    for sub in ui.world.broker.state.hub.subs
+                )
+            )
+            >= 3
+        ),
+        what="all three browsers' members subscriptions",
+    )
+    assert ui.world.agent_call("#" + room, "claude-1", "claim", key="build", ttl=0)["released"]
+    for page in pages:
+        expect(page.locator("#buddy-list .m-claim-entry")).to_have_count(0)
+
+
 def test_inspector_shows_the_member_detail(ui: UI) -> None:
     page = ui.open()
     with page.expect_response(lambda r: r.url.endswith("/api/rooms/build/members/bench")) as got:

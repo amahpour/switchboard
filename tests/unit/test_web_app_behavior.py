@@ -329,7 +329,7 @@ def test_a_typed_kick_asks_first_and_declining_gives_the_text_back() -> None:
 
 def test_the_palette_and_mentions_complete_without_sending() -> None:
     out = run("palette_and_mentions")
-    assert not out["all"]["hidden"] and len(out["all"]["items"]) == 15
+    assert not out["all"]["hidden"] and len(out["all"]["items"]) == 17
     assert "/rename" in out["all"]["items"]
     assert "/wake" in out["all"]["items"]  # wake an agent past the hold on chatter (#137)
     assert "/review" in out["all"]["items"]  # a person starts a review board (#248)

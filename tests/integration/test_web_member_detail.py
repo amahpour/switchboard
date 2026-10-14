@@ -34,6 +34,7 @@ MEMBER_KEYS = {
     "wakes_at",  # when chatter held for it wakes it, or None (#137): a time, never text
     "version_claim",
     "tools_claim",
+    "claims",
     "status_line",
     "status_line_stale",
     "status_line_remaining_s",

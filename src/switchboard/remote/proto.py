@@ -87,6 +87,7 @@ REMOTE_METHODS = frozenset(
         "agent.away",
         "agent.status",
         "agent.review",
+        "agent.claim",
         "hook.event",
         "hook.ack",
     }

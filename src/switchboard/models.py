@@ -266,6 +266,19 @@ class Message:
         )
 
 
+MAX_PINS = 5  # a room's pinned decisions (#292, DESIGN.md §48)
+
+
+@dataclass(frozen=True)
+class Pin:
+    """A message a person pinned in its room (#292): shown to every agent that joins, and in the
+    web UI's room header."""
+
+    message: Message
+    pinned_by: str
+    pinned_at: float
+
+
 @dataclass(frozen=True)
 class Member:
     """An active membership joined with its participant: the buddy-list row."""
@@ -296,6 +309,7 @@ class Member:
     status_line_at: float | None = None
     status_line_stale: bool = False
     status_line_remaining_s: float | None = None
+    claims: tuple[dict[str, Any], ...] = ()  # advisory outside work held by this membership (§46)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
