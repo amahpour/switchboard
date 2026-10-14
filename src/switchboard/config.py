@@ -44,6 +44,9 @@ class ConfigError(ValueError):
 class DeliveryCfg:
     quiet_s: float = 3.0
     max_hold_s: float = 60.0
+    # chatter that doesn't address an idle agent waits this long before it wakes it (#137,
+    # DESIGN.md §8.2): just inside a 5-minute prompt cache. 0: the quiet period, as before 0.29
+    unaddressed_hold_s: float = 270.0
     batch_max_msgs: int = 20
     batch_max_chars: int = 6000
     pull_max_chars: int = 24000  # read()/say() unread answers (tool results), rendered

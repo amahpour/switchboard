@@ -105,6 +105,8 @@ class DeliveryHooks(Protocol):
 
     def parked_reason(self, membership_id: int) -> str | None: ...
 
+    def wakes_at(self, membership_id: int) -> float | None: ...
+
     def board_reason(self, member: Member) -> str | None: ...
 
     def member_claims(self, member: Member) -> tuple[str | None, tuple[str, ...] | None]: ...
@@ -157,6 +159,8 @@ def member_dict(m: Member) -> dict[str, Any]:
         "env_leak": m.env_leak,
         "held": m.held,
         "queued": m.queued,
+        # when the hold on unaddressed chatter (#137) lets the queued messages wake it, or None
+        "wakes_at": m.wakes_at,
         "inflight": m.inflight,
         "parked": m.parked,
         "parked_reason": m.parked_reason,
@@ -478,7 +482,12 @@ class RoomService:
                 m = dataclasses.replace(m, parked=True, parked_reason=why)
             board = self.delivery.board_reason(m)
             version, tools = self.delivery.member_claims(m)
-            out.append(dataclasses.replace(m, board_why=board, version_claim=version, tools_claim=tools))
+            wakes = self.delivery.wakes_at(m.membership_id)
+            out.append(
+                dataclasses.replace(
+                    m, board_why=board, version_claim=version, tools_claim=tools, wakes_at=wakes
+                )
+            )
         return out
 
     def member_detail(self, room_name: str, name: str) -> dict[str, Any]:

@@ -262,6 +262,9 @@ class AgentService:
     def parked_reason(self, membership_id: int) -> str | None:
         return self.engine.parked_reason(membership_id)
 
+    def wakes_at(self, membership_id: int) -> float | None:
+        return self.engine.wakes_at(membership_id)
+
     def board_reason(self, member: Member) -> str | None:
         """Why ``member`` can't use the review board, from its MCP server's claims (#249). None
         when it can, or when its MCP process isn't connected now: an offline member shows as

@@ -21,7 +21,7 @@ from switchboard.models import Push
 
 @pytest.fixture
 def w(tmp_path: Path, clock: FakeClock) -> World:
-    return World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0))
+    return World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0, unaddressed_hold_s=0.0))
 
 
 def ids(text: str) -> list[int]:
@@ -46,7 +46,11 @@ def test_order_is_human_then_mentions_then_chatter_each_by_id() -> None:
 
 def test_older_chatter_never_crowds_out_a_later_human_message(tmp_path: Path, clock: FakeClock) -> None:
     w = World(
-        tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0, batch_max_msgs=3, hop_limit=0)
+        tmp_path,
+        clock,
+        Config().with_delivery(
+            quiet_s=0.0, max_hold_s=0.0, unaddressed_hold_s=0.0, batch_max_msgs=3, hop_limit=0
+        ),
     )
     p, m = w.agent("bot")
     _pp, peer = w.agent("peer")
