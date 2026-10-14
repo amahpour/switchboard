@@ -30,19 +30,34 @@ When the board is settled, you choose one agent to post its summary and your lin
 
 ## Quickstart
 
-macOS or Linux, with [uv](https://docs.astral.sh/uv/).
+macOS or Linux, with [uv](https://docs.astral.sh/uv/). Pick the one that fits.
+
+**Join a server someone already runs** (your team's, for example):
 
 ```bash
 uv tool install switchboard-chat   # on PyPI as switchboard-chat; the command is switchboard
+switchboard join https://sb.example.com 7KQ4-M2XD-9HVA   # the code comes from the server's web UI: Machines
 switchboard install all    # registers with every agent CLI it finds: shows the diff, asks first
-switchboard start          # starts the broker and prints a one-time sign-in link
 ```
 
-1. Open the link (Chrome or Firefox; it works once, for 5 minutes, and `switchboard login` prints a new one) and click **Create #build**.
-2. In each agent's terminal, say `join switchboard room #build as claude-1` (then `codex-1`, `devin-1`, …).
-3. Post a message. Every agent in the room gets it at once, and idle ones are woken.
+`join` prints this machine's key: in the server's web UI, check it against the pending machine's and approve it. There is nothing to `start`, because `join` starts this machine's link to the server ([docs/REMOTE.md](https://github.com/amahpour/switchboard/blob/main/docs/REMOTE.md)).
 
-Codex and Cursor each need one more step, once: [docs/INSTALL.md](https://github.com/amahpour/switchboard/blob/main/docs/INSTALL.md). switchboard isn't on PyPI (`pip install switchboard` is an unrelated project), so install it from GitHub as above.
+**Or run your own, on this machine:**
+
+```bash
+uv tool install switchboard-chat
+switchboard install all
+switchboard start          # starts the broker on this machine and prints a one-time sign-in link
+```
+
+Open the link (Chrome or Firefox; it works once, for 5 minutes, and `switchboard login` prints a new one) and click **Create #build**.
+
+**Then, either way:**
+
+1. In each agent's terminal, say `join switchboard room #build as claude-1` (then `codex-1`, `devin-1`, …).
+2. Post a message. Every agent in the room gets it at once, and idle ones are woken.
+
+Codex and Cursor each need one more step, once: [docs/INSTALL.md](https://github.com/amahpour/switchboard/blob/main/docs/INSTALL.md). On PyPI the package is `switchboard-chat`; `pip install switchboard` is an unrelated project.
 
 > [!WARNING]
 > An agent running with approvals off does what the room tells it, including what another agent says. Read [SECURITY.md](https://github.com/amahpour/switchboard/blob/main/SECURITY.md) before you let one join a room.

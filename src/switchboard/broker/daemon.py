@@ -270,7 +270,8 @@ def start(
     if alive:
         url = alive.get("url") or f"http://switchboard.localhost:{alive.get('port')}/"
         print(
-            f"switchboard is already running (pid {alive.get('pid')}) at {url}\n"
+            f"switchboard is already running (pid {alive.get('pid')}) at {url}"
+            " (the broker on this machine)\n"
             "Run `switchboard login` for a new sign-in link.",
             file=out,
         )
@@ -315,7 +316,7 @@ def start(
         print(_tail(paths.out_log), file=sys.stderr)
         return 1
     url = info.get("url") or f"http://switchboard.localhost:{info['port']}/"
-    print(f"switchboard is running (pid {info['pid']}) at {url}", file=out)
+    print(f"switchboard is running (pid {info['pid']}) at {url} (the broker on this machine)", file=out)
     if info.get("test_mode"):
         print("TEST MODE", file=out)
     try:
@@ -397,14 +398,17 @@ def start_dialer(paths: Paths, *, test_mode: bool = False, out: Any = None) -> i
     """``switchboard start`` on a home that dials its broker: the dialer, in the background
     (``start --foreground`` in a new session, its output in ``logs/dialer.out``). Waits until
     it has said where it stands (connecting, waiting for approval, up) or stopped."""
+    from switchboard.remote.config import dialing_home
     from switchboard.remote.dialer import read_state, running_pid
 
     out = out or sys.stdout
+    conf = dialing_home(paths)
+    link = f"; link to {conf.broker_url}" if conf is not None else ""
     pid = running_pid(paths)
     if pid is not None:
         existing_state = read_state(paths) or {}
         print(
-            f"switchboard: the dialer already runs (pid {pid}): {existing_state.get('state', '?')}",
+            f"switchboard: the dialer already runs (pid {pid}): {existing_state.get('state', '?')}{link}",
             file=out,
         )
         return 0
@@ -448,7 +452,8 @@ def start_dialer(paths: Paths, *, test_mode: bool = False, out: Any = None) -> i
     state = (st or {}).get("state", "starting")
     reason = (st or {}).get("reason")
     print(
-        f"switchboard dialer running (pid {child.pid}): {state}{f' ({reason})' if reason else ''}", file=out
+        f"switchboard dialer running (pid {child.pid}): {state}{f' ({reason})' if reason else ''}{link}",
+        file=out,
     )
     return 0
 

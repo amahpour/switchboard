@@ -826,16 +826,17 @@ def cmd_remote(args: argparse.Namespace) -> int:
 
 
 def cmd_remote_join(args: argparse.Namespace) -> int:
-    """``switchboard remote join <url> <code>`` (DESIGN.md §31.7)."""
+    """``switchboard join`` and ``switchboard remote join`` (DESIGN.md §31.7)."""
     from switchboard.remote import join
 
     paths = _paths(args)
+    command = "switchboard remote join" if args.cmd == "remote" else "switchboard join"
     if args.test_mode:
         from switchboard.broker import daemon
 
         why = daemon.check_test_mode(paths, _home_given(args))
         if why:
-            print(f"switchboard remote join: {why}", file=sys.stderr)
+            print(f"{command}: {why}", file=sys.stderr)
             return EXIT_USAGE
     try:
         return join.join(
@@ -847,7 +848,7 @@ def cmd_remote_join(args: argparse.Namespace) -> int:
             start=not args.no_start,
         )
     except join.JoinError as e:
-        print(f"switchboard remote join: {e}", file=sys.stderr)
+        print(f"{command}: {e}", file=sys.stderr)
         return EXIT_ERR
 
 
@@ -943,6 +944,16 @@ def _port_number(text: str) -> int:
     return port
 
 
+def _join_arguments(parser: argparse.ArgumentParser) -> None:
+    """Keep the short onboarding command and the older remote spelling identical."""
+    parser.add_argument("url", help="the broker's address, e.g. https://sb.example.com")
+    parser.add_argument("code", help="the pairing code from the web UI (Add a machine), e.g. 7KQ4-M2XD-9HVA")
+    parser.add_argument(
+        "--no-start", action="store_true", help="pair only; start the dialer later with `switchboard start`"
+    )
+    parser.add_argument("--test-mode", action="store_true", help=argparse.SUPPRESS)
+
+
 def build_parser() -> argparse.ArgumentParser:
     from switchboard.colors import MODES
 
@@ -968,7 +979,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action=_VersionAction)
     sub = p.add_subparsers(dest="cmd", metavar="COMMAND")
 
-    s = sub.add_parser("start", parents=[common], help="start the broker (daemonizes)")
+    s = sub.add_parser(
+        "start",
+        parents=[common],
+        help="start this machine's broker or its link to a hosted broker",
+        description="Start the broker on this machine. In a paired home, start its link to a hosted broker.",
+    )
     s.add_argument("--foreground", action="store_true", help="run in this process")
     # a container sets --port, --listen and --public-url through the environment (docs/DEPLOY.md);
     # config.toml's `port`, `listen` and `public_url` otherwise
@@ -1000,6 +1016,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--test-mode", action="store_true", help=argparse.SUPPRESS)
     s.add_argument("--test-trust-uds", action="store_true", help=argparse.SUPPRESS)
     s.set_defaults(func=cmd_start)
+
+    s = sub.add_parser(
+        "join", parents=[common], help="pair this machine with a hosted broker using a web UI code"
+    )
+    _join_arguments(s)
+    s.set_defaults(func=cmd_remote_join)
 
     s = sub.add_parser("stop", parents=[common], help="stop the broker")
     s.set_defaults(func=cmd_stop)
@@ -1218,14 +1240,9 @@ def build_parser() -> argparse.ArgumentParser:
     r = rsub.add_parser(
         "join",
         parents=[common],
-        help="this machine: pair with a hosted broker (a code from its web UI), then dial it",
+        help="same as `switchboard join`: pair with a hosted broker, then dial it",
     )
-    r.add_argument("url", help="the broker's address, e.g. https://sb.example.com")
-    r.add_argument("code", help="the pairing code from the web UI (Add a machine), e.g. 7KQ4-M2XD-9HVA")
-    r.add_argument(
-        "--no-start", action="store_true", help="pair only; start the dialer later with `switchboard start`"
-    )
-    r.add_argument("--test-mode", action="store_true", help=argparse.SUPPRESS)
+    _join_arguments(r)
     r = rsub.add_parser(
         "enable", parents=[common], help="consent to this remote's current config and dial it"
     )

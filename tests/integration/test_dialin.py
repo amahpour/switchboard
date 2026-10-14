@@ -436,6 +436,23 @@ def test_the_desktop_takes_no_machines(broker: Any, web: httpx.Client) -> None:
 
 
 # ------------------------------------------------------------ remote join
+def test_join_short_name_pairs_and_keeps_the_same_trust_checks(d: DialIn) -> None:
+    """The onboarding spelling reaches real pairing, then refuses the same spent code."""
+    code = d.code()
+    first = d.cli("join", d.origin, code, "--test-mode", "--no-start")
+    assert first.returncode == 0, first.stderr
+    assert "Check the web UI shows the same before you approve it." in first.stdout
+    assert (d.machine / "satellite.toml").exists()
+    other = make_pi_home(satellite=False)
+    try:
+        spent = d.cli("join", d.origin, code, "--test-mode", "--no-start", home=other)
+        assert spent.returncode == 1
+        assert "This code was already used by another machine" in spent.stdout
+        assert not (other / "satellite.toml").exists()
+    finally:
+        shutil.rmtree(other, ignore_errors=True)
+
+
 def test_join_refuses_a_home_with_a_broker_and_a_used_code(d: DialIn, tmp_path: Path) -> None:
     code = d.code()
     desk = make_pi_home(satellite=False)

@@ -4,7 +4,7 @@ You need macOS or Linux, [uv](https://docs.astral.sh/uv/) and Python 3.13 (uv fe
 
 ```bash
 uv tool install switchboard-chat   # an isolated copy with its own Python; puts `switchboard` on your PATH
-switchboard start              # starts the broker in the background and prints a one-time sign-in link
+switchboard start              # starts this machine's broker and prints a one-time sign-in link
 ```
 
 `pipx install switchboard-chat` works too. Plain `switchboard` on PyPI is an unrelated project, so `pip install switchboard`, `uv tool install switchboard` and `uvx switchboard` don't install this one (`uvx --from switchboard-chat switchboard` does). Releases before 0.21.1 are on GitHub only: `uv tool install git+https://github.com/amahpour/switchboard@<tag>`, with a tag like `v0.21.0`. From a checkout of this repo, run `uv tool install .`. Releases and their notes are on the [releases page](https://github.com/amahpour/switchboard/releases); what changed is in [CHANGELOG.md](../CHANGELOG.md).
@@ -14,6 +14,8 @@ Install a copy (not the checkout itself): the hooks and MCP server that `switchb
 **Platforms:** macOS (tested; the development machine) and Linux (tested: the full suite in a Debian 12 container; CI runs it on GitHub's `ubuntu-latest` and `macos-latest` for every pull request; see [docs/SANDBOX.md §10](SANDBOX.md#10-the-linux-test-run)), and Windows under WSL2. Live agent runs so far: Claude Code, Codex and Devin on macOS; Claude Code and Codex with the broker on Linux x86_64 (the recordings in [docs/media](media/README.md)); and Claude Code as a remote member on a Linux x86_64 server and on a Windows desktop under WSL2 (Claude Desktop's sessions there).
 
 Open the printed link (`http://switchboard.localhost:7419/login?t=…`) in Chrome or Firefox (Safari may not resolve `*.localhost`; on Linux, Chrome and Firefox resolve it themselves even where the system resolver doesn't). It works once, for 5 minutes, and signs that browser in for 12 hours (sliding). `switchboard login` prints a new one.
+
+**Joining a hosted broker instead?** Install the same package on this machine, get a code from the server's web UI under **Machines**, then run `switchboard join <server-url> <code>`. Check the key it prints against the web UI before approving the machine, then run `switchboard install all` here. `join` starts this machine's link to the server; no local broker or separate `start` is needed. See [Remote members](REMOTE.md#machines-that-dial-in-a-hosted-broker).
 
 ## Register switchboard with each harness (once)
 
