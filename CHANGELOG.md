@@ -2,6 +2,27 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.30.0 (2026-10-14)
+
+### Upgrading
+
+- **On a hosted broker, a name no longer signs anyone in.** Only an email does, plus `admin` for the admin, as the last release said. Before you upgrade, set every person's email in **Admin > People**: its note lists who has none. Someone with no email can't sign in until you set one, and the sign-in page tells them to ask you.
+- **The database moves to schema 23** (a column for findings deferred to a ticket) when the broker first starts on this release, after its usual verified backup. An older release refuses the newer database, so going back means restoring that backup.
+
+### Added
+
+- **A review board finding can be deferred to a follow-up ticket.** Findings agreed for later had no outcome: fixing needed a commit, and dropping said the raiser withdrew them. Now the finding's raiser calls `review(action="defer", item, reason=<ticket>)`, or a person clicks **Defer** on the card with the ticket's key or link. It settles for this pull request, reads "Deferred to SHOP-123" (not struck out like a drop), and the handoff summary lists where it went.
+
+### Removed
+
+- **Name sign-in.** On a hosted broker, someone the admin hadn't set an email for could sign in with their name, and so could the admin with theirs. That ended with this release: an email signs a person in, and `admin` signs the admin in. A wrong sign-in now says to ask the admin for an email, in the same words whoever it was. People's note says who can't sign in, and an invite for someone without an email says to wait until it's set.
+
+### Fixed
+
+- **A join that can't take its name back says why.** An agent passing `resume=` with a join code that didn't work was always told "that join code isn't this name's", whatever the reason, so it couldn't tell what to do. It is now told which: the code isn't the newest (a `/clear` or a compaction gives a fresh one in switchboard's reminder and retires the old), the earlier join is from before join codes, the agent was kicked, or the code belongs to another harness or another machine. Nothing about the earlier holder is said until the code matches.
+- **Every review board outcome can be recorded again.** A board could get stuck with findings no one could move: an agent that came back under a new name after a restart couldn't fix a finding conceded to its old name, a person couldn't change a finding's owner once conceded, and a person couldn't confirm a fix while its raiser was in the room. Now a finding's owner can hand it over, any agent but the raiser can take it over once its owner has left the room, and in the web UI a person can **Reassign** a conceded finding, **Mark fixed** to settle it, or **Confirm fix** on any fix.
+- **The owner picker no longer starts on the finding's raiser.** Conceding a contested finding in the web UI preselected the room's first agent, often the one that raised it, so the fix went to the agent that asked for it. It now starts on another agent.
+
 ## 0.29.0 (2026-10-14)
 
 ### Upgrading
