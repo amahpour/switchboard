@@ -2340,6 +2340,15 @@ class Store:
         with db.tx(self.con):
             self.con.execute(f"UPDATE reviews SET {cols} WHERE id=?", (*fields.values(), review_id))
 
+    def move_review_head(self, review_id: int, head: str, finding_ids: list[int]) -> None:
+        """Set the head and mark old unresolved findings in one transaction (#291)."""
+        with db.tx(self.con):
+            self.con.execute("UPDATE reviews SET head=? WHERE id=?", (head, review_id))
+            self.con.executemany(
+                "UPDATE review_items SET outdated_head=? WHERE id=? AND review_id=?",
+                ((head, item_id, review_id) for item_id in finding_ids),
+            )
+
     def review_events(self, room_id: int, since: float) -> list[Event]:
         """The room's ``review`` events from ``since`` (a board's opening) on, oldest first: the
         moves a card's history is read from (#250)."""
@@ -2394,7 +2403,10 @@ class Store:
         allowed = {"owner", "commit_sha", "proof", "confirmed_by", "reason", "answer", "answered_by"}
         if set(fields) - allowed:
             raise ValueError(f"unknown review item fields: {sorted(set(fields) - allowed)}")
+        clear_outdated = state in ("fixed", "dropped")
         cols = ", ".join(f"{k}=?" for k in ("state", "updated_at", *fields))
+        if clear_outdated:
+            cols += ", outdated_head=''"
         with db.tx(self.con):
             self.con.execute(
                 f"UPDATE review_items SET {cols} WHERE id=?",
@@ -2535,6 +2547,7 @@ def _review_item(r: sqlite3.Row) -> reviews.Item:
         commit=r["commit_sha"],
         proof=r["proof"],
         confirmed_by=r["confirmed_by"],
+        outdated_head=r["outdated_head"],
         reason=r["reason"],
         options=opts,
         recommend=r["recommend"],

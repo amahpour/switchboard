@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from conftest import FakeClock
 
-from switchboard import reviews
+from switchboard import db, reviews
 from switchboard.broker.reviews import Boards
 from switchboard.reviews import Item, ReviewError
+from switchboard.store import Store
 
 
 def finding(state: str = "raised", raised_by: str = "codex-1", owner: str = "", n: int = 1) -> Item:
@@ -24,6 +26,34 @@ def finding(state: str = "raised", raised_by: str = "codex-1", owner: str = "", 
 
 def question(state: str = "open") -> Item:
     return replace(finding(), kind="question", state=state, options=("before tax", "after tax"), recommend=0)
+
+
+def test_a_new_head_outdates_only_unsettled_findings(tmp_path: Path) -> None:
+    """A head move marks old work, including an unconfirmed fix, without changing its age."""
+    clock = FakeClock()
+    store = Store(db.open_db(tmp_path / "board.db"), clock)
+    room = store.create_room("#build", "alice", 60, 30)
+    board = store.open_review(room.id, "https://example.com/shop/pull/7", "aaa1111", "codex-1")
+    raised = store.add_review_item(board["id"], "finding", "raised", title="raised", raised_by="codex-1")
+    fixed = store.add_review_item(board["id"], "finding", "fixed", title="fix to check", raised_by="codex-1")
+    done = store.add_review_item(board["id"], "finding", "dropped", title="done", raised_by="codex-1")
+    asked = store.add_review_item(board["id"], "question", "open", title="question", raised_by="codex-1")
+    clock.advance(5)
+    store.move_review_item(fixed.id, "fixed", owner="claude-1", commit_sha="bbb2222", proof="test_fix")
+    fixed_before_head = store.review_item(board["id"], "finding", fixed.n)
+    assert fixed_before_head is not None
+    clock.advance(10)
+    store.move_review_head(
+        board["id"], "ccc3333", reviews.unsettled_finding_ids(store.review_items(board["id"]))
+    )
+    items = {i.id: i for i in store.review_items(board["id"])}
+    assert [items[i.id].outdated_head for i in (raised, fixed, done, asked)] == ["ccc3333", "ccc3333", "", ""]
+    assert items[fixed.id].updated_at == fixed_before_head.updated_at  # head movement is not a new fix
+    store.move_review_item(raised.id, "conceded", owner="claude-1")
+    assert store.review_item(board["id"], "finding", raised.n).outdated_head == "ccc3333"
+    store.move_review_item(raised.id, "fixed", commit_sha="ddd4444", proof="test_raised")
+    store.move_review_item(fixed.id, "fixed", confirmed_by="codex-1")
+    assert all(not store.review_item(board["id"], "finding", n).outdated_head for n in (1, 2))
 
 
 def test_the_author_side_concedes_or_contests_and_the_raiser_only_drops() -> None:

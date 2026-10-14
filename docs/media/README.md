@@ -45,6 +45,7 @@ It drives headless Chromium through Playwright (a dev dependency): run `uv run p
 | `setup-person-light.png` | a teammate choosing their own password after their one-time password |
 
 Re-run it whenever the UI changes, and look at every picture before committing them.
+For review board head changes, `ui_shots.py` also writes `outdated-before-*` and `outdated-after-*` PNGs in light, dark and phone light: the selected finding gains the new head mark.
 
 ## The CLI screenshots (`cli_shots.py`)
 

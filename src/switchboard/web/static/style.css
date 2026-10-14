@@ -2798,6 +2798,8 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 .board-state.s-fixed, .board-state.s-answered { color: var(--green); }
 .board-card-title { font-size: calc(13px * var(--text-scale)); }
 .board-card-meta { font-size: calc(11.5px * var(--text-scale)); color: var(--muted-2); }
+.board-outdated { color: var(--amber-ink); font-size: calc(11.5px * var(--text-scale)); font-weight: 650; overflow-wrap: anywhere; }
+.board-detail .board-outdated { margin: 0; }
 .board-handoff { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent-tint); }
 .board-handoff h4 { margin: 0; font-size: calc(13px * var(--text-scale)); }
 .board-handoff-lead { margin: 0; color: var(--ink-2); font-size: calc(12px * var(--text-scale)); overflow-wrap: anywhere; }

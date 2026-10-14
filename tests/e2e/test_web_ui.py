@@ -35,6 +35,7 @@ from typing import Any
 
 import pytest
 from conftest import PHASE_REPORTS, TEST_HUMAN, sanitize_env
+from fakes.fake_link import wait_for
 from playwright.sync_api import Browser, BrowserContext, ConsoleMessage, Page, Route, WebSocketRoute, expect
 from ui_world import CI_URL, JS_SCHEME, PROFILE, UIWorld, wait_js
 
@@ -2395,6 +2396,81 @@ def test_the_review_board_shows_each_item_in_its_lane(ui: UI) -> None:
     toggle.click()
     expect(page.locator("#log")).to_be_visible()
     expect(page.locator("#board")).to_be_hidden()
+
+
+@pytest.mark.parametrize("options", (DESKTOP, PHONE), ids=("desktop", "phone"))
+def test_new_review_head_marks_only_unsettled_findings_on_the_open_page(
+    ui: UI, options: dict[str, Any]
+) -> None:
+    """An agent's new head appears live on old findings, not on a question or settled work."""
+    slug = "e2e-board-outdated-" + ("phone" if options is PHONE else "desktop")
+    room = "#" + slug
+    page = review_room(ui, slug, **options)
+    page.click("#board-toggle")
+    expect(page.locator("#board .board-outdated")).to_have_count(0)
+    # The board can be read through HTTP before the browser's hello subscribes to its live
+    # review frames. Wait for that event, so the agent move exercises the live update path.
+    wait_for(
+        lambda: ui.world.broker.on_loop(
+            lambda: any(
+                room in sub.rooms and "review" in sub.kinds and not sub.closed
+                for sub in ui.world.broker.state.hub.subs
+            )
+        ),
+        what="the browser's review subscription",
+    )
+    sha = "7b9c2a4d6e8f"
+    result = ui.world.agent_call(
+        room, "codex-1", "review", action="open", url="https://example.com/shop/pull/7", head=sha
+    )
+    assert result["ok"], result
+    for label in ("F3", "F4"):
+        expect(page.locator(f'#board .board-card[data-item="{label}"] .board-outdated')).to_have_text(
+            f"Outdated at {sha}"
+        )
+    for label in ("F1", "F2", "Q1"):
+        expect(page.locator(f'#board .board-card[data-item="{label}"] .board-outdated')).to_have_count(0)
+    page.locator('#board .board-card[data-item="F3"]').click()
+    expect(page.locator("#board .board-detail .board-outdated")).to_have_text(f"Outdated at {sha}")
+
+
+def test_a_stale_board_fetch_cannot_erase_a_live_head_move(ui: UI) -> None:
+    """A GET started before a review frame must not replace that newer board on arrival."""
+    slug = "e2e-board-stale-fetch"
+    room = "#" + slug
+    page = review_room(ui, slug)
+    page.evaluate("""() => {
+      const original = window.fetch.bind(window);
+      window.fetch = async (input, options) => {
+        const response = await original(input, options);
+        if (String(input).endsWith('/review') && !window.heldBoardFetch) {
+          window.heldBoardFetch = true;
+          await new Promise(resolve => { window.releaseBoardFetch = resolve; });
+        }
+        return response;
+      };
+    }""")
+    page.click("#board-toggle")
+    wait_js(page, "() => window.heldBoardFetch === true")
+    wait_for(
+        lambda: ui.world.broker.on_loop(
+            lambda: any(
+                room in sub.rooms and "review" in sub.kinds and not sub.closed
+                for sub in ui.world.broker.state.hub.subs
+            )
+        ),
+        what="the browser's review subscription",
+    )
+    sha = "7b9c2a4d6e8f"
+    result = ui.world.agent_call(
+        room, "codex-1", "review", action="open", url="https://example.com/shop/pull/7", head=sha
+    )
+    assert result["ok"], result
+    mark = page.locator('#board .board-card[data-item="F3"] .board-outdated')
+    expect(mark).to_have_text(f"Outdated at {sha}")
+    page.evaluate("() => window.releaseBoardFetch()")
+    page.evaluate("() => new Promise(resolve => setTimeout(resolve, 0))")
+    expect(mark).to_have_text(f"Outdated at {sha}")
 
 
 def test_the_three_lanes_sit_in_one_row_and_stack_on_a_phone(ui: UI) -> None:

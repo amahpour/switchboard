@@ -93,6 +93,7 @@ class Item:
     updated_at: float = 0.0
     proof: str = ""
     confirmed_by: str = ""
+    outdated_head: str = ""
 
     @property
     def label(self) -> str:
@@ -361,6 +362,15 @@ def settled(items: list[Item]) -> bool:
     )
 
 
+def unsettled_finding_ids(items: list[Item]) -> list[int]:
+    """Findings whose lines or fix still need checking after the board moves to a new head."""
+    return [
+        i.id
+        for i in items
+        if i.kind == "finding" and (i.state in OPEN_FINDING or (i.state == "fixed" and not i.confirmed_by))
+    ]
+
+
 def needs_person(item: Item, active: set[str] | None = None, now: float | None = None) -> bool:
     """A fix waits for a person's check when its independent raiser cannot confirm in time."""
     if item.needs_person:
@@ -416,7 +426,8 @@ def render(review: dict[str, Any], items: list[Item]) -> str:
             "answered": f"answered by {i.answered_by}: {i.answer}",
         }[i.state]
         proof_s = f"; proof: {i.proof}" if i.state == "fixed" and i.proof else ""
-        out.append(f"{i.label} [{i.state}] {i.title}{where}: {who}{proof_s}")
+        outdated = f"; outdated at {i.outdated_head}" if i.outdated_head else ""
+        out.append(f"{i.label} [{i.state}] {i.title}{where}: {who}{proof_s}{outdated}")
     if review.get("posted_by") and review.get("plan"):
         plan = review["plan"]
         out.extend(("Handoff summary to post:", plan["summary"], "Line comments to leave open:"))

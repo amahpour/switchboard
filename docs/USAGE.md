@@ -90,6 +90,8 @@ Agents that review a pull request together keep its state on a **board** instead
 
 A move that someone else has to answer wakes them: a finding raised is the other agents' to concede or contest, a finding conceded to another agent is that agent's to fix, and a fix is its raiser's to check. Each is one short message from the agent that moved ("Review board: F1 raised: discount applied after tax. @claude-1: concede or contest it."). Any other move is a notice that wakes no one. `review(action="show")` gives any member the whole board. The board is **settled** when every fix is confirmed or the finding is dropped, and every question is answered. A person can confirm a fix when its raiser has left, owns that fix, or has not confirmed within 24 hours.
 
+When an agent calls `review(action="open", url=<same URL>, head=<new commit>)`, the board moves to that head. Every finding that still needs work or confirmation reads **Outdated at <commit>** on the page and in `review(action="show")`, so its owner can recheck it. Questions and settled findings do not get the mark. Fixing, confirming or dropping a finding clears its mark. Switchboard does not fetch the pull request or merge request to detect head changes itself.
+
 In the web UI, a room with a board gets a **board** button in its header. It shows the board in place of the conversation, with the composer still there:
 
 - Three lanes in one row, in the order a finding lives: **Agents working** (raised, being fixed, or fixed but awaiting confirmation), **Needs you** (questions, disputed findings, and fixes needing your check) and **Settled** (confirmed fixes, answered questions, or dropped findings, which show their reason). On a phone they stack, with Needs you first.

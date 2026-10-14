@@ -152,7 +152,8 @@ class Boards:
             self._notice(room, f"{by} opened a review board for {url}" + (f" at {head[:12]}" if head else ""))
         elif head and head != rv["head"]:
             # a new head: the same board, its checks now about a newer commit (§37.4)
-            self.store.set_review(rv["id"], head=head)
+            items = self.store.review_items(rv["id"])
+            self.store.move_review_head(rv["id"], head, reviews.unsettled_finding_ids(items))
             self._notice(room, f"{by} moved the review board to {head[:12]}")
         self.store.add_event("review", room_id=room.id, data={"open": url, "head": head, "by": by})
 
@@ -365,6 +366,7 @@ def item_dict(
         "commit": i.commit,
         "proof": i.proof,
         "confirmed_by": i.confirmed_by,
+        "outdated_head": i.outdated_head,
         "reason": i.reason,
         "options": list(i.options),
         "recommend": i.recommend,

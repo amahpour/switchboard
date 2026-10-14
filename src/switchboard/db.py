@@ -29,7 +29,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -204,6 +204,7 @@ CREATE TABLE review_items(
   answered_by TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL, updated_at REAL NOT NULL,
   proof TEXT NOT NULL DEFAULT '' CHECK(length(proof) <= 500),
   confirmed_by TEXT NOT NULL DEFAULT '' CHECK(length(confirmed_by) <= 100),
+  outdated_head TEXT NOT NULL DEFAULT '' CHECK(length(outdated_head) <= 64),
   UNIQUE(review_id, kind, n));
 """
 
@@ -426,6 +427,13 @@ V18_TO_V19 = (
     "UPDATE meta SET value='19' WHERE key='schema_version'",
 )
 
+# v19 -> v20 (#291): an unsettled finding can be flagged when the board's head changes.
+V19_TO_V20 = (
+    "ALTER TABLE review_items ADD COLUMN outdated_head TEXT NOT NULL DEFAULT ''"
+    " CHECK(length(outdated_head) <= 64)",
+    "UPDATE meta SET value='20' WHERE key='schema_version'",
+)
+
 
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
@@ -449,6 +457,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         16: (17, V16_TO_V17, ()),
         17: (18, V17_TO_V18, ()),
         18: (19, V18_TO_V19, ()),
+        19: (20, V19_TO_V20, ()),
     }
     out = []
     v = frm

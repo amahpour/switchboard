@@ -2565,6 +2565,8 @@
       if (!$('closed-panel').classList.contains('hidden')) loadClosed().catch(function () {});
     } else if (f.t === 'review') {
       if (!r) return;
+      // An older HTTP board read may still be in flight. Keep this live frame authoritative.
+      r.boardGeneration = (r.boardGeneration || 0) + 1;
       r.board = f.board || null;
       if (f.room === state.active) renderBoard();
     } else if (f.t === 'remotes') {
@@ -4890,10 +4892,14 @@
 
   async function loadBoard(r) {
     if (!r) return;
+    // Only the latest read may apply; a newer read or live frame makes this response stale.
+    const generation = r.boardGeneration = (r.boardGeneration || 0) + 1;
     try {
       const res = await api('GET', '/api/rooms/' + encodeURIComponent(r.slug) + '/review');
+      if (r.boardGeneration !== generation) return;
       r.board = res.board || null;
     } catch (e) {
+      if (r.boardGeneration !== generation) return;
       r.board = r.board || null;
     }
     if (r.name === state.active) renderBoard();
@@ -5004,6 +5010,7 @@
         card.append(top, el('span', 'board-card-title', i.title));
         const meta = i.state === 'dropped' && i.reason ? i.reason : [boardWhere(i), boardWho(i)].filter(Boolean).join(' · ');
         card.append(el('span', 'board-card-meta', meta));
+        if (i.outdated_head) card.append(el('span', 'board-outdated', 'Outdated at ' + i.outdated_head));
         if (i.state === 'dropped') card.classList.add('dropped');
         card.addEventListener('click', function () {
           state.boardSel = state.boardSel === i.label ? null : i.label;
@@ -5209,6 +5216,7 @@
     const top = el('div', 'board-detail-top');
     top.append(el('span', 'board-state s-' + i.state, BOARD_STATE[i.state] || i.state), el('h3', null, i.label + ' · ' + i.title));
     d.append(top, el('p', 'board-detail-state', boardWho(i)));
+    if (i.outdated_head) d.append(el('p', 'board-outdated', 'Outdated at ' + i.outdated_head));
     const contested = i.state === 'contested';
     if (i.detail && !contested) d.append(mdBody(i.detail, []));
     const rows = el('dl', 'board-rows');

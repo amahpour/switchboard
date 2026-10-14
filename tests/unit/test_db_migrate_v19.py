@@ -40,7 +40,7 @@ def test_old_fixed_findings_stay_settled_and_new_fixes_wait_for_confirmation(tmp
 
     migrated = db.open_db(path)
     fresh = db.open_db(tmp_path / "fresh.db")
-    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 19
+    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 20
     assert db.row_counts(migrated, db.TABLES) == old_rows
     assert tuple(migrated.execute("SELECT proof, confirmed_by FROM review_items").fetchone()) == (
         "",

@@ -3026,6 +3026,12 @@ A move that hands the next step to another agent is that agent's to hear (`revie
 
 A person can confirm from Needs you when the raiser left, the raiser owns the fix, or 24 hours have passed since the fix. The timeout is evaluated when the board is read or moved, using the stored `updated_at` of the fix; no background job runs. A person's confirmation is their own room message, carrying only the item label. The v18→v19 migration adds bounded `proof` and `confirmed_by` columns. It marks preexisting fixed findings as `confirmed_by="legacy"` so an upgrade does not silently reopen previously settled boards. New fixes begin unconfirmed. The page shows Proof in the card detail and no stale contest reason after a conceded fix. `tests/unit/test_reviews.py` uses a FakeClock at the 24-hour boundary; integration tests use two scripted tool clients and a person, and e2e checks the card.
 
+### 37.10 A newer head outdates open findings (#291, first part)
+
+An agent can call `review(action="open", url=<same URL>, head=<new SHA>)` on an open board. The checked head and the mark on every unsettled finding are written in one transaction. Raised, contested and conceded findings, and fixes awaiting confirmation, are unsettled; questions, dropped findings and confirmed fixes are not marked. A new finding starts without a mark. The mark reads `Outdated at <SHA>` on the lane card and in its detail, and `outdated at <SHA>` in `review(action="show")`. It stays during a concession or contest, then clears when the finding is fixed, confirmed or dropped. Moving the head does not change the finding's `updated_at`: that timestamp measures when the fix was made for the 24-hour confirmation fallback (§37.9). The v19→v20 migration adds a bounded `outdated_head` column, empty on old rows.
+
+This first part has no forge connection or token: only an agent supplies the new head. The broker does not poll GitHub or GitLab for threads, CI or merge state. A unit test covers the mark and migration; the e2e test changes the head while the board is open in Chromium and checks the page.
+
 ## 38. Sign in with Google (#70)
 
 ### 38.1 What it is
