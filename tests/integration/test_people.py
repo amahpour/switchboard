@@ -626,6 +626,27 @@ def test_people_sign_in_with_their_email_once_they_have_one(hosted: InProcBroker
     assert bob.post(f"/api/people/{pid}/email", {"email": "x@example.com"}).status_code == 403
 
 
+def test_people_lists_the_same_people_a_name_still_signs_in(hosted: InProcBroker) -> None:
+    """#240: Admin > People tells the admin who still signs in by name, and the page works that out
+    from this list: everyone but the admin whose ``email`` is empty. A name signs in exactly those
+    people (``people.account``, §39.3), so the note names the people who will lose their way in,
+    no more and no fewer. Fails if the list's rule and the sign-in rule part: someone with an email
+    whose name still signs them in, or someone with none whose name doesn't."""
+    admin = set_up(hosted)
+    one_time = {name: add(admin, name)["password"] for name in ("bob", "carol", "dave")}
+    listed = {p["name"]: p for p in admin.get("/api/people").json()["people"]}
+    assert (
+        admin.post(f"/api/people/{listed['carol']['id']}/email", {"email": "carol@example.com"}).status_code
+        == 200
+    )
+    listed = {p["name"]: p for p in admin.get("/api/people").json()["people"]}
+    by_name = {n for n, p in listed.items() if not p["admin"] and p["email"] is None}
+    assert by_name == {"bob", "dave"}
+    for name, password in one_time.items():
+        signed_in = signin(Browser(hosted), name, password).status_code == 200
+        assert signed_in == (name in by_name), name
+
+
 def test_someone_added_by_email_signs_in_with_it(hosted: InProcBroker) -> None:
     """#192: Add someone takes an email. Their name defaults to the email's local part, the
     invite says to sign in with the email, and it does (with the one-time password); their

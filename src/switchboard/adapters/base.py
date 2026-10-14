@@ -75,6 +75,16 @@ class Caps:
     inline_paths: frozenset[str] = INLINE_PATHS
 
 
+@dataclass(frozen=True)
+class HelloClaims:
+    """What a harness keeps of a verified ``mcp.hello``'s params beyond what every harness has
+    (DESIGN.md §6.4). The MCP server's own claims, kept only where the harness can use them."""
+
+    env_leak: bool = False  # its environment carried another harness's markers (Claude's never does)
+    test_session: str | None = None  # the scripted test agent's --test-session (§9.6)
+    ack_mode: str | None = None  # its --ack: how its pull answers are confirmed (``pull_ack``)
+
+
 class Adapter:
     """Base class. Subclasses override what their harness supports."""
 
@@ -96,6 +106,16 @@ class Adapter:
     # Its tier follows from the participant row alone (Cursor's binding and degraded spell,
     # Devin's wait loop), so the engine re-derives it when the row changes (§9.4).
     derives_tier = False
+    # A scripted stand-in: it exists only in test mode, and on a remote host only when both
+    # machines are in it (§9.6, §27.5.3).
+    test_only = False
+    # The push or wake channel an MCP connection becomes through ``mcp.attach`` (§6.4, §9.2,
+    # §27.7): its name ("inbox": Claude's; "codex": a remote Codex's wake), and the tier it gives.
+    # "" when the harness has none. A connection asks for a channel by ``channel_flag``, the
+    # ``mcp.attach`` parameter that names it; the one with no flag is what a bare attach gets.
+    channel = ""
+    channel_flag = ""
+    channel_tier = ""
 
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -192,6 +212,36 @@ class Adapter:
     def conn_tier(self, ident: Any, existing: Participant | None) -> tuple[str, str | None]:
         """The tier a join from this verified MCP connection gets (Claude: inbox if attached)."""
         return self.tier(existing)
+
+    # -- ``mcp.hello`` and ``mcp.attach`` (DESIGN.md §6.4) ---------------------
+    def hello_claims(self, params: dict[str, Any]) -> HelloClaims:
+        """What this harness keeps of a verified ``mcp.hello``'s params. ``ValueError`` (its
+        message goes to the caller) for params this harness refuses (the test agent's
+        session key)."""
+        return HelloClaims(env_leak=bool(params.get("env_leak")))
+
+    def attested_socket(self, att: dict[str, Any]) -> str | None:
+        """The Claude inbox socket a remote host's satellite attested for this harness's MCP
+        server (``facts.attest``, §27.5.3), or None: only Claude has one."""
+        return None
+
+    def channel_refusal(self, ident: Any, *, has_token: bool, guard_ok: bool, remote: bool) -> str | None:
+        """Why this verified MCP connection can't be this harness's ``channel`` (``guard_ok``: the
+        MCP server's own guard passed; ``remote``: it comes over a link), or None. Only
+        harnesses with a channel are ever asked."""
+        return f"{self.harness} has no push channel"
+
+    def attach(self, mcp_pid: int, mcp_start: float | None, conn: Any, host: str) -> None:
+        """Make ``conn`` the channel of the sessions of that MCP process (``channel`` only)."""
+        raise NotImplementedError(f"{self.harness} has no push channel")
+
+    def detach(self, conn: Any) -> list[int]:
+        """Forget every channel on ``conn``; wakes waiting on it fail. Returns the mcp pids."""
+        return []
+
+    def posted(self, batch_id: int, conn: Any, result: dict[str, Any]) -> bool:
+        """``mcp.posted`` from the channel a frame was handed to: True if it settled one."""
+        return False
 
     def on_joined(self, p: Participant, nonce: str, fresh: bool) -> None:
         """A join (``fresh``: a new membership or another process) was persisted."""

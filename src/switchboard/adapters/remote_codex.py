@@ -69,6 +69,11 @@ def thread_of(p: Participant) -> str:
 class RemoteCodexAdapter(CodexMembership, PullAdapter):
     serial_push = True  # one wake in flight per thread
     reports_approval_mode = True  # as a Codex session here (§9.3)
+    # the link connection of a remote Codex's MCP server wakes its threads (``mcp.attach
+    # {codex: true}``, issue #63)
+    channel = "codex"
+    channel_flag = "codex"
+    channel_tier = TIER_LINK
 
     def __init__(self, cfg: Config):
         super().__init__("codex", cfg)
@@ -82,6 +87,19 @@ class RemoteCodexAdapter(CodexMembership, PullAdapter):
         self.runner: Any = None
 
     # ------------------------------------------------------------ channels
+    def channel_refusal(self, ident: Any, *, has_token: bool, guard_ok: bool, remote: bool) -> str | None:
+        """A Codex MCP server on a remote host offers its link connection as the wake channel
+        of the threads it serves (its own check found that machine's Codex control socket
+        usable). Only over a link: a Codex on this machine is woken by the broker itself
+        (``CodexAdapter``)."""
+        if ident.harness != self.harness:
+            return "not a verified Codex session"
+        if not remote:
+            return "a Codex session on this machine is woken by the broker itself"
+        if not guard_ok:
+            return "the MCP server's own check refused"
+        return None
+
     def attach(self, mcp_pid: int, mcp_start: float | None, conn: Any, host: str) -> None:
         self.conns[(host, int(mcp_pid))] = (mcp_start, conn)
 

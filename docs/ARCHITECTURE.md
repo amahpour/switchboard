@@ -86,7 +86,7 @@ Beside these is the [security model](../CLAUDE.md#the-security-model-in-short) (
 
 ### Where the code doesn't follow them yet
 
-Each is an open issue; don't copy the pattern, and the fix removes its mention here. Harness branches outside the adapters: `agents.py`'s `mcp.hello`/attach branches ([#170](https://github.com/amahpour/switchboard/issues/170); Codex session keys and binding and the Cursor branches moved to their adapters).
+Each is an open issue; don't copy the pattern, and the fix removes its mention here. Harness branches outside the adapters: `agents.py`'s `join` and `hook_event` still name the scripted test agent ([#360](https://github.com/amahpour/switchboard/issues/360); session keys, binding, `mcp.hello` and attach moved to the adapters, #170).
 
 ## Where to read next in DESIGN.md
 
