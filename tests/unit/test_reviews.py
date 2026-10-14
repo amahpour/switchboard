@@ -534,3 +534,14 @@ def test_a_person_reassigns_a_conceded_finding_or_rules_it_fixed() -> None:
     assert reviews.person_move(f, "fix") == "fixed"
     with pytest.raises(ReviewError, match="can't be fixed from there"):
         reviews.person_move(finding("raised"), "fix")
+
+
+def test_a_persons_fix_reads_right_in_the_handoff() -> None:
+    """#371: a person's Mark fixed has no agent proof and may have no commit; the handoff summary
+    said "commit ; proof: ." for it. It now says whose say it was."""
+    marked = replace(finding("fixed", owner="claude-1"), confirmed_by="alice", file="a.py", lines="3")
+    plan = reviews.handoff_plan(
+        [marked], [{"data": {"item": "F1", "to": "fixed", "by": "alice", "person": True}}]
+    )
+    assert "- F1 Fixed: off by one, on alice's say" in plan["summary"], plan["summary"]
+    assert "commit " not in plan["summary"]
