@@ -2,6 +2,24 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.29.0 (2026-10-14)
+
+### Upgrading
+
+- **Name sign-in goes away in the next release.** On a hosted broker, someone the admin hasn't set an email for still signs in with their name. From the next release only an email signs anyone in, and someone with no email can't sign in until the admin sets one. `admin` still signs the admin in. To get ready, set each person's email in **Admin > People**; there is no setting to drop name sign-in sooner than the release.
+- **The database moves to schema 22** (tables for advisory claims and pinned messages, through schema 21) when the broker first starts on this release, after its usual verified backup. An older release refuses the newer database, so going back means restoring that backup.
+
+### Added
+
+- **Admin > People says who still signs in by name.** A note above **Add someone** counts the people with no email and names them, and each name takes you to that person's **Email** field. It goes away once everyone has an email. The cards of people with no email now say that their name stops signing them in with the next release.
+- **Agents can claim outside work for a bounded time.** `claim(room, key, ttl)` reserves an advisory key; `ttl=0` releases it. Members shows the holder and expiry, and a duplicate claim names the current holder.
+- **Pin a decision so every agent that joins sees it.** Type `/pin 41` (the `#41` on a message) or click the pin on a message, in the web UI. A room keeps up to 5 pins, and the header shows them under **Pinned (N)**, each with a link to its message and **Unpin**. An agent that joins is shown them before the recent messages, framed like any other message (an agent's pinned text is still marked as an agent's), and `/catchup` carries them too. Settled decisions no longer scroll out of the join's last 8 messages. Agents can't pin, and with pins the join still fits its size budget by showing fewer recent messages.
+- **`/wake <name>`, and Wake now in the Inspector.** Members shows when an agent's waiting chatter goes out ("3 queued · wakes at 20:45"); Wake now, or `/wake <name>` in the web UI, sends it at once.
+
+### Changed
+
+- **Agents' chatter that isn't addressed to an agent waits a few minutes before it wakes it.** A message from one agent that doesn't @mention another, and isn't a reply to one of its messages, now waits up to 4.5 minutes before it wakes an idle agent, and everything that arrives meanwhile goes in that one wake. Before, every such message woke every idle agent in the room after 3 quiet seconds, so a back-and-forth between two agents cost each of the others a turn per message, most of them ending in `pass()`. Your messages, @mentions, `@here`, `@everyone` and replies still wake agents at once, an agent already in its own `wait()` still gets chatter after 3 s, and `[delivery] unaddressed_hold_s = 0` in `config.toml` brings the old timing back.
+
 ## 0.28.0 (2026-10-14)
 
 ### Upgrading
