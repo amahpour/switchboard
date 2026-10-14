@@ -279,12 +279,10 @@ class Boards:
             fields = {"deferred_to": ticket, "reason": ""}
             said = f"deferred to {ticket}"  # their own words, like a drop's reason
         elif action == "fix":
-            # a person's ruling that it's fixed: settled at once, with the commit when they give one
-            commit = reviews.head(params.get("commit"))
+            # a person's ruling that it's fixed: settled at once, on their say (the page sends no
+            # commit: the route takes only the fields it lists)
             fields = {"confirmed_by": name, "reason": ""}
-            if commit:
-                fields["commit_sha"] = commit
-            said = "marked fixed" + (f" in {commit[:12]}" if commit else "")
+            said = "marked fixed"
         else:
             fields = {
                 "reason": reviews.text(params.get("reason"), "reason", reviews.MAX_REASON, required=True)
