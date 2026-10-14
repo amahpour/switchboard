@@ -2922,6 +2922,7 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 /* a question's options are sentences, not button labels: each takes the row and wraps inside the
    detail (a long one ran past it and was cut off) */
 .board-actions button[data-option] { flex: 1 1 100%; max-width: 100%; height: auto; min-height: 32px; padding: 7px 12px; line-height: 1.3; white-space: normal; text-align: left; justify-content: flex-start; overflow-wrap: anywhere; }
+.board-action-set { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; flex: 1 1 100%; min-width: 0; }
 .board-field { display: flex; flex-direction: column; gap: 4px; font-size: calc(12px * var(--text-scale)); color: var(--muted-2); flex: 1 1 160px; }
 .board-field input, .board-field select { font: inherit; color: var(--fg); background: var(--input-bg); border: 1px solid var(--input-border); border-radius: 6px; padding: 6px 8px; min-width: 0; }
 /* a contested finding's two sides go one above the other in a card under 440 px: side by side

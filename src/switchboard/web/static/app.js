@@ -5541,7 +5541,10 @@
       fixed.id = 'board-mark-fixed';
       fixed.title = 'Settle ' + i.label + ' as fixed, on your say: no agent needs to confirm it';
       fixed.addEventListener('click', function () { boardMove({ action: 'fix', item: i.label }); });
-      acts.append(label, reassign, fixed);
+      // one set, so on a phone Mark fixed wraps with Reassign, not beside Drop's reason
+      const set = el('div', 'board-action-set');
+      set.append(label, reassign, fixed);
+      acts.append(set);
     }
     if (i.state === 'fixed' && !i.confirmed_by) {
       // any fix: when its raiser can't check it (needs_person), or as a person's own ruling (#371)
