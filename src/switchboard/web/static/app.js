@@ -4467,11 +4467,11 @@
     return card;
   }
 
-  // Who still signs in by name (#240, DESIGN.md §39.3): a person with no email. The next release
-  // drops name sign-in, so the admin is told how many there are, and who, while there is time to set
-  // their emails. The admin isn't counted: `admin` signs them in whatever happens. This follows the
-  // broker's rule (people.account): a name signs in only someone with no email.
-  function peopleByName() {
+  // Who can't sign in (#240, DESIGN.md §39.3): a person with no email, since only an email (or
+  // `admin`) signs anyone in. The admin is told how many there are, and who, so they can set the
+  // emails. The admin isn't counted: `admin` signs them in whatever happens. This follows the
+  // broker's rule (people.account).
+  function peopleWithoutEmail() {
     return state.people.filter(function (p) { return !p.admin && !p.email; });
   }
 
@@ -4481,12 +4481,12 @@
 
   // Each name goes to that person's Email field, where the admin sets it: their cards are further
   // down, and focus lands in the field, not on a button that is about to disappear.
-  function byNameNote(who) {
+  function noEmailNote(who) {
     const one = who.length === 1;
-    const list = el('ul', 'by-name-list');
+    const list = el('ul', 'no-email-list');
     for (const p of who) {
       const b = btn('btn btn-ghost-sm', personLabel(p));
-      b.dataset.focus = 'by-name:' + p.id;
+      b.dataset.focus = 'no-email:' + p.id;
       b.title = 'Go to the Email field of ' + p.name;
       b.setAttribute('aria-label', 'Set an email for ' + personLabel(p));
       b.addEventListener('click', function () {
@@ -4500,13 +4500,13 @@
       li.append(b);
       list.append(li);
     }
-    const title = one ? '1 person still signs in by name' : who.length + ' people still sign in by name';
+    const title = one ? '1 person can’t sign in' : who.length + ' people can’t sign in';
     const n = note('amber', 'info', title, [
-      el('p', null, 'Name sign-in goes away in the next release. After that, someone with no email can’t sign in,'
-        + ' so set an email for ' + (one ? 'them' : 'each of them') + ' first. You can still sign in as admin.'),
+      el('p', null, 'They have no email, and only an email signs someone in.'
+        + ' Set one for ' + (one ? 'them' : 'each of them') + '.'),
       list,
     ]);
-    n.id = 'by-name-note';
+    n.id = 'no-email-note';
     return n;
   }
 
@@ -4776,8 +4776,8 @@
     if (!p.admin && p.passkeys && p.sign_in !== 'passkey') bits.push(plural(p.passkeys, 'passkey', 'passkeys'));
     if (p.admin) bits.push(p.password ? 'password' : 'no password', plural(p.passkeys || 0, 'passkey', 'passkeys'));
     if (!p.email) {
-      bits.push(p.admin ? 'no email yet: you sign in with your name until the next release, or with admin'
-        : 'no email yet: signs in with their name, until the next release');
+      bits.push(p.admin ? 'no email yet: you sign in as admin'
+        : 'no email yet: can’t sign in until you set one');
     }
     card.append(el('p', 'machine-step', bits.join(' · ')));
     card.append(nameRow(p), emailRow(p));
@@ -4829,8 +4829,8 @@
     const typing = f && f.id === 'person-name';
     body.replaceChildren();
     if (state.invite) body.append(inviteCard(state.invite));
-    const byName = peopleByName();
-    if (byName.length) body.append(byNameNote(byName));
+    const noEmail = peopleWithoutEmail();
+    if (noEmail.length) body.append(noEmailNote(noEmail));
     body.append(addPersonCard());
     for (const p of state.people) body.append(personCard(p));
     if (state.privateRooms && state.privateRooms.length) body.append(privateRoomsCard(state.privateRooms));

@@ -101,6 +101,9 @@ SETUP_COOKIE = "switchboard_setup"
 PASSKEY_COOKIE = "switchboard_passkey"
 ADD_COOKIE = "switchboard_passkey_add"
 DEVICE_COOKIE = "switchboard_device"
+# a wrong password sign-in, whoever it was (#240): the ask-the-admin half is for someone with no
+# email, who can't sign in at all since name sign-in ended, without saying whether that's who it is
+WRONG_SIGNIN = "wrong email or password (no email set for you yet? ask the admin to set one)"
 DEVICE_TTL_S = 30 * 24 * 3600
 OPEN_CHECKS_MAX = 32  # strangers' password checks running or queued; past this, refused before scrypt
 HASH_RE = re.compile(r"[0-9a-f]{64}")  # a remote's config_hash (sha256 hex)
@@ -819,7 +822,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         if resp is None:
             state.signin.failed(budget)
             failed("bad_password")
-            return _err(403, "bad_password", "wrong email or password")
+            # the same words whoever it was, so a sign-in never says which emails are someone's
+            return _err(403, "bad_password", WRONG_SIGNIN)
         state.signin.ok(budget)
         trust_device(resp, key, trusted)
         return resp

@@ -2566,10 +2566,10 @@ body.login {
 .person-chip { height: 22px; padding: 0 9px; border-radius: 11px; font-size: calc(11.5px * var(--text-scale)); font-weight: 600; }
 .person-chip.pending { background: var(--amber-bg); color: var(--amber-fg); }
 .person-chip.bad { background: var(--danger-bg); color: var(--danger); }
-/* who still signs in by name (#240): a note above Add someone, a name per button */
-#by-name-note { margin-bottom: 10px; }
-.by-name-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; }
-.by-name-list .btn { max-width: 100%; height: auto; min-height: 26px; padding-block: 4px; white-space: normal; text-align: left; overflow-wrap: anywhere; }
+/* who can't sign in, having no email (#240): a note above Add someone, a name per button */
+#no-email-note { margin-bottom: 10px; }
+.no-email-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; }
+.no-email-list .btn { max-width: 100%; height: auto; min-height: 26px; padding-block: 4px; white-space: normal; text-align: left; overflow-wrap: anywhere; }
 .invite-card { border-color: var(--accent); }
 .invite-card:focus { outline: none; }
 .invite-card:focus-visible { box-shadow: 0 0 0 3px var(--focus); }

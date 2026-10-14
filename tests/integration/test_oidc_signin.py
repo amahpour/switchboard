@@ -141,7 +141,7 @@ def test_a_google_sign_in_retires_the_invites_one_time_password(google) -> None:
     br, r = google_sign_in(b, issuer, "dave@example.com")
     assert r.status_code == 200 and br.get("/api/me").json()["human"] == "dave"
     assert br.get("/").status_code == 200 and "/static/app.js" in br.get("/").text  # the app, not setup
-    r = Browser(b).post("/api/signin/password", {"name": "dave", "password": one_time})
+    r = Browser(b).post("/api/signin/password", {"name": "dave@example.com", "password": one_time})
     assert r.status_code == 403
     dave = next(p for p in admin.get("/api/people").json()["people"] if p["name"] == "dave")
     assert dave["sign_in"] == "google"

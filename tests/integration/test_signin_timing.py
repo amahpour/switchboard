@@ -100,10 +100,10 @@ def test_a_one_time_password_costs_one_check_right_or_wrong(
         admin = set_up(b)
         one_time = add(admin, "bob")["password"]
         del counted[:]
-        assert signin(Browser(b), "bob", "WRONG-ONE0-TIME-PASS").status_code == 403
+        assert signin(Browser(b), "bob@example.com", "WRONG-ONE0-TIME-PASS").status_code == 403
         assert_one_real_check(counted, ok=False)
         del counted[:]
-        r = signin(Browser(b), "bob", one_time)
+        r = signin(Browser(b), "bob@example.com", one_time)
         assert r.status_code == 200 and r.json()["next"] == "setup"
         assert_one_real_check(counted, ok=True)
     finally:
@@ -120,13 +120,13 @@ def test_a_persons_own_password_costs_one_check_right_or_wrong(
         admin = set_up(b)
         one_time = add(admin, "bob")["password"]
         bob = Browser(b)
-        assert signin(bob, "bob", one_time).json()["next"] == "setup"
+        assert signin(bob, "bob@example.com", one_time).json()["next"] == "setup"
         assert bob.post("/api/me/password", {"password": BOB_PW}).status_code == 200
         del counted[:]
-        assert signin(Browser(b), "bob", BOB_PW + "x").status_code == 403
+        assert signin(Browser(b), "bob@example.com", BOB_PW + "x").status_code == 403
         assert_one_real_check(counted, ok=False)  # was 2 calls before #179's fix
         del counted[:]
-        assert signin(Browser(b), "bob", BOB_PW).json()["next"] == "app"
+        assert signin(Browser(b), "bob@example.com", BOB_PW).json()["next"] == "app"
         assert_one_real_check(counted, ok=True)
     finally:
         stop(b)
@@ -141,7 +141,7 @@ def test_a_passkey_only_person_costs_one_check(counted: list[tuple[str | None, b
         admin = set_up(b)
         one_time = add(admin, "bob")["password"]
         bob = Browser(b)
-        assert signin(bob, "bob", one_time).json()["next"] == "setup"
+        assert signin(bob, "bob@example.com", one_time).json()["next"] == "setup"
         auth = SoftAuthenticator(RP_ID, PUBLIC)
         r = bob.post("/api/passkeys/begin")
         assert r.status_code == 200, r.text
@@ -149,7 +149,7 @@ def test_a_passkey_only_person_costs_one_check(counted: list[tuple[str | None, b
         assert r.status_code == 200, r.text
         assert b.state.store.person_named("bob").password_hash is None
         del counted[:]
-        assert signin(Browser(b), "bob", "whatever it is").status_code == 403
+        assert signin(Browser(b), "bob@example.com", "whatever it is").status_code == 403
         assert_one_real_check(counted, ok=False)
     finally:
         stop(b)

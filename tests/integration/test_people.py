@@ -29,6 +29,7 @@ from switchboard.broker import web
 from switchboard.broker.auth import WebOrigin
 from switchboard.broker.passwords import FREE_FAILURES, hash_password
 from switchboard.broker.people import ONE_TIME_TTL_S
+from switchboard.broker.web import WRONG_SIGNIN
 from switchboard.config import Config
 from switchboard.models import NAME_REUSE_S
 
@@ -69,8 +70,13 @@ def set_up(b: InProcBroker, br: Browser | None = None) -> Browser:
     return br
 
 
-def add(admin: Browser, name: str) -> dict[str, Any]:
-    r = admin.post("/api/people", {"name": name})
+def add(admin: Browser, name: str, email: str | None = "") -> dict[str, Any]:
+    """Add ``name`` with the email ``<name>@example.com`` (a name signs no one in since #240), or
+    with ``email``; ``email=None`` adds someone with none, who can't sign in until it's set."""
+    body: dict[str, Any] = {"name": name}
+    if email is not None:
+        body["email"] = email or f"{name}@example.com"
+    r = admin.post("/api/people", body)
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -78,7 +84,7 @@ def add(admin: Browser, name: str) -> dict[str, Any]:
 def join_as_bob(b: InProcBroker, admin: Browser) -> Browser:
     one_time = add(admin, "bob")["password"]
     bob = Browser(b)
-    r = signin(bob, "bob", one_time)
+    r = signin(bob, "bob@example.com", one_time)
     assert r.status_code == 200 and r.json()["next"] == "setup", r.text
     assert bob.post("/api/me/password", {"password": BOB_PW}).status_code == 200
     return bob
@@ -157,12 +163,14 @@ def test_the_admin_sets_up_with_the_one_time_password_then_their_own(hosted: InP
     me = br.get("/api/me").json()
     assert (me["human"], me["admin"], me["password"], me["passkeys"]) == ("alice", True, True, 0)
     assert events(hosted, "claim") == [{"what": "claim", "via": "web", "with": "password"}]
-    # the one-time password is spent; the admin's own works under either name
+    # the one-time password is spent; the admin's own works as admin, in any case (and not under
+    # their display name, which signs no one in since #240)
     assert signin(Browser(hosted), "admin", tok).status_code == 403
-    for name in ("alice", "Admin", "ADMIN"):
+    for name in ("admin", "Admin", "ADMIN"):
         r = signin(Browser(hosted), name, ADMIN_PW)
         assert r.status_code == 200 and r.json()["next"] == "app", name
-    assert signin(Browser(hosted), "alice", ADMIN_PW + "x").status_code == 403
+    assert signin(Browser(hosted), "alice", ADMIN_PW).status_code == 403
+    assert signin(Browser(hosted), "admin", ADMIN_PW + "x").status_code == 403
 
 
 def test_the_admin_may_take_a_passkey_instead(hosted: InProcBroker) -> None:
@@ -179,22 +187,22 @@ def test_the_admin_may_take_a_passkey_instead(hosted: InProcBroker) -> None:
     # no password to sign in with, until they choose one in their settings
     assert signin(Browser(hosted), "admin", ADMIN_PW).status_code == 403
     assert br.post("/api/me/password", {"password": ADMIN_PW}).status_code == 200  # fresh from the claim
-    assert signin(Browser(hosted), "alice", ADMIN_PW).json()["next"] == "app"
+    assert signin(Browser(hosted), "admin", ADMIN_PW).json()["next"] == "app"
 
 
 # -------------------------------------------------------------------- people
 def test_a_teammate_joins_with_a_one_time_password(hosted: InProcBroker) -> None:
     admin = set_up(hosted)
-    got = add(admin, "Bob")
+    got = add(admin, "Bob", "Bob@Example.com")
     one_time = got["password"]
     assert got["person"]["name"] == "bob" and got["person"]["sign_in"] == "one-time"
     assert got["invite"] == (
-        f"You're invited to switchboard: {PUBLIC}\nSign in as bob with the one-time password"
-        f" {one_time} (it works for 7 days).\nRight after, you choose your own password, or a"
-        " passkey."
+        f"You're invited to switchboard: {PUBLIC}\nSign in with bob@example.com and the one-time"
+        f" password {one_time} (it works for 7 days).\nRight after, you choose your own password,"
+        " or a passkey."
     )
     bob = Browser(hosted)
-    r = signin(bob, "BOB", one_time.lower().replace("-", ""))
+    r = signin(bob, "BOB@EXAMPLE.COM", one_time.lower().replace("-", ""))
     assert r.status_code == 200 and r.json() == {
         "ok": True,
         "next": "setup",
@@ -216,8 +224,8 @@ def test_a_teammate_joins_with_a_one_time_password(hosted: InProcBroker) -> None
     assert bob.get("/api/people").status_code == 403  # the admin section is the admin's
     assert bob.post("/api/people", {"name": "carol"}).status_code == 403
     # the one-time password is gone; their own works
-    assert signin(Browser(hosted), "bob", one_time).status_code == 403
-    assert signin(Browser(hosted), "bob", BOB_PW).json()["next"] == "app"
+    assert signin(Browser(hosted), "bob@example.com", one_time).status_code == 403
+    assert signin(Browser(hosted), "bob@example.com", BOB_PW).json()["next"] == "app"
     people = admin.get("/api/people").json()["people"]
     assert [(p["name"], p["admin"], p["sign_in"]) for p in people] == [
         ("alice", True, "admin"),
@@ -296,7 +304,7 @@ async def test_a_person_cannot_take_an_agents_live_or_recent_name(
                 await agent.leave("#build")
         clock.advance(NAME_REUSE_S + 1)
         admin = Browser(broker)
-        assert (await asyncio.to_thread(signin, admin, "alice", ADMIN_PW)).status_code == 200
+        assert (await asyncio.to_thread(signin, admin, "admin", ADMIN_PW)).status_code == 200
         assert (await asyncio.to_thread(admin.post, "/api/people", {"name": "bob"})).status_code == 200
 
 
@@ -310,9 +318,9 @@ def test_the_admin_gives_a_new_one_time_password(hosted: InProcBroker) -> None:
     assert r.status_code == 200 and r.json()["person"]["sign_in"] == "one-time"
     fresh = r.json()["password"]
     assert bob.get("/api/me").status_code == 401  # signed out everywhere
-    assert signin(Browser(hosted), "bob", BOB_PW).status_code == 403  # the old password is gone
+    assert signin(Browser(hosted), "bob@example.com", BOB_PW).status_code == 403  # the old password is gone
     again = Browser(hosted)
-    assert signin(again, "bob", fresh).json()["next"] == "setup"
+    assert signin(again, "bob@example.com", fresh).json()["next"] == "setup"
     assert again.post("/api/me/password", {"password": "a newer secret 2"}).status_code == 200
     assert events(hosted, "session")[-1]["person"] == "bob"
 
@@ -326,8 +334,8 @@ def test_the_admin_removes_someone(hosted: InProcBroker) -> None:
     r = admin.post(f"/api/people/{pid}/remove")
     assert r.status_code == 200 and r.json() == {"ok": True, "sessions": 1, "machines": []}
     assert bob.get("/api/me").status_code == 401
-    r = signin(Browser(hosted), "bob", BOB_PW)
-    assert r.status_code == 403 and r.json()["message"] == "wrong email or password"
+    r = signin(Browser(hosted), "bob@example.com", BOB_PW)
+    assert r.status_code == 403 and r.json()["message"] == WRONG_SIGNIN
     assert [p["name"] for p in admin.get("/api/people").json()["people"]] == ["alice"]
     [msg] = [m for m in admin.get("/api/rooms/build/messages").json()["messages"] if m["kind"] == "chat"]
     assert msg["from"] == "bob"  # their messages keep their name
@@ -341,7 +349,7 @@ def test_one_time_passwords_expire_after_a_week(ticking: tuple[InProcBroker, Fak
     admin = set_up(b)
     one_time = add(admin, "bob")["password"]
     clock.advance(ONE_TIME_TTL_S + 1)
-    r = signin(Browser(b), "bob", one_time)
+    r = signin(Browser(b), "bob@example.com", one_time)
     assert r.status_code == 403 and r.json()["error"] == "expired"
     admin = Browser(b)  # the admin's own session ran out in that week too
     assert signin(admin, "admin", ADMIN_PW).status_code == 200
@@ -354,12 +362,12 @@ def test_wrong_passwords_slow_down(ticking: tuple[InProcBroker, FakeClock]) -> N
     set_up(b)
     br = Browser(b)
     for _ in range(FREE_FAILURES):
-        assert signin(br, "alice", "not it at all").status_code == 403
-    r = signin(br, "alice", ADMIN_PW)  # even the right one waits
+        assert signin(br, "admin", "not it at all").status_code == 403
+    r = signin(br, "admin", ADMIN_PW)  # even the right one waits
     assert r.status_code == 429 and "wait 31 s" in r.json()["message"]
     assert signin(br, "nobody", "not it at all").status_code == 403  # other names are not held up
     clock.advance(31.0)
-    assert signin(br, "alice", ADMIN_PW).status_code == 200
+    assert signin(br, "admin", ADMIN_PW).status_code == 200
 
 
 def test_known_browser_can_sign_in_during_strangers_account_lockout(
@@ -494,14 +502,14 @@ def test_admin_names_share_one_password_guessing_budget(ticking: tuple[InProcBro
     browser = Browser(broker)
     for _ in range(FREE_FAILURES):
         assert signin(browser, "admin", "wrong secret").status_code == 403
-    assert signin(browser, "alice", ADMIN_PW).status_code == 429
+    assert signin(browser, "admin", ADMIN_PW).status_code == 429
 
 
 def test_a_passkey_instead_of_a_password(hosted: InProcBroker) -> None:
     admin = set_up(hosted)
     one_time = add(admin, "bob")["password"]
     bob = Browser(hosted)
-    assert signin(bob, "bob", one_time).json()["next"] == "setup"
+    assert signin(bob, "bob@example.com", one_time).json()["next"] == "setup"
     auth = SoftAuthenticator(RP_ID, PUBLIC)
     r = bob.post("/api/passkeys/begin")
     assert r.status_code == 200, r.text
@@ -510,7 +518,7 @@ def test_a_passkey_instead_of_a_password(hosted: InProcBroker) -> None:
     r = bob.post("/api/passkeys", {"credential": auth.register(opts), "name": "Bob's phone"})
     assert r.status_code == 200 and r.json()["passkeys"] == 1
     assert bob.get("/api/me").json()["password"] is False  # no password: the passkey instead
-    assert signin(Browser(hosted), "bob", one_time).status_code == 403
+    assert signin(Browser(hosted), "bob@example.com", one_time).status_code == 403
     again = Browser(hosted)
     r = again.post("/api/passkey/begin")
     r = again.post("/api/passkey/finish", {"credential": auth.get(r.json()["options"])})
@@ -562,7 +570,7 @@ def test_sign_out_everywhere_is_your_own_sessions(hosted: InProcBroker) -> None:
     admin = set_up(hosted)
     bob = join_as_bob(hosted, admin)
     bob2 = Browser(hosted)
-    assert signin(bob2, "bob", BOB_PW).status_code == 200
+    assert signin(bob2, "bob@example.com", BOB_PW).status_code == 200
     r = bob.post("/logout", {"all": True})
     assert r.status_code == 200 and r.json()["revoked"] == 2
     assert bob2.get("/api/me").status_code == 401
@@ -574,27 +582,32 @@ def test_the_auth_state_offers_sso_as_coming_soon(hosted: InProcBroker) -> None:
     assert (st["password"], st["passkeys_work"], st["sso"]) == (True, True, "coming soon")
 
 
-def test_people_sign_in_with_their_email_once_they_have_one(hosted: InProcBroker) -> None:
-    """#192: an email is who a person is. Once the admin sets one, it signs them in, in any
-    case, and their name stops working (so a name, which anyone can guess, isn't a second way
-    in); someone without an email yet still signs in by name. ``admin`` always works, and the
-    admin's own display name stops once the admin has an email too."""
+def test_only_an_email_or_admin_signs_anyone_in(hosted: InProcBroker) -> None:
+    """#240 ends #192's grace period: an email is who a person is, ``admin`` always means the
+    admin, and nothing else signs anyone in. Someone with no email can't sign in until the admin
+    sets one, and the refusal says to ask the admin, in the same words whoever it is (a sign-in
+    never tells which names or emails are someone's). The admin's own name stops too, with or
+    without an email. Fails if a name still works for anyone, a person's or the admin's."""
     admin = set_up(hosted)
-    bob = join_as_bob(hosted, admin)
+    one_time = add(admin, "bob", None)["password"]
     pid = admin.get("/api/people").json()["people"][1]["id"]
-    assert signin(Browser(hosted), "bob", BOB_PW).json()["next"] == "app"  # no email yet: the name
-    assert signin(Browser(hosted), "bob@example.com", BOB_PW).status_code == 403
+    for who in ("bob", "bob@example.com"):
+        r = signin(Browser(hosted), who, one_time)
+        assert (r.status_code, r.json()["message"]) == (403, WRONG_SIGNIN), who
     r = admin.post(f"/api/people/{pid}/email", {"email": " Bob@Example.com "})
     assert r.status_code == 200 and r.json()["person"]["email"] == "bob@example.com", r.text
-    for who in ("bob@example.com", "BOB@example.COM"):
-        r = signin(Browser(hosted), who, BOB_PW)
-        assert r.status_code == 200 and r.json()["human"] == "bob", who
-    assert signin(Browser(hosted), "bob", BOB_PW).status_code == 403
+    bob = Browser(hosted)
+    assert signin(bob, "BOB@example.COM", one_time).json()["next"] == "setup"
+    assert bob.post("/api/me/password", {"password": BOB_PW}).status_code == 200
+    r = signin(Browser(hosted), "bob@example.com", BOB_PW)
+    assert r.status_code == 200 and r.json()["human"] == "bob"
+    assert signin(Browser(hosted), "bob", BOB_PW).json()["message"] == WRONG_SIGNIN
     me = bob.get("/api/me")  # a session already signed in carries on, and knows who it signs in as
     assert me.status_code == 200 and me.json()["email"] == "bob@example.com"
+    # the admin: as admin always, by email once they have one, and never by name
     assert admin.get("/api/me").json()["email"] is None
-    # the admin: by name until they have an email, by email after, and as admin always
-    assert signin(Browser(hosted), "alice", ADMIN_PW).json()["next"] == "app"
+    assert signin(Browser(hosted), "alice", ADMIN_PW).json()["message"] == WRONG_SIGNIN
+    assert signin(Browser(hosted), "admin", ADMIN_PW).json()["next"] == "app"
     r = admin.post("/api/people/owner/email", {"email": "alice@example.com"})
     assert r.status_code == 200 and r.json()["person"]["email"] == "alice@example.com", r.text
     assert signin(Browser(hosted), "alice", ADMIN_PW).status_code == 403
@@ -604,10 +617,6 @@ def test_people_sign_in_with_their_email_once_they_have_one(hosted: InProcBroker
     # someone invited with an email set signs in with it and their one-time password, and the
     # Choose page's hidden username (for a password manager) is that email
     carol = add(admin, "carol")
-    assert (
-        admin.post(f"/api/people/{carol['person']['id']}/email", {"email": "carol@example.com"}).status_code
-        == 200
-    )
     br = Browser(hosted)
     r = signin(br, "carol@example.com", carol["password"])
     assert r.status_code == 200 and r.json()["next"] == "setup", r.text
@@ -616,35 +625,35 @@ def test_people_sign_in_with_their_email_once_they_have_one(hosted: InProcBroker
     assert admin.post("/api/people/owner/email", {"email": "bob@example.com"}).status_code == 409
     assert admin.post(f"/api/people/{pid}/email", {"email": "alice@example.com"}).status_code == 409
     assert admin.post(f"/api/people/{pid}/email", {"email": "bob"}).status_code == 400
-    # taking it away puts the name back
+    # taking it away leaves bob no way in: the name doesn't come back
     assert admin.post(f"/api/people/{pid}/email", {"email": None}).status_code == 200
-    assert signin(Browser(hosted), "bob", BOB_PW).json()["next"] == "app"
-    assert signin(Browser(hosted), "bob@example.com", BOB_PW).status_code == 403
+    for who in ("bob", "bob@example.com"):
+        assert signin(Browser(hosted), who, BOB_PW).json()["message"] == WRONG_SIGNIN, who
     evs = hosted.on_loop(lambda: hosted.state.store.recent_events(kinds=["people"], limit=200))
     got = sorted((e.id, e.data["person"], e.data["set"]) for e in evs if e.data.get("what") == "email")
-    assert [g[1:] for g in got] == [("bob", True), ("alice", True), ("carol", True), ("bob", False)]
+    assert [g[1:] for g in got] == [("bob", True), ("alice", True), ("bob", False)]
     assert bob.post(f"/api/people/{pid}/email", {"email": "x@example.com"}).status_code == 403
 
 
-def test_people_lists_the_same_people_a_name_still_signs_in(hosted: InProcBroker) -> None:
-    """#240: Admin > People tells the admin who still signs in by name, and the page works that out
-    from this list: everyone but the admin whose ``email`` is empty. A name signs in exactly those
-    people (``people.account``, §39.3), so the note names the people who will lose their way in,
-    no more and no fewer. Fails if the list's rule and the sign-in rule part: someone with an email
-    whose name still signs them in, or someone with none whose name doesn't."""
+def test_the_people_with_no_email_are_the_ones_who_cant_sign_in(hosted: InProcBroker) -> None:
+    """#240: Admin > People tells the admin who has no email (the page works it out from this
+    list: everyone but the admin whose ``email`` is empty), and those are exactly the people who
+    can't sign in. Fails if the list's rule and the sign-in rule part: someone listed who can sign
+    in, or someone with an email who can't."""
     admin = set_up(hosted)
-    one_time = {name: add(admin, name)["password"] for name in ("bob", "carol", "dave")}
+    one_time = {name: add(admin, name, None)["password"] for name in ("bob", "carol", "dave")}
     listed = {p["name"]: p for p in admin.get("/api/people").json()["people"]}
     assert (
         admin.post(f"/api/people/{listed['carol']['id']}/email", {"email": "carol@example.com"}).status_code
         == 200
     )
     listed = {p["name"]: p for p in admin.get("/api/people").json()["people"]}
-    by_name = {n for n, p in listed.items() if not p["admin"] and p["email"] is None}
-    assert by_name == {"bob", "dave"}
+    no_email = {n for n, p in listed.items() if not p["admin"] and p["email"] is None}
+    assert no_email == {"bob", "dave"}
     for name, password in one_time.items():
-        signed_in = signin(Browser(hosted), name, password).status_code == 200
-        assert signed_in == (name in by_name), name
+        who = listed[name]["email"] or name
+        signed_in = signin(Browser(hosted), who, password).status_code == 200
+        assert signed_in == (name not in no_email), name
 
 
 def test_someone_added_by_email_signs_in_with_it(hosted: InProcBroker) -> None:
@@ -785,7 +794,8 @@ def messages(br: Browser, room: str = "build") -> list[tuple[str, str, str]]:
 async def test_a_person_renames_themselves_and_the_agents_follow(hosted: InProcBroker) -> None:
     """#114, §41: bob renames himself in Settings. His session carries on as robert; what he
     said before keeps "bob"; every open room gets "bob is now robert"; the agents' who() and
-    their next delivery name robert. With no email yet, robert signs him in and bob doesn't.
+    their next delivery name robert. He signs in with his email, as before: a name, old or new,
+    signs no one in (#240).
     A name that's another person's, an agent's, reserved or malformed is refused, and so is a
     field that isn't one of the three."""
     admin = await asyncio.to_thread(set_up, hosted)
@@ -830,9 +840,10 @@ async def test_a_person_renames_themselves_and_the_agents_follow(hosted: InProcB
         assert "alice and robert (your users, kind=human)" in who["text"], who["text"]
         got = (await agent.read("#build"))["text"]
         assert "from=robert kind=human" in got and "after" in got, got
-    # no email yet: the new name signs him in, the old one doesn't
-    assert signin(Browser(hosted), "robert", BOB_PW).json()["next"] == "app"
-    assert signin(Browser(hosted), "bob", BOB_PW).status_code == 403
+    # the email signs him in, whatever his name: neither name does
+    assert signin(Browser(hosted), "bob@example.com", BOB_PW).json()["next"] == "app"
+    for name in ("robert", "bob"):
+        assert signin(Browser(hosted), name, BOB_PW).status_code == 403, name
     people_ = admin.get("/api/people").json()["people"]
     assert [p["name"] for p in people_] == ["alice", "robert"]
 

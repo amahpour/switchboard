@@ -62,9 +62,11 @@ def is_owner_name(state: "BrokerState", name: str) -> bool:
 
 
 def account(state: "BrokerState", ident: str) -> tuple[str, "PersonRow | None"]:
-    """Who signs in as ``ident`` (#192, §39): ``("owner", None)``, ``("person", row)`` or
-    ``("none", None)``. An email is who someone is. A name still works, for now, for whoever
-    has no email yet (the grace period); ``admin`` always means the owner."""
+    """Who signs in as ``ident`` (#192, #240, §39): ``("owner", None)``, ``("person", row)`` or
+    ``("none", None)``. An email is who someone is, and ``admin`` always means the owner. Nothing
+    else signs anyone in: the grace period in which a name worked for whoever had no email yet
+    ended with #240, announced a release before. Someone with no email can't sign in until the
+    admin sets one."""
     n = ident.strip().lower()
     if not n:
         return "none", None
@@ -73,10 +75,9 @@ def account(state: "BrokerState", ident: str) -> tuple[str, "PersonRow | None"]:
             return "owner", None
         p = state.store.person_by_email(n)
         return ("person", p) if p is not None else ("none", None)
-    if n == ADMIN_ALIAS or (n == state.cfg.human_name.lower() and state.store.owner_email() is None):
+    if n == ADMIN_ALIAS:
         return "owner", None
-    p = state.store.person_named(n)
-    return ("person", p) if p is not None and p.email is None else ("none", None)
+    return "none", None
 
 
 def clean_email(raw: Any) -> tuple[str | None, str | None]:
@@ -301,12 +302,16 @@ def invite_text(
     origin: str, name: str, one_time: str, email: str | None = None, first_name: str | None = None
 ) -> str:
     """What the owner sends a new person (the admin section's Copy button): it greets them by
-    their first name, and who they sign in as is their email when they have one (#192), else
-    their name."""
-    who = f"with {email} and" if email else f"as {name} with"
+    their first name, and they sign in with their email (#192). Someone with none can't sign in
+    until the owner sets one (#240), so their invite says to wait for it."""
     hello = f"Hi {first_name}, you're invited" if first_name else "You're invited"
+    how = (
+        f"Sign in with {email} and the one-time password {one_time}"
+        if email
+        else f"Once I've set your email, sign in with it and the one-time password {one_time}"
+    )
     return (
         f"{hello} to switchboard: {origin}\n"
-        f"Sign in {who} the one-time password {one_time} (it works for 7 days).\n"
+        f"{how} (it works for 7 days).\n"
         "Right after, you choose your own password, or a passkey."
     )
