@@ -86,7 +86,7 @@ Beside these is the [security model](../CLAUDE.md#the-security-model-in-short) (
 
 ### Where the code doesn't follow them yet
 
-Each is an open issue; don't copy the pattern, and the fix removes its mention here. Harness branches outside the adapters: `agents.py`'s `join` and `hook_event` still name the scripted test agent ([#360](https://github.com/amahpour/switchboard/issues/360); session keys, binding, `mcp.hello` and attach moved to the adapters, #170).
+None now: #170 and #360 moved the last harness branches out of `agents.py` into the adapters, and `tests/unit/test_adapter_hello_attach.py` keeps the methods they left clean. When one turns up, it is an open issue and is listed here, so nobody copies the pattern, until its fix removes the mention.
 
 ## Where to read next in DESIGN.md
 

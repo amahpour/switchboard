@@ -80,6 +80,8 @@ log = logging.getLogger("switchboard.agents")
 WAIT_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 # the code at the end of a join's answer ("join yk:j<16 hex>"), given back to reclaim a name (#304)
 JOIN_CODE_RE = re.compile(r"^(?:yk:j)?([0-9a-f]{16})$")
+# the refusal for a screen name SCREEN_NAME_RE doesn't match: an example name, not a harness rule
+BAD_SCREEN_NAME = "screen names look like claude-1: a-z first, then a-z, 0-9, '_' or '-', at most 24"
 # mcp.posted err: a short code ("guard", "bad_text") or an exception type name
 POST_ERR_RE = re.compile(r"[A-Za-z0-9_]{1,40}")
 # a hook's reported model name (the hook relays only this shape too), for the report:
@@ -733,10 +735,7 @@ class AgentService:
         name = params.get("screen_name")
         name = name.strip().lower().lstrip("@") if isinstance(name, str) else ""
         if not SCREEN_NAME_RE.match(name):
-            raise ServiceError(
-                "bad_request",
-                "screen names look like claude-1: a-z first, then a-z, 0-9, '_' or '-', at most 24",
-            )
+            raise ServiceError("bad_request", BAD_SCREEN_NAME)
         human = self.cfg.human_name.lower()
         if (
             name in RESERVED_NAMES
@@ -790,7 +789,9 @@ class AgentService:
             session_id=(tid or mc.session_id),
             host=mc.ident.host,
         )
-        if h == "test" or (existing is not None and existing.hooks_seen_at is not None):
+        # a harness whose status comes from its sinks (the test agent) starts busy, as does a
+        # session whose hooks were already seen: its next hook or wait() says otherwise
+        if adapter.sink_status or (existing is not None and existing.hooks_seen_at is not None):
             fields.update(status="busy", status_at=now, status_src="join")
         elif existing is None or existing.status == "offline":
             fields.update(status="starting", status_at=now, status_src="join")
@@ -1314,10 +1315,10 @@ class AgentService:
     async def hook_event(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
         inert: dict[str, Any] = {"out": None}
         harness = params.get("harness")
-        if harness == "test" and not self.state.test_mode:
-            return inert
         if not isinstance(harness, str) or harness not in HOOK_EVENTS:
             return inert
+        if self.engine.adapter_for(harness).test_only and not self.state.test_mode:
+            return inert  # a scripted stand-in's hook counts only in test mode (§9.6)
         raw_event = params.get("event")
         event = canonical_event(raw_event if isinstance(raw_event, str) else "")
         if event not in HOOK_EVENTS[harness]:
@@ -1328,7 +1329,8 @@ class AgentService:
             if got is None:
                 return inert
             host, chain, argv_fn = got
-            if harness == "test" and not getattr(getattr(conn, "link", None), "sat_test_mode", False):
+            sat_test_mode = getattr(getattr(conn, "link", None), "sat_test_mode", False)
+            if self.engine.adapter_for(harness, host).test_only and not sat_test_mode:
                 return inert
             pid: int | None = chain[0].pid
         else:
