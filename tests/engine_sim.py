@@ -317,11 +317,18 @@ class Sim:
     def before_call(self, mem: Mem) -> None:
         self.run(self.engine.before_call(self.p(mem)))
         # an agent call confirms the session's acked stop continuations (§24): none is left
-        # offered, so a stub it carried is pending for this call's read()/pass()
+        # offered, so a stub it carried is pending for this call's read()/pass(). One whose
+        # batch a kick or leave already cancelled stays in ``continues`` on purpose, until its
+        # expiry undoes the busy it set (test_a_followup_cancelled_by_a_kick_still_undoes_its_busy),
+        # so it isn't "left offered": counting it failed seed 531 once #137 changed the order of
+        # events there.
         left = [
             bid
             for bid, c in self.engine.continues.items()
-            if c.participant_id == mem.pid and c.acked_at is not None
+            if c.participant_id == mem.pid
+            and c.acked_at is not None
+            and (b := self.store.get_batch(bid)) is not None
+            and b.state == "offered"
         ]
         assert not left, f"seed {self.seed}: {mem.name}'s call left acked continuations {left} offered"
 
