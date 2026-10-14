@@ -24,9 +24,9 @@ What it does, as ``ui_shots.py`` does for still pictures:
 - **The browser's own screencast frames,** each with the time it was drawn. Playwright's video
   recorder says nothing about when its first frame was taken, so captions drifted seconds off
   the picture; frames with their own clock line up exactly, and they are sharper.
-- **Then ffmpeg:** the sign-in is cut off the front, each step's caption is shown in a bar under
-  the page (never over it), and each click gets a ring where it landed, since a headless page
-  has no mouse pointer to see.
+- **Then ffmpeg:** the sign-in is cut off the front, each step's caption is shown in a bar above
+  the page (never over it, and not under it, where a video player's controls cover it), and each
+  click gets a ring where it landed, since a headless page has no mouse pointer to see.
 
 A scenario shows one change working, in well under a minute, at one window size (``--phone`` for
 390x844): the frames are joined at the size the recording started with, so a scenario never
@@ -344,7 +344,8 @@ def finish(stem: Path, take: Take, end: float) -> None:
         listing = work / "frames.txt"
         concat_file(frame_list(take.frames, take.start, end), listing)
         inputs = ["-f", "concat", "-safe", "0", "-i", str(listing)]
-        chain = [f"[0:v]fps={FPS},scale={w}:{h},pad={w}:{h + bar}:0:0:color={paper}[v0]"]
+        # the bar goes on top: a player's controls hang over the bottom of a video
+        chain = [f"[0:v]fps={FPS},scale={w}:{h},pad={w}:{h + bar}:0:{bar}:color={paper}[v0]"]
         last, n = "v0", 0
         steps = [(max(0.0, t - zero), text) for t, text in take.steps]
         bounds = [t for t, _ in steps[1:]] + [end - zero]
@@ -353,7 +354,7 @@ def finish(stem: Path, take: Take, end: float) -> None:
             png = work / f"caption-{n}.png"
             caption_png(text, png, w, bar)
             inputs += ["-i", str(png)]
-            chain.append(f"[{last}][{n}:v]overlay=0:{h}:enable='between(t,{t:.3f},{until:.3f})'[v{n}]")
+            chain.append(f"[{last}][{n}:v]overlay=0:0:enable='between(t,{t:.3f},{until:.3f})'[v{n}]")
             last = f"v{n}"
         if take.clicks:
             ring = work / "ring.png"
@@ -363,7 +364,7 @@ def finish(stem: Path, take: Take, end: float) -> None:
                 n += 1
                 inputs += ["-i", str(ring)]
                 chain.append(
-                    f"[{last}][{n}:v]overlay={x - RING / 2:.0f}:{y - RING / 2:.0f}:"
+                    f"[{last}][{n}:v]overlay={x - RING / 2:.0f}:{y + bar - RING / 2:.0f}:"
                     f"enable='between(t,{t:.3f},{t + RING_S:.3f})'[v{n}]"
                 )
                 last = f"v{n}"
