@@ -162,15 +162,36 @@ def version_claim(value: Any) -> str | None:
     return value if isinstance(value, str) and VERSION_RE.fullmatch(value) else None
 
 
-def name_reserved_text(name: str, room: str, code: str | None, claim: str | None) -> str:
+# Why a join code didn't bring a name back (#370), each its own words: one sentence for all of them
+# hid what to do. The ones after "mismatch" are said only to a caller whose code matched, so a
+# guess learns nothing about the name's last holder.
+RECLAIM_WHY = {
+    "no_code": "that join has no code on record: it was made before join codes could bring a name back",
+    "mismatch": (
+        "that join code isn't this name's current one: after a /clear or a compaction, switchboard's"
+        " reminder gives each room a fresh code and the earlier one stops working, so use the newest"
+        " code you were given"
+    ),
+    "kicked": "that agent was kicked from this room, so its name can't be taken back",
+    "harness": (
+        "that code is from another harness's session: a code brings a name back only to the same harness"
+    ),
+    "host": "that code is from a session on another machine: a code brings a name back only on the same one",
+    "gone": "that session is no longer on record",
+}
+
+
+def name_reserved_text(
+    name: str, room: str, code: str | None, claim: str | None, why: str | None = None
+) -> str:
     """Why a join was refused a reserved name, and what to do. The way back (``resume=``) is named
     only to a session whose MCP server has it (``claim``, its claimed version, is 0.25.0 or later):
     an older one keeps the ``join`` schema it started with and refuses the call, so it is told to
     update, and to pick another name meanwhile (#340). A caller that gave ``code`` has the
-    parameter already."""
+    parameter already, and is told why it didn't work (``why``, a ``RECLAIM_WHY`` key, #370)."""
     text = f"{name} was used by another agent in {room} today; pick another"
     if code is not None:
-        return text + " (that join code isn't this name's)"
+        return f"{text} ({RECLAIM_WHY.get(why or 'mismatch', RECLAIM_WHY['mismatch'])})"
     if has_feature(claim, "join.resume"):
         return (
             text + ", or, if it was you before a restart, join again with resume= set to"
@@ -567,23 +588,37 @@ class AgentService:
             and proc.same_start(p.mcp_start, ident.mcp_start)
         )
 
-    def _reclaim(self, holder: Membership, code: str | None, harness: str, host: str) -> Membership | None:
-        """The membership whose reserved name a join may take back (#304, DESIGN.md §6.1), or None.
+    def _reclaim(
+        self, holder: Membership, code: str | None, harness: str, host: str
+    ) -> tuple[Membership | None, str | None]:
+        """The membership whose reserved name a join may take back (#304, DESIGN.md §6.1), or None
+        with why not (a ``RECLAIM_WHY`` key, #370; None when no code was given).
 
-        Only with the code that membership's own join answer ended with, which only the session
-        that read that answer has, and only for the same harness on the same machine (so the
-        same person): never a name another session or machine used. Not from a kicked agent,
-        and not while the old membership is still in the room."""
-        if code is None or holder.join_code_hash is None or holder.active or holder.kicked:
-            return None
+        Only with the code that membership's own join answer ended with (or the newest a reminder
+        gave it), which only the session that read it has, and only for the same harness on the
+        same machine (so the same person): never a name another session or machine used. Not
+        from a kicked agent, and not while the old membership is still in the room. The code is
+        checked before anything about the holder is said, so a wrong one learns only that."""
+        if code is None:
+            return None, None
+        if holder.active:
+            return None, "mismatch"  # the caller checks this first (name_taken); never a reclaim
+        if holder.join_code_hash is None:
+            return None, "no_code"
         if not hmac.compare_digest(holder.join_code_hash, join_code_hash(code)):
-            return None
+            return None, "mismatch"
+        if holder.kicked:
+            return None, "kicked"
         old = self.store.get_participant(holder.participant_id)
-        if old is None or old.harness != harness or (old.host or "") != (host or ""):
-            return None
+        if old is None:
+            return None, "gone"
+        if old.harness != harness:
+            return None, "harness"
+        if (old.host or "") != (host or ""):
+            return None, "host"
         if self.store.was_kicked(holder.room_id, old.id):
-            return None
-        return holder
+            return None, "kicked"
+        return holder, None
 
     def _check_same_session(self, existing: Participant, mc: McpConn) -> None:
         """A re-join may take over a session's memberships (rotating the
@@ -825,9 +860,11 @@ class AgentService:
                 room.id, name, existing.id if existing else -1, now - NAME_REUSE_S
             )
             if holder is not None:
-                resumed = self._reclaim(holder, code, h, host)
+                resumed, why = self._reclaim(holder, code, h, host)
                 if resumed is None:
-                    raise ServiceError("name_reserved", name_reserved_text(name, room.name, code, mc.version))
+                    raise ServiceError(
+                        "name_reserved", name_reserved_text(name, room.name, code, mc.version, why)
+                    )
         elif cur.screen_name.lower() != name:
             raise ServiceError(
                 "bad_request",

@@ -142,7 +142,7 @@ def test_a_code_never_moves_a_name_to_another_machine_harness_or_a_kicked_agent(
     new = FakeClaude(broker, env={"CLAUDE_CODE_SESSION_ID": RESTARTED})
     try:
         r = new.tool("join", room="#build", screen_name="bench", resume="yk:j" + "ab" * 8)
-        assert r["code"] == "name_reserved", r
+        assert r["code"] == "name_reserved" and "on another machine" in r["error"], r
 
         async def other_harness() -> dict[str, Any]:
             async with FakeAgent(broker.home, "k9") as a:  # the test harness, not claude
@@ -151,7 +151,7 @@ def test_a_code_never_moves_a_name_to_another_machine_harness_or_a_kicked_agent(
         import asyncio
 
         r = asyncio.run(other_harness())
-        assert r["code"] == "name_reserved", r
+        assert r["code"] == "name_reserved" and "another harness" in r["error"], r
         st.con.execute(
             "UPDATE memberships SET kicked=1 WHERE participant_id=? AND room_id="
             "(SELECT id FROM rooms WHERE name='#docs')",
@@ -159,9 +159,33 @@ def test_a_code_never_moves_a_name_to_another_machine_harness_or_a_kicked_agent(
         )
         st.con.commit()
         r = new.tool("join", room="#docs", screen_name="planner", resume=codes["#docs"])
-        assert r["code"] == "name_reserved", r
+        assert r["code"] == "name_reserved" and "was kicked" in r["error"], r
+        # a wrong code learns nothing about the holder: not that it was kicked (#370)
+        r = new.tool("join", room="#docs", screen_name="planner", resume="yk:j" + "0" * 16)
+        assert r["code"] == "name_reserved" and "current one" in r["error"], r
+        assert "kicked" not in r["error"], r
         r = new.tool("join", room="#build", screen_name="planner", resume=codes["#build"])
         assert r["ok"], r  # the right code, same machine and harness, not kicked here
+    finally:
+        new.close()
+
+
+def test_a_join_from_before_join_codes_says_so(broker: InProcBroker) -> None:
+    """#370: a membership with no join code on record (made before join codes could bring a name
+    back) refused every code with the same words as a wrong one, so the agent couldn't tell its
+    code was fine and the name simply can't come back. It now says so. Fails if the refusal still
+    reads as a wrong code."""
+    st = broker.state.store
+    old = st.upsert_participant("claude", session_key("claude", "", "s-old"))
+    room = st.get_room("#build")
+    assert room is not None
+    gone = st.create_membership(room.id, old.id, "planner", cred_hash("x"), None)
+    st.con.execute("UPDATE memberships SET left_at=? WHERE id=?", (st.clock.now(), gone.id))
+    st.con.commit()
+    new = FakeClaude(broker, env={"CLAUDE_CODE_SESSION_ID": RESTARTED})
+    try:
+        r = new.tool("join", room="#build", screen_name="planner", resume="yk:j" + "ab" * 8)
+        assert r["code"] == "name_reserved" and "no code on record" in r["error"], r
     finally:
         new.close()
 
