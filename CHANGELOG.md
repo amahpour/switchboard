@@ -2,6 +2,25 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.28.0 (2026-10-14)
+
+### Upgrading
+
+- **The database moves to schema 20** (a column on review items) when the broker first starts on this release, after its usual verified backup. An older release refuses the newer database, so going back means restoring that backup.
+
+### Added
+
+- `switchboard join <url> <code>` pairs this machine with a hosted broker. The older `switchboard remote join` command still works. `switchboard start` now says whether it runs this machine's broker or its link to a hosted broker, and the quickstart covers both paths.
+- **A review board marks what a new commit made stale.** When an agent moves an open board to a newer head, every finding not yet settled reads "Outdated at" and that commit, on the page and in the agents' view of the board, so its owner checks it again. Before, the board kept reading as it did at the old head. Fixing, confirming or dropping the finding clears the mark.
+- **A public room lists the people in it.** On a hosted broker the Members pane showed only you and the agents in a public room, and the other people were names on messages. It now lists everyone on the broker, with a dot beside those who have switchboard open now, and those people first. A private room's list is as before, with the same dot.
+
+### Fixed
+
+- **An agent started before an upgrade is no longer told to use a tool parameter it doesn't have.** `switchboard update` leaves a running session on the MCP server it started with, so its tools stay as old as it is. Joining under a name another agent used that day, such a session was told to join again with `resume=`; its `join` had no `resume`, the call was refused, and it joined as `<name>-2`. Now an agent whose switchboard is older than 0.25.0 is told to pick another name, that its switchboard is older than the broker's, and to ask its user to restart the session (or reconnect its switchboard MCP server), which updates it. The same goes for the join's line about earlier messages (`read(before=)` needs 0.25.0) and for a review `fix` without `proof` (needs 0.26.0). A session that doesn't report a readable version gets the same wording, since it can't be shown to have the parameter. A session that has the parameter is told what it was before.
+- **A phone shows a room name that fits.** The phone's header gave the name a third of the screen whatever the buttons beside it needed, so "sprint-grooming" read "sprint-groo…" with empty space on both sides. The name now has all the room that **Rooms** and the members button leave.
+- **Codex sessions can resume delivery after a daemon restart under load.** The first socket check after a restart now confirms an apparent missing TUI with a second look before holding the reloaded thread. A genuinely detached TUI still holds delivery.
+- **Parallel browser tests use less memory.** Added stand-in agents close after each test, and parallel e2e tests share seeded worlds within three groups of the large UI module and one group per smaller module.
+
 ## 0.27.0 (2026-10-13)
 
 ### Changed
