@@ -29,7 +29,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -205,6 +205,7 @@ CREATE TABLE review_items(
   proof TEXT NOT NULL DEFAULT '' CHECK(length(proof) <= 500),
   confirmed_by TEXT NOT NULL DEFAULT '' CHECK(length(confirmed_by) <= 100),
   outdated_head TEXT NOT NULL DEFAULT '' CHECK(length(outdated_head) <= 64),
+  deferred_to TEXT NOT NULL DEFAULT '' CHECK(length(deferred_to) <= 200),
   UNIQUE(review_id, kind, n));
 
 CREATE TABLE claims(
@@ -474,6 +475,14 @@ V21_TO_V22 = (
     "UPDATE meta SET value='22' WHERE key='schema_version'",
 )
 
+# v22 -> v23 (#371, DESIGN.md §37.2): a finding deferred to a follow-up ticket. It is a dropped
+# finding with the ticket it went to, so everything that settles a dropped one settles it too.
+V22_TO_V23 = (
+    "ALTER TABLE review_items ADD COLUMN deferred_to TEXT NOT NULL DEFAULT ''"
+    " CHECK(length(deferred_to) <= 200)",
+    "UPDATE meta SET value='23' WHERE key='schema_version'",
+)
+
 
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
@@ -500,6 +509,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         19: (20, V19_TO_V20, ()),
         20: (21, V20_TO_V21, ("claims",)),
         21: (22, V21_TO_V22, ("pins",)),
+        22: (23, V22_TO_V23, ()),
     }
     out = []
     v = frm

@@ -55,6 +55,8 @@ AGENT_MOVES = {
     "fix": (frozenset({"conceded"}), "fixed"),
     "drop": (frozenset({"raised", "contested", "conceded"}), "dropped"),
     "confirm": (frozenset({"fixed"}), "fixed"),
+    # to a follow-up ticket: settled for this pull request, stored as dropped with the ticket (#371)
+    "defer": (frozenset({"raised", "contested", "conceded"}), "dropped"),
 }
 PERSON_MOVES = {
     # from conceded: a person reassigns its owner (#371)
@@ -63,6 +65,7 @@ PERSON_MOVES = {
     "answer": (frozenset({"open"}), "answered"),
     # a person's ruling that it's fixed, and so settled: confirmed by them (#371)
     "fix": (frozenset({"conceded"}), "fixed"),
+    "defer": (frozenset({"raised", "contested", "conceded"}), "dropped"),
 }
 
 
@@ -98,6 +101,8 @@ class Item:
     proof: str = ""
     confirmed_by: str = ""
     outdated_head: str = ""
+    # a dropped finding deferred to this follow-up ticket (#371): settled, but not withdrawn
+    deferred_to: str = ""
 
     @property
     def label(self) -> str:
@@ -250,6 +255,7 @@ HISTORY_VERBS = {
     "fixed": "fixed it",
     "confirmed": "confirmed it",
     "dropped": "dropped it",
+    "deferred": "deferred it to a ticket",
     "answered": "answered it",
 }
 MAX_HISTORY = 12
@@ -324,8 +330,8 @@ def agent_move(item: Item, move: str, actor: str, owner_here: bool = True) -> st
                 f' over first with review(action="concede", item="{item.label}")'
             )
         raise ReviewError(f"{item.label} is {item.owner}'s to fix")
-    if move == "drop" and actor != item.raised_by:
-        raise ReviewError(f"only {item.raised_by}, who raised {item.label}, or a person can drop it")
+    if move in ("drop", "defer") and actor != item.raised_by:
+        raise ReviewError(f"only {item.raised_by}, who raised {item.label}, or a person can {move} it")
     if move == "confirm":
         if item.confirmed_by:
             raise ReviewError(f"{item.label} is already confirmed by {item.confirmed_by}")

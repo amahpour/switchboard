@@ -2477,7 +2477,9 @@ class Store:
         return item
 
     def move_review_item(self, item_id: int, state: str, **fields: Any) -> None:
-        allowed = {"owner", "commit_sha", "proof", "confirmed_by", "reason", "answer", "answered_by"}
+        allowed = {
+            "owner", "commit_sha", "proof", "confirmed_by", "reason", "answer", "answered_by", "deferred_to"
+        }
         if set(fields) - allowed:
             raise ValueError(f"unknown review item fields: {sorted(set(fields) - allowed)}")
         clear_outdated = state in ("fixed", "dropped")
@@ -2625,6 +2627,7 @@ def _review_item(r: sqlite3.Row) -> reviews.Item:
         proof=r["proof"],
         confirmed_by=r["confirmed_by"],
         outdated_head=r["outdated_head"],
+        deferred_to=r["deferred_to"],
         reason=r["reason"],
         options=opts,
         recommend=r["recommend"],
