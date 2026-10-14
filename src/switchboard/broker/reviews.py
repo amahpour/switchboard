@@ -275,7 +275,10 @@ class Boards:
             fields = {"confirmed_by": name}
             said = "confirmed"
         elif action == "defer":
-            ticket = reviews.text(params.get("ticket"), "ticket", reviews.MAX_TICKET, required=True)
+            # the ticket comes as the reason, as from an agent: the route takes only the fields it lists
+            ticket = reviews.text(
+                params.get("reason"), "reason (the follow-up ticket)", reviews.MAX_TICKET, required=True
+            )
             fields = {"deferred_to": ticket, "reason": ""}
             said = f"deferred to {ticket}"  # their own words, like a drop's reason
         elif action == "fix":

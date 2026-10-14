@@ -234,7 +234,9 @@ async def test_findings_deferred_to_a_ticket_settle_the_board(broker: InProcBrok
             r = await reviewer.call("review", room="#build", action="defer", item="F1", reason="SHOP-123")
             assert r["ok"] and "deferred to SHOP-123" in r["board"], r
             r = web.post(
-                path, json={"action": "defer", "item": "F2", "ticket": "SHOP-124"}, headers=broker.write_headers()
+                path,
+                json={"action": "defer", "item": "F2", "reason": "SHOP-124"},
+                headers=broker.write_headers(),
             )
             assert r.status_code == 200, r.text
             board = r.json()["board"]

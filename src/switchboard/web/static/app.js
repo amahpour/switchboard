@@ -5573,7 +5573,7 @@
       defer.addEventListener('click', function () {
         const key = String(ticket.value || '').trim();
         if (!key) { ticket.focus(); return; }
-        boardMove({ action: 'defer', item: i.label, ticket: key });
+        boardMove({ action: 'defer', item: i.label, reason: key });  // the ticket, as the reason
       });
       const set = el('div', 'board-action-set');
       set.append(tlabel, defer);
