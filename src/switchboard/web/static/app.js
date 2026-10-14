@@ -55,6 +55,7 @@
     // name -> { name, slug, id, createdAt, lastId, msgs: [], members: [], settings: {},
     //           unread: 0 (addressed to me: the red count), quiet: false (other new agent chat) }
     rooms: new Map(),
+    pinsOpen: false,   // the header's pinned list is open (#292)
     closed: 0,         // how many closed rooms there are (GET /api/rooms), for the Closed row
     closedRooms: [],   // GET /api/closed-rooms, as the Closed sheet shows it
     active: null,
@@ -496,6 +497,8 @@
     pause: 'M5.5 3.5v9M10.5 3.5v9',
     play: 'M5 3.5v9l7-4.5-7-4.5Z',
     sidebar: rr(2, 3, 12, 10, 2) + 'M10 3v10',
+    // a thumbtack, for a pinned message (#292)
+    pin: 'M5.5 2.5h5M6.3 2.5l-.4 4L4 8.3v.7h8v-.7l-1.9-1.8-.4-4M8 9v4.5',
     people: circ(6, 5, 2.5) + 'M1.5 13.5c.4-2.4 2.3-3.8 4.5-3.8s4.1 1.4 4.5 3.8M10.5 2.7a2.5 2.5 0 0 1 0 4.6M12 9.9c1.4.5 2.3 1.7 2.5 3.6',
     at: circ(8, 8, 2.5) + 'M10.5 8v1a2 2 0 0 0 4 0V8a6.5 6.5 0 1 0-2.6 5.2',
     slash: rr(2, 2, 12, 12, 3) + 'M9.8 5 6.2 11',
@@ -584,7 +587,7 @@
     let r = state.rooms.get(name);
     if (!r) {
       r = { name: name, slug: name.replace(/^#/, ''), lastId: 0, msgs: [], members: [], settings: {}, rules: '',
-        unread: 0, quiet: false };
+        pins: [], unread: 0, quiet: false };
       state.rooms.set(name, r);
     }
     return r;
@@ -795,6 +798,108 @@
     return meta;
   }
 
+  // ----------------------------------------------------------- pinned decisions (#292, §47)
+  // A person pins a chat message: every agent that joins is shown it, and the room's header lists
+  // it. The button is the same as typing /pin <id>, and goes through it, so the broker's rules
+  // (a person's web session, at most five) are the only ones. The buttons and the strip follow the
+  // broker's `pins` frames, never what a click expects.
+  function isPinned(r, id) {
+    return !!r && Array.isArray(r.pins) && r.pins.some(function (p) { return p.id === id; });
+  }
+
+  // aria-pressed says which; the label stays one thing, so a screen reader doesn't hear both
+  function setPinState(b, on, id) {
+    b.setAttribute('aria-pressed', String(on));
+    b.title = on ? 'Pinned: click to unpin' : 'Pin: agents that join are shown it first';
+    b.dataset.pin = String(id);
+  }
+
+  // a chat row's pin button (the last thing in the row, out of the grid: style.css) and its mark
+  function withPin(line, r, m) {
+    line.classList.toggle('is-pinned', isPinned(r, m.id));
+    line.append(pinButton(r, m.id));
+    return line;
+  }
+
+  function pinButton(r, id) {
+    const b = btn('msg-pin');
+    b.setAttribute('aria-label', 'Pin message ' + id);
+    b.append(icon('pin'));
+    setPinState(b, isPinned(r, id), id);
+    b.addEventListener('click', function () {
+      setPinned(r, id, b.getAttribute('aria-pressed') !== 'true');
+    });
+    return b;
+  }
+
+  async function setPinned(r, id, on) {
+    try {
+      await api('POST', '/api/rooms/' + encodeURIComponent(r.slug) + '/command', { text: (on ? '/pin ' : '/unpin ') + id });
+    } catch (e) {
+      renderLocal(String(e.message || e), true);  // a sixth pin says to unpin one first
+    }
+  }
+
+  // the rows on screen, after the room's pins changed: in place, so focus stays where it is
+  function markPinned(r) {
+    for (const row of $('log').children) {
+      if (!row.classList || !row.classList.contains('k-chat')) continue;
+      const id = Number(row.dataset.id);
+      row.classList.toggle('is-pinned', isPinned(r, id));
+      for (const b of row.children) {
+        if (b.classList && b.classList.contains('msg-pin')) setPinState(b, isPinned(r, id), id);
+      }
+    }
+  }
+
+  // the room's pins in the header: a count and the newest pin on one line, opened to a list of
+  // each with a link to its message and Unpin. A pin's text is the sender's: textContent only.
+  function renderPins() {
+    const r = activeRoom();
+    const box = $('pins');
+    const pins = r && Array.isArray(r.pins) ? r.pins : [];
+    const focused = focusKey(box);
+    box.classList.toggle('hidden', pins.length === 0);
+    const list = $('pins-list');
+    list.replaceChildren();
+    if (!pins.length) {
+      if (focused) tryFocus($('input'));
+      return;
+    }
+    const open = !!state.pinsOpen;
+    const toggle = $('pins-toggle');
+    toggle.setAttribute('aria-expanded', String(open));
+    $('pins-count').textContent = 'Pinned (' + pins.length + ')';
+    const newest = pins[pins.length - 1];
+    $('pins-peek').textContent = label(newest.from, newest.host) + ': ' + firstLine(newest.text, 100);
+    list.classList.toggle('hidden', !open);
+    for (const p of pins) {
+      const li = el('li', 'pin-row');
+      li.dataset.id = String(p.id);
+      const who = label(p.from, p.host);
+      const link = btn('pin-link');
+      link.dataset.focus = 'pin-link:' + p.id;
+      const snippet = firstLine(p.text, 160);
+      link.append(avatar(p.harness, p.sender_kind, p.from, 'mini'), el('span', 'pin-from', who), el('span', 'pin-text', snippet));
+      link.setAttribute('aria-label', 'Go to message ' + p.id + ' from ' + who + ': ' + snippet);
+      link.title = p.text + (p.cut ? '…' : '') + '\n#' + p.id + ' · pinned by ' + p.pinned_by;
+      link.addEventListener('click', function () { jumpToPin(r, p.id); });
+      const un = btn('btn btn-ghost-sm pin-unpin', 'Unpin');
+      un.dataset.focus = 'pin-unpin:' + p.id;
+      un.setAttribute('aria-label', 'Unpin message ' + p.id);
+      un.addEventListener('click', function () { setPinned(r, p.id, false); });
+      li.append(link, un);
+      list.append(li);
+    }
+    // an Unpin that took its row with it hands the focus to the strip's own button
+    if (focused && !refocus(box, focused) && !refocus(box, 'pins-toggle')) tryFocus(toggle);
+  }
+
+  function jumpToPin(r, id) {
+    if ($('log').querySelector('[data-id="' + String(id) + '"]')) jumpTo(id);
+    else renderLocal('Message #' + id + ' is older than the history this page has loaded.');
+  }
+
   function inspectedLabel() {
     const ins = state.inspect;
     if (!ins || ins.room !== state.active) return null;
@@ -887,7 +992,7 @@
     if (isCont(prev, m)) {
       line.classList.add('cont');
       line.append(messageMeta(m, true), mdBody(m.text, m.mentions));
-      return line;
+      return withPin(line, r, m);
     }
     const reply = m.reply_to ? replyLine(r, m) : null;
     if (reply) {
@@ -917,7 +1022,7 @@
     head.append(messageMeta(m, false));
     body.append(head, mdBody(m.text, m.mentions));
     line.append(body);
-    return line;
+    return withPin(line, r, m);
   }
 
   // One log row for a message. `live` is true when appendMsg adds it as it arrives:
@@ -1016,6 +1121,7 @@
     composerPlaceholder();
     updateRoomEmpty();
     renderRows(r);
+    renderPins();
     log.scrollTop = log.scrollHeight;
   }
 
@@ -2087,6 +2193,11 @@
       usage: '/hops   /hops <n>   (0–1000, 0 turns it off)', detail: 'A new limit never lifts a loop-guard pause: /resume does.', live: 'hops' },
     { group: 'Room', cmd: 'close', args: '', desc: 'Close the room; the history is kept', pill: '', usage: '/close',
       detail: 'Asks first. Reopen it from Closed rooms.' },
+    { group: 'Room', cmd: 'pin', args: '<id>', desc: 'Pin a message for every agent that joins', pill: 'web only',
+      usage: '/pin <id>   (the #number on a message)',
+      detail: 'Up to five. Agents that join are shown it, and /catchup carries it. Agents can’t pin.' },
+    { group: 'Room', cmd: 'unpin', args: '<id>', desc: 'Unpin a message', pill: '', usage: '/unpin <id>',
+      detail: 'It stays in the history; agents that join no longer see it first.' },
     { group: 'Agents', cmd: 'hold', args: '<name>', desc: 'Stop delivery to one agent', pill: '', usage: '/hold <name>',
       detail: 'Nothing is dropped: held messages go out on /release.' },
     { group: 'Agents', cmd: 'release', args: '<name>', desc: 'Resume delivery to a held agent', pill: 'web only', usage: '/release <name>',
@@ -2594,6 +2705,13 @@
       if (!r) return;
       r.settings = f.settings || {};
       if (f.room === state.active) renderStatus();
+    } else if (f.t === 'pins') {
+      if (!r) return;
+      r.pins = Array.isArray(f.pins) ? f.pins : [];
+      if (f.room === state.active) {
+        renderPins();
+        markPinned(r);
+      }
     } else if (f.t === 'notice') {
       if (!f.room || f.room === state.active) renderLocal(f.text, f.level === 'warn');
     } else if (f.t === 'rooms') {
@@ -5746,6 +5864,7 @@
       r.createdAt = l.created_at;
       r.settings = l.settings || {};
       r.rules = l.rules || '';
+      r.pins = Array.isArray(l.pins) ? l.pins : [];  // the room's pinned messages (#292)
       r.private = !!l.private;  // seen only by its people (§44)
       r.people = Array.isArray(l.people) ? l.people : null;
     }
@@ -5773,6 +5892,10 @@
 
   async function boot() {
     bindInput();
+    $('pins-toggle').addEventListener('click', function () {
+      state.pinsOpen = !state.pinsOpen;
+      renderPins();
+    });
     keepLogPinned();
     try {
       state.me = await api('GET', '/api/me');

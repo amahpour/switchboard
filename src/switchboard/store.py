@@ -565,7 +565,7 @@ class Store:
         ).fetchone()
         return int(r[0])
 
-    # ------------------------------------------------------------ pinned decisions (#292, §45)
+    # ------------------------------------------------------------ pinned decisions (#292, §47)
     def pins(self, room_id: int) -> list[Pin]:
         """A room's pins, in message order (the order they were said in)."""
         rows = self.con.execute(

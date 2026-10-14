@@ -148,7 +148,7 @@ PIN_TEXT_MAX = 300  # a pin's text in the room header: the strip shows its first
 
 
 def pin_dict(p: Pin) -> dict[str, Any]:
-    """One pinned message as the web UI's header strip shows it (#292, DESIGN.md §45): who said
+    """One pinned message as the web UI's header strip shows it (#292, DESIGN.md §47): who said
     it, who pinned it, and its text display-cleaned and cut (the message itself has the rest)."""
     m = p.message
     text = clean(m.text)
@@ -321,7 +321,7 @@ class RoomService:
             "people": self.room_people_names(room) if room.private else None,
         }
 
-    # ------------------------------------------------------ pinned decisions (#292, §45)
+    # ------------------------------------------------------ pinned decisions (#292, §47)
     def pins_payload(self, room: Room) -> list[dict[str, Any]]:
         return [pin_dict(p) for p in self.store.pins(room.id)]
 

@@ -266,7 +266,7 @@ class Message:
         )
 
 
-MAX_PINS = 5  # a room's pinned decisions (#292, DESIGN.md §45)
+MAX_PINS = 5  # a room's pinned decisions (#292, DESIGN.md §47)
 
 
 @dataclass(frozen=True)

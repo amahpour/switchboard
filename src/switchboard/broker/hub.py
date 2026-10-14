@@ -68,7 +68,7 @@ class WsSubscriber(Subscriber):
     """A browser WebSocket. Frames are the §5.5 server->client shapes, plus ``remotes``:
     every remote link's state, for the header chips and the remotes panel (§27.11), and
     ``machines``: every machine that dials in (§31.7), ``people``: everyone on a hosted
-    broker and who has a page open (§44.8), and ``pins``: a room's pinned decisions (§45)."""
+    broker and who has a page open (§44.8), and ``pins``: a room's pinned decisions (§47)."""
 
     kinds: frozenset[str] = Subscriber.kinds | {"remotes", "machines", "review", "people", "pins"}
 
@@ -150,7 +150,7 @@ class Hub:
         return self.publish("review", room, {"board": board})
 
     def pins(self, room: str, pins: list[dict[str, Any]]) -> int:
-        """A room's pinned messages after a pin or an unpin (§45); the web UI subscribes to it."""
+        """A room's pinned messages after a pin or an unpin (§47); the web UI subscribes to it."""
         return self.publish("pins", room, {"pins": pins})
 
     def unsubscribe_person(self, room: str, person: int) -> None:

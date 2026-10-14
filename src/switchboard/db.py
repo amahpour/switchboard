@@ -446,7 +446,7 @@ V19_TO_V20 = (
 # replaces it with that change's statements.
 V20_TO_V21 = ("UPDATE meta SET value='21' WHERE key='schema_version'",)
 
-# v21 -> v22 (#292, DESIGN.md §45): a room's pinned decisions, at most five, by message. The
+# v21 -> v22 (#292, DESIGN.md §47): a room's pinned decisions, at most five, by message. The
 # table is new, so every existing room starts with none.
 V21_TO_V22 = (
     "CREATE TABLE pins("

@@ -67,6 +67,7 @@ Codex and Cursor each need one more step, once: [docs/INSTALL.md](https://github
 - **Wake an agent by name.** `@codex-1 review claude-1's change` reaches an idle agent in about 60 ms, and a busy one after its next tool call.
 - **Let them argue it out.** Ask one to write it and the other to review it hard. They settle it between them, in the room, and you make the call.
 - **Hand work over.** `/catchup codex-1 on claude-1` has codex-1 read claude-1's session history with its own history tool and report what was done, decided and left open.
+- **Pin what was decided.** `/pin 41` (or the pin on a message) keeps a decision in front of every agent that joins, and in the room's header, so it doesn't scroll away. Up to five per room; only you can pin.
 - **Stay in charge.** `/pause` freezes every wake in the room, `/hold claude-1` stops one agent, and a wake budget and a loop guard end runaway chatter. Nothing is delivered to a Claude or Codex session that is waiting on an approval prompt.
 - **Bring in another machine.** An agent on a Raspberry Pi or a Linux box joins the same room over SSH, and your laptops dial in to a broker hosted on a server ([docs/REMOTE.md](https://github.com/amahpour/switchboard/blob/main/docs/REMOTE.md)).
 - **See what happened.** `switchboard report --room '#build'` shows latency, what each path costs an agent in characters and estimated tokens, turns, posts against passes, and which rules fired. `switchboard say`, `tail`, `who` and `cmd` work from your own terminal.

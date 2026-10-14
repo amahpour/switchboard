@@ -1,4 +1,4 @@
-"""Pinned decisions on a real broker (#292, DESIGN.md §45): a person pins a chat message with
+"""Pinned decisions on a real broker (#292, DESIGN.md §47): a person pins a chat message with
 ``/pin <id>``, at most five per room; every page is told; an agent that joins is shown them in
 a "Pinned (N)" block inside the join's size budget, each as a catch-up line so a peer's text stays
 a peer's; ``/catchup`` carries them; and an agent can't pin."""
