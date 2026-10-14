@@ -22,6 +22,7 @@ MAX_DETAIL = 4000
 MAX_FILE = 300
 MAX_LINES = 40
 MAX_REASON = 500
+MAX_TICKET = 200  # a follow-up ticket's key or link, for a deferred finding (#371)
 MAX_PROOF = 500
 MAX_OPTION = 200
 MAX_OPTIONS = 4
@@ -441,7 +442,9 @@ def render(review: dict[str, Any], items: list[Item]) -> str:
             "fixed": f"fixed by {i.owner}"
             + (f" in {i.commit[:12]}" if i.commit else "")
             + (f", confirmed by {i.confirmed_by}" if i.confirmed_by else ", awaiting confirmation"),
-            "dropped": "dropped" + (f": {i.reason}" if i.reason else ""),
+            "dropped": f"deferred to {i.deferred_to}"
+            if i.deferred_to
+            else "dropped" + (f": {i.reason}" if i.reason else ""),
             "open": "for a person: "
             + " | ".join(
                 f"{n}. {o}{' (recommended)' if n == i.recommend else ''}" for n, o in enumerate(i.options)
@@ -485,13 +488,15 @@ def handoff_plan(
                 outcome += f"; proof: {i.proof}"
         elif i.state == "answered":
             outcome = f"Answered: {i.title} — {i.answer}"
+        elif i.deferred_to:
+            outcome = f"Deferred: {i.title} — to {i.deferred_to}"
         else:
             outcome = f"Dropped: {i.title}" + (f" — {i.reason}" if i.reason else "")
         lines.append(f"- {i.label} {outcome}")
     decisions: dict[str, list[str]] = {}
     for event in events:
         data = event.get("data") or {}
-        if data.get("to") not in ("conceded", "dropped", "confirmed"):
+        if data.get("to") not in ("conceded", "dropped", "confirmed", "deferred"):
             continue
         label, actor = data.get("item"), data.get("by")
         if not isinstance(label, str) or not isinstance(actor, str):
@@ -512,7 +517,15 @@ def handoff_plan(
             if i.commit
             else f"Fixed, on {i.confirmed_by}'s say."
         )
-        result = fixed if i.state == "fixed" else f"Dropped: {i.reason}." if i.state == "dropped" else ""
+        result = (
+            fixed
+            if i.state == "fixed"
+            else f"Deferred to {i.deferred_to}."
+            if i.deferred_to
+            else f"Dropped: {i.reason}."
+            if i.state == "dropped"
+            else ""
+        )
         comments.append(
             {
                 "item": i.label,

@@ -40,7 +40,7 @@ def test_v19_review_findings_gain_an_empty_outdated_head_after_backup(tmp_path: 
 
     migrated = db.open_db(path)
     fresh = db.open_db(tmp_path / "fresh.db")
-    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 22
+    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 23
     assert db.row_counts(migrated, db.V20_TABLES) == before
     assert tuple(migrated.execute("SELECT title, outdated_head FROM review_items").fetchone()) == (
         "old finding",

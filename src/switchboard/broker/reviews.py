@@ -19,7 +19,7 @@ from switchboard.reviews import ReviewError
 
 log = logging.getLogger(__name__)
 
-ACTIONS = ("open", "show", "raise", "ask", "concede", "contest", "fix", "confirm", "drop")
+ACTIONS = ("open", "show", "raise", "ask", "concede", "contest", "fix", "confirm", "drop", "defer")
 
 
 class Boards:
@@ -109,8 +109,22 @@ class Boards:
             fields["confirmed_by"] = actor
         elif action in ("contest", "drop"):
             fields["reason"] = reviews.text(params.get("reason"), "reason", reviews.MAX_REASON, required=True)
+        elif action == "defer":
+            # the follow-up ticket comes as the reason: the tool's list has no room for a field (#371)
+            fields["deferred_to"] = reviews.text(
+                params.get("reason"), "reason (the follow-up ticket)", reviews.MAX_TICKET, required=True
+            )
+            fields["reason"] = ""
         self.store.move_review_item(item.id, to, **fields)
-        shown = "confirmed" if action == "confirm" else "reassigned" if reassigned else to
+        shown = (
+            "confirmed"
+            if action == "confirm"
+            else "reassigned"
+            if reassigned
+            else "deferred"
+            if action == "defer"
+            else to
+        )
         self.store.add_event("review", room_id=room.id, data={"item": item.label, "to": shown, "by": actor})
         moved = self.store.review_item(rv["id"], kind, n)
         assert moved is not None
@@ -120,6 +134,7 @@ class Boards:
                 room, moved, actor, f"{actor} moved {item.label} from {item.owner}{gone} to {fields['owner']}"
             )
         tail = {
+            "deferred": f" to {fields.get('deferred_to')}",
             "conceded": f", owner {fields.get('owner')}",
             "fixed": f" in {fields.get('commit_sha', '')[:12]}",
             "contested": ": a person decides",
@@ -225,8 +240,8 @@ class Boards:
             return self._handoff(room, rv, name, person_id, params)
         if rv["posted_at"] is not None:
             raise ReviewError("this board was already handed off: no more moves")
-        if action not in ("answer", "concede", "confirm", "drop", "fix"):
-            raise ReviewError("action must be answer, concede, confirm, fix, drop, handoff or close")
+        if action not in ("answer", "concede", "confirm", "drop", "fix", "defer"):
+            raise ReviewError("action must be answer, concede, confirm, fix, drop, defer, handoff or close")
         kind, n = reviews.parse_label(params.get("item"))
         item = self.store.review_item(rv["id"], kind, n)
         if item is None:
@@ -259,6 +274,10 @@ class Boards:
         elif action == "confirm":
             fields = {"confirmed_by": name}
             said = "confirmed"
+        elif action == "defer":
+            ticket = reviews.text(params.get("ticket"), "ticket", reviews.MAX_TICKET, required=True)
+            fields = {"deferred_to": ticket, "reason": ""}
+            said = f"deferred to {ticket}"  # their own words, like a drop's reason
         elif action == "fix":
             # a person's ruling that it's fixed: settled at once, with the commit when they give one
             commit = reviews.head(params.get("commit"))
@@ -277,7 +296,13 @@ class Boards:
             room_id=room.id,
             data={
                 "item": item.label,
-                "to": "confirmed" if action == "confirm" else "reassigned" if reassigned else to,
+                "to": "confirmed"
+                if action == "confirm"
+                else "reassigned"
+                if reassigned
+                else "deferred"
+                if action == "defer"
+                else to,
                 "by": name,
                 "person": True,
             },
@@ -357,6 +382,7 @@ def action_past(action: str) -> str:
         "fix": "fixed",
         "confirm": "confirmed",
         "drop": "dropped",
+        "defer": "deferred",
     }[action]
 
 
@@ -382,6 +408,7 @@ def item_dict(
         "proof": i.proof,
         "confirmed_by": i.confirmed_by,
         "outdated_head": i.outdated_head,
+        "deferred_to": i.deferred_to,
         "reason": i.reason,
         "options": list(i.options),
         "recommend": i.recommend,

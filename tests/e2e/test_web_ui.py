@@ -2802,6 +2802,25 @@ def test_a_person_reassigns_a_finding_rules_it_fixed_and_the_owner_isnt_its_rais
     expect(chat_row(page, "Review board: F3 marked")).to_contain_text("marked fixed")
 
 
+def test_a_person_defers_a_finding_to_a_follow_up_ticket(ui: UI) -> None:
+    """#371: Defer settles a finding for this pull request with the ticket it goes to, shown as
+    "Deferred to" (not struck out like a drop). It needs the ticket first. Fails without the
+    action, or if the card reads as dropped."""
+    page = review_room(ui, "e2e-board-defer")
+    page.click("#board-toggle")
+    page.click('#board .board-card[data-item="F3"]')
+    page.click("#board-defer")
+    expect(page.locator("#board-ticket")).to_be_focused()  # no ticket yet: nothing is sent
+    page.fill("#board-ticket", "SHOP-123")
+    page.click("#board-defer")
+    card = page.locator('#board .lane-settled .board-card[data-item="F3"]')
+    expect(card).to_contain_text("Deferred to SHOP-123")
+    expect(card.locator(".board-state")).to_have_text("Deferred")
+    expect(card).not_to_have_class(re.compile(r"\bdropped\b"))
+    page.click("#board-toggle")
+    expect(chat_row(page, "Review board: F3 deferred")).to_contain_text("deferred to SHOP-123")
+
+
 def test_dropping_needs_a_reason_and_closing_asks_first(ui: UI) -> None:
     page = review_room(ui, "e2e-board-drop")
     page.click("#board-toggle")

@@ -545,3 +545,22 @@ def test_a_persons_fix_reads_right_in_the_handoff() -> None:
     )
     assert "- F1 Fixed: off by one, on alice's say" in plan["summary"], plan["summary"]
     assert "commit " not in plan["summary"]
+
+
+def test_a_finding_is_deferred_by_its_raiser_or_a_person_and_settles() -> None:
+    """#371: findings agreed for a follow-up ticket had no outcome: fix needs a commit, and drop
+    says the raiser withdrew it. Defer settles it for this pull request, by its raiser (like a
+    drop) or a person, and the board and the handoff say where it went."""
+    f = finding("conceded", raised_by="codex-1", owner="claude-1")
+    assert reviews.agent_move(f, "defer", "codex-1") == "dropped"
+    with pytest.raises(ReviewError, match="or a person can defer it"):
+        reviews.agent_move(f, "defer", "claude-1")
+    assert reviews.person_move(f, "defer") == "dropped"
+    with pytest.raises(ReviewError):
+        reviews.person_move(finding("fixed"), "defer")
+    deferred = replace(f, state="dropped", deferred_to="SHOP-123")
+    assert reviews.settled([deferred])
+    text = reviews.render({"url": "https://example.com/shop/pull/7", "head": "", "posted_by": None}, [deferred])
+    assert "deferred to SHOP-123" in text, text
+    plan = reviews.handoff_plan([deferred], [])
+    assert "- F1 Deferred: off by one — to SHOP-123" in plan["summary"], plan["summary"]

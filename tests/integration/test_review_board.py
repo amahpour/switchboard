@@ -214,6 +214,38 @@ async def test_a_board_from_371_reaches_settled(broker: InProcBroker) -> None:
         web.close()
 
 
+async def test_findings_deferred_to_a_ticket_settle_the_board(broker: InProcBroker) -> None:
+    """#371: six findings agreed for a follow-up ticket had no outcome to record. The raiser
+    defers one with the ticket as the reason (the author can't: deferring is the raiser's call,
+    like dropping), a person defers another from the page with the ticket, both read "deferred
+    to" on the board, and the board settles. Fails if defer is refused, settles nothing, or reads
+    as a plain drop."""
+    web = broker.web_client()
+    path = "/api/rooms/build/review"
+    try:
+        async with FakeAgent(broker.home, "kd-a") as author, FakeAgent(broker.home, "kd-r") as reviewer:
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            await reviewer.call("review", room="#build", action="open", url=PR)
+            await reviewer.call("review", room="#build", action="raise", title="split the module")
+            await reviewer.call("review", room="#build", action="raise", title="rename the flag")
+            r = await author.call("review", room="#build", action="defer", item="F1", reason="SHOP-123")
+            assert r.get("ok") is False and "or a person can defer it" in r["error"], r
+            r = await reviewer.call("review", room="#build", action="defer", item="F1", reason="SHOP-123")
+            assert r["ok"] and "deferred to SHOP-123" in r["board"], r
+            r = web.post(
+                path, json={"action": "defer", "item": "F2", "ticket": "SHOP-124"}, headers=broker.write_headers()
+            )
+            assert r.status_code == 200, r.text
+            board = r.json()["board"]
+            assert [i["deferred_to"] for i in board["items"]] == ["SHOP-123", "SHOP-124"]
+            assert board["settled"], board
+        texts = [m["text"] for m in web.get("/api/rooms/build/messages").json()["messages"]]
+        assert any("Review board: F2 deferred to SHOP-124" in t for t in texts), texts
+    finally:
+        web.close()
+
+
 async def test_a_board_from_open_to_settled(broker: InProcBroker) -> None:
     async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
         await author.join("#build", "claude-1")

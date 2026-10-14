@@ -28,7 +28,7 @@ def test_v20_upgrade_adds_empty_claims_with_a_backup(tmp_path: Path) -> None:
 
     migrated = db.open_db(path)
     fresh = db.open_db(tmp_path / "fresh.db")
-    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 22  # on through pins (#292)
+    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 23  # on through pins (#292)
     assert db.row_counts(migrated, db.tables_of(20)) == before
     assert migrated.execute("SELECT COUNT(*) FROM claims").fetchone()[0] == 0
     assert [tuple(r) for r in migrated.execute("PRAGMA table_info(claims)")] == [

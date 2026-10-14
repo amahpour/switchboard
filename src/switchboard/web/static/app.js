@@ -5110,6 +5110,9 @@
     raised: 'Raised', contested: 'Contested', conceded: 'Being fixed', fixed: 'Fixed', dropped: 'Dropped',
     open: 'Waiting for you', answered: 'Answered',
   };
+  // a dropped finding deferred to a follow-up ticket (#371) reads as that, not as withdrawn
+  function boardStateWord(i) { return i.deferred_to ? 'Deferred' : BOARD_STATE[i.state] || i.state; }
+  function boardStateClass(i) { return 'board-state s-' + (i.deferred_to ? 'deferred' : i.state); }
 
   async function loadBoard(r) {
     if (!r) return;
@@ -5227,12 +5230,13 @@
         card.dataset.item = i.label;
         card.setAttribute('aria-pressed', String(state.boardSel === i.label));
         const top = el('span', 'board-card-top');
-        top.append(el('span', 'board-label', i.label), el('span', 'board-state s-' + i.state, BOARD_STATE[i.state] || i.state));
+        top.append(el('span', 'board-label', i.label), el('span', boardStateClass(i), boardStateWord(i)));
         card.append(top, el('span', 'board-card-title', i.title));
-        const meta = i.state === 'dropped' && i.reason ? i.reason : [boardWhere(i), boardWho(i)].filter(Boolean).join(' · ');
+        const meta = i.deferred_to ? 'Deferred to ' + i.deferred_to
+          : i.state === 'dropped' && i.reason ? i.reason : [boardWhere(i), boardWho(i)].filter(Boolean).join(' · ');
         card.append(el('span', 'board-card-meta', meta));
         if (i.outdated_head) card.append(outdatedMark('span', i));
-        if (i.state === 'dropped') card.classList.add('dropped');
+        if (i.state === 'dropped') card.classList.add(i.deferred_to ? 'deferred' : 'dropped');
         card.addEventListener('click', function () {
           state.boardSel = state.boardSel === i.label ? null : i.label;
           renderBoard();
@@ -5444,7 +5448,7 @@
     const d = el('aside', 'board-detail');
     d.setAttribute('aria-label', i.label + ' detail');
     const top = el('div', 'board-detail-top');
-    top.append(el('span', 'board-state s-' + i.state, BOARD_STATE[i.state] || i.state), el('h3', null, i.label + ' · ' + i.title));
+    top.append(el('span', boardStateClass(i), boardStateWord(i)), el('h3', null, i.label + ' · ' + i.title));
     d.append(top, el('p', 'board-detail-state', boardWho(i)));
     if (i.outdated_head) d.append(outdatedMark('p', i));
     const contested = i.state === 'contested';
@@ -5477,7 +5481,8 @@
       d.append(sides);
     }
     if (i.answer) d.append(el('p', 'board-answer', 'Answer: ' + i.answer));
-    if (i.reason && i.state === 'dropped') d.append(el('p', 'board-reason', 'Dropped: ' + i.reason));
+    if (i.deferred_to) d.append(el('p', 'board-reason', 'Deferred to ' + i.deferred_to));
+    else if (i.reason && i.state === 'dropped') d.append(el('p', 'board-reason', 'Dropped: ' + i.reason));
     if (i.history && i.history.length) {
       const ol = el('ol', 'board-history');
       ol.setAttribute('aria-label', 'History');
@@ -5552,6 +5557,27 @@
       confirm.id = 'board-confirm';
       confirm.addEventListener('click', function () { boardMove({ action: 'confirm', item: i.label }); });
       acts.append(confirm);
+    }
+    if (i.kind === 'finding' && ['raised', 'contested', 'conceded'].indexOf(i.state) >= 0) {
+      // settled for this pull request, to be done in a follow-up ticket (#371): not withdrawn
+      const tlabel = el('label', 'board-field', 'Follow-up ticket');
+      const ticket = el('input');
+      ticket.id = 'board-ticket';
+      ticket.type = 'text';
+      ticket.maxLength = 200;
+      ticket.placeholder = 'SHOP-123 or a link';
+      tlabel.append(ticket);
+      const defer = btn('btn', 'Defer');
+      defer.id = 'board-defer';
+      defer.title = 'Settle ' + i.label + ' for this pull request: it goes to that follow-up ticket';
+      defer.addEventListener('click', function () {
+        const key = String(ticket.value || '').trim();
+        if (!key) { ticket.focus(); return; }
+        boardMove({ action: 'defer', item: i.label, ticket: key });
+      });
+      const set = el('div', 'board-action-set');
+      set.append(tlabel, defer);
+      acts.append(set);
     }
     if (['raised', 'contested', 'conceded', 'open'].indexOf(i.state) >= 0) {
       const label = el('label', 'board-field', 'Reason to drop');

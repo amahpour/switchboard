@@ -583,10 +583,10 @@ def build_server(st: McpState) -> FastMCP:
         options: list[str] = EMPTY_OPTIONS,
         recommend: int = -1,
     ) -> str:
-        """The review board for one pull request. action: open(url, head), show,
+        """One pull request's review board. action: open(url, head), show,
         raise(title, detail, where="path:40-58"), ask(title, options, recommend),
-        concede(item, owner), contest or drop(item, reason), fix(item, commit, proof: test name
-        or link), confirm(item) by its raiser. Returns the board."""
+        concede(item, owner), contest/drop(item, reason), defer(item, reason=ticket),
+        fix(item, commit, proof: test name or link), confirm(item) by its raiser."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = await st.find_cred(room, tid)

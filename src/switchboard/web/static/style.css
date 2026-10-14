@@ -2869,6 +2869,7 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 .board-lane { display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 10px; background: var(--side-bg); border: 1px solid var(--side-border); min-width: 0; }
 .board-lane.lane-you:not(.lane-clear) { background: var(--danger-bg); border-color: var(--danger); }
 .board-card.dropped { opacity: .62; }
+.board-card.deferred { opacity: .8; }  /* settled here, still to do in its ticket: not struck out */
 .board-card.dropped .board-card-title { text-decoration: line-through; text-decoration-color: var(--muted); }
 .board-lane-title { display: flex; align-items: center; gap: 6px; margin: 0; font-size: calc(12.5px * var(--text-scale)); font-weight: 600; color: var(--ink-2); }
 .board-count { color: var(--muted-2); font-weight: 400; font-variant-numeric: tabular-nums; }
