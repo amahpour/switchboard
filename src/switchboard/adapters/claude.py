@@ -49,7 +49,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, Adapter
+from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, Adapter, HelloClaims
 from switchboard.adapters.base import SendError as _BaseSendError
 from switchboard.broker import proc
 from switchboard.claude_registry import REGISTRY_IDLE, registry_status
@@ -144,6 +144,9 @@ class ClaudeAdapter(Adapter):
     serial_push = True  # one inbox frame in flight per session (§9.2)
     reports_session_id = True  # followed through /clear by the hooks (§6.3)
     reports_approval_mode = True
+    # the connection of its MCP server, once attached (``mcp.attach``, §6.4), is its push channel
+    channel = "inbox"
+    channel_tier = TIER_INBOX
 
     def __init__(self, cfg: Config):
         super().__init__(cfg)
@@ -167,6 +170,27 @@ class ClaudeAdapter(Adapter):
         self._task: asyncio.Task[None] | None = None
 
     # -------------------------------------------------------- attach state
+    def hello_claims(self, params: dict[str, Any]) -> HelloClaims:
+        # Claude's own environment carries Claude's markers, so a "leak" claimed for it is none
+        return HelloClaims()
+
+    def attested_socket(self, att: dict[str, Any]) -> str | None:
+        socket: str | None = att["claude_socket"]
+        return socket
+
+    def channel_refusal(self, ident: Any, *, has_token: bool, guard_ok: bool, remote: bool) -> str | None:
+        """Only a connection whose process is a direct child of a claude whose registry names
+        the inbox socket (``ident.claude_socket``), that has the session token and whose own
+        guard passed, is the inbox. On a remote host the same: the satellite ran the parent,
+        registry and socket check there (§27.5.3)."""
+        if ident.harness != self.harness or not ident.claude_socket:
+            return "not a verified Claude session"
+        if not has_token:
+            return "no session messaging token"
+        if not guard_ok:
+            return "the MCP server's inbox guard refused"
+        return None
+
     def attach(self, mcp_pid: int, mcp_start: float | None, conn: Any, host: str = LOCAL_HOST) -> None:
         self.conns[(host, int(mcp_pid))] = (mcp_start, conn)
 

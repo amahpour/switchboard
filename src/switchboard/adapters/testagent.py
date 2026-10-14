@@ -8,22 +8,39 @@ subprocess of the fake agent exercise hook confirmation and hook context.
 
 from __future__ import annotations
 
+import dataclasses
+import re
 from typing import Any
 
-from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, Adapter
+from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, Adapter, HelloClaims
 from switchboard.broker.peer import McpIdentity
 from switchboard.config import Config
 from switchboard.models import Participant, Release, Route
 from switchboard.models import session_key as make_session_key
 
 ACK_MODES = ("next_call", "immediate", "never")
+TEST_SESSION_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 
 
 class TestAgentAdapter(Adapter):
     harness = "test"
     reports_session_id = True
     sink_status = True
+    test_only = True
     __test__ = False  # not a pytest class
+
+    def hello_claims(self, params: dict[str, Any]) -> HelloClaims:
+        """Its ``mcp.hello`` must name a ``--test-session`` (the session key, below), and may name
+        an ``--ack`` mode (``pull_ack``); an unknown one is ``next_call``."""
+        ts = params.get("test_session")
+        if not isinstance(ts, str) or not TEST_SESSION_RE.match(ts):
+            raise ValueError("--harness test needs --test-session KEY ([A-Za-z0-9_.-]{1,64})")
+        mode = params.get("test_ack")
+        return dataclasses.replace(
+            super().hello_claims(params),
+            test_session=ts,
+            ack_mode=mode if mode in ACK_MODES else "next_call",
+        )
 
     def tier(self, p: Participant | None) -> tuple[str, str | None]:
         return "mcp-only", None

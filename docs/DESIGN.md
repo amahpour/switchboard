@@ -237,7 +237,7 @@ src/switchboard/
   delivery/engine.py     Engine: synchronous core returning list[Action] (§8.2)
   delivery/runner.py     Runner: async; executes Actions, ticks the engine every 1 s
   delivery/sinks.py      SinkRegistry: open wait() calls and Cursor stop parks
-  adapters/base.py       Adapter ABC, Caps, Route
+  adapters/base.py       Adapter ABC, Caps, Route, HelloClaims; what a harness keeps of a hello and which MCP connection may be its push channel (§6.3, §6.4)
   adapters/claude.py     route(); send() via the attached MCP conn; ClaudeRegistryPoller
   adapters/codex_rpc.py  WebSocket-over-UDS JSON-RPC client with method/param allowlists (from the M0 Codex wake client)
   adapters/codex.py      CodexLink (status conn), CodexLiveness, verify_thread, turn/start, turn/steer, queue fallback
@@ -721,6 +721,15 @@ store writes, kick carry-over and notices common to any such bind. `TestAgentAda
 supplies the scripted test agent's key from its `--test-session`, the one harness `session_key`
 needs outside `(ident, thread_id)` (#170).
 
+`mcp.hello` asks the adapters too (#170). `hello_claims(params)` is what a harness keeps of the
+hello's params, as a `HelloClaims`: `env_leak` (Claude's is always false, its own environment
+carries Claude's markers), and for the test agent its `--test-session` (required; a bad one is
+`bad_request`) and its `--ack`. A remote host's hello asks `test_only` (the test agent exists only
+where both machines are in test mode) and `attested_socket` (the Claude inbox socket its satellite
+attested, §27.5.3). Every adapter hears every verified hello through `on_mcp_hello`, with the
+sessions of that MCP process that are its own harness's (Codex: an app-server that runs
+switchboard's MCP servers, and a restarting thread's own MCP process reconnecting).
+
 **Re-joining a session** (the same `session_key`) rotates its credential and takes over its memberships only from the MCP process that holds it (a broker reconnect), or once that MCP process is gone (an MCP restart), and never while another live agent process holds the session. Otherwise `join` fails with `conflict`. Once the holder is gone, what the resuming process gets depends on whether the liveness sweep (every `LIVENESS_S` = 2 s) has ended the old session yet. Both outcomes are intended, and in both the resuming process becomes the thread's only active participant:
   - **Not ended yet:** it takes over the still-active membership ("You rejoined", same membership, credential rotated).
   - **Already ended:** the join is fresh ("You joined", a new membership).
@@ -757,7 +766,7 @@ def post(sock_path, token, text, from_, msg_id, hold_s=0.3):
 ```
 - **Refusal guard.** `post` refuses unless the local `detect()` returned claude **and** `sock_path == $CLAUDE_CODE_MESSAGING_SOCKET ==` the registry path verified at startup. The socket path never comes from the broker.
 - On `push:deliver {batch_id, text, room, sender}`, the server runs `post(…, from_=f"switchboard:{room}/{sender}", msg_id=f"yk-b{batch_id}-<8 hex>")` in a thread and replies `mcp.posted {batch_id, ok, t_post | err}`. (M3: `from` names the first sender, as F§12 recommends, so bursts spread over several rate-limit keys; the random suffix keeps ids unique across broker homes.)
-- **Attach (M3).** After every successful `mcp.hello` (first connect and every reconnect) and before any tool call proceeds, a server whose guard passes and that has the token sends `mcp.attach {guard_ok: true}`. The broker re-checks the verified Claude identity (registry socket), the token flag and the flag, and makes that connection the session's push channel; the tier becomes `claude:inbox`. Connection loss detaches it (tier `claude:hook` until the reconnect re-attaches).
+- **Attach (M3).** After every successful `mcp.hello` (first connect and every reconnect) and before any tool call proceeds, a server whose guard passes and that has the token sends `mcp.attach {guard_ok: true}`. The broker re-checks the verified Claude identity (registry socket), the token flag and the flag, and makes that connection the session's push channel; the tier becomes `claude:inbox`. The check is the adapter's (`channel_refusal`, with `channel`, `channel_flag` and `channel_tier`: Claude's `inbox`, and a remote Codex's `codex`, asked for with `codex: true`, §27.7); `AgentService` keeps what any channel needs: the connection's `attached` set, the `tier` event and the tier refresh, and `mcp.posted` going to the adapter whose channel the connection is. Connection loss detaches it (tier `claude:hook` until the reconnect re-attaches).
 - The token comes from `CLAUDE_CODE_MESSAGING_TOKEN`. It is never logged, sent to the broker, or put on a command line.
 - There is one frame per batch, and batch ids are unique, so the identical-repeat dedupe and the roughly 30-per-burst limit are never hit (F§2 1.7).
 

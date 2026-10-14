@@ -1,7 +1,9 @@
 """AgentService: the agent side of the broker (DESIGN.md §5.2, §6, §7, §8).
 
 - ``mcp.hello`` verifies the MCP server's process ancestry (§5.3) and records
-  which harness session it serves. Nothing is persisted until ``join``.
+  which harness session it serves. Nothing is persisted until ``join``. What a
+  harness keeps of the hello, and which connection may be its push channel
+  (``mcp.attach``), are its adapter's to say (§6.3, §6.4).
 - ``agent.*`` calls carry a membership credential that works only on the
   verified MCP connection it was issued to (the participant's mcp pid/start).
 - ``hook.event`` resolves which joined session (if any) a hook belongs to from
@@ -30,7 +32,6 @@ from typing import TYPE_CHECKING, Any
 
 from switchboard import envelope, reviews
 from switchboard.adapters.base import HOOK_EVENTS, start_key
-from switchboard.adapters.testagent import ACK_MODES
 from switchboard.broker import proc
 from switchboard.broker.hosts import HostViews
 from switchboard.broker.peer import (
@@ -76,7 +77,6 @@ if TYPE_CHECKING:  # pragma: no cover
 
 log = logging.getLogger("switchboard.agents")
 
-TEST_SESSION_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 WAIT_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 # the code at the end of a join's answer ("join yk:j<16 hex>"), given back to reclaim a name (#304)
 JOIN_CODE_RE = re.compile(r"^(?:yk:j)?([0-9a-f]{16})$")
@@ -100,9 +100,10 @@ class McpConn:
     has_messaging_token: bool = False
     session_id: str | None = None
     test_session: str | None = None
-    test_ack: str = "next_call"
-    inbox_attached: bool = False  # Claude: this connection is the session's push channel
-    codex_attached: bool = False  # remote Codex (issue #63): this connection wakes its threads
+    ack_mode: str | None = None  # the test agent's --ack, from its adapter's ``hello_claims``
+    # the channels (an adapter's ``channel``) this connection is: Claude's push inbox, or a
+    # remote Codex's wake channel (issue #63)
+    attached: set[str] = field(default_factory=set)
     # what the MCP server says it is and offers (#249): claims, shown to a person, granting nothing
     version: str | None = None
     tools: tuple[str, ...] | None = None
@@ -110,6 +111,24 @@ class McpConn:
     @property
     def harness(self) -> str:
         return self.ident.harness
+
+    @property
+    def inbox_attached(self) -> bool:
+        """Claude: this connection is the session's push channel."""
+        return "inbox" in self.attached
+
+    @inbox_attached.setter
+    def inbox_attached(self, on: bool) -> None:
+        (self.attached.add if on else self.attached.discard)("inbox")
+
+    @property
+    def codex_attached(self) -> bool:
+        """Remote Codex: this connection wakes its threads."""
+        return "codex" in self.attached
+
+    @codex_attached.setter
+    def codex_attached(self, on: bool) -> None:
+        (self.attached.add if on else self.attached.discard)("codex")
 
 
 def _mcp_key(host: str, pid: int | None, start: float | None) -> tuple[str, int, str]:
@@ -301,17 +320,11 @@ class AgentService:
                 )
             except McpRefused as e:
                 raise ServiceError(e.code, e.message) from None
-        test_session = None
-        ack = "next_call"
-        if ident.harness == "test":
-            ts = params.get("test_session")
-            if not isinstance(ts, str) or not TEST_SESSION_RE.match(ts):
-                raise ServiceError(
-                    "bad_request", "--harness test needs --test-session KEY ([A-Za-z0-9_.-]{1,64})"
-                )
-            test_session = ts
-            a = params.get("test_ack")
-            ack = a if a in ACK_MODES else "next_call"
+        adapter = self.engine.adapter_for(ident.harness, ident.host)
+        try:
+            claims = adapter.hello_claims(params)
+        except ValueError as e:
+            raise ServiceError("bad_request", str(e)) from None
         ci = params.get("client_info")
         ci = (
             {k: str(v)[:80] for k, v in ci.items() if k in ("name", "version")}
@@ -325,11 +338,11 @@ class AgentService:
             ident=ident,
             client_info=ci,
             evidence=ev,
-            env_leak=bool(params.get("env_leak")) and ident.harness != "claude",
+            env_leak=claims.env_leak,
             has_messaging_token=bool(params.get("has_messaging_token")),
             session_id=sid[:128] if isinstance(sid, str) else None,
-            test_session=test_session,
-            test_ack=ack,
+            test_session=claims.test_session,
+            ack_mode=claims.ack_mode,
             version=version_claim(params.get("version")),
             tools=tools_claim(params.get("tools")),
         )
@@ -343,16 +356,15 @@ class AgentService:
         # A reconnecting MCP server (same process) picks its sessions up again.
         mine = self.store.participants_by_mcp(ident.host, ident.mcp_pid, ident.mcp_start)
         for p in mine:
-            if p.harness == "test":
-                self.engine.ack_modes[p.id] = ack
+            if claims.ack_mode is not None and p.harness == ident.harness:
+                self.engine.ack_modes[p.id] = claims.ack_mode
             if p.status == "offline":
                 self.run(self.engine.set_status(p, "starting", "mcp:hello"))
-        codex = self.engine.adapters.get("codex")
-        if codex is not None:
-            # a Codex app-server that runs switchboard's MCP servers (after a daemon restart:
-            # the new one), and a restarting session's own MCP process reconnecting
-            codex.on_mcp_hello(ident, [p for p in mine if p.harness == "codex"])
-        adapter = self.engine.adapter_for(ident.harness, ident.host)
+        # every adapter hears every hello, with the sessions of that MCP process that are its own
+        # harness's (Codex: a live app-server that runs switchboard's MCP servers, after a daemon
+        # restart the new one, and a restarting session's own MCP process reconnecting)
+        for heard in self.engine.adapters.values():
+            heard.on_mcp_hello(ident, [p for p in mine if p.harness == heard.harness])
         tier, note = adapter.tier(None)
         log.info(
             "mcp hello: conn %d harness %s%s (%s)",
@@ -383,11 +395,13 @@ class AgentService:
         harness, note = att["harness"], att["tier_note"]
         if harness not in (claimed, "unknown"):
             raise ServiceError("forbidden", "can't identify the MCP server process")
-        if harness == "test":
+        adapter = self.engine.adapter_for(harness, host)
+        if adapter.test_only:
             if not (self.state.test_mode and link.sat_test_mode):
                 raise ServiceError("forbidden", "--harness test needs test mode on both machines")
         elif harness != "unknown" and harness not in link.entry.harnesses:
             harness, note = "unknown", f"not allowed for {host}"
+            adapter = self.engine.adapter_for(harness, host)
         agent = att["agent"]
         return McpIdentity(
             harness=harness,
@@ -397,7 +411,7 @@ class AgentService:
             agent_start=agent[1] if agent else None,
             evidence=att["evidence"],
             tier_note=note,
-            claude_socket=att["claude_socket"] if harness == "claude" else None,
+            claude_socket=adapter.attested_socket(att),
             host=host,
         )
 
@@ -413,10 +427,8 @@ class AgentService:
         key = _mcp_key(mc.ident.host, mc.ident.mcp_pid, mc.ident.mcp_start)
         if self._mcp_claims.get(key, (None,))[0] == conn.id:
             del self._mcp_claims[key]  # a newer connection of the same process keeps its own
-        if mc.inbox_attached:
-            self._detach(conn, mc)
-        if mc.codex_attached:
-            self._detach_codex(conn, mc)
+        for channel in sorted(mc.attached):
+            self._detach(conn, mc, channel)
         acts: list[Action] = self.engine.close_conn_sinks(conn.id)
         for p in self.store.participants_by_mcp(mc.ident.host, mc.ident.mcp_pid, mc.ident.mcp_start):
             if self.engine.adapter(p).keep_on_mcp_disconnect(p):
@@ -425,81 +437,65 @@ class AgentService:
             acts += self.engine.set_status(p, "offline", "mcp:bye")
         self.run(acts)
 
-    # ======================================================= Claude inbox
-    def _claude(self) -> Any:
-        return self.engine.adapters.get("claude")
+    # ===================================================== push channels
+    def _channel_named(self, channel: str) -> Any:
+        """The adapter whose ``channel`` this is, or None."""
+        for adapter in self.engine.adapters.values():
+            if adapter.channel == channel:
+                return adapter
+        return None
 
-    def _remote_codex(self) -> Any:
-        return self.engine.adapters.get("codex@remote")
-
-    def _attach_codex(self, conn: "Conn", mc: McpConn, params: dict[str, Any]) -> dict[str, Any]:
-        """``mcp.attach {codex: true}`` (issue #63): a Codex MCP server on a remote host
-        offers its link connection as the wake channel of the threads it serves (the
-        server found that machine's Codex control socket usable). Only over a link: a
-        Codex on this machine is woken by the broker itself (``CodexAdapter``)."""
-        why = None
-        if mc.harness != "codex":
-            why = "not a verified Codex session"
-        elif not _remote(conn):
-            why = "a Codex session on this machine is woken by the broker itself"
-        elif params.get("guard_ok") is not True:
-            why = "the MCP server's own check refused"
-        adapter = self._remote_codex()
-        if why is not None or adapter is None:
-            return {"attached": False, "reason": why or "no remote Codex adapter"}
-        if mc.codex_attached:  # a repeated hello on the same connection
-            return {"attached": True, "tier": "codex:link"}
-        adapter.attach(mc.ident.mcp_pid, mc.ident.mcp_start, conn, host=mc.ident.host)
-        mc.codex_attached = True
-        self.store.add_event("tier", data={"what": "attach", "harness": "codex"})
-        self._refresh_tiers(mc)
-        return {"attached": True, "tier": "codex:link"}
-
-    def _detach_codex(self, conn: "Conn", mc: McpConn) -> None:
-        adapter = self._remote_codex()
-        if adapter is not None:
-            adapter.detach(conn)
-        mc.codex_attached = False
-        self._refresh_tiers(mc)
+    def _channel_asked(self, params: dict[str, Any]) -> Any:
+        """The adapter an ``mcp.attach`` asks to be the channel of: the one whose ``channel_flag``
+        the request sets (``codex: true``, issue #63), else the one with no flag, which a bare
+        request gets (Claude's inbox, from before there was another)."""
+        bare = None
+        for adapter in self.engine.adapters.values():
+            if not adapter.channel:
+                continue
+            if not adapter.channel_flag:
+                bare = adapter
+            elif params.get(adapter.channel_flag) is True:
+                return adapter
+        return bare
 
     def attach(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
-        """``mcp.attach``: make this verified Claude MCP connection its session's
-        push channel (DESIGN.md §6.4, §9.2). Only a connection whose process is a
-        direct child of a claude whose registry names the same inbox socket,
-        that has the session token and whose own guard passed, gets the inbox
-        tier; everything else stays ``claude:hook``.
+        """``mcp.attach``: make this verified MCP connection its session's push or wake channel
+        (DESIGN.md §6.4, §9.2). Each channel's adapter says whether this connection may be it
+        (``channel_refusal``: for Claude's inbox a direct child of a claude whose registry names the
+        same inbox socket, with the session token and a passing guard; for a remote Codex's wake
+        channel, a verified Codex over a link whose guard passed); everything else stays on its
+        hooks (``claude:hook``).
 
-        On a remote host (§27.5.6, §27.7) the same: the parent, registry and socket check
+        On a remote host (§27.5.6, §27.7) it is the same: the parent, registry and socket check
         is the one its satellite ran there (``facts.attest``), and the channel is keyed by
-        ``(host, mcp pid)``. Frames to it carry ``chk`` for the satellite's last-mile
-        check (``ClaudeAdapter.send``). A Codex server on a remote host attaches as its
-        threads' wake channel instead (``codex: true``, ``_attach_codex``)."""
+        ``(host, mcp pid)``. Frames to it carry ``chk`` for the satellite's last-mile check
+        (``ClaudeAdapter.send``)."""
         mc = self._mcp(conn)
-        if params.get("codex") is True:
-            return self._attach_codex(conn, mc, params)
-        why = None
-        if mc.harness != "claude" or not mc.ident.claude_socket:
-            why = "not a verified Claude session"
-        elif not mc.has_messaging_token:
-            why = "no session messaging token"
-        elif params.get("guard_ok") is not True:
-            why = "the MCP server's inbox guard refused"
-        adapter = self._claude()
-        if why is not None or adapter is None:
-            return {"attached": False, "reason": why or "no Claude adapter"}
-        if mc.inbox_attached:  # a repeated hello on the same connection
-            return {"attached": True, "tier": "claude:inbox"}
+        adapter = self._channel_asked(params)
+        if adapter is None:
+            return {"attached": False, "reason": "no adapter for that channel"}
+        why = adapter.channel_refusal(
+            mc.ident,
+            has_token=mc.has_messaging_token,
+            guard_ok=params.get("guard_ok") is True,
+            remote=_remote(conn),
+        )
+        if why is not None:
+            return {"attached": False, "reason": why}
+        if adapter.channel in mc.attached:  # a repeated hello on the same connection
+            return {"attached": True, "tier": adapter.channel_tier}
         adapter.attach(mc.ident.mcp_pid, mc.ident.mcp_start, conn, host=mc.ident.host)
-        mc.inbox_attached = True
-        self.store.add_event("tier", data={"what": "attach", "harness": "claude"})
+        mc.attached.add(adapter.channel)
+        self.store.add_event("tier", data={"what": "attach", "harness": adapter.harness})
         self._refresh_tiers(mc)
-        return {"attached": True, "tier": "claude:inbox"}
+        return {"attached": True, "tier": adapter.channel_tier}
 
-    def _detach(self, conn: "Conn", mc: McpConn) -> None:
-        adapter = self._claude()
+    def _detach(self, conn: "Conn", mc: McpConn, channel: str) -> None:
+        adapter = self._channel_named(channel)
         if adapter is not None:
             adapter.detach(conn)
-        mc.inbox_attached = False
+        mc.attached.discard(channel)
         self._refresh_tiers(mc)
 
     def _refresh_tiers(self, mc: McpConn) -> None:
@@ -524,10 +520,11 @@ class AgentService:
         ``no_chk``/``bad_chk`` (§27.5.6)."""
         mc = self._mcp(conn)
         bid = params.get("batch_id")
-        if not isinstance(bid, int) or isinstance(bid, bool) or not (mc.inbox_attached or mc.codex_attached):
+        if not isinstance(bid, int) or isinstance(bid, bool) or not mc.attached:
             return {}
-        # a remote Codex server's report of its wake (issue #63), else a Claude inbox post
-        adapter = self._remote_codex() if mc.codex_attached else self._claude()
+        # the report of a frame handed to this connection: a Claude inbox post, or a remote
+        # Codex server's wake (issue #63), by the channel it is
+        adapter = self._channel_named(min(mc.attached))
         if adapter is None:
             return {}
         t = params.get("t_post")
@@ -839,8 +836,8 @@ class AgentService:
             )
         nonce = secrets.token_hex(8)
         p = self.store.upsert_participant(h, key, bind_nonce=nonce, **fields)
-        if h == "test":
-            self.engine.ack_modes[p.id] = mc.test_ack
+        if mc.ack_mode is not None:
+            self.engine.ack_modes[p.id] = mc.ack_mode
         cred = secrets.token_urlsafe(32)
         rejoined = cur is not None
         if cur is not None:
