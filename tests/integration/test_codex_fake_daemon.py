@@ -770,6 +770,15 @@ def daemon_comes_back(w: W) -> FakeClaude:
     w.cx.p.stdin.write(json.dumps({"op": "attach", "path": w.sock}) + "\n")
     w.cx.p.stdin.flush()
     assert w.cx.recv()["attached"]
+    tui_pid = w.cx.p.pid
+    # The broker's lsof may have started before attach completed. Let that look finish and
+    # observe this TUI before loading an active member's thread; otherwise the old snapshot
+    # can hold it as detached. An ended member has no client poll until it joins again.
+    if w.part()["ended_at"] is None:
+        assert wait_for(
+            lambda: w.b.on_loop(lambda: w.adapter.clients is not None and tui_pid in w.adapter.clients.pids),
+            10,
+        ), w.adapter.clients
     with w.d.lock:
         w.d.loaded.add(TID)
     w.d.set_status(TID, "idle")
