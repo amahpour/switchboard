@@ -560,7 +560,9 @@ def test_a_finding_is_deferred_by_its_raiser_or_a_person_and_settles() -> None:
         reviews.person_move(finding("fixed"), "defer")
     deferred = replace(f, state="dropped", deferred_to="SHOP-123")
     assert reviews.settled([deferred])
-    text = reviews.render({"url": "https://example.com/shop/pull/7", "head": "", "posted_by": None}, [deferred])
+    text = reviews.render(
+        {"url": "https://example.com/shop/pull/7", "head": "", "posted_by": None}, [deferred]
+    )
     assert "deferred to SHOP-123" in text, text
     plan = reviews.handoff_plan([deferred], [])
     assert "- F1 Deferred: off by one — to SHOP-123" in plan["summary"], plan["summary"]

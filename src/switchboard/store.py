@@ -2478,7 +2478,14 @@ class Store:
 
     def move_review_item(self, item_id: int, state: str, **fields: Any) -> None:
         allowed = {
-            "owner", "commit_sha", "proof", "confirmed_by", "reason", "answer", "answered_by", "deferred_to"
+            "owner",
+            "commit_sha",
+            "proof",
+            "confirmed_by",
+            "reason",
+            "answer",
+            "answered_by",
+            "deferred_to",
         }
         if set(fields) - allowed:
             raise ValueError(f"unknown review item fields: {sorted(set(fields) - allowed)}")
