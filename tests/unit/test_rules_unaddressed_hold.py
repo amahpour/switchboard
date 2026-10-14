@@ -224,6 +224,19 @@ def test_wake_now_on_a_busy_agent_goes_out_when_it_is_idle_not_at_the_hold(
     assert f"id={msg.id} " in push.text
 
 
+def test_a_parked_agent_shows_no_wake_time(w: World) -> None:
+    """Found in the recording: after Wake now on an agent with no wake path, Members still said
+    "wakes at", a wake that can't happen. Once it is parked, the time goes (the Inspector says
+    to poke it)."""
+    p, m, _conn = claude(w, attached=False)
+    _pa, a = w.agent("codex-1")
+    msg = w.agent_says(a, "just chatter")
+    assert w.engine.wakes_at(m.id) == pytest.approx(msg.ts + 270)
+    w.actions += w.engine.on_command(w.room.id, "wake", m.id)
+    assert w.engine.parked_reason(m.id)
+    assert w.engine.wakes_at(m.id) is None
+
+
 def test_leaving_drops_a_pending_wake_now(w: World) -> None:
     p, m, _conn = claude(w, status="busy", registry="busy")
     _pa, a = w.agent("codex-1")

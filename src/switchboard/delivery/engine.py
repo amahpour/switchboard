@@ -166,10 +166,11 @@ class Engine:
     def wakes_at(self, membership_id: int) -> float | None:
         """When the hold on unaddressed chatter (#137) lets this member's waiting messages wake
         it, for the member list; None when nothing waits on the hold. Only for a member that
-        such a wake would reach now: idle, not held, in a room that isn't paused and has budget,
-        and not already in its own wait() (which gets chatter without the hold)."""
+        such a wake would reach now: idle, not held or parked (no wake path: the Inspector says to
+        poke it instead), in a room that isn't paused and has budget, and not already in its own
+        wait() (which gets chatter without the hold)."""
         m = self.store.get_membership(membership_id)
-        if m is None or not m.active or m.held:
+        if m is None or not m.active or m.held or membership_id in self.parked:
             return None
         p = self.store.get_participant(m.participant_id)
         room = self.store.room_by_id(m.room_id)
