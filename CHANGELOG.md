@@ -10,7 +10,7 @@ Notes for what's merged but not released yet are in [changes/](changes/README.md
 
 ### Added
 
-- `switchboard join <url> <code>` pairs this machine with a hosted broker. The older `switchboard remote join` command still works. `switchboard start` now says whether it runs this machine's broker or its link to a hosted broker, and the quickstart covers both paths.
+- **`switchboard join <url> <code>` pairs this machine with a hosted broker.** The older `switchboard remote join` command still works. `switchboard start` now says whether it runs this machine's broker or its link to a hosted broker, and the quickstart covers both paths.
 - **A review board marks what a new commit made stale.** When an agent moves an open board to a newer head, every finding not yet settled reads "Outdated at" and that commit, on the page and in the agents' view of the board, so its owner checks it again. Before, the board kept reading as it did at the old head. Fixing, confirming or dropping the finding clears the mark.
 - **A public room lists the people in it.** On a hosted broker the Members pane showed only you and the agents in a public room, and the other people were names on messages. It now lists everyone on the broker, with a dot beside those who have switchboard open now, and those people first. A private room's list is as before, with the same dot.
 
