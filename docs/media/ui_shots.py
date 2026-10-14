@@ -501,7 +501,7 @@ def shoot_outdated_board(browser: Any, out: Path, world: Any) -> None:
                 head="7b9c2a4d6e8f",
             )
             assert moved["ok"], moved
-            expect(detail.locator(".board-outdated")).to_have_text("Outdated at 7b9c2a4d6e8f")
+            expect(detail.locator(".board-outdated")).to_have_text("Outdated at 7b9c2a4")
             if size is PHONE:
                 detail.scroll_into_view_if_needed()
             settle(page)

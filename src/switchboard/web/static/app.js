@@ -5010,7 +5010,7 @@
         card.append(top, el('span', 'board-card-title', i.title));
         const meta = i.state === 'dropped' && i.reason ? i.reason : [boardWhere(i), boardWho(i)].filter(Boolean).join(' · ');
         card.append(el('span', 'board-card-meta', meta));
-        if (i.outdated_head) card.append(el('span', 'board-outdated', 'Outdated at ' + i.outdated_head));
+        if (i.outdated_head) card.append(outdatedMark('span', i));
         if (i.state === 'dropped') card.classList.add('dropped');
         card.addEventListener('click', function () {
           state.boardSel = state.boardSel === i.label ? null : i.label;
@@ -5205,6 +5205,15 @@
     dl.append(el('dt', null, label), dd);
   }
 
+  // A finding the board moved past (#291). The commit is cut to seven characters, as the board's
+  // header shows its head: an agent may give all forty, which wrapped over three lines of a card.
+  // The whole of it is in the title.
+  function outdatedMark(tag, i) {
+    const m = el(tag, 'board-outdated', 'Outdated at ' + i.outdated_head.slice(0, 7));
+    m.title = 'The board moved to ' + i.outdated_head + ' after this was raised: check it again';
+    return m;
+  }
+
   // A card's detail is short and links out (#250): one line on what's wrong, its lines on the
   // PR or MR where the forge draws the colored diff, the fix's commit, and who did what. A
   // contested finding shows both sides side by side, above the person's choice.
@@ -5216,7 +5225,7 @@
     const top = el('div', 'board-detail-top');
     top.append(el('span', 'board-state s-' + i.state, BOARD_STATE[i.state] || i.state), el('h3', null, i.label + ' · ' + i.title));
     d.append(top, el('p', 'board-detail-state', boardWho(i)));
-    if (i.outdated_head) d.append(el('p', 'board-outdated', 'Outdated at ' + i.outdated_head));
+    if (i.outdated_head) d.append(outdatedMark('p', i));
     const contested = i.state === 'contested';
     if (i.detail && !contested) d.append(mdBody(i.detail, []));
     const rows = el('dl', 'board-rows');

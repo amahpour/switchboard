@@ -2426,12 +2426,12 @@ def test_new_review_head_marks_only_unsettled_findings_on_the_open_page(
     assert result["ok"], result
     for label in ("F3", "F4"):
         expect(page.locator(f'#board .board-card[data-item="{label}"] .board-outdated')).to_have_text(
-            f"Outdated at {sha}"
+            f"Outdated at {sha[:7]}"
         )
     for label in ("F1", "F2", "Q1"):
         expect(page.locator(f'#board .board-card[data-item="{label}"] .board-outdated')).to_have_count(0)
     page.locator('#board .board-card[data-item="F3"]').click()
-    expect(page.locator("#board .board-detail .board-outdated")).to_have_text(f"Outdated at {sha}")
+    expect(page.locator("#board .board-detail .board-outdated")).to_have_text(f"Outdated at {sha[:7]}")
 
 
 def test_a_stale_board_fetch_cannot_erase_a_live_head_move(ui: UI) -> None:
@@ -2467,10 +2467,10 @@ def test_a_stale_board_fetch_cannot_erase_a_live_head_move(ui: UI) -> None:
     )
     assert result["ok"], result
     mark = page.locator('#board .board-card[data-item="F3"] .board-outdated')
-    expect(mark).to_have_text(f"Outdated at {sha}")
+    expect(mark).to_have_text(f"Outdated at {sha[:7]}")
     page.evaluate("() => window.releaseBoardFetch()")
     page.evaluate("() => new Promise(resolve => setTimeout(resolve, 0))")
-    expect(mark).to_have_text(f"Outdated at {sha}")
+    expect(mark).to_have_text(f"Outdated at {sha[:7]}")
 
 
 def test_the_three_lanes_sit_in_one_row_and_stack_on_a_phone(ui: UI) -> None:
