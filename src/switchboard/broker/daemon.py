@@ -271,7 +271,7 @@ def start(
         url = alive.get("url") or f"http://switchboard.localhost:{alive.get('port')}/"
         print(
             f"switchboard is already running (pid {alive.get('pid')}) at {url}"
-            " — broker on this machine\n"
+            " (the broker on this machine)\n"
             "Run `switchboard login` for a new sign-in link.",
             file=out,
         )
@@ -316,7 +316,7 @@ def start(
         print(_tail(paths.out_log), file=sys.stderr)
         return 1
     url = info.get("url") or f"http://switchboard.localhost:{info['port']}/"
-    print(f"switchboard is running (pid {info['pid']}) at {url} — broker on this machine", file=out)
+    print(f"switchboard is running (pid {info['pid']}) at {url} (the broker on this machine)", file=out)
     if info.get("test_mode"):
         print("TEST MODE", file=out)
     try:
