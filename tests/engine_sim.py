@@ -130,7 +130,12 @@ class Sim:
             hop_limit=r.choice([0, 3, 6]),
             watchdog_s=r.choice([30.0, 120.0]),
             watchdog_max=r.choice([0, 1, 2]),
+            # the hold on unaddressed chatter (#137), drawn from a stream of its own so every
+            # seed's events stay what they were before it
+            unaddressed_hold_s=random.Random(seed * 7919 + 137).choice([0.0, 30.0, 270.0]),
         )
+        # /wake (#137) now and then, from the same side stream, so the main one is unchanged
+        self.side = random.Random(seed * 104729 + 137)
         self.clock = FakeClock()
         self.w = World(tmp_path, self.clock, cfg)
         self.engine = self.w.engine
@@ -632,6 +637,19 @@ class Sim:
             d = rows.get(message_id)
             if (membership_id, message_id) in self.escalated and d is not None and d["notified_at"] is None:
                 self.bad.append(f"{where} wakes it for escalated @mention {message_id}: {self.trace[-5:]}")
+        # the hold (#137): a wake for chatter alone that addresses nobody waits for its oldest
+        # item's hold, except into the agent's own wait() or after a person's /wake
+        hold = self.w.cfg.delivery.unaddressed_hold_s
+        if hold > 0 and kw.get("kind") == "wake" and kw.get("path") != "wait":
+            if membership_id not in self.engine.wake_now:
+                pend = {i.message_id: i for i in self.store.pending_items(membership_id)}
+                its = [pend[mid] for mid, _inline in kw.get("items", ()) if mid in pend]
+                if its and all(i.prio == 0 and not i.reply_to_me for i in its):
+                    waited = self.clock.now() - min(i.ts for i in its)
+                    if waited < hold - 1e-6:
+                        self.bad.append(
+                            f"{where} after {waited:.1f} s of a {hold:.0f} s hold: {self.trace[-5:]}"
+                        )
 
     def check_watchdog(self) -> list[str]:
         """At most watchdog_max reminders per delivery; escalated @mentions never
@@ -780,6 +798,13 @@ class Sim:
                 m = r.choice(ms)
                 self.store.end_membership(m.id, "kick", kicked=True)
                 self.run(self.engine.on_membership_ended(m.id, "kick"))
+        if self.side.random() < 0.25:
+            # /wake as the command allows it: a member that isn't held, in a room not paused
+            ms = [m for m in self.store.room_memberships(room.id) if not m.held]
+            if ms and not self.store.room_by_id(room.id).paused:
+                m = ms[self.side.randrange(len(ms))]
+                self.trace.append(f"cmd:wake:{m.screen_name}")
+                self.run(self.engine.on_command(room.id, "wake", m.id))
                 for mem in self.members:
                     if m.id in mem.mids:
                         mem.mids.remove(m.id)
@@ -956,7 +981,8 @@ class Sim:
     def quiesce(self) -> None:
         """Lift every cooldown, then let every agent cooperate (confirm what it is
         offered, answer with pass(), end its turn and listen again) while the
-        clock runs past max_hold_s plus the largest TTL."""
+        clock runs past the longer of max_hold_s and the hold on unaddressed chatter (#137),
+        plus the largest TTL."""
         if not self.link_up:
             self.trace.append("link_up")
             self.link_back()
@@ -969,7 +995,7 @@ class Sim:
                     self.store.set_held(m.id, False)
                     self.run(self.engine.on_command(room.id, "release", m.id))
         d = self.w.cfg.delivery
-        t_end = self.clock.now() + d.max_hold_s + d.offer_backstop_s + 5.0
+        t_end = self.clock.now() + max(d.max_hold_s, d.unaddressed_hold_s) + d.offer_backstop_s + 5.0
         rounds = 0
         while self.clock.now() < t_end:
             rounds += 1

@@ -57,6 +57,9 @@ class Shim:
     def parked_reason(self, membership_id: int) -> str | None:
         return self.w.engine.parked_reason(membership_id)
 
+    def wakes_at(self, membership_id: int) -> float | None:
+        return self.w.engine.wakes_at(membership_id)
+
     def board_reason(self, member: Member) -> str | None:
         return None  # no MCP servers here, so no claims about their tools (#249)
 

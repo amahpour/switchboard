@@ -1040,6 +1040,53 @@ def test_inspector_hold_posts_the_command_and_shows_held(ui: UI) -> None:
         )
 
 
+def test_members_say_when_held_chatter_wakes_an_agent_and_wake_now_sends_it(ui: UI) -> None:
+    """#137: another agent's chatter that addresses nobody waits on the hold, and the member list
+    says when it wakes the agent ("1 queued · wakes at 20:45") in light, dark and on the phone.
+    The Inspector's Wake now sends /wake through the composer's path, and its reply shows in the
+    log. The agent that wrote it waits on nothing. Fails without ``wakes_at`` in the members
+    frame, or without the button."""
+    room = "e2e-held-chatter"
+    ui.world.create_room("#" + room)
+    ui.world.add_agents("#" + room, ("claude-1", "codex-1"))
+    ui.world.agent_call("#" + room, "codex-1", "say", text="the cache key drops the host")
+
+    def idle() -> None:  # a scripted agent is busy after its join; the hold is for an idle one
+        st = ui.world.broker.state
+        r = st.store.get_room("#" + room)
+        assert r is not None
+        m = st.store.find_member(r.id, "claude-1")
+        assert m is not None
+        st.store.set_status(m.participant_id, "idle", "hook:Stop")
+        st.hub.members_changed("#" + room)
+
+    ui.world.broker.on_loop(idle)
+    when = re.compile(r"1 queued · wakes at \d\d:\d\d")
+    for options in ({"color_scheme": "light"}, {"color_scheme": "dark"}, {**PHONE, "color_scheme": "light"}):
+        page = ui.open(room=room, **options)
+        if "viewport" in options:
+            page.click("#buddy-toggle")
+        expect(page.locator('#buddy-list .member[data-name="claude-1"]')).to_contain_text(when)
+        expect(page.locator('#buddy-list .member[data-name="codex-1"]')).not_to_contain_text("wakes at")
+        no_horizontal_scroll(page)
+    page = ui.open(room=room)
+    page.click('#buddy-list .member[data-name="claude-1"]')
+    expect(page.locator("#insp-name")).to_contain_text("claude-1")
+    wake = page.locator("#insp-wake")
+    expect(wake).to_have_text("Wake now")
+    expect(page.locator("#insp-body .insp-actions .fine")).to_contain_text("Same as /wake, /hold")
+    with page.expect_request(
+        lambda r: r.method == "POST" and r.url.endswith(f"/api/rooms/{room}/command")
+    ) as req:
+        wake.click()
+    assert req.value.post_data_json == {"text": "/wake claude-1"}
+    expect(page.locator("#log .line.local").last).to_contain_text("waking claude-1 for 1 waiting message")
+    page = ui.open(room=room)  # the Inspector covers Members: start again for codex-1
+    page.click('#buddy-list .member[data-name="codex-1"]')
+    expect(page.locator("#insp-name")).to_contain_text("codex-1")
+    expect(page.locator("#insp-wake")).to_have_count(0)
+
+
 def test_slash_palette_and_mentions(ui: UI) -> None:
     page = ui.open()
     box = page.locator("#input")

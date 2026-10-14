@@ -205,6 +205,8 @@ ASKS_ADAPTERS = (
     "posted",
     "_channel_asked",
     "_channel_named",
+    "join",  # the test agent's starting status: its adapter's sink_status (#360)
+    "hook_event",  # the test agent's test-mode gate: its adapter's test_only (#360)
 )
 
 

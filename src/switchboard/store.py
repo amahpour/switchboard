@@ -1959,7 +1959,10 @@ class Store:
         "SELECT d.membership_id, d.message_id, d.prio, d.mentioned, d.state, d.batch_id,"
         " d.attempts, d.notified_at, d.redelivered, d.reminders, d.in_context_at,"
         " m.ts, m.sender_name, m.sender_kind,"
-        " m.sender_harness, m.text, m.reply_to, m.mentions, m.sender_host"
+        " m.sender_harness, m.text, m.reply_to, m.mentions, m.sender_host,"
+        # a reply to this member's own message addresses it, like an @mention (#137)
+        " COALESCE((SELECT r.sender_membership_id FROM messages r WHERE r.id=m.reply_to)"
+        "   = d.membership_id, 0) AS reply_to_me"
         " FROM deliveries d JOIN messages m ON m.id=d.message_id"
     )
 
@@ -2073,7 +2076,7 @@ class Store:
         were notified as a stub at or before ``before``, and that the watchdog
         isn't done with yet (DESIGN.md §8.5)."""
         # active members first, then their open deliveries by index: this runs every tick
-        cols = self._ITEM_SQL.split(" FROM ")[0]
+        cols = self._ITEM_SQL.rsplit(" FROM deliveries", 1)[0]
         rows = self.con.execute(
             cols + " FROM memberships mm CROSS JOIN deliveries d INDEXED BY deliveries_open"
             " ON d.membership_id=mm.id AND d.state IN ('in_context','pending')"

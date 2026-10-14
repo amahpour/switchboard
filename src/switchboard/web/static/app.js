@@ -510,6 +510,8 @@
     door: 'M3.5 14V2.5h8V14M1.5 14h13M9 8.5h.01',
     info: circ(8, 8, 6) + 'M8 7.3V11M8 5h.01',
     warn: 'M8 2.3 14.6 13.6H1.4L8 2.3ZM8 6.6v3.2M8 11.8h.01',
+    // a bell, for Wake now (#137): the body, the rim and the clapper
+    bell: 'M4.5 11V7a3.5 3.5 0 0 1 7 0v4l1.5 1.5h-10L4.5 11ZM6.5 13.5a1.5 1.5 0 0 0 3 0',
     hourglass: 'M4.5 2.5h7M4.5 13.5h7M5.5 2.5c0 3 5 3 5 5.5s-5 2.5-5 5.5M10.5 2.5c0 3-5 3-5 5.5s5 2.5 5 5.5',
     history: 'M2.5 8a5.5 5.5 0 1 0 1.7-4M2.5 2.5V5.5h3M8 5.5V8l2 1.5',
     kick: circ(6.5, 5, 2.5) + 'M1.5 13.5c.4-2.4 2.3-3.8 5-3.8 1.2 0 2.2.3 3 .8M11 10l3.5 3.5M14.5 10 11 13.5',
@@ -1275,6 +1277,8 @@
     if (flag) nameLine.append(flag);
     let st = statusWord(m) + ' · ' + harnessOf(m.harness)[1];
     if (m.queued) st += ' · ' + m.queued + ' queued';
+    // the hold on agents' chatter (#137): when those messages wake it, unless you wake it first
+    if (m.wakes_at) st += ' · wakes at ' + hhmm(m.wakes_at);
     if (m.inflight) st += ' · ' + m.inflight + ' in flight';
     if (m.held) st += ' · held';
     if (m.env_leak) st += ' · env shared';
@@ -2068,6 +2072,16 @@
       hold.title = 'Hold: stop delivery to ' + m.name + '; messages wait until you release it';
     }
     hold.addEventListener('click', function () { submitText((m.held ? '/release ' : '/hold ') + m.name); });
+    // Wake now (#137): only while agents' chatter waits on the hold for this member
+    let wake = null;
+    if (m.wakes_at) {
+      wake = btn('btn');
+      wake.id = 'insp-wake';
+      wake.dataset.focus = 'wake';
+      wake.append(icon('bell'), 'Wake now');
+      wake.title = 'Wake now: ' + m.name + ' gets its waiting messages now, not at ' + hhmm(m.wakes_at) + ' (web only)';
+      wake.addEventListener('click', function () { submitText('/wake ' + m.name); });
+    }
     const cu = btn('btn');
     cu.id = 'insp-catchup';
     cu.dataset.focus = 'catchup';
@@ -2077,6 +2091,7 @@
     cu.title = '/catchup ' + m.name + ' on a member, a topic or the room';
     cu.append(icon('history'), 'Catch up on…', icon('chev-down'));
     cu.addEventListener('click', function () { setMenu(!ui.menu); });
+    if (wake) row.append(wake);
     row.append(hold, cu);
     refs.hold = hold;
     refs.catchup = cu;
@@ -2138,7 +2153,9 @@
     });
     refs.kick = kick;
     const fine = el('p', 'fine');
-    fine.append('Same as ', el('code', null, '/hold'), ', ', el('code', null, '/catchup'), ' and ', el('code', null, '/kick'), ' in the composer.');
+    fine.append('Same as ');
+    if (wake) fine.append(el('code', null, '/wake'), ', ');
+    fine.append(el('code', null, '/hold'), ', ', el('code', null, '/catchup'), ' and ', el('code', null, '/kick'), ' in the composer.');
     actions.append(menu, row, kick, fine);
 
     body.replaceChildren(id);
@@ -2217,6 +2234,9 @@
       detail: 'Nothing is dropped: held messages go out on /release.' },
     { group: 'Agents', cmd: 'release', args: '<name>', desc: 'Resume delivery to a held agent', pill: 'web only', usage: '/release <name>',
       detail: 'Raises agent activity, so it needs this signed-in browser.' },
+    { group: 'Agents', cmd: 'wake', args: '<name>', desc: 'Wake an agent now for its waiting messages', pill: 'web only',
+      usage: '/wake <name>',
+      detail: 'Agents’ messages that don’t address it wait a few minutes to arrive together; this sends them now.' },
     { group: 'Agents', cmd: 'kick', args: '<name>', desc: 'Remove an agent and revoke its membership', pill: '', usage: '/kick <name>',
       detail: 'Asks first. Removes it from {room} and revokes its membership.' },
     { group: 'Agents', cmd: 'review', args: '<url> [note]', desc: 'Start a review board for a PR or MR', pill: '',
