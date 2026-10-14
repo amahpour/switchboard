@@ -5885,6 +5885,8 @@
       if (pruned || $('empty').classList.contains('hidden') === (state.rooms.size === 0)) renderLog();
       renderBuddies();
       renderStatus();
+      renderPins();  // the listing is the truth about the pins too, after a reconnect (#292)
+      if (activeRoom()) markPinned(activeRoom());
     }
     if (pruned) renderLocal(was + ' is no longer open (closed or deleted); Closed rooms can reopen a closed room');
     return fresh;
