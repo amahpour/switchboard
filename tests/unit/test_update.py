@@ -56,15 +56,30 @@ def test_the_upgrade_command_names_the_package_on_pypi() -> None:
         "/bin/uv",
         "tool",
         "install",
+        "--refresh-package",
+        "switchboard-chat",
         "switchboard-chat@latest",
     ]
-    assert update.install_argv(UV, "0.23.0", "/bin/uv")[-1] == "switchboard-chat==0.23.0"
+    assert update.install_argv(UV, "0.23.0", "/bin/uv") == [
+        "/bin/uv",
+        "tool",
+        "install",
+        "--refresh-package",
+        "switchboard-chat",
+        "switchboard-chat==0.23.0",
+    ]
     pipx = Installer("pipx", "switchboard-chat")
     assert update.install_argv(pipx, None, "/bin/pipx") == [
         "/bin/pipx",
         "install",
         "--force",
         "switchboard-chat",
+    ]
+    assert update.install_argv(pipx, "0.23.0", "/bin/pipx") == [
+        "/bin/pipx",
+        "install",
+        "--force",
+        "switchboard-chat==0.23.0",
     ]
 
 
@@ -114,7 +129,7 @@ def go(
 def test_an_update_upgrades_restarts_the_dialer_and_re_registers_with_the_new_copy() -> None:
     rc, rec, out = go(update.Plan(restart_dialer=True, harnesses=["claude", "codex"]))
     assert rc == 0 and rec.calls == [
-        ["/bin/uv", "tool", "install", "switchboard-chat@latest"],
+        ["/bin/uv", "tool", "install", "--refresh-package", "switchboard-chat", "switchboard-chat@latest"],
         ["/bin/switchboard", "stop", "--home", HOME],
         ["/bin/switchboard", "start", "--home", HOME],
         ["/bin/switchboard", "install", "claude", "--home", HOME, "--yes"],
