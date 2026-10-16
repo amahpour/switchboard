@@ -53,7 +53,7 @@ from switchboard.broker.peer import Peer
 from switchboard.broker.rpc import Conn
 from switchboard.broker.service import ServiceError
 from switchboard.envelope import clean
-from switchboard.models import ROOM_RE, Room, valid_host
+from switchboard.models import ROOM_RE, Room, over_https, valid_host
 from switchboard.paths import Paths
 from switchboard.remote import proto
 from switchboard.remote.config import (
@@ -1390,6 +1390,8 @@ class RemoteManager:
         for p in self.state.store.joined_participants():
             if not p.host or p.host in doomed:
                 continue
+            if over_https(p.host, p.mcp_pid):
+                continue  # no link to lose: its token is its tie, and revoking it ends it (§49.3)
             link = self.links.get(p.host) or self.machines.get(p.host)
             if link is None:
                 if self.config_error is not None:
