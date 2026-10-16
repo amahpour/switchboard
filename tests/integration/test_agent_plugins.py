@@ -125,6 +125,9 @@ def run_listen(
     url: str | None = None,
     owner: int | None = None,
     round_s: int | None = None,
+    data: Path | None = None,
+    home: Path | None = None,
+    tmp: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """``bin/listen`` as Claude Code runs it at Stop: the hook's input on stdin, the plugin's settings
     in ``CLAUDE_PLUGIN_OPTION_*``, and Claude Code's own pid in ``CLAUDE_PID`` (here the test's, or
@@ -137,6 +140,12 @@ def run_listen(
     }
     if round_s is not None:
         env["SWITCHBOARD_LISTEN_S"] = str(round_s)
+    if data is not None:
+        env["CLAUDE_PLUGIN_DATA"] = str(data)  # where the plugin keeps what it has said
+    if home is not None:
+        env["HOME"] = str(home)
+    if tmp is not None:
+        env["TMPDIR"] = str(tmp)
     stop = json.dumps({"session_id": session, "hook_event_name": "Stop", "stop_hook_active": False})
     return subprocess.run(
         ["sh", str(LISTEN)], input=stop, env=env, capture_output=True, text=True, timeout=60
@@ -484,3 +493,68 @@ def test_the_session_script_keeps_the_token_off_its_command_line() -> None:
     assert "-K -" in text
     curl_lines = [line for line in text.splitlines() if "curl " in line and not line.lstrip().startswith("#")]
     assert curl_lines and all("token" not in line.lower() for line in curl_lines)
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
+def test_the_listener_says_once_that_someone_else_ended_the_session(tmp_path: Path) -> None:
+    """A 410 means someone else ended the session (a kick, a closed room): the listener wakes it with
+    the server's line, once, and stays quiet when the same line comes back at later Stops, so it
+    can't loop a session awake. A different line (ended again, later) is said again. Fails if the
+    listener exits 0 on a 410 (the session goes deaf) or repeats the same line."""
+    line = "[switchboard] claude-1 is no longer in #build: your user removed it, at 19:30 UTC."
+    data = tmp_path / "plugin-data"
+    data.mkdir()
+    first = Stub([(410, line)])
+    try:
+        r = run_listen(None, "sbat_" + "x" * 43, SESSION_1, url=first.url, data=data)
+    finally:
+        first.close()
+    assert (r.returncode, r.stderr) == (2, line), r
+    second = Stub([(410, line)])
+    try:
+        r = run_listen(None, "sbat_" + "x" * 43, SESSION_1, url=second.url, data=data)
+    finally:
+        second.close()
+    assert (r.returncode, r.stderr) == (0, ""), r
+    later = line.replace("19:30", "20:05")
+    third = Stub([(410, later)])
+    try:
+        r = run_listen(None, "sbat_" + "x" * 43, SESSION_1, url=third.url, data=data)
+    finally:
+        third.close()
+    assert (r.returncode, r.stderr) == (2, later), r
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
+def test_the_listener_wakes_nobody_when_it_cant_remember_what_it_said(tmp_path: Path) -> None:
+    """The once-only marker is what stops a 410 from waking the session at every Stop, so a listener
+    that can't write it stays quiet (F1 on #405's board). Fails if it wakes without the marker, which
+    would loop a session awake for as long as it's open."""
+    blocked = tmp_path / "read-only"
+    blocked.mkdir()
+    blocked.chmod(0o500)
+    stub = Stub([(410, "[switchboard] claude-1 is no longer in #build: your user removed it, at 19:30 UTC.")])
+    try:
+        r = run_listen(None, "sbat_" + "x" * 43, SESSION_1, url=stub.url, data=blocked)
+    finally:
+        stub.close()
+        blocked.chmod(0o700)
+    assert (r.returncode, r.stderr) == (0, ""), r
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
+def test_the_listener_keeps_its_marker_out_of_shared_folders(tmp_path: Path) -> None:
+    """Set up by hand there's no CLAUDE_PLUGIN_DATA, and the marker goes in the user's own
+    ~/.cache/switchboard, never TMPDIR or /tmp, where another account could plant the name first
+    (F2 on #405's board). Fails if the marker lands in the shared folder."""
+    home, shared = tmp_path / "home", tmp_path / "shared-tmp"
+    home.mkdir()
+    shared.mkdir()
+    stub = Stub([(410, "[switchboard] claude-1 is no longer in #build: your user removed it, at 19:30 UTC.")])
+    try:
+        r = run_listen(None, "sbat_" + "x" * 43, SESSION_1, url=stub.url, home=home, tmp=shared)
+    finally:
+        stub.close()
+    assert r.returncode == 2, r
+    assert list(shared.iterdir()) == []
+    assert (home / ".cache" / "switchboard" / f"ended-{SESSION_1}").is_file()

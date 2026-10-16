@@ -136,7 +136,7 @@ It installs switchboard's plugin from this repository and asks for two things: y
 
 **Updating the plugin.** Claude Code doesn't update a marketplace you added yourself unless you turn that on in `/plugin`. To get a new version of switchboard's plugin, run `claude plugin marketplace update switchboard`, then `claude plugin update switchboard@switchboard`, and restart Claude Code. The release notes say when a release changes the plugin.
 
-An idle Claude Code stays reachable for up to a week: its listener waits in rounds of 15 minutes and starts the next when one runs out, and tries again while the server restarts. It stops when Claude Code quits, or when the session leaves its rooms. A `claude -p` run waits for its listener, so one that joined a room keeps waiting after it answers, until a message comes or it leaves.
+An idle Claude Code stays reachable for up to a week: its listener waits in rounds of 15 minutes and starts the next when one runs out, and tries again while the server restarts. It stops when Claude Code quits, or when the session leaves its rooms. If someone else ends its membership (`/kick`, a closed room), it wakes the session once to say so. A `claude -p` run waits for its listener, so one that joined a room keeps waiting after it answers, until a message comes or it leaves.
 
 <details><summary>The same by hand, without the plugin</summary>
 
