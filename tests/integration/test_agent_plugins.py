@@ -26,6 +26,7 @@ from switchboard.broker.agent_http import HOOK_FIELDS, HOOK_TOOL, LISTEN_PATH, P
 ROOT = Path(__file__).resolve().parents[2]
 CLAUDE_PLUGIN = ROOT / "plugins" / "claude"
 LISTEN = CLAUDE_PLUGIN / "bin" / "listen"
+SESSION = CLAUDE_PLUGIN / "bin" / "session"
 
 
 def load(p: Path) -> Any:
@@ -64,8 +65,10 @@ def test_the_claude_plugin_asks_for_the_server_and_a_secret_token() -> None:
 def test_every_hook_calls_the_hook_tool_with_fields_it_takes() -> None:
     """Each mcp_tool hook calls this plugin's own server's hook tool, with only the fields that tool
     takes; the ones about tools match switchboard's own tools only, so no other tool's input or
-    result leaves the machine; and Stop runs the listener in the background. Fails if a hook names
-    a field the server doesn't take, matches every tool, or the listener can't wake the session."""
+    result leaves the machine; SessionStart and SessionEnd are command hooks (Claude Code 2.1.283
+    and 2.1.299 refuse an mcp_tool hook there: "no MCP client context", #399); and Stop runs the
+    listener in the background. Fails if a hook names a field the server doesn't take, matches every
+    tool, is an mcp_tool hook where Claude Code won't run one, or the listener can't wake the session."""
     hooks = claude_hooks()
     assert set(hooks) == {
         "SessionStart",
@@ -87,6 +90,10 @@ def test_every_hook_calls_the_hook_tool_with_fields_it_takes() -> None:
                 assert h["input"]["session_id"] == "${session_id}"
             if event in ("PreToolUse", "PostToolUse", "PostToolUseFailure"):
                 assert group["matcher"] == "mcp__plugin_switchboard_switchboard__.*", event
+    for event in ("SessionStart", "SessionEnd"):  # Claude Code runs no mcp_tool hook at these (#399)
+        [h] = [h for g in hooks[event] for h in g["hooks"]]
+        assert h["type"] == "command" and h["command"] == '"${CLAUDE_PLUGIN_ROOT}"/bin/session', event
+    assert os.access(SESSION, os.X_OK)
     [stop] = [h for g in hooks["Stop"] for h in g["hooks"]]
     assert stop["type"] == "command" and stop["asyncRewake"] is True
     assert stop["command"] == '"${CLAUDE_PLUGIN_ROOT}"/bin/listen' and stop["timeout"] > 900
@@ -336,3 +343,50 @@ def test_the_listener_ends_with_claude_code() -> None:
     finally:
         owner.kill()
         stub.close()
+
+
+def run_session(
+    b: InProcBroker, token: str, session: str, event: str, **fields: str
+) -> subprocess.CompletedProcess[str]:
+    """``bin/session`` as Claude Code runs it: the hook's input on stdin (compact JSON, as Claude Code
+    writes it), the plugin's settings in ``CLAUDE_PLUGIN_OPTION_*``."""
+    env = {
+        "PATH": os.environ["PATH"],
+        "CLAUDE_PLUGIN_OPTION_SERVER_URL": b.base,
+        "CLAUDE_PLUGIN_OPTION_TOKEN": token,
+    }
+    hook = json.dumps(
+        {"session_id": session, "hook_event_name": event, "cwd": "/x/y", **fields}, separators=(",", ":")
+    )
+    return subprocess.run(
+        ["sh", str(SESSION)], input=hook, env=env, capture_output=True, text=True, timeout=30
+    )
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="the script needs curl")
+def test_the_session_script_takes_a_quit_session_offline(broker: InProcBroker) -> None:
+    """Claude Code won't run an mcp_tool hook at SessionEnd (#399), so the plugin's ``bin/session``
+    sends it: the session goes offline at once, and the script exits 0 and prints nothing. A
+    SessionStart reports too, and an event that isn't one of the two sends nothing. Fails if a quit
+    session stays idle in the room, or the script prints anything for a SessionEnd."""
+    broker.call("room.create", {"name": "#build"})
+    token = make_token(broker, "laptop")
+    claude = Claude(broker, token, SESSION_1)
+    assert claude.call("join", room="#build", screen_name="claude-1")["ok"]
+    r = run_session(broker, token, SESSION_1, "SessionStart", source="resume", permission_mode="default")
+    assert (r.returncode, r.stderr) == (0, ""), r
+    assert participant(broker, "claude-1").status != "offline"
+    assert run_session(broker, token, SESSION_1, "Stop").returncode == 0
+    assert participant(broker, "claude-1").status != "offline"  # not one of its events
+    r = run_session(broker, token, SESSION_1, "SessionEnd", reason="prompt_input_exit")
+    assert (r.returncode, r.stdout, r.stderr) == (0, "", ""), r
+    until(lambda: participant(broker, "claude-1").status == "offline")
+
+
+def test_the_session_script_keeps_the_token_off_its_command_line() -> None:
+    """As the listener does: the token reaches curl on stdin (``-K -``). Fails if it ever goes in
+    curl's arguments."""
+    text = SESSION.read_text()
+    assert "-K -" in text
+    curl_lines = [line for line in text.splitlines() if "curl " in line and not line.lstrip().startswith("#")]
+    assert curl_lines and all("token" not in line.lower() for line in curl_lines)

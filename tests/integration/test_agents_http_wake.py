@@ -295,3 +295,44 @@ def test_a_broker_that_has_run_a_while_keeps_an_agent_over_https(build: InProcBr
     p = participant(build, "claude-1")
     assert p.active and p.status != "offline", p
     assert claude.call("who", room="#build")["ok"]
+
+
+def session_hook(b: InProcBroker, token: str, body: Any, **headers: str) -> httpx.Response:
+    """The plugin's ``bin/session``: a POST of a small JSON object to ``/mcp/session``."""
+    h = {"authorization": f"Bearer {token}", "content-type": "application/json", **headers}
+    data = body if isinstance(body, bytes) else json.dumps(body).encode()
+    return httpx.post(f"{b.base}/mcp/session", headers=h, content=data, timeout=10)
+
+
+def test_the_session_route_takes_only_session_start_and_end_from_an_agent(build: InProcBroker) -> None:
+    """``/mcp/session`` (#399) is for Claude Code's SessionStart and SessionEnd only, which it can't
+    send as mcp_tool hooks: a SessionEnd takes the session offline, and it answers 200 with a JSON
+    object. Any other event (a Stop, which would park), a browser, a missing or wrong token, another
+    method or a large body is refused, so the route can't be used to wake or hold a session. Fails if
+    it accepts anything wider."""
+    claude, token = joined_claude(build)
+    sid = SESSION_1
+    # the route's own guarantee that it never parks (F2 on #404's board): a park needs a Stop with
+    # wait_s, and the route takes neither, whatever the engine does with a SessionStart
+    assert "wait_s" not in agent_http.SESSION_FIELDS and "Stop" not in agent_http.SESSION_EVENTS
+    r = session_hook(build, token, {"event": "SessionStart", "session_id": sid, "wait_s": "60"})
+    assert r.status_code == 200 and not parked(build, participant(build, "claude-1").id), r.text
+    assert session_hook(build, token, {"event": "Stop", "session_id": sid}).status_code == 400
+    assert session_hook(build, token, {"event": "PreToolUse", "session_id": sid}).status_code == 400
+    assert session_hook(build, token, ["SessionEnd"]).status_code == 400
+    assert (
+        session_hook(build, "sbat_" + "x" * 43, {"event": "SessionEnd", "session_id": sid}).status_code == 401
+    )
+    r = session_hook(build, token, {"event": "SessionEnd", "session_id": sid}, origin=build.origin)
+    assert r.status_code == 403
+    assert (
+        httpx.get(f"{build.base}/mcp/session", headers={"authorization": f"Bearer {token}"}).status_code
+        == 405
+    )
+    assert session_hook(build, token, b"{" + b" " * 4096 + b"}").status_code == 413
+    assert participant(build, "claude-1").status != "offline"  # none of those did anything
+    r = session_hook(build, token, {"event": "SessionStart", "session_id": sid, "source": "resume"})
+    assert r.status_code == 200 and isinstance(r.json(), dict), r.text
+    r = session_hook(build, token, {"event": "SessionEnd", "session_id": sid, "reason": "logout"})
+    assert r.status_code == 200 and r.json() == {}, r.text
+    assert participant(build, "claude-1").status == "offline"
