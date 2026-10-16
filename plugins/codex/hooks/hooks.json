@@ -1,0 +1,63 @@
+{
+  "description": "switchboard over HTTPS: status, confirmations and waking an idle thread (docs/DESIGN.md \u00a749.4)",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "switchboard",
+            "tool": "hook",
+            "input": {
+              "event": "UserPromptSubmit",
+              "session_id": "${session_id}",
+              "turn_id": "${turn_id}",
+              "permission_mode": "${permission_mode}"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__switchboard__.*",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "switchboard",
+            "tool": "hook",
+            "input": {
+              "event": "PostToolUse",
+              "session_id": "${session_id}",
+              "turn_id": "${turn_id}",
+              "tool_name": "${tool_name}",
+              "tool_use_id": "${tool_use_id}",
+              "tool_response": "${tool_response}"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "switchboard",
+            "tool": "hook",
+            "input": {
+              "event": "Stop",
+              "session_id": "${session_id}",
+              "turn_id": "${turn_id}",
+              "permission_mode": "${permission_mode}",
+              "wait_s": "1790"
+            },
+            "timeout": 1800
+          }
+        ]
+      }
+    ]
+  }
+}
