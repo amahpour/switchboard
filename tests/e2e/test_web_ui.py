@@ -2583,23 +2583,50 @@ def test_a_stale_board_fetch_cannot_erase_a_live_head_move(ui: UI) -> None:
     expect(mark).to_have_text(f"Outdated at {sha[:7]}")
 
 
+# The board's lanes as laid out: each lane's name, top and left, and whether it has a size (a lane of
+# a board not laid out yet is all zeros, so three of them would share one top).
+LANE_BOXES = (
+    "() => [...document.querySelectorAll('#board .board-lane')].map(l => {"
+    " const r = l.getBoundingClientRect();"
+    " return [l.className.match(/lane-(\\w+)/)[1], Math.round(r.top), Math.round(r.left),"
+    " r.width > 0 && r.height > 0]; })"
+)
+# true once the lanes sit in one row, in the order a finding lives
+LANES_IN_A_ROW = (
+    "() => { const b = (" + LANE_BOXES + ")(); return b.length === 3 && b.every(x => x[3])"
+    " && new Set(b.map(x => x[1])).size === 1"
+    " && b.slice().sort((x, y) => x[2] - y[2]).map(x => x[0]).join() === 'working,you,settled'; }"
+)
+# true once the lanes stack, with Needs you first
+LANES_STACKED = (
+    "() => { const b = (" + LANE_BOXES + ")(); return b.length === 3 && b.every(x => x[3])"
+    " && b.slice().sort((x, y) => x[1] - y[1]).map(x => x[0]).join() === 'you,working,settled'; }"
+)
+
+
+def lanes_settle(page: Page, laid_out: str) -> None:
+    """Wait for the board's lanes to be laid out as ``laid_out`` says (``wait_js``, which polls
+    through ``page.evaluate``), and fail with what they measured if they never are. Right after
+    Open board the page is still settling: the board is drawn by the click and drawn again when its
+    own read answers, and on a phone the rooms drawer may still be closing. One run measured that
+    instant (2026-10-15, a full e2e run under ``-n auto``) and read a phone's lanes in DOM order,
+    while the next frame showed them stacked."""
+    try:
+        wait_js(page, laid_out)
+    except TimeoutError:
+        raise AssertionError(f"the lanes never settled: {page.evaluate(LANE_BOXES)}") from None
+
+
 def test_the_three_lanes_sit_in_one_row_and_stack_on_a_phone(ui: UI) -> None:
     """#250: on a desktop the lanes are one row, in the order a finding lives (no lane wraps
-    under another); on a phone they stack, with Needs you first."""
+    under another); on a phone they stack, with Needs you first. Each is checked once the board
+    is laid out (``lanes_settle``), and fails if it never is."""
     page = review_room(ui, "e2e-board-row")
     page.click("#board-toggle")
-    tops = page.locator("#board .board-lane").evaluate_all(
-        "ls => ls.map(l => [l.className.match(/lane-(\\w+)/)[1], Math.round(l.getBoundingClientRect().top),"
-        " Math.round(l.getBoundingClientRect().left)])"
-    )
-    assert [t[0] for t in sorted(tops, key=lambda t: t[2])] == ["working", "you", "settled"]
-    assert len({t[1] for t in tops}) == 1, tops
+    lanes_settle(page, LANES_IN_A_ROW)
     phone = review_room(ui, "e2e-board-row-phone", **PHONE)
     phone.click("#board-toggle")
-    tops = phone.locator("#board .board-lane").evaluate_all(
-        "ls => ls.map(l => [l.className.match(/lane-(\\w+)/)[1], Math.round(l.getBoundingClientRect().top)])"
-    )
-    assert [t[0] for t in sorted(tops, key=lambda t: t[1])] == ["you", "working", "settled"]
+    lanes_settle(phone, LANES_STACKED)
     no_horizontal_scroll(phone)
 
 
