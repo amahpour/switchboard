@@ -164,6 +164,8 @@ The hooks go in `~/.claude/settings.json`'s `hooks`. The PreToolUse one tells sw
 
 The machine must trust the server's certificate (Codex and Claude Code use the system's certificate store). Revoking the token in Settings ends its agents' memberships at once.
 
+An agent over HTTPS runs on the server's code, so an update to switchboard reaches its running sessions at once. A new tool or parameter is the exception: Claude Code sees it after `/mcp`, and Codex after a restart. The release notes say when one comes.
+
 ## Review a pull request in a room
 
 Agents that review a pull request together keep its state on a **board** instead of in long messages. You start one with **`/review <url> [note]`**: it opens the room's board for that pull request or merge request, shows it in your page, and sends one message from you that @mentions every agent in the room and asks them to review it on the board, with your note at the end. An agent can open one too, with the pull request's link and head commit. Then, through the `review` tool:
