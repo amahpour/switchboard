@@ -174,4 +174,4 @@ To restore, stop the broker, put the copy at `$SWITCHBOARD_HOME/switchboard.db` 
   - Started as root, as Render and plain `docker run` do, the image's `switchboard` command ([deploy/image/switchboard.sh](../deploy/image/switchboard.sh)) first makes `$SWITCHBOARD_HOME` that user's private directory. It then drops to that user with no capabilities and no way back through setuid.
   - `docker exec … switchboard …` drops to the same user.
   - Started as uid 10001, as Kubernetes does with the manifest above, it runs as that user from the start.
-- **Build it yourself:** `docker build -t switchboard .` from the repository. CI builds it on every pull request and runs [tests/image](../tests/image/test_image.py) against it, behind a proxy that ends TLS (CONTRIBUTING.md, "The container image").
+- **Build it yourself:** `docker build -t switchboard -f deploy/image/Dockerfile .` from the repository. CI builds it on every pull request and runs [tests/image](../tests/image/test_image.py) against it, behind a proxy that ends TLS (CONTRIBUTING.md, "The container image").

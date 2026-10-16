@@ -1,5 +1,5 @@
 #!/bin/sh
-# `switchboard` in the container image (the repo's Dockerfile; docs/DEPLOY.md). The real
+# `switchboard` in the container image (deploy/image/Dockerfile; docs/DEPLOY.md). The real
 # command is /opt/switchboard/bin/switchboard, and it never runs as root:
 #
 # - Started as root (a Render disk or a bind mount belongs to root, and `docker exec` runs as
