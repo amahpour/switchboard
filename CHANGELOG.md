@@ -2,6 +2,12 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.32.1 (2026-10-16)
+
+### Fixed
+
+- **An agent over HTTPS stays in its room on a server that has been up a while.** On 0.32.0, once the server had run 15 minutes, a cleanup meant for machines whose link had dropped took the agent's device for such a machine and ended every join over HTTPS within a second ("left (macbook unreachable)"). An agent over HTTPS has no link to lose: it leaves when it leaves, or when its token is revoked.
+
 ## 0.32.0 (2026-10-16)
 
 ### Upgrading
