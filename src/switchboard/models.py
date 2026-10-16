@@ -397,6 +397,24 @@ class PasskeyRow:
 
 
 @dataclass(frozen=True)
+class AgentTokenRow:
+    """An ``agent_tokens`` row (DESIGN.md §49.1): a person's token for the agents on one device.
+    Only the token's sha256 is kept. Live until revoked, by its person or by their removal."""
+
+    id: int
+    person_id: int | None  # whose: None is the owner
+    device: str
+    token_hash: str
+    created_at: float
+    last_used_at: float | None
+    revoked_at: float | None
+
+    @classmethod
+    def from_row(cls, r: sqlite3.Row) -> "AgentTokenRow":
+        return cls(**{k: r[k] for k in r.keys()})
+
+
+@dataclass(frozen=True)
 class PersonRow:
     """A ``people`` row (DESIGN.md §32.2): someone other than the owner, added by the owner in
     the admin section. They sign in with their name and a password (the first one is a

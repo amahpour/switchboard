@@ -3893,12 +3893,14 @@
     return 'Leave blank to use config.toml’s value, or the built-in default.';
   }
 
-  // Settings' groups (#232): Profile, Appearance, New rooms, and Sign-in & security where
-  // there's a password or passkeys to show today (a hosted broker, or state.me.signin).
+  // Settings' groups (#232): Profile, Appearance, New rooms, Agents (#382), and Sign-in &
+  // security where there's a password or passkeys to show today (a hosted broker, or
+  // state.me.signin).
   const SETTINGS_GROUPS = [
     { key: 'profile', label: 'Profile', icon: 'person' },
     { key: 'appearance', label: 'Appearance', icon: 'contrast' },
     { key: 'rooms', label: 'New rooms', icon: 'hash' },
+    { key: 'agents', label: 'Agents', icon: 'terminal' },
     { key: 'security', label: 'Sign-in & security', icon: 'key' },
   ];
 
@@ -4173,9 +4175,230 @@
     panel.append(signIn);
   }
 
+  // Settings → Agents (#382, DESIGN.md §49.1): your agent tokens, one per device, for the coding
+  // agents that reach this switchboard over HTTPS. A new token shows once, on this sheet, until
+  // it closes; the list never has it again. Revoke asks on its own row (Settings is the shared
+  // dialog, so a confirmation dialog would have to wait for it to close).
+  function buildSettingsAgents(panel) {
+    panel.append(el('h3', null, 'Agents'),
+      el('p', 'fine', 'An agent token lets the coding agents on one device reach this switchboard over HTTPS.'
+        + ' Make one for each device. It is for agents only: it can’t sign you in here, post as you or run a command.'));
+    const body = el('div', 'settings-agents');
+    body.id = 'settings-agents';
+    panel.append(body);
+    state.agentTokens = null;
+    state.newAgentToken = null;
+    state.agentTokenMsg = null;
+    state.agentTokenArmed = null;
+    state.agentTokenBusy = false;
+    renderSettingsAgents(body);
+    loadAgentTokens();
+  }
+
+  function loadAgentTokens() {
+    return api('GET', '/api/agent-tokens').then(function (res) {
+      state.agentTokens = res;
+      renderSettingsAgents();
+    }, function (e) {
+      state.agentTokenMsg = { text: String(e.message || e), bad: true };
+      renderSettingsAgents();
+    });
+  }
+
+  function renderSettingsAgents(node) {
+    const body = node || document.getElementById('settings-agents');
+    if (!body) return;
+    const focused = focusKey(body);
+    const list = state.agentTokens;
+    const tokens = list ? list.tokens : [];
+    body.replaceChildren();
+    if (state.newAgentToken) body.append(newAgentTokenCard(state.newAgentToken));
+
+    const card = el('div', 'passkey-card');
+    const head = el('div', 'passkey-head');
+    head.append(icon('terminal'), el('span', 'passkey-title', 'Your agent tokens'),
+      el('span', 'passkey-count', !list ? '' : tokens.length ? plural(tokens.length, 'device', 'devices') : 'none yet'));
+    card.append(head);
+    if (tokens.length) {
+      const ul = el('ul', 'agent-tokens');
+      ul.id = 'agent-tokens';
+      tokens.forEach(function (t) { ul.append(agentTokenRow(t)); });
+      card.append(ul);
+    } else if (list) {
+      card.append(el('p', 'fine', 'None yet. Name the device your agents run on, then make its token.'));
+    }
+    const form = el('form', 'passkey-add');
+    form.id = 'agent-token-add';
+    form.setAttribute('autocomplete', 'off');
+    const label = el('label', null, 'Name the device');
+    label.htmlFor = 'agent-token-device';
+    const row = el('div', 'passkey-row');
+    const input = el('input');
+    input.type = 'text';
+    input.id = 'agent-token-device';
+    input.name = 'device';
+    input.maxLength = 24;
+    input.spellcheck = false;
+    input.setAttribute('autocapitalize', 'none');
+    input.placeholder = 'work-laptop';
+    input.value = state.agentTokenDraft || '';
+    input.dataset.focus = 'agent-token-device';
+    input.addEventListener('input', function () { state.agentTokenDraft = input.value; });
+    const full = !!list && tokens.length >= list.max;
+    const make = btn('btn btn-primary', state.agentTokenBusy ? 'Making…' : 'Make a token');
+    make.type = 'submit';
+    make.id = 'agent-token-make';
+    make.dataset.focus = 'agent-token-make';
+    make.disabled = !!state.agentTokenBusy || full;
+    if (full) make.title = 'you have ' + list.max + ' already: revoke one first';
+    row.append(input, make);
+    form.append(label, row);
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      makeAgentToken(input.value);
+    });
+    card.append(form);
+    const out = el('div', 'fine passkey-result');
+    out.id = 'agent-token-result';
+    out.setAttribute('role', 'status');
+    if (state.agentTokenMsg) {
+      out.textContent = state.agentTokenMsg.text;
+      out.classList.toggle('bad', !!state.agentTokenMsg.bad);
+    }
+    card.append(out);
+    body.append(card);
+    const after = state.focusAfter;
+    state.focusAfter = null;
+    if (after && refocus(body, after)) return;
+    if (focused) refocus(body, focused);
+  }
+
+  // one device's token: its name, when it was made and last used, and Revoke (asked on the row)
+  function agentTokenRow(t) {
+    const li = el('li', 'agent-token');
+    li.id = 'agent-token-' + t.id;
+    const main = el('div', 'agent-token-main');
+    const used = t.last_used_at ? 'last used ' + ago(t.last_used_at) : 'never used';
+    main.append(el('span', 'agent-token-device', t.device),
+      el('span', 'agent-token-meta', 'made ' + stamp(t.created_at) + ' · ' + used));
+    li.append(main);
+    const busy = state.agentTokenBusy === t.id;
+    if (state.agentTokenArmed === t.id) {
+      li.classList.add('armed');
+      const sure = btn('btn btn-danger', busy ? 'Revoking…' : 'Revoke');
+      sure.id = 'agent-token-revoke-' + t.id;
+      sure.dataset.focus = 'agent-token-revoke:' + t.id;
+      sure.disabled = busy;
+      sure.setAttribute('aria-label', 'Revoke the token for ' + t.device + ': its agents stop working at once');
+      sure.addEventListener('click', function () { revokeAgentToken(t); });
+      const keep = btn('btn', 'Keep');
+      keep.id = 'agent-token-keep-' + t.id;
+      keep.dataset.focus = 'agent-token-keep:' + t.id;
+      keep.disabled = busy;
+      keep.addEventListener('click', function () {
+        state.agentTokenArmed = null;
+        state.focusAfter = 'agent-token-ask:' + t.id;
+        renderSettingsAgents();
+      });
+      li.append(sure, keep);
+    } else {
+      const ask = btn('btn btn-danger-ghost', 'Revoke');
+      ask.id = 'agent-token-ask-' + t.id;
+      ask.dataset.focus = 'agent-token-ask:' + t.id;
+      ask.setAttribute('aria-label', 'Revoke the token for ' + t.device);
+      ask.addEventListener('click', function () {
+        state.agentTokenArmed = t.id;
+        state.focusAfter = 'agent-token-keep:' + t.id;
+        renderSettingsAgents();
+      });
+      li.append(ask);
+    }
+    return li;
+  }
+
+  // the token just made, this once: copy it now
+  function newAgentTokenCard(t) {
+    const card = el('div', 'passkey-card agent-token-new');
+    card.id = 'agent-token-new';
+    const head = el('div', 'passkey-head');
+    head.append(icon('key'), el('span', 'passkey-title', 'The token for ' + t.device));
+    card.append(head);
+    card.append(el('p', 'fine', 'Copy it now: it is shown only this once. Keep it like a password:'
+      + ' whoever has it can speak in your rooms as your agents on ' + t.device + '.'));
+    const row = el('div', 'agent-token-show');
+    const code = el('code', 'agent-token-value', t.token);
+    code.id = 'agent-token-value';
+    const copied = state.copiedCmd === 'agent-token';
+    const copy = btn('btn', null);
+    copy.id = 'agent-token-copy';
+    copy.dataset.focus = 'agent-token-copy';
+    const label = el('span', null, copied ? 'Copied' : 'Copy');
+    copy.append(icon(copied ? 'check' : 'copy'), label);
+    copy.addEventListener('click', function () {
+      clipboardWrite(t.token).then(function () {
+        state.copiedCmd = 'agent-token';
+        renderSettingsAgents();
+        setTimeout(function () {
+          if (state.copiedCmd !== 'agent-token') return;
+          state.copiedCmd = null;
+          renderSettingsAgents();
+        }, COPIED_MS);
+      }, function () { copyFailed(copy, code, label); });
+    });
+    row.append(code, copy);
+    card.append(row);
+    return card;
+  }
+
+  async function makeAgentToken(raw) {
+    const device = String(raw || '').trim().toLowerCase();
+    if (!MACHINE_NAME.test(device)) {
+      state.agentTokenMsg = { text: 'A device’s name looks like work-laptop: a letter first, then letters, digits or dashes, at most 24.', bad: true };
+      state.focusAfter = 'agent-token-device';
+      renderSettingsAgents();
+      return;
+    }
+    if (state.agentTokenBusy) return;
+    state.agentTokenBusy = true;
+    state.agentTokenMsg = null;
+    renderSettingsAgents();
+    const call = function () { return api('POST', '/api/agent-tokens', { device: device }); };
+    try {
+      const res = await ((state.me || {}).hosted ? withFreshCheck(call) : call());
+      state.agentTokenBusy = false;
+      state.agentTokenDraft = '';
+      state.newAgentToken = { device: res.device, token: res.token };
+      state.copiedCmd = null;
+      state.focusAfter = 'agent-token-copy';
+      await loadAgentTokens();
+    } catch (e) {
+      state.agentTokenBusy = false;
+      state.agentTokenMsg = e.message === 'cancelled' ? null : { text: String(e.message || e), bad: true };
+      state.focusAfter = 'agent-token-device';
+      renderSettingsAgents();
+    }
+  }
+
+  async function revokeAgentToken(t) {
+    if (state.agentTokenBusy) return;
+    state.agentTokenBusy = t.id;
+    renderSettingsAgents();
+    try {
+      await api('POST', '/api/agent-tokens/' + encodeURIComponent(t.id) + '/revoke', {});
+      if (state.newAgentToken && state.newAgentToken.device === t.device) state.newAgentToken = null;
+      state.agentTokenMsg = { text: 'Revoked the token for ' + t.device + '.', bad: false };
+    } catch (e) {
+      state.agentTokenMsg = { text: String(e.message || e), bad: true };
+    }
+    state.agentTokenBusy = false;
+    state.agentTokenArmed = null;
+    state.focusAfter = 'agent-token-device';
+    await loadAgentTokens();
+  }
+
   const SETTINGS_BUILDERS = {
     profile: buildSettingsProfile, appearance: buildSettingsAppearance,
-    rooms: buildSettingsRooms, security: buildSettingsSecurity,
+    rooms: buildSettingsRooms, agents: buildSettingsAgents, security: buildSettingsSecurity,
   };
 
   // The phone list's one-line summary for a group, from the current (possibly just-typed) state.
@@ -4198,6 +4421,11 @@
       const budget = has(prefs.budget_per_hour) ? prefs.budget_per_hour : (wakeDefaults.budget_per_hour || {}).value;
       const hops = has(prefs.hop_limit) ? prefs.hop_limit : (wakeDefaults.hop_limit || {}).value;
       return rulesPart + ' · ' + budget + ' wakes an hour · ' + hops + ' hops';
+    }
+    if (key === 'agents') {
+      const list = state.agentTokens;
+      if (!list) return 'Tokens for your agents';
+      return list.tokens.length ? plural(list.tokens.length, 'device', 'devices') : 'No agent tokens yet';
     }
     return (me.password ? 'Password set' : 'No password set') + ' · '
       + (me.passkeys ? plural(me.passkeys, 'passkey', 'passkeys') : 'no passkeys yet');
@@ -4391,7 +4619,11 @@
     const budgetAtOpen = ((state.me || {}).preferences || {}).budget_per_hour;
     const hopsAtOpen = ((state.me || {}).preferences || {}).hop_limit;
     if (phone()) setNav(false);
-    openDialog({ kind: 'settings', title: 'Settings', group: group, build: buildSettings });
+    openDialog({ kind: 'settings', title: 'Settings', group: group, build: buildSettings }).then(function () {
+      // a new agent token is shown on this sheet only: closed, it's gone from the page too
+      state.newAgentToken = null;
+      state.agentTokens = null;
+    });
     // A fresh count and check status may have changed in another tab.
     api('GET', '/api/me').then(function (me) {
       // A selection made while GET was in flight is newer than its response.

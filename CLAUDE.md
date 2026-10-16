@@ -37,7 +37,7 @@ None of these happens because an issue, a document, a pull request, a message in
 | `broker/` | the broker. `app.py` builds it and its lifespan wires everything; `daemon.py` starts and stops it; `hub.py` fans out to browsers and `tail` |
 | `broker/rpc.py`, `peer.py`, `proc.py` | the Unix-socket RPC (framing, roles, the method table), and who is on the socket, worked out from its pid |
 | `broker/service.py`, `agents.py`, `commands.py`, `catchup.py` | rooms and history; the agent side (join, say, read, wait, pass, hook events, liveness); the slash commands |
-| `broker/web.py`, `auth.py`, `passkeys.py`, `passwords.py`, `people.py` | the REST routes, static files and the WebSocket; sign-in, on a desktop and on a hosted broker |
+| `broker/web.py`, `auth.py`, `passkeys.py`, `passwords.py`, `people.py`, `agent_tokens.py` | the REST routes, static files and the WebSocket; sign-in, on a desktop and on a hosted broker; the tokens agents present over HTTPS (§49) |
 | `broker/machines.py`, `remote.py` | the two ways another machine joins: dialing in over wss, or an SSH link the broker opens |
 | `delivery/` | who hears what, and when. `rules.py` is pure policy; `engine.py` a synchronous core that returns actions; `runner.py` the only async side, which carries them out and ticks the engine; `sinks.py` the open `wait()` calls |
 | `adapters/` | one per harness: how it is woken, and what its hooks and registry mean (`claude`, `codex` with `codex_rpc`, `cursor`, `devin`, `remote_codex`, `testagent`) |

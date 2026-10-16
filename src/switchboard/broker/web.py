@@ -67,7 +67,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from switchboard import __version__, build_info, db
-from switchboard.broker import oidc, people
+from switchboard.broker import agent_tokens, oidc, people
 from switchboard.broker.auth import COOKIE_NAME, SESSION_TTL_S, app_csp, sha256_hex
 from switchboard.broker.commands import MAX_BUDGET, MAX_HOPS, Actor
 from switchboard.broker.hub import WsSubscriber
@@ -1290,6 +1290,41 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 raise ServiceError("bad_request", "machine names look like work-laptop")
             w = who(request)
             return _ok(await state.machines.remove(name, "web", w.name if w is not None else None))
+        except ServiceError as e:
+            return _svc_err(e)
+
+    # -------------------------------------------------- agent tokens (#382, §49.1)
+    # Each person's own: a desktop's owner, or anyone signed in to a hosted broker. Making one
+    # grants access, so a hosted broker wants a check in the last five minutes, as pairing does.
+    @app.get("/api/agent-tokens")
+    async def agent_tokens_list(request: Request) -> Response:
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        return _ok(agent_tokens.listing(state, w.person_id))
+
+    @app.post("/api/agent-tokens")
+    async def agent_tokens_make(request: Request) -> Response:
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        if state.hosted and not state.fresh_check(w.h):
+            return _err(403, "reauth", "confirm it's you first")
+        try:
+            body = await _json_body(request)
+            return _ok(agent_tokens.make(state, w.person_id, body.get("device"), w.name))
+        except ServiceError as e:
+            return _svc_err(e)
+
+    @app.post("/api/agent-tokens/{tid}/revoke")
+    async def agent_tokens_revoke(request: Request, tid: str) -> Response:
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        try:
+            await _json_body(request)
+            n = int(tid) if ROOM_ID_RE.fullmatch(tid) and int(tid) <= MAX_ROOM_ID else 0
+            return _ok(agent_tokens.revoke(state, w.person_id, n, w.name))
         except ServiceError as e:
             return _svc_err(e)
 

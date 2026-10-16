@@ -1539,14 +1539,30 @@ def test_wake_defaults_copy_into_a_room_and_its_own_dialog_edits_live(ui: UI) ->
     ui.world.command("e2e-wake", "/close")
 
 
-def test_settings_shows_three_tabs_on_a_desktop_broker(ui: UI) -> None:
+def test_settings_shows_four_tabs_on_a_desktop_broker(ui: UI) -> None:
     """A desktop broker has no password or passkeys to show, so Settings has no Sign-in &
-    security tab; Sign out still sits in the rail (#232)."""
+    security tab, but it has Agents (#382); Sign out still sits in the rail (#232)."""
     page = ui.open()
     open_settings(page)
-    expect(page.locator("#settings-rail [role='tab']")).to_have_count(3)
+    expect(page.locator("#settings-rail [role='tab']")).to_have_count(4)
+    expect(page.locator("#settings-tab-agents")).to_be_visible()
     expect(page.locator("#settings-tab-security")).to_have_count(0)
     expect(page.locator("#settings-sign-out")).to_be_visible()
+    page.keyboard.press("Escape")
+
+
+def test_settings_agents_make_a_token_with_no_check_on_a_desktop_broker(ui: UI) -> None:
+    """A desktop broker's owner signed in from the terminal, so making an agent token asks for
+    nothing more (#382): the token shows at once, and Revoke on its row takes it away again."""
+    page = ui.open()
+    open_settings(page, "agents")
+    page.fill("#agent-token-device", "e2e-desk")
+    page.click("#agent-token-make")
+    expect(page.locator("#agent-token-value")).to_have_text(re.compile(r"^sbat_[A-Za-z0-9_-]{43}$"))
+    expect(page.locator("#confirm-dialog")).to_be_hidden()
+    page.get_by_role("button", name="Revoke the token for e2e-desk", exact=True).click()
+    page.locator("#agent-tokens .agent-token.armed .btn-danger").click()
+    expect(page.locator("#agent-tokens .agent-token", has_text="e2e-desk")).to_have_count(0)
     page.keyboard.press("Escape")
 
 
@@ -1564,13 +1580,13 @@ def test_settings_tabs_respond_to_arrow_keys_tab_and_escape(ui: UI) -> None:
     expect(page.locator("#settings-tab-profile")).to_have_attribute("aria-selected", "false")
     expect(page.locator("#settings-panel-profile")).to_be_hidden()
     page.keyboard.press("End")
-    expect(page.locator("#settings-tab-rooms")).to_be_focused()
-    expect(page.locator("#settings-panel-rooms")).to_be_visible()
+    expect(page.locator("#settings-tab-agents")).to_be_focused()
+    expect(page.locator("#settings-panel-agents")).to_be_visible()
     page.keyboard.press("Home")
     expect(page.locator("#settings-tab-profile")).to_be_focused()
     expect(page.locator("#settings-panel-profile")).to_be_visible()
     page.keyboard.press("ArrowUp")  # wraps to the last tab
-    expect(page.locator("#settings-tab-rooms")).to_be_focused()
+    expect(page.locator("#settings-tab-agents")).to_be_focused()
     page.keyboard.press("Home")
     page.keyboard.press("Tab")
     expect(page.locator("#settings-first")).to_be_focused()  # Tab left the rail, into the panel
@@ -1610,7 +1626,7 @@ def test_settings_draft_survives_switching_groups_and_a_refresh(ui: UI) -> None:
     page.keyboard.press("Escape")
 
 
-@pytest.mark.parametrize("group", ["profile", "appearance", "rooms"])
+@pytest.mark.parametrize("group", ["profile", "appearance", "rooms", "agents"])
 def test_every_settings_group_has_its_padded_scrolling_box(ui: UI, group: str) -> None:
     """A group with no save bar (Appearance) is laid out like one with a bar: its controls sit
     inside the padded box that scrolls, not against the rail's edge (#257's review)."""

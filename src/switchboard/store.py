@@ -21,6 +21,7 @@ from switchboard.models import (
     MAX_PINS,
     ROOM_RE,
     WATCHDOG_DONE,
+    AgentTokenRow,
     Batch,
     Event,
     Item,
@@ -1289,9 +1290,9 @@ class Store:
             )
 
     def person_remove(self, person_id: int) -> list[str] | None:
-        """In one transaction: the person is removed, their password and passkeys deleted and
-        their sessions ended. Returns the ended sessions' id hashes, or None if there was no
-        such active person."""
+        """In one transaction: the person is removed, their password and passkeys deleted, their
+        agent tokens revoked (§49.1) and their sessions ended. Returns the ended sessions' id
+        hashes, or None if there was no such active person."""
         now = self.clock.now()
         with db.tx(self.con):
             if (
@@ -1304,7 +1305,76 @@ class Store:
             ):
                 return None
             self.con.execute("DELETE FROM passkeys WHERE person_id=?", (person_id,))
+            self.con.execute(
+                "UPDATE agent_tokens SET revoked_at=? WHERE person_id=? AND revoked_at IS NULL",
+                (now, person_id),
+            )
             return self.web_session_delete_person(person_id)
+
+    # ------------------------------------------------------ agent tokens (#382, §49.1)
+    # NULL ``person_id`` is the owner, as on passkeys and machines. One live token per device.
+    def agent_token_add(self, person_id: int | None, device: str, token_hash: str) -> AgentTokenRow | None:
+        """A new live token for ``device``, or None when a live one has that name already."""
+        if not valid_host(device) or len(token_hash) != 64:
+            raise ValueError("an agent token needs a device name and a sha256")
+        now = self.clock.now()
+        with db.tx(self.con):
+            try:
+                cur = self.con.execute(
+                    "INSERT INTO agent_tokens(person_id, device, token_hash, created_at) VALUES(?,?,?,?)",
+                    (person_id, device, token_hash, now),
+                )
+            except sqlite3.IntegrityError:
+                return None
+            r = self.con.execute("SELECT * FROM agent_tokens WHERE id=?", (cur.lastrowid,)).fetchone()
+        return AgentTokenRow.from_row(r)
+
+    def agent_tokens_of(self, person_id: int | None) -> list[AgentTokenRow]:
+        """One person's live tokens (None: the owner's), oldest first."""
+        rows = self.con.execute(
+            "SELECT * FROM agent_tokens WHERE person_id IS ? AND revoked_at IS NULL ORDER BY created_at, id",
+            (person_id,),
+        )
+        return [AgentTokenRow.from_row(r) for r in rows]
+
+    def agent_token_for_device(self, device: str) -> AgentTokenRow | None:
+        """The live token named ``device``, whoever's it is."""
+        r = self.con.execute(
+            "SELECT * FROM agent_tokens WHERE device=? AND revoked_at IS NULL", (device,)
+        ).fetchone()
+        return AgentTokenRow.from_row(r) if r else None
+
+    def agent_token_by_hash(self, token_hash: str) -> AgentTokenRow | None:
+        """The live token whose sha256 this is."""
+        r = self.con.execute(
+            "SELECT * FROM agent_tokens WHERE token_hash=? AND revoked_at IS NULL", (token_hash,)
+        ).fetchone()
+        return AgentTokenRow.from_row(r) if r else None
+
+    def agent_token_revoke(self, token_id: int, person_id: int | None) -> AgentTokenRow | None:
+        """Revoke one of ``person_id``'s live tokens; the row, revoked, or None when it isn't
+        theirs or isn't live."""
+        now = self.clock.now()
+        with db.tx(self.con):
+            if (
+                self.con.execute(
+                    "UPDATE agent_tokens SET revoked_at=?"
+                    " WHERE id=? AND person_id IS ? AND revoked_at IS NULL",
+                    (now, token_id, person_id),
+                ).rowcount
+                != 1
+            ):
+                return None
+            r = self.con.execute("SELECT * FROM agent_tokens WHERE id=?", (token_id,)).fetchone()
+        return AgentTokenRow.from_row(r)
+
+    def agent_token_used(self, token_id: int) -> None:
+        """An agent used this token now (the list shows when it was last used)."""
+        with db.tx(self.con):
+            self.con.execute(
+                "UPDATE agent_tokens SET last_used_at=? WHERE id=? AND revoked_at IS NULL",
+                (self.clock.now(), token_id),
+            )
 
     # ------------------------------------------------------------ preferences
     # 0 is the owner (desktop or hosted); positive ids belong to the people table.

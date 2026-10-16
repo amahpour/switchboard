@@ -29,7 +29,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -224,6 +224,12 @@ CREATE TABLE pins(
   room_id INTEGER NOT NULL REFERENCES rooms(id), message_id INTEGER NOT NULL REFERENCES messages(id),
   pinned_by TEXT NOT NULL CHECK(length(pinned_by) <= 100), pinned_at REAL NOT NULL,
   PRIMARY KEY(room_id, message_id));
+CREATE TABLE agent_tokens(
+  id INTEGER PRIMARY KEY, person_id INTEGER,
+  device TEXT NOT NULL CHECK(length(device) BETWEEN 1 AND 24),
+  token_hash TEXT NOT NULL UNIQUE CHECK(length(token_hash) = 64),
+  created_at REAL NOT NULL, last_used_at REAL, revoked_at REAL);
+CREATE UNIQUE INDEX agent_tokens_device ON agent_tokens(device) WHERE revoked_at IS NULL;
 """
 
 TABLES = (
@@ -246,6 +252,7 @@ TABLES = (
     "room_people",
     "claims",
     "pins",
+    "agent_tokens",
 )
 # the tables of a version-1 database (0.1.0, 0.2.0) and of a version-2 one (0.3.0 to 0.6.5):
 # the rows a migration must keep
@@ -257,6 +264,7 @@ V8_TABLES = TABLES[:14]
 V14_TABLES = TABLES[:16]  # before room_people (v15)
 V20_TABLES = TABLES[:17]  # before claims (v21)
 V21_TABLES = TABLES[:18]  # before pins (v22)
+V24_TABLES = TABLES[:19]  # before agent_tokens (v25)
 
 # v1 -> v2 (DESIGN.md §27.6): one BEGIN IMMEDIATE, after a verified backup. The
 # columns land at the end of their tables, where the fresh schema above puts them too.
@@ -501,6 +509,18 @@ V23_TO_V24 = (
     "UPDATE meta SET value='24' WHERE key='schema_version'",
 )
 
+# v24 -> v25 (#382, DESIGN.md §49.1): agent tokens, a person's token for the agents on one device.
+# The table is new, so nobody has one until they make it; one live token per device name.
+V24_TO_V25 = (
+    "CREATE TABLE agent_tokens("
+    " id INTEGER PRIMARY KEY, person_id INTEGER,"
+    " device TEXT NOT NULL CHECK(length(device) BETWEEN 1 AND 24),"
+    " token_hash TEXT NOT NULL UNIQUE CHECK(length(token_hash) = 64),"
+    " created_at REAL NOT NULL, last_used_at REAL, revoked_at REAL)",
+    "CREATE UNIQUE INDEX agent_tokens_device ON agent_tokens(device) WHERE revoked_at IS NULL",
+    "UPDATE meta SET value='25' WHERE key='schema_version'",
+)
+
 
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
@@ -529,6 +549,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         21: (22, V21_TO_V22, ("pins",)),
         22: (23, V22_TO_V23, ()),
         23: (24, V23_TO_V24, ()),
+        24: (25, V24_TO_V25, ("agent_tokens",)),
     }
     out = []
     v = frm
@@ -557,6 +578,8 @@ def tables_of(version: int) -> tuple[str, ...]:
         return V20_TABLES
     if version <= 21:
         return V21_TABLES
+    if version <= 24:
+        return V24_TABLES
     return TABLES
 
 

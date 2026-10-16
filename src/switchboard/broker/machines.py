@@ -564,6 +564,9 @@ class MachineManager:
         if row is not None and not row.removed:
             what = "waiting for your approval" if row.pending else "approved"
             raise ServiceError("conflict", f"{name} is paired already ({what}): remove it first")
+        if self.state.store.agent_token_for_device(name) is not None:
+            # its agents are members on that host already (§49.1)
+            raise ServiceError("conflict", f"{name} is the device of an agent token: pick another name")
         code = self.codes.mint(name, person_id)
         origin = self.state.web_origin.origin
         self.state.store.add_event("machine", data={"what": "code", "name": name, "person": person_id})
@@ -676,6 +679,12 @@ class MachineManager:
                 "error": "used",
                 "message": "This code was already used by another machine. Don't approve the"
                 " pending machine: remove it in the web UI and make a new code.",
+            }
+        if self.state.store.agent_token_for_device(name) is not None:
+            # an agent token took the name after the code was made (§49.1)
+            return 409, {
+                "error": "conflict",
+                "message": f"{name} is now the device of an agent token: make a new code with another name",
             }
         try:
             self.state.store.machine_pair(

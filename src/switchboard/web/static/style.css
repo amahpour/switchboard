@@ -2233,6 +2233,28 @@ body.login {
 .passkey-row .btn-primary { flex-shrink: 0; }
 .passkey-result.bad { color: var(--danger); font-weight: 500; }
 .passkey-result:empty { display: none; }
+/* Settings → Agents (§49.1): a person's agent tokens, one row per device, in the passkey cards */
+.agent-tokens { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.agent-token { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid var(--side-border); }
+.agent-token:first-child { border-top: 0; padding-top: 2px; }
+.agent-token-main { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
+.agent-token-device { font: 600 calc(13px * var(--text-scale)) var(--mono); overflow-wrap: anywhere; }
+.agent-token-meta { font-size: calc(11.5px * var(--text-scale)); color: var(--muted-2); }
+.agent-token .btn { flex-shrink: 0; }
+.agent-token-new { border-color: var(--accent); }
+.agent-token-show { display: flex; align-items: center; gap: 8px; }
+.agent-token-value {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--input-border);
+  border-radius: 7px;
+  background: var(--input-bg);
+  font: calc(12px * var(--text-scale)) var(--mono);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.agent-token-show .btn { flex-shrink: 0; }
 /* the Machines sheet (index.html, §31.8): machines that dial in. The same cards as the
    Passkeys sheet; a pending machine's card is edged in amber until it's approved or rejected. */
 .machine-card {
