@@ -5,15 +5,8 @@
       {
         "hooks": [
           {
-            "type": "mcp_tool",
-            "server": "plugin:switchboard:switchboard",
-            "tool": "hook",
-            "input": {
-              "event": "${hook_event_name}",
-              "session_id": "${session_id}",
-              "source": "${source}",
-              "permission_mode": "${permission_mode}"
-            },
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/session",
             "timeout": 10
           }
         ]
@@ -111,14 +104,8 @@
       {
         "hooks": [
           {
-            "type": "mcp_tool",
-            "server": "plugin:switchboard:switchboard",
-            "tool": "hook",
-            "input": {
-              "event": "${hook_event_name}",
-              "session_id": "${session_id}",
-              "reason": "${reason}"
-            },
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/session",
             "timeout": 10
           }
         ]
