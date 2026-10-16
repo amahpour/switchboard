@@ -621,6 +621,31 @@ class Listener:
         self.auth = auth
         self.tools = tools
 
+    @staticmethod
+    async def _ended(send: Send, agents: Any, conn: HttpConn, sid: str) -> bool:
+        """410 with the line that tells a session it was ended by someone else (``http_ended``),
+        as plain text the listener prints once; False when there is no such line."""
+        try:
+            why = agents.http_ended(conn, sid)
+        except ServiceError:
+            why = None
+        if not why:
+            return False
+        body = why.encode("utf-8")
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 410,
+                "headers": [
+                    (b"content-type", b"text/plain; charset=utf-8"),
+                    (b"content-length", str(len(body)).encode()),
+                    (b"cache-control", b"no-store"),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
+        return True
+
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or scope.get("method") != "POST":
             await _reply(send, 405, {"error": "method", "message": "POST only"})
@@ -649,6 +674,8 @@ class Listener:
                 p = agents.http_session(conn, sid)
             except ServiceError:
                 p = None
+            if p is None and await self._ended(send, agents, conn, sid):
+                return
             if p is None or p.status != "idle":
                 await _reply(send, 409, {"error": "not_idle", "message": "not idle: its next Stop listens"})
                 return
@@ -670,7 +697,7 @@ class Listener:
         if not isinstance(text, str) or not text:
             if res.get("ended") in LISTEN_AGAIN:
                 await _reply(send, 408, {"error": "timeout", "message": "nothing yet: listen again"})
-            else:
+            elif not await self._ended(send, agents, conn, sid):
                 await _reply(send, 409, {"error": "nothing", "message": "nothing to wake for"})
             return
         agents.hook_ack(conn, {"batch_id": res.get("batch_id"), "ack": res.get("ack")})

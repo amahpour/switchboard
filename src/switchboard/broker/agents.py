@@ -28,6 +28,7 @@ import math
 import os
 import re
 import secrets
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -80,6 +81,18 @@ if TYPE_CHECKING:  # pragma: no cover
     from switchboard.broker.rpc import Conn
 
 log = logging.getLogger("switchboard.agents")
+
+# how a session over HTTPS learns why it is in no room (§49.4): the ends it didn't choose
+ENDED_BY_ITSELF = frozenset({"leave", "session_end"})
+ENDED_WHY = {
+    "kick": "your user removed it",
+    "closed": "the room was closed",
+    "person_left": "your user's account was removed",
+    "not_allowed": "it is no longer allowed in that room",
+    "unreachable": "the server took its machine for unreachable",
+    "removed": "its machine was removed",
+    "token revoked": "its agent token was revoked",
+}
 
 WAIT_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 # the code at the end of a join's answer ("join yk:j<16 hex>"), given back to reclaim a name (#304)
@@ -740,6 +753,26 @@ class AgentService:
         return p, m, room
 
     # ======================================================= over HTTPS (§49.3)
+    def http_ended(self, conn: Any, thread_id: str | None) -> str | None:
+        """Why the caller's session is in no room now, when something other than the session
+        itself ended it (a kick, a closed room, a removed person): the line its listener wakes it
+        with, once (§49.4), since nothing else reaches an idle session over HTTPS. None while it is
+        in a room, before it ever joined, or after it left or quit on its own."""
+        mc = self._mcp(conn)
+        p = self.store.find_participant(mc.harness, self._session_key(mc, thread_id))
+        if p is None or p.host != conn.host or self.store.participant_memberships(p.id):
+            return None
+        m = self.store.last_ended_membership(p.id)
+        if m is None or m.left_at is None or m.left_reason in ENDED_BY_ITSELF:
+            return None
+        room = self.store.room_by_id(m.room_id)
+        why = ENDED_WHY.get(m.left_reason or "", f"it ended ({m.left_reason})")
+        when = time.strftime("%H:%M UTC", time.gmtime(m.left_at))
+        return (
+            f"[switchboard] {m.screen_name} is no longer in {room.name if room else 'its room'}: {why},"
+            f" at {when}. switchboard can't reach this session until it joins a room again."
+        )
+
     def http_session(self, conn: Any, thread_id: str | None) -> Participant | None:
         """The caller's own session, if it joined: by the harness's session key on the token's
         device (a Codex thread). None before its first join."""
