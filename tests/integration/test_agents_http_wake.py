@@ -22,6 +22,7 @@ from test_agents_http import CALL as CODEX_CALL
 from test_agents_http import THREAD_A, Codex, make_token, members, sse_result
 from test_agents_http_claude import HOOK, SESSION_1, Claude
 
+from switchboard import __version__
 from switchboard.broker import agent_http
 
 TOKEN_IN = re.compile(r"yk:b(\d+)\.([0-9a-f]{8})")
@@ -295,6 +296,25 @@ def test_a_broker_that_has_run_a_while_keeps_an_agent_over_https(build: InProcBr
     p = participant(build, "claude-1")
     assert p.active and p.status != "offline", p
     assert claude.call("who", room="#build")["ok"]
+
+
+def test_the_join_over_https_says_the_stop_hook_wakes_an_idle_session(build: InProcBroker) -> None:
+    """A join over HTTPS, for Claude Code and for Codex (#402), describes how the session is
+    reached: its Stop hook waits on the broker and wakes it when idle, and while it works messages
+    come after its tool calls. Fails if the join says switchboard can't wake the session, as the
+    generic text of a harness with no push path does."""
+    claude = Claude(build, make_token(build, "laptop"), SESSION_1)
+    codex = Codex(build, make_token(build, "desk"))
+    codex.start()
+    joins = [
+        claude.call("join", room="#build", screen_name="claude-1"),
+        codex.call("join", THREAD_A, room="#build", screen_name="codex-1"),
+    ]
+    for r in joins:
+        text = json.dumps(r)
+        assert "can't wake" not in text
+        assert "Stop hook waits" in text and "after your tool calls" in text
+        assert f"switchboard {__version__}" in text  # the server's version, behind the token
 
 
 def session_hook(b: InProcBroker, token: str, body: Any, **headers: str) -> httpx.Response:

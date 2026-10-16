@@ -500,7 +500,7 @@ TOOL_NAMES = ("join", "leave", "who", "claim", "say", "read", "wait", "pass", "a
 
 
 def build_server(st: ToolBackend) -> FastMCP:
-    mcp = FastMCP("switchboard", instructions=INSTRUCTIONS)
+    mcp = FastMCP("switchboard", instructions=INSTRUCTIONS, version=__version__)
     if isinstance(st, McpState):  # over HTTPS the broker knows the caller from its token (§49.2)
         mcp.add_middleware(HelloMiddleware(st))
 

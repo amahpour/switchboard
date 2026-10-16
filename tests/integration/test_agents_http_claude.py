@@ -15,8 +15,9 @@ from typing import Any
 import httpx
 import pytest
 from conftest import InProcBroker
-from test_agents_http import make_token, members, sse_result
+from test_agents_http import Codex, make_token, members, sse_result
 
+from switchboard import __version__
 from switchboard.broker import agent_http
 from switchboard.mcp.server import TOOL_NAMES
 
@@ -171,3 +172,20 @@ def test_the_hook_tool_is_hidden_and_decides_nothing(build: InProcBroker) -> Non
     claude = Claude(build, make_token(build, "laptop"), SESSION_1)
     assert claude.tools() == sorted(TOOL_NAMES)
     assert claude.hook(next(USES)) == "{}"
+
+
+def test_the_server_tells_an_agent_its_version_behind_the_token(build: InProcBroker) -> None:
+    """The version of the server an agent talks to comes in its serverInfo (#402): in Codex's
+    initialize answer, and under `_meta` in Claude Code's discover. It comes only with a token:
+    /healthz stays "ok" for anyone, so the version isn't a fingerprint. Fails if serverInfo lacks
+    the version, or a request without a valid token learns it."""
+    codex = Codex(build, make_token(build, "desk"))
+    info = sse_result(codex.start())["result"]["serverInfo"]
+    assert (info["name"], info["version"]) == ("switchboard", __version__)
+    claude = Claude(build, make_token(build, "laptop"), SESSION_1)
+    info = sse_result(claude.discover())["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]
+    assert (info["name"], info["version"]) == ("switchboard", __version__)
+    for bad in (None, "sbat_" + "x" * 43):
+        r = Codex(build, bad).start()
+        assert r.status_code == 401 and __version__ not in r.text
+    assert httpx.get(f"{build.base}/healthz").text == "ok\n"

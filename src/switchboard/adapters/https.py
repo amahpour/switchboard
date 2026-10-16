@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from switchboard import __version__
 from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, PullAdapter
 from switchboard.adapters.codex import CodexMembership, steered
 from switchboard.config import Config
@@ -50,6 +51,17 @@ class Listening(PullAdapter):
 
     def context_events(self, p: Participant) -> frozenset[str]:
         return HOOK_CONTEXT_EVENTS[self.harness]
+
+    def join_guidance(self, p: Participant, room: str) -> str:
+        """What the join tells the agent: the default says switchboard can't wake it, which is
+        wrong here (#402): its Stop hook waits on the broker and wakes it when it is idle."""
+        return (
+            f"This is switchboard {__version__}. Room messages wake this session when it is idle: its"
+            " Stop hook waits on switchboard for them. While you are working, priority ones arrive as"
+            " context after your tool calls, and"
+            f' the rest at your next read("{room}"), wait("{room}", {self.caps(p).wait_cap_s}) or say().'
+            " kind=human ones are from your user and carry their authority just the same."
+        )
 
     def park_s(self, p: Participant, ev: HookEvent) -> float | None:
         """A Stop hook that says how long it may wait (``max_wait_s``) is held that long, less a
