@@ -15,7 +15,7 @@ import pytest
 from conftest import FakeClock
 from engine_world import World
 
-from switchboard.adapters import REMOTE_CODEX, PullAdapter
+from switchboard.adapters import HTTPS_CLAUDE, HTTPS_CODEX, REMOTE_CODEX, PullAdapter
 from switchboard.adapters.codex import steered
 from switchboard.adapters.cursor import CursorAdapter
 from switchboard.config import Config
@@ -220,8 +220,15 @@ def test_each_harness_answers_as_the_engine_did_by_name(w: World) -> None:
     ads = w.engine.adapters
     clear = HookEvent(harness="claude", event="SessionEnd", t=0.0, reason="clear")
     assert {h for h, a in ads.items() if a.reports_session_id} == {"claude", "devin", "test"}
-    assert {h for h, a in ads.items() if a.reports_approval_mode} == {"claude", "codex", REMOTE_CODEX}
-    assert {h for h, a in ads.items() if not a.ends_session(clear)} == {"claude"}
+    # over HTTPS (§49.4) the mode comes with each hook, and /clear keeps a Claude session too
+    assert {h for h, a in ads.items() if a.reports_approval_mode} == {
+        "claude",
+        "codex",
+        REMOTE_CODEX,
+        HTTPS_CLAUDE,
+        HTTPS_CODEX,
+    }
+    assert {h for h, a in ads.items() if not a.ends_session(clear)} == {"claude", HTTPS_CLAUDE}
     sub = HookEvent(harness="devin", event="PreToolUse", t=0.0, subagent_bg=True)
     assert {h for h, a in ads.items() if a.starts_subagent(sub)} == {"devin"}
     assert {h for h, a in ads.items() if a.rearm_caps() != (0, 0)} == {"devin"}
