@@ -39,12 +39,26 @@ def events(svc: RoomService, kind: str) -> list[dict[str, Any]]:
 
 def test_a_new_room_falls_back_to_the_built_in_default_with_nothing_set(svc: RoomService) -> None:
     """Nobody has a default and config.toml says nothing: the built-in numbers apply, and
-    Settings would say so."""
+    Settings would say so. The built-in hop limit is 0, the loop guard off (#406); it was 6."""
     defaults = svc.wake_defaults(None)
     assert defaults["budget_per_hour"] == {"value": 60, "source": "built-in default"}
-    assert defaults["hop_limit"] == {"value": 6, "source": "built-in default"}
+    assert defaults["hop_limit"] == {"value": 0, "source": "built-in default"}
     room = svc.create_room("#build")
-    assert (room.budget_per_hour, room.hop_limit) == (60, 6)
+    assert (room.budget_per_hour, room.hop_limit) == (60, 0)
+
+
+def test_your_own_hop_limit_turns_the_guard_on_for_new_rooms_despite_the_built_in_zero(
+    svc: RoomService,
+) -> None:
+    """The guard is off by default, not gone (#406): a person who wants it sets a hop limit in
+    Settings, and every room they make from then on starts with it. Another person's rooms,
+    and rooms made before, are not touched."""
+    before = svc.create_room("#before")
+    svc.store.set_preferences(None, {"hop_limit": 6})
+    assert svc.wake_defaults(None)["hop_limit"] == {"value": 6, "source": "your default"}
+    after = svc.create_room("#after")
+    assert (before.hop_limit, after.hop_limit) == (0, 6)
+    assert svc.store.get_room("#before").hop_limit == 0  # copy on create: no migration, no write-back
 
 
 def test_configtoml_wins_over_the_built_in_default(tmp_path: Path, clock: FakeClock) -> None:
@@ -93,7 +107,7 @@ def test_set_room_wake_sets_the_rate_and_what_is_left_this_hour_together(svc: Ro
     svc.create_room("#build")
     room = svc.room("#build")
     assert (room.budget_per_hour, room.budget_remaining) == (60, 60)
-    room = svc.set_room_wake("#build", budget_per_hour=120, hop_limit=6, actor="alice")
+    room = svc.set_room_wake("#build", budget_per_hour=120, hop_limit=0, actor="alice")
     assert (room.budget_per_hour, room.budget_remaining) == (120, 120)
     assert "alice set the wake budget to 120/hour (was 60/hour)" in notices(svc)
     assert events(svc, "budget_set")[-1] == {"old": 60, "new": 120, "per_hour": True}
@@ -102,6 +116,7 @@ def test_set_room_wake_sets_the_rate_and_what_is_left_this_hour_together(svc: Ro
 def test_set_room_wake_writes_the_same_hop_limit_notice_the_hops_command_writes(svc: RoomService) -> None:
     """Reuses ``commands.hop_limit_notice`` rather than restating the wording for each case."""
     svc.create_room("#build")
+    svc.set_room_wake("#build", budget_per_hour=60, hop_limit=6, actor="alice")
     svc.set_room_wake("#build", budget_per_hour=60, hop_limit=0, actor="alice")
     assert "alice turned the loop guard off (hop limit was 6)" in notices(svc)
     svc.set_room_wake("#build", budget_per_hour=60, hop_limit=10, actor="alice")
@@ -114,7 +129,7 @@ def test_set_room_wake_is_a_no_op_when_nothing_changed(svc: RoomService) -> None
     """Saving the dialog with the same numbers posts nothing new and writes no event."""
     svc.create_room("#build")
     before = notices(svc)
-    svc.set_room_wake("#build", budget_per_hour=60, hop_limit=6, actor="alice")
+    svc.set_room_wake("#build", budget_per_hour=60, hop_limit=0, actor="alice")
     assert notices(svc) == before
     assert events(svc, "budget_set") == []
     assert events(svc, "hop_limit_set") == []

@@ -46,7 +46,8 @@ class Rec(Subscriber):
 
 @pytest.fixture
 def w(tmp_path: Path, clock: FakeClock) -> World:
-    return World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0))
+    # hop_limit=6: the loop guard ships off (#406), and two tests here trip it to see its notice
+    return World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0, hop_limit=6))
 
 
 @pytest.fixture

@@ -26,7 +26,7 @@ Source: `openagents-org/openagents` at `5e7b63a` (2026-09-24), Apache-2.0 at the
   switchboard, by contrast:
   - never changes a session's approval mode;
   - holds delivery while a permission prompt is open;
-  - has a loop guard (6 hops by default, auto-pause), a wake budget (60 per hour) and a `say()` rate limit (once per 10 s).
+  - has a wake budget (60 per hour), a `say()` rate limit (once per 10 s) and a loop guard (auto-pause after N agent messages in a row; off by default since #406, `/hops <n>` turns it on).
 
   switchboard stays on 127.0.0.1. OpenAgents sends traffic and PostHog analytics to openagents.org by default.
 - **When to use which.**

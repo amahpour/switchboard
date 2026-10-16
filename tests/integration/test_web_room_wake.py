@@ -58,7 +58,8 @@ def test_each_person_creates_rooms_from_their_own_defaults(hosted: InProcBroker)
         made_by_bob = bob.post("/api/rooms", {"name": "#bob-room"}).json()["room"]["settings"]
         made_by_admin = admin.post("/api/rooms", {"name": "#admin-room"}).json()["room"]["settings"]
         assert made_by_bob["hop_limit"] == 15 and made_by_bob["budget_per_hour"] == 60  # built-in rate
-        assert made_by_admin["budget_per_hour"] == 90 and made_by_admin["hop_limit"] == 6
+        # admin set no hop limit of their own, so the built-in 0 (guard off, #406) applies, not bob's 15
+        assert made_by_admin["budget_per_hour"] == 90 and made_by_admin["hop_limit"] == 0
     finally:
         bob.close()
         admin.close()
@@ -119,13 +120,13 @@ def test_set_room_wake_updates_the_header_chips_live_and_posts_a_notice(
         ws.send(json.dumps({"t": "hello", "rooms": ["#wake-live"], "after": {}}))
         r = web.put(
             "/api/rooms/wake-live/wake",
-            json={"budget_per_hour": 300, "hop_limit": 0},
+            json={"budget_per_hour": 300, "hop_limit": 12},  # a new room starts with the guard off
             headers=headers,
         )
         assert r.status_code == 200
         settings = r.json()["settings"]
         assert (settings["budget_per_hour"], settings["budget_remaining"]) == (300, 300)
-        assert settings["hop_limit"] == 0
+        assert settings["hop_limit"] == 12
 
         seen_room, seen_notice = False, False
         for _ in range(20):
@@ -147,6 +148,8 @@ def test_set_room_wake_updates_the_header_chips_live_and_posts_a_notice(
         assert seen_room and seen_notice
         kinds = {e.kind for e in broker.state.store.recent_events()}
         assert {"budget_set", "hop_limit_set"} <= kinds
+        [hop] = [e.data for e in broker.state.store.recent_events() if e.kind == "hop_limit_set"]
+        assert hop == {"old": 0, "new": 12}
         # the rate, not what's left this hour (which /budget n's budget_set records)
         rate = [e.data for e in broker.state.store.recent_events() if e.kind == "budget_set"]
         assert rate and rate[-1] == {"old": 60, "new": 300, "per_hour": True}, rate

@@ -320,8 +320,9 @@ def test_the_loop_guard_pause_is_the_same_pause(w: World) -> None:
     park = stop(w, pc)
     s = listen(w, pt, mt, "w1")
     w.store.set_budget(w.room.id, 0)  # nothing wakes on the chatter itself
+    w.store.set_hop_limit(w.room.id, 6)  # the guard ships off (#406); this room has it on
     _pa, ma = w.agent("a")
-    for i in range(w.cfg.delivery.hop_limit):
+    for i in range(6):
         w.agent_says(ma, f"hop {i}")
     room = w.store.room_by_id(w.room.id)
     assert room.paused and room.paused_reason == "loop guard"

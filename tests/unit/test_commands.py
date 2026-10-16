@@ -235,7 +235,8 @@ def test_who_status_help(svc: RoomService) -> None:
     who = svc.command("#build", "/who", WEB)["text"]
     assert "alice (you, human) + 0 agent(s)" in who and "no agents" in who
     st = svc.command("#build", "/status", WEB)["text"]
-    assert "#build: active" in st and "budget 60/60" in st and "hops 0/6" in st
+    assert "#build: active" in st and "budget 60/60" in st
+    assert "hops 0, loop guard off" in st  # the guard ships off (#406); it showed "hops 0/6"
     assert "agents: none" in st and "TEST MODE" in st and "codex link" in st and "hooks:" in st
     assert svc.command("#build", "/help", WEB)["text"] == HELP_TEXT
     room = svc.room("#build")

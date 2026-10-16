@@ -42,7 +42,7 @@ No board, or no Pi? [§7](#7-the-fake-remote-machine-no-board-no-pi) runs the wh
 ## 4. Before recording (checklist)
 
 - [ ] `switchboard remote status` shows `fpga-pi: up`, the same version on both machines, and remote hooks ok; the web UI's sidebar says `fpga-pi · up`.
-- [ ] In the web UI, `/hops` in `#fpga` is at least 20 (`/hops 30`). Each build → result cycle is two agent messages.
+- [ ] In the web UI, `/hops` in `#fpga` says the loop guard is off (the default) or a limit of at least 20 (`/hops 30`). Each build → result cycle is two agent messages.
 - [ ] `openFPGALoader --detect` on the remote sees the board; the UART device exists.
 - [ ] Both Claude sessions are in the default (prompting) mode. Decide what the remote may run without asking (e.g. `sha256sum`, `ls`); put it in `~/bench/.claude/settings.json` yourself. switchboard never writes it.
 - [ ] Close other rooms; zoom the browser to 125%; big terminal fonts; notifications off.

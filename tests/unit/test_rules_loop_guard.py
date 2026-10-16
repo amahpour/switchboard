@@ -1,7 +1,8 @@
 """Loop guard (DESIGN.md §8.5): a per-room hop counter across
-any number of agents. After 6 agent messages with no human message the room pauses
-itself (the same pause as /pause) and the human is told. Only the human's messages
-(web or CLI) and /resume reset the counter."""
+any number of agents. With a limit set (it is off unless someone turns it on, #406), after
+that many agent messages with no human message the room pauses itself (the same pause as
+/pause) and the human is told. Only the human's messages (web or CLI) and /resume reset the
+counter. These tests set the limit to 6, the number the guard used to ship with."""
 
 from __future__ import annotations
 
@@ -12,6 +13,8 @@ from conftest import FakeClock
 from engine_world import World
 from test_rules_release import room
 
+from switchboard.broker.hub import Hub
+from switchboard.broker.service import BrokerInfo, RoomService
 from switchboard.config import Config
 from switchboard.delivery import rules
 from switchboard.models import Notice
@@ -19,7 +22,7 @@ from switchboard.models import Notice
 
 @pytest.fixture
 def w(tmp_path: Path, clock: FakeClock) -> World:
-    return World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0))
+    return World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0, hop_limit=6))
 
 
 def warn_notices(w: World) -> list[Notice]:
@@ -164,6 +167,36 @@ def test_a_hop_limit_of_zero_turns_the_guard_off(tmp_path: Path, clock: FakeCloc
     for i in range(20):
         w.agent_says(ma, f"hop {i}")
     assert not w.store.room_by_id(w.room.id).paused and w.store.count_events("loop_guard") == 0
+
+
+def test_a_new_room_with_no_default_of_anyones_has_the_guard_off_and_never_pauses(
+    tmp_path: Path, clock: FakeClock
+) -> None:
+    """The guard ships off (#406). A room made the way a new one is, by ``RoomService.create_room``
+    with no person default and a stock config, has ``hop_limit`` 0, and 40 agent messages in a
+    row with none from a person leave it running: no pause, no ``loop_guard`` event, no warning.
+    Before, the same room paused at the sixth message. The count still runs, so ``/hops <n>``
+    can turn the guard on later and count the run so far."""
+    w = World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0))
+    svc = RoomService(w.store, Hub(), w.cfg, BrokerInfo(port=7419, test_mode=True), clock)
+    fresh = svc.create_room("#fresh")
+    assert fresh.hop_limit == 0
+    ms = [w.agent(f"a{i}", room_id=fresh.id)[1] for i in range(3)]
+    for i in range(40):
+        m = ms[i % 3]
+        msg = w.store.insert_message(
+            fresh.id,
+            sender_name=m.screen_name,
+            sender_kind="agent",
+            via="mcp",
+            text=f"hop {i}",
+            sender_membership_id=m.id,
+            sender_harness="test",
+        )
+        w.actions += w.engine.on_message(msg.id)
+    r = w.store.room_by_id(fresh.id)
+    assert not r.paused and r.hop_count == 40 and r.hop_limit == 0
+    assert w.store.count_events("loop_guard") == 0 and not warn_notices(w)
 
 
 def test_a_human_message_during_the_guard_pause_does_not_resume(w: World) -> None:
