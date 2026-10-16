@@ -37,7 +37,6 @@ import pytest
 from conftest import PHASE_REPORTS, TEST_HUMAN, sanitize_env
 from fakes.fake_link import wait_for
 from playwright.sync_api import Browser, BrowserContext, ConsoleMessage, Page, Route, WebSocketRoute, expect
-from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from ui_world import CI_URL, JS_SCHEME, PROFILE, UIWorld, wait_js
 
 from switchboard import __version__
@@ -2590,14 +2589,15 @@ LANES_STACKED = (
 
 
 def lanes_settle(page: Page, laid_out: str) -> None:
-    """Wait for the board's lanes to be laid out as ``laid_out`` says, and fail with what they
-    measured if they never are. Right after Open board the page is still settling: the board is
-    drawn by the click and drawn again when its own read answers, and on a phone the rooms drawer
-    may still be closing. One run measured that instant (2026-10-15, a full e2e run under
-    ``-n auto``) and read a phone's lanes in DOM order, while the next frame showed them stacked."""
+    """Wait for the board's lanes to be laid out as ``laid_out`` says (``wait_js``, which polls
+    through ``page.evaluate``), and fail with what they measured if they never are. Right after
+    Open board the page is still settling: the board is drawn by the click and drawn again when its
+    own read answers, and on a phone the rooms drawer may still be closing. One run measured that
+    instant (2026-10-15, a full e2e run under ``-n auto``) and read a phone's lanes in DOM order,
+    while the next frame showed them stacked."""
     try:
-        page.wait_for_function(laid_out)
-    except PlaywrightTimeoutError:
+        wait_js(page, laid_out)
+    except TimeoutError:
         raise AssertionError(f"the lanes never settled: {page.evaluate(LANE_BOXES)}") from None
 
 
