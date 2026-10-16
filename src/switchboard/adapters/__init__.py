@@ -7,27 +7,29 @@ from switchboard.adapters.claude import ClaudeAdapter
 from switchboard.adapters.codex import CodexAdapter
 from switchboard.adapters.cursor import CursorAdapter
 from switchboard.adapters.devin import DevinAdapter
-from switchboard.adapters.https import HttpsClaudeAdapter
+from switchboard.adapters.https import HttpsClaudeAdapter, HttpsCodexAdapter
 from switchboard.adapters.remote_codex import RemoteCodexAdapter
 from switchboard.adapters.testagent import TestAgentAdapter
 from switchboard.config import Config
 
 # The adapter of a Codex session on another host (DESIGN.md §27.7); never a harness name.
 REMOTE_CODEX = "codex@remote"
-# The adapter of a Claude Code session over HTTPS (§49.3); never a harness name.
+# The adapters of Claude Code and Codex sessions over HTTPS (§49.3); never harness names.
 HTTPS_CLAUDE = "claude@https"
+HTTPS_CODEX = "codex@https"
 
 
 def build_adapters(cfg: Config) -> dict[str, Adapter]:
     """Claude (M3) and Codex (M4) have push tiers; Cursor (stop park, M5) and
     Devin (wait loop plus Stop re-arm, M5) are reached through their hooks. A
-    Codex session on a remote host is pull only (``REMOTE_CODEX``, M8c), and so is a
-    Claude Code session over HTTPS (``HTTPS_CLAUDE``, §49.3)."""
+    Codex session on a remote host is pull only (``REMOTE_CODEX``, M8c). A session over
+    HTTPS is woken by its own Stop hook (``HTTPS_CLAUDE``, ``HTTPS_CODEX``, §49.4)."""
     return {
         "claude": ClaudeAdapter(cfg),
         "codex": CodexAdapter(cfg),
         REMOTE_CODEX: RemoteCodexAdapter(cfg),
         HTTPS_CLAUDE: HttpsClaudeAdapter(cfg),
+        HTTPS_CODEX: HttpsCodexAdapter(cfg),
         "cursor": CursorAdapter(cfg),
         "devin": DevinAdapter(cfg),
         "unknown": PullAdapter("unknown", cfg),
@@ -37,6 +39,7 @@ def build_adapters(cfg: Config) -> dict[str, Adapter]:
 
 __all__ = [
     "HTTPS_CLAUDE",
+    "HTTPS_CODEX",
     "REMOTE_CODEX",
     "Adapter",
     "Caps",
@@ -45,6 +48,7 @@ __all__ = [
     "CursorAdapter",
     "DevinAdapter",
     "HttpsClaudeAdapter",
+    "HttpsCodexAdapter",
     "PullAdapter",
     "RemoteCodexAdapter",
     "TestAgentAdapter",

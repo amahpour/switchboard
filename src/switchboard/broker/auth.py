@@ -35,7 +35,7 @@ CODE_PATHS = frozenset({"/link/pair"})
 # agents over HTTPS (DESIGN.md §49.2): an agent token authenticates them, never a cookie, and the
 # route itself (``agent_http.AgentAuth``) refuses any request that has an Origin, so a browser can't
 # call it at all; its Host is checked as everywhere
-AGENT_PATHS = frozenset({"/mcp"})
+AGENT_PATHS = frozenset({"/mcp", "/mcp/listen"})
 _DNS_NAME_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*")
 
 Scope = dict[str, Any]
@@ -251,8 +251,8 @@ class HostOriginGuard:
       (``/healthz``), which a platform's health checker sends to the container's own address.
     - Unsafe http methods also need ``Origin`` to be the UI's origin and ``X-Switchboard: 1``,
       else 403. (The session cookie is checked by routes.) The exceptions are ``CODE_PATHS``
-      (``POST /link/pair``), which a pairing code authenticates, and ``AGENT_PATHS`` (``/mcp``),
-      which an agent token does: both refuse any request that has an Origin.
+      (``POST /link/pair``), which a pairing code authenticates, and ``AGENT_PATHS`` (``/mcp``,
+      ``/mcp/listen``), which an agent token does: both refuse any request that has an Origin.
     """
 
     def __init__(self, app: ASGIApp, origin: WebOrigin):

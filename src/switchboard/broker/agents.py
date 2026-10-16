@@ -1511,6 +1511,31 @@ class AgentService:
             return inert
         return {"out": {"kind": out.kind, "text": out.text}, "batch_id": out.batch_id, "ack": out.ack}
 
+    async def http_hook(self, conn: Any, harness: str, event: str, params: dict[str, Any]) -> dict[str, Any]:
+        """A hook over HTTPS (§49.4): its session is the one it names on the token's device (no
+        process to walk), then everything as ``hook_event``: status, confirmations, and (only where
+        the harness's table allows it) context, or a Stop hook held until a message comes."""
+        inert: dict[str, Any] = {"out": None}
+        if harness not in HOOK_EVENTS or event not in HOOK_EVENTS[harness]:
+            return inert
+        sid = params.get("sid")
+        try:
+            p = self.http_session(conn, sid if isinstance(sid, str) and 0 < len(sid) <= 128 else None)
+        except ServiceError:
+            return inert  # no session to name (a Codex hook without its thread)
+        if p is None:
+            return inert  # a session that hasn't joined: nothing of it to report
+        ev = parse_hook_event(harness, event, params)
+        self._record(harness, event, params)
+        self._note_model(p, params.get("model"))
+        out, acts = self.engine.claim_for_hook(p, ev)
+        if out is not None and out.kind == "park" and out.sink_id is not None:
+            return await self._park(conn, out.sink_id, acts)
+        self.run(acts)
+        if out is None:
+            return inert
+        return {"out": {"kind": out.kind, "text": out.text}, "batch_id": out.batch_id, "ack": out.ack}
+
     @staticmethod
     def _remote_chain(conn: "Conn") -> tuple[str, list[ProcInfo], Any] | None:
         """``(host, chain, argv_fn)`` from a remote hook's ``facts.chain``: synthetic

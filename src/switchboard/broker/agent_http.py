@@ -16,7 +16,11 @@ runs on the agent's machine.
   ``hook`` tool just before, reports which session made that call (``HookUses``). Any other
   client is told it isn't supported yet, since its calls couldn't be told apart.
 - **The hook tool** is left out of ``tools/list``, so the model never sees it, and a hook
-  calls it anyway. It answers ``{}``: a hook reply that decides nothing.
+  calls it anyway. Each event reports the session's status (§49.4); its answer is written here
+  (#380's decision 5), only in the hook script's own shapes (§7.3) plus Codex's Stop
+  ``decision: block``, and is ``{}`` when there is nothing to say.
+- **The listener** (``/mcp/listen``): Claude Code's Stop hook posts its session id there and waits,
+  and the answer is the message that wakes it (§49.4).
 - **No credentials.** A session's memberships are read from the store on every call, so a broker
   restart drops nobody. A call names its membership (``m:<id>``), and ``AgentService`` checks it
   against the caller's own session.
@@ -45,6 +49,7 @@ from switchboard.broker import agent_tokens
 from switchboard.broker.agents import McpConn
 from switchboard.broker.peer import McpIdentity
 from switchboard.broker.service import ServiceError
+from switchboard.hook import switchboard_hook as hook_script
 from switchboard.mcp.server import (
     CLIENT_INFO_META_KEY,
     TOOL_NAMES,
@@ -70,6 +75,10 @@ UNSUPPORTED = (
     " Connect this agent with `switchboard install` meanwhile"
 )
 HOOK_TOOL = "hook"  # called by a harness's hooks, never listed for the model
+LISTEN_PATH = "/mcp/listen"  # Claude Code's listener waits here (§49.4)
+SESSION_HEADER = b"x-switchboard-session"  # the listener's session id, the only thing it sends
+WAIT_HEADER = b"x-switchboard-wait"  # how long the listener's curl waits (its --max-time)
+WAIT_MAX_S = 3600.0
 TOOL_USE_KEY = "claudecode/toolUseId"  # the call's id in Claude Code's _meta
 USES_MAX = 4096  # tool calls whose session a hook reported, remembered at once
 USES_TTL_S = 120.0  # how long such a report is kept
@@ -139,6 +148,72 @@ def client_info(ctx: Context | None) -> dict[str, str]:
 
 def _id(value: Any) -> str | None:
     return value if isinstance(value, str) and 0 < len(value) <= ID_MAX else None
+
+
+def _flag(value: Any) -> bool | None:
+    """A boolean a hook's input template filled in: ``true``/``false`` as text, or a JSON bool."""
+    if isinstance(value, bool):
+        return value
+    return {"true": True, "false": False}.get(value) if isinstance(value, str) else None
+
+
+def hook_params(event: str, fields: dict[str, Any], now: float) -> dict[str, Any]:
+    """What a hook over HTTPS relays, as the hook script's own params (§7.2 step 4): the fields
+    its input template names, cut and checked, and the batch tokens in a switchboard tool's own
+    result (its hook matches switchboard's tools only, so nothing else of the session is sent).
+    ``wait_s``, a number the hook config itself sets, lets a Stop hook wait that long."""
+    ev = event.lower()
+    ok = False if ev == "posttoolusefailure" else (True if ev == "posttooluse" else None)
+    toks: list[list[Any]] = []
+    raw = fields.get("tool_response")
+    result = raw if isinstance(raw, str) else json.dumps(raw, default=str) if raw else ""
+    for m in hook_script.TOKEN_RE.finditer(result[: hook_script.FIELD_SCAN_MAX]):
+        if [int(m.group(1)), m.group(2)] not in toks and len(toks) < hook_script.MAX_TOKENS:
+            toks.append([int(m.group(1)), m.group(2)])
+    wait = fields.get("wait_s")
+    try:
+        wait_s = float(wait) if wait not in (None, "") and not isinstance(wait, bool) else None
+    except (TypeError, ValueError):
+        wait_s = None
+    p: dict[str, Any] = {
+        "sid": _id(fields.get("session_id")),
+        "gen": _id(fields.get("turn_id")) or _id(fields.get("prompt_id")),
+        "tool": _id(fields.get("tool_name")),
+        "tool_use_id": _id(fields.get("tool_use_id")),
+        "ok": ok,
+        "stop_hook_active": _flag(fields.get("stop_hook_active")),
+        "source": hook_script._str(fields.get("source"), 32),
+        "reason": hook_script._str(fields.get("reason"), 64),
+        "permission_mode": hook_script._str(fields.get("permission_mode"), 32),
+        "model": hook_script._model(fields.get("model")),
+        "tokens": toks,
+        "t": now,
+        "max_wait_s": min(wait_s, WAIT_MAX_S) if wait_s is not None and wait_s > 0 else None,
+    }
+    return {k: v for k, v in p.items() if v is not None and v != []}
+
+
+def reply_for(harness: str, event: str, out: Any) -> dict[str, Any] | None:
+    """A hook's answer, written by the broker (#380's decision 5): the hook script's own shapes
+    for context (``render``, §7.3), and Codex's Stop ``decision: block`` for a follow-up. Every
+    answer is checked against those exact shapes; anything else answers nothing."""
+    if not isinstance(out, dict):
+        return None
+    text = out.get("text")
+    if not isinstance(text, str) or not text:
+        return None
+    if out.get("kind") == "continue" and harness == "codex" and event == "Stop":
+        reply: Any = {"decision": "block", "reason": text}
+    else:
+        reply = hook_script.render(harness, event, out)
+    return reply if _shape_ok(reply, event, text) else None
+
+
+def _shape_ok(reply: Any, event: str, text: str) -> bool:
+    """Exactly one of the shapes a hook over HTTPS may answer with, carrying the batch's text."""
+    if reply == {"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}:
+        return True
+    return reply == {"decision": "block", "reason": text} and event == "Stop"
 
 
 class HookUses:
@@ -234,6 +309,17 @@ class HttpTools:
             return
         info = client_info(ctx)
         harness = CLIENTS.get(info.get("name", ""), "unknown")
+        conn = self.conn_for(token, harness, info)
+        if harness == "claude":
+            use = _id(McpState.meta(ctx).get(TOOL_USE_KEY))
+            thread = await self.uses.session(token.id, use) if use is not None else None
+        else:
+            thread = self._thread_of(ctx)
+        self._caller.set(Caller(token, harness, thread, conn))
+        self.state.agents.http_claims(token.device, TOOL_NAMES)
+
+    def conn_for(self, token: AgentTokenRow, harness: str, info: dict[str, str] | None = None) -> HttpConn:
+        """A connection for one call of ``harness`` on the token's device (§49.3)."""
         ident = McpIdentity(
             harness=harness,
             mcp_pid=0,
@@ -245,30 +331,39 @@ class HttpTools:
         )
         mc = McpConn(
             ident=ident,
-            client_info=info,
+            client_info=info or {},
             evidence={"via": "agent token"},
             version=__version__,
             tools=TOOL_NAMES,
         )
-        conn = HttpConn(next(self._ids), token.device, mc)
-        if harness == "claude":
-            use = _id(McpState.meta(ctx).get(TOOL_USE_KEY))
-            thread = await self.uses.session(token.id, use) if use is not None else None
-        else:
-            thread = self._thread_of(ctx)
-        self._caller.set(Caller(token, harness, thread, conn))
-        self.state.agents.http_claims(token.device, TOOL_NAMES)
+        return HttpConn(next(self._ids), token.device, mc)
 
-    async def on_hook(self, event: str, session_id: str, tool_use_id: str) -> None:
-        """A harness's hook, by its token: PreToolUse names the session of the call it precedes.
-        Anything else is ignored until hooks report status (#383)."""
+    async def on_hook(self, fields: dict[str, Any]) -> str:
+        """A harness's hook, by its token (``prime`` ran): Claude Code's PreToolUse names the
+        session of the call it precedes; every other event goes to the session it names (§49.4),
+        and the answer is the hook's reply, checked (``reply_for``)."""
+        c = self._served()
+        if c is None:
+            return "{}"
+        event, sid = str(fields.get("event") or ""), _id(fields.get("session_id"))
+        if event == "PreToolUse":
+            use = _id(fields.get("tool_use_id"))
+            if c.harness == "claude" and sid and use:
+                self.uses.report(c.token.id, use, sid)
+            return "{}"
+        params = hook_params(event, fields, self.state.clock.now())
+        agents: Any = self.state.agents  # an HttpConn stands in for the socket's Conn
         try:
-            token = get_http_request().scope.get("state", {}).get("agent_token")
-        except RuntimeError:
-            return
-        sid, use = _id(session_id), _id(tool_use_id)
-        if isinstance(token, AgentTokenRow) and event == "PreToolUse" and sid and use:
-            self.uses.report(token.id, use, sid)
+            res = await agents.http_hook(c.conn, c.harness, event, params)
+        except asyncio.CancelledError:
+            # the hook went away (Codex: Esc while its Stop hook waited): so does its park
+            agents.run(self.state.engine.close_conn_sinks(c.conn.id))
+            raise
+        reply = reply_for(c.harness, event, res.get("out"))
+        if reply is None:
+            return "{}"
+        agents.hook_ack(c.conn, {"batch_id": res.get("batch_id"), "ack": res.get("ack")})
+        return json.dumps(reply)
 
     def thread_id(self, ctx: Context | None) -> str | None:
         """The caller's session within its MCP connection: a Codex thread, or the Claude Code
@@ -436,6 +531,74 @@ class AgentAuth:
             self.sessions.pop(sid, None)
 
 
+class Listener:
+    """``/mcp/listen`` (§49.4): Claude Code's Stop hook, a ``curl`` command with ``asyncRewake``,
+    posts here with nothing but its session id and waits. The answer is the message that wakes it
+    (200, its text), or a refusal (4xx), which ``curl -f`` takes as an error: the hook then exits 0
+    and wakes nothing. A later listener of the session, or any other hook of it, ends this one, and
+    so does ``curl`` going away."""
+
+    def __init__(self, auth: AgentAuth, tools: HttpTools) -> None:
+        self.auth = auth
+        self.tools = tools
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("method") != "POST":
+            await _reply(send, 405, {"error": "method", "message": "POST only"})
+            return
+        if _header(scope, b"origin") is not None:
+            await _reply(send, 403, {"error": "forbidden", "message": "agents only: a browser can't listen"})
+            return
+        row = self.auth.token(scope)
+        if row is None:
+            await _reply(send, 401, {"error": "unauthorized", "message": "an agent token is needed"})
+            return
+        sid = _id(_header(scope, SESSION_HEADER))
+        if sid is None:
+            await _reply(send, 400, {"error": "bad_request", "message": "X-Switchboard-Session is needed"})
+            return
+        try:
+            wait = float(_header(scope, WAIT_HEADER) or 900)
+        except ValueError:
+            wait = 900.0
+        self.auth.touch(row)
+        state = self.tools.state
+        agents: Any = state.agents  # an HttpConn stands in for the socket's Conn
+        conn = self.tools.conn_for(row, "claude")
+
+        async def gone() -> None:
+            # curl went away (its session ended, or a turn began): so does the park
+            while (await receive())["type"] != "http.disconnect":
+                pass
+            agents.run(state.engine.close_conn_sinks(conn.id))
+
+        watch = asyncio.create_task(gone())
+        try:
+            params = {"sid": sid, "max_wait_s": min(max(wait, 0.0), WAIT_MAX_S), "t": state.clock.now()}
+            res = await agents.http_hook(conn, "claude", "Stop", params)
+        finally:
+            watch.cancel()
+        out = res.get("out")
+        text = out.get("text") if isinstance(out, dict) and out.get("kind") == "continue" else None
+        if not isinstance(text, str) or not text:
+            await _reply(send, 409, {"error": "nothing", "message": "nothing to wake for"})
+            return
+        agents.hook_ack(conn, {"batch_id": res.get("batch_id"), "ack": res.get("ack")})
+        body = text.encode("utf-8")
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [
+                    (b"content-type", b"text/plain; charset=utf-8"),
+                    (b"content-length", str(len(body)).encode()),
+                    (b"cache-control", b"no-store"),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
+
+
 class HideHook(Middleware):
     """The hook tool is for hooks, so ``tools/list`` leaves it out: the model never sees it."""
 
@@ -450,13 +613,46 @@ def install(app: "FastAPI", state: "BrokerState") -> Any:
     server = build_server(tools)
 
     @server.tool(name=HOOK_TOOL, annotations=ToolAnnotations(read_only_hint=False, open_world_hint=False))
-    async def hook(event: str = "", session_id: str = "", tool_use_id: str = "", tool_name: str = "") -> str:
+    async def hook(
+        ctx: Context,
+        event: Any = "",
+        session_id: Any = "",
+        tool_use_id: Any = "",
+        tool_name: Any = "",
+        turn_id: Any = "",
+        prompt_id: Any = "",
+        permission_mode: Any = "",
+        model: Any = "",
+        source: Any = "",
+        reason: Any = "",
+        stop_hook_active: Any = "",
+        tool_response: Any = "",
+        wait_s: Any = "",
+    ) -> str:
         """For switchboard's hooks, not for the model."""
-        await tools.on_hook(event, session_id, tool_use_id)
-        return "{}"
+        await tools.prime(ctx)
+        return await tools.on_hook(
+            {
+                "event": event,
+                "session_id": session_id,
+                "tool_use_id": tool_use_id,
+                "tool_name": tool_name,
+                "turn_id": turn_id,
+                "prompt_id": prompt_id,
+                "permission_mode": permission_mode,
+                "model": model,
+                "source": source,
+                "reason": reason,
+                "stop_hook_active": stop_hook_active,
+                "tool_response": tool_response,
+                "wait_s": wait_s,
+            }
+        )
 
     server.add_middleware(HideHook())
     mcp_app = server.http_app(path=PATH)
     inner = next(r.endpoint for r in mcp_app.routes if isinstance(r, Route) and r.path == PATH)
-    app.router.routes.append(Route(PATH, endpoint=AgentAuth(inner, state)))
+    auth = AgentAuth(inner, state)
+    app.router.routes.append(Route(PATH, endpoint=auth))
+    app.router.routes.append(Route(LISTEN_PATH, endpoint=Listener(auth, tools)))
     return mcp_app

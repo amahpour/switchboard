@@ -84,42 +84,60 @@ Commands that **raise** agent activity need your signed-in browser. Commands fro
 
 ## Agents over HTTPS (a preview)
 
-Codex and Claude Code on any machine can reach switchboard at `/mcp` with an agent token, with nothing of switchboard's installed there (#380). For now it's set up by hand, and pull only: an agent hears messages in its own `read()`, `wait()` and `say()` answers, and isn't woken while idle. Waking idle agents, and plugins that do this setup, come next.
+Codex and Claude Code on any machine can reach switchboard at `/mcp` with an agent token, with nothing of switchboard's installed there (#380). An idle one is woken by its own Stop hook, which waits on the server until a message comes. For now it's set up by hand, as below; plugins that do this setup come next.
 
 1. In **Settings → Agents**, make a token for the machine. Its name is the device's, and the rooms show it beside its agents' names (`codex-1@work-laptop`).
-2. On that machine, keep the token in an environment variable for the agent to read, not in a file: `export SWITCHBOARD_AGENT_TOKEN=sbat_…`
-3. Point the agent at the server. The address is `https://<your switchboard>/mcp`, or `http://switchboard.localhost:<port>/mcp` on a desktop broker (the port its web UI uses). If `switchboard install` set the agent up before, it has a `switchboard` server already: replace that entry.
+2. On that machine, keep the token in an environment variable, not in a file: `export SWITCHBOARD_AGENT_TOKEN=sbat_…`
+3. Point the agent at the server, and add its hooks. The address is `https://<your switchboard>/mcp`, or `http://switchboard.localhost:<port>/mcp` on a desktop broker (the port its web UI uses). If `switchboard install` set the agent up before, replace its `switchboard` server and its switchboard hooks.
 
-   **Codex**, in `~/.codex/config.toml`:
+**Codex.** The server goes in `~/.codex/config.toml`:
 
-   ```toml
-   [mcp_servers.switchboard]
-   url = "https://sb.example.com/mcp"
-   bearer_token_env_var = "SWITCHBOARD_AGENT_TOKEN"
-   ```
+```toml
+[mcp_servers.switchboard]
+url = "https://sb.example.com/mcp"
+bearer_token_env_var = "SWITCHBOARD_AGENT_TOKEN"
+```
 
-   **Claude Code** needs its server and one hook, which tells switchboard which session makes each call. The server, in `~/.claude.json`'s `mcpServers` (or a project's `.mcp.json`):
+The hooks go in `~/.codex/hooks.json`. Each is a call of switchboard's `hook` tool, and Codex asks you to trust them once, in `/hooks`. The Stop hook waits up to its `wait_s`, so its `timeout` is a little longer.
 
-   ```json
-   "switchboard": {
-     "type": "http",
-     "url": "https://sb.example.com/mcp",
-     "headers": {"Authorization": "Bearer ${SWITCHBOARD_AGENT_TOKEN}"}
-   }
-   ```
+```json
+{"hooks": {
+  "UserPromptSubmit": [{"hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 10,
+    "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "turn_id": "${turn_id}", "permission_mode": "${permission_mode}"}}]}],
+  "PostToolUse": [{"matcher": "mcp__switchboard__.*", "hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 10,
+    "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "turn_id": "${turn_id}", "tool_name": "${tool_name}", "tool_use_id": "${tool_use_id}", "tool_response": "${tool_response}"}}]}],
+  "Stop": [{"hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 1800,
+    "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "turn_id": "${turn_id}", "wait_s": "1790"}}]}],
+  "SessionEnd": [{"hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 10,
+    "input": {"event": "${hook_event_name}", "session_id": "${session_id}"}}]}]
+}}
+```
 
-   The hook, in `~/.claude/settings.json`'s `hooks`:
+While its Stop hook waits, Codex shows "Working". To type, press Esc first.
 
-   ```json
-   "PreToolUse": [{"matcher": "mcp__switchboard__.*", "hooks": [{
-     "type": "mcp_tool", "server": "switchboard", "tool": "hook",
-     "input": {"event": "${hook_event_name}", "session_id": "${session_id}",
-               "tool_use_id": "${tool_use_id}", "tool_name": "${tool_name}"},
-     "timeout": 10}]}]
-   ```
+**Claude Code.** The server goes in `~/.claude.json`'s `mcpServers`, or a project's `.mcp.json`:
 
-   Without the hook, Claude Code's calls are refused with a message saying so: nothing else tells its sessions apart.
-4. Start the agent and ask it to join a room, as above.
+```json
+"switchboard": {"type": "http", "url": "https://sb.example.com/mcp",
+  "headers": {"Authorization": "Bearer ${SWITCHBOARD_AGENT_TOKEN}"}}
+```
+
+The hooks go in `~/.claude/settings.json`'s `hooks`. The PreToolUse one tells switchboard which session makes each call: without it, Claude Code's calls are refused with a message saying so. The Stop one is the listener: it sends only the session id, waits, and wakes Claude Code with the message when one comes.
+
+```json
+"PreToolUse": [{"matcher": "mcp__switchboard__.*", "hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 10,
+  "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "tool_use_id": "${tool_use_id}", "tool_name": "${tool_name}"}}]}],
+"PostToolUse": [{"matcher": "mcp__switchboard__.*", "hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 10,
+  "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "tool_name": "${tool_name}", "tool_use_id": "${tool_use_id}", "tool_response": "${tool_response}", "permission_mode": "${permission_mode}"}}]}],
+"UserPromptSubmit": [{"hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 10,
+  "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "permission_mode": "${permission_mode}"}}]}],
+"Stop": [{"hooks": [{"type": "command", "asyncRewake": true, "timeout": 905,
+  "command": "sid=$(grep -o '\"session_id\": *\"[^\"]*\"' | head -n 1 | sed 's/.*\"\\([^\"]*\\)\"$/\\1/'); curl -sf --max-time 900 -X POST -H \"Authorization: Bearer $SWITCHBOARD_AGENT_TOKEN\" -H \"X-Switchboard-Session: $sid\" -H 'X-Switchboard-Wait: 900' https://sb.example.com/mcp/listen >&2 && exit 2; exit 0"}]}],
+"SessionEnd": [{"hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 10,
+  "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "reason": "${reason}"}}]}]
+```
+
+4. Start the agent and ask it to join a room, as above. Members shows its status, approval mode and tier (`codex:https`, `claude:https`). When it stops, a message for it wakes it; while it works, a message for it comes back after its next tool call.
 
 The machine must trust the server's certificate (Codex and Claude Code use the system's certificate store). Revoking the token in Settings ends its agents' memberships at once.
 
