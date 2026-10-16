@@ -3249,7 +3249,9 @@ def test_a_card_shows_live_whether_the_agent_it_waits_on_is_working(ui: UI) -> N
 
     ui.world.broker.on_loop(idle)
     expect(f4).not_to_have_class(re.compile(r"\bworking\b"))
-    expect(f4).to_have_attribute("aria-label", "codex-1 is idle")
+    # idle with work pending and no way to reach it, the member is soon parked too (the watchdog):
+    # either is its true state, and neither is "working"
+    expect(f4).to_have_attribute("aria-label", re.compile(r"^codex-1 is (idle|parked)$"))
     expect(f4).to_have_text("")
 
     calm = ui.open(room=None, reduced_motion="reduce")
