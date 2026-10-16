@@ -40,7 +40,11 @@ while kill -0 "$owner" 2>/dev/null; do
   case $(cat "$code" 2>/dev/null) in
     200) cat "$body" >&2; exit 2 ;;
     410) # someone else ended the session: say so once, or it goes deaf without a word
-      seen="${CLAUDE_PLUGIN_DATA:-${TMPDIR:-/tmp}}/switchboard-ended-$sid"
+      # the plugin's own data folder, or the user's; never a shared one like /tmp, where another
+      # account could plant the name first
+      dir=${CLAUDE_PLUGIN_DATA:-${HOME:+$HOME/.cache/switchboard}}
+      [ -n "$dir" ] && mkdir -p "$dir" 2>/dev/null || exit 0
+      seen="$dir/ended-$sid"
       [ "$(cat "$seen" 2>/dev/null)" = "$(cat "$body")" ] && exit 0
       cp "$body" "$seen" 2>/dev/null || exit 0 # no marker, no wake: it could loop the session awake
       cat "$body" >&2

@@ -126,6 +126,8 @@ def run_listen(
     owner: int | None = None,
     round_s: int | None = None,
     data: Path | None = None,
+    home: Path | None = None,
+    tmp: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """``bin/listen`` as Claude Code runs it at Stop: the hook's input on stdin, the plugin's settings
     in ``CLAUDE_PLUGIN_OPTION_*``, and Claude Code's own pid in ``CLAUDE_PID`` (here the test's, or
@@ -140,6 +142,10 @@ def run_listen(
         env["SWITCHBOARD_LISTEN_S"] = str(round_s)
     if data is not None:
         env["CLAUDE_PLUGIN_DATA"] = str(data)  # where the plugin keeps what it has said
+    if home is not None:
+        env["HOME"] = str(home)
+    if tmp is not None:
+        env["TMPDIR"] = str(tmp)
     stop = json.dumps({"session_id": session, "hook_event_name": "Stop", "stop_hook_active": False})
     return subprocess.run(
         ["sh", str(LISTEN)], input=stop, env=env, capture_output=True, text=True, timeout=60
@@ -440,3 +446,21 @@ def test_the_listener_wakes_nobody_when_it_cant_remember_what_it_said(tmp_path: 
         stub.close()
         blocked.chmod(0o700)
     assert (r.returncode, r.stderr) == (0, ""), r
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
+def test_the_listener_keeps_its_marker_out_of_shared_folders(tmp_path: Path) -> None:
+    """Set up by hand there's no CLAUDE_PLUGIN_DATA, and the marker goes in the user's own
+    ~/.cache/switchboard, never TMPDIR or /tmp, where another account could plant the name first
+    (F2 on #405's board). Fails if the marker lands in the shared folder."""
+    home, shared = tmp_path / "home", tmp_path / "shared-tmp"
+    home.mkdir()
+    shared.mkdir()
+    stub = Stub([(410, "[switchboard] claude-1 is no longer in #build: your user removed it, at 19:30 UTC.")])
+    try:
+        r = run_listen(None, "sbat_" + "x" * 43, SESSION_1, url=stub.url, home=home, tmp=shared)
+    finally:
+        stub.close()
+    assert r.returncode == 2, r
+    assert list(shared.iterdir()) == []
+    assert (home / ".cache" / "switchboard" / f"ended-{SESSION_1}").is_file()
