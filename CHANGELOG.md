@@ -2,6 +2,25 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.32.0 (2026-10-16)
+
+### Upgrading
+
+- **The database moves to schema 25** (a table for agent tokens) when the broker first starts on this release, after its usual verified backup. An older release refuses the newer database, so going back means restoring that backup.
+- **On Kubernetes, add two annotations to your Ingress** for agents over HTTPS: `nginx.ingress.kubernetes.io/proxy-read-timeout: "960"` and `nginx.ingress.kubernetes.io/proxy-send-timeout: "960"`, as [deploy/kubernetes/switchboard.yaml](deploy/kubernetes/switchboard.yaml) now has. Without them, ingress-nginx cuts Claude Code's listener after 60 seconds, so it has to start again every minute ([docs/DEPLOY.md](docs/DEPLOY.md#kubernetes-eks-gke-aks)).
+
+### Added
+
+- **Agent tokens, in Settings → Agents.** Make one for each device whose coding agents will reach switchboard over HTTPS, the first step of #380's redesign: agents connecting to the server directly, with nothing of switchboard's running on their machine. A token is shown once, kept only as a hash, and works for agents only: it can't sign you in, post as you or run a command. Revoke one and its agents stop at once; removing a person revokes theirs. On a hosted broker, making one asks you to confirm it's you first.
+- **Codex and Claude Code can reach switchboard over HTTPS with an agent token (a preview).** Point the agent's MCP settings at your switchboard's `/mcp` with a token from **Settings → Agents** (Claude Code also needs one hook, which says which session makes each call), and its sessions join rooms with nothing of switchboard's installed on that machine. An idle one is woken by its own Stop hook, which waits on the server until a message comes: Claude Code's runs a small `curl` listener and starts a turn with the message, and Codex's answers "keep going" with it (Codex shows "Working" while it waits). An idle Claude Code stays reachable for a week, waiting in 15-minute rounds and riding out a server restart; an idle Codex stays reachable for a day, but not across a server restart. A busy one gets messages for it after its next tool call, and its hooks report its status and approval mode. Each sets itself up with a plugin (below; [docs/USAGE.md](docs/USAGE.md#agents-over-https-a-preview), #380).
+- **Claude Code connects with one line: `/plugin install switchboard --marketplace amahpour/switchboard`.** The plugin asks for your switchboard's address and an agent token, which Claude Code keeps as a secret, and brings the server and the hooks that wake an idle session. Settings → Agents shows that line, and your switchboard's address, under each new token.
+- **Codex's plugin brings its hooks: `codex plugin marketplace add amahpour/switchboard`, then `codex plugin add switchboard@switchboard`.** Your switchboard's address goes in `~/.codex/config.toml` and the token in `SWITCHBOARD_AGENT_TOKEN`, and Codex asks once to trust the hooks. Settings → Agents shows each line under a new token.
+- **An agent over HTTPS runs on the server's code,** so an update to switchboard reaches its running sessions at once, with no restart. A new tool or parameter is the exception: Claude Code sees it after `/mcp`, and Codex after a restart. The release notes say when one comes.
+
+### Changed
+
+- **The image's Dockerfile moved to `deploy/image/Dockerfile`.** To build the image yourself, run `docker build -t switchboard -f deploy/image/Dockerfile .` from the repository ([docs/DEPLOY.md](docs/DEPLOY.md)). The published image is the same.
+
 ## 0.31.0 (2026-10-15)
 
 ### Upgrading
