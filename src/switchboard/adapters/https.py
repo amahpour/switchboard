@@ -4,13 +4,15 @@ broker at ``/mcp`` with an agent token.
 No push path reaches the machine such an agent runs on, so an idle one is woken by its own Stop
 hook, which waits on the broker (a park, as Cursor's stop hook does, §9.4) until a message comes:
 
-- **Claude Code** runs a background listener at Stop: a ``curl`` command hook with
-  ``asyncRewake``, which posts to ``/mcp/listen`` and waits. The broker answers with the message,
-  ``curl`` prints it, the hook exits 2, and Claude Code starts a turn with it, idle until then with
-  no spinner. An empty or failed answer exits 0 and wakes nothing.
+- **Claude Code** runs a background listener at Stop: a ``curl`` loop in a command hook with
+  ``asyncRewake``, which posts to ``/mcp/listen`` and waits, one round after another. The broker
+  answers with the message, ``curl`` prints it, the hook exits 2, and Claude Code starts a turn with
+  it, idle until then with no spinner. Any other answer ends the listener, waking nothing, except a
+  round that ran out (408), after which it waits again.
 - **Codex** holds its Stop hook (an ``mcp_tool`` hook calling the hidden ``hook`` tool) open in the
   same way, and the answer is ``decision: block`` with the message, so Codex carries on with it.
-  Codex shows "Working" meanwhile, and the person presses Esc to type (#380's decision 2).
+  Codex shows "Working" meanwhile, up to a day, and the person presses Esc to type (#380's
+  decision 2).
 
 A busy session gets priority messages as hook context after its tool calls, and everything else at
 its next ``read()``, ``wait()`` or ``say()``. Each harness's session key comes from what its calls
@@ -34,7 +36,7 @@ NO_SESSION = (
     "this Claude Code call named no session: switchboard's PreToolUse hook reports it before each"
     " call (docs/USAGE.md, Agents over HTTPS)"
 )
-LISTEN_S = 1800.0  # the longest a Stop hook is held before it answers with nothing
+LISTEN_S = 86400.0  # the longest a Stop hook is held before it answers with nothing: a day
 PARK_MARGIN_S = 5.0  # an answer this long before the hook's own deadline
 MIN_PARK_S = 5.0
 IDLE_WHY = "stopped and not listening: no Stop hook waiting (or call wait())"

@@ -20,7 +20,7 @@ runs on the agent's machine.
   (#380's decision 5), only in the hook script's own shapes (§7.3) plus Codex's Stop
   ``decision: block``, and is ``{}`` when there is nothing to say.
 - **The listener** (``/mcp/listen``): Claude Code's Stop hook posts its session id there and waits,
-  and the answer is the message that wakes it (§49.4).
+  round after round, and the answer is the message that wakes it (§49.4).
 - **No credentials.** A session's memberships are read from the store on every call, so a broker
   restart drops nobody. A call names its membership (``m:<id>``), and ``AgentService`` checks it
   against the caller's own session.
@@ -93,8 +93,10 @@ HOOK_FIELDS = (
 )
 LISTEN_PATH = "/mcp/listen"  # Claude Code's listener waits here (§49.4)
 SESSION_HEADER = b"x-switchboard-session"  # the listener's session id, the only thing it sends
-WAIT_HEADER = b"x-switchboard-wait"  # how long the listener's curl waits (its --max-time)
-WAIT_MAX_S = 3600.0
+WAIT_HEADER = b"x-switchboard-wait"  # how long one round of the listener waits
+AGAIN_HEADER = b"x-switchboard-again"  # "1" on the listener's later rounds: only an idle session waits on
+WAIT_MAX_S = 86400.0  # the longest any one wait is held (a Codex Stop hook may ask for a day)
+LISTEN_AGAIN = frozenset({"timeout", "paused"})  # a round that ended so: the listener waits again (408)
 TOOL_USE_KEY = "claudecode/toolUseId"  # the call's id in Claude Code's _meta
 USES_MAX = 4096  # tool calls whose session a hook reported, remembered at once
 USES_TTL_S = 120.0  # how long such a report is kept
@@ -548,11 +550,13 @@ class AgentAuth:
 
 
 class Listener:
-    """``/mcp/listen`` (§49.4): Claude Code's Stop hook, a ``curl`` command with ``asyncRewake``,
-    posts here with nothing but its session id and waits. The answer is the message that wakes it
-    (200, its text), or a refusal (4xx), which ``curl -f`` takes as an error: the hook then exits 0
-    and wakes nothing. A later listener of the session, or any other hook of it, ends this one, and
-    so does ``curl`` going away."""
+    """``/mcp/listen`` (§49.4): Claude Code's Stop hook, a ``curl`` loop with ``asyncRewake``, posts
+    here with nothing but its session id and waits, round after round. The answer is the message
+    that wakes it (200, its text); 408 when a round ran out with nothing, so the listener waits
+    again; or another refusal (409 and the rest), which ends the listener and wakes nothing. A later
+    listener of the session, or any other hook of it, ends this one, and so does ``curl`` going away.
+    A later round (``X-Switchboard-Again: 1``) waits only while the session is still idle, so one
+    that slips in after the session got busy never reports it idle."""
 
     def __init__(self, auth: AgentAuth, tools: HttpTools) -> None:
         self.auth = auth
@@ -581,6 +585,14 @@ class Listener:
         state = self.tools.state
         agents: Any = state.agents  # an HttpConn stands in for the socket's Conn
         conn = self.tools.conn_for(row, "claude")
+        if _header(scope, AGAIN_HEADER) == "1":
+            try:
+                p = agents.http_session(conn, sid)
+            except ServiceError:
+                p = None
+            if p is None or p.status != "idle":
+                await _reply(send, 409, {"error": "not_idle", "message": "not idle: its next Stop listens"})
+                return
 
         async def gone() -> None:
             # curl went away (its session ended, or a turn began): so does the park
@@ -597,7 +609,10 @@ class Listener:
         out = res.get("out")
         text = out.get("text") if isinstance(out, dict) and out.get("kind") == "continue" else None
         if not isinstance(text, str) or not text:
-            await _reply(send, 409, {"error": "nothing", "message": "nothing to wake for"})
+            if res.get("ended") in LISTEN_AGAIN:
+                await _reply(send, 408, {"error": "timeout", "message": "nothing yet: listen again"})
+            else:
+                await _reply(send, 409, {"error": "nothing", "message": "nothing to wake for"})
             return
         agents.hook_ack(conn, {"batch_id": res.get("batch_id"), "ack": res.get("ack")})
         body = text.encode("utf-8")

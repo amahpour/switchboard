@@ -1530,7 +1530,7 @@ class AgentService:
         self._note_model(p, params.get("model"))
         out, acts = self.engine.claim_for_hook(p, ev)
         if out is not None and out.kind == "park" and out.sink_id is not None:
-            return await self._park(conn, out.sink_id, acts)
+            return await self._park(conn, out.sink_id, acts, ended=True)
         self.run(acts)
         if out is None:
             return inert
@@ -1568,9 +1568,13 @@ class AgentService:
                 return p
         return None
 
-    async def _park(self, conn: "Conn", sink_id: int, acts: list[Action]) -> dict[str, Any]:
+    async def _park(
+        self, conn: "Conn", sink_id: int, acts: list[Action], *, ended: bool = False
+    ) -> dict[str, Any]:
         """A Cursor stop hook waits here (DESIGN.md §9.4) until the engine fills its
-        park with a follow-up, the park is released, or it times out."""
+        park with a follow-up, the park is released, or it times out. ``ended`` adds why a
+        park that brought nothing ended (``timeout``, ``paused``, ``cancelled``), for a
+        listener over HTTPS that waits again after a round that ran out (§49.4)."""
         runner = self.state.runner
         fut = runner.future_for(sink_id)
         s = self.engine.sinks.get(sink_id)
@@ -1587,7 +1591,7 @@ class AgentService:
             runner.drop_future(sink_id)
         text, bid, ack = res.get("text"), res.get("batch_id"), res.get("ack")
         if res.get("status") != "messages" or not isinstance(text, str) or not isinstance(bid, int):
-            return {"out": None}
+            return {"out": None, "ended": res.get("status")} if ended else {"out": None}
         return {"out": {"kind": "continue", "text": text}, "batch_id": bid, "ack": ack}
 
     def _bind_cursor(self, p: Participant, ev: HookEvent) -> Participant | None:

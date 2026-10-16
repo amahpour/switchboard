@@ -255,3 +255,25 @@ def test_a_session_that_never_joined_gets_nothing_from_its_hooks(build: InProcBr
     assert claude_hook(stranger, event="UserPromptSubmit") == "{}"
     assert claude_hook(stranger, event="Stop", wait_s="60") == "{}"  # nothing to hold either
     assert members(build, "#build") == {}
+
+
+def test_a_round_that_runs_out_asks_for_another_while_the_session_stays_idle(build: InProcBroker) -> None:
+    """The listener waits in rounds (#384): one that runs out with nothing answers 408, which the
+    listener takes as "wait again", and a later round (``X-Switchboard-Again: 1``) waits only while
+    the session is still idle, so it never reports a busy session idle. Fails if a round's end looks
+    like a takeover (409, which ends the listener), a later round can't be woken, or one parks a busy
+    session."""
+    claude, token = joined_claude(build)
+    p = participant(build, "claude-1")
+    r = listen(build, token, SESSION_1, wait=10)  # held 5 s, then nothing
+    assert r.status_code == 408 and r.json()["error"] == "timeout", r.text
+    with ThreadPoolExecutor(1) as pool:
+        again = pool.submit(listen, build, token, SESSION_1, 60, **{"x-switchboard-again": "1"})
+        until(lambda: parked(build, p.id))
+        build.call("human.say", {"room": "#build", "text": "@claude-1 still there?"})
+        r = again.result(30)
+    assert r.status_code == 200 and "still there?" in r.text, r.text
+    claude_hook(claude, event="UserPromptSubmit")  # the wake's turn: busy
+    r = listen(build, token, SESSION_1, **{"x-switchboard-again": "1"})
+    assert r.status_code == 409 and r.json()["error"] == "not_idle", r.text
+    assert not parked(build, p.id)

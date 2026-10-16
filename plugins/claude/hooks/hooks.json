@@ -102,7 +102,7 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/listen",
             "asyncRewake": true,
-            "timeout": 905
+            "timeout": 604800
           }
         ]
       }

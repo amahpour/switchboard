@@ -8,7 +8,10 @@ import json
 import os
 import shutil
 import subprocess
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -109,15 +112,24 @@ def test_the_hook_tool_takes_every_field_a_hook_may_send(broker: InProcBroker) -
 
 
 def run_listen(
-    b: InProcBroker, token: str, session: str, url: str | None = None
+    b: InProcBroker | None,
+    token: str,
+    session: str,
+    url: str | None = None,
+    owner: int | None = None,
+    round_s: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """``bin/listen`` as Claude Code runs it at Stop: the hook's input on stdin, the plugin's settings
-    in ``CLAUDE_PLUGIN_OPTION_*``. Its own wait is the script's; the test's is a safety net."""
+    in ``CLAUDE_PLUGIN_OPTION_*``, and Claude Code's own pid in ``CLAUDE_PID`` (here the test's, or
+    ``owner``). ``round_s`` shortens a round. The test's timeout is a safety net."""
     env = {
         "PATH": os.environ["PATH"],
-        "CLAUDE_PLUGIN_OPTION_SERVER_URL": url or b.base,
+        "CLAUDE_PLUGIN_OPTION_SERVER_URL": url or (b.base if b else ""),
         "CLAUDE_PLUGIN_OPTION_TOKEN": token,
+        "CLAUDE_PID": str(owner if owner is not None else os.getpid()),
     }
+    if round_s is not None:
+        env["SWITCHBOARD_LISTEN_S"] = str(round_s)
     stop = json.dumps({"session_id": session, "hook_event_name": "Stop", "stop_hook_active": False})
     return subprocess.run(
         ["sh", str(LISTEN)], input=stop, env=env, capture_output=True, text=True, timeout=60
@@ -216,3 +228,111 @@ def test_codexs_hooks_take_what_the_hook_tool_takes_and_what_codex_allows() -> N
     assert post["matcher"] == "mcp__switchboard__.*"
     [stop] = [h for g in hooks["Stop"] for h in g["hooks"]]
     assert float(stop["input"]["wait_s"]) < stop["timeout"]
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
+def test_the_listener_waits_again_when_a_round_runs_out(broker: InProcBroker) -> None:
+    """An idle session stays reachable past one round (#384): when a round runs out with nothing,
+    the listener starts the next, and a message then wakes it. Fails if the listener gives up after
+    its first round, as it did when one wait was all it had."""
+    broker.call("room.create", {"name": "#build"})
+    token = make_token(broker, "laptop")
+    claude = Claude(broker, token, SESSION_1)
+    assert claude.call("join", room="#build", screen_name="claude-1")["ok"]
+    claude.call("read", room="#build")
+    pid = participant(broker, "claude-1").id
+
+    def park_ids() -> set[int]:
+        return {s.id for s in broker.on_loop(broker.state.engine.sinks.parks_for, pid)}
+
+    with ThreadPoolExecutor(1) as pool:
+        run = pool.submit(run_listen, broker, token, SESSION_1, None, None, 10)  # rounds of 5 s
+        until(lambda: bool(park_ids()))
+        first = park_ids()
+        until(lambda: bool(park_ids()) and park_ids() != first, timeout=20)  # the second round
+        broker.call("human.say", {"room": "#build", "text": "@claude-1 are you there"})
+        r = run.result(60)
+    assert r.returncode == 2 and "are you there" in r.stderr, r
+
+
+class Stub:
+    """A stand-in server for the listener: answers each POST with the next scripted reply (a status
+    and a body; ``None`` holds the request until the test lets it go), and records each request's
+    ``X-Switchboard-Again``."""
+
+    def __init__(self, replies: list[tuple[int, str] | None]) -> None:
+        self.replies = list(replies)
+        self.again: list[str] = []
+        self.release = threading.Event()
+        stub = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                stub.again.append(self.headers.get("X-Switchboard-Again", ""))
+                reply = stub.replies.pop(0) if stub.replies else (409, "")
+                if reply is None:
+                    stub.release.wait(30)
+                    reply = (409, "")
+                status, body = reply
+                data = body.encode()
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *args: Any) -> None:
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self) -> None:
+        self.release.set()
+        self.server.shutdown()
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
+def test_the_listener_rides_out_a_server_that_is_away_and_says_which_round_it_is() -> None:
+    """A server restarting, or a proxy that cut a long wait, answers 5xx (or nothing): the listener
+    tries again, then wakes on the message that comes. Its first round is the session's Stop, and
+    every later one says so (``X-Switchboard-Again: 1``). Fails if a 5xx ends the listener, or a
+    later round passes for a new Stop."""
+    stub = Stub([(503, "restarting"), (408, ""), (200, "the message")])
+    try:
+        r = run_listen(None, "sbat_" + "x" * 43, SESSION_1, url=stub.url, round_s=10)
+    finally:
+        stub.close()
+    assert (r.returncode, r.stderr) == (2, "the message"), r
+    assert stub.again == ["0", "1", "1"]
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
+def test_the_listener_ends_with_claude_code() -> None:
+    """A background hook outlives Claude Code when it quits (seen with 2.1.300), so the listener
+    watches Claude Code's pid (``CLAUDE_PID``): it never starts for one that's gone, and stops within
+    seconds of it going mid-wait, waking nothing. Fails if a listener keeps waiting for a session
+    whose Claude Code has quit."""
+    gone = subprocess.Popen(["sleep", "0"])
+    gone.wait()
+    stub = Stub([(200, "never sent")])
+    try:
+        r = run_listen(None, "sbat_" + "x" * 43, SESSION_1, url=stub.url, owner=gone.pid)
+        assert (r.returncode, r.stderr, stub.again) == (0, "", []), r
+    finally:
+        stub.close()
+    owner = subprocess.Popen(["sleep", "60"])
+    stub = Stub([None])  # holds the wait open
+    try:
+        with ThreadPoolExecutor(1) as pool:
+            run = pool.submit(run_listen, None, "sbat_" + "x" * 43, SESSION_1, stub.url, owner.pid)
+            until(lambda: stub.again == ["0"])
+            owner.kill()
+            owner.wait()
+            t0 = time.monotonic()
+            r = run.result(30)
+        assert (r.returncode, r.stderr) == (0, ""), r
+        assert time.monotonic() - t0 < 10
+    finally:
+        owner.kill()
+        stub.close()
