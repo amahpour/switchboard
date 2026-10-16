@@ -423,3 +423,20 @@ def test_the_listener_says_once_that_someone_else_ended_the_session(tmp_path: Pa
     finally:
         third.close()
     assert (r.returncode, r.stderr) == (2, later), r
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
+def test_the_listener_wakes_nobody_when_it_cant_remember_what_it_said(tmp_path: Path) -> None:
+    """The once-only marker is what stops a 410 from waking the session at every Stop, so a listener
+    that can't write it stays quiet (F1 on #405's board). Fails if it wakes without the marker, which
+    would loop a session awake for as long as it's open."""
+    blocked = tmp_path / "read-only"
+    blocked.mkdir()
+    blocked.chmod(0o500)
+    stub = Stub([(410, "[switchboard] claude-1 is no longer in #build: your user removed it, at 19:30 UTC.")])
+    try:
+        r = run_listen(None, "sbat_" + "x" * 43, SESSION_1, url=stub.url, data=blocked)
+    finally:
+        stub.close()
+        blocked.chmod(0o700)
+    assert (r.returncode, r.stderr) == (0, ""), r
