@@ -3,8 +3,8 @@
 # no mcp_tool hook at these two events (it has no MCP connection then), so this command hook posts
 # them to the server instead: the event, the session id, and the event's own short fields, nothing
 # else. A SessionEnd takes the session offline; a SessionStart after /clear or a compaction may get
-# context back, which it prints for Claude Code. It always exits 0, and quickly: a server that
-# can't be reached changes nothing here. The token reaches curl on its stdin, never its command
+# context back, which it prints for Claude Code. It always exits 0, and quickly (within 1 s for a
+# SessionEnd): a server that can't be reached changes nothing here. The token reaches curl on its stdin, never its command
 # line, where other processes could read it.
 input=$(cat)
 field() {
@@ -23,8 +23,12 @@ token=${CLAUDE_PLUGIN_OPTION_TOKEN:-$SWITCHBOARD_AGENT_TOKEN}
 [ -n "$url" ] && [ -n "$token" ] || exit 0
 body=$(printf '{"event": "%s", "session_id": "%s", "source": "%s", "reason": "%s", "permission_mode": "%s"}' \
   "$event" "$sid" "$(plain "$(field source)")" "$(plain "$(field reason)")" "$(plain "$(field permission_mode)")")
+# Claude Code gives SessionEnd hooks as little as 1.5 s (2.1.299), so that one gets 1 s; a request on
+# the same network takes tens of milliseconds
+limit=5
+[ "$event" = SessionEnd ] && limit=1
 out=$(printf 'header = "Authorization: Bearer %s"\n' "$token" |
-  curl -sf --max-time 5 -K - -X POST -H 'Content-Type: application/json' --data-binary "$body" \
-    "$url/mcp/session")
+  curl -sf --connect-timeout "$limit" --max-time "$limit" -K - -X POST -H 'Content-Type: application/json' \
+    --data-binary "$body" "$url/mcp/session")
 [ "$event" = SessionStart ] && [ -n "$out" ] && [ "$out" != "{}" ] && printf '%s\n' "$out"
 exit 0

@@ -604,8 +604,8 @@ class SessionHook:
         if reply is None:
             await _reply(send, 200, {})
             return
+        await _reply(send, 200, reply)  # sent first: a batch is acknowledged once its answer went out
         agents.hook_ack(conn, {"batch_id": res.get("batch_id"), "ack": res.get("ack")})
-        await _reply(send, 200, reply)
 
 
 class Listener:
