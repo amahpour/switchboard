@@ -3216,3 +3216,85 @@ def test_the_mention_mirror_keeps_the_textarea_width_when_it_scrolls(ui: UI) -> 
     box.evaluate("el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll')); }")
     top = box.evaluate("el => [el.scrollTop, document.getElementById('input-mirror').scrollTop]")
     assert top[0] > 0 and top[0] == top[1], top  # past its 8 lines, and the mirror scrolls with it
+
+
+def test_a_card_shows_live_whether_the_agent_it_waits_on_is_working(ui: UI) -> None:
+    """#407: a card whose next move is an agent's (a finding being fixed, a fix awaiting its
+    raiser) shows that agent's status: a pulsing dot and "working" while it's busy, a steady dot
+    once it's idle, live as Members changes. A question, a disputed finding and a settled one show
+    none. The hover says busy "on this or something else", since switchboard can't tell which. With
+    reduced motion the dot holds still and the word stays. Fails if the card can't tell a working
+    agent from an idle one, or claims a status it doesn't have."""
+    slug = "e2e-board-working"
+    room = "#" + slug
+    page = review_room(ui, slug)
+    page.click("#board-toggle")
+    f4 = page.locator('#board .board-card[data-item="F4"] .board-pulse')  # conceded, owner codex-1
+    expect(f4).to_have_count(1)
+    expect(f4).to_have_attribute("data-member", "codex-1")
+    expect(f4).to_have_class(re.compile(r"\bworking\b"))  # a scripted agent is busy after its join
+    expect(f4).to_have_attribute("aria-label", "codex-1 is working (on this or something else)")
+    expect(f4).to_have_text("working")
+    for label in ("F1", "F2", "F3", "Q1"):  # dropped, confirmed, contested, a question
+        expect(page.locator(f'#board .board-card[data-item="{label}"] .board-pulse')).to_have_count(0)
+
+    def idle() -> None:
+        st = ui.world.broker.state
+        r = st.store.get_room(room)
+        assert r is not None
+        m = st.store.find_member(r.id, "codex-1")
+        assert m is not None
+        st.store.set_status(m.participant_id, "idle", "hook:Stop")
+        st.hub.members_changed(room)
+
+    ui.world.broker.on_loop(idle)
+    expect(f4).not_to_have_class(re.compile(r"\bworking\b"))
+    # idle with work pending and no way to reach it, the member is soon parked too (the watchdog):
+    # either is its true state, and neither is "working"
+    expect(f4).to_have_attribute("aria-label", re.compile(r"^codex-1 is (idle|parked)$"))
+    expect(f4).to_have_text("")
+
+    calm = ui.open(room=None, reduced_motion="reduce")
+    open_room(calm, slug)
+
+    def busy() -> None:
+        st = ui.world.broker.state
+        r = st.store.get_room(room)
+        assert r is not None
+        m = st.store.find_member(r.id, "codex-1")
+        assert m is not None
+        st.store.set_status(m.participant_id, "busy", "hook:PreToolUse")
+        st.hub.members_changed(room)
+
+    ui.world.broker.on_loop(busy)
+    calm.click("#board-toggle")
+    still = calm.locator('#board .board-card[data-item="F4"] .board-pulse')
+    expect(still).to_have_text("working")
+    assert still.evaluate("e => getComputedStyle(e, '::before').animationName") == "none"
+
+
+def test_a_focused_card_keeps_focus_when_an_agent_changes_state(ui: UI) -> None:
+    """Every busy/idle change rebuilds the board (its members frame), and with the working dot
+    (#407) those frames matter while agents work. A card reached by Tab must keep the focus, or a
+    keyboard or screen-reader user loses their place each time an agent starts or stops. Fails if
+    the rebuild drops focus to the page."""
+    slug = "e2e-board-focus"
+    room = "#" + slug
+    page = review_room(ui, slug)
+    page.click("#board-toggle")
+    card = page.locator('#board .board-card[data-item="F4"]')
+    card.focus()
+    assert page.evaluate("document.activeElement.dataset.item") == "F4"
+
+    def idle() -> None:
+        st = ui.world.broker.state
+        r = st.store.get_room(room)
+        assert r is not None
+        m = st.store.find_member(r.id, "codex-1")
+        assert m is not None
+        st.store.set_status(m.participant_id, "idle", "hook:Stop")
+        st.hub.members_changed(room)
+
+    ui.world.broker.on_loop(idle)
+    expect(card.locator(".board-pulse")).not_to_have_class(re.compile(r"\bworking\b"))  # it rebuilt
+    expect(page.locator('#board .board-card[data-item="F4"]')).to_be_focused()

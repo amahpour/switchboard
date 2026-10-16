@@ -137,7 +137,9 @@ def settle(page: Any) -> None:
     wait_js(
         page,
         "() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r("
-        "document.getAnimations().every(a => a.playState !== 'running')))))",
+        # an infinite one (a working agent's pulsing dot, #407) never ends: the shot disables it
+        "document.getAnimations().every(a => a.playState !== 'running'"
+        " || a.effect.getComputedTiming().iterations === Infinity)))))",
         timeout_ms=10_000,
     )
 
