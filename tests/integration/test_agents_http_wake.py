@@ -312,6 +312,11 @@ def test_the_session_route_takes_only_session_start_and_end_from_an_agent(build:
     it accepts anything wider."""
     claude, token = joined_claude(build)
     sid = SESSION_1
+    # the route's own guarantee that it never parks (F2 on #404's board): a park needs a Stop with
+    # wait_s, and the route takes neither, whatever the engine does with a SessionStart
+    assert "wait_s" not in agent_http.SESSION_FIELDS and "Stop" not in agent_http.SESSION_EVENTS
+    r = session_hook(build, token, {"event": "SessionStart", "session_id": sid, "wait_s": "60"})
+    assert r.status_code == 200 and not parked(build, participant(build, "claude-1").id), r.text
     assert session_hook(build, token, {"event": "Stop", "session_id": sid}).status_code == 400
     assert session_hook(build, token, {"event": "PreToolUse", "session_id": sid}).status_code == 400
     assert session_hook(build, token, ["SessionEnd"]).status_code == 400
