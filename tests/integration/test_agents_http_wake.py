@@ -22,6 +22,7 @@ from test_agents_http import CALL as CODEX_CALL
 from test_agents_http import THREAD_A, Codex, make_token, members, sse_result
 from test_agents_http_claude import HOOK, SESSION_1, Claude
 
+from switchboard import __version__
 from switchboard.broker import agent_http
 
 TOKEN_IN = re.compile(r"yk:b(\d+)\.([0-9a-f]{8})")
@@ -313,3 +314,4 @@ def test_the_join_over_https_says_the_stop_hook_wakes_an_idle_session(build: InP
         text = json.dumps(r)
         assert "can't wake" not in text
         assert "Stop hook waits" in text and "after your tool calls" in text
+        assert f"switchboard {__version__}" in text  # the server's version, behind the token

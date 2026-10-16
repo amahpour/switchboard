@@ -14,7 +14,7 @@ your machines ─wss─▶ Render's router, Caddy, an ingress             the br
 
 - **One container, one volume, one broker.** The broker takes a lock in its data directory, and a second broker on the same volume refuses to start. Never run more than one replica. Several brokers behind one address are a different design ([#35](https://github.com/amahpour/switchboard/issues/35)).
 - **The volume is a real disk:** a Render disk, EBS, a GCE persistent disk, a Docker volume. Never NFS or EFS, where SQLite's locking isn't reliable.
-- **The public URL is the only address.** You tell the broker the `https://` address browsers use. It then answers only to that host, accepts writes only from that origin, marks its session cookie `Secure`, and puts that address in the sign-in links. Requests for any other host get `421`. The one exception is `GET /healthz`, which answers `ok` and the version to anyone (platforms probe the container's own address) and nothing else.
+- **The public URL is the only address.** You tell the broker the `https://` address browsers use. It then answers only to that host, accepts writes only from that origin, marks its session cookie `Secure`, and puts that address in the sign-in links. Requests for any other host get `421`. The one exception is `GET /healthz`, which answers `ok` to anyone (platforms probe the container's own address) and nothing else.
 - **TLS is the proxy's job.** The broker speaks plain HTTP on port 7419 inside the container. It never reads `X-Forwarded-*` headers: the public URL you configure decides the scheme and the host, so a forged header can't change them.
 - **WebSockets pass through the proxy:** the web UI's (`/ws`) and your machines' links (`/link`). Every proxy above does that by default. Don't put request buffering on them: a machine's link is a long-lived WebSocket that the broker pings every 2 seconds.
 
@@ -163,7 +163,7 @@ To restore, stop the broker, put the copy at `$SWITCHBOARD_HOME/switchboard.db` 
 
 ## Health checks and logs
 
-- **`GET /healthz`** answers `ok` and the server's version (`ok 0.32.1`) with status 200, so a client can tell what the server runs; the version is public anyway (the image tag, the web UI's footer). It needs no sign-in, returns nothing else, and accepts any Host, so platforms can probe the container's own address. The image's Docker `HEALTHCHECK` calls it, and so do the Kubernetes probes and Render's `healthCheckPath`.
+- **`GET /healthz`** answers `ok` with status 200. It needs no sign-in, returns no data, and accepts any Host, so platforms can probe the container's own address. The image's Docker `HEALTHCHECK` calls it, and so do the Kubernetes probes and Render's `healthCheckPath`.
 - **Logs** are on stdout: `docker logs switchboard`, `kubectl logs switchboard-0`, or Render's Logs tab. They hold ids, never message text. The admin's one-time password is the one secret ever printed there, and it works once and expires. The people's one-time passwords never appear there. Pairing codes never appear there.
 
 ## The image

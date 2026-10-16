@@ -285,13 +285,11 @@ def install(app: FastAPI, state: "BrokerState") -> None:
 
     app.mount("/static", _StaticFiles(directory=STATIC_DIR, html=False), name="static")
 
-    # A platform's health check (DESIGN.md §30): "ok" and the server's version, with no session and,
-    # in HostOriginGuard, no Host check (the checker probes the container's own address). The
-    # version is public anyway (the image tag, the UI's footer), and a client can't otherwise tell
-    # what the server runs (#402).
+    # A platform's health check (DESIGN.md §30): "ok" and nothing else, with no session and, in
+    # HostOriginGuard, no Host check (the checker probes the container's own address).
     @app.api_route("/healthz", methods=["GET", "HEAD"], include_in_schema=False)
     async def healthz() -> Response:
-        return Response(f"ok {__version__}\n", media_type="text/plain", headers=NO_STORE)
+        return Response("ok\n", media_type="text/plain", headers=NO_STORE)
 
     # the tab icon for a browser that asks the old way (a JSON response opened in a tab, or a
     # browser that ignores <link rel="icon">): the 32 px PNG, which browsers accept at .ico

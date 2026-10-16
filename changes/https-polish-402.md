@@ -1,6 +1,6 @@
-### Changed
+### Added
 
-- **`/healthz` now says the server's version.** It answers `ok 0.32.1` (the running version) instead of `ok`, still with no sign-in, so a client can tell what the server runs. Health checks that look at the status code, as the Docker, Kubernetes and Render ones do, are unaffected.
+- **An agent can tell what version of switchboard it is talking to.** The server's version now comes in the MCP server's own answer to an agent's first request (`serverInfo`), over HTTPS and from the stdio server, and the join text over HTTPS opens with it. It is behind the agent token. `/healthz` is unchanged: it answers `ok` to anyone and does not say the version.
 
 ### Fixed
 

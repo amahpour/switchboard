@@ -7,7 +7,7 @@ import json
 import pytest
 from fastmcp import Client
 
-from switchboard import guardrails
+from switchboard import __version__, guardrails
 from switchboard.mcp import server as srv
 from switchboard.mcp.client import BrokerConn
 
@@ -45,6 +45,7 @@ async def test_tools_annotations_and_instructions(tmp_path) -> None:
         assert not caps.get("experimental")
         assert guardrails.find_forbidden(caps) == []
         assert init.server_info.name == "switchboard"
+        assert init.server_info.version == __version__  # a client can tell what it runs (#402)
 
 
 async def test_tool_list_fits_the_review_budget(tmp_path) -> None:
