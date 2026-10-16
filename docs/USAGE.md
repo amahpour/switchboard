@@ -134,6 +134,8 @@ Codex allows no `mcp_tool` hook at SessionEnd, so a Codex thread over HTTPS show
 
 It installs switchboard's plugin from this repository and asks for two things: your switchboard's address (`https://sb.example.com`) and the agent token, which Claude Code keeps as a secret. The plugin carries the server and the hooks: one tells switchboard which session makes each call, and the Stop one is the listener, which sends only the session id, waits, and wakes Claude Code with the message when one comes. Restart Claude Code, or run `/mcp`, to connect it.
 
+**Updating the plugin.** Claude Code doesn't update a marketplace you added yourself unless you turn that on in `/plugin`. To get a new version of switchboard's plugin, run `claude plugin marketplace update switchboard`, then `claude plugin update switchboard@switchboard`, and restart Claude Code. The release notes say when a release changes the plugin.
+
 An idle Claude Code stays reachable for up to a week: its listener waits in rounds of 15 minutes and starts the next when one runs out, and tries again while the server restarts. It stops when Claude Code quits, or when the session leaves its rooms. A `claude -p` run waits for its listener, so one that joined a room keeps waiting after it answers, until a message comes or it leaves.
 
 <details><summary>The same by hand, without the plugin</summary>
@@ -156,9 +158,10 @@ The hooks go in `~/.claude/settings.json`'s `hooks`. The PreToolUse one tells sw
   "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "permission_mode": "${permission_mode}"}}]}],
 "Stop": [{"hooks": [{"type": "command", "asyncRewake": true, "timeout": 604800,
   "command": "~/.claude/hooks/switchboard-listen"}]}],
-"SessionEnd": [{"hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 10,
-  "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "reason": "${reason}"}}]}]
+"SessionEnd": [{"hooks": [{"type": "command", "timeout": 10, "command": "~/.claude/hooks/switchboard-session"}]}]
 ```
+
+The SessionEnd one takes the session offline when Claude Code quits. Claude Code runs no `mcp_tool` hook at SessionEnd, so it is the plugin's [`bin/session`](../plugins/claude/bin/session): save it as `~/.claude/hooks/switchboard-session` and make it executable, beside the listener.
 
 </details>
 

@@ -1,0 +1,30 @@
+#!/bin/sh
+# switchboard's SessionStart and SessionEnd for Claude Code (docs/DESIGN.md §49.4). Claude Code runs
+# no mcp_tool hook at these two events (it has no MCP connection then), so this command hook posts
+# them to the server instead: the event, the session id, and the event's own short fields, nothing
+# else. A SessionEnd takes the session offline; a SessionStart after /clear or a compaction may get
+# context back, which it prints for Claude Code. It always exits 0, and quickly: a server that
+# can't be reached changes nothing here. The token reaches curl on its stdin, never its command
+# line, where other processes could read it.
+input=$(cat)
+field() {
+  printf '%s' "$input" | grep -o "\"$1\": *\"[^\"]*\"" | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/'
+}
+plain() { # only letters, digits, - and _: nothing that needs quoting in JSON
+  case $1 in *[!A-Za-z0-9_-]*) printf '' ;; *) printf '%s' "$1" ;; esac
+}
+event=$(plain "$(field hook_event_name)")
+sid=$(plain "$(field session_id)")
+case $event in SessionStart | SessionEnd) ;; *) exit 0 ;; esac
+[ -n "$sid" ] || exit 0
+url=${CLAUDE_PLUGIN_OPTION_SERVER_URL:-$SWITCHBOARD_URL}
+url=${url%/}
+token=${CLAUDE_PLUGIN_OPTION_TOKEN:-$SWITCHBOARD_AGENT_TOKEN}
+[ -n "$url" ] && [ -n "$token" ] || exit 0
+body=$(printf '{"event": "%s", "session_id": "%s", "source": "%s", "reason": "%s", "permission_mode": "%s"}' \
+  "$event" "$sid" "$(plain "$(field source)")" "$(plain "$(field reason)")" "$(plain "$(field permission_mode)")")
+out=$(printf 'header = "Authorization: Bearer %s"\n' "$token" |
+  curl -sf --max-time 5 -K - -X POST -H 'Content-Type: application/json' --data-binary "$body" \
+    "$url/mcp/session")
+[ "$event" = SessionStart ] && [ -n "$out" ] && [ "$out" != "{}" ] && printf '%s\n' "$out"
+exit 0

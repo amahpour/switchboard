@@ -92,6 +92,10 @@ HOOK_FIELDS = (
     "wait_s",
 )
 LISTEN_PATH = "/mcp/listen"  # Claude Code's listener waits here (§49.4)
+SESSION_PATH = "/mcp/session"  # Claude Code's SessionStart and SessionEnd, as command hooks (§49.4)
+SESSION_EVENTS = frozenset({"SessionStart", "SessionEnd"})  # Claude Code runs no mcp_tool hook at these
+SESSION_FIELDS = ("event", "session_id", "source", "reason", "permission_mode")  # all /mcp/session reads
+SESSION_BODY_MAX = 2048
 SESSION_HEADER = b"x-switchboard-session"  # the listener's session id, the only thing it sends
 WAIT_HEADER = b"x-switchboard-wait"  # how long one round of the listener waits
 AGAIN_HEADER = b"x-switchboard-again"  # "1" on the listener's later rounds: only an idle session waits on
@@ -549,6 +553,61 @@ class AgentAuth:
             self.sessions.pop(sid, None)
 
 
+class SessionHook:
+    """``/mcp/session`` (§49.4): Claude Code's SessionStart and SessionEnd, which it won't run as
+    ``mcp_tool`` hooks (it has no MCP connection then), sent by the plugin's ``bin/session``, a
+    command hook. It posts a small JSON object with only ``SESSION_FIELDS`` and is handled exactly
+    as the hook tool handles the same event: a SessionEnd takes the session offline, and a
+    SessionStart after ``/clear`` or a compaction may answer with context, in the checked shape.
+    Anything else is refused. The answer is always 200 with a JSON object (``{}`` for nothing),
+    which the script prints for Claude Code."""
+
+    def __init__(self, auth: AgentAuth, tools: HttpTools) -> None:
+        self.auth = auth
+        self.tools = tools
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("method") != "POST":
+            await _reply(send, 405, {"error": "method", "message": "POST only"})
+            return
+        if _header(scope, b"origin") is not None:
+            await _reply(send, 403, {"error": "forbidden", "message": "agents only"})
+            return
+        row = self.auth.token(scope)
+        if row is None:
+            await _reply(send, 401, {"error": "unauthorized", "message": "an agent token is needed"})
+            return
+        raw = b""
+        while True:
+            msg = await receive()
+            raw += msg.get("body", b"")
+            if len(raw) > SESSION_BODY_MAX:
+                await _reply(send, 413, {"error": "too_large", "message": "too large"})
+                return
+            if not msg.get("more_body"):
+                break
+        try:
+            body = json.loads(raw or b"{}")
+        except ValueError:
+            body = None
+        if not isinstance(body, dict) or body.get("event") not in SESSION_EVENTS:
+            await _reply(send, 400, {"error": "bad_request", "message": "SessionStart or SessionEnd"})
+            return
+        self.auth.touch(row)
+        fields = {k: body[k] for k in SESSION_FIELDS if isinstance(body.get(k), str)}
+        event = fields["event"]
+        state = self.tools.state
+        agents: Any = state.agents  # an HttpConn stands in for the socket's Conn
+        conn = self.tools.conn_for(row, "claude")
+        res = await agents.http_hook(conn, "claude", event, hook_params(event, fields, state.clock.now()))
+        reply = reply_for("claude", event, res.get("out"))
+        if reply is None:
+            await _reply(send, 200, {})
+            return
+        agents.hook_ack(conn, {"batch_id": res.get("batch_id"), "ack": res.get("ack")})
+        await _reply(send, 200, reply)
+
+
 class Listener:
     """``/mcp/listen`` (§49.4): Claude Code's Stop hook, a ``curl`` loop with ``asyncRewake``, posts
     here with nothing but its session id and waits, round after round. The answer is the message
@@ -671,4 +730,5 @@ def install(app: "FastAPI", state: "BrokerState") -> Any:
     auth = AgentAuth(inner, state)
     app.router.routes.append(Route(PATH, endpoint=auth))
     app.router.routes.append(Route(LISTEN_PATH, endpoint=Listener(auth, tools)))
+    app.router.routes.append(Route(SESSION_PATH, endpoint=SessionHook(auth, tools)))
     return mcp_app
