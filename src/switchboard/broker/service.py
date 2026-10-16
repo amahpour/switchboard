@@ -408,10 +408,14 @@ class RoomService:
         return self.room_people_names(room) if room.private else self.people_names()
 
     def host_person(self, host: str) -> int:
-        """Whose agents run on ``host`` (§44.3): a machine that dialed in is the person's who made
-        its pairing code (#178); this machine and an SSH remote are the owner's."""
+        """Whose agents run on ``host`` (§44.3): a device with a live agent token is its person's
+        (§49.1); a machine that dialed in is the person's who made its pairing code (#178); this
+        machine and an SSH remote are the owner's."""
         if not host:
             return 0
+        t = self.store.agent_token_for_device(host)
+        if t is not None:
+            return t.person_id if t.person_id is not None else 0
         m = self.store.machine(host)
         return m.person_id if m is not None and m.person_id is not None else 0
 

@@ -102,5 +102,9 @@ def revoke(state: "BrokerState", person_id: int | None, token_id: Any, by: str) 
     row = state.store.agent_token_revoke(token_id, person_id)
     if row is None:
         raise ServiceError("not_found", "no such agent token")
-    state.store.add_event("agent_tokens", data={"what": "revoke", "device": row.device, "by": by})
-    return {"ok": True, "device": row.device}
+    # its agents' sessions end with it: "left (work-laptop's token revoked)" (§49.3)
+    ended = state.remotes.end_members(row.device, "token revoked") if state.remotes is not None else 0
+    state.store.add_event(
+        "agent_tokens", data={"what": "revoke", "device": row.device, "by": by, "ended": ended}
+    )
+    return {"ok": True, "device": row.device, "ended": ended}

@@ -6,6 +6,9 @@
   (``mcp.attach``), are its adapter's to say (§6.3, §6.4).
 - ``agent.*`` calls carry a membership credential that works only on the
   verified MCP connection it was issued to (the participant's mcp pid/start).
+  An agent over HTTPS (``broker/agent_http.py``, §49.2) has no credential: its
+  calls name a membership (``m:<id>``) that is checked against the caller's own
+  session, worked out from its agent token and the harness's session id.
 - ``hook.event`` resolves which joined session (if any) a hook belongs to from
   the kernel peer pid's ancestry, then lets the engine update status, confirm
   offers and, where the harness table allows it, return priority context.
@@ -30,7 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from switchboard import claims, envelope, reviews
+from switchboard import __version__, claims, envelope, reviews
 from switchboard.adapters.base import HOOK_EVENTS, start_key
 from switchboard.broker import proc
 from switchboard.broker.hosts import HostViews
@@ -142,6 +145,15 @@ def _remote(conn: Any) -> bool:
     """A connection carried by a remote host's link (DESIGN.md §27.5.2); a stand-in
     without the flag is a local one."""
     return getattr(conn, "remote", False) is True
+
+
+def _http(conn: Any) -> bool:
+    """One call of an agent over HTTPS (``agent_http.HttpConn``, DESIGN.md §49.3)."""
+    return getattr(conn, "http", False) is True
+
+
+# what an agent over HTTPS passes instead of a credential: the membership it means (§49.3)
+HTTP_MEMBERSHIP_RE = re.compile(r"m:([1-9][0-9]{0,17})")
 
 
 TOOL_NAME_RE = re.compile(r"^[a-z][a-z_]{0,31}$")
@@ -677,6 +689,8 @@ class AgentService:
     def _member(
         self, conn: "Conn", params: dict[str, Any], *, next_call: bool = True
     ) -> tuple[Participant, Membership, Room]:
+        if _http(conn):
+            return self._http_member(conn, params, next_call=next_call)
         mc = self._mcp(conn)
         cred = params.get("cred")
         if not isinstance(cred, str) or not cred or len(cred) > 200:
@@ -719,6 +733,69 @@ class AgentService:
                 )
             if p.harness != mc.ident.harness:
                 raise ServiceError("unauthorized", "this credential belongs to another process")
+        if next_call:
+            self.run(self.engine.before_call(p))
+            p = self.store.get_participant(p.id) or p
+        return p, m, room
+
+    # ======================================================= over HTTPS (§49.3)
+    def http_session(self, conn: Any, thread_id: str | None) -> Participant | None:
+        """The caller's own session, if it joined: by the harness's session key on the token's
+        device (a Codex thread). None before its first join."""
+        mc = self._mcp(conn)
+        p = self.store.find_participant(mc.harness, self._session_key(mc, thread_id))
+        return p if p is not None and p.active and p.host == conn.host else None
+
+    def http_rooms(self, conn: Any, thread_id: str | None) -> list[tuple[Room, Membership]]:
+        """The rooms the caller's session is in now, with its membership in each."""
+        p = self.http_session(conn, thread_id)
+        if p is None:
+            return []
+        out = []
+        for m in self.store.participant_memberships(p.id):
+            room = self.store.room_by_id(m.room_id)
+            if room is not None:
+                out.append((room, m))
+        return out
+
+    def http_room(self, conn: Any, name: str, thread_id: str | None) -> tuple[Room, Membership] | None:
+        """The caller's membership in ``name`` (a canonical room name), or in the room renamed
+        from it (#316): both names work, as they do over the socket."""
+        rooms = self.http_rooms(conn, thread_id)
+        for room, m in rooms:
+            if room.name == name:
+                return room, m
+        renamed = self.store.room_by_alias(name)
+        if renamed is not None and self.store.get_room(name) is None:
+            for room, m in rooms:
+                if room.id == renamed.id:
+                    return room, m
+        return None
+
+    def http_claims(self, host: str, tools: tuple[str, ...]) -> None:
+        """What a member over HTTPS runs is this broker's own code, so its version and tools are
+        the broker's (#249): kept under its sessions' MCP key, ``(device, 0, 0.0)``."""
+        self._mcp_claims[_mcp_key(host, 0, 0.0)] = (0, __version__, tools)
+
+    def _http_member(
+        self, conn: Any, params: dict[str, Any], *, next_call: bool
+    ) -> tuple[Participant, Membership, Room]:
+        """``_member`` for a call over HTTPS: the membership it names must be the caller's own
+        session's, and active; everything else is checked as for a credential."""
+        tid = params.get("thread_id")
+        tid = tid if isinstance(tid, str) and 0 < len(tid) <= 128 else None
+        got = params.get("cred")
+        got = HTTP_MEMBERSHIP_RE.fullmatch(got) if isinstance(got, str) else None
+        p = self.http_session(conn, tid)
+        m = self.store.get_membership(int(got.group(1))) if got is not None else None
+        if p is None or m is None or m.participant_id != p.id:
+            raise ServiceError("unauthorized", "not a member: join() first")
+        room = self.store.room_by_id(m.room_id)
+        if not m.active or room is None:
+            raise ServiceError("unauthorized", "not a member (your membership ended): join() again")
+        credential_error = self.engine.adapter(p).credential_error(p, params)
+        if credential_error is not None:
+            raise ServiceError("unauthorized", credential_error)
         if next_call:
             self.run(self.engine.before_call(p))
             p = self.store.get_participant(p.id) or p

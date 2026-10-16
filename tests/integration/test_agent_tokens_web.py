@@ -55,7 +55,7 @@ def test_the_owner_makes_lists_and_revokes_a_token_on_a_desktop_broker(broker: I
     again = post(c, broker, MAKE, {"device": "work-laptop"})
     assert again.status_code == 409 and "revoke it first" in again.json()["message"]
     r = post(c, broker, f"{MAKE}/{made['id']}/revoke")
-    assert r.status_code == 200 and r.json() == {"ok": True, "device": "work-laptop"}
+    assert r.status_code == 200 and r.json() == {"ok": True, "device": "work-laptop", "ended": 0}
     assert c.get(MAKE).json()["tokens"] == []
     assert st.store.agent_token_by_hash(row.token_hash) is None
     assert post(c, broker, f"{MAKE}/{made['id']}/revoke").status_code == 404

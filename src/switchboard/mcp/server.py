@@ -32,7 +32,7 @@ import logging
 import os
 import secrets
 import sys
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from fastmcp import Context, FastMCP
 from fastmcp.server.middleware import Middleware
@@ -112,6 +112,38 @@ def err(message: str, code: str | None = None) -> str:
     if code:
         d["code"] = code
     return dumps(d)
+
+
+class ToolBackend(Protocol):
+    """What ``build_server``'s tools need from whoever carries their calls to the broker: this
+    process's ``McpState`` over the broker's socket, or the broker's own ``HttpTools`` for agents
+    over HTTPS (``broker/agent_http.py``, DESIGN.md §49.2). The tools are the same either way,
+    because they are the agent's whole interface (§6)."""
+
+    @property
+    def harness(self) -> str | None: ...
+
+    @property
+    def creds(self) -> dict[tuple[str | None, str], str]: ...
+
+    @property
+    def codex_threads(self) -> dict[str, str]: ...
+
+    async def prime(self, ctx: Context | None) -> None: ...
+
+    def thread_id(self, ctx: Context | None) -> str | None: ...
+
+    def wait_cap(self) -> int: ...
+
+    async def call(self, method: str, params: dict[str, Any], timeout: float = 15.0) -> dict[str, Any]: ...
+
+    async def find_cred(self, room: str, tid: str | None) -> tuple[str, str] | str: ...
+
+    def base(self, cred: str, tid: str | None) -> dict[str, Any]: ...
+
+    def forget(self, res: dict[str, Any], key: tuple[str | None, str]) -> None: ...
+
+    def unwait(self, params: dict[str, Any]) -> None: ...
 
 
 class McpState:
@@ -394,6 +426,10 @@ class McpState:
         if not res.get("ok") and res.get("code") in ("unauthorized", "kicked"):
             self.creds.pop(key, None)
 
+    def unwait(self, params: dict[str, Any]) -> None:
+        """The harness cancelled a wait(): take its answer back, if any (no reply awaited)."""
+        self.conn.notify("agent.unwait", params)
+
 
 PASSED = "[switchboard] logged, not posted."
 
@@ -463,9 +499,10 @@ class HelloMiddleware(Middleware):
 TOOL_NAMES = ("join", "leave", "who", "claim", "say", "read", "wait", "pass", "away", "review", "status")
 
 
-def build_server(st: McpState) -> FastMCP:
+def build_server(st: ToolBackend) -> FastMCP:
     mcp = FastMCP("switchboard", instructions=INSTRUCTIONS)
-    mcp.add_middleware(HelloMiddleware(st))
+    if isinstance(st, McpState):  # over HTTPS the broker knows the caller from its token (§49.2)
+        mcp.add_middleware(HelloMiddleware(st))
 
     @mcp.tool(annotations=RW_IDEM)
     async def join(room: str, screen_name: str, ctx: Context, resume: str = "") -> str:
@@ -655,7 +692,7 @@ def build_server(st: McpState) -> FastMCP:
             res = await st.call("agent.wait", params, timeout=t + 15)
         except asyncio.CancelledError:
             # The harness cancelled the call (e.g. Esc): take the answer back if any.
-            st.conn.notify("agent.unwait", {**st.base(cred, tid), "wait_id": wait_id})
+            st.unwait({**st.base(cred, tid), "wait_id": wait_id})
             raise
         st.forget(res, (tid, name))
         return dumps(res)
