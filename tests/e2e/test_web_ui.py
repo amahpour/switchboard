@@ -3269,3 +3269,30 @@ def test_a_card_shows_live_whether_the_agent_it_waits_on_is_working(ui: UI) -> N
     still = calm.locator('#board .board-card[data-item="F4"] .board-pulse')
     expect(still).to_have_text("working")
     assert still.evaluate("e => getComputedStyle(e, '::before').animationName") == "none"
+
+
+def test_a_focused_card_keeps_focus_when_an_agent_changes_state(ui: UI) -> None:
+    """Every busy/idle change rebuilds the board (its members frame), and with the working dot
+    (#407) those frames matter while agents work. A card reached by Tab must keep the focus, or a
+    keyboard or screen-reader user loses their place each time an agent starts or stops. Fails if
+    the rebuild drops focus to the page."""
+    slug = "e2e-board-focus"
+    room = "#" + slug
+    page = review_room(ui, slug)
+    page.click("#board-toggle")
+    card = page.locator('#board .board-card[data-item="F4"]')
+    card.focus()
+    assert page.evaluate("document.activeElement.dataset.item") == "F4"
+
+    def idle() -> None:
+        st = ui.world.broker.state
+        r = st.store.get_room(room)
+        assert r is not None
+        m = st.store.find_member(r.id, "codex-1")
+        assert m is not None
+        st.store.set_status(m.participant_id, "idle", "hook:Stop")
+        st.hub.members_changed(room)
+
+    ui.world.broker.on_loop(idle)
+    expect(card.locator(".board-pulse")).not_to_have_class(re.compile(r"\bworking\b"))  # it rebuilt
+    expect(page.locator('#board .board-card[data-item="F4"]')).to_be_focused()

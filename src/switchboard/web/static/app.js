@@ -5458,6 +5458,11 @@
   function renderBoard() {
     const handoffFocused = document.activeElement && document.activeElement.id === 'board-handoff';
     const dividerFocused = document.activeElement && document.activeElement.id === 'board-divider';
+    // a card with keyboard focus keeps it through the rebuild: a members frame rebuilds the board on
+    // every busy/idle change (#407), and a keyboard or screen-reader user would lose their place
+    const focusedCard = document.activeElement && document.activeElement.closest
+      ? document.activeElement.closest('#board .board-card') : null;
+    const focusedItem = focusedCard ? focusedCard.dataset.item : null;
     const r = activeRoom();
     const b = r ? r.board : null;
     const toggle = $('board-toggle');
@@ -5594,6 +5599,10 @@
     }
     // every board event redraws the board: the divider keeps the focus it had
     if (dividerFocused && boardParts) boardParts.divider.focus();
+    if (focusedItem) {
+      const again = box.querySelector('.board-card[data-item="' + focusedItem + '"]');
+      if (again) again.focus();
+    }
   }
 
   // The open card's width (#343). It was a fixed 340 px, cramped on a wide window. The card now
