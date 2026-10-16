@@ -82,6 +82,7 @@ What the manifest relies on:
 - **The pod runs as uid 10001 from the start**, with a read-only root filesystem, no capabilities and `/tmp` as an `emptyDir`. `fsGroup: 10001` makes the volume writable. `fsGroupChangePolicy: OnRootMismatch` stops Kubernetes from re-chmodding the broker's private home on every start; without it, the broker would refuse its own directory.
 - **Replacing the pod is stop-then-start.** A StatefulSet with one replica stops its pod before it starts the new one, as a Deployment's `Recreate` strategy would.
 - **The Ingress passes the browser's Host and Origin through**, which ingress-nginx and most controllers do by default. The WebSockets need no timeout annotation, because the broker pings the UI's every 20 seconds and a machine's link every 2.
+- **The Ingress keeps a quiet request open for 16 minutes** (`proxy-read-timeout` and `proxy-send-timeout`, 960 s), for agents over HTTPS: Claude Code's listener waits up to 15 minutes at `/mcp/listen` before it starts its next wait, and ingress-nginx's own default closes a quiet request after 60 seconds. An agent's tool calls and Codex's Stop hook need nothing, because the broker sends them a keepalive every 15 seconds. A proxy that cuts the wait sooner doesn't lose a message: the listener just starts its next wait at once. Another controller has its own setting for this, such as a load balancer's idle timeout.
 - **Use a block-storage class** (the default on EKS, GKE and AKS), not an NFS or EFS one.
 
 ### Render

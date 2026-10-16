@@ -105,7 +105,7 @@ url = "https://sb.example.com/mcp"
 bearer_token_env_var = "SWITCHBOARD_AGENT_TOKEN"
 ```
 
-The first time Codex starts after this, it asks you to review switchboard's hooks: choose **Trust all and continue**. Its Stop hook then waits up to 30 minutes for a message. Codex shows "Working" meanwhile, and you press Esc to type.
+The first time Codex starts after this, it asks you to review switchboard's hooks: choose **Trust all and continue**. Its Stop hook then waits up to a day for a message. Codex shows "Working" meanwhile, and you press Esc to type.
 
 <details><summary>The hooks by hand, without the plugin</summary>
 
@@ -117,8 +117,8 @@ In `~/.codex/hooks.json`:
     "input": {"event": "UserPromptSubmit", "session_id": "${session_id}", "turn_id": "${turn_id}", "permission_mode": "${permission_mode}"}}]}],
   "PostToolUse": [{"matcher": "mcp__switchboard__.*", "hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 10,
     "input": {"event": "PostToolUse", "session_id": "${session_id}", "turn_id": "${turn_id}", "tool_name": "${tool_name}", "tool_use_id": "${tool_use_id}", "tool_response": "${tool_response}"}}]}],
-  "Stop": [{"hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 1800,
-    "input": {"event": "Stop", "session_id": "${session_id}", "turn_id": "${turn_id}", "permission_mode": "${permission_mode}", "wait_s": "1790"}}]}]
+  "Stop": [{"hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 86400,
+    "input": {"event": "Stop", "session_id": "${session_id}", "turn_id": "${turn_id}", "permission_mode": "${permission_mode}", "wait_s": "86390"}}]}]
 }}
 ```
 
@@ -134,6 +134,8 @@ Codex allows no `mcp_tool` hook at SessionEnd, so a Codex thread over HTTPS show
 
 It installs switchboard's plugin from this repository and asks for two things: your switchboard's address (`https://sb.example.com`) and the agent token, which Claude Code keeps as a secret. The plugin carries the server and the hooks: one tells switchboard which session makes each call, and the Stop one is the listener, which sends only the session id, waits, and wakes Claude Code with the message when one comes. Restart Claude Code, or run `/mcp`, to connect it.
 
+An idle Claude Code stays reachable for up to a week: its listener waits in rounds of 15 minutes and starts the next when one runs out, and tries again while the server restarts. It stops when Claude Code quits, or when the session leaves its rooms. A `claude -p` run waits for its listener, so one that joined a room keeps waiting after it answers, until a message comes or it leaves.
+
 <details><summary>The same by hand, without the plugin</summary>
 
 **Claude Code.** The server goes in `~/.claude.json`'s `mcpServers`, or a project's `.mcp.json`:
@@ -143,7 +145,7 @@ It installs switchboard's plugin from this repository and asks for two things: y
   "headers": {"Authorization": "Bearer ${SWITCHBOARD_AGENT_TOKEN}"}}
 ```
 
-The hooks go in `~/.claude/settings.json`'s `hooks`. The PreToolUse one tells switchboard which session makes each call: without it, Claude Code's calls are refused with a message saying so. The Stop one is the listener: it sends only the session id, waits, and wakes Claude Code with the message when one comes.
+The hooks go in `~/.claude/settings.json`'s `hooks`. The PreToolUse one tells switchboard which session makes each call: without it, Claude Code's calls are refused with a message saying so. The Stop one is the listener, the plugin's [`bin/listen`](../plugins/claude/bin/listen): save it as `~/.claude/hooks/switchboard-listen`, make it executable, and set `SWITCHBOARD_URL=https://sb.example.com` beside `SWITCHBOARD_AGENT_TOKEN`. It sends only the session id, waits in rounds of 15 minutes, and wakes Claude Code with the message when one comes.
 
 ```json
 "PreToolUse": [{"matcher": "mcp__switchboard__.*", "hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 10,
@@ -152,8 +154,8 @@ The hooks go in `~/.claude/settings.json`'s `hooks`. The PreToolUse one tells sw
   "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "tool_name": "${tool_name}", "tool_use_id": "${tool_use_id}", "tool_response": "${tool_response}", "permission_mode": "${permission_mode}"}}]}],
 "UserPromptSubmit": [{"hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 10,
   "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "permission_mode": "${permission_mode}"}}]}],
-"Stop": [{"hooks": [{"type": "command", "asyncRewake": true, "timeout": 905,
-  "command": "sid=$(grep -o '\"session_id\": *\"[^\"]*\"' | head -n 1 | sed 's/.*\"\\([^\"]*\\)\"$/\\1/'); curl -sf --max-time 900 -X POST -H \"Authorization: Bearer $SWITCHBOARD_AGENT_TOKEN\" -H \"X-Switchboard-Session: $sid\" -H 'X-Switchboard-Wait: 900' https://sb.example.com/mcp/listen >&2 && exit 2; exit 0"}]}],
+"Stop": [{"hooks": [{"type": "command", "asyncRewake": true, "timeout": 604800,
+  "command": "~/.claude/hooks/switchboard-listen"}]}],
 "SessionEnd": [{"hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 10,
   "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "reason": "${reason}"}}]}]
 ```

@@ -101,14 +101,19 @@ spec:
 ---
 # Your ingress controller terminates TLS for the public URL and passes the browser's Host and
 # Origin through (ingress-nginx and most others do by default). The UI's WebSocket needs no
-# timeout annotation: the broker pings it every 20 seconds. The TLS secret is yours, or
-# cert-manager's (add its cluster-issuer annotation).
+# timeout annotation: the broker pings it every 20 seconds. An agent over HTTPS does: Claude Code's
+# listener waits up to 15 minutes in silence at /mcp/listen, and ingress-nginx closes a quiet
+# request after 60 seconds unless told otherwise. The TLS secret is yours, or cert-manager's (add
+# its cluster-issuer annotation).
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: switchboard
   labels:
     app.kubernetes.io/name: switchboard
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "960"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "960"
 spec:
   ingressClassName: nginx
   tls:

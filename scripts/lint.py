@@ -202,7 +202,8 @@ def main() -> int:
     ok = compare(findings(), args.base) and format_ok and js_ok
     shellcheck = installed_tool("shellcheck")
     actionlint = installed_tool("actionlint")
-    scripts = run("git", "ls-files", "*.sh", capture_output=True).stdout.splitlines()
+    # shell scripts: *.sh, and the plugins' extensionless ones (bin/listen)
+    scripts = run("git", "ls-files", "*.sh", "plugins/*/bin/*", capture_output=True).stdout.splitlines()
     ok &= run(str(shellcheck), "-x", *scripts, check=False).returncode == 0
     env = {**os.environ, "PATH": f"{TOOLS}:{os.environ['PATH']}"}
     # actionlint looks up shellcheck by its ordinary name.
