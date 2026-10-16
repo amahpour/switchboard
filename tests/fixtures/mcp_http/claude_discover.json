@@ -1,0 +1,38 @@
+{
+  "_source": "claude-code 2.1.300 over Streamable HTTP (MCP 2026-07-28), #380's spike, 2026-10-14",
+  "_note": "the first request of a session's MCP client: no initialize, no session id",
+  "headers": {
+    "accept": "application/json, text/event-stream",
+    "accept-encoding": "identity",
+    "content-type": "application/json",
+    "user-agent": "claude-code/2.1.300 (cli)",
+    "mcp-method": "server/discover",
+    "mcp-protocol-version": "2026-07-28"
+  },
+  "body": {
+    "jsonrpc": "2.0",
+    "id": "server-discover-probe-1",
+    "method": "server/discover",
+    "params": {
+      "_meta": {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": {
+          "name": "claude-code",
+          "title": "Claude Code",
+          "version": "2.1.300",
+          "description": "Anthropic's agentic coding tool",
+          "websiteUrl": "https://claude.com/claude-code"
+        },
+        "io.modelcontextprotocol/clientCapabilities": {
+          "roots": {
+            "listChanged": true
+          },
+          "elicitation": {
+            "form": {},
+            "url": {}
+          }
+        }
+      }
+    }
+  }
+}

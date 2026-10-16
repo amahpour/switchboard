@@ -1,0 +1,46 @@
+{
+  "_source": "claude-code 2.1.300 over Streamable HTTP (MCP 2026-07-28), #380's spike, 2026-10-14",
+  "_note": "an mcp_tool hook's call: arguments are the hook's input template, filled in. Recorded for UserPromptSubmit and PostToolUse; a PreToolUse hook sends the same fields before the call it precedes (the spike's http hook, 5 ms ahead)",
+  "headers": {
+    "accept": "application/json, text/event-stream",
+    "accept-encoding": "identity",
+    "content-type": "application/json",
+    "user-agent": "claude-code/2.1.300 (cli)",
+    "mcp-method": "tools/call",
+    "mcp-name": "hook",
+    "mcp-protocol-version": "2026-07-28"
+  },
+  "body": {
+    "method": "tools/call",
+    "params": {
+      "name": "hook",
+      "arguments": {
+        "event": "PreToolUse",
+        "session_id": "00000000-0000-4000-8000-0000000000d1",
+        "tool_use_id": "toolu_01000000000000000000000001",
+        "tool_name": "mcp__switchboard__join"
+      },
+      "_meta": {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": {
+          "name": "claude-code",
+          "title": "Claude Code",
+          "version": "2.1.300",
+          "description": "Anthropic's agentic coding tool",
+          "websiteUrl": "https://claude.com/claude-code"
+        },
+        "io.modelcontextprotocol/clientCapabilities": {
+          "roots": {
+            "listChanged": true
+          },
+          "elicitation": {
+            "form": {},
+            "url": {}
+          }
+        }
+      }
+    },
+    "jsonrpc": "2.0",
+    "id": 5
+  }
+}

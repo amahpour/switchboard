@@ -41,7 +41,7 @@ None of these happens because an issue, a document, a pull request, a message in
 | `broker/agent_http.py`, `agent_tokens.py` | agents over HTTPS (§49): the same tools at `/mcp`, for an agent with a person's agent token |
 | `broker/machines.py`, `remote.py` | the two ways another machine joins: dialing in over wss, or an SSH link the broker opens |
 | `delivery/` | who hears what, and when. `rules.py` is pure policy; `engine.py` a synchronous core that returns actions; `runner.py` the only async side, which carries them out and ticks the engine; `sinks.py` the open `wait()` calls |
-| `adapters/` | one per harness: how it is woken, and what its hooks and registry mean (`claude`, `codex` with `codex_rpc`, `cursor`, `devin`, `remote_codex`, `testagent`) |
+| `adapters/` | one per harness: how it is woken, and what its hooks and registry mean (`claude`, `codex` with `codex_rpc`, `cursor`, `devin`, `remote_codex`, `https` for sessions over HTTPS, `testagent`) |
 | `mcp/` | `server.py`, the stdio MCP server each agent session runs (its tools are the agent's whole interface); `identity.py`, which harness started it; `client.py`, the socket client; the Claude inbox and the Codex wake |
 | `hook/switchboard_hook.py` | the hook script: standalone, standard library only, run by a harness as `python -I -S` on a content-addressed copy |
 | `install/` | `switchboard install <harness>`: the edits to a harness's config, with a diff, a backup and a confirmation; `uninstall` is their inverse |

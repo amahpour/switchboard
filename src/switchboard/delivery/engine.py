@@ -62,6 +62,7 @@ from switchboard.models import (
     Snapshot,
     display_room,
     join_code_hash,
+    over_https,
 )
 from switchboard.store import Store
 
@@ -146,12 +147,16 @@ class Engine:
         return self.clock.now()
 
     def adapter(self, p: Participant) -> Adapter:
-        return self.adapter_for(p.harness, getattr(p, "host", ""))
+        host = getattr(p, "host", "")
+        return self.adapter_for(p.harness, host, https=over_https(host, getattr(p, "mcp_pid", None)))
 
-    def adapter_for(self, harness: str, host: str = "") -> Adapter:
+    def adapter_for(self, harness: str, host: str = "", *, https: bool = False) -> Adapter:
         """The adapter of a ``harness`` session on ``host`` ('' for this machine). A harness
         whose push paths reach only this machine (Codex's app-server) has a pull-only
-        adapter for its sessions on other hosts (DESIGN.md §27.7)."""
+        adapter for its sessions on other hosts (DESIGN.md §27.7). A session over HTTPS has its
+        harness's ``@https`` adapter where there is one (§49.3)."""
+        if https and f"{harness}@https" in self.adapters:
+            return self.adapters[f"{harness}@https"]
         adapter = self.adapters.get(harness) or self.adapters["unknown"]
         if host and adapter.local_only:
             return self.adapters.get(f"{harness}@remote") or self.adapters["unknown"]
