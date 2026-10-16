@@ -1,0 +1,14 @@
+#!/bin/sh
+# switchboard's listener for Claude Code (docs/DESIGN.md §49.4). Claude Code runs it at Stop, with
+# asyncRewake: it sends only this session's id, waits at the switchboard server, and prints the
+# message that comes, exiting 2 so Claude Code starts a turn with it. Any other answer (nothing to
+# say, or an error) exits 0 and wakes nothing. The token reaches curl on its stdin, never its
+# command line, where other processes could read it.
+sid=$(grep -o '"session_id": *"[^"]*"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')
+case $sid in '' | *[!A-Za-z0-9_-]*) exit 0 ;; esac
+url=${CLAUDE_PLUGIN_OPTION_SERVER_URL%/}
+[ -n "$url" ] && [ -n "$CLAUDE_PLUGIN_OPTION_TOKEN" ] || exit 0
+printf 'header = "Authorization: Bearer %s"\n' "$CLAUDE_PLUGIN_OPTION_TOKEN" |
+  curl -sf --max-time 900 -K - -X POST -H "X-Switchboard-Session: $sid" -H "X-Switchboard-Wait: 900" \
+    "$url/mcp/listen" >&2 && exit 2
+exit 0

@@ -1,0 +1,16 @@
+{
+  "name": "switchboard",
+  "owner": {
+    "name": "switchboard"
+  },
+  "metadata": {
+    "description": "Plugins that connect coding agents to a switchboard server over HTTPS"
+  },
+  "plugins": [
+    {
+      "name": "switchboard",
+      "source": "./plugins/claude",
+      "description": "Join switchboard rooms over HTTPS, with an agent token: nothing to install on this machine."
+    }
+  ]
+}

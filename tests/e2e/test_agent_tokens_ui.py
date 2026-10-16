@@ -183,3 +183,30 @@ def test_the_phone_gets_the_same_panel_without_a_sideways_scroll(
     box = page.locator("#agent-token-value").bounding_box()
     assert box is not None and box["x"] + box["width"] <= PHONE["viewport"]["width"]
     revoke_all(hosted)
+
+
+def test_the_new_token_comes_with_the_steps_to_connect_an_agent(
+    ui: UI, hosted: tuple[InProcBroker, str]
+) -> None:
+    """Under the token shown once, Connect an agent gives the line to run in Claude Code (the plugin,
+    from this repository's marketplace) and this switchboard's own address, each with Copy (#384).
+    Fails if the steps are missing, name another address, or go when the token does."""
+    b, _ = hosted
+    revoke_all(hosted)
+    checked_now(hosted)
+    page = open_page(ui, hosted)
+    open_settings(page, "agents")
+    page.fill("#agent-token-device", "studio")
+    page.click("#agent-token-make")
+    connect = page.locator("#agent-connect")
+    expect(connect).to_contain_text("Connect an agent on studio")
+    expect(page.locator("#agent-connect-claude")).to_have_text(
+        "/plugin install switchboard --marketplace amahpour/switchboard"
+    )
+    expect(page.locator("#agent-connect-server")).to_have_text(b.state.web_origin.origin)
+    expect(page.locator("#agent-connect-claude-copy")).to_be_visible()
+    expect(page.locator("#agent-connect-server-copy")).to_be_visible()
+    page.keyboard.press("Escape")
+    open_settings(page, "agents")
+    expect(page.locator("#agent-connect")).to_have_count(0)  # it goes with the token it was for
+    revoke_all(hosted)
