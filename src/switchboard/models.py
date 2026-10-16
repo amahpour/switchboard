@@ -143,6 +143,16 @@ def valid_host(host: str) -> bool:
     return isinstance(host, str) and HOST_RE.fullmatch(host) is not None
 
 
+# A session over HTTPS (DESIGN.md §49.3) has no process: its MCP pid is 0 on its device's host,
+# which no kernel-reported pid is.
+HTTPS_MCP_PID = 0
+
+
+def over_https(host: str, mcp_pid: int | None) -> bool:
+    """A session that reaches the broker at ``/mcp`` with an agent token (§49.3)."""
+    return bool(host) and mcp_pid == HTTPS_MCP_PID
+
+
 def session_key(harness: str, host: str, rest: str) -> str:
     """A participant's session key (DESIGN.md §27.5.4): ``<harness>:<rest>`` on this
     machine (the keys every earlier version wrote), ``<harness>@<host>:<rest>`` for a

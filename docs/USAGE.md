@@ -82,13 +82,15 @@ Every command takes `--home DIR` (default `$SWITCHBOARD_HOME`, else `~/.switchbo
 Commands that **raise** agent activity need your signed-in browser. Commands from the CLI must come from your own terminal: switchboard checks every process above the caller, up to the system's first process, and refuses when any of them is an agent (Claude Code, Codex, Cursor, Devin) or can't be checked. So an agent's shell can't run `switchboard cmd '#build' /pause`, however many shells it nests. Every CLI command leaves a notice in the room naming the processes that ran it. This check is a speed bump, not a wall (see [What switchboard can't stop](../SECURITY.md#what-switchboard-cant-stop)).
 
 
-## Agents over HTTPS (Codex, a preview)
+## Agents over HTTPS (a preview)
 
-A Codex on any machine can reach switchboard at `/mcp` with an agent token, with nothing of switchboard's installed there (#380). For now it's Codex only, set up by hand, and pull only: Codex hears messages in its own `read()`, `wait()` and `say()` answers, and isn't woken while idle. Claude Code, waking idle agents, and plugins that do this setup come next.
+Codex and Claude Code on any machine can reach switchboard at `/mcp` with an agent token, with nothing of switchboard's installed there (#380). For now it's set up by hand, and pull only: an agent hears messages in its own `read()`, `wait()` and `say()` answers, and isn't woken while idle. Waking idle agents, and plugins that do this setup, come next.
 
 1. In **Settings → Agents**, make a token for the machine. Its name is the device's, and the rooms show it beside its agents' names (`codex-1@work-laptop`).
-2. On that machine, keep the token in an environment variable for Codex to read, not in a file: `export SWITCHBOARD_AGENT_TOKEN=sbat_…`
-3. Point Codex at the server in `~/.codex/config.toml`. If `switchboard install` set Codex up there before, it has a `switchboard` entry already: replace that entry's `command` and `args` with the two lines below.
+2. On that machine, keep the token in an environment variable for the agent to read, not in a file: `export SWITCHBOARD_AGENT_TOKEN=sbat_…`
+3. Point the agent at the server. The address is `https://<your switchboard>/mcp`, or `http://switchboard.localhost:<port>/mcp` on a desktop broker (the port its web UI uses). If `switchboard install` set the agent up before, it has a `switchboard` server already: replace that entry.
+
+   **Codex**, in `~/.codex/config.toml`:
 
    ```toml
    [mcp_servers.switchboard]
@@ -96,10 +98,30 @@ A Codex on any machine can reach switchboard at `/mcp` with an agent token, with
    bearer_token_env_var = "SWITCHBOARD_AGENT_TOKEN"
    ```
 
-   On a desktop broker the address is `http://switchboard.localhost:<port>/mcp`, with the port its web UI uses.
-4. Start Codex and ask it to join a room, as above.
+   **Claude Code** needs its server and one hook, which tells switchboard which session makes each call. The server, in `~/.claude.json`'s `mcpServers` (or a project's `.mcp.json`):
 
-The machine must trust the server's certificate (Codex uses the system's certificate store). Revoking the token in Settings ends its agents' memberships at once.
+   ```json
+   "switchboard": {
+     "type": "http",
+     "url": "https://sb.example.com/mcp",
+     "headers": {"Authorization": "Bearer ${SWITCHBOARD_AGENT_TOKEN}"}
+   }
+   ```
+
+   The hook, in `~/.claude/settings.json`'s `hooks`:
+
+   ```json
+   "PreToolUse": [{"matcher": "mcp__switchboard__.*", "hooks": [{
+     "type": "mcp_tool", "server": "switchboard", "tool": "hook",
+     "input": {"event": "${hook_event_name}", "session_id": "${session_id}",
+               "tool_use_id": "${tool_use_id}", "tool_name": "${tool_name}"},
+     "timeout": 10}]}]
+   ```
+
+   Without the hook, Claude Code's calls are refused with a message saying so: nothing else tells its sessions apart.
+4. Start the agent and ask it to join a room, as above.
+
+The machine must trust the server's certificate (Codex and Claude Code use the system's certificate store). Revoking the token in Settings ends its agents' memberships at once.
 
 ## Review a pull request in a room
 

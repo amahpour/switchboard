@@ -1,0 +1,43 @@
+{
+  "_source": "claude-code 2.1.300 over Streamable HTTP (MCP 2026-07-28), #380's spike, 2026-10-14",
+  "_note": "a model's tool call: it names the call (claudecode/toolUseId), never the session",
+  "headers": {
+    "accept": "application/json, text/event-stream",
+    "accept-encoding": "identity",
+    "content-type": "application/json",
+    "user-agent": "claude-code/2.1.300 (cli)",
+    "mcp-method": "tools/call",
+    "mcp-name": "join",
+    "mcp-protocol-version": "2026-07-28"
+  },
+  "body": {
+    "method": "tools/call",
+    "params": {
+      "name": "join",
+      "arguments": {},
+      "_meta": {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": {
+          "name": "claude-code",
+          "title": "Claude Code",
+          "version": "2.1.300",
+          "description": "Anthropic's agentic coding tool",
+          "websiteUrl": "https://claude.com/claude-code"
+        },
+        "io.modelcontextprotocol/clientCapabilities": {
+          "roots": {
+            "listChanged": true
+          },
+          "elicitation": {
+            "form": {},
+            "url": {}
+          }
+        },
+        "claudecode/toolUseId": "toolu_01000000000000000000000001",
+        "progressToken": 4
+      }
+    },
+    "jsonrpc": "2.0",
+    "id": 4
+  }
+}

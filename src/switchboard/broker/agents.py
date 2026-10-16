@@ -69,6 +69,7 @@ from switchboard.models import (
     has_feature,
     join_code_hash,
     normalize_room,
+    over_https,
     split_session_key,
 )
 from switchboard.remote import proto
@@ -590,7 +591,7 @@ class AgentService:
         # Each harness's rule: Codex keys by thread, Cursor starts pending, the test
         # agent by its --test-session, and claude, devin and unknown by process (§6.3).
         try:
-            return self.engine.adapter_for(h, host).session_key(
+            return self.engine.adapter_for(h, host, https=over_https(host, mc.ident.mcp_pid)).session_key(
                 mc.ident, thread_id, test_session=mc.test_session
             )
         except ValueError as e:
@@ -874,7 +875,7 @@ class AgentService:
         tid = tid if isinstance(tid, str) and 0 < len(tid) <= 128 else None
         key = self._session_key(mc, tid)
         h = mc.harness
-        adapter = self.engine.adapter_for(h, host)
+        adapter = self.engine.adapter_for(h, host, https=over_https(host, mc.ident.mcp_pid))
         conflict = adapter.join_conflict(self.store, tid, host)
         if conflict is not None:
             raise ServiceError("conflict", conflict)
