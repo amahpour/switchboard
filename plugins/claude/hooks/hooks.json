@@ -1,0 +1,128 @@
+{
+  "description": "switchboard: which session makes each call, its status, and waking it when idle (docs/DESIGN.md \u00a749.4)",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:switchboard:switchboard",
+            "tool": "hook",
+            "input": {
+              "event": "${hook_event_name}",
+              "session_id": "${session_id}",
+              "source": "${source}",
+              "permission_mode": "${permission_mode}"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:switchboard:switchboard",
+            "tool": "hook",
+            "input": {
+              "event": "${hook_event_name}",
+              "session_id": "${session_id}",
+              "permission_mode": "${permission_mode}"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "mcp__plugin_switchboard_switchboard__.*",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:switchboard:switchboard",
+            "tool": "hook",
+            "input": {
+              "event": "${hook_event_name}",
+              "session_id": "${session_id}",
+              "tool_use_id": "${tool_use_id}",
+              "tool_name": "${tool_name}"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__plugin_switchboard_switchboard__.*",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:switchboard:switchboard",
+            "tool": "hook",
+            "input": {
+              "event": "${hook_event_name}",
+              "session_id": "${session_id}",
+              "tool_use_id": "${tool_use_id}",
+              "tool_name": "${tool_name}",
+              "tool_response": "${tool_response}",
+              "permission_mode": "${permission_mode}"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "mcp__plugin_switchboard_switchboard__.*",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:switchboard:switchboard",
+            "tool": "hook",
+            "input": {
+              "event": "${hook_event_name}",
+              "session_id": "${session_id}",
+              "tool_use_id": "${tool_use_id}",
+              "tool_name": "${tool_name}"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/listen",
+            "asyncRewake": true,
+            "timeout": 905
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:switchboard:switchboard",
+            "tool": "hook",
+            "input": {
+              "event": "${hook_event_name}",
+              "session_id": "${session_id}",
+              "reason": "${reason}"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

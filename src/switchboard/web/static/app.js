@@ -4316,7 +4316,36 @@
     return li;
   }
 
-  // the token just made, this once: copy it now
+  // the token just made, this once: copy it now, and the steps that connect an agent with it
+  // (#384): Claude Code's plugin, from this repository's marketplace
+  const PLUGIN_MARKETPLACE = 'amahpour/switchboard';
+
+  // a line to copy: the text in a code box, and Copy beside it ("Copied" a moment after)
+  function copyLine(key, text, id, copyId) {
+    const row = el('div', 'agent-token-show');
+    const code = el('code', 'agent-token-value', text);
+    code.id = id;
+    const copied = state.copiedCmd === key;
+    const copy = btn('btn', null);
+    copy.id = copyId || id + '-copy';
+    copy.dataset.focus = copy.id;
+    const label = el('span', null, copied ? 'Copied' : 'Copy');
+    copy.append(icon(copied ? 'check' : 'copy'), label);
+    copy.addEventListener('click', function () {
+      clipboardWrite(text).then(function () {
+        state.copiedCmd = key;
+        renderSettingsAgents();
+        setTimeout(function () {
+          if (state.copiedCmd !== key) return;
+          state.copiedCmd = null;
+          renderSettingsAgents();
+        }, COPIED_MS);
+      }, function () { copyFailed(copy, code, label); });
+    });
+    row.append(code, copy);
+    return row;
+  }
+
   function newAgentTokenCard(t) {
     const card = el('div', 'passkey-card agent-token-new');
     card.id = 'agent-token-new';
@@ -4325,29 +4354,24 @@
     card.append(head);
     card.append(el('p', 'fine', 'Copy it now: it is shown only this once. Keep it like a password:'
       + ' whoever has it can speak in your rooms as your agents on ' + t.device + '.'));
-    const row = el('div', 'agent-token-show');
-    const code = el('code', 'agent-token-value', t.token);
-    code.id = 'agent-token-value';
-    const copied = state.copiedCmd === 'agent-token';
-    const copy = btn('btn', null);
-    copy.id = 'agent-token-copy';
-    copy.dataset.focus = 'agent-token-copy';
-    const label = el('span', null, copied ? 'Copied' : 'Copy');
-    copy.append(icon(copied ? 'check' : 'copy'), label);
-    copy.addEventListener('click', function () {
-      clipboardWrite(t.token).then(function () {
-        state.copiedCmd = 'agent-token';
-        renderSettingsAgents();
-        setTimeout(function () {
-          if (state.copiedCmd !== 'agent-token') return;
-          state.copiedCmd = null;
-          renderSettingsAgents();
-        }, COPIED_MS);
-      }, function () { copyFailed(copy, code, label); });
-    });
-    row.append(code, copy);
-    card.append(row);
+    card.append(copyLine('agent-token', t.token, 'agent-token-value', 'agent-token-copy'));
+    card.append(connectSteps(t));
     return card;
+  }
+
+  // Connect an agent on that device: one line to run in each harness, and what it asks for
+  function connectSteps(t) {
+    const box = el('div', 'agent-connect');
+    box.id = 'agent-connect';
+    box.append(el('h4', 'agent-connect-title', 'Connect an agent on ' + t.device));
+    const claude = el('div', 'agent-connect-step');
+    claude.append(el('p', null, 'Claude Code: run this in Claude Code. It installs switchboard’s plugin and asks for'
+      + ' two things, this switchboard’s address and the token above.'));
+    claude.append(copyLine('agent-connect-claude', '/plugin install switchboard --marketplace ' + PLUGIN_MARKETPLACE,
+      'agent-connect-claude'));
+    claude.append(copyLine('agent-connect-server', location.origin, 'agent-connect-server'));
+    box.append(claude);
+    return box;
   }
 
   async function makeAgentToken(raw) {

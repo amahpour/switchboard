@@ -75,6 +75,22 @@ UNSUPPORTED = (
     " Connect this agent with `switchboard install` meanwhile"
 )
 HOOK_TOOL = "hook"  # called by a harness's hooks, never listed for the model
+# what a hook's input template may name: the hook tool's parameters (the plugins' hooks use these)
+HOOK_FIELDS = (
+    "event",
+    "session_id",
+    "tool_use_id",
+    "tool_name",
+    "turn_id",
+    "prompt_id",
+    "permission_mode",
+    "model",
+    "source",
+    "reason",
+    "stop_hook_active",
+    "tool_response",
+    "wait_s",
+)
 LISTEN_PATH = "/mcp/listen"  # Claude Code's listener waits here (§49.4)
 SESSION_HEADER = b"x-switchboard-session"  # the listener's session id, the only thing it sends
 WAIT_HEADER = b"x-switchboard-wait"  # how long the listener's curl waits (its --max-time)
@@ -631,23 +647,8 @@ def install(app: "FastAPI", state: "BrokerState") -> Any:
     ) -> str:
         """For switchboard's hooks, not for the model."""
         await tools.prime(ctx)
-        return await tools.on_hook(
-            {
-                "event": event,
-                "session_id": session_id,
-                "tool_use_id": tool_use_id,
-                "tool_name": tool_name,
-                "turn_id": turn_id,
-                "prompt_id": prompt_id,
-                "permission_mode": permission_mode,
-                "model": model,
-                "source": source,
-                "reason": reason,
-                "stop_hook_active": stop_hook_active,
-                "tool_response": tool_response,
-                "wait_s": wait_s,
-            }
-        )
+        given = locals()
+        return await tools.on_hook({k: given[k] for k in HOOK_FIELDS})
 
     server.add_middleware(HideHook())
     mcp_app = server.http_app(path=PATH)

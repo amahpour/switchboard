@@ -84,9 +84,9 @@ Commands that **raise** agent activity need your signed-in browser. Commands fro
 
 ## Agents over HTTPS (a preview)
 
-Codex and Claude Code on any machine can reach switchboard at `/mcp` with an agent token, with nothing of switchboard's installed there (#380). An idle one is woken by its own Stop hook, which waits on the server until a message comes. For now it's set up by hand, as below; plugins that do this setup come next.
+Codex and Claude Code on any machine can reach switchboard at `/mcp` with an agent token, with nothing of switchboard's installed there (#380). An idle one is woken by its own Stop hook, which waits on the server until a message comes. Claude Code sets itself up with switchboard's plugin, in one line; Codex is set up by hand, as below.
 
-1. In **Settings → Agents**, make a token for the machine. Its name is the device's, and the rooms show it beside its agents' names (`codex-1@work-laptop`).
+1. In **Settings → Agents**, make a token for the machine. Its name is the device's, and the rooms show it beside its agents' names (`codex-1@work-laptop`). The card that shows the token, once, also shows how to connect each agent.
 2. On that machine, keep the token in an environment variable, not in a file: `export SWITCHBOARD_AGENT_TOKEN=sbat_…`
 3. Point the agent at the server, and add its hooks. The address is `https://<your switchboard>/mcp`, or `http://switchboard.localhost:<port>/mcp` on a desktop broker (the port its web UI uses). If `switchboard install` set the agent up before, replace its `switchboard` server and its switchboard hooks.
 
@@ -115,6 +115,16 @@ The hooks go in `~/.codex/hooks.json`. Each is a call of switchboard's `hook` to
 
 While its Stop hook waits, Codex shows "Working". To type, press Esc first.
 
+**Claude Code.** In Claude Code, run:
+
+```text
+/plugin install switchboard --marketplace amahpour/switchboard
+```
+
+It installs switchboard's plugin from this repository and asks for two things: your switchboard's address (`https://sb.example.com`) and the agent token, which Claude Code keeps as a secret. The plugin carries the server and the hooks: one tells switchboard which session makes each call, and the Stop one is the listener, which sends only the session id, waits, and wakes Claude Code with the message when one comes. Restart Claude Code, or run `/mcp`, to connect it.
+
+<details><summary>The same by hand, without the plugin</summary>
+
 **Claude Code.** The server goes in `~/.claude.json`'s `mcpServers`, or a project's `.mcp.json`:
 
 ```json
@@ -136,6 +146,8 @@ The hooks go in `~/.claude/settings.json`'s `hooks`. The PreToolUse one tells sw
 "SessionEnd": [{"hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 10,
   "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "reason": "${reason}"}}]}]
 ```
+
+</details>
 
 4. Start the agent and ask it to join a room, as above. Members shows its status, approval mode and tier (`codex:https`, `claude:https`). When it stops, a message for it wakes it; while it works, a message for it comes back after its next tool call.
 

@@ -1,0 +1,23 @@
+{
+  "name": "switchboard",
+  "version": "0.1.0",
+  "description": "Join switchboard rooms, a group chat for you and your coding agents, over HTTPS: nothing to install on this machine.",
+  "author": {"name": "switchboard"},
+  "homepage": "https://github.com/amahpour/switchboard",
+  "license": "MIT",
+  "userConfig": {
+    "server_url": {
+      "type": "string",
+      "title": "switchboard server",
+      "description": "Your switchboard's address, as in the browser: https://sb.example.com",
+      "required": true
+    },
+    "token": {
+      "type": "string",
+      "title": "Agent token",
+      "description": "This device's agent token, from Settings → Agents in switchboard's web UI",
+      "sensitive": true,
+      "required": true
+    }
+  }
+}
