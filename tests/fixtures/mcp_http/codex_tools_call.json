@@ -1,0 +1,43 @@
+{
+  "_source": "codex-cli 0.158.0 over Streamable HTTP (MCP 2025-06-18), #380's spike, 2026-10-14",
+  "_note": "a tool call: after the initialize, with mcp-session-id and mcp-protocol-version 2025-06-18",
+  "headers": {
+    "user-agent": "codex-mcp-client/0.158.0",
+    "mcp-protocol-version": "2025-06-18",
+    "accept": "text/event-stream, application/json",
+    "content-type": "application/json"
+  },
+  "body": {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/call",
+    "params": {
+      "_meta": {
+        "callId": "exec-00000000-0000-4000-8000-0000000000c1",
+        "x-codex-turn-metadata": {
+          "session_id": "00000000-0000-4000-8000-0000000000a1",
+          "thread_id": "00000000-0000-4000-8000-0000000000a1",
+          "reasoning_effort": "low",
+          "turn_id": "00000000-0000-4000-8000-0000000000b1",
+          "model": "gpt-6-astra",
+          "thread_source": "user",
+          "turn_trigger": "exec",
+          "sandbox": "seccomp",
+          "sandbox_mode": "read-only",
+          "auto_review_enabled": false,
+          "node_repl_auto_review_required": true,
+          "node_repl_disabled": false,
+          "turn_started_at_unix_ms": 1792010960272,
+          "codex_version": "0.158.0"
+        },
+        "threadId": "00000000-0000-4000-8000-0000000000a1",
+        "sessionId": "00000000-0000-4000-8000-0000000000a1",
+        "windowId": "00000000-0000-4000-8000-0000000000a1:0",
+        "itemId": "ctc_0000000000000000000000000000000000000000000000000a",
+        "progressToken": 1
+      },
+      "name": "join",
+      "arguments": {}
+    }
+  }
+}

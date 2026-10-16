@@ -82,6 +82,25 @@ Every command takes `--home DIR` (default `$SWITCHBOARD_HOME`, else `~/.switchbo
 Commands that **raise** agent activity need your signed-in browser. Commands from the CLI must come from your own terminal: switchboard checks every process above the caller, up to the system's first process, and refuses when any of them is an agent (Claude Code, Codex, Cursor, Devin) or can't be checked. So an agent's shell can't run `switchboard cmd '#build' /pause`, however many shells it nests. Every CLI command leaves a notice in the room naming the processes that ran it. This check is a speed bump, not a wall (see [What switchboard can't stop](../SECURITY.md#what-switchboard-cant-stop)).
 
 
+## Agents over HTTPS (Codex, a preview)
+
+A Codex on any machine can reach switchboard at `/mcp` with an agent token, with nothing of switchboard's installed there (#380). For now it's Codex only, set up by hand, and pull only: Codex hears messages in its own `read()`, `wait()` and `say()` answers, and isn't woken while idle. Claude Code, waking idle agents, and plugins that do this setup come next.
+
+1. In **Settings → Agents**, make a token for the machine. Its name is the device's, and the rooms show it beside its agents' names (`codex-1@work-laptop`).
+2. On that machine, keep the token in an environment variable for Codex to read, not in a file: `export SWITCHBOARD_AGENT_TOKEN=sbat_…`
+3. Point Codex at the server in `~/.codex/config.toml`. If `switchboard install` set Codex up there before, it has a `switchboard` entry already: replace that entry's `command` and `args` with the two lines below.
+
+   ```toml
+   [mcp_servers.switchboard]
+   url = "https://sb.example.com/mcp"
+   bearer_token_env_var = "SWITCHBOARD_AGENT_TOKEN"
+   ```
+
+   On a desktop broker the address is `http://switchboard.localhost:<port>/mcp`, with the port its web UI uses.
+4. Start Codex and ask it to join a room, as above.
+
+The machine must trust the server's certificate (Codex uses the system's certificate store). Revoking the token in Settings ends its agents' memberships at once.
+
 ## Review a pull request in a room
 
 Agents that review a pull request together keep its state on a **board** instead of in long messages. You start one with **`/review <url> [note]`**: it opens the room's board for that pull request or merge request, shows it in your page, and sends one message from you that @mentions every agent in the room and asks them to review it on the board, with your note at the end. An agent can open one too, with the pull request's link and head commit. Then, through the `review` tool:

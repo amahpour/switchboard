@@ -16,8 +16,10 @@ flowchart TB
   browser["Browser: web/static/"]
   cli["switchboard CLI"]
   far["Another machine: satellite or dialer"]
+  elsewhere["An agent anywhere, over HTTPS"]
   subgraph broker["Broker: switchboard start"]
     web["web.py: REST and WebSocket"]
+    http["agent_http.py: /mcp"]
     rpc["rpc.py and peer.py: Unix socket"]
     svc["service.py, agents.py, commands.py"]
     engine["engine.py and rules.py"]
@@ -34,7 +36,9 @@ flowchart TB
   hook --> rpc
   cli --> rpc
   far -- "SSH or wss link: remote.py, machines.py" --> rpc
+  elsewhere -- "an agent token" --> http
   web --> svc
+  http --> svc
   rpc --> svc
   svc --> store
   svc --> engine
@@ -55,13 +59,14 @@ flowchart TB
 | **MCP server**<br>`mcp/` | `switchboard mcp`, one stdio process per agent session. Its tools (`join`, `say`, `read`, `wait`, `pass` and a few more) are the agent's whole interface. | [§6](DESIGN.md#6-mcp-server-switchboard-mcp) |
 | **Hook script**<br>`hook/` | Run by the harness on each event. It reports the session's state and the batch tokens it saw, and prints the reply the broker allows: context after a tool call, a continue at stop. | [§7](DESIGN.md#7-hook-script-srcswitchboardhookswitchboard_hookpy) |
 | **Web UI**<br>`web/static/` | Plain JavaScript. Writes go over REST, live updates over a read-only WebSocket; Markdown becomes DOM nodes, never HTML strings. | [§29](DESIGN.md#29-the-native-web-ui-and-the-inspector-19), [§5.5](DESIGN.md#55-rest-and-websocket) |
+| **Agents over HTTPS**<br>`broker/agent_http.py`, `broker/agent_tokens.py` | The same tools at `/mcp`, for an agent with an agent token and nothing of switchboard's on its machine: the token names the person and the device, and the harness names the session (Codex's thread). Codex only for now. | [§49](DESIGN.md#49-agents-over-https-380) |
 | **Remote links**<br>`broker/remote.py`, `broker/machines.py`, `remote/` | One link per other machine: the broker dials it over SSH (`switchboard satellite` at the far end), or it dials a hosted broker over `wss://`. The far end vouches for that machine's processes, and the broker trusts it for that machine's members only. | [§27](DESIGN.md#27-remote-members-over-ssh-m8), [§31.7](DESIGN.md#317-the-dial-in-link) |
 
-Also: `cli.py`; `install/` ([§9.7](DESIGN.md#97-install-targets-switchboard-install-h)); `envelope.py` ([§8.6](DESIGN.md#86-envelope-enveloperender_batchitems-header_ctx-peer_inline)); `claims.py` ([§47](DESIGN.md#47-advisory-claims-for-work-outside-a-room-293)); `broker/agent_tokens.py` ([§49](DESIGN.md#49-agents-over-https-380)); `store.py`, `db.py` and `models.py` ([§4](DESIGN.md#4-data-model-sqlite)); `guardrails.py` ([§11](DESIGN.md#11-security-model)).
+Also: `cli.py`; `install/` ([§9.7](DESIGN.md#97-install-targets-switchboard-install-h)); `envelope.py` ([§8.6](DESIGN.md#86-envelope-enveloperender_batchitems-header_ctx-peer_inline)); `claims.py` ([§47](DESIGN.md#47-advisory-claims-for-work-outside-a-room-293)); `store.py`, `db.py` and `models.py` ([§4](DESIGN.md#4-data-model-sqlite)); `guardrails.py` ([§11](DESIGN.md#11-security-model)).
 
 ## The path of a message
 
-1. **Posted** in the web UI (`web.py`), with `switchboard say`, or by an agent's `say` through its MCP server and the socket.
+1. **Posted** in the web UI (`web.py`), with `switchboard say`, or by an agent's `say` through its MCP server and the socket, or over HTTPS at `/mcp` (`agent_http.py`).
 2. **Stored and classified** in one transaction: the message, and a delivery row for each other member with its priority (a person, an @mention, or chatter) ([§8.1](DESIGN.md#81-classification-on-insert-in-the-same-transaction-as-the-message)).
 3. **Fanned out** by the hub to browsers and `tail`.
 4. **Decided per recipient.** `rules.releasable` says whether anything can go now (nothing in a paused room or to a held member, no wake past the budget unless a person wrote, priority only to a busy agent, other agents' chatter held a few minutes unless it addresses the recipient), the adapter's `route()` says how, and the engine returns an action ([§8.2](DESIGN.md#82-engine-core-and-runner)).

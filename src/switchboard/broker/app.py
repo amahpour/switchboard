@@ -20,7 +20,7 @@ from fastapi import FastAPI
 
 from switchboard import db
 from switchboard.adapters import build_adapters
-from switchboard.broker import oidc, web
+from switchboard.broker import agent_http, oidc, web
 from switchboard.broker.agents import AgentService
 from switchboard.broker.auth import HostOriginGuard, LoginTokens, SecurityHeaders, Sessions, WebOrigin
 from switchboard.broker.hosts import HostViews
@@ -98,6 +98,8 @@ class BrokerState:
     claim_grace: dict[str, float] = field(default_factory=dict)
     # failed password sign-ins (§32.4)
     signin: SignInLimiter = None  # type: ignore[assignment]
+    # the MCP app behind /mcp, for agents over HTTPS (§49.2): its lifespan runs inside ours
+    agent_http: Any = None
 
     @property
     def hosted(self) -> bool:
@@ -262,10 +264,17 @@ def create_app(
             state.machines = MachineManager(state)
             await state.machines.start()
             state.service.machines = state.machines
+        # agents over HTTPS (§49.2): the MCP session manager, once everything it calls is up
+        mcp_http = contextlib.AsyncExitStack()
+        if state.agent_http is not None:
+            await mcp_http.enter_async_context(state.agent_http.lifespan(state.agent_http))
         log.info("broker up: pid %d port %d test_mode %s", os.getpid(), port, test_mode)
         try:
             yield
         finally:
+            # first: its open streams end before the services they call
+            with contextlib.suppress(Exception):
+                await mcp_http.aclose()
             if state.machines is not None:
                 with contextlib.suppress(Exception):
                     await state.machines.stop()
@@ -302,6 +311,7 @@ def create_app(
     )
     app.state.broker = state
     web.install(app, state)
+    state.agent_http = agent_http.install(app, state)
     # Added last = outermost: SecurityHeaders wraps the guard's own 421/403 replies.
     app.add_middleware(HostOriginGuard, origin=web_origin)
     app.add_middleware(SecurityHeaders, origin=web_origin)
