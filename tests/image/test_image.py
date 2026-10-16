@@ -241,7 +241,7 @@ class Stack:
         docker("cp", str(caddyfile), f"{self.caddy}:/etc/caddy/Caddyfile")
         docker("start", self.caddy)
         wait_for("Caddy's local CA", lambda: docker("cp", f"{self.caddy}:{CADDY_ROOT}", str(self.ca)))
-        wait_for("the broker's /healthz", lambda: self.healthz() == "ok\n")
+        wait_for("the broker's /healthz", lambda: self.healthz().startswith("ok "))
         wait_for("the proxy", lambda: self.https("GET", "/healthz")[0] == 200)
         wait_for_docker_links(self.net)
         return self

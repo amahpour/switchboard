@@ -21,6 +21,7 @@ from conftest import InProcBroker, SubprocBroker, cookie_of, make_tmp_home
 from websockets.exceptions import InvalidStatus
 from websockets.sync.client import connect
 
+from switchboard import __version__
 from switchboard.broker.auth import SESSION_TTL_S, WebOrigin
 
 PUBLIC = "https://sb.example.com"
@@ -209,17 +210,18 @@ def test_healthz_answers_any_host_and_nothing_else(
     mode: str, public: InProcBroker, broker: InProcBroker
 ) -> None:
     """A platform's health check probes the container's own address, so /healthz skips the Host
-    check; it needs no session and says nothing but "ok". Everything else keeps the check."""
+    check; it needs no session and says nothing but "ok" and the server's version (#402, so a
+    client can tell what the server runs). Everything else keeps the check."""
     b = public if mode == "public" else broker
     for host in ["10.0.0.7:7419", "localhost", f"127.0.0.1:{b.port}", HOST]:
         with client(b, host=host) as c:
             r = c.get("/healthz")
-            assert (r.status_code, r.text) == (200, "ok\n"), host
+            assert (r.status_code, r.text) == (200, f"ok {__version__}\n"), host
             assert r.headers["cache-control"] == "no-store" and "set-cookie" not in r.headers
             assert r.headers["x-content-type-options"] == "nosniff" and "content-security-policy" in r.headers
             r = c.head("/healthz")
             assert r.status_code == 200 and r.content == b""
-            assert c.get("/healthz?verbose=1").text == "ok\n"
+            assert c.get("/healthz?verbose=1").text == f"ok {__version__}\n"
     with client(b, host="10.0.0.7:7419") as c:
         # only GET and HEAD of exactly /healthz
         assert c.post("/healthz", headers=write_headers()).status_code == 421
@@ -242,7 +244,8 @@ def test_healthz_answers_any_host_and_nothing_else(
             out += chunk
     finally:
         s.close()
-    assert out.split(b"\r\n", 1)[0].endswith(b" 200 OK") and out.endswith(b"\r\n\r\nok\n")
+    assert out.split(b"\r\n", 1)[0].endswith(b" 200 OK")
+    assert out.endswith(f"\r\n\r\nok {__version__}\n".encode())
 
 
 # --------------------------------------------------------- a real broker process
@@ -256,7 +259,7 @@ def test_a_real_broker_with_container_settings(tmp_home: Path) -> None:
         assert call_sync(b.paths.sock, "sys.ping", {})["url"] == "http://sb.test/"
         assert call_sync(b.paths.sock, "human.login_link", {})["url"].startswith("http://sb.test/login?t=")
         r = httpx.get(f"http://127.0.0.1:{b.port}/healthz")
-        assert (r.status_code, r.text) == (200, "ok\n")
+        assert (r.status_code, r.text) == (200, f"ok {__version__}\n")
         assert httpx.get(f"http://127.0.0.1:{b.port}/", headers={"Host": "sb.test"}).status_code == 200
         assert b.paths.pidfile.exists()
         assert b.proc is not None

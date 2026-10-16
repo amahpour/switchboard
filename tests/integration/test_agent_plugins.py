@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import InProcBroker
+from conftest import InProcBroker, child_env
 from test_agents_http import make_token, sse_result
 from test_agents_http_claude import SESSION_1, Claude
 from test_agents_http_wake import parked, participant, until
@@ -336,3 +336,97 @@ def test_the_listener_ends_with_claude_code() -> None:
     finally:
         owner.kill()
         stub.close()
+
+
+# ------------------------------------------------------- a change to a plugin bumps its version
+MANIFESTS = {
+    "plugins/claude": ".claude-plugin/plugin.json",
+    "plugins/codex": ".codex-plugin/plugin.json",
+}
+
+
+def vcs(repo: Path, *args: str) -> str | None:
+    """Git's output in ``repo``, or None where git isn't there, it isn't a repository, or the
+    command fails."""
+    try:
+        r = subprocess.run(
+            ["git", "-c", "core.quotepath=off", *args],
+            cwd=repo, capture_output=True, text=True, timeout=60, env=child_env(),
+        )  # fmt: skip
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def base_commit(repo: Path) -> str | None:
+    """What this work is compared with: the merge base with origin/main, or, in CI's checkout of a
+    pull request's merge commit (which has no origin/main), that commit's first parent, which is
+    main as it is. None where neither is known (the Docker test image has no .git)."""
+    base = vcs(repo, "merge-base", "HEAD", "origin/main")
+    if base:
+        return base.strip()
+    parents = vcs(repo, "rev-list", "--parents", "-n", "1", "HEAD")
+    if parents and len(parents.split()) == 3:
+        return parents.split()[1]
+    return None
+
+
+def version_at(repo: Path, rev: str, path: str) -> str | None:
+    text = vcs(repo, "show", f"{rev}:{path}")
+    return json.loads(text)["version"] if text else None
+
+
+def unbumped_plugins(repo: Path, base: str) -> list[str]:
+    """The plugins with a file changed since ``base`` (committed, edited or new) whose manifest
+    ``version`` is still what it was there."""
+    out = []
+    for folder, manifest in MANIFESTS.items():
+        changed = (vcs(repo, "diff", "--name-only", base, "--", folder) or "").split()
+        changed += (vcs(repo, "ls-files", "--others", "--exclude-standard", folder) or "").split()
+        old = version_at(repo, base, f"{folder}/{manifest}")
+        if changed and old is not None and old == load(repo / folder / manifest)["version"]:
+            out.append(f"{folder} ({', '.join(sorted(changed))}) is still at {old}")
+    return out
+
+
+def test_a_change_to_a_plugin_bumps_its_version() -> None:
+    """Claude Code and Codex keep an installed plugin by its `version`, so a change to its hooks or
+    listener that leaves the version alone never reaches anyone who has installed it (DESIGN.md
+    §49.5, #402). Compares each plugin's files with main and fails if one changed and its manifest
+    version didn't. Skipped where there is no git history to compare with."""
+    base = base_commit(ROOT)
+    if base is None:
+        pytest.skip("no git history to compare the plugins with")
+    assert unbumped_plugins(ROOT, base) == []
+
+
+def test_the_version_check_sees_a_changed_file_and_a_new_one_and_accepts_a_bump(tmp_path: Path) -> None:
+    """The check above, on a throwaway repository: an edit to a plugin file, or a new file in the
+    plugin, without a bump is found; the same with a bump, and a change outside the plugins, are
+    not. Fails if the check can't tell them apart (so it would pass whatever the plugins do)."""
+    if vcs(tmp_path, "--version") is None:
+        pytest.skip("git is not available")
+    repo = tmp_path / "repo"
+    for folder, manifest in MANIFESTS.items():
+        (repo / folder / Path(manifest).parent).mkdir(parents=True)
+        (repo / folder / manifest).write_text('{"name": "switchboard", "version": "1.0.0"}')
+        (repo / folder / "hooks.json").write_text("{}")
+    assert vcs(repo, "init", "-q", "-b", "main") is not None
+    ident = ["-c", "user.name=alice", "-c", "user.email=alice@example.com"]
+    assert vcs(repo, "add", "-A") is not None
+    assert vcs(repo, *ident, "commit", "-q", "-m", "start") is not None
+    base = (vcs(repo, "rev-parse", "HEAD") or "").strip()
+    assert base and unbumped_plugins(repo, base) == []
+
+    (repo / "plugins/claude/hooks.json").write_text('{"hooks": {}}')  # an edit, no bump
+    (repo / "plugins/codex/bin.sh").write_text("exit 0")  # a new file, no bump
+    (repo / "README.md").write_text("outside the plugins")
+    found = unbumped_plugins(repo, base)
+    assert [f.split(" ")[0] for f in found] == ["plugins/claude", "plugins/codex"], found
+
+    for folder, manifest in MANIFESTS.items():
+        (repo / folder / manifest).write_text('{"name": "switchboard", "version": "1.0.1"}')
+    assert unbumped_plugins(repo, base) == []
+    assert vcs(repo, "add", "-A") is not None  # committed work is compared the same way
+    assert vcs(repo, *ident, "commit", "-q", "-m", "change") is not None
+    assert unbumped_plugins(repo, base) == []
