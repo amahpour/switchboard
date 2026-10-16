@@ -1064,7 +1064,11 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         if p is None or not p.active:
             return _err(404, "not_found", "no such person")
         theirs = state.store.machines_of(p.id)  # paired or approved by them: they go too (#178)
+        devices = [t.device for t in state.store.agent_tokens_of(p.id)]  # revoked with them (§49.1)
         gone = state.store.person_remove(p.id) or []
+        ended = 0
+        if state.remotes is not None:  # their agents over HTTPS leave, as on a revoke (§49.3)
+            ended = sum(state.remotes.end_members(d, "token revoked") for d in devices)
         state.service.person_gone(p.id)  # out of every private room, with their agents (§44.3)
         for g in gone:
             state.hub.close_sessions(g)
@@ -1084,6 +1088,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 "by": w.name,
                 "sessions": len(gone),
                 "machines": removed,
+                "agent_devices": devices,
+                "agents_ended": ended,
             },
         )
         tail = f"; their machines removed: {', '.join(removed)}" if removed else ""

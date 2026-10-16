@@ -307,3 +307,24 @@ def test_a_tokens_agents_are_its_persons(hosted: InProcBroker) -> None:
     got = bobs.call("join", THREAD_A, room="#secret", screen_name="codex-b")
     assert not got["ok"] and got["code"] == "not_found", got
     assert mine.call("join", THREAD_B, room="#secret", screen_name="codex-a")["ok"]
+
+
+def test_removing_a_person_ends_their_agents_over_https(hosted: InProcBroker) -> None:
+    """Removing someone revokes their tokens (§49.1), and their devices' agents leave every room
+    at once, as on a revoke. Fails if a removed person's agent stays a member, unable to call
+    and never leaving."""
+    from test_people import ADMIN_PW, join_as_bob, set_up
+
+    admin = set_up(hosted)
+    join_as_bob(hosted, admin)
+    assert admin.post("/api/signin/check", {"password": ADMIN_PW}).status_code == 200
+    assert admin.post("/api/rooms", {"name": "#build"}).status_code == 200
+    bob_id = hosted.on_loop(hosted.state.store.person_named, "bob").id
+    bobs = Codex(hosted, make_token(hosted, "bob-box", bob_id))
+    bobs.c = httpx.Client(base_url=f"http://127.0.0.1:{hosted.port}", timeout=30.0, headers={"host": HOSTED})
+    bobs.start()
+    assert bobs.call("join", THREAD_A, room="#build", screen_name="codex-b")["ok"]
+    assert set(members(hosted, "#build")) == {"codex-b"}
+    assert admin.post(f"/api/people/{bob_id}/remove").status_code == 200
+    assert members(hosted, "#build") == {}
+    assert bobs.raw("say", THREAD_A, room="#build", text="still here?").status_code == 401
