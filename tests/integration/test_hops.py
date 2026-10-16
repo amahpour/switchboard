@@ -1,22 +1,50 @@
 """/hops against a real broker: the web session, the UDS roles, the CLI, and a loop-guard
-pause that shows once on the WebSocket and in ``tail`` (DESIGN.md §10, §22)."""
+pause that shows once on the WebSocket and in ``tail`` (DESIGN.md §10, §22).
+
+The loop guard ships off (#406), and these tests are about turning it on, off and down. Each
+broker here starts with ``[delivery] hop_limit = 6``, the number a new room used to start with,
+so the room under test begins with the guard on and "was 6" and "raising" mean what they say."""
 
 from __future__ import annotations
 
 import json
 import os
 import time
+from collections.abc import Iterator
 from itertools import takewhile
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
-from conftest import InProcBroker, SubprocBroker, cookie_of, human_cli_denial_word, ws_connect
+from conftest import TEST_HUMAN, InProcBroker, SubprocBroker, cookie_of, human_cli_denial_word, ws_connect
 
 from switchboard.broker import proc
 from switchboard.broker.peer import ProcessPeerPolicy
+from switchboard.config import Config
 from switchboard.mcp.client import RpcError, Stream, call_sync
+
+GUARD_ON = Config(human_name=TEST_HUMAN).with_delivery(hop_limit=6)
+GUARD_ON_TOML = "[delivery]\nhop_limit = 6\n"
+
+
+@pytest.fixture
+def broker(tmp_home: Path) -> Iterator[InProcBroker]:
+    b = InProcBroker(tmp_home, GUARD_ON).start()
+    try:
+        yield b
+    finally:
+        b.stop()
+
+
+@pytest.fixture
+def subproc_broker(tmp_home: Path) -> Iterator[SubprocBroker]:
+    (tmp_home / "config.toml").write_text(GUARD_ON_TOML)
+    b = SubprocBroker(tmp_home).start()
+    try:
+        yield b
+    finally:
+        b.kill()
 
 
 def recv_until(ws: Any, pred, timeout: float = 5.0) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -142,6 +170,31 @@ def test_a_loop_guard_pause_shows_once_on_the_websocket_and_in_tail(
         tail.close()
 
 
+def test_a_room_on_a_stock_broker_starts_with_the_loop_guard_off(tmp_home: Path) -> None:
+    """The shipped default (#406): a broker with no config.toml makes a room whose hop limit is
+    0. ``/hops`` says the guard is off, the web's room frame carries 0 (the header chip reads
+    "loop guard off"), and 12 agent messages in a row, twice the old limit, leave the room
+    running. Before, the same room paused at the sixth."""
+    b = InProcBroker(tmp_home).start()  # not the module's broker, which pins the limit to 6
+    try:
+        web = b.web_client()
+        assert web.post("/api/rooms", json={"name": "#build"}, headers=b.write_headers()).status_code == 200
+        assert web_cmd(b, web, "/hops")["text"].startswith("#build: hops 0, loop guard off")
+        for i in range(12):
+            agent_post(b, f"hop {i}")
+        st = b.state.store.get_room("#build")
+        assert not st.paused and st.hop_limit == 0 and st.hop_count == 12
+        assert b.state.store.count_events("loop_guard") == 0
+        assert web.get("/api/rooms").json()["rooms"][0]["settings"]["hop_limit"] == 0
+        # turning it on is still one command, and it counts the run so far
+        assert web_cmd(b, web, "/hops 5")["ok"]
+        agent_post(b, "one more")
+        st = b.state.store.get_room("#build")
+        assert st.paused and st.paused_reason == "loop guard" and st.hop_count == 13
+    finally:
+        b.stop()
+
+
 def test_hops_roles_over_the_uds(tmp_home: Path) -> None:
     """A caller that passes only the human_cli check may lower the limit, never raise it or turn it off."""
 
@@ -160,7 +213,7 @@ def test_hops_roles_over_the_uds(tmp_home: Path) -> None:
         def login_allowed(self, peer) -> bool:  # type: ignore[override]
             return peer.uid == os.getuid()
 
-    b = InProcBroker(tmp_home, policy=CliOnly()).start()
+    b = InProcBroker(tmp_home, GUARD_ON, policy=CliOnly()).start()
     try:
         web = b.web_client()
         web.post("/api/rooms", json={"name": "#build"}, headers=b.write_headers())
@@ -216,6 +269,7 @@ def test_hops_from_the_cli(subproc_broker: SubprocBroker) -> None:
 
 def test_hops_from_the_cli_without_test_trust(tmp_home: Path) -> None:
     """The real peer check: raising refused either way; lowering allowed from a real terminal."""
+    (tmp_home / "config.toml").write_text(GUARD_ON_TOML)
     b = SubprocBroker(tmp_home, trust=False).start()
     try:
         tok = b.paths.test_login_token.read_text().strip()

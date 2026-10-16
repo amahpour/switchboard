@@ -15,7 +15,9 @@ from fakes.fake_agent import FakeAgent, ids_in
 
 from switchboard.config import Config
 
-FAST = Config(human_name="alice").with_delivery(quiet_s=0.0, max_hold_s=0.0)
+# hop_limit=6: the loop guard is off unless a room has a limit (#406), and the first test
+# below is about the guard stopping two chatty agents
+FAST = Config(human_name="alice").with_delivery(quiet_s=0.0, max_hold_s=0.0, hop_limit=6)
 LINE = re.compile(r"^- id=(\d+) .*?from=(\S+) kind=(\S+) .*?to_you=(yes|no)", re.M)
 
 

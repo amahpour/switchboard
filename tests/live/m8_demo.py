@@ -37,7 +37,7 @@ web API and checks what comes back. You approve the flash on the remote yourself
 remote's switchboard version and the md5s of its harness config before and after.
 
 Both modes: the preflight (versions on both machines from ``remote status``, the link up,
-this machine's harness-config md5s before and after, ``/hops`` at least 20), the human's
+this machine's harness-config md5s before and after, the loop guard off or ``/hops`` at least 20), the human's
 lines through the web API, and checks of the tiers, the approval hold (``waiting-approval``
 and a held delivery), the ``artifact:`` and ``result:`` lines and a second cycle. It writes
 ``tests/live/_runs/m8-<time>.md`` with the timings. It never copies a login and never adds a
@@ -403,7 +403,7 @@ class Rehearsal:
         hops = next(r for r in self.web.get("/api/rooms").json()["rooms"] if r["name"] == ROOM)["settings"][
             "hop_limit"
         ]
-        if hops < 20:
+        if 0 < hops < 20:  # 0 is the loop guard off (the default since #406): nothing to raise
             r = self.web.post("/api/rooms/fpga/command", json={"text": "/hops 30"}, headers=self.hdr)
             assert r.status_code == 200 and r.json().get("ok"), r.text
             hops = 30

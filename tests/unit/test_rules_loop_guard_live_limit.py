@@ -26,7 +26,8 @@ CLI = Actor(role="human_cli", via="cli", chain="zsh ← Terminal")
 
 @pytest.fixture
 def w(tmp_path: Path, clock: FakeClock) -> World:
-    return World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0))
+    # hop_limit=6: the guard ships off (#406); each test here changes a limit that starts at 6
+    return World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0, hop_limit=6))
 
 
 def warn_notices(w: World) -> list[Notice]:

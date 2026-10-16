@@ -21,7 +21,7 @@ def test_defaults_match_design() -> None:
     assert (d.rate_limit_s, d.budget_per_hour, d.hop_limit, d.watchdog_s, d.watchdog_max) == (
         10.0,
         60,
-        6,
+        0,  # the loop guard is off unless a room has a limit (#406)
         120,
         2,
     )
@@ -113,7 +113,7 @@ def test_load_toml(tmp_path: Path) -> None:
     assert c.human_name == "sam" and c.port == 8000
     assert c.delivery.quiet_s == 1.0 and isinstance(c.delivery.quiet_s, float)
     assert c.delivery.budget_per_hour == 10 and c.devin.rearm is False
-    assert c.delivery.hop_limit == 6
+    assert c.delivery.hop_limit == 0  # not in the file: the built-in default, the guard off (#406)
 
 
 @pytest.mark.parametrize(

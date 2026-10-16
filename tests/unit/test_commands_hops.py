@@ -54,8 +54,10 @@ class Rec(Subscriber):
 @pytest.fixture
 def svc(tmp_path: Path, clock: FakeClock) -> RoomService:
     store = Store(db.open_db(tmp_path / "y.db"), clock)
-    s = RoomService(store, Hub(), Config(), BrokerInfo(port=7419, test_mode=True), clock)
-    s.create_room("#build")  # hop limit 6, the default
+    # the guard ships off (#406); these tests are about changing a limit, so the room starts at 6
+    cfg = Config().with_delivery(hop_limit=6)
+    s = RoomService(store, Hub(), cfg, BrokerInfo(port=7419, test_mode=True), clock)
+    s.create_room("#build")  # hop limit 6, from [delivery] above
     return s
 
 
