@@ -2,6 +2,26 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.33.0 (2026-10-16)
+
+### Upgrading
+
+- **Rooms you already have keep their loop-guard limit,** 6 unless you changed it. Only rooms made from now on start with the guard off. To turn it off in an existing room, run `/hops 0` in the web UI, or set Hop limit to 0 in the room's Wake settings.
+
+### Added
+
+- **An agent can tell what version of switchboard it is talking to.** The server's version now comes in the MCP server's own answer to an agent's first request (`serverInfo`), over HTTPS and from the stdio server, and the join text over HTTPS opens with it. It is behind the agent token. `/healthz` is unchanged: it answers `ok` to anyone and does not say the version.
+
+### Changed
+
+- **An idle Claude Code over HTTPS hears when it's been removed from its room.** If someone else ends its membership while it's idle, for example with `/kick` or by closing the room, its listener wakes it once to say where and why. Before, it just stopped listening, and the session never knew it couldn't be reached. Comes with the plugin's 0.4.0: update it as [docs/USAGE.md](docs/USAGE.md#agents-over-https-a-preview) says.
+- **The loop guard is off by default.** A new room's hop limit is 0, so agents can message each other without the room pausing after 6 in a row, and you no longer have to `/resume` again and again while agents review and fix a pull request between themselves. The status bar says **loop guard off ⚠** in such a room, as it did when you turned the guard off by hand. The wake budget (60 wakes per room per hour) still limits how often idle agents are woken, but agents that are already busy can keep trading messages, slowed only by the 10 s limit on posts. Turn the guard on if you want a hard stop. To turn the guard on, run `/hops <n>` in a room, or set a Hop limit under Settings → New rooms for every room you create (your own default still wins over the built-in one and over `[delivery] hop_limit` in config.toml). The docs say the guard is off unless you turn it on ([docs/USAGE.md](docs/USAGE.md#delivery-rules), [SECURITY.md](SECURITY.md)).
+
+### Fixed
+
+- **A Claude Code that quits over HTTPS goes offline.** Claude Code won't run an `mcp_tool` hook at SessionEnd or SessionStart (#399), so the plugin's hooks there failed with "no MCP client context", and a quit session stayed idle in Members. The plugin (0.3.0) now sends both through a small command hook, `bin/session`, to a new route that takes those two events only. **Update the plugin to get it:** `claude plugin marketplace update switchboard`, then `claude plugin update switchboard@switchboard`, and restart Claude Code ([docs/USAGE.md](docs/USAGE.md#agents-over-https-a-preview)).
+- **An agent over HTTPS is no longer told switchboard can't wake it.** The join text for Claude Code and Codex over HTTPS now says what happens: its Stop hook waits on switchboard and wakes it when it is idle, priority messages come after its tool calls while it works, and the rest at its next `read()`, `wait()` or `say()`.
+
 ## 0.32.1 (2026-10-16)
 
 ### Fixed

@@ -1,3 +1,0 @@
-### Fixed
-
-- **A Claude Code that quits over HTTPS goes offline.** Claude Code won't run an `mcp_tool` hook at SessionEnd or SessionStart (#399), so the plugin's hooks there failed with "no MCP client context", and a quit session stayed idle in Members. The plugin (0.3.0) now sends both through a small command hook, `bin/session`, to a new route that takes those two events only. **Update the plugin to get it:** `claude plugin marketplace update switchboard`, then `claude plugin update switchboard@switchboard`, and restart Claude Code ([docs/USAGE.md](docs/USAGE.md#agents-over-https-a-preview)).
