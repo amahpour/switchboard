@@ -5422,6 +5422,32 @@
     return i.file ? i.file + (i.lines ? ':' + i.lines : '') : '';
   }
 
+  // Whose move a card waits on (#407): the owner of a finding being fixed, or the raiser of a fix
+  // awaiting confirmation. A raised finding is the other agents' (any of them) and a question
+  // or a disputed one is yours, so those get no dot.
+  function boardNext(i) {
+    if (i.kind === 'question' || i.needs_person) return null;
+    if (i.state === 'conceded') return i.owner || null;
+    if (i.state === 'fixed' && !i.confirmed_by) return i.raised_by || null;
+    return null;
+  }
+
+  // That agent's live status on its card: the Members dot, pulsing and saying "working" while it
+  // is busy. switchboard knows an agent is busy, not what it is busy with, and says so.
+  function boardPulse(who, m) {
+    const key = m ? statusKey(m) : 'offline';
+    const busy = key === 'busy';
+    const word = !m ? who + ' has left the room'
+      : busy ? who + ' is working (on this or something else)' : who + ' is ' + statusWord(m).toLowerCase();
+    const s = el('span', 'board-pulse s-' + key + (busy ? ' working' : ''));
+    s.dataset.member = who;
+    s.title = word;
+    s.setAttribute('role', 'img');
+    s.setAttribute('aria-label', word);
+    if (busy) s.append(el('span', 'board-pulse-word', 'working'));
+    return s;
+  }
+
   function boardWho(i) {
     if (i.kind === 'question') return i.state === 'answered' ? 'answered by ' + i.answered_by : 'asked by ' + i.raised_by;
     if (i.state === 'fixed') return i.confirmed_by ? 'confirmed by ' + i.confirmed_by : 'owner ' + i.owner + ' · awaiting confirmation';
@@ -5527,6 +5553,8 @@
         card.setAttribute('aria-pressed', String(state.boardSel === i.label));
         const top = el('span', 'board-card-top');
         top.append(el('span', 'board-label', i.label), el('span', boardStateClass(i), boardStateWord(i)));
+        const next = boardNext(i);
+        if (next) top.append(boardPulse(next, (r.members || []).find(function (m) { return m.name === next; })));
         card.append(top, el('span', 'board-card-title', i.title));
         const meta = i.deferred_to ? 'Deferred to ' + i.deferred_to
           : i.state === 'dropped' && i.reason ? i.reason : [boardWhere(i), boardWho(i)].filter(Boolean).join(' · ');
