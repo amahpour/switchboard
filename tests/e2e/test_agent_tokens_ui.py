@@ -210,3 +210,32 @@ def test_the_new_token_comes_with_the_steps_to_connect_an_agent(
     open_settings(page, "agents")
     expect(page.locator("#agent-connect")).to_have_count(0)  # it goes with the token it was for
     revoke_all(hosted)
+
+
+def test_connect_gives_codex_its_plugin_its_server_and_its_token(
+    ui: UI, hosted: tuple[InProcBroker, str]
+) -> None:
+    """Codex's steps: the plugin (the hooks), this switchboard in config.toml (a Codex plugin can't
+    hold an address), and the token in the environment variable that config names. Fails if any
+    line names another address or another variable, or misses the token just made."""
+    b, _ = hosted
+    revoke_all(hosted)
+    checked_now(hosted)
+    page = open_page(ui, hosted)
+    open_settings(page, "agents")
+    page.fill("#agent-token-device", "build-box")
+    page.click("#agent-token-make")
+    token = page.locator("#agent-token-value").inner_text()
+    expect(page.locator("#agent-connect-codex")).to_have_text(
+        "codex plugin marketplace add amahpour/switchboard && codex plugin add switchboard@switchboard"
+    )
+    origin = b.state.web_origin.origin
+    config = page.locator("#agent-connect-codex-config").inner_text()
+    assert config.splitlines() == [
+        "[mcp_servers.switchboard]",
+        f'url = "{origin}/mcp"',
+        'bearer_token_env_var = "SWITCHBOARD_AGENT_TOKEN"',
+    ]
+    expect(page.locator("#agent-connect-codex-env")).to_have_text(f"export SWITCHBOARD_AGENT_TOKEN={token}")
+    page.keyboard.press("Escape")
+    revoke_all(hosted)

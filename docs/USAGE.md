@@ -84,13 +84,20 @@ Commands that **raise** agent activity need your signed-in browser. Commands fro
 
 ## Agents over HTTPS (a preview)
 
-Codex and Claude Code on any machine can reach switchboard at `/mcp` with an agent token, with nothing of switchboard's installed there (#380). An idle one is woken by its own Stop hook, which waits on the server until a message comes. Claude Code sets itself up with switchboard's plugin, in one line; Codex is set up by hand, as below.
+Codex and Claude Code on any machine can reach switchboard at `/mcp` with an agent token, with nothing of switchboard's installed there (#380). An idle one is woken by its own Stop hook, which waits on the server until a message comes. Each sets itself up with switchboard's plugin, installed from this repository.
 
 1. In **Settings → Agents**, make a token for the machine. Its name is the device's, and the rooms show it beside its agents' names (`codex-1@work-laptop`). The card that shows the token, once, also shows how to connect each agent.
 2. On that machine, keep the token in an environment variable, not in a file: `export SWITCHBOARD_AGENT_TOKEN=sbat_…`
 3. Point the agent at the server, and add its hooks. The address is `https://<your switchboard>/mcp`, or `http://switchboard.localhost:<port>/mcp` on a desktop broker (the port its web UI uses). If `switchboard install` set the agent up before, replace its `switchboard` server and its switchboard hooks.
 
-**Codex.** The server goes in `~/.codex/config.toml`:
+**Codex.** Install the plugin, which brings the hooks:
+
+```bash
+codex plugin marketplace add amahpour/switchboard
+codex plugin add switchboard@switchboard
+```
+
+Codex plugins can't hold your server's address, so it goes in `~/.codex/config.toml`, where `switchboard install` may have put a `switchboard` server before (replace that one):
 
 ```toml
 [mcp_servers.switchboard]
@@ -98,22 +105,26 @@ url = "https://sb.example.com/mcp"
 bearer_token_env_var = "SWITCHBOARD_AGENT_TOKEN"
 ```
 
-The hooks go in `~/.codex/hooks.json`. Each is a call of switchboard's `hook` tool, and Codex asks you to trust them once, in `/hooks`. The Stop hook waits up to its `wait_s`, so its `timeout` is a little longer.
+The first time Codex starts after this, it asks you to review switchboard's hooks: choose **Trust all and continue**. Its Stop hook then waits up to 30 minutes for a message. Codex shows "Working" meanwhile, and you press Esc to type.
+
+<details><summary>The hooks by hand, without the plugin</summary>
+
+In `~/.codex/hooks.json`:
 
 ```json
 {"hooks": {
   "UserPromptSubmit": [{"hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 10,
-    "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "turn_id": "${turn_id}", "permission_mode": "${permission_mode}"}}]}],
+    "input": {"event": "UserPromptSubmit", "session_id": "${session_id}", "turn_id": "${turn_id}", "permission_mode": "${permission_mode}"}}]}],
   "PostToolUse": [{"matcher": "mcp__switchboard__.*", "hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 10,
-    "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "turn_id": "${turn_id}", "tool_name": "${tool_name}", "tool_use_id": "${tool_use_id}", "tool_response": "${tool_response}"}}]}],
+    "input": {"event": "PostToolUse", "session_id": "${session_id}", "turn_id": "${turn_id}", "tool_name": "${tool_name}", "tool_use_id": "${tool_use_id}", "tool_response": "${tool_response}"}}]}],
   "Stop": [{"hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 1800,
-    "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "turn_id": "${turn_id}", "wait_s": "1790"}}]}],
-  "SessionEnd": [{"hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 10,
-    "input": {"event": "${hook_event_name}", "session_id": "${session_id}"}}]}]
+    "input": {"event": "Stop", "session_id": "${session_id}", "turn_id": "${turn_id}", "permission_mode": "${permission_mode}", "wait_s": "1790"}}]}]
 }}
 ```
 
-While its Stop hook waits, Codex shows "Working". To type, press Esc first.
+Codex allows no `mcp_tool` hook at SessionEnd, so a Codex thread over HTTPS shows idle, not offline, after it quits.
+
+</details>
 
 **Claude Code.** In Claude Code, run:
 
@@ -152,6 +163,8 @@ The hooks go in `~/.claude/settings.json`'s `hooks`. The PreToolUse one tells sw
 4. Start the agent and ask it to join a room, as above. Members shows its status, approval mode and tier (`codex:https`, `claude:https`). When it stops, a message for it wakes it; while it works, a message for it comes back after its next tool call.
 
 The machine must trust the server's certificate (Codex and Claude Code use the system's certificate store). Revoking the token in Settings ends its agents' memberships at once.
+
+An agent over HTTPS runs on the server's code, so an update to switchboard reaches its running sessions at once. A new tool or parameter is the exception: Claude Code sees it after `/mcp`, and Codex after a restart. The release notes say when one comes.
 
 ## Review a pull request in a room
 

@@ -160,3 +160,59 @@ def test_the_listener_keeps_the_token_off_its_command_line() -> None:
     assert "-K -" in text
     curl_lines = [line for line in text.splitlines() if "curl " in line]
     assert curl_lines and all("TOKEN" not in line for line in curl_lines)
+
+
+CODEX_PLUGIN = ROOT / "plugins" / "codex"
+
+
+def test_codexs_marketplace_lists_its_plugin_where_it_is() -> None:
+    """`codex plugin marketplace add amahpour/switchboard` reads `.agents/plugins/marketplace.json`
+    (first, before Claude Code's), whose entry must point at the Codex plugin's folder and match its
+    manifest's name, or Codex refuses to install it. Fails if they drift apart."""
+    mk = load(ROOT / ".agents" / "plugins" / "marketplace.json")
+    [entry] = mk["plugins"]
+    assert entry["source"] == {"source": "local", "path": "./plugins/codex"}
+    manifest = load(CODEX_PLUGIN / ".codex-plugin" / "plugin.json")
+    assert entry["name"] == manifest["name"] == mk["name"] == "switchboard"
+    assert manifest["hooks"] == "./hooks/hooks.json" and "mcpServers" not in manifest
+    assert not (CODEX_PLUGIN / ".mcp.json").exists()  # its server is the user's config.toml entry
+
+
+def test_codexs_hooks_take_what_the_hook_tool_takes_and_what_codex_allows() -> None:
+    """Codex refuses a hook file with a top-level key but `description` and `hooks`, or a null in an
+    input; skips an mcp_tool hook at SessionEnd, with a warning; and fails a hook whose template
+    names a field its event doesn't always carry. Each hook here calls the `switchboard` server's
+    hook tool with fields it takes, PostToolUse matches switchboard's tools only, and Stop waits
+    for less than its own timeout. Fails if a hook breaks any of these, which would break the file
+    or the hook, or leak another tool's result."""
+    doc = load(CODEX_PLUGIN / "hooks" / "hooks.json")
+    assert set(doc) == {"description", "hooks"}
+    hooks = doc["hooks"]
+    assert set(hooks) == {"UserPromptSubmit", "PostToolUse", "Stop"}
+    common = {
+        "session_id",
+        "turn_id",
+        "hook_event_name",
+        "permission_mode",
+        "cwd",
+        "model",
+        "transcript_path",
+    }
+    allowed = {  # what each event always carries (codex-rs/hooks/schema/generated, rust-v0.158.0)
+        "UserPromptSubmit": common | {"prompt"},
+        "PostToolUse": common | {"tool_name", "tool_use_id", "tool_input", "tool_response"},
+        "Stop": common | {"last_assistant_message", "stop_hook_active"},
+    }
+    for event, groups in hooks.items():
+        for group in groups:
+            for h in group["hooks"]:
+                assert (h["type"], h["server"], h["tool"]) == ("mcp_tool", "switchboard", HOOK_TOOL)
+                inp = h["input"]
+                assert inp["event"] == event and None not in inp.values()
+                assert set(inp) <= set(HOOK_FIELDS)
+                named = {v[2:-1] for v in inp.values() if isinstance(v, str) and v.startswith("${")}
+                assert named <= allowed[event], (event, named - allowed[event])
+    [post] = hooks["PostToolUse"]
+    assert post["matcher"] == "mcp__switchboard__.*"
+    [stop] = [h for g in hooks["Stop"] for h in g["hooks"]]
+    assert float(stop["input"]["wait_s"]) < stop["timeout"]

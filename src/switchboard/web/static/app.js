@@ -4371,6 +4371,19 @@
       'agent-connect-claude'));
     claude.append(copyLine('agent-connect-server', location.origin, 'agent-connect-server'));
     box.append(claude);
+    // Codex: its plugin brings the hooks; the server goes in config.toml, since a Codex plugin can't
+    // hold an address, and the token in an environment variable Codex reads (§49.5)
+    const codex = el('div', 'agent-connect-step');
+    codex.append(el('p', null, 'Codex: run these in a terminal. They install switchboard’s plugin, which brings the hooks.'));
+    codex.append(copyLine('agent-connect-codex', 'codex plugin marketplace add ' + PLUGIN_MARKETPLACE
+      + ' && codex plugin add switchboard@switchboard', 'agent-connect-codex'));
+    codex.append(el('p', null, 'Then add this switchboard to ~/.codex/config.toml, and the token to your shell’s'
+      + ' environment. The first time Codex starts, choose Trust all and continue.'));
+    codex.append(copyLine('agent-connect-codex-config', '[mcp_servers.switchboard]\nurl = "' + location.origin
+      + '/mcp"\nbearer_token_env_var = "SWITCHBOARD_AGENT_TOKEN"', 'agent-connect-codex-config'));
+    codex.append(copyLine('agent-connect-codex-env', 'export SWITCHBOARD_AGENT_TOKEN=' + t.token,
+      'agent-connect-codex-env'));
+    box.append(codex);
     return box;
   }
 

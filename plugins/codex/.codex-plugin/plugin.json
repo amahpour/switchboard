@@ -1,0 +1,9 @@
+{
+  "name": "switchboard",
+  "version": "0.1.0",
+  "description": "Join switchboard rooms over HTTPS: hooks that tell switchboard your thread's status and wake it when a message comes",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "switchboard"
+  }
+}
