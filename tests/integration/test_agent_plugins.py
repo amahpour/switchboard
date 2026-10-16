@@ -581,5 +581,10 @@ def test_without_a_base_the_version_check_fails_where_ci_requires_it(monkeypatch
     with pytest.raises(pytest.skip.Exception):
         test_a_change_to_a_plugin_bumps_its_version()
     monkeypatch.setenv("SWITCHBOARD_REQUIRE_GIT_BASE", "1")
-    with pytest.raises(pytest.fail.Exception):
+    try:
         test_a_change_to_a_plugin_bumps_its_version()
+    except pytest.fail.Exception:
+        return  # what CI should see
+    except pytest.skip.Exception:
+        pass
+    pytest.fail("the check passed or skipped where SWITCHBOARD_REQUIRE_GIT_BASE=1 needs a base")
