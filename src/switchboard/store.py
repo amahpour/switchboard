@@ -1957,6 +1957,15 @@ class Store:
         ).fetchall()
         return [Membership.from_row(r) for r in rows]
 
+    def last_ended_membership(self, participant_id: int) -> Membership | None:
+        """The participant's most recently ended membership, if any (§49.4)."""
+        r = self.con.execute(
+            "SELECT * FROM memberships WHERE participant_id=? AND left_at IS NOT NULL"
+            " ORDER BY left_at DESC, id DESC LIMIT 1",
+            (participant_id,),
+        ).fetchone()
+        return Membership.from_row(r) if r else None
+
     def room_memberships(self, room_id: int) -> list[Membership]:
         rows = self.con.execute(
             "SELECT * FROM memberships WHERE room_id=? AND left_at IS NULL ORDER BY id",

@@ -331,3 +331,22 @@ def test_the_session_route_takes_only_session_start_and_end_from_an_agent(build:
     r = session_hook(build, token, {"event": "SessionEnd", "session_id": sid, "reason": "logout"})
     assert r.status_code == 200 and r.json() == {}, r.text
     assert participant(build, "claude-1").status == "offline"
+
+
+def test_a_session_someone_else_ended_hears_why_from_its_listener(build: InProcBroker) -> None:
+    """An idle session over HTTPS that someone else ends (here a /kick) can't be told any other way,
+    so its listener's next round answers 410 with why, which the listener prints once (#402). One
+    that left on its own, or never joined, gets the usual 409, which wakes nothing. Fails if a kicked
+    session goes deaf without a word, or a session that chose to leave is woken about it."""
+    claude, token = joined_claude(build)
+    build.call("human.command", {"room": "#build", "text": "/kick claude-1"})
+    r = listen(build, token, SESSION_1)
+    assert r.status_code == 410, r.text
+    assert "claude-1 is no longer in #build: your user removed it" in r.text, r.text
+    again = listen(build, token, SESSION_1, **{"x-switchboard-again": "1"})
+    assert again.status_code == 410  # the same line: the listener keeps it from repeating
+    two = Claude(build, token, "00000000-0000-4000-8000-0000000000aa")
+    assert two.call("join", room="#build", screen_name="claude-2")["ok"]
+    assert two.call("leave", room="#build")["ok"]
+    assert listen(build, token, "00000000-0000-4000-8000-0000000000aa").status_code == 409
+    assert listen(build, token, "00000000-0000-4000-8000-0000000000bb").status_code == 409  # never joined

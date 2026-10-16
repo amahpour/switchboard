@@ -4,6 +4,7 @@
 # round, so the session can be woken however long it stays idle. A message prints, and the exit 2
 # makes Claude Code start a turn with it. Exit 0 wakes nothing: when another listener or a hook of
 # the session takes over, the session is busy or gone, the token is refused, or Claude Code quits.
+# One exception: a session that someone else ended (a kick, a closed room) is told so, once.
 # A round that runs out starts the next; a server that can't be reached (restarting, or a proxy
 # that cut the wait) is tried again, a little later each time. The token reaches curl on its stdin,
 # never its command line, where other processes could read it.
@@ -38,6 +39,13 @@ while kill -0 "$owner" 2>/dev/null; do
   again=1
   case $(cat "$code" 2>/dev/null) in
     200) cat "$body" >&2; exit 2 ;;
+    410) # someone else ended the session: say so once, or it goes deaf without a word
+      seen="${CLAUDE_PLUGIN_DATA:-${TMPDIR:-/tmp}}/switchboard-ended-$sid"
+      [ "$(cat "$seen" 2>/dev/null)" = "$(cat "$body")" ] && exit 0
+      cp "$body" "$seen" 2>/dev/null
+      cat "$body" >&2
+      exit 2
+      ;;
     408) backoff=1; sleep 1 ;;
     000 | 429 | 500 | 502 | 503 | 504)
       if [ $(($(date +%s) - began)) -ge 10 ]; then
