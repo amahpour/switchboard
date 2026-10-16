@@ -409,11 +409,24 @@ def test_a_change_to_a_plugin_bumps_its_version() -> None:
     """Claude Code and Codex keep an installed plugin by its `version`, so a change to its hooks or
     listener that leaves the version alone never reaches anyone who has installed it (DESIGN.md
     §49.5, #402). Compares each plugin's files with main and fails if one changed and its manifest
-    version didn't. Skipped where there is no git history to compare with."""
+    version didn't. Skipped where there is no git history to compare with, except where
+    ``SWITCHBOARD_REQUIRE_GIT_BASE=1`` (CI's test jobs) says there must be one: there a lost
+    history fails the run instead of quietly checking nothing (F1 on #403's board)."""
     base = base_commit(ROOT)
     if base is None:
+        if os.environ.get("SWITCHBOARD_REQUIRE_GIT_BASE") == "1":
+            pytest.fail("no base to compare the plugins with, and SWITCHBOARD_REQUIRE_GIT_BASE=1 needs one")
         pytest.skip("no git history to compare the plugins with")
     assert unbumped_plugins(ROOT, base) == []
+
+
+def test_ci_requires_the_plugin_version_check_to_run() -> None:
+    """The test job that fetches the history for the version check (``fetch-depth: 2``) also sets
+    ``SWITCHBOARD_REQUIRE_GIT_BASE``, so the check can't turn into a skip unnoticed. Fails if the
+    flag goes from the workflow while the check still depends on that history."""
+    workflow = (ROOT / ".github" / "workflows" / "test.yml").read_text()
+    assert "fetch-depth: 2" in workflow
+    assert 'SWITCHBOARD_REQUIRE_GIT_BASE: "1"' in workflow
 
 
 def test_the_version_check_sees_a_changed_file_and_a_new_one_and_accepts_a_bump(tmp_path: Path) -> None:
@@ -558,3 +571,15 @@ def test_the_listener_keeps_its_marker_out_of_shared_folders(tmp_path: Path) -> 
     assert r.returncode == 2, r
     assert list(shared.iterdir()) == []
     assert (home / ".cache" / "switchboard" / f"ended-{SESSION_1}").is_file()
+
+
+def test_without_a_base_the_version_check_fails_where_ci_requires_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no history to compare with, the check skips on a laptop but fails under
+    ``SWITCHBOARD_REQUIRE_GIT_BASE=1``. Fails if CI's lost history would pass as a skip."""
+    monkeypatch.setitem(globals(), "base_commit", lambda root: None)
+    monkeypatch.delenv("SWITCHBOARD_REQUIRE_GIT_BASE", raising=False)
+    with pytest.raises(pytest.skip.Exception):
+        test_a_change_to_a_plugin_bumps_its_version()
+    monkeypatch.setenv("SWITCHBOARD_REQUIRE_GIT_BASE", "1")
+    with pytest.raises(pytest.fail.Exception):
+        test_a_change_to_a_plugin_bumps_its_version()
