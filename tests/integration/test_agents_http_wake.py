@@ -277,3 +277,21 @@ def test_a_round_that_runs_out_asks_for_another_while_the_session_stays_idle(bui
     r = listen(build, token, SESSION_1, **{"x-switchboard-again": "1"})
     assert r.status_code == 409 and r.json()["error"] == "not_idle", r.text
     assert not parked(build, p.id)
+
+
+def test_a_broker_that_has_run_a_while_keeps_an_agent_over_https(build: InProcBroker) -> None:
+    """The remotes sweep ends the members of a host with no machine link once the broker has run
+    15 minutes (``DEFAULT_END_AFTER_S``). An agent over HTTPS has no link: its token is its tie. Seen
+    live on 0.32.0: on a broker up for 40 minutes, every join over HTTPS was ended within a second,
+    "left (macbook unreachable)". Fails if the sweep takes a token's device for a lost machine."""
+    claude, _ = joined_claude(build)
+    rem = build.state.remotes
+
+    def age() -> None:
+        rem.started_at -= 2 * 900  # as if the broker had run half an hour
+
+    build.on_loop(age)
+    build.on_loop(rem.sweep)
+    p = participant(build, "claude-1")
+    assert p.active and p.status != "offline", p
+    assert claude.call("who", room="#build")["ok"]
