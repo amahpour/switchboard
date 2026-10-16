@@ -2,7 +2,7 @@
   "name": "switchboard-lint",
   "private": true,
   "scripts": {
-    "lint:js": "eslint src/switchboard/web/static/*.js"
+    "lint:js": "cd ../.. && eslint --config scripts/eslint/eslint.config.mjs 'src/switchboard/web/static/*.js'"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

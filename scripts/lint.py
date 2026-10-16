@@ -16,8 +16,12 @@ from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+# Findings pinned when a new rule lands, by file, rule and source. None are now, so there is no file;
+# a missing baseline, here or at the base commit, pins nothing.
 BASELINE = ROOT / ".lint-baseline.json"
+NO_FINDINGS: dict[str, list[list[str]]] = {"ruff": [], "mypy": []}
 TOOLS = ROOT / ".lint-tools"
+ESLINT = ROOT / "scripts" / "eslint"
 PYTHON_DIRS = ("src", "tests", "scripts", "docs/media")
 RELEASES = {
     "shellcheck": (
@@ -156,7 +160,7 @@ def findings() -> dict[str, list[list[str]]]:
 
 
 def compare(actual: dict[str, list[list[str]]], base: str) -> bool:
-    expected = json.loads(BASELINE.read_text())
+    expected = json.loads(BASELINE.read_text()) if BASELINE.exists() else NO_FINDINGS
     good = True
     for tool, rows in actual.items():
         added = list((Counter(map(tuple, rows)) - Counter(map(tuple, expected[tool]))).elements())
@@ -165,13 +169,12 @@ def compare(actual: dict[str, list[list[str]]], base: str) -> bool:
             print("  NEW", *row[:3])
         good &= not added
     old = run("git", "show", f"{base}:.lint-baseline.json", check=False, capture_output=True)
-    if old.returncode == 0:
-        former = json.loads(old.stdout)
-        for tool in ("ruff", "mypy"):
-            growth = Counter(map(tuple, expected[tool])) - Counter(map(tuple, former[tool]))
-            if growth:
-                print(f"{tool}: baseline grew by {sum(growth.values())} findings")
-                good = False
+    former = json.loads(old.stdout) if old.returncode == 0 else NO_FINDINGS
+    for tool in ("ruff", "mypy"):  # the baseline may only shrink
+        growth = Counter(map(tuple, expected[tool])) - Counter(map(tuple, former[tool]))
+        if growth:
+            print(f"{tool}: baseline grew by {sum(growth.values())} findings")
+            good = False
     return good
 
 
@@ -197,8 +200,9 @@ def main() -> int:
     command = ("uv", "run", "--frozen", "ruff", "format", *([] if args.fix else ["--check"]), *PYTHON_DIRS)
     format_ok = run(*command, check=False).returncode == 0
     print("ruff format: whole Python tree")
-    run("npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund")
-    js_ok = run("npm", "run", "lint:js", *(["--", "--fix"] if args.fix else []), check=False).returncode == 0
+    npm = ("npm", "--prefix", str(ESLINT))  # ESLint and its config live in scripts/eslint/
+    run(*npm, "ci", "--ignore-scripts", "--no-audit", "--no-fund")
+    js_ok = run(*npm, "run", "lint:js", *(["--", "--fix"] if args.fix else []), check=False).returncode == 0
     ok = compare(findings(), args.base) and format_ok and js_ok
     shellcheck = installed_tool("shellcheck")
     actionlint = installed_tool("actionlint")

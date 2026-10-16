@@ -103,7 +103,7 @@ jobs:
         # Three runners per OS, each running a third of the suite with xdist on its cores. A
         # hosted runner has only 3-4 cores, and more xdist workers than cores doesn't pay (each
         # worker imports and collects the whole suite), so more runners is what shortens the run.
-        # pytest-split balances the thirds by the durations in .test_durations (CONTRIBUTING.md);
+        # pytest-split balances the thirds by the durations in tests/.test_durations (CONTRIBUTING.md);
         # `--splits` below must match this list's length. Locally, run the suite whole (-n auto).
         shard: [1, 2, 3]
     runs-on: ${{ matrix.os }}
@@ -141,7 +141,7 @@ jobs:
       # --cov measures this process and ([tool.coverage.run] patch) its Python children.
       # -n auto: pytest-xdist runs this shard on every core; pytest-cov merges the workers.
       # --splits/--group: this runner's third of the suite (pytest-split, least_duration balances
-      # the recorded durations; a test not in .test_durations counts as the average one).
+      # the recorded durations; a test not in tests/.test_durations counts as the average one).
       - run: >-
           uv run --frozen pytest -q -p no:cacheprovider -n auto
           --splits 3 --group ${{ matrix.shard }} --splitting-algorithm least_duration
@@ -255,6 +255,7 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
+          file: deploy/image/Dockerfile
           build-args: BUILD_COMMIT=${{ github.sha }}
           load: true
           tags: switchboard:ci

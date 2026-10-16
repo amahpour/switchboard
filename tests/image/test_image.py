@@ -1,7 +1,7 @@
 """The container image (issue #34, docs/DEPLOY.md). Marker ``image``, opt-in; needs Docker, and
 Playwright's Chromium for the UI test.
 
-    docker build -t switchboard:dev .
+    docker build -t switchboard:dev -f deploy/image/Dockerfile .
     SWITCHBOARD_IMAGE=switchboard:dev uv run pytest -m image tests/image   # unset: builds switchboard:test
 
 The CI job ``image`` builds the image and runs these. They start it the way a platform does:
@@ -368,6 +368,8 @@ def image() -> str:
         f"BUILD_COMMIT={revision}",
         "-t",
         "switchboard:test",
+        "-f",
+        str(ROOT / "deploy" / "image" / "Dockerfile"),
         str(ROOT),
         timeout=1200.0,
     )

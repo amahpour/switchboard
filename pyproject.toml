@@ -80,8 +80,8 @@ target-version = "py312"
 line-length = 110
 
 [tool.ruff.lint]
-# Existing findings are pinned by file, rule and source in .lint-baseline.json.
-# New violations fail; the baseline may only shrink.
+# New violations fail. None are pinned (scripts/lint.py: a .lint-baseline.json could pin
+# existing ones when a rule lands, and may only shrink).
 select = ["E4", "E7", "E9", "E501", "F", "I", "B"]
 
 [tool.mypy]
@@ -101,7 +101,8 @@ markers = [
     "e2e: the web UI in a real browser through Playwright, tests/e2e (opt-in: -m e2e; needs `playwright install chromium`)",
     "image: the container image behind a TLS proxy, tests/image (opt-in: -m image; needs Docker and Playwright's Chromium)",
 ]
-addopts = "-m 'not live and not perf and not twohost and not e2e and not image'"
+# pytest-split's per-test durations, which balance CI's shards (CONTRIBUTING.md, "Shards in CI")
+addopts = "-m 'not live and not perf and not twohost and not e2e and not image' --durations-path=tests/.test_durations"
 # A warning doesn't fail anything on its own, so each one here either fails the suite or is a
 # named, understood exception. error::PytestUnraisableExceptionWarning (#277): a leaked object's
 # __del__ raising (an asyncio transport whose server was already closed, #276) printed a warning
