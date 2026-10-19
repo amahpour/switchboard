@@ -91,8 +91,15 @@ def test_every_hook_calls_the_hook_tool_with_fields_it_takes() -> None:
             if event in ("PreToolUse", "PostToolUse", "PostToolUseFailure"):
                 assert group["matcher"] == "mcp__plugin_switchboard_switchboard__.*", event
     for event in ("SessionStart", "SessionEnd"):  # Claude Code runs no mcp_tool hook at these (#399)
-        [h] = [h for g in hooks[event] for h in g["hooks"]]
+        h = hooks[event][0]["hooks"][0]
         assert h["type"] == "command" and h["command"] == '"${CLAUDE_PLUGIN_ROOT}"/bin/session', event
+    [start_listener] = [h for g in hooks["SessionStart"] for h in g["hooks"][1:]]
+    assert start_listener == {
+        "type": "command",
+        "command": '"${CLAUDE_PLUGIN_ROOT}"/bin/listen',
+        "asyncRewake": True,
+        "timeout": 604800,
+    }
     assert os.access(SESSION, os.X_OK)
     [stop] = [h for g in hooks["Stop"] for h in g["hooks"]]
     assert stop["type"] == "command" and stop["asyncRewake"] is True
@@ -128,10 +135,13 @@ def run_listen(
     data: Path | None = None,
     home: Path | None = None,
     tmp: Path | None = None,
+    event: str = "Stop",
+    source: str = "",
 ) -> subprocess.CompletedProcess[str]:
-    """``bin/listen`` as Claude Code runs it at Stop: the hook's input on stdin, the plugin's settings
-    in ``CLAUDE_PLUGIN_OPTION_*``, and Claude Code's own pid in ``CLAUDE_PID`` (here the test's, or
-    ``owner``). ``round_s`` shortens a round. The test's timeout is a safety net."""
+    """``bin/listen`` as Claude Code runs it at Stop or SessionStart: the hook's input on stdin,
+    the plugin's settings in ``CLAUDE_PLUGIN_OPTION_*``, and Claude Code's own pid in
+    ``CLAUDE_PID`` (here the test's, or ``owner``). ``round_s`` shortens a round. The test's
+    timeout is a safety net."""
     env = {
         "PATH": os.environ["PATH"],
         "CLAUDE_PLUGIN_OPTION_SERVER_URL": url or (b.base if b else ""),
@@ -146,7 +156,9 @@ def run_listen(
         env["HOME"] = str(home)
     if tmp is not None:
         env["TMPDIR"] = str(tmp)
-    stop = json.dumps({"session_id": session, "hook_event_name": "Stop", "stop_hook_active": False})
+    stop = json.dumps(
+        {"session_id": session, "hook_event_name": event, "source": source, "stop_hook_active": False}
+    )
     return subprocess.run(
         ["sh", str(LISTEN)], input=stop, env=env, capture_output=True, text=True, timeout=60
     )
@@ -179,6 +191,57 @@ def test_the_listener_wakes_with_the_message_and_is_quiet_otherwise(broker: InPr
     assert (nobody.returncode, nobody.stderr) == (0, ""), nobody
     assert run_listen(broker, token, "not a session; rm -rf ~").returncode == 0  # never sent
     assert LISTEN_PATH == "/mcp/listen"  # the path the script posts to
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
+def test_a_resumed_claude_is_woken_before_its_first_turn(broker: InProcBroker) -> None:
+    """A stand-in Claude quits and resumes while still a member. Its SessionStart hooks start the
+    listener without a prompt or Stop; an @mention wakes it before its first turn (#412). Fails if
+    SessionStart only reports the restart, leaving the member parked and deaf."""
+    broker.call("room.create", {"name": "#build"})
+    token = make_token(broker, "laptop")
+    claude = Claude(broker, token, SESSION_1)
+    assert claude.call("join", room="#build", screen_name="claude-1")["ok"]
+    claude.call("read", room="#build")
+    assert run_session(broker, token, SESSION_1, "SessionEnd", reason="prompt_input_exit").returncode == 0
+    pid = participant(broker, "claude-1").id
+    until(lambda: participant(broker, "claude-1").status == "offline")
+
+    hooks = [h for g in claude_hooks()["SessionStart"] for h in g["hooks"]]
+    assert hooks[0]["command"] == '"${CLAUDE_PLUGIN_ROOT}"/bin/session'
+    assert run_session(broker, token, SESSION_1, "SessionStart", source="resume").returncode == 0
+    [listener] = [h for h in hooks[1:] if h.get("asyncRewake")]
+    assert listener["command"] == '"${CLAUDE_PLUGIN_ROOT}"/bin/listen'
+    with ThreadPoolExecutor(1) as pool:
+        waking = pool.submit(run_listen, broker, token, SESSION_1, event="SessionStart", source="resume")
+        until(lambda: parked(broker, pid))
+        broker.call("human.say", {"room": "#build", "text": "@claude-1 resume now"})
+        r = waking.result(60)
+    assert r.returncode == 2 and "resume now" in r.stderr, r
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
+def test_sessionstart_listens_only_when_idle_before_a_turn() -> None:
+    """A /clear or compaction SessionStart may be mid-turn; its listener must leave without
+    reporting Stop to the broker. Startup and resume can listen before the first turn."""
+    stub = Stub([(409, ""), (409, "")])
+    try:
+        for source in ("clear", "compact"):
+            r = run_listen(
+                None, "sbat_" + "x" * 43, SESSION_1, url=stub.url, event="SessionStart", source=source
+            )
+            assert (r.returncode, r.stderr) == (0, ""), r
+        assert stub.again == []
+        for source in ("startup", "resume"):
+            assert (
+                run_listen(
+                    None, "sbat_" + "x" * 43, SESSION_1, url=stub.url, event="SessionStart", source=source
+                ).returncode
+                == 0
+            )
+        assert stub.again == ["0", "0"]
+    finally:
+        stub.close()
 
 
 def test_the_listener_keeps_the_token_off_its_command_line() -> None:

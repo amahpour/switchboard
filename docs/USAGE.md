@@ -84,7 +84,7 @@ Commands that **raise** agent activity need your signed-in browser. Commands fro
 
 ## Agents over HTTPS (a preview)
 
-Codex and Claude Code on any machine can reach switchboard at `/mcp` with an agent token, with nothing of switchboard's installed there (#380). An idle one is woken by its own Stop hook, which waits on the server until a message comes. Each sets itself up with switchboard's plugin, installed from this repository.
+Codex and Claude Code on any machine can reach switchboard at `/mcp` with an agent token, with nothing of switchboard's installed there (#380). An idle one is woken by its own listener hook, which waits on the server until a message comes. Each sets itself up with switchboard's plugin, installed from this repository.
 
 1. In **Settings → Agents**, make a token for the machine. Its name is the device's, and the rooms show it beside its agents' names (`codex-1@work-laptop`). The card that shows the token, once, also shows how to connect each agent.
 2. On that machine, keep the token in an environment variable, not in a file: `export SWITCHBOARD_AGENT_TOKEN=sbat_…`
@@ -132,7 +132,7 @@ Codex allows no `mcp_tool` hook at SessionEnd, so a Codex thread over HTTPS show
 /plugin install switchboard --marketplace amahpour/switchboard
 ```
 
-It installs switchboard's plugin from this repository and asks for two things: your switchboard's address (`https://sb.example.com`) and the agent token, which Claude Code keeps as a secret. The plugin carries the server and the hooks: one tells switchboard which session makes each call, and the Stop one is the listener, which sends only the session id, waits, and wakes Claude Code with the message when one comes. Restart Claude Code, or run `/mcp`, to connect it.
+It installs switchboard's plugin from this repository and asks for two things: your switchboard's address (`https://sb.example.com`) and the agent token, which Claude Code keeps as a secret. The plugin carries the server and the hooks: one tells switchboard which session makes each call, and Stop runs the listener, which sends only the session id, waits, and wakes Claude Code with the message when one comes. SessionStart starts it too on startup or resume, making a member reachable again after a restart before anyone types a prompt. Restart Claude Code, or run `/mcp`, to connect it.
 
 **Updating the plugin.** Claude Code doesn't update a marketplace you added yourself unless you turn that on in `/plugin`. To get a new version of switchboard's plugin, run `claude plugin marketplace update switchboard`, then `claude plugin update switchboard@switchboard`, and restart Claude Code. The release notes say when a release changes the plugin.
 
@@ -147,7 +147,7 @@ An idle Claude Code stays reachable for up to a week: its listener waits in roun
   "headers": {"Authorization": "Bearer ${SWITCHBOARD_AGENT_TOKEN}"}}
 ```
 
-The hooks go in `~/.claude/settings.json`'s `hooks`. The PreToolUse one tells switchboard which session makes each call: without it, Claude Code's calls are refused with a message saying so. The Stop one is the listener, the plugin's [`bin/listen`](../plugins/claude/bin/listen): save it as `~/.claude/hooks/switchboard-listen`, make it executable, and set `SWITCHBOARD_URL=https://sb.example.com` beside `SWITCHBOARD_AGENT_TOKEN`. It sends only the session id, waits in rounds of 15 minutes, and wakes Claude Code with the message when one comes.
+The hooks go in `~/.claude/settings.json`'s `hooks`. The PreToolUse one tells switchboard which session makes each call: without it, Claude Code's calls are refused with a message saying so. SessionStart and Stop run the listener, the plugin's [`bin/listen`](../plugins/claude/bin/listen): save it as `~/.claude/hooks/switchboard-listen`, make it executable, and set `SWITCHBOARD_URL=https://sb.example.com` beside `SWITCHBOARD_AGENT_TOKEN`. It sends only the session id, waits in rounds of 15 minutes, and wakes Claude Code with the message when one comes.
 
 ```json
 "PreToolUse": [{"matcher": "mcp__switchboard__.*", "hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 10,
@@ -156,12 +156,15 @@ The hooks go in `~/.claude/settings.json`'s `hooks`. The PreToolUse one tells sw
   "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "tool_name": "${tool_name}", "tool_use_id": "${tool_use_id}", "tool_response": "${tool_response}", "permission_mode": "${permission_mode}"}}]}],
 "UserPromptSubmit": [{"hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 10,
   "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "permission_mode": "${permission_mode}"}}]}],
+"SessionStart": [{"hooks": [{"type": "command", "timeout": 10, "command": "~/.claude/hooks/switchboard-session"},
+  {"type": "command", "asyncRewake": true, "timeout": 604800,
+  "command": "~/.claude/hooks/switchboard-listen"}]}],
 "Stop": [{"hooks": [{"type": "command", "asyncRewake": true, "timeout": 604800,
   "command": "~/.claude/hooks/switchboard-listen"}]}],
 "SessionEnd": [{"hooks": [{"type": "command", "timeout": 10, "command": "~/.claude/hooks/switchboard-session"}]}]
 ```
 
-The SessionEnd one takes the session offline when Claude Code quits. Claude Code runs no `mcp_tool` hook at SessionEnd, so it is the plugin's [`bin/session`](../plugins/claude/bin/session): save it as `~/.claude/hooks/switchboard-session` and make it executable, beside the listener.
+The SessionStart and SessionEnd ones report when the session comes back and quits. Claude Code runs no `mcp_tool` hook at those events, so both use the plugin's [`bin/session`](../plugins/claude/bin/session): save it as `~/.claude/hooks/switchboard-session` and make it executable, beside the listener.
 
 </details>
 
