@@ -8,6 +8,12 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/session",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/listen",
+            "asyncRewake": true,
+            "timeout": 604800
           }
         ]
       }

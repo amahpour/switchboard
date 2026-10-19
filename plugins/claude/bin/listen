@@ -1,5 +1,6 @@
 #!/bin/sh
-# switchboard's listener for Claude Code (docs/DESIGN.md §49.4). Claude Code runs it at Stop, with
+# switchboard's listener for Claude Code (docs/DESIGN.md §49.4). Claude Code runs it at Stop and
+# at SessionStart for startup/resume, with
 # asyncRewake: it sends only this session's id and waits at the switchboard server, round after
 # round, so the session can be woken however long it stays idle. A message prints, and the exit 2
 # makes Claude Code start a turn with it. Exit 0 wakes nothing: when another listener or a hook of
@@ -8,7 +9,19 @@
 # A round that runs out starts the next; a server that can't be reached (restarting, or a proxy
 # that cut the wait) is tried again, a little later each time. The token reaches curl on its stdin,
 # never its command line, where other processes could read it.
-sid=$(grep -o '"session_id": *"[^"]*"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')
+input=$(cat)
+field() {
+  printf '%s' "$input" | grep -o "\"$1\": *\"[^\"]*\"" | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/'
+}
+event=$(field hook_event_name)
+# A /clear or compaction can happen mid-turn; its next Stop starts the listener. Starting one
+# here would report that busy session idle and could deliver a wake into the running turn.
+case $event in
+  Stop) ;;
+  SessionStart) case $(field source) in startup | resume) ;; *) exit 0 ;; esac ;;
+  *) exit 0 ;;
+esac
+sid=$(field session_id)
 case $sid in '' | *[!A-Za-z0-9_-]*) exit 0 ;; esac
 url=${CLAUDE_PLUGIN_OPTION_SERVER_URL:-$SWITCHBOARD_URL}
 url=${url%/}
