@@ -430,10 +430,16 @@ def person_move(item: Item, move: str) -> str:
 
 def settled(items: list[Item]) -> bool:
     """Nothing left to do: every finding fixed or dropped, every question answered or dropped."""
-    return not any(
-        i.state in OPEN_FINDING or i.state == "open" or (i.state == "fixed" and not i.confirmed_by)
+    return not open_items(items)
+
+
+def open_items(items: list[Item]) -> list[Item]:
+    """The labels that must be named if an agent closes a board with work left (#408)."""
+    return [
+        i
         for i in items
-    )
+        if i.state in OPEN_FINDING or i.state == "open" or (i.state == "fixed" and not i.confirmed_by)
+    ]
 
 
 def unsettled_finding_ids(items: list[Item]) -> list[int]:

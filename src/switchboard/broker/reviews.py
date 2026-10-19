@@ -19,7 +19,20 @@ from switchboard.reviews import ReviewError
 
 log = logging.getLogger(__name__)
 
-ACTIONS = ("open", "show", "raise", "ask", "concede", "contest", "fix", "confirm", "drop", "defer", "report")
+ACTIONS = (
+    "open",
+    "show",
+    "raise",
+    "ask",
+    "concede",
+    "contest",
+    "fix",
+    "confirm",
+    "drop",
+    "defer",
+    "report",
+    "close",
+)
 
 
 class Boards:
@@ -86,6 +99,8 @@ class Boards:
             return self._shown(room)
         if action == "report":  # also after the handoff: the merge that closes the board comes then
             return self._report(room, rv, actor, params)
+        if action == "close":  # settled boards can close even after handoff
+            return self._close(room, rv, actor, params)
         if rv["posted_at"] is not None:
             raise ReviewError("this board was already handed off: no more moves")
         if action in ("raise", "ask"):
@@ -174,6 +189,28 @@ class Boards:
             }
         return self._shown(room)
 
+    def _close(self, room: Room, rv: dict[str, Any], actor: str, params: dict[str, Any]) -> dict[str, Any]:
+        """Close a settled board at any time; open work needs the mover's reason in the room."""
+        items = self.store.review_items(rv["id"])
+        open_items = reviews.open_items(items)
+        reason = reviews.text(params.get("reason"), "reason", reviews.MAX_REASON, required=bool(open_items))
+        f = reviews.forge(rv["url"])
+        ref = ("#" if f["kind"] == "github" else "!") + str(f["number"]) if f is not None else rv["url"]
+        labels = [item.label for item in open_items]
+        line = f"Review board for {ref} closed by {actor}"
+        line += f": {reason}" if reason else "."
+        if labels:
+            line += f". Open items: {', '.join(labels)}."
+        self.store.set_review(rv["id"], closed_at=self.state.clock.now())
+        self.store.add_event(
+            "review",
+            room_id=room.id,
+            data={"close": rv["url"], "by": actor, "reason": reason, "open": labels},
+        )
+        self.state.service.post_notice(room, line, level="info")
+        self.state.hub.review(room.name, None)
+        return {"ok": True, "closed": True, "board": None}
+
     def _told(self, room: Room, item: reviews.Item, actor: str, notice: str) -> dict[str, Any]:
         """The board after ``actor``'s move on ``item``, and how the room hears of it: the line
         for whoever acts next (posted by the caller as the mover's message, so it wakes them),
@@ -189,7 +226,7 @@ class Boards:
     def _open(self, room: Room, actor: str, params: dict[str, Any]) -> dict[str, Any]:
         url = reviews.url(params.get("url"))
         head = reviews.head(params.get("head"))
-        self._open_board(room, actor, url, head, "a person closes it before another opens")
+        self._open_board(room, actor, url, head, "close it before another opens")
         return self._shown(room)
 
     def _open_board(self, room: Room, by: str, url: str, head: str, then: str) -> None:

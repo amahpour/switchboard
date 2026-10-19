@@ -138,6 +138,10 @@ def test_settled_means_nothing_left_to_do() -> None:
     assert reviews.settled([finding("fixed", owner="a"), finding("dropped"), question("answered")])
     for open_one in (finding("raised"), finding("contested"), finding("conceded"), question("open")):
         assert not reviews.settled([finding("fixed"), open_one]), open_one.state
+    waiting = replace(finding("fixed", n=2), confirmed_by="")
+    items = [finding("dropped"), finding("raised"), waiting, question("open"), question("answered")]
+    assert [item.label for item in reviews.open_items(items)] == ["F1", "F2", "Q1"]
+    assert not reviews.settled(items)  # a fix awaiting confirmation is still open
     c = reviews.counts([finding("contested"), question(), finding("fixed"), finding("raised")])
     assert c == {"needs_person": 2, "open": 3, "fixed": 1, "dropped": 0, "answered": 0}
 
