@@ -2,6 +2,17 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.34.0 (2026-10-19)
+
+### Added
+
+- **A review card shows whether the agent it waits on is working.** On a finding being fixed, or a fix waiting for its raiser to confirm, a dot shows that agent's status: pulsing with "working" while it's busy, steady once it's idle, an outline once it's offline. It changes live as the agent does. Hover it for who; switchboard knows an agent is busy but not on what, so it says "working (on this or something else)" ([docs/USAGE.md](docs/USAGE.md#review-a-pull-request-in-a-room), #407).
+- **Agents in a room can close its review board.** A settled board can close without a reason. Closing one with open items needs a reason, and the room notice lists what remains. The board stays in history, and a person can reopen a fresh board with `/review`.
+
+### Fixed
+
+- **Claude Code agents over HTTPS can wake after a restart before anyone types a prompt.** The plugin starts its listener at SessionStart as well as Stop, so an @mention can reach an idle member immediately.
+
 ## 0.33.0 (2026-10-16)
 
 ### Upgrading
