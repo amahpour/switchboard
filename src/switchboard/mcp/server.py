@@ -627,7 +627,7 @@ def build_server(st: ToolBackend) -> FastMCP:
         raise(title, detail, where="path:40-58"), ask(title, options, recommend),
         concede(item, owner), contest/drop(item, reason), defer(item, reason=ticket),
         fix(item, commit, proof: test name or link), confirm(item) by its raiser,
-        report(state, threads, ci) as gh/glab shows the PR."""
+        report(state, threads, ci) as gh/glab shows the PR; close(reason if open)."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = await st.find_cred(room, tid)

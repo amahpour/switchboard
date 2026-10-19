@@ -22,6 +22,7 @@ from switchboard.models import session_key
 
 FAST = Config(human_name="alice").with_delivery(quiet_s=0.0, max_hold_s=0.0)
 PR = "https://example.com/shop/pull/7"
+GITHUB_PR = "https://github.com/example/shop/pull/7"
 
 
 @pytest.fixture
@@ -291,6 +292,124 @@ async def test_an_agent_reports_the_pull_request_and_a_merge_closes_the_board(br
         web.close()
 
 
+async def test_agent_closes_a_settled_board_without_a_reason_and_opens_the_next(
+    broker: InProcBroker,
+) -> None:
+    """A settled board has no work to lose, so its member can close it without a reason and
+    open the next PR. The old row and item remain in history (#408)."""
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "close-author") as author:
+            await author.join("#build", "claude-1")
+            assert (await author.call("review", room="#build", action="open", url=GITHUB_PR))["ok"]
+            assert (await author.call("review", room="#build", action="raise", title="checked"))["ok"]
+            assert (await author.call("review", room="#build", action="drop", item="F1", reason="checked"))[
+                "ok"
+            ]
+            closed = await author.call("review", room="#build", action="close")
+            assert closed["ok"] and closed["closed"] is True, closed
+            assert web.get("/api/rooms/build/review").json()["board"] is None
+            opened = await author.call("review", room="#build", action="open", url=GITHUB_PR + "8")
+            assert opened["ok"] and opened["board"].startswith(f"Review of {GITHUB_PR}8"), opened
+        notices = [
+            row["text"] for row in q(broker, "SELECT text FROM messages WHERE kind='notice' ORDER BY id")
+        ]
+        assert "Review board for #7 closed by claude-1." in notices
+        rows = q(broker, "SELECT url, closed_at FROM reviews ORDER BY id")
+        assert len(rows) == 2 and rows[0]["url"] == GITHUB_PR and rows[0]["closed_at"] is not None
+        assert rows[1]["closed_at"] is None
+        assert [row["title"] for row in q(broker, "SELECT title FROM review_items")] == ["checked"]
+    finally:
+        web.close()
+
+
+async def test_agent_close_with_open_items_needs_a_reason_and_lists_them_for_the_room(
+    broker: InProcBroker,
+) -> None:
+    """Closing unsettled work is deliberate: an empty or oversized reason is refused without
+    changing the board; a valid reason closes it and the room sees every open label. A person can
+    reopen the same PR with /review, while the old board remains in history (#408)."""
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "close-author") as author:
+            await author.join("#build", "claude-1")
+            await author.call("review", room="#build", action="open", url=GITHUB_PR)
+            await author.call("review", room="#build", action="raise", title="tax order")
+            await author.call(
+                "review", room="#build", action="ask", title="Which policy?", options=["old", "new"]
+            )
+            for reason in ("", "   ", "x" * 501):
+                refused = await author.call("review", room="#build", action="close", reason=reason)
+                assert refused["ok"] is False and "reason" in refused["error"], refused
+                assert web.get("/api/rooms/build/review").json()["board"] is not None
+            closed = await author.call("review", room="#build", action="close", reason="moving to #8")
+            assert closed["ok"] and closed["closed"] is True, closed
+            assert web.get("/api/rooms/build/review").json()["board"] is None
+            reopened = web_cmd(broker, web, f"/review {GITHUB_PR}")
+            assert reopened.status_code == 200, reopened.text
+            assert web.get("/api/rooms/build/review").json()["board"]["items"] == []
+        notices = [
+            row["text"] for row in q(broker, "SELECT text FROM messages WHERE kind='notice' ORDER BY id")
+        ]
+        assert "Review board for #7 closed by claude-1: moving to #8. Open items: F1, Q1." in notices
+        rows = q(broker, "SELECT id, closed_at FROM reviews ORDER BY id")
+        assert len(rows) == 2 and rows[0]["closed_at"] is not None and rows[1]["closed_at"] is None
+        assert [
+            (r["kind"], r["state"]) for r in q(broker, "SELECT kind, state FROM review_items ORDER BY id")
+        ] == [
+            ("finding", "raised"),
+            ("question", "open"),
+        ]
+    finally:
+        web.close()
+
+
+async def test_agent_can_close_a_settled_board_after_handoff(broker: InProcBroker) -> None:
+    """A settled board can close at any time, including after the person handed its review off."""
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "close-author") as author:
+            await author.join("#build", "claude-1")
+            await author.call("review", room="#build", action="open", url=GITHUB_PR)
+            await author.call("review", room="#build", action="raise", title="checked")
+            await author.call("review", room="#build", action="drop", item="F1", reason="checked")
+            handed = web.post(
+                "/api/rooms/build/review", json={"action": "handoff"}, headers=broker.write_headers()
+            )
+            assert handed.status_code == 200, handed.text
+            closed = await author.call("review", room="#build", action="close")
+            assert closed["ok"] and closed["closed"] is True, closed
+    finally:
+        web.close()
+
+
+async def test_agent_close_notice_keeps_every_open_label_at_the_board_limit(broker: InProcBroker) -> None:
+    """The room notice cannot cut the tail of a full board: the last of 200 open items is visible
+    alongside the first, even with a long valid reason."""
+    async with FakeAgent(broker.home, "close-author") as author:
+        await author.join("#build", "claude-1")
+        await author.call("review", room="#build", action="open", url=GITHUB_PR)
+
+        def fill() -> None:
+            store = broker.state.store
+            room = store.get_room("#build")
+            assert room is not None
+            rv = store.current_review(room.id)
+            assert rv is not None
+            for _ in range(200):
+                store.add_review_item(rv["id"], "finding", "raised", title="open", raised_by="claude-1")
+
+        broker.on_loop(fill)
+        closed = await author.call("review", room="#build", action="close", reason="r" * 500)
+        assert closed["ok"] and closed["closed"] is True, closed
+    [line] = [
+        row["text"]
+        for row in q(broker, "SELECT text FROM messages WHERE kind='notice'")
+        if row["text"].startswith("Review board for #7 closed")
+    ]
+    assert line.count("F") == 200 and "F1, F2" in line and line.endswith("F199, F200.")
+
+
 async def test_a_board_from_open_to_settled(broker: InProcBroker) -> None:
     async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
         await author.join("#build", "claude-1")
@@ -357,7 +476,7 @@ async def test_refusals_say_what_to_fix(broker: InProcBroker) -> None:
         assert r["ok"] is False and "http(s) link" in r["error"]
         await a.call("review", room="#build", action="open", url=PR)
         r = await a.call("review", room="#build", action="open", url=PR + "8")
-        assert r["ok"] is False and "a person closes it" in r["error"]
+        assert r["ok"] is False and "close it before another opens" in r["error"]
         r = await a.call("review", room="#build", action="concede", item="F9")
         assert r["ok"] is False and "has no F9" in r["error"]
         r = await a.call("review", room="#build", action="tidy")
