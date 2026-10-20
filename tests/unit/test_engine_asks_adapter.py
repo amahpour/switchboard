@@ -15,7 +15,7 @@ import pytest
 from conftest import FakeClock
 from engine_world import World
 
-from switchboard.adapters import HTTPS_CLAUDE, HTTPS_CODEX, REMOTE_CODEX, PullAdapter
+from switchboard.adapters import HTTPS_CLAUDE, HTTPS_CODEX, HTTPS_DEVIN, REMOTE_CODEX, PullAdapter
 from switchboard.adapters.codex import steered
 from switchboard.adapters.cursor import CursorAdapter
 from switchboard.config import Config
@@ -216,10 +216,12 @@ def test_an_adapter_can_take_its_status_from_sinks_and_confirm_pulls_at_once(w: 
 
 
 def test_each_harness_answers_as_the_engine_did_by_name(w: World) -> None:
-    """The move changes nothing: the harnesses the engine named before #169 answer yes."""
+    """The move changes nothing: the harnesses the engine named before #169 answer yes. Devin over
+    HTTPS (§49.7) is Devin's adapter with another session key and tier, so it answers as Devin
+    does: a test that left it out would not notice the wait loop quietly dropping out."""
     ads = w.engine.adapters
     clear = HookEvent(harness="claude", event="SessionEnd", t=0.0, reason="clear")
-    assert {h for h, a in ads.items() if a.reports_session_id} == {"claude", "devin", "test"}
+    assert {h for h, a in ads.items() if a.reports_session_id} == {"claude", "devin", HTTPS_DEVIN, "test"}
     # over HTTPS (§49.4) the mode comes with each hook, and /clear keeps a Claude session too
     assert {h for h, a in ads.items() if a.reports_approval_mode} == {
         "claude",
@@ -230,11 +232,13 @@ def test_each_harness_answers_as_the_engine_did_by_name(w: World) -> None:
     }
     assert {h for h, a in ads.items() if not a.ends_session(clear)} == {"claude", HTTPS_CLAUDE}
     sub = HookEvent(harness="devin", event="PreToolUse", t=0.0, subagent_bg=True)
-    assert {h for h, a in ads.items() if a.starts_subagent(sub)} == {"devin"}
-    assert {h for h, a in ads.items() if a.rearm_caps() != (0, 0)} == {"devin"}
+    assert {h for h, a in ads.items() if a.starts_subagent(sub)} == {"devin", HTTPS_DEVIN}
+    assert {h for h, a in ads.items() if a.rearm_caps() != (0, 0)} == {"devin", HTTPS_DEVIN}
     dv = w.cfg.devin
-    assert ads["devin"].rearm_caps() == (dv.rearm_max_per_prompt, dv.rearm_max_per_hour)
-    assert {h for h, a in ads.items() if a.derives_tier} == {"cursor", "devin"}
+    caps = (dv.rearm_max_per_prompt, dv.rearm_max_per_hour)
+    assert ads["devin"].rearm_caps() == caps
+    assert ads[HTTPS_DEVIN].rearm_caps() == caps
+    assert {h for h, a in ads.items() if a.derives_tier} == {"cursor", "devin", HTTPS_DEVIN}
     assert {h for h, a in ads.items() if a.followup_limit()} == {"cursor"}
     assert ads["cursor"].followup_limit() == w.cfg.cursor.max_unconfirmed_followups
     assert {h for h, a in ads.items() if a.local_only} == {"codex"}

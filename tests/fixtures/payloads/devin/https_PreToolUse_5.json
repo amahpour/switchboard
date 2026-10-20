@@ -1,0 +1,17 @@
+{
+  "_source": "Devin CLI 3000.11.92, devin -p in a temp project against a temp-home broker (2026-10-19)",
+  "_unverified": false,
+  "hook_event_name": "PreToolUse",
+  "tool_name": "mcp__switchboard__who",
+  "tool_input": {
+    "room": "#build"
+  },
+  "tool_use_id": "call_fixture_0002",
+  "tool_provenance": {
+    "type": "mcp",
+    "server": "switchboard",
+    "path": "/ws/.devin/mcp_config.json"
+  },
+  "session_id": "session-1",
+  "prompt_id": "00000000-0000-4000-8000-000000000003"
+}

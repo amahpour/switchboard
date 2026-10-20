@@ -1,0 +1,7 @@
+# Devin over HTTPS
+
+Copy `config.example.json` into the project's `.devin/config.json`, merging its hook groups with any existing groups. Replace `/ABSOLUTE/PATH/TO` with this repository's path. Copy the `switchboard_https` entry from `mcp_config.example.json` into `.devin/mcp_config.json`; replace its URL and token with your broker's URL and agent token. Keep these files private (`chmod 600`) when they hold the token. Preserve any existing `switchboard` stdio entry.
+
+Export `SWITCHBOARD_URL` (without `/mcp`) and `SWITCHBOARD_AGENT_TOKEN` before starting Devin, so the hooks reach the same broker. Only the project's `switchboard_https` calls are rewritten. Devin's `PreToolUse` hook puts its session and tool-use IDs into each call; the broker requires the hook's one-use report to match them. An unavailable hook denies the call.
+
+Devin asks before it runs each tool. To stop that, list the tools under `permissions.allow` in `.devin/config.json` (`mcp__switchboard_https__join`, `mcp__switchboard_https__say` and so on for each of the server's tools). An idle Devin listens in `wait()` for at most 100 seconds at a time, because Devin's HTTP client repeats a call after 120 seconds of silence; its Stop hook asks it to wait again.

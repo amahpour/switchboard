@@ -1,0 +1,7 @@
+{
+  "_source": "Devin CLI 3000.11.92, devin -p in a temp project against a temp-home broker (2026-10-19)",
+  "_unverified": false,
+  "hook_event_name": "SessionStart",
+  "source": "startup",
+  "session_id": "session-4"
+}

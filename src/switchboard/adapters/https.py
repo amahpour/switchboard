@@ -22,17 +22,26 @@ name: Claude Code's session id, which its PreToolUse hook reports before each ca
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any
 
 from switchboard import __version__
-from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, PullAdapter
+from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, Caps, PullAdapter
 from switchboard.adapters.codex import CodexMembership, steered
+from switchboard.adapters.devin import DevinAdapter
 from switchboard.config import Config
 from switchboard.models import HookEvent, Participant, Release, Route, session_key
 
 CLAUDE_TIER = "claude:https"
 CODEX_TIER = "codex:https"
 CURSOR_TIER = "cursor:https"
+DEVIN_TIER = "devin:https"
+# how Devin names the tools of the plugin's HTTPS server in its hooks (``mcp__<server>__<tool>``)
+DEVIN_TOOL_PREFIX = "mcp__switchboard_https__"
+# Devin's HTTP client sends a call again after 120 s of silence (measured, Devin CLI 3000.11.92); the
+# one-use hook report is spent by then, so the repeat is refused and the first wait() is orphaned.
+# A wait() under this ends before that.
+DEVIN_WAIT_CAP_S = 100
 NOTE = "over HTTPS: woken at stop"
 NO_SESSION = (
     "this Claude Code call named no session: switchboard's PreToolUse hook reports it before each"
@@ -150,3 +159,23 @@ class HttpsCursorAdapter(Listening):
         if not thread_id:
             raise ValueError("this Cursor call has no verified conversation ID")
         return session_key("cursor", ident.host, thread_id)
+
+
+class HttpsDevinAdapter(DevinAdapter):
+    """Devin over HTTPS, keyed by the session ID its PreToolUse hook puts on each call. Its wait
+    loop is Devin's (§9.5); only the tool's name differs: the plugin's server is not ``switchboard``,
+    so the wait() whose hooks pin an answer is the one under ``DEVIN_TOOL_PREFIX``."""
+
+    wait_tool = f"{DEVIN_TOOL_PREFIX}wait"
+
+    def caps(self, p: Participant | None = None) -> Caps:
+        caps = super().caps(p)
+        return dataclasses.replace(caps, wait_cap_s=min(caps.wait_cap_s, DEVIN_WAIT_CAP_S))
+
+    def tier(self, p: Participant | None) -> tuple[str, str | None]:
+        return DEVIN_TIER, "over HTTPS: listening through wait()"
+
+    def session_key(self, ident: Any, thread_id: str | None, *, test_session: str | None = None) -> str:
+        if not thread_id:
+            raise ValueError("this Devin call has no verified session ID")
+        return session_key("devin", ident.host, thread_id)

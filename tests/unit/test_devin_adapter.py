@@ -14,9 +14,11 @@ from conftest import FakeClock
 from engine_world import KEY, World
 
 from switchboard import envelope
+from switchboard.adapters import HTTPS_DEVIN
 from switchboard.adapters.devin import BLOCK_CONFIRM_S, TAINT_WHY, WAIT_TOOL, DevinAdapter
+from switchboard.adapters.https import DEVIN_TOOL_PREFIX, DEVIN_WAIT_CAP_S
 from switchboard.config import Config
-from switchboard.models import Release
+from switchboard.models import HTTPS_MCP_PID, Release
 
 
 @pytest.fixture
@@ -39,9 +41,11 @@ def tokens(b_id: int, m: Any) -> tuple[tuple[int, str], ...]:
     return ((int(t.group(1)), t.group(2)),)
 
 
-def open_wait(w: World, p: Any, m: Any, *, tuid: str | None = "call_w1", wid: str = "w1") -> Any:
+def open_wait(
+    w: World, p: Any, m: Any, *, tuid: str | None = "call_w1", wid: str = "w1", tool: str = WAIT_TOOL
+) -> Any:
     if tuid is not None:
-        w.hook(p, "PreToolUse", tool=WAIT_TOOL, tool_use_id=tuid)
+        w.hook(p, "PreToolUse", tool=tool, tool_use_id=tuid)
     sink, acts = w.engine.open_wait(w.p(p), w.m(m), wid, 600)
     w.actions += acts
     return sink
@@ -114,6 +118,50 @@ def test_a_token_in_another_tools_output_does_not_confirm_a_wait(w: World, clock
     wait_post(w, p, m, bid, tuid="call_X", tool="exec")  # e.g. the model echoed the token
     b = w.store.get_batch(bid)
     assert b.state == "expired" and b.confirmed_at is None  # and the agent moved on: it comes back
+
+
+def https_devin(w: World, name: str = "dv-https") -> tuple[Any, Any]:
+    """A Devin session over HTTPS (§49.7): its adapter is picked by the session's host and pid."""
+    p, m = w.agent(name, harness="devin", status="busy", hooks=True, host="laptop")
+    p = w.store.update_participant(p.id, mcp_pid=HTTPS_MCP_PID)
+    assert w.engine.adapter(p) is w.engine.adapters[HTTPS_DEVIN]
+    return p, m
+
+
+def test_a_wait_over_https_is_confirmed_by_its_own_posttooluse(w: World, clock: FakeClock) -> None:
+    """Over HTTPS the wait loop is Devin's, under the plugin's server name (``mcp__switchboard_https__``,
+    which the broker gives both of its hook reports). Fails if the adapter still looks for the
+    stdio server's name: the call's own PostToolUse then confirms nothing, the hook takes the answer
+    back as an orphan's, and the same message comes again at the next wait()."""
+    wait = f"{DEVIN_TOOL_PREFIX}wait"
+    p, m = https_devin(w)
+    sink = open_wait(w, p, m, tuid="call_A", tool=wait)
+    assert sink.meta["tool_use_id"] == "call_A"  # the PreToolUse report pinned the call
+    msg = w.human("wake up")
+    bid = w.resolved(sink.id)[-1]["batch_id"]
+    clock.advance(0.2)
+    wait_post(w, p, m, bid, tuid="call_B", tool=wait)  # another call's PostToolUse: no
+    assert w.store.get_batch(bid).state == "offered"
+    wait_post(w, p, m, bid, tuid="call_A", tool=wait)
+    assert w.store.get_batch(bid).state == "confirmed"
+    assert w.delivery(m, msg)["state"] == "in_context"
+
+
+def test_a_wait_over_https_ends_before_devins_client_sends_it_again(w: World) -> None:
+    """Devin's HTTP client repeats a call that was silent for 120 s, and the repeat is refused (its
+    hook report was spent): the wait() it was in is orphaned. So over HTTPS the cap on a wait is under
+    that, in what the server clamps, what the join says and what the Stop re-arm asks for; a lower
+    cap of the config's still wins. Fails if a wait over HTTPS may run the 600 s a local one does."""
+    p, _m = https_devin(w)
+    a = w.engine.adapter(w.p(p))
+    assert DEVIN_WAIT_CAP_S < 120 and a.caps(w.p(p)).wait_cap_s == DEVIN_WAIT_CAP_S
+    assert ad(w).caps(w.p(p)).wait_cap_s == 600  # a local one is unchanged
+    assert f'wait("#build", {DEVIN_WAIT_CAP_S})' in a.join_guidance(w.p(p), "#build")
+    w.hook(p, "UserPromptSubmit", gen="p1")
+    out = w.hook(p, "Stop")
+    assert out is not None and f'wait("#build", {DEVIN_WAIT_CAP_S})' in out.text
+    short = dataclasses.replace(w.cfg, devin=dataclasses.replace(w.cfg.devin, wait_cap_s=30))
+    assert type(a)(short).caps(w.p(p)).wait_cap_s == 30
 
 
 def test_a_newer_wait_supersedes_the_older_one(w: World) -> None:

@@ -1,0 +1,9 @@
+{
+  "_source": "Devin CLI 3000.11.92, devin -p in a temp project against a temp-home broker (2026-10-19)",
+  "_unverified": false,
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "last_assistant_message": "sanitized tool output",
+  "session_id": "session-3",
+  "prompt_id": "00000000-0000-4000-8000-000000000005"
+}
