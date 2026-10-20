@@ -397,6 +397,87 @@ def test_broadcast_mentions_lead_the_popover_above_the_member_list() -> None:
     assert out["picked"]["value"] == "hi @everyone "
 
 
+def test_the_mention_popover_lists_people_after_the_agents_that_match() -> None:
+    """Issue #418: on a hosted broker the @ popover lists the room's people after the agents that
+    match, so a person can be @mentioned from the page at all. Everyone the `people` frame names
+    is offered in a public room, those with a page open now before those away at the same rank,
+    never the viewer (alice); a person has the round person avatar and a presence dot, and no tier
+    chip (nothing wakes a person); the agents keep their own head and count and the people get
+    theirs. Picking one inserts @name, which the composer highlights without the admin's people
+    list. Fails if the popover still walks only the room's agents: no person is ever listed."""
+    out = run("mention_people_popover")
+    assert out["all"]["ids"] == [
+        "men-humans",
+        "men-here",
+        "men-everyone",
+        "men-claude-1",
+        "men-codex-1",
+        "men-devin-1",
+        "men-bench",
+        "men-helper-bob",
+        "men-bobby",  # the people who are online first, in the frame's order,
+        "men-carol",
+        "men-bob",  # then bob, who is away; alice, the viewer, is left out
+    ]
+    assert out["all"]["heads"] == ["Agents in #build5", "People in #build3"]
+    assert out["all"]["foot"] == "An @mention wakes an agent at once; a person gets a red badge."
+    assert out["bo"]["ids"] == ["men-helper-bob", "men-bobby", "men-bob"]  # agents, then people, online first
+    assert out["bo"]["heads"] == ["Agents in #build1", "People in #build2"]
+    person = out["person"]
+    assert person["bobbyAvatar"] == "avatar human" and person["bobbyDot"] == "dot s-human"
+    assert person["bobbyStatus"] == "Online · Person"
+    assert person["bobDot"] == "dot s-offline" and person["bobStatus"] == "Offline · Person"
+    assert person["bobbyTier"] == 0 and person["helperTier"] == 1  # an agent has its tier chip, a person none
+    assert out["exact"] == ["men-helper-bob", "men-bob", "men-bobby"]  # the exact name, then the longer one
+    assert out["car"] == {"ids": ["men-carol"], "heads": ["People in #build1"]}  # no agent: one head
+    assert out["viewer"] == {"hidden": True}  # "@ali" is only the viewer: nothing to offer
+    assert out["picked"] == {"value": "hi @carol ", "hl": ["@carol"], "hidden": True}
+    assert out["said"] == []  # choosing someone sends nothing
+
+
+def test_a_private_room_offers_only_its_own_people() -> None:
+    """Issue #418: in a private room (DESIGN.md §44) the @ popover lists the room's own people,
+    from the room listing, not everyone the `people` frame names; the public room still lists
+    everyone. Fails if a private room offers people who can't see it."""
+    out = run("mention_people_private_room")
+    assert out["publicRoom"] == ["men-bob", "men-bobby"]
+    assert out["secretCarol"] == {"hidden": True}  # carol is not in #secret
+    assert out["secretBo"] == ["men-bob"]  # and bobby is not either
+    assert out["secretAll"]["ids"] == ["men-humans", "men-here", "men-everyone", "men-bob"]
+    assert out["secretAll"]["heads"] == ["Agents in #secret0", "People in #secret1"]
+
+
+def test_another_persons_mention_of_you_counts_but_not_your_own() -> None:
+    """Issue #418: bob's @mention of alice raises the same red badge as an agent's -- the room's
+    tab, the phone's Rooms badge, the title count -- and marks his row as a mention. Bob not
+    naming her, bob naming carol, and alice naming herself do none of it. Focus mode leaves a
+    person's message alone and still collapses an agent's unaddressed chatter. Fails if a person's
+    mention is dropped because a person sent it (mentionsMe used to return false for any human)."""
+    out = run("person_mention_badges")
+    nothing = {
+        "tab": {"badge": None, "quietDot": None},
+        "title": "switchboard — #build",
+        "roomsBadge": {"text": "0", "hidden": True},
+    }
+    assert out["plain"] == out["other"] == out["own"] == nothing  # not even a quiet dot
+
+    mentioned = out["mentioned"]
+    assert mentioned["tab"] == {"badge": {"text": "1", "label": "1 message for you"}, "quietDot": None}
+    assert mentioned["title"] == "(1) switchboard — #build"
+    assert mentioned["roomsBadge"] == {"text": "1", "hidden": False}
+    assert out["agent"]["tab"]["badge"] == {"text": "2", "label": "2 messages for you"}  # an agent's adds
+    assert out["agent"]["title"] == "(2) switchboard — #build"
+    assert out["opened"]["tab"] == {"badge": None, "quietDot": None}
+    assert out["opened"]["title"] == "switchboard — #ops"
+
+    # the row's mention style: bob's @alice (13) and the agent's (14), not the others
+    marked = {i: r["mention"] for i, r in out["rows"].items()}
+    assert marked == {"10": False, "11": False, "12": False, "13": True, "14": True, "15": False}
+    assert not any(r["collapsible"] for r in out["rows"].values())  # Focus is off
+    collapsed = {i for i, r in out["focus"].items() if r["collapsible"]}
+    assert collapsed == {"15"}  # only the agent's unaddressed chatter; bob's rows are people's
+
+
 def test_an_argument_less_palette_command_runs() -> None:
     out = run("palette_runs")
     assert out["commands"] == ["/help"] and texts(out) == ["/helphelp text"]

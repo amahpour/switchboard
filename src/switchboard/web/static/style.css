@@ -1485,6 +1485,7 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
   color: var(--muted);
 }
 .pal-head { top: 0; border-bottom: 1px solid var(--line); }
+.pal-head ~ .pal-head { border-top: 1px solid var(--line); }  /* the @ popover's People head (#418) */
 .pal-head > :first-child { font-size: calc(13px * var(--text-scale)); font-weight: 600; color: var(--fg); }
 .pal-head > :last-child:not(:first-child):not(:nth-child(2)) { margin-left: auto; }
 .pal-foot { bottom: 0; border-top: 1px solid var(--line); font-size: calc(11.5px * var(--text-scale)); }
