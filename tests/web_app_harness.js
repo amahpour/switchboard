@@ -107,6 +107,8 @@ function makeWorld(rooms) {
     held: [],
     onCommand: null,  // (slug, text) -> body; may change state and deliver frames first
     members: {},      // slug -> [member_dict], for GET /api/rooms/{slug}/members
+    me: null,         // the body of GET /api/me, when a scenario needs more than the human's name
+    boards: {},       // slug -> the room's review board, for GET /api/rooms/{slug}/review
     details: {},      // 'slug/name' -> the member-detail body; missing -> 404
     commands: [],     // every command text the page sent, in order
     said: [],         // every /say text the page sent, in order
@@ -120,7 +122,13 @@ function makeWorld(rooms) {
   }
 
   function route(method, url, body) {
-    if (method === 'GET' && url === '/api/me') return function () { return [200, { human: 'alice', test_mode: false }]; };
+    if (method === 'GET' && url === '/api/me') {
+      return function () { return [200, server.me || { human: 'alice', test_mode: false }]; };
+    }
+    const mr = /^\/api\/rooms\/([^/]+)\/review$/.exec(url);
+    if (method === 'GET' && mr) {
+      return function () { return [200, { board: server.boards[decodeURIComponent(mr[1])] || null }]; };
+    }
     if (method === 'GET' && url === '/api/rooms') {
       return function () { return [200, { rooms: server.rooms.map(roomDict), closed: server.closed }]; };
     }
@@ -1037,6 +1045,110 @@ const SCENARIOS = {
     const focus = marked();
     return { plain: plain, other: other, own: own, mentioned: mentioned, agent: agent, opened: opened,
              rows: rows, focus: focus };
+  },
+
+  // The review board's header (#425): Hand off sits beside the title and the status, not in a lane,
+  // and says what is left. One board per case, delivered as the live frame an agent's move sends.
+  async board_handoff_header() {
+    process.env.TZ = 'UTC';  // hhmm() is local time: the same clock for the page and for the expected text
+    const w = makeWorld([{ id: 1, name: '#build', created_at: 100 }]);
+    w.server.me = { human: 'alice', test_mode: false, person_id: 'p-alice' };  // before the page reads it
+    w.location.hash = '#build';
+    const ws = await boot(w);
+    ws.deliver({ t: 'members', room: '#build', members: MEMBERS });
+    await settle();
+    // the page's clock, which the nudge's window reads: the scenario moves it
+    let nowMs = Date.now();
+    class MovingDate extends Date {
+      constructor(...args) { if (args.length) super(...args); else super(nowMs); }
+      static now() { return nowMs; }
+    }
+    w.window.Date = MovingDate;
+    const mine = { 'claude-1': 'p-alice', 'codex-1': 'p-alice' };
+    const item = function (label, state, extra) {
+      return Object.assign({ label: label, kind: label[0] === 'Q' ? 'question' : 'finding', state: state,
+        title: 'title of ' + label, detail: '', file: '', lines: '', raised_by: 'codex-1', owner: '', commit: '',
+        proof: '', confirmed_by: '', outdated_head: '', deferred_to: '', reason: '', options: [], recommend: null,
+        answer: '', answered_by: '', needs_person: false, lines_url: null, commit_url: null, history: [] }, extra || {});
+    };
+    const fixed = function (label, by) { return item(label, 'fixed', { owner: 'claude-1', confirmed_by: by || '' }); };
+    const open = function (label) { return item(label, 'open', { needs_person: true, options: ['yes', 'no'] }); };
+    const board = function (items, extra) {
+      return Object.assign({ id: 7, url: 'https://example.com/shop/pull/7', forge: null, head: '4f2c9e1a7b30',
+        opened_by: 'codex-1', opened_at: TS, settled: items.every(function (i) {
+          return i.state === 'dropped' || i.state === 'answered' || (i.state === 'fixed' && i.confirmed_by);
+        }), counts: {}, items: items, plan: { summary: '', comments: [] }, agents: ['claude-1', 'codex-1'],
+        agent_people: mine, posted_at: null, posted_by: null }, extra || {});
+    };
+    const show = async function (b) {
+      w.server.boards.build = b;
+      ws.deliver({ t: 'review', room: '#build', board: b });
+      await settle();
+    };
+    const header = function () {
+      const box = w.$('board');
+      const button = findAll(box, function (n) { return n.id === 'board-handoff'; })[0] || null;
+      const note = findAll(box, function (n) { return n.id === 'board-handoff-status'; })[0] || null;
+      const group = findAll(box, function (n) { return n.classList.contains('board-handoff'); })[0] || null;
+      const head = findAll(box, function (n) { return n.classList.contains('board-head'); })[0];
+      const lanes = findAll(box, function (n) { return n.classList.contains('board-lane'); });
+      return {
+        text: note ? note.textContent : null,
+        button: !!button,
+        disabled: button ? button.disabled : null,
+        nudge: button ? button.classList.contains('nudge') : null,
+        describedby: button ? button.attrs['aria-describedby'] : null,
+        group: group ? group.className : null,
+        inHead: !!group && findAll(head, function (n) { return n === group; }).length === 1,
+        inLane: lanes.some(function (lane) {
+          return findAll(lane, function (n) { return n.id === 'board-handoff' || n.id === 'board-handoff-status'; }).length > 0;
+        }),
+        lanes: lanes.length,
+      };
+    };
+    const cases = {};
+    const order = [];
+    const record = async function (name, b) {
+      await show(b);
+      cases[name] = header();
+      order.push(name);
+    };
+
+    await show(board([open('Q1'), fixed('F1', 'codex-1')]));
+    click(w.$('board-toggle'));  // the board opens on the first board the room has
+    await settle();
+    cases.first = header();
+    await record('empty', board([]));
+    await record('question_and_fixes', board([open('Q1'), item('F1', 'fixed', { owner: 'claude-1' }),
+      item('F2', 'fixed', { owner: 'claude-1' }), fixed('F3', 'codex-1')]));
+    await record('one_fix', board([item('F1', 'fixed', { owner: 'claude-1' }), fixed('F2', 'codex-1')]));
+    await record('contested_and_working', board([item('F1', 'contested'), item('F2', 'raised'),
+      item('F3', 'conceded', { owner: 'claude-1' }), item('F4', 'conceded', { owner: 'claude-1' })]));
+    await record('one_working', board([item('F1', 'raised'), fixed('F2', 'codex-1')]));
+    await record('everything', board([open('Q1'), open('Q2'), item('F1', 'contested'), item('F2', 'fixed', { owner: 'claude-1' }),
+      item('F3', 'raised')]));
+    await record('not_my_agents', board([fixed('F1', 'codex-1')], { agent_people: { 'claude-1': 'p-bob', 'codex-1': 'p-bob' } }));
+    const ready = board([fixed('F1', 'codex-1'), item('F2', 'dropped', { reason: 'out of scope' }),
+      item('Q1', 'answered', { answer: 'yes', answered_by: 'alice' })]);
+    await record('ready', ready);
+    // a person's own move redraws the board twice, the reply and then the live frame: the
+    // highlight is still there on the second
+    await show(ready);
+    cases.ready_again = header();
+    nowMs += 2000;  // past the window, a redraw of the same ready board has no highlight
+    await show(ready);
+    cases.ready_later = header();
+    // a board that is ready when it opens is not news: closing and reopening it shows no nudge
+    click(w.$('board-toggle'));
+    click(w.$('board-toggle'));
+    await settle();
+    cases.ready_reopened = header();
+    const noon = new Date();
+    noon.setUTCHours(12, 34, 0, 0);
+    await record('done_today', board(ready.items, { posted_by: 'claude-1', posted_at: noon.getTime() / 1000 }));
+    cases.done_today.expected = 'Handed off by claude-1 at 12:34';
+    await record('done_before', board(ready.items, { posted_by: 'claude-1', posted_at: TS }));
+    return { cases: cases, order: order };
   },
 
   // First run: the Welcome form creates the room named in its field.
