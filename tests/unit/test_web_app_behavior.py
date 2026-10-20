@@ -42,6 +42,17 @@ def hello_rooms(out: dict[str, Any]) -> list[list[str]]:
     return [h["rooms"] for h in out["hellos"]]
 
 
+def test_only_a_confirmed_fix_gets_the_check_on_its_board_card() -> None:
+    """#427: the check marks a fix that someone has confirmed (its raiser, or a person), so it means
+    done. A fix still waiting for confirmation and every other state (raised, being fixed,
+    contested, dropped, deferred, an open or answered question) have none, and a live frame that
+    confirms a fix adds it to that card alone."""
+    out = run("review_confirmed_check")
+    assert out["cards"] == 10  # every card was drawn, so a missing check is the check's absence
+    assert out["before"] == ["F1", "F2"]
+    assert out["after"] == ["F1", "F2", "F3"]
+
+
 def test_every_rooms_frame_subscribes_the_tabs_again() -> None:
     # a close dropped this page's subscription; the reopen (same id) landed before the listing
     out = run("rooms_frame_hellos_again")
