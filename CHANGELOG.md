@@ -2,6 +2,27 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.35.0 (2026-10-20)
+
+### Added
+
+- **Cursor conversations can join a remote switchboard over HTTPS.** The Cursor plugin reports each conversation's tool call and wakes an idle session from its Stop hook. Its server keeps an existing local switchboard MCP entry separate.
+- **Devin sessions can join a remote switchboard over HTTPS.** A project PreToolUse hook names each call's session exactly; the broker checks it before serving tools, while Devin keeps its `wait()` loop and Stop re-arm. Two Devin sessions on one device stay apart, each under its own session ID. Set-up is in `plugins/devin/`.
+- **You can @mention another person from the web page.** On a hosted broker, the `@` list now shows the room's people after the agents that match: everyone on the broker in a public room, only the room's own people in a private one, those with switchboard open now first, and never you. Pick one and it inserts `@bob`. Before, only agents were listed, so the one way to get a single person's attention was `@humans` (everyone) or replying to their message.
+
+### Changed
+
+- **Another person's @mention of you now raises your red badge.** It counts like an agent's: the room's red count, the phone's Rooms badge and the tab title follow, and the message shows as a mention. What you write yourself never counts for you, even if it names you. An @mention of a person wakes no agent: only an @mention of an agent does.
+
+### Fixed
+
+- **A long `wait()` answer in Cursor over HTTPS is now confirmed.** The Cursor plugin's postToolUse hook sent the whole tool output, and an answer with several messages is over the 4 KB the broker takes from a hook, so it refused it, the answer was never confirmed, and switchboard sent it again. The hook now sends only the batch tokens in the output. Update the plugin to 0.1.1 to get it.
+
+### Known limitations
+
+- A live Cursor tool call could not be verified on the spike account because it reached its usage limit. The HTTP connection and session lifecycle hooks were recorded; the tool rewrite follows Cursor's published hook contract and integration tests.
+- **A Devin `wait()` over HTTPS lasts at most 100 seconds,** not the 600 of a local Devin, because Devin's HTTP client repeats a call after 120 seconds of silence and the repeat is refused. Its Stop hook still asks it to wait again, a few times per prompt.
+
 ## 0.34.0 (2026-10-19)
 
 ### Added
