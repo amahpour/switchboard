@@ -1,7 +1,8 @@
 """A review board in a room: findings and questions about one pull request (DESIGN.md §37).
 
 Pure policy, no I/O: what an item is, the moves an agent or a person may make on it, when a
-board is settled, and how a board reads as text. The store keeps the rows (``store.py``), the
+board is settled, what the agents' picks among an item's options add up to (§37.12), and how a
+board reads as text. The store keeps the rows (``store.py``), the
 broker applies the moves (``broker/reviews.py``). switchboard never fetches the pull request,
 judges a finding, holds a token or posts anything: the agents and the people do (§37.1).
 """
@@ -104,6 +105,9 @@ class Item:
     outdated_head: str = ""
     # a dropped finding deferred to this follow-up ticket (#371): settled, but not withdrawn
     deferred_to: str = ""
+    # the picks agents made with ``concur`` (#423), oldest first: (screen name, option index).
+    # The asker's own ``recommend`` is their pick too, and is not repeated here (``effective_picks``).
+    picks: tuple[tuple[str, int], ...] = ()
 
     @property
     def label(self) -> str:
@@ -237,11 +241,100 @@ def options(value: Any) -> tuple[str, ...]:
     return out
 
 
-def recommend(value: Any, opts: tuple[str, ...]) -> int | None:
+def recommend(value: Any, opts: tuple[str, ...], *, required: bool = False) -> int | None:
+    """An option's index, or None when none is given and none is required. A question and a
+    finding's fix options both carry the asker's recommendation (#423): ``required`` refuses a
+    call without it, with what to give."""
     if value is None:
+        if required:
+            raise ReviewError(
+                f"recommend is required with options: the index of the one you pick, 0 to {len(opts) - 1}."
+                " The other agents agree or pick another with concur"
+            )
         return None
     if type(value) is not int or not 0 <= value < len(opts):
         raise ReviewError(f"recommend must be an option's index, 0 to {len(opts) - 1}")
+    return value
+
+
+def names(who: Sequence[str]) -> str:
+    """'a', 'a and b', 'a, b and c': how a note names the agents behind a pick."""
+    who = list(who)
+    if len(who) < 2:
+        return "".join(who)
+    return ", ".join(who[:-1]) + " and " + who[-1]
+
+
+def effective_picks(item: Item) -> dict[str, int]:
+    """Every agent's pick on ``item``'s options, in the order they were made, the asker first. The
+    asker's ``recommend`` is their pick; a ``concur`` of their own replaces it. A pick that points
+    at no option is dropped, so a row out of range never counts for anything."""
+    out: dict[str, int] = {}
+    if item.options and item.recommend is not None and item.raised_by:
+        out[item.raised_by] = item.recommend
+    out.update(item.picks)
+    return {a: o for a, o in out.items() if 0 <= o < len(item.options)}
+
+
+@dataclass(frozen=True)
+class Consensus:
+    """What the agents' picks add up to (#423). Computed from the picks and who is in the room now,
+    never stored or claimed: ``state`` is "none" (no one here has picked), "proposed" (those who
+    picked agree, and others are still to), "agreed" (every agent in the room picked the same
+    option) or "split" (two picks differ: no option is recommended). ``order`` lists the options,
+    the recommended one first; ``notes`` says, per option (by index), who is behind it."""
+
+    state: str
+    option: int | None
+    by: tuple[str, ...]
+    waiting: tuple[str, ...]
+    order: tuple[int, ...]
+    notes: tuple[str, ...]
+
+
+def consensus(item: Item, present: Sequence[str]) -> Consensus:
+    """The agreement on ``item``'s options among ``present``, the agents in the room now (the only
+    ones who can still agree: a pick by an agent who left is history, and counts for nothing). An
+    option is "recommended" only when every one of them has picked it; an agent who hasn't is
+    waited on, and a split names each pick without recommending any."""
+    count = len(item.options)
+    base = tuple(range(count))
+    here = list(dict.fromkeys(present))
+    live = {a: o for a, o in effective_picks(item).items() if a in here}
+    waiting = tuple(a for a in here if a not in live)
+    notes = [""] * count
+    if not live:
+        return Consensus("none", None, (), waiting, base, tuple(notes))
+    chosen = set(live.values())
+    if len(chosen) > 1:
+        for o in sorted(chosen):
+            notes[o] = "picked by " + names([a for a, p in live.items() if p == o])
+        return Consensus("split", None, (), waiting, base, tuple(notes))
+    (option,) = chosen
+    by = tuple(live)
+    if waiting:
+        notes[option] = names(by) + (" recommends this" if len(by) == 1 else " recommend this")
+    else:
+        notes[option] = "recommended by " + names(by)
+    order = (option, *(o for o in base if o != option))
+    return Consensus("agreed" if not waiting else "proposed", option, by, waiting, order, tuple(notes))
+
+
+def concur(item: Item, actor: str, value: Any, here: Sequence[str]) -> int:
+    """The option index ``actor`` picks with ``concur``, or ReviewError. Only an agent in the room
+    picks (the board's agents are the room's, §37.12); only an item with options that is still being
+    decided: an open question, or a finding not yet fixed or dropped; and only an index in range.
+    An agent may pick again until then, which replaces their pick."""
+    if actor not in here:
+        raise ReviewError(f"only an agent in the room can concur: {actor!r} isn't")
+    if not item.options:
+        raise ReviewError(f"{item.label} has no options to pick")
+    if item.state != "open" and item.state not in OPEN_FINDING:
+        raise ReviewError(f"{item.label} is {item.state}: its options are settled")
+    if type(value) is not int or not 0 <= value < len(item.options):
+        raise ReviewError(
+            f"concur needs recommend, the index of the option you pick, 0 to {len(item.options) - 1}"
+        )
     return value
 
 
@@ -395,15 +488,27 @@ def handoff(item: Item, actor: str, agents: Sequence[str]) -> tuple[tuple[str, .
     """After an agent's move on ``item`` (its state now), who has to act next and the line
     that tells them, or None when it's nobody's move or a person's (§37.4). A raised finding
     is the other agents' to concede or contest; a finding conceded to another agent is that
-    owner's to fix; a fix is its raiser's to check. Questions and contested findings wait for
-    a person, who sees them on the page, and a move that leaves the next step with the mover
-    wakes nobody. ``agents``: the room's active agents."""
+    owner's to fix; a fix is its raiser's to check. A question just asked is the other agents' to
+    agree with or answer with another pick (#423: "recommended" means they all agree), before it
+    is a person's. Contested findings wait for a person, who sees them on the page, and a move
+    that leaves the next step with the mover wakes nobody. ``agents``: the room's active agents."""
     show = 'review(action="show") shows the board.'
-    if item.kind != "finding":
-        return None
+    if item.kind == "question":
+        who = tuple(a for a in agents if a != actor) if item.state == "open" and item.options else ()
+        if not who:
+            return None
+        concur_s = f'review(action="concur", item="{item.label}", recommend=<index>)'
+        stop = "" if item.title.endswith((".", "?", "!")) else "."  # a question usually ends in one
+        mention = " ".join("@" + a for a in who)
+        return who, (
+            f"Review board: {item.label} asked: {item.title}{stop} {mention}: agree with {actor}'s pick"
+            f" or pick another option, {concur_s}. {show}"
+        )
     if item.state == "raised":
         who = tuple(a for a in agents if a != actor)
         verb, then = f"raised: {item.title}", "concede or contest it"
+        if item.options:  # its fix options are theirs to agree with too (#423)
+            then += ", and agree with its fix option or pick another (concur)"
     elif item.state == "conceded":
         who = (item.owner,) if item.owner and item.owner != actor and item.owner in agents else ()
         verb, then = f"conceded, owner {item.owner}", "it's yours to fix"
@@ -477,9 +582,26 @@ def counts(items: list[Item], active: set[str] | None = None, now: float | None 
     return out
 
 
-def render(review: dict[str, Any], items: list[Item], now: float | None = None) -> str:
+def options_text(item: Item, present: Sequence[str]) -> str:
+    """An item's options as an agent reads them: the recommended one first, each with its number
+    (what ``concur`` takes) and who is behind it, then who is still to agree. Empty for none."""
+    if not item.options:
+        return ""
+    c = consensus(item, present)
+    text = " | ".join(f"{n}. {item.options[n]}" + (f" ({c.notes[n]})" if c.notes[n] else "") for n in c.order)
+    if c.state == "split":
+        text += "; the agents are split: no option is recommended"
+    if c.waiting:
+        text += f"; waiting on {names(c.waiting)} to agree or pick another (concur)"
+    return text
+
+
+def render(
+    review: dict[str, Any], items: list[Item], now: float | None = None, present: Sequence[str] = ()
+) -> str:
     """The board as an agent reads it: one line per item, open work first. Short on purpose:
-    the board replaces a wall of text in the room, it mustn't become one."""
+    the board replaces a wall of text in the room, it mustn't become one. ``present``: the room's
+    agents, who must all pick an option for it to read "recommended by" (``consensus``)."""
     head_s = f" at {review['head'][:12]}" if review.get("head") else ""
     state = "settled" if settled(items) else "open"
     if review.get("posted_by"):
@@ -504,15 +626,18 @@ def render(review: dict[str, Any], items: list[Item], now: float | None = None) 
             "dropped": f"deferred to {i.deferred_to}"
             if i.deferred_to
             else "dropped" + (f": {i.reason}" if i.reason else ""),
-            "open": "for a person: "
-            + " | ".join(
-                f"{n}. {o}{' (recommended)' if n == i.recommend else ''}" for n, o in enumerate(i.options)
-            ),
+            "open": "for a person: " + options_text(i, present),
             "answered": f"answered by {i.answered_by}: {i.answer}",
         }[i.state]
         proof_s = f"; proof: {i.proof}" if i.state == "fixed" and i.proof else ""
         outdated = f"; outdated at {i.outdated_head}" if i.outdated_head else ""
-        out.append(f"{i.label} [{i.state}] {i.title}{where}: {who}{proof_s}{outdated}")
+        # a finding may offer fix options, in the same shape as a question's (#423)
+        fix_options = (
+            f"; fix options: {options_text(i, present)}"
+            if i.kind == "finding" and i.options and i.state in OPEN_FINDING
+            else ""
+        )
+        out.append(f"{i.label} [{i.state}] {i.title}{where}: {who}{proof_s}{outdated}{fix_options}")
     if review.get("posted_by") and review.get("plan"):
         plan = review["plan"]
         out.extend(("Handoff summary to post:", plan["summary"], "Line comments to leave open:"))

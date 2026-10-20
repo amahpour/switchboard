@@ -11,6 +11,7 @@ message; any other move is a notice, which wakes no one. The board is read on de
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from typing import Any
 
 from switchboard import reviews
@@ -24,6 +25,7 @@ ACTIONS = (
     "show",
     "raise",
     "ask",
+    "concur",
     "concede",
     "contest",
     "fix",
@@ -44,6 +46,12 @@ class Boards:
         return self.state.store
 
     # ----------------------------------------------------------------- reads
+    def board_named(self, room_name: str) -> dict[str, Any] | None:
+        """The board of the room called ``room_name``, or None: for the hub, which republishes it
+        when who is in the room changes (§37.12)."""
+        room = self.store.get_room(room_name)
+        return self.board(room) if room is not None else None
+
     def board(self, room: Room) -> dict[str, Any] | None:
         """The room's board as data: the review, its items and whether it's settled."""
         rv = self.store.current_review(room.id)
@@ -67,7 +75,7 @@ class Boards:
             "opened_at": rv["opened_at"],
             "settled": reviews.settled(items),
             "counts": reviews.counts(items, active, now),
-            "items": [item_dict(i, f, events, active, now) for i in items],
+            "items": [item_dict(i, f, events, active, now, agents) for i in items],
             "plan": reviews.handoff_plan(items, events, self.store.room_agent_names_ever(room.id)),
             "agents": agents,
             "agent_people": agent_people,
@@ -112,6 +120,8 @@ class Boards:
         if item is None:
             raise ReviewError(f"{room.name}'s board has no {('F' if kind == 'finding' else 'Q')}{n}")
         here = self.store.active_names(room.id)
+        if action == "concur":
+            return self._concur(room, rv, item, actor, here, params)
         to = reviews.agent_move(item, action, actor, owner_here=item.owner in here)
         fields: dict[str, Any] = {}
         reassigned = action == "concede" and item.state == "conceded"
@@ -166,6 +176,35 @@ class Boards:
         }.get(shown, "")
         return self._told(room, moved, actor, f"{actor} {action_past(action)} {item.label}{tail}")
 
+    def _concur(
+        self,
+        room: Room,
+        rv: dict[str, Any],
+        item: reviews.Item,
+        actor: str,
+        here: list[str],
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """``actor`` agrees with the option an agent recommended, or picks another (#423, §37.12).
+        The pick is stored; whether an option is "recommended" is computed from every agent's
+        pick (``reviews.consensus``). It says so in the room as a notice and wakes no one: the
+        agents who haven't picked were asked when the item was raised or asked."""
+        pick = reviews.concur(item, actor, params.get("recommend"), here)
+        self.store.set_review_pick(item.id, actor, pick)
+        self.store.add_event(
+            "review", room_id=room.id, data={"item": item.label, "to": "picked", "by": actor, "option": pick}
+        )
+        moved = self.store.review_item(rv["id"], item.kind, item.n)
+        assert moved is not None
+        c = reviews.consensus(moved, here)
+        if c.state == "agreed":
+            said = f"{actor} concurred on {item.label}: recommended by {reviews.names(c.by)}"
+        elif c.state == "split":
+            said = f"{actor} picked another option for {item.label}: the agents are split"
+        else:
+            said = f"{actor} picked an option for {item.label}; waiting on {reviews.names(c.waiting)}"
+        return self._told(room, moved, actor, said, wake=False)
+
     def _report(self, room: Room, rv: dict[str, Any], actor: str, params: dict[str, Any]) -> dict[str, Any]:
         """What ``actor`` read off the pull request with its own gh or glab (#291, §37.11): stored
         as its claim, with its name and the time. A merge or a close ends the board, and a new CI
@@ -211,11 +250,14 @@ class Boards:
         self.state.hub.review(room.name, None)
         return {"ok": True, "closed": True, "board": None}
 
-    def _told(self, room: Room, item: reviews.Item, actor: str, notice: str) -> dict[str, Any]:
+    def _told(
+        self, room: Room, item: reviews.Item, actor: str, notice: str, wake: bool = True
+    ) -> dict[str, Any]:
         """The board after ``actor``'s move on ``item``, and how the room hears of it: the line
         for whoever acts next (posted by the caller as the mover's message, so it wakes them),
-        or the notice when that's nobody (§37.4)."""
-        handoff = reviews.handoff(item, actor, self.store.active_names(room.id))
+        or the notice when that's nobody (§37.4). A move that asks nothing of anyone, such as a
+        pick among options (``wake`` False), is a notice whatever state the item is in."""
+        handoff = reviews.handoff(item, actor, self.store.active_names(room.id)) if wake else None
         if handoff is None:
             self._notice(room, notice)
         out = self._shown(room, touched=item.label)
@@ -267,6 +309,17 @@ class Boards:
                     reviews.lines(params.get("lines")),
                 )
             )
+            # a finding may offer fix options, in a question's shape: 2 to 4, and the one its raiser
+            # recommends (#423). Options without a recommendation, or one without options, are refused.
+            fix: dict[str, Any] = {}
+            if "options" in params:
+                opts = reviews.options(params["options"])
+                fix = {
+                    "options": opts,
+                    "recommend": reviews.recommend(params.get("recommend"), opts, required=True),
+                }
+            elif params.get("recommend") is not None:
+                raise ReviewError("recommend picks one of options: give the options too")
             return self.store.add_review_item(
                 rv["id"],
                 "finding",
@@ -276,6 +329,7 @@ class Boards:
                 file=file,
                 lines=lines,
                 raised_by=actor,
+                **fix,
             )
         opts = reviews.options(params.get("options"))
         return self.store.add_review_item(
@@ -286,7 +340,7 @@ class Boards:
             detail=detail,
             raised_by=actor,
             options=opts,
-            recommend=reviews.recommend(params.get("recommend"), opts),
+            recommend=reviews.recommend(params.get("recommend"), opts, required=True),
         )
 
     # ----------------------------------------------------------- a person's moves
@@ -434,7 +488,7 @@ class Boards:
         out: dict[str, Any] = {
             "ok": True,
             "settled": b["settled"],
-            "board": reviews.render(b, items, self.state.clock.now()),
+            "board": reviews.render(b, items, self.state.clock.now(), b["agents"]),
         }
         if touched:
             out["item"] = touched
@@ -462,8 +516,11 @@ def item_dict(
     events: list[dict[str, Any]] | None = None,
     active: set[str] | None = None,
     now: float | None = None,
+    present: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """An item as the page reads it, with its links on the forge and its history (#250)."""
+    """An item as the page reads it, with its links on the forge and its history (#250), and what
+    the room's agents (``present``) have picked among its options (#423)."""
+    c = reviews.consensus(i, present)
     return {
         "label": i.label,
         "kind": i.kind,
@@ -482,6 +539,15 @@ def item_dict(
         "reason": i.reason,
         "options": list(i.options),
         "recommend": i.recommend,
+        "picks": [{"agent": a, "option": o} for a, o in reviews.effective_picks(i).items()],
+        "consensus": {
+            "state": c.state,
+            "option": c.option,
+            "by": list(c.by),
+            "waiting": list(c.waiting),
+            "order": list(c.order),
+            "notes": list(c.notes),
+        },
         "answer": i.answer,
         "answered_by": i.answered_by,
         "needs_person": reviews.needs_person(i, active, now),

@@ -5551,6 +5551,10 @@
     toggle.classList.toggle('hidden', !b);
     if (!b) state.boardOpen = false;
     const open = !!(b && state.boardOpen);
+    // keyboard focus inside the open card (a drawn diagram's button, the drop reason) survives the
+    // rebuild below along with the card itself (boardDetailFor)
+    const detailFocus = open && boardDetailCache && document.activeElement && boardDetailCache.el.contains
+      && boardDetailCache.el.contains(document.activeElement) ? document.activeElement : null;
     toggle.setAttribute('aria-pressed', String(open));
     toggle.title = open ? 'Back to the conversation' : "Show this room's review board";
     $('main').classList.toggle('board-open', open);
@@ -5558,6 +5562,7 @@
     box.classList.toggle('hidden', !open);
     if (!open) {
       boardParts = null;
+      boardDetailCache = null;
       if (r) r.handoffWas = null;  // reopening the board is not a board that just settled
       box.replaceChildren();
       return;
@@ -5673,12 +5678,15 @@
     if (sel) {
       // the card beside the lanes, with the divider that trades width between them (#343)
       const divider = boardDivider();
-      const detail = boardDetail(r, sel);
+      const detail = boardDetailFor(r, sel);
       body.classList.add('has-detail');
       body.append(divider, detail);
       boardParts = { body: body, divider: divider, detail: detail, rung: null };
       applyBoardDetailW();
-    } else state.boardSel = null;
+    } else {
+      state.boardSel = null;
+      boardDetailCache = null;
+    }
     if (unable.length) box.replaceChildren(head, notes, body);
     else box.replaceChildren(head, body);
     syncBoardDivider();
@@ -5695,6 +5703,24 @@
       const again = box.querySelector('.board-card[data-item="' + focusedItem + '"]');
       if (again) again.focus();
     }
+    if (detailFocus && detailFocus.isConnected && document.activeElement !== detailFocus) {
+      detailFocus.focus({ preventScroll: true });
+    }
+  }
+
+  // The open card's page is built again only when something it shows changed. Every members frame
+  // (a busy or idle flip) rebuilds the board (#407), and a card rebuilt each time would put a
+  // drawn diagram back to its code, and lose the reason a person was typing (#423). The key is
+  // what the card reads: its item (the consensus included), the room's agent names (the owner
+  // picker) and the board's forge; a status change alone leaves it as it was.
+  let boardDetailCache = null;  // { key, el } of the card on show, or null
+  function boardDetailFor(r, i) {
+    const key = JSON.stringify([i, (r.members || []).map(function (m) { return m.name; }), r.board.url,
+      r.board.forge]);
+    if (boardDetailCache && boardDetailCache.key === key) return boardDetailCache.el;
+    const card = boardDetail(r, i);
+    boardDetailCache = { key: key, el: card };
+    return card;
   }
 
   // The open card's width (#343). It was a fixed 340 px, cramped on a wide window. The card now
@@ -5917,6 +5943,60 @@
     return m;
   }
 
+  // An item's options (#423, DESIGN.md §37.12) as the broker orders them: the recommended one first,
+  // otherwise as asked. The broker's `consensus` is the one place that says who is behind which
+  // option; this reads it, never works it out. A value that isn't a permutation of the options is
+  // ignored, so the options always all show, in the order they were asked.
+  function boardOptionOrder(i) {
+    const count = (i.options || []).length;
+    const order = i.consensus && Array.isArray(i.consensus.order) ? i.consensus.order : [];
+    const valid = order.length === count && order.every(function (x, k) {
+      return Number.isInteger(x) && x >= 0 && x < count && order.indexOf(x) === k;
+    });
+    return valid ? order : (i.options || []).map(function (_, k) { return k; });
+  }
+
+  // " (recommended by claude-1 and codex-1)", " (claude-1 recommends this)" or " (picked by claude-1)":
+  // the broker's words for the option's note, in parentheses. Nothing when no one is behind it.
+  function boardOptionNote(i, n) {
+    const notes = i.consensus && Array.isArray(i.consensus.notes) ? i.consensus.notes : [];
+    return typeof notes[n] === 'string' && notes[n] ? ' (' + notes[n] + ')' : '';
+  }
+
+  function boardNames(list) {
+    const names = (list || []).map(String);
+    return names.length < 2 ? names.join('') : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+  }
+
+  // What the options still lack: the agents in the room who haven't picked, and a split, where
+  // two picks differ and none is recommended.
+  function boardConsensusLine(i) {
+    const c = i.consensus;
+    if (!c) return null;
+    const bits = [];
+    if (c.state === 'split') bits.push('The agents are split: no option is recommended.');
+    if (Array.isArray(c.waiting) && c.waiting.length) {
+      bits.push('Waiting for ' + boardNames(c.waiting) + ' to agree or pick another.');
+    }
+    if (!bits.length) return null;
+    const p = el('p', 'board-consensus', bits.join(' '));
+    p.dataset.state = String(c.state || '');
+    return p;
+  }
+
+  // A finding's fix options: a list, since a person doesn't choose among them here (the finding's
+  // owner does), with the same notes a question's buttons carry.
+  function boardFixOptions(i) {
+    const box = el('div', 'board-fix-options');
+    box.append(el('h4', null, 'Fix options'));
+    const ul = el('ul', 'board-option-list');
+    for (const n of boardOptionOrder(i)) ul.append(el('li', null, i.options[n] + boardOptionNote(i, n)));
+    box.append(ul);
+    const line = ['raised', 'contested', 'conceded'].indexOf(i.state) >= 0 ? boardConsensusLine(i) : null;
+    if (line) box.append(line);
+    return box;
+  }
+
   // A card's detail is short and links out (#250): one line on what's wrong, its lines on the
   // PR or MR where the forge draws the colored diff, the fix's commit, and who did what. A
   // contested finding shows both sides side by side, above the person's choice.
@@ -5947,6 +6027,7 @@
         ? window.SBMarkdown.externalLink('Open proof', i.proof, location.hostname) : el('code', null, i.proof));
     }
     if (rows.childNodes.length) d.append(rows);
+    if (i.kind === 'finding' && (i.options || []).length) d.append(boardFixOptions(i));
     if (contested) {
       const by = (i.history || []).filter(function (h) { return h.did === 'contested it'; }).pop();
       const sides = el('div', 'board-sides');
@@ -5974,12 +6055,17 @@
     }
     const acts = el('div', 'board-actions');
     if (i.kind === 'question' && i.state === 'open') {
-      i.options.forEach(function (o, n) {
-        const b = btn(n === i.recommend ? 'btn-primary' : 'btn', o + (n === i.recommend ? ' (recommended)' : ''));
+      // each option says what it is, the agreed one first and in the primary color (#423): an
+      // option only one agent picked is listed first too, but reads as that agent's, not the board's
+      const agreed = i.consensus && i.consensus.state === 'agreed' ? i.consensus.option : null;
+      for (const n of boardOptionOrder(i)) {
+        const b = btn(n === agreed ? 'btn-primary' : 'btn', i.options[n] + boardOptionNote(i, n));
         b.dataset.option = String(n);
         b.addEventListener('click', function () { boardMove({ action: 'answer', item: i.label, option: n }); });
         acts.append(b);
-      });
+      }
+      const line = boardConsensusLine(i);
+      if (line) acts.append(line);
     }
     // the agents a finding can go to, the first preselected: not its raiser, whose finding it is,
     // nor (on a reassign) its current owner (#371: the raiser was preselected, so a person's

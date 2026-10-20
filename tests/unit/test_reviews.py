@@ -211,11 +211,12 @@ def test_the_board_text_puts_open_work_first_and_stays_short() -> None:
         replace(finding("contested", n=2), title="rounding"),
         replace(question(), n=1, title="before or after tax?"),
     ]
-    text = reviews.render({"url": "https://example.com/pr/7", "head": "a" * 40}, items)
+    text = reviews.render({"url": "https://example.com/pr/7", "head": "a" * 40}, items, None, AGENTS)
     lines = text.splitlines()
     assert lines[0] == f"Review of https://example.com/pr/7 at {'a' * 12}: open"
     assert lines[1].startswith("F2 [contested] rounding") and "a person decides" in lines[1]
-    assert lines[2].startswith("Q1 [open] before or after tax?") and "0. before tax (recommended)" in lines[2]
+    assert lines[2].startswith("Q1 [open] before or after tax?")
+    assert "0. before tax (codex-1 recommends this) | 1. after tax" in lines[2]  # asked by codex-1
     assert lines[3].startswith("F1 [fixed]") and len(lines) == 4
 
 
@@ -497,9 +498,11 @@ def test_a_concession_wakes_another_owner_and_a_fix_wakes_its_raiser() -> None:
 
 
 def test_a_person_s_items_and_a_move_nobody_answers_wake_no_agent() -> None:
-    """Questions and contested findings are a person's (the page shows them); a drop ends a
-    finding; an agent no longer in the room isn't woken."""
-    assert reviews.handoff(question(), "codex-1", AGENTS) is None
+    """Contested findings are a person's (the page shows them); a drop ends a finding; an agent no
+    longer in the room isn't woken. A question is the other agents' to agree with first (#423), but
+    nobody's once it is answered, or when its asker is the only agent."""
+    assert reviews.handoff(question("answered"), "codex-1", AGENTS) is None
+    assert reviews.handoff(question(), "codex-1", ("codex-1",)) is None
     assert reviews.handoff(finding("contested"), "claude-1", AGENTS) is None
     assert reviews.handoff(finding("dropped"), "codex-1", AGENTS) is None
     assert reviews.handoff(finding(), "codex-1", ("codex-1",)) is None  # alone in the room
@@ -597,3 +600,169 @@ def test_a_report_takes_only_what_it_knows_and_says_whose_it_is() -> None:
     assert reviews.report_line(rv, 1000.0 + 180) == "2 open on the PR, CI failing (per claude-1, 3 min ago)"
     assert reviews.report_line({**rv, "pr_threads": 0, "pr_ci": ""}, 1010.0).startswith("no threads open")
     assert reviews.report_line({"reported_by": ""}, 0.0) == ""
+
+
+# --------------------------------------------- agreement on an item's options (#423, DESIGN.md §37.12)
+def asked(
+    recommend: int | None = 0, picks: tuple[tuple[str, int], ...] = (), raised_by: str = "codex-1"
+) -> Item:
+    return replace(question(), raised_by=raised_by, recommend=recommend, picks=picks)
+
+
+def test_an_option_is_recommended_only_when_every_agent_in_the_room_picked_it() -> None:
+    """The asker's recommend is their pick, and nothing more: it reads as that agent's until each
+    agent in the room has picked the same option. Fails if the asker's pick alone reads as the
+    board's ("recommended"), which is what one agent could claim for the whole room before."""
+    alone = reviews.consensus(asked(), AGENTS)
+    assert (alone.state, alone.option, alone.by, alone.waiting) == (
+        "proposed",
+        0,
+        ("codex-1",),
+        ("claude-1",),
+    )
+    assert alone.notes == ("codex-1 recommends this", "")
+    assert alone.order == (0, 1)
+
+    both = reviews.consensus(asked(picks=(("claude-1", 0),)), AGENTS)
+    assert (both.state, both.option, both.by, both.waiting) == ("agreed", 0, ("codex-1", "claude-1"), ())
+    assert both.notes == ("recommended by codex-1 and claude-1", "")
+
+    three = reviews.consensus(asked(picks=(("claude-1", 0),)), (*AGENTS, "devin-1"))
+    assert three.state == "proposed" and three.waiting == ("devin-1",)
+    assert three.notes[0] == "codex-1 and claude-1 recommend this"
+
+
+def test_the_recommended_option_is_listed_first_whichever_was_asked_first() -> None:
+    """The order is the broker's, so the page and the board text agree. Fails if the recommended
+    option stays where it was asked."""
+    c = reviews.consensus(asked(recommend=1, picks=(("claude-1", 1),)), AGENTS)
+    assert c.state == "agreed" and c.order == (1, 0)
+    assert c.notes == ("", "recommended by codex-1 and claude-1")
+
+
+def test_two_different_picks_are_a_split_and_nothing_is_recommended() -> None:
+    """A split shows each pick as that agent's and recommends none. Fails if either side's pick, or
+    the first one made, wins."""
+    c = reviews.consensus(asked(picks=(("claude-1", 1),)), AGENTS)
+    assert (c.state, c.option, c.by) == ("split", None, ())
+    assert c.notes == ("picked by codex-1", "picked by claude-1")
+    assert c.order == (0, 1)  # none is first
+    still = reviews.consensus(asked(picks=(("claude-1", 1),)), (*AGENTS, "devin-1"))
+    assert still.state == "split" and still.waiting == ("devin-1",)  # a third agent can't undo it
+
+
+def test_an_agent_changing_its_pick_replaces_it_and_the_asker_keeps_its_place() -> None:
+    """A concur by the asker replaces their recommend, and stays first in 'recommended by'."""
+    c = reviews.consensus(asked(picks=(("codex-1", 1), ("claude-1", 1))), AGENTS)
+    assert c.state == "agreed" and c.option == 1 and c.by == ("codex-1", "claude-1")
+
+
+def test_a_pick_by_an_agent_who_left_counts_for_nothing_and_a_newcomer_must_pick_too() -> None:
+    """The agents are the room's now (§37.12): agreement is among them. Fails if an absent agent's
+    pick still decides, or if an agent who joined after the others agreed is waved through."""
+    left = reviews.consensus(asked(picks=(("claude-1", 1),)), ("claude-1",))  # codex-1 left
+    assert (left.state, left.option, left.by) == ("agreed", 1, ("claude-1",))
+    nobody = reviews.consensus(asked(), ("claude-1",))  # the asker left, no one else picked
+    assert nobody.state == "none" and nobody.waiting == ("claude-1",) and nobody.notes == ("", "")
+    newcomer = reviews.consensus(asked(picks=(("claude-1", 0),)), (*AGENTS, "devin-1"))
+    assert newcomer.state == "proposed" and newcomer.waiting == ("devin-1",)
+
+
+def test_a_pick_out_of_range_or_an_item_without_options_recommends_nothing() -> None:
+    """Fails closed: a row the database should never hold can't make an option recommended."""
+    bad = reviews.consensus(asked(recommend=5, picks=(("claude-1", 9),)), AGENTS)
+    assert bad.state == "none" and bad.notes == ("", "") and bad.order == (0, 1)
+    plain = reviews.consensus(finding(), AGENTS)
+    assert (plain.state, plain.order, plain.notes) == ("none", (), ())
+    unrecommended = reviews.consensus(asked(recommend=None), AGENTS)  # asked before #423
+    assert unrecommended.state == "none" and unrecommended.waiting == AGENTS
+
+
+def test_names_are_joined_in_words() -> None:
+    assert [reviews.names(n) for n in ([], ["a"], ["a", "b"], ["a", "b", "c"])] == [
+        "",
+        "a",
+        "a and b",
+        "a, b and c",
+    ]
+
+
+def test_concur_checks_who_what_and_which_option() -> None:
+    """A pick is validated like any move: an agent in the room, an item with options that is still
+    being decided, and an index in range (a bool, a string and a negative number are not one)."""
+    q = asked()
+    assert reviews.concur(q, "claude-1", 1, AGENTS) == 1
+    assert reviews.concur(q, "codex-1", 1, AGENTS) == 1  # the asker may change their mind
+    with pytest.raises(ReviewError, match="only an agent in the room can concur: 'devin-9' isn't"):
+        reviews.concur(q, "devin-9", 0, AGENTS)
+    for bad in (2, -1, True, "0", None, 1.0):
+        with pytest.raises(
+            ReviewError, match="concur needs recommend, the index of the option you pick, 0 to 1"
+        ):
+            reviews.concur(q, "claude-1", bad, AGENTS)
+    with pytest.raises(ReviewError, match="F1 has no options to pick"):
+        reviews.concur(finding(), "claude-1", 0, AGENTS)
+    for state in ("answered", "dropped"):
+        with pytest.raises(ReviewError, match=f"Q1 is {state}: its options are settled"):
+            reviews.concur(replace(q, n=1, state=state), "claude-1", 0, AGENTS)
+    fix = replace(finding(), options=("rewrite it", "patch it"), recommend=1)
+    assert reviews.concur(fix, "claude-1", 0, AGENTS) == 0  # a finding's fix options, while it's open
+    for state in ("fixed", "dropped"):
+        with pytest.raises(ReviewError, match=f"F1 is {state}: its options are settled"):
+            reviews.concur(replace(fix, state=state), "claude-1", 0, AGENTS)
+
+
+def test_a_question_must_carry_a_recommendation() -> None:
+    """ask(options) without recommend is refused, saying what to give; with one it is the index."""
+    with pytest.raises(
+        ReviewError, match=r"recommend is required with options: .* 0 to 1\. The other agents agree"
+    ):
+        reviews.recommend(None, ("a", "b"), required=True)
+    assert reviews.recommend(1, ("a", "b"), required=True) == 1
+    with pytest.raises(ReviewError, match="recommend must be an option's index, 0 to 1"):
+        reviews.recommend(2, ("a", "b"), required=True)
+
+
+def test_a_question_just_asked_is_the_other_agents_to_agree_with() -> None:
+    """Fails while an ask is a silent notice: the other agents would never be asked, so 'recommended
+    by every agent' could not come true. The line names whom, the asker, and the exact call."""
+    who, text = reviews.handoff(asked(), "codex-1", (*AGENTS, "devin-1")) or ((), "")
+    assert who == ("claude-1", "devin-1")
+    assert text == (
+        "Review board: Q1 asked: off by one. @claude-1 @devin-1: agree with codex-1's pick or pick"
+        ' another option, review(action="concur", item="Q1", recommend=<index>).'
+        ' review(action="show") shows the board.'
+    )
+
+
+def test_a_finding_with_fix_options_asks_the_others_to_agree_with_them_too() -> None:
+    fix = replace(finding(), options=("rewrite it", "patch it"), recommend=1)
+    who, text = reviews.handoff(fix, "codex-1", AGENTS) or ((), "")
+    assert (
+        who == ("claude-1",)
+        and "concede or contest it, and agree with its fix option or pick another (concur)" in text
+    )
+    assert "concur" not in (reviews.handoff(finding(), "codex-1", AGENTS) or ((), ""))[1]
+
+
+def test_the_board_text_says_who_is_behind_each_option_and_who_is_awaited() -> None:
+    """What an agent reads: the recommended option first, with its number (what concur takes),
+    then who is still to agree. Fails if the text still says '(recommended)' for one agent's pick."""
+    review = {"url": "https://example.com/pr/7", "head": ""}
+    one = reviews.render(review, [asked(recommend=1)], None, AGENTS).splitlines()[1]
+    assert one.endswith(
+        "for a person: 1. after tax (codex-1 recommends this) | 0. before tax;"
+        " waiting on claude-1 to agree or pick another (concur)"
+    )
+    agreed = reviews.render(review, [asked(picks=(("claude-1", 0),))], None, AGENTS).splitlines()[1]
+    assert agreed.endswith("for a person: 0. before tax (recommended by codex-1 and claude-1) | 1. after tax")
+    split = reviews.render(review, [asked(picks=(("claude-1", 1),))], None, AGENTS).splitlines()[1]
+    assert split.endswith(
+        "0. before tax (picked by codex-1) | 1. after tax (picked by claude-1);"
+        " the agents are split: no option is recommended"
+    )
+    fix = replace(finding(), options=("rewrite it", "patch it"), recommend=1)
+    line = reviews.render(review, [fix], None, AGENTS).splitlines()[1]
+    assert "; fix options: 1. patch it (codex-1 recommends this) | 0. rewrite it; waiting on claude-1" in line
+    done = reviews.render(review, [replace(fix, state="fixed", confirmed_by="codex-1")], None, AGENTS)
+    assert "fix options" not in done  # once it's fixed, the choice is made

@@ -2976,6 +2976,11 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 .board-history { margin: 0; padding: 8px 0 0 18px; border-top: 1px solid var(--line); color: var(--muted-2); font-size: calc(12px * var(--text-scale)); display: flex; flex-direction: column; gap: 2px; }
 .board-history strong { color: var(--fg); font-weight: 600; }
 .board-history-at { margin-left: 6px; font-variant-numeric: tabular-nums; }
+/* a question's agreement (#423): who is still to pick, or that the agents split; and a finding's fix options */
+.board-consensus { flex: 1 1 100%; margin: 0; color: var(--muted-2); font-size: calc(12px * var(--text-scale)); }
+.board-fix-options { display: flex; flex-direction: column; gap: 4px; }
+.board-fix-options h4 { margin: 0; color: var(--muted-2); font-size: calc(12px * var(--text-scale)); font-weight: 600; }
+.board-option-list { margin: 0; padding: 0 0 0 18px; display: flex; flex-direction: column; gap: 3px; font-size: calc(12.5px * var(--text-scale)); }
 .board-answer { margin: 0; font-weight: 600; }
 .board-detail-state, .board-reason { margin: 0; color: var(--muted-2); font-size: calc(12.5px * var(--text-scale)); }
 .board-where { align-self: flex-start; }

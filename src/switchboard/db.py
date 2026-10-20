@@ -29,7 +29,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -211,6 +211,11 @@ CREATE TABLE review_items(
   outdated_head TEXT NOT NULL DEFAULT '' CHECK(length(outdated_head) <= 64),
   deferred_to TEXT NOT NULL DEFAULT '' CHECK(length(deferred_to) <= 200),
   UNIQUE(review_id, kind, n));
+CREATE TABLE review_picks(
+  item_id INTEGER NOT NULL REFERENCES review_items(id),
+  agent TEXT NOT NULL CHECK(length(agent) BETWEEN 1 AND 100),
+  choice INTEGER NOT NULL CHECK(choice BETWEEN 0 AND 3), picked_at REAL NOT NULL,
+  PRIMARY KEY(item_id, agent));
 
 CREATE TABLE claims(
   room_id INTEGER NOT NULL REFERENCES rooms(id),
@@ -253,6 +258,7 @@ TABLES = (
     "claims",
     "pins",
     "agent_tokens",
+    "review_picks",
 )
 # the tables of a version-1 database (0.1.0, 0.2.0) and of a version-2 one (0.3.0 to 0.6.5):
 # the rows a migration must keep
@@ -265,6 +271,7 @@ V14_TABLES = TABLES[:16]  # before room_people (v15)
 V20_TABLES = TABLES[:17]  # before claims (v21)
 V21_TABLES = TABLES[:18]  # before pins (v22)
 V24_TABLES = TABLES[:19]  # before agent_tokens (v25)
+V25_TABLES = TABLES[:20]  # before review_picks (v26)
 
 # v1 -> v2 (DESIGN.md §27.6): one BEGIN IMMEDIATE, after a verified backup. The
 # columns land at the end of their tables, where the fresh schema above puts them too.
@@ -521,6 +528,18 @@ V24_TO_V25 = (
     "UPDATE meta SET value='25' WHERE key='schema_version'",
 )
 
+# v25 -> v26 (#423, DESIGN.md §37.12): the pick each agent made on a question's or a finding's
+# options, so that "recommended" is computed from every agent's pick instead of claimed by one.
+# The table is new, so nothing is rewritten: the asker's own pick is still its ``recommend``.
+V25_TO_V26 = (
+    "CREATE TABLE review_picks("
+    " item_id INTEGER NOT NULL REFERENCES review_items(id),"
+    " agent TEXT NOT NULL CHECK(length(agent) BETWEEN 1 AND 100),"
+    " choice INTEGER NOT NULL CHECK(choice BETWEEN 0 AND 3), picked_at REAL NOT NULL,"
+    " PRIMARY KEY(item_id, agent))",
+    "UPDATE meta SET value='26' WHERE key='schema_version'",
+)
+
 
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
@@ -550,6 +569,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         22: (23, V22_TO_V23, ()),
         23: (24, V23_TO_V24, ()),
         24: (25, V24_TO_V25, ("agent_tokens",)),
+        25: (26, V25_TO_V26, ("review_picks",)),
     }
     out = []
     v = frm
@@ -580,6 +600,8 @@ def tables_of(version: int) -> tuple[str, ...]:
         return V21_TABLES
     if version <= 24:
         return V24_TABLES
+    if version <= 25:
+        return V25_TABLES
     return TABLES
 
 

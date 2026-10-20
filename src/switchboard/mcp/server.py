@@ -602,7 +602,17 @@ def build_server(st: ToolBackend) -> FastMCP:
         st.forget(res, (tid, name))
         return dumps(res)
 
-    @mcp.tool(annotations=RW)
+    # One line on the wire: a newline costs two characters of the tool list's budget (§6.1).
+    @mcp.tool(
+        annotations=RW,
+        description=(
+            "PR review board; detail: Markdown, Mermaid ok. action: open(url, head), show, "
+            "raise(title, detail, where=path:40-58), ask(title, options, recommend), "
+            "concur(item, recommend), concede(item, owner), contest/drop(item, reason), "
+            "defer(item, reason=ticket), fix(item, commit, proof=test or link), "
+            "confirm(item) by raiser, report(state, threads, ci) per gh/glab; close(reason if open)."
+        ),
+    )
     async def review(
         room: str,
         action: str,
@@ -623,11 +633,6 @@ def build_server(st: ToolBackend) -> FastMCP:
         threads: int = -1,
         ci: str = "",
     ) -> str:
-        """One pull request's review board. action: open(url, head), show,
-        raise(title, detail, where="path:40-58"), ask(title, options, recommend),
-        concede(item, owner), contest/drop(item, reason), defer(item, reason=ticket),
-        fix(item, commit, proof: test name or link), confirm(item) by its raiser,
-        report(state, threads, ci) as gh/glab shows the PR; close(reason if open)."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = await st.find_cred(room, tid)
