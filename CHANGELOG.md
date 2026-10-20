@@ -2,6 +2,38 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.36.0 (2026-10-20)
+
+### Added
+
+- **A confirmed fix on the review board has a green check in its card's corner.** A settled fix now reads as done at a glance, like a dropped finding's struck-through title reads as dropped. The check marks a fix that has been confirmed, by the agent that raised it or by you; a fix still waiting for that confirmation has none, and nor has any other card.
+- **A review card's detail reads as Markdown, with Mermaid diagrams.** The `review` tool now tells agents to write an item's `detail` in Markdown and to use a Mermaid diagram when a picture explains it better. In the board's side panel the detail is drawn the way the chat draws a message (headings, lists, code, tables), and a Mermaid block has **Show diagram**, with the same strict settings as in the chat; a diagram that can't be drawn keeps its code and says why. A diagram you have drawn stays drawn while agents change status around it, where the whole card used to be built again.
+- **A question's recommendation is the agents' agreement, and says so.** An option is marked "recommended" only once every agent in the room has picked it: "(recommended by claude-1 and codex-1)". Before that it reads "(claude-1 recommends this)", and a line under the options says who is still to agree. The other agents are asked to agree or pick another option with the new `review(action="concur", item, recommend=<index>)`. If two agents pick differently, each pick shows ("(picked by codex-1)"), none is recommended, and the card says so. The recommended option is listed first; each option keeps its own text. An agent that joins the room is waited on too, and the open card updates by itself.
+- **A finding can offer fix options** in the same shape, with its raiser's recommendation and the same agreement.
+
+### Changed
+
+- **Hand off is in the review board's header, not in the Settled lane.** It used to be a card at the top of Settled, which read as one of the settled findings, though it acts on the whole board. It now sits beside the title and the status. While it is locked, the words beside it say what is left, such as "1 question to answer, 2 fixes to confirm" or "No items yet", and they update as items settle. When the last item settles the button glows once, with no sound. Once handed off, the header reads "Handed off by claude-1 at 09:40" in place of the button. On a phone the header stays on screen while the lanes scroll. The dialog, the preview and the rules for when it unlocks are the same.
+- **`ask` now needs `recommend`, the option the asker picks.** A question with options must carry a recommendation; a call without one is refused with what to give. A question asked also wakes the other agents in the room (it was a notice that woke no one) so they can agree or pick another.
+- **The `/review` request asks for Markdown and a recommendation.** It tells each agent to write details in Markdown, to ask with the option it recommends, and to agree with the others' questions with `concur`.
+- **The database moves to schema 26** (a table for the picks) when the broker first starts on this release, after its usual verified backup. An older release refuses the newer database, so going back means restoring that backup. Questions asked before keep their recommendation as their asker's pick.
+- **A contested finding goes back to the agent that raised it before it needs you.** Until now every contest landed in **Needs you** at once and the raiser never got to answer it, so every disagreement became yours. A contest now wakes the raiser, who either **drops** the finding (the contest convinced them, and it settles) or **insists** on it with a reason (the new `review(action="insist", item, reason)`, only for the raiser of a contested finding, once). Until then the finding is in **Agents working**, with the raiser's status dot and a line saying it waits for them. Only an insisted finding comes to you, and its card shows the two reasons side by side. The other agent can still concede at any point, an agent can still ask you a question on purpose, and you can rule on any contested finding yourself, insisted or not.
+- **A contested finding whose raiser has left the room, or is offline, comes to you** with no move needed (the board updates when an agent goes offline or returns). There is no timer: a raiser that is there and silent keeps it with the agents, and you can step in.
+- **The `/review` request tells agents to settle disagreements between themselves** and leave you only what they still disagree on.
+- **The database moves to schema 27** (a column for the insisting reason) when the broker first starts on this release, after its usual verified backup. An older release refuses the newer database, so going back means restoring that backup. A finding contested before the upgrade keeps waiting on you, with a line saying it was contested before agents could insist.
+
+### Fixed
+
+- **Codex threads over HTTPS go offline after a normal quit.** When Codex closes its MCP session on `/quit` or Ctrl-C, Members shows its threads offline. Their room memberships remain, so resuming a thread brings it back. A forced kill sends no close request and may still leave it showing idle.
+- **A page with more than 64 rooms open now stays connected.** The page said hello to the broker once, naming every room, and the broker refuses a hello that names more than 64 and closes the socket, so with 65 rooms the page showed "Disconnected: reconnecting" for as long as it had them. It now says hello in batches of 64.
+- **An agent over HTTPS now hears room messages after any tool call, not only after switchboard's own.** A Claude Code or Codex agent that was busy with Bash and file edits got nothing until its turn ended, though these docs say a message comes back after its next tool call. The plugins now also tell switchboard when any other tool has run. They send only the tool's name and the session and call ids, never what the tool was given or what it printed, so no Bash output, file or secret goes to the server. A session in no room costs one small request per tool call, which the server answers with nothing. A server that doesn't answer holds a tool call for at most 2 seconds. To get it, update the plugins: Claude Code's is now 0.5.0 (`claude plugin marketplace update switchboard`, then `claude plugin update switchboard@switchboard`, then restart it), and Codex's 0.3.0 (refresh its marketplace; Codex asks you to trust the changed hooks at its next start). If you added the hooks by hand, [docs/USAGE.md](docs/USAGE.md) has the new groups.
+
+### Known limitations
+
+- A running agent session keeps the `review` tool it started with. One started before this release can read the agreed recommendation, and can use `concur` (it takes the existing `recommend` field), but doesn't know to until it restarts or is told.
+- An agent in the room that never picks, because its switchboard can't use the board or it is idle, keeps an option from reading "recommended". You can still answer. How agents settle a split before it reaches you is not part of this change.
+- The `review` tool's description is exactly at its character budget, so it names `insist` but not the guidance: that is in the line the contest sends the raiser and in the `/review` request. A running agent session keeps the tool it started with; it can use `insist` (an action, not a new field) once it is told, which the contest's message does.
+
 ## 0.35.0 (2026-10-20)
 
 ### Added

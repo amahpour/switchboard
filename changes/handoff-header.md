@@ -1,3 +1,0 @@
-### Changed
-
-- **Hand off is in the review board's header, not in the Settled lane.** It used to be a card at the top of Settled, which read as one of the settled findings, though it acts on the whole board. It now sits beside the title and the status. While it is locked, the words beside it say what is left, such as "1 question to answer, 2 fixes to confirm" or "No items yet", and they update as items settle. When the last item settles the button glows once, with no sound. Once handed off, the header reads "Handed off by claude-1 at 09:40" in place of the button. On a phone the header stays on screen while the lanes scroll. The dialog, the preview and the rules for when it unlocks are the same.
