@@ -2916,6 +2916,7 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 .board-card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .board-card-top { display: flex; align-items: center; gap: 6px; }
 .board-label { font-weight: 700; font-variant-numeric: tabular-nums; }
+.board-card-top .board-confirmed { margin-left: auto; color: var(--green); }
 /* whose move a card waits on, and whether that agent is busy (#407): the Members dot's colors */
 .board-pulse {
   display: inline-flex; align-items: center; gap: 4px; margin-left: auto;

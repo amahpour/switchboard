@@ -42,6 +42,15 @@ def hello_rooms(out: dict[str, Any]) -> list[list[str]]:
     return [h["rooms"] for h in out["hellos"]]
 
 
+def test_only_a_confirmed_fix_gets_a_decorative_check_on_the_board() -> None:
+    """#427: fixed alone is not done; a raiser's confirmation adds the existing check icon.
+    Dropped and answered cards never acquire it, including after a live board redraw."""
+    out = run("review_confirmed_check")
+    check = [{"icon": True, "hidden": "true", "focusable": "false"}]
+    assert out["before"] == {"F1": check, "F2": [], "F3": [], "Q1": []}
+    assert out["after"] == {"F1": check, "F2": check, "F3": [], "Q1": []}
+
+
 def test_every_rooms_frame_subscribes_the_tabs_again() -> None:
     # a close dropped this page's subscription; the reopen (same id) landed before the listing
     out = run("rooms_frame_hellos_again")

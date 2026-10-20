@@ -365,6 +365,36 @@ function roomsBadge(w) {
 
 // ---------------------------------------------------------------- scenarios
 const SCENARIOS = {
+  // A confirmed fix alone earns the card's decorative check, including after a live update.
+  async review_confirmed_check() {
+    const { w, ws } = await buildRoom();
+    const items = [
+      { label: 'F1', kind: 'finding', state: 'fixed', title: 'Confirmed', confirmed_by: 'codex-1' },
+      { label: 'F2', kind: 'finding', state: 'fixed', title: 'Awaiting confirmation', raised_by: 'codex-1' },
+      { label: 'F3', kind: 'finding', state: 'dropped', title: 'Dropped', reason: 'not a bug' },
+      { label: 'Q1', kind: 'question', state: 'answered', title: 'Answered' },
+    ];
+    const board = { url: 'https://example.com/shop/pull/7', items: items, counts: {},
+                    agents: [], agent_people: {}, settled: false };
+    ws.deliver({ t: 'review', room: '#build', board: board });
+    click(w.$('board-toggle'));
+    await settle();
+    const marks = function () {
+      return Object.fromEntries(items.map(function (i) {
+        const card = findAll(w.$('board'), function (n) { return n.dataset.item === i.label; })[0];
+        const check = findAll(card, function (n) { return n.classList.contains('board-confirmed'); });
+        return [i.label, check.map(function (n) {
+          return { icon: n.classList.contains('ic-check'), hidden: n.attrs['aria-hidden'],
+                   focusable: n.attrs.focusable };
+        })];
+      }));
+    };
+    const before = marks();
+    items[1] = { ...items[1], confirmed_by: 'claude-1' };
+    ws.deliver({ t: 'review', room: '#build', board: { ...board, items: items } });
+    await settle();
+    return { before: before, after: marks() };
+  },
   // A rooms frame whose listing looks unchanged (the room was closed, which dropped this page's
   // subscription, then reopened under the same id before the listing was served).
   async rooms_frame_hellos_again() {

@@ -5632,6 +5632,13 @@
         top.append(el('span', 'board-label', i.label), el('span', boardStateClass(i), boardStateWord(i)));
         const next = boardNext(i);
         if (next) top.append(boardPulse(next, (r.members || []).find(function (m) { return m.name === next; })));
+        if (i.state === 'fixed' && i.confirmed_by) {
+          const check = icon('check');
+          check.classList.add('board-confirmed');
+          check.setAttribute('aria-hidden', 'true');
+          check.setAttribute('focusable', 'false');
+          top.append(check);
+        }
         card.append(top, el('span', 'board-card-title', i.title));
         const meta = i.deferred_to ? 'Deferred to ' + i.deferred_to
           : i.state === 'dropped' && i.reason ? i.reason : [boardWhere(i), boardWho(i)].filter(Boolean).join(' · ');

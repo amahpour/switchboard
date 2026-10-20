@@ -2508,6 +2508,54 @@ def test_the_review_board_shows_each_item_in_its_lane(ui: UI) -> None:
     expect(page.locator("#board")).to_be_hidden()
 
 
+@pytest.mark.parametrize(
+    "options",
+    (
+        {**DESKTOP, "color_scheme": "light"},
+        {**DESKTOP, "color_scheme": "dark"},
+        {**PHONE, "color_scheme": "light"},
+    ),
+    ids=("light", "dark", "phone"),
+)
+def test_only_a_confirmed_fix_has_a_green_corner_check(ui: UI, options: dict[str, Any]) -> None:
+    """#427: the existing check icon sits at a confirmed fix's top-right in each theme and on
+    a phone. A fix awaiting its raiser, a drop, and the other states have none. Confirmation
+    adds it on the open board without changing the dropped strikethrough."""
+    slug = "e2e-board-check-" + (
+        "phone"
+        if "viewport" in options and options["viewport"] == PHONE["viewport"]
+        else options["color_scheme"]
+    )
+    room = "#" + slug
+    page = review_room(ui, slug, **options)
+    call = ui.world.agent_call
+    call(room, "claude-1", "review", action="concede", item="F3")
+    call(room, "claude-1", "review", action="fix", item="F3", commit="abc1234", proof="test_rounding")
+    page.click("#board-toggle")
+    mark = page.locator('#board .board-card[data-item="F2"] .board-confirmed')
+    expect(mark).to_be_visible()
+    expect(mark).to_have_attribute("aria-hidden", "true")
+    expect(mark).to_have_attribute("focusable", "false")
+    expect(mark).to_have_class(re.compile(r"\bic-check\b"))
+    card = page.locator('#board .board-card[data-item="F2"]')
+    corner = card.evaluate("""c => {
+      const card = c.getBoundingClientRect();
+      const mark = c.querySelector('.board-confirmed').getBoundingClientRect();
+      return { rightGap: card.right - mark.left, topGap: mark.top - card.top };
+    }""")
+    assert 0 < corner["rightGap"] <= 32 and 0 <= corner["topGap"] < 32
+    expect(mark).to_have_css(
+        "color", "rgb(52, 199, 89)" if options["color_scheme"] == "dark" else "rgb(46, 157, 78)"
+    )
+    for label in ("F1", "F3", "F4", "Q1"):
+        expect(page.locator(f'#board .board-card[data-item="{label}"] .board-confirmed')).to_have_count(0)
+    dropped = page.locator('#board .board-card[data-item="F1"] .board-card-title')
+    assert "line-through" in dropped.evaluate("e => getComputedStyle(e).textDecorationLine")
+    call(room, "codex-1", "review", action="confirm", item="F3")
+    expect(page.locator('#board .lane-settled .board-card[data-item="F3"] .board-confirmed')).to_be_visible()
+    no_horizontal_scroll(page)
+
+
 @pytest.mark.parametrize("options", (DESKTOP, PHONE), ids=("desktop", "phone"))
 def test_new_review_head_marks_only_unsettled_findings_on_the_open_page(
     ui: UI, options: dict[str, Any]
