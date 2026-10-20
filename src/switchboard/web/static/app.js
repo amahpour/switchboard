@@ -5635,8 +5635,6 @@
         if (i.state === 'fixed' && i.confirmed_by) {
           const check = icon('check');
           check.classList.add('board-confirmed');
-          check.setAttribute('aria-hidden', 'true');
-          check.setAttribute('focusable', 'false');
           top.append(check);
         }
         card.append(top, el('span', 'board-card-title', i.title));

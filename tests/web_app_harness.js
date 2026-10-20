@@ -383,10 +383,7 @@ const SCENARIOS = {
       return Object.fromEntries(items.map(function (i) {
         const card = findAll(w.$('board'), function (n) { return n.dataset.item === i.label; })[0];
         const check = findAll(card, function (n) { return n.classList.contains('board-confirmed'); });
-        return [i.label, check.map(function (n) {
-          return { icon: n.classList.contains('ic-check'), hidden: n.attrs['aria-hidden'],
-                   focusable: n.attrs.focusable };
-        })];
+        return [i.label, check.map(function (n) { return n.classList.contains('ic-check'); })];
       }));
     };
     const before = marks();

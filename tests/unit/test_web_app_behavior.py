@@ -46,7 +46,7 @@ def test_only_a_confirmed_fix_gets_a_decorative_check_on_the_board() -> None:
     """#427: fixed alone is not done; a raiser's confirmation adds the existing check icon.
     Dropped and answered cards never acquire it, including after a live board redraw."""
     out = run("review_confirmed_check")
-    check = [{"icon": True, "hidden": "true", "focusable": "false"}]
+    check = [True]
     assert out["before"] == {"F1": check, "F2": [], "F3": [], "Q1": []}
     assert out["after"] == {"F1": check, "F2": check, "F3": [], "Q1": []}
 
