@@ -47,6 +47,7 @@ It drives headless Chromium through Playwright (a dev dependency): run `uv run p
 
 Re-run it whenever the UI changes, and look at every picture before committing them.
 For review board head changes, `ui_shots.py` also writes `outdated-before-*` and `outdated-after-*` PNGs in light, dark and phone light: the selected finding gains the new head mark.
+For the board's confirmed-fix check (#427), it writes `check-waiting-*` and `check-confirmed-*` PNGs in light, dark and phone light: a fix awaiting its raiser's confirmation has no check, and the same card has a green one once confirmed.
 
 ## The CLI screenshots (`cli_shots.py`)
 

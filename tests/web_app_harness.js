@@ -365,32 +365,46 @@ function roomsBadge(w) {
 
 // ---------------------------------------------------------------- scenarios
 const SCENARIOS = {
-  // A confirmed fix alone earns the card's decorative check, including after a live update.
+  // Only a fixed item that someone has confirmed gets the card's check (#427): not a fix still
+  // waiting for its raiser, and not any other state. A live frame that confirms one adds it.
   async review_confirmed_check() {
     const { w, ws } = await buildRoom();
     const items = [
-      { label: 'F1', kind: 'finding', state: 'fixed', title: 'Confirmed', confirmed_by: 'codex-1' },
-      { label: 'F2', kind: 'finding', state: 'fixed', title: 'Awaiting confirmation', raised_by: 'codex-1' },
-      { label: 'F3', kind: 'finding', state: 'dropped', title: 'Dropped', reason: 'not a bug' },
-      { label: 'Q1', kind: 'question', state: 'answered', title: 'Answered' },
+      { label: 'F1', kind: 'finding', state: 'fixed', title: 'Confirmed by its raiser',
+        raised_by: 'codex-1', owner: 'claude-1', confirmed_by: 'codex-1' },
+      { label: 'F2', kind: 'finding', state: 'fixed', title: 'Confirmed by a person',
+        raised_by: 'codex-1', owner: 'claude-1', confirmed_by: 'alice' },
+      { label: 'F3', kind: 'finding', state: 'fixed', title: 'Awaiting confirmation',
+        raised_by: 'codex-1', owner: 'claude-1' },
+      { label: 'F4', kind: 'finding', state: 'raised', title: 'Raised', raised_by: 'codex-1' },
+      { label: 'F5', kind: 'finding', state: 'conceded', title: 'Being fixed',
+        raised_by: 'codex-1', owner: 'claude-1' },
+      { label: 'F6', kind: 'finding', state: 'contested', title: 'Contested',
+        raised_by: 'codex-1', needs_person: true },
+      { label: 'F7', kind: 'finding', state: 'dropped', title: 'Dropped', reason: 'not a bug' },
+      { label: 'F8', kind: 'finding', state: 'dropped', title: 'Deferred', deferred_to: 'SHOP-9' },
+      { label: 'Q1', kind: 'question', state: 'open', title: 'Open', raised_by: 'codex-1',
+        needs_person: true },
+      { label: 'Q2', kind: 'question', state: 'answered', title: 'Answered', answered_by: 'alice' },
     ];
     const board = { url: 'https://example.com/shop/pull/7', items: items, counts: {},
                     agents: [], agent_people: {}, settled: false };
     ws.deliver({ t: 'review', room: '#build', board: board });
     click(w.$('board-toggle'));
     await settle();
-    const marks = function () {
-      return Object.fromEntries(items.map(function (i) {
+    const checked = function () {
+      return items.filter(function (i) {
         const card = findAll(w.$('board'), function (n) { return n.dataset.item === i.label; })[0];
-        const check = findAll(card, function (n) { return n.classList.contains('board-confirmed'); });
-        return [i.label, check.map(function (n) { return n.classList.contains('ic-check'); })];
-      }));
+        return findAll(card, function (n) {
+          return n.classList.contains('board-confirmed') && n.classList.contains('ic-check');
+        }).length === 1;
+      }).map(function (i) { return i.label; });
     };
-    const before = marks();
-    items[1] = { ...items[1], confirmed_by: 'claude-1' };
+    const before = checked();
+    items[2] = { ...items[2], confirmed_by: 'codex-1' };
     ws.deliver({ t: 'review', room: '#build', board: { ...board, items: items } });
     await settle();
-    return { before: before, after: marks() };
+    return { before: before, after: checked() };
   },
   // A rooms frame whose listing looks unchanged (the room was closed, which dropped this page's
   // subscription, then reopened under the same id before the listing was served).

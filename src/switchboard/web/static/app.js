@@ -5632,6 +5632,8 @@
         top.append(el('span', 'board-label', i.label), el('span', boardStateClass(i), boardStateWord(i)));
         const next = boardNext(i);
         if (next) top.append(boardPulse(next, (r.members || []).find(function (m) { return m.name === next; })));
+        // a settled fix reads as done (#427): the check sits in the corner, only once someone has
+        // confirmed it. icon() hides it from a screen reader; the card says "Fixed" and "confirmed by".
         if (i.state === 'fixed' && i.confirmed_by) {
           const check = icon('check');
           check.classList.add('board-confirmed');
