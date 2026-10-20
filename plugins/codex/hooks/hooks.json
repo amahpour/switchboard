@@ -38,6 +38,24 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "switchboard",
+            "tool": "hook",
+            "input": {
+              "event": "PostToolUse",
+              "session_id": "${session_id}",
+              "turn_id": "${turn_id}",
+              "tool_name": "${tool_name}",
+              "tool_use_id": "${tool_use_id}"
+            },
+            "timeout": 2
+          }
+        ]
       }
     ],
     "Stop": [

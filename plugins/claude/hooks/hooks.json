@@ -73,6 +73,23 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "^(?!mcp__plugin_switchboard_switchboard__)",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:switchboard:switchboard",
+            "tool": "hook",
+            "input": {
+              "event": "${hook_event_name}",
+              "session_id": "${session_id}",
+              "tool_use_id": "${tool_use_id}",
+              "tool_name": "${tool_name}"
+            },
+            "timeout": 2
+          }
+        ]
       }
     ],
     "PostToolUseFailure": [
@@ -90,6 +107,23 @@
               "tool_name": "${tool_name}"
             },
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "^(?!mcp__plugin_switchboard_switchboard__)",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:switchboard:switchboard",
+            "tool": "hook",
+            "input": {
+              "event": "${hook_event_name}",
+              "session_id": "${session_id}",
+              "tool_use_id": "${tool_use_id}",
+              "tool_name": "${tool_name}"
+            },
+            "timeout": 2
           }
         ]
       }
