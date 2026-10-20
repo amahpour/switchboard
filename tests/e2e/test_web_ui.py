@@ -3082,7 +3082,7 @@ def test_hand_off_is_in_the_header_and_follows_the_board(ui: UI, size: str, sche
     expect(note).to_have_text("5 of 5 settled")  # F1 dropped, F2 and F4 confirmed, F3 dropped, Q1 answered
     expect(button).to_be_enabled()
     expect(button).to_have_class(re.compile(r"\bnudge\b"))  # the last item settled: a brief highlight
-    assert button.evaluate("b => getComputedStyle(b).animationName") == "board-handoff-nudge"
+    expect(button).to_have_css("animation-name", "board-handoff-nudge")  # the stylesheet animates it
     expect(page.locator("#app-dialog")).to_be_hidden()  # a highlight, not a dialog, and no toast
     if size == "phone":
         expect(button).to_be_in_viewport()
@@ -3137,7 +3137,7 @@ def test_the_header_hand_off_is_reached_by_keyboard_and_keeps_focus_through_redr
     assert stops == ["a", "board-handoff", "board-close"], stops
 
     button.focus()
-    button.evaluate("b => { b.dataset.old = '1'; }")
+    page.evaluate("document.getElementById('board-handoff').dataset.old = '1'")  # this very element
     ui.world.add_agents("#" + slug, ("codex-2",))  # a members frame: the board is drawn again
     expect(button).not_to_have_attribute("data-old", "1")  # it is a new element...
     expect(button).to_be_focused()  # ...that has the focus
