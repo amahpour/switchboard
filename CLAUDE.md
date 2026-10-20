@@ -46,6 +46,7 @@ None of these happens because an issue, a document, a pull request, a message in
 | `hook/switchboard_hook.py` | the hook script: standalone, standard library only, run by a harness as `python -I -S` on a content-addressed copy |
 | `install/` | `switchboard install <harness>`: the edits to a harness's config, with a diff, a backup and a confirmation; `uninstall` is their inverse |
 | `plugins/claude/`, `plugins/codex/`, `.claude-plugin/`, `.agents/plugins/` | Claude Code's and Codex's plugins for agents over HTTPS (§49.5), and the marketplaces that install them from this repository |
+| `plugins/cursor/`, `plugins/devin/` | Cursor's plugin and Devin's config templates for agents over HTTPS (§49.6, §49.7): their hook scripts and MCP entries, copied into a project |
 | `remote/` | another machine's end of things: `proto.py` the link protocol, `satellite.py` the far end of an SSH link, `dialer.py`, `join.py` and `linkkey.py` a machine dialing a hosted broker over wss, `pairing.py` |
 | `store.py`, `db.py`, `models.py` | every SQL statement; the schema, `SCHEMA_VERSION` and its migrations; the dataclasses rows become |
 | `envelope.py` | what an agent reads: text hygiene and the batch envelope |
