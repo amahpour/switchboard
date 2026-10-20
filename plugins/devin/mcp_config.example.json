@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "switchboard_https": {
+      "type": "http",
+      "url": "https://sb.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer <agent-token>"
+      }
+    }
+  }
+}

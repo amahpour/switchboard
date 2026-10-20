@@ -71,9 +71,14 @@ log = logging.getLogger("switchboard.agent_http")
 
 PATH = "/mcp"
 # the clients whose sessions a call over HTTPS can name, by their clientInfo name (§49.3)
-CLIENTS = {"codex-mcp-client": "codex", "claude-code": "claude", "Cursor": "cursor"}
+CLIENTS = {
+    "codex-mcp-client": "codex",
+    "claude-code": "claude",
+    "Cursor": "cursor",
+    "rmcp": "devin",  # Devin's Rust transport; a matching input hook is still required
+}
 UNSUPPORTED = (
-    "switchboard over HTTPS works with Codex, Claude Code and Cursor for now."
+    "switchboard over HTTPS works with Codex, Claude Code, Cursor and Devin for now."
     " Connect this agent with `switchboard install` meanwhile"
 )
 HOOK_TOOL = "hook"  # called by a harness's hooks, never listed for the model
@@ -365,7 +370,7 @@ class HttpTools:
         info = client_info(ctx)
         harness = CLIENTS.get(info.get("name", ""), "unknown")
         conn = self.conn_for(token, harness, info)
-        if harness in ("cursor",):
+        if harness in ("cursor", "devin"):
             thread = self.input_session.get()
         elif harness == "claude":
             use = _id(McpState.meta(ctx).get(TOOL_USE_KEY))
@@ -673,9 +678,10 @@ class CommandHook:
             body = json.loads(raw)
         except ValueError:
             body = None
-        if not isinstance(body, dict) or body.get("harness") != "cursor":
+        if not isinstance(body, dict) or body.get("harness") not in ("cursor", "devin"):
             await _reply(send, 400, {"error": "bad_request"})
             return
+        harness = body["harness"]
         sid = _id(body.get("session_id"))
         event = body.get("event")
         if sid is None or not isinstance(event, str):
@@ -684,28 +690,43 @@ class CommandHook:
         self.auth.touch(row)
         if scope.get("path") == PRETOOL_PATH:
             use, tool = _id(body.get("tool_use_id")), _id(body.get("tool_name"))
-            if (
-                event != "preToolUse"
-                or use is None
-                or tool not in {f"switchboard_{name}" for name in TOOL_NAMES}
-            ):
+            names = {f"switchboard_{name}" for name in TOOL_NAMES} if harness == "cursor" else set(TOOL_NAMES)
+            expected = "preToolUse" if harness == "cursor" else "PreToolUse"
+            if event != expected or use is None or tool not in names:
                 await _reply(send, 400, {"error": "bad_request"})
                 return
-            self.tools.input_uses.report(row.id, "cursor", sid, use, tool)
+            self.tools.input_uses.report(row.id, harness, sid, use, tool)
+            if harness == "devin":
+                conn = self.tools.conn_for(row, harness)
+                await self.tools.state.agents.http_hook(
+                    conn,
+                    harness,
+                    event,
+                    hook_params(
+                        event,
+                        {"session_id": sid, "tool_use_id": use, "tool_name": tool},
+                        self.tools.state.clock.now(),
+                    ),
+                )
             await _reply(send, 200, {})
             return
         ev = canonical_event(event)
-        if ev not in ("SessionStart", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"):
+        allowed = (
+            ("SessionStart", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd")
+            if harness == "cursor"
+            else ("SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "SessionEnd")
+        )
+        if ev not in allowed:
             await _reply(send, 400, {"error": "bad_request"})
             return
         fields = {k: v for k, v in body.items() if k in HOOK_FIELDS}
         fields["session_id"] = sid
         agents: Any = self.tools.state.agents
-        conn = self.tools.conn_for(row, "cursor")
+        conn = self.tools.conn_for(row, harness)
         res = await agents.http_hook(
-            conn, "cursor", ev, hook_params(event, fields, self.tools.state.clock.now())
+            conn, harness, ev, hook_params(event, fields, self.tools.state.clock.now())
         )
-        reply = reply_for("cursor", event, res.get("out")) or {}
+        reply = reply_for(harness, event, res.get("out")) or {}
         await _reply(send, 200, reply)
         if reply:
             agents.hook_ack(conn, {"batch_id": res.get("batch_id"), "ack": res.get("ack")})
@@ -841,9 +862,10 @@ class InputIdentity(Middleware):
     async def on_call_tool(self, context: Any, call_next: Any) -> Any:
         ctx = context.fastmcp_context
         info = client_info(ctx)
-        if info.get("name") != "Cursor" or context.message.name == HOOK_TOOL:
+        if context.message.name == HOOK_TOOL or info.get("name") not in ("Cursor", "rmcp"):
             return await call_next(context)
-        if not context.message.name.startswith("switchboard_"):
+        harness = "cursor" if info.get("name") == "Cursor" else "devin"
+        if harness == "cursor" and not context.message.name.startswith("switchboard_"):
             return ToolResult(
                 content=[TextContent(text=err("use the Cursor switchboard tools", "bad_request"))]
             )
@@ -857,7 +879,7 @@ class InputIdentity(Middleware):
             not isinstance(token, AgentTokenRow)
             or sid is None
             or use is None
-            or not self.tools.input_uses.take(token.id, "cursor", sid, use, context.message.name)
+            or not self.tools.input_uses.take(token.id, harness, sid, use, context.message.name)
         ):
             return ToolResult(
                 content=[TextContent(text=err("this call has no matching session hook", "bad_request"))]
