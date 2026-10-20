@@ -57,6 +57,8 @@ handoff-blocked-, handoff-ready-, handoff-dialog- and handoff-after-{light,dark,
 summary and Posted by choice, then the selected agent's handoff, #252 and #425),
 outdated-before-{light,dark,phone-light} and outdated-after-{light,dark,phone-light}
 (a board's unresolved findings before and after an agent moves its head, #291),
+check-waiting-{light,dark,phone-light} and check-confirmed-{light,dark,phone-light} (a fix awaiting
+its raiser has no check; once confirmed, its card gets a green one in the corner, #427),
 confirm-light, signin-light, setup-person-light and
 signin-phone-dark, and from a second one at
 ``http://localhost:<port>``, with test machines that dial in (``tests/fakes/fake_machine.py``:
@@ -743,6 +745,60 @@ def shoot_proof_board(browser: Any, out: Path, world: Any) -> None:
                 page.locator("#board .board-detail").scroll_into_view_if_needed()
             settle(page)
             shot(page, out, "proof-after-" + slug + ".png")
+        finally:
+            ctx.close()
+
+
+def center(page: Any, selector: str) -> None:
+    """Scroll ``selector`` to the middle of the page, as ``reveal`` does for the nearest edge: one
+    evaluate, so a redraw of the board between finding the card and scrolling can't fail it."""
+    page.evaluate(
+        "s => { const e = document.querySelector(s); if (e) e.scrollIntoView({ block: 'center' }); }",
+        selector,
+    )
+
+
+def shoot_confirmed_check(browser: Any, out: Path, world: Any) -> None:
+    """#427: a fix still waiting for its raiser has no check; once the raiser confirms it, its
+    card gets a green one in the corner. On a phone the lanes stack, so the shot scrolls the card
+    into view. It waits for the card to move, never for the check: the same script shoots the
+    board before the change."""
+    from playwright.sync_api import expect
+
+    for slug, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        room = "#check-" + slug
+        world.create_room(room)
+        world.add_agents(room, ("claude-1", "codex-1"))
+        world.seed_review(room)
+        call = world.agent_call
+        call(room, "claude-1", "review", action="concede", item="F3")
+        call(room, "claude-1", "review", action="fix", item="F3", commit="abc1234",
+             proof="tests/test_money.py::test_rounding")  # fmt: skip
+        ctx = browser.new_context(timezone_id="UTC", locale="en-US", **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="' + room + '"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            page.click("#board-toggle")
+            waiting = page.locator('#board .lane-working .board-card[data-item="F3"]')
+            expect(waiting).to_contain_text("Fixed")
+            if slug == "phone-light":
+                center(page, '#board .lane-working .board-card[data-item="F3"]')
+            shot(page, out, "check-waiting-" + slug + ".png")
+            call(room, "codex-1", "review", action="confirm", item="F3")
+            confirmed = page.locator('#board .lane-settled .board-card[data-item="F3"]')
+            expect(confirmed).to_contain_text("confirmed by codex-1")
+            if slug == "phone-light":
+                center(page, '#board .lane-settled .board-card[data-item="F3"]')
+            shot(page, out, "check-confirmed-" + slug + ".png")
         finally:
             ctx.close()
 
@@ -1860,6 +1916,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_room_rename(browser, out, world)
             shoot_settings_tabs(browser, out, world)
             shoot_settings_agents(browser, out, world)
+            shoot_confirmed_check(browser, out, world)  # rooms of its own, so last in this world
             shoot_hosted(browser, out, hosted)
             shoot_common_password(browser, out, weak)
             shoot_mention_people(browser, out, people)

@@ -373,6 +373,54 @@ function roomsBadge(w) {
 
 // ---------------------------------------------------------------- scenarios
 const SCENARIOS = {
+  // Only a fixed item that someone has confirmed gets the card's check (#427): not a fix still
+  // waiting for its raiser, and not any other state. A live frame that confirms one adds it.
+  async review_confirmed_check() {
+    const { w, ws } = await buildRoom();
+    // every field a card and the header read, as the broker sends them (a board missing one throws)
+    const item = function (label, state, extra) {
+      return Object.assign({ label: label, kind: label[0] === 'Q' ? 'question' : 'finding', state: state,
+        title: 'title of ' + label, detail: '', file: '', lines: '', raised_by: 'codex-1', owner: '', commit: '',
+        proof: '', confirmed_by: '', outdated_head: '', deferred_to: '', reason: '', options: [], recommend: null,
+        answer: '', answered_by: '', needs_person: false, lines_url: null, commit_url: null, history: [] },
+        extra || {});
+    };
+    const items = [
+      item('F1', 'fixed', { owner: 'claude-1', confirmed_by: 'codex-1' }),  // confirmed by its raiser
+      item('F2', 'fixed', { owner: 'claude-1', confirmed_by: 'alice' }),    // confirmed by a person
+      item('F3', 'fixed', { owner: 'claude-1' }),                           // awaiting its raiser
+      item('F4', 'raised'),
+      item('F5', 'conceded', { owner: 'claude-1' }),
+      item('F6', 'contested', { needs_person: true }),
+      item('F7', 'dropped', { reason: 'not a bug' }),
+      item('F8', 'dropped', { deferred_to: 'SHOP-9' }),
+      item('Q1', 'open', { needs_person: true, options: ['yes', 'no'] }),
+      item('Q2', 'answered', { answer: 'yes', answered_by: 'alice' }),
+    ];
+    const board = { id: 7, url: 'https://example.com/shop/pull/7', forge: null, head: '4f2c9e1a7b30',
+                    opened_by: 'codex-1', opened_at: 1, settled: false, counts: {}, items: items,
+                    plan: { summary: '', comments: [] }, agents: ['claude-1', 'codex-1'],
+                    agent_people: {}, posted_at: null, posted_by: null };
+    w.server.boards.build = board;  // what opening the board reads back
+    ws.deliver({ t: 'review', room: '#build', board: board });
+    click(w.$('board-toggle'));
+    await settle();
+    const checked = function () {
+      return items.filter(function (i) {
+        const card = findAll(w.$('board'), function (n) { return n.dataset.item === i.label; })[0];
+        return findAll(card, function (n) {
+          return n.classList.contains('board-confirmed') && n.classList.contains('ic-check');
+        }).length === 1;
+      }).map(function (i) { return i.label; });
+    };
+    const cards = findAll(w.$('board'), function (n) { return n.classList.contains('board-card'); }).length;
+    const before = checked();
+    items[2] = { ...items[2], confirmed_by: 'codex-1' };
+    w.server.boards.build = { ...board, items: items };
+    ws.deliver({ t: 'review', room: '#build', board: w.server.boards.build });
+    await settle();
+    return { cards: cards, before: before, after: checked() };
+  },
   // A rooms frame whose listing looks unchanged (the room was closed, which dropped this page's
   // subscription, then reopened under the same id before the listing was served).
   async rooms_frame_hellos_again() {

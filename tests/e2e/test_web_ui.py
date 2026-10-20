@@ -2508,6 +2508,65 @@ def test_the_review_board_shows_each_item_in_its_lane(ui: UI) -> None:
     expect(page.locator("#board")).to_be_hidden()
 
 
+@pytest.mark.parametrize(
+    "theme, options",
+    (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone", {**PHONE, "color_scheme": "light"}),
+    ),
+    ids=("light", "dark", "phone"),
+)
+def test_only_a_confirmed_fix_has_a_green_check_in_its_corner(
+    ui: UI, theme: str, options: dict[str, Any]
+) -> None:
+    """#427: a card whose fix is confirmed carries the board's own check icon at its top-right,
+    in the theme's success green (light and dark) and hidden from a screen reader, which already
+    hears "Fixed" and "confirmed by". The dropped finding, the contested one, the one being fixed
+    and the open question have none; a fix still waiting for its raiser gets none until the
+    raiser confirms, and then gets it where it stands. The dropped title stays struck through."""
+    room = "#e2e-board-check-" + theme
+    page = review_room(ui, room[1:], **options)
+    call = ui.world.agent_call
+    page.click("#board-toggle")
+
+    card = page.locator('#board .board-card[data-item="F2"]')
+    mark = card.locator(".board-confirmed")
+    expect(mark).to_have_count(1)
+    expect(mark).to_be_visible()
+    expect(mark).to_have_class(re.compile(r"\bic-check\b"))
+    expect(mark).to_have_attribute("aria-hidden", "true")
+    expect(mark).to_have_attribute("focusable", "false")
+    # the corner: at the card's right edge (its padding), on the top row beside the state word,
+    # not over it
+    where = card.evaluate(
+        """c => {
+          const box = c.getBoundingClientRect();
+          const mark = c.querySelector('.board-confirmed').getBoundingClientRect();
+          const word = c.querySelector('.board-state').getBoundingClientRect();
+          return { right: box.right - mark.right, top: mark.top - box.top, clear: mark.left - word.right };
+        }"""
+    )
+    assert 0 < where["right"] <= 16 and 0 <= where["top"] <= 20 and where["clear"] > 0, where
+    # --green: #2e9d4e in the light theme, #34c759 in the dark one
+    expect(mark).to_have_css("color", "rgb(52, 199, 89)" if theme == "dark" else "rgb(46, 157, 78)")
+
+    for label in ("F1", "F3", "F4", "Q1"):  # dropped, contested, being fixed, an open question
+        expect(page.locator(f'#board .board-card[data-item="{label}"] .board-confirmed')).to_have_count(0)
+    dropped = page.locator('#board .board-card[data-item="F1"] .board-card-title')
+    assert "line-through" in dropped.evaluate("e => getComputedStyle(e).textDecorationLine")
+
+    # a fix its raiser hasn't confirmed yet has no check; the raiser's confirmation adds it
+    call(room, "claude-1", "review", action="concede", item="F3")
+    call(room, "claude-1", "review", action="fix", item="F3", commit="abc1234", proof="test_rounding")
+    waiting = page.locator('#board .lane-working .board-card[data-item="F3"]')
+    expect(waiting).to_be_visible()
+    expect(waiting.locator(".board-confirmed")).to_have_count(0)
+    call(room, "codex-1", "review", action="confirm", item="F3")
+    expect(page.locator('#board .lane-settled .board-card[data-item="F3"] .board-confirmed')).to_be_visible()
+    no_horizontal_scroll(page)
+
+
 @pytest.mark.parametrize("options", (DESKTOP, PHONE), ids=("desktop", "phone"))
 def test_new_review_head_marks_only_unsettled_findings_on_the_open_page(
     ui: UI, options: dict[str, Any]
