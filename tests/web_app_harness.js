@@ -1027,6 +1027,18 @@ const SCENARIOS = {
              rows: rows, focus: focus };
   },
 
+  // More rooms than one hello may name: the broker refuses a hello over 64 rooms and closes the
+  // socket, so the page says hello in batches (each room once, none over 64).
+  async hello_batches_many_rooms() {
+    const rooms = [];
+    for (let i = 0; i < 70; i++) rooms.push({ id: i + 1, name: '#room-' + String(i).padStart(2, '0'), created_at: 100 + i });
+    const w = makeWorld(rooms);
+    w.location.hash = '#room-00';
+    const ws = await boot(w);
+    const sent = hellos(ws).map(function (h) { return h.rooms; });
+    return { sizes: sent.map(function (r) { return r.length; }), all: [].concat(...sent), names: rooms.map(function (r) { return r.name; }) };
+  },
+
   // First run: the Welcome form creates the room named in its field.
   async welcome_create() {
     const w = makeWorld([]);
