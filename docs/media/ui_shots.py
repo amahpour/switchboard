@@ -506,6 +506,95 @@ def shoot_board(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+REVIEW_CARD_DETAIL = (
+    "## Why it matters\n\n"
+    "- `total()` adds the tax **before** it takes the discount off\n"
+    "- the receipt shows the other order, so the two disagree by $1.60\n\n"
+    "```python\nreturn tax(price) - discount\n```\n\n"
+    "```mermaid\nflowchart LR\n  A[cart] --> B[tax] --> C[discount] --> D[total]\n```"
+)
+
+
+def shoot_review_card(browser: Any, out: Path, world: Any) -> None:
+    """#423: a card whose detail is Markdown with a drawn Mermaid diagram, and a question whose
+    options say who recommends them: one agent's pick, then every agent's, then a split."""
+    from playwright.sync_api import expect
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    views = (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    )
+    for slug, ctx_args in views:
+        room = "#card-md-" + slug
+        world.create_room(room)
+        world.add_agents(room, ("claude-1", "codex-1"))
+        call = world.agent_call
+        call(
+            room,
+            "codex-1",
+            "review",
+            action="open",
+            url="https://example.com/shop/pull/7",
+            head="4f2c9e1a7b30",
+        )
+        call(room, "codex-1", "review", action="raise", title="Discount is taken after tax",
+             where="shop/cart.py:40-58", detail=REVIEW_CARD_DETAIL)  # fmt: skip
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="' + room + '"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            page.click("#board-toggle")
+            page.click('#board .board-card[data-item="F1"]')
+            box = page.locator("#board .board-detail .md-pre").nth(1)
+            box.locator("button.md-show-diagram").click()
+            expect(box).to_have_class(re.compile(r"\bmd-showing-diagram\b"))
+            if slug == "phone-light":
+                page.locator("#board .board-detail").scroll_into_view_if_needed()
+            settle(page)
+            shot(page, out, "review-card-markdown-" + slug + ".png")
+        finally:
+            ctx.close()
+
+    for slug, ctx_args in views:
+        room = "#options-" + slug
+        world.create_room(room)
+        world.add_agents(room, ("claude-1", "codex-1"))
+        world.seed_review(room)
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="' + room + '"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            page.click("#board-toggle")
+            page.click('#board .board-card[data-item="Q1"]')
+            buttons = page.locator("#board .board-detail button[data-option]")
+            expect(buttons.nth(0)).to_have_text("Before tax (claude-1 recommends this)")
+            if slug == "light":
+                shot(page, out, "review-options-one-pick-light.png")
+            world.agent_call(room, "codex-1", "review", action="concur", item="Q1", recommend=0)
+            expect(buttons.nth(0)).to_have_text("Before tax (recommended by claude-1 and codex-1)")
+            if slug == "phone-light":
+                page.locator("#board .board-detail").scroll_into_view_if_needed()
+            shot(page, out, "review-options-agreed-" + slug + ".png")
+            if slug == "light":
+                world.agent_call(room, "codex-1", "review", action="concur", item="Q1", recommend=1)
+                expect(buttons.nth(1)).to_have_text("After tax (picked by codex-1)")
+                shot(page, out, "review-options-split-light.png")
+        finally:
+            ctx.close()
+
+
 def shoot_outdated_board(browser: Any, out: Path, world: Any) -> None:
     """#291: the same open finding before and after an agent moves the board's head."""
     from playwright.sync_api import expect
@@ -1672,6 +1761,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
         try:
             shoot(browser, out, world)
             shoot_board(browser, out, world)
+            shoot_review_card(browser, out, world)
             shoot_outdated_board(browser, out, world)
             shoot_claims(browser, out, world)
             shoot_proof_board(browser, out, world)

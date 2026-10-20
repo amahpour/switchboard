@@ -47,6 +47,7 @@ It drives headless Chromium through Playwright (a dev dependency): run `uv run p
 
 Re-run it whenever the UI changes, and look at every picture before committing them.
 For review board head changes, `ui_shots.py` also writes `outdated-before-*` and `outdated-after-*` PNGs in light, dark and phone light: the selected finding gains the new head mark.
+For the review card (§37.12), it writes `review-card-markdown-*` (a finding whose detail is Markdown with a drawn Mermaid diagram) and `review-options-agreed-*` (a question whose recommendation both agents picked) in light, dark and phone light, plus `review-options-one-pick-light.png` and `review-options-split-light.png` (one agent's pick, and two that differ).
 
 ## The CLI screenshots (`cli_shots.py`)
 
