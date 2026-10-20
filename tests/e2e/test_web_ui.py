@@ -2702,14 +2702,18 @@ def test_a_departed_raiser_puts_the_fix_in_needs_you(ui: UI) -> None:
 
 def test_a_contested_finding_shows_both_sides(ui: UI) -> None:
     """#250: the raiser's case and the contest's reason, side by side, above the choice. With
-    no forge, the lines are text, not a link."""
+    no forge, the lines are text, not a link. The seeded F3 has its raiser's insist too (#424), so
+    both sides have made their case and it is the person's."""
     page = review_room(ui, "e2e-board-sides")
     page.click("#board-toggle")
     page.click('#board .board-card[data-item="F3"]')
     sides = page.locator("#board .board-detail .board-side")
     expect(sides).to_have_count(2)
-    expect(sides.nth(0).locator(".board-side-who")).to_have_text("codex-1 · raised it")
+    expect(sides.nth(0).locator(".board-side-who")).to_have_text("codex-1 · raised it, and insists")
     expect(sides.nth(0)).to_contain_text("Half-up rounding, but the ledger rounds half-even.")
+    expect(sides.nth(0).locator(".board-insist")).to_have_text(
+        "Insists: the ledger is the books: the receipt has to match it"
+    )
     expect(sides.nth(1).locator(".board-side-who")).to_have_text("claude-1 · contests it")
     expect(sides.nth(1)).to_contain_text("the ledger is the one to change: half-up is what the receipt shows")
     expect(page.locator("#board .board-detail .board-where")).to_have_text("shop/money.py:8")
@@ -3194,11 +3198,6 @@ def test_a_contested_finding_waits_on_its_raiser_until_it_insists(ui: UI) -> Non
     )
     expect(detail.locator(".board-insist")).to_have_text("Insists: " + INSIST)
     expect(detail.locator(".board-side").nth(1)).to_contain_text("half-up is what the receipt shows")
-    left, right = (detail.locator(".board-side").nth(n).bounding_box() for n in (0, 1))
-    assert left and right and left["x"] < right["x"] and abs(left["y"] - right["y"]) < 2, (
-        left,
-        right,
-    )  # side by side
     expect(page.locator("#board-concede")).to_be_visible()  # and the person's ruling is there, as before
     expect(detail.locator(".board-history li")).to_have_text(
         [
@@ -3207,6 +3206,11 @@ def test_a_contested_finding_waits_on_its_raiser_until_it_insists(ui: UI) -> Non
             re.compile("codex-1 insisted on it"),
         ]
     )
+    page.click(
+        "#pane-toggle"
+    )  # Members closes: the card is wide enough for its two sides to sit beside each other
+    left, right = (detail.locator(".board-side").nth(n).bounding_box() for n in (0, 1))
+    assert left and right and left["x"] < right["x"] and abs(left["y"] - right["y"]) < 2, (left, right)
 
 
 def test_the_raiser_dropping_a_contested_finding_settles_it(ui: UI) -> None:
