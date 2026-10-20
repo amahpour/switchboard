@@ -81,6 +81,7 @@ def test_cursor_input_hook_routes_two_conversations_and_rejects_unmatched_calls(
 
     assert report(SID_A, "use-a", "switchboard_join").status_code == 200
     assert call(SID_A, "use-a", "switchboard_join", room="#build", screen_name="one")["ok"]
+    assert call(SID_A, "use-a", "switchboard_who", room="#build")["ok"] is False
     assert report(SID_B, "use-b", "switchboard_join").status_code == 200
     assert call(SID_B, "use-b", "switchboard_join", room="#build", screen_name="two")["ok"]
     assert call(SID_A, "missing", "switchboard_who", room="#build")["ok"] is False
