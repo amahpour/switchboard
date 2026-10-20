@@ -3131,6 +3131,119 @@ def test_an_agent_joining_the_room_changes_what_the_board_says_with_no_move(ui: 
     expect(buttons.nth(0)).to_have_text("Before tax (recommended by claude-1, codex-1 and devin-1)")
 
 
+# ----------------------------------- a contest goes back to its raiser first (#424, DESIGN.md §37.13)
+INSIST = "the ledger is the books: the receipt has to match it"
+
+
+def contest_room(ui: UI, slug: str, **open_args: Any) -> tuple[Page, str]:
+    """A board with one finding, F1, raised by codex-1 and contested by claude-1, and not insisted on."""
+    room = "#" + slug
+    ui.world.create_room(room)
+    ui.world.add_agents(room, ("claude-1", "codex-1"))
+    call = ui.world.agent_call
+    call(room, "codex-1", "review", action="open", url="https://example.com/shop/pull/7")
+    call(room, "codex-1", "review", action="raise", title="Rounding drops a cent", where="shop/money.py:8",
+         detail="Half-up rounding, but the ledger rounds half-even.")  # fmt: skip
+    call(room, "claude-1", "review", action="contest", item="F1", reason="half-up is what the receipt shows")
+    page = ui.open(room=None, **open_args)
+    open_room(page, slug)
+    page.click("#board-toggle")
+    return page, room
+
+
+def set_agent_status(ui: UI, room: str, name: str, status: str) -> None:
+    """The agent's session status as the broker holds it, announced as a status change is."""
+
+    def go() -> None:
+        st = ui.world.broker.state
+        member = st.store.find_member(st.store.get_room(room).id, name)
+        st.store.update_participant(member.participant_id, status=status)
+        st.hub.members_changed(room)
+
+    ui.world.broker.on_loop(go)
+
+
+def test_a_contested_finding_waits_on_its_raiser_until_it_insists(ui: UI) -> None:
+    """#424: a contest isn't the person's yet. The finding sits in Agents working with its raiser's
+    status, saying it waits for them to drop it or insist; when the raiser insists it moves to Needs you
+    at once, showing the raiser's reason beside the contest's. Fails if every contest lands in Needs you."""
+    page, room = contest_room(ui, "e2e-board-contest")
+    assert lane_labels(page, "working") == ["F1"] and lane_labels(page, "you") == []
+    card = page.locator('#board .board-card[data-item="F1"]')
+    expect(card.locator(".board-state")).to_have_text("Contested")
+    expect(card.locator(".board-pulse")).to_have_attribute("data-member", "codex-1")  # whose move it is
+    expect(card).to_contain_text("waiting for codex-1 to drop it or insist")
+    expect(page.locator("#board-status")).to_have_text("1 open")
+    card.click()
+    detail = page.locator("#board .board-detail")
+    expect(detail.locator(".board-detail-state")).to_have_text(
+        "raised by codex-1 · waiting for codex-1 to drop it or insist"
+    )
+    expect(detail.locator(".board-side-who")).to_have_text(["codex-1 · raised it", "claude-1 · contests it"])
+    expect(detail.locator(".board-insist")).to_have_count(0)
+
+    ui.world.agent_call(room, "codex-1", "review", action="insist", item="F1", reason=INSIST)
+    expect(page.locator('#board .lane-you .board-card[data-item="F1"]')).to_be_visible()
+    assert lane_labels(page, "working") == []
+    expect(page.locator("#board-status")).to_have_text("1 needs you")
+    expect(detail.locator(".board-detail-state")).to_have_text(
+        "raised by codex-1 · insisted: yours to decide"
+    )
+    expect(detail.locator(".board-side-who")).to_have_text(
+        ["codex-1 · raised it, and insists", "claude-1 · contests it"]
+    )
+    expect(detail.locator(".board-insist")).to_have_text("Insists: " + INSIST)
+    expect(detail.locator(".board-side").nth(1)).to_contain_text("half-up is what the receipt shows")
+    left, right = (detail.locator(".board-side").nth(n).bounding_box() for n in (0, 1))
+    assert left and right and left["x"] < right["x"] and abs(left["y"] - right["y"]) < 2, (
+        left,
+        right,
+    )  # side by side
+    expect(page.locator("#board-concede")).to_be_visible()  # and the person's ruling is there, as before
+    expect(detail.locator(".board-history li")).to_have_text(
+        [
+            re.compile("codex-1 raised it"),
+            re.compile("claude-1 contested it"),
+            re.compile("codex-1 insisted on it"),
+        ]
+    )
+
+
+def test_the_raiser_dropping_a_contested_finding_settles_it(ui: UI) -> None:
+    """The contest convinced them: the raiser drops it and it is Settled, and the person was never asked."""
+    page, room = contest_room(ui, "e2e-board-contest-drop")
+    page.click('#board .board-card[data-item="F1"]')
+    ui.world.agent_call(room, "codex-1", "review", action="drop", item="F1", reason="the receipt wins")
+    expect(page.locator('#board .lane-settled .board-card[data-item="F1"]')).to_be_visible()
+    assert lane_labels(page, "you") == [] and lane_labels(page, "working") == []
+    expect(page.locator("#board-status")).to_have_text("Settled")
+
+
+def test_a_contested_finding_goes_to_you_when_its_raiser_is_offline(ui: UI) -> None:
+    """Nothing waits forever on an agent that isn't there: with its raiser offline the finding is in Needs
+    you with no move at all, says so, and goes back to the agents when the raiser returns."""
+    page, room = contest_room(ui, "e2e-board-contest-offline")
+    assert lane_labels(page, "working") == ["F1"]
+    set_agent_status(ui, room, "codex-1", "offline")
+    expect(page.locator('#board .lane-you .board-card[data-item="F1"]')).to_be_visible()
+    expect(page.locator('#board .board-card[data-item="F1"]')).to_contain_text(
+        "codex-1 is not here: yours to decide"
+    )
+    expect(page.locator("#board-status")).to_have_text("1 needs you")
+    set_agent_status(ui, room, "codex-1", "idle")
+    expect(page.locator('#board .lane-working .board-card[data-item="F1"]')).to_be_visible()
+    expect(page.locator("#board-status")).to_have_text("1 open")
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_an_insisted_card_fits_a_phone(ui: UI, scheme: str) -> None:
+    page, room = contest_room(ui, f"e2e-board-contest-phone-{scheme}", **PHONE, color_scheme=scheme)
+    ui.world.agent_call(room, "codex-1", "review", action="insist", item="F1", reason=INSIST)
+    page.click('#board .board-card[data-item="F1"]')
+    expect(page.locator("#board .board-insist")).to_have_text("Insists: " + INSIST)
+    no_horizontal_scroll(page)
+
+
 def test_a_person_reassigns_a_finding_rules_it_fixed_and_the_owner_isnt_its_raiser_by_default(
     ui: UI,
 ) -> None:

@@ -2961,6 +2961,7 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 .board-side { padding: 8px 10px; border-radius: 8px; background: var(--side-bg); border: 1px solid var(--side-border); font-size: calc(12.5px * var(--text-scale)); min-width: 0; }
 .board-side > p { margin: 0; }
 .board-side > .board-side-who { margin: 0 0 4px; font-weight: 600; }
+.board-side > .board-insist { margin: 6px 0 0; padding-top: 6px; border-top: 1px solid var(--side-border); font-weight: 600; }
 .board-history { margin: 0; padding: 8px 0 0 18px; border-top: 1px solid var(--line); color: var(--muted-2); font-size: calc(12px * var(--text-scale)); display: flex; flex-direction: column; gap: 2px; }
 .board-history strong { color: var(--fg); font-weight: 600; }
 .board-history-at { margin-left: 6px; font-variant-numeric: tabular-nums; }

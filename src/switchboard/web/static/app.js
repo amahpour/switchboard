@@ -5460,9 +5460,11 @@
   // Three lanes in one row, read as the life of a finding (#250): the agents' work, what only a
   // person can decide, and what's done. Dropped items are settled too: muted, with their reason.
   const BOARD_LANES = [
+    // a contested finding is its raiser's to drop or insist on (#424): it is here until insisted on
+    // (or its raiser has left), when the broker's needs_person puts it in Needs you
     { key: 'working', title: 'Agents working', empty: 'Nothing in progress',
       test: function (i) { return !i.needs_person && (i.state === 'raised' || i.state === 'conceded' ||
-        (i.state === 'fixed' && !i.confirmed_by)); } },
+        i.state === 'contested' || (i.state === 'fixed' && !i.confirmed_by)); } },
     { key: 'you', title: 'Needs you', empty: 'Nothing needs you', test: function (i) { return i.needs_person; } },
     { key: 'settled', title: 'Settled', empty: 'Nothing settled yet',
       test: function (i) { return (i.state === 'fixed' && !!i.confirmed_by) || i.state === 'answered' || i.state === 'dropped'; } },
@@ -5495,12 +5497,13 @@
   }
 
   // Whose move a card waits on (#407): the owner of a finding being fixed, or the raiser of a fix
-  // awaiting confirmation. A raised finding is the other agents' (any of them) and a question
-  // or a disputed one is yours, so those get no dot.
+  // awaiting confirmation, or of a contested finding (#424). A raised finding is the other agents'
+  // (any of them) and a question or an insisted one is yours, so those get no dot.
   function boardNext(i) {
     if (i.kind === 'question' || i.needs_person) return null;
     if (i.state === 'conceded') return i.owner || null;
     if (i.state === 'fixed' && !i.confirmed_by) return i.raised_by || null;
+    if (i.state === 'contested') return i.raised_by || null;
     return null;
   }
 
@@ -5524,6 +5527,12 @@
     if (i.kind === 'question') return i.state === 'answered' ? 'answered by ' + i.answered_by : 'asked by ' + i.raised_by;
     if (i.state === 'fixed') return i.confirmed_by ? 'confirmed by ' + i.confirmed_by : 'owner ' + i.owner + ' · awaiting confirmation';
     if (i.state === 'conceded') return 'owner ' + i.owner;
+    if (i.state === 'contested') {
+      // both sides have made their case once only when the raiser insisted (#424)
+      if (i.insisted) return 'raised by ' + i.raised_by + ' · insisted: yours to decide';
+      if (!i.needs_person) return 'raised by ' + i.raised_by + ' · waiting for ' + i.raised_by + ' to drop it or insist';
+      return 'raised by ' + i.raised_by + ' · ' + i.raised_by + ' is not here: yours to decide';
+    }
     return 'raised by ' + i.raised_by;
   }
 
@@ -5959,8 +5968,10 @@
       const by = (i.history || []).filter(function (h) { return h.did === 'contested it'; }).pop();
       const sides = el('div', 'board-sides');
       const raised = el('div', 'board-side');
-      raised.append(el('p', 'board-side-who', i.raised_by + ' · raised it'));
+      raised.append(el('p', 'board-side-who', i.raised_by + (i.insisted ? ' · raised it, and insists' : ' · raised it')));
       raised.append(i.detail ? mdBody(i.detail, []) : el('p', null, i.title));
+      // the raiser's answer to the contest (#424), set beside the contest's reason
+      if (i.insisted) raised.append(el('p', 'board-insist', i.insist_line || 'Insists: ' + i.insisted));
       const against = el('div', 'board-side');
       against.append(el('p', 'board-side-who', (by ? by.by : 'the other side') + ' · contests it'), el('p', null, i.reason));
       sides.append(raised, against);
