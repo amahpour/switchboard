@@ -2603,6 +2603,7 @@ class Store:
             "answer",
             "answered_by",
             "deferred_to",
+            "insisted",
         }
         if set(fields) - allowed:
             raise ValueError(f"unknown review item fields: {sorted(set(fields) - allowed)}")
@@ -2752,6 +2753,7 @@ def _review_item(r: sqlite3.Row, picks: tuple[tuple[str, int], ...] = ()) -> rev
         confirmed_by=r["confirmed_by"],
         outdated_head=r["outdated_head"],
         deferred_to=r["deferred_to"],
+        insisted=r["insisted"],
         reason=r["reason"],
         options=opts,
         recommend=r["recommend"],

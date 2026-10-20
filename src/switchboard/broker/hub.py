@@ -106,7 +106,7 @@ class Hub:
         self._settings_fn: Callable[[str], dict[str, Any] | None] | None = None
         # a room's review board follows who is in the room (DESIGN.md §37.12): see _flush_members
         self._board_fn: Callable[[str], dict[str, Any] | None] | None = None
-        self._member_names: dict[str, tuple[str, ...]] = {}
+        self._member_names: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
 
     # registration ----------------------------------------------------------
     def add(self, sub: Subscriber) -> None:
@@ -197,13 +197,16 @@ class Hub:
             self._board_follows_members(room, members)
 
     def _board_follows_members(self, room: str, members: list[dict[str, Any]]) -> None:
-        """When who is in ``room`` changed, publish its review board again. Whether an option is
-        "recommended" is every agent in the room agreeing (§37.12), so a join or a leave changes
-        what the board says without any move. Status changes alone don't: the names are the same."""
+        """When who is in ``room``, or who is offline in it, changed, publish its review board again.
+        Whether an option is "recommended" is every agent in the room agreeing (§37.12), and a
+        contested finding is a person's once its raiser has left or gone offline (§37.13), so a join,
+        a leave or a drop to offline changes what the board says without any move. Any other status
+        change (busy, idle) doesn't: the same agents are there, as reachable as before."""
         names = tuple(sorted(str(m.get("name")) for m in members))
-        if self._member_names.get(room) == names:
+        gone = tuple(sorted(str(m.get("name")) for m in members if m.get("status") == "offline"))
+        if self._member_names.get(room) == (names, gone):
             return
-        self._member_names[room] = names
+        self._member_names[room] = (names, gone)
         board = self._board_fn(room) if self._board_fn is not None else None
         if board is not None:
             self.publish("review", room, {"board": board})

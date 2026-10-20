@@ -277,9 +277,11 @@ def review_request(agents: list[str], url: str, note: str) -> str:
         + f" Please review {url} together on this room's review board. Raise each finding with"
         ' review(action="raise"), with its file and lines, and write its detail in Markdown (a'
         " Mermaid diagram when a picture explains it better than words); concede or contest each"
-        ' other\'s; ask with review(action="ask") what only a person can decide, with the option'
-        " you recommend, and agree with the others' questions or pick another option with"
-        ' review(action="concur"). review(action="show") shows the board.'
+        " other's, and when one of yours is contested, drop it or insist on it with your reason"
+        ' (review(action="insist")): settle disagreements between you, and leave a person only'
+        ' what you still disagree on. Ask with review(action="ask") what only a person can decide,'
+        " with the option you recommend, and agree with the others' questions or pick another"
+        ' option with review(action="concur"). review(action="show") shows the board.'
     )
     return text + (f"\n\nNote: {note}" if note else "")
 

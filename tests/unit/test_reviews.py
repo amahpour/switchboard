@@ -214,7 +214,8 @@ def test_the_board_text_puts_open_work_first_and_stays_short() -> None:
     text = reviews.render({"url": "https://example.com/pr/7", "head": "a" * 40}, items, None, AGENTS)
     lines = text.splitlines()
     assert lines[0] == f"Review of https://example.com/pr/7 at {'a' * 12}: open"
-    assert lines[1].startswith("F2 [contested] rounding") and "a person decides" in lines[1]
+    assert lines[1].startswith("F2 [contested] rounding")
+    assert "raised by codex-1, contested: codex-1 drops it or insists" in lines[1]  # its raiser's move (#424)
     assert lines[2].startswith("Q1 [open] before or after tax?")
     assert "0. before tax (codex-1 recommends this) | 1. after tax" in lines[2]  # asked by codex-1
     assert lines[3].startswith("F1 [fixed]") and len(lines) == 4
@@ -498,12 +499,12 @@ def test_a_concession_wakes_another_owner_and_a_fix_wakes_its_raiser() -> None:
 
 
 def test_a_person_s_items_and_a_move_nobody_answers_wake_no_agent() -> None:
-    """Contested findings are a person's (the page shows them); a drop ends a finding; an agent no
+    """An insisted-on finding is a person's (the page shows it); a drop ends a finding; an agent no
     longer in the room isn't woken. A question is the other agents' to agree with first (#423), but
     nobody's once it is answered, or when its asker is the only agent."""
     assert reviews.handoff(question("answered"), "codex-1", AGENTS) is None
     assert reviews.handoff(question(), "codex-1", ("codex-1",)) is None
-    assert reviews.handoff(finding("contested"), "claude-1", AGENTS) is None
+    assert reviews.handoff(replace(finding("contested"), insisted="stands"), "codex-1", AGENTS) is None
     assert reviews.handoff(finding("dropped"), "codex-1", AGENTS) is None
     assert reviews.handoff(finding(), "codex-1", ("codex-1",)) is None  # alone in the room
     gone = replace(finding("fixed", owner="claude-1"), commit="def5678", confirmed_by="")
@@ -766,3 +767,110 @@ def test_the_board_text_says_who_is_behind_each_option_and_who_is_awaited() -> N
     assert "; fix options: 1. patch it (codex-1 recommends this) | 0. rewrite it; waiting on claude-1" in line
     done = reviews.render(review, [replace(fix, state="fixed", confirmed_by="codex-1")], None, AGENTS)
     assert "fix options" not in done  # once it's fixed, the choice is made
+
+
+# ------------------------------------------ a contest goes back to its raiser (#424, DESIGN.md §37.13)
+def contested(insisted: str = "", raised_by: str = "codex-1") -> Item:
+    return replace(
+        finding("contested", raised_by=raised_by),
+        reason="half-up is what the receipt shows",
+        insisted=insisted,
+    )
+
+
+def test_only_the_raiser_can_insist_and_only_once_on_a_contested_finding() -> None:
+    """#424: `insist` is the raiser's answer to a contest. Fails if anyone else can insist (the contester
+    would settle it in their own favour), if a finding no one contested can be insisted on, or if it can
+    be said twice (the person would be asked again)."""
+    f = contested()
+    assert (
+        reviews.agent_move(f, "insist", "codex-1") == "contested"
+    )  # the state stays: the reason is what changes
+    with pytest.raises(ReviewError, match="only codex-1, who raised F1, can insist on it"):
+        reviews.agent_move(f, "insist", "claude-1")
+    for state in ("raised", "conceded", "fixed", "dropped"):
+        with pytest.raises(ReviewError, match=f"F1 is {state}: only a contested finding can be insisted on"):
+            reviews.agent_move(finding(state), "insist", "codex-1")
+    with pytest.raises(ReviewError, match="F1 is insisted on already: a person decides, or you can drop it"):
+        reviews.agent_move(contested("it stays"), "insist", "codex-1")
+    with pytest.raises(ReviewError, match="is a question: only a person"):
+        reviews.agent_move(question(), "insist", "codex-1")
+
+
+def test_the_raiser_can_drop_a_contested_finding_and_the_contester_can_still_concede_it() -> None:
+    """The raiser dropping it settles it (the contest convinced them), before or after insisting; and the
+    other side may concede at any point, as before."""
+    for f in (contested(), contested("it stays")):
+        assert reviews.agent_move(f, "drop", "codex-1") == "dropped"
+        assert reviews.agent_move(f, "concede", "claude-1") == "conceded"
+        with pytest.raises(ReviewError, match="only codex-1, who raised F1, or a person can drop it"):
+            reviews.agent_move(f, "drop", "claude-1")
+
+
+def test_a_contested_finding_is_its_raisers_until_it_insists_or_its_raiser_is_gone() -> None:
+    """#424: Needs you is for what the agents could not settle. A contest is the raiser's to answer;
+    it is a person's once insisted on, and also when the raiser has left, is offline, or nothing says
+    who is in the room (it fails closed). Fails if every contest still lands on the person."""
+    here = {"codex-1", "claude-1"}
+    assert not reviews.needs_person(contested(), here)
+    assert not reviews.raiser_answers(contested("x"), here) and reviews.needs_person(contested("x"), here)
+    assert reviews.needs_person(contested(), {"claude-1"})  # the raiser left the room
+    assert reviews.needs_person(contested(), here, None, ["codex-1"])  # or is offline
+    assert not reviews.needs_person(
+        contested(), here, None, ["claude-1"]
+    )  # the other side being offline changes nothing
+    assert reviews.needs_person(contested())  # no one to ask: a person
+    assert contested().needs_person  # the item alone says so too
+    c = reviews.counts([contested(), contested("x"), contested(raised_by="devin-1"), finding("raised")], here)
+    assert c["needs_person"] == 2 and c["open"] == 4  # the insisted one, and one whose raiser isn't here
+    assert reviews.counts([contested()], here, None, ["codex-1"])["needs_person"] == 1
+
+
+def test_a_contest_wakes_its_raiser_and_an_insist_wakes_nobody() -> None:
+    """A contested finding is the raiser's to answer, so the contester's move is posted as a message to
+    them (a notice would leave it waiting on no one); after the insist it is a person's, who sees it on
+    the page. The line says what to do and that only an insisted finding goes to a person."""
+    who, text = reviews.handoff(contested(), "claude-1", AGENTS) or ((), "")
+    assert who == ("codex-1",)
+    assert text.startswith(
+        "Review board: F1 contested: off by one. @codex-1: drop it if the contest convinces you"
+    )
+    assert 'insist with your reason (review(action="insist", item="F1", reason=...))' in text
+    assert "only an insisted finding goes to a person" in text
+    assert reviews.handoff(contested("it stays"), "codex-1", AGENTS) is None
+    assert reviews.handoff(contested(), "claude-1", ("claude-1",)) is None  # the raiser isn't here
+
+
+def test_the_board_text_says_whose_move_a_contested_finding_is() -> None:
+    review = {"url": "https://example.com/pr/7", "head": ""}
+
+    def line(f: Item, present: tuple[str, ...] = AGENTS, offline: tuple[str, ...] = ()) -> str:
+        return reviews.render(review, [f], None, present, offline).splitlines()[1]
+
+    assert line(contested()).endswith(
+        "raised by codex-1, contested: codex-1 drops it or insists (review action insist)"
+    )
+    assert line(contested("it stays")).endswith("raised by codex-1, contested, insisted on: a person decides")
+    assert line(contested(), ("claude-1",)).endswith(
+        "raised by codex-1, contested; codex-1 isn't here to answer: a person decides"
+    )
+    assert "isn't here to answer" in line(contested(), AGENTS, ("codex-1",))
+
+
+def test_an_insist_reads_on_a_cards_history() -> None:
+    f = contested("it stays")
+    events = [
+        {"ts": 7.0, "data": {"item": "F1", "to": "contested", "by": "claude-1"}},
+        {"ts": 8.0, "data": {"item": "F1", "to": "insisted", "by": "codex-1"}},
+    ]
+    assert [(h["by"], h["did"]) for h in reviews.history(f, events)] == [
+        ("codex-1", "raised it"), ("claude-1", "contested it"), ("codex-1", "insisted on it"),
+    ]  # fmt: skip
+
+
+def test_the_migrations_line_for_an_old_contest_is_the_one_the_page_shows() -> None:
+    """db.py can't import reviews: the literal in its migration and ``LEGACY_INSISTED`` are pinned equal."""
+    assert reviews.LEGACY_INSISTED in "".join(db.V26_TO_V27)
+    assert reviews.insist_line(contested("it stays")) == "Insists: it stays"
+    assert reviews.insist_line(contested(reviews.LEGACY_INSISTED)) == reviews.LEGACY_INSISTED
+    assert reviews.insist_line(contested()) == ""

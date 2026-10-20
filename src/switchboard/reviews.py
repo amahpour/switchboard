@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
@@ -49,11 +49,14 @@ QUESTION_STATES = ("open", "answered", "dropped")
 OPEN_FINDING = frozenset({"raised", "contested", "conceded"})
 
 # An agent's moves on a finding, from -> to. A person may also rule on a contested finding
-# (to conceded, with an owner, or to dropped) and drop anything; only a person answers.
+# (to conceded, with an owner, or to dropped) and drop anything; only a person answers. A contest
+# goes back to its raiser, who drops the finding or insists on it (#424): ``insist`` leaves the
+# finding contested, with the raiser's reason, and that is what puts it in front of a person.
 AGENT_MOVES = {
     # from conceded: a handover by its owner, or a takeover once the owner has left (#371)
     "concede": (frozenset({"raised", "contested", "conceded"}), "conceded"),
     "contest": (frozenset({"raised"}), "contested"),
+    "insist": (frozenset({"contested"}), "contested"),
     "fix": (frozenset({"conceded"}), "fixed"),
     "drop": (frozenset({"raised", "contested", "conceded"}), "dropped"),
     "confirm": (frozenset({"fixed"}), "fixed"),
@@ -108,6 +111,9 @@ class Item:
     # the picks agents made with ``concur`` (#423), oldest first: (screen name, option index).
     # The asker's own ``recommend`` is their pick too, and is not repeated here (``effective_picks``).
     picks: tuple[tuple[str, int], ...] = ()
+    # the raiser's reason for insisting on a contested finding (#424), empty until it does: both
+    # sides have then made their case once, and a person decides
+    insisted: str = ""
 
     @property
     def label(self) -> str:
@@ -115,6 +121,9 @@ class Item:
 
     @property
     def needs_person(self) -> bool:
+        """Whether a person must act, from the item alone: a contested finding counts, since nothing
+        here says its raiser can still answer. ``needs_person()`` (below) knows who is in the room
+        and lets a contested finding stay with its raiser (#424)."""
         return (
             (self.kind == "question" and self.state == "open")
             or self.state == "contested"
@@ -396,6 +405,7 @@ HISTORY_VERBS = {
     "conceded": "conceded it",
     "reassigned": "reassigned it",
     "contested": "contested it",
+    "insisted": "insisted on it",
     "fixed": "fixed it",
     "confirmed": "confirmed it",
     "dropped": "dropped it",
@@ -450,7 +460,8 @@ def parse_label(value: Any) -> tuple[str, int]:
 def agent_move(item: Item, move: str, actor: str, owner_here: bool = True) -> str:
     """The state an agent's ``move`` takes ``item`` to, or ReviewError. Rules beyond the
     table: a question is a person's to answer or drop; whoever raised a finding can't concede
-    or contest it (that's the other side's call), only drop it; only its owner marks it fixed.
+    or contest it (that's the other side's call), only drop it, or insist on it once it is
+    contested (#424: only its raiser, and once); only its owner marks it fixed.
     A conceded finding moves to another owner (#371) when its owner hands it over, or when the
     owner has left the room (``owner_here`` False: a restart brings an agent back under a new
     name, and the finding would otherwise be no one's to fix)."""
@@ -460,7 +471,14 @@ def agent_move(item: Item, move: str, actor: str, owner_here: bool = True) -> st
         raise ReviewError(f"{item.label} is a question: only a person answers or drops it")
     frm, to = AGENT_MOVES[move]
     if item.state not in frm:
+        if move == "insist":
+            raise ReviewError(f"{item.label} is {item.state}: only a contested finding can be insisted on")
         raise ReviewError(f"{item.label} is {item.state}: it can't be {to} from there")
+    if move == "insist":
+        if actor != item.raised_by:
+            raise ReviewError(f"only {item.raised_by}, who raised {item.label}, can insist on it")
+        if item.insisted:
+            raise ReviewError(f"{item.label} is insisted on already: a person decides, or you can drop it")
     if move in ("concede", "contest") and actor == item.raised_by:
         raise ReviewError(f"{item.label} is yours: you can drop it, not {move} it")
     if move == "concede" and item.state == "conceded" and actor != item.owner and owner_here:
@@ -490,8 +508,9 @@ def handoff(item: Item, actor: str, agents: Sequence[str]) -> tuple[tuple[str, .
     is the other agents' to concede or contest; a finding conceded to another agent is that
     owner's to fix; a fix is its raiser's to check. A question just asked is the other agents' to
     agree with or answer with another pick (#423: "recommended" means they all agree), before it
-    is a person's. Contested findings wait for a person, who sees them on the page, and a move
-    that leaves the next step with the mover wakes nobody. ``agents``: the room's active agents."""
+    is a person's. A contested finding goes back to its raiser (#424), to drop or insist on; once
+    insisted on it waits for a person, who sees it on the page, and a move that leaves the next
+    step with the mover wakes nobody. ``agents``: the room's active agents."""
     show = 'review(action="show") shows the board.'
     if item.kind == "question":
         who = tuple(a for a in agents if a != actor) if item.state == "open" and item.options else ()
@@ -509,6 +528,15 @@ def handoff(item: Item, actor: str, agents: Sequence[str]) -> tuple[tuple[str, .
         verb, then = f"raised: {item.title}", "concede or contest it"
         if item.options:  # its fix options are theirs to agree with too (#423)
             then += ", and agree with its fix option or pick another (concur)"
+    elif item.state == "contested" and not item.insisted:
+        # a contest is the raiser's to answer (#424): drop it, or insist with a reason, and only an
+        # insisted finding is a person's. The reason itself is read on the board, not repeated here
+        who = (item.raised_by,) if item.raised_by != actor and item.raised_by in agents else ()
+        verb = f"contested: {item.title}"
+        then = (
+            f'drop it if the contest convinces you, or insist with your reason (review(action="insist", '
+            f'item="{item.label}", reason=...)): only an insisted finding goes to a person'
+        )
     elif item.state == "conceded":
         who = (item.owner,) if item.owner and item.owner != actor and item.owner in agents else ()
         verb, then = f"conceded, owner {item.owner}", "it's yours to fix"
@@ -556,10 +584,40 @@ def unsettled_finding_ids(items: list[Item]) -> list[int]:
     ]
 
 
-def needs_person(item: Item, active: set[str] | None = None, now: float | None = None) -> bool:
-    """A fix waits for a person's check when its independent raiser cannot confirm in time."""
+# what a finding contested before agents could insist reads as (the v26 -> v27 migration writes it)
+LEGACY_INSISTED = "(contested before agents could insist: a person decides)"
+
+
+def insist_line(item: Item) -> str:
+    """The raiser's answer to a contest as a card shows it: "Insists: <reason>", or the migration's own
+    line for a finding that was already waiting on a person. Empty when there is none."""
+    if not item.insisted:
+        return ""
+    return item.insisted if item.insisted == LEGACY_INSISTED else f"Insists: {item.insisted}"
+
+
+def raiser_answers(item: Item, active: set[str] | None, offline: Collection[str] = ()) -> bool:
+    """Whether a contested finding is still its raiser's to answer (#424): not insisted on yet, and
+    its raiser is in the room (``active``, who we know) and not offline. Fails closed: with no
+    ``active`` to look at, or a raiser who left or is offline, a person has it."""
+    return (
+        item.state == "contested"
+        and not item.insisted
+        and active is not None
+        and item.raised_by in active
+        and item.raised_by not in offline
+    )
+
+
+def needs_person(
+    item: Item, active: set[str] | None = None, now: float | None = None, offline: Collection[str] = ()
+) -> bool:
+    """Whether a person must act now. A contested finding goes back to its raiser first, who drops it
+    or insists (#424), so it is a person's only once insisted on, or when its raiser has left the
+    room or is offline. A fix waits for a person's check when its independent raiser cannot
+    confirm in time."""
     if item.needs_person:
-        return True
+        return not raiser_answers(item, active, offline)
     return bool(
         item.state == "fixed"
         and not item.confirmed_by
@@ -570,16 +628,31 @@ def needs_person(item: Item, active: set[str] | None = None, now: float | None =
     )
 
 
-def counts(items: list[Item], active: set[str] | None = None, now: float | None = None) -> dict[str, int]:
+def counts(
+    items: list[Item],
+    active: set[str] | None = None,
+    now: float | None = None,
+    offline: Collection[str] = (),
+) -> dict[str, int]:
     out = {"needs_person": 0, "open": 0, "fixed": 0, "dropped": 0, "answered": 0}
     for i in items:
-        if needs_person(i, active, now):
+        if needs_person(i, active, now, offline):
             out["needs_person"] += 1
         if i.state in OPEN_FINDING or i.state == "open" or (i.state == "fixed" and not i.confirmed_by):
             out["open"] += 1
         elif i.state in ("fixed", "dropped", "answered"):
             out[i.state] += 1
     return out
+
+
+def contested_line(item: Item, active: set[str], offline: Collection[str]) -> str:
+    """Whose move a contested finding is, as an agent reads it (#424)."""
+    base = f"raised by {item.raised_by}, contested"
+    if item.insisted:
+        return f"{base}, insisted on: a person decides"
+    if raiser_answers(item, active, offline):
+        return f"{base}: {item.raised_by} drops it or insists (review action insist)"
+    return f"{base}; {item.raised_by} isn't here to answer: a person decides"
 
 
 def options_text(item: Item, present: Sequence[str]) -> str:
@@ -597,11 +670,16 @@ def options_text(item: Item, present: Sequence[str]) -> str:
 
 
 def render(
-    review: dict[str, Any], items: list[Item], now: float | None = None, present: Sequence[str] = ()
+    review: dict[str, Any],
+    items: list[Item],
+    now: float | None = None,
+    present: Sequence[str] = (),
+    offline: Collection[str] = (),
 ) -> str:
     """The board as an agent reads it: one line per item, open work first. Short on purpose:
     the board replaces a wall of text in the room, it mustn't become one. ``present``: the room's
-    agents, who must all pick an option for it to read "recommended by" (``consensus``)."""
+    agents, who must all pick an option for it to read "recommended by" (``consensus``), and whose
+    raiser a contested finding waits on; ``offline``: those among them who are not there (#424)."""
     head_s = f" at {review['head'][:12]}" if review.get("head") else ""
     state = "settled" if settled(items) else "open"
     if review.get("posted_by"):
@@ -618,7 +696,7 @@ def render(
         where = f" ({i.file}{':' + i.lines if i.lines else ''})" if i.file else ""
         who = {
             "raised": f"raised by {i.raised_by}",
-            "contested": f"raised by {i.raised_by}, contested: a person decides",
+            "contested": contested_line(i, set(present), offline),
             "conceded": f"owner {i.owner}",
             "fixed": f"fixed by {i.owner}"
             + (f" in {i.commit[:12]}" if i.commit else "")
