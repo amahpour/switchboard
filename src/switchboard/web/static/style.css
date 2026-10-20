@@ -3005,6 +3005,7 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
      they can see it. Three rows: the title; the status and Close; what is left and Hand off. */
   .board-head { position: sticky; top: -10px; z-index: 2; margin: -10px -12px 0; padding: 10px 12px 8px;
     background: var(--bg); border-bottom: 1px solid var(--line); }
+  .board { scroll-padding-top: 160px; }  /* a card that takes focus by keyboard doesn't land under it */
   #board-status { order: 1; }
   #board-close { order: 2; margin-left: auto; }
   .board-handoff { order: 3; flex: 1 1 100%; justify-content: space-between; }
