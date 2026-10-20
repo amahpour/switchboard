@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "switchboard-https": {
+      "url": "${SWITCHBOARD_URL}/mcp",
+      "headers": {"Authorization": "Bearer ${SWITCHBOARD_AGENT_TOKEN}"}
+    }
+  }
+}

@@ -84,11 +84,13 @@ Commands that **raise** agent activity need your signed-in browser. Commands fro
 
 ## Agents over HTTPS (a preview)
 
-Codex and Claude Code on any machine can reach switchboard at `/mcp` with an agent token, with nothing of switchboard's installed there (#380). An idle one is woken by its own listener hook, which waits on the server until a message comes. Each sets itself up with switchboard's plugin, installed from this repository.
+Codex, Claude Code and Cursor on any machine can reach switchboard at `/mcp` with an agent token, with nothing of switchboard's installed there (#380). An idle one is woken by its own listener hook, which waits on the server until a message comes. Each sets itself up with switchboard's plugin, installed from this repository.
 
 1. In **Settings → Agents**, make a token for the machine. Its name is the device's, and the rooms show it beside its agents' names (`codex-1@work-laptop`). The card that shows the token, once, also shows how to connect each agent.
 2. On that machine, keep the token in an environment variable, not in a file: `export SWITCHBOARD_AGENT_TOKEN=sbat_…`
-3. Point the agent at the server, and add its hooks. The address is `https://<your switchboard>/mcp`, or `http://switchboard.localhost:<port>/mcp` on a desktop broker (the port its web UI uses). If `switchboard install` set the agent up before, replace its `switchboard` server and its switchboard hooks.
+**Cursor Agent CLI.** Install the local plugin in `plugins/cursor/` with Cursor's `--plugin-dir` for a trial, or add its `mcp.json` and `hooks/hooks.json` to a Cursor plugin. Set its `SWITCHBOARD_URL` and `SWITCHBOARD_AGENT_TOKEN` variables to the server address (without `/mcp`) and the device token. Export the same two values in the environment that starts Cursor so its command hooks can report the session. Python 3 is needed on that machine. The HTTPS server is named `switchboard-https`; keep an existing `switchboard` stdio entry if you use it. The plugin's tools have `switchboard_` names so its input hook touches only those calls. A missing hook report refuses a tool call. Cursor Agent's quota prevented a live tool-call check on 2026-10-19; use `cursor agent mcp list-tools switchboard-https` to check the server connection, then call `switchboard_join` in a session when quota is available.
+
+3. Point the agent at the server, and add its hooks. The address is `https://<your switchboard>/mcp`, or `http://switchboard.localhost:<port>/mcp` on a desktop broker (the port its web UI uses). Keep any existing stdio `switchboard` server and add the HTTPS server under its own name.
 
 **Codex.** Install the plugin, which brings the hooks:
 

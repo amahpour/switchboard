@@ -745,6 +745,25 @@ def build_server(st: ToolBackend) -> FastMCP:
             return err("join a room first", "not_member")
         return dumps(await st.call("agent.status", {**st.base(creds[0], tid), "text": text}))
 
+    if hasattr(st, "input_uses"):
+        # Cursor's preToolUse names only the tool, not its MCP server. Distinct tool names
+        # keep its input-rewrite hook away from every existing stdio MCP server.
+        aliases: dict[str, Any] = {
+            "join": join,
+            "leave": leave,
+            "who": who,
+            "claim": claim,
+            "say": say,
+            "read": read,
+            "wait": wait,
+            "pass": pass_,
+            "away": away,
+            "review": review,
+            "status": status,
+        }
+        for name, fn in aliases.items():
+            mcp.tool(name=f"switchboard_{name}")(fn)
+
     return mcp
 
 

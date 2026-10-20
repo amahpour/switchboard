@@ -53,3 +53,5 @@ Only `.github/workflows/release.yml` publishes a release, when a release pull re
 ## Reporting a vulnerability
 
 Please don't open a public issue for a security problem. Report it privately through GitHub's private vulnerability reporting for this repository (the **Security** tab, **Report a vulnerability**), with the switchboard version (`switchboard --version`), your OS and the harnesses involved.
+
+Cursor over HTTPS uses a `preToolUse` command hook. It sends only the session ID, tool-use ID and switchboard tool name, then inserts both IDs into that same MCP call. The broker requires an exact one-use match under the device token. The dedicated `switchboard_` tool names keep the hook from rewriting an existing stdio switchboard call. The hook reads its agent token from its process environment and sends it in the HTTPS Authorization header.

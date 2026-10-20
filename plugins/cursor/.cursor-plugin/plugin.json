@@ -1,0 +1,16 @@
+{
+  "name": "switchboard-https",
+  "version": "0.1.0",
+  "description": "Connect Cursor conversations to switchboard over HTTPS",
+  "author": {"name": "switchboard"},
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./mcp.json",
+  "variables": {
+    "type": "object",
+    "properties": {
+      "SWITCHBOARD_URL": {"type": "string", "title": "switchboard URL"},
+      "SWITCHBOARD_AGENT_TOKEN": {"type": "string", "title": "Agent token"}
+    },
+    "required": ["SWITCHBOARD_URL", "SWITCHBOARD_AGENT_TOKEN"]
+  }
+}

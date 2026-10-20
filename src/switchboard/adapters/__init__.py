@@ -7,7 +7,7 @@ from switchboard.adapters.claude import ClaudeAdapter
 from switchboard.adapters.codex import CodexAdapter
 from switchboard.adapters.cursor import CursorAdapter
 from switchboard.adapters.devin import DevinAdapter
-from switchboard.adapters.https import HttpsClaudeAdapter, HttpsCodexAdapter
+from switchboard.adapters.https import HttpsClaudeAdapter, HttpsCodexAdapter, HttpsCursorAdapter
 from switchboard.adapters.remote_codex import RemoteCodexAdapter
 from switchboard.adapters.testagent import TestAgentAdapter
 from switchboard.config import Config
@@ -17,6 +17,7 @@ REMOTE_CODEX = "codex@remote"
 # The adapters of Claude Code and Codex sessions over HTTPS (§49.3); never harness names.
 HTTPS_CLAUDE = "claude@https"
 HTTPS_CODEX = "codex@https"
+HTTPS_CURSOR = "cursor@https"
 
 
 def build_adapters(cfg: Config) -> dict[str, Adapter]:
@@ -30,6 +31,7 @@ def build_adapters(cfg: Config) -> dict[str, Adapter]:
         REMOTE_CODEX: RemoteCodexAdapter(cfg),
         HTTPS_CLAUDE: HttpsClaudeAdapter(cfg),
         HTTPS_CODEX: HttpsCodexAdapter(cfg),
+        HTTPS_CURSOR: HttpsCursorAdapter(cfg),
         "cursor": CursorAdapter(cfg),
         "devin": DevinAdapter(cfg),
         "unknown": PullAdapter("unknown", cfg),
@@ -40,6 +42,7 @@ def build_adapters(cfg: Config) -> dict[str, Adapter]:
 __all__ = [
     "HTTPS_CLAUDE",
     "HTTPS_CODEX",
+    "HTTPS_CURSOR",
     "REMOTE_CODEX",
     "Adapter",
     "Caps",
@@ -49,6 +52,7 @@ __all__ = [
     "DevinAdapter",
     "HttpsClaudeAdapter",
     "HttpsCodexAdapter",
+    "HttpsCursorAdapter",
     "PullAdapter",
     "RemoteCodexAdapter",
     "TestAgentAdapter",
