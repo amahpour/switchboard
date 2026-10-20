@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import httpx
@@ -113,7 +112,7 @@ def test_cursor_command_hook_inserts_the_reported_ids(broker: InProcBroker) -> N
         "tool_input": {"room": "#build"},
     }
     r = subprocess.run(
-        [sys.executable, str(SCRIPT), "pre"],
+        [str(SCRIPT), "pre"],
         input=json.dumps(payload),
         text=True,
         capture_output=True,
