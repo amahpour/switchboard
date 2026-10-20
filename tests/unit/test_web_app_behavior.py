@@ -48,6 +48,7 @@ def test_only_a_confirmed_fix_gets_the_check_on_its_board_card() -> None:
     contested, dropped, deferred, an open or answered question) have none, and a live frame that
     confirms a fix adds it to that card alone."""
     out = run("review_confirmed_check")
+    assert out["cards"] == 10  # every card was drawn, so a missing check is the check's absence
     assert out["before"] == ["F1", "F2"]
     assert out["after"] == ["F1", "F2", "F3"]
 

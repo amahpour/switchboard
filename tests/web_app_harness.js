@@ -377,26 +377,31 @@ const SCENARIOS = {
   // waiting for its raiser, and not any other state. A live frame that confirms one adds it.
   async review_confirmed_check() {
     const { w, ws } = await buildRoom();
+    // every field a card and the header read, as the broker sends them (a board missing one throws)
+    const item = function (label, state, extra) {
+      return Object.assign({ label: label, kind: label[0] === 'Q' ? 'question' : 'finding', state: state,
+        title: 'title of ' + label, detail: '', file: '', lines: '', raised_by: 'codex-1', owner: '', commit: '',
+        proof: '', confirmed_by: '', outdated_head: '', deferred_to: '', reason: '', options: [], recommend: null,
+        answer: '', answered_by: '', needs_person: false, lines_url: null, commit_url: null, history: [] },
+        extra || {});
+    };
     const items = [
-      { label: 'F1', kind: 'finding', state: 'fixed', title: 'Confirmed by its raiser',
-        raised_by: 'codex-1', owner: 'claude-1', confirmed_by: 'codex-1' },
-      { label: 'F2', kind: 'finding', state: 'fixed', title: 'Confirmed by a person',
-        raised_by: 'codex-1', owner: 'claude-1', confirmed_by: 'alice' },
-      { label: 'F3', kind: 'finding', state: 'fixed', title: 'Awaiting confirmation',
-        raised_by: 'codex-1', owner: 'claude-1' },
-      { label: 'F4', kind: 'finding', state: 'raised', title: 'Raised', raised_by: 'codex-1' },
-      { label: 'F5', kind: 'finding', state: 'conceded', title: 'Being fixed',
-        raised_by: 'codex-1', owner: 'claude-1' },
-      { label: 'F6', kind: 'finding', state: 'contested', title: 'Contested',
-        raised_by: 'codex-1', needs_person: true },
-      { label: 'F7', kind: 'finding', state: 'dropped', title: 'Dropped', reason: 'not a bug' },
-      { label: 'F8', kind: 'finding', state: 'dropped', title: 'Deferred', deferred_to: 'SHOP-9' },
-      { label: 'Q1', kind: 'question', state: 'open', title: 'Open', raised_by: 'codex-1',
-        needs_person: true },
-      { label: 'Q2', kind: 'question', state: 'answered', title: 'Answered', answered_by: 'alice' },
+      item('F1', 'fixed', { owner: 'claude-1', confirmed_by: 'codex-1' }),  // confirmed by its raiser
+      item('F2', 'fixed', { owner: 'claude-1', confirmed_by: 'alice' }),    // confirmed by a person
+      item('F3', 'fixed', { owner: 'claude-1' }),                           // awaiting its raiser
+      item('F4', 'raised'),
+      item('F5', 'conceded', { owner: 'claude-1' }),
+      item('F6', 'contested', { needs_person: true }),
+      item('F7', 'dropped', { reason: 'not a bug' }),
+      item('F8', 'dropped', { deferred_to: 'SHOP-9' }),
+      item('Q1', 'open', { needs_person: true, options: ['yes', 'no'] }),
+      item('Q2', 'answered', { answer: 'yes', answered_by: 'alice' }),
     ];
-    const board = { url: 'https://example.com/shop/pull/7', items: items, counts: {},
-                    agents: [], agent_people: {}, settled: false };
+    const board = { id: 7, url: 'https://example.com/shop/pull/7', forge: null, head: '4f2c9e1a7b30',
+                    opened_by: 'codex-1', opened_at: 1, settled: false, counts: {}, items: items,
+                    plan: { summary: '', comments: [] }, agents: ['claude-1', 'codex-1'],
+                    agent_people: {}, posted_at: null, posted_by: null };
+    w.server.boards.build = board;  // what opening the board reads back
     ws.deliver({ t: 'review', room: '#build', board: board });
     click(w.$('board-toggle'));
     await settle();
@@ -408,11 +413,13 @@ const SCENARIOS = {
         }).length === 1;
       }).map(function (i) { return i.label; });
     };
+    const cards = findAll(w.$('board'), function (n) { return n.classList.contains('board-card'); }).length;
     const before = checked();
     items[2] = { ...items[2], confirmed_by: 'codex-1' };
-    ws.deliver({ t: 'review', room: '#build', board: { ...board, items: items } });
+    w.server.boards.build = { ...board, items: items };
+    ws.deliver({ t: 'review', room: '#build', board: w.server.boards.build });
     await settle();
-    return { before: before, after: checked() };
+    return { cards: cards, before: before, after: checked() };
   },
   // A rooms frame whose listing looks unchanged (the room was closed, which dropped this page's
   // subscription, then reopened under the same id before the listing was served).
