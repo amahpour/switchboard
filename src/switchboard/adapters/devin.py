@@ -58,6 +58,7 @@ class DevinAdapter(Adapter):
     harness = "devin"
     reports_session_id = True  # the hooks' session_id is the one the history tools know
     derives_tier = True
+    wait_tool = WAIT_TOOL  # how its hooks name switchboard's wait(); over HTTPS another server name
 
     def tier(self, p: Participant | None) -> tuple[str, str | None]:
         return TIER, None
@@ -113,16 +114,16 @@ class DevinAdapter(Adapter):
     def closes_waits(self, p: Participant, ev: HookEvent) -> bool:
         """Any hook of this session other than the wait() call's own ends an open
         wait(): the agent has moved on (an interrupt sends no cancel)."""
-        return not (ev.ev in ("PreToolUse", "PostToolUse") and ev.tool == WAIT_TOOL)
+        return not (ev.ev in ("PreToolUse", "PostToolUse") and ev.tool == self.wait_tool)
 
     def is_wait_pre(self, ev: HookEvent) -> bool:
-        return ev.ev == "PreToolUse" and ev.tool == WAIT_TOOL and bool(ev.tool_use_id)
+        return ev.ev == "PreToolUse" and ev.tool == self.wait_tool and bool(ev.tool_use_id)
 
     def pull_confirms(self, path: str, want_tool_use: str | None, ev: HookEvent) -> bool:
         """A wait() answer is in context only on that very call's successful PostToolUse."""
         if path != "wait":
             return True
-        if ev.ev != "PostToolUse" or ev.tool != WAIT_TOOL or ev.ok is not True:
+        if ev.ev != "PostToolUse" or ev.tool != self.wait_tool or ev.ok is not True:
             return False
         return want_tool_use is None or ev.tool_use_id == want_tool_use
 

@@ -47,6 +47,7 @@ from mcp.types import TextContent, ToolAnnotations
 from starlette.routing import Route
 
 from switchboard import __version__
+from switchboard.adapters.https import DEVIN_TOOL_PREFIX
 from switchboard.broker import agent_tokens
 from switchboard.broker.agents import McpConn
 from switchboard.broker.peer import McpIdentity
@@ -704,7 +705,8 @@ class CommandHook:
                     event,
                     hook_params(
                         event,
-                        {"session_id": sid, "tool_use_id": use, "tool_name": tool},
+                        # named as Devin's PostToolUse names it, which its wait loop compares (§9.5)
+                        {"session_id": sid, "tool_use_id": use, "tool_name": DEVIN_TOOL_PREFIX + tool},
                         self.tools.state.clock.now(),
                     ),
                 )

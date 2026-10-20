@@ -3,12 +3,16 @@
 
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 
 SERVER = "mcp__switchboard_https__"
+# a delivery's batch token, as switchboard writes it into a tool's answer
+TOKEN = re.compile(r"yk:b\d{1,12}\.[0-9a-f]{8}")
+MAX_TOKENS = 20
 EVENTS = {
     "post": "PostToolUse",
     "start": "SessionStart",
@@ -103,7 +107,11 @@ def main():
         if not isinstance(tool, str) or not tool.startswith(SERVER):
             return
         body["tool_name"] = tool
-        body["tool_response"] = p.get("tool_response", {})
+        # only the batch tokens: the broker reads nothing else of the answer, and a long one would
+        # not fit the request it accepts
+        resp = p.get("tool_response")
+        text = resp if isinstance(resp, str) else json.dumps(resp)
+        body["tool_response"] = " ".join(list(dict.fromkeys(TOKEN.findall(text)))[:MAX_TOKENS])
     reply = send("/mcp/event", body)
     if isinstance(reply, dict) and (
         set(reply) == {"decision", "reason"} or set(reply) == {"hookSpecificOutput"}
