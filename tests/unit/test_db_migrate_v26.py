@@ -85,7 +85,14 @@ def test_a_pick_is_one_per_agent_and_item_and_within_the_options(tmp_path: Path)
     con.execute(insert, (item.id, "claude-1", 0, 1.0))
     with pytest.raises(sqlite3.IntegrityError):
         con.execute(insert, (item.id, "claude-1", 1, 2.0))
-    for bad in ("codex-1", 4, 1.0), ("", 0, 1.0), ("x" * 101, 0, 1.0), ("codex-1", -1, 1.0):
+    # the last option a board allows fits; one more doesn't (the CHECK moves with reviews.MAX_OPTIONS)
+    con.execute(insert, (item.id, "codex-1", reviews.MAX_OPTIONS - 1, 1.0))
+    for bad in (
+        ("devin-1", reviews.MAX_OPTIONS, 1.0),
+        ("", 0, 1.0),
+        ("x" * 101, 0, 1.0),
+        ("devin-1", -1, 1.0),
+    ):
         with pytest.raises(sqlite3.IntegrityError):
             con.execute(insert, (item.id, *bad))
     with pytest.raises(sqlite3.IntegrityError):

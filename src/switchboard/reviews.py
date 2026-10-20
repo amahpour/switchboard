@@ -106,7 +106,7 @@ class Item:
     # a dropped finding deferred to this follow-up ticket (#371): settled, but not withdrawn
     deferred_to: str = ""
     # the picks agents made with ``concur`` (#423), oldest first: (screen name, option index).
-    # The asker's own ``recommend`` is their pick too, and is not repeated here (``picks``).
+    # The asker's own ``recommend`` is their pick too, and is not repeated here (``effective_picks``).
     picks: tuple[tuple[str, int], ...] = ()
 
     @property
@@ -322,7 +322,7 @@ def consensus(item: Item, present: Sequence[str]) -> Consensus:
 
 def concur(item: Item, actor: str, value: Any, here: Sequence[str]) -> int:
     """The option index ``actor`` picks with ``concur``, or ReviewError. Only an agent in the room
-    picks (the board's agents are the room's, §37.2); only an item with options that is still being
+    picks (the board's agents are the room's, §37.12); only an item with options that is still being
     decided: an open question, or a finding not yet fixed or dropped; and only an index in range.
     An agent may pick again until then, which replaces their pick."""
     if actor not in here:
