@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -17,11 +18,12 @@ from typing import Any
 
 import pytest
 from conftest import InProcBroker, child_env
-from test_agents_http import make_token, sse_result
+from test_agents_http import THREAD_A, Codex, make_token, sse_result
 from test_agents_http_claude import SESSION_1, Claude
-from test_agents_http_wake import parked, participant, until
+from test_agents_http_wake import claude_hook, codex_hook, parked, participant, until
 
 from switchboard.broker.agent_http import HOOK_FIELDS, HOOK_TOOL, LISTEN_PATH, PATH
+from switchboard.mcp.server import TOOL_NAMES
 
 ROOT = Path(__file__).resolve().parents[2]
 CLAUDE_PLUGIN = ROOT / "plugins" / "claude"
@@ -35,6 +37,40 @@ def load(p: Path) -> Any:
 
 def claude_hooks() -> dict[str, list[dict[str, Any]]]:
     return dict(load(CLAUDE_PLUGIN / "hooks" / "hooks.json")["hooks"])
+
+
+FIXTURES = ROOT / "tests" / "fixtures"
+SECRET = "SECRET-OF-THE-TOOL-9f3a"  # stands for a Bash output, a file's contents, a command line, a path
+
+
+def fill(template: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """A hook's input, as the harness fills it: each ``${field}`` is that field of the hook's payload.
+    A field the payload lacks is an error, as it is in Codex (it fails a hook that names one)."""
+    out = {}
+    for key, value in template.items():
+        named = re.fullmatch(r"\$\{(\w+)\}", value) if isinstance(value, str) else None
+        out[key] = str(payload[named.group(1)]) if named else value
+    return out
+
+
+def with_secrets(payload: dict[str, Any]) -> dict[str, Any]:
+    """A recorded payload with everything the tool did or saw replaced by ``SECRET``: its input, its
+    result, the directory and the transcript. Whatever of that reaches a hook's input is a leak."""
+    return {
+        **payload,
+        "tool_input": {"command": SECRET},
+        "tool_response": {"stdout": SECRET, "stderr": SECRET},
+        "error": SECRET,
+        "cwd": f"/{SECRET}",
+        "transcript_path": f"/{SECRET}/transcript.jsonl",
+    }
+
+
+def groups_for(groups: list[dict[str, Any]], tool: str) -> list[dict[str, Any]]:
+    """The groups of one event that run for ``tool``: no matcher, an empty one or ``*`` matches every
+    tool; any other is a regular expression searched in the tool's name (Claude Code's JavaScript one
+    and Codex's Rust one agree on every matcher the plugins use)."""
+    return [g for g in groups if g.get("matcher") in (None, "", "*") or re.search(g["matcher"], tool)]
 
 
 def test_the_marketplace_lists_the_plugin_where_it_is() -> None:
@@ -64,11 +100,13 @@ def test_the_claude_plugin_asks_for_the_server_and_a_secret_token() -> None:
 
 def test_every_hook_calls_the_hook_tool_with_fields_it_takes() -> None:
     """Each mcp_tool hook calls this plugin's own server's hook tool, with only the fields that tool
-    takes; the ones about tools match switchboard's own tools only, so no other tool's input or
-    result leaves the machine; SessionStart and SessionEnd are command hooks (Claude Code 2.1.283
-    and 2.1.299 refuse an mcp_tool hook there: "no MCP client context", #399); and Stop runs the
-    listener in the background. Fails if a hook names a field the server doesn't take, matches every
-    tool, is an mcp_tool hook where Claude Code won't run one, or the listener can't wake the session."""
+    takes; PreToolUse matches switchboard's own tools only, and each of PostToolUse and
+    PostToolUseFailure has a group for them (they carry their result) and one for every other tool
+    (#422, tested below); SessionStart and SessionEnd are command hooks (Claude Code 2.1.283 and
+    2.1.299 refuse an mcp_tool hook there: "no MCP client context", #399); and Stop runs the listener
+    in the background. Fails if a hook names a field the server doesn't take, has the wrong groups for
+    a tool event, is an mcp_tool hook where Claude Code won't run one, or the listener can't wake the
+    session."""
     hooks = claude_hooks()
     assert set(hooks) == {
         "SessionStart",
@@ -88,8 +126,13 @@ def test_every_hook_calls_the_hook_tool_with_fields_it_takes() -> None:
                 assert set(h["input"]) <= set(HOOK_FIELDS), (event, set(h["input"]) - set(HOOK_FIELDS))
                 assert h["input"]["event"] == "${hook_event_name}"
                 assert h["input"]["session_id"] == "${session_id}"
-            if event in ("PreToolUse", "PostToolUse", "PostToolUseFailure"):
-                assert group["matcher"] == "mcp__plugin_switchboard_switchboard__.*", event
+    own = "mcp__plugin_switchboard_switchboard__.*"
+    assert [g["matcher"] for g in hooks["PreToolUse"]] == [own]  # only says who makes a switchboard call
+    for event in ("PostToolUse", "PostToolUseFailure"):
+        # switchboard's own tools carry their result; every other tool doesn't
+        [theirs, others] = hooks[event]
+        assert theirs["matcher"] == own, event
+        assert others["matcher"] == "^(?!mcp__plugin_switchboard_switchboard__)", event
     for event in ("SessionStart", "SessionEnd"):  # Claude Code runs no mcp_tool hook at these (#399)
         h = hooks[event][0]["hooks"][0]
         assert h["type"] == "command" and h["command"] == '"${CLAUDE_PLUGIN_ROOT}"/bin/session', event
@@ -273,9 +316,9 @@ def test_codexs_hooks_take_what_the_hook_tool_takes_and_what_codex_allows() -> N
     """Codex refuses a hook file with a top-level key but `description` and `hooks`, or a null in an
     input; skips an mcp_tool hook at SessionEnd, with a warning; and fails a hook whose template
     names a field its event doesn't always carry. Each hook here calls the `switchboard` server's
-    hook tool with fields it takes, PostToolUse matches switchboard's tools only, and Stop waits
-    for less than its own timeout. Fails if a hook breaks any of these, which would break the file
-    or the hook, or leak another tool's result."""
+    hook tool with fields it takes, PostToolUse has a group for switchboard's tools (it carries their
+    result) and one for every tool (#422, tested below), and Stop waits for less than its own
+    timeout. Fails if a hook breaks any of these, which would break the file or the hook."""
     doc = load(CODEX_PLUGIN / "hooks" / "hooks.json")
     assert set(doc) == {"description", "hooks"}
     hooks = doc["hooks"]
@@ -303,10 +346,133 @@ def test_codexs_hooks_take_what_the_hook_tool_takes_and_what_codex_allows() -> N
                 assert set(inp) <= set(HOOK_FIELDS)
                 named = {v[2:-1] for v in inp.values() if isinstance(v, str) and v.startswith("${")}
                 assert named <= allowed[event], (event, named - allowed[event])
-    [post] = hooks["PostToolUse"]
-    assert post["matcher"] == "mcp__switchboard__.*"
+    [theirs, every] = hooks["PostToolUse"]
+    assert theirs["matcher"] == "mcp__switchboard__.*"
+    assert every["matcher"] == ""  # Codex's regular expressions have no look-around to leave theirs out
     [stop] = [h for g in hooks["Stop"] for h in g["hooks"]]
     assert float(stop["input"]["wait_s"]) < stop["timeout"]
+
+
+def test_claudes_plugin_reports_every_other_tool_without_its_input_or_result() -> None:
+    """A busy agent hears a priority message only through a hook after a tool call, so the plugin
+    reports every tool (#422) -- but a tool's input and result are the user's (a Bash output, a file,
+    a secret) and must not go to the server. So the group for tools other than switchboard's sends the
+    event, the session, the call and the tool's name, nothing else, and Claude Code runs it for no
+    switchboard tool (their own group carries the result the batch token is read from). It has a short
+    timeout, since it runs on every tool call. Filled from Claude Code's recorded payloads with a secret
+    in everything the tool did, no secret reaches the input. Fails if a tool matches both groups or
+    neither, the group sends more than those four fields, or waits as long as the others."""
+    hooks = claude_hooks()
+    prefix = "mcp__plugin_switchboard_switchboard__"
+    for event in ("PostToolUse", "PostToolUseFailure"):
+        payload = load(FIXTURES / "payloads" / "claude" / f"{event}_bash.json")
+        for tool in ("Bash", "Read", "Edit", "Task", "WebFetch", "mcp__github__create_issue", "mcp__x__join"):
+            [group] = groups_for(hooks[event], tool)
+            assert "tool_response" not in group["hooks"][0]["input"], (event, tool)
+        for tool in TOOL_NAMES:  # switchboard's tools: exactly their own group, which has the result
+            [group] = groups_for(hooks[event], prefix + tool)
+            assert group["matcher"] == prefix + ".*", (event, tool)
+        [others] = groups_for(hooks[event], "Bash")
+        [h] = others["hooks"]
+        assert set(h["input"]) == {"event", "session_id", "tool_use_id", "tool_name"}, event
+        assert 0 < h["timeout"] <= 2, event  # on every tool call: a slow server must not hold them up
+        filled = fill(h["input"], with_secrets(payload))
+        assert filled["event"] == event and filled["tool_name"] == "Bash"
+        assert SECRET not in json.dumps(filled), (event, filled)
+
+
+def test_codexs_plugin_reports_every_tool_without_its_input_or_result() -> None:
+    """Codex fires PostToolUse for its shell tool (named Bash), so the plugin reports every tool
+    (#422) -- as little as Claude Code's: the event, the thread, the turn, the call and the tool's name,
+    with a short timeout. Filled from Codex's recorded payload with a secret in everything the tool did,
+    no secret reaches the input. It matches switchboard's own tools too (Codex's regular expressions
+    can't leave them out), which the server answers by dropping the report without a result
+    (``test_a_switchboard_tools_report_without_its_result_is_dropped``). Fails if the group sends more
+    than those fields, has a result in it, or waits as long as the others."""
+    [theirs, every] = load(CODEX_PLUGIN / "hooks" / "hooks.json")["hooks"]["PostToolUse"]
+    payload = load(FIXTURES / "payloads" / "codex" / "PostToolUse_bash.json")
+    assert groups_for([theirs, every], "Bash") == [every]
+    assert groups_for([theirs, every], "mcp__switchboard__read") == [theirs, every]
+    [h] = every["hooks"]
+    assert set(h["input"]) == {"event", "session_id", "turn_id", "tool_name", "tool_use_id"}
+    assert 0 < h["timeout"] <= 2
+    filled = fill(h["input"], with_secrets(payload))
+    assert filled["event"] == "PostToolUse" and filled["tool_name"] == "Bash"
+    assert SECRET not in json.dumps(filled), filled
+
+
+def test_the_recorded_hook_calls_are_what_the_plugins_templates_send() -> None:
+    """The requests Claude Code 2.1.304 and Codex 0.158.0 sent for the second group (recorded in the
+    live check of #422) name the same fields as the plugins' templates, and carry no result. Fails if
+    a template and what its harness really sends drift apart."""
+    for fixture, [*_, others] in (
+        ("claude_hook_post_tool", claude_hooks()["PostToolUse"]),
+        ("codex_hook_post_tool", load(CODEX_PLUGIN / "hooks" / "hooks.json")["hooks"]["PostToolUse"]),
+    ):
+        sent = load(FIXTURES / "mcp_http" / f"{fixture}.json")["body"]["params"]["arguments"]
+        assert set(sent) == set(others["hooks"][0]["input"]), fixture
+        assert sent["event"] == "PostToolUse" and sent["tool_name"] == "Bash"
+        assert "tool_response" not in sent and "tool_input" not in sent
+
+
+def context_of(text: str) -> str:
+    """The context a hook's answer hands the model."""
+    return str(json.loads(text)["hookSpecificOutput"]["additionalContext"])
+
+
+def second_group_call(
+    fixture: str, payload: str, groups: list[dict[str, Any]], **given: str
+) -> dict[str, Any]:
+    """The hook call a harness makes after a Bash call through the plugin's group for every other
+    tool: its recorded request (the headers and ``_meta`` it sends), with the arguments the group's
+    template fills in from the harness's recorded payload for a Bash call. ``given`` sets the
+    payload's session."""
+    rec = load(FIXTURES / "mcp_http" / f"{fixture}.json")
+    [group] = groups_for(groups, "Bash")  # fails where the plugin has no group for a Bash call
+    filled = fill(group["hooks"][0]["input"], {**load(FIXTURES / "payloads" / payload), **given})
+    params = {**rec["body"]["params"], "arguments": filled}
+    return {"headers": rec["headers"], "body": {**rec["body"], "params": params}}
+
+
+def test_a_busy_claude_hears_a_message_after_a_bash_call(broker: InProcBroker) -> None:
+    """The plugin's group for every other tool (#422), filled from Claude Code's recorded payload for a
+    Bash call and sent as Claude Code 2.1.304 sends it (recorded in #422's live check): the member is
+    busy, an @mention waits, and the answer to that report carries it, so a Claude that does only Bash
+    hears it after its next call (the issue). Fails where the plugin has no such group, the server
+    needs a result in the report, or it answers in another shape."""
+    broker.call("room.create", {"name": "#build"})
+    claude = Claude(broker, make_token(broker, "laptop"), SESSION_1)
+    assert claude.call("join", room="#build", screen_name="claude-1")["ok"]
+    claude.call("read", room="#build")
+    claude_hook(claude, event="UserPromptSubmit")  # busy
+    broker.call("human.say", {"room": "#build", "text": "@claude-1 stop and check the tests"})
+    groups = claude_hooks()["PostToolUse"]
+    call = second_group_call(
+        "claude_hook_post_tool", "claude/PostToolUse_bash.json", groups, session_id=SESSION_1
+    )
+    r = claude.post(call["body"], call["headers"], "hook")
+    assert r.status_code == 200, r.text
+    assert "check the tests" in context_of(sse_result(r)["result"]["content"][0]["text"])
+
+
+def test_a_busy_codex_hears_a_message_after_a_shell_call(broker: InProcBroker) -> None:
+    """The same for Codex 0.158.0: the plugin's group for every tool, filled from its recorded payload
+    for a shell call (tool_name Bash), carries the waiting @mention back. Fails where the plugin has no
+    such group, the server needs a result in the report, or it answers in another shape."""
+    broker.call("room.create", {"name": "#build"})
+    codex = Codex(broker, make_token(broker, "laptop"))
+    codex.start()
+    assert codex.call("join", THREAD_A, room="#build", screen_name="codex-1")["ok"]
+    codex.call("read", THREAD_A, room="#build")
+    codex_hook(codex, THREAD_A, event="UserPromptSubmit", turn_id="t-1")  # busy
+    broker.call("human.say", {"room": "#build", "text": "@codex-1 stop and check the tests"})
+    groups = load(CODEX_PLUGIN / "hooks" / "hooks.json")["hooks"]["PostToolUse"]
+    call = second_group_call(
+        "codex_hook_post_tool", "codex/PostToolUse_bash.json", groups, session_id=THREAD_A
+    )
+    r = codex.c.post("/mcp", json=call["body"], headers=codex.headers(call["headers"]))
+    assert r.status_code == 200, r.text
+    assert "check the tests" in context_of(sse_result(r)["result"]["content"][0]["text"])
 
 
 @pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")

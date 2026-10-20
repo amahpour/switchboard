@@ -1,0 +1,29 @@
+{
+  "_source": "codex-cli 0.158.0 over Streamable HTTP (MCP 2025-06-18), #422's live check, 2026-10-20",
+  "_note": "the hook call the plugin's second PostToolUse group makes after a shell call (tool_name Bash): only the event, the thread, the turn, the call and the tool's name; no input, no result. After the initialize, with mcp-session-id",
+  "headers": {
+    "user-agent": "codex-mcp-client/0.158.0",
+    "mcp-protocol-version": "2025-06-18",
+    "accept": "text/event-stream, application/json",
+    "content-type": "application/json"
+  },
+  "body": {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "method": "tools/call",
+    "params": {
+      "_meta": {
+        "threadId": "00000000-0000-4000-8000-0000000000a1",
+        "progressToken": 2
+      },
+      "name": "hook",
+      "arguments": {
+        "event": "PostToolUse",
+        "session_id": "00000000-0000-4000-8000-0000000000a1",
+        "turn_id": "00000000-0000-4000-8000-0000000000b1",
+        "tool_name": "Bash",
+        "tool_use_id": "exec-00000000-0000-4000-8000-0000000000c2"
+      }
+    }
+  }
+}

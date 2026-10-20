@@ -1,0 +1,46 @@
+{
+  "_source": "claude-code 2.1.304 over Streamable HTTP (MCP 2026-07-28), #422's live check, 2026-10-20",
+  "_note": "the hook call the plugin's second PostToolUse group makes after a Bash call: only the event, the session, the call and the tool's name; no input, no result (PostToolUseFailure sends the same four fields)",
+  "headers": {
+    "accept": "application/json, text/event-stream",
+    "accept-encoding": "identity",
+    "content-type": "application/json",
+    "user-agent": "claude-code/2.1.304 (claude-desktop, agent-sdk/0.3.299)",
+    "mcp-method": "tools/call",
+    "mcp-name": "hook",
+    "mcp-protocol-version": "2026-07-28"
+  },
+  "body": {
+    "method": "tools/call",
+    "params": {
+      "name": "hook",
+      "arguments": {
+        "event": "PostToolUse",
+        "session_id": "00000000-0000-4000-8000-0000000000d1",
+        "tool_use_id": "toolu_01000000000000000000000002",
+        "tool_name": "Bash"
+      },
+      "_meta": {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": {
+          "name": "claude-code",
+          "title": "Claude Code",
+          "version": "2.1.304",
+          "description": "Anthropic's agentic coding tool",
+          "websiteUrl": "https://claude.com/claude-code"
+        },
+        "io.modelcontextprotocol/clientCapabilities": {
+          "roots": {
+            "listChanged": true
+          },
+          "elicitation": {
+            "form": {},
+            "url": {}
+          }
+        }
+      }
+    },
+    "jsonrpc": "2.0",
+    "id": 7
+  }
+}

@@ -19,7 +19,10 @@ runs on the agent's machine.
 - **The hook tool** is left out of ``tools/list``, so the model never sees it, and a hook
   calls it anyway. Each event reports the session's status (§49.4); its answer is written here
   (#380's decision 5), only in the hook script's own shapes (§7.3) plus Codex's Stop
-  ``decision: block``, and is ``{}`` when there is nothing to say.
+  ``decision: block``, and is ``{}`` when there is nothing to say. After a tool call there are two
+  kinds of report (#422): a switchboard tool's own, which carries its result (its batch tokens
+  confirm an answer), and any other tool's, which carries no result at all, only that the session
+  made a call, so a busy session hears its priority messages after every tool call.
 - **The listener** (``/mcp/listen``): Claude Code's Stop hook posts its session id there and waits,
   round after round, and the answer is the message that wakes it (§49.4).
 - **No credentials.** A session's memberships are read from the store on every call, so a broker
@@ -33,6 +36,7 @@ import asyncio
 import itertools
 import json
 import logging
+import re
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
@@ -99,6 +103,10 @@ HOOK_FIELDS = (
     "tool_response",
     "wait_s",
 )
+# a tool of switchboard's own server, by the name a harness gives it: Codex and a hand-made Claude
+# Code server say ``mcp__switchboard__<tool>``, Claude Code's plugin
+# ``mcp__plugin_switchboard_switchboard__<tool>``
+OWN_TOOL_RE = re.compile(r"mcp__(?:plugin_switchboard_)?switchboard__")
 LISTEN_PATH = "/mcp/listen"  # Claude Code's listener waits here (§49.4)
 SESSION_PATH = "/mcp/session"  # Claude Code's SessionStart and SessionEnd, as command hooks (§49.4)
 SESSION_EVENTS = frozenset({"SessionStart", "SessionEnd"})  # Claude Code runs no mcp_tool hook at these
@@ -203,7 +211,7 @@ def _flag(value: Any) -> bool | None:
 def hook_params(event: str, fields: dict[str, Any], now: float) -> dict[str, Any]:
     """What a hook over HTTPS relays, as the hook script's own params (§7.2 step 4): the fields
     its input template names, cut and checked, and the batch tokens in a switchboard tool's own
-    result (its hook matches switchboard's tools only, so nothing else of the session is sent).
+    result (only a switchboard tool's report carries a result, so nothing else of the session is read).
     ``wait_s``, a number the hook config itself sets, lets a Stop hook wait that long."""
     ev = event.lower()
     ok = False if ev == "posttoolusefailure" else (True if ev == "posttooluse" else None)
@@ -234,6 +242,20 @@ def hook_params(event: str, fields: dict[str, Any], now: float) -> dict[str, Any
         "max_wait_s": min(wait_s, WAIT_MAX_S) if wait_s is not None and wait_s > 0 else None,
     }
     return {k: v for k, v in p.items() if v is not None and v != []}
+
+
+def second_report(event: str, fields: dict[str, Any]) -> bool:
+    """True for the report that comes with no result after a switchboard tool's own call: the plugins
+    send one for every other tool (#422), and Codex's matcher can't leave switchboard's tools out
+    (no look-around), so its second group reports those calls too. The first group's report, which
+    carries the result, does everything this one would, so this one is dropped: without that it could
+    take the context the other was about to carry, or report the call twice. ``tool_response`` is
+    ``None`` only when the hook sent none; a result that happens to be empty is still a result."""
+    return (
+        event == "PostToolUse"
+        and fields.get("tool_response") is None
+        and OWN_TOOL_RE.match(str(fields.get("tool_name") or "")) is not None
+    )
 
 
 def reply_for(harness: str, event: str, out: Any) -> dict[str, Any] | None:
@@ -429,6 +451,8 @@ class HttpTools:
             use = _id(fields.get("tool_use_id"))
             if c.harness == "claude" and sid and use:
                 self.uses.report(c.token.id, use, sid)
+            return "{}"
+        if second_report(event, fields):
             return "{}"
         params = hook_params(event, fields, self.state.clock.now())
         agents: Any = self.state.agents  # an HttpConn stands in for the socket's Conn
@@ -974,7 +998,7 @@ def install(app: "FastAPI", state: "BrokerState") -> Any:
         source: Any = "",
         reason: Any = "",
         stop_hook_active: Any = "",
-        tool_response: Any = "",
+        tool_response: Any = None,  # None: the hook sent none (see ``second_report``)
         wait_s: Any = "",
     ) -> str:
         """For switchboard's hooks, not for the model."""

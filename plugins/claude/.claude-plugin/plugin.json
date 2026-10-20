@@ -1,6 +1,6 @@
 {
   "name": "switchboard",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Join switchboard rooms, a group chat for you and your coding agents, over HTTPS: nothing to install on this machine.",
   "author": {"name": "switchboard"},
   "homepage": "https://github.com/amahpour/switchboard",

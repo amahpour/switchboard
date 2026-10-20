@@ -41,6 +41,13 @@ def participant(b: InProcBroker, name: str) -> Any:
     return b.on_loop(st.store.get_participant, m.participant_id)
 
 
+def member(b: InProcBroker, name: str) -> Any:
+    """A member's buddy-list row: ``queued`` messages waiting for it, ``inflight`` ones offered."""
+    st = b.state
+    room = b.on_loop(st.store.get_room, "#build")
+    return next(m for m in b.on_loop(st.store.members, room.id) if m.name == name)
+
+
 def claude_hook(claude: Claude, **fields: Any) -> str:
     """One of Claude Code's mcp_tool hooks, its input template filled in."""
     body = copy.deepcopy(HOOK["body"])
@@ -229,6 +236,76 @@ def test_a_tool_result_seen_by_its_hook_confirms_it(build: InProcBroker) -> None
     assert build.on_loop(build.state.store.get_batch, bid).state == "confirmed"
 
 
+OWN_READ = ("mcp__switchboard__read", "mcp__plugin_switchboard_switchboard__read")
+
+
+@pytest.mark.parametrize("tool", OWN_READ)
+def test_a_switchboard_tools_report_without_its_result_is_dropped(build: InProcBroker, tool: str) -> None:
+    """After a call of switchboard's own tool the plugin sends two reports (#422): the one with the
+    tool's result (the batch tokens in it confirm a read() answer), and the one every other tool's call
+    gets, with none. Codex's matcher can't leave switchboard's tools out of the second, so the server
+    drops it: it answers {} and leaves the waiting message for the report that has the result. A
+    result that is empty is still a result. Fails if the report without one takes the context (the
+    result's report would then find nothing, and a confirmation could be missed) or an empty result is
+    dropped with it."""
+    claude, _ = joined_claude(build)
+    claude_hook(claude, event="UserPromptSubmit")
+    build.call("human.say", {"room": "#build", "text": "@claude-1 look at the build"})
+    assert member(build, "claude-1").queued == 1
+    assert claude_hook(claude, event="PostToolUse", tool_name=tool, tool_use_id="toolu_d1") == "{}"
+    assert (member(build, "claude-1").queued, member(build, "claude-1").inflight) == (1, 0)
+    out = claude_hook(claude, event="PostToolUse", tool_name=tool, tool_use_id="toolu_d1", tool_response="")
+    assert "look at the build" in json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert (member(build, "claude-1").queued, member(build, "claude-1").inflight) == (0, 0)  # delivered
+
+
+def test_a_report_without_a_result_confirms_and_takes_back_nothing(build: InProcBroker) -> None:
+    """Every other tool's call is reported (#422), with nothing in it a batch token could be read
+    from: so it confirms no read() answer on its own, expires none, and hands out nothing while one is
+    still in flight. Only the report with the answer's own token confirms it, and the message that
+    waited behind it comes with that report, and a later Bash call's report has nothing to add. Fails
+    if a Bash call's report confirms or drops an answer it didn't carry."""
+    claude, _ = joined_claude(build)
+    claude_hook(claude, event="UserPromptSubmit")
+    build.call("human.say", {"room": "#build", "text": "hello claude"})
+    got = claude.call("read", room="#build")
+    bid = int(TOKEN_IN.search(got["text"]).group(1))
+    state = lambda: build.on_loop(build.state.store.get_batch, bid).state  # noqa: E731
+    assert state() == "offered"
+    build.call("human.say", {"room": "#build", "text": "@claude-1 and then this"})
+    # a Bash call that runs beside the read(), and one that fails
+    for event in ("PostToolUse", "PostToolUseFailure"):
+        assert claude_hook(claude, event=event, tool_name="Bash", tool_use_id="toolu_b1") == "{}"
+        assert (state(), member(build, "claude-1").queued) == ("offered", 1)  # kept, and nothing handed out
+    out = claude_hook(
+        claude,
+        event="PostToolUse",
+        tool_name="mcp__switchboard__read",
+        tool_use_id="toolu_r1",
+        tool_response=json.dumps([{"type": "text", "text": json.dumps(got)}]),
+    )
+    assert state() == "confirmed"  # by its own token; and the message that waited behind it comes with it
+    assert "and then this" in json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert claude_hook(claude, event="PostToolUse", tool_name="Bash", tool_use_id="toolu_b2") == "{}"
+    assert state() == "confirmed" and member(build, "claude-1").queued == 0  # nothing left to hand out
+
+
+def test_the_report_of_a_second_tool_is_told_from_the_one_with_a_result() -> None:
+    """``second_report`` is true only for a PostToolUse of a switchboard tool (by either harness's name
+    for it) that sent no ``tool_response`` at all. Fails if it drops a report that has a result (empty
+    or not), another tool's report, or a failure's (which never has a result)."""
+    second = agent_http.second_report
+    none: dict[str, Any] = {"tool_response": None}
+    for tool in ("mcp__switchboard__say", "mcp__plugin_switchboard_switchboard__wait"):
+        assert second("PostToolUse", {"tool_name": tool, **none})
+        assert not second("PostToolUse", {"tool_name": tool, "tool_response": ""})
+        assert not second("PostToolUse", {"tool_name": tool, "tool_response": '[{"type": "text"}]'})
+        assert not second("PostToolUseFailure", {"tool_name": tool, **none})
+    for tool in ("Bash", "mcp__github__say", "mcp__switchboard_https__wait", "xmcp__switchboard__say", ""):
+        assert not second("PostToolUse", {"tool_name": tool, **none}), tool
+    assert not second("PostToolUse", none)  # no tool name at all
+
+
 def test_the_reply_is_one_of_the_allowed_shapes_or_nothing() -> None:
     """The broker writes a hook's reply (decision 5), so it checks each against the hook script's
     shapes (§7.3) and Codex's Stop block, and answers nothing otherwise. Fails if a continue reaches
@@ -249,13 +326,25 @@ def test_the_reply_is_one_of_the_allowed_shapes_or_nothing() -> None:
 
 
 def test_a_session_that_never_joined_gets_nothing_from_its_hooks(build: InProcBroker) -> None:
-    """Hooks of a session with no membership change nothing and answer {}. Fails if a hook can
-    create or touch a participant."""
+    """Hooks of a session with no membership change nothing and answer {}, however many tool calls
+    it reports (every tool's is, #422, in a room or not): no participant, event or batch is written.
+    Fails if a hook can create or touch a participant, or costs a session in no room a write."""
     token = make_token(build, "laptop")
     stranger = Claude(build, token, SESSION_1)
+    rows = lambda: build.on_loop(  # noqa: E731
+        lambda: [
+            build.state.store.con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+            for t in ("participants", "memberships", "events", "batches")
+        ]
+    )
+    before = rows()
     assert claude_hook(stranger, event="UserPromptSubmit") == "{}"
     assert claude_hook(stranger, event="Stop", wait_s="60") == "{}"  # nothing to hold either
+    # every tool call is reported, in a room or not (#422)
+    for event in ("PostToolUse", "PostToolUseFailure"):
+        assert claude_hook(stranger, event=event, tool_name="Bash", tool_use_id="toolu_s1") == "{}"
     assert members(build, "#build") == {}
+    assert rows() == before  # nothing written for it: not a participant, an event, or a batch
 
 
 def test_a_round_that_runs_out_asks_for_another_while_the_session_stays_idle(build: InProcBroker) -> None:
