@@ -3009,7 +3009,7 @@ def test_the_board_fits_a_phone(ui: UI, scheme: str) -> None:
 
 @pytest.mark.parametrize("size", ["desktop", "phone"])
 def test_one_handoff_dialog_previews_the_review_and_chooses_its_agent(ui: UI, size: str) -> None:
-    """The settled lane offers one review, with exact text and a chosen poster; Esc returns focus."""
+    """Hand off, in the header, offers one review with exact text and a chosen poster; Esc returns focus."""
     slug = "e2e-board-handoff-" + size
     page = review_room(ui, slug, **(PHONE if size == "phone" else {}))
     room = "#" + slug
@@ -3047,7 +3047,7 @@ def test_one_handoff_dialog_previews_the_review_and_chooses_its_agent(ui: UI, si
 
 
 def test_handoff_unlocks_only_after_every_item_is_settled(ui: UI) -> None:
-    """The Settled lane waits for the question and both fix confirmations before handoff."""
+    """The header's Hand off waits for the question and both fix confirmations."""
     slug = "e2e-board-post"
     page = review_room(ui, slug)
     room = "#" + slug
@@ -3073,6 +3073,145 @@ def test_handoff_unlocks_only_after_every_item_is_settled(ui: UI) -> None:
     expect(page.locator("#board-status")).to_have_text("Handed off to codex-1")
     page.click("#board-toggle")
     expect(chat_row(page, "Hand off")).to_contain_text("@codex-1")
+
+
+def settle_review_board(page: Page, ui: UI, room: str) -> None:
+    """Take review_room's board to settled, as a review would: codex-1 drops the contested F3 (its
+    raiser's call), fixes F4 (which it also raised, so a person checks it), and a person confirms
+    that fix and answers Q1 on the page. Leaves the board open with Hand off enabled."""
+    call = ui.world.agent_call
+    call("#" + room, "codex-1", "review", action="drop", item="F3", reason="the ledger is the one to change")
+    call("#" + room, "codex-1", "review", action="fix", item="F4", commit="def5678", proof="test_case")
+    page.click('#board .board-card[data-item="F4"]')
+    page.click("#board-confirm")
+    page.click('#board .board-card[data-item="Q1"]')
+    page.locator('#board .board-detail button[data-option="0"]').click()
+    expect(page.locator("#board-handoff")).to_be_enabled()
+
+
+@pytest.mark.parametrize(("size", "scheme"), [("desktop", "light"), ("desktop", "dark"), ("phone", "light")])
+def test_hand_off_is_in_the_header_and_follows_the_board(ui: UI, size: str, scheme: str) -> None:
+    """#425: Hand off used to be a card at the top of Settled, so it read as one of the settled
+    findings. It is in the board's header, in no lane, in three states: disabled with what is
+    left (which updates as the agents settle items, no reload), enabled with how far the board
+    got and a brief highlight when the last item settles, and, once handed off, who did it and
+    when in place of the button. Fails if the old panel is back in a lane, if the words are
+    stale, or if the highlight, the handoff or the focus on the result is missing."""
+    slug = f"e2e-board-header-{size}-{scheme}"
+    page = review_room(ui, slug, **(PHONE if size == "phone" else {}), color_scheme=scheme)
+    page.click("#board-toggle")
+    header = page.locator("#board .board-head")
+    button = header.locator("#board-handoff")
+    note = header.locator("#board-handoff-status")
+    expect(button).to_be_visible()
+    expect(button).to_be_disabled()
+    expect(button).to_have_text("Hand off")
+    expect(note).to_have_text("1 question to answer, 1 finding to decide, 1 finding in progress")
+    expect(button).to_have_attribute("aria-describedby", "board-handoff-status")
+    # no Hand off section in any lane: Settled holds items, and nothing else but its title
+    expect(
+        page.locator("#board .board-lane #board-handoff, #board .board-lane .board-handoff")
+    ).to_have_count(0)
+    settled = page.locator("#board .lane-settled")
+    assert settled.evaluate("l => [...l.children].map(c => c.className.split(' ')[0])") == [
+        "board-lane-title", "board-card", "board-card"]  # fmt: skip
+    if size == "phone":
+        # visible without scrolling the lanes: in the first screen, above every lane
+        expect(button).to_be_in_viewport()
+        above = page.evaluate(
+            "() => document.querySelector('#board-handoff').getBoundingClientRect().bottom <="
+            " document.querySelector('#board .board-lane').getBoundingClientRect().top"
+        )
+        assert above
+        no_horizontal_scroll(page)
+
+    call = ui.world.agent_call
+    room = "#" + slug
+    call(room, "codex-1", "review", action="drop", item="F3", reason="the ledger is the one to change")
+    expect(note).to_have_text("1 question to answer, 1 finding in progress")  # live: no reload
+    call(room, "codex-1", "review", action="fix", item="F4", commit="def5678", proof="test_case")
+    expect(note).to_have_text("1 question to answer, 1 fix to confirm")
+    page.click('#board .board-card[data-item="F4"]')
+    page.click("#board-confirm")
+    expect(note).to_have_text("1 question to answer")
+    expect(button).to_be_disabled()
+    page.click('#board .board-card[data-item="Q1"]')
+    page.locator('#board .board-detail button[data-option="0"]').click()
+
+    expect(note).to_have_text("5 of 5 settled")  # F1 dropped, F2 and F4 confirmed, F3 dropped, Q1 answered
+    expect(button).to_be_enabled()
+    expect(button).to_have_class(re.compile(r"\bnudge\b"))  # the last item settled: a brief highlight
+    expect(button).to_have_css("animation-name", "board-handoff-nudge")  # the stylesheet animates it
+    expect(page.locator("#app-dialog")).to_be_hidden()  # a highlight, not a dialog, and no toast
+    if size == "phone":
+        expect(button).to_be_in_viewport()
+        no_horizontal_scroll(page)
+    button.click()
+    page.click("#app-dialog-action")  # Posted by: the board's opener
+    done = header.locator("#board-handoff-status")
+    expect(done).to_have_text(re.compile(r"^Handed off by codex-1 at \d\d:\d\d$"))
+    expect(header.locator("#board-handoff")).to_have_count(0)
+    expect(page.locator("#board-status")).to_have_text("Handed off to codex-1")
+    expect(done).to_be_focused()  # focus moves to the handoff result
+    expect(page.locator("#board .board-lane .board-handoff")).to_have_count(0)
+    if size == "phone":
+        no_horizontal_scroll(page)
+
+
+def test_a_board_that_opens_ready_has_no_highlight(ui: UI) -> None:
+    """#425: the highlight is for the moment the last item settles, not for a board that is
+    already settled when the page opens it. Fails if every ready board flashes on open."""
+    slug = "e2e-board-header-ready-open"
+    page = review_room(ui, slug)
+    page.click("#board-toggle")
+    settle_review_board(page, ui, slug)
+    page.click("#board-toggle")  # back to the log
+    page.click("#board-toggle")  # and the board again, already ready
+    button = page.locator("#board .board-head #board-handoff")
+    expect(button).to_be_enabled()
+    expect(button).not_to_have_class(re.compile(r"\bnudge\b"))
+
+
+def test_the_header_hand_off_is_reached_by_keyboard_and_keeps_focus_through_redraws(ui: UI) -> None:
+    """#425: Hand off is in the header's Tab order, between the pull request's link and Close
+    board. Every members frame rebuilds the board, so a focused Hand off is a new element each
+    time and must get the focus back (handoffFocus, as it did in the lane); when a move leaves it
+    disabled, the line beside it takes the focus instead of the page losing it. Fails if the
+    focus falls to the page on a redraw, or if Hand off isn't a Tab stop.
+
+    The room keeps redrawing the board for a while after a move (each message a person's move
+    sends wakes the agents, whose status then changes), and Close board keeps no focus through a
+    redraw as Hand off does. So the Tab order is read in one step, not walked with the keys: a
+    walk would lose its place to a late redraw. The focus checks hold across any number of them."""
+    slug = "e2e-board-header-focus"
+    page = review_room(ui, slug)
+    page.click("#board-toggle")
+    settle_review_board(page, ui, slug)
+    button = page.locator("#board-handoff")
+    stops = page.evaluate(
+        """() => [...document.querySelectorAll('#board .board-head a, #board .board-head button,'
+          + ' #board .board-head [tabindex]')].filter(e => !e.disabled && e.tabIndex >= 0)
+          .map(e => e.id || e.tagName.toLowerCase())"""
+    )
+    assert stops == ["a", "board-handoff", "board-close"], stops
+
+    button.focus()
+    page.evaluate("document.getElementById('board-handoff').dataset.old = '1'")  # this very element
+    ui.world.add_agents("#" + slug, ("codex-2",))  # a members frame: the board is drawn again
+    expect(button).not_to_have_attribute("data-old", "1")  # it is a new element...
+    expect(button).to_be_focused()  # ...that has the focus
+    page.keyboard.press("Enter")
+    expect(page.locator("#app-dialog")).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(button).to_be_focused()
+
+    # a new finding unsettles the board while the button has the focus: it is disabled now
+    ui.world.agent_call(
+        "#" + slug, "codex-2", "review", action="raise", title="A late one", where="shop/a.py:1"
+    )
+    expect(button).to_be_disabled()
+    expect(page.locator("#board-handoff-status")).to_have_text("1 finding in progress")
+    expect(page.locator("#board-handoff-status")).to_be_focused()
 
 
 @pytest.mark.parametrize(
