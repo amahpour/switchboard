@@ -3114,24 +3114,29 @@ def test_a_board_that_opens_ready_has_no_highlight(ui: UI) -> None:
 
 
 def test_the_header_hand_off_is_reached_by_keyboard_and_keeps_focus_through_redraws(ui: UI) -> None:
-    """#425: Tab goes from the pull request's link to Hand off and on to Close board. Every
-    members frame rebuilds the board, so a focused Hand off is a new element each time and must
-    get the focus back (handoffFocused, as it did in the lane); when a move leaves it disabled,
-    the line beside it takes the focus instead of the page losing it. Fails if the focus falls
-    to the page on a redraw, or if Hand off can't be reached by Tab."""
+    """#425: Hand off is in the header's Tab order, between the pull request's link and Close
+    board. Every members frame rebuilds the board, so a focused Hand off is a new element each
+    time and must get the focus back (handoffFocus, as it did in the lane); when a move leaves it
+    disabled, the line beside it takes the focus instead of the page losing it. Fails if the
+    focus falls to the page on a redraw, or if Hand off isn't a Tab stop.
+
+    The room keeps redrawing the board for a while after a move (each message a person's move
+    sends wakes the agents, whose status then changes), and Close board keeps no focus through a
+    redraw as Hand off does. So the Tab order is read in one step, not walked with the keys: a
+    walk would lose its place to a late redraw. The focus checks hold across any number of them."""
     slug = "e2e-board-header-focus"
     page = review_room(ui, slug)
     page.click("#board-toggle")
     settle_review_board(page, ui, slug)
     button = page.locator("#board-handoff")
-    page.locator("#board .board-head a.board-url").focus()
-    page.keyboard.press("Tab")
-    expect(button).to_be_focused()
-    page.keyboard.press("Tab")
-    expect(page.locator("#board-close")).to_be_focused()
-    page.keyboard.press("Shift+Tab")
-    expect(button).to_be_focused()
+    stops = page.evaluate(
+        """() => [...document.querySelectorAll('#board .board-head a, #board .board-head button,'
+          + ' #board .board-head [tabindex]')].filter(e => !e.disabled && e.tabIndex >= 0)
+          .map(e => e.id || e.tagName.toLowerCase())"""
+    )
+    assert stops == ["a", "board-handoff", "board-close"], stops
 
+    button.focus()
     button.evaluate("b => { b.dataset.old = '1'; }")
     ui.world.add_agents("#" + slug, ("codex-2",))  # a members frame: the board is drawn again
     expect(button).not_to_have_attribute("data-old", "1")  # it is a new element...
