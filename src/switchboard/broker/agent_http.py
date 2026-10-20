@@ -163,6 +163,15 @@ class Caller:
     conn: HttpConn
 
 
+@dataclass
+class McpSession:
+    """One token's transport session and the Codex threads seen on its tool calls."""
+
+    token_id: int
+    generation: int
+    threads: set[str] = field(default_factory=set)
+
+
 def client_info(ctx: Context | None) -> dict[str, str]:
     """The client's name and version, as it says (a claim, cut to 80 characters): from this
     request's ``_meta`` (2026-07-28), else from its session's ``initialize`` (2025-06-18)."""
@@ -331,6 +340,7 @@ class HttpTools:
         self.uses = HookUses(state.clock)
         self.input_uses = InputUses(state.clock)
         self.input_session: ContextVar[str | None] = ContextVar("switchboard_input_session", default=None)
+        self.session_auth: AgentAuth | None = None
 
     @property
     def harness(self) -> str | None:
@@ -362,8 +372,10 @@ class HttpTools:
 
     async def prime(self, ctx: Context | None) -> None:
         try:
-            token = get_http_request().scope.get("state", {}).get("agent_token")
+            scope: Scope = dict(get_http_request().scope)
+            token = scope.get("state", {}).get("agent_token")
         except RuntimeError:  # not over HTTP at all
+            scope = {}
             token = None
         if not isinstance(token, AgentTokenRow):
             self._caller.set(None)
@@ -379,6 +391,10 @@ class HttpTools:
         else:
             thread = self._thread_of(ctx)
         self._caller.set(Caller(token, harness, thread, conn))
+        if harness == "codex" and thread is not None and self.session_auth is not None:
+            sid = _header(scope, b"mcp-session-id")
+            if sid is not None and scope.get("method") == "POST":
+                self.session_auth.record_thread(sid, token.id, thread)
         self.state.agents.http_claims(token.device, TOOL_NAMES)
 
     def conn_for(self, token: AgentTokenRow, harness: str, info: dict[str, str] | None = None) -> HttpConn:
@@ -528,10 +544,15 @@ class AgentAuth:
     """In front of ``/mcp`` (§49.2): no browser, a live agent token, and an MCP session used only
     with the token that opened it."""
 
-    def __init__(self, app: Callable[[Scope, Receive, Send], Awaitable[None]], state: "BrokerState"):
+    def __init__(
+        self, app: Callable[[Scope, Receive, Send], Awaitable[None]], state: "BrokerState", tools: HttpTools
+    ):
         self.app = app
         self.state = state
-        self.sessions: OrderedDict[str, int] = OrderedDict()  # Mcp-Session-Id -> token id
+        self.tools = tools
+        self._session_numbers = itertools.count(1)
+        self.sessions: OrderedDict[str, McpSession] = OrderedDict()  # Mcp-Session-Id -> owner, threads
+        self.latest: dict[tuple[int, str], str] = {}  # token and thread -> latest serving MCP session
         self.touched: dict[int, float] = {}  # token id -> when its last use was written
 
     def token(self, scope: Scope) -> AgentTokenRow | None:
@@ -548,10 +569,31 @@ class AgentAuth:
             self.state.store.agent_token_used(row.id)
 
     def bind(self, session_id: str, token_id: int) -> None:
-        self.sessions[session_id] = token_id
+        if session_id not in self.sessions:
+            self.sessions[session_id] = McpSession(token_id, next(self._session_numbers))
         self.sessions.move_to_end(session_id)
         while len(self.sessions) > SESSIONS_MAX:
-            self.sessions.popitem(last=False)
+            self.forget(next(iter(self.sessions)))
+
+    def forget(self, session_id: str) -> McpSession | None:
+        session = self.sessions.pop(session_id, None)
+        if session is not None:
+            for thread in session.threads:
+                key = (session.token_id, thread)
+                if self.latest.get(key) == session_id:
+                    del self.latest[key]
+        return session
+
+    def record_thread(self, session_id: str, token_id: int, thread: str) -> None:
+        """Remember only a checked call on this token's known transport session."""
+        session = self.sessions.get(session_id)
+        if session is not None and session.token_id == token_id:
+            session.threads.add(thread)
+            key = (token_id, thread)
+            previous = self.latest.get(key)
+            newer = self.sessions.get(previous) if previous is not None else None
+            if newer is None or session.generation >= newer.generation:
+                self.latest[key] = session_id
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -575,23 +617,39 @@ class AgentAuth:
             )
             return
         sid = _header(scope, b"mcp-session-id")
-        if sid is not None and self.sessions.get(sid, row.id) != row.id:
+        session = self.sessions.get(sid) if sid is not None else None
+        if sid is not None and (
+            (session is not None and session.token_id != row.id)
+            or (scope.get("method") == "DELETE" and session is None)
+        ):
             # another token's session: as if it didn't exist (the client starts a new one)
             await _reply(send, 404, {"error": "not_found", "message": "no such MCP session"})
             return
         self.touch(row)
         scope.setdefault("state", {})["agent_token"] = row
 
+        response_status: int | None = None
+
         async def send_binding(message: dict[str, Any]) -> None:
+            nonlocal response_status
             if message["type"] == "http.response.start":
+                response_status = message["status"]
                 for k, v in message.get("headers", []):
                     if k.lower() == b"mcp-session-id":
                         self.bind(v.decode("latin-1"), row.id)
             await send(message)
 
         await self.app(scope, receive, send_binding)
-        if sid is not None and scope.get("method") == "DELETE":
-            self.sessions.pop(sid, None)
+        if sid is not None and scope.get("method") == "DELETE" and response_status in (200, 202, 204):
+            # A resumed thread can use a newer MCP session before this old DELETE arrives.
+            # Only the session that served it most recently may take it offline.
+            for thread in session.threads if session is not None else ():
+                if self.latest.get((row.id, thread)) == sid:
+                    conn = self.tools.conn_for(row, "codex")
+                    await self.state.agents.http_hook(
+                        conn, "codex", "SessionEnd", {"sid": thread, "t": self.state.clock.now()}
+                    )
+            self.forget(sid)
 
 
 class SessionHook:
@@ -928,7 +986,8 @@ def install(app: "FastAPI", state: "BrokerState") -> Any:
     server.add_middleware(InputIdentity(tools))
     mcp_app = server.http_app(path=PATH)
     inner = next(r.endpoint for r in mcp_app.routes if isinstance(r, Route) and r.path == PATH)
-    auth = AgentAuth(inner, state)
+    auth = AgentAuth(inner, state, tools)
+    tools.session_auth = auth
     app.router.routes.append(Route(PATH, endpoint=auth))
     app.router.routes.append(Route(LISTEN_PATH, endpoint=Listener(auth, tools)))
     app.router.routes.append(Route(SESSION_PATH, endpoint=SessionHook(auth, tools)))
