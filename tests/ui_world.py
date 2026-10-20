@@ -601,7 +601,8 @@ class UIWorld:
         call(room, "codex-1", "review", action="drop", item="F1",
              reason="moved to Q1: it's a pricing decision, not a bug")  # fmt: skip
         call(room, "claude-1", "review", action="ask", title="Discount before or after tax?",
-             detail="Before tax: $86.40 on the $96.00 order. After tax: $88.00. Finance's sheet says before.",
+             detail="Finance's sheet says **before tax**. On the $96.00 order, with the 10% code:\n\n"
+                    "| | Total |\n|---|---|\n| Before tax | $86.40 |\n| After tax | $88.00 |",
              options=["Before tax", "After tax"], recommend=0)  # fmt: skip
 
     def agent_say(self, room: str, name: str, text: str, reply_to: int | None = None) -> int:

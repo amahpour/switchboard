@@ -2846,7 +2846,7 @@ def test_a_person_answers_a_question_and_rules_on_a_finding(ui: UI) -> None:
     page.click('#board .board-card[data-item="Q1"]')
     detail = page.locator("#board .board-detail")
     expect(detail.locator("h3")).to_have_text("Q1 · Discount before or after tax?")
-    expect(detail.locator('button[data-option="0"]')).to_have_text("Before tax (recommended)")
+    expect(detail.locator('button[data-option="0"]')).to_have_text("Before tax (claude-1 recommends this)")
     detail.locator('button[data-option="0"]').click()
     expect(page.locator('#board .lane-settled .board-card[data-item="Q1"]')).to_be_visible()
     page.click('#board .board-card[data-item="F3"]')
@@ -2860,6 +2860,275 @@ def test_a_person_answers_a_question_and_rules_on_a_finding(ui: UI) -> None:
     page.click("#board-toggle")
     expect(chat_row(page, "Review board: Q1")).to_contain_text("answered with option 0")
     expect(chat_row(page, "Review board: F3")).to_contain_text("conceded, owner codex-1")
+
+
+# ----------------------------------------- the card in the side panel: Markdown, diagrams (#423)
+CARD_DETAIL = (
+    "## Why it matters\n\n"
+    "- `total()` taxes **first**\n- the receipt disagrees\n\n"
+    f"{FENCE}python\nreturn tax(price) - discount\n{FENCE}\n\n"
+    "| order | total |\n|---|---|\n| before tax | $86.40 |\n| after tax | $88.00 |\n\n"
+    f"{FENCE}mermaid\n{FLOW}\n{FENCE}"
+)
+
+
+def markdown_card(ui: UI, slug: str, **open_args: Any) -> Page:
+    """A board with one finding whose detail is Markdown with a list, code, a table and a Mermaid
+    block, open on that card."""
+    room = "#" + slug
+    ui.world.create_room(room)
+    ui.world.add_agents(room, ("claude-1", "codex-1"))
+    ui.world.agent_call(room, "codex-1", "review", action="open", url="https://example.com/shop/pull/7")
+    ui.world.agent_call(
+        room, "codex-1", "review", action="raise", title="Discount is taken after tax",
+        where="shop/cart.py:40-58", detail=CARD_DETAIL,
+    )  # fmt: skip
+    page = ui.open(room=None, **open_args)
+    open_room(page, slug)
+    page.click("#board-toggle")
+    page.click('#board .board-card[data-item="F1"]')
+    expect(page.locator("#board .board-detail")).to_be_visible()
+    return page
+
+
+def fill_of(box: Any) -> str:
+    return box.evaluate(
+        "(b) => getComputedStyle(b.querySelector('.md-diagram').shadowRoot.querySelector('.node rect')).fill"
+    )
+
+
+def lightness(color: str) -> float:
+    r, g, b = (int(x) for x in re.findall(r"\d+", color)[:3])
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255
+
+
+@pytest.mark.parametrize(
+    ("scheme", "options"),
+    [("light", DESKTOP), ("dark", DESKTOP), ("light", PHONE)],
+    ids=("light", "dark", "phone"),
+)
+def test_a_cards_detail_is_markdown_and_its_mermaid_block_draws_on_click(
+    ui: UI, scheme: str, options: dict[str, Any]
+) -> None:
+    """#423: an item's detail reads as the chat does: a heading, a list, inline and fenced code, a
+    table, and a ```mermaid block with "Show diagram" that draws in the card's own shadow root
+    with the page's scheme, never in its stylesheet. On a phone nothing runs past the screen.
+    Fails if the side panel shows the detail as flat text, or the diagram needs the chat."""
+    slug = f"e2e-board-md-{scheme}-{'phone' if options is PHONE else 'desktop'}"
+    page = markdown_card(ui, slug, color_scheme=scheme, **options)
+    detail = page.locator("#board .board-detail")
+    expect(detail.locator(".md .md-h2")).to_have_text("Why it matters")
+    expect(detail.locator(".md-ul li")).to_have_count(2)
+    expect(detail.locator(".md-ul li strong")).to_have_text("first")
+    expect(detail.locator(".md-ul li .md-code")).to_have_text("total()")
+    expect(detail.locator(".md-pre-body code").first).to_have_text("return tax(price) - discount")
+    expect(detail.locator(".md-table th")).to_have_text(["order", "total"])
+    expect(detail.locator(".md-table td")).to_have_text(["before tax", "$86.40", "after tax", "$88.00"])
+    styles = page.evaluate("document.querySelectorAll('style').length")
+    box = detail.locator(".md-pre").nth(1)
+    button = box.locator("button.md-show-diagram")
+    expect(button).to_have_text("Show diagram")
+    button.click()
+    expect(button).to_have_text("Show code")
+    expect(box).to_have_class(cls("md-showing-diagram"))
+    assert box.evaluate(SHADOW_SVG)
+    assert page.evaluate("document.querySelectorAll('style').length") == styles  # none leaked into the page
+    assert page.evaluate("document.querySelectorAll('.md-diagram-stage').length") == 0
+    assert (lightness(fill_of(box)) < 0.5) == (scheme == "dark"), fill_of(box)
+    if options is PHONE:
+        no_horizontal_scroll(page)
+        card = detail.bounding_box()
+        drawn = box.bounding_box()
+        assert card and drawn and drawn["x"] + drawn["width"] <= card["x"] + card["width"] + 1, (card, drawn)
+    button.click()  # and back to its code
+    expect(button).to_have_text("Show diagram")
+    expect(box.locator(".md-pre-body")).to_be_visible()
+
+
+def test_a_broken_diagram_in_a_card_shows_its_source_and_why(ui: UI) -> None:
+    """The same safety as the chat (DESIGN.md §33): a diagram Mermaid can't parse keeps its code on
+    show and says why. Fails if the card draws Mermaid's own error, or hides the source."""
+    room = "#e2e-board-md-broken"
+    ui.world.create_room(room)
+    ui.world.add_agents(room, ("claude-1", "codex-1"))
+    call = ui.world.agent_call
+    call(room, "codex-1", "review", action="open", url="https://example.com/shop/pull/7")
+    call(room, "codex-1", "review", action="raise", title="A bad picture",
+         detail=f"{FENCE}mermaid\nflowchart LR\n  A -->\n{FENCE}")  # fmt: skip
+    page = ui.open(room=None)
+    open_room(page, "e2e-board-md-broken")
+    page.click("#board-toggle")
+    page.click('#board .board-card[data-item="F1"]')
+    box = page.locator("#board .board-detail .md-pre")
+    box.locator("button.md-show-diagram").click()
+    expect(box.locator(".md-diagram-error")).to_contain_text("Can't draw this diagram: Parse error on line 3")
+    expect(box.locator(".md-pre-body")).to_be_visible()
+    expect(box.locator("button.md-show-diagram")).to_have_text("Show diagram")
+    assert not box.evaluate(SHADOW_SVG)
+
+
+def test_a_drawn_diagram_in_a_card_stays_drawn_when_an_agent_changes_status(ui: UI) -> None:
+    """Every members frame rebuilds the board (#407): an agent going busy or idle must not put the
+    card on show back to its code, or throw away what a person was typing in it. Fails if the card
+    is built again on a frame that changed nothing it shows."""
+    slug = "e2e-board-md-live"
+    page = markdown_card(ui, slug)
+    detail = page.locator("#board .board-detail")
+    box = detail.locator(".md-pre").nth(1)
+    box.locator("button.md-show-diagram").click()
+    expect(box).to_have_class(cls("md-showing-diagram"))
+    reason = page.locator("#board-reason")
+    reason.fill("not a bug, by design")
+    reason.focus()
+    ui.world.agent_status("#" + slug, "claude-1", "reviewing the tax order")
+    expect(page.locator('#buddy-list .member[data-name="claude-1"]')).to_contain_text(
+        "reviewing the tax order"
+    )
+    expect(box).to_have_class(cls("md-showing-diagram"))
+    assert box.evaluate(SHADOW_SVG)
+    expect(reason).to_have_value("not a bug, by design")
+    expect(reason).to_be_focused()
+    # a change to the card itself does rebuild it: a new head puts the Outdated mark on it, code back
+    ui.world.agent_call("#" + slug, "codex-1", "review", action="open",
+                        url="https://example.com/shop/pull/7", head="7b9c2a4d6e8f")  # fmt: skip
+    expect(page.locator("#board .board-detail .board-outdated")).to_have_text("Outdated at 7b9c2a4")
+    expect(page.locator("#board .board-detail .md-pre").nth(1)).not_to_have_class(cls("md-showing-diagram"))
+
+
+def option_buttons(page: Page) -> Any:
+    return page.locator("#board .board-detail button[data-option]")
+
+
+def test_a_question_marks_an_option_recommended_only_once_the_agents_agree(ui: UI) -> None:
+    """#423: each option shows its own text, never "Option A"; the one an agent recommends is first and
+    reads "claude-1 recommends this" until every agent in the room has picked it, then "recommended by
+    claude-1 and codex-1", in the primary colour. A different pick makes both picks show, with none
+    recommended. Every change reaches the open page as it happens. Fails if one agent's pick is shown as
+    the board's, the picks aren't shown, or the page needs a reload."""
+    slug = "e2e-board-recommend"
+    room = "#" + slug
+    page = review_room(ui, slug)
+    page.click("#board-toggle")
+    page.click('#board .board-card[data-item="Q1"]')
+    detail = page.locator("#board .board-detail")
+    buttons = option_buttons(page)
+    expect(buttons).to_have_text(["Before tax (claude-1 recommends this)", "After tax"])
+    expect(detail).not_to_contain_text(re.compile(r"Option [A-D]"))
+    expect(detail.locator(".board-consensus")).to_have_text("Waiting for codex-1 to agree or pick another.")
+    expect(buttons.nth(0)).not_to_have_class(cls("btn-primary"))  # one agent's pick isn't the board's
+
+    ui.world.agent_call(room, "codex-1", "review", action="concur", item="Q1", recommend=0)
+    expect(buttons).to_have_text(["Before tax (recommended by claude-1 and codex-1)", "After tax"])
+    expect(buttons.nth(0)).to_have_class(cls("btn-primary"))
+    expect(detail.locator(".board-consensus")).to_have_count(0)
+
+    ui.world.agent_call(room, "codex-1", "review", action="concur", item="Q1", recommend=1)
+    expect(buttons).to_have_text(["Before tax (picked by claude-1)", "After tax (picked by codex-1)"])
+    expect(detail.locator(".board-consensus")).to_have_text("The agents are split: no option is recommended.")
+    expect(detail.locator("button.btn-primary[data-option]")).to_have_count(0)
+
+    # a person still chooses: the answer is theirs, whatever the agents picked
+    buttons.nth(1).click()
+    expect(page.locator('#board .lane-settled .board-card[data-item="Q1"]')).to_be_visible()
+    expect(page.locator("#board .board-detail .board-answer")).to_have_text("Answer: After tax")
+    expect(page.locator("#board .board-detail button[data-option]")).to_have_count(0)
+
+
+def test_the_option_the_agents_recommend_is_listed_first(ui: UI) -> None:
+    """The recommended option moves to the top of the list whichever was asked first; the buttons
+    still answer with their own option. Fails if the order is the order asked."""
+    slug = "e2e-board-recommend-first"
+    room = "#" + slug
+    page = review_room(ui, slug)
+    ui.world.agent_call(
+        room, "codex-1", "review", action="ask", title="Keep the retry loop?",
+        options=["Keep the retry loop", "Cap it at three tries", "Remove it"], recommend=1,
+    )  # fmt: skip
+    page.click("#board-toggle")
+    page.click('#board .board-card[data-item="Q2"]')
+    buttons = option_buttons(page)
+    expect(buttons).to_have_text(
+        ["Cap it at three tries (codex-1 recommends this)", "Keep the retry loop", "Remove it"]
+    )
+    ui.world.agent_call(room, "claude-1", "review", action="concur", item="Q2", recommend=1)
+    expect(buttons).to_have_text(
+        ["Cap it at three tries (recommended by codex-1 and claude-1)", "Keep the retry loop", "Remove it"]
+    )
+    assert buttons.evaluate_all("bs => bs.map(b => b.dataset.option)") == ["1", "0", "2"]
+    buttons.nth(0).click()  # the first button answers with its own option (1), not the first asked (0)
+    expect(page.locator("#board .board-detail .board-answer")).to_have_text("Answer: Cap it at three tries")
+
+
+def test_a_board_frame_with_a_bad_order_or_note_still_lists_every_option_as_asked(ui: UI) -> None:
+    """The page reads the broker's order and notes, but never trusts their shape: an order that isn't
+    a permutation of the options, or a note that isn't text, is ignored, so every option still shows
+    once, as asked, as plain text. Fails if a repeated index hides an option or a note is drawn as is."""
+    slug = "e2e-board-bad-consensus"
+    room = "#" + slug
+    page = review_room(ui, slug)
+    page.click("#board-toggle")
+    page.click('#board .board-card[data-item="Q1"]')
+    expect(option_buttons(page)).to_have_text(["Before tax (claude-1 recommends this)", "After tax"])
+
+    def publish(order: Any, notes: Any) -> None:
+        def go() -> None:
+            board = ui.world.broker.state.boards.board_named(room)
+            q1 = next(i for i in board["items"] if i["label"] == "Q1")
+            q1["consensus"] = {**q1["consensus"], "order": order, "notes": notes}
+            ui.world.broker.state.hub.review(room, board)
+
+        ui.world.broker.on_loop(go)
+
+    publish([0, 0], [{"x": 1}, "<b>after</b> tax"])
+    expect(option_buttons(page)).to_have_text(["Before tax", "After tax (<b>after</b> tax)"])
+    expect(page.locator("#board .board-detail b")).to_have_count(0)  # text, never markup
+    publish("1,0", None)
+    expect(option_buttons(page)).to_have_text(["Before tax", "After tax"])
+
+
+def test_a_finding_lists_its_fix_options_with_who_recommends_them(ui: UI) -> None:
+    """A finding may offer fix options in a question's shape; the card lists them (a person doesn't
+    choose here: the owner does) with the same notes, and drops the "waiting" line once it is fixed."""
+    slug = "e2e-board-fix-options"
+    room = "#" + slug
+    page = review_room(ui, slug)
+    ui.world.agent_call(
+        room, "codex-1", "review", action="raise", title="Retry loop never stops",
+        where="shop/retry.py:10-20", options=["Cap the retries", "Remove the loop"], recommend=0,
+    )  # fmt: skip
+    page.click("#board-toggle")
+    page.click('#board .board-card[data-item="F5"]')
+    options = page.locator("#board .board-detail .board-option-list li")
+    expect(page.locator("#board .board-detail .board-fix-options h4")).to_have_text("Fix options")
+    expect(options).to_have_text(["Cap the retries (codex-1 recommends this)", "Remove the loop"])
+    expect(page.locator("#board .board-detail .board-consensus")).to_have_text(
+        "Waiting for claude-1 to agree or pick another."
+    )
+    expect(page.locator("#board .board-detail button[data-option]")).to_have_count(0)
+    ui.world.agent_call(room, "claude-1", "review", action="concur", item="F5", recommend=0)
+    expect(options.nth(0)).to_have_text("Cap the retries (recommended by codex-1 and claude-1)")
+    expect(page.locator("#board .board-detail .board-consensus")).to_have_count(0)
+
+
+def test_an_agent_joining_the_room_changes_what_the_board_says_with_no_move(ui: UI) -> None:
+    """ "Recommended" means every agent in the room agreed, so a newcomer who hasn't picked changes the
+    open card by itself (the broker sends the board again). Fails if the page keeps saying "recommended
+    by" over an agent that never weighed in."""
+    slug = "e2e-board-newcomer"
+    room = "#" + slug
+    page = review_room(ui, slug)
+    ui.world.agent_call(room, "codex-1", "review", action="concur", item="Q1", recommend=0)
+    page.click("#board-toggle")
+    page.click('#board .board-card[data-item="Q1"]')
+    buttons = option_buttons(page)
+    expect(buttons.nth(0)).to_have_text("Before tax (recommended by claude-1 and codex-1)")
+    ui.world.add_agents(room, ("devin-1",))
+    expect(buttons.nth(0)).to_have_text("Before tax (claude-1 and codex-1 recommend this)")
+    expect(page.locator("#board .board-detail .board-consensus")).to_have_text(
+        "Waiting for devin-1 to agree or pick another."
+    )
+    ui.world.agent_call(room, "devin-1", "review", action="concur", item="Q1", recommend=0)
+    expect(buttons.nth(0)).to_have_text("Before tax (recommended by claude-1, codex-1 and devin-1)")
 
 
 def test_a_person_reassigns_a_finding_rules_it_fixed_and_the_owner_isnt_its_raiser_by_default(
@@ -3081,7 +3350,7 @@ def test_a_long_option_wraps_inside_the_question_s_detail(ui: UI, size: str) -> 
     page.click("#board-toggle")
     page.click('#board .board-card[data-item="Q2"]')
     detail = page.locator("#board .board-detail")
-    expect(detail.locator('button[data-option="0"]')).to_have_text(long + " (recommended)")
+    expect(detail.locator('button[data-option="0"]')).to_have_text(long + " (codex-1 recommends this)")
     # each option's left and right margin inside the detail, and how much of its text is hidden
     edges = detail.evaluate("""d => { const r = d.getBoundingClientRect();
         return [...d.querySelectorAll('button[data-option]')].map(b => {
