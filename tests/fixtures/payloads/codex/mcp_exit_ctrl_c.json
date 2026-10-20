@@ -1,0 +1,132 @@
+{
+  "_source": "Live Codex CLI 0.158.0 TUI to local Streamable HTTP probe, 2026-10-19; server-side HTTP request and socket log",
+  "_sanitized": "TCP source ports, monotonic connection IDs, absolute timestamps, and Mcp-Session-Id replaced; request method, path, remaining headers, JSON bodies, event order, and relative timing retained",
+  "_probe": "MCP 2025-06-18; server returned Mcp-Session-Id on initialize and kept GET SSE open with comment keepalives",
+  "exit_action": "Ctrl-C at idle prompt",
+  "server_events": [
+    {
+      "ms_after_first_event": 0,
+      "kind": "conn_open",
+      "connection": "connection-1"
+    },
+    {
+      "ms_after_first_event": 0,
+      "kind": "request",
+      "connection": "connection-1",
+      "method": "POST",
+      "path": "/mcp",
+      "headers": {
+        "user-agent": "codex-mcp-client/0.158.0",
+        "accept": "text/event-stream, application/json"
+      },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "initialize",
+        "params": {
+          "protocolVersion": "2025-06-18",
+          "capabilities": {
+            "elicitation": {
+              "form": {},
+              "url": {}
+            }
+          },
+          "clientInfo": {
+            "name": "codex-mcp-client",
+            "title": "Codex",
+            "version": "0.158.0"
+          }
+        }
+      }
+    },
+    {
+      "ms_after_first_event": 1,
+      "kind": "request",
+      "connection": "connection-1",
+      "method": "POST",
+      "path": "/mcp",
+      "headers": {
+        "user-agent": "codex-mcp-client/0.158.0",
+        "mcp-protocol-version": "2025-06-18",
+        "accept": "text/event-stream, application/json",
+        "mcp-session-id": "MCP_SESSION_1"
+      },
+      "body": {
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized"
+      }
+    },
+    {
+      "ms_after_first_event": 1,
+      "kind": "request",
+      "connection": "connection-1",
+      "method": "GET",
+      "path": "/mcp",
+      "headers": {
+        "user-agent": "codex-mcp-client/0.158.0",
+        "mcp-protocol-version": "2025-06-18",
+        "accept": "text/event-stream, application/json",
+        "mcp-session-id": "MCP_SESSION_1"
+      }
+    },
+    {
+      "ms_after_first_event": 1,
+      "kind": "conn_open",
+      "connection": "connection-2"
+    },
+    {
+      "ms_after_first_event": 1,
+      "kind": "request",
+      "connection": "connection-2",
+      "method": "POST",
+      "path": "/mcp",
+      "headers": {
+        "user-agent": "codex-mcp-client/0.158.0",
+        "mcp-protocol-version": "2025-06-18",
+        "accept": "text/event-stream, application/json",
+        "mcp-session-id": "MCP_SESSION_1"
+      },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {
+          "_meta": {
+            "progressToken": 0
+          }
+        }
+      }
+    },
+    {
+      "ms_after_first_event": 4548,
+      "kind": "request",
+      "connection": "connection-2",
+      "method": "DELETE",
+      "path": "/mcp",
+      "headers": {
+        "user-agent": "codex-mcp-client/0.158.0",
+        "mcp-protocol-version": "2025-06-18",
+        "mcp-session-id": "MCP_SESSION_1",
+        "accept": "*/*"
+      }
+    },
+    {
+      "ms_after_first_event": 4585,
+      "kind": "conn_close",
+      "connection": "connection-2"
+    },
+    {
+      "ms_after_first_event": 5504,
+      "kind": "stream_close",
+      "connection": "connection-1",
+      "reason": "BrokenPipeError"
+    },
+    {
+      "ms_after_first_event": 5504,
+      "kind": "conn_close",
+      "connection": "connection-1"
+    }
+  ],
+  "_unverified": false,
+  "hook_event_name": "McpTransportExitTrace"
+}

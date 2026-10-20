@@ -25,6 +25,7 @@ from switchboard.mcp.server import TOOL_NAMES
 FIX = Path(__file__).resolve().parents[1] / "fixtures" / "mcp_http"
 INIT = json.loads((FIX / "codex_initialize.json").read_text())
 CALL = json.loads((FIX / "codex_tools_call.json").read_text())
+EXIT_FIX = Path(__file__).resolve().parents[1] / "fixtures" / "payloads" / "codex"
 THREAD_A = "00000000-0000-4000-8000-0000000000a1"
 THREAD_B = "00000000-0000-4000-8000-0000000000a2"
 
@@ -95,6 +96,12 @@ class Codex:
         r = self.c.post("/mcp", json=body, headers=self.headers(CALL["headers"]))
         return sorted(t["name"] for t in sse_result(r)["result"]["tools"])
 
+    def delete(self, recorded: dict[str, Any]) -> httpx.Response:
+        """Send the last request in a recorded graceful Codex exit, with this client's token."""
+        last = [e for e in recorded["server_events"] if e.get("method") == "DELETE"]
+        assert len(last) == 1 and last[0]["path"] == "/mcp"
+        return self.c.delete("/mcp", headers=self.headers(last[0]["headers"]))
+
 
 def members(b: InProcBroker, room: str) -> dict[str, tuple[str, str]]:
     st = b.state
@@ -103,6 +110,68 @@ def members(b: InProcBroker, room: str) -> dict[str, tuple[str, str]]:
         m.name: (m.harness, b.on_loop(st.store.get_participant, m.participant_id).host)
         for m in b.on_loop(st.store.members, r.id)
     }
+
+
+def status(b: InProcBroker, name: str) -> str:
+    room = b.on_loop(b.state.store.get_room, "#build")
+    member = next(m for m in b.on_loop(b.state.store.members, room.id) if m.name == name)
+    return b.on_loop(b.state.store.get_participant, member.participant_id).status
+
+
+@pytest.mark.parametrize("exit_name", ["quit", "ctrl_c"])
+def test_recorded_codex_delete_ends_its_threads_but_keeps_memberships(
+    build: InProcBroker, exit_name: str
+) -> None:
+    """The recorded /quit and Ctrl-C DELETE has no thread ID. The server must remember each
+    thread from its tool calls, take both offline, and keep their memberships for resume. A
+    SIGKILL trace has no DELETE, so its thread stays as it was until a later signal."""
+    graceful = json.loads((EXIT_FIX / f"mcp_exit_{exit_name}.json").read_text())
+    killed = json.loads((EXIT_FIX / "mcp_exit_sigkill.json").read_text())
+    assert all(e.get("method") != "DELETE" for e in killed["server_events"])
+    codex = Codex(build, make_token(build, "laptop"))
+    assert codex.start().status_code == 200
+    for thread, name in ((THREAD_A, "codex-1"), (THREAD_B, "codex-2")):
+        assert codex.call("join", thread, room="#build", screen_name=name)["ok"]
+        assert codex.call("hook", thread, event="Stop", session_id=thread) == {}
+        assert status(build, name) == "idle"
+    assert codex.delete(graceful).status_code == 200
+    assert status(build, "codex-1") == status(build, "codex-2") == "offline"
+    assert set(members(build, "#build")) == {"codex-1", "codex-2"}
+    resumed = Codex(build, codex.token)
+    assert resumed.start().status_code == 200
+    assert resumed.call("hook", THREAD_A, event="UserPromptSubmit", session_id=THREAD_A) == {}
+    assert status(build, "codex-1") == "busy"
+    assert set(members(build, "#build")) == {"codex-1", "codex-2"}
+
+
+def test_delete_requires_owner_and_does_not_end_a_thread_served_by_newer_session(
+    build: InProcBroker,
+) -> None:
+    """A wrong token or unknown ID cannot end anyone. A resumed thread belongs to its newer
+    MCP session, so a late DELETE of the old one takes only the still-old thread offline."""
+    recorded = json.loads((EXIT_FIX / "mcp_exit_quit.json").read_text())
+    token = make_token(build, "laptop")
+    old = Codex(build, token)
+    assert old.start().status_code == 200
+    for thread, name in ((THREAD_A, "codex-1"), (THREAD_B, "codex-2")):
+        assert old.call("join", thread, room="#build", screen_name=name)["ok"]
+        assert old.call("hook", thread, event="Stop", session_id=thread) == {}
+    other = Codex(build, make_token(build, "desk"))
+    other.sid = old.sid
+    assert other.delete(recorded).status_code == 404
+    assert status(build, "codex-1") == status(build, "codex-2") == "idle"
+    unknown = Codex(build, token)
+    unknown.sid = "00000000-0000-4000-8000-000000000099"
+    assert unknown.delete(recorded).status_code == 404
+    assert status(build, "codex-1") == status(build, "codex-2") == "idle"
+    resumed = Codex(build, token)
+    assert resumed.start().status_code == 200
+    assert resumed.call("who", THREAD_A, room="#build")["ok"]
+    assert old.call("who", THREAD_A, room="#build")["ok"]  # a late old call cannot reclaim it
+    assert old.delete(recorded).status_code == 200
+    assert status(build, "codex-1") == "idle"
+    assert status(build, "codex-2") == "offline"
+    assert set(members(build, "#build")) == {"codex-1", "codex-2"}
 
 
 @pytest.fixture

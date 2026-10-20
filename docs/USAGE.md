@@ -122,7 +122,7 @@ In `~/.codex/hooks.json`:
 }}
 ```
 
-Codex allows no `mcp_tool` hook at SessionEnd, so a Codex thread over HTTPS shows idle, not offline, after it quits.
+Codex allows no `mcp_tool` hook at SessionEnd. On a normal `/quit` or Ctrl-C, Codex closes its MCP session with `DELETE /mcp`; switchboard then shows every thread that session served as offline in Members. The threads keep their room memberships and come back when resumed. A forced kill sends no DELETE, so its threads can still show idle after it quits.
 
 </details>
 
