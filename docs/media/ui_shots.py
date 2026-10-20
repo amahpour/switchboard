@@ -595,6 +595,59 @@ def shoot_review_card(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def shoot_contest_flow(browser: Any, out: Path, world: Any) -> None:
+    """#424: a contested finding waits in Agents working on its raiser, then, once the raiser insists,
+    comes to Needs you with both reasons beside each other."""
+    from playwright.sync_api import expect
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for slug, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        room = "#contest-" + slug
+        world.create_room(room)
+        world.add_agents(room, ("claude-1", "codex-1"))
+        call = world.agent_call
+        call(
+            room,
+            "codex-1",
+            "review",
+            action="open",
+            url="https://example.com/shop/pull/7",
+            head="4f2c9e1a7b30",
+        )
+        call(room, "codex-1", "review", action="raise", title="Rounding drops a cent on $19.99",
+             where="shop/money.py:8", detail="Half-up rounding, but the ledger rounds half-even.")  # fmt: skip
+        call(room, "claude-1", "review", action="contest", item="F1",
+             reason="the ledger is the one to change: half-up is what the receipt shows")  # fmt: skip
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="' + room + '"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            page.click("#board-toggle")
+            page.click('#board .board-card[data-item="F1"]')
+            expect(page.locator('#board .lane-working .board-card[data-item="F1"]')).to_be_visible()
+            if slug == "phone-light":
+                page.locator("#board .board-detail").scroll_into_view_if_needed()
+            shot(page, out, "contest-waiting-" + slug + ".png")
+            call(room, "codex-1", "review", action="insist", item="F1",
+                 reason="the ledger is the books: the receipt has to match it")  # fmt: skip
+            expect(page.locator('#board .lane-you .board-card[data-item="F1"]')).to_be_visible()
+            expect(page.locator("#board .board-insist")).to_have_count(1)
+            if slug == "phone-light":
+                page.locator("#board .board-detail").scroll_into_view_if_needed()
+            shot(page, out, "contest-insisted-" + slug + ".png")
+        finally:
+            ctx.close()
+
+
 def shoot_outdated_board(browser: Any, out: Path, world: Any) -> None:
     """#291: the same open finding before and after an agent moves the board's head."""
     from playwright.sync_api import expect
@@ -1762,6 +1815,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot(browser, out, world)
             shoot_board(browser, out, world)
             shoot_review_card(browser, out, world)
+            shoot_contest_flow(browser, out, world)
             shoot_outdated_board(browser, out, world)
             shoot_claims(browser, out, world)
             shoot_proof_board(browser, out, world)
