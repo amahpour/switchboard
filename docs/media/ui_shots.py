@@ -52,8 +52,9 @@ people-name-clash-{light,dark,phone-light} (an agent holds the requested person'
 people-edit-{light,dark,phone-light} (Copy's fade timer while an email is selected),
 proof-before-{light,dark,phone-light} and proof-after-{light,dark,phone-light} (a contested
 review finding before its fix, then a fix's proof waiting for confirmation, #251),
-handoff-dialog-{light,dark,phone-light} and handoff-after-{light,dark,phone-light} (the one
-review summary and Posted by choice, then the selected agent's handoff, #252),
+handoff-blocked-, handoff-ready-, handoff-dialog- and handoff-after-{light,dark,phone-light}
+(Hand off in the board's header locked with what is left, then ready, then the one review
+summary and Posted by choice, then the selected agent's handoff, #252 and #425),
 outdated-before-{light,dark,phone-light} and outdated-after-{light,dark,phone-light}
 (a board's unresolved findings before and after an agent moves its head, #291),
 confirm-light, signin-light, setup-person-light and
@@ -693,8 +694,22 @@ def shoot_proof_board(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def reveal(page: Any, selector: str) -> None:
+    """Scroll ``selector`` into view if it isn't. Not Locator.scroll_into_view_if_needed: the
+    board is redrawn by every live frame, and that call fails if the element is replaced while
+    it waits for it to be stable."""
+    page.evaluate(
+        "s => { const e = document.querySelector(s); if (e) e.scrollIntoView({ block: 'nearest' }); }",
+        selector,
+    )
+
+
 def shoot_handoff_board(browser: Any, out: Path, world: Any) -> None:
-    """#252: the exact one-review plan in the dialog, then the chosen agent's handoff."""
+    """#252, #425: Hand off in the board's header, in its states: locked with what is left,
+    ready, the exact one-review plan in the dialog, then the chosen agent's handoff. Each shot
+    scrolls Hand off into view first, which costs nothing where it is already on screen (the
+    header, with the phone's sticky one) and shows where a person had to go before #425, when
+    it was a card in the Settled lane."""
     from playwright.sync_api import expect
 
     for slug, ctx_args in (
@@ -712,6 +727,8 @@ def shoot_handoff_board(browser: Any, out: Path, world: Any) -> None:
         call(
             room, "claude-1", "review", action="contest", item="F1", reason="The old order matched the ledger"
         )
+        call(room, "claude-1", "review", action="ask", title="Discount before or after tax?",
+             options=["Before tax", "After tax"], recommend=0)  # fmt: skip
         ctx = browser.new_context(timezone_id="UTC", locale="en-US", **ctx_args)
         ctx.set_default_timeout(WAIT_MS)
         try:
@@ -722,6 +739,10 @@ def shoot_handoff_board(browser: Any, out: Path, world: Any) -> None:
                 page.click("#rooms-toggle")
             tab.click()
             page.click("#board-toggle")
+            handoff = page.locator("#board-handoff")
+            expect(handoff).to_be_disabled()
+            reveal(page, "#board-handoff")
+            shot(page, out, "handoff-blocked-" + slug + ".png")
             page.click('#board .board-card[data-item="F1"]')
             page.select_option("#board-owner", "claude-1")
             page.click("#board-concede")
@@ -732,8 +753,11 @@ def shoot_handoff_board(browser: Any, out: Path, world: Any) -> None:
             expect(page.locator('#board .lane-settled .board-card[data-item="F1"]')).to_contain_text(
                 "confirmed by codex-1"
             )
-            handoff = page.locator("#board-handoff")
+            page.click('#board .board-card[data-item="Q1"]')
+            page.locator('#board .board-detail button[data-option="0"]').click()
             expect(handoff).to_be_enabled()
+            reveal(page, "#board-handoff")
+            shot(page, out, "handoff-ready-" + slug + ".png")
             handoff.click()
             expect(page.locator("#app-dialog .handoff-comment")).to_contain_text("shop/cart.py:58")
             if slug == "phone-light":
@@ -741,7 +765,7 @@ def shoot_handoff_board(browser: Any, out: Path, world: Any) -> None:
             shot(page, out, "handoff-dialog-" + slug + ".png")
             page.click("#app-dialog-action")
             expect(page.locator("#board-status")).to_have_text("Handed off to codex-1")
-            page.locator("#board .board-handoff").scroll_into_view_if_needed()
+            reveal(page, "#board-handoff-status")
             shot(page, out, "handoff-after-" + slug + ".png")
         finally:
             ctx.close()
