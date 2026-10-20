@@ -2765,14 +2765,22 @@
     });
   }
 
+  // The broker refuses a hello that names more than 64 rooms (WS_MAX_ROOMS in web.py) and closes
+  // the socket, so a page with 65 rooms never stayed connected. It says hello in batches of 64:
+  // each adds its rooms to what the socket follows, as a second hello always has.
+  const HELLO_ROOMS_MAX = 64;
+
   function hello(names) {
     if (!state.ws || state.ws.readyState !== WebSocket.OPEN || !names.length) return;
-    const after = {};
-    for (const n of names) {
-      const r = state.rooms.get(n);
-      if (r && r.lastId > 0) after[n] = r.lastId;
+    for (let i = 0; i < names.length; i += HELLO_ROOMS_MAX) {
+      const batch = names.slice(i, i + HELLO_ROOMS_MAX);
+      const after = {};
+      for (const n of batch) {
+        const r = state.rooms.get(n);
+        if (r && r.lastId > 0) after[n] = r.lastId;
+      }
+      state.ws.send(JSON.stringify({ t: 'hello', rooms: batch, after: after }));
     }
-    state.ws.send(JSON.stringify({ t: 'hello', rooms: names, after: after }));
   }
 
   // Frames for a room that is not open here (closed, deleted, or not listed yet) are dropped:

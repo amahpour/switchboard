@@ -48,6 +48,17 @@ def test_every_rooms_frame_subscribes_the_tabs_again() -> None:
     assert out["tabs"] == ["#build"] and hello_rooms(out) == [["#build"]]
 
 
+def test_a_page_with_more_rooms_than_one_hello_may_name_says_hello_in_batches() -> None:
+    """The broker refuses a hello that names more than 64 rooms (web.py's WS_MAX_ROOMS) and closes
+    the socket, so a page with 65 rooms never stayed connected: it reconnected forever, and the
+    e2e suite, whose one world holds a room per test when it runs serially, went red once it passed
+    64. The page sends batches of at most 64, together naming every room once. Fails if one hello
+    names them all."""
+    out = run("hello_batches_many_rooms")
+    assert out["sizes"] == [64, 6]
+    assert out["all"] == out["names"]  # every room, once, in order
+
+
 def test_a_failed_resync_on_open_still_subscribes_the_tabs() -> None:
     out = run("resync_fails_on_open")
     assert out["tabs"] == ["#build"] and hello_rooms(out) == [["#build"]]
