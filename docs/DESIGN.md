@@ -628,7 +628,7 @@ A **Closed (n)** row in the sidebar (hidden while no room is closed; before #19 
 - `{"t":"people","people":[…],"online":[…]}` on a hosted broker only (§44.8): every person's name, the owner's first, and those with a page open. Sent to every open page when one connects or closes and when a person is added, removed or renamed.
 - `{"t":"pong"}`
 
-A `hello` subscribes the listed rooms (it is additive) and replays, per room, the messages after `after[room]` (or the newest 500 without `after`), then a `room` and a `members` frame. If more than 500 messages are newer than `after`, it replays the newest 500 after a notice saying how many were skipped, so the live stream never has a hole.
+A `hello` names at most 64 rooms (`WS_MAX_ROOMS`): a longer one closes the socket (1008), so a page with more rooms says hello in batches of 64, each adding its rooms (the page did not until #432, and a page with 65 rooms stayed disconnected). A `hello` subscribes the listed rooms (it is additive) and replays, per room, the messages after `after[room]` (or the newest 500 without `after`), then a `room` and a `members` frame. If more than 500 messages are newer than `after`, it replays the newest 500 after a notice saying how many were skipped, so the live stream never has a hole.
 
 The server sends a ping every 20 s.
 
