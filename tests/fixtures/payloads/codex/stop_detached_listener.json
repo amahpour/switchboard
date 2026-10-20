@@ -1,0 +1,31 @@
+{
+  "_source": "Live Codex CLI 0.158.0 TUI, GPT-6 Luna low, 2026-10-19; Stop/SessionEnd hook log, detached child log, async hook completion marker, and idle TUI observation",
+  "_sanitized": "Thread ID, PIDs, paths, and timestamps replaced; event ordering and observed outcomes retained",
+  "stop_hook": {
+    "hook_event_name": "Stop",
+    "session_id": "THREAD_1",
+    "codex_process_ancestor_found": true,
+    "detached_child_started": true,
+    "child_survived_hook_exit": true
+  },
+  "listener": {
+    "stdio": "separate log file",
+    "output_after_stop": "{\"decision\": \"block\", \"reason\": \"listener wake 399\"}",
+    "codex_idle_after_output": true,
+    "exited_after_codex_process_exit": true
+  },
+  "async_stop_hook": {
+    "async": true,
+    "completed_after_stop": true,
+    "output": "{\"decision\": \"block\", \"reason\": \"async wake 399\", \"hookSpecificOutput\": {\"hookEventName\": \"Stop\", \"additionalContext\": \"async wake 399\"}}",
+    "codex_idle_after_output": true
+  },
+  "session_end": {
+    "hook_event_name": "SessionEnd",
+    "observed_on_quit": true,
+    "observed_on_ctrl_c": true,
+    "observed_on_sigkill": false
+  },
+  "_unverified": false,
+  "hook_event_name": "Stop"
+}
