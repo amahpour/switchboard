@@ -36,7 +36,16 @@ from typing import Any
 import pytest
 from conftest import PHASE_REPORTS, TEST_HUMAN, sanitize_env
 from fakes.fake_link import wait_for
-from playwright.sync_api import Browser, BrowserContext, ConsoleMessage, Page, Route, WebSocketRoute, expect
+from playwright.sync_api import (
+    Browser,
+    BrowserContext,
+    ConsoleMessage,
+    Locator,
+    Page,
+    Route,
+    WebSocketRoute,
+    expect,
+)
 from ui_world import CI_URL, JS_SCHEME, PROFILE, UIWorld, wait_js
 
 from switchboard import __version__
@@ -744,29 +753,89 @@ AVATAR_LOOK = """async (el) => {
 
 
 @pytest.mark.parametrize("scheme", ["light", "dark"])
-def test_codex_and_cursor_avatars_show_their_icons(ui: UI, scheme: str) -> None:
-    """#62: a Codex or Cursor agent's avatar is its vendor's icon for the scheme, loaded from the
-    page's own origin under the CSP, with the monogram unseen. Claude Code shows our own bubble
-    (Anthropic allows its name in text, not its icon), and Devin keeps its DV monogram."""
+def test_codex_cursor_and_devin_avatars_show_their_icons(ui: UI, scheme: str) -> None:
+    """#62, #441: a Codex, Cursor or Devin agent's avatar is its vendor's icon for the scheme,
+    loaded from the page's own origin under the CSP, with the monogram unseen. Claude Code shows
+    our own bubble (Anthropic allows its name in text, not its icon). Fails if an icon's file is
+    missing or blocked, the scheme picks the other file, or the monogram still shows."""
     page = ui.open(color_scheme=scheme)
     member = page.locator("#buddy-list .member")
     codex = member.filter(has_text="codex-1").locator(".avatar")
     look = codex.evaluate(AVATAR_LOOK)
     assert look["img"] == f"/static/agents/codex-{scheme}.png" and look["width"] == 256, look
     assert look["color"] == "rgba(0, 0, 0, 0)", look  # the CX text is there for no one to see
+    devin = member.filter(has_text="devin-1").locator(".avatar")
+    look = devin.evaluate(AVATAR_LOOK)
+    assert look["img"] == f"/static/agents/devin-{scheme}.png" and look["width"] == 1024, look
+    assert look["color"] == "rgba(0, 0, 0, 0)", look  # the DV text stays in the element, unseen
+    expect(devin).to_contain_text("DV")
     # no agent in the seeded world runs Cursor: the welcome page's card has its avatar
     cursor = page.locator(".harness-head .avatar.h-cursor")
     look = cursor.evaluate(AVATAR_LOOK)
     assert look["img"] == f"/static/agents/cursor-{scheme}.png" and look["width"] == 1024, look
-    for name in ("claude-1", "devin-1"):
-        look = member.filter(has_text=name).locator(".avatar").evaluate(AVATAR_LOOK)
-        assert look["img"] is None and look["color"] != "rgba(0, 0, 0, 0)", (name, look)
+    look = page.locator(".harness-head .avatar.h-devin").evaluate(AVATAR_LOOK)
+    assert look["img"] == f"/static/agents/devin-{scheme}.png" and look["width"] == 1024, look
+    look = member.filter(has_text="claude-1").locator(".avatar").evaluate(AVATAR_LOOK)
+    assert look["img"] is None and look["color"] != "rgba(0, 0, 0, 0)", look
     claude = member.filter(has_text="claude-1").locator(".avatar")
     expect(claude.locator("svg.ic-bubble")).to_be_visible()
     expect(claude).not_to_contain_text("CC")
     expect(claude).not_to_contain_text("Claude")  # a 32 px row has no room for the word
     expect(page.locator(".harness-head .avatar.h-claude svg.ic-bubble")).to_have_count(1)
-    expect(member.filter(has_text="devin-1").locator(".avatar")).to_contain_text("DV")
+
+
+# An avatar's box, in CSS pixels.
+AVATAR_BOX = """el => {
+  const r = el.getBoundingClientRect();
+  return {w: Math.round(r.width), h: Math.round(r.height)};
+}"""
+
+
+@pytest.mark.parametrize("phone", [False, True])
+def test_devin_s_logo_shows_in_the_members_the_log_and_the_inspector(ui: UI, phone: bool) -> None:
+    """#441: devin-1 shows Devin's logo, not its DV letters, in the Members list, beside its
+    message in the log and on the Inspector's large avatar, at the sizes every harness uses there
+    (32, 32 and 40 px; the phone's log is 28), on a desktop and on a phone. Fails if any of the
+    three places still draws the monogram tile, or an icon is the wrong size."""
+    page = ui.open(**PHONE) if phone else ui.open()
+    sizes = {"member": 32, "log": 28 if phone else 32, "inspector": 40}
+
+    def check(where: str, avatar: Locator) -> None:
+        expect(avatar).to_be_visible()
+        look = avatar.evaluate(AVATAR_LOOK)
+        assert look["img"] == "/static/agents/devin-light.png" and look["width"] == 1024, (where, look)
+        assert look["color"] == "rgba(0, 0, 0, 0)", (where, look)
+        box = avatar.evaluate(AVATAR_BOX)
+        assert box == {"w": sizes[where], "h": sizes[where]}, (where, box)
+
+    page.locator('#log .line[data-from="devin-1"]').scroll_into_view_if_needed()
+    check("log", page.locator('#log .line[data-from="devin-1"] > .avatar.h-devin'))
+    if phone:
+        page.click("#buddy-toggle")
+    check("member", page.locator('#buddy-list .member[data-name="devin-1"] .avatar.h-devin'))
+    with page.expect_response(lambda r: "/members/devin-1" in r.url and r.request.method == "GET"):
+        page.click('#buddy-list .member[data-name="devin-1"]')
+    expect(page.locator("#insp-name")).to_contain_text("devin-1")
+    check("inspector", page.locator("#insp-body .insp-id > .avatar.h-devin"))
+
+
+def test_devin_s_logo_follows_the_theme_setting(ui: UI) -> None:
+    """#441: the saved Theme (the page's data-theme) picks Devin's file, not only the system's
+    scheme: Dark on a light system shows the dark file, Light on a dark system the light one,
+    and System follows the system. Fails if the explicit Dark block lacks the icon, so a person
+    who chose Dark gets a white tile in a dark pane."""
+    page = ui.open(color_scheme="light")
+    devin = page.locator('#buddy-list .member[data-name="devin-1"] .avatar')
+    for theme, scheme, want in (
+        ("system", "light", "light"),
+        ("dark", "light", "dark"),
+        ("light", "dark", "light"),
+        ("system", "dark", "dark"),
+    ):
+        page.emulate_media(color_scheme=scheme)
+        page.evaluate("t => { document.documentElement.dataset.theme = t; }", theme)
+        look = devin.evaluate(AVATAR_LOOK)
+        assert look["img"] == f"/static/agents/devin-{want}.png", (theme, scheme, look)
 
 
 # Where the Inspector's avatar, its word and the name beside it sit, in CSS pixels.

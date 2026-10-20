@@ -83,12 +83,11 @@
   --human-fg: #5a3d99;
   --h-claude-bg: #b9573a;
   --h-claude-fg: #ffffff;
-  --h-devin-bg: #e2f2e8;
-  --h-devin-fg: #1d6b43;
-  /* the agents' icons (#62, DESIGN.md §29.9): the only files this stylesheet loads, each pinned */
+  /* the agents' icons (#62, #441, DESIGN.md §29.9): the only files this stylesheet loads, each pinned */
   --h-codex-img: url('/static/agents/codex-light.png');
   --h-codex-tile: #ffffff;
   --h-cursor-img: url('/static/agents/cursor-light.png');
+  --h-devin-img: url('/static/agents/devin-light.png');
   --h-icon-ring: rgba(0, 0, 0, 0.08);
   --h-other-bg: #ececf0;
   --h-other-fg: #3c3c43;
@@ -161,8 +160,6 @@
     --human-fg: #cfbdf7;
     --h-claude-bg: #b9573a;
     --h-claude-fg: #ffffff;
-    --h-devin-bg: #1b3a29;
-    --h-devin-fg: #91ddb2;
   --h-codex-img: url('/static/agents/codex-dark.png');
   --h-codex-tile: #000000;
   --h-cursor-img: url('/static/agents/cursor-dark.png');
@@ -170,6 +167,7 @@
     --h-codex-img: url('/static/agents/codex-dark.png');
     --h-codex-tile: #000000;
     --h-cursor-img: url('/static/agents/cursor-dark.png');
+    --h-devin-img: url('/static/agents/devin-dark.png');
     --h-icon-ring: rgba(255, 255, 255, 0.1);
     --h-other-bg: #2e2e33;
     --h-other-fg: #d0d0d6;
@@ -233,8 +231,7 @@
   --human-fg: #cfbdf7;
   --h-claude-bg: #b9573a;
   --h-claude-fg: #ffffff;
-  --h-devin-bg: #1b3a29;
-  --h-devin-fg: #91ddb2;
+  --h-devin-img: url('/static/agents/devin-dark.png');
   --h-other-bg: #2e2e33;
   --h-other-fg: #d0d0d6;
   color-scheme: dark;
@@ -1018,11 +1015,10 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
 }
 .avatar.named .ic { width: 24px; height: 24px; flex: none; }
 .av-word { font-size: calc(9.5px * var(--text-scale)); font-weight: 700; line-height: 1; }
-.avatar.h-devin { background: var(--h-devin-bg); color: var(--h-devin-fg); }
 .avatar.h-test, .avatar.h-unknown { background: var(--h-other-bg); color: var(--h-other-fg); }
-/* Codex and Cursor show their vendor's icon, unaltered; the monogram stays in the DOM, unseen.
+/* Codex, Cursor and Devin show their vendor's icon, unaltered; the monogram stays in the DOM, unseen.
    Claude Code has switchboard's own bubble: Anthropic allows its name in plain text, not its icon. */
-.avatar.h-codex, .avatar.h-cursor {
+.avatar.h-codex, .avatar.h-cursor, .avatar.h-devin {
   color: transparent;
   background-position: center;
   background-size: cover;
@@ -1031,6 +1027,7 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
 }
 .avatar.h-codex { background-color: var(--h-codex-tile); background-image: var(--h-codex-img); }
 .avatar.h-cursor { background-color: transparent; background-image: var(--h-cursor-img); }
+.avatar.h-devin { background-color: transparent; background-image: var(--h-devin-img); }
 .avatar.human { border-radius: 50%; background: var(--human-bg); color: var(--human-fg); font-size: calc(12.5px * var(--text-scale)); font-weight: 600; }
 .avatar.sys { background: var(--chip-bg); color: var(--muted-2); font-size: calc(15px * var(--text-scale)); font-weight: 400; }
 .avatar.sm { width: 28px; height: 28px; font-size: calc(12px * var(--text-scale)); }
