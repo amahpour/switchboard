@@ -197,6 +197,30 @@ def test_a_room_with_no_board_gets_no_review_frame_and_a_dropped_room_forgets_it
     h.add(s)
     h.members_changed("#a")
     assert [f["t"] for f in drained(s)] == ["members"]
-    assert h._member_names == {"#a": ("claude-1",)}
+    assert h._member_names == {"#a": (("claude-1",), ())}
     h.drop_room("#a")
     assert h._member_names == {}
+
+
+def test_the_board_is_published_again_when_an_agent_goes_offline_or_comes_back() -> None:
+    """A contested finding is a person's once its raiser is offline (DESIGN.md §37.13), so the drop
+    to offline, and the return, send the page the board again with no move at all; busy and idle
+    still don't. Fails if an agent going offline leaves the finding in the agents' lane."""
+    h = Hub()
+    members: list[dict] = [{"name": "claude-1", "status": "idle"}, {"name": "codex-1", "status": "idle"}]
+    h.set_members_source(lambda room: [dict(m) for m in members])
+    h.set_board_source(lambda room: {"url": "u"})
+    s = WsSubscriber()
+    s.rooms = {"#a"}
+    h.add(s)
+    h.members_changed("#a")
+    assert [f["t"] for f in drained(s)] == ["members", "review"]
+    members[1]["status"] = "busy"
+    h.members_changed("#a")
+    assert [f["t"] for f in drained(s)] == ["members"]
+    members[1]["status"] = "offline"
+    h.members_changed("#a")
+    assert [f["t"] for f in drained(s)] == ["members", "review"]
+    members[1]["status"] = "idle"  # back
+    h.members_changed("#a")
+    assert [f["t"] for f in drained(s)] == ["members", "review"]

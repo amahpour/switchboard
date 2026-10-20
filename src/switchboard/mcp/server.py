@@ -608,9 +608,9 @@ def build_server(st: ToolBackend) -> FastMCP:
         description=(
             "PR review board; detail: Markdown, Mermaid ok. action: open(url, head), show, "
             "raise(title, detail, where=path:40-58), ask(title, options, recommend), "
-            "concur(item, recommend), concede(item, owner), contest/drop(item, reason), "
+            "concur(item, recommend), concede(item, owner), contest/insist/drop(item, reason), "
             "defer(item, reason=ticket), fix(item, commit, proof=test or link), "
-            "confirm(item) by raiser, report(state, threads, ci) per gh/glab; close(reason if open)."
+            "confirm(item), report(state, threads, ci) per gh/glab; close(reason if open)."
         ),
     )
     async def review(

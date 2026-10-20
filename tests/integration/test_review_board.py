@@ -543,6 +543,10 @@ async def test_a_person_answers_rules_and_closes_from_the_web(broker: InProcBrok
             await author.call(
                 "review", room="#build", action="contest", item="F1", reason="banker's rounding"
             )
+            # the contest goes back to its raiser first (#424); only once insisted on is it the person's
+            await reviewer.call(
+                "review", room="#build", action="insist", item="F1", reason="the ledger rounds half-even"
+            )
             await author.call(
                 "review",
                 room="#build",
@@ -589,6 +593,7 @@ async def test_a_person_answers_rules_and_closes_from_the_web(broker: InProcBrok
     chat = q(broker, "SELECT sender_kind, text FROM messages WHERE kind='chat' ORDER BY id")
     assert [(r["sender_kind"], r["text"][:21]) for r in chat] == [
         ("agent", "Review board: F1 rais"),  # the raise, the author's to answer
+        ("agent", "Review board: F1 cont"),  # the contest, its raiser's to drop or insist on (#424)
         ("agent", "Review board: Q1 aske"),  # the question, the reviewer's to agree with (#423)
         ("human", "Review board: Q1 answ"),
         ("human", "Review board: F1 conc"),
@@ -1112,4 +1117,154 @@ async def test_the_board_follows_who_is_in_the_room(broker: InProcBroker) -> Non
             assert back["by"] == ["claude-1", "codex-1"]
     finally:
         ws.close()
+        web.close()
+
+
+# ------------------------------------- a contest goes back to its raiser first (#424, DESIGN.md §37.13)
+def finding_of(web: Any, label: str) -> dict[str, Any]:
+    board = web.get("/api/rooms/build/review").json()["board"]
+    return next(i for i in board["items"] if i["label"] == label)
+
+
+async def test_a_contested_finding_is_its_raisers_to_drop_or_insist_on(broker: InProcBroker) -> None:
+    """The agents settle what they can: a contest is posted to its raiser, who drops the finding (the
+    contest convinced them) or insists with a reason, and only an insisted finding needs the person.
+    Only the raiser can insist, once, on a contested finding; the other side may still concede. Fails
+    if every contest still lands on the person, or the raiser is never told."""
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            await reviewer.call("review", room="#build", action="open", url=PR)
+            for title in ("rounding", "style nit", "expired codes"):
+                await reviewer.call("review", room="#build", action="raise", title=title)
+            for item in ("F1", "F2", "F3"):
+                await author.call("review", room="#build", action="contest", item=item, reason="not a bug")
+            f1 = finding_of(web, "F1")
+            assert (f1["state"], f1["needs_person"], f1["insisted"]) == ("contested", False, "")
+            board = web.get("/api/rooms/build/review").json()["board"]
+            assert board["counts"]["needs_person"] == 0 and board["offline"] == []
+            shown = (await author.call("review", room="#build", action="show"))["board"]
+            assert (
+                "F1 [contested] rounding: raised by codex-1, contested: codex-1 drops it or insists" in shown
+            )
+
+            # only the raiser insists, on a contested finding, with a reason, once
+            r = await author.call("review", room="#build", action="insist", item="F1", reason="no")
+            assert r["ok"] is False and "only codex-1, who raised F1, can insist on it" in r["error"]
+            r = await reviewer.call("review", room="#build", action="insist", item="F1")
+            assert r["ok"] is False and "reason is required" in r["error"]
+            r = await reviewer.call("review", room="#build", action="insist", item="F1", reason="r" * 501)
+            assert r["ok"] is False and "too long" in r["error"]
+            r = await reviewer.call("review", room="#build", action="insist", item="Q1", reason="x")
+            assert r["ok"] is False and "has no Q1" in r["error"]
+            assert finding_of(web, "F1")["needs_person"] is False  # none of that moved it
+            r = await reviewer.call(
+                "review", room="#build", action="insist", item="F1", reason="the ledger rounds half-even"
+            )
+            assert (
+                r["ok"]
+                and "F1 [contested] rounding" in r["board"]
+                and "insisted on: a person decides" in r["board"]
+            )
+            f1 = finding_of(web, "F1")
+            assert (f1["needs_person"], f1["insisted"]) == (True, "the ledger rounds half-even")
+            assert f1["insist_line"] == "Insists: the ledger rounds half-even"
+            assert [h["did"] for h in f1["history"]] == ["raised it", "contested it", "insisted on it"]
+            r = await reviewer.call("review", room="#build", action="insist", item="F1", reason="again")
+            assert r["ok"] is False and "insisted on already" in r["error"]
+            r = await reviewer.call("review", room="#build", action="insist", item="F4", reason="x")
+            assert r["ok"] is False and "has no F4" in r["error"]
+
+            # dropping settles it (the contest convinced the raiser); the other side may still concede
+            r = await reviewer.call("review", room="#build", action="drop", item="F2", reason="fair")
+            assert r["ok"] and finding_of(web, "F2")["state"] == "dropped"
+            r = await author.call("review", room="#build", action="concede", item="F3")
+            assert r["ok"] and finding_of(web, "F3")["state"] == "conceded"
+            r = await reviewer.call("review", room="#build", action="insist", item="F3", reason="x")
+            assert (
+                r["ok"] is False
+                and "F3 is conceded: only a contested finding can be insisted on" in r["error"]
+            )
+            r = await reviewer.call("review", room="#build", action="insist", item="F2", reason="x")
+            assert r["ok"] is False and "F2 is dropped: only a contested finding" in r["error"]
+            board = web.get("/api/rooms/build/review").json()["board"]
+            assert board["counts"]["needs_person"] == 1  # the one both sides argued
+    finally:
+        web.close()
+    # each contest was the contester's own message to the raiser; the insist and the rest were notices
+    chat = q(broker, "SELECT sender_name, text FROM messages WHERE kind='chat' AND text LIKE '%contested%'")
+    assert [r["sender_name"] for r in chat] == ["claude-1"] * 3
+    assert chat[0]["text"].startswith(
+        "Review board: F1 contested: rounding. @codex-1: drop it if the contest convinces you"
+    )
+    assert 'review(action="insist", item="F1", reason=...)' in chat[0]["text"]
+    notices = [m["text"] for m in q(broker, "SELECT text FROM messages WHERE kind='notice' ORDER BY id")]
+    assert "codex-1 insisted F1: a person decides" in notices
+    assert not any(
+        "F1 contested" in n for n in notices
+    )  # a contest that wakes its raiser isn't also a notice
+
+
+async def test_a_contested_finding_goes_to_a_person_when_its_raiser_has_left_or_is_offline(
+    broker: InProcBroker,
+) -> None:
+    """Nothing waits forever on an agent that isn't there: the broker tells it by the room's members (left,
+    or status offline), so the finding moves to Needs you with no move at all, and back when it returns."""
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            await reviewer.call("review", room="#build", action="open", url=PR)
+            await reviewer.call("review", room="#build", action="raise", title="rounding")
+            await author.call("review", room="#build", action="contest", item="F1", reason="by design")
+            assert finding_of(web, "F1")["needs_person"] is False
+
+            def set_status(status: str) -> None:
+                store = broker.state.store
+                room = store.get_room("#build")
+                member = store.find_member(room.id, "codex-1")
+                store.update_participant(member.participant_id, status=status)
+
+            broker.on_loop(set_status, "offline")
+            f1 = finding_of(web, "F1")
+            assert f1["needs_person"] is True and f1["insisted"] == ""
+            board = web.get("/api/rooms/build/review").json()["board"]
+            assert board["offline"] == ["codex-1"] and board["counts"]["needs_person"] == 1
+            shown = (await author.call("review", room="#build", action="show"))["board"]
+            assert "contested; codex-1 isn't here to answer: a person decides" in shown
+            broker.on_loop(set_status, "idle")
+            assert finding_of(web, "F1")["needs_person"] is False
+            await reviewer.leave("#build")
+            assert finding_of(web, "F1")["needs_person"] is True
+            shown = (await author.call("review", room="#build", action="show"))["board"]
+            assert "contested; codex-1 isn't here to answer: a person decides" in shown
+    finally:
+        web.close()
+
+
+async def test_a_person_can_still_rule_on_a_contested_finding_its_raiser_has_not_answered(
+    broker: InProcBroker,
+) -> None:
+    """The person may step in at any time, as before: concede it to an owner or drop it, whether or not
+    the raiser has insisted. Fails if the new flow takes the person's ruling away."""
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            await reviewer.call("review", room="#build", action="open", url=PR)
+            await reviewer.call("review", room="#build", action="raise", title="rounding")
+            await reviewer.call("review", room="#build", action="raise", title="style nit")
+            for item in ("F1", "F2"):
+                await author.call("review", room="#build", action="contest", item=item, reason="by design")
+            body = {"action": "concede", "item": "F1", "owner": "claude-1"}
+            r = web.post("/api/rooms/build/review", json=body, headers=broker.write_headers())
+            assert r.status_code == 200 and finding_of(web, "F1")["state"] == "conceded"
+            body = {"action": "drop", "item": "F2", "reason": "not worth it"}
+            r = web.post("/api/rooms/build/review", json=body, headers=broker.write_headers())
+            assert r.status_code == 200 and finding_of(web, "F2")["state"] == "dropped"
+    finally:
         web.close()

@@ -29,7 +29,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -210,6 +210,7 @@ CREATE TABLE review_items(
   confirmed_by TEXT NOT NULL DEFAULT '' CHECK(length(confirmed_by) <= 100),
   outdated_head TEXT NOT NULL DEFAULT '' CHECK(length(outdated_head) <= 64),
   deferred_to TEXT NOT NULL DEFAULT '' CHECK(length(deferred_to) <= 200),
+  insisted TEXT NOT NULL DEFAULT '' CHECK(length(insisted) <= 500),
   UNIQUE(review_id, kind, n));
 CREATE TABLE review_picks(
   item_id INTEGER NOT NULL REFERENCES review_items(id),
@@ -540,6 +541,18 @@ V25_TO_V26 = (
     "UPDATE meta SET value='26' WHERE key='schema_version'",
 )
 
+# v26 -> v27 (#424, DESIGN.md §37.13): the reason a finding's raiser gives for insisting on it after
+# it was contested. A contested finding with one has both sides' case made, and a person decides;
+# without one it is still its raiser's to answer. A finding contested before this was already waiting
+# on a person, and its raiser was never asked to answer, so it keeps waiting there: it is marked
+# insisted with a line saying so (``reviews.LEGACY_INSISTED``; a test pins the two equal).
+V26_TO_V27 = (
+    "ALTER TABLE review_items ADD COLUMN insisted TEXT NOT NULL DEFAULT '' CHECK(length(insisted) <= 500)",
+    "UPDATE review_items SET insisted='(contested before agents could insist: a person decides)'"
+    " WHERE kind='finding' AND state='contested'",
+    "UPDATE meta SET value='27' WHERE key='schema_version'",
+)
+
 
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
@@ -570,6 +583,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         23: (24, V23_TO_V24, ()),
         24: (25, V24_TO_V25, ("agent_tokens",)),
         25: (26, V25_TO_V26, ("review_picks",)),
+        26: (27, V26_TO_V27, ()),
     }
     out = []
     v = frm

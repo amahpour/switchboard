@@ -28,6 +28,7 @@ ACTIONS = (
     "concur",
     "concede",
     "contest",
+    "insist",
     "fix",
     "confirm",
     "drop",
@@ -58,11 +59,12 @@ class Boards:
         if rv is None:
             return None
         items = self.store.review_items(rv["id"])
-        agent_people = {
-            member.name: self.state.service.host_person(member.host) for member in self.store.members(room.id)
-        }
+        members = self.store.members(room.id)
+        agent_people = {member.name: self.state.service.host_person(member.host) for member in members}
         agents = list(agent_people)
         active = set(agents)
+        # in the room but not there (#424): a contested finding doesn't wait on its raiser then
+        offline = sorted(m.name for m in members if m.status == "offline")
         now = self.state.clock.now()
         f = reviews.forge(rv["url"])
         events = [{"ts": e.ts, "data": e.data} for e in self.store.review_events(room.id, rv["opened_at"])]
@@ -74,10 +76,11 @@ class Boards:
             "opened_by": rv["opened_by"],
             "opened_at": rv["opened_at"],
             "settled": reviews.settled(items),
-            "counts": reviews.counts(items, active, now),
-            "items": [item_dict(i, f, events, active, now, agents) for i in items],
+            "counts": reviews.counts(items, active, now, offline),
+            "items": [item_dict(i, f, events, active, now, agents, offline) for i in items],
             "plan": reviews.handoff_plan(items, events, self.store.room_agent_names_ever(room.id)),
             "agents": agents,
+            "offline": offline,
             "agent_people": agent_people,
             "posted_at": rv["posted_at"],
             "posted_by": rv["posted_by"],
@@ -143,6 +146,11 @@ class Boards:
             fields["confirmed_by"] = actor
         elif action in ("contest", "drop"):
             fields["reason"] = reviews.text(params.get("reason"), "reason", reviews.MAX_REASON, required=True)
+        elif action == "insist":
+            # the raiser's case, to set beside the contest's: only then does a person decide (#424)
+            fields["insisted"] = reviews.text(
+                params.get("reason"), "reason", reviews.MAX_REASON, required=True
+            )
         elif action == "defer":
             # the follow-up ticket comes as the reason: the tool's list has no room for a field (#371)
             fields["deferred_to"] = reviews.text(
@@ -157,6 +165,8 @@ class Boards:
             if reassigned
             else "deferred"
             if action == "defer"
+            else "insisted"
+            if action == "insist"
             else to
         )
         self.store.add_event("review", room_id=room.id, data={"item": item.label, "to": shown, "by": actor})
@@ -171,7 +181,10 @@ class Boards:
             "deferred": f" to {fields.get('deferred_to')}",
             "conceded": f", owner {fields.get('owner')}",
             "fixed": f" in {fields.get('commit_sha', '')[:12]}",
-            "contested": ": a person decides",
+            "contested": f": {item.raised_by} drops it or insists"
+            if reviews.raiser_answers(moved, set(here))
+            else f": {item.raised_by} isn't here, a person decides",
+            "insisted": ": a person decides",
             "confirmed": f" by {actor}",
         }.get(shown, "")
         return self._told(room, moved, actor, f"{actor} {action_past(action)} {item.label}{tail}")
@@ -488,7 +501,7 @@ class Boards:
         out: dict[str, Any] = {
             "ok": True,
             "settled": b["settled"],
-            "board": reviews.render(b, items, self.state.clock.now(), b["agents"]),
+            "board": reviews.render(b, items, self.state.clock.now(), b["agents"], b["offline"]),
         }
         if touched:
             out["item"] = touched
@@ -503,6 +516,7 @@ def action_past(action: str) -> str:
     return {
         "concede": "conceded",
         "contest": "contested",
+        "insist": "insisted",
         "fix": "fixed",
         "confirm": "confirmed",
         "drop": "dropped",
@@ -517,9 +531,11 @@ def item_dict(
     active: set[str] | None = None,
     now: float | None = None,
     present: Sequence[str] = (),
+    offline: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """An item as the page reads it, with its links on the forge and its history (#250), and what
-    the room's agents (``present``) have picked among its options (#423)."""
+    """An item as the page reads it, with its links on the forge and its history (#250), what
+    the room's agents (``present``) have picked among its options (#423), and whether a contested
+    finding is still its raiser's to answer, which ``offline`` agents can't (#424)."""
     c = reviews.consensus(i, present)
     return {
         "label": i.label,
@@ -537,6 +553,8 @@ def item_dict(
         "outdated_head": i.outdated_head,
         "deferred_to": i.deferred_to,
         "reason": i.reason,
+        "insisted": i.insisted,
+        "insist_line": reviews.insist_line(i),
         "options": list(i.options),
         "recommend": i.recommend,
         "picks": [{"agent": a, "option": o} for a, o in reviews.effective_picks(i).items()],
@@ -550,7 +568,7 @@ def item_dict(
         },
         "answer": i.answer,
         "answered_by": i.answered_by,
-        "needs_person": reviews.needs_person(i, active, now),
+        "needs_person": reviews.needs_person(i, active, now, offline),
         "lines_url": reviews.lines_url(f, i.file, i.lines),
         "commit_url": reviews.commit_url(f, i.commit),
         "history": reviews.history(i, events or []),

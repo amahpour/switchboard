@@ -598,6 +598,9 @@ class UIWorld:
         call(room, "claude-1", "review", action="concede", item="F4", owner="codex-1")
         call(room, "claude-1", "review", action="contest", item="F3",
              reason="the ledger is the one to change: half-up is what the receipt shows")  # fmt: skip
+        # the raiser stands by it: both sides have made their case, so it is the person's (#424)
+        call(room, "codex-1", "review", action="insist", item="F3",
+             reason="the ledger is the books: the receipt has to match it")  # fmt: skip
         call(room, "codex-1", "review", action="drop", item="F1",
              reason="moved to Q1: it's a pricing decision, not a bug")  # fmt: skip
         call(room, "claude-1", "review", action="ask", title="Discount before or after tax?",

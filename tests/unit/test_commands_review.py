@@ -106,6 +106,16 @@ def test_the_request_asks_for_markdown_a_diagram_and_a_recommendation() -> None:
     assert 'agree with the others\' questions or pick another option with review(action="concur")' in text
 
 
+def test_the_request_asks_agents_to_settle_a_contest_between_themselves() -> None:
+    """#424: a contested finding goes back to its raiser, to drop or insist on, and a person gets only
+    what the agents still disagree on. The request says so where every agent reads it. Fails on the
+    old request, which let every contest land on the person."""
+    text = review_request(["claude-1"], PR, "")
+    assert "when one of yours is contested, drop it or insist on it with your reason" in text
+    assert 'review(action="insist")' in text
+    assert "leave a person only what you still disagree on" in text
+
+
 def test_help_lists_review() -> None:
     assert "  /review <url> [note]" in HELP_TEXT
 
@@ -130,16 +140,16 @@ def test_a_note_too_long_for_one_message_is_refused_before_the_board_opens(
     """The request has to fit [delivery] max_msg_chars; a note that doesn't is refused, saying
     how much fits, and nothing is posted. (This RoomService has no boards: the check comes first.)"""
     store = Store(db.open_db(tmp_path / "y.db"), clock)
-    cfg = Config().with_delivery(max_msg_chars=700)
+    cfg = Config().with_delivery(max_msg_chars=1000)
     svc = RoomService(store, Hub(), cfg, BrokerInfo(port=7419, test_mode=True), clock)
     room = svc.create_room("#build")
     p = store.upsert_participant("test", "test:agent:claude-1", status="idle")
     store.create_membership(room.id, p.id, "claude-1", "h-claude-1")
-    fits = 700 - len(review_request(["claude-1"], PR, "")) - len("\n\nNote: ")
+    fits = 1000 - len(review_request(["claude-1"], PR, "")) - len("\n\nNote: ")
     with pytest.raises(ServiceError) as e:
-        svc.command("#build", f"/review {PR} " + "n" * 800, Actor(role="human", via="web"))
+        svc.command("#build", f"/review {PR} " + "n" * 1200, Actor(role="human", via="web"))
     assert (
         e.value.message
-        == f"/review: the note is too long (800 characters; at most {fits} fit in one message)"
+        == f"/review: the note is too long (1200 characters; at most {fits} fit in one message)"
     )
     assert [m for m in store.history(room.id) if m.kind == "chat"] == []
