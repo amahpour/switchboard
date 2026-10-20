@@ -10,11 +10,12 @@ runs on the agent's machine.
   token's last use is written at most once a minute.
 - **Who is calling** (``HttpTools.prime``): the token's person and device, the device being the
   host of its agents' sessions (§27.6). The harness is the client's own claim, from its
-  ``clientInfo`` (``codex-mcp-client`` is Codex, ``claude-code`` Claude Code). The session is the
+  ``clientInfo`` (Codex, Claude Code, or Cursor). The session is the
   harness's own. Codex names its thread on every call (``_meta.threadId``). Claude Code names
   the call (``_meta["claudecode/toolUseId"]``), and its PreToolUse hook, a call of the hidden
-  ``hook`` tool just before, reports which session made that call (``HookUses``). Any other
-  client is told it isn't supported yet, since its calls couldn't be told apart.
+  ``hook`` tool just before, reports which session made that call (``HookUses``). Cursor's
+  command hook injects a checked conversation ID into its call's arguments. Any other client
+  is told it isn't supported yet, since its calls couldn't be told apart.
 - **The hook tool** is left out of ``tools/list``, so the model never sees it, and a hook
   calls it anyway. Each event reports the session's status (§49.4); its answer is written here
   (#380's decision 5), only in the hook script's own shapes (§7.3) plus Codex's Stop
@@ -41,7 +42,8 @@ from typing import TYPE_CHECKING, Any
 from fastmcp import Context
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.server.middleware import Middleware
-from mcp.types import ToolAnnotations
+from fastmcp.tools.base import ToolResult
+from mcp.types import TextContent, ToolAnnotations
 from starlette.routing import Route
 
 from switchboard import __version__
@@ -58,7 +60,7 @@ from switchboard.mcp.server import (
     build_server,
     err,
 )
-from switchboard.models import AgentTokenRow, InvalidName, normalize_room
+from switchboard.models import AgentTokenRow, InvalidName, canonical_event, normalize_room
 
 if TYPE_CHECKING:  # pragma: no cover
     from fastapi import FastAPI
@@ -69,9 +71,9 @@ log = logging.getLogger("switchboard.agent_http")
 
 PATH = "/mcp"
 # the clients whose sessions a call over HTTPS can name, by their clientInfo name (§49.3)
-CLIENTS = {"codex-mcp-client": "codex", "claude-code": "claude"}
+CLIENTS = {"codex-mcp-client": "codex", "claude-code": "claude", "Cursor": "cursor"}
 UNSUPPORTED = (
-    "switchboard over HTTPS works with Codex and Claude Code for now."
+    "switchboard over HTTPS works with Codex, Claude Code and Cursor for now."
     " Connect this agent with `switchboard install` meanwhile"
 )
 HOOK_TOOL = "hook"  # called by a harness's hooks, never listed for the model
@@ -96,6 +98,10 @@ SESSION_PATH = "/mcp/session"  # Claude Code's SessionStart and SessionEnd, as c
 SESSION_EVENTS = frozenset({"SessionStart", "SessionEnd"})  # Claude Code runs no mcp_tool hook at these
 SESSION_FIELDS = ("event", "session_id", "source", "reason", "permission_mode")  # all /mcp/session reads
 SESSION_BODY_MAX = 2048
+INPUT_SESSION = "switchboard_session_id"
+INPUT_USE = "switchboard_tool_use_id"
+PRETOOL_PATH = "/mcp/pretool"
+EVENT_PATH = "/mcp/event"
 SESSION_HEADER = b"x-switchboard-session"  # the listener's session id, the only thing it sends
 WAIT_HEADER = b"x-switchboard-wait"  # how long one round of the listener waits
 AGAIN_HEADER = b"x-switchboard-again"  # "1" on the listener's later rounds: only an idle session waits on
@@ -228,6 +234,8 @@ def reply_for(harness: str, event: str, out: Any) -> dict[str, Any] | None:
         reply: Any = {"decision": "block", "reason": text}
     else:
         reply = hook_script.render(harness, event, out)
+    if harness == "cursor" and reply in ({"additional_context": text}, {"followup_message": text}):
+        return reply
     return reply if _shape_ok(reply, event, text) else None
 
 
@@ -282,6 +290,29 @@ class HookUses:
                 return None
 
 
+class InputUses:
+    """A command hook's report, paired with IDs injected into that same tool call's input."""
+
+    def __init__(self, clock: Any) -> None:
+        self.clock = clock
+        self.uses: OrderedDict[tuple[int, str], tuple[str, str, str, float]] = OrderedDict()
+
+    def report(self, token_id: int, harness: str, sid: str, use: str, tool: str) -> None:
+        now = self.clock.now()
+        self.uses[(token_id, use)] = (harness, sid, tool, now)
+        self.uses.move_to_end((token_id, use))
+        while self.uses and (
+            len(self.uses) > USES_MAX or next(iter(self.uses.values()))[3] < now - USES_TTL_S
+        ):
+            self.uses.popitem(last=False)
+
+    def take(self, token_id: int, harness: str, sid: str, use: str, tool: str) -> bool:
+        got = self.uses.pop((token_id, use), None)
+        return bool(
+            got is not None and got[:3] == (harness, sid, tool) and got[3] >= self.clock.now() - USES_TTL_S
+        )
+
+
 class HttpTools:
     """``build_server``'s backend inside the broker (``mcp.server.ToolBackend``), one for every
     agent over HTTPS. Each tool call's caller is worked out by ``prime``, from the request the call
@@ -292,6 +323,8 @@ class HttpTools:
         self._caller: ContextVar[Caller | None] = ContextVar("switchboard_http_caller", default=None)
         self._ids = itertools.count(1 << 48)  # connection ids apart from the socket's
         self.uses = HookUses(state.clock)
+        self.input_uses = InputUses(state.clock)
+        self.input_session: ContextVar[str | None] = ContextVar("switchboard_input_session", default=None)
 
     @property
     def harness(self) -> str | None:
@@ -332,7 +365,9 @@ class HttpTools:
         info = client_info(ctx)
         harness = CLIENTS.get(info.get("name", ""), "unknown")
         conn = self.conn_for(token, harness, info)
-        if harness == "claude":
+        if harness in ("cursor",):
+            thread = self.input_session.get()
+        elif harness == "claude":
             use = _id(McpState.meta(ctx).get(TOOL_USE_KEY))
             thread = await self.uses.session(token.id, use) if use is not None else None
         else:
@@ -608,6 +643,74 @@ class SessionHook:
         agents.hook_ack(conn, {"batch_id": res.get("batch_id"), "ack": res.get("ack")})
 
 
+class CommandHook:
+    """A command hook reports its own session; PreToolUse also binds its call's injected IDs."""
+
+    def __init__(self, auth: AgentAuth, tools: HttpTools) -> None:
+        self.auth, self.tools = auth, tools
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("method") != "POST":
+            await _reply(send, 405, {"error": "method"})
+            return
+        if _header(scope, b"origin") is not None:
+            await _reply(send, 403, {"error": "forbidden"})
+            return
+        row = self.auth.token(scope)
+        if row is None:
+            await _reply(send, 401, {"error": "unauthorized"})
+            return
+        raw = b""
+        while True:
+            msg = await receive()
+            raw += msg.get("body", b"")
+            if len(raw) > 4096:
+                await _reply(send, 413, {"error": "too_large"})
+                return
+            if not msg.get("more_body"):
+                break
+        try:
+            body = json.loads(raw)
+        except ValueError:
+            body = None
+        if not isinstance(body, dict) or body.get("harness") != "cursor":
+            await _reply(send, 400, {"error": "bad_request"})
+            return
+        sid = _id(body.get("session_id"))
+        event = body.get("event")
+        if sid is None or not isinstance(event, str):
+            await _reply(send, 400, {"error": "bad_request"})
+            return
+        self.auth.touch(row)
+        if scope.get("path") == PRETOOL_PATH:
+            use, tool = _id(body.get("tool_use_id")), _id(body.get("tool_name"))
+            if (
+                event != "preToolUse"
+                or use is None
+                or tool not in {f"switchboard_{name}" for name in TOOL_NAMES}
+            ):
+                await _reply(send, 400, {"error": "bad_request"})
+                return
+            self.tools.input_uses.report(row.id, "cursor", sid, use, tool)
+            await _reply(send, 200, {})
+            return
+        ev = canonical_event(event)
+        if ev not in ("SessionStart", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"):
+            await _reply(send, 400, {"error": "bad_request"})
+            return
+        fields = {k: v for k, v in body.items() if k in HOOK_FIELDS}
+        fields["session_id"] = sid
+        agents: Any = self.tools.state.agents
+        conn = self.tools.conn_for(row, "cursor")
+        res = await agents.http_hook(
+            conn, "cursor", ev, hook_params(event, fields, self.tools.state.clock.now())
+        )
+        reply = reply_for("cursor", event, res.get("out")) or {}
+        await _reply(send, 200, reply)
+        if reply:
+            agents.hook_ack(conn, {"batch_id": res.get("batch_id"), "ack": res.get("ack")})
+
+
 class Listener:
     """``/mcp/listen`` (§49.4): Claude Code's Stop hook, a ``curl`` loop with ``asyncRewake``, posts
     here with nothing but its session id and waits, round after round. The answer is the message
@@ -723,6 +826,52 @@ class HideHook(Middleware):
         return [t for t in await call_next(context) if t.name != HOOK_TOOL]
 
 
+class InputIdentity(Middleware):
+    """Remove injected arguments before tool validation; accept only a matching hook report."""
+
+    def __init__(self, tools: HttpTools) -> None:
+        self.tools = tools
+
+    async def on_list_tools(self, context: Any, call_next: Any) -> Any:
+        listed = await call_next(context)
+        if client_info(context.fastmcp_context).get("name") == "Cursor":
+            return [t for t in listed if t.name.startswith("switchboard_")]
+        return [t for t in listed if not t.name.startswith("switchboard_")]
+
+    async def on_call_tool(self, context: Any, call_next: Any) -> Any:
+        ctx = context.fastmcp_context
+        info = client_info(ctx)
+        if info.get("name") != "Cursor" or context.message.name == HOOK_TOOL:
+            return await call_next(context)
+        if not context.message.name.startswith("switchboard_"):
+            return ToolResult(
+                content=[TextContent(text=err("use the Cursor switchboard tools", "bad_request"))]
+            )
+        args = context.message.arguments or {}
+        sid, use = _id(args.get(INPUT_SESSION)), _id(args.get(INPUT_USE))
+        try:
+            token = get_http_request().scope.get("state", {}).get("agent_token")
+        except RuntimeError:
+            token = None
+        if (
+            not isinstance(token, AgentTokenRow)
+            or sid is None
+            or use is None
+            or not self.tools.input_uses.take(token.id, "cursor", sid, use, context.message.name)
+        ):
+            return ToolResult(
+                content=[TextContent(text=err("this call has no matching session hook", "bad_request"))]
+            )
+        clean = {k: v for k, v in args.items() if k not in (INPUT_SESSION, INPUT_USE)}
+        marker = self.tools.input_session.set(sid)
+        try:
+            return await call_next(
+                context.copy(message=context.message.model_copy(update={"arguments": clean}))
+            )
+        finally:
+            self.tools.input_session.reset(marker)
+
+
 def install(app: "FastAPI", state: "BrokerState") -> Any:
     """Serve the tools at ``PATH`` behind ``AgentAuth``, with the hidden hook tool. Returns the
     MCP app, whose lifespan runs its session manager: the broker's own lifespan enters it."""
@@ -752,10 +901,14 @@ def install(app: "FastAPI", state: "BrokerState") -> Any:
         return await tools.on_hook({k: given[k] for k in HOOK_FIELDS})
 
     server.add_middleware(HideHook())
+    server.add_middleware(InputIdentity(tools))
     mcp_app = server.http_app(path=PATH)
     inner = next(r.endpoint for r in mcp_app.routes if isinstance(r, Route) and r.path == PATH)
     auth = AgentAuth(inner, state)
     app.router.routes.append(Route(PATH, endpoint=auth))
     app.router.routes.append(Route(LISTEN_PATH, endpoint=Listener(auth, tools)))
     app.router.routes.append(Route(SESSION_PATH, endpoint=SessionHook(auth, tools)))
+    command_hook = CommandHook(auth, tools)
+    app.router.routes.append(Route(PRETOOL_PATH, endpoint=command_hook))
+    app.router.routes.append(Route(EVENT_PATH, endpoint=command_hook))
     return mcp_app

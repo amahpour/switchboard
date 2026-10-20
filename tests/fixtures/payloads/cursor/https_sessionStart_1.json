@@ -1,0 +1,15 @@
+{
+  "_source": "Cursor Agent CLI 3.25.6, cursor agent -p in a temp project against a temp-home broker (2026-10-19); usage limit ended run before tool call",
+  "_unverified": false,
+  "conversation_id": "00000000-0000-4000-8000-000000000001",
+  "generation_id": "00000000-0000-4000-8000-000000000001",
+  "model": "default",
+  "is_background_agent": false,
+  "session_id": "00000000-0000-4000-8000-000000000001",
+  "hook_event_name": "sessionStart",
+  "cursor_version": "2026.10.18-ea085cb",
+  "workspace_roots": [
+    "/ws"
+  ],
+  "transcript_path": null
+}

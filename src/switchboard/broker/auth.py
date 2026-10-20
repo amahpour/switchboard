@@ -35,7 +35,7 @@ CODE_PATHS = frozenset({"/link/pair"})
 # agents over HTTPS (DESIGN.md §49.2): an agent token authenticates them, never a cookie, and the
 # route itself (``agent_http.AgentAuth``) refuses any request that has an Origin, so a browser can't
 # call it at all; its Host is checked as everywhere
-AGENT_PATHS = frozenset({"/mcp", "/mcp/listen", "/mcp/session"})
+AGENT_PATHS = frozenset({"/mcp", "/mcp/listen", "/mcp/session", "/mcp/pretool", "/mcp/event"})
 _DNS_NAME_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*")
 
 Scope = dict[str, Any]

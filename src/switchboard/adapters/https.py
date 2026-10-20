@@ -32,6 +32,7 @@ from switchboard.models import HookEvent, Participant, Release, Route, session_k
 
 CLAUDE_TIER = "claude:https"
 CODEX_TIER = "codex:https"
+CURSOR_TIER = "cursor:https"
 NOTE = "over HTTPS: woken at stop"
 NO_SESSION = (
     "this Claude Code call named no session: switchboard's PreToolUse hook reports it before each"
@@ -132,3 +133,20 @@ class HttpsCodexAdapter(CodexMembership, Listening):
 
     def prompt_verdict(self, acked: bool) -> str | None:
         return "human_prompt"
+
+
+class HttpsCursorAdapter(Listening):
+    """Cursor over HTTPS, keyed by the conversation ID its preToolUse hook puts on each call."""
+
+    reports_approval_mode = False
+
+    def __init__(self, cfg: Config):
+        super().__init__("cursor", cfg)
+
+    def tier(self, p: Participant | None) -> tuple[str, str | None]:
+        return CURSOR_TIER, NOTE
+
+    def session_key(self, ident: Any, thread_id: str | None, *, test_session: str | None = None) -> str:
+        if not thread_id:
+            raise ValueError("this Cursor call has no verified conversation ID")
+        return session_key("cursor", ident.host, thread_id)
