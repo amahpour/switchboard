@@ -3,11 +3,15 @@
 
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 
+# a delivery's batch token, as switchboard writes it into a tool's answer
+TOKEN = re.compile(r"yk:b\d{1,12}\.[0-9a-f]{8}")
+MAX_TOKENS = 20
 EVENTS = {
     "post": "postToolUse",
     "failure": "postToolUseFailure",
@@ -93,7 +97,11 @@ def main():
         if key in p:
             body["prompt_id" if key == "generation_id" else key] = p[key]
     if kind == "post":
-        body["tool_response"] = p.get("tool_output", "")
+        # only the batch tokens: the broker reads nothing else of the answer, and a long one (a
+        # wait() with several messages) would not fit the request it accepts
+        out = p.get("tool_output")
+        text = out if isinstance(out, str) else json.dumps(out)
+        body["tool_response"] = " ".join(list(dict.fromkeys(TOKEN.findall(text)))[:MAX_TOKENS])
     if kind == "stop":
         body["wait_s"] = 630
     reply = send("/mcp/event", body, 650 if kind == "stop" else 5)
