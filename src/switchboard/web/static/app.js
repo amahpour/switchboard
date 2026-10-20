@@ -5528,7 +5528,9 @@
   }
 
   function renderBoard() {
-    const handoffFocused = document.activeElement && document.activeElement.id === 'board-handoff';
+    // Hand off is in the header (#425); its button, or the line that replaced it, keeps the focus
+    const handoffFocus = document.activeElement && (document.activeElement.id === 'board-handoff'
+      || document.activeElement.id === 'board-handoff-status') ? document.activeElement.id : null;
     const dividerFocused = document.activeElement && document.activeElement.id === 'board-divider';
     // a card with keyboard focus keeps it through the rebuild: a members frame rebuilds the board on
     // every busy/idle change (#407), and a keyboard or screen-reader user would lose their place
@@ -5548,6 +5550,7 @@
     box.classList.toggle('hidden', !open);
     if (!open) {
       boardParts = null;
+      if (r) r.handoffWas = null;  // reopening the board is not a board that just settled
       box.replaceChildren();
       return;
     }
@@ -5596,7 +5599,7 @@
         'The board for ' + b.url + ' is kept in the history, and agents can open a new one.', 'Close board');
       if (ok) boardMove({ action: 'close' });
     });
-    head.append(title, status, close);
+    head.append(title, status, boardHandoff(r, b), close);
 
     // members whose switchboard can't move cards (#249): the board would stand still for them,
     // while they argue in chat instead. Each line is switchboard's own text (member_dict).
@@ -5623,7 +5626,6 @@
       const h = el('h3', 'board-lane-title', lane.title);
       h.append(el('span', 'board-count', String(items.length)));
       col.append(h);
-      if (lane.key === 'settled' && b.items.length) col.append(boardHandoffPanel(b));
       for (const i of items) {
         const card = btn('board-card' + (state.boardSel === i.label ? ' selected' : ''));
         card.dataset.item = i.label;
@@ -5665,9 +5667,12 @@
     if (unable.length) box.replaceChildren(head, notes, body);
     else box.replaceChildren(head, body);
     syncBoardDivider();
-    if (handoffFocused) {
+    if (handoffFocus) {
+      // a button that is now disabled or gone can't take it: the line beside it does
       const handoff = $('board-handoff');
-      if (handoff) handoff.focus();
+      const again = handoffFocus === 'board-handoff' && handoff && !handoff.disabled ? handoff
+        : $('board-handoff-status');
+      if (again) again.focus();
     }
     // every board event redraws the board: the divider keeps the focus it had
     if (dividerFocused && boardParts) boardParts.divider.focus();
@@ -5782,27 +5787,80 @@
     return d;
   }
 
+  // What stands between this board and Hand off, in plain words (#425): a count for each kind of
+  // item that is left. A person's own calls come first (a question, a contested finding), then
+  // the fixes waiting to be checked, then the findings the agents are still working on.
+  function boardLeft(items) {
+    let questions = 0;
+    let contested = 0;
+    let fixes = 0;
+    let working = 0;
+    for (const i of items) {
+      if (i.kind === 'question' && i.state === 'open') questions++;
+      else if (i.state === 'contested') contested++;
+      else if (i.state === 'fixed' && !i.confirmed_by) fixes++;
+      else if (i.state === 'raised' || i.state === 'conceded') working++;
+    }
+    const left = [];
+    if (questions) left.push(plural(questions, 'question', 'questions') + ' to answer');
+    if (contested) left.push(plural(contested, 'finding', 'findings') + ' to decide');
+    if (fixes) left.push(plural(fixes, 'fix', 'fixes') + ' to confirm');
+    if (working) left.push(plural(working, 'finding', 'findings') + ' in progress');
+    return left;
+  }
+
+  // "at 09:40" on the day it happened, "on Sat, Oct 17 at 09:40" after that
+  function boardHandoffWhen(ts) {
+    if (!ts) return '';
+    const day = dayLabel(ts) === 'Today' ? '' : ' on ' + new Date(ts * 1000).toLocaleDateString(undefined,
+      { weekday: 'short', month: 'short', day: 'numeric' });
+    return day + ' at ' + hhmm(ts);
+  }
+
+  // The three states of Hand off (§37.6): done, ready, and blocked, with what the line beside the
+  // button says. Blocked follows the rules the button always had: the board has items, all of
+  // them settled, and one of the clicking person's agents is in the room to post the review.
+  function boardHandoffState(b, mine) {
+    if (b.posted_by) return { kind: 'done', text: 'Handed off by ' + b.posted_by + boardHandoffWhen(b.posted_at) };
+    if (!b.items.length) return { kind: 'blocked', text: 'No items yet' };
+    if (!b.settled) return { kind: 'blocked', text: boardLeft(b.items).join(', ') || 'Not every item is settled' };
+    if (!mine.length) return { kind: 'blocked', text: 'None of your agents is in this room' };
+    const settled = BOARD_LANES.find(function (lane) { return lane.key === 'settled'; }).test;
+    return { kind: 'ready', text: b.items.filter(settled).length + ' of ' + b.items.length + ' settled' };
+  }
+
+  const BOARD_NUDGE_MS = 1800;  // how long the highlight lasts: the length of style.css's animation
+
+  // Hand off, in the board's header (#425): an action on the whole board, not one of its items.
   // One agent posts the reviewed summary and each person-decided line (§37.6).
-  function boardHandoffPanel(b) {
+  function boardHandoff(r, b) {
     const mine = (b.agents || []).filter(function (agent) {
       return b.agent_people[agent] === state.me.person_id;
     });
     const defaultAgent = mine.includes(b.opened_by) ? b.opened_by : mine[0];
-    const p = el('section', 'board-handoff');
-    p.setAttribute('aria-label', 'Hand off review');
-    p.append(el('h4', null, 'Hand off'));
-    const lead = el('p', 'board-handoff-lead', b.posted_by
-      ? b.posted_by + ' was asked to post one review, with line comments left open.'
-      : !b.settled ? 'Wait for confirmed fixes and every question to be decided.'
-        : !mine.length ? 'One of your agents must be in this room to post the review.'
-          : 'One agent posts the settled summary and comments where you decided.');
-    lead.id = 'board-handoff-status';
-    lead.tabIndex = -1;
-    p.append(lead);
-    if (!b.posted_by) {
-      const handoff = btn('btn-primary', 'Hand off');
+    const s = boardHandoffState(b, mine);
+    // The nudge: a brief highlight when the last item settles, never for a board that opened
+    // ready. A person's own move redraws the board twice (the reply and the live frame), so the
+    // highlight lasts BOARD_NUDGE_MS, not one render.
+    const was = r.handoffWas && r.handoffWas.id === b.id ? r.handoffWas : null;
+    const ready = s.kind === 'ready';
+    let until = ready && was && was.ready ? was.until : 0;
+    if (ready && was && !was.ready) until = Date.now() + BOARD_NUDGE_MS;
+    const nudge = ready && Date.now() < until;
+    r.handoffWas = { id: b.id, ready: ready, until: until };
+    const g = el('div', 'board-handoff is-' + s.kind);
+    g.setAttribute('role', 'group');
+    g.setAttribute('aria-label', 'Hand off review');
+    const note = el('span', 'board-handoff-note', s.text);
+    note.id = 'board-handoff-status';
+    note.tabIndex = -1;
+    if (s.kind === 'done' && b.posted_at) note.title = new Date(b.posted_at * 1000).toLocaleString();
+    g.append(note);
+    if (s.kind !== 'done') {
+      const handoff = btn('btn-primary' + (nudge ? ' nudge' : ''), 'Hand off');
       handoff.id = 'board-handoff';
-      handoff.disabled = !b.settled || !mine.length;
+      handoff.disabled = s.kind !== 'ready';
+      handoff.setAttribute('aria-describedby', 'board-handoff-status');
       handoff.addEventListener('click', async function () {
         const agent = await openDialog({ kind: 'handoff', title: 'Hand off this review',
           body: 'One agent will post this review to ' + b.url + '. The line conversations stay open.',
@@ -5812,9 +5870,9 @@
           if (status) status.focus();
         }
       });
-      p.append(handoff);
+      g.append(handoff);
     }
-    return p;
+    return g;
   }
 
   // A link to the PR or MR (#250): the one checked link path (§29.4), with the forge's mark
