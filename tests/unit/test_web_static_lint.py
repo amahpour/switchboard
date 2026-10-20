@@ -124,6 +124,9 @@ AGENT_ICONS = {
     "agents/codex-dark.png": "9938d1c9d54afd6de6c8302e9237a3bc4c39d4faa8939ce3bfc9a213ecf3f20b",
     "agents/cursor-light.png": "1ea13e52299f52568335d08fb39b248660992bf66a0c0fe452ee382b008452d8",
     "agents/cursor-dark.png": "ff6890b460641ae05d8e58691c3b4e4438ef7da473df6c34ab3f50334be8c9b3",
+    # Cognition's own avatar files from its brand kit (devin.ai/brand), byte for byte (#441)
+    "agents/devin-light.png": "3afb7f4c0e2c233a6e3a1956e4c9606a0ac3f774972bc7085f17d1b48dca6ee2",
+    "agents/devin-dark.png": "b604b099bcdb8d09455368e67eb7ae74962871eac87524eddc3b30e3a31b4e2d",
 }
 AGENT_ICON_URL = re.compile(r"url\('/static/(agents/[a-z-]+\.png)'\)")
 
@@ -163,7 +166,9 @@ def test_the_agent_icons_are_the_pinned_files() -> None:
     notice = (STATIC / "agents" / "NOTICE").read_text()
     for name in AGENT_ICONS:
         assert name.removeprefix("agents/") in notice, name
-    assert "not affiliated" in notice and "openai.com/brand" in notice and "cursor.com/brand" in notice
+    assert "not affiliated" in notice and "Cognition" in notice
+    for source in ("openai.com/brand", "cursor.com/brand", "devin.ai/brand"):
+        assert source in notice, source
 
 
 def test_writes_carry_the_csrf_header() -> None:

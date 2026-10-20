@@ -1,7 +1,7 @@
-The agents' icons (issue #62, DESIGN.md §29.9)
+The agents' icons (issues #62 and #441, DESIGN.md §29.9)
 
 These files show which tool an agent runs, next to its name. switchboard is not affiliated
-with, sponsored by or endorsed by OpenAI or Anysphere. The icons are their trademarks and
+with, sponsored by or endorsed by OpenAI, Anysphere or Cognition. The icons are their trademarks and
 artwork, not covered by switchboard's MIT license, and are used under each owner's terms.
 Each is the owner's artwork, unaltered. If an owner asks, its icon is removed and the
 monogram comes back.
@@ -18,6 +18,15 @@ cursor-light.png, cursor-dark.png
   Source: https://cursor.com/brand ("Download brand assets", Avatars/Square/PNG/
   AVATAR_SQUARE_2D_LIGHT.png and AVATAR_SQUARE_2D_DARK.png), unchanged.
 
+devin-light.png, devin-dark.png
+  The Devin avatar (the symbol on a white or a black square), Cognition's trademark, used to
+  mark agents that run Devin.
+  Source: https://devin.ai/brand ("Download brand kit", https://devin.ai/assets/brand/brand-kit.zip:
+  Brand Logos 2026/Devin/PNG/devin-avatar-square-white.png and devin-avatar-square-black.png),
+  unchanged. The light file is also served on that page as
+  https://devin.ai/assets/brand/logos/devin/symbol-light.png. The page offers these as the
+  official logos of Devin and Cognition and states no other terms.
+
 Claude Code's avatar is switchboard's own chat-bubble drawing, not Anthropic's icon, with "Claude"
 written under it in plain text on the Inspector: Anthropic's terms allow naming Claude Code in
-plain text only. Devin keeps its DV tile until its icon is cleared.
+plain text only.
