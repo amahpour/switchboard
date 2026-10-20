@@ -489,6 +489,75 @@ def test_another_persons_mention_of_you_counts_but_not_your_own() -> None:
     assert collapsed == {"15"}  # only the agent's unaddressed chatter; bob's rows are people's
 
 
+BLOCKED_WORDS = {
+    "empty": "No items yet",
+    "question_and_fixes": "1 question to answer, 2 fixes to confirm",
+    "one_fix": "1 fix to confirm",
+    "contested_and_working": "1 finding to decide, 3 findings in progress",
+    "one_working": "1 finding in progress",
+    "everything": "2 questions to answer, 1 finding to decide, 1 fix to confirm, 1 finding in progress",
+    "not_my_agents": "None of your agents is in this room",
+}
+
+
+def test_hand_off_is_in_the_boards_header_and_says_what_is_left() -> None:
+    """#425: Hand off was a card at the top of the Settled lane, so it read as one of the settled
+    findings. It is in the header now, in no lane, and while it is disabled the line beside it
+    says what is left, in plain words and with the right singular and plural, most-yours first:
+    questions, then contested findings, fixes to confirm, and findings still in progress. An
+    empty board says so, and so does a settled one with none of your agents in the room (the
+    rules the button always had). Fails if Hand off is drawn in a lane, if a blocked board still
+    shows an enabled button, or if the words name the wrong things."""
+    out = run("board_handoff_header")
+    for name, words in BLOCKED_WORDS.items():
+        c = out["cases"][name]
+        assert (c["text"], c["button"], c["disabled"], c["inHead"], c["inLane"]) == (
+            words,
+            True,
+            True,
+            True,
+            False,
+        ), name
+        assert c["group"] == "board-handoff is-blocked" and c["describedby"] == "board-handoff-status", name
+    assert out["cases"]["first"]["text"] == "1 question to answer"  # the board as it first opens
+    assert all(c["lanes"] == 3 and not c["inLane"] for c in out["cases"].values())
+
+
+def test_a_settled_board_shows_how_far_it_got_and_an_enabled_hand_off() -> None:
+    """#425: ready is "3 of 3 settled" (a confirmed fix, a dropped finding and an answered
+    question all count) beside an enabled button; handed off is "Handed off by claude-1 at
+    12:34" in place of the button, with the day when it wasn't today. Fails if a dropped or
+    answered item isn't counted as settled, or if the button stays after the handoff."""
+    out = run("board_handoff_header")["cases"]
+    ready = out["ready"]
+    assert (ready["text"], ready["button"], ready["disabled"], ready["group"]) == (
+        "3 of 3 settled",
+        True,
+        False,
+        "board-handoff is-ready",
+    )
+    assert not ready["inLane"] and ready["inHead"]
+    today, before = out["done_today"], out["done_before"]
+    assert today["text"] == today["expected"] == "Handed off by claude-1 at 12:34"
+    assert before["text"].startswith("Handed off by claude-1 on ") and before["text"].endswith(" at 14:13")
+    for done in (today, before):
+        assert done["button"] is False and done["group"] == "board-handoff is-done" and not done["inLane"]
+
+
+def test_the_nudge_lasts_a_moment_after_the_last_item_settles() -> None:
+    """#425: when the last item settles, Hand off gets a brief highlight (a class the stylesheet
+    animates: no toast, no sound). A person's own move redraws the board twice, the reply and the
+    live frame, so the second redraw keeps it; a redraw after the window, and a board that is
+    ready when it is opened, get none. Fails if the highlight goes with the first redraw, if
+    every redraw of a ready board flashes, or if a board that opened ready is treated as news."""
+    out = run("board_handoff_header")["cases"]
+    assert out["ready"]["nudge"] is True
+    assert out["ready_again"]["nudge"] is True  # the same board again, straight after
+    assert out["ready_later"]["nudge"] is False  # and again once the window has passed
+    assert out["ready_reopened"]["nudge"] is False  # closed and opened again, already ready
+    assert not any(out[name]["nudge"] for name in BLOCKED_WORDS)  # nothing flashes while it is disabled
+
+
 def test_an_argument_less_palette_command_runs() -> None:
     out = run("palette_runs")
     assert out["commands"] == ["/help"] and texts(out) == ["/helphelp text"]

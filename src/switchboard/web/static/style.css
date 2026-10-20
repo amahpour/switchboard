@@ -2942,10 +2942,20 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 .board-card-meta { font-size: calc(11.5px * var(--text-scale)); color: var(--muted-2); }
 .board-outdated { color: var(--amber-ink); font-size: calc(11.5px * var(--text-scale)); font-weight: 650; overflow-wrap: anywhere; }
 .board-detail .board-outdated { margin: 0; }
-.board-handoff { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent-tint); }
-.board-handoff h4 { margin: 0; font-size: calc(13px * var(--text-scale)); }
-.board-handoff-lead { margin: 0; color: var(--ink-2); font-size: calc(12px * var(--text-scale)); overflow-wrap: anywhere; }
-.board-handoff .btn-primary { align-self: flex-start; }
+/* Hand off, in the board's header (#425, DESIGN.md §37.6): an action on the whole board, so it sits
+   with the title and the status, not among the items. The line says how far along the board is,
+   or what is left; the button is the way. */
+.board-handoff { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.board-handoff-note { font-size: calc(12.5px * var(--text-scale)); color: var(--muted-2); min-width: 0; max-width: 17em; overflow-wrap: anywhere; }
+.board-handoff.is-ready .board-handoff-note, .board-handoff.is-done .board-handoff-note { color: var(--ink-2); }
+.board-handoff .btn-primary { flex: none; }
+/* the last item just settled: a halo that grows and fades once, with no sound and no movement of
+   the layout. prefers-reduced-motion drops every animation (see above), and the button is lit anyway. */
+.board-handoff .btn-primary.nudge { animation: board-handoff-nudge 1.8s ease-out 1; }
+@keyframes board-handoff-nudge {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); }
+  100% { box-shadow: 0 0 0 12px color-mix(in srgb, var(--accent) 0%, transparent); }
+}
 .board-detail { min-width: 0; container: card / inline-size; display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); overflow-wrap: anywhere; }
 .board-detail h3 { margin: 0; font-size: calc(14px * var(--text-scale)); }
 .board-detail-top { display: flex; flex-direction: column; gap: 2px; }
@@ -2990,6 +3000,16 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 @media (max-width: 760px) {
   .board { padding: 10px 12px 12px; }
   .board-title { flex-basis: 100%; }  /* its own row; the status and Close go under it (#247) */
+  /* The header stays on screen while the lanes scroll under it (#425): a person answers the last
+     question in a card that is below the lanes here, and Hand off, with its highlight, is where
+     they can see it. Three rows: the title; the status and Close; what is left and Hand off. */
+  .board-head { position: sticky; top: -10px; z-index: 2; margin: -10px -12px 0; padding: 10px 12px 8px;
+    background: var(--bg); border-bottom: 1px solid var(--line); }
+  .board { scroll-padding-top: 160px; }  /* a card that takes focus by keyboard doesn't land under it */
+  #board-status { order: 1; }
+  #board-close { order: 2; margin-left: auto; }
+  .board-handoff { order: 3; flex: 1 1 100%; justify-content: space-between; }
+  .board-handoff-note { max-width: none; }
   .board-lanes { grid-template-columns: minmax(0, 1fr); }
   .board-lane.lane-you { order: -1; }  /* stacked on a phone: what needs you first */
   .board-sides { grid-template-columns: minmax(0, 1fr); }
