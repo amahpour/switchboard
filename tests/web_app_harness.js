@@ -113,8 +113,10 @@ function makeWorld(rooms) {
   };
 
   function roomDict(r) {
-    return { id: r.id, name: r.name, slug: r.name.slice(1), created_at: r.created_at, members: 0, last_id: 0,
-             settings: {} };
+    const d = { id: r.id, name: r.name, slug: r.name.slice(1), created_at: r.created_at, members: 0, last_id: 0,
+                settings: {} };
+    if (r.private) { d.private = true; d.people = r.people; }  // a private room lists its people (§44)
+    return d;
   }
 
   function route(method, url, body) {
@@ -815,6 +817,96 @@ const SCENARIOS = {
     return report(w, ws, { all: all, humansFiltered: humansFiltered, filtered: filtered, picked: picked });
   },
 
+  // Issue #418: the @ popover lists the room's people after the agents that match. On a hosted
+  // broker's public room that is everyone the `people` frame names, but never the viewer
+  // (alice); a person with a page open now (the frame's `online`) comes before one who is away
+  // at the same rank; the person row has the round person avatar and a presence dot, and no
+  // tier chip; the agents keep their own head and count, the people get theirs; picking one
+  // inserts @name and the composer highlights it, for a non-admin too (nothing here loads the
+  // admin's people list).
+  async mention_people_popover() {
+    const helper = Object.assign({}, MEMBERS[0], { name: 'helper-bob' });  // an agent with "bob" in its name
+    const { w, ws } = await buildRoom(MEMBERS.concat([helper]));
+    ws.deliver({ t: 'people', people: ['alice', 'bob', 'bobby', 'carol'], online: ['alice', 'bobby', 'carol'] });
+    await settle();
+    const ids = function () {
+      return findAll(w.$('mentions'), function (n) { return n.attrs.role === 'option'; }).map(function (n) { return n.id; });
+    };
+    const heads = function () {
+      return findAll(w.$('mentions'), function (n) { return n.classList.contains('pal-head'); })
+        .map(function (n) { return n.textContent; });
+    };
+    const rowOf = function (name) { return findAll(w.$('mentions'), function (n) { return n.id === 'men-' + name; })[0]; };
+    const part = function (row, cls) {
+      return findAll(row, function (n) { return n.classList.contains(cls); });
+    };
+
+    type(w, 'hi @');
+    const all = { ids: ids(), heads: heads(), foot: part(w.$('mentions'), 'pal-foot')[0].textContent };
+
+    type(w, 'hi @bo');  // helper-bob is an agent (a word match); bobby (online) and bob (away) are people
+    const bo = { ids: ids(), heads: heads() };
+    const bobby = rowOf('bobby');
+    const bob = rowOf('bob');
+    const person = {
+      bobbyAvatar: part(bobby, 'avatar')[0].className,
+      bobbyDot: part(bobby, 'dot')[0].className,
+      bobbyStatus: part(bobby, 'm-status')[0].textContent,
+      bobDot: part(bob, 'dot')[0].className,
+      bobStatus: part(bob, 'm-status')[0].textContent,
+      bobbyTier: part(bobby, 'tier').length,
+      helperTier: part(rowOf('helper-bob'), 'tier').length,
+    };
+
+    type(w, 'hi @bob');  // an exact name ranks first among the people, as among the agents
+    const exact = ids();
+
+    type(w, 'hi @car');  // no agent matches: the people head is the only one
+    const car = { ids: ids(), heads: heads() };
+
+    type(w, 'hi @ali');  // alice is the viewer: never offered, and nothing else matches
+    const viewer = { hidden: w.$('mentions').classList.contains('hidden') };
+
+    type(w, 'hi @car');
+    key(w.$('input'), 'Enter');
+    const mirror = findAll(w.$('input-mirror'), function (n) { return n.classList.contains('mention-hl'); })
+      .map(function (n) { return n.textContent; });
+    const picked = { value: w.$('input').value, hl: mirror, hidden: w.$('mentions').classList.contains('hidden') };
+    await settle();
+    return report(w, ws, { all: all, bo: bo, person: person, exact: exact, car: car, viewer: viewer, picked: picked,
+                           said: w.server.said });
+  },
+
+  // Issue #418: in a private room (§44) only that room's people are offered, from the room
+  // listing's `people`, not everyone the `people` frame names; the public room still offers all.
+  async mention_people_private_room() {
+    const w = makeWorld([{ id: 1, name: '#build', created_at: 100 },
+                         { id: 2, name: '#secret', created_at: 101, private: true, people: ['alice', 'bob'] }]);
+    w.location.hash = '#build';
+    const ws = await boot(w);
+    ws.deliver({ t: 'people', people: ['alice', 'bob', 'bobby', 'carol'], online: ['alice'] });
+    await settle();
+    const ids = function () {
+      return findAll(w.$('mentions'), function (n) { return n.attrs.role === 'option'; }).map(function (n) { return n.id; });
+    };
+    const heads = function () {
+      return findAll(w.$('mentions'), function (n) { return n.classList.contains('pal-head'); })
+        .map(function (n) { return n.textContent; });
+    };
+
+    type(w, '@bo');
+    const publicRoom = ids();
+    click(findAll(w.$('tabs'), function (n) { return n.tag === 'button' && n.dataset.room === '#secret'; })[0]);
+    await settle();
+    type(w, '@car');  // carol is not in #secret
+    const secretCarol = { hidden: w.$('mentions').classList.contains('hidden') };
+    type(w, '@bo');  // bob is, bobby is not
+    const secretBo = ids();
+    type(w, '@');  // alice is the viewer
+    const secretAll = { ids: ids(), heads: heads() };
+    return report(w, ws, { publicRoom: publicRoom, secretCarol: secretCarol, secretBo: secretBo, secretAll: secretAll });
+  },
+
   // An argument-less palette command runs at once (Enter), through the normal send path.
   async palette_runs() {
     const { w, ws } = await buildRoom(MEMBERS);
@@ -885,6 +977,54 @@ const SCENARIOS = {
 
     return { quiet: quiet, mentioned: mentioned, replied: replied, humans: humans, repliedOther: repliedOther,
              personHumans: personHumans, ownHumans: ownHumans, opened: opened };
+  },
+
+  // Issue #418: another person's @mention of alice counts like an agent's: the red badge, the
+  // rooms toggle badge, the title count and the row's mention style. bob not naming her, naming
+  // carol, or alice naming herself does not; and Focus mode leaves a person's message alone
+  // while it still collapses an agent's chatter. (A person's @mention reaches no agent: that is
+  // the broker's, tests/integration, and tests/e2e's end-to-end run through it.)
+  async person_mention_badges() {
+    const w = makeWorld([{ id: 1, name: '#build', created_at: 100 }, { id: 2, name: '#ops', created_at: 101 }]);
+    w.location.hash = '#build';
+    const ws = await boot(w);
+    const person = function (id, from, text, mentions) {
+      return { id: id, ts: TS + id, kind: 'chat', from: from, sender_kind: 'human', via: 'web', text: text,
+               reply_to: null, mentions: mentions, host: null };
+    };
+    const seen = function () { return { tab: tabInfo(w, '#ops'), title: w.document.title, roomsBadge: roomsBadge(w) }; };
+    const deliver = async function (msg) {
+      ws.deliver({ t: 'msg', room: '#ops', msg: msg });
+      await settle();
+    };
+
+    await deliver(person(10, 'bob', 'anyone around?', []));
+    const plain = seen();  // bob talking, not to alice: nothing, not even a quiet dot
+    await deliver(person(11, 'bob', '@carol can you look?', ['carol']));
+    const other = seen();  // naming carol is not naming alice
+    await deliver(person(12, 'alice', 'note to self @alice', ['alice']));
+    const own = seen();  // alice's own message never addresses her
+    await deliver(person(13, 'bob', '@alice please look', ['alice']));
+    const mentioned = seen();
+    await deliver(chat(14, 'claude-1', '@alice and this one too', { mentions: ['alice'] }));
+    const agent = seen();
+    await deliver(chat(15, 'codex-1', 'just chatter', { harness: 'codex' }));
+
+    click(findAll(w.$('tabs'), function (n) { return n.tag === 'button' && n.dataset.room === '#ops'; })[0]);
+    await settle();
+    const opened = seen();
+    const marked = function () {
+      const out = {};
+      for (const r of rowInfo(w)) if (r.id) out[r.id] = { mention: r.cls.split(' ').includes('mention'),
+                                                          collapsible: r.cls.split(' ').includes('collapsible') };
+      return out;
+    };
+    const rows = marked();
+    click(w.$('focus-toggle'));
+    await settle();
+    const focus = marked();
+    return { plain: plain, other: other, own: own, mentioned: mentioned, agent: agent, opened: opened,
+             rows: rows, focus: focus };
   },
 
   // First run: the Welcome form creates the room named in its field.

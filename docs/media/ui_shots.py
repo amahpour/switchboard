@@ -46,6 +46,8 @@ welcome-light and login-light, plus, from a hosted broker
 passkeys; issues #41 and #61): signin-setup-light, setup-light, people-light, people-dark,
 passkeys-light, passkeys-dark, people-opening-{light,dark,phone-light} (initial People fetch held),
 common-password-{light,dark,phone-light} (a common chosen password refused, #181),
+mention-people-{popover,badge,line}-{light,dark,phone-light} (the @ popover listing people after
+the agents, bob's @alice as a red count on a room's tab, and as a mention line, #418),
 people-name-clash-{light,dark,phone-light} (an agent holds the requested person's name),
 people-edit-{light,dark,phone-light} (Copy's fade timer while an email is selected),
 proof-before-{light,dark,phone-light} and proof-after-{light,dark,phone-light} (a contested
@@ -1381,6 +1383,141 @@ def shoot_common_password(browser: Any, out: Path, world: Any) -> None:
         ctx.close()
 
 
+def shoot_mention_people(browser: Any, out: Path, world: Any) -> None:
+    """Mentioning a person (#418), on a hosted broker: alice (the admin, whose page this is), bob
+    (his page is open, so he's online), carol (not here) and one agent, claude-1, in #build. The
+    @ popover lists the people after the agents; bob's @alice in #ops, a room alice isn't viewing,
+    is a red count on its tab (the phone's Rooms toggle too), and a mention line once she opens
+    it. Light, dark and the phone."""
+    import asyncio
+    import threading
+
+    import httpx
+    from fakes.fake_agent import FakeAgent
+    from playwright.sync_api import expect
+
+    origin = world.origin
+    headers = {"Origin": origin, "X-Switchboard": "1"}
+    admin_pw, bob_pw = "correct horse battery", "bob's own secret 1"
+    with httpx.Client(base_url=origin, headers=headers) as c:
+        one_time = world.claim_link().split("#t=", 1)[1]
+        assert c.post("/api/signin/password", json={"name": "admin", "password": one_time}).status_code == 200
+        assert c.post("/api/setup/password", json={"password": admin_pw}).status_code == 200
+        assert c.post("/api/rooms", json={"name": "#ops"}).status_code == 200
+        bob_otp = c.post("/api/people", json={"name": "bob", "email": "bob@example.com"}).json()["password"]
+        assert c.post("/api/people", json={"name": "carol", "email": "carol@example.com"}).status_code == 200
+        admin_cookie = c.cookies.get("switchboard_session")
+    with httpx.Client(base_url=origin, headers=headers) as c:
+        signed = c.post("/api/signin/password", json={"name": "bob@example.com", "password": bob_otp})
+        assert signed.status_code == 200, signed.text
+        assert c.post("/api/me/password", json={"password": bob_pw}).status_code == 200
+        bob_cookie = c.cookies.get("switchboard_session")
+    assert admin_cookie and bob_cookie
+
+    def say_as(cookie: str, room: str, text: str) -> None:
+        with httpx.Client(
+            base_url=origin, headers=headers, cookies={"switchboard_session": cookie}
+        ) as client:
+            assert client.post(f"/api/rooms/{room}/say", json={"text": text}).status_code == 200
+
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+
+    def run_agent(coro: Any) -> Any:
+        return asyncio.run_coroutine_threadsafe(coro, loop).result(60)
+
+    agent = FakeAgent(world.broker.home, "shots-mention-people")
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+
+    def alice_context(**ctx_args: Any) -> Any:
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        ctx.add_cookies([{"name": "switchboard_session", "value": admin_cookie, "url": origin}])
+        return ctx
+
+    bob_ctx = browser.new_context(**base, **DESKTOP)
+    bob_ctx.set_default_timeout(WAIT_MS)
+    bob_ctx.add_cookies([{"name": "switchboard_session", "value": bob_cookie, "url": origin}])
+    try:
+        world.set_test_mode(True)  # a test agent joins only in test mode: off again before any page loads
+        try:
+            run_agent(agent.start())
+            assert run_agent(agent.join("#build", "claude-1"))["ok"]
+        finally:
+            world.set_test_mode(False)
+        bob = bob_ctx.new_page()
+        bob.goto(origin + "/")
+        connected(bob)  # his page is open: bob is online in alice's list
+
+        for name, ctx_args in (
+            ("mention-people-popover-light.png", {**DESKTOP, "color_scheme": "light"}),
+            ("mention-people-popover-dark.png", {**DESKTOP, "color_scheme": "dark"}),
+            ("mention-people-popover-phone-light.png", {**PHONE, "color_scheme": "light"}),
+        ):
+            ctx = alice_context(**ctx_args)
+            try:
+                page = ctx.new_page()
+                page.goto(origin + "/")
+                connected(page)
+                tab = page.locator('#tabs .room[data-room="#build"]')
+                if not tab.is_visible():
+                    page.click("#rooms-toggle")
+                tab.click()
+                type_in(page, "@")
+                expect(page.locator("#men-bob .m-status")).to_have_text("Online · Person")
+                expect(page.locator("#men-carol .m-status")).to_have_text("Offline · Person")
+                # the list scrolls: end on the people, under the sticky heads of both groups
+                page.evaluate("document.getElementById('mentions').scrollTop = 1e6")
+                shot(page, out, name)
+            finally:
+                ctx.close()
+
+        say_as(bob_cookie, "ops", "@alice can you review the migration before we ship it tonight?")
+        for name, ctx_args in (
+            ("mention-people-badge-light.png", {**DESKTOP, "color_scheme": "light"}),
+            ("mention-people-badge-dark.png", {**DESKTOP, "color_scheme": "dark"}),
+            ("mention-people-badge-phone-light.png", {**PHONE, "color_scheme": "light"}),
+        ):
+            ctx = alice_context(**ctx_args)
+            try:
+                page = ctx.new_page()
+                page.goto(origin + "/")
+                connected(page)
+                tab = page.locator('#tabs .room[data-room="#ops"]')
+                if not tab.is_visible():
+                    page.click("#rooms-toggle")
+                expect(tab.locator(".badge")).to_have_text("1")
+                shot(page, out, name)
+            finally:
+                ctx.close()
+
+        for name, ctx_args in (
+            ("mention-people-line-light.png", {**DESKTOP, "color_scheme": "light"}),
+            ("mention-people-line-dark.png", {**DESKTOP, "color_scheme": "dark"}),
+            ("mention-people-line-phone-light.png", {**PHONE, "color_scheme": "light"}),
+        ):
+            ctx = alice_context(**ctx_args)
+            try:
+                page = ctx.new_page()
+                page.goto(origin + "/")
+                connected(page)
+                tab = page.locator('#tabs .room[data-room="#ops"]')
+                if not tab.is_visible():
+                    page.click("#rooms-toggle")
+                tab.click()
+                expect(page.locator("#log .line.mention")).to_have_count(1)
+                shot(page, out, name)
+            finally:
+                ctx.close()
+    finally:
+        bob_ctx.close()
+        run_agent(agent.close())
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(10)
+        loop.close()
+
+
 # -------------------------------------------------------- the machines' shots
 AS_DEPLOYED = "https://sb.example.com"
 
@@ -1520,6 +1657,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
     world = UIWorld(keep=args.keep)
     hosted = HostedWorld(keep=args.keep)
     weak = HostedWorld(keep=args.keep)
+    people = HostedWorld(keep=args.keep)  # alice, bob and carol, for mentioning a person (#418)
     # a second hosted broker, for the machines that dial in: behind localhost, which their
     # dialers (other processes) resolve too
     fleet = HostedWorld(keep=args.keep, host="localhost")
@@ -1527,6 +1665,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
         world.start()
         hosted.start()
         weak.start()
+        people.start()
         fleet.start()
         env = {**os.environ, "TZ": "UTC", "HOME": REAL_HOME or os.environ["HOME"]}
         browser = pw.chromium.launch(executable_path=args.chrome or None, env=env)
@@ -1555,16 +1694,21 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_settings_agents(browser, out, world)
             shoot_hosted(browser, out, hosted)
             shoot_common_password(browser, out, weak)
+            shoot_mention_people(browser, out, people)
             shoot_machines(browser, out, fleet)
         finally:
             browser.close()
     finally:
         fleet.stop()
+        people.stop()
         weak.stop()
         hosted.stop()
         world.stop()
         if args.keep:
-            print(f"kept: {world.home} {world.home2} {hosted.home} {weak.home} {fleet.home}", file=sys.stderr)
+            print(
+                f"kept: {world.home} {world.home2} {hosted.home} {weak.home} {people.home} {fleet.home}",
+                file=sys.stderr,
+            )
 
 
 def main() -> None:

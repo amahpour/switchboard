@@ -650,6 +650,16 @@
     return a;
   }
 
+  // A person in the @ popover (#418): the round avatar the log gives them, with the green dot of
+  // a page open now or the hollow one of nobody there (the same two as the You row's).
+  function personAvatar(name, online) {
+    const a = avatar(null, 'human', name);
+    const d = el('span', 'dot ' + (online ? 's-human' : 's-offline'));
+    d.title = online ? 'Online' : 'Offline';
+    a.append(d);
+    return a;
+  }
+
   function statusKey(m) { return m.parked ? 'parked' : m.status; }
 
   function statusWord(m) { return m.parked ? 'Parked' : (STATUS_WORD[m.status] || m.status || ''); }
@@ -745,9 +755,13 @@
   }
 
   // ------------------------------------------------------------- log rows
+  // An @mention of the viewer, from an agent or from another person (#418): m.mentions is what
+  // the broker matched against the room's agents and people. Never the viewer's own message,
+  // even one that names themself.
   function mentionsMe(m) {
-    if (!state.me || m.sender_kind === 'human') return false;
+    if (!state.me) return false;
     const me = state.me.human.toLowerCase();
+    if (m.sender_kind === 'human' && String(m.from).toLowerCase() === me) return false;
     return (m.mentions || []).indexOf(me) >= 0;
   }
 
@@ -1153,9 +1167,9 @@
     r.lastId = m.id;
     if (r.msgs.length > MAX_LINES) r.msgs.splice(0, r.msgs.length - MAX_LINES);
     if (r.name !== state.active) {
-      // a person's message counts only when it's another person's @humans (#138); otherwise
-      // a person's messages are left out, as they were before it (#109)
-      if (m.kind === 'chat' && (m.sender_kind !== 'human' || addressesHumans(m))) {
+      // a person's message counts only when it's another person's @mention of you (#418) or
+      // @humans (#138); otherwise a person's messages are left out, as they were before (#109)
+      if (m.kind === 'chat' && (m.sender_kind !== 'human' || mentionsMe(m) || addressesHumans(m))) {
         if (addressedToMe(r, m)) r.unread += 1;  // an @mention or a reply to you: the red count
         else r.quiet = true;                     // other agent chatter: a quiet marker, no number
       }
@@ -2331,8 +2345,20 @@
     const names = new Set(BROADCAST_NAMES);
     if (state.me && state.me.human) names.add(String(state.me.human).toLowerCase());
     for (const p of state.people) names.add(String(p.name).toLowerCase());
+    for (const n of mentionablePeople(r)) names.add(n.toLowerCase());
     if (r) for (const m of r.members) names.add(String(m.name).toLowerCase());
     return names;
+  }
+
+  // The people the @ popover offers in room `r` (#418): everyone on a hosted broker in a public
+  // room (state.everyone, the `people` frame, #354), only the room's own people in a private one
+  // (r.people, §44): the lists the People pane shows, and the names service.mention_names
+  // matches on the broker. Never the viewer, who can't address themself. A desktop broker has
+  // one person, so the list is empty there. Names are lowercase (PERSON_NAME), like agents'.
+  function mentionablePeople(r) {
+    const me = state.me && state.me.human ? String(state.me.human).toLowerCase() : '';
+    const names = r && r.private && Array.isArray(r.people) ? r.people : state.everyone;
+    return names.filter(function (n) { return typeof n === 'string' && n.toLowerCase() !== me; });
   }
 
   // Rebuild the mirror layer from #input's current value: plain text, with each matching
@@ -2419,6 +2445,25 @@
     return scored.map(function (s) { return s.m; });
   }
 
+  // The people to list after the agents that match (#418): ranked as the agents are -- exact
+  // name, prefix, word prefix, anywhere -- then a person with a page open now (state.online, the
+  // `people` frame) before one who is away, then the broker's own order. A person is
+  // { name, person: true, online }; renderPop draws it with a person avatar and no tier chip.
+  function matchPeople(r, query) {
+    const scored = [];
+    mentionablePeople(r).forEach(function (name, i) {
+      const info = matchInfo(name, query);
+      if (!info) return;
+      scored.push({ p: { name: name, person: true, online: state.online.has(name) }, rank: info.rank, i: i });
+    });
+    scored.sort(function (a, b) {
+      if (a.rank !== b.rank) return a.rank - b.rank;
+      if (a.p.online !== b.p.online) return a.p.online ? -1 : 1;
+      return a.i - b.i;
+    });
+    return scored.map(function (s) { return s.p; });
+  }
+
   // Appends `name` to `target` as plain text, with [start, start + len) wrapped in its own
   // <mark> node -- createElement/textContent only, per this file's security rule (no innerHTML).
   function appendMatch(target, name, start, len) {
@@ -2450,10 +2495,11 @@
       const pre = mm[2];
       const query = pre.toLowerCase();
       const members = matchMembers(r, query);
-      const items = matchBroadcasts(query).concat(members);
+      const people = matchPeople(r, query);
+      const items = matchBroadcasts(query).concat(members, people);
       if (!items.length) return closePop();
       openPop({ kind: 'mentions', items: items, sel: keepSel('mentions', items), start: caret - pre.length - 1, end: caret,
-                query: query, memberCount: members.length });
+                query: query, memberCount: members.length, peopleCount: people.length });
       return;
     }
     closePop();
@@ -2559,11 +2605,22 @@
       foot.append(tip);
       box.append(foot);
     } else {
-      const head = el('div', 'pal-head');
+      // Agents lead and people follow under a head of their own (#418). With no agent or
+      // broadcast to list, the people head is the only one.
       const count = typeof p.memberCount === 'number' ? p.memberCount : p.items.length;
-      head.append(el('strong', null, 'Agents in ' + (r ? r.name : '')), el('span', 'muted', String(count)));
-      box.append(head);
+      if (!(p.items.length && p.items[0].person)) {
+        const head = el('div', 'pal-head');
+        head.append(el('strong', null, 'Agents in ' + (r ? r.name : '')), el('span', 'muted', String(count)));
+        box.append(head);
+      }
+      let peopleHead = false;
       p.items.forEach(function (m, i) {
+        if (m.person && !peopleHead) {
+          peopleHead = true;
+          const head = el('div', 'pal-head');
+          head.append(el('strong', null, 'People in ' + (r ? r.name : '')), el('span', 'muted', String(p.peopleCount)));
+          box.append(head);
+        }
         const o = el('div', 'pal-item mention-opt');
         o.id = optionId(p, i);
         o.setAttribute('role', 'option');
@@ -2574,6 +2631,17 @@
         const hit = matchInfo(m.name, p.query || '');
         appendMatch(nameEl, m.name, hit ? hit.start : 0, hit ? hit.len : 0);
         nl.append(nameEl);
+        if (m.person) {
+          // a person (#418): the round person avatar with the dot of a page open now or not, and
+          // no tier chip -- there is no waking a person, only a badge on their own page
+          nl.append(el('span', 'm-status', (m.online ? 'Online' : 'Offline') + ' · Person'));
+          main.append(nl);
+          o.append(personAvatar(m.name, m.online), main);
+          if (i === p.sel) selected = o;
+          bindOption(o, i);
+          box.append(o);
+          return;
+        }
         if (m.broadcast) {
           // @here/@everyone (issue #111): a description where a member's status goes, on the
           // same line, and a plain icon instead of a harness avatar -- it isn't one.
@@ -2597,7 +2665,9 @@
         bindOption(o, i);
         box.append(o);
       });
-      box.append(el('div', 'pal-foot', 'An @mention wakes that agent at once.'));
+      box.append(el('div', 'pal-foot', p.peopleCount
+        ? 'An @mention wakes an agent at once; a person gets a red badge.'
+        : 'An @mention wakes that agent at once.'));
     }
     const input = $('input');
     input.setAttribute('aria-controls', p.kind);
@@ -2767,6 +2837,8 @@
       state.everyone = Array.isArray(f.people) ? f.people.filter(function (n) { return typeof n === 'string'; }) : [];
       state.online = new Set(Array.isArray(f.online) ? f.online : []);
       renderRoomPeople();
+      renderComposerMentions();  // who can be @mentioned (and their dot in the popover) changed
+      if (state.pop && state.pop.kind === 'mentions') updatePopover();
     } else if (f.t === 'machines') {
       setMachines(f.machines || [], f.codes || []);
     }
