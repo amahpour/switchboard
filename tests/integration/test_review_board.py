@@ -7,12 +7,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import sqlite3
 from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import InProcBroker
+from conftest import InProcBroker, cookie_of, ws_connect
 from fakes.fake_agent import FakeAgent
 from test_passkeys import hosted_broker, stop
 from test_people import join_as_bob, set_up
@@ -336,7 +337,12 @@ async def test_agent_close_with_open_items_needs_a_reason_and_lists_them_for_the
             await author.call("review", room="#build", action="open", url=GITHUB_PR)
             await author.call("review", room="#build", action="raise", title="tax order")
             await author.call(
-                "review", room="#build", action="ask", title="Which policy?", options=["old", "new"]
+                "review",
+                room="#build",
+                action="ask",
+                title="Which policy?",
+                options=["old", "new"],
+                recommend=0,
             )
             for reason in ("", "   ", "x" * 501):
                 refused = await author.call("review", room="#build", action="close", reason=reason)
@@ -448,15 +454,18 @@ async def test_a_board_from_open_to_settled(broker: InProcBroker) -> None:
     notices = [m["text"] for m in q(broker, "SELECT text FROM messages WHERE kind='notice' ORDER BY id")]
     assert [n for n in notices if "F1" in n or "Q1" in n or "board" in n] == [
         f"codex-1 opened a review board for {PR} at abc1234",
-        "claude-1 asked Q1: Discount before or after tax?",
         "claude-1 conceded F1, owner claude-1",
     ]
-    # the raise was the author's to answer and the fix the raiser's to check: each was the
-    # mover's own message naming them, so it was delivered; the other moves woke no one
+    # the raise was the author's to answer, the question the reviewer's to agree with (#423) and the
+    # fix the raiser's to check: each was the mover's own message naming them, so it was delivered;
+    # the other moves woke no one
     chat = q(broker, "SELECT sender_name, text, mentions FROM messages WHERE kind='chat' ORDER BY id")
     assert [(r["sender_name"], r["text"]) for r in chat] == [
         ("codex-1", 'Review board: F1 raised: discount applied after tax. @claude-1: concede or contest it.'
                     ' review(action="show") shows the board.'),
+        ("claude-1", 'Review board: Q1 asked: Discount before or after tax? @codex-1: agree with claude-1\'s'
+                     ' pick or pick another option, review(action="concur", item="Q1", recommend=<index>).'
+                     ' review(action="show") shows the board.'),
         ("claude-1", 'Review board: F1 fixed in def5678. @codex-1: check the fix.'
                      ' review(action="show") shows the board.'),
     ]  # fmt: skip
@@ -540,6 +549,7 @@ async def test_a_person_answers_rules_and_closes_from_the_web(broker: InProcBrok
                 action="ask",
                 title="Before or after tax?",
                 options=["before", "after"],
+                recommend=0,
             )
 
             got = web.get("/api/rooms/build/review").json()["board"]
@@ -579,6 +589,7 @@ async def test_a_person_answers_rules_and_closes_from_the_web(broker: InProcBrok
     chat = q(broker, "SELECT sender_kind, text FROM messages WHERE kind='chat' ORDER BY id")
     assert [(r["sender_kind"], r["text"][:21]) for r in chat] == [
         ("agent", "Review board: F1 rais"),  # the raise, the author's to answer
+        ("agent", "Review board: Q1 aske"),  # the question, the reviewer's to agree with (#423)
         ("human", "Review board: Q1 answ"),
         ("human", "Review board: F1 conc"),
     ]
@@ -682,6 +693,7 @@ async def test_handoff_summarizes_all_items_and_defaults_to_the_opener(broker: I
                 action="ask",
                 title="Before or after tax?",
                 options=["before", "after"],
+                recommend=0,
             )
             r = move(action="handoff")
             assert r.status_code == 400 and "isn't settled" in r.json()["message"]
@@ -879,3 +891,225 @@ async def test_a_raise_wakes_the_agent_listening_in_wait(broker: InProcBroker) -
         await reviewer.call("review", room="#build", action="raise", title="discount applied after tax")
         got = await asyncio.wait_for(listening, 15)
         assert "F1 raised: discount applied after tax" in (got.get("text") or "")
+
+
+# ------------------------------------------- Markdown, and a recommendation the agents agree on (#423)
+async def ask_tax(agent: FakeAgent, **more: Any) -> dict[str, Any]:
+    return await agent.call(
+        "review", room="#build", action="ask", title="Before or after tax?",
+        options=["before tax", "after tax"], **more,
+    )  # fmt: skip
+
+
+def consensus_of(web: Any, label: str = "Q1") -> dict[str, Any]:
+    board = web.get("/api/rooms/build/review").json()["board"]
+    return next(i for i in board["items"] if i["label"] == label)["consensus"]
+
+
+async def test_a_question_is_recommended_only_once_every_agent_in_the_room_agrees(
+    broker: InProcBroker,
+) -> None:
+    """claude-1 asks with its pick; the others are asked to agree or pick another with concur. The
+    board says "claude-1 recommends this" until codex-1 and devin-1 have both picked the same, then
+    "recommended by" all three; a different pick makes it a split with no recommendation. The
+    answer a person gives is unchanged. Fails if the asker's pick alone is ever the board's, if the
+    others are never asked, or if a pick is claimed rather than counted."""
+    web = broker.web_client()
+    try:
+        async with (
+            FakeAgent(broker.home, "k1") as author,
+            FakeAgent(broker.home, "k2") as reviewer,
+            FakeAgent(broker.home, "k3") as third,
+        ):
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            await third.join("#build", "devin-1")
+            await author.call("review", room="#build", action="open", url=PR)
+
+            missing = await ask_tax(author)
+            assert missing["ok"] is False and "recommend is required with options" in missing["error"]
+            asked = await ask_tax(author, recommend=1)
+            assert asked["item"] == "Q1"
+            assert "1. after tax (claude-1 recommends this) | 0. before tax;" in asked["board"]
+            assert "waiting on codex-1 and devin-1 to agree or pick another (concur)" in asked["board"]
+            c = consensus_of(web)
+            assert (c["state"], c["option"], c["by"], c["waiting"]) == (
+                "proposed", 1, ["claude-1"], ["codex-1", "devin-1"],
+            )  # fmt: skip
+            assert c["order"] == [1, 0] and c["notes"] == ["", "claude-1 recommends this"]
+
+            one = await reviewer.call("review", room="#build", action="concur", item="Q1", recommend=1)
+            assert one["ok"] and "waiting on devin-1" in one["board"]
+            assert consensus_of(web)["notes"][1] == "claude-1 and codex-1 recommend this"
+            two = await third.call("review", room="#build", action="concur", item="Q1", recommend=1)
+            assert two["ok"] and "(recommended by claude-1, codex-1 and devin-1)" in two["board"]
+            c = consensus_of(web)
+            assert (c["state"], c["by"], c["waiting"]) == ("agreed", ["claude-1", "codex-1", "devin-1"], [])
+            assert c["notes"] == ["", "recommended by claude-1, codex-1 and devin-1"]
+
+            changed = await reviewer.call("review", room="#build", action="concur", item="Q1", recommend=0)
+            assert changed["ok"]
+            c = consensus_of(web)
+            assert (c["state"], c["option"], c["order"]) == ("split", None, [0, 1])
+            assert c["notes"] == ["picked by codex-1", "picked by claude-1 and devin-1"]
+            assert "the agents are split: no option is recommended" in changed["board"]
+
+            # a person still answers it, from any of the options, and then it is settled
+            r = web.post(
+                "/api/rooms/build/review", json={"action": "answer", "item": "Q1", "option": 0},
+                headers=broker.write_headers(),
+            )  # fmt: skip
+            assert r.status_code == 200
+            late = await third.call("review", room="#build", action="concur", item="Q1", recommend=0)
+            assert late["ok"] is False and "Q1 is answered: its options are settled" in late["error"]
+    finally:
+        web.close()
+    # asking woke the others once, as claude-1's own message; the picks said so in the room, waking no one
+    chat = q(broker, "SELECT sender_name, text FROM messages WHERE kind='chat' AND sender_kind='agent'")
+    assert [r["sender_name"] for r in chat] == ["claude-1"]
+    assert chat[0]["text"].startswith(
+        "Review board: Q1 asked: Before or after tax? @codex-1 @devin-1: agree with claude-1's pick"
+    )
+    notices = [m["text"] for m in q(broker, "SELECT text FROM messages WHERE kind='notice' ORDER BY id")]
+    assert [n for n in notices if " Q1" in n] == [
+        "codex-1 picked an option for Q1; waiting on devin-1",
+        "devin-1 concurred on Q1: recommended by claude-1, codex-1 and devin-1",
+        "codex-1 picked another option for Q1: the agents are split",
+    ]
+
+
+async def test_a_pick_is_checked_like_any_other_move(broker: InProcBroker) -> None:
+    """concur names an item with options that is still being decided, and an option that exists;
+    every refusal says what to fix and stores nothing. Fails if a pick on a finding without
+    options, a missing or out-of-range index, or an unknown item is taken."""
+    async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
+        await author.join("#build", "claude-1")
+        await reviewer.join("#build", "codex-1")
+        await author.call("review", room="#build", action="open", url=PR)
+        await reviewer.call("review", room="#build", action="raise", title="rounding")
+        await ask_tax(author, recommend=0)
+
+        async def concur(**kw: Any) -> dict[str, Any]:
+            return await reviewer.call("review", room="#build", action="concur", **kw)
+
+        assert "F1 has no options to pick" in (await concur(item="F1", recommend=0))["error"]
+        assert "has no Q9" in (await concur(item="Q9", recommend=0))["error"]
+        assert "bad item" not in (await concur(item="Q1", recommend=5))["error"]
+        for bad in ({}, {"recommend": 2}, {"recommend": -5}):
+            r = await concur(item="Q1", **bad)
+            assert (
+                r["ok"] is False
+                and "concur needs recommend, the index of the option you pick, 0 to 1" in r["error"]
+            ), r
+        r = await concur(item="not a label", recommend=0)
+        assert r["ok"] is False and "board label" in r["error"]
+        too_many = await reviewer.call(
+            "review", room="#build", action="ask", title="a", options=["a", "b"], recommend=2
+        )
+        assert too_many["ok"] is False and "recommend must be an option's index, 0 to 1" in too_many["error"]
+    assert q(broker, "SELECT COUNT(*) AS n FROM review_picks")[0]["n"] == 0
+    assert q(broker, "SELECT COUNT(*) AS n FROM review_items WHERE kind='question'")[0]["n"] == 1
+
+
+async def test_a_finding_may_offer_fix_options_the_agents_agree_on(broker: InProcBroker) -> None:
+    """A finding can carry 2 to 4 fix options and its raiser's recommendation, in a question's
+    shape; the author is asked to agree with it in the same message that asks it to concede or
+    contest. Options without a recommendation, or a recommendation without options, are refused."""
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            await reviewer.call("review", room="#build", action="open", url=PR)
+            r = await reviewer.call(
+                "review", room="#build", action="raise", title="retry loop never stops",
+                options=["cap the retries", "remove the loop"],
+            )  # fmt: skip
+            assert r["ok"] is False and "recommend is required with options" in r["error"]
+            r = await reviewer.call(
+                "review", room="#build", action="raise", title="retry loop never stops", recommend=0
+            )
+            assert r["ok"] is False and "give the options too" in r["error"]
+            r = await reviewer.call(
+                "review", room="#build", action="raise", title="retry loop never stops",
+                where="shop/retry.py:10-20", detail="## Why\n\n- it spins",
+                options=["cap the retries", "remove the loop"], recommend=0,
+            )  # fmt: skip
+            assert r["item"] == "F1"
+            assert (
+                "; fix options: 0. cap the retries (codex-1 recommends this) | 1. remove the loop;"
+                in r["board"]
+            )
+            got = web.get("/api/rooms/build/review").json()["board"]["items"][0]
+            assert got["options"] == ["cap the retries", "remove the loop"] and got["detail"].startswith(
+                "## Why"
+            )
+            await author.call("review", room="#build", action="concur", item="F1", recommend=0)
+            assert consensus_of(web, "F1")["state"] == "agreed"
+            assert consensus_of(web, "F1")["notes"][0] == "recommended by codex-1 and claude-1"
+            # once it is conceded and fixed, the choice is made and the picks stop being asked for
+            await author.call("review", room="#build", action="concede", item="F1")
+            await author.call(
+                "review", room="#build", action="fix", item="F1", commit="abc1234", proof="test_retry"
+            )
+            late = await reviewer.call("review", room="#build", action="concur", item="F1", recommend=1)
+            assert late["ok"] is False and "F1 is fixed: its options are settled" in late["error"]
+    finally:
+        web.close()
+    [raised] = [
+        m["text"]
+        for m in q(broker, "SELECT text FROM messages WHERE kind='chat' ORDER BY id")
+        if "F1 raised" in m["text"]
+    ]
+    assert (
+        "@claude-1: concede or contest it, and agree with its fix option or pick another (concur)." in raised
+    )
+
+
+def review_frame(ws: Any, label: str, until: Any, timeout: float = 10.0) -> dict[str, Any]:
+    """The next ``review`` frame whose item ``label`` satisfies ``until``; the page is given every
+    state the board takes, so waiting for the frame that has it is waiting for the event."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    while True:
+        left = deadline - time.monotonic()
+        assert left > 0, "no review frame with the awaited state"
+        f = json.loads(ws.recv(timeout=left))
+        if f.get("t") == "review" and f["board"]:
+            item = next((i for i in f["board"]["items"] if i["label"] == label), None)
+            if item is not None and until(item["consensus"]):
+                return item["consensus"]
+
+
+async def test_the_board_follows_who_is_in_the_room(broker: InProcBroker) -> None:
+    """An option is recommended when every agent in the room picked it, so an agent that joins (or
+    leaves) changes what the board says with no move at all. The page is sent the board again then.
+    Fails if a page that is already open keeps saying "recommended by" after a newcomer joined."""
+    web = broker.web_client()
+    ws = ws_connect(broker, cookie_of(web))
+    try:
+        ws.send(json.dumps({"t": "hello", "rooms": ["#build"], "after": {}}))
+        async with (
+            FakeAgent(broker.home, "k1") as author,
+            FakeAgent(broker.home, "k2") as reviewer,
+            FakeAgent(broker.home, "k3") as newcomer,
+        ):
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            await author.call("review", room="#build", action="open", url=PR)
+            await ask_tax(author, recommend=0)
+            await reviewer.call("review", room="#build", action="concur", item="Q1", recommend=0)
+            agreed = await asyncio.to_thread(
+                review_frame, ws, "Q1", lambda c: c["state"] == "agreed" and c["waiting"] == []
+            )
+            assert agreed["by"] == ["claude-1", "codex-1"]
+            await newcomer.join("#build", "devin-1")
+            now = await asyncio.to_thread(review_frame, ws, "Q1", lambda c: c["waiting"] == ["devin-1"])
+            assert (now["state"], now["notes"][0]) == ("proposed", "claude-1 and codex-1 recommend this")
+            await newcomer.leave("#build")
+            back = await asyncio.to_thread(review_frame, ws, "Q1", lambda c: c["state"] == "agreed")
+            assert back["by"] == ["claude-1", "codex-1"]
+    finally:
+        ws.close()
+        web.close()

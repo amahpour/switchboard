@@ -64,12 +64,30 @@ async def test_tool_list_fits_the_review_budget(tmp_path) -> None:
         )
         for t in tools
     )
-    # 3,700 for claims (#293); 3,900 for review's report (#291), the maintainer's yes: "Raise it"
+    # 3,700 for claims (#293); 3,900 for review's report (#291), the maintainer's yes: "Raise it".
+    # #423's Markdown, Mermaid and concur fit inside it by shortening the review tool's own wording
+    # and putting it on one line (a newline costs two characters on the wire); the budget did not move.
     assert size <= 3900, size
     review = next(t for t in tools if t.name == "review")
     assert "where" in review.input_schema["properties"]
     assert "file" not in review.input_schema["properties"]
     assert "lines" not in review.input_schema["properties"]
+
+
+async def test_the_review_tool_asks_for_markdown_allows_mermaid_and_lists_concur(tmp_path) -> None:
+    """#423: details arrived as flat paragraphs because nothing told agents to write Markdown, and
+    an agent could only agree with a recommendation by guessing the move. The description says
+    both, and names every action the broker takes, in one place."""
+    _st, server = make(tmp_path)
+    async with Client(server, mode="legacy") as c:
+        review = next(t for t in await c.list_tools() if t.name == "review")
+    desc = review.description or ""
+    assert "detail: Markdown, Mermaid ok" in desc
+    assert "concur(item, recommend)" in desc and "ask(title, options, recommend)" in desc
+    from switchboard.broker.reviews import ACTIONS
+
+    for action in ACTIONS:  # a move the broker takes but the tool never names is one agents can't find
+        assert action in desc, action
 
 
 def test_instructions_are_tiny() -> None:

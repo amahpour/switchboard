@@ -95,6 +95,17 @@ def test_the_request_mentions_each_agent_and_carries_only_the_persons_words() ->
     assert noted == review_request(["claude-1"], PR, "") + "\n\nNote: the tax order matters most"
 
 
+def test_the_request_asks_for_markdown_a_diagram_and_a_recommendation() -> None:
+    """The board's guidance where each agent reads it (#423): details in Markdown with a Mermaid
+    diagram when it explains better, a question asked with the option the agent recommends, and
+    the others' questions agreed with or answered with another pick. Fails on the old request,
+    which said none of it, so details arrived as flat paragraphs."""
+    text = review_request(["claude-1"], PR, "")
+    assert "write its detail in Markdown" in text and "Mermaid diagram" in text
+    assert "with the option you recommend" in text
+    assert 'agree with the others\' questions or pick another option with review(action="concur")' in text
+
+
 def test_help_lists_review() -> None:
     assert "  /review <url> [note]" in HELP_TEXT
 
@@ -119,16 +130,16 @@ def test_a_note_too_long_for_one_message_is_refused_before_the_board_opens(
     """The request has to fit [delivery] max_msg_chars; a note that doesn't is refused, saying
     how much fits, and nothing is posted. (This RoomService has no boards: the check comes first.)"""
     store = Store(db.open_db(tmp_path / "y.db"), clock)
-    cfg = Config().with_delivery(max_msg_chars=400)
+    cfg = Config().with_delivery(max_msg_chars=700)
     svc = RoomService(store, Hub(), cfg, BrokerInfo(port=7419, test_mode=True), clock)
     room = svc.create_room("#build")
     p = store.upsert_participant("test", "test:agent:claude-1", status="idle")
     store.create_membership(room.id, p.id, "claude-1", "h-claude-1")
-    fits = 400 - len(review_request(["claude-1"], PR, "")) - len("\n\nNote: ")
+    fits = 700 - len(review_request(["claude-1"], PR, "")) - len("\n\nNote: ")
     with pytest.raises(ServiceError) as e:
-        svc.command("#build", f"/review {PR} " + "n" * 500, Actor(role="human", via="web"))
+        svc.command("#build", f"/review {PR} " + "n" * 800, Actor(role="human", via="web"))
     assert (
         e.value.message
-        == f"/review: the note is too long (500 characters; at most {fits} fit in one message)"
+        == f"/review: the note is too long (800 characters; at most {fits} fit in one message)"
     )
     assert [m for m in store.history(room.id) if m.kind == "chat"] == []

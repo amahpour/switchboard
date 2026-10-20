@@ -2531,13 +2531,38 @@ class Store:
         rows = self.con.execute(
             "SELECT * FROM review_items WHERE review_id=? ORDER BY kind, n", (review_id,)
         ).fetchall()
-        return [_review_item(r) for r in rows]
+        picked = self._review_picks(review_id)
+        return [_review_item(r, picked.get(r["id"], ())) for r in rows]
 
     def review_item(self, review_id: int, kind: str, n: int) -> reviews.Item | None:
         r = self.con.execute(
             "SELECT * FROM review_items WHERE review_id=? AND kind=? AND n=?", (review_id, kind, n)
         ).fetchone()
-        return _review_item(r) if r else None
+        return _review_item(r, self._review_picks(review_id).get(r["id"], ())) if r else None
+
+    def _review_picks(self, review_id: int) -> dict[int, tuple[tuple[str, int], ...]]:
+        """Every pick on the board's items (#423), by item id, the oldest first."""
+        rows = self.con.execute(
+            "SELECT p.item_id, p.agent, p.choice FROM review_picks p"
+            " JOIN review_items i ON i.id=p.item_id WHERE i.review_id=?"
+            " ORDER BY p.picked_at, p.agent",
+            (review_id,),
+        ).fetchall()
+        out: dict[int, list[tuple[str, int]]] = {}
+        for r in rows:
+            out.setdefault(r["item_id"], []).append((r["agent"], r["choice"]))
+        return {k: tuple(v) for k, v in out.items()}
+
+    def set_review_pick(self, item_id: int, agent: str, choice: int) -> None:
+        """``agent``'s pick among an item's options (``concur``), replacing the one they made
+        before. The item's own state and ``updated_at`` stay as they are: a pick decides nothing."""
+        with db.tx(self.con):
+            self.con.execute(
+                "INSERT INTO review_picks(item_id, agent, choice, picked_at) VALUES(?, ?, ?, ?)"
+                " ON CONFLICT(item_id, agent) DO UPDATE SET choice=excluded.choice,"
+                " picked_at=excluded.picked_at",
+                (item_id, agent, choice, self.clock.now()),
+            )
 
     def add_review_item(self, review_id: int, kind: str, state: str, **fields: Any) -> reviews.Item:
         """A new finding or question, numbered next on its board (F1, F2, ...; Q1, ...)."""
@@ -2706,7 +2731,7 @@ def _has_column(con: sqlite3.Connection, table: str, column: str) -> bool:
     return any(r[1] == column for r in con.execute(f"PRAGMA table_info({table})").fetchall())
 
 
-def _review_item(r: sqlite3.Row) -> reviews.Item:
+def _review_item(r: sqlite3.Row, picks: tuple[tuple[str, int], ...] = ()) -> reviews.Item:
     try:
         opts = tuple(str(o) for o in json.loads(r["options"]))
     except (ValueError, TypeError):
@@ -2734,4 +2759,5 @@ def _review_item(r: sqlite3.Row) -> reviews.Item:
         answered_by=r["answered_by"],
         created_at=r["created_at"],
         updated_at=r["updated_at"],
+        picks=picks,
     )

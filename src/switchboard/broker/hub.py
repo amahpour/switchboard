@@ -104,6 +104,9 @@ class Hub:
         self._members_fn: Callable[[str], list[dict[str, Any]] | None] | None = None
         self._settings_pending: dict[str, asyncio.TimerHandle] = {}
         self._settings_fn: Callable[[str], dict[str, Any] | None] | None = None
+        # a room's review board follows who is in the room (DESIGN.md §37.12): see _flush_members
+        self._board_fn: Callable[[str], dict[str, Any] | None] | None = None
+        self._member_names: dict[str, tuple[str, ...]] = {}
 
     # registration ----------------------------------------------------------
     def add(self, sub: Subscriber) -> None:
@@ -170,6 +173,9 @@ class Hub:
     def set_members_source(self, fn: Callable[[str], list[dict[str, Any]] | None]) -> None:
         self._members_fn = fn
 
+    def set_board_source(self, fn: Callable[[str], dict[str, Any] | None]) -> None:
+        self._board_fn = fn
+
     def members_changed(self, room: str) -> None:
         """Debounced (200 ms) full buddy-list snapshot for ``room``."""
         if room in self._members_pending:
@@ -188,6 +194,19 @@ class Hub:
         members = self._members_fn(room)
         if members is not None:
             self.publish("members", room, {"members": members})
+            self._board_follows_members(room, members)
+
+    def _board_follows_members(self, room: str, members: list[dict[str, Any]]) -> None:
+        """When who is in ``room`` changed, publish its review board again. Whether an option is
+        "recommended" is every agent in the room agreeing (§37.12), so a join or a leave changes
+        what the board says without any move. Status changes alone don't: the names are the same."""
+        names = tuple(sorted(str(m.get("name")) for m in members))
+        if self._member_names.get(room) == names:
+            return
+        self._member_names[room] = names
+        board = self._board_fn(room) if self._board_fn is not None else None
+        if board is not None:
+            self.publish("review", room, {"board": board})
 
     def set_settings_source(self, fn: Callable[[str], dict[str, Any] | None]) -> None:
         self._settings_fn = fn
@@ -222,6 +241,7 @@ class Hub:
             h = pending.pop(room, None)
             if h is not None:
                 h.cancel()
+        self._member_names.pop(room, None)
 
     # sessions --------------------------------------------------------------
     def close_sessions(self, sid_hash: str | None = None) -> int:

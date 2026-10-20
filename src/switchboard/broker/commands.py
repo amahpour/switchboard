@@ -275,9 +275,11 @@ def review_request(agents: list[str], url: str, note: str) -> str:
     text = (
         " ".join("@" + a for a in agents)
         + f" Please review {url} together on this room's review board. Raise each finding with"
-        ' review(action="raise"), with its file and lines; concede or contest each other\'s; ask'
-        ' with review(action="ask") what only a person can decide. review(action="show") shows'
-        " the board."
+        ' review(action="raise"), with its file and lines, and write its detail in Markdown (a'
+        " Mermaid diagram when a picture explains it better than words); concede or contest each"
+        ' other\'s; ask with review(action="ask") what only a person can decide, with the option'
+        " you recommend, and agree with the others' questions or pick another option with"
+        ' review(action="concur"). review(action="show") shows the board.'
     )
     return text + (f"\n\nNote: {note}" if note else "")
 

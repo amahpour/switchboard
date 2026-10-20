@@ -146,3 +146,57 @@ def test_drop_room_cancels_its_pending_frames() -> None:
     members, settings, mp, sp = asyncio.run(run())
     assert list(mp) == ["#lab"] and sp == {}
     assert members == ["#lab"] and settings == []
+
+
+def drained(s: WsSubscriber) -> list[dict]:
+    out = []
+    while not s.q.empty():
+        out.append(s.q.get_nowait())
+    return out
+
+
+def test_the_review_board_is_published_again_only_when_who_is_in_the_room_changes() -> None:
+    """Whether an option is recommended depends on every agent in the room (DESIGN.md §37.12), so a
+    join or a leave sends the page the board again; a status change alone sends the members and
+    nothing more. Fails if the board is never refreshed (a newcomer is not waited on), or if every
+    busy/idle flip republishes it (a rebuild per flip)."""
+    h = Hub()
+    members: list[dict] = [{"name": "claude-1", "status": "idle"}]
+    boards: list[str] = []
+
+    def board(room: str) -> dict | None:
+        boards.append(room)
+        return {"url": "u", "n": len(boards)}
+
+    h.set_members_source(lambda room: list(members))
+    h.set_board_source(board)
+    s = WsSubscriber()
+    s.rooms = {"#a"}
+    h.add(s)
+    h.members_changed("#a")  # no loop here, so this publishes at once
+    assert [f["t"] for f in drained(s)] == ["members", "review"]
+    members[0]["status"] = "busy"
+    h.members_changed("#a")
+    assert [f["t"] for f in drained(s)] == ["members"]  # same names: the board stays as it was
+    members.append({"name": "codex-1", "status": "idle"})
+    h.members_changed("#a")
+    frames = drained(s)
+    assert [f["t"] for f in frames] == ["members", "review"] and frames[1]["board"]["n"] == 2
+    members.pop(0)
+    h.members_changed("#a")
+    assert [f["t"] for f in drained(s)] == ["members", "review"]
+    assert boards == ["#a", "#a", "#a"]
+
+
+def test_a_room_with_no_board_gets_no_review_frame_and_a_dropped_room_forgets_its_members() -> None:
+    h = Hub()
+    h.set_members_source(lambda room: [{"name": "claude-1"}])
+    h.set_board_source(lambda room: None)  # no board is open in the room
+    s = WsSubscriber()
+    s.rooms = {"#a"}
+    h.add(s)
+    h.members_changed("#a")
+    assert [f["t"] for f in drained(s)] == ["members"]
+    assert h._member_names == {"#a": ("claude-1",)}
+    h.drop_room("#a")
+    assert h._member_names == {}
