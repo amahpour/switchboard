@@ -3635,9 +3635,9 @@ def test_the_header_hand_off_is_reached_by_keyboard_and_keeps_focus_through_redr
     focus falls to the page on a redraw, or if Hand off isn't a Tab stop.
 
     The room keeps redrawing the board for a while after a move (each message a person's move
-    sends wakes the agents, whose status then changes), and Close board keeps no focus through a
-    redraw as Hand off does. So the Tab order is read in one step, not walked with the keys: a
-    walk would lose its place to a late redraw. The focus checks hold across any number of them."""
+    sends wakes the agents, whose status then changes). The Tab order is read in one step here, not
+    walked with the keys, so a late redraw can't move the walk; Close board keeps its focus through
+    them too (#430, its own test below). The focus checks hold across any number of redraws."""
     slug = "e2e-board-header-focus"
     page = review_room(ui, slug)
     page.click("#board-toggle")
@@ -3667,6 +3667,36 @@ def test_the_header_hand_off_is_reached_by_keyboard_and_keeps_focus_through_redr
     expect(button).to_be_disabled()
     expect(page.locator("#board-handoff-status")).to_have_text("1 finding in progress")
     expect(page.locator("#board-handoff-status")).to_be_focused()
+
+
+def test_close_board_keeps_keyboard_focus_through_a_redraw(ui: UI) -> None:
+    """#430: every members frame and every review frame rebuilds the board, and the room redraws it for
+    a while after each move (a person's message wakes the agents, whose status then changes). A card,
+    the divider and Hand off took their focus back after it; Close board did not, so a keyboard user
+    who had tabbed to it lost their place and the next Tab started from the top of the page. Fails if
+    either kind of frame leaves the page's own body focused instead of the button, or if Shift+Tab
+    after it doesn't go back to the header's link."""
+    slug = "e2e-board-close-focus"
+    page = review_room(ui, slug)
+    page.click("#board-toggle")
+    close = page.locator("#board-close")
+    close.focus()
+    expect(close).to_be_focused()
+
+    def rebuilt(trigger: Any) -> None:
+        page.evaluate("document.getElementById('board-close').dataset.old = '1'")  # this very element
+        trigger()
+        expect(close).not_to_have_attribute("data-old", "1")  # the board was drawn again: a new button
+        expect(close).to_be_focused()  # that has the focus
+
+    rebuilt(lambda: ui.world.add_agents("#" + slug, ("codex-2",)))  # a members frame
+    rebuilt(  # a review frame: an agent's move
+        lambda: ui.world.agent_call(
+            "#" + slug, "codex-2", "review", action="raise", title="A late one", where="shop/a.py:1"
+        )
+    )
+    page.keyboard.press("Shift+Tab")  # where a keyboard user goes back to: the link before it
+    expect(page.locator("#board .board-head a")).to_be_focused()
 
 
 @pytest.mark.parametrize(

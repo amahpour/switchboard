@@ -5623,6 +5623,9 @@
     const handoffFocus = document.activeElement && (document.activeElement.id === 'board-handoff'
       || document.activeElement.id === 'board-handoff-status') ? document.activeElement.id : null;
     const dividerFocused = document.activeElement && document.activeElement.id === 'board-divider';
+    // Close board is rebuilt with the rest of the header (#430): a keyboard user who tabbed to it
+    // would otherwise be dropped to the top of the page by the next members or review frame
+    const closeFocused = !!document.activeElement && document.activeElement.id === 'board-close';
     // a card with keyboard focus keeps it through the rebuild: a members frame rebuilds the board on
     // every busy/idle change (#407), and a keyboard or screen-reader user would lose their place
     const focusedCard = document.activeElement && document.activeElement.closest
@@ -5789,8 +5792,12 @@
         : $('board-handoff-status');
       if (again) again.focus();
     }
-    // every board event redraws the board: the divider keeps the focus it had
+    // every board event redraws the board: the divider and Close board keep the focus they had
     if (dividerFocused && boardParts) boardParts.divider.focus();
+    if (closeFocused) {
+      const again = $('board-close');
+      if (again) again.focus();
+    }
     if (focusedItem) {
       const again = box.querySelector('.board-card[data-item="' + focusedItem + '"]');
       if (again) again.focus();
