@@ -36,7 +36,7 @@ def test_socket_modes(subproc_broker: SubprocBroker) -> None:
     st = os.stat(p.sock)
     assert stat.S_ISSOCK(st.st_mode) and stat.S_IMODE(st.st_mode) == 0o600
     assert st.st_uid == os.getuid()
-    for d in (p.home, p.run_dir, p.logs_dir, p.hooks_dir):
+    for d in (p.home, p.run_dir, p.logs_dir):
         assert stat.S_IMODE(os.stat(d).st_mode) == 0o700, d
     for f in (p.db, p.log):
         assert stat.S_IMODE(os.stat(f).st_mode) == 0o600, f
@@ -46,32 +46,3 @@ def test_in_process_getsockname(broker: InProcBroker) -> None:
     servers = broker.server.servers
     names = [s.getsockname() for srv in servers for s in srv.sockets]
     assert names == [("127.0.0.1", broker.port)]
-
-
-def test_hook_copy_tamper_is_reported(tmp_home, monkeypatch) -> None:
-    import json as _json
-    import time as _time
-
-    from conftest import cookie_of, ws_connect
-
-    from switchboard.broker import app as app_mod
-
-    monkeypatch.setattr(app_mod, "MAINTENANCE_S", 0.2)
-    b = InProcBroker(tmp_home).start()
-    try:
-        assert b.call("sys.status")["hooks"].startswith("ok (1 copy)")
-        web = b.web_client()
-        ws = ws_connect(b, cookie_of(web))
-        [copy] = list(b.paths.hooks_dir.glob("switchboard_hook-*.py"))
-        copy.chmod(0o644)
-        copy.write_text(copy.read_text() + "\n# tampered\n")
-        deadline = _time.monotonic() + 5
-        while True:
-            f = _json.loads(ws.recv(timeout=max(0.1, deadline - _time.monotonic())))
-            if f.get("t") == "notice":
-                break
-        assert "hook copy changed" in f["text"] and f["level"] == "warn"
-        assert b.call("sys.status")["hooks"].startswith("MISMATCH")
-        ws.close()
-    finally:
-        b.stop()

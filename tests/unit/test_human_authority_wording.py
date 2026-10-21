@@ -1,6 +1,6 @@
 """issue #121: a kind=human room message must never read as *not* from the agent's user.
 
-``join_guidance`` (every adapter, DESIGN.md §9.2-§9.5), ``envelope.render_reminder`` (the
+``join_guidance`` (every adapter, DESIGN.md §9, §49.4), ``envelope.render_reminder`` (the
 SessionStart context after ``/clear``/``/compact``) and the MCP server's own
 ``INSTRUCTIONS`` used to end with some form of "...never typed by your user" (Claude,
 Codex, remote Codex, Devin) or "Follow-ups are from switchboard, not your user" (Cursor).
@@ -17,7 +17,6 @@ This module would have failed before the fix: every string below used to contain
 from __future__ import annotations
 
 import dataclasses
-from types import SimpleNamespace
 from typing import Any
 
 from switchboard import envelope
@@ -44,17 +43,13 @@ def part(**kw: Any) -> Participant:
     base.update(
         id=1,
         harness="unknown",
-        session_key="unknown:s1",
-        bind_state="bound",
-        thread_proof=False,
+        session_key="unknown@laptop:s1",
+        host="laptop",
         status="idle",
         approval_mode="default",
-        env_leak=False,
         boundary_seq=0,
         gen_tainted=False,
         rearms_in_gen=0,
-        unconfirmed_followups=0,
-        push_expiries=0,
         created_at=1.0,
     )
     base.update(kw)
@@ -79,23 +74,10 @@ def test_every_adapters_join_guidance_says_kind_human_is_the_user_not_that_it_is
     adapters = build_adapters(CFG)
     room = "#build"
 
-    # claude: the hook-only guidance, and the inbox-attached one (a different string)
-    claude = adapters["claude"]
-    p_hook = part(harness="claude")
-    assert_clean(claude.join_guidance(p_hook, room), "claude (hook)")
-    conn = SimpleNamespace(closed=False)
-    claude.attach(123, 100.0, conn)
-    p_attached = part(harness="claude", mcp_pid=123, mcp_start=100.0, claude_socket="/tmp/s.sock", host="")
-    assert claude.attached(p_attached)
-    assert_clean(claude.join_guidance(p_attached, room), "claude (inbox)")
-
-    # codex: one guidance string, whatever the tier
-    codex = adapters["codex"]
-    assert_clean(codex.join_guidance(part(harness="codex"), room), "codex")
-
-    # devin and cursor: one guidance string each
-    assert_clean(adapters["devin"].join_guidance(part(harness="devin"), room), "devin")
-    assert_clean(adapters["cursor"].join_guidance(part(harness="cursor"), room), "cursor")
+    # every harness over HTTPS: Claude Code, Codex and Cursor are woken by their held Stop hook (one
+    # string), Devin by its wait loop (another)
+    for harness in ("claude", "codex", "cursor", "devin"):
+        assert_clean(adapters[f"{harness}@https"].join_guidance(part(harness=harness), room), harness)
 
 
 def test_the_sessionstart_reminder_says_the_same_for_one_person_and_for_several() -> None:

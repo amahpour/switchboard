@@ -19,7 +19,6 @@ from switchboard.config import Config
 
 FAST = Config(human_name="alice").with_delivery(quiet_s=0.0, max_hold_s=0.0)
 CLOSED_WAIT = "[switchboard] #build was closed by alice; you are no longer in it."
-CLOSED_CALL = "#build was closed by alice; you are no longer in it"
 
 
 @pytest.fixture
@@ -103,9 +102,7 @@ async def test_close_reuse_and_reopen(broker: InProcBroker) -> None:
             # the open wait returns `closed`, with the exact text
             r = await asyncio.wait_for(t, 5)
             assert r["status"] == "closed" and r["text"] == CLOSED_WAIT
-            # the next call: the closed error, then the MCP server's own "you are not in"
-            r = await beta.say("#build", "anyone?")
-            assert r["ok"] is False and r["code"] == "unauthorized" and r["error"] == CLOSED_CALL
+            # the next call: the session is in no room now
             r = await beta.say("#build", "anyone?")
             assert r["ok"] is False and r["code"] == "not_member" and "you are not in #build" in r["error"]
             r = await beta.join("#build", "beta")
@@ -148,9 +145,9 @@ async def test_close_reuse_and_reopen(broker: InProcBroker) -> None:
             r = b.web.post("/api/rooms", json={"name": "#build"}, headers=b.write_headers())
             assert r.status_code == 200 and r.json()["room"]["id"] == 2
             assert [m["text"] for m in history(b)] == ["#build created by alice"]
-            # alpha's old credential still names the closed room, never the new one
+            # alpha is not in the new #build: a name is not a membership
             r = await alpha.say("#build", "still here?")
-            assert r["ok"] is False and r["code"] == "unauthorized" and r["error"] == CLOSED_CALL
+            assert r["ok"] is False and r["code"] == "not_member" and "you are not in #build" in r["error"]
             assert [m["text"] for m in history(b)] == ["#build created by alice"]
 
             # reopen: 409 while the new #build is open
@@ -172,12 +169,12 @@ async def test_close_reuse_and_reopen(broker: InProcBroker) -> None:
             assert r.status_code == 404 and "no closed room with id 1" in r.text
 
             # nobody was re-added: alpha joins again, the kicked gamma is still refused,
-            # and delta's old credential is now just revoked
+            # and delta, who didn't, is in no room
             assert (await alpha.join("#build", "alpha"))["ok"]
             r = await gamma.join("#build", "gamma")
             assert r["ok"] is False and r["code"] == "kicked"
             r = await delta.say("#build", "hello?")
-            assert r["ok"] is False and r["code"] == "unauthorized" and "was closed" not in r["error"]
+            assert r["ok"] is False and r["code"] == "not_member"
     finally:
         ws.close()
 

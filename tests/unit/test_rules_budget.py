@@ -10,17 +10,15 @@ from typing import Any
 
 import pytest
 from conftest import FakeClock
+from engine_agents import fills, listener, session, woke
 from engine_world import World
-from test_claude_adapter import claude, reg
-from test_codex_adapter import attach, codex
-from test_cursor_adapter import cursor, park_result, stop
 from test_devin_adapter import devin
 from test_devin_adapter import open_wait as devin_wait
 from test_rules_release import NOW, item, room
 
 from switchboard.config import Config
 from switchboard.delivery import rules
-from switchboard.models import Notice, Push
+from switchboard.models import Notice
 
 
 @pytest.fixture
@@ -30,10 +28,6 @@ def w(tmp_path: Path, clock: FakeClock) -> World:
 
 def left(w: World) -> int:
     return w.store.room_by_id(w.room.id).budget_remaining
-
-
-def pushes(w: World) -> list[Push]:
-    return [a for a in w.take() if isinstance(a, Push)]
 
 
 def result(w: World, sink: Any) -> dict[str, Any] | None:
@@ -130,23 +124,17 @@ def test_wakes_decrement_budget_to_a_floor_and_notice_once(w: World) -> None:
 
 
 def test_each_kind_of_wake_and_continuation_is_counted(w: World) -> None:
-    """idle_wake (Claude inbox, Codex turn/start), wait_return, stop_cont (Cursor
-    follow-up, Devin Stop block) and the Devin re-arm: one budget unit each."""
-    pc, mc, _conn = claude(w, "claude-1")
-    px, mx = codex(w)
-    attach(w)
+    """A parked Stop hook's follow-up (Claude Code, Codex, Cursor), wait_return, the Devin Stop
+    block and the Devin re-arm: one budget unit each."""
+    parks = [listener(w, f"{h}-1", h)[2] for h in ("claude", "codex", "cursor")]
     pt, mt = w.agent("bot")
-    pu, mu = cursor(w, status="busy")
-    park = stop(w, pu)
     s, acts = w.engine.open_wait(w.p(pt), w.m(mt), "w1", 50)
     w.actions += acts
     pd, md = devin(w)
     w.hook(pd, "UserPromptSubmit", gen="g1")
     start = left(w)
-    w.human("everyone, wake up")  # 5 wakes: inbox, turn/start, wait, follow-up; devin is busy
-    assert {x.path for x in pushes(w)} == {"inbox", "turn_start"}
-    assert park_result(w, park.sink_id)["status"] == "messages"
-    assert result(w, s)["status"] == "messages"
+    w.human("everyone, wake up")  # 4 wakes: three Stop hooks and a wait(); devin is busy
+    assert all(woke(w, park) for park in parks) and result(w, s)["status"] == "messages"
     assert left(w) == start - 4
     out = w.hook(pd, "Stop", gen="g1")  # the Devin Stop block hands it over: counted
     assert out is not None and out.kind == "continue"
@@ -156,8 +144,6 @@ def test_each_kind_of_wake_and_continuation_is_counted(w: World) -> None:
         for b in w.store.con.execute("SELECT path, wake_kind FROM batches WHERE budget_counted=1").fetchall()
     }
     assert counted == {
-        ("inbox", "idle_wake"),
-        ("turn_start", "idle_wake"),
         ("wait", "wait_return"),
         ("stop_followup", "stop_cont"),
         ("stop_block", "stop_cont"),
@@ -173,14 +159,13 @@ def test_each_kind_of_wake_and_continuation_is_counted(w: World) -> None:
 
 
 def test_mid_task_delivery_and_pulls_are_not_counted(w: World) -> None:
-    pc, mc, _conn = claude(w, "claude-1", status="busy", attached=False, registry=None)
-    pb, mb, _c2 = claude(w, "claude-2", status="busy", mode="bypass", registry="busy")
-    px, mx = codex(w, status="busy")
-    attach(w, view="busy")
+    pc, mc = session(w, "claude-1", status="busy")
+    pb, mb = session(w, "claude-2", status="busy", mode="bypass")
+    px, mx = session(w, "codex-1", "codex", status="busy")
     pt, mt = w.agent("bot", ack="immediate")
     start = left(w)
     w.human("mid-task for everyone")
-    assert {x.path for x in pushes(w)} == {"inbox", "steer"}  # bypass inbox, Codex steer
+    assert not fills(w)  # nothing is pushed at a busy session: its next hook carries it
     out = w.hook(pc, "PostToolUse", ok=True)
     assert out is not None and w.store.get_batch(out.batch_id).path == "hook_ctx"
     out = w.hook(pc, "UserPromptSubmit", gen="g2")  # nothing left: the first batch is in flight
@@ -191,12 +176,8 @@ def test_mid_task_delivery_and_pulls_are_not_counted(w: World) -> None:
 
 # --------------------------------------------------- exhausted: humans only
 def test_exhausted_only_the_human_wakes_on_every_path(w: World) -> None:
-    pc, mc, _conn = claude(w, "claude-1")
-    px, mx = codex(w)
-    attach(w)
+    parks = {h: listener(w, f"{h}-1", h)[2] for h in ("claude", "codex", "cursor")}
     pt, mt = w.agent("bot")
-    pu, mu = cursor(w, status="busy")
-    park = stop(w, pu)
     s, acts = w.engine.open_wait(w.p(pt), w.m(mt), "w1", 50)
     w.actions += acts
     pd, md = devin(w)
@@ -206,13 +187,12 @@ def test_exhausted_only_the_human_wakes_on_every_path(w: World) -> None:
     names = ("claude-1", "codex-1", "bot", "cursor-1", "devin-1")
     w.agent_says(peer, "@" + " @".join(names), mentions=names)  # @mentions: need budget
     w.agent_says(peer, "plain chatter")
-    assert pushes(w) == []
-    assert s.open and ds.open and park_result(w, park.sink_id) is None
+    assert not fills(w)
+    assert s.open and ds.open and not any(woke(w, park) for park in parks.values())
     w.human("the human always gets through")
-    assert {x.path for x in pushes(w)} == {"inbox", "turn_start"}
     for sink in (s, ds):
         assert result(w, sink)["status"] == "messages"
-    assert park_result(w, park.sink_id)["status"] == "messages"
+    assert all(woke(w, park) for park in parks.values())
     assert left(w) == 0 and w.store.count_events("budget_exhausted") == 1
 
 
@@ -269,15 +249,13 @@ def test_priority_hook_context_is_not_counted(w: World) -> None:
     assert left(w) == 60
 
 
-def test_idle_claude_on_the_inbox_at_zero_budget_waits_for_the_human(w: World, clock: FakeClock) -> None:
-    p, m, _conn = claude(w, "claude-1")
+def test_a_listening_claude_at_zero_budget_waits_for_the_human(w: World, clock: FakeClock) -> None:
+    p, m, park = listener(w, "claude-1")
     _pp, peer = w.agent("peer")
     w.store.set_budget(w.room.id, 0)
     w.agent_says(peer, "@claude-1 hi", mentions=("claude-1",))
     clock.advance(1)
-    reg(w, p, "idle")
     w.actions += w.engine.tick()
-    assert pushes(w) == [] and w.engine.parked_reason(m.id) is None  # budget-held is not parked
+    assert not woke(w, park) and w.engine.parked_reason(m.id) is None  # budget-held is not parked
     w.human("me")
-    [push] = pushes(w)
-    assert push.path == "inbox"
+    assert woke(w, park)

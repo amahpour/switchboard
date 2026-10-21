@@ -10,7 +10,8 @@ Schema versions: 1 (0.1.0 and 0.2.0), 2 (remote members: ``participants.host``,
 4 (people, §32: ``people``, a person on passkeys, web sessions, machines and
 messages, where NULL is the owner), 5 (per-person preferences, §34), 6 (text size, §34),
 7 (custom room rules, §35), and so on up to 28 (each step is below); 29 (#385) drops the
-``remotes`` and ``link_machines`` tables.
+``remotes`` and ``link_machines`` tables; 30 (#385) ends the sessions of the local agent path and
+drops the process ids and the stdio credential that only it used.
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -30,7 +31,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 29
+SCHEMA_VERSION = 30
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -53,36 +54,25 @@ CREATE TABLE participants(
   harness TEXT NOT NULL CHECK(harness IN ('claude','codex','cursor','devin','test','unknown')),
   session_key TEXT NOT NULL,
   session_id TEXT,
-  agent_pid INTEGER, agent_start REAL,
-  mcp_pid INTEGER, mcp_start REAL,
-  claude_socket TEXT,
-  bind_state TEXT NOT NULL DEFAULT 'bound' CHECK(bind_state IN ('bound','pending')),
-  bind_nonce TEXT,
-  thread_proof INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'starting'
      CHECK(status IN ('starting','idle','busy','waiting-approval','offline')),
   status_at REAL, status_src TEXT,
   tier TEXT,
   tier_note TEXT,
   approval_mode TEXT NOT NULL DEFAULT 'unknown' CHECK(approval_mode IN ('bypass','prompting','unknown')),
-  env_leak INTEGER NOT NULL DEFAULT 0,
   away TEXT,
   boundary_seq INTEGER NOT NULL DEFAULT 0,
   gen TEXT, gen_tainted INTEGER NOT NULL DEFAULT 0, rearms_in_gen INTEGER NOT NULL DEFAULT 0,
-  last_loop_count INTEGER, unconfirmed_followups INTEGER NOT NULL DEFAULT 0,
-  push_expiries INTEGER NOT NULL DEFAULT 0,
   hooks_seen_at REAL, last_say_at REAL, created_at REAL NOT NULL, last_seen REAL, ended_at REAL,
   host TEXT NOT NULL DEFAULT '',
   status_line TEXT,
   status_line_at REAL,
   UNIQUE(harness, session_key));
-CREATE INDEX participants_host_mcp ON participants(host, mcp_pid) WHERE ended_at IS NULL;
 
 CREATE TABLE memberships(
   id INTEGER PRIMARY KEY, room_id INTEGER NOT NULL REFERENCES rooms(id),
   participant_id INTEGER NOT NULL REFERENCES participants(id),
   screen_name TEXT NOT NULL COLLATE NOCASE,
-  cred_hash TEXT,
   joined_at REAL NOT NULL, join_msg_id INTEGER NOT NULL,
   left_at REAL, left_reason TEXT,
   kicked INTEGER NOT NULL DEFAULT 0,
@@ -580,6 +570,46 @@ V28_TO_V29 = (
 )
 
 
+# v29 -> v30 (#385, DESIGN.md §49.8): the local agent path is gone, the per-session MCP server and the
+# hook script, so a session that reached the broker through it (a real MCP pid, or no device host) has
+# no way to reconnect. It ends as a session end does, as in v29: its membership leaves with reason
+# ``retired``, its open deliveries are revoked, its offered batches cancelled, and it goes offline. A
+# session over HTTPS (a device host and MCP pid 0) is untouched. Then the columns only that path used
+# go: the process ids and the MCP server's claims (``agent_pid`` ... ``mcp_start``, ``claude_socket``,
+# ``env_leak``), Cursor's bind state and join nonce, Codex's thread proof, the push and follow-up
+# counters, and the stdio credential (``memberships.cred_hash``), and the index on the MCP pid. No row
+# is deleted. SQLite's ``DROP COLUMN`` (3.35) rewrites the table in place, inside the migration's one
+# transaction.
+_LOCAL_SESSION = "p.ended_at IS NULL AND NOT (p.host != '' AND p.mcp_pid IS 0)"
+V29_TO_V30 = (
+    "UPDATE deliveries SET state='revoked' WHERE state IN ('pending','offered','in_context')"
+    " AND membership_id IN (SELECT m.id FROM memberships m JOIN participants p ON p.id=m.participant_id"
+    f" WHERE m.left_at IS NULL AND {_LOCAL_SESSION})",
+    f"UPDATE batches SET state='cancelled', expired_at={_NOW}, expire_reason='retired' WHERE state='offered'"
+    " AND membership_id IN (SELECT m.id FROM memberships m JOIN participants p ON p.id=m.participant_id"
+    f" WHERE m.left_at IS NULL AND {_LOCAL_SESSION})",
+    f"UPDATE memberships SET left_at={_NOW}, left_reason='retired' WHERE left_at IS NULL"
+    f" AND participant_id IN (SELECT p.id FROM participants p WHERE {_LOCAL_SESSION})",
+    f"UPDATE participants SET ended_at={_NOW}, status='offline', status_at={_NOW}, status_src='retired'"
+    f" WHERE id IN (SELECT p.id FROM participants p WHERE {_LOCAL_SESSION})",
+    "DROP INDEX participants_host_mcp",
+    "ALTER TABLE participants DROP COLUMN agent_pid",
+    "ALTER TABLE participants DROP COLUMN agent_start",
+    "ALTER TABLE participants DROP COLUMN mcp_pid",
+    "ALTER TABLE participants DROP COLUMN mcp_start",
+    "ALTER TABLE participants DROP COLUMN claude_socket",
+    "ALTER TABLE participants DROP COLUMN bind_state",
+    "ALTER TABLE participants DROP COLUMN bind_nonce",
+    "ALTER TABLE participants DROP COLUMN thread_proof",
+    "ALTER TABLE participants DROP COLUMN env_leak",
+    "ALTER TABLE participants DROP COLUMN last_loop_count",
+    "ALTER TABLE participants DROP COLUMN unconfirmed_followups",
+    "ALTER TABLE participants DROP COLUMN push_expiries",
+    "ALTER TABLE memberships DROP COLUMN cred_hash",
+    "UPDATE meta SET value='30' WHERE key='schema_version'",
+)
+
+
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
     the tables the step adds). Read from the module at run time, never cached."""
@@ -612,6 +642,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         26: (27, V26_TO_V27, ()),
         27: (28, V27_TO_V28, ()),
         28: (29, V28_TO_V29, ()),
+        29: (30, V29_TO_V30, ()),
     }
     out = []
     v = frm

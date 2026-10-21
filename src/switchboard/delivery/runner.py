@@ -1,21 +1,18 @@
 """Runner: the async side of the delivery engine (DESIGN.md §8.2).
 
-It carries out the engine's actions (push through the adapter's transport,
-resolve sink futures, publish notices and buddy-list snapshots) and ticks
-the engine every second. Everything that needs asyncio lives here; the
+It carries out the engine's actions (resolve sink futures, publish notices and
+buddy-list snapshots) and ticks the engine every second. Everything that needs asyncio lives here; the
 engine stays synchronous.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
-from switchboard.adapters.base import SendError
-from switchboard.models import Action, Notice, Push, ResolveSink, Snapshot
+from switchboard.models import Action, Notice, ResolveSink, Snapshot
 
 if TYPE_CHECKING:  # pragma: no cover
     from switchboard.broker.app import BrokerState
@@ -30,7 +27,6 @@ class Runner:
         self.state = state
         self.tick_s = tick_s
         self.futures: dict[int, asyncio.Future[dict[str, Any]]] = {}
-        self._tasks: set[asyncio.Task[Any]] = set()
 
     @property
     def engine(self) -> Any:
@@ -43,8 +39,6 @@ class Runner:
             try:
                 if isinstance(a, ResolveSink):
                     self._resolve(a)
-                elif isinstance(a, Push):
-                    self._spawn(self._push(a))
                 elif isinstance(a, Notice):
                     self._notice(a)
                 elif isinstance(a, Snapshot):
@@ -75,46 +69,6 @@ class Runner:
         if fut is not None and not fut.done():
             fut.set_result(a.result)
 
-    async def _push(self, a: Push) -> None:
-        st = self.state
-        p = st.store.get_participant(a.participant_id)
-        b = st.store.get_batch(a.batch_id)
-        if p is None or b is None or b.state != "offered" or b.posted_at is not None:
-            return  # cancelled (/pause) or settled before the transport got it
-        adapter = st.engine.adapter(p)
-        # Handed to the transport = posted: a frame on its way can't be recalled,
-        # so /pause no longer cancels it (DESIGN §8.5), and the idle expiry
-        # counts from here. mcp.posted refines the time when it reports one.
-        st.store.mark_posted(a.batch_id)
-        try:
-            t_post = await adapter.send(p, b, a.text, room=a.room, sender=a.sender)
-        except Exception as e:
-            # SendError messages are fixed strings or an exception type name (no text, no paths)
-            why = e.reason if isinstance(e, SendError) else type(e).__name__
-            cur = st.store.get_batch(a.batch_id)
-            if cur is not None and cur.state != "offered":
-                # already confirmed (the frame landed) or settled: nothing to take back
-                log.info(
-                    "push of batch %d: no post report (%s); batch already %s", a.batch_id, why, cur.state
-                )
-                return
-            if isinstance(e, SendError) and not e.counted:
-                # a re-route (e.g. a Codex steer after the turn ended): back to
-                # pending without counting as a push failure; re-evaluated at once
-                log.info("push of batch %d re-routed: %s", a.batch_id, why)
-                self.execute(st.engine.on_expire(a.batch_id, "reroute", count_failure=False))
-                return
-            log.warning("push of batch %d failed: %s", a.batch_id, why)
-            self.execute(st.engine.on_expire(a.batch_id, "send_error"))
-            return
-        if t_post is not None:
-            # the MCP server's clock reading, bounded: never before the batch, never
-            # in the future (a far-future posted_at would stop the idle expiry)
-            t_post = min(max(t_post, b.created_at), st.clock.now() + 1.0)
-            st.store.refine_posted(a.batch_id, t_post)
-        if a.rules_version:
-            st.store.mark_rules_seen(b.membership_id, a.rules_version)
-
     def _notice(self, a: Notice) -> None:
         st = self.state
         room = st.store.room_by_id(a.room_id) if a.room_id is not None else None
@@ -137,11 +91,6 @@ class Runner:
         st.hub.members_changed(room.name)
         st.hub.settings_changed(room.name)
 
-    def _spawn(self, coro: Any) -> None:
-        t = asyncio.get_running_loop().create_task(coro)
-        self._tasks.add(t)
-        t.add_done_callback(self._tasks.discard)
-
     # --------------------------------------------------------------- tick
     async def run(self) -> None:
         while True:
@@ -152,11 +101,6 @@ class Runner:
                 log.exception("engine tick failed")
 
     async def stop(self) -> None:
-        for t in list(self._tasks):
-            t.cancel()
-        for t in list(self._tasks):
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await t
         for fut in self.futures.values():
             if not fut.done():
                 fut.set_result({"status": "cancelled"})

@@ -65,7 +65,7 @@ jobs:
       version: ${{ needs.release.outputs.version }}
 
   # After a release: its sdist and wheel, built from the new tag and checked (the name, the
-  # version, the web UI's files and the hook script, a clean install: .github/scripts/check_dist.py),
+  # version, the web UI's files and the hook reply table, a clean install: .github/scripts/check_dist.py),
   # then attached to the GitHub Release and handed to `publish-pypi`.
   build-dist:
     name: build package

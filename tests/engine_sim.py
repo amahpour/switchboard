@@ -3,16 +3,16 @@ engine, for the M6 property test (DESIGN.md §13): random interleavings of statu
 message, sink and command events, then quiescence, then the invariant.
 
 Everything runs on a FakeClock against a real Store and Engine with the real
-adapters (no broker, no I/O, no asyncio). The simulated harnesses act the way
-the broker would call the engine: hooks through ``claim_for_hook``, ``wait()``
-through ``open_wait``, pushes through a stand-in for the runner, the Claude
-registry poller and the Codex status link by hand.
+adapters (no broker, no I/O, no asyncio). Every harness is a session over HTTPS
+(§49): the simulated harnesses act the way the broker would call the engine: hooks
+through ``claim_for_hook``, ``wait()`` through ``open_wait``, a Stop hook that the
+broker holds through the park it opens. Nothing is pushed to a session.
 
 Invariant (DESIGN.md §13 M6): after quiescence, no delivery of an active
 membership is ``offered``, or ``pending`` and wake-eligible (not a notified,
 pull-only stub). Quiescence: the clock is past ``max_hold_s`` plus the largest
 TTL (the offer backstop), the rooms are unpaused, the budget covers what is
-pending, and every member is idle with a push path or an open sink.
+pending, and every member is idle with a held Stop hook or an open sink.
 
 Safety rules checked all along (not only at the end): the pause rules after
 every random event; at every batch, nothing but a pull for a session on an
@@ -38,25 +38,15 @@ from conftest import FakeClock
 from engine_world import World
 
 from switchboard import envelope
-from switchboard.adapters.claude import ClaudeAdapter, registry_transition
-from switchboard.adapters.codex import Clients, CodexAdapter
-from switchboard.adapters.devin import WAIT_TOOL
+from switchboard.adapters.https import HttpsDevinAdapter
 from switchboard.config import Config
-from switchboard.models import WATCHDOG_DONE, Action, HookEvent, HookOut, Notice, Push, Room, session_key
+from switchboard.models import WATCHDOG_DONE, Action, HookEvent, HookOut, Notice, Room
 
+WAIT_TOOL = HttpsDevinAdapter.wait_tool
 KINDS = ("test", "devin", "claude", "cursor", "codex")
 SINGLE_ROOM = ("test", "devin")  # wait()-based: one open wait() per session, so one room
+LISTENERS = ("claude", "cursor", "codex")  # a Stop hook that the broker holds wakes them (§49.4)
 BIG_BUDGET = 100_000
-
-
-class FakeConn:
-    closed = False
-
-    def __init__(self) -> None:
-        self.pushes: list[tuple[str, dict[str, Any]]] = []
-
-    def push(self, kind: str, data: dict[str, Any]) -> None:
-        self.pushes.append((kind, data))
 
 
 @dataclass
@@ -66,34 +56,21 @@ class Mem:
     pid: int
     mids: list[int]
     conn: int
-    tid: str = ""
     wid: str | None = None  # last wait() id
     sink: int | None = None  # last wait() sink
     sink_used: bool = False  # its result was acted on
     tuid: str = ""  # Devin: the wait() call's tool_use_id
-    park: int | None = None  # Cursor: the stop hook's park
+    park: int | None = None  # a listener's held Stop hook
     park_used: bool = False
     gen: int = 0
-    loop: int = 0  # Cursor loop_count
-    reg: str = "idle"  # Claude registry status
-    view: str = "idle"  # Codex thread status
     mode: str = "prompting"
-    attached: bool = True
-    iconn: FakeConn = field(default_factory=FakeConn)
     shown: list[tuple[int, str]] = field(default_factory=list)  # tokens in tool results, not yet in a hook
     acks: list[tuple[int, str]] = field(default_factory=list)  # hook outputs not acked yet
     cont: tuple[int, str] | None = None  # Devin: a printed Stop block awaiting its next hook
+    deferred: bool = False  # Codex: a follow-up was acked, and its next hook hasn't come
     n: int = 0
     lazy: bool = False  # in quiescence: takes every delivery but never answers (the watchdog's case)
     to_read: set[int] = field(default_factory=set)  # lazy: memberships with an escalated @mention to read()
-
-
-class _Runner:
-    """What the Claude adapter's registry path reads of the broker's runner."""
-
-    def __init__(self, sim: "Sim") -> None:
-        self.state = type("S", (), {"store": sim.store, "engine": sim.engine, "clock": sim.clock})()
-        self.execute = sim.run
 
 
 class Sim:
@@ -122,14 +99,6 @@ class Sim:
         if r.random() < 0.35:
             d = cfg.delivery
             self.rooms.append(self.store.create_room("#side", "alice", d.budget_per_hour, d.hop_limit))
-        self.claude = self.engine.adapters["claude"]
-        self.codex = self.engine.adapters["codex"]
-        assert isinstance(self.claude, ClaudeAdapter) and isinstance(self.codex, CodexAdapter)
-        self.claude.clock = self.clock
-        self.claude.runner = _Runner(self)
-        self.codex.clock = self.clock
-        self.codex.link_state = "up"
-        self.inflight: dict[int, Push] = {}
         self.notices: list[Notice] = []
         self.trace: list[str] = []
         self.kicked = False
@@ -173,38 +142,22 @@ class Sim:
     # ------------------------------------------------------------- set-up
     def _add(self, kind: str, name: str, i: int) -> None:
         r = self.rng
-        status = {"test": "busy", "devin": "busy", "claude": "idle", "cursor": "busy", "codex": "idle"}[kind]
-        p, m = self.w.agent(name, harness=kind, status=status, hooks=kind != "test")
+        p, m = self.w.agent(name, harness=kind, status="busy", hooks=kind != "test")
         mids = [m.id]
         if len(self.rooms) > 1 and kind not in SINGLE_ROOM and r.random() < 0.7:
-            mids.append(self.store.create_membership(self.rooms[1].id, p.id, name, f"h2-{name}").id)
+            mids.append(self.store.create_membership(self.rooms[1].id, p.id, name).id)
         mem = Mem(kind=kind, name=name, pid=p.id, mids=mids, conn=1000 + i, lazy=r.random() < 0.3)
         if kind == "claude":
             mem.mode = r.choice(["prompting", "bypass"])
-            self.store.update_participant(p.id, claude_socket=f"/tmp/yk-sim-{i}.sock", approval_mode=mem.mode)
-            self.claude.attach(p.mcp_pid, p.mcp_start, mem.iconn, host="")
-        elif kind == "cursor":
-            self.store.update_participant(
-                p.id, session_key=session_key("cursor", "", f"conv-{name}"), bind_state="bound"
-            )
+            self.store.update_participant(p.id, approval_mode=mem.mode)
         elif kind == "codex":
-            mem.tid = f"019a0000-0000-7000-8000-{i:012d}"
-            self.store.update_participant(
-                p.id, session_key=f"codex:{mem.tid}", thread_proof=1, approval_mode="prompting"
-            )
-            self.codex.loaded.add(mem.tid)
-            self.codex.view[mem.tid] = ("idle", self.clock.now())
+            self.store.update_participant(p.id, approval_mode="prompting")
         self.members.append(mem)
-        self.refresh()
-        if kind == "cursor":
-            self.hook(mem, "stop", status="completed", loop_count=0, max_wait_s=630.0)
 
     # ------------------------------------------------------------ plumbing
     def run(self, acts: list[Action]) -> None:
         for a in acts:
-            if isinstance(a, Push):
-                self.inflight[a.batch_id] = a
-            elif isinstance(a, Notice):
+            if isinstance(a, Notice):
                 self.notices.append(a)
 
     def p(self, mem: Mem) -> Any:
@@ -229,8 +182,7 @@ class Sim:
         if not mem.mids:
             return None
         p = self.p(mem)
-        if mem.kind == "codex":
-            kw.setdefault("sid", mem.tid)
+        mem.deferred = False
         ev = HookEvent(harness=mem.kind, event=event, t=self.clock.now(), **kw)
         out, acts = self.engine.claim_for_hook(p, ev)
         self.run(acts)
@@ -277,100 +229,9 @@ class Sim:
         mem.shown.clear()
         return toks
 
-    # ---------------------------------------------------- adapters' loops
-    def claude_poll(self, mem: Mem) -> None:
-        """What ClaudeAdapter.poll_once does for this session's registry file."""
-        p = self.p(mem)
-        if p is None or not p.active or not mem.mids:
-            return
-        view, changed = self.claude.observe(
-            p.agent_pid, {"pid": p.agent_pid, "status": mem.reg}, self.clock.now()
-        )
-        tr = registry_transition(p.status, p.hooks_seen_at, view, self.clock.now())
-        if tr is not None:
-            self.run(self.engine.set_status(p, tr[0], "claude:registry", bump=tr[1]))
-        elif changed:
-            self.run(self.engine.evaluate_participant(p.id))
-
-    def codex_view(self, mem: Mem, st: str) -> None:
-        """A thread/status/changed notification (CodexAdapter._set_view + _apply_status)."""
-        mem.view = st
-        self.codex.view[mem.tid] = (st, self.clock.now())
-        p = self.p(mem)
-        if p is None or not p.active or not mem.mids:
-            return
-        if p.status == st:
-            self.run(self.engine.evaluate_participant(p.id))
-            return
-        bump = st == "idle" and p.status in ("busy", "waiting-approval")
-        self.run(self.engine.set_status(p, st, "codex:status", bump=bump))
-
-    def refresh(self) -> None:
-        now = self.clock.now()
-        n = sum(1 for m in self.members if m.kind == "codex")
-        self.codex.loaded_at = now
-        self.codex.clients = Clients(True, now, max(1, n), None)
-        for mem in self.active():
-            if mem.kind == "claude":
-                self.claude_poll(mem)
-
     def advance(self, dt: float) -> None:
         self.clock.advance(dt)
-        self.refresh()
         self.run(self.engine.tick())
-
-    # ----------------------------------------------------------- the runner
-    def deliver(self, bid: int, outcome: str) -> bool:
-        """The runner's _push, with the transport's outcome chosen here."""
-        push = self.inflight.pop(bid, None)
-        if push is None:
-            return False
-        b = self.store.get_batch(bid)
-        if b is None or b.state != "offered" or b.posted_at is not None:
-            return False  # cancelled (/pause) or settled before the transport got it
-        mem = next((m for m in self.members if m.pid == push.participant_id), None)
-        if mem is None or not mem.mids:
-            return False
-        self.store.mark_posted(bid)
-        p = self.p(mem)
-        adapter = self.engine.adapter(p)
-        if outcome == "fail":
-            adapter._failed(p)
-            self.run(self.engine.on_expire(bid, "send_error"))
-            return True
-        if outcome == "lost" and push.path == "inbox":
-            return True  # posted, never lands: the idle expiry takes it back
-        if outcome == "lost":  # a Codex RPC either answers or fails
-            adapter._failed(p)
-            self.run(self.engine.on_expire(bid, "send_error"))
-            return True
-        tok = self.token(bid)
-        if push.path == "inbox":
-            if not mem.attached or mem.reg == "waiting":
-                return True  # never lands: the idle expiry takes it back
-            if mem.reg == "idle":
-                mem.gen += 1
-                mem.reg = "busy"
-                self.claude_poll(mem)
-            self.hook(
-                mem, "UserPromptSubmit", gen=f"c{mem.gen}", tokens=(tok,), permission_mode=self._pm(mem)
-            )
-            return True
-        if push.path in ("turn_start", "steer"):
-            want = "idle" if push.path == "turn_start" else "busy"
-            if mem.view != want:  # the fresh status check before the RPC: a re-route
-                self.codex._rerouted(p)
-                self.run(self.engine.on_expire(bid, "reroute", count_failure=False))
-                return True
-            self.codex.reroutes.pop(p.id, None)
-            self.codex.backoff.pop(p.id, None)
-            if push.path == "turn_start":
-                self.run(self.engine.on_confirm(bid, "rpc:turn/start"))
-                mem.gen += 1
-                self.codex_view(mem, "busy")
-            self.hook(mem, "UserPromptSubmit", gen=f"x{mem.gen}", tokens=(tok,))
-            return True
-        raise AssertionError(f"unexpected push path {push.path}")
 
     @staticmethod
     def _pm(mem: Mem) -> str:
@@ -466,12 +327,8 @@ class Sim:
             tu, g = f"r{mem.n}", f"d{mem.gen}"
             self.hook(mem, "PreToolUse", tool="read", tool_use_id=tu, gen=g)
             self.hook(mem, "PostToolUse", tool="read", tool_use_id=tu, ok=True, tokens=(tok,), gen=g)
-        elif mem.kind == "claude":
-            self.hook(mem, "PostToolUse", ok=True, tokens=(tok,), permission_mode=self._pm(mem))
-        elif mem.kind == "codex":
-            self.hook(mem, "PostToolUse", tool="mcp__switchboard__read", ok=True, tokens=(tok,))
         else:
-            self.hook(mem, "postToolUse", ok=True, tokens=(tok,))
+            self.hook(mem, "PostToolUse", ok=True, tokens=(tok,), permission_mode=self._pm(mem))
         return more
 
     def read(self, mem: Mem, mid: int | None = None) -> None:
@@ -589,6 +446,7 @@ class Sim:
         """One random event, then the safety checks."""
         before = self._last_batch()
         self._step()
+        self.print_followups()
         self.check_pause(before)
         bad = self.bad + self.check_watchdog()
         assert not bad, "\n".join(bad[:10])
@@ -598,8 +456,8 @@ class Sim:
 
     def check_pause(self, before: int) -> None:
         """/pause stops every wake at once: in a paused room nothing but an explicit
-        pull (read/say) is offered, no wait() or unposted push stays pending from
-        before the pause, and a Cursor park lives only while a room it serves is live."""
+        pull (read/say) is offered, no wait() or unposted offer stays pending from
+        before the pause, and a held Stop hook lives only while a room it serves is live."""
         rows = self.store.con.execute(
             "SELECT b.id, b.kind, b.path, m.room_id FROM batches b JOIN memberships m ON m.id=b.membership_id"
             " WHERE b.id>?",
@@ -614,7 +472,7 @@ class Sim:
         for park in self.engine.sinks.parks():
             serves = self.store.participant_memberships(park.participant_id)
             assert any(not self.room_of(x.id).paused for x in serves), (
-                f"seed {self.seed}: a Cursor stop is parked while every room it serves is"
+                f"seed {self.seed}: a Stop hook is held while every room it serves is"
                 f" paused: {self.trace[-5:]}"
             )
         for room in self.rooms:
@@ -638,12 +496,11 @@ class Sim:
             "tick",
             "big_tick",
             "cmd",
-            "push",
             "harness",
             "harness",
             "harness",
         ]
-        weights = [10, 8, 4, 2, 10, 4, 1, 5, 8, 12, 12, 12]
+        weights = [10, 8, 4, 2, 10, 4, 1, 5, 12, 12, 12]
         what = r.choices(kinds, weights)[0]
         act = self.active()
         if what == "human":
@@ -660,13 +517,9 @@ class Sim:
             self.advance(r.choice([30.0, 70.0, 130.0, 200.0, 700.0]))
         elif what == "cmd":
             self.command()
-        elif what == "push" and self.inflight:
-            bid = r.choice(sorted(self.inflight))
-            self.trace.append(f"push:{bid}")
-            self.deliver(bid, r.choices(["ok", "lost", "fail"], [7, 2, 1])[0])
         elif what == "harness" and act:
             mem = r.choice(act)
-            getattr(self, f"ev_{mem.kind}")(mem)
+            (self.ev_listener if mem.kind in LISTENERS else getattr(self, f"ev_{mem.kind}"))(mem)
 
     def command(self) -> None:
         r = self.rng
@@ -748,7 +601,23 @@ class Sim:
         elif what == "subagent" and r.random() < 0.3:
             self.hook(mem, "PreToolUse", tool="run_subagent", tool_use_id="sub", subagent_bg=True, gen=g)
 
-    def ev_claude(self, mem: Mem) -> None:
+    def stop_hook(self, mem: Mem) -> HookOut | None:
+        """The session's turn ends: its Stop hook says how long it may wait, and the broker holds it."""
+        return self.hook(mem, "Stop", max_wait_s=630.0, permission_mode=self._pm(mem))
+
+    def print_followups(self) -> None:
+        """A held Stop hook that was answered prints its follow-up as soon as the broker answers it:
+        most of the time at once, and the hook acks it. Some are slower or never acked (a late ``followup``
+        event below, a hook that died), so the offer backstop and the missing ack are exercised too."""
+        for mem in self.active():
+            s = self.engine.sinks.get(mem.park) if mem.park is not None else None
+            if s is None or s.open or mem.park_used or self.rng.random() < 0.15:
+                continue
+            self.run_followup(mem, ack=self.rng.random() < 0.9, defer=True)
+
+    def ev_listener(self, mem: Mem) -> None:
+        """Claude Code, Codex or Cursor over HTTPS: a turn of tool calls, then a Stop hook that waits
+        on the broker, and what its answer starts (§49.4)."""
         r = self.rng
         what = r.choice(
             [
@@ -757,86 +626,52 @@ class Sim:
                 "tool",
                 "toolfail",
                 "stop",
-                "esc",
-                "approval",
-                "answer",
+                "stop",
+                "followup",
+                "followup",
+                "hookdie",
                 "ack",
-                "attach",
                 "wait",
                 "use",
-                "offline",
-                "clear",
+                "end",
             ]
         )
-        self.trace.append(f"claude:{what}:{mem.name}")
+        if mem.deferred and r.random() < 0.5:
+            what = "prompt"  # the person typed instead (Esc, then text): the follow-up never ran
+        self.trace.append(f"{mem.kind}:{what}:{mem.name}")
+        busy = self.p(mem).status == "busy"
         pm = self._pm(mem)
-        if what == "prompt":
+        # a Codex follow-up carries on the turn it ended: a prompt typed meanwhile (Esc, then text) is
+        # the person's, and expires the follow-up that hadn't run yet
+        if what == "prompt" and (not busy or mem.deferred):
             mem.gen += 1
-            mem.reg = "busy"
-            self.hook(mem, "UserPromptSubmit", gen=f"c{mem.gen}", permission_mode=pm)
-            self.claude_poll(mem)
-        elif what == "tool" and mem.reg == "busy":
+            self.hook(mem, "UserPromptSubmit", gen=f"g{mem.gen}", permission_mode=pm)
+        elif what == "tool" and busy:
             self.hook(mem, "PostToolUse", ok=True, tokens=self.show_tokens(mem), permission_mode=pm)
-        elif what == "toolfail" and mem.reg == "busy":
+        elif what == "toolfail" and busy:
             self.hook(mem, "PostToolUseFailure", ok=False, permission_mode=pm)
-        elif what == "stop" and mem.reg == "busy":
-            self.hook(mem, "Stop", permission_mode=pm)
-            mem.reg = "idle"
-            self.claude_poll(mem)
-        elif what == "esc" and mem.reg == "busy":
-            mem.reg = "idle"  # no Stop hook: the registry says it
-            self.claude_poll(mem)
-        elif what == "approval" and mem.reg == "busy":
-            mem.reg = "waiting"
-            self.claude_poll(mem)
-        elif what == "answer" and mem.reg == "waiting":
-            mem.reg = r.choice(["busy", "idle"])
-            self.claude_poll(mem)
+        elif what == "stop" and busy:
+            self.stop_hook(mem)
+        elif what == "followup":
+            self.run_followup(mem, ack=r.random() < 0.85, defer=True)
+        elif what == "hookdie":
+            self.run(self.engine.close_conn_sinks(mem.conn))  # the held call went away
         elif what == "ack":
             self.ack_all(mem)
-        elif what == "attach":
-            p = self.p(mem)
-            if mem.attached:
-                self.claude.detach(mem.iconn)
-                mem.iconn = FakeConn()
-            else:
-                self.claude.attach(p.mcp_pid, p.mcp_start, mem.iconn, host="")
-            mem.attached = not mem.attached
-            self.run(self.engine.evaluate_participant(mem.pid))
-        elif what == "wait" and mem.reg == "busy":  # a tool call inside a turn
+        elif what == "wait" and busy:  # a tool call inside a turn
             self.open_wait(mem, r.choice([30.0, 110.0]))
         elif what == "use":
             self.use_wait_result(mem)
-        elif what == "offline" and r.random() < 0.3:
-            self.hook(mem, "SessionEnd", reason="prompt_input_exit")
-            mem.reg = "idle"
-        elif what == "clear":
+        elif what == "end" and r.random() < 0.3:
+            self.hook(mem, "SessionEnd", reason="logout")
+        elif what == "end" and mem.kind == "claude":  # /clear keeps the session
             self.hook(mem, "SessionEnd", reason="clear")
             self.hook(mem, "SessionStart", source="clear")
 
-    def ev_cursor(self, mem: Mem) -> None:
-        r = self.rng
-        what = r.choice(["prompt", "tool", "stop", "stop", "followup", "followup", "hookdie", "ack"])
-        self.trace.append(f"cursor:{what}:{mem.name}")
-        if what == "prompt":
-            mem.gen += 1
-            mem.loop = 0
-            self.hook(mem, "beforeSubmitPrompt", gen=f"u{mem.gen}")
-        elif what == "tool":
-            self.hook(mem, "postToolUse", ok=r.random() < 0.9, tokens=self.show_tokens(mem))
-        elif what == "stop":
-            st = r.choices(["completed", "aborted", "error"], [6, 1, 1])[0]
-            self.hook(mem, "stop", status=st, loop_count=mem.loop, max_wait_s=630.0)
-        elif what == "followup":
-            self.run_followup(mem, ack=r.random() < 0.85)
-        elif what == "hookdie":
-            self.run(self.engine.close_conn_sinks(mem.conn))
-        elif what == "ack":
-            self.ack_all(mem)
-
-    def run_followup(self, mem: Mem, *, ack: bool) -> bool:
-        """A parked stop hook was answered: it prints the follow-up and acks, and
-        Cursor runs it as the next turn (loop_count + 1)."""
+    def run_followup(self, mem: Mem, *, ack: bool, defer: bool = False) -> bool:
+        """A held Stop hook was answered: it prints the follow-up and acks, and the harness runs
+        it: a new turn (Claude Code, Cursor) or the turn it carries on (Codex's block). ``defer``: a
+        Codex follow-up may wait for its next hook, which is then whatever the session does next."""
         s = self.engine.sinks.get(mem.park) if mem.park is not None else None
         if s is None or s.open or mem.park_used:
             return False
@@ -845,35 +680,17 @@ class Sim:
         if res.get("status") != "messages":
             return False
         if not ack:
-            return True  # the hook died before acking: Cursor never runs it
+            return True  # the hook died before acking: the harness never runs it
         self.run(self.engine.on_hook_ack(res["batch_id"], res["ack"]))
-        mem.loop += 1
-        self.hook(mem, "postToolUse", ok=True)
-        return True
-
-    def ev_codex(self, mem: Mem) -> None:
-        r = self.rng
-        what = r.choice(["prompt", "tool", "tool", "stop", "approval", "answer", "ack"])
-        self.trace.append(f"codex:{what}:{mem.name}")
-        if what == "prompt" and mem.view == "idle":
+        if mem.kind == "codex":
+            if defer and self.rng.random() < 0.4:
+                mem.deferred = True
+                return True
+            self.hook(mem, "PostToolUse", tool="Bash", ok=True, permission_mode=self._pm(mem))
+        else:
             mem.gen += 1
-            self.hook(mem, "UserPromptSubmit", gen=f"x{mem.gen}")
-            self.codex_view(mem, "busy")
-        elif what == "tool" and mem.view == "busy":
-            self.hook(mem, "PostToolUse", tool="Bash", ok=True, tokens=self.show_tokens(mem))
-        elif what == "stop" and mem.view == "busy":
-            self.hook(mem, "Stop", gen=f"x{mem.gen}")
-            self.codex_view(mem, "idle")
-        elif what == "approval" and mem.view == "busy":
-            self.codex_view(mem, "waiting-approval")
-        elif what == "answer" and mem.view == "waiting-approval":
-            if r.random() < 0.5:
-                self.codex_view(mem, "busy")
-            else:
-                self.hook(mem, "Interrupt")
-                self.codex_view(mem, "idle")
-        elif what == "ack":
-            self.ack_all(mem)
+            self.hook(mem, "UserPromptSubmit", gen=f"g{mem.gen}", permission_mode=self._pm(mem))
+        return True
 
     # ------------------------------------------------------------ quiescence
     def quiesce(self) -> None:
@@ -914,8 +731,6 @@ class Sim:
                 self.store.set_budget(room.id, BIG_BUDGET)
                 self.run(self.engine.on_command(room.id, "budget"))
         busy = False
-        for bid in sorted(self.inflight):
-            busy |= self.deliver(bid, "ok")
         for mem in self.active():
             for mid in sorted(mem.to_read & set(mem.mids)):
                 self.read(mem, mid)  # it reads the escalated @mention; its turn then ends unanswered
@@ -923,7 +738,9 @@ class Sim:
                     self.before_call(mem)  # its next call confirms the read (--ack next_call)
                 busy = True
             mem.to_read.clear()
-            busy |= getattr(self, f"settle_{mem.kind}")(mem)
+            busy |= (self.settle_listener if mem.kind in LISTENERS else getattr(self, f"settle_{mem.kind}"))(
+                mem
+            )
             busy |= self.ack_all(mem)
             if not mem.lazy and any(self.store.in_context_items(mid) for mid in mem.mids):
                 for mid in mem.mids:
@@ -973,70 +790,29 @@ class Sim:
             busy = True
         return busy
 
-    def settle_claude(self, mem: Mem) -> bool:
-        busy = False
-        p = self.p(mem)
-        if not mem.attached:
-            self.claude.attach(p.mcp_pid, p.mcp_start, mem.iconn, host="")
-            mem.attached = True
-            busy = True
-        if p.status == "offline":
+    def settle_listener(self, mem: Mem) -> bool:
+        """A cooperative Claude Code, Codex or Cursor: runs what its Stop hook was answered with, ends
+        its turn and waits at Stop again."""
+        busy = self.run_followup(mem, ack=True)
+        if self.p(mem).status == "offline":
             self.hook(mem, "SessionStart", source="resume")
             busy = True
-        if mem.reg == "waiting":
-            mem.reg = "idle"  # the human declines the prompt
-            self.claude_poll(mem)
-            busy = True
         busy |= self.use_wait_result(mem)
-        p = self.p(mem)
-        if mem.reg == "busy" or p.status == "busy":
-            if mem.shown:
-                self.hook(
-                    mem, "PostToolUse", ok=True, tokens=self.show_tokens(mem), permission_mode=self._pm(mem)
-                )
-            self.ack_all(mem)
-            self.answer(mem)
-            self.hook(mem, "Stop", permission_mode=self._pm(mem))
-            mem.reg = "idle"
-            self.claude_poll(mem)
-            busy = True
-        return busy
-
-    def settle_cursor(self, mem: Mem) -> bool:
-        busy = self.run_followup(mem, ack=True)
         s = self.engine.sinks.get(mem.park) if mem.park is not None else None
         if s is not None and s.open:
             return busy
         p = self.p(mem)
         if p.status != "busy":
             mem.gen += 1
-            mem.loop = 0
-            self.hook(mem, "beforeSubmitPrompt", gen=f"u{mem.gen}")  # the human pokes it
+            self.hook(mem, "UserPromptSubmit", gen=f"g{mem.gen}", permission_mode=self._pm(mem))  # poked
         if mem.shown:
-            self.hook(mem, "postToolUse", ok=True, tokens=self.show_tokens(mem))
+            self.hook(
+                mem, "PostToolUse", ok=True, tokens=self.show_tokens(mem), permission_mode=self._pm(mem)
+            )
         self.ack_all(mem)
         self.answer(mem)
-        self.hook(mem, "stop", status="completed", loop_count=mem.loop, max_wait_s=630.0)
+        self.stop_hook(mem)
         return True
-
-    def settle_codex(self, mem: Mem) -> bool:
-        busy = False
-        if mem.view == "waiting-approval":
-            self.hook(mem, "Interrupt")  # the human declines
-            self.codex_view(mem, "idle")
-            busy = True
-        p = self.p(mem)
-        if mem.view == "busy" or p.status == "busy":
-            if mem.view != "busy":
-                self.codex_view(mem, "busy")
-            if mem.shown:
-                self.hook(mem, "PostToolUse", tool="Bash", ok=True, tokens=self.show_tokens(mem))
-            self.ack_all(mem)
-            self.answer(mem)
-            self.hook(mem, "Stop", gen=f"x{mem.gen}")
-            self.codex_view(mem, "idle")
-            busy = True
-        return busy
 
     # ------------------------------------------------------------ invariant
     def violations(self) -> list[str]:
@@ -1058,7 +834,7 @@ class Sim:
         for mem in self.members:
             p = self.p(mem)
             lines.append(
-                f"  {mem.name} ({mem.kind}) status={p.status} tier={p.tier} reg={mem.reg} view={mem.view}"
+                f"  {mem.name} ({mem.kind}) status={p.status} tier={p.tier}"
                 f" mids={mem.mids} parked={[self.engine.parked_reason(x) for x in mem.mids]}"
             )
         for room in self.rooms:

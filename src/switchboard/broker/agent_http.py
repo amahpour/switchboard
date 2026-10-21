@@ -50,20 +50,25 @@ from fastmcp.tools.base import ToolResult
 from mcp.types import TextContent, ToolAnnotations
 from starlette.routing import Route
 
-from switchboard import __version__
 from switchboard.adapters.https import DEVIN_TOOL_PREFIX
 from switchboard.broker import agent_tokens
-from switchboard.broker.agents import McpConn
-from switchboard.broker.peer import McpIdentity
+from switchboard.broker.agents import AgentConn
+from switchboard.broker.hook_replies import (
+    FIELD_SCAN_MAX,
+    MAX_TOKENS,
+    TOKEN_RE,
+    clip,
+    model_name,
+    reply_for,
+)
 from switchboard.broker.service import ServiceError
-from switchboard.hook import switchboard_hook as hook_script
 from switchboard.mcp.server import (
     CLIENT_INFO_META_KEY,
     TOOL_NAMES,
     WAIT_CAPS,
-    McpState,
     build_server,
     err,
+    request_meta,
 )
 from switchboard.models import AgentTokenRow, InvalidName, canonical_event, normalize_room
 
@@ -83,6 +88,11 @@ CLIENTS = {
     "rmcp": "devin",  # Devin's Rust transport; a matching input hook is still required
 }
 UNSUPPORTED = "switchboard over HTTPS works with Codex, Claude Code, Cursor and Devin for now"
+# the scripted test agent (§9.6): a client of this name on a test-mode broker, naming its session and
+# how its answers are confirmed in two headers. A broker that isn't in test mode never serves it.
+TEST_CLIENT = "switchboard-test-agent"
+TEST_SESSION_HEADER = b"x-switchboard-test-session"
+TEST_ACK_HEADER = b"x-switchboard-test-ack"
 HOOK_TOOL = "hook"  # called by a harness's hooks, never listed for the model
 # what a hook's input template may name: the hook tool's parameters (the plugins' hooks use these)
 HOOK_FIELDS = (
@@ -161,11 +171,8 @@ class HttpConn:
 
     id: int
     host: str
-    mcp: McpConn
-    http: bool = True
-    remote: bool = False
+    agent: AgentConn
     closed: bool = False
-    facts: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -188,7 +195,7 @@ class McpSession:
 def client_info(ctx: Context | None) -> dict[str, str]:
     """The client's name and version, as it says (a claim, cut to 80 characters): from this
     request's ``_meta`` (2026-07-28), else from its session's ``initialize`` (2025-06-18)."""
-    raw: Any = McpState.meta(ctx).get(CLIENT_INFO_META_KEY)
+    raw: Any = request_meta(ctx).get(CLIENT_INFO_META_KEY)
     if not isinstance(raw, dict) and ctx is not None:
         try:
             params = ctx.session.client_params
@@ -234,8 +241,8 @@ def hook_params(event: str, fields: dict[str, Any], now: float) -> dict[str, Any
     toks: list[list[Any]] = []
     raw = fields.get("tool_response")
     result = raw if isinstance(raw, str) else json.dumps(raw, default=str) if raw else ""
-    for m in hook_script.TOKEN_RE.finditer(result[: hook_script.FIELD_SCAN_MAX]):
-        if [int(m.group(1)), m.group(2)] not in toks and len(toks) < hook_script.MAX_TOKENS:
+    for m in TOKEN_RE.finditer(result[:FIELD_SCAN_MAX]):
+        if [int(m.group(1)), m.group(2)] not in toks and len(toks) < MAX_TOKENS:
             toks.append([int(m.group(1)), m.group(2)])
     wait = fields.get("wait_s")
     try:
@@ -249,10 +256,10 @@ def hook_params(event: str, fields: dict[str, Any], now: float) -> dict[str, Any
         "tool_use_id": _id(fields.get("tool_use_id")),
         "ok": ok,
         "stop_hook_active": _flag(fields.get("stop_hook_active")),
-        "source": hook_script._str(fields.get("source"), 32),
-        "reason": hook_script._str(fields.get("reason"), 64),
-        "permission_mode": hook_script._str(fields.get("permission_mode"), 32),
-        "model": hook_script._model(fields.get("model")),
+        "source": clip(fields.get("source"), 32),
+        "reason": clip(fields.get("reason"), 64),
+        "permission_mode": clip(fields.get("permission_mode"), 32),
+        "model": model_name(fields.get("model")),
         "tokens": toks,
         "t": now,
         "max_wait_s": min(wait_s, WAIT_MAX_S) if wait_s is not None and wait_s > 0 else None,
@@ -272,31 +279,6 @@ def second_report(event: str, fields: dict[str, Any]) -> bool:
         and fields.get("tool_response") is None
         and OWN_TOOL_RE.match(str(fields.get("tool_name") or "")) is not None
     )
-
-
-def reply_for(harness: str, event: str, out: Any) -> dict[str, Any] | None:
-    """A hook's answer, written by the broker (#380's decision 5): the hook script's own shapes
-    for context (``render``, §7.3), and Codex's Stop ``decision: block`` for a follow-up. Every
-    answer is checked against those exact shapes; anything else answers nothing."""
-    if not isinstance(out, dict):
-        return None
-    text = out.get("text")
-    if not isinstance(text, str) or not text:
-        return None
-    if out.get("kind") == "continue" and harness == "codex" and event == "Stop":
-        reply: Any = {"decision": "block", "reason": text}
-    else:
-        reply = hook_script.render(harness, event, out)
-    if harness == "cursor" and reply in ({"additional_context": text}, {"followup_message": text}):
-        return reply
-    return reply if _shape_ok(reply, event, text) else None
-
-
-def _shape_ok(reply: Any, event: str, text: str) -> bool:
-    """Exactly one of the shapes a hook over HTTPS may answer with, carrying the batch's text."""
-    if reply == {"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}:
-        return True
-    return reply == {"decision": "block", "reason": text} and event == "Stop"
 
 
 class HookUses:
@@ -400,7 +382,7 @@ class HttpTools:
 
     def _served(self) -> Caller | None:
         c = self._caller.get()
-        return c if c is not None and c.harness in CLIENTS.values() else None
+        return c if c is not None and (c.harness in CLIENTS.values() or c.harness == "test") else None
 
     async def prime(self, ctx: Context | None) -> None:
         try:
@@ -413,12 +395,22 @@ class HttpTools:
             self._caller.set(None)
             return
         info = client_info(ctx)
-        harness = CLIENTS.get(info.get("name", ""), "unknown")
-        conn = self.conn_for(token, harness, info)
-        if harness in ("cursor", "devin"):
+        test: dict[str, str] | None = None
+        if self.state.test_mode and info.get("name") == TEST_CLIENT:
+            harness = "test"
+            test = {
+                "session": _header(scope, TEST_SESSION_HEADER) or "",
+                "ack": _header(scope, TEST_ACK_HEADER) or "",
+            }
+        else:
+            harness = CLIENTS.get(info.get("name", ""), "unknown")
+        conn = self.conn_for(token, harness, info, test=test)
+        if harness == "test":
+            thread = None
+        elif harness in ("cursor", "devin"):
             thread = self.input_session.get()
         elif harness == "claude":
-            use = _id(McpState.meta(ctx).get(TOOL_USE_KEY))
+            use = _id(request_meta(ctx).get(TOOL_USE_KEY))
             thread = await self.uses.session(token.id, use) if use is not None else None
         else:
             thread = self._thread_of(ctx)
@@ -427,27 +419,27 @@ class HttpTools:
             sid = _header(scope, b"mcp-session-id")
             if sid is not None and scope.get("method") == "POST":
                 self.session_auth.record_thread(sid, token.id, thread)
-        self.state.agents.http_claims(token.device, TOOL_NAMES)
 
-    def conn_for(self, token: AgentTokenRow, harness: str, info: dict[str, str] | None = None) -> HttpConn:
-        """A connection for one call of ``harness`` on the token's device (§49.3)."""
-        ident = McpIdentity(
+    def conn_for(
+        self,
+        token: AgentTokenRow,
+        harness: str,
+        info: dict[str, str] | None = None,
+        *,
+        test: dict[str, str] | None = None,
+    ) -> HttpConn:
+        """A connection for one call of ``harness`` on the token's device (§49.3). A scripted test
+        agent (``test``: its session key and ack mode, from its headers, §9.6) has no device: its
+        sessions are on the empty host, as the local test agent's always were."""
+        host = "" if harness == "test" else token.device
+        agent = AgentConn(
             harness=harness,
-            mcp_pid=0,
-            mcp_start=0.0,
-            agent_pid=None,
-            agent_start=None,
-            evidence=f"agent token for {token.device}",
-            host=token.device,
-        )
-        mc = McpConn(
-            ident=ident,
+            host=host,
             client_info=info or {},
-            evidence={"via": "agent token"},
-            version=__version__,
-            tools=TOOL_NAMES,
+            test_session=(test or {}).get("session"),
+            ack_mode=(test or {}).get("ack"),
         )
-        return HttpConn(next(self._ids), token.device, mc)
+        return HttpConn(next(self._ids), host, agent)
 
     async def on_hook(self, fields: dict[str, Any]) -> str:
         """A harness's hook, by its token (``prime`` ran): Claude Code's PreToolUse names the
@@ -477,6 +469,13 @@ class HttpTools:
             # the hook went away (Codex: Esc while its Stop hook waited): so does its park
             agents.run(self.state.engine.close_conn_sinks(c.conn.id))
             raise
+        if c.harness == "test":
+            # the scripted test agent (§9.6; a test-mode broker only) reads the engine's own answer,
+            # not a shape of the table, so a test sees the text and the batch it was given
+            out = res.get("out")
+            if isinstance(out, dict) and res.get("batch_id") is not None:
+                agents.hook_ack(c.conn, {"batch_id": res.get("batch_id"), "ack": res.get("ack")})
+            return json.dumps({"out": out, "batch_id": res.get("batch_id")})
         reply = reply_for(c.harness, event, res.get("out"))
         if reply is None:
             return "{}"
@@ -492,7 +491,7 @@ class HttpTools:
     @staticmethod
     def _thread_of(ctx: Context | None) -> str | None:
         """Codex: ``_meta.threadId`` of this call (one MCP session serves many threads)."""
-        return _id(McpState.meta(ctx).get("threadId"))
+        return _id(request_meta(ctx).get("threadId"))
 
     def wait_cap(self) -> int:
         return WAIT_CAPS.get(self.harness or "unknown", 50)
@@ -540,9 +539,6 @@ class HttpTools:
         if tid:
             p["thread_id"] = tid
         return p
-
-    def forget(self, res: dict[str, Any], key: tuple[str | None, str]) -> None:
-        """Nothing to forget: memberships are read from the store on every call."""
 
     def unwait(self, params: dict[str, Any]) -> None:
         c = self._served()

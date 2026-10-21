@@ -32,19 +32,9 @@ def test_defaults_match_design() -> None:
         5.0,
         10.0,
     )
-    assert (c.claude.inbox_hold_s, c.claude.inbox_idle_expire_s, c.claude.wait_cap_s) == (0.3, 5.0, 110)
-    assert (
-        c.codex.queue_fallback,
-        c.codex.require_thread_proof,
-        c.codex.wait_cap_s,
-        c.codex.ctx_max_chars,
-    ) == (True, True, 240, 5000)
-    assert (
-        c.cursor.stop_park_s,
-        c.cursor.wait_cap_s,
-        c.cursor.ctx_max_chars,
-        c.cursor.max_unconfirmed_followups,
-    ) == (600, 50, 8000, 2)
+    assert c.claude.wait_cap_s == 110
+    assert (c.codex.wait_cap_s, c.codex.ctx_max_chars) == (240, 5000)
+    assert (c.cursor.wait_cap_s, c.cursor.ctx_max_chars) == (50, 8000)
     assert (c.devin.wait_cap_s, c.devin.rearm, c.devin.rearm_max_per_prompt, c.devin.ctx_max_chars) == (
         600,
         True,
@@ -136,6 +126,34 @@ def test_load_toml(tmp_path: Path) -> None:
 def test_invalid(data: dict) -> None:
     with pytest.raises(ConfigError):
         from_dict(data)
+
+
+def test_the_keys_only_the_local_agent_path_read_are_accepted_and_reported() -> None:
+    """A config.toml written for 0.37 still loads (#385): the keys of the local agent path (Claude's
+    inbox and sessions directory, Codex's daemon, thread proof and queue, Cursor's park and follow-up
+    limit) are ignored and named in ``Config.retired``, and what is still read is read. Fails if a
+    release that retired them refuses the file, or reads them as settings."""
+    c = from_dict(
+        {
+            "claude": {"sessions_dir": "/x", "inbox_hold_s": 0.3, "wait_cap_s": 90},
+            "codex": {"control_socket": "/y", "require_thread_proof": False, "queue_fallback": True},
+            "cursor": {"stop_park_s": 600, "max_unconfirmed_followups": 2, "wait_cap_s": 40},
+        }
+    )
+    assert c.claude.wait_cap_s == 90 and c.cursor.wait_cap_s == 40
+    assert c.retired == (
+        "claude.inbox_hold_s",
+        "claude.sessions_dir",
+        "codex.control_socket",
+        "codex.queue_fallback",
+        "codex.require_thread_proof",
+        "cursor.max_unconfirmed_followups",
+        "cursor.stop_park_s",
+    )
+    assert from_dict({"claude": {"wait_cap_s": 90}}).retired == ()
+    for bad in ({"claude": {"nope": 1}}, {"cursor": {"stop_park_s": 600, "nope": 1}}):
+        with pytest.raises(ConfigError):  # a key that was never one is still refused
+            from_dict(bad)
 
 
 def test_bad_toml(tmp_path: Path) -> None:

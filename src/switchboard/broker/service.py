@@ -90,8 +90,6 @@ class BrokerInfo:
     test_mode: bool = False
     home: str = ""
     url: str = ""  # the web UI's address, as browsers reach it
-    hook_state: str = "not checked"
-    codex_link: str = "not started"
 
 
 class DeliveryHooks(Protocol):
@@ -108,10 +106,6 @@ class DeliveryHooks(Protocol):
     def parked_reason(self, membership_id: int) -> str | None: ...
 
     def wakes_at(self, membership_id: int) -> float | None: ...
-
-    def board_reason(self, member: Member) -> str | None: ...
-
-    def member_claims(self, member: Member) -> tuple[str | None, tuple[str, ...] | None]: ...
 
 
 def _hhmmss(ts: float | None) -> str:
@@ -179,7 +173,6 @@ def member_dict(m: Member) -> dict[str, Any]:
         "status_line_stale": m.status_line_stale,
         "status_line_remaining_s": m.status_line_remaining_s,
         "approval_mode": m.approval_mode,
-        "env_leak": m.env_leak,
         "held": m.held,
         "queued": m.queued,
         # when the hold on unaddressed chatter (#137) lets the queued messages wake it, or None
@@ -187,12 +180,8 @@ def member_dict(m: Member) -> dict[str, Any]:
         "inflight": m.inflight,
         "parked": m.parked,
         "parked_reason": m.parked_reason,
-        # the member's host: '' for this machine, else the remote's name (§27.11)
+        # the member's device (§49.1): '' only for a scripted test agent
         "host": m.host,
-        # why it can't use the review board, or None (#249): switchboard's own words
-        "board_why": m.board_why,
-        "version_claim": m.version_claim or "unknown",
-        "tools_claim": list(m.tools_claim) if m.tools_claim is not None else None,
         "claims": list(m.claims),
     }
 
@@ -213,9 +202,9 @@ def member_label(m: Member) -> str:
 #  - The session id is shown to the human only, as in /who (``session_handles``).
 TIMELINE_LIMIT = 6
 QUEUED_LIMIT = 50
-# every delivery path the engine and the adapters use (models.py, report.py); anything else
-# is reported as "other" rather than echoed
-KNOWN_PATHS = frozenset({"inbox", "turn_start", "queue", "steer"}) | PULL_PATHS | HOOK_PATHS | CONTINUE_PATHS
+# every delivery path the engine uses (models.py, report.py); anything else is reported as "other"
+# rather than echoed. Older databases also hold the paths of the pushes of earlier releases.
+KNOWN_PATHS = PULL_PATHS | HOOK_PATHS | CONTINUE_PATHS
 
 
 def _num(v: Any) -> int | float | None:
@@ -545,14 +534,7 @@ class RoomService:
             why = self.delivery.parked_reason(m.membership_id)
             if why:
                 m = dataclasses.replace(m, parked=True, parked_reason=why)
-            board = self.delivery.board_reason(m)
-            version, tools = self.delivery.member_claims(m)
-            wakes = self.delivery.wakes_at(m.membership_id)
-            out.append(
-                dataclasses.replace(
-                    m, board_why=board, version_claim=version, tools_claim=tools, wakes_at=wakes
-                )
-            )
+            out.append(dataclasses.replace(m, wakes_at=self.delivery.wakes_at(m.membership_id)))
         return out
 
     def member_detail(self, room_name: str, name: str) -> dict[str, Any]:
@@ -821,7 +803,7 @@ class RoomService:
         posted: list[Message] = []
         with db.tx(self.store.con):
             for m in members:
-                self.store.end_membership(m.membership_id, "closed", keep_cred=True)
+                self.store.end_membership(m.membership_id, "closed")
                 posted.append(
                     self.store.insert_message(
                         room.id,
@@ -1225,8 +1207,6 @@ class RoomService:
                 flags.append("⚠ approvals off")
             elif m.approval_mode == "unknown":
                 flags.append("? approval mode unknown (treat like ⚠)")
-            if m.env_leak:
-                flags.append("env shared")
             if m.held:
                 flags.append("⏸ held")
             if m.queued:
@@ -1290,8 +1270,6 @@ class RoomService:
                 lines.append(f"    [{_hhmmss(e.ts)}] {e.kind}")
         else:
             lines.append("  recent rule events: none")
-        lines.append(f"  codex link: {self.info.codex_link}")
-        lines.append(f"  hooks: {self.info.hook_state}")
         if self.info.test_mode:
             lines.append("  TEST MODE")
         return "\n".join(lines)
@@ -1325,7 +1303,5 @@ class RoomService:
             "closed_rooms": self.store.count_closed_rooms(),
             "members": self.store.count_active_members(),
             "web_clients": self.hub.ws_count(),
-            "codex_link": self.info.codex_link,
-            "hooks": self.info.hook_state,
             "test_mode": self.info.test_mode,
         }

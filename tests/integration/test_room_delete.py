@@ -96,9 +96,9 @@ def add_offline_member(b: InProcBroker, room_id: int, name: str) -> None:
                 (f"test:{name}",),
             )
             con.execute(
-                "INSERT INTO memberships(room_id, participant_id, screen_name, cred_hash, joined_at,"
-                " join_msg_id) VALUES(?,?,?,?,0,?)",
-                (room_id, cur.lastrowid, name, "h" * 64, b.state.store.last_message_id(room_id)),
+                "INSERT INTO memberships(room_id, participant_id, screen_name, joined_at,"
+                " join_msg_id) VALUES(?,?,?,0,?)",
+                (room_id, cur.lastrowid, name, b.state.store.last_message_id(room_id)),
             )
 
     b.on_loop(go)

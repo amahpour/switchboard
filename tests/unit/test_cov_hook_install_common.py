@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from old_install import hook_command
 
 from switchboard import DIST_NAME
 from switchboard.install import common
@@ -23,9 +24,7 @@ from switchboard.install.common import (
     InstallError,
     Plan,
     PurgeEdit,
-    hook_command,
 )
-from switchboard.paths import hook_sha12
 
 PY = "/opt/yk/venv/bin/python"
 HOME = "/opt/yk/home"
@@ -33,22 +32,6 @@ SHA = "abcdef012345"
 
 
 # ------------------------------------------------------------ recognising
-@pytest.mark.parametrize(
-    "sha12,harness,event",
-    [
-        ("ABCDEF012345", "claude", "Stop"),  # upper-case hex
-        ("abcdef01234", "claude", "Stop"),  # 11 digits
-        (SHA, "Claude", "Stop"),
-        (SHA, "claude code", "Stop"),
-        (SHA, "claude", "Post-Tool"),
-        (SHA, "claude", "Stop;id"),
-    ],
-)
-def test_hook_command_refuses_bad_parts(sha12: str, harness: str, event: str) -> None:
-    with pytest.raises(InstallError, match="bad hook command parts"):
-        hook_command(PY, HOME, sha12, harness, event)
-
-
 def test_runs_switchboard_mcp_and_its_home() -> None:
     ours = {"command": PY, "args": ["-I", "-m", "switchboard", "mcp", "--home", HOME]}
     assert common.runs_switchboard_mcp(ours) and common.mcp_home(ours) == HOME
@@ -235,7 +218,7 @@ def test_hook_copies_when_the_listing_fails(tmp_path: Path, monkeypatch: pytest.
 def _copies(home: Path) -> list[Path]:
     hooks = home / "hooks"
     hooks.mkdir(parents=True)
-    copy = hooks / f"switchboard_hook-{hook_sha12()}.py"
+    copy = hooks / f"switchboard_hook-{SHA}.py"
     copy.write_text("# hook\n")
     return [copy]
 

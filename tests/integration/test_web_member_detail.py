@@ -30,10 +30,7 @@ from switchboard.delivery.engine import STOP_BUSY_SRCS
 FAST = Config(human_name="alice").with_delivery(quiet_s=0.0, max_hold_s=0.0)
 SECRET = "the quick secret text 7f3a"  # a message body that must never appear in a detail
 MEMBER_KEYS = {
-    "board_why",  # why it can't use the review board, or None (#249)
     "wakes_at",  # when chatter held for it wakes it, or None (#137): a time, never text
-    "version_claim",
-    "tools_claim",
     "claims",
     "status_line",
     "status_line_stale",
@@ -45,7 +42,6 @@ MEMBER_KEYS = {
     "tier_note",
     "away",
     "approval_mode",
-    "env_leak",
     "held",
     "queued",
     "inflight",
@@ -223,7 +219,7 @@ async def test_timeline_whitelists_event_data(broker: InProcBroker) -> None:
         add("unparked", seconds=12.5)
         add("rearm", n=2)
         add("requeue", reason="redeliver", n=3)
-        add("expire", path="inbox", reason="x" * 500)
+        add("expire", path="stop_followup", reason="x" * 500)
         add("cancel", path="/etc/passwd", reason="kick")
         tl = detail(broker, "devin-1").json()["timeline"]
         assert [e["kind"] for e in tl] == ["parked", "unparked", "rearm", "requeue", "expire", "cancel"]
@@ -232,12 +228,12 @@ async def test_timeline_whitelists_event_data(broker: InProcBroker) -> None:
         assert by["unparked"] == {"kind": "unparked", "seconds": 12.5}
         assert by["rearm"] == {"kind": "rearm", "n": 2}
         assert by["requeue"] == {"kind": "requeue", "reason": "redeliver", "n": 3}
-        assert by["expire"]["path"] == "inbox" and len(by["expire"]["reason"]) == 200
+        assert by["expire"]["path"] == "stop_followup" and len(by["expire"]["reason"]) == 200
         assert by["cancel"] == {"kind": "cancel", "path": "other", "reason": "kick"}
 
         add("watchdog_remind", n=1)
         add("watchdog_escalate", why="parked", n=True, status="busy")
-        add("offer", path="steer", n=4, counted=1, ids=["x", True])
+        add("offer", path="hook_ctx", n=4, counted=1, ids=["x", True])
         add("login", what="session")  # not a timeline kind
         tl = detail(broker, "devin-1").json()["timeline"]
         by = {e["kind"]: {k: v for k, v in e.items() if k != "ts"} for e in tl}
@@ -247,7 +243,7 @@ async def test_timeline_whitelists_event_data(broker: InProcBroker) -> None:
         # the "ids" the events carry are ids of no delivery of this member: nobody is named
         assert by["offer"] == {
             "kind": "offer",
-            "path": "steer",
+            "path": "hook_ctx",
             "n": 4,
             "counted": True,
             "prio": None,

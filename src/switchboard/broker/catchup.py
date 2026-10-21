@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from switchboard.adapters import build_adapters
+from switchboard.adapters import adapter_for, build_adapters
 from switchboard.config import Config
 from switchboard.envelope import clean, render_pins
 from switchboard.models import LOCAL_HOST, Member, Message, Participant
@@ -74,8 +74,7 @@ def session_id(p: Participant | None, cfg: Config) -> tuple[str | None, str]:
     history tool, or a shell command built from it, takes as one token) is ever passed on."""
     if p is None:
         return None, "no session"
-    adapters = build_adapters(cfg)
-    adapter = adapters.get(p.harness) or adapters["unknown"]
+    adapter = adapter_for(build_adapters(cfg), p.harness)
     sid, why = adapter.history_session_id(p, cfg)
     if sid and not SID_RE.fullmatch(sid):
         return None, "its session id isn't in a form switchboard passes on"

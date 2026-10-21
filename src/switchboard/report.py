@@ -6,8 +6,9 @@ SQLite connection (the broker may be running or stopped):
 
 - **per-message latency**, send (``messages.ts``, broker clock) to the
   recipient, for the first batch that reached each recipient, labelled per path
-  (§12.5): *turn start* (Claude inbox, Codex ``turn/start`` and ``codex queue``),
-  *first hook* (a Cursor follow-up or a Devin Stop block), *in context* and
+  (§12.5): *first hook* (a Stop hook's message: a Claude Code listener's, a Codex or
+  Cursor hold's, or a Devin Stop block), *turn start* (only in a database from before
+  0.38.0: Claude's inbox, Codex's ``turn/start`` and ``codex queue``), *in context* and
   *first action* (a Devin ``wait()`` answer), *in context* (mid-task paths) and
   *pulled* (``read()``/``say()`` answers); p50 and p95 with
   ``statistics.quantiles(n=100, method="inclusive")`` (n=1 shows the value,
@@ -64,13 +65,15 @@ WAKE_TURN_PATHS = ("inbox", "turn_start", "queue")
 CONTINUE_PATHS = ("stop_followup", "stop_block")
 MID_TASK_PATHS = ("steer", "hook_ctx", "hook_ups")
 PULL_PATHS = ("read", "say")
+# The tier a path implied before releases recorded it per session: only the local path wrote these.
 PATH_TIER = {
     "turn_start": "codex:daemon",
     "steer": "codex:daemon",
     "queue": "codex:queue",
-    "stop_followup": "cursor:stop-park",
-    "stop_block": "devin:wait-loop",
 }
+# A Stop hook's follow-up and Devin's Stop block are sessions over HTTPS now (§49.4), each with the
+# tier it joined with; these name the tier of a batch from before that was recorded.
+STOP_PATH_TIER = {"stop_followup": "cursor:stop-park", "stop_block": "devin:wait-loop"}
 LINK_EVIDENCE, LINK_TIER = "link:turn/start", "codex:link"
 PRIO_REASON = {2: "human", 1: "mention", 0: "chatter"}
 LABEL_ORDER = ("turn start", "first hook", "first action", "in context", "pulled")
@@ -481,6 +484,8 @@ def build(
             if b["path"] == "inbox"
             else _tier_at(tiers.get(mem.participant_id, []), b["created_at"], mem.tier)
         )
+        if b["path"] in STOP_PATH_TIER and tier in ("-", "mcp-only"):
+            tier = STOP_PATH_TIER[b["path"]]
         for mid_ in ids:
             key = (mem.membership_id, mid_)
             msg = msgs.get(mid_)
@@ -873,12 +878,11 @@ def render_markdown(rep: dict[str, Any], *, title: str | None = None, paint: Any
     L.append(
         "Each message counts once per recipient, at the first batch that reached it (deliveries held by a"
         " pause, a /hold or an approval prompt are listed separately, below). T0 is the message's"
-        " time on the broker clock. **turn start**: the new turn began (Claude: the"
-        " UserPromptSubmit the inbox message started; Codex: `thread/status` went active"
-        " after `turn/start`, or the UserPromptSubmit of a"
-        " `codex queue` item). **first hook**: the first hook after a Cursor follow-up or a Devin Stop"
-        " message. **in context**: a Devin `wait()` answer's PostToolUse, or mid-task context confirmed"
-        " (hook ack, steer). **first action**: the tool call that followed a Devin `wait()` answer."
+        " time on the broker clock. **first hook**: the first hook after a Stop hook's message (an idle"
+        " Claude Code, Codex or Cursor session woken, or a Devin Stop message). **turn start**: the new"
+        " turn began, for a wake of a release before 0.38.0 (Claude's inbox, Codex's `turn/start` or"
+        " `codex queue`). **in context**: a Devin `wait()` answer's PostToolUse, or mid-task context"
+        " confirmed (hook ack, steer). **first action**: the tool call that followed a Devin `wait()` answer."
         " **pulled**: the agent's own `read()`/`say()` answer. Chatter includes the room's 3 s quiet period."
         ' "By reason" uses each sample\'s main measure: turn start, first hook, first action (or in'
         " context when no tool call followed a `wait()` answer), in context for mid-task, pulled."
@@ -1044,7 +1048,7 @@ def render_markdown(rep: dict[str, Any], *, title: str | None = None, paint: Any
         " prompts and switchboard's"
         " wakes; a Devin agent in its `wait()` loop stays in one turn). Wakes are batches that could start a"
         " turn or return a `wait()` (counted against the budget, with Devin re-arms); continuations are"
-        ' Cursor follow-ups, Devin Stop messages and re-arms. "Wakes unaddressed": of the confirmed wakes,'
+        ' Stop-hook messages and Devin re-arms. "Wakes unaddressed": of the confirmed wakes,'
         " how many carried nothing addressed to this agent (no @mention, nothing from the human) --"
         ' woken for chatter alone. "Passes after wake": confirmed wakes the agent answered with a `pass()`'
         " and nothing posted, a turn spent for nothing. Turns and approval prompts count only while"

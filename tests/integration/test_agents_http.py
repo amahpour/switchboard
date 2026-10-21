@@ -315,21 +315,13 @@ def test_a_client_other_than_codex_is_told_it_isnt_supported_yet(build: InProcBr
     assert members(build, "#build") == {}
 
 
-def test_the_token_notes_its_last_use_and_its_member_runs_this_broker(build: InProcBroker) -> None:
-    """The token list shows when each was last used, and Members shows the version and tools
-    each member runs: over HTTPS, the broker's own. Fails if a call leaves last use empty, or a
-    member over HTTPS shows an unknown version."""
+def test_the_token_notes_its_last_use(build: InProcBroker) -> None:
+    """The token list shows when each was last used. Fails if a call leaves last use empty."""
     codex = Codex(build, make_token(build, "laptop"))
     codex.start()
     assert codex.call("join", THREAD_A, room="#build", screen_name="codex-1")["ok"]
-    st = build.state
-    row = build.on_loop(st.store.agent_token_for_device, "laptop")
+    row = build.on_loop(build.state.store.agent_token_for_device, "laptop")
     assert row.last_used_at is not None
-    room = build.on_loop(st.store.get_room, "#build")
-    [m] = build.on_loop(st.store.members, room.id)
-    from switchboard import __version__
-
-    assert build.on_loop(st.agents.member_claims, m) == (__version__, TOOL_NAMES)
 
 
 def test_a_call_can_name_only_its_own_sessions_membership(build: InProcBroker) -> None:
@@ -345,11 +337,9 @@ def test_a_call_can_name_only_its_own_sessions_membership(build: InProcBroker) -
     st = build.state
     room = build.on_loop(st.store.get_room, "#build")
     by_name = {m.name: m.membership_id for m in build.on_loop(st.store.members, room.id)}
-    from switchboard.broker.agents import McpConn
-    from switchboard.broker.peer import McpIdentity
+    from switchboard.broker.agents import AgentConn
 
-    ident = McpIdentity("codex", 0, 0.0, None, None, "agent token for laptop", host="laptop")
-    conn = HttpConn(1 << 50, "laptop", McpConn(ident=ident))
+    conn = HttpConn(1 << 50, "laptop", AgentConn("codex", "laptop"))
     forged = {"cred": f"m:{by_name['codex-1']}", "thread_id": THREAD_B, "text": "as codex-1?"}
     with pytest.raises(Exception, match="not a member"):
         build.on_loop(st.agents.say, conn, forged)

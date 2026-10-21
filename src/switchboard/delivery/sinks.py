@@ -1,11 +1,11 @@
-"""SinkRegistry: open wait() calls and Cursor stop parks.
+"""SinkRegistry: open wait() calls and parked Stop hooks.
 
 A sink is an agent that is blocked, listening: an open sink makes the
 member effectively idle (DESIGN.md §8.2). The registry is plain in-memory
 state owned by the engine; the runner attaches asyncio futures to it.
 
 - ``wait``: one member (room) listening through the MCP ``wait()`` tool.
-- ``park``: a Cursor stop hook long-polling for a follow-up (DESIGN.md §9.4).
+- ``park``: a Stop hook long-polling for a follow-up (DESIGN.md §9.4, §49.4).
   It belongs to the whole session (one conversation), so it serves every
   room of that participant; one live park per participant.
 """
@@ -24,7 +24,7 @@ class Sink:
     participant_id: int
     membership_id: int
     room_id: int
-    kind: str  # 'wait' | 'park' (a Cursor stop hook, for every room of the participant)
+    kind: str  # 'wait' | 'park' (a Stop hook, for every room of the participant)
     path: str  # batch path used when the engine fills it
     wait_id: str
     opened_at: float

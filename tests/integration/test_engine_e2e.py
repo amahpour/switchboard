@@ -218,30 +218,14 @@ def test_property_simulation_exercises_every_path_and_rule(tmp_path: Path) -> No
             if kind == "watchdog_escalate":
                 events.add(f"watchdog_escalate:{json.loads(data)['why']}")
     assert kinds == {"test", "devin", "claude", "cursor", "codex"}
-    assert paths == {
-        "wait",
-        "read",
-        "say",
-        "inbox",
-        "turn_start",
-        "steer",
-        "hook_ctx",
-        "hook_ups",
-        "stop_followup",
-        "stop_block",
-    }
+    assert paths == {"wait", "read", "say", "hook_ctx", "hook_ups", "stop_followup", "stop_block"}
     assert {
-        "pause",
         "no_ack",
         "no_confirm",
-        "idle_no_token",
-        "reroute",
-        "send_error",
         "superseded",
         "unwait",
         "newer_read",
         "human_prompt",
-        "loop_reset",
     } <= reasons
     assert {
         "loop_guard",
@@ -254,6 +238,5 @@ def test_property_simulation_exercises_every_path_and_rule(tmp_path: Path) -> No
         "watchdog_escalate:unanswered",
         "watchdog_escalate:parked",
         "watchdog_escalate:not_idle",
-        "cancel",
         "pass_refused",
     } <= events

@@ -1,11 +1,11 @@
 """#304 (DESIGN.md §6.1): an agent restarted into a new session takes its name back with the join
 code its earlier join answered with, in each room it was in; without that code, or with any other,
 the name stays reserved; and a code never moves a name to another machine, harness or a kicked
-agent. The refusal tells a session to use ``resume`` only if its MCP server has it (#340).
-Stand-in Claude sessions (tests/fakes/fake_claude.py) against an in-process broker."""
+agent. Codex sessions over HTTPS (§49) against an in-process broker."""
 
 from __future__ import annotations
 
+import asyncio
 import re
 import sqlite3
 import time
@@ -15,17 +15,14 @@ from typing import Any
 import pytest
 from conftest import InProcBroker
 from fakes.fake_agent import FakeAgent
-from fakes.fake_claude import FakeClaude
+from test_agents_http import THREAD_A, THREAD_B, Codex, make_token
 
-from switchboard import __version__
-from switchboard.broker.agents import cred_hash
 from switchboard.config import Config
-from switchboard.mcp.client import RpcError, Stream
-from switchboard.models import session_key
+from switchboard.models import join_code_hash, session_key
 
 FAST = Config(human_name="alice").with_delivery(quiet_s=0.0, max_hold_s=0.0)
 CODE = re.compile(r"\byk:j[0-9a-f]{16}\b")
-RESTARTED = "00000000-0000-4000-8000-00000000c2b0"
+RESTARTED = THREAD_B
 
 
 def wait_for(fn: Any, timeout: float = 10.0) -> Any:
@@ -41,7 +38,6 @@ def wait_for(fn: Any, timeout: float = 10.0) -> Any:
 @pytest.fixture
 def broker(tmp_home: Path):
     b = InProcBroker(tmp_home, FAST).start()
-    (tmp_home / "config.toml").write_text(f'[claude]\nsessions_dir = "{b.cfg.claude.sessions_dir}"\n')
     web = b.web_client()
     for room in ("#build", "#docs"):
         assert web.post("/api/rooms", json={"name": room}, headers=b.write_headers()).status_code == 200
@@ -66,17 +62,27 @@ def join_code(res: dict[str, Any]) -> str:
     return got.group(0)
 
 
+def codex_session(b: InProcBroker) -> Codex:
+    """A Codex process on the device ``laptop`` (one token for it per broker): its calls name their
+    thread in ``_meta``."""
+    if not hasattr(b, "laptop_token"):
+        b.laptop_token = make_token(b, "laptop")  # type: ignore[attr-defined]
+    c = Codex(b, b.laptop_token)  # type: ignore[attr-defined]
+    assert c.start().status_code == 200
+    return c
+
+
 def first_session_ends(b: InProcBroker) -> dict[str, str]:
-    """A Claude session joins #build and #docs as planner, then dies: its codes, by room."""
-    old = FakeClaude(b)
+    """A Codex thread joins #build and #docs as planner, then leaves both: its codes, by room."""
+    old = codex_session(b)
     codes = {}
     for room in ("#build", "#docs"):
-        r = old.tool("join", room=room, screen_name="planner")
+        r = old.call("join", THREAD_A, room=room, screen_name="planner")
         assert r["ok"], r
         codes[room] = join_code(r)
-    old.p.kill()
-    old.p.wait(5)
-    assert wait_for(lambda: len(q(b, "SELECT 1 FROM memberships WHERE left_reason='session_end'")) == 2)
+    for room in ("#build", "#docs"):
+        assert old.call("leave", THREAD_A, room=room)["ok"]
+    assert wait_for(lambda: len(q(b, "SELECT 1 FROM memberships WHERE left_reason='leave'")) == 2)
     return codes
 
 
@@ -85,43 +91,37 @@ def test_a_restarted_session_takes_its_name_back_in_each_room(broker: InProcBrok
     each room's code from its earlier join, the new session is planner again in both rooms, and the
     room is told it's back, not new."""
     codes = first_session_ends(broker)
-    new = FakeClaude(broker, env={"CLAUDE_CODE_SESSION_ID": RESTARTED})
-    try:
-        for room in ("#build", "#docs"):
-            r = new.tool("join", room=room, screen_name="planner", resume=codes[room])
-            assert r["ok"] and r["screen_name"] == "planner", r
-            assert CODE.search(r["text"]).group(0) != codes[room]  # a new code for the next restart
-        msgs = broker.web.get("/api/rooms/build/messages").json()["messages"]
-        joins = [m["text"] for m in msgs if m["kind"] == "join"]
-        assert len(joins) == 2 and not joins[0].endswith("restart"), joins
-        assert joins[-1].startswith("joined (claude, ") and joins[-1].endswith(", back after a restart"), (
-            joins
-        )
-        members = broker.web.get("/api/rooms/build/members").json()["members"]
-        assert [m["name"] for m in members] == ["planner"]
-        rows = q(broker, "SELECT DISTINCT participant_id FROM memberships WHERE screen_name='planner'")
-        assert len(rows) == 2  # really another session, not the old one re-bound
-    finally:
-        new.close()
+    new = codex_session(broker)
+    for room in ("#build", "#docs"):
+        r = new.call("join", RESTARTED, room=room, screen_name="planner", resume=codes[room])
+        assert r["ok"] and r["screen_name"] == "planner", r
+        assert CODE.search(r["text"]).group(0) != codes[room]  # a new code for the next restart
+    msgs = broker.web.get("/api/rooms/build/messages").json()["messages"]
+    joins = [m["text"] for m in msgs if m["kind"] == "join"]
+    assert len(joins) == 2 and not joins[0].endswith("restart"), joins
+    assert joins[-1].startswith("joined (codex on laptop, ") and joins[-1].endswith(
+        ", back after a restart"
+    ), joins
+    members = broker.web.get("/api/rooms/build/members").json()["members"]
+    assert [m["name"] for m in members] == ["planner"]
+    rows = q(broker, "SELECT DISTINCT participant_id FROM memberships WHERE screen_name='planner'")
+    assert len(rows) == 2  # really another session, not the old one re-bound
 
 
 def test_without_the_code_or_with_another_the_name_stays_reserved(broker: InProcBroker) -> None:
     """The reservation still does its job: no code, a made-up code, the other room's code or a
     malformed one never hand the name over. The refusal says how to reclaim it."""
     codes = first_session_ends(broker)
-    new = FakeClaude(broker, env={"CLAUDE_CODE_SESSION_ID": RESTARTED})
-    try:
-        r = new.tool("join", room="#build", screen_name="planner")
-        assert r["code"] == "name_reserved" and "resume=" in r["error"], r
-        for wrong in ("yk:j" + "0" * 16, codes["#docs"]):
-            r = new.tool("join", room="#build", screen_name="planner", resume=wrong)
-            assert r["code"] == "name_reserved" and "isn't this name's" in r["error"], (wrong, r)
-        for bad in ("yk:jXYZ", "0" * 64, "yk:j" + "A" * 16):
-            r = new.tool("join", room="#build", screen_name="planner", resume=bad)
-            assert r["code"] == "bad_request", (bad, r)
-        assert q(broker, "SELECT COUNT(*) FROM memberships WHERE left_at IS NULL")[0][0] == 0
-    finally:
-        new.close()
+    new = codex_session(broker)
+    r = new.call("join", RESTARTED, room="#build", screen_name="planner")
+    assert r["code"] == "name_reserved" and "resume=" in r["error"], r
+    for wrong in ("yk:j" + "0" * 16, codes["#docs"]):
+        r = new.call("join", RESTARTED, room="#build", screen_name="planner", resume=wrong)
+        assert r["code"] == "name_reserved" and "isn't this name's" in r["error"], (wrong, r)
+    for bad in ("yk:jXYZ", "0" * 64, "yk:j" + "A" * 16):
+        r = new.call("join", RESTARTED, room="#build", screen_name="planner", resume=bad)
+        assert r["code"] == "bad_request", (bad, r)
+    assert q(broker, "SELECT COUNT(*) FROM memberships WHERE left_at IS NULL")[0][0] == 0
 
 
 def test_a_code_never_moves_a_name_to_another_machine_harness_or_a_kicked_agent(
@@ -132,42 +132,37 @@ def test_a_code_never_moves_a_name_to_another_machine_harness_or_a_kicked_agent(
     codes = first_session_ends(broker)
     [(old_id,)] = q(broker, "SELECT DISTINCT participant_id FROM memberships WHERE screen_name='planner'")
     st = broker.state.store
-    # a Claude agent on another machine ("pi") that held "bench" here and left: its code is known
-    far = st.upsert_participant("claude", session_key("claude", "pi", "s-far"), host="pi")
+    # a Codex agent on another machine ("pi") that held "bench" here and left: its code is known
+    far = st.upsert_participant("codex", session_key("codex", "pi", "s-far"), host="pi")
     room = st.get_room("#build")
     assert room is not None
-    gone = st.create_membership(room.id, far.id, "bench", cred_hash("x"), cred_hash("ab" * 8))
+    gone = st.create_membership(room.id, far.id, "bench", join_code_hash("ab" * 8))
     st.con.execute("UPDATE memberships SET left_at=? WHERE id=?", (st.clock.now(), gone.id))
     st.con.commit()
-    new = FakeClaude(broker, env={"CLAUDE_CODE_SESSION_ID": RESTARTED})
-    try:
-        r = new.tool("join", room="#build", screen_name="bench", resume="yk:j" + "ab" * 8)
-        assert r["code"] == "name_reserved" and "on another machine" in r["error"], r
+    new = codex_session(broker)
+    r = new.call("join", RESTARTED, room="#build", screen_name="bench", resume="yk:j" + "ab" * 8)
+    assert r["code"] == "name_reserved" and "on another machine" in r["error"], r
 
-        async def other_harness() -> dict[str, Any]:
-            async with FakeAgent(broker.home, "k9") as a:  # the test harness, not claude
-                return await a.call("join", room="#build", screen_name="planner", resume=codes["#build"])
+    async def other_harness() -> dict[str, Any]:
+        async with FakeAgent(broker.home, "k9") as a:  # the test harness, not codex
+            return await a.call("join", room="#build", screen_name="planner", resume=codes["#build"])
 
-        import asyncio
-
-        r = asyncio.run(other_harness())
-        assert r["code"] == "name_reserved" and "another harness" in r["error"], r
-        st.con.execute(
-            "UPDATE memberships SET kicked=1 WHERE participant_id=? AND room_id="
-            "(SELECT id FROM rooms WHERE name='#docs')",
-            (old_id,),
-        )
-        st.con.commit()
-        r = new.tool("join", room="#docs", screen_name="planner", resume=codes["#docs"])
-        assert r["code"] == "name_reserved" and "was kicked" in r["error"], r
-        # a wrong code learns nothing about the holder: not that it was kicked (#370)
-        r = new.tool("join", room="#docs", screen_name="planner", resume="yk:j" + "0" * 16)
-        assert r["code"] == "name_reserved" and "current one" in r["error"], r
-        assert "kicked" not in r["error"], r
-        r = new.tool("join", room="#build", screen_name="planner", resume=codes["#build"])
-        assert r["ok"], r  # the right code, same machine and harness, not kicked here
-    finally:
-        new.close()
+    r = asyncio.run(other_harness())
+    assert r["code"] == "name_reserved" and "another harness" in r["error"], r
+    st.con.execute(
+        "UPDATE memberships SET kicked=1 WHERE participant_id=? AND room_id="
+        "(SELECT id FROM rooms WHERE name='#docs')",
+        (old_id,),
+    )
+    st.con.commit()
+    r = new.call("join", RESTARTED, room="#docs", screen_name="planner", resume=codes["#docs"])
+    assert r["code"] == "name_reserved" and "was kicked" in r["error"], r
+    # a wrong code learns nothing about the holder: not that it was kicked (#370)
+    r = new.call("join", RESTARTED, room="#docs", screen_name="planner", resume="yk:j" + "0" * 16)
+    assert r["code"] == "name_reserved" and "current one" in r["error"], r
+    assert "kicked" not in r["error"], r
+    r = new.call("join", RESTARTED, room="#build", screen_name="planner", resume=codes["#build"])
+    assert r["ok"], r  # the right code, same machine and harness, not kicked here
 
 
 def test_a_join_from_before_join_codes_says_so(broker: InProcBroker) -> None:
@@ -176,90 +171,46 @@ def test_a_join_from_before_join_codes_says_so(broker: InProcBroker) -> None:
     code was fine and the name simply can't come back. It now says so. Fails if the refusal still
     reads as a wrong code."""
     st = broker.state.store
-    old = st.upsert_participant("claude", session_key("claude", "", "s-old"))
+    old = st.upsert_participant("codex", session_key("codex", "laptop", "s-old"), host="laptop")
     room = st.get_room("#build")
     assert room is not None
-    gone = st.create_membership(room.id, old.id, "planner", cred_hash("x"), None)
+    gone = st.create_membership(room.id, old.id, "planner", None)
     st.con.execute("UPDATE memberships SET left_at=? WHERE id=?", (st.clock.now(), gone.id))
     st.con.commit()
-    new = FakeClaude(broker, env={"CLAUDE_CODE_SESSION_ID": RESTARTED})
-    try:
-        r = new.tool("join", room="#build", screen_name="planner", resume="yk:j" + "ab" * 8)
-        assert r["code"] == "name_reserved" and "no code on record" in r["error"], r
-    finally:
-        new.close()
+    new = codex_session(broker)
+    r = new.call("join", RESTARTED, room="#build", screen_name="planner", resume="yk:j" + "ab" * 8)
+    assert r["code"] == "name_reserved" and "no code on record" in r["error"], r
 
 
-# ----------------------------------------------- the refusal's hint follows the caller (#340)
-OLDER = "this session's switchboard is older than the broker's"
+# ----------------------------------------------------- the refusal tells the way back
+def test_the_refusal_names_resume_and_another_name(broker: InProcBroker) -> None:
+    """A session that joins under a name its holder left is told what to do: join again with
+    ``resume=`` set to the code at the end of its earlier join, or pick another name. Fails if the
+    refusal drops the way back, and an agent can only give up the name."""
 
+    async def go() -> str:
+        async with FakeAgent(broker.home, "holder") as holder, FakeAgent(broker.home, "caller") as caller:
+            await holder.join("#build", "planner")
+            await holder.leave("#build")
+            r = await caller.call("join", room="#build", screen_name="planner")
+            assert r["code"] == "name_reserved", r
+            return str(r["error"])
 
-def planner_left(b: InProcBroker) -> None:
-    """Another session held ``planner`` in #build and left, so the name is reserved for a day."""
-    with Stream(b.paths.sock, timeout=5) as holder:
-        holder.call("mcp.hello", {"harness": "test", "test_session": "holder"}, 5)
-        joined = holder.call("agent.join", {"room": "#build", "screen_name": "planner"}, 5)
-        holder.call("agent.leave", {"cred": joined["cred"]}, 5)
-
-
-def refusal_for(b: InProcBroker, claim: dict[str, Any], **join: Any) -> str:
-    """The ``name_reserved`` text a session gets when its MCP server's ``mcp.hello`` claims
-    ``claim`` (a version, or nothing) and it joins as ``planner`` after the holder left."""
-    planner_left(b)
-    with Stream(b.paths.sock, timeout=5) as s:
-        s.call("mcp.hello", {"harness": "test", "test_session": "caller", **claim}, 5)
-        with pytest.raises(RpcError) as refused:
-            s.call("agent.join", {"room": "#build", "screen_name": "planner", **join}, 5)
-    assert refused.value.code == "name_reserved", refused.value
-    return refused.value.message
-
-
-@pytest.mark.parametrize("version", [__version__, "0.25.0", "0.25.7", "1.0.0"])
-def test_a_session_that_has_resume_is_told_to_use_it(broker: InProcBroker, version: str) -> None:
-    """A session whose MCP server is from 0.25.0 or later has the ``resume`` parameter, so the
-    refusal still tells it to use that, as it has since #304. A fix that always dropped the hint
-    would leave current sessions with no way to learn how to take their name back."""
-    text = refusal_for(broker, {"version": version})
+    text = asyncio.run(go())
     assert "join again with resume= set to the code" in text and "pick another" in text, text
-    assert OLDER not in text, text
 
 
-@pytest.mark.parametrize("version", ["0.24.9", "0.24.0", "0.23.0", "0.1.0"])
-def test_a_session_from_before_resume_is_not_told_to_use_it(broker: InProcBroker, version: str) -> None:
-    """The bug (#340): a session whose MCP server is from before 0.25.0 was told to join again
-    with ``resume=``, a parameter its ``join`` tool doesn't have, so the call was refused and the
-    agent joined under another name. It is told its switchboard is older than the broker's, that
-    a restart updates it, and that it can still pick another name; ``resume`` isn't named."""
-    text = refusal_for(broker, {"version": version})
-    assert "resume" not in text, text
-    assert OLDER in text and "Ask your user to restart this session" in text and "pick another" in text, text
+def test_a_wrong_code_is_told_it_isnt_the_names(broker: InProcBroker) -> None:
+    """A caller that passes ``resume`` already has the parameter: its refusal says the code isn't
+    this name's, and doesn't send it round again."""
 
+    async def go() -> str:
+        async with FakeAgent(broker.home, "holder") as holder, FakeAgent(broker.home, "caller") as caller:
+            await holder.join("#build", "planner")
+            await holder.leave("#build")
+            r = await caller.call("join", room="#build", screen_name="planner", resume="yk:j" + "0" * 16)
+            assert r["code"] == "name_reserved", r
+            return str(r["error"])
 
-@pytest.mark.parametrize(
-    "claim",
-    [
-        pytest.param({}, id="absent"),
-        pytest.param({"version": None}, id="null"),
-        pytest.param({"version": 25}, id="not a string"),
-        pytest.param({"version": "not a version!"}, id="not a version"),
-        pytest.param({"version": "0.25"}, id="no patch number"),
-        pytest.param({"version": "dev"}, id="a word"),
-        pytest.param({"version": "9" * 40}, id="too long"),
-    ],
-)
-def test_a_session_that_does_not_say_its_version_is_not_told_to_use_resume(
-    broker: InProcBroker, claim: dict[str, Any]
-) -> None:
-    """A claim is not trusted to be there or to parse. A version the broker can't read counts as
-    too old: the conservative answer names no parameter the session may not have, and the cost of
-    being wrong is one restart, not an agent stuck on a call its tool refuses."""
-    text = refusal_for(broker, claim)
-    assert "resume" not in text, text
-    assert OLDER in text and "pick another" in text, text
-
-
-def test_a_wrong_code_is_answered_the_same_whatever_the_version(broker: InProcBroker) -> None:
-    """A caller that passes ``resume`` has the parameter, whatever version it claims, so its
-    refusal says the code isn't this name's, as before, and doesn't tell it to update."""
-    text = refusal_for(broker, {"version": "0.24.0"}, resume="yk:j" + "0" * 16)
-    assert "isn't this name's" in text and OLDER not in text, text
+    text = asyncio.run(go())
+    assert "isn't this name's" in text, text

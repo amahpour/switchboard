@@ -354,10 +354,6 @@ def _argv_linux(pid: int) -> str:
     return raw.rstrip(b"\0").replace(b"\0", b" ").decode("utf-8", "replace").strip()
 
 
-def argv(pid: int, start: float) -> str:
-    return argv_many([ProcInfo(pid=pid, ppid=0, start=start, uid=-1)]).get(pid, "")
-
-
 def linux_tty_name(dev: int) -> str:
     """The name ``ps -o tty=`` gives Linux's tty device number ``dev`` (``/proc/<pid>/stat``'s
     tty_nr): ``pts/3``, ``tty2``, ``ttyS0``; another device as ``tty?<major>:<minor>``."""

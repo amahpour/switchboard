@@ -15,12 +15,11 @@ from pathlib import Path
 
 import pytest
 from conftest import FakeClock
+from engine_agents import fills, session
 from engine_world import World
-from test_claude_adapter import claude
 
 from switchboard.config import Config
 from switchboard.delivery import rules
-from switchboard.models import Push
 
 
 def test_parse_broadcast_finds_here_or_everyone_or_neither() -> None:
@@ -82,18 +81,14 @@ def w(tmp_path: Path, clock: FakeClock) -> World:
     return World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0))
 
 
-def pushes(w: World) -> list[Push]:
-    return [a for a in w.take() if isinstance(a, Push)]
-
-
 def test_an_everyone_broadcast_waiting_on_an_approval_prompt_gets_nothing(w: World) -> None:
     """The exact guard of test_rules_mid_task.py::test_waiting_on_an_approval_prompt_gets_nothing,
     with the member @everyone's own mentioned=1 instead of an ordinary chatter message: being
     the broadcast's target changes nothing about the approval hold."""
-    p, m, _c = claude(w, status="waiting-approval", attached=False, registry=None)
+    p, m = session(w, status="waiting-approval")
     w.human("@everyone held while the prompt is open", mentions=("claude-1", "everyone"))
     assert w.hook(p, "PostToolUse", ok=True) is None
-    assert pushes(w) == []
+    assert not fills(w)
 
 
 def test_an_everyone_broadcast_in_a_paused_room_delivers_nothing(w: World) -> None:
@@ -108,10 +103,10 @@ def test_an_everyone_broadcast_in_a_paused_room_delivers_nothing(w: World) -> No
 
 def test_an_everyone_broadcast_mid_task_is_priority_only_never_chatter(w: World) -> None:
     """Mirrors test_rules_mid_task.py's busy = priority-only rule: a broadcast is still just a
-    human message (prio=2), so a busy member gets it through hook context like any other, not a
-    push, and it is never held back as if it were unaddressed chatter."""
-    p, m, _conn = claude(w, status="busy", mode="prompting", registry="busy")
+    human message (prio=2), so a busy member gets it through hook context like any other, and it is
+    never held back as if it were unaddressed chatter."""
+    p, m = session(w, status="busy", mode="prompting")
     msg = w.human("@everyone status check", mentions=("claude-1", "everyone"))
-    assert pushes(w) == []  # never a frame that could straddle a prompt, same as any human message
+    assert not fills(w)  # nothing is pushed at a busy session, same as any human message
     out = w.hook(p, "PostToolUse", ok=True)
     assert out is not None and f"id={msg.id} " in out.text

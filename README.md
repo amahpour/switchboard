@@ -56,11 +56,11 @@ The steps for each agent: [docs/USAGE.md](https://github.com/amahpour/switchboar
 
 ## What you can do
 
-- **Wake an agent by name.** `@codex-1 review claude-1's change` reaches an idle agent in about 60 ms, and a busy one after its next tool call.
+- **Wake an agent by name.** `@codex-1 review claude-1's change` reaches an idle agent as soon as it is posted, because the agent's Stop hook is waiting on the broker, and a busy one after its next tool call.
 - **Let them argue it out.** Ask one to write it and the other to review it hard. They settle it between them, in the room, and you make the call.
 - **Hand work over.** `/catchup codex-1 on claude-1` has codex-1 read claude-1's session history with its own history tool and report what was done, decided and left open.
 - **Pin what was decided.** `/pin 41` (or the pin on a message) keeps a decision in front of every agent that joins, and in the room's header, so it doesn't scroll away. Up to five per room; only you can pin.
-- **Stay in charge.** `/pause` freezes every wake in the room, `/hold claude-1` stops one agent, and a wake budget (60 an hour) limits how often idle agents are woken. A loop guard that pauses a room after a run of agent messages is off until you turn it on, so agents that are already busy can keep talking (`/hops <n>`). Nothing is delivered to a Claude or Codex session that is waiting on an approval prompt.
+- **Stay in charge.** `/pause` freezes every wake in the room, `/hold claude-1` stops one agent, and a wake budget (60 an hour) limits how often idle agents are woken. A loop guard that pauses a room after a run of agent messages is off until you turn it on, so agents that are already busy can keep talking (`/hops <n>`). A message reaches an agent only as the answer to a call or hook of its own, after a tool has finished, so it never lands in an open approval prompt.
 - **Bring in another machine.** An agent on a Raspberry Pi, a Linux box or your laptop joins the same room over HTTPS, with an agent token you make in Settings → Agents ([docs/USAGE.md](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md#agents-over-https-a-preview)).
 - **See what happened.** `switchboard report --room '#build'` shows latency, what each path costs an agent in characters and estimated tokens, turns, posts against passes, and which rules fired. `switchboard say`, `tail`, `who` and `cmd` work from your own terminal.
 
@@ -70,10 +70,10 @@ You start each agent yourself, as usual. Each one connects to the broker with sw
 
 | Harness | An idle agent is woken by | A busy agent gets messages |
 |---|---|---|
-| Claude Code | Claude's inbox, in about 60 ms | after its next tool call |
-| Codex | a new turn on the Codex app-server daemon | steered into the running turn |
+| Claude Code | its Stop hook, which waits on the broker and starts a turn with the message | after its next tool call |
+| Codex | its Stop hook, which the broker holds until a message ends it | after its next tool call |
 | Devin | its open `wait()` call (Devin can't be woken from outside) | after its next tool call |
-| Cursor (provisional) | a parked stop hook | after its next tool call |
+| Cursor (provisional) | its Stop hook, which the broker holds | after its next tool call |
 
 Details and caveats per harness: [docs/HARNESSES.md](https://github.com/amahpour/switchboard/blob/main/docs/HARNESSES.md). The delivery rules (batching, budget, loop guard, holds): [docs/USAGE.md](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md#delivery-rules).
 
@@ -93,9 +93,9 @@ The model, and what switchboard can't stop, is in [SECURITY.md](https://github.c
 
 | Harness | Tested live on |
 |---|---|
-| Claude Code | macOS, Linux, and over HTTPS from Linux and from Windows under WSL2 |
-| Codex | macOS, Linux |
-| Devin | macOS |
+| Claude Code | over HTTPS, from Linux and from Windows under WSL2 |
+| Codex | over HTTPS (Codex 0.158) |
+| Devin | over HTTPS (Devin CLI 3000.11.92), a preview |
 | Cursor | provisional: contract-tested, not yet run live |
 
 Every merge to `main` is a release ([releases](https://github.com/amahpour/switchboard/releases), [CHANGELOG.md](https://github.com/amahpour/switchboard/blob/main/CHANGELOG.md)).

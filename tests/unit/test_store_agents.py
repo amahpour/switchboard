@@ -18,31 +18,22 @@ def store(tmp_path: Path, clock: FakeClock) -> Store:
 
 def setup(store: Store):
     room = store.create_room("#build", "alice", 60, 6)
-    p = store.upsert_participant(
-        "test", "test:a", status="busy", agent_pid=10, agent_start=1.0, mcp_pid=11, mcp_start=2.0
-    )
-    m = store.create_membership(room.id, p.id, "alpha", "hash-a")
+    p = store.upsert_participant("test", "test:a", status="busy")
+    m = store.create_membership(room.id, p.id, "alpha")
     return room, p, m
 
 
 def test_participant_upsert_and_reactivate(store: Store) -> None:
     room, p, m = setup(store)
     assert store.find_participant("test", "test:a").id == p.id
-    assert store.membership_by_cred("hash-a").id == m.id
     ended = store.end_participant(p.id)
     assert [x.id for x in ended] == [m.id]
     assert store.get_participant(p.id).ended_at is not None
-    assert store.membership_by_cred("hash-a") is None
+    assert store.participant_memberships(p.id) == []
     p2 = store.upsert_participant("test", "test:a", status="busy")
     assert p2.id == p.id and p2.active
     with pytest.raises(ValueError):
         store.upsert_participant("test", "test:b", bogus=1)
-
-
-def test_mcp_lookup_uses_start_time(store: Store) -> None:
-    _room, p, _m = setup(store)
-    assert [x.id for x in store.participants_by_mcp("", 11, 2.0)] == [p.id]
-    assert store.participants_by_mcp("", 11, 9.0) == []
 
 
 def test_name_reuse_and_kick_memory(store: Store, clock: FakeClock) -> None:
@@ -53,25 +44,6 @@ def test_name_reuse_and_kick_memory(store: Store, clock: FakeClock) -> None:
     assert store.was_kicked(room.id, p.id)
     clock.advance(86401)
     assert not store.name_used_by_other(room.id, "alpha", q.id, clock.now() - 86400)
-
-
-def test_kick_memory_follows_a_cursor_conversation(store: Store) -> None:
-    """A kick of any earlier participant of the conversation (its key, or an ended one
-    renamed ``<key>#ended-<n>``) counts; the match is exact on the prefix (``_`` is not
-    a wildcard), and other conversations don't count."""
-    room = store.create_room("#build", "alice", 60, 6)
-    key = "cursor:conv_1"
-    old = store.upsert_participant("cursor", key, status="busy")
-    m = store.create_membership(room.id, old.id, "cursor-1", "h1")
-    store.end_membership(m.id, "kick", kicked=True)
-    store.update_participant(old.id, session_key=f"{key}#ended-{old.id}")
-    new = store.upsert_participant("cursor", key, status="busy")
-    assert store.was_kicked_session(room.id, "cursor", key, exclude=new.id)
-    assert not store.was_kicked_session(room.id, "cursor", "cursor:convX1", exclude=new.id)  # '_' literal
-    assert not store.was_kicked_session(room.id, "cursor", "cursor:conv", exclude=new.id)
-    assert not store.was_kicked_session(room.id, "devin", key, exclude=new.id)
-    other = store.create_room("#other", "alice", 60, 6)
-    assert not store.was_kicked_session(other.id, "cursor", key, exclude=new.id)
 
 
 def test_batch_confirm_and_cursor(store: Store) -> None:
@@ -96,7 +68,7 @@ def test_batch_confirm_and_cursor(store: Store) -> None:
 def test_confirm_chatter_is_handled_and_stubs_are_notified(store: Store) -> None:
     room, p, m = setup(store)
     q = store.upsert_participant("test", "test:b", status="busy")
-    mq = store.create_membership(room.id, q.id, "beta", "hash-b")
+    mq = store.create_membership(room.id, q.id, "beta")
     chat = store.insert_message(
         room.id, sender_name="beta", sender_kind="agent", via="mcp", text="c", sender_membership_id=mq.id
     )
@@ -116,19 +88,15 @@ def test_confirm_chatter_is_handled_and_stubs_are_notified(store: Store) -> None
     assert ds[ment.id]["state"] == "pending" and ds[ment.id]["notified_at"] is not None
 
 
-def test_expire_and_cancel(store: Store) -> None:
+def test_an_expired_offer_goes_back_to_pending_and_counts_as_an_attempt(store: Store) -> None:
     room, p, m = setup(store)
     mid = store.insert_message(room.id, sender_name="alice", sender_kind="human", via="web", text="x").id
-    b = store.create_batch(m.id, path="inbox", kind="wake", items=[(mid, True)], counted=True)
+    b = store.create_batch(m.id, path="wait", kind="wake", items=[(mid, True)], counted=True)
     assert store.room_by_id(room.id).budget_remaining == 59
-    store.expire_batch(b.id, "no_ack", push=True)
+    store.expire_batch(b.id, "no_ack")
     d = store.deliveries(m.id)[0]
     assert d["state"] == "pending" and d["attempts"] == 1 and d["batch_id"] is None
-    assert store.get_participant(p.id).push_expiries == 1
-    b2 = store.create_batch(m.id, path="inbox", kind="wake", items=[(mid, True)])
-    store.expire_batch(b2.id, "pause", state="cancelled")
-    assert store.deliveries(m.id)[0]["attempts"] == 1
-    assert store.get_batch(b2.id).state == "cancelled"
+    assert store.room_by_id(room.id).budget_remaining == 59  # a failed wake still used its turn
 
 
 def test_end_membership_cancels_open_offers(store: Store) -> None:

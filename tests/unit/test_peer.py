@@ -17,7 +17,6 @@ import pytest
 from switchboard.broker import proc
 from switchboard.broker.peer import (
     AllowAllHumans,
-    HookCandidate,
     Peer,
     PeerPolicy,
     ProcessPeerPolicy,
@@ -26,7 +25,6 @@ from switchboard.broker.peer import (
     match_agent,
     peer_pid,
     peer_uid,
-    resolve_hook_participant,
     short_chain,
 )
 
@@ -262,90 +260,6 @@ def test_is_agent_chain_and_short_chain() -> None:
 
 def _pi(pid: int, start: float) -> proc.ProcInfo:
     return proc.ProcInfo(pid=pid, ppid=1, start=start, uid=os.getuid())
-
-
-def _argvs(names: dict[int, str]):
-    return lambda procs: {p.pid: names.get(p.pid, "") for p in procs}
-
-
-SHELLS = _argvs({300: "python3 -I -S hook.py", 200: "/bin/sh -c x", 150: "-zsh"})
-
-
-def test_resolve_hook_participant() -> None:
-    chain = [_pi(300, 3.0), _pi(200, 2.0), _pi(100, 1.0)]
-
-    def resolve(*a, **k):
-        return resolve_hook_participant(*a, argv_fn=SHELLS, **k)
-
-    a = HookCandidate(1, "claude", 200, 2.0, session_id="s-a")
-    b = HookCandidate(2, "claude", 999, 2.0, session_id="s-b")  # not in the chain
-    assert resolve(chain, "claude", "s-a", [a, b]) == a
-    assert resolve(chain, "codex", "s-a", [a, b]) is None  # wrong harness
-    wrong_start = HookCandidate(3, "claude", 200, 7.0)
-    assert resolve(chain, "claude", None, [wrong_start]) is None
-    # two threads under one daemon: ambiguous without a sid -> inert; sid picks one
-    t1 = HookCandidate(4, "codex", 100, 1.0, session_id="t1", session_key="codex:t1")
-    t2 = HookCandidate(5, "codex", 100, 1.0, session_id="t2", session_key="codex:t2")
-    assert resolve(chain, "codex", None, [t1, t2]) is None
-    assert resolve(chain, "codex", "t2", [t1, t2]) == t2
-    assert resolve(chain, "codex", "zz", [t1, t2]) is None
-    # pending (unbound) participants count only for a join-nonce bind
-    pend = HookCandidate(6, "cursor", 200, 2.0, bind_state="pending")
-    assert resolve(chain, "cursor", "conv", [pend]) is None
-    assert resolve(chain, "cursor", "conv", [pend], join_nonce_bind=True) == pend
-
-
-def test_the_hook_resolver_reads_argv_only_through_its_caller() -> None:
-    """``argv_fn`` has no default (DESIGN.md §27.5.6): a caller resolving another
-    host's chain can't fall back to this machine's process table by leaving it out.
-    The SID keys are the host's own (``session_key``)."""
-    chain = [_pi(300, 3.0), _pi(200, 2.0), _pi(100, 1.0)]
-    t1 = HookCandidate(4, "codex", 100, 1.0, session_id="t1", session_key="codex@fpga-pi:t1")
-    with pytest.raises(TypeError):
-        resolve_hook_participant(chain, "codex", "t1", [t1])  # type: ignore[call-arg]
-    assert resolve_hook_participant(chain, "codex", "t1", [t1], argv_fn=SHELLS, host="fpga-pi") == t1
-    assert resolve_hook_participant(chain, "codex", "t1", [t1], argv_fn=SHELLS) is None  # a local hook
-
-
-def test_codex_hooks_must_name_their_own_thread() -> None:
-    """An unjoined sibling thread under the same daemon is inert, even when only
-    one thread has joined (security review M2)."""
-    chain = [_pi(300, 3.0), _pi(200, 2.0), _pi(100, 1.0)]
-    only_a = HookCandidate(4, "codex", 100, 1.0, session_id="thread-A", session_key="codex:thread-A")
-    r = lambda sid: resolve_hook_participant(chain, "codex", sid, [only_a], argv_fn=SHELLS)  # noqa: E731
-    assert r("thread-A") == only_a
-    assert r("thread-B") is None and r(None) is None
-    # exact match, not a suffix match
-    assert r("A") is None
-    suffix = HookCandidate(7, "codex", 100, 1.0, session_key="codex:x:thread-A")
-    assert resolve_hook_participant(chain, "codex", "thread-A", [suffix], argv_fn=SHELLS) is None
-    bound = HookCandidate(8, "cursor", 100, 1.0, session_key="cursor:conv-1")
-    assert resolve_hook_participant(chain, "cursor", "conv-1", [bound], argv_fn=SHELLS) == bound
-    assert resolve_hook_participant(chain, "cursor", "conv-2", [bound], argv_fn=SHELLS) is None
-
-
-def test_nested_session_hooks_are_inert() -> None:
-    """`claude -p` run from a joined Claude's Bash fires the same user-level hooks;
-    they must not be credited to the outer session (review M2)."""
-    # hook 10 <- sh 11 <- nested claude 12 <- zsh 13 <- outer claude 14
-    chain = [_pi(p, 1000.0 + p) for p in (10, 11, 12, 13, 14)]
-    outer = HookCandidate(1, "claude", 14, 1014.0, session_id="outer", session_key="claude:14@1014.00")
-    argvs = {10: "python3 -I -S hook.py --harness claude", 11: "/bin/sh -c x", 12: "claude -p hi", 13: "-zsh"}
-    assert resolve_hook_participant(chain, "claude", "nested", [outer], argv_fn=_argvs(argvs)) is None
-    assert resolve_hook_participant(chain, "claude", "outer", [outer], argv_fn=_argvs(argvs)) is None
-    # another harness in between counts too; so does an unreadable argv (fail closed)
-    for mid in ("/opt/bin/codex exec x", "devin --x acp", ""):
-        got = resolve_hook_participant(chain, "claude", "outer", [outer], argv_fn=_argvs({**argvs, 12: mid}))
-        assert got is None, mid
-    # the same chain with a plain shell in that place resolves
-    ok = {**argvs, 12: "bash -c 'claude-like'"}
-    assert resolve_hook_participant(chain, "claude", "outer", [outer], argv_fn=_argvs(ok)) == outer
-    # the hook process's own argv is never judged (its --home may contain "/claude ")
-    own = {**ok, 10: "python3 -I -S /u/claude hook.py --home /u/claude --harness claude"}
-    assert resolve_hook_participant(chain, "claude", "outer", [outer], argv_fn=_argvs(own)) == outer
-    # a hook whose parent *is* the agent needs no argv at all
-    direct = [_pi(20, 1.0), _pi(14, 1014.0)]
-    assert resolve_hook_participant(direct, "claude", None, [outer], argv_fn=_argvs({})) == outer
 
 
 def test_socketpair_peer_helpers() -> None:

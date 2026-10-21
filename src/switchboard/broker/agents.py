@@ -1,30 +1,27 @@
-"""AgentService: the agent side of the broker (DESIGN.md §5.2, §6, §7, §8).
+"""AgentService: the agent side of the broker (DESIGN.md §5.2, §6, §7, §8, §49).
 
-- ``mcp.hello`` verifies the MCP server's process ancestry (§5.3) and records
-  which harness session it serves. Nothing is persisted until ``join``. What a
-  harness keeps of the hello, and which connection may be its push channel
-  (``mcp.attach``), are its adapter's to say (§6.3, §6.4).
-- ``agent.*`` calls carry a membership credential that works only on the
-  verified MCP connection it was issued to (the participant's mcp pid/start).
-  An agent over HTTPS (``broker/agent_http.py``, §49.2) has no credential: its
-  calls name a membership (``m:<id>``) that is checked against the caller's own
-  session, worked out from its agent token and the harness's session id.
-- ``hook.event`` resolves which joined session (if any) a hook belongs to from
-  the kernel peer pid's ancestry, then lets the engine update status, confirm
-  offers and, where the harness table allows it, return priority context.
+Every agent reaches the broker at ``/mcp`` (``broker/agent_http.py``, §49.2) with an agent token. Its calls
+are served here, with a ``HttpConn`` standing in for a connection: the token's device is its host (§49.3),
+and a call names a membership (``m:<id>``) that is checked against the caller's own session, worked out
+from the token and the harness's session id. There are no credentials and no processes: a session is
+told apart by what its harness says, and what it may do by its token (§11).
 
-All policy lives in the engine; this module validates input, resolves
-identities and executes the engine's actions through the runner.
+- ``join``, ``leave``, ``who``, ``say``, ``read``, ``wait``, ``pass``, ``review``, ``claim``, ``away`` and
+  ``status`` are the tools (``mcp/server.py``).
+- ``http_hook`` takes a harness's hook report (§49.4): the engine updates status, confirms offers and,
+  where the hook reply table allows it (``broker/hook_replies.py``), returns priority context, or holds
+  a Stop hook until a message comes.
+
+All policy lives in the engine; this module validates input, resolves identities and executes the
+engine's actions through the runner.
 """
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import hmac
 import json
 import logging
-import math
 import os
 import re
 import secrets
@@ -34,49 +31,28 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from switchboard import __version__, claims, envelope, reviews
-from switchboard.adapters.base import HOOK_EVENTS, start_key
-from switchboard.broker import proc
-from switchboard.broker.hosts import HostViews
-from switchboard.broker.peer import (
-    HookCandidate,
-    McpIdentity,
-    McpRefused,
-    resolve_hook_participant,
-    verify_mcp_peer,
-)
-from switchboard.broker.proc import ProcInfo
+from switchboard import claims, envelope
 from switchboard.broker.service import MAX_MESSAGE_ID, ServiceError
 from switchboard.delivery import rules
 from switchboard.envelope import TOKEN_RE, clean, sanitize
 from switchboard.models import (
-    HARNESSES,
-    LOCAL_HOST,
     NAME_REUSE_S,
     RESERVED_NAMES,
     SCREEN_NAME_RE,
-    VERIFYING,
     Action,
     HookEvent,
-    Member,
     Membership,
     Message,
-    Notice,
     Participant,
     Room,
     Snapshot,
-    behind_by_minor,
-    canonical_event,
-    has_feature,
     join_code_hash,
-    over_https,
-    split_session_key,
 )
 from switchboard.reviews import ProofRequired, ReviewError
 
 if TYPE_CHECKING:  # pragma: no cover
+    from switchboard.broker.agent_http import HttpConn
     from switchboard.broker.app import BrokerState
-    from switchboard.broker.rpc import Conn
 
 log = logging.getLogger("switchboard.agents")
 
@@ -97,79 +73,46 @@ WAIT_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 JOIN_CODE_RE = re.compile(r"^(?:yk:j)?([0-9a-f]{16})$")
 # the refusal for a screen name SCREEN_NAME_RE doesn't match: an example name, not a harness rule
 BAD_SCREEN_NAME = "screen names look like claude-1: a-z first, then a-z, 0-9, '_' or '-', at most 24"
-# mcp.posted err: a short code ("guard", "bad_text") or an exception type name
-POST_ERR_RE = re.compile(r"[A-Za-z0-9_]{1,40}")
 # a hook's reported model name (the hook relays only this shape too), for the report:
 # an "@" may carry a version (claude-...@20250514), never a domain (nothing email-shaped)
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:+-]{0,63}(?:@[A-Za-z0-9_:+-]{1,32})?")
 AWAY_MAX = 80
-LIVENESS_S = 2.0
+
+
+# the harnesses a hook over HTTPS may name (§49.4): the four, and the scripted test agent
+HOOK_EVENTS: dict[str, frozenset[str]] = {
+    "claude": frozenset(
+        {"SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"}
+    ),
+    "codex": frozenset({"UserPromptSubmit", "PostToolUse", "Stop", "Interrupt", "SessionEnd"}),
+    "cursor": frozenset(
+        {"SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"}
+    ),
+    "devin": frozenset(
+        {"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"}
+    ),
+    "test": frozenset(
+        {"SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"}
+    ),
+}
 
 
 @dataclass
-class McpConn:
-    """What a connection proved in ``mcp.hello`` (kept in memory only)."""
+class AgentConn:
+    """Who is calling over HTTPS (§49.3), as far as the call says: the harness a client claims to be
+    (its ``clientInfo``), the device of its token, and, for a scripted test agent of a test-mode broker,
+    the session it names and how its answers are confirmed (§9.6). Claims, used only to pick wording and
+    adapter; what a caller may do comes from its token."""
 
-    ident: McpIdentity
+    harness: str
+    host: str
     client_info: dict[str, Any] = field(default_factory=dict)
-    evidence: dict[str, Any] = field(default_factory=dict)
-    env_leak: bool = False
-    has_messaging_token: bool = False
-    session_id: str | None = None
     test_session: str | None = None
-    ack_mode: str | None = None  # the test agent's --ack, from its adapter's ``hello_claims``
-    # the channels (an adapter's ``channel``) this connection is: Claude's push inbox
-    attached: set[str] = field(default_factory=set)
-    # what the MCP server says it is and offers (#249): claims, shown to a person, granting nothing
-    version: str | None = None
-    tools: tuple[str, ...] | None = None
-
-    @property
-    def harness(self) -> str:
-        return self.ident.harness
-
-    @property
-    def inbox_attached(self) -> bool:
-        """Claude: this connection is the session's push channel."""
-        return "inbox" in self.attached
-
-    @inbox_attached.setter
-    def inbox_attached(self, on: bool) -> None:
-        (self.attached.add if on else self.attached.discard)("inbox")
-
-
-def _mcp_key(host: str, pid: int | None, start: float | None) -> tuple[str, int, str]:
-    """One MCP process: its host, pid and start time (to the hundredth, as stored)."""
-    return (host, pid or 0, f"{start or 0.0:.2f}")
-
-
-def _http(conn: Any) -> bool:
-    """One call of an agent over HTTPS (``agent_http.HttpConn``, DESIGN.md §49.3)."""
-    return getattr(conn, "http", False) is True
+    ack_mode: str | None = None
 
 
 # what an agent over HTTPS passes instead of a credential: the membership it means (§49.3)
 HTTP_MEMBERSHIP_RE = re.compile(r"m:([1-9][0-9]{0,17})")
-
-
-TOOL_NAME_RE = re.compile(r"^[a-z][a-z_]{0,31}$")
-VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+_-]{0,31}$")
-MAX_TOOLS = 64
-
-
-def tools_claim(value: Any) -> tuple[str, ...] | None:
-    """The tools an MCP server says it offers (``mcp.hello``'s ``tools``, #249). A claim, used
-    only to tell a person which members can't use the review board; the method table still
-    decides what a member may call. Not a list: None, an unknown, which counts as unable. A name
-    that isn't one is dropped; at most ``MAX_TOOLS`` are read."""
-    if not isinstance(value, list):
-        return None
-    return tuple(sorted({v for v in value[:MAX_TOOLS] if isinstance(v, str) and TOOL_NAME_RE.fullmatch(v)}))
-
-
-def version_claim(value: Any) -> str | None:
-    """The switchboard version an MCP server says it runs, or None: only to name it to a person."""
-    return value if isinstance(value, str) and VERSION_RE.fullmatch(value) else None
 
 
 # Why a join code didn't bring a name back (#370), each its own words: one sentence for all of them
@@ -191,34 +134,21 @@ RECLAIM_WHY = {
 }
 
 
-def name_reserved_text(
-    name: str, room: str, code: str | None, claim: str | None, why: str | None = None
-) -> str:
-    """Why a join was refused a reserved name, and what to do. The way back (``resume=``) is named
-    only to a session whose MCP server has it (``claim``, its claimed version, is 0.25.0 or later):
-    an older one keeps the ``join`` schema it started with and refuses the call, so it is told to
-    update, and to pick another name meanwhile (#340). A caller that gave ``code`` has the
-    parameter already, and is told why it didn't work (``why``, a ``RECLAIM_WHY`` key, #370)."""
+def name_reserved_text(name: str, room: str, code: str | None, why: str | None = None) -> str:
+    """Why a join was refused a reserved name, and what to do. A caller that gave ``code`` has the
+    ``resume`` parameter already, and is told why it didn't work (``why``, a ``RECLAIM_WHY`` key,
+    #370); any other is told the way back: ``resume=``, the code at the end of its earlier join."""
     text = f"{name} was used by another agent in {room} today; pick another"
     if code is not None:
         return f"{text} ({RECLAIM_WHY.get(why or 'mismatch', RECLAIM_WHY['mismatch'])})"
-    if has_feature(claim, "join.resume"):
-        return (
-            text + ", or, if it was you before a restart, join again with resume= set to"
-            " the code at the end of that join's answer (yk:j...)"
-        )
     return (
-        f"{text}. If it was you before a restart, {envelope.OLDER_SWITCHBOARD} and its join can't"
-        f" take a name back. {envelope.RESTART_UPDATES}"
+        text + ", or, if it was you before a restart, join again with resume= set to"
+        " the code at the end of that join's answer (yk:j...)"
     )
 
 
 # a rate-limited say() waits its turn (§8.4); a burst past this many per member is refused
 MAX_QUEUED_SAYS = 3
-
-
-def cred_hash(cred: str) -> str:
-    return hashlib.sha256(cred.encode()).hexdigest()
 
 
 def _model_ok(model: Any) -> bool:
@@ -240,19 +170,11 @@ def clamp_before(value: Any) -> int:
 class AgentService:
     def __init__(self, state: "BrokerState"):
         self.state = state
-        # host -> agent pids of that host's joined sessions
-        self._agent_index: dict[str, set[int]] = {}
         self._models: dict[int, str] = {}  # participant id -> last model recorded
-        # a SessionStart's model from a session that hasn't joined yet (Claude reports its
-        # model only there, before any join): (host, pid, start) of each process above the hook
-        self._early_models: dict[tuple[str, int, str], str] = {}
-        # an MCP process's claims in its latest mcp.hello: (conn id, version, tools) (#249)
-        self._mcp_claims: dict[tuple[str, int, str], tuple[int, str | None, tuple[str, ...] | None]] = {}
         rec = os.environ.get("SWITCHBOARD_RECORD_PAYLOADS")
         self.record_dir = Path(rec) if rec and state.test_mode else None
         # membership id -> its rate-limited says waiting their turn: (text, reply_to), oldest first
         self._queued_says: dict[int, deque[tuple[str, int | None]]] = {}
-        self.refresh_index()
 
     # ------------------------------------------------------------ plumbing
     @property
@@ -271,23 +193,9 @@ class AgentService:
     def svc(self) -> Any:
         return self.state.service
 
-    @property
-    def hosts(self) -> HostViews:
-        """Every probe about a participant goes through its host's view (§27.5.6)."""
-        return self.state.hosts
-
     def run(self, actions: list[Action]) -> None:
         if actions:
             self.state.runner.execute(actions)
-
-    def refresh_index(self) -> None:
-        """Agent pids of joined sessions, per host: hooks from anywhere else are inert at once.
-        A local hook only ever meets the local set."""
-        idx: dict[str, set[int]] = {}
-        for p in self.store.joined_participants():
-            if p.agent_pid:
-                idx.setdefault(p.host, set()).add(p.agent_pid)
-        self._agent_index = idx
 
     # -------------------------------------------------- RoomService hooks
     def on_message(self, msg: Message) -> None:
@@ -298,13 +206,11 @@ class AgentService:
 
     def on_membership_ended(self, membership_id: int, reason: str) -> None:
         self.run(self.engine.on_membership_ended(membership_id, reason))
-        self.refresh_index()
 
     def on_memberships_ended(self, membership_ids: list[int], reason: str) -> None:
-        """Several at once (``/close``, §28.3): the engine per membership, the index once."""
+        """Several at once (``/close``, §28.3): the engine per membership."""
         for mid in membership_ids:
             self.run(self.engine.on_membership_ended(mid, reason))
-        self.refresh_index()
 
     def parked_reason(self, membership_id: int) -> str | None:
         return self.engine.parked_reason(membership_id)
@@ -312,240 +218,17 @@ class AgentService:
     def wakes_at(self, membership_id: int) -> float | None:
         return self.engine.wakes_at(membership_id)
 
-    def board_reason(self, member: Member) -> str | None:
-        """Why ``member`` can't use the review board, from its MCP server's claims (#249). None
-        when it can, or when its MCP process isn't connected now: an offline member shows as
-        offline already, and its claims went with its connection."""
-        p = self.store.get_participant(member.participant_id)
-        if p is None or p.mcp_pid is None or p.mcp_start is None:
-            return None
-        claim = self._mcp_claims.get(_mcp_key(p.host, p.mcp_pid, p.mcp_start))
-        if claim is None:
-            return None
-        return reviews.board_reason(member.name, claim[1], claim[2])
-
-    def member_claims(self, member: Member) -> tuple[str | None, tuple[str, ...] | None]:
-        """The current MCP process's bounded claims, or unknown after it disconnects."""
-        p = self.store.get_participant(member.participant_id)
-        if p is None or p.mcp_pid is None or p.mcp_start is None:
-            return None, None
-        claim = self._mcp_claims.get(_mcp_key(p.host, p.mcp_pid, p.mcp_start))
-        return (claim[1], claim[2]) if claim is not None else (None, None)
-
-    # ================================================================= mcp
-    def hello(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
-        claimed = params.get("harness")
-        claimed = claimed if isinstance(claimed, str) and claimed in HARNESSES else "unknown"
-        sock = params.get("claude_socket")
-        sock = sock if isinstance(sock, str) and len(sock) < 1024 else None
-        try:
-            ident = verify_mcp_peer(
-                conn.peer,
-                claimed,
-                claude_socket=sock,
-                sessions_dir=self.cfg.claude.sessions_dir,
-                test_mode=self.state.test_mode,
-            )
-        except McpRefused as e:
-            raise ServiceError(e.code, e.message) from None
-        adapter = self.engine.adapter_for(ident.harness, ident.host)
-        try:
-            claims = adapter.hello_claims(params)
-        except ValueError as e:
-            raise ServiceError("bad_request", str(e)) from None
-        ci = params.get("client_info")
-        ci = (
-            {k: str(v)[:80] for k, v in ci.items() if k in ("name", "version")}
-            if isinstance(ci, dict)
-            else {}
-        )
-        ev = params.get("evidence")
-        ev = {k: str(v)[:120] for k, v in ev.items()} if isinstance(ev, dict) else {}
-        sid = params.get("session_id")
-        mc = McpConn(
-            ident=ident,
-            client_info=ci,
-            evidence=ev,
-            env_leak=claims.env_leak,
-            has_messaging_token=bool(params.get("has_messaging_token")),
-            session_id=sid[:128] if isinstance(sid, str) else None,
-            test_session=claims.test_session,
-            ack_mode=claims.ack_mode,
-            version=version_claim(params.get("version")),
-            tools=tools_claim(params.get("tools")),
-        )
-        conn.mcp = mc
-        # the claims are about the MCP process's code: its members are told apart by it (#249)
-        self._mcp_claims[_mcp_key(ident.host, ident.mcp_pid, ident.mcp_start)] = (
-            conn.id,
-            mc.version,
-            mc.tools,
-        )
-        # A reconnecting MCP server (same process) picks its sessions up again.
-        mine = self.store.participants_by_mcp(ident.host, ident.mcp_pid, ident.mcp_start)
-        for p in mine:
-            if claims.ack_mode is not None and p.harness == ident.harness:
-                self.engine.ack_modes[p.id] = claims.ack_mode
-            if p.status == "offline":
-                self.run(self.engine.set_status(p, "starting", "mcp:hello"))
-        # every adapter hears every hello, with the sessions of that MCP process that are its own
-        # harness's (Codex: a live app-server that runs switchboard's MCP servers, after a daemon
-        # restart the new one, and a restarting session's own MCP process reconnecting)
-        for heard in self.engine.adapters.values():
-            heard.on_mcp_hello(ident, [p for p in mine if p.harness == heard.harness])
-        tier, note = adapter.tier(None)
-        log.info(
-            "mcp hello: conn %d harness %s%s (%s)",
-            conn.id,
-            ident.harness,
-            f" on {ident.host}" if ident.host else "",
-            ident.evidence,
-        )
-        return {
-            "conn_id": conn.id,
-            "harness": ident.harness,
-            "tier": tier,
-            "tier_note": ident.tier_note or note,
-            "test_mode": self.state.test_mode,
-        }
-
-    def conn_closed(self, conn: "Conn") -> None:
-        """mcp.bye or connection loss: open waits end; the session goes offline (not Codex).
-        A hook's connection: a Cursor stop park on it ends (the hook is gone)."""
-        mc = getattr(conn, "mcp", None)
-        if mc is None:
-            if self.engine is not None and self.engine.sinks.for_conn(conn.id):
-                self.run(self.engine.close_conn_sinks(conn.id))
-            return
-        conn.mcp = None
-        key = _mcp_key(mc.ident.host, mc.ident.mcp_pid, mc.ident.mcp_start)
-        if self._mcp_claims.get(key, (None,))[0] == conn.id:
-            del self._mcp_claims[key]  # a newer connection of the same process keeps its own
-        for channel in sorted(mc.attached):
-            self._detach(conn, mc, channel)
-        acts: list[Action] = self.engine.close_conn_sinks(conn.id)
-        for p in self.store.participants_by_mcp(mc.ident.host, mc.ident.mcp_pid, mc.ident.mcp_start):
-            if self.engine.adapter(p).keep_on_mcp_disconnect(p):
-                continue
-            acts += self.engine.expire_pull_batches(p.id, "disconnect")
-            acts += self.engine.set_status(p, "offline", "mcp:bye")
-        self.run(acts)
-
-    # ===================================================== push channels
-    def _channel_named(self, channel: str) -> Any:
-        """The adapter whose ``channel`` this is, or None."""
-        for adapter in self.engine.adapters.values():
-            if adapter.channel == channel:
-                return adapter
-        return None
-
-    def _channel_asked(self, params: dict[str, Any]) -> Any:
-        """The adapter an ``mcp.attach`` asks to be the channel of: the one whose ``channel_flag``
-        the request sets (``codex: true``, issue #63), else the one with no flag, which a bare
-        request gets (Claude's inbox, from before there was another)."""
-        bare = None
-        for adapter in self.engine.adapters.values():
-            if not adapter.channel:
-                continue
-            if not adapter.channel_flag:
-                bare = adapter
-            elif params.get(adapter.channel_flag) is True:
-                return adapter
-        return bare
-
-    def attach(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
-        """``mcp.attach``: make this verified MCP connection its session's push or wake channel
-        (DESIGN.md §6.4, §9.2). Each channel's adapter says whether this connection may be it
-        (``channel_refusal``: for Claude's inbox a direct child of a claude whose registry names the
-        same inbox socket, with the session token and a passing guard); everything else stays on
-        its hooks (``claude:hook``)."""
-        mc = self._mcp(conn)
-        adapter = self._channel_asked(params)
-        if adapter is None:
-            return {"attached": False, "reason": "no adapter for that channel"}
-        why = adapter.channel_refusal(
-            mc.ident,
-            has_token=mc.has_messaging_token,
-            guard_ok=params.get("guard_ok") is True,
-        )
-        if why is not None:
-            return {"attached": False, "reason": why}
-        if adapter.channel in mc.attached:  # a repeated hello on the same connection
-            return {"attached": True, "tier": adapter.channel_tier}
-        adapter.attach(mc.ident.mcp_pid, mc.ident.mcp_start, conn, host=mc.ident.host)
-        mc.attached.add(adapter.channel)
-        self.store.add_event("tier", data={"what": "attach", "harness": adapter.harness})
-        self._refresh_tiers(mc)
-        return {"attached": True, "tier": adapter.channel_tier}
-
-    def _detach(self, conn: "Conn", mc: McpConn, channel: str) -> None:
-        adapter = self._channel_named(channel)
-        if adapter is not None:
-            adapter.detach(conn)
-        mc.attached.discard(channel)
-        self._refresh_tiers(mc)
-
-    def _refresh_tiers(self, mc: McpConn) -> None:
-        """Re-derive the tier of every session this MCP process serves."""
-        acts: list[Action] = []
-        for p in self.store.participants_by_mcp(mc.ident.host, mc.ident.mcp_pid, mc.ident.mcp_start):
-            adapter = self.engine.adapter(p)
-            tier, note = adapter.tier(p)
-            note = mc.ident.tier_note or note
-            if (tier, note) != (p.tier, p.tier_note):
-                self.store.update_participant(p.id, tier=tier, tier_note=note)
-                self.store.add_event("tier", participant_id=p.id, data={"tier": tier})
-                acts += self.engine.evaluate_participant(p.id)
-                acts += [Snapshot(m.room_id) for m in self.store.participant_memberships(p.id)]
-        self.run(acts)
-
-    def posted(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
-        """``mcp.posted {batch_id, ok, t_post, err?}`` from the channel the frame went to."""
-        mc = self._mcp(conn)
-        bid = params.get("batch_id")
-        if not isinstance(bid, int) or isinstance(bid, bool) or not mc.attached:
-            return {}
-        # the report of a frame handed to this connection: a Claude inbox post
-        adapter = self._channel_named(min(mc.attached))
-        if adapter is None:
-            return {}
-        t = params.get("t_post")
-        if isinstance(t, (int, float)) and not isinstance(t, bool) and math.isfinite(t):
-            t_post = float(t)
-        else:
-            t_post = None
-        err = params.get("err")
-        if err is not None:
-            # it reaches the broker log: codes only, never free text
-            err = err if isinstance(err, str) and POST_ERR_RE.fullmatch(err) else "post_failed"
-        res: dict[str, Any] = {
-            "ok": params.get("ok") is True,
-            "t_post": t_post,
-            "err": err,
-        }
-        adapter.posted(bid, conn, res)
-        return {}
-
     # ======================================================== membership
-    def _session_key(self, mc: McpConn, thread_id: str | None) -> str:
-        h, host = mc.harness, mc.ident.host
-        # Each harness's rule: Codex keys by thread, Cursor starts pending, the test
-        # agent by its --test-session, and claude, devin and unknown by process (§6.3).
+    def _session_key(self, mc: AgentConn, thread_id: str | None) -> str:
+        """This harness's session key for a call on the token's device (§6.3): Codex's thread, Claude
+        Code's, Cursor's and Devin's session id (each harness's own, named by its hooks), the scripted
+        test agent's own key."""
         try:
-            return self.engine.adapter_for(h, host, https=over_https(host, mc.ident.mcp_pid)).session_key(
-                mc.ident, thread_id, test_session=mc.test_session
+            return self.engine.adapter_for(mc.harness).session_key(
+                mc.host, thread_id, test_session=mc.test_session
             )
         except ValueError as e:
             raise ServiceError("bad_request", str(e)) from e
-
-    @staticmethod
-    def _same_mcp(p: Participant, ident: McpIdentity) -> bool:
-        """``(host, mcp_pid, mcp_start)`` equal: the very MCP process that holds ``p``."""
-        return (
-            p.host == ident.host
-            and p.mcp_pid == ident.mcp_pid
-            and proc.same_start(p.mcp_start, ident.mcp_start)
-        )
 
     def _reclaim(
         self, holder: Membership, code: str | None, harness: str, host: str
@@ -555,7 +238,7 @@ class AgentService:
 
         Only with the code that membership's own join answer ended with (or the newest a reminder
         gave it), which only the session that read it has, and only for the same harness on the
-        same machine (so the same person): never a name another session or machine used. Not
+        same device (so the same person): never a name another session or device used. Not
         from a kicked agent, and not while the old membership is still in the room. The code is
         checked before anything about the holder is said, so a wrong one learns only that."""
         if code is None:
@@ -579,158 +262,13 @@ class AgentService:
             return None, "kicked"
         return holder, None
 
-    def _check_same_session(self, existing: Participant, mc: McpConn) -> None:
-        """A re-join may take over a session's memberships (rotating the
-        credential) only from the MCP process that holds it (a broker
-        reconnect) or once that process is gone (an MCP restart), and never
-        from under another live agent process. Otherwise a process that merely
-        knows a Codex thread id could post as that thread's agent.
-
-        Both probes go to the session's own host (§27.5.6); a host that can't
-        tell (``None``) counts as alive: no takeover until it can."""
-        if self._same_mcp(existing, mc.ident):
-            return
-        view = self.hosts.view(existing.host)
-        if existing.mcp_pid:
-            a = view.alive(existing.mcp_pid, existing.mcp_start)
-            if a is None:
-                raise ServiceError(
-                    "conflict",
-                    f"can't verify this session on {existing.host or 'this machine'}"
-                    " yet; try again in a few seconds",
-                )
-            if a:
-                raise ServiceError(
-                    "conflict",
-                    "this session is already joined from another live switchboard MCP server; ask your user",
-                )
-        same_agent = (
-            existing.host == mc.ident.host
-            and existing.agent_pid == mc.ident.agent_pid
-            and proc.same_start(existing.agent_start, mc.ident.agent_start)
-        )
-        if not same_agent and existing.agent_pid:
-            a = view.alive(existing.agent_pid, existing.agent_start)
-            if a is None:
-                raise ServiceError(
-                    "conflict",
-                    f"can't verify this session on {existing.host or 'this machine'}"
-                    " yet; try again in a few seconds",
-                )
-            if a:
-                raise ServiceError(
-                    "conflict", "this session belongs to another live agent process; ask your user"
-                )
-
-    def _mcp(self, conn: "Conn") -> McpConn:
-        mc = getattr(conn, "mcp", None)
-        if mc is None:
-            raise ServiceError("unauthorized", "send mcp.hello first")
-        return mc
-
     def _member(
-        self, conn: "Conn", params: dict[str, Any], *, next_call: bool = True
+        self, conn: "HttpConn", params: dict[str, Any], *, next_call: bool = True
     ) -> tuple[Participant, Membership, Room]:
-        if _http(conn):
-            return self._http_member(conn, params, next_call=next_call)
-        mc = self._mcp(conn)
-        cred = params.get("cred")
-        if not isinstance(cred, str) or not cred or len(cred) > 200:
-            raise ServiceError("unauthorized", "missing membership credential: join() first")
-        h = cred_hash(cred)
-        m = self.store.membership_by_cred(h)
-        if m is None:
-            closed = self.store.closed_membership_by_cred(h)
-            if closed is not None:
-                # still `unauthorized`: the MCP server then forgets the credential (§28.3)
-                raise ServiceError(
-                    "unauthorized",
-                    f"{closed[1].display_name} was closed by {self.cfg.human_name}; you are no longer in it",
-                )
-            raise ServiceError(
-                "unauthorized", "not a member (your membership was revoked or rotated): join() again"
-            )
-        p = self.store.get_participant(m.participant_id)
-        if p is None or not p.active:
-            raise ServiceError("unauthorized", "this session has ended: join() again")
-        if not self._same_mcp(p, mc.ident):
-            # (host, mcp_pid, mcp_start): a credential works only from the MCP process that joined,
-            # on its own host (§27.5.4)
-            raise ServiceError("unauthorized", "this credential belongs to another process")
-        credential_error = self.engine.adapter(p).credential_error(p, params)
-        if credential_error is not None:
-            raise ServiceError("unauthorized", credential_error)
-        room = self.store.room_by_id(m.room_id)
-        assert room is not None
-        if next_call:
-            self.run(self.engine.before_call(p))
-            p = self.store.get_participant(p.id) or p
-        return p, m, room
-
-    # ======================================================= over HTTPS (§49.3)
-    def http_ended(self, conn: Any, thread_id: str | None) -> str | None:
-        """Why the caller's session is in no room now, when something other than the session
-        itself ended it (a kick, a closed room, a removed person): the line its listener wakes it
-        with, once (§49.4), since nothing else reaches an idle session over HTTPS. None while it is
-        in a room, before it ever joined, or after it left or quit on its own."""
-        mc = self._mcp(conn)
-        p = self.store.find_participant(mc.harness, self._session_key(mc, thread_id))
-        if p is None or p.host != conn.host or self.store.participant_memberships(p.id):
-            return None
-        m = self.store.last_ended_membership(p.id)
-        if m is None or m.left_at is None or m.left_reason in ENDED_BY_ITSELF:
-            return None
-        room = self.store.room_by_id(m.room_id)
-        why = ENDED_WHY.get(m.left_reason or "", f"it ended ({m.left_reason})")
-        when = time.strftime("%H:%M UTC", time.gmtime(m.left_at))
-        return (
-            f"[switchboard] {m.screen_name} is no longer in {room.name if room else 'its room'}: {why},"
-            f" at {when}. switchboard can't reach this session until it joins a room again."
-        )
-
-    def http_session(self, conn: Any, thread_id: str | None) -> Participant | None:
-        """The caller's own session, if it joined: by the harness's session key on the token's
-        device (a Codex thread). None before its first join."""
-        mc = self._mcp(conn)
-        p = self.store.find_participant(mc.harness, self._session_key(mc, thread_id))
-        return p if p is not None and p.active and p.host == conn.host else None
-
-    def http_rooms(self, conn: Any, thread_id: str | None) -> list[tuple[Room, Membership]]:
-        """The rooms the caller's session is in now, with its membership in each."""
-        p = self.http_session(conn, thread_id)
-        if p is None:
-            return []
-        out = []
-        for m in self.store.participant_memberships(p.id):
-            room = self.store.room_by_id(m.room_id)
-            if room is not None:
-                out.append((room, m))
-        return out
-
-    def http_room(self, conn: Any, name: str, thread_id: str | None) -> tuple[Room, Membership] | None:
-        """The caller's membership in ``name`` (a canonical room name), or in the room renamed
-        from it (#316): both names work, as they do over the socket."""
-        rooms = self.http_rooms(conn, thread_id)
-        for room, m in rooms:
-            if room.name == name:
-                return room, m
-        renamed = self.store.room_by_alias(name)
-        if renamed is not None and self.store.get_room(name) is None:
-            for room, m in rooms:
-                if room.id == renamed.id:
-                    return room, m
-        return None
-
-    def http_claims(self, host: str, tools: tuple[str, ...]) -> None:
-        """What a member over HTTPS runs is this broker's own code, so its version and tools are
-        the broker's (#249): kept under its sessions' MCP key, ``(device, 0, 0.0)``."""
-        self._mcp_claims[_mcp_key(host, 0, 0.0)] = (0, __version__, tools)
-
-    def _http_member(
-        self, conn: Any, params: dict[str, Any], *, next_call: bool
-    ) -> tuple[Participant, Membership, Room]:
-        """``_member`` for a call over HTTPS: the membership it names must be the caller's own
-        session's, and active; everything else is checked as for a credential."""
+        """The call's membership (§49.3): the one it names (``m:<id>``) must be the caller's own
+        session's, and active. A session is told apart by what its harness names on every call, so a
+        process that merely knows a Codex thread id on another device can't be taken for it: the
+        token's device is part of the key."""
         tid = params.get("thread_id")
         tid = tid if isinstance(tid, str) and 0 < len(tid) <= 128 else None
         got = params.get("cred")
@@ -750,12 +288,66 @@ class AgentService:
             p = self.store.get_participant(p.id) or p
         return p, m, room
 
-    def join(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
-        mc = self._mcp(conn)
+    # ======================================================= the caller's session (§49.3)
+    def http_ended(self, conn: "HttpConn", thread_id: str | None) -> str | None:
+        """Why the caller's session is in no room now, when something other than the session
+        itself ended it (a kick, a closed room, a removed person): the line its listener wakes it
+        with, once (§49.4), since nothing else reaches an idle session over HTTPS. None while it is
+        in a room, before it ever joined, or after it left or quit on its own."""
+        mc = conn.agent
+        p = self.store.find_participant(mc.harness, self._session_key(mc, thread_id))
+        if p is None or p.host != conn.host or self.store.participant_memberships(p.id):
+            return None
+        m = self.store.last_ended_membership(p.id)
+        if m is None or m.left_at is None or m.left_reason in ENDED_BY_ITSELF:
+            return None
+        room = self.store.room_by_id(m.room_id)
+        why = ENDED_WHY.get(m.left_reason or "", f"it ended ({m.left_reason})")
+        when = time.strftime("%H:%M UTC", time.gmtime(m.left_at))
+        return (
+            f"[switchboard] {m.screen_name} is no longer in {room.name if room else 'its room'}: {why},"
+            f" at {when}. switchboard can't reach this session until it joins a room again."
+        )
+
+    def http_session(self, conn: "HttpConn", thread_id: str | None) -> Participant | None:
+        """The caller's own session, if it joined: by the harness's session key on the token's
+        device (a Codex thread). None before its first join."""
+        mc = conn.agent
+        p = self.store.find_participant(mc.harness, self._session_key(mc, thread_id))
+        return p if p is not None and p.active and p.host == conn.host else None
+
+    def http_rooms(self, conn: "HttpConn", thread_id: str | None) -> list[tuple[Room, Membership]]:
+        """The rooms the caller's session is in now, with its membership in each."""
+        p = self.http_session(conn, thread_id)
+        if p is None:
+            return []
+        out = []
+        for m in self.store.participant_memberships(p.id):
+            room = self.store.room_by_id(m.room_id)
+            if room is not None:
+                out.append((room, m))
+        return out
+
+    def http_room(self, conn: "HttpConn", name: str, thread_id: str | None) -> tuple[Room, Membership] | None:
+        """The caller's membership in ``name`` (a canonical room name), or in the room renamed
+        from it (#316): both names work, as they do over the socket."""
+        rooms = self.http_rooms(conn, thread_id)
+        for room, m in rooms:
+            if room.name == name:
+                return room, m
+        renamed = self.store.room_by_alias(name)
+        if renamed is not None and self.store.get_room(name) is None:
+            for room, m in rooms:
+                if room.id == renamed.id:
+                    return room, m
+        return None
+
+    def join(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
+        mc = conn.agent
         raw_room = params.get("room")
         if not isinstance(raw_room, str) or not raw_room.strip():
             raise ServiceError("bad_request", "room is required, e.g. #build")
-        host = mc.ident.host
+        host = mc.host
         # whose agent this is (§44.3): a private room takes only its own people's agents, and
         # says "no such room" to any other, as it does to the people who aren't in it
         person = self.svc.host_person(host)
@@ -809,45 +401,22 @@ class AgentService:
         tid = tid if isinstance(tid, str) and 0 < len(tid) <= 128 else None
         key = self._session_key(mc, tid)
         h = mc.harness
-        adapter = self.engine.adapter_for(h, host, https=over_https(host, mc.ident.mcp_pid))
+        adapter = self.engine.adapter_for(h)
         conflict = adapter.join_conflict(self.store, tid, host)
         if conflict is not None:
             raise ServiceError("conflict", conflict)
         existing = self.store.find_participant(h, key)
-        mine = adapter.existing_session(self.store, mc.ident)
-        if mine is not None:
-            # Cursor: one session per agent process until its key is the conversation id (§6.3)
-            existing, key = mine, mine.session_key
-        if existing is not None and (
-            self.store.was_kicked(room.id, existing.id)
-            or adapter.conversation_kicked(self.store, room.id, existing)
-        ):
+        if existing is not None and self.store.was_kicked(room.id, existing.id):
             raise ServiceError("kicked", f"you were kicked from {room.name}; ask your user")
-        if existing is not None and existing.active:
-            self._check_same_session(existing, mc)
         now = self.state.clock.now()
-        tier, note = adapter.conn_tier(mc.ident, existing)
-        fields: dict[str, Any] = dict(
-            agent_pid=mc.ident.agent_pid,
-            agent_start=mc.ident.agent_start,
-            mcp_pid=mc.ident.mcp_pid,
-            mcp_start=mc.ident.mcp_start,
-            claude_socket=mc.ident.claude_socket,
-            tier=tier,
-            tier_note=mc.ident.tier_note or note,
-            env_leak=int(mc.env_leak),
-            session_id=(tid or mc.session_id),
-            host=mc.ident.host,
-        )
+        tier, note = adapter.tier(existing)
+        fields: dict[str, Any] = dict(tier=tier, tier_note=note, session_id=tid, host=host)
         # a harness whose status comes from its sinks (the test agent) starts busy, as does a
         # session whose hooks were already seen: its next hook or wait() says otherwise
         if adapter.sink_status or (existing is not None and existing.hooks_seen_at is not None):
             fields.update(status="busy", status_at=now, status_src="join")
         elif existing is None or existing.status == "offline":
             fields.update(status="starting", status_at=now, status_src="join")
-        same_mcp = existing is not None and self._same_mcp(existing, mc.ident)
-        fields.update(adapter.rebind_fields(existing, same_mcp=same_mcp))
-        fields.update(adapter.join_fields(existing))
         cur = self.store.active_membership(room.id, existing.id) if existing else None
         resumed: Membership | None = None
         if cur is None:
@@ -860,9 +429,7 @@ class AgentService:
             if holder is not None:
                 resumed, why = self._reclaim(holder, code, h, host)
                 if resumed is None:
-                    raise ServiceError(
-                        "name_reserved", name_reserved_text(name, room.name, code, mc.version, why)
-                    )
+                    raise ServiceError("name_reserved", name_reserved_text(name, room.name, code, why))
         elif cur.screen_name.lower() != name:
             raise ServiceError(
                 "bad_request",
@@ -870,27 +437,20 @@ class AgentService:
                 " leave() first to change your name",
             )
         nonce = secrets.token_hex(8)
-        p = self.store.upsert_participant(h, key, bind_nonce=nonce, **fields)
+        p = self.store.upsert_participant(h, key, **fields)
         if mc.ack_mode is not None:
             self.engine.ack_modes[p.id] = mc.ack_mode
-        cred = secrets.token_urlsafe(32)
         rejoined = cur is not None
         if cur is not None:
-            # the same verified session again (an MCP reconnect): rotate the credential
-            self.store.rotate_cred(cur.id, cred_hash(cred), join_code_hash(nonce))
+            # the same session again (a reconnect, a retry): a fresh join code
+            self.store.set_join_code(cur.id, join_code_hash(nonce))
             m = cur
             self.run(self.engine.expire_pull_batches(p.id, "rejoin"))
             self.store.add_event(
                 "bind", room_id=room.id, membership_id=m.id, participant_id=p.id, data={"what": "rotate"}
             )
-            notice = adapter.rejoin_notice(p, m.screen_name, same_mcp=same_mcp)
-            if notice is not None:
-                self.run([Notice(room.id, "info", notice)])
         else:
-            m = self.store.create_membership(room.id, p.id, name, cred_hash(cred), join_code_hash(nonce))
-            # a Codex thread proof about to run shows as "verifying...", not "mcp-only"; the
-            # event says so, so the proof that passes announces it here (§9.3)
-            verifying = note == VERIFYING
+            m = self.store.create_membership(room.id, p.id, name, join_code_hash(nonce))
             self.store.add_event(
                 "join",
                 room_id=room.id,
@@ -899,12 +459,11 @@ class AgentService:
                 data={
                     "harness": h,
                     "tier": tier,
-                    **({"verifying": True} if verifying else {}),
                     **({"resumed": resumed.id} if resumed is not None else {}),
                 },
             )
             where = f"{h} on {host}" if host else h
-            shown = VERIFYING if verifying else tier
+            shown = tier
             self.svc._post(
                 room,
                 sender_name=name,
@@ -917,23 +476,6 @@ class AgentService:
                 text=f"joined ({where}, {shown})" + (", back after a restart" if resumed is not None else ""),
                 sender_host=host or None,
             )
-            if behind_by_minor(mc.version):
-                self.run(
-                    [
-                        Notice(
-                            room.id,
-                            "info",
-                            f"{name} reports switchboard {mc.version}; run switchboard update"
-                            " where it runs, then restart its session.",
-                        )
-                    ]
-                )
-        self.refresh_index()
-        if p.agent_pid:
-            early = self._early_models.get((p.host, p.agent_pid, start_key(p.agent_start)))
-            if early is not None:
-                self._note_model(p, early)
-        adapter.on_joined(p, nonce, not same_mcp or not rejoined)
         others = [(x.name, x.harness, x.host) for x in self.store.members(room.id) if x.membership_id != m.id]
         hist = [x for x in self.store.history(room.id, None, 400) if x.kind == "chat"]
         catchup = hist[-self.cfg.delivery.catchup_n :] if self.cfg.delivery.catchup_n else []
@@ -952,7 +494,6 @@ class AgentService:
             catchup=catchup,
             earlier=earlier,
             earlier_before=earlier_before,
-            can_page=has_feature(mc.version, "read.before"),
             nonce=nonce,
             guidance=adapter.join_guidance(p, room.name),
             test_mode=self.state.test_mode,
@@ -968,7 +509,6 @@ class AgentService:
         )
         self.run(self.engine.evaluate(m.id) + [Snapshot(room.id)])
         return {
-            "cred": cred,
             "membership_id": m.id,
             "room": room.name,
             "screen_name": m.screen_name,
@@ -978,7 +518,7 @@ class AgentService:
             "rejoined": rejoined,
         }
 
-    def leave(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
+    def leave(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
         p, m, room = self._member(conn, params)
         self.store.end_membership(m.id, "leave")
         self.store.add_event("leave", room_id=room.id, membership_id=m.id, participant_id=p.id)
@@ -994,10 +534,9 @@ class AgentService:
             text="left",
             sender_host=p.host or None,
         )
-        self.refresh_index()
         return {"room": room.name, "text": f"[switchboard] you left {room.name}."}
 
-    def who(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
+    def who(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
         _p, _m, room = self._member(conn, params)
         rows = self.svc.member_rows(room.id)
         humans = self.svc.room_humans(room)
@@ -1012,14 +551,10 @@ class AgentService:
             if x.host:
                 bits.append(f"host={envelope._word(x.host)}")
             bits += [f"status={x.status}", f"tier={x.tier or '-'}"]
-            bits.append(f"version_claim={x.version_claim or 'unknown'}")
-            bits.append(f"tools_claim={','.join(x.tools_claim) if x.tools_claim is not None else 'unknown'}")
             if x.tier_note:
                 bits.append(f"tier_note={envelope._word(x.tier_note)}")
             mode = {"bypass": "approvals_off", "prompting": "prompting"}.get(x.approval_mode, "unknown")
             bits.append(f"approvals={mode}")
-            if x.env_leak:
-                bits.append("env_shared=yes")
             if x.held:
                 bits.append("held=yes")
             if x.parked:
@@ -1029,7 +564,7 @@ class AgentService:
             lines.append(" ".join(bits))
         return {"room": room.name, "text": "\n".join(lines), "count": len(rows)}
 
-    def review(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
+    def review(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
         """One move on the room's review board (DESIGN.md §37). A move that's another agent's to
         answer (a raise, a concession to another owner, a fix) is posted as this agent's message
         naming them, so it wakes them as a say() would, under the room's budget and loop guard;
@@ -1039,15 +574,7 @@ class AgentService:
         try:
             res = self.state.boards.agent(room, m.screen_name, params)
         except ProofRequired as e:
-            if has_feature(self._mcp(conn).version, "review.proof"):
-                raise ServiceError("bad_request", str(e)) from None
-            # its review tool has no proof field, so "proof is required" can't be followed (#340)
-            raise ServiceError(
-                "bad_request",
-                "fix needs proof, a test's name or an http(s) link, but"
-                f" {envelope.OLDER_SWITCHBOARD} and its review tool has no proof field."
-                f" {envelope.RESTART_UPDATES}",
-            ) from None
+            raise ServiceError("bad_request", str(e)) from None
         except ReviewError as e:
             raise ServiceError("bad_request", str(e)) from None
         handoff = res.pop("handoff", None)
@@ -1065,7 +592,7 @@ class AgentService:
             )
         return res
 
-    def say(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
+    def say(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
         p, m, room = self._member(conn, params)
         text = params.get("text")
         if not isinstance(text, str):
@@ -1225,7 +752,7 @@ class AgentService:
         )
         return msg
 
-    def read(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
+    def read(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
         p, m, room = self._member(conn, params)
         limit = params.get("limit", 20)
         if isinstance(limit, bool) or not isinstance(limit, int):
@@ -1246,7 +773,7 @@ class AgentService:
         self.run(acts)
         return {"text": text, "batch_id": bid, "count": count, "more": more}
 
-    async def wait(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
+    async def wait(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
         p, m, room = self._member(conn, params)
         caps = self.engine.adapter(p).caps(p)
         timeout = rules.clamp_wait(params.get("timeout_s"), caps.wait_cap_s)
@@ -1265,7 +792,7 @@ class AgentService:
             runner.drop_future(sink.id)
         return {"timeout_s": timeout, "wait_id": wid, **res}
 
-    def unwait(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
+    def unwait(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
         # not a "next call": the harness cancelled the wait, it may never have seen the answer
         p, _m, _room = self._member(conn, params, next_call=False)
         wid = params.get("wait_id")
@@ -1275,7 +802,7 @@ class AgentService:
         self.run(self.engine.wait_dropped(p))  # a Devin over HTTPS that never calls again is gone (#448)
         return {}
 
-    def pass_(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
+    def pass_(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
         # _member runs before_call first: a hook-less agent's read() answer is confirmed by this call
         p, m, room = self._member(conn, params)
         unread = self.engine.check_pass(p, m)  # the read-first rule (DESIGN.md §24)
@@ -1301,7 +828,7 @@ class AgentService:
         self.run(self.engine.evaluate(m.id) + [Snapshot(room.id)])
         return {"room": room.name, "passed": True, "handled": n, "text": "[switchboard] logged, not posted."}
 
-    def away(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
+    def away(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
         p, _m, _room = self._member(conn, params)
         msg = params.get("message")
         away = None
@@ -1311,7 +838,7 @@ class AgentService:
         self.run([Snapshot(r) for r in {x.room_id for x in self.store.participant_memberships(p.id)}])
         return {"away": away}
 
-    def status(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
+    def status(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
         p, _m, _room = self._member(conn, params)
         raw = params.get("text")
         if not isinstance(raw, str):
@@ -1323,7 +850,7 @@ class AgentService:
         self.run([Snapshot(r) for r in {x.room_id for x in self.store.participant_memberships(p.id)}])
         return {"status_line": line}
 
-    def claim(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
+    def claim(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
         """Advisory outside work, per room: only its member may renew or release it (§47)."""
         _p, m, room = self._member(conn, params)
         try:
@@ -1347,82 +874,17 @@ class AgentService:
         }
 
     # =============================================================== hooks
-    async def hook_event(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
-        inert: dict[str, Any] = {"out": None}
-        harness = params.get("harness")
-        if not isinstance(harness, str) or harness not in HOOK_EVENTS:
-            return inert
-        if self.engine.adapter_for(harness).test_only and not self.state.test_mode:
-            return inert  # a scripted stand-in's hook counts only in test mode (§9.6)
-        raw_event = params.get("event")
-        event = canonical_event(raw_event if isinstance(raw_event, str) else "")
-        if event not in HOOK_EVENTS[harness]:
-            return inert
-        # the connection's kernel peer is a process on this machine, and only this machine's
-        # participants can be its candidates
-        host = LOCAL_HOST
-        view = self.hosts.view(host)
-        pid = conn.peer.pid
-        argv_fn = lambda procs: view.argv_many(procs) or {}  # noqa: E731
-        walked: list[ProcInfo] | None = None
-
-        def get_chain() -> list[ProcInfo]:
-            nonlocal walked
-            if walked is None:
-                walked = (self.hosts.view(host).ancestry(pid, 8) or []) if pid else []
-            return walked
-
-        if pid and event == "SessionStart":
-            self._remember_model(host, get_chain(), params.get("model"))
-        index = self._agent_index.get(host)
-        if not pid or not index:
-            return inert
-        if not any(pi.pid in index for pi in get_chain()):
-            return inert
-        ev = parse_hook_event(harness, event, params)
-        self._record(harness, event, params)
-        cands = [
-            HookCandidate(
-                participant_id=p.id,
-                harness=p.harness,
-                agent_pid=p.agent_pid,
-                agent_start=p.agent_start,
-                session_id=p.session_id,
-                session_key=p.session_key,
-                bind_state=p.bind_state,
-            )
-            for p in self.store.joined_participants()
-            if p.host == host
-        ]
-        nonce_bind = self.engine.adapter_for(harness, host).join_nonce_bind(ev)
-        c = resolve_hook_participant(
-            get_chain(), harness, ev.sid, cands, join_nonce_bind=nonce_bind, argv_fn=argv_fn, host=host
-        )
-        if c is None:
-            return inert
-        p = self.store.get_participant(c.participant_id)
-        if p is None or not p.active:
-            return inert
-        if nonce_bind:
-            p = self._bind_cursor(p, ev)
-            if p is None:
-                return inert
-        self._note_model(p, params.get("model"))
-        out, acts = self.engine.claim_for_hook(p, ev)
-        if out is not None and out.kind == "park" and out.sink_id is not None:
-            return await self._park(conn, out.sink_id, acts)
-        self.run(acts)
-        if out is None:
-            return inert
-        return {"out": {"kind": out.kind, "text": out.text}, "batch_id": out.batch_id, "ack": out.ack}
-
-    async def http_hook(self, conn: Any, harness: str, event: str, params: dict[str, Any]) -> dict[str, Any]:
-        """A hook over HTTPS (§49.4): its session is the one it names on the token's device (no
-        process to walk), then everything as ``hook_event``: status, confirmations, and (only where
-        the harness's table allows it) context, or a Stop hook held until a message comes."""
+    async def http_hook(
+        self, conn: "HttpConn", harness: str, event: str, params: dict[str, Any]
+    ) -> dict[str, Any]:
+        """A hook over HTTPS (§49.4): its session is the one it names on the token's device, then the
+        engine's: status, confirmations, and (only where the harness's table allows it, §7.3) context,
+        or a Stop hook held until a message comes."""
         inert: dict[str, Any] = {"out": None}
         if harness not in HOOK_EVENTS or event not in HOOK_EVENTS[harness]:
             return inert
+        if self.engine.adapter_for(harness).test_only and not self.state.test_mode:
+            return inert  # a scripted stand-in's hook counts only in test mode (§9.6)
         sid = params.get("sid")
         try:
             p = self.http_session(conn, sid if isinstance(sid, str) and 0 < len(sid) <= 128 else None)
@@ -1441,24 +903,13 @@ class AgentService:
             return inert
         return {"out": {"kind": out.kind, "text": out.text}, "batch_id": out.batch_id, "ack": out.ack}
 
-    def _held_elsewhere(self, harness: str, rest: str, host: str) -> Participant | None:
-        """An active session of ``harness`` with this global id (a Cursor conversation) on
-        another host than ``host``, this machine included (§27.5.4)."""
-        for p in self.store.active_participants():
-            if p.harness != harness or p.host == host:
-                continue
-            parts = split_session_key(p.session_key)
-            if parts is not None and parts[2] == rest:
-                return p
-        return None
-
     async def _park(
-        self, conn: "Conn", sink_id: int, acts: list[Action], *, ended: bool = False
+        self, conn: "HttpConn", sink_id: int, acts: list[Action], *, ended: bool = False
     ) -> dict[str, Any]:
-        """A Cursor stop hook waits here (DESIGN.md §9.4) until the engine fills its
-        park with a follow-up, the park is released, or it times out. ``ended`` adds why a
-        park that brought nothing ended (``timeout``, ``paused``, ``cancelled``), for a
-        listener over HTTPS that waits again after a round that ran out (§49.4)."""
+        """A Stop hook waits here (DESIGN.md §9.4, §49.4) until the engine fills its park with a
+        follow-up, the park is released, or it times out. ``ended`` adds why a park that brought
+        nothing ended (``timeout``, ``paused``, ``cancelled``), for a listener that waits again
+        after a round that ran out."""
         runner = self.state.runner
         fut = runner.future_for(sink_id)
         s = self.engine.sinks.get(sink_id)
@@ -1478,117 +929,7 @@ class AgentService:
             return {"out": None, "ended": res.get("status")} if ended else {"out": None}
         return {"out": {"kind": "continue", "text": text}, "batch_id": bid, "ack": ack}
 
-    def _bind_cursor(self, p: Participant, ev: HookEvent) -> Participant | None:
-        """The ``postToolUse`` for ``MCP:join`` carries the join's nonce and the
-        ``conversation_id`` (DESIGN.md §6.3): key the session by it. Only the
-        participant whose own join issued that nonce, and whose agent is in this
-        hook's ancestry (checked by the resolver), can be bound; anything else
-        is inert. A bound session that joins again (e.g. after a chat switch in
-        the same agent process) is re-keyed the same way. The nonce rule, the "already
-        bound" check and the conversation id's key are the Cursor adapter's own
-        (``nonce_ok``, ``bound_to``, ``conversation_key``); every store write and engine
-        call here stays this method's."""
-        adapter = self.engine.adapter_for(p.harness, p.host)
-        sid = ev.sid or ""
-        if not adapter.nonce_ok(p, ev):
-            # not this participant's current join: only its own bound conversation may go on
-            return p if adapter.bound_to(p, sid) else None
-        key = adapter.conversation_key(p, sid)
-        if key is None:
-            return None
-        if p.session_key == key and p.bind_state == "bound":
-            self.store.update_participant(p.id, bind_nonce=None)  # single use
-            return self.store.get_participant(p.id)
-        if self._held_elsewhere(p.harness, sid, p.host) is not None:
-            # a conversation id is global: no session ever moves between hosts (§27.5.4)
-            self.store.add_event(
-                "bind",
-                participant_id=p.id,
-                data={"what": "cursor", "ok": False, "why": "conversation on another host"},
-            )
-            self.run(
-                [
-                    Notice(
-                        m.room_id,
-                        "warn",
-                        f"{m.screen_name}: can't bind to its Cursor conversation: it is joined from"
-                        " another machine (it stays mcp-only)",
-                    )
-                    for m in self.store.participant_memberships(p.id)
-                ]
-            )
-            return None
-        other = self.store.find_participant("cursor", key)
-        if other is not None and other.id != p.id:
-            # the holder's own host decides; one that can't tell (None) counts as alive
-            if other.active and other.agent_pid and self.hosts.agent_alive(other) is not False:
-                self.store.add_event(
-                    "bind",
-                    participant_id=p.id,
-                    data={"what": "cursor", "ok": False, "why": "conversation held"},
-                )
-                log.warning(
-                    "cursor participant %d: conversation already bound to live participant %d", p.id, other.id
-                )
-                self.run(
-                    [
-                        Notice(
-                            m.room_id,
-                            "warn",
-                            f"{m.screen_name}: can't bind to its Cursor conversation: another live"
-                            " switchboard session holds it (it stays mcp-only)",
-                        )
-                        for m in self.store.participant_memberships(p.id)
-                    ]
-                )
-                return None
-            if other.active:  # its agent is gone: end it now, as the liveness check would
-                self.check_liveness()
-            # the key of an ended session of this conversation (e.g. before a --resume) is freed
-            self.store.update_participant(other.id, session_key=f"{key}#ended-{other.id}")
-        # the nonce is single use: re-keying again takes a new join() (a visible rejoin)
-        p = self.store.update_participant(
-            p.id, session_key=key, session_id=sid[:128], bind_state="bound", bind_nonce=None
-        )
-        self.store.add_event("bind", participant_id=p.id, data={"what": "cursor", "ok": True})
-        self._carry_kicks(p, key)
-        acts = self.engine.refresh_tier(p.id) + self.engine.evaluate_participant(p.id)
-        self.run(acts)
-        log.info("cursor participant %d bound to its conversation", p.id)
-        return self.store.get_participant(p.id)
-
-    def _carry_kicks(self, p: Participant, key: str) -> None:
-        """A kick sticks to the conversation (as it does to a Claude session or a
-        Codex thread): a new agent process that resumes a conversation that was
-        kicked from a room is removed from that room again once it binds."""
-        for m in self.store.participant_memberships(p.id):
-            if not self.store.was_kicked_session(m.room_id, "cursor", key, exclude=p.id):
-                continue
-            self.store.end_membership(m.id, "kick", kicked=True)
-            self.store.add_event(
-                "kick",
-                room_id=m.room_id,
-                membership_id=m.id,
-                participant_id=p.id,
-                data={"why": "resumed a kicked conversation"},
-            )
-            self.run(self.engine.on_membership_ended(m.id, "kick"))
-            room = self.store.room_by_id(m.room_id)
-            if room is not None:
-                self.svc._post(
-                    room,
-                    sender_name=m.screen_name,
-                    sender_kind="agent",
-                    sender_harness="cursor",
-                    sender_membership_id=m.id,
-                    via="system",
-                    kind="leave",
-                    text=f"was kicked by {self.cfg.human_name} (earlier, in this conversation)",
-                    sender_host=p.host or None,
-                )
-        self.refresh_index()
-
-    def hook_ack(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
+    def hook_ack(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
         bid = params.get("batch_id")
         ack = params.get("ack")
         if isinstance(bid, int) and not isinstance(bid, bool) and isinstance(ack, str) and len(ack) <= 64:
@@ -1603,16 +944,6 @@ class AgentService:
         self._models[p.id] = model
         self.store.add_event("model", participant_id=p.id, data={"model": model})
 
-    def _remember_model(self, host: str, chain: list[ProcInfo], model: Any) -> None:
-        """Keep a SessionStart's model for the processes above the hook (``chain``, on
-        ``host``), until a join names one."""
-        if not _model_ok(model):
-            return
-        for pi in chain:
-            self._early_models[(host, pi.pid, start_key(pi.start))] = model
-        while len(self._early_models) > 256:  # bounded: oldest first
-            self._early_models.pop(next(iter(self._early_models)))
-
     def _record(self, harness: str, event: str, params: dict[str, Any]) -> None:
         """SWITCHBOARD_RECORD_PAYLOADS (test mode): keep the allowlisted fields a hook sent."""
         if self.record_dir is None:
@@ -1626,43 +957,6 @@ class AgentService:
             pass
 
     # ============================================================ liveness
-    def check_liveness(self) -> None:
-        """A dead agent process ends its session: leave every room (DESIGN.md §6.3).
-
-        For Codex the agent is the app-server (the daemon, or an embedded TUI)
-        that runs the thread's MCP server: when it is gone, so is the thread,
-        unless it was the daemon restarting (an auto-update): the adapter keeps
-        such a session for a grace window and re-binds it to the new daemon if
-        the thread comes back there (DESIGN §9.3). Everything finer (a TUI
-        quitting while the daemon lives) is CodexLink's."""
-        for p in self.store.joined_participants():
-            if not p.agent_pid:
-                continue
-            # asked of the participant's own host (§27.5.6); None: that host can't tell now
-            # (a device's session), so the session is left alone, never ended
-            if self.hosts.agent_alive(p) is not False:
-                continue
-            if self.engine.adapter(p).defer_end(p):
-                continue
-            ended = self.store.end_participant(p.id, "session_end")
-            for m in ended:
-                self.run(self.engine.on_membership_ended(m.id, "session_end"))
-                room = self.store.room_by_id(m.room_id)
-                if room is not None:
-                    self.svc._post(
-                        room,
-                        sender_name=m.screen_name,
-                        sender_kind="agent",
-                        sender_harness=p.harness,
-                        sender_membership_id=m.id,
-                        via="system",
-                        kind="leave",
-                        text="left (session ended)",
-                        sender_host=p.host or None,
-                    )
-            log.info("participant %d ended (agent gone)", p.id)
-        self.refresh_index()
-
     def end_device(self, device: str, why: str) -> int:
         """End every session of an agent device: its token was revoked, or its person removed.
         Each leaves its rooms with "left (<device> <why>)". Returns how many ended."""
@@ -1688,16 +982,7 @@ class AgentService:
                     )
         if n:
             log.info("device %s: %d session(s) ended (%s)", device, n, why)
-            self.refresh_index()
         return n
-
-    async def liveness_loop(self) -> None:
-        while True:
-            await asyncio.sleep(LIVENESS_S)
-            try:
-                self.check_liveness()
-            except Exception:
-                log.exception("liveness check failed")
 
 
 # ----------------------------------------------------------------------------
@@ -1706,7 +991,7 @@ def _s(v: Any, n: int = 128) -> str | None:
 
 
 def parse_hook_event(harness: str, event: str, p: dict[str, Any]) -> HookEvent:
-    """Validate a hook.event's params into a HookEvent (unknown keys are ignored)."""
+    """Validate a hook report's params into a HookEvent (unknown keys are ignored)."""
     toks: list[tuple[int, str]] = []
     raw = p.get("tokens")
     if isinstance(raw, list):
@@ -1720,11 +1005,9 @@ def parse_hook_event(harness: str, event: str, p: dict[str, Any]) -> HookEvent:
             ):
                 if TOKEN_RE.fullmatch(f"yk:b{t[0]}.{t[1]}"):
                     toks.append((t[0], t[1]))
-    lc = p.get("loop_count")
     ok = p.get("ok")
     t = p.get("t")
     mw = p.get("max_wait_s")
-    nonce = p.get("join_nonce")
     return HookEvent(
         harness=harness,
         event=event,
@@ -1733,14 +1016,11 @@ def parse_hook_event(harness: str, event: str, p: dict[str, Any]) -> HookEvent:
         tool=_s(p.get("tool")),
         tool_use_id=_s(p.get("tool_use_id")),
         ok=ok if isinstance(ok, bool) else None,
-        status=_s(p.get("status"), 32),
-        loop_count=lc if isinstance(lc, int) and not isinstance(lc, bool) else None,
         stop_hook_active=p.get("stop_hook_active") if isinstance(p.get("stop_hook_active"), bool) else None,
         source=_s(p.get("source"), 32),
         reason=_s(p.get("reason"), 64),
         permission_mode=_s(p.get("permission_mode"), 32),
         tokens=tuple(toks),
-        join_nonce=nonce if isinstance(nonce, str) and re.fullmatch(r"[0-9a-f]{16}", nonce) else None,
         subagent_bg=p.get("subagent_bg") is True,
         t=float(t) if isinstance(t, (int, float)) and not isinstance(t, bool) else None,
         max_wait_s=float(mw) if isinstance(mw, (int, float)) and not isinstance(mw, bool) else None,

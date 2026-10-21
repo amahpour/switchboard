@@ -69,7 +69,7 @@ def test_handoff_poster_belongs_to_the_person_who_clicks() -> None:
             store.agent_token_add(bob_id, "bobs-laptop", "b" * 64)  # bob's device: his agents are on it
             for name, host in (("claude-1", ""), ("codex-1", "bobs-laptop")):
                 participant = store.upsert_participant("test", session_key("test", host, name), host=host)
-                store.create_membership(room.id, participant.id, name, "hash-" + name)
+                store.create_membership(room.id, participant.id, name)
             review = store.open_review(room.id, PR, "", "codex-1")
             store.add_review_item(
                 review["id"],
@@ -91,7 +91,6 @@ def test_handoff_poster_belongs_to_the_person_who_clicks() -> None:
                 room_id=room.id,
                 data={"item": "F1", "to": "confirmed", "by": "codex-1", "board": review["id"]},
             )
-            hosted.state.agents.refresh_index()
 
         hosted.on_loop(seed)
         board = page_board(alice.get("/api/rooms/build/review"))

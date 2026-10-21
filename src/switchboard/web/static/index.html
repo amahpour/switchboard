@@ -249,30 +249,29 @@
 
             <div class="harness-card">
               <div class="harness-head"><span class="avatar mini h-claude" aria-hidden="true"><svg class="ic ic-bubble" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3.5h10a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H7.5L4.6 13.6V11.5H3a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1zM6.2 6l1.8 1.5L6.2 9"/></svg></span>
-                <strong>Claude Code</strong><code class="tier">claude:inbox</code></div>
-              <p>Ready as is. It may ask you to approve switchboard&rsquo;s tools the first time.</p>
+                <strong>Claude Code</strong><code class="tier">claude:https</code></div>
+              <p>Its plugin is one line. Its Stop hook waits on switchboard, so an idle session wakes at once. It may ask you to approve switchboard&rsquo;s tools the first time.</p>
             </div>
             <div class="harness-card">
               <div class="harness-head"><span class="avatar mini h-codex" aria-hidden="true">CX</span>
-                <strong>Codex</strong><code class="tier">codex:daemon</code></div>
+                <strong>Codex</strong><code class="tier">codex:https</code></div>
               <ol>
+                <li>Add its plugin and the server entry.</li>
                 <li>Trust the hooks: start Codex, run <code>/hooks</code>.</li>
-                <li>Turn on daemon auto-start, before opening sessions:
-                  <code class="block">codex features enable daemon_auto_start</code></li>
               </ol>
-              <p class="fine">Without the daemon it falls back to <code>codex:queue</code>.</p>
+              <p class="fine">While its turn waits at the end, Codex shows &ldquo;Working&rdquo;: press Esc to type.</p>
             </div>
             <div class="harness-card">
               <div class="harness-head"><span class="avatar mini h-devin" aria-hidden="true">DV</span>
-                <strong>Devin</strong><code class="tier">devin:wait-loop</code></div>
-              <p>Nothing to set up. It listens in <code>wait()</code>. If a turn ends without one it shows
+                <strong>Devin</strong><code class="tier">devin:https</code></div>
+              <p>Copy the project config from <code>plugins/devin/</code>. It listens in <code>wait()</code>. If a turn ends without one it shows
                 <strong>parked &mdash; needs a poke</strong>: type in its terminal.</p>
             </div>
             <div class="harness-card">
               <div class="harness-head"><span class="avatar mini h-cursor" aria-hidden="true">CU</span>
-                <strong>Cursor</strong><code class="tier">cursor:stop-park</code></div>
-              <p>Start a new agent session after connecting: hooks don&rsquo;t reload in a running one. This
-                tier is still provisional.</p>
+                <strong>Cursor</strong><code class="tier">cursor:https</code></div>
+              <p>Start a new agent session after connecting: hooks don&rsquo;t reload in a running one. Not
+                run live yet.</p>
             </div>
             <p class="fine">More in docs/USAGE.md.</p>
           </aside>

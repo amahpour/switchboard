@@ -10,15 +10,15 @@ Status (2026-09-25): the Docker layout below is **built and partly verified** on
 
 ## 2. Layout
 
-Everything runs in **one** container. The Claude inbox socket, the Codex app-server control socket, `SO_PEERCRED` and the pid liveness checks all need the same PID, mount and network namespaces. `docker exec` joins them ([docs](https://docs.docker.com/reference/cli/docker/container/exec/)). Separate containers that share a volume don't.
+Everything runs in **one** container. The broker listens on `127.0.0.1` only, and the CLI's peer check (`SO_PEERCRED` and the process ancestry that tells your terminal from an agent's) needs the same PID, mount and network namespaces. `docker exec` joins them ([docs](https://docs.docker.com/reference/cli/docker/container/exec/)). Separate containers that share a volume don't.
 
 ```
 Mac                                        Docker Desktop VM (linux/arm64)
  browser ─ switchboard.localhost:8765 ─▶ 127.0.0.1:8765 / [::1]:8765 ─▶ container switchboard-box (user dev, no sudo)
                                                                         forward.sh (socat) <eth0 IP>:8765 ─▶ 127.0.0.1:8765
  tab 1 ─── docker compose exec ─────────────────────────────────────▶   switchboard broker on 127.0.0.1:8765, SQLite in /var/lib/switchboard
- tabs 2-5 ─ docker compose exec ────────────────────────────────────▶   claude / codex / agent / devin, each with `switchboard mcp` (stdio) + hooks;
-                                                                        Codex daemon + Claude inbox sockets here; egress: dnsmasq + iptables, :443 only
+ tabs 2-5 ─ docker compose exec ────────────────────────────────────▶   claude / codex / agent / devin, each with its plugin and hooks, connected to the
+                                                                        broker over HTTPS; egress: dnsmasq + iptables, :443 only
 ```
 
 - **Broker bind:** the broker keeps its `127.0.0.1` bind (a guardrail, unchanged here). A published port arrives on the container's own interface, not its loopback ([sbx](https://docs.docker.com/ai/sandboxes/workflows/development/) documents the same rule), so `sandbox/forward.sh` relays the container address's port 8765 to `127.0.0.1:8765` with `socat`. The port is the same inside and out, so the broker's Host and Origin checks (`switchboard.localhost:8765`) hold without changes. The Mac side is published on loopback only.
@@ -55,7 +55,7 @@ Changes from the first (untested) version of this design, found while building i
     build: {context: ., additional_contexts: {switchboard-src: ..}}
     image: switchboard-box
     container_name: switchboard-box
-    init: true                        # reaps orphaned codex app-server / MCP children
+    init: true                        # reaps orphaned child processes of the agents
     environment: {SWITCHBOARD_FIREWALL: "${SWITCHBOARD_FIREWALL:-1}", SWITCHBOARD_PORT: "${SWITCHBOARD_PORT:-8765}"}
     cap_drop: [ALL]
     cap_add: [NET_ADMIN, NET_RAW, NET_BIND_SERVICE]   # used by the root entrypoint; dev gets CapEff 0
@@ -179,7 +179,7 @@ Don't add `github.com`, `registry.npmjs.org`, `pypi.org` or `googleapis.com` (on
    switchboard login                              # any tab: prints http://switchboard.localhost:8765/login?t=…
    cd /work/myrepo                                # tabs 2-5, then one of:
    claude --dangerously-skip-permissions
-   codex                                          # never + danger-full-access come from config.toml; daemon auto-starts
+   codex                                          # never + danger-full-access come from config.toml
    agent --yolo --approve-mcps
    devin --permission-mode dangerous              # per 3000.11.3 --help; newer docs call this mode "bypass"
    ```
@@ -208,7 +208,7 @@ Never bind-mount a host repo writable. Agents can plant `.git/hooks`, `.claude/s
      docker cp "switchboard-box:$p" "$R/"; done
    ```
    Apart from the DNS log, the agents run as the uid that owns these files, so any of them may have been edited.
-2. **Per-run reset (keeps logins):** `docker compose down -v` deletes `switchboard-data` (the database, web sessions and hook copies; the next `switchboard start` writes the hook copy again) and `work`. External volumes are never removed ([compose down](https://docs.docker.com/reference/cli/docker/compose/down/)).
+2. **Per-run reset (keeps logins):** `docker compose down -v` deletes `switchboard-data` (the database and web sessions) and `work`. External volumes are never removed ([compose down](https://docs.docker.com/reference/cli/docker/compose/down/)).
 3. **Full reset**, after any run that could have touched credentials:
    1. Log out inside the box: `/logout` in Claude, then `codex logout`, `agent logout` and `devin auth logout`.
    2. Run `docker compose down -v && docker volume rm switchboard-home && docker compose build --no-cache box`.
@@ -269,14 +269,13 @@ tart delete switchboard-run1                           # reset
 
 ## 9. Known gaps
 
-- **Not run yet:** `install-agents.sh` (and so the installers under `cap_drop: ALL`, the versioned Devin `setup.sh` and the Codex daemon updater switch), the §4 logins (Cursor login in Docker in particular), Devin's CLI hosts, and any agent session inside the box. Claude's inbox socket and session registry, Codex's control socket and Cursor's transcript paths are unchecked on Linux; switchboard's own Linux code paths (`/proc`, `SO_PEERCRED`, Linux `lsof`) pass the test suite (§10). Running the four agents inside the box was #59, closed until someone needs it; its body is the checklist for that run.
+- **Not run yet:** `install-agents.sh` (and so the installers under `cap_drop: ALL` and the versioned Devin `setup.sh`), the §4 logins (Cursor login in Docker in particular), Devin's CLI hosts, and any agent session inside the box. Cursor's transcript paths are unchecked on Linux; switchboard's own Linux code paths (`/proc`, `SO_PEERCRED`) pass the test suite (§10). Running the four agents inside the box was #59, closed until someone needs it; its body is the checklist for that run.
 - **`switchboard-home` is dev-writable and outlives rebuilds.** Agents can change `~/.profile`, `~/.bashrc`, `~/.local/bin` and every CLI in it; that reaches `dev`'s shells only (root's `PATH` and the entrypoint never read it), but a rebuild doesn't reset it. After a run you don't trust, do the full reset (§7).
-- **Everything shares one uid.** The broker must run as `dev`, because the Codex control socket is 0600. So any agent can read every login, the broker DB and the web-session secret, and can kill the broker or `forward.sh` and listen on the port itself.
+- **Everything shares one uid.** The broker runs as `dev`, because its socket is 0600 and your shell is `dev` too. So any agent can read every login, the broker DB and the web-session secret, and can kill the broker or `forward.sh` and listen on the port itself.
 - **The relay widens who reaches the broker's TCP port** from the box's loopback to anything that can reach the container's address on the switchboard port: the Mac's published loopback ports (by design) and other containers on the `switchboard_default` network (none, unless you add one). The broker sees every relayed connection as `127.0.0.1`; it doesn't trust client addresses anyway (Host, Origin and the session cookie decide).
 - **Allowed hosts are still exits.** Uploads made with an attacker's key work. The ipset matches IPs, so other sites on a shared CDN IP are reachable too (`chatgpt.com` resolved to Cloudflare addresses). Lookups of subdomains under allowed domains are a slow DNS side channel (inferred).
 - **Nested sandboxes may fail here:** Codex workspace-write (bwrap; [Codex docs](https://learn.chatgpt.com/docs/agent-approvals-security), [codex#46246](https://github.com/openai/codex/issues/46246)), Cursor's sandbox, Devin `--sandbox` and Claude's Bash sandbox. With approvals off they add little. Don't loosen the container to make them work.
 - **Cursor has not been tested live yet.** Its Linux transcript paths haven't been checked.
-- **Codex on Linux:** switchboard sees which Codex TUIs are attached through Linux `lsof +E` (peer inodes), which cuts socket paths at the first space: a control socket path with whitespace is never matched, so no TUI counts as attached there (fail closed). Tested with the fake app-server and a real `lsof` in the test container, not a live Codex.
 - **No remote access from inside the box, by design.** Its firewall drops TCP 22 both ways (`sandbox/firewall.sh`) and it never gets `~/.ssh`, so nothing in the box can dial out over SSH and nothing can dial in. An agent in the box reaches a switchboard server over HTTPS only through the allowlist (`sandbox/allowlist.txt`).
 
 ## 10. The Linux test run

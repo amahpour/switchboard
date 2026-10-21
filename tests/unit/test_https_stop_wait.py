@@ -15,7 +15,7 @@ from engine_world import World
 from switchboard.adapters import HTTPS_CLAUDE, HTTPS_CODEX, HTTPS_CURSOR
 from switchboard.adapters.https import _held
 from switchboard.config import Config
-from switchboard.models import HTTPS_MCP_PID, HookEvent
+from switchboard.models import HookEvent
 
 
 @pytest.fixture
@@ -24,9 +24,8 @@ def w(tmp_path: Path, clock: FakeClock) -> World:
 
 
 def https_session(w: World, harness: str, name: str, key: str) -> tuple[Any, Any]:
-    """An idle session over HTTPS (§49.3): its adapter is picked by the session's host and pid."""
+    """An idle session over HTTPS (§49.3): its adapter is picked by the session's device."""
     p, m = w.agent(name, harness=harness, status="idle", hooks=True, host="laptop")
-    p = w.store.update_participant(p.id, mcp_pid=HTTPS_MCP_PID)
     assert w.engine.adapter(p) is w.engine.adapters[key]
     return p, m
 
@@ -115,16 +114,6 @@ def test_only_codex_over_https_is_marked_not_listening_for_a_closed_stop_wait(
     p, m = https_session(w, harness, f"{harness}-1", key)
     stop_wait(w, p, conn_id=7)
     w.actions += w.engine.close_conn_sinks(7)
-    assert w.engine.lost_stops == {} and w.engine.parked_reason(m.id) is None
-
-
-def test_a_local_codex_is_never_marked(w: World) -> None:
-    """A Codex on this machine never parks at Stop (it is woken through its app-server), so a
-    closed connection of its own has no Stop wait to lose. Fails if a wait() closing marks it."""
-    p, m = w.agent("codex-2", harness="codex", status="idle", hooks=True)
-    _sink, acts = w.engine.open_wait(w.p(p), w.m(m), "w1", 50, conn_id=9)
-    w.actions += acts
-    w.actions += w.engine.close_conn_sinks(9)
     assert w.engine.lost_stops == {} and w.engine.parked_reason(m.id) is None
 
 

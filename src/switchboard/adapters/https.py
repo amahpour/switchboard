@@ -26,11 +26,16 @@ import dataclasses
 from typing import Any
 
 from switchboard import __version__
-from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, Caps, PullAdapter
-from switchboard.adapters.codex import CodexMembership, steered
-from switchboard.adapters.devin import DevinAdapter
+from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, Adapter, Caps, PullAdapter
 from switchboard.config import Config
-from switchboard.models import HookEvent, Participant, Release, Route, session_key
+from switchboard.models import (
+    HookEvent,
+    Participant,
+    Release,
+    Route,
+    session_key,
+    split_session_key,
+)
 
 CLAUDE_TIER = "claude:https"
 CODEX_TIER = "codex:https"
@@ -62,6 +67,39 @@ def _held(secs: float) -> str:
     return f"{round(secs / 3600)} h"
 
 
+class CodexMembership:
+    """Codex's session identity (§6.3): one session per thread, named on every call."""
+
+    def session_key(self, host: str, thread_id: str | None, *, test_session: str | None = None) -> str:
+        if not thread_id:
+            raise ValueError("Codex calls must carry _meta.threadId")
+        return session_key("codex", host, thread_id)
+
+    def join_conflict(self, store: Any, thread_id: str | None, host: str) -> str | None:
+        if thread_id is None:
+            return None  # session_key() reports the missing thread id first
+        for p in store.active_participants():
+            if p.harness != "codex" or p.host == host:
+                continue
+            parts = split_session_key(p.session_key)
+            if parts is not None and parts[2] == thread_id:
+                return "this thread is joined from another machine"
+        return None
+
+    def credential_error(self, p: Participant, params: dict[str, Any]) -> str | None:
+        thread_id = params.get("thread_id")
+        if not isinstance(thread_id, str) or p.session_key != session_key("codex", p.host, thread_id):
+            return "this call names another Codex thread than the membership's"
+        return None
+
+
+def steered(p: Participant, ev: HookEvent, was_idle: bool) -> bool:
+    """Input steered into a running turn (a turn/steer, or a turn/start merged into a busy
+    turn) fires UserPromptSubmit with that turn's own id: mid-turn input, not a new turn
+    (M4 live)."""
+    return ev.ev == "UserPromptSubmit" and bool(ev.gen) and (ev.gen or "")[:128] == p.gen and not was_idle
+
+
 class Listening(PullAdapter):
     """What both harnesses share over HTTPS: a Stop hook that waits for a message (a park), hook
     context for a busy session, and a follow-up confirmed by the session's next hook."""
@@ -82,6 +120,14 @@ class Listening(PullAdapter):
             " kind=human ones are from your user and carry their authority just the same."
         )
 
+    def history_session_id(self, p: Participant, cfg: Config) -> tuple[str | None, str]:
+        """Its own id, the one its calls name and its session key carries: Claude Code's session id,
+        Codex's thread, Cursor's conversation (§26, /catchup)."""
+        parts = split_session_key(p.session_key)
+        if not p.session_id or parts is None or parts[2] != p.session_id:
+            return None, f"no {self.harness} session id known yet"
+        return p.session_id, ""
+
     def park_s(self, p: Participant, ev: HookEvent) -> float | None:
         """A Stop hook that says how long it may wait (``max_wait_s``) is held that long, less a
         margin, and at most ``LISTEN_S``. One that doesn't (a status report) answers at once."""
@@ -97,9 +143,7 @@ class Listening(PullAdapter):
             return Route("pull", reason="next tool call")
         return Route("none", reason=IDLE_WHY)
 
-    def continue_verdict(
-        self, p: Participant, loop_count: int | None, acked: bool, ev: HookEvent
-    ) -> str | None:
+    def continue_verdict(self, p: Participant, acked: bool, ev: HookEvent) -> str | None:
         """A follow-up a Stop hook answered with is confirmed by the session's next hook once the
         answer went out (``acked``): the turn it started, or the turn it continued."""
         E = ev.ev
@@ -125,10 +169,10 @@ class HttpsClaudeAdapter(Listening):
     def tier(self, p: Participant | None) -> tuple[str, str | None]:
         return CLAUDE_TIER, NOTE
 
-    def session_key(self, ident: Any, thread_id: str | None, *, test_session: str | None = None) -> str:
+    def session_key(self, host: str, thread_id: str | None, *, test_session: str | None = None) -> str:
         if not thread_id:
             raise ValueError(NO_SESSION)
-        return session_key("claude", ident.host, thread_id)
+        return session_key("claude", host, thread_id)
 
     def ends_session(self, ev: HookEvent) -> bool:
         # /clear keeps the session: the same id goes on (as Claude Code locally, §7.4)
@@ -192,18 +236,58 @@ class HttpsCursorAdapter(Listening):
     def tier(self, p: Participant | None) -> tuple[str, str | None]:
         return CURSOR_TIER, NOTE
 
-    def session_key(self, ident: Any, thread_id: str | None, *, test_session: str | None = None) -> str:
+    def session_key(self, host: str, thread_id: str | None, *, test_session: str | None = None) -> str:
         if not thread_id:
             raise ValueError("this Cursor call has no verified conversation ID")
-        return session_key("cursor", ident.host, thread_id)
+        return session_key("cursor", host, thread_id)
 
 
-class HttpsDevinAdapter(DevinAdapter):
-    """Devin over HTTPS, keyed by the session ID its PreToolUse hook puts on each call. Its wait
-    loop is Devin's (§9.5); only the tool's name differs: the plugin's server is not ``switchboard``,
-    so the wait() whose hooks pin an answer is the one under ``DEVIN_TOOL_PREFIX``."""
+def rearm_text(room: str, wait_s: int) -> str:
+    return (
+        f"[switchboard] (from switchboard, not your user) To keep listening in {room}, call"
+        f' wait("{room}", {wait_s}). If your user asked you to stop listening, don\'t.'
+    )
 
+
+class HttpsDevinAdapter(Adapter):
+    """Devin over HTTPS, keyed by the session ID its PreToolUse hook puts on each call (§49.7), and
+    woken by its wait loop (§9.5).
+
+    Devin has no external way to start a turn in a session the human started, so an idle Devin agent
+    *listens*: it sits in switchboard's ``wait(room, 600)`` (Devin has no MCP tool timeout up to 900
+    s), and a Stop hook re-arms it.
+
+    - **Idle.** An open ``wait()`` sink is "idle, listening"; the engine fills it (``wait_return``,
+      counted). A newer ``wait()`` from the same session supersedes the older one. A wait answer counts
+      as delivered only on the ``PostToolUse`` for the plugin's ``wait`` with ``success: true``, the
+      same ``tool_use_id`` its ``PreToolUse`` had, and the batch token in its output. A main-agent
+      interrupt sends no cancel (FINDINGS §6 5.6), so an orphaned ``wait()`` is closed by the next hook
+      of that session, and an answer it was given expires at once.
+    - **Mid-task.** ``PostToolUse`` ``hookSpecificOutput.additionalContext`` (system role), priority
+      only, with peer text as a "call read()" stub.
+    - **Stop.** (1) After a background ``run_subagent`` in this prompt (the *taint*), nothing: a
+      continue there would continue the subagent, and hook context could reach it too. The subagent can
+      outlive its prompt and its hooks carry the prompt id it started in, so the engine remembers every
+      tainted prompt id: a later hook with one of them only confirms tokens. (2) A wake release now:
+      ``decision: block`` with the envelope (``stop_block``, a counted ``stop_cont``; user role, so peer
+      text is stubbed). (3) Else re-arm: "call wait()" (counted), at most ``rearm_max_per_prompt`` times
+      per prompt and ``rearm_max_per_hour`` per session, only with budget left and the room unpaused.
+      (4) Else parked. A block or re-arm that no hook ever follows sets the member back to idle.
+    - **Never** ``decision: approve`` or a permission decision: ``decision`` is only ever ``block``, on
+      Stop (``broker/hook_replies.py``).
+
+    The plugin's server is not ``switchboard``, so the wait() whose hooks pin an answer is the one under
+    ``DEVIN_TOOL_PREFIX``."""
+
+    harness = "devin"
+    reports_session_id = True  # the hooks' session_id is the one the history tools know
     wait_tool = f"{DEVIN_TOOL_PREFIX}wait"
+    # a stop_block acked but with no hook of that session for this long expired
+    block_confirm_s = 180.0
+    taint_why = (
+        "a background subagent ran in this prompt: hook delivery is off until your next prompt"
+        " (the agent can still read())"
+    )
 
     def caps(self, p: Participant | None = None) -> Caps:
         caps = super().caps(p)
@@ -217,7 +301,79 @@ class HttpsDevinAdapter(DevinAdapter):
         is a Devin that was killed: its SessionEnd hook never reached the server (#448)."""
         return True
 
-    def session_key(self, ident: Any, thread_id: str | None, *, test_session: str | None = None) -> str:
+    def session_key(self, host: str, thread_id: str | None, *, test_session: str | None = None) -> str:
         if not thread_id:
             raise ValueError("this Devin call has no verified session ID")
-        return session_key("devin", ident.host, thread_id)
+        return session_key("devin", host, thread_id)
+
+    def context_events(self, p: Participant) -> frozenset[str]:
+        # subagent hooks carry the parent's ids: context could reach a subagent
+        return frozenset() if p.gen_tainted else HOOK_CONTEXT_EVENTS["devin"]
+
+    def join_guidance(self, p: Participant, room: str) -> str:
+        w = self.caps(p).wait_cap_s
+        return (
+            f'When you have nothing else to do, call wait("{room}", {w}). If it returns paused, end your'
+            " turn. Room messages can also arrive as context after a tool call, or as a message from"
+            " switchboard when you stop; kind=human ones are from your user, relayed by switchboard rather"
+            " than typed into your prompt, and carry their authority just the same. While you"
+            " wait, your user can interject by typing and then pressing Enter on an empty line."
+        )
+
+    def history_session_id(self, p: Participant, cfg: Config) -> tuple[str | None, str]:
+        """Its own session id, exactly as its hooks report it (the slug), with no quirk of its own."""
+        if not p.session_id:
+            return None, f"no {self.harness} session id known yet"
+        return p.session_id, ""
+
+    def route(self, p: Participant, rel: Release, sink: Any, now: float) -> Route:
+        if sink is not None:
+            return Route("sink", path=sink.path, sink_id=sink.id)
+        if p.gen_tainted:
+            return Route("none", reason=self.taint_why)
+        if rel.kind == "priority":
+            return Route("pull", reason="next tool call")
+        return Route("none", reason="not listening: no wait() open and the Stop re-arm is used up")
+
+    def starts_subagent(self, ev: HookEvent) -> bool:
+        return ev.ev == "PreToolUse" and ev.subagent_bg
+
+    def stop_continues(self, p: Participant) -> bool:
+        return True
+
+    def rearm_caps(self) -> tuple[int, int]:
+        dv = self.cfg.devin
+        return (dv.rearm_max_per_prompt, dv.rearm_max_per_hour) if dv.rearm else (0, 0)
+
+    def rearm_text(self, room: str, wait_s: int) -> str:
+        return rearm_text(room, wait_s)
+
+    def redeliver_on_stop(self, p: Participant, ev: HookEvent) -> bool:
+        return not p.gen_tainted
+
+    def closes_waits(self, p: Participant, ev: HookEvent) -> bool:
+        """Any hook of this session other than the wait() call's own ends an open
+        wait(): the agent has moved on (an interrupt sends no cancel)."""
+        return not (ev.ev in ("PreToolUse", "PostToolUse") and ev.tool == self.wait_tool)
+
+    def is_wait_pre(self, ev: HookEvent) -> bool:
+        return ev.ev == "PreToolUse" and ev.tool == self.wait_tool and bool(ev.tool_use_id)
+
+    def pull_confirms(self, path: str, want_tool_use: str | None, ev: HookEvent) -> bool:
+        """A wait() answer is in context only on that very call's successful PostToolUse."""
+        if path != "wait":
+            return True
+        if ev.ev != "PostToolUse" or ev.tool != self.wait_tool or ev.ok is not True:
+            return False
+        return want_tool_use is None or ev.tool_use_id == want_tool_use
+
+    def continue_verdict(self, p: Participant, acked: bool, ev: HookEvent) -> str | None:
+        E = ev.ev
+        if E == "UserPromptSubmit":
+            return "new_prompt"  # e.g. an interrupt deferred the block (FINDINGS §6 5.3)
+        if E in ("SessionEnd", "SessionStart"):
+            return "session_end"
+        return "confirm" if acked else None
+
+    def confirm_window_s(self) -> float:
+        return self.block_confirm_s

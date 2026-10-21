@@ -12,11 +12,10 @@ from typing import Any
 
 import pytest
 from conftest import FakeClock
+from engine_agents import post, session
 from engine_world import World
-from test_codex_adapter import attach, codex
 
 from switchboard.config import Config
-from switchboard.models import Push
 
 QUIET, HOLD = 3.0, 60.0
 
@@ -125,15 +124,15 @@ def test_the_batch_cap_in_rendered_characters(w: World) -> None:
 
 
 def test_the_cap_follows_each_harness_context_limit(w: World) -> None:
-    """Codex keeps at most 5,000 characters of context: a steer batch fits in it."""
-    p, mx = codex(w, status="busy")
-    attach(w, view="busy")
+    """Codex keeps at most 5,000 characters of context: a hook context batch fits in it, and what
+    doesn't stays pending. Fails if the batch is cut to the room's cap instead of the harness's."""
+    p, mx = session(w, "codex-1", "codex", status="busy")
     msgs = [w.human("y" * 1400) for _ in range(6)]
-    [push] = [a for a in w.take() if isinstance(a, Push)]
-    assert push.path == "steer" and len(push.text) <= w.cfg.codex.ctx_max_chars
-    assert 1 <= len(ids(push.text)) <= 3
+    out = post(w, p, tool="Bash")
+    assert out is not None and out.kind == "context" and len(out.text) <= w.cfg.codex.ctx_max_chars
+    assert 1 <= len(ids(out.text)) <= 3
     pending = [d["message_id"] for d in w.store.deliveries(mx.id) if d["state"] == "pending"]
-    assert pending == [x.id for x in msgs[len(ids(push.text)) :]]
+    assert pending == [x.id for x in msgs[len(ids(out.text)) :]]
 
 
 def test_one_huge_message_is_never_stuck(w: World) -> None:

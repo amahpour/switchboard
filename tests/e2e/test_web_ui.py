@@ -47,8 +47,6 @@ from playwright.sync_api import (
 )
 from ui_world import CI_URL, JS_SCHEME, PROFILE, UIWorld, wait_js
 
-from switchboard import __version__
-
 pytestmark = pytest.mark.e2e
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -1052,13 +1050,21 @@ def test_inspector_shows_the_member_detail(ui: UI) -> None:
     expect(page.locator("#members-view")).not_to_have_class(cls("offscreen"))
     expect(page.locator('#buddy-list .member[data-name="bench"]')).to_be_visible()
 
-    # a member with no session id gets the reason instead (codex-1: no Codex thread id)
-    with page.expect_response(lambda r: r.url.endswith("/api/rooms/build/members/codex-1")) as got:
+    # codex-1 runs with approvals off, and says so
+    with page.expect_response(lambda r: r.url.endswith("/api/rooms/build/members/codex-1")):
         page.click('#buddy-list .member[data-name="codex-1"]')
+    expect(body.locator(".insp-attn")).to_contain_text("Approvals off")
+
+    # a member with no session id gets the reason instead (a scripted agent: no history tool knows it)
+    room = "e2e-no-session-id"
+    ui.world.create_room(f"#{room}")
+    ui.world.add_agents(f"#{room}", ("scout",))
+    page = ui.open(room=room)
+    with page.expect_response(lambda r: r.url.endswith(f"/api/rooms/{room}/members/scout")) as got:
+        page.click('#buddy-list .member[data-name="scout"]')
     why = got.value.json()["session"]
     assert not why["id"] and why["why"]
-    expect(body.locator(".insp-facts")).to_contain_text(why["why"])
-    expect(body.locator(".insp-attn")).to_contain_text("Approvals off")
+    expect(page.locator("#insp-body .insp-facts")).to_contain_text(why["why"])
 
 
 def test_inspector_hold_posts_the_command_and_shows_held(ui: UI) -> None:
@@ -2051,15 +2057,12 @@ def test_the_tier_badge_says_how_the_agent_is_woken(ui: UI) -> None:
     expect(page.locator("#buddy .pane-foot, #pane .pane-foot")).to_have_count(0)
     expect(page.locator("#buddy-list")).not_to_contain_text("Select an agent to inspect it")
     badge = page.locator('#buddy-list .member[data-name="claude-1"] code.tier')
-    expect(badge).to_have_attribute(
-        "title", "How switchboard wakes it: Claude Code’s own inbox: switchboard wakes it at once"
-    )
+    how = "Claude Code over HTTPS: its Stop hook waits for messages and wakes it when it is idle"
+    expect(badge).to_have_attribute("title", f"How switchboard wakes it: {how}")
     devin = page.locator('#buddy-list .member[data-name="devin-1"] code.tier')
     expect(devin).to_have_attribute("title", re.compile("Devin waits in wait"))
     page.click('#buddy-list .member[data-name="claude-1"]')
-    expect(page.locator("#insp-tier-how")).to_have_text(
-        "Claude Code’s own inbox: switchboard wakes it at once"
-    )
+    expect(page.locator("#insp-tier-how")).to_have_text(how)
 
 
 def test_empty_room_copy_keeps_its_icon(ui: UI) -> None:
@@ -2391,53 +2394,6 @@ def review_room(ui: UI, slug: str, pr: str | None = None, **open_args: Any) -> P
 
 def lane_labels(page: Page, lane: str) -> list[str]:
     return page.locator(f"#board .lane-{lane} .board-card").evaluate_all("cs => cs.map(c => c.dataset.item)")
-
-
-def test_the_board_names_a_member_that_cant_use_it(ui: UI) -> None:
-    """#249: a member whose switchboard lists no tools (from before the list) can't move cards,
-    so the board says so, at once when it joins, and says nothing about the ones that can."""
-    slug = "e2e-board-unable"
-    page = review_room(ui, slug)
-    page.click("#board-toggle")
-    expect(page.locator("#board-unable")).to_have_count(0)  # claude-1 and codex-1 list review
-    ui.world.add_old_agent("#" + slug, "codex-2")
-    line = page.locator('#board-unable .board-unable-line[data-member="codex-2"]')
-    expect(line).to_have_text(
-        "codex-2 can't use the board: its switchboard is older than this one and doesn't list its"
-        " tools. Upgrade it, then restart its session."
-    )
-    expect(page.locator("#board-unable .board-unable-line")).to_have_count(1)
-    expect(line.locator("svg.ic-warn, span.ic-warn")).to_have_count(1)
-
-
-def test_members_name_a_member_behind_and_the_inspector_shows_every_claim(ui: UI) -> None:
-    """#299: a Members row says what a member runs only when it matters (behind this broker by a
-    minor release, or without the review tool), so a room of current agents stays one line each;
-    the Inspector always shows the reported version and tools. Light, dark and the phone. (The
-    world's old agents share one process, and claims are per MCP process: so only one here.)"""
-    room = "e2e-member-claims"
-    ui.world.create_room("#" + room)
-    ui.world.add_agents("#" + room, ("claude-1",))
-    ui.world.add_old_agent("#" + room, "codex-1", version="0.9.0", tools=["join", "say", "read"])
-    for options in ({"color_scheme": "light"}, {"color_scheme": "dark"}, {**PHONE, "color_scheme": "light"}):
-        page = ui.open(room=room, **options)
-        if "viewport" in options:
-            page.click("#buddy-toggle")
-        current = page.locator('#buddy-list .member[data-name="claude-1"]')
-        old = page.locator('#buddy-list .member[data-name="codex-1"]')
-        expect(current.locator(".m-claim")).to_have_count(0)
-        expect(old.locator(".m-claim")).to_have_text(
-            "switchboard 0.9.0 (behind, no review tool): run switchboard update there"
-        )
-        no_horizontal_scroll(page)
-        old.click()
-        facts = page.locator("#insp-body .insp-facts")
-        expect(facts).to_contain_text("0.9.0 (behind)")
-        expect(facts).to_contain_text("join, read, say")
-        page.click("#insp-back")
-        current.click()
-        expect(facts).to_contain_text(__version__)
-        expect(facts).to_contain_text("review")
 
 
 def test_the_review_board_shows_each_item_in_its_lane(ui: UI) -> None:

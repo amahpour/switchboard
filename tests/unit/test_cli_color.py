@@ -150,10 +150,9 @@ WHO = {
             "name": "claude-1",
             "harness": "claude",
             "status": "idle",
-            "tier": "claude:inbox",
+            "tier": "claude:https",
             "tier_note": None,
             "approval_mode": "prompting",
-            "env_leak": False,
             "held": False,
             "queued": 0,
             "parked": None,
@@ -165,10 +164,9 @@ WHO = {
             "name": "codex-1",
             "harness": "codex",
             "status": "busy",
-            "tier": "codex:daemon",
+            "tier": "codex:https",
             "tier_note": None,
             "approval_mode": "bypass",
-            "env_leak": True,
             "held": True,
             "queued": 2,
             "parked": None,
@@ -178,10 +176,9 @@ WHO = {
             "name": "devin-1",
             "harness": "devin",
             "status": "offline",
-            "tier": "devin:wait-loop",
+            "tier": "devin:https",
             "tier_note": None,
             "approval_mode": "unknown",
-            "env_leak": False,
             "held": False,
             "queued": 4,
             "parked": "its turn ended without wait()",
@@ -227,7 +224,7 @@ def spec_report(mp: pytest.MonkeyPatch, tmp: Path, clock: FakeClock) -> tuple[li
 def _user_home(tmp: Path) -> Path:
     """A user home with a config value that carries an escape sequence, and the hook an old
     ``switchboard install`` wrote for ``tmp/sbh``, so ``uninstall`` has a line to remove."""
-    from switchboard.install.common import hook_command
+    from old_install import hook_command
 
     uh = tmp / "uh"
     (uh / ".claude").mkdir(parents=True, exist_ok=True)

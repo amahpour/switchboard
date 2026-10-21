@@ -5,7 +5,7 @@
 - exactly one wheel and one sdist, of `switchboard-chat` at the version in pyproject.toml and
   switchboard/__init__.py, and the wheel's metadata saying the same;
 - the wheel carries what a running broker reads from its own package: the web UI's files and
-  the hook script, which a harness runs as a copy of that file;
+  the table of hook replies (`broker/hook_replies.py`);
 - the sdist carries only what builds the wheel (src/switchboard, pyproject.toml) and the README,
   LICENSE and CHANGELOG: not the screenshots, the docs or the tests;
 - the wheel installs into a fresh environment, and its `switchboard --version` says the version.
@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WHEEL_NEEDS = (
     "switchboard/__init__.py",
     "switchboard/cli.py",
-    "switchboard/hook/switchboard_hook.py",
+    "switchboard/broker/hook_replies.py",
     "switchboard/web/static/index.html",
     "switchboard/web/static/app.js",
     "switchboard/web/static/md.js",

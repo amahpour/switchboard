@@ -8,11 +8,12 @@ from pathlib import Path
 
 import pytest
 from conftest import FakeClock
+from engine_agents import listener
 from engine_world import KEY, World
 
 from switchboard import envelope
 from switchboard.config import Config
-from switchboard.models import Push, Snapshot
+from switchboard.models import Snapshot
 
 
 @pytest.fixture
@@ -96,23 +97,20 @@ def test_wait_timeout_and_paused_at_timeout(w: World, clock: FakeClock) -> None:
     assert w.resolved(s2.id)[0]["status"] == "paused"  # ...and returns paused, never spins
 
 
-def test_pause_answers_open_waits_and_cancels_unposted_offers(w: World) -> None:
+def test_pause_answers_open_waits_and_ends_a_held_stop_hook(w: World) -> None:
+    """``/pause`` returns an open ``wait()`` as paused and ends a held Stop hook with nothing, and the
+    message that arrives after it waits (nothing is offered into a paused room). Fails if a pause leaves
+    a wait open or a held Stop hook parked."""
     p, m = w.agent("bot")
     s1, acts = w.engine.open_wait(w.p(p), w.m(m), "w1", 50)
     w.actions += acts
-    p2, m2 = w.agent("pushy")
-    msg = w.human("x")
-    # an unposted push offer (as the Claude inbox will make in M3)
-    w.store.expire_batch  # noqa: B018 (exists)
-    items = [(msg.id, True)]
-    w.store.con.execute("UPDATE deliveries SET state='pending' WHERE membership_id=?", (m2.id,))
-    b = w.store.create_batch(m2.id, path="inbox", kind="wake", items=items)
+    p2, m2, park = listener(w, "lis")
     w.store.set_paused(w.room.id, True, "paused by alice")
     w.actions += w.engine.on_command(w.room.id, "pause")
-    assert w.resolved(s1.id)[-1]["status"] in ("paused", "messages")
-    assert w.store.get_batch(b.id).state == "cancelled"
+    assert w.resolved(s1.id)[-1]["status"] == "paused"
+    assert w.engine.sinks.get(park.sink_id).open is False
+    msg = w.human("x")
     assert w.states(m2)[msg.id] == "pending"
-    assert w.delivery(m2, msg)["attempts"] == 0  # cancelled, not an attempt
 
 
 def test_unwait_takes_back_what_the_wait_was_given(w: World) -> None:
@@ -262,7 +260,7 @@ def test_hook_status_transitions(w: World) -> None:
     assert w.p(p).boundary_seq == seq + 1
     w.hook(p, "SessionEnd", reason="clear")
     assert w.p(p).status == "idle"  # /clear keeps the session
-    w.store.set_status(p.id, "waiting-approval", "claude:registry")
+    w.store.set_status(p.id, "waiting-approval", "test")
     w.hook(p, "PostToolUse", ok=True)
     assert w.p(p).status == "waiting-approval"  # hooks never touch the approval hold
     w.hook(p, "SessionEnd", reason="prompt_input_exit")
@@ -284,20 +282,15 @@ def test_session_start_restores_framing_in_claudes_verified_output(w: World, sou
     assert envelope.PEER_WARNING in out.text and envelope.PASS_ADVICE in out.text
 
 
-def test_devin_and_bound_cursor_posttooluse_carry_priority_context_from_m5(w: World) -> None:
+def test_devin_and_cursor_posttooluse_carry_priority_context(w: World) -> None:
     for h in ("devin", "cursor"):
         p, _m = w.agent(f"a-{h}", harness=h, status="busy")
         msg = w.human(f"hi @a-{h}", mentions=(f"a-{h}",))
         out = w.hook(p, "PostToolUse", ok=True)
         assert out is not None and out.kind == "context" and f"id={msg.id}" in out.text
-    # a Cursor session not bound to its conversation yet gets nothing through hooks
-    p, _m = w.agent("a-pend", harness="cursor", status="busy")
-    w.store.update_participant(p.id, bind_state="pending", session_key="cursor:agent:1@1.00")
-    w.human("hi @a-pend", mentions=("a-pend",))
-    assert w.hook(p, "PostToolUse", ok=True) is None
 
 
-def test_codex_posttooluse_carries_priority_context_from_m4(w: World) -> None:
+def test_codex_posttooluse_carries_priority_context(w: World) -> None:
     p, _m = w.agent("a-codex", harness="codex", status="busy")
     msg = w.human("hi @a-codex", mentions=("a-codex",))
     out = w.hook(p, "PostToolUse", ok=True)
@@ -367,30 +360,6 @@ def test_quiet_period_holds_chatter_for_a_waiting_agent(tmp_path: Path, clock: F
     assert w.resolved(sink.id)[0]["status"] == "messages"
 
 
-def test_no_push_without_an_attached_inbox(w: World) -> None:
-    p, m = w.agent("bot", harness="claude", status="idle", hooks=True)
-    w.human("x")
-    assert not [a for a in w.take() if isinstance(a, Push)]
-
-
-def test_three_push_expiries_in_a_row_warn(w: World) -> None:
-    from switchboard.models import Notice
-
-    p, m = w.agent("bot")
-    for i in range(3):
-        msg = w.human(f"m{i}")
-        w.store.con.execute(
-            "UPDATE deliveries SET state='pending', batch_id=NULL WHERE membership_id=?", (m.id,)
-        )
-        w.store.con.execute(
-            "UPDATE batches SET state='cancelled' WHERE membership_id=? AND state='offered'", (m.id,)
-        )
-        b = w.store.create_batch(m.id, path="inbox", kind="wake", items=[(msg.id, True)])
-        w.actions += w.engine.on_expire(b.id, "no_confirm")
-    warns = [a for a in w.take() if isinstance(a, Notice) and "not confirmed" in a.text]
-    assert len(warns) == 1 and w.p(p).push_expiries == 3
-
-
 # ---------------------------------------------------- envelope fitting (review M2)
 HTMLISH = ('<div class="x">\n<b>hi</b>\n</div>\n' * 60)[:1400]
 
@@ -402,7 +371,7 @@ def printed_lines(text: str) -> dict[int, str]:
 def test_hook_context_fits_the_hook_limit_and_every_acked_item_was_shown_whole(w: World) -> None:
     """Escape-heavy text used to overflow the hook's 10,000-char cut, and the cut
     items were acked as in_context: a silent skip."""
-    from switchboard.hook import switchboard_hook as hk
+    from switchboard.broker import hook_replies as hk
 
     p, m = w.agent("claude-1", harness="claude", status="busy", hooks=True)
     msgs = [w.human(HTMLISH) for _ in range(4)]

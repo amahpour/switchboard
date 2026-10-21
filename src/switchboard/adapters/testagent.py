@@ -1,19 +1,18 @@
 """The scripted test agent's harness (DESIGN.md §9.6), tier ``mcp-only``.
 
-``switchboard mcp --harness test --test-session KEY --ack next_call|immediate|never``
-works only against a test-mode broker. Status is inferred from sinks (an
-open wait() is idle, anything else busy); synthetic hook events from a
-subprocess of the fake agent exercise hook confirmation and hook context.
+A scripted agent connects to ``/mcp`` of a **test-mode** broker as the ``test`` client, with an agent
+token like any other, and names its session (``X-Switchboard-Test-Session``) and how its pull answers
+are confirmed (``X-Switchboard-Test-Ack``: ``next_call``, ``immediate`` or ``never``). A broker that
+isn't in test mode refuses the client. Status is inferred from sinks (an open wait() is idle, anything
+else busy); synthetic hook events from the test exercise hook confirmation and hook context.
 """
 
 from __future__ import annotations
 
-import dataclasses
 import re
 from typing import Any
 
-from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, Adapter, HelloClaims
-from switchboard.broker.peer import McpIdentity
+from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, Adapter
 from switchboard.config import Config
 from switchboard.models import Participant, Release, Route
 from switchboard.models import session_key as make_session_key
@@ -29,27 +28,14 @@ class TestAgentAdapter(Adapter):
     test_only = True
     __test__ = False  # not a pytest class
 
-    def hello_claims(self, params: dict[str, Any]) -> HelloClaims:
-        """Its ``mcp.hello`` must name a ``--test-session`` (the session key, below), and may name
-        an ``--ack`` mode (``pull_ack``); an unknown one is ``next_call``."""
-        ts = params.get("test_session")
-        if not isinstance(ts, str) or not TEST_SESSION_RE.match(ts):
-            raise ValueError("--harness test needs --test-session KEY ([A-Za-z0-9_.-]{1,64})")
-        mode = params.get("test_ack")
-        return dataclasses.replace(
-            super().hello_claims(params),
-            test_session=ts,
-            ack_mode=mode if mode in ACK_MODES else "next_call",
-        )
-
     def tier(self, p: Participant | None) -> tuple[str, str | None]:
         return "mcp-only", None
 
-    def session_key(
-        self, ident: McpIdentity, thread_id: str | None, *, test_session: str | None = None
-    ) -> str:
-        # keyed by --test-session, not by process: several scripted agents may share one (§9.6)
-        return make_session_key(self.harness, ident.host, str(test_session))
+    def session_key(self, host: str, thread_id: str | None, *, test_session: str | None = None) -> str:
+        # keyed by the test session, not by a process: several scripted agents may share one (§9.6)
+        if not isinstance(test_session, str) or not TEST_SESSION_RE.match(test_session):
+            raise ValueError("a test agent needs a session key ([A-Za-z0-9_.-]{1,64})")
+        return make_session_key(self.harness, host, test_session)
 
     def pull_ack(self, p: Participant, mode: str | None) -> str:
         return mode if mode in ACK_MODES else "next_call"

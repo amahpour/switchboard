@@ -1,0 +1,24 @@
+### Upgrading
+
+- **Connect each agent over HTTPS before you update, or right after.** From 0.38.0 every agent reaches the broker the same way: at `/mcp`, with an agent token and switchboard's plugin ([docs/USAGE.md](docs/USAGE.md#agents-over-https-a-preview)), on your own machine too (`http://switchboard.localhost:<port>/mcp` on a desktop broker). In **Settings → Agents**, make a token for the device and follow the steps for the harness. The per-session MCP server (`switchboard mcp`) and the hook script that `switchboard install` registered are gone, so an agent still on them loses switchboard's tools and its hooks do nothing.
+- **Update the broker with `switchboard update`, as usual.** The database moves to schema 30 once, after a verified backup beside it (`switchboard.db.v28.bak` from 0.37.x, which is the file as it was). Rooms, messages, people, passkeys, agent tokens, claims, pins and review boards all stay. Every session that was not over HTTPS ends and leaves its rooms, as when any session ends. An agent joins again through its new connection. Sessions over HTTPS are untouched. Columns that only the old path used are dropped, and an older broker refuses the new database, so the backup is the way back to 0.37.2.
+- **If you ran `switchboard install` before, run `switchboard uninstall all`** ([docs/INSTALL.md](docs/INSTALL.md#uninstall)). What it wrote into the harnesses' configs now points at things that are gone. `~/.switchboard/hooks/` holds old copies of the hook script and does nothing; `uninstall --purge-hooks` deletes them once no config runs one, or delete the folder yourself.
+- **Config keys of the old path are ignored.** `[claude] sessions_dir`, `inbox_hold_s`, `inbox_idle_expire_s`; `[codex] control_socket`, `home`, `bin`, `queue_fallback`, `require_thread_proof`, `restart_grace_s`; `[cursor] stop_park_s`, `max_unconfirmed_followups`. The broker names the ones it finds in its log once at start, so an old `config.toml` still loads. You can delete them.
+- **A script that calls `switchboard mcp` or `switchboard hook` now fails.** Each prints one line, saying the verb was retired in 0.38.0 and where agents connect now, and exits 2.
+
+### Removed
+
+- **The per-session MCP server (`switchboard mcp`), the hook script and its copies in your home.** An agent's tools are served by the broker at `/mcp`, and its harness's hooks are the plugin's own: fixed commands that send a few named fields. There is no script of switchboard's on the agent's machine for the agent to edit, and no copy to keep in step.
+- **Claude Code's inbox wake and session registry, and the Codex app-server link: `turn/start`, `turn/steer`, `codex queue`, the thread proof, the liveness check and the daemon restart re-bind.** Nothing of switchboard's reaches into a running session any more. An idle agent is woken by its own Stop hook, which waits on the broker for a message, and a busy one gets context after its next tool call, as an agent over HTTPS did already. That also means the Codex daemon (`daemon_auto_start`) is no longer needed.
+- **The local adapters and tiers: `claude:inbox`, `claude:hook`, `codex:daemon`, `codex:queue`, `codex:link`, `cursor:stop-park`, `devin:wait-loop`.** The tiers are `claude:https`, `codex:https`, `cursor:https` and `devin:https`. Old rows in reports keep their old names.
+- **Members' "env shared", and the agent's reported switchboard version and tools.** Nothing is shared between an agent and the broker's machine now, and the server's tools are the broker's own, so the hint to restart a session after `switchboard update` and the room note about an agent behind the broker are gone with them.
+
+### Changed
+
+- **The docs describe one path.** The README, USAGE, HARNESSES, LIMITATIONS, INSTALL, SANDBOX, SECURITY and DESIGN say how each harness is reached over HTTPS and what was removed ([docs/HARNESSES.md](docs/HARNESSES.md)).
+- **`switchboard report` labels a Stop hook's wake "first hook".** A wake of an earlier release in the same database keeps "turn start". The tier a Stop-hook wake is counted under is the one the session joined with.
+- **`/catchup` works for a Claude Code, Codex or Cursor session over HTTPS that has a session id,** through the adapter of its device. Before, only the local adapters answered, and such a session read as an unknown harness.
+
+### Known limitations
+
+- **The `waiting-approval` status is never set.** Only the old Claude registry and the Codex app-server reported an open approval prompt. The guard that delivers nothing to such a session, and the status in the page, stay for a harness that reports it; none does today. Nothing is delivered into an open prompt anyway, because a message comes only as the answer to a call or hook that follows a finished tool ([docs/DESIGN.md §11](docs/DESIGN.md#11-security-model)).

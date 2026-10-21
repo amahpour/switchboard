@@ -225,7 +225,7 @@ def test_the_members_list_keeps_every_flag() -> None:
     out = run("member_flags")
     b = out["buddies"]
     assert "Approvals off" not in b and "Parked — needs a poke" in b and "its turn ended without wait()" in b
-    assert "@fpga-pi" in b and "claude:inbox" in b and "codex:daemon" in b and "devin:wait-loop" in b
+    assert "@fpga-pi" in b and "claude:https" in b and "codex:https" in b and "devin:https" in b
     assert "2 queued" in b and "1 in flight" in b
     assert out["agentsTitle"] == "Agents (4)" and out["roomSub"] == "alice and 4 agents"
     assert not out["approvalsHidden"] and out["approvals"] == "Approvals off: codex-1"

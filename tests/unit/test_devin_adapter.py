@@ -15,11 +15,10 @@ from engine_world import KEY, World
 
 from switchboard import envelope
 from switchboard.adapters import HTTPS_DEVIN
-from switchboard.adapters.devin import BLOCK_CONFIRM_S, TAINT_WHY, WAIT_TOOL, DevinAdapter
-from switchboard.adapters.https import DEVIN_TOOL_PREFIX, DEVIN_WAIT_CAP_S
+from switchboard.adapters.https import DEVIN_TOOL_PREFIX, DEVIN_WAIT_CAP_S, HttpsDevinAdapter
 from switchboard.config import Config
 from switchboard.delivery import rules
-from switchboard.models import HTTPS_MCP_PID, Release
+from switchboard.models import Release
 
 
 @pytest.fixture
@@ -27,9 +26,14 @@ def w(tmp_path: Path, clock: FakeClock) -> World:
     return World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0))
 
 
-def ad(w: World) -> DevinAdapter:
-    a = w.engine.adapters["devin"]
-    assert isinstance(a, DevinAdapter)
+WAIT_TOOL = HttpsDevinAdapter.wait_tool  # the plugin's server name, which the broker gives both hook reports
+BLOCK_CONFIRM_S = HttpsDevinAdapter.block_confirm_s
+TAINT_WHY = HttpsDevinAdapter.taint_why
+
+
+def ad(w: World) -> HttpsDevinAdapter:
+    a = w.engine.adapters[HTTPS_DEVIN]
+    assert isinstance(a, HttpsDevinAdapter)
     return a
 
 
@@ -62,7 +66,7 @@ def wait_post(
 def test_tier_context_and_route(w: World, clock: FakeClock) -> None:
     a = ad(w)
     p, _m = devin(w)
-    assert a.tier(w.p(p)) == ("devin:wait-loop", None)
+    assert a.tier(w.p(p)) == ("devin:https", "over HTTPS: listening through wait()")
     assert a.context_events(w.p(p)) == frozenset({"PostToolUse"})
     prio = Release(items=(), kind="priority", counted=False, reason="human")
     wake = Release(items=(), kind="wake", counted=True, reason="human")
@@ -122,9 +126,8 @@ def test_a_token_in_another_tools_output_does_not_confirm_a_wait(w: World, clock
 
 
 def https_devin(w: World, name: str = "dv-https") -> tuple[Any, Any]:
-    """A Devin session over HTTPS (§49.7): its adapter is picked by the session's host and pid."""
+    """A Devin session over HTTPS (§49.7): its adapter is picked by the session's device."""
     p, m = w.agent(name, harness="devin", status="busy", hooks=True, host="laptop")
-    p = w.store.update_participant(p.id, mcp_pid=HTTPS_MCP_PID)
     assert w.engine.adapter(p) is w.engine.adapters[HTTPS_DEVIN]
     return p, m
 
@@ -152,11 +155,10 @@ def test_a_wait_over_https_ends_before_devins_client_sends_it_again(w: World) ->
     """Devin's HTTP client repeats a call that was silent for 120 s, and the repeat is refused (its
     hook report was spent): the wait() it was in is orphaned. So over HTTPS the cap on a wait is under
     that, in what the server clamps, what the join says and what the Stop re-arm asks for; a lower
-    cap of the config's still wins. Fails if a wait over HTTPS may run the 600 s a local one does."""
+    cap of the config's still wins. Fails if a wait may run the 600 s Devin's own config allows."""
     p, _m = https_devin(w)
     a = w.engine.adapter(w.p(p))
     assert DEVIN_WAIT_CAP_S < 120 and a.caps(w.p(p)).wait_cap_s == DEVIN_WAIT_CAP_S
-    assert ad(w).caps(w.p(p)).wait_cap_s == 600  # a local one is unchanged
     assert f'wait("#build", {DEVIN_WAIT_CAP_S})' in a.join_guidance(w.p(p), "#build")
     w.hook(p, "UserPromptSubmit", gen="p1")
     out = w.hook(p, "Stop")
@@ -270,19 +272,18 @@ def test_a_devin_taken_offline_for_a_dropped_wait_comes_back_with_any_hook(
     assert res["status"] == "messages" and f"id={msg.id}" in res["text"]
 
 
-def test_only_a_devin_over_https_is_taken_offline_for_a_dropped_wait(w: World, clock: FakeClock) -> None:
-    """A wait() cancelled for any other harness, or for a local Devin (which has a process to look at),
-    starts no clock. Fails if the rule leaks past the adapter that asks for it (the engine names no
-    harness)."""
-    local, lm = devin(w)
-    cx, _cm = w.agent("cx", harness="codex", status="busy", hooks=True)
-    open_wait(w, local, lm, tuid="call_L")
-    for p in (local, cx):
+def test_only_a_devin_is_taken_offline_for_a_dropped_wait(w: World, clock: FakeClock) -> None:
+    """A wait() cancelled for any other harness starts no clock. Fails if the rule leaks past the
+    adapter that asks for it (the engine names no harness)."""
+    cx, cm = w.agent("cx", harness="codex", status="busy", hooks=True)
+    cl, _lm = w.agent("cl", harness="claude", status="busy", hooks=True)
+    w.actions += w.engine.open_wait(w.p(cx), w.m(cm), "w1", 600)[1]
+    for p in (cx, cl):
         w.actions += w.engine.wait_dropped(w.p(p))
     assert w.engine.wait_drops == {}
     clock.advance(rules.WAIT_DROP_GRACE_S + 1)
     tick(w)
-    assert w.p(local).status == "busy" and w.p(cx).status == "busy"
+    assert w.p(cx).status == "busy" and w.p(cl).status == "busy"
 
 
 def test_a_session_that_ended_or_left_leaves_no_clock_behind(w: World, clock: FakeClock) -> None:
@@ -495,7 +496,7 @@ def test_stop_rearms_the_wait_loop_within_budget_and_the_per_prompt_cap(w: World
     for n in (1, 2):
         out = w.hook(p, "Stop")
         assert out is not None and out.kind == "continue" and out.batch_id is None
-        assert out.text.startswith("[switchboard]") and 'wait("#build", 600)' in out.text
+        assert out.text.startswith("[switchboard]") and f'wait("#build", {DEVIN_WAIT_CAP_S})' in out.text
         assert w.p(p).rearms_in_gen == n
     assert w.store.room_by_id(w.room.id).budget_remaining == budget - 2
     assert w.store.count_events("rearm") == 2
@@ -541,7 +542,7 @@ def test_no_rearm_when_paused_out_of_budget_or_off(w: World, tmp_path: Path, clo
 
 def test_devin_never_gets_a_decision_other_than_block() -> None:
     """The hook's output table: PreToolUse/PermissionRequest print nothing for Devin."""
-    from switchboard.hook.switchboard_hook import render
+    from switchboard.broker.hook_replies import render
 
     for ev in ("PreToolUse", "PermissionRequest", "UserPromptSubmit", "SessionStart", "SessionEnd"):
         assert render("devin", ev, {"kind": "continue", "text": "x"}) is None
@@ -552,5 +553,5 @@ def test_devin_never_gets_a_decision_other_than_block() -> None:
 def test_caps(w: World) -> None:
     p, _m = devin(w)
     caps = ad(w).caps(w.p(p))
-    assert caps.wait_cap_s == 600 and caps.ctx_max_chars == 6000
+    assert caps.wait_cap_s == DEVIN_WAIT_CAP_S and caps.ctx_max_chars == 6000
     assert "stop_block" not in caps.inline_paths and "wait" in caps.inline_paths

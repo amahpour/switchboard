@@ -1,9 +1,9 @@
 """/catchup against a real in-process broker (DESIGN.md §26).
 
-The agent and a bystander are scripted test agents (``switchboard mcp --harness test``); the
-subject is a stand-in Claude or Codex session (``fakes/fake_claude.py``), so its session id
-comes through the real join path. ``/catchup`` posts one human chat message: the engine wakes
-the agent (and, for a member catch-up, a bystander like any human message), never the subject.
+The agent and a bystander are scripted test agents (``fakes/fake_agent.py``); the subject is a
+Claude Code or Codex session over HTTPS (§49), so its session id comes through the real join path.
+``/catchup`` posts one human chat message: the engine wakes the agent (and, for a member catch-up, a
+bystander like any human message), never the subject.
 No history tool exists here and none is looked for.
 """
 
@@ -21,7 +21,9 @@ from typing import Any
 import pytest
 from conftest import InProcBroker
 from fakes.fake_agent import FakeAgent, ids_in
-from fakes.fake_claude import SID, FakeClaude
+from test_agents_http import THREAD_A, Codex, make_token
+from test_agents_http_claude import SESSION_1 as SID
+from test_agents_http_claude import Claude
 
 from switchboard.broker import catchup
 from switchboard.broker.peer import AllowAllHumans
@@ -34,8 +36,6 @@ DAY = 24 * 3600.0
 
 def start(tmp_home: Path, policy: Any = None, cfg: Config = FAST) -> InProcBroker:
     b = InProcBroker(tmp_home, cfg, policy=policy).start()
-    # the MCP servers read the same config file the broker was built from
-    (tmp_home / "config.toml").write_text(f'[claude]\nsessions_dir = "{b.cfg.claude.sessions_dir}"\n')
     web = b.web_client()
     assert web.post("/api/rooms", json={"name": "#build"}, headers=b.write_headers()).status_code == 200
     b.web = web
@@ -52,11 +52,17 @@ def broker(tmp_home: Path):
 
 @pytest.fixture
 def claude(broker: InProcBroker):
-    c = FakeClaude(broker)
-    r = c.tool("join", room="#build", screen_name="claude-1")
-    assert r["ok"], r
+    c = join_claude(broker)
     yield c
-    c.close()
+    c.c.close()
+
+
+def join_claude(b: InProcBroker) -> Claude:
+    """A Claude Code session over HTTPS, on the device ``laptop``, in #build as claude-1."""
+    c = Claude(b, make_token(b, "laptop"), SID)
+    r = c.call("join", room="#build", screen_name="claude-1")
+    assert r["ok"], r
+    return c
 
 
 def web_cmd(b: InProcBroker, text: str) -> Any:
@@ -114,7 +120,7 @@ async def until_waiting(b: InProcBroker, *names: str) -> None:
 
 
 # ------------------------------------------------------------------ waking
-async def test_catchup_wakes_the_agent_not_the_subject(broker: InProcBroker, claude: FakeClaude) -> None:
+async def test_catchup_wakes_the_agent_not_the_subject(broker: InProcBroker, claude: Claude) -> None:
     async with FakeAgent(broker.home, "ag") as ag, FakeAgent(broker.home, "by") as by:
         await ag.join("#build", "catcher")
         await by.join("#build", "bystander")
@@ -124,10 +130,7 @@ async def test_catchup_wakes_the_agent_not_the_subject(broker: InProcBroker, cla
         assert r.status_code == 200, r.text
         lines = r.json()["text"].splitlines()
         assert lines[0].startswith("asked catcher to catch up on claude-1's work since ")
-        assert (
-            lines[1]
-            == f"  subject: claude-1 · claude · session {SID} · host: the switchboard machine (yours)"
-        )
+        assert lines[1] == f"  subject: claude-1 · claude · session {SID} · host: laptop"
         assert lines[2] == (
             "⚠ catcher may run with approvals off (its approval mode is unknown): transcripts it reads"
             " may make it act without asking"
@@ -169,7 +172,7 @@ async def test_catchup_wakes_the_agent_not_the_subject(broker: InProcBroker, cla
 
 
 async def test_the_report_counts_a_catchup_request_on_the_agent_it_went_to(
-    broker: InProcBroker, claude: FakeClaude
+    broker: InProcBroker, claude: Claude
 ) -> None:
     """``switchboard report``'s characters by path (issue #275) count a /catchup request, its
     own length, on the agent asked to catch up and not on the subject (who is never sent it),
@@ -197,7 +200,7 @@ async def test_the_report_counts_a_catchup_request_on_the_agent_it_went_to(
     assert rep["characters"]["catchup"] == request
 
 
-async def test_room_wide_wakes_only_the_agent(broker: InProcBroker, claude: FakeClaude) -> None:
+async def test_room_wide_wakes_only_the_agent(broker: InProcBroker, claude: Claude) -> None:
     async with FakeAgent(broker.home, "ag") as ag, FakeAgent(broker.home, "by") as by:
         await ag.join("#build", "catcher")
         await by.join("#build", "tester")
@@ -237,7 +240,7 @@ async def test_room_wide_wakes_only_the_agent(broker: InProcBroker, claude: Fake
         ]
 
 
-async def test_a_held_agent_keeps_the_request_queued(broker: InProcBroker, claude: FakeClaude) -> None:
+async def test_a_held_agent_keeps_the_request_queued(broker: InProcBroker, claude: Claude) -> None:
     async with FakeAgent(broker.home, "ag") as ag:
         await ag.join("#build", "catcher")
         assert web_cmd(broker, "/hold catcher").status_code == 200
@@ -258,7 +261,7 @@ async def test_a_held_agent_keeps_the_request_queued(broker: InProcBroker, claud
         assert ids_in(got["text"]) == [msg["id"]]
 
 
-async def test_reviews_old_form_posts_nothing(broker: InProcBroker, claude: FakeClaude) -> None:
+async def test_reviews_old_form_posts_nothing(broker: InProcBroker, claude: Claude) -> None:
     """0.3's /review alias is gone, and the name opens a review board now (#248): the old form
     is refused as a URL that isn't one, and nothing is posted or recorded as a catch-up."""
     async with FakeAgent(broker.home, "ag") as ag:
@@ -270,45 +273,31 @@ async def test_reviews_old_form_posts_nothing(broker: InProcBroker, claude: Fake
 
 
 async def test_a_codex_subject_through_the_uds(broker: InProcBroker) -> None:
-    """The subject's thread id comes from its join's ``_meta.threadId``, sent once the thread
-    proof passed (§9.3); before that its line says to ask it. The command comes in over the
-    UDS as ``switchboard cmd`` sends it (``human.command``), so it leaves a CLI audit line."""
-    cx = FakeClaude(broker, as_harness="codex")
-    try:
-        assert cx.tool("join", meta={"threadId": "thread-A"}, room="#build", screen_name="codex-1")["ok"]
-        async with FakeAgent(broker.home, "ag") as ag:
-            await ag.join("#build", "catcher")
-            # no Codex daemon here, so the thread proof can't pass: no id yet, but the request goes out
-            res = broker.call("human.command", {"room": "#build", "text": "/catchup catcher on codex-1"})
-            assert res["ok"] and "no session id: ask codex-1 here for a short summary" in res["text"]
-            assert "(its Codex thread isn't verified yet)" in res["text"]
-            assert "session:" not in web_cmd(broker, "/who").json()["text"]
-
-            def prove() -> None:  # what a passing thread proof records
-                st = broker.state.store
-                part = st.find_participant("codex", "codex:thread-A")
-                st.update_participant(part.id, thread_proof=1)
-
-            broker.on_loop(prove)
-            res = broker.call("human.command", {"room": "#build", "text": "/catchup catcher on codex-1"})
-            assert res["ok"] and "codex-1 · codex · session thread-A · host" in res["text"]
-            first, msg = human_chat(broker)
-            assert "no session id: ask codex-1 here" in first["text"]
-            assert msg["via"] == "cli" and "codex-1 · codex · session thread-A · host" in msg["text"]
-            assert set(deliveries(broker, msg["id"])) == {"catcher"}
-            assert "session: thread-A @ this machine" in web_cmd(broker, "/who").json()["text"]
-            notices = [
-                m["text"]
-                for m in broker.web.get("/api/rooms/build/messages").json()["messages"]
-                if m["kind"] == "notice"
-            ]
-            assert sum(1 for n in notices if n.startswith("/catchup by alice (via cli: ")) == 2
-    finally:
-        cx.close()
+    """The subject's thread id comes from its join's ``_meta.threadId`` (§49.3). The command comes
+    in over the UDS as ``switchboard cmd`` sends it (``human.command``), so it leaves a CLI audit
+    line."""
+    cx = Codex(broker, make_token(broker, "laptop"))
+    assert cx.start().status_code == 200
+    assert cx.call("join", THREAD_A, room="#build", screen_name="codex-1")["ok"]
+    async with FakeAgent(broker.home, "ag") as ag:
+        await ag.join("#build", "catcher")
+        res = broker.call("human.command", {"room": "#build", "text": "/catchup catcher on codex-1"})
+        assert res["ok"] and f"codex-1 · codex · session {THREAD_A} · host: laptop" in res["text"]
+        [msg] = human_chat(broker)
+        assert msg["via"] == "cli"
+        assert f"codex-1 · codex · session {THREAD_A} · host: laptop" in msg["text"]
+        assert set(deliveries(broker, msg["id"])) == {"catcher"}
+        assert f"session: {THREAD_A} @ laptop" in web_cmd(broker, "/who").json()["text"]
+        notices = [
+            m["text"]
+            for m in broker.web.get("/api/rooms/build/messages").json()["messages"]
+            if m["kind"] == "notice"
+        ]
+        assert sum(1 for n in notices if n.startswith("/catchup by alice (via cli: ")) == 1
 
 
 # ---------------------------------------------------------------- refusals
-async def test_kicked_and_departed_members_fail(broker: InProcBroker, claude: FakeClaude) -> None:
+async def test_kicked_and_departed_members_fail(broker: InProcBroker, claude: Claude) -> None:
     async with FakeAgent(broker.home, "ag") as ag, FakeAgent(broker.home, "gone") as gone:
         await ag.join("#build", "catcher")
         await gone.join("#build", "leaver")
@@ -327,7 +316,7 @@ async def test_kicked_and_departed_members_fail(broker: InProcBroker, claude: Fa
         assert human_chat(broker) == [] and catchup_events(broker) == []
 
 
-async def test_an_agent_cannot_run_catchup(broker: InProcBroker, claude: FakeClaude) -> None:
+async def test_an_agent_cannot_run_catchup(broker: InProcBroker, claude: Claude) -> None:
     """An agent's say("/catchup ...") is stored literally, as for every command."""
     async with FakeAgent(broker.home, "ag") as ag:
         await ag.join("#build", "catcher")
@@ -339,11 +328,11 @@ async def test_an_agent_cannot_run_catchup(broker: InProcBroker, claude: FakeCla
 
 
 # ------------------------------------------------------------------- who
-def test_who_shows_the_session_to_the_human(broker: InProcBroker, claude: FakeClaude) -> None:
+def test_who_shows_the_session_to_the_human(broker: InProcBroker, claude: Claude) -> None:
     who = web_cmd(broker, "/who").json()["text"]
-    assert f"session: {SID} @ this machine" in who
+    assert f"session: {SID} @ laptop" in who
     [m] = broker.call("room.who", {"room": "#build"})["members"]
-    assert m["name"] == "claude-1" and m["session"] == f"{SID} @ this machine"
+    assert m["name"] == "claude-1" and m["session"] == f"{SID} @ laptop"
     # never in the buddy-list rows the web UI and its WebSocket get
     [row] = broker.web.get("/api/rooms/build/members").json()["members"]
     assert "session" not in row and "transcript" not in row
@@ -364,25 +353,24 @@ class NotHuman(AllowAllHumans):
 
 def test_room_who_hides_sessions_from_an_agents_shell(tmp_home: Path) -> None:
     b = start(tmp_home, NotHuman())
-    c = FakeClaude(b)
+    c = join_claude(b)
     try:
-        assert c.tool("join", room="#build", screen_name="claude-1")["ok"]
         [m] = b.call("room.who", {"room": "#build"})["members"]  # room.who is anon: it still answers
         assert m["name"] == "claude-1" and "session" not in m
         # the agents' own who() never carries it either
-        r = c.tool("who", room="#build")
+        r = c.call("who", room="#build")
         assert r["ok"] and SID not in str(r)
         with pytest.raises(RpcError) as e:  # and /catchup isn't available to such a caller at all
             b.call("human.command", {"room": "#build", "text": "/catchup claude-1"})
         assert e.value.code == "forbidden"
         assert (
-            f"session: {SID} @ this machine"
+            f"session: {SID} @ laptop"
             in b.web.post(
                 "/api/rooms/build/command", json={"text": "/who"}, headers=b.write_headers()
             ).json()["text"]
         )
     finally:
-        c.close()
+        c.c.close()
         b.web.close()
         b.stop()
 
@@ -411,3 +399,19 @@ def test_no_warning_without_the_key(tmp_home: Path, caplog: pytest.LogCaptureFix
     with caplog.at_level(logging.WARNING, logger="switchboard.broker"):
         InProcBroker(tmp_home, FAST).start().stop()
     assert not [r for r in caplog.records if "[review]" in r.getMessage()]
+
+
+def test_the_retired_config_keys_are_named_once_at_start(
+    tmp_home: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A config.toml from 0.37 still starts the broker (#385): the keys of the local agent path are
+    ignored, and one warning names the ones the file has. Fails if the broker refuses the file or says
+    nothing."""
+    cfg = FAST.replace(retired=("claude.sessions_dir", "codex.control_socket"))
+    with caplog.at_level(logging.WARNING, logger="switchboard.broker"):
+        InProcBroker(tmp_home, cfg).start().stop()
+    hits = [r.getMessage() for r in caplog.records if "since agents connect over HTTPS" in r.getMessage()]
+    assert hits == [
+        "config.toml: [claude] sessions_dir, [codex] control_socket are ignored since agents connect"
+        " over HTTPS (0.38.0); you can remove them"
+    ]

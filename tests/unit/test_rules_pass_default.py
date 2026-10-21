@@ -9,16 +9,13 @@ from pathlib import Path
 
 import pytest
 from conftest import FakeClock
+from engine_agents import listener, result, session
 from engine_world import World
-from test_claude_adapter import claude
-from test_codex_adapter import attach, codex
-from test_cursor_adapter import cursor, park_result, stop
 from test_devin_adapter import devin
 from test_rules_release import item
 
 from switchboard import envelope
 from switchboard.config import Config
-from switchboard.models import Push
 
 ADVICE = envelope.PASS_ADVICE
 
@@ -34,44 +31,33 @@ def test_the_advice_says_what_the_rule_says() -> None:
 
 def texts_on_every_path(w: World) -> dict[str, str]:
     out: dict[str, str] = {}
-    pc, mc, _conn = claude(w, "claude-1")  # idle: inbox
-    ph, mh, _c2 = claude(w, "claude-2", status="busy", attached=False, registry=None)  # hook context
-    px, mx = codex(w)
-    attach(w)
+    _pc, _mc, park = listener(w, "claude-1")  # idle: its Stop hook is parked
+    ph, mh = session(w, "claude-2", status="busy")  # hook context
     pt, mt = w.agent("bot")
     st, acts = w.engine.open_wait(w.p(pt), w.m(mt), "w1", 3600)
     w.actions += acts
-    pu, mu = cursor(w, status="busy")
-    park = stop(w, pu)
     w.human("hello everyone")
-    for a in w.take():
-        if isinstance(a, Push):
-            out[a.path] = a.text
+    w.take()
     out["wait"] = w.engine.sinks.get(st.id).result["text"]
-    out["stop_followup"] = park_result(w, park.sink_id)["text"]
+    out["stop_followup"] = result(w, park)["text"]
     out["hook_ctx"] = w.hook(ph, "PostToolUse", ok=True).text
     return out
 
 
 def test_every_path_omits_repeated_advice(w: World) -> None:
     got = texts_on_every_path(w)
-    assert {"inbox", "turn_start", "wait", "stop_followup", "hook_ctx"} <= set(got)
+    assert {"wait", "stop_followup", "hook_ctx"} <= set(got)
     for path, text in got.items():
         assert text.startswith("[switchboard]"), path
         assert ADVICE not in text, path
 
 
-def test_devin_stop_block_and_a_steer_omit_repeated_advice(w: World) -> None:
+def test_devin_stop_block_omits_repeated_advice(w: World) -> None:
     pd, md = devin(w)
     w.hook(pd, "UserPromptSubmit", gen="g1")
     w.human("for devin")
     out = w.hook(pd, "Stop", gen="g1")
     assert out is not None and out.kind == "continue" and ADVICE not in out.text
-    px, mx = codex(w, status="busy")
-    attach(w, view="busy")
-    w.human("steer this")
-    [push] = [a for a in w.take() if isinstance(a, Push)]
-    assert push.path == "steer" and ADVICE not in push.text
 
 
 def test_stub_only_reminder_and_again_batches_keep_flags_without_advice(w: World) -> None:

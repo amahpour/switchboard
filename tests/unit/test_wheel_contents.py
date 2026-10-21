@@ -33,7 +33,10 @@ def test_wheel_contents(tmp_path: Path) -> None:
     [whl] = list(tmp_path.glob(f"{DIST_NAME.replace('-', '_')}-*.whl"))  # switchboard-chat on PyPI (#233)
     names = zipfile.ZipFile(whl).namelist()
     assert "switchboard/__init__.py" in names
-    assert "switchboard/hook/switchboard_hook.py" in names
+    assert "switchboard/broker/hook_replies.py" in names
+    assert not [
+        n for n in names if n.startswith("switchboard/hook/")
+    ]  # the hook script went in 0.38.0 (#385)
     for f in (
         "index.html",
         "login.html",

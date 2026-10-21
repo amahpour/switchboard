@@ -20,7 +20,6 @@
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import gc
 import os
 import shutil
@@ -287,14 +286,7 @@ class InProcBroker:
 
         self.home = Path(home)
         self.paths = Paths.from_home(home)
-        # Never let a test broker look at the user's real Codex daemon or Claude registry.
-        base = cfg or Config(human_name=TEST_HUMAN)
-        self.cfg = base.replace(
-            codex=dataclasses.replace(
-                base.codex, control_socket=str(self.home / "cx.sock"), bin="/usr/bin/false"
-            ),
-            claude=dataclasses.replace(base.claude, sessions_dir=str(self.home / "claude-sessions")),
-        )
+        self.cfg = cfg or Config(human_name=TEST_HUMAN)
         self.policy = policy if policy is not None else AllowAllHumans()
         self.test_mode = test_mode
         self.clock = clock

@@ -29,7 +29,7 @@ def test_open_creates_full_schema_with_wal(tmp_path: Path) -> None:
     tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert EXPECTED_TABLES <= tables
     # v2 since M8b (§27.6), v3 since #41 (§31.2), v4 since #61 (§32.2), v5 since #100
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 29
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 30
     indexes = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='index'")}
     assert {
         "memberships_active_name",
@@ -48,21 +48,26 @@ def test_schema_columns_match_design(tmp_path: Path) -> None:
         return {r[1] for r in con.execute(f"PRAGMA table_info({t})")}
 
     assert {"budget_notice_window", "hop_limit", "last_msg_at", "paused_reason"} <= cols("rooms")
-    assert {
+    assert {"approval_mode", "boundary_seq", "gen_tainted", "rearms_in_gen", "hooks_seen_at"} <= cols(
+        "participants"
+    )
+    assert {"join_msg_id", "kicked", "held", "cursor_id", "peer_batch_boundary"} <= cols("memberships")
+    # what only the local agent path used went with it (schema 30, #385)
+    assert not {
+        "agent_pid",
+        "agent_start",
+        "mcp_pid",
+        "mcp_start",
+        "claude_socket",
+        "bind_state",
         "bind_nonce",
         "thread_proof",
-        "approval_mode",
         "env_leak",
-        "boundary_seq",
-        "gen_tainted",
-        "rearms_in_gen",
+        "last_loop_count",
         "unconfirmed_followups",
         "push_expiries",
-        "hooks_seen_at",
-    } <= cols("participants")
-    assert {"cred_hash", "join_msg_id", "kicked", "held", "cursor_id", "peer_batch_boundary"} <= cols(
-        "memberships"
-    )
+    } & cols("participants")
+    assert "cred_hash" not in cols("memberships")
     assert {"sender_membership_id", "sender_harness", "via", "kind", "mentions", "reply_to"} <= cols(
         "messages"
     )

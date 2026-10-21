@@ -1,33 +1,61 @@
-"""The MCP server's contract: tools, annotations, instructions, capabilities, errors (DESIGN.md §6.1)."""
+"""The MCP tools' contract: tools, annotations, instructions, capabilities, errors (DESIGN.md §6.1).
+
+The tools are defined once (``mcp/server.py``) and served at ``/mcp`` of the broker (§49.2); these
+tests build the server over a stub backend, so what is checked is the tools themselves."""
 
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import pytest
 from fastmcp import Client
 
 from switchboard import __version__, guardrails
 from switchboard.mcp import server as srv
-from switchboard.mcp.client import BrokerConn
 
 TOOLS = {"join", "leave", "who", "say", "read", "wait", "pass", "away", "review", "status", "claim"}
 
 
-def make(tmp_path, **kw) -> tuple[srv.McpState, object]:
-    st = srv.McpState(
-        BrokerConn(tmp_path / "no.sock", backoff=(0.05, 0.1)),
-        env={},
-        parent_argv="/bin/zsh",
-        ppid=None,
-        sessions_dir=str(tmp_path),
-        **kw,
-    )
+class Backend:
+    """What the tools need from the broker side, recording the calls they make."""
+
+    harness = "claude"
+    creds: dict[tuple[str | None, str], str] = {}
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def prime(self, ctx: Any) -> None:
+        return None
+
+    def thread_id(self, ctx: Any) -> str | None:
+        return (srv.request_meta(ctx) or {}).get("threadId")
+
+    def wait_cap(self) -> int:
+        return 110
+
+    async def call(self, method: str, params: dict[str, Any], timeout: float = 15.0) -> dict[str, Any]:
+        self.calls.append((method, params))
+        return {"ok": True, "room": "#build", "screen_name": "bot", "tier": "claude:https", "text": "hi"}
+
+    async def find_cred(self, room: str, tid: str | None) -> tuple[str, str] | str:
+        return srv.dumps({"ok": False, "error": "not a member: join() first", "code": "not_member"})
+
+    def base(self, cred: str, tid: str | None) -> dict[str, Any]:
+        return {"cred": cred, **({"thread_id": tid} if tid else {})}
+
+    def unwait(self, params: dict[str, Any]) -> None:
+        return None
+
+
+def make(tmp_path: Any = None, **kw: Any) -> tuple[Backend, Any]:
+    st = Backend()
     return st, srv.build_server(st)
 
 
-async def test_tools_annotations_and_instructions(tmp_path) -> None:
-    _st, server = make(tmp_path)
+async def test_tools_annotations_and_instructions() -> None:
+    _st, server = make()
     async with Client(server, mode="legacy") as c:
         tools = {t.name: t for t in await c.list_tools()}
         assert set(tools) == TOOLS
@@ -48,11 +76,11 @@ async def test_tools_annotations_and_instructions(tmp_path) -> None:
         assert init.server_info.version == __version__  # a client can tell what it runs (#402)
 
 
-async def test_tool_list_fits_the_review_budget(tmp_path) -> None:
+async def test_tool_list_fits_the_review_budget() -> None:
     """Every agent turn carries the tool list. The maintainer approved 3,700 for one claim
     tool in #293, and 3,900 for review's report in #291 ("Raise it", 2026-10-14); another tool
     or parameter must still fit, with every description a sentence."""
-    _st, server = make(tmp_path)
+    _st, server = make()
     async with Client(server, mode="legacy") as c:
         tools = await c.list_tools()
     size = sum(
@@ -74,11 +102,11 @@ async def test_tool_list_fits_the_review_budget(tmp_path) -> None:
     assert "lines" not in review.input_schema["properties"]
 
 
-async def test_the_review_tool_asks_for_markdown_allows_mermaid_and_lists_concur(tmp_path) -> None:
+async def test_the_review_tool_asks_for_markdown_allows_mermaid_and_lists_concur() -> None:
     """#423: details arrived as flat paragraphs because nothing told agents to write Markdown, and
     an agent could only agree with a recommendation by guessing the move. The description says
     both, and names every action the broker takes, in one place."""
-    _st, server = make(tmp_path)
+    _st, server = make()
     async with Client(server, mode="legacy") as c:
         review = next(t for t in await c.list_tools() if t.name == "review")
     desc = review.description or ""
@@ -104,8 +132,8 @@ def test_instructions_are_tiny() -> None:
     )
 
 
-async def test_pass_and_read_descriptions_say_read_first(tmp_path) -> None:
-    _st, server = make(tmp_path)
+async def test_pass_and_read_descriptions_say_read_first() -> None:
+    _st, server = make()
     async with Client(server, mode="legacy") as c:
         tools = {t.name: t for t in await c.list_tools()}
     desc = tools["pass"].description or ""
@@ -138,44 +166,28 @@ def test_pass_results_map_the_read_first_refusal() -> None:
     assert mixed["code"] == "unauthorized" and mixed["text"].endswith("[switchboard] #old: not a member")
 
 
-async def test_broker_down_is_a_normal_result_not_an_error(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(srv, "HELLO_TIMEOUT_S", 0.2)
-    st, server = make(tmp_path)
+async def test_join_carries_its_arguments_to_the_backend() -> None:
+    st, server = make()
     async with Client(server, mode="legacy") as c:
-        r = await c.call_tool("join", {"room": "#build", "screen_name": "bot"}, raise_on_error=False)
-        assert not r.is_error
-        data = json.loads(r.content[0].text)
-        assert data == {"ok": False, "error": srv.BROKER_DOWN}
+        r = await c.call_tool(
+            "join",
+            {"room": "#build", "screen_name": "bot", "resume": "yk:j" + "a" * 16},
+            raise_on_error=False,
+        )
+        assert not r.is_error and json.loads(r.content[0].text)["ok"] is True
+    [(method, params)] = st.calls
+    assert method == "agent.join"
+    assert params == {"room": "#build", "screen_name": "bot", "resume": "yk:j" + "a" * 16}
+
+
+async def test_a_call_with_no_membership_is_a_normal_result_not_an_error() -> None:
+    _st, server = make()
+    async with Client(server, mode="legacy") as c:
         r = await c.call_tool("read", {"room": "#build"}, raise_on_error=False)
         data = json.loads(r.content[0].text)
         assert data["ok"] is False and data["code"] == "not_member" and not r.is_error
-        r = await c.call_tool("pass", {}, raise_on_error=False)
-        assert json.loads(r.content[0].text)["ok"] is False
-    await st.conn.close()
-
-
-def test_hello_params_never_carry_the_token(tmp_path) -> None:
-    env = srv.env_view(
-        {
-            "CLAUDECODE": "1",
-            "CLAUDE_CODE_MESSAGING_TOKEN": "tok-secret",
-            "CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/s.sock",
-        }
-    )
-    st = srv.McpState(
-        BrokerConn(tmp_path / "x.sock"),
-        env=env,
-        parent_argv="/bin/zsh",
-        ppid=None,
-        sessions_dir=str(tmp_path),
-        harness_flag="test",
-        test_session="k1",
-        ack="never",
-    )
-    p = st.hello_params()
-    assert p["harness"] == "test" and p["test_session"] == "k1" and p["test_ack"] == "never"
-    assert p["has_messaging_token"] is True and "claude_socket" not in p
-    assert "tok-secret" not in json.dumps(p)
+        r = await c.call_tool("leave", {"room": "#build"}, raise_on_error=False)
+        assert json.loads(r.content[0].text)["ok"] is False and not r.is_error
 
 
 @pytest.mark.parametrize(
@@ -184,27 +196,3 @@ def test_hello_params_never_carry_the_token(tmp_path) -> None:
 )
 def test_wait_caps(harness: str, cap: int) -> None:
     assert srv.WAIT_CAPS[harness] == cap
-
-
-async def test_modern_handshake_takes_client_info_from_request_meta(tmp_path, monkeypatch) -> None:
-    """MCP 2026-07-28 clients send no initialize; identity comes from each request's _meta."""
-    monkeypatch.setattr(srv, "HELLO_TIMEOUT_S", 0.2)
-    st, server = make(tmp_path)
-    async with Client(server) as c:  # auto mode: server/discover
-        assert c.initialize_result is None
-        await c.call_tool("join", {"room": "#b", "screen_name": "x"}, raise_on_error=False)
-    assert st.conn.hello_params is not None
-    assert st.conn.hello_params["client_info"].get("name")  # the client's own name, from _meta
-    await st.conn.close()
-
-
-async def test_client_info_from_initialize_wins_the_race_with_the_first_call(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(srv, "HELLO_TIMEOUT_S", 0.2)
-    st, server = make(tmp_path)
-    async with Client(
-        server, mode="legacy", client_info=__import__("mcp").types.Implementation(name="Cursor", version="1")
-    ) as c:
-        await c.call_tool("join", {"room": "#b", "screen_name": "x"}, raise_on_error=False)
-    assert st.conn.hello_params["client_info"]["name"] == "Cursor"
-    assert st.conn.hello_params["harness"] == "cursor"
-    await st.conn.close()

@@ -52,10 +52,12 @@ ALL_FORBIDDEN: tuple[str, ...] = (
 
 # Every Codex ``turn/start`` / ``turn/steer`` / ``thread/resume`` field that
 # changes a thread's settings (FINDINGS §4a; the TurnStartParams schema of
-# codex-cli 0.156.1). Any of them persists on the user's session. switchboard's
-# RPC client builds params from exact key allowlists; this list is a second,
-# independent check on the keys (never on message text). Not in ALL_FORBIDDEN:
-# words like "cwd" and "model" appear legitimately elsewhere.
+# codex-cli 0.156.1). Any of them persists on the user's session. Until 0.38.0
+# switchboard's Codex client built params from exact key allowlists and this
+# list was a second, independent check on the keys (never on message text);
+# that client is gone (#385) and nothing reads the list now. It stays, as the
+# record of what must never be sent to a thread if a client ever returns. Not
+# in ALL_FORBIDDEN: words like "cwd" and "model" appear legitimately elsewhere.
 CODEX_OVERRIDE_FIELDS = (
     "cwd",
     "runtimeWorkspaceRoots",

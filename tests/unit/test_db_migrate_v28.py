@@ -96,7 +96,7 @@ def test_a_v27_database_keeps_its_rows_and_each_review_event_names_the_board_it_
 
     migrated = db.open_db(path)
     fresh = db.open_db(tmp_path / "fresh.db")
-    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 29
+    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 30
     assert db.row_counts(migrated, db.kept_tables(27)) == before
     assert [tuple(r) for r in migrated.execute("PRAGMA table_info(reviews)")] == [
         tuple(r) for r in fresh.execute("PRAGMA table_info(reviews)")

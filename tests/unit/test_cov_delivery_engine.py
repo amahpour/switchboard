@@ -1,8 +1,8 @@
 """Engine edge cases with a FakeClock (DESIGN.md §8.2, §8.5, §8.7, §9.4, §9.5):
 stale or unknown ids handed back to the engine (a late unwait or wait timer, an
 ack after a leave, a call after a kick, a second expiry), pull answers and their
-confirmation rules, a dropped connection, /hold, one live Cursor park per
-conversation, the Devin taint memory, and the guards that keep an ended session,
+confirmation rules, a dropped connection, /hold, one live Stop-hook park per
+session, the Devin taint memory, and the guards that keep an ended session,
 a paused room or a held member out of delivery and the watchdog."""
 
 from __future__ import annotations
@@ -11,15 +11,15 @@ from pathlib import Path
 
 import pytest
 from conftest import FakeClock
+from engine_agents import STOP_MAX_WAIT_S, result, session, stop
 from engine_world import World
-from test_claude_adapter import claude
-from test_cursor_adapter import cursor, park_result, stop
 from test_devin_adapter import devin
 
-from switchboard.adapters.cursor import FOLLOWUP_CONFIRM_S
 from switchboard.config import Config
 from switchboard.delivery.engine import TAINTED_GENS_MAX
-from switchboard.models import HookEvent, Notice, Push, ResolveSink, Snapshot, closed_room_name
+from switchboard.models import HookEvent, Notice, ResolveSink, Snapshot, closed_room_name
+
+FOLLOWUP_CONFIRM_S = 180.0  # how long an acked follow-up may wait for the session's next hook
 
 
 @pytest.fixture
@@ -28,7 +28,7 @@ def w(tmp_path: Path, clock: FakeClock) -> World:
 
 
 def cursor_stop() -> HookEvent:
-    return HookEvent(harness="cursor", event="stop", status="completed", loop_count=0)
+    return HookEvent(harness="cursor", event="stop", max_wait_s=STOP_MAX_WAIT_S)
 
 
 def leave(w: World, membership_id: int, reason: str = "leave") -> None:
@@ -154,7 +154,7 @@ def test_a_second_expiry_of_a_settled_offer_changes_nothing(w: World) -> None:
 
 # ------------------------------------------------------------ Cursor parks
 def test_hold_unparks_the_member(w: World) -> None:
-    _p, m = cursor(w, status="idle")
+    _p, m = session(w, "cursor-1", "cursor", status="idle")
     w.human("@cursor-1 look", mentions=("cursor-1",))
     assert w.engine.parked_reason(m.id)
     w.store.set_held(m.id, True)
@@ -164,7 +164,7 @@ def test_hold_unparks_the_member(w: World) -> None:
 
 
 def test_open_park_keeps_one_live_park_per_conversation(w: World) -> None:
-    p, _m = cursor(w, status="idle")
+    p, _m = session(w, "cursor-1", "cursor", status="idle")
     s1, _acts = w.engine.open_park(w.p(p), cursor_stop(), 60)
     s2, acts = w.engine.open_park(w.p(p), cursor_stop(), 60)
     # the older park resolves with no continuation
@@ -175,11 +175,11 @@ def test_open_park_keeps_one_live_park_per_conversation(w: World) -> None:
 
 
 def test_a_park_filled_while_the_session_already_shows_busy_leaves_its_status(w: World) -> None:
-    p, m = cursor(w, status="busy")
+    p, m = session(w, "cursor-1", "cursor", status="busy")
     msg = w.human("please look")  # busy: a wake waits for a stop hook
     before = (w.p(p).status, w.p(p).status_src, w.store.count_events("status"))
     sink, _acts = w.engine.open_park(w.p(p), cursor_stop(), 60)
-    res = park_result(w, sink.id)
+    res = result(w, sink)
     assert res is not None and res["status"] == "messages" and f"id={msg.id}" in res["text"]
     # the follow-up starts a turn; the session is busy already: no status write, no event
     assert (w.p(p).status, w.p(p).status_src, w.store.count_events("status")) == before
@@ -188,10 +188,10 @@ def test_a_park_filled_while_the_session_already_shows_busy_leaves_its_status(w:
 def test_a_call_after_a_kick_does_not_confirm_the_cancelled_followup(w: World) -> None:
     d = w.cfg.delivery
     other = w.store.create_room("#other", "alice", d.budget_per_hour, d.hop_limit)
-    p, m = cursor(w, status="busy")
+    p, m = session(w, "cursor-1", "cursor", status="busy")
     w.store.create_membership(other.id, p.id, "cursor-1", "h2")
     w.human("x")
-    res = park_result(w, stop(w, p).sink_id)
+    res = result(w, stop(w, p))
     w.engine.on_hook_ack(res["batch_id"], res["ack"])  # printed by the stop hook
     leave(w, m.id, "kick")  # kicked from #build; still in #other
     confirms = w.store.count_events("confirm")
@@ -204,9 +204,9 @@ def test_a_call_after_a_kick_does_not_confirm_the_cancelled_followup(w: World) -
 
 
 def test_an_acked_followup_of_a_session_that_ended_leaves_it_offline(w: World, clock: FakeClock) -> None:
-    p, _m = cursor(w, status="busy")
+    p, _m = session(w, "cursor-1", "cursor", status="busy")
     w.human("x")
-    res = park_result(w, stop(w, p).sink_id)
+    res = result(w, stop(w, p))
     w.engine.on_hook_ack(res["batch_id"], res["ack"])
     assert w.p(p).status == "busy" and w.p(p).status_src == "stop:followup"
     for ended in w.store.end_participant(p.id, "session_end"):
@@ -265,18 +265,8 @@ def test_leaving_drops_the_peer_mark_of_the_cancelled_chatter_batch(w: World) ->
     assert bid not in w.engine.peer_marks
 
 
-def test_refresh_tier_leaves_harnesses_without_a_derived_tier_alone(w: World) -> None:
-    p, _m, _c = claude(w)
-    before = w.p(p)
-    assert w.engine.refresh_tier(p.id) == []
-    after = w.p(p)
-    assert (after.tier, after.tier_note) == (before.tier, before.tier_note)
-    assert w.store.count_events("tier") == 0
-    assert w.engine.refresh_tier(p.id + 1000) == []  # no such participant
-
-
 def test_a_permission_mode_change_alone_refreshes_the_room(w: World) -> None:
-    p, _m, _c = claude(w, mode="prompting")
+    p, _m = session(w, mode="prompting")
     w.take()
     w.hook(p, "PreToolUse", tool="Bash", permission_mode="bypassPermissions")
     assert w.p(p).approval_mode == "bypass"
@@ -286,10 +276,11 @@ def test_a_permission_mode_change_alone_refreshes_the_room(w: World) -> None:
 
 
 def test_no_reminder_after_clear_for_a_session_in_no_room(w: World) -> None:
-    p, m, _c = claude(w)
+    p, m = session(w)
     leave(w, m.id)
-    assert w.hook(p, "SessionStart", source="clear", sid="new-session-id") is None
-    assert w.p(p).session_id == "new-session-id"  # the hook itself was still taken
+    w.clock.advance(1)
+    assert w.hook(p, "SessionStart", source="clear") is None
+    assert w.p(p).hooks_seen_at == w.clock.now()  # the hook itself was still taken
 
 
 # ---------------------------------------------------------- Devin taint
@@ -334,7 +325,7 @@ def test_an_ended_session_is_offered_nothing_even_with_a_membership_row_left(
     w.take()
     second = w.human("anyone?")
     assert w.states(m)[second.id] == "pending"
-    assert not [a for a in w.take() if isinstance(a, (Push, ResolveSink))]
+    assert not [a for a in w.take() if isinstance(a, ResolveSink)]
     clock.advance(w.cfg.delivery.watchdog_s + 1)
     assert w.engine.watchdog() == []
     d = w.delivery(m, first)
@@ -347,9 +338,11 @@ def test_the_parked_escalation_skips_a_paused_room_or_a_held_member(
 ) -> None:
     """Paused rooms and held members are left alone by the watchdog (§8.5), even
     while the member is still recorded as parked."""
-    p, m = cursor(w, status="idle")  # stopped, no stop hook waiting: nothing can reach it
+    p, m = session(
+        w, "cursor-1", "cursor", status="idle"
+    )  # stopped, no stop hook waiting: nothing can reach it
     msg = w.human("@cursor-1 look", mentions=("cursor-1",))
-    assert "not parked" in (w.engine.parked_reason(m.id) or "")
+    assert "not listening" in (w.engine.parked_reason(m.id) or "")
     clock.advance(w.cfg.delivery.watchdog_s + 1)
     if how == "paused":
         w.store.set_paused(w.room.id, True, "x")
@@ -369,10 +362,9 @@ def test_the_parked_escalation_skips_a_paused_room_or_a_held_member(
 
 # ------------------------------------------------------------ /close (§28.3)
 def close(w: World, *membership_ids: int) -> None:
-    """What ``RoomService.close_room`` does: end each membership keeping its credential,
-    rename the room, then tell the engine."""
+    """What ``RoomService.close_room`` does: end each membership, rename the room, then tell the engine."""
     for mid in membership_ids:
-        w.store.end_membership(mid, "closed", keep_cred=True)
+        w.store.end_membership(mid, "closed")
     w.store.rename_room(w.room.id, closed_room_name("#build", w.room.id), expect="#build")
     for mid in membership_ids:
         w.actions += w.engine.on_membership_ended(mid, "closed")
@@ -398,7 +390,7 @@ def test_a_close_names_this_room_when_the_room_row_is_gone(w: World, monkeypatch
     p, m = w.agent("bot")
     sink, acts = w.engine.open_wait(w.p(p), w.m(m), "w1", 50)
     w.actions += acts
-    w.store.end_membership(m.id, "closed", keep_cred=True)
+    w.store.end_membership(m.id, "closed")
     monkeypatch.setattr(w.store, "room_by_id", lambda rid: None)
     w.actions += w.engine.on_membership_ended(m.id, "closed")
     assert w.resolved(sink.id) == [
@@ -410,9 +402,9 @@ def test_a_close_names_this_room_when_the_room_row_is_gone(w: World, monkeypatch
 
 
 def test_a_close_releases_the_parks_of_a_session_with_no_room_left(w: World) -> None:
-    p, m = cursor(w, status="idle")
+    p, m = session(w, "cursor-1", "cursor", status="idle")
     s, _acts = w.engine.open_park(w.p(p), cursor_stop(), 60)
     assert w.engine.sinks.parks_for(p.id) == [s]
     close(w, m.id)
     assert w.engine.sinks.parks_for(p.id) == []
-    assert park_result(w, s.id) == {}
+    assert result(w, s) == {}

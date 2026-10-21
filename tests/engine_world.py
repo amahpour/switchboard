@@ -26,7 +26,6 @@ class World:
         )
         d = self.cfg.delivery
         self.room = self.store.create_room("#build", "alice", d.budget_per_hour, d.hop_limit)
-        self._pid = 50000
         self.actions: list[Action] = []
 
     # ------------------------------------------------------------ setup
@@ -39,18 +38,17 @@ class World:
         hooks: bool = False,
         ack: str = "next_call",
         room_id: int | None = None,
-        host: str = "",
+        host: str | None = None,
     ) -> tuple[Participant, Membership]:
-        """A joined participant; ``host`` names a remote host (its pids are pids there)."""
-        self._pid += 1
+        """A joined participant. A real harness is a session over HTTPS (§49.3) on a device (``host``,
+        ``laptop`` unless said), so it gets its ``@https`` adapter; the scripted test agent has no
+        device, and its own adapter."""
+        if host is None:
+            host = "" if harness == "test" else "laptop"
         p = self.store.upsert_participant(
             harness,
             session_key(harness, host, name),
             status=status,
-            agent_pid=self._pid,
-            agent_start=1.0,
-            mcp_pid=self._pid + 100000,
-            mcp_start=2.0,
             tier="mcp-only",
             session_id=f"sid-{name}",
             host=host,
@@ -59,7 +57,7 @@ class World:
             p = self.store.update_participant(p.id, hooks_seen_at=self.clock.now())
         if harness == "test":
             self.engine.ack_modes[p.id] = ack
-        m = self.store.create_membership(room_id or self.room.id, p.id, name, "h-" + name)
+        m = self.store.create_membership(room_id or self.room.id, p.id, name)
         return p, m
 
     def p(self, p: Participant | int) -> Participant:

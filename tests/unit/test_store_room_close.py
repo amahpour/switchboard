@@ -1,4 +1,4 @@
-"""store: closed rooms (DESIGN.md §28.2, §28.4, §28.5): the renamed row, kept credentials,
+"""store: closed rooms (DESIGN.md §28.2, §28.4, §28.5): the renamed row, ended memberships,
 reopen, and the room references the human types."""
 
 from __future__ import annotations
@@ -23,21 +23,19 @@ def room(store: Store, name: str) -> Room:
     return store.create_room(name, "alice", 60, 6)
 
 
-def agent(store: Store, room_id: int, name: str, cred: str) -> int:
-    """An active membership with its own credential hash; returns its id."""
+def agent(store: Store, room_id: int, name: str) -> int:
+    """An active membership; returns its id."""
     _, mid = add_agent(store, room_id, name)
-    with db.tx(store.con):
-        store.con.execute("UPDATE memberships SET cred_hash=? WHERE id=?", (cred, mid))
     return mid
 
 
 def close(store: Store, r: Room) -> Room:
     """What ``/close`` does to the store (the service adds the messages): end every
-    membership keeping its credential, record the event, rename the row."""
+    membership, record the event, rename the row."""
     with db.tx(store.con):
         ids = [m.membership_id for m in store.members(r.id)]
         for mid in ids:
-            store.end_membership(mid, "closed", keep_cred=True)
+            store.end_membership(mid, "closed")
         store.add_event(
             "room_close",
             room_id=r.id,
@@ -93,55 +91,20 @@ def test_closed_rooms_matches_the_base_exactly(store: Store) -> None:
     assert [r.id for r in store.closed_rooms("#a_b")] == [a_b.id]
 
 
-def test_end_membership_keep_cred(store: Store) -> None:
+def test_end_membership_closed(store: Store) -> None:
     r = room(store, "#build")
-    keep = agent(store, r.id, "alpha", "a" * 64)
-    plain = agent(store, r.id, "beta", "b" * 64)
+    keep = agent(store, r.id, "alpha")
     msg = store.insert_message(r.id, sender_name="alice", sender_kind="human", via="web", text="hi")
     offered = store.create_batch(keep, path="wait", kind="wake", items=[(msg.id, 1)])
-    store.end_membership(keep, "closed", keep_cred=True)
+    store.end_membership(keep, "closed")
     m = membership(store, keep)
-    assert m["cred_hash"] == "a" * 64 and m["left_reason"] == "closed" and m["kicked"] == 0
-    assert m["left_at"] is not None
+    assert m["left_reason"] == "closed" and m["kicked"] == 0 and m["left_at"] is not None
     assert store.delivery_state(keep, msg.id) == "revoked"
     b = store.get_batch(offered.id)
     assert b is not None and b.state == "cancelled" and b.expire_reason == "closed"
-    # the kept hash never authorizes
-    assert store.membership_by_cred("a" * 64) is None
-    assert store.closed_membership_by_cred("a" * 64) is None  # the room isn't closed (yet)
-    # a plain end still clears the hash
-    store.end_membership(plain, "leave")
-    assert membership(store, plain)["cred_hash"] is None
     # ending twice changes nothing
     store.end_membership(keep, "kick", kicked=True)
     assert membership(store, keep) == m
-
-
-def test_closed_membership_by_cred(store: Store) -> None:
-    r = room(store, "#build")
-    mid = agent(store, r.id, "alpha", "a" * 64)
-    assert store.membership_by_cred("a" * 64) is not None
-    assert store.closed_membership_by_cred("a" * 64) is None  # active: not a closed one
-    closed = close(store, r)
-    got = store.closed_membership_by_cred("a" * 64)
-    assert got is not None
-    m, cr = got
-    assert m.id == mid and m.cred_hash == "a" * 64 and not m.active and cr == closed
-    assert store.membership_by_cred("a" * 64) is None
-    assert store.closed_membership_by_cred("f" * 64) is None
-    # once the room is reopened, the hash is gone and so is the hint
-    store.reopen_room(r.id)
-    assert store.closed_membership_by_cred("a" * 64) is None
-    assert membership(store, mid)["cred_hash"] is None
-
-
-def test_closed_membership_needs_the_room_still_closed(store: Store) -> None:
-    """A kept hash whose room was renamed back some other way names nothing."""
-    r = room(store, "#build")
-    agent(store, r.id, "alpha", "a" * 64)
-    c = close(store, r)
-    store.rename_room(r.id, "#build", expect=c.name)
-    assert store.closed_membership_by_cred("a" * 64) is None
 
 
 def test_rename_room(store: Store) -> None:
@@ -163,8 +126,8 @@ def test_rename_room(store: Store) -> None:
 
 def test_reopen_room(store: Store, clock: FakeClock) -> None:
     r = store.set_paused(room(store, "#build").id, True, "paused by alice")
-    alpha = agent(store, r.id, "alpha", "a" * 64)
-    beta = agent(store, r.id, "beta", "b" * 64)
+    alpha = agent(store, r.id, "alpha")
+    beta = agent(store, r.id, "beta")
     store.end_membership(beta, "kick", kicked=True)
     store.insert_message(r.id, sender_name="alice", sender_kind="human", via="web", text="kept")
     c = close(store, r)
@@ -176,14 +139,13 @@ def test_reopen_room(store: Store, clock: FakeClock) -> None:
     new = room(store, "#build")
     with pytest.raises(Conflict, match="#build is taken by an open room"):
         store.reopen_room(c.id)
-    assert store.room_by_id(c.id) == c and membership(store, alpha)["cred_hash"] == "a" * 64  # unchanged
+    assert store.room_by_id(c.id) == c and membership(store, alpha)["left_reason"] == "closed"  # unchanged
     close(store, new)
     got = store.reopen_room(c.id)
     assert got.name == "#build" and got.id == r.id and not got.closed
     assert got.paused and got.paused_reason == "paused by alice"  # settings kept
     assert [m.text for m in store.history(r.id)] == ["kept"]
     assert store.members(r.id) == []  # nobody is re-added
-    assert membership(store, alpha)["cred_hash"] is None
     assert store.was_kicked(r.id, store.get_membership(beta).participant_id)  # a kick still holds
     assert not store.was_kicked(r.id, store.get_membership(alpha).participant_id)
     assert store.count_closed_rooms() == 1  # the other #build

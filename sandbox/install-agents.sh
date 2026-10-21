@@ -16,8 +16,7 @@ export PATH="$HOME/.local/bin:$PATH"   # where the installers put the CLIs (not 
 # - Claude: code.claude.com/docs/en/setup; `bash -s <version>` pins the version;
 #   DISABLE_AUTOUPDATER=1 (image env) turns its updater off.
 # - Codex: chatgpt.com/codex/install.sh redirects to releases.openai.com/codex/install.sh,
-#   which reads CODEX_RELEASE and CODEX_NON_INTERACTIVE; the daemon settings path and
-#   format come from its source (codex-rs/app-server-daemon/src/settings.rs @ rust-v0.156.1).
+#   which reads CODEX_RELEASE and CODEX_NON_INTERACTIVE.
 # - Cursor: cursor.com/docs/cli/installation. It can't be pinned (the script hard-codes
 #   its build) and it keeps auto-updating: there is no documented way to turn that off.
 # - Devin: the versioned setup.sh URL was observed, not documented (the documented
@@ -29,13 +28,10 @@ CLAUDE_VER=2.1.282 CODEX_VER=0.156.1 DEVIN_VER=3000.11.3
 curl -fsSL https://claude.ai/install.sh | bash -s "$CLAUDE_VER"
 curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 CODEX_RELEASE="$CODEX_VER" sh
 curl -fsS https://cursor.com/install | bash      # can't pin: the script hard-codes its build
-mkdir -p ~/.codex/app-server-daemon ~/.config/devin
+mkdir -p ~/.codex ~/.config/devin
 test -e ~/.codex/config.toml || printf '%s\n' 'approval_policy = "never"' \
   'sandbox_mode = "danger-full-access"' 'check_for_update_on_startup = false' \
   'cli_auth_credentials_store = "file"' > ~/.codex/config.toml
-test -e ~/.codex/app-server-daemon/settings.json ||   # the daemon's own updater (from source)
-  echo '{"updater":{"autoUpdateEnabled":false}}' > ~/.codex/app-server-daemon/settings.json
-codex features enable daemon_auto_start               # experimental, undocumented
 d=$(mktemp -d)
 curl -fsSLo "$d/devin.sh" "https://static.devin.ai/cli/$DEVIN_VER/setup.sh" && bash "$d/devin.sh"  # not piped: its closing `devin setup` needs the TTY
 f="$HOME/.config/devin/config.json"; test -e "$f" || echo '{}' > "$f"

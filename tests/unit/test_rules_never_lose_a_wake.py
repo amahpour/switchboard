@@ -11,12 +11,11 @@ from typing import Any
 
 import pytest
 from conftest import FakeClock
+from engine_agents import fills, session, stop
+from engine_agents import result as sink_result
 from engine_world import World
-from test_claude_adapter import claude, reg, tok
-from test_codex_adapter import attach, codex
 
 from switchboard.config import Config
-from switchboard.models import Push
 
 
 @pytest.fixture
@@ -28,37 +27,21 @@ def ids(text: str) -> list[int]:
     return [int(x) for x in re.findall(r"^- id=(\d+) ", text, re.M)]
 
 
-def pushes(w: World) -> list[Push]:
-    return [a for a in w.take() if isinstance(a, Push)]
-
-
 def result(w: World, sink: Any) -> dict[str, Any] | None:
     s = w.engine.sinks.get(sink.id)
     return None if s is None or s.open else s.result
 
 
-def test_busy_to_idle_rechecks_pending_on_the_inbox(w: World) -> None:
-    p, m, _conn = claude(w, status="busy", registry="busy")
+@pytest.mark.parametrize("harness", ["claude", "codex", "cursor"])
+def test_busy_to_idle_rechecks_pending_at_the_stop_hook(w: World, harness: str) -> None:
+    """The chatter that came while the agent worked goes out when its turn ends: its Stop hook parks
+    and the park is answered at once. Fails if the busy to idle edge doesn't look at what is pending."""
+    p, m = session(w, f"{harness}-1", harness, status="busy")
     _pp, peer = w.agent("peer")
     chat = w.agent_says(peer, "chatter while busy")  # not deliverable mid-task
-    assert pushes(w) == []
-    w.hook(p, "Stop")  # busy -> idle
-    reg(w, p, "idle")
-    w.actions += w.engine.evaluate_participant(p.id)
-    [push] = pushes(w)
-    assert ids(push.text) == [chat.id]
-
-
-def test_busy_to_idle_by_the_codex_link_rechecks_pending(w: World) -> None:
-    p, m = codex(w, status="busy")
-    attach(w, view="busy")
-    _pp, peer = w.agent("peer")
-    chat = w.agent_says(peer, "chatter while busy")
-    assert pushes(w) == []
-    attach(w, view="idle")
-    w.actions += w.engine.set_status(w.p(p), "idle", "codex:status", bump=True)
-    [push] = pushes(w)
-    assert push.path == "turn_start" and ids(push.text) == [chat.id]
+    assert not fills(w)
+    out = stop(w, p)  # busy -> idle
+    assert ids(sink_result(w, out)["text"]) == [chat.id]
 
 
 def test_a_new_wait_gets_everything_that_arrived_while_busy_human_first(w: World) -> None:
@@ -83,37 +66,24 @@ def test_an_unconfirmed_offer_comes_back(w: World, clock: FakeClock) -> None:
     assert out2 is not None and out2.batch_id != out.batch_id and f"id={msg.id} " in out2.text
 
 
-def test_a_lost_inbox_frame_is_posted_again(w: World, clock: FakeClock) -> None:
-    p, m, _conn = claude(w)
+def test_an_unacknowledged_followup_is_offered_again_at_the_next_stop(w: World, clock: FakeClock) -> None:
+    """A follow-up the hook never acknowledged (it died, or the harness dropped it) goes back to
+    pending, and the session's next Stop gets it again; this time it runs, and the next hook of the
+    turn it starts confirms it. Fails if the message is lost with the first follow-up."""
+    p, m = session(w, status="busy")
     msg = w.human("did you get this?")
-    [push] = pushes(w)
-    w.store.mark_posted(push.batch_id)
-    got: list[Push] = []
-    for _ in range(20):  # 5 s idle with no token: expired; then the backoff; then again
-        clock.advance(1)
-        reg(w, p, "idle")
-        w.actions += w.engine.tick()
-        got += pushes(w)
-    assert w.store.get_batch(push.batch_id).expire_reason == "idle_no_token"
-    assert got and f"id={msg.id} " in got[0].text
-    w.hook(p, "UserPromptSubmit", tokens=(tok(got[0].text),))
-    assert w.delivery(m, msg)["state"] == "in_context"
-
-
-def test_a_failed_turn_start_is_retried_after_the_backoff(w: World, clock: FakeClock) -> None:
-    p, m = codex(w)
-    a = attach(w)
-    msg = w.human("x")
-    [push] = pushes(w)
-    w.store.mark_posted(push.batch_id)
-    a._failed(p)  # what send() does on an RPC error
-    w.actions += w.engine.on_expire(push.batch_id, "send_error")
-    assert pushes(w) == []  # backing off, not dropped
-    clock.advance(1.5)
-    attach(w)
+    first = stop(w, p)
+    res = sink_result(w, first)
+    assert f"id={msg.id} " in res["text"]
+    clock.advance(w.cfg.delivery.hook_ack_s + 0.1)
     w.actions += w.engine.tick()
-    [again] = pushes(w)
-    assert again.path == "turn_start" and f"id={msg.id} " in again.text
+    assert w.store.get_batch(res["batch_id"]).expire_reason == "no_ack"
+    assert w.delivery(m, msg)["state"] == "pending" and w.delivery(m, msg)["attempts"] == 1
+    again = sink_result(w, stop(w, p))
+    assert f"id={msg.id} " in again["text"] and again["batch_id"] != res["batch_id"]
+    w.engine.on_hook_ack(again["batch_id"], again["ack"])
+    w.hook(p, "UserPromptSubmit", gen="g1")
+    assert w.delivery(m, msg)["state"] == "in_context"
 
 
 def test_cooldowns_defer_never_drop(w: World, clock: FakeClock) -> None:

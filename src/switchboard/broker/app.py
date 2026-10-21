@@ -23,7 +23,6 @@ from switchboard.adapters import build_adapters
 from switchboard.broker import agent_http, oidc, web
 from switchboard.broker.agents import AgentService
 from switchboard.broker.auth import HostOriginGuard, LoginTokens, SecurityHeaders, Sessions, WebOrigin
-from switchboard.broker.hosts import HostViews
 from switchboard.broker.hub import Hub, WsSubscriber
 from switchboard.broker.passkeys import (
     CLAIM_TTL_S,
@@ -44,7 +43,7 @@ from switchboard.config import Config
 from switchboard.delivery.engine import Engine
 from switchboard.delivery.runner import Runner
 from switchboard.delivery.sinks import SinkRegistry
-from switchboard.paths import Paths, hook_state_text, write_hook_copy
+from switchboard.paths import Paths
 from switchboard.store import Store
 
 log = logging.getLogger("switchboard.broker")
@@ -65,8 +64,6 @@ class BrokerState:
     login_tokens: LoginTokens
     # where browsers reach the web UI (DESIGN.md §30): switchboard.localhost:<port>, or --public-url
     web_origin: WebOrigin = None  # type: ignore[assignment]
-    # every probe about a participant goes through its host's view
-    hosts: HostViews = None  # type: ignore[assignment]
     store: Store = None  # type: ignore[assignment]
     sessions: Sessions = None  # type: ignore[assignment]
     hub: Hub = None  # type: ignore[assignment]
@@ -190,7 +187,6 @@ def create_app(
         ),
         login_tokens=LoginTokens(clock),
         web_origin=web_origin,
-        hosts=HostViews(cfg.claude.sessions_dir),
         sealer=Sealer(clock),
         used_challenges=UsedChallenges(clock),
         signin=SignInLimiter(clock),
@@ -200,23 +196,22 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         os.umask(0o077)
         paths.ensure()
-        from switchboard.broker import proc
-
-        proc.pin_home_btime(paths)  # recovery compares old process starts before ending any session
         if cfg.review.agentsview:
             # a 0.2.0 key: /catchup never looks for agentsview (DESIGN.md §26); once per start
             log.warning(
                 "config.toml: [review] agentsview is ignored since /catchup replaced /review;"
                 " you can remove it"
             )
+        if cfg.retired:
+            log.warning(
+                "config.toml: %s are ignored since agents connect over HTTPS (0.38.0); you can remove them",
+                ", ".join(f"[{k.split('.')[0]}] {k.split('.')[1]}" for k in cfg.retired),
+            )
         con = db.open_db(paths.db)  # a version-1 database is migrated here, after a backup (§27.6)
         state.store = Store(con, clock)
-        # local rows only: a session over HTTPS has no pid to probe
-        state.recovery = state.store.recover_on_start(state.hosts.local.alive)
+        state.recovery = state.store.recover_on_start()
         if any(state.recovery.values()):
             log.warning("restart recovery: %s", state.recovery)
-        write_hook_copy(paths)
-        _refresh_hook_state(state)
         state.sessions = Sessions(state.store)
         _owner_start(state, reset_owner)
         state.hub = Hub()
@@ -247,9 +242,6 @@ def create_app(
             state.tasks.append(asyncio.create_task(_claim_loop(state)))
         state.tasks.append(asyncio.create_task(_maintenance(state)))
         state.tasks.append(asyncio.create_task(state.runner.run()))
-        state.tasks.append(asyncio.create_task(state.agents.liveness_loop()))
-        for adapter in state.engine.adapters.values():
-            await adapter.start(state.runner)
         # agents over HTTPS (§49.2): the MCP session manager, once everything it calls is up
         mcp_http = contextlib.AsyncExitStack()
         if state.agent_http is not None:
@@ -268,9 +260,6 @@ def create_app(
                     await t
             await state.rpc.stop()
             await state.runner.stop()
-            for adapter in state.engine.adapters.values():
-                with contextlib.suppress(Exception):
-                    await adapter.stop()
             state.hub.close_all()
             await asyncio.sleep(0)  # let WS senders see their close sentinel
             with contextlib.suppress(Exception):
@@ -383,25 +372,12 @@ async def _claim_loop(state: BrokerState) -> None:
         _announce_claim(state)
 
 
-def _refresh_hook_state(state: BrokerState) -> None:
-    state.info.hook_state = hook_state_text(state.paths)
-
-
 async def _maintenance(state: BrokerState) -> None:
-    """Every 60 s: WAL checkpoint, hook hash check, session purge, stale WebSockets."""
-    was_bad = state.info.hook_state.startswith("MISMATCH")
+    """Every 60 s: WAL checkpoint, session purge, stale WebSockets."""
     while True:
         await asyncio.sleep(MAINTENANCE_S)
         try:
             db.checkpoint(state.store.con)
-            _refresh_hook_state(state)
-            bad = state.info.hook_state.startswith("MISMATCH")
-            if bad and not was_bad:
-                state.store.add_event("hook_hash", data={"state": "mismatch"})
-                state.hub.notice(
-                    None, "warn", "switchboard hook copy changed on disk: " + state.info.hook_state
-                )
-            was_bad = bad
             state.store.web_session_purge()
             state.login_tokens.purge()
             state.used_challenges.purge()

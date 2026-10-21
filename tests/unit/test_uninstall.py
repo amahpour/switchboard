@@ -22,11 +22,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from old_install import hook_command
 
 from switchboard import cli, guardrails
 from switchboard.cli import build_parser
 from switchboard.install import claude, codex, common, cursor, devin
-from switchboard.install.common import dump_json, hook_command, run_uninstall
+from switchboard.install.common import dump_json, run_uninstall
 
 FIX = Path(__file__).resolve().parents[1] / "fixtures" / "install"
 PY = "/opt/yk/venv/bin/python"
