@@ -1,10 +1,10 @@
 """``switchboard update`` (DESIGN.md §45): how it finds its installer, the command it runs, what it
-says of a running broker and re-registers, and that it never starts what wasn't running. The runner is a
-fake that records each command, so nothing here installs, starts or registers anything."""
+says of a running broker, that it never starts what wasn't running, and that it no longer re-registers
+harnesses (``switchboard install`` is retired, 0.38.0). The runner is a fake that records each command,
+so nothing here installs or starts anything."""
 
 from __future__ import annotations
 
-import argparse
 import io
 import subprocess
 from pathlib import Path
@@ -96,11 +96,9 @@ def test_the_old_github_tool_is_told_to_switch_once() -> None:
         update.install_argv(Installer("uv", "switchboard"), None, "/bin/uv")
 
 
-def test_a_running_broker_is_told_about_and_the_registered_harnesses_are_re_registered() -> None:
-    stopped = update.plan(broker_running=False, registered=[])
-    assert not stopped.broker_running and stopped.harnesses == []
-    desk = update.plan(broker_running=True, registered=["claude"])
-    assert desk.broker_running and desk.harnesses == ["claude"]
+def test_a_running_broker_is_told_about() -> None:
+    assert not update.plan(broker_running=False).broker_running
+    assert update.plan(broker_running=True).broker_running
 
 
 class Recorder:
@@ -113,34 +111,33 @@ class Recorder:
         return subprocess.CompletedProcess(argv, 1 if self.fail and self.fail in argv else 0)
 
 
-def go(
-    todo: update.Plan, *, after: str = "0.24.0", yes: bool = True, rec: Recorder | None = None
-) -> tuple[int, Recorder, str]:
+def go(todo: update.Plan, *, after: str = "0.24.0", rec: Recorder | None = None) -> tuple[int, Recorder, str]:
     rec = rec or Recorder()
     out = io.StringIO()
     rc = update.run(
-        home=HOME, home_given=True, version=None, yes=yes, current="0.23.0", inst=UV, tool="/bin/uv",
+        home=HOME, home_given=True, version=None, current="0.23.0", inst=UV, tool="/bin/uv",
         exe="/bin/switchboard", state=lambda: todo, runner=rec, new_version=lambda exe: after, out=out,
     )  # fmt: skip
     return rc, rec, out.getvalue()
 
 
-def test_an_update_upgrades_and_re_registers_with_the_new_copy() -> None:
-    rc, rec, out = go(update.Plan(harnesses=["claude", "codex"]))
+def test_an_update_only_upgrades_the_copy() -> None:
+    """The one command it runs is the upgrade: nothing re-registers a harness (``switchboard install``
+    is retired), starts or stops a broker. Fails if update calls the new copy for anything."""
+    rc, rec, out = go(update.Plan())
     assert rc == 0 and rec.calls == [
         ["/bin/uv", "tool", "install", "--refresh-package", "switchboard-chat", "switchboard-chat@latest"],
-        ["/bin/switchboard", "install", "claude", "--home", HOME, "--yes"],
-        ["/bin/switchboard", "install", "codex", "--home", HOME, "--yes"],
     ]
     assert "0.23.0 -> 0.24.0" in out and "restart your running agent sessions" in out
+    assert "re-register" not in out
 
 
 def test_nothing_that_was_not_running_is_started() -> None:
     """The maintainer's worry: `switchboard start` in the wrong home brings an old desktop broker
     back. Fails if update starts or stops anything."""
-    rc, rec, out = go(update.Plan(harnesses=["claude"]))
+    rc, rec, out = go(update.Plan())
     assert rc == 0 and not any(c[1] in ("start", "stop") for c in rec.calls)
-    assert "nothing restarted" in out
+    assert "no broker runs in" in out and "nothing restarted" in out
 
 
 def test_a_running_broker_is_left_to_the_person() -> None:
@@ -150,34 +147,22 @@ def test_a_running_broker_is_left_to_the_person() -> None:
 
 
 def test_already_the_newest_changes_nothing_else() -> None:
-    rc, rec, out = go(update.Plan(harnesses=["claude"]), after="0.23.0")
+    rc, rec, out = go(update.Plan(), after="0.23.0")
     assert rc == 0 and len(rec.calls) == 1 and "already the newest" in out
 
 
 def test_a_failed_upgrade_stops_there() -> None:
-    rc, rec, _out = go(update.Plan(harnesses=["claude"]), rec=Recorder(fail="tool"))
+    rc, rec, _out = go(update.Plan(), rec=Recorder(fail="tool"))
     assert rc == 1 and len(rec.calls) == 1
 
 
-def test_without_yes_install_asks_as_it_always_does() -> None:
-    _rc, rec, _out = go(update.Plan(harnesses=["claude"]), yes=False)
-    assert rec.calls[-1] == ["/bin/switchboard", "install", "claude", "--home", HOME]
-
-
-def test_registered_reads_whether_a_harness_runs_this_home(tmp_path: Path) -> None:
-    """``update`` re-registers exactly the harnesses that are: Claude Code installed into a temp ~
-    for one home is registered for it, not for another, and Codex isn't at all."""
-    user_home, home = tmp_path / "u", str(tmp_path / "sb")
-    user_home.mkdir()
-    assert not common.registered("claude", home, user_home)
-    args = argparse.Namespace(
-        harness="claude", home=home, user_home=str(user_home), yes=True, dry_run=False, print_args=False,
-        workspace=None, allow_editable=True,
-    )  # fmt: skip
-    assert common.run_install(args, out=io.StringIO()) == 0
-    assert common.registered("claude", home, user_home)
-    assert not common.registered("claude", str(tmp_path / "other"), user_home)
-    assert not common.registered("codex", home, user_home)
+def test_a_script_that_still_passes_yes_is_not_broken(capsys: pytest.CaptureFixture[str]) -> None:
+    """``update --yes`` confirmed the re-registering that is retired; the flag is accepted and ignored. Fails
+    if argparse refuses it (exit 2 and "unrecognized arguments") instead of getting as far as update's
+    own refusal of the checkout the tests run from."""
+    assert cli.main(["update", "--yes"]) == cli.EXIT_ERR
+    err = capsys.readouterr().err
+    assert "runs from a checkout" in err and "unrecognized" not in err
 
 
 def test_the_command_refuses_a_checkout_and_changes_nothing(capsys: pytest.CaptureFixture[str]) -> None:

@@ -36,7 +36,8 @@ An agent's normal replies are never posted, only `say()`. Its text starting with
 | Command | What it does |
 |---|---|
 | `switchboard status` | Is the broker up, its version and build commit, which port, which rooms, the Codex link |
-| `switchboard update [--version X.Y.Z] [--yes]` | Upgrade switchboard, say whether a broker runs in this home, and re-register the harnesses registered for it ([docs/INSTALL.md](INSTALL.md)). It starts nothing that wasn't running |
+| `switchboard update [--version X.Y.Z]` | Upgrade switchboard and say whether a broker runs in this home ([docs/INSTALL.md](INSTALL.md)). It starts nothing that wasn't running, and re-registers nothing: agents connect with their plugin |
+| `switchboard uninstall <harness\|all> [--dry-run] [--yes] [--purge-hooks]` | Remove what an older `switchboard install` wrote into a harness's config: switchboard's own hooks and MCP entry, with a diff, a backup and an "Apply?" ([docs/INSTALL.md](INSTALL.md#uninstall)). `switchboard install` itself is retired |
 | `switchboard login [--open]` | A fresh one-time sign-in link |
 | `switchboard logout --all` | Sign out every browser |
 | `switchboard rooms` | List open rooms |
@@ -51,7 +52,7 @@ An agent's normal replies are never posted, only `say()`. Its text starting with
 | `switchboard stop` | Stop the broker |
 
 **Colour.** On a terminal, switchboard colours its own framing so the output is easy to scan:
-- `install` and `uninstall` diffs: added lines green, removed red, file headers bold, and notes and unchanged files dim;
+- `uninstall` diffs: added lines green, removed red, file headers bold, and notes and unchanged files dim;
 - `tail`: your nick bold, each agent a colour of its own (the same on every run), the system dim, and warnings red;
 - `status` and `who`: state words (`up` and `idle` green; `parked` and `paused` yellow) and links;
 - `report`: headings, and each rule that fired.
@@ -97,7 +98,7 @@ codex plugin marketplace add amahpour/switchboard
 codex plugin add switchboard@switchboard
 ```
 
-Codex plugins can't hold your server's address, so it goes in `~/.codex/config.toml`, where `switchboard install` may have put a `switchboard` server before (replace that one):
+Codex plugins can't hold your server's address, so it goes in `~/.codex/config.toml`, where an older `switchboard install` may have put a `switchboard` server (replace that one, or remove it with `switchboard uninstall codex`):
 
 ```toml
 [mcp_servers.switchboard]

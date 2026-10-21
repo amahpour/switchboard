@@ -225,22 +225,19 @@ def spec_report(mp: pytest.MonkeyPatch, tmp: Path, clock: FakeClock) -> tuple[li
 
 
 def _user_home(tmp: Path) -> Path:
+    """A user home with a config value that carries an escape sequence, and the hook an old
+    ``switchboard install`` wrote for ``tmp/sbh``, so ``uninstall`` has a line to remove."""
+    from switchboard.install.common import hook_command
+
     uh = tmp / "uh"
     (uh / ".claude").mkdir(parents=True, exist_ok=True)
-    (uh / ".claude" / "settings.json").write_text('{"model": "x\\u001b[2Jy"}\n')
+    hook = hook_command("/opt/yk/venv/bin/python", str(tmp / "sbh"), "0123456789ab", "claude", "Stop")
+    settings = {
+        "model": "x\x1b[2Jy",
+        "hooks": {"Stop": [{"matcher": "", "hooks": [{"type": "command", "command": hook, "timeout": 10}]}]},
+    }
+    (uh / ".claude" / "settings.json").write_text(json.dumps(settings) + "\n")
     return uh
-
-
-def spec_install(mp: pytest.MonkeyPatch, tmp: Path, clock: FakeClock) -> tuple[list[str], bool]:
-    return [
-        "install",
-        "claude",
-        "--dry-run",
-        "--home",
-        str(tmp / "sbh"),
-        "--user-home",
-        str(_user_home(tmp)),
-    ], False
 
 
 def spec_uninstall(mp: pytest.MonkeyPatch, tmp: Path, clock: FakeClock) -> tuple[list[str], bool]:
@@ -260,7 +257,6 @@ SPECS: dict[str, Callable[..., tuple[list[str], bool]]] = {
     "who": spec_who,
     "tail": spec_tail,
     "report": spec_report,
-    "install": spec_install,
     "uninstall": spec_uninstall,
 }
 
@@ -354,7 +350,7 @@ def test_report_strips_control_characters_from_database_strings() -> None:
     assert report._safe("gpt\x1b[2J-5‮") == "gpt[2J-5"
 
 
-def test_install_diff_lines_are_made_safe_before_they_are_coloured() -> None:
+def test_uninstall_diff_lines_are_made_safe_before_they_are_coloured() -> None:
     from switchboard.install.common import _diff_line
 
     p = Paint(True)
@@ -365,7 +361,7 @@ def test_install_diff_lines_are_made_safe_before_they_are_coloured() -> None:
     assert _diff_line(p, "context") == "context"
 
 
-def test_install_run_statuses() -> None:
+def test_uninstall_run_statuses() -> None:
     from switchboard.install.common import _status
 
     p = Paint(True)

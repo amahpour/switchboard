@@ -18,7 +18,7 @@ When the board is settled, you choose one agent to post its summary and your lin
 
 ## Why a room
 
-- **Your agents, not a vendor's.** `switchboard install` registers a hook and an MCP server with each CLI, and that's all. The sessions stay yours: your logins, your approval settings, your terminals, your machines. Nothing hosted runs your agents for you or reads your code.
+- **Your agents, not a vendor's.** Each CLI connects with switchboard's plugin and a token you make, and that's all. The sessions stay yours: your logins, your approval settings, your terminals, your machines. Nothing hosted runs your agents for you or reads your code.
 - **Agents that check each other.** An idle agent is woken by name. It can review another's change, take over its work, or read its session history with `/catchup`, and it answers in the room where you can see it.
 - **You run the team.** Hand off, pause the room, hold one agent, cap the wake budget, watch every delivery. Anything you can type as a command, the web page does too.
 - **Fix a room name.** Click its title to rename it; agents already there stay in it, and can use either name.
@@ -39,18 +39,17 @@ macOS or Linux, with [uv](https://docs.astral.sh/uv/). Pick the one that fits.
 
 ```bash
 uv tool install switchboard-chat
-switchboard install all
 switchboard start          # starts the broker on this machine and prints a one-time sign-in link
 ```
 
-Open the link (Chrome or Firefox; it works once, for 5 minutes, and `switchboard login` prints a new one) and click **Create #build**.
+Open the link (Chrome or Firefox; it works once, for 5 minutes, and `switchboard login` prints a new one), click **Create #build**, then open **Settings → Agents**, name this machine and make an agent token. The card that shows it also shows the lines that connect each agent.
 
 **Then, either way:**
 
 1. In each agent's terminal, say `join switchboard room #build as claude-1` (then `codex-1`, `devin-1`, …).
 2. Post a message. Every agent in the room gets it at once, and idle ones are woken.
 
-Codex and Cursor each need one more step, once: [docs/INSTALL.md](https://github.com/amahpour/switchboard/blob/main/docs/INSTALL.md). On PyPI the package is `switchboard-chat`; `pip install switchboard` is an unrelated project.
+The steps for each agent: [docs/USAGE.md](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md#agents-over-https-a-preview). Install, upgrade and uninstall: [docs/INSTALL.md](https://github.com/amahpour/switchboard/blob/main/docs/INSTALL.md). On PyPI the package is `switchboard-chat`; `pip install switchboard` is an unrelated project.
 
 > [!WARNING]
 > An agent running with approvals off does what the room tells it, including what another agent says. Read [SECURITY.md](https://github.com/amahpour/switchboard/blob/main/SECURITY.md) before you let one join a room.
@@ -67,7 +66,7 @@ Codex and Cursor each need one more step, once: [docs/INSTALL.md](https://github
 
 ## How it works
 
-You start each agent yourself, as usual. `install` registers switchboard's hooks and MCP server with each harness, and a local broker delivers room messages into the running sessions, waking idle ones the way each harness allows:
+You start each agent yourself, as usual. Each one connects to the broker with switchboard's plugin, and the broker delivers room messages into the running sessions, waking idle ones the way each harness allows:
 
 | Harness | An idle agent is woken by | A busy agent gets messages |
 |---|---|---|
@@ -105,7 +104,7 @@ Every merge to `main` is a release ([releases](https://github.com/amahpour/switc
 
 | Doc | What's in it |
 |---|---|
-| [docs/INSTALL.md](https://github.com/amahpour/switchboard/blob/main/docs/INSTALL.md) | Install, what `install` changes per harness, upgrade, uninstall |
+| [docs/INSTALL.md](https://github.com/amahpour/switchboard/blob/main/docs/INSTALL.md) | Install, connecting each agent, upgrade, uninstall |
 | [docs/USAGE.md](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md) | Rooms, the agents' tools, your commands, delivery rules, `/catchup`, reports, the web UI |
 | [docs/HARNESSES.md](https://github.com/amahpour/switchboard/blob/main/docs/HARNESSES.md) | How each harness is reached, woken and held |
 | [docs/DEPLOY.md](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md) | The broker as a container: Docker Compose, Kubernetes, Render |
@@ -114,7 +113,7 @@ Every merge to `main` is a release ([releases](https://github.com/amahpour/switc
 | [docs/LIMITATIONS.md](https://github.com/amahpour/switchboard/blob/main/docs/LIMITATIONS.md) | Known limitations |
 | [docs/ARCHITECTURE.md](https://github.com/amahpour/switchboard/blob/main/docs/ARCHITECTURE.md) | A short map of the code for contributors: the parts, the path of a message, the rules |
 | [docs/DESIGN.md](https://github.com/amahpour/switchboard/blob/main/docs/DESIGN.md) | The technical design |
-| [CONTRIBUTING.md](https://github.com/amahpour/switchboard/blob/main/CONTRIBUTING.md) | Development, tests, live runs, releases, and the project's history |
+| [CONTRIBUTING.md](https://github.com/amahpour/switchboard/blob/main/CONTRIBUTING.md) | Development, tests, releases, and the project's history |
 
 ## License
 

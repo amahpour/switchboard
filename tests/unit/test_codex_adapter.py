@@ -248,7 +248,7 @@ def test_queue_needs_hooks_seen_and_an_idle_thread(w: World) -> None:
     a.bin_ok = True
     w.human("q1")
     assert pushes(w) == []
-    assert "switchboard install codex" in (w.engine.parked_reason(m.id) or "")
+    assert "Settings → Agents" in (w.engine.parked_reason(m.id) or "")
     w.store.update_participant(p.id, hooks_seen_at=w.clock.now())
     w.take()
     w.actions += w.engine.evaluate(m.id)

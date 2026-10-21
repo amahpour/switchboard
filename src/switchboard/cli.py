@@ -531,17 +531,16 @@ def cmd_report(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def cmd_install(args: argparse.Namespace) -> int:
-    from switchboard.install import common
-
-    return common.run_install(args)
-
-
 # Verbs that were retired (#385, DESIGN.md §49.8). Each says so in one line and exits 2, instead of
 # argparse's "invalid choice": an old script, an old harness entry or an old ``switchboard update``
 # that still calls one learns what happened and where to go.
 HTTPS_WHERE = "Agents connect over HTTPS now: Settings → Agents in the web UI, and docs/USAGE.md"
 RETIRED = {
+    "install": (
+        "registering an MCP server and hooks with a harness was retired in 0.38.0 (#385). "
+        + HTTPS_WHERE
+        + ". `switchboard uninstall <harness>` still removes what an old install wrote"
+    ),
     "remote": "SSH remotes and the machines that dial in were retired in 0.38.0 (#385). " + HTTPS_WHERE,
     "satellite": "SSH remotes were retired in 0.38.0 (#385). " + HTTPS_WHERE,
     "join": "machines that dial in were retired in 0.38.0 (#385). " + HTTPS_WHERE,
@@ -554,8 +553,7 @@ def cmd_retired(args: argparse.Namespace) -> int:
 
 
 def cmd_update(args: argparse.Namespace) -> int:
-    """``switchboard update`` (DESIGN.md §45): upgrade this copy, say what runs in the home,
-    re-register the harnesses registered for it."""
+    """``switchboard update`` (DESIGN.md §45): upgrade this copy and say what still runs in the home."""
     import shutil
 
     from switchboard import __version__, update
@@ -573,10 +571,7 @@ def cmd_update(args: argparse.Namespace) -> int:
     def state() -> update.Plan:
         from switchboard.mcp.client import ping
 
-        return update.plan(
-            broker_running=ping(paths.sock, timeout=1.0) is not None,
-            registered=[h for h in common.HARNESSES if common.registered(h, home)],
-        )
+        return update.plan(broker_running=ping(paths.sock, timeout=1.0) is not None)
 
     # the same entry point, which the upgrade repoints at the new copy
     exe = sys.argv[0] if os.path.basename(sys.argv[0]) == "switchboard" else shutil.which("switchboard")
@@ -585,7 +580,6 @@ def cmd_update(args: argparse.Namespace) -> int:
             home=home,
             home_given=_home_given(args),
             version=args.to_version,
-            yes=args.yes,
             current=__version__,
             inst=inst,
             tool=tool,
@@ -754,38 +748,15 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_report)
 
     s = sub.add_parser(
-        "install",
-        parents=[common],
-        help="register switchboard's MCP server and hooks with a harness (shows a diff first)",
-    )
-    s.add_argument(
-        "harness",
-        choices=["claude", "codex", "cursor", "devin", "all"],
-        help="a harness, or all (every harness whose CLI is on PATH, one confirmation)",
-    )
-    s.add_argument("--dry-run", action="store_true", help="show the diff, write nothing")
-    s.add_argument("--yes", action="store_true", help="apply without asking")
-    s.add_argument(
-        "--print-args", action="store_true", help="print per-launch flags/files as JSON (writes nothing)"
-    )
-    s.add_argument("--workspace", default=None, help="with --print-args: the workspace dir")
-    s.add_argument("--user-home", default=None, help="treat DIR as ~ (tests)")
-    s.add_argument(
-        "--allow-editable",
-        action="store_true",
-        help="allow an editable/source install of switchboard (agents could edit its code)",
-    )
-    s.set_defaults(func=cmd_install)
-
-    s = sub.add_parser(
         "update",
         parents=[common],
-        help="upgrade switchboard, restart what already runs in this home, re-register its harnesses",
+        help="upgrade switchboard and say what still runs the old version in this home",
     )
     s.add_argument(
         "--version", dest="to_version", metavar="X.Y.Z", default=None, help="a release (default: the newest)"
     )
-    s.add_argument("--yes", action="store_true", help="re-register the harnesses without asking")
+    # update asks nothing now; a script that still passes --yes must not break
+    s.add_argument("--yes", action="store_true", help=argparse.SUPPRESS)
     s.set_defaults(func=cmd_update)
 
     s = sub.add_parser(
@@ -814,7 +785,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--ack", choices=["next_call", "immediate", "never"], default=None, help=argparse.SUPPRESS)
     s.set_defaults(func=cmd_mcp)
 
-    for verb in ("remote", "satellite", "join"):
+    for verb in ("install", "remote", "satellite", "join"):
         sub.add_parser(verb, parents=[common]).set_defaults(func=cmd_retired)
 
     s = sub.add_parser("hook", parents=[common], help="run the installed hook script (debugging)")

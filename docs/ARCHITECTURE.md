@@ -4,7 +4,7 @@ A short map of the code for a new contributor or coding agent: the parts, the pa
 
 ## The parts
 
-You start each agent yourself; switchboard never launches one or types into it. `switchboard install` registers an MCP server and a hook script with each harness, and a local broker does the rest. Paths are under `src/switchboard/`.
+You start each agent yourself; switchboard never launches one or types into it. A harness reaches the broker over HTTPS with an agent token and switchboard's plugin (§49), or, on a machine set up before 0.38.0, through the MCP server and hook script that `switchboard install` registered (retired; `switchboard uninstall` removes them), and the broker does the rest. Paths are under `src/switchboard/`.
 
 ```mermaid
 flowchart TB
@@ -59,7 +59,7 @@ flowchart TB
 | **Web UI**<br>`web/static/` | Plain JavaScript. Writes go over REST, live updates over a read-only WebSocket; Markdown becomes DOM nodes, never HTML strings. | [§29](DESIGN.md#29-the-native-web-ui-and-the-inspector-19), [§5.5](DESIGN.md#55-rest-and-websocket) |
 | **Agents over HTTPS**<br>`broker/agent_http.py`, `broker/agent_tokens.py`, `plugins/` | The same tools at `/mcp`, for an agent with an agent token and nothing of switchboard's on its machine: the token names the person and the device, and the harness names the session: Codex's thread, or the Claude Code, Cursor or Devin session its PreToolUse hook reports. Codex, Claude Code, Cursor and Devin for now. | [§49](DESIGN.md#49-agents-over-https-380) |
 
-Also: `cli.py`; `install/` ([§9.7](DESIGN.md#97-install-targets-switchboard-install-h)); `envelope.py` ([§8.6](DESIGN.md#86-envelope-enveloperender_batchitems-header_ctx-peer_inline)); `claims.py` ([§47](DESIGN.md#47-advisory-claims-for-work-outside-a-room-293)); `store.py`, `db.py` and `models.py` ([§4](DESIGN.md#4-data-model-sqlite)); `guardrails.py` ([§11](DESIGN.md#11-security-model)).
+Also: `cli.py`; `install/`, which now only removes what an old install wrote ([§9.7](DESIGN.md#97-install-targets-switchboard-install-h)); `envelope.py` ([§8.6](DESIGN.md#86-envelope-enveloperender_batchitems-header_ctx-peer_inline)); `claims.py` ([§47](DESIGN.md#47-advisory-claims-for-work-outside-a-room-293)); `store.py`, `db.py` and `models.py` ([§4](DESIGN.md#4-data-model-sqlite)); `guardrails.py` ([§11](DESIGN.md#11-security-model)).
 
 ## The path of a message
 

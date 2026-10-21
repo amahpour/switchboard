@@ -1,31 +1,22 @@
-"""Shared install machinery (DESIGN.md §9.7).
+"""Shared machinery of ``switchboard uninstall`` (DESIGN.md §9.7).
 
-- ``plan()`` (per harness) returns FileEdit and CommandEdit items; nothing is
-  touched until the user confirms.
-- The diff shows only the entries switchboard owns (its hook groups, its MCP
-  entry), with values of secret-looking keys masked, so other servers' env
-  blocks are never printed.
-- ``Apply? [y/N]``; with no TTY and no ``--yes`` it refuses.
-- Each file is backed up to ``<file>.bak-switchboard-YYYYmmddHHMMSS`` (0600 unless
-  the original was already private) and written atomically.
-- Re-running is idempotent ("no changes").
-- An editable/source install of switchboard is refused unless ``--allow-editable``:
-  otherwise an agent editing the repo could change what trusted hooks and the
-  MCP server do.
-- The MCP command runs the venv's Python directly, never ``uv run`` (uv would
-  insert itself into the process chain the broker verifies).
-- ``switchboard install all`` plans every harness whose CLI is on PATH and shows
-  one combined diff with a single confirmation.
+``switchboard install`` is retired (0.38.0, #385: agents connect over HTTPS now, DESIGN.md §49), but a
+machine that installed before still has switchboard's entries in its harnesses' configs, so
+``switchboard uninstall <h|all>`` stays: ``unplan()`` per harness returns FileEdit and CommandEdit
+items, and nothing is touched until the user confirms.
 
-``switchboard uninstall <h|all>`` (``unplan()`` per harness) is the inverse: it
-removes only switchboard's own entries, recognised the way install recognises its
-older ones (a hook command containing ``H="<home>/hooks/switchboard_hook-``, the
-MCP entry that runs ``-m switchboard mcp --home <home>``, the Codex marker block,
-Devin's eight allow names), with the same diff, confirmation, backups and
-atomic writes. Removed entries are shown through an allowlisted view (an MCP
-entry's ``command`` and ``args``, a hook's ``command``, ...; every other value
-``***``), since the user may have edited them. Missing files are skipped; an
-editable install is not refused.
+- It removes only switchboard's own entries, recognised the way install recognised its older ones (a hook
+  command containing ``H="<home>/hooks/switchboard_hook-``, the MCP entry that runs
+  ``-m switchboard mcp --home <home>``, the Codex marker block, Devin's nine allow names).
+- The diff shows only those entries, through an allowlisted view (an MCP entry's ``command`` and ``args``,
+  a hook's ``command``, ...; every other value ``***``, and secret-looking values masked), since the user
+  may have edited them: other servers' env blocks are never printed.
+- ``Apply? [y/N]``; with no TTY and no ``--yes`` it refuses. ``--dry-run`` only shows the diff.
+- Each file is backed up to ``<file>.bak-switchboard-YYYYmmddHHMMSS`` (0600 unless the original was already
+  private) and written atomically.
+- Re-running is idempotent ("nothing to remove"). Missing files are skipped. An editable install of
+  switchboard is not refused (removing entries can't make an agent's edits run).
+- ``--purge-hooks`` also deletes the hook copies in ``<home>/hooks`` once no config runs one.
 """
 
 from __future__ import annotations
@@ -104,14 +95,7 @@ class PurgeEdit:
 Edit = FileEdit | CommandEdit | Missing | PurgeEdit
 
 HARNESSES = ("claude", "codex", "cursor", "devin")
-# the CLI each harness is started with (`install all` skips a harness with none on PATH)
-CLI_NAMES: dict[str, tuple[str, ...]] = {
-    "claude": ("claude",),
-    "codex": ("codex",),
-    "cursor": ("cursor-agent", "agent"),
-    "devin": ("devin",),
-}
-# the user-level files install writes hook commands into (``--purge-hooks`` checks them)
+# the user-level files install wrote hook commands into (``--purge-hooks`` checks them)
 HOOK_CONFIGS: dict[str, tuple[str, ...]] = {
     "claude": (".claude", "settings.json"),
     "codex": (".codex", "hooks.json"),
@@ -126,7 +110,7 @@ class Plan:
     harness: str
     edits: list[Edit] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
-    verb: str = "install"
+    verb: str = "uninstall"
     title: str = ""
 
     @property
@@ -135,7 +119,7 @@ class Plan:
 
     @property
     def unchanged_text(self) -> str:
-        return "nothing to remove" if self.verb == "uninstall" else "no changes"
+        return "nothing to remove"
 
 
 # ------------------------------------------------------------------ commands
@@ -145,19 +129,6 @@ def check_path(p: str, what: str) -> str:
     if any(c in _UNSAFE_PATH_CHARS for c in p):
         raise InstallError(f"{what} contains a quote, $, backslash or newline; install refuses it: {p!r}")
     return p
-
-
-def mcp_argv(python: str, home: str) -> list[str]:
-    """The MCP command, byte-identical for every harness (no harness hint)."""
-    return [
-        check_path(python, "python"),
-        "-I",
-        "-m",
-        "switchboard",
-        "mcp",
-        "--home",
-        check_path(home, "home"),
-    ]
 
 
 def hook_command(
@@ -230,17 +201,6 @@ def mcp_home(entry: Any) -> str | None:
         return None
 
 
-def refuse_foreign_mcp(where: str, entry: Any) -> None:
-    """Install replaces an MCP server named switchboard only if it runs
-    switchboard's MCP server (any home, any Python): "switchboard" is a
-    common word, and another tool's server of that name isn't ours to drop."""
-    if entry is not None and not runs_switchboard_mcp(entry):
-        raise InstallError(
-            f"{where} already has an MCP server named switchboard that isn't switchboard's;"
-            " rename or remove it, then re-run"
-        )
-
-
 def safe_text(s: str) -> str:
     """``s`` for the terminal: non-printable characters (escape sequences, CR)
     shown escaped, so a value read from a config file can't rewrite the screen."""
@@ -308,7 +268,7 @@ _HOOK_KEYS = frozenset({"matcher", "type", "command", "timeout", "loop_limit"})
 
 
 def hook_view(obj: Any) -> Any:
-    """A removed hook group or handler for the diff: the keys install writes;
+    """A removed hook group or handler for the diff: the keys install wrote;
     any other key the user added shows ``***``."""
     if isinstance(obj, list):
         return [hook_view(v) for v in obj]
@@ -355,61 +315,10 @@ def compact(obj: Any) -> str:
     return safe_text(json.dumps(mask(obj), ensure_ascii=False))
 
 
-def set_hook_groups(
-    settings: dict[str, Any], events: dict[str, tuple[str, int]], home: str, *, matcher: bool = True
-) -> list[str]:
-    """Claude-shaped hooks: ``hooks.<Event> = [{"matcher":"", "hooks":[{type,command,timeout}]}]``.
-
-    Older switchboard hook entries for this home are replaced; everything else is kept.
-    Returns display lines for the diff.
-    """
-    lines: list[str] = []
-    hooks = settings.get("hooks")
-    if hooks is None:
-        hooks = settings["hooks"] = {}
-    if not isinstance(hooks, dict):
-        raise InstallError('"hooks" is not an object; fix it by hand first')
-    for event, (cmd, timeout) in events.items():
-        arr = hooks.get(event)
-        if arr is None:
-            arr = hooks[event] = []
-        if not isinstance(arr, list):
-            raise InstallError(f'"hooks.{event}" is not a list; fix it by hand first')
-        present = any(
-            isinstance(g, dict)
-            and isinstance(g.get("hooks"), list)
-            and any(isinstance(h, dict) and h.get("command") == cmd for h in g["hooks"])
-            for g in arr
-        )
-        if present:
-            continue
-        kept = []
-        for g in arr:
-            if isinstance(g, dict) and isinstance(g.get("hooks"), list):
-                inner = [
-                    h
-                    for h in g["hooks"]
-                    if not (isinstance(h, dict) and is_switchboard_hook(h.get("command"), home))
-                ]
-                if len(inner) != len(g["hooks"]):
-                    lines.append(f"  - hooks.{event}: an older switchboard hook")
-                    if not inner:
-                        continue
-                    g = {**g, "hooks": inner}
-            kept.append(g)
-        group: dict[str, Any] = {"hooks": [{"type": "command", "command": cmd, "timeout": timeout}]}
-        if matcher:
-            group = {"matcher": "", **group}
-        kept.append(group)
-        hooks[event] = kept
-        lines.append(f"  + hooks.{event}[{len(kept) - 1}]: {compact(group)}")
-    return lines
-
-
 def remove_hook_groups(
     data: dict[str, Any], home: str, *, drop_empty_hooks: bool, positional: bool = False
 ) -> tuple[list[str], int]:
-    """Undo ``set_hook_groups`` / ``set_codex_hooks`` (``hooks.<Event> = [{..., "hooks": [...]}]``).
+    """Undo install's hook groups (``hooks.<Event> = [{..., "hooks": [...]}]``).
 
     Every switchboard hook for this home is removed, in any event (older versions
     too). A group left with no hooks is dropped (install always made its own
@@ -751,29 +660,13 @@ def _module(harness: str) -> Any:
 
 @dataclass
 class _Run:
-    """One section of an install/uninstall run: a plan, or why there is none."""
+    """One section of an uninstall run: a plan, or why there is none."""
 
     name: str
     plan: Plan | None = None
     status: str = ""
     error: bool = False
     rc: int | None = None
-
-
-def registered(harness: str, home: str, user_home: Path | None = None) -> bool:
-    """True if ``harness`` is registered with switchboard for ``home``: uninstalling it would
-    change something (``switchboard update`` re-registers exactly these). Reads, never writes."""
-    try:
-        return _module(harness).unplan(user_home or Path.home(), home, run_commands=False).changed
-    except InstallError:
-        return False
-
-
-def cli_on_path(harness: str) -> str | None:
-    for name in CLI_NAMES[harness]:
-        if shutil.which(name):
-            return name
-    return None
 
 
 def _unchanged(plan: Plan) -> str:
@@ -788,7 +681,6 @@ def _unchanged(plan: Plan) -> str:
 
 def _summary(
     runs: list[_Run],
-    verb: str,
     *,
     applied: bool,
     out: TextIO,
@@ -796,8 +688,8 @@ def _summary(
     paint: Paint | None = None,
 ) -> None:
     p = paint or PLAIN
-    done = {"install": "installed", "uninstall": "removed"}[verb]
-    would = {"install": "would change", "uninstall": "would remove"}[verb]
+    done = "removed"
+    would = "would remove"
     print(p.heading("summary:"), file=out)
     for r in runs:
         if r.plan is None:
@@ -821,13 +713,10 @@ def _finish(
     runs: list[_Run],
     args: argparse.Namespace,
     *,
-    verb: str,
     many: bool,
     stdin: TextIO | None,
     out: TextIO,
     trailer: list[str] | None = None,
-    prepare: Any = None,
-    check_editable: bool = False,
 ) -> int:
     """Render every section, then one confirmation, then apply each changed plan."""
     p = for_args(args, out)  # colour only when ``out`` is a terminal (or --color always)
@@ -835,7 +724,7 @@ def _finish(
         if r.plan is not None:
             render_plan(r.plan, out, p)
         else:
-            print(p.heading(f"switchboard {verb} {r.name}:") + " " + _status(p, r.status), file=out)
+            print(p.heading(f"switchboard uninstall {r.name}:") + " " + _status(p, r.status), file=out)
     changed = any(r.plan is not None and r.plan.changed for r in runs)
     if changed:
         for n in trailer or []:
@@ -843,78 +732,19 @@ def _finish(
     failed = any(r.error for r in runs)
     if args.dry_run or not changed:
         if many:
-            _summary(runs, verb, applied=False, out=out, paint=p)
+            _summary(runs, applied=False, out=out, paint=p)
         return 1 if failed else 0
-    if check_editable and editable_install() and not args.allow_editable:
-        print(
-            "switchboard: refusing to install from an editable/source checkout: an agent editing the repo"
-            " could change what the hooks and MCP server run. Install a copy first (`uv tool install .`),"
-            " or pass --allow-editable.",
-            file=sys.stderr,
-        )
-        return 1
     if not confirm(args.yes, stdin, out, p):
         print(p.warn("not applied"), file=out)
         return 1
-    if prepare is not None:
-        prepare()
     rc = 1 if failed else 0
     for r in runs:
         if r.plan is not None and r.plan.changed:
             r.rc = apply_plan(r.plan, run_commands=not args.user_home, out=out, paint=p)
             rc = rc or r.rc
     if many:
-        _summary(runs, verb, applied=True, out=out, run_commands=not args.user_home, paint=p)
+        _summary(runs, applied=True, out=out, run_commands=not args.user_home, paint=p)
     return rc
-
-
-def run_install(args: argparse.Namespace, *, stdin: TextIO | None = None, out: TextIO | None = None) -> int:
-    from switchboard.paths import Paths, hook_sha12
-
-    out = out or sys.stdout
-    many = args.harness == "all"
-    try:
-        home = str(Paths.from_home(getattr(args, "home", None)).home)
-        python = sys.executable
-        sha12 = hook_sha12()
-        if args.print_args:
-            if many:
-                raise InstallError("--print-args prints one harness's per-launch flags; name the harness")
-            ws = Path(args.workspace).resolve() if args.workspace else None
-            data = _module(args.harness).print_args(python, home, sha12, ws)
-            print(json.dumps(data, indent=2), file=out)
-            return 0
-        user_home = Path(args.user_home).resolve() if args.user_home else Path.home()
-        runs: list[_Run] = []
-        for h in HARNESSES if many else (args.harness,):
-            if many and cli_on_path(h) is None:
-                names = " or ".join(f"`{n}`" for n in CLI_NAMES[h])
-                runs.append(_Run(h, status=f"skipped ({names} not on PATH)"))
-                continue
-            try:
-                runs.append(
-                    _Run(
-                        h,
-                        plan=_module(h).plan(user_home, python, home, sha12, run_commands=not args.user_home),
-                    )
-                )
-            except InstallError as e:
-                if not many:
-                    raise
-                runs.append(_Run(h, status=f"error: {e}", error=True))
-    except InstallError as e:
-        print(f"switchboard: {e}", file=sys.stderr)
-        return 1
-
-    def prepare() -> None:
-        from switchboard.paths import write_hook_copy
-
-        Paths.from_home(home).ensure()
-        write_hook_copy(Paths.from_home(home))
-
-    return _finish(
-        runs, args, verb="install", many=many, stdin=stdin, out=out, prepare=prepare, check_editable=True
-    )
 
 
 def hook_copies(hooks_dir: Path) -> tuple[list[Path], str]:
@@ -942,7 +772,7 @@ def hook_copies(hooks_dir: Path) -> tuple[list[Path], str]:
 
 def purge_plan(plans: list[Plan], user_home: Path, home: str) -> Plan:
     """``--purge-hooks``: delete the hook copies only if, after this run, none
-    of the configs install writes hooks into still runs one of them.
+    of the configs install wrote hooks into still runs one of them.
 
     With ``--user-home`` the real ``~``'s configs are checked too (read only):
     the switchboard home (``--home``, else SWITCHBOARD_HOME or ~/.switchboard) doesn't
@@ -1019,7 +849,7 @@ def run_uninstall(args: argparse.Namespace, *, stdin: TextIO | None = None, out:
         " they restart"
     )
     # a summary whenever there is more than one section (`all`, or a harness plus --purge-hooks)
-    return _finish(runs, args, verb="uninstall", many=len(runs) > 1, stdin=stdin, out=out, trailer=trailer)
+    return _finish(runs, args, many=len(runs) > 1, stdin=stdin, out=out, trailer=trailer)
 
 
 def deep(obj: dict[str, Any]) -> dict[str, Any]:

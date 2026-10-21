@@ -396,7 +396,7 @@ def test_the_loaded_list_picks_the_queue_tier_and_its_argv(w: W) -> None:
     mid = w.say("before any hook")
     time.sleep(0.5)
     assert w.queue_calls() == []  # nothing could confirm it: parked
-    assert "switchboard install codex" in (w.member().get("parked_reason") or "")
+    assert "Settings → Agents" in (w.member().get("parked_reason") or "")
     w.hook("UserPromptSubmit", prompt="hi")
     w.hook("Stop", stop_hook_active=False)
     assert wait_for(lambda: w.queue_calls())

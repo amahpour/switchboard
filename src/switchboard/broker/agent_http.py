@@ -82,10 +82,7 @@ CLIENTS = {
     "Cursor": "cursor",
     "rmcp": "devin",  # Devin's Rust transport; a matching input hook is still required
 }
-UNSUPPORTED = (
-    "switchboard over HTTPS works with Codex, Claude Code, Cursor and Devin for now."
-    " Connect this agent with `switchboard install` meanwhile"
-)
+UNSUPPORTED = "switchboard over HTTPS works with Codex, Claude Code, Cursor and Devin for now"
 HOOK_TOOL = "hook"  # called by a harness's hooks, never listed for the model
 # what a hook's input template may name: the hook tool's parameters (the plugins' hooks use these)
 HOOK_FIELDS = (

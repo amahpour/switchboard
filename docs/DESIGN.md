@@ -89,7 +89,7 @@ The broker sends `version` and `commit` in `GET /api/me` and `sys.status`. The s
 
 ## 2. Runtime layout
 
-**`SWITCHBOARD_HOME`** defaults to `~/.switchboard`, and `--home DIR` overrides it on every subcommand. Tests always use a temp dir. Every hook and MCP command line that `install` writes includes an explicit `--home <abs>`, because the Codex daemon and Cursor pass a minimal env (F§4a, and the M0 Cursor runs). Every entry point calls `os.umask(0o077)`.
+**`SWITCHBOARD_HOME`** defaults to `~/.switchboard`, and `--home DIR` overrides it on every subcommand. Tests always use a temp dir. Every hook and MCP command line that `install` wrote (retired, §9.7) includes an explicit `--home <abs>`, because the Codex daemon and Cursor pass a minimal env (F§4a, and the M0 Cursor runs). Every entry point calls `os.umask(0o077)`.
 
 ```
 $SWITCHBOARD_HOME/                0700
@@ -117,7 +117,7 @@ $SWITCHBOARD_HOME/                0700
 - **Socket path length.** macOS `sun_path` holds at most 103 bytes (F§10 S6). `sock_path(home)` returns `<home>/run/broker.sock` if that is at most 100 bytes. Otherwise it returns `/tmp/switchboard-<uid>/<sha256(realpath(home))[:12]>.sock`, with the dir created by `ensure_private_dir`.
   - `sock_path` is defined once, in the stdlib hook module; `paths.py` imports it from `switchboard.hook.switchboard_hook`.
   - Before connecting, clients (the hook, the CLI and the MCP client) check that `os.stat(sock).st_uid == os.getuid()`.
-- **Hook copy.** On every start, `switchboard start` and `install` write `hooks/switchboard_hook-<sha12>.py`, where the name is the sha256 of the packaged file (mode 0444).
+- **Hook copy.** On every start, `switchboard start` writes (and, until 0.38.0, `install` wrote) `hooks/switchboard_hook-<sha12>.py`, where the name is the sha256 of the packaged file (mode 0444).
   - Every 60 s the broker re-hashes every file in `hooks/`. If a file's content doesn't match its name, the broker stops returning hook output and posts a warn notice.
   - Because the hash is part of the command string, any script change is a new command, and Codex asks for trust again (Codex trust covers the command, not the script, F§4b 3.7).
 - **Port.** Default **7419**; set it with `port` in config or `--port`.
@@ -260,7 +260,7 @@ src/switchboard/
   mcp/claude_inbox.py    post(sock, token, text, from_, msg_id, hold_s)
   hook/switchboard_hook.py   STANDALONE stdlib file (no switchboard imports); also defines sock_path()
   install/common.py      FileEdit/CommandEdit, JSON merge, TOML marker block, masked diff, backup, atomic write, confirm
-  install/{claude,codex,cursor,devin}.py   plan(user_home, python, home) -> list[Edit]; print_args(workspace)
+  install/{claude,codex,cursor,devin}.py   unplan(user_home, home) -> Plan (what an old install wrote, removed; §9.7)
   report.py              latency, turns, posts/passes, rules (M7)
   cli.py                 argparse subcommands
   web/static/{index.html, app.js, style.css}
@@ -308,9 +308,8 @@ Workflow: `uv python pin 3.13`, `uv sync`, `uv run pytest`. Pin fastmcp exactly 
 | `cmd '#build' '/pause'` | per command (§10) | |
 | `tail '#build' [--after ID] [--json] [--no-follow]` | anon | streams `[14:02:11] <alice> text` |
 | `who '#build' [--json]` | anon | members; `session` (`<id> @ <host>`, §26) only for a caller that passes the human_cli check |
-| `install claude\|codex\|cursor\|devin [--dry-run] [--yes] [--print-args [--workspace DIR]] [--user-home DIR] [--allow-editable]` | – | §9.7 |
-| `install all [--dry-run] [--yes] [--user-home DIR] [--allow-editable]` | – | every harness whose CLI is on PATH, one diff and one confirmation (§9.7) |
-| `uninstall claude\|codex\|cursor\|devin\|all [--dry-run] [--yes] [--user-home DIR] [--purge-hooks]` | – | the inverse of install (§9.7, §23) |
+| `install …`, `remote …`, `satellite`, `join` | – | retired (0.38.0, #385): one line, exit 2, whatever the arguments (§49.8) |
+| `uninstall claude\|codex\|cursor\|devin\|all [--dry-run] [--yes] [--user-home DIR] [--purge-hooks]` | – | removes what an old install wrote (§9.7, §23) |
 | `mcp [--harness test --test-session KEY --ack next_call\|immediate\|never]` | – | stdio MCP server; the harness is detected at runtime (§6.2) |
 | `hook --harness H --event E` | – | debug: `os.execv` of the installed hook copy |
 | `report --room '#build' [--since ISO\|--last 2h] [--json] [--out FILE]` | anon | §12.6 |
@@ -670,7 +669,7 @@ Rules, in order:
 5. **claude** needs all of: `CLAUDECODE == "1"`, a parent argv that matches claude, and `<sessions_dir>/<getppid()>.json` with `messagingSocketPath == $CLAUDE_CODE_MESSAGING_SOCKET`. Env alone never makes a session Claude.
 6. Otherwise **unknown**, which gets the `mcp-only` tier.
 
-`install` writes no harness hint: the MCP command is byte-identical for every harness.
+`install` wrote no harness hint: the MCP command was byte-identical for every harness.
 
 `evidence` records which rule fired, plus `clientInfo`, parent argv[0] and `env_leak`. `env_leak` is true when the harness isn't claude but the env has `CLAUDECODE` or `CLAUDE_CODE_MESSAGING_*`: for example, a Codex daemon started from a Claude shell (F§4a). It shows in `/status` and the buddy list.
 
@@ -754,7 +753,7 @@ def post(sock_path, token, text, from_, msg_id, hold_s=0.3):
 ## 7. Hook script (`src/switchboard/hook/switchboard_hook.py`)
 
 ### 7.1 Invocation
-`install` and `--print-args` write the following command string, with absolute paths filled in. Paths containing `'` are refused.
+`install` and `--print-args` wrote the following command string, with absolute paths filled in. Paths containing `'` were refused.
 ```
 /bin/sh -c 'H="<home>/hooks/switchboard_hook-<sha12>.py"; P="<python>"; [ -r "$H" ] && [ -x "$P" ] && exec "$P" -I -S "$H" --home "<home>" --harness <h> --event <E> [--max-wait N]; exit 0'
 ```
@@ -1171,39 +1170,29 @@ The engine asks the adapter these questions rather than branching on the harness
 - Tests also send synthetic PostToolUse `hook.event`s carrying tokens, from a subprocess of the fake agent (so its ancestry matches), to exercise hook confirmation.
 
 ### 9.7 Install targets (`switchboard install <h>`)
-Common behaviour (`install/common.py`):
-- `plan()` returns `FileEdit` and `CommandEdit` items.
-  - The diff shows only the JSON paths and TOML block that switchboard owns.
-  - Values of keys matching `token|key|secret|pass|auth|env|url` are masked, so other servers' env blocks are never printed.
-- It prompts `Apply? [y/N]`. With no TTY and no `--yes`, it refuses.
-- Each file is backed up to `<file>.bak-switchboard-YYYYmmddHHMMSS` with the original mode (0600 if the original is more open), then written atomically (tmp + `os.replace`).
-- Re-running is idempotent and reports "no changes". Entries are matched by the server name `switchboard` or by the exact hook command string. `--user-home DIR` redirects `~` for tests.
-  - An MCP server named `switchboard` is replaced only if it runs switchboard's MCP server (`-m switchboard mcp`, for any home). Anything else under that name ("switchboard" is a common word) makes install refuse that harness with an `InstallError`, as Codex already did for a `[mcp_servers.switchboard]` outside the markers.
-  - Claude keeps user-scope MCP servers in `~/.claude.json`, which install **reads only** (the `mcpServers.switchboard` entry, nothing else is kept or printed). The same entry plans no command; a different one plans `claude mcp remove --scope user switchboard` before `add-json` (which refuses an existing name). (M2 review: a re-install used to run `add-json` every time and stop before writing the hooks when it failed.)
-  - File edits are applied first, then commands in order. A failed command stops the commands after it, is reported with the command to run by hand, and makes install exit 1; the file edits stay.
-  - Temp files for the atomic write come from `mkstemp` (random name, `O_EXCL`), and the mode is set on the open descriptor.
-- **Refuses an editable or source install** of switchboard (read from `direct_url.json` `dir_info.editable`) unless `--allow-editable` is passed. Otherwise an agent editing the repo could change what trusted hooks and the MCP server do. The README tells the user to run `uv tool install .` first.
-- The MCP command runs the venv Python **directly**, never `uv run`. `uv` would insert itself into the parent chain (seen in the M0 Claude hooks runs) and break `sessions/<ppid>.json` and the peer checks; a test covers this.
-- **Never written:** `trust`, `hooks.state`, `crossSessionInbound`, permission modes, sandbox or network keys, `read_config_from`, or any allowlist entry other than Devin's eight switchboard tool names.
 
-MCP command (the same for every harness): `["<python>","-I","-m","switchboard","mcp","--home",H]`. Hook command: §7.1.
+**Retired in 0.38.0 (#385).** `switchboard install <harness|all>` registered switchboard's stdio MCP server and its hook script with each harness: a diff of the files and commands it would change, `Apply? [y/N]`, a backup and an atomic write for each. Agents now connect over HTTPS with an agent token and switchboard's plugin, and nothing of switchboard's is registered on their machine (§49), so the verb is gone, with `--print-args`, `--allow-editable` and `update`'s re-registering step. It prints one line and exits 2 (§49.8), so a script or an old `update` learns what happened. The last release that has it is v0.37.2: `git show v0.37.2:docs/DESIGN.md`.
 
-| Harness | MCP server goes to | Hooks go to | Other |
+A machine set up before still has what install wrote, so **`switchboard uninstall <h|all>`** stays, and it recognises an old install's entries (`install/common.py`, `unplan()` per harness):
+
+| Harness | MCP server was written to | Hooks were written to | Other |
 |---|---|---|---|
-| claude | `CommandEdit(["claude","mcp","add-json","--scope","user","switchboard",<json>])`, shown in the diff. It is never run in tests, and `--user-home` doesn't apply to it. | `~/.claude/settings.json` `{"hooks":{"<Event>":[{"matcher":"","hooks":[{"type":"command","command":C,"timeout":10}]}]}}`, appended for SessionStart, UserPromptSubmit, PostToolUse, PostToolUseFailure, Stop and SessionEnd | – |
-| codex | `~/.codex/config.toml`: a `[mcp_servers.switchboard]` block (`command`, `args`) between `# >>> switchboard >>>` and `# <<< switchboard <<<`. Only that span is ever replaced. If `[mcp_servers.switchboard]` exists outside the markers, install refuses. | `~/.codex/hooks.json` `{"hooks":{"<Event>":[{"hooks":[{"type":"command","command":C,"timeout":N}]}]}}`. Groups are **appended** to the end of each event array, because inserting shifts trust indices (F§4b). Events: UserPromptSubmit, PostToolUse, Stop (10), Interrupt (3), SessionEnd (3). | Prints "start codex, run /hooks → review and trust the switchboard hooks". switchboard never trusts them itself. |
-| cursor | `~/.cursor/mcp.json` `mcpServers.switchboard = {"command":…, "args":[…]}` | `~/.cursor/hooks.json` `{"version":1,"hooks":{"sessionStart":[{"command":C,"timeout":10}], …, "stop":[{"command":C,"timeout":660,"loop_limit":null}]}}` for sessionStart, beforeSubmitPrompt, postToolUse, postToolUseFailure, stop and sessionEnd. | Takes effect only in new sessions (no hot reload in the CLI) |
-| devin | `~/.config/devin/mcp_config.json` `mcpServers.switchboard` | `~/.config/devin/config.json` `hooks`, in the Claude shape, for SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop (30) and SessionEnd | `permissions.allow +=` exactly `mcp__switchboard__{join,leave,who,say,read,wait,pass,away}`. A wildcard would also approve any other server named `switchboard`. |
+| claude | the user scope of `~/.claude.json`, through `claude mcp add-json --scope user switchboard <json>`, a `CommandEdit` that was never run in tests (and not with `--user-home`) | `~/.claude/settings.json` `{"hooks":{"<Event>":[{"matcher":"","hooks":[{"type":"command","command":C,"timeout":10}]}]}}` for SessionStart, UserPromptSubmit, PostToolUse, PostToolUseFailure, Stop and SessionEnd | `PermissionRequest` was never registered |
+| codex | `~/.codex/config.toml`: a `[mcp_servers.switchboard]` block (`command`, `args`) between `# >>> switchboard >>>` and `# <<< switchboard <<<` | `~/.codex/hooks.json`, one group per event (UserPromptSubmit, PostToolUse, Stop, Interrupt, SessionEnd), **appended**: Codex keys hook trust by position (event:group:handler), so inserting would un-trust the groups after it | no trust, approval or sandbox state |
+| cursor | `~/.cursor/mcp.json` `mcpServers.switchboard = {"command":…, "args":[…]}` | `~/.cursor/hooks.json` `{"version":1,"hooks":{"sessionStart":[{"command":C,"timeout":10}], …, "stop":[{"command":C,"timeout":660,"loop_limit":null}]}}` | |
+| devin | `~/.config/devin/mcp_config.json` `mcpServers.switchboard` | `~/.config/devin/config.json` `hooks`, in the Claude shape, for SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop (30) and SessionEnd | `permissions.allow` gained exactly the nine `mcp__switchboard__{join,leave,who,say,read,wait,pass,away,review}`. A wildcard would also have approved any other server named `switchboard` |
 
-**`install all`** plans claude, codex, cursor and devin in that order, skipping (with a note) a harness whose CLI isn't on PATH (`claude`, `codex`, `cursor-agent` or `agent`, `devin`). It renders one combined diff, checks the editable install once, asks once, writes the hook copy once, applies each changed plan and prints a one-line summary per harness. A harness whose config can't be read is reported as an error in the diff and the summary; the others still apply and the exit code is 1. `--print-args` needs one harness.
+The MCP command was the venv's Python run directly (`["<python>","-I","-m","switchboard","mcp","--home",H]`), never `uv run`, and a hook command was the `/bin/sh` guard of §7.1.
 
-**`switchboard uninstall <h|all>`** (`unplan()` per harness) is the exact inverse; see §23 for the rules. It removes only what install recognises as its own: a hook command containing `H="<home>/hooks/switchboard_hook-` (any hook version), an MCP entry that runs `-m switchboard mcp --home <home>`, the Codex marker block, and Devin's nine allow names (kept while another switchboard home's Devin install remains). Same diff, `Apply? [y/N]`, backups and atomic writes; removed entries are printed through an allowlist (an MCP entry's `command` and `args`, a hook's own keys; every other value `***`); "nothing to remove" when clean; missing files are skipped; no editable-install check; `all` gives one combined diff, one confirmation and a summary. `--purge-hooks` also deletes `<home>/hooks/switchboard_hook-*.py`, only when none of the four hook configs (under `--user-home` and, if that is set, under the real `~` too) still runs one after this run.
+What `uninstall` does:
+- **It removes only what install recognises as its own:** a hook command containing `H="<home>/hooks/switchboard_hook-` (any hook version), an MCP entry that runs `-m switchboard mcp --home <home>` (for any other home, or an entry that isn't switchboard's, it leaves the entry alone with a note), the Codex marker block, and Devin's nine allow names (kept while another switchboard home's Devin entries remain).
+- **The diff shows only those entries,** through an allowlist (an MCP entry's `command` and `args`, with the value after a secret-looking flag masked, and a hook's own keys; every other value `***`), since the user may have edited them, and values of keys matching `token|key|secret|pass|auth|env|url` are masked, so other servers' env blocks are never printed.
+- **`Apply? [y/N]`;** with no TTY and no `--yes` it refuses. Each file is backed up to `<file>.bak-switchboard-YYYYmmddHHMMSS` with the original mode (0600 if the original is more open), then written atomically (a `mkstemp` file, the mode set on the open descriptor, `os.replace`). Files are written first, then commands (`claude mcp remove --scope user switchboard`, only when the registered entry runs switchboard's MCP server for this home); a failed command is reported with the command to run by hand and makes the exit code 1, and the file edits stay.
+- **Re-running** says "nothing to remove"; a missing file is skipped; an editable install of switchboard isn't refused (removing entries can't make an agent's edits run). `--user-home DIR` redirects `~` for tests.
+- **`all`** plans claude, codex, cursor and devin in that order, renders one combined diff, asks once and prints a one-line summary per harness. A harness whose config can't be read is reported as an error in the diff and the summary; the others still apply and the exit code is 1.
+- **`--purge-hooks`** also deletes `<home>/hooks/switchboard_hook-*.py`, only when none of the four hook configs (under `--user-home` and, if that is set, under the real `~` too) still runs one after this run.
 
-**`--print-args [--workspace DIR]`** writes nothing. It prints JSON of the form `{"argv": [...], "env": {...}, "files": {"<rel path>": "<content>"}, "notes": [...]}` containing **only switchboard's MCP entry and hooks**. The test harness adds its own isolation and permission profile (§12.4); the product never emits permission, trust or allowlist flags.
-- **claude:** `argv = ["--mcp-config", <json>, "--settings", <json with hooks>]`.
-- **codex:** `files = {"config.toml": <switchboard block>, "hooks.json": <hooks>}`, to be placed in a `CODEX_HOME`.
-- **cursor:** `files = {".cursor/mcp.json", ".cursor/hooks.json"}`.
-- **devin:** `files = {".devin/config.json" (hooks and the nine allow names), ".devin/mcp_config.json"}`.
+See §23 for the rules of removal.
 
 ---
 
@@ -1276,7 +1265,7 @@ Neither command can change `budget_per_hour` itself, the rate the room's wake bu
     - Credentials work only on the verified MCP connection.
     - Batch tokens are HMACed per membership, and acks need a per-reply nonce.
     - Claude inbox posts are guarded in the MCP process (§6.4).
-12. **Run hook code that agents can edit.** Hooks run from a content-addressed 0444 copy in `$SWITCHBOARD_HOME/hooks`, checked every 60 s. `install` refuses an editable switchboard.
+12. **Run hook code that agents can edit.** Hooks run from a content-addressed 0444 copy in `$SWITCHBOARD_HOME/hooks`, checked every 60 s. (`install`, retired in 0.38.0, refused an editable switchboard.)
 13. **Grant `human_cli`, `human` or `login` to a peer that is itself an SSH or relay process,** or (unless `[security] allow_ssh_cli`) to a peer under a remote-login server (§5.3; `tests/unit/test_peer_ssh_rules.py`).
 
 **Static guardrail test** (`tests/unit/test_guardrails_static.py`). It greps `src/switchboard/**` for all of the following:
@@ -1364,11 +1353,9 @@ live/              harness/{tmuxdrv.py, cleanenv.sh, profiles.py, preflight.py, 
   - the order of `detect()` with synthetic env, clientInfo, parent argv and registry files;
   - **under a Claude-like env, `switchboard mcp --harness test` never connects to `$CLAUDE_CODE_MESSAGING_SOCKET`**;
   - a Codex parent plus leaked `CLAUDE_CODE_*` gives codex with `env_leak`.
-- **install:**
-  - golden-file diffs on a temp user home, per harness and milestone;
-  - idempotency; backup naming and mode; the marker block; Codex groups only appended; Devin allow has exactly the eight names;
-  - the MCP command runs Python directly (not `uv`); `--print-args` writes no files; editable installs are refused;
-  - the `claude mcp add-json` `CommandEdit` argv is asserted and never run.
+- **uninstall** (what the install tests became when `install` was retired, §9.7):
+  - what an old install wrote is a static fixture per harness (`tests/fixtures/install/`: from an empty config, from the user's own, and Devin's from two homes), and `uninstall` is checked against it on a temp user home: byte-for-byte round trips, the user's entries before and after switchboard's kept, idempotency, dry-run, backup naming and mode, the marker block, the Codex trust-position warning, Devin's allow names kept while another home uses them;
+  - the `claude mcp remove` `CommandEdit` argv is asserted and never run with `--user-home`.
 - **peer and proc:**
   - a child started through a symlinked fake binary named `claude` (and `codex`) is denied `human_cli`; a plain child is allowed;
   - a pid with a different start time doesn't match;
@@ -1439,6 +1426,8 @@ live/              harness/{tmuxdrv.py, cleanenv.sh, profiles.py, preflight.py, 
 - **Re-recording.** With `SWITCHBOARD_RECORD_PAYLOADS=<dir>`, the broker writes the allowlisted fields it received, and live runs re-record `_unverified` fixtures. The same scan applies to those files.
 
 ### 12.4 Live tests (`pytest -m live`, opt-in with `SWITCHBOARD_LIVE=claude,codex,devin`)
+**Retired in 0.38.0 (#385).** These tests registered each real CLI per launch with `switchboard install <h> --print-args`, which is gone with `install` (§9.7), and drove the local agent path; they and `tests/live/m7_demo.py` are deleted (the last release that has them is v0.37.2). Live tests of agents over HTTPS, with the plugins from the checkout, are [#470](https://github.com/amahpour/switchboard/issues/470). What follows is what they did.
+
 **Common setup.**
 - tmux on `-L yk-live-<pid>`. Every CLI starts under `env -i HOME PATH USER LOGNAME SHELL TERM LANG`, plus the variables listed per harness.
 - A scratch git repo with no remote. The broker runs with `--test-mode` in a temp home, **without** `--test-trust-uds`. The driver acts as the human through the web API, using `run/test-login-token`.
@@ -1669,7 +1658,7 @@ The real demo, with a human interjecting live and with Cursor, is repeated later
 - **Hook replies** carry one room per hook call (the room holding the highest-priority item).
 - **Claude hook context cap** is 10,000 characters in the hook's table (no Claude limit was recorded); broker batches are fitted to `min(batch_max_chars, ctx cap)` (6,000 for Claude), and the hook prints nothing rather than cut (§7.3).
 - **MCP handshake.** FastMCP 4.0.9 / mcp 2.2.0 also speak MCP 2026-07-28, where a client sends `server/discover` instead of `initialize`. The server takes `clientInfo` from `initialize`, or else from each request's `_meta["io.modelcontextprotocol/clientInfo"]`, before sending `mcp.hello`. Tool annotations use the SDK v2 snake_case names; they serialize as `readOnlyHint`/`destructiveHint`/`openWorldHint`/`idempotentHint` on the wire.
-- **Install.** A re-install replaces older switchboard hook entries for the same home (a different hook version) instead of adding a second copy. `--dry-run` and `--print-args` are allowed from an editable checkout because they write nothing.
+- **Install (retired, §9.7).** A re-install replaced older switchboard hook entries for the same home (a different hook version) instead of adding a second copy. `--dry-run` and `--print-args` are allowed from an editable checkout because they write nothing.
 - **Fixtures (§12.3).** Claude's M0 hook loggers recorded key sets and selected values, not whole payloads, so the Claude fixtures are rebuilt from those and marked `_unverified`. The Devin background `run_subagent` PreToolUse *was* recorded (in the M0 Devin verify run). Tool-output text in recorded fixtures is replaced (some raw outputs were env dumps); ids are replaced and paths rewritten to `/ws`.
 - **Review fixes (M2):**
   - Hook resolution: exact session keys for Codex and bound Cursor, and no other agent process between a hook and its session's agent (§5.3).
@@ -1715,7 +1704,7 @@ The real demo, with a human interjecting live and with Cursor, is repeated later
 - **Tiers shown.** `codex:daemon` (loaded in the control socket's server), `codex:queue` (not loaded there, guard passes), `mcp-only` with a note: `unverified thread` (no proof yet), `session ended`, `thread not running` (offline), or why the queue guard refused. `detached?` is added to a push tier whose liveness check fails.
 - **Thread proof** is reset when the thread is joined from a different MCP process; proof attempts are 2, 5 and 15 s after the join, then at each turn end and link start (up to 20 more), each on a fresh connection. A failed first series posts a `bind` event (`ok: false`).
 - **Session end.** Codex participants end (leave every room) when their agent process (the app-server that runs their MCP server) is gone, like the other harnesses; `mcp.bye` still doesn't touch them (one MCP process can serve several threads).
-- **Install.** An older switchboard hook in `~/.codex/hooks.json` is replaced **in place** (same group index, so the user's own groups keep their trust); new groups are appended. `--print-args` also returns `argv: ["-c", "mcp_servers.switchboard={…}"]` for a per-launch app-server.
+- **Install (retired, §9.7).** An older switchboard hook in `~/.codex/hooks.json` was replaced **in place** (same group index, so the user's own groups keep their trust); new groups are appended. `--print-args` also returns `argv: ["-c", "mcp_servers.switchboard={…}"]` for a per-launch app-server.
 - **Live profile (test-only).** Besides §12.4: plugins and apps are disabled; the TUI gets `-a on-request -s workspace-write` (a `--remote` TUI sends its own config's policy with `thread/start`, which could be `never` + `danger-full-access`); the driver checks `/status` ("Ask for approval", our socket) before any prompt; the TUI lists any untrusted user hook (even a disabled one) in a "Hooks need review" dialog, which the driver skips with Esc (continue without trusting: it declines and trusts nothing). `codex app-server --listen unix://PATH` symlinks PATH to `/private/tmp/codex-daemon-<uid>/<sha256>` and leaves a 0-byte lock file per path there, so the live test reuses one short directory (`/tmp/yk-cx-live-<uid>`).
 - **Observed:** the app-server runs one `switchboard mcp` per thread (two threads, two processes); `_meta.threadId` stays the identity.
 
@@ -1742,7 +1731,7 @@ The real demo, with a human interjecting live and with Cursor, is repeated later
 - **Taint across prompts (M5 review).** A background subagent can outlive the prompt that started it, and its hooks carry that prompt's id (F§6 5.2). The engine keeps the set of tainted prompt ids per participant (the last 16, in memory: a broker restart forgets it; the current prompt's `gen_tainted` flag is persisted). A hook whose `gen` is a tainted prompt other than the current one is a *stale subagent* hook: it confirms only the tokens it carries (what that subagent read itself) and does nothing else: no context, no Stop block or re-arm, no re-deliver, no status change, no expiry of the main agent's offers, no settling of its continuations, and it doesn't close the main agent's `wait()` as an orphan. Within a tainted prompt, hooks don't close waits either (the wait answer's own `pull_ack_s` still protects the message).
 - **First action.** A `wait_return` batch confirmed by PostToolUse gets `turn_start_at` = that hook ("in context"); the session's next PreToolUse (Devin registers it) sets `first_action_at` and a `first_action` event. A continuation confirmed *by* a PreToolUse gets both at once. A turn boundary (Stop, UserPromptSubmit, session start/end) before any PreToolUse drops the mark: a wake answered in text only has no first action, and the re-armed `wait()` many seconds later isn't one (M5 review).
 - **Hook script.** Devin's `ok` now comes from `tool_response.success` (Devin has no top-level `success`, so a failed or cancelled call used to count as ok; a decision made in M2 already said so, but the code missed it). This changes the hook's hash, so installs write a new copy name.
-- **Install.** Cursor: `~/.cursor/mcp.json` `mcpServers.switchboard`; `~/.cursor/hooks.json` `{"version":1, "hooks":{…}}` with one entry per event (an older switchboard entry for this home is removed, the new one appended: Cursor keys nothing by index); `stop` gets `timeout = stop_park_s + 60`, `loop_limit: null` and `--max-wait stop_park_s + 30`, read from the home's `config.toml` (default 660 / 630). Devin: `~/.config/devin/mcp_config.json` and `~/.config/devin/config.json` (Claude-shaped groups with `matcher: ""`; Stop timeout 30, the rest 10) plus exactly the eight `mcp__switchboard__*` names appended to `permissions.allow`. `--print-args` gives the project-local files (`.cursor/…`, `.devin/…`).
+- **Install (retired, §9.7).** Cursor: `~/.cursor/mcp.json` `mcpServers.switchboard`; `~/.cursor/hooks.json` `{"version":1, "hooks":{…}}` with one entry per event (an older switchboard entry for this home is removed, the new one appended: Cursor keys nothing by index); `stop` gets `timeout = stop_park_s + 60`, `loop_limit: null` and `--max-wait stop_park_s + 30`, read from the home's `config.toml` (default 660 / 630). Devin: `~/.config/devin/mcp_config.json` and `~/.config/devin/config.json` (Claude-shaped groups with `matcher: ""`; Stop timeout 30, the rest 10) plus exactly the eight `mcp__switchboard__*` names appended to `permissions.allow`. `--print-args` gives the project-local files (`.cursor/…`, `.devin/…`).
 - **Live profiles (test-only).** Devin: `devin --model swe-1-6-slow --respect-workspace-trust false` in a scratch git workspace whose `.devin/config.json` adds `read_config_from` all false and allows `read`. Cursor (not yet run live): `agent --model auto --trust --approve-mcps` in a scratch workspace with a project `.cursor/cli.json` allowing switchboard's tools, as M0 did; the product never emits these flags.
 - **`/status`** member lines show the tier and its note (e.g. `cursor:stop-park (provisional)`), as §9.4 asks; before the M5 review only `/who`, the UI and `switchboard who` did.
 
@@ -1809,10 +1798,9 @@ The real demo, with a human interjecting live and with Cursor, is repeated later
 - **Codex `config.toml`:** only switchboard's lines of the marker span go: the markers, comments and blanks before the first table header, and `[mcp_servers.switchboard]` with any `[mcp_servers.switchboard.*]` sub-table up to the next other header. Anything else between the markers stays in place: Codex rewrites `config.toml` itself (for example its hook trust records), and a table it adds at the end of the file could land before the file's trailing comment, which can be switchboard's end marker (not observed: on this Mac Codex put its trust tables next to the existing ones, above the block; the case is guarded anyway). The blank line install put before the block is removed too, so a file whose block was appended comes back byte for byte. The result must parse to exactly the original TOML minus `mcp_servers.switchboard` (and an `mcp_servers` it emptied), or nothing is written. **Deviation in install:** a re-install now keeps those foreign lines too (after the new block) instead of replacing the whole span; when switchboard's own lines are unchanged its diff is a single `~ N line(s) between the markers that aren't switchboard's move after '# <<< switchboard <<<'` line; the golden files are unchanged. An `[mcp_servers.switchboard]` outside the markers (install refuses to write one) is left alone with a note. Removed lines are shown through an allowlist, since the user may have edited them: markers, table headers, blank lines and comments without a secret-looking word as they are; in `[mcp_servers.switchboard]` a one-line `command` string and `args` array (the value after a secret-looking flag such as `--api-key`, and `--token=…`, masked); every other value, continuation line and comment `***`.
 - **Codex `hooks.json` and trust positions:** Codex keys hook trust by `event:group:handler` (FINDINGS §4b), so removing switchboard's group moves every later group up one index, and removing a switchboard handler from a mixed group moves the handlers after it. Each of the user's groups or handlers that moves gets a `!` line in the diff (by position only, never its command) and a note says to run `/hooks`, which may ask to trust them again (a moved hook's key now points at the old hash, so it fails closed). switchboard never writes trust state and leaves Codex's trust records for the removed hooks alone.
 - **Hook copies** in `<home>/hooks` stay by default (inert once nothing runs them; a note says so). `--purge-hooks` deletes regular files named `switchboard_hook-<sha12>.py` there, only when, after this run's edits, none of `~/.claude/settings.json`, `~/.codex/hooks.json`, `~/.cursor/hooks.json` and `~/.config/devin/config.json` contains `<home>/hooks/switchboard_hook-` (an unreadable one counts as still using them), and only if the directory is a real directory owned by the user. Project-local configs (from `--print-args`) aren't checked. The switchboard home itself (rooms, history, config) is never touched.
-- **`all`** runs the four in order with one combined diff, one confirmation and a summary; a harness whose config can't be parsed is reported as an error and skipped while the others apply (exit 1). Uninstall needs no `--allow-editable`: removing entries can't make edited code run. A run with more than one section (`all`, or a harness plus `--purge-hooks`) ends with the summary; it says why hook copies were kept, and "a harness command failed" without "files written" when no file changed.
+- **`all`** runs the four in order with one combined diff, one confirmation and a summary; a harness whose config can't be parsed is reported as an error and skipped while the others apply (exit 1). Uninstall never refuses an editable install: removing entries can't make edited code run. A run with more than one section (`all`, or a harness plus `--purge-hooks`) ends with the summary; it says why hook copies were kept, and "a harness command failed" without "files written" when no file changed.
 - **The diff shows only what is removed, through an allowlist.** Uninstall is the first path that prints entries the user may have edited, so a removed MCP entry shows only `command` and `args` (flagged values masked) and `***` for every other key (`env`, `headers`, `cwd`, …), and a removed hook group or handler shows the keys install writes (`matcher`, `type`, `command`, `timeout`, `loop_limit`) and `***` for any other. **Deviation (install too):** `mask()` now masks the whole value of a secret-looking key, including an object or list (an `env` block), instead of walking into it; install's own entries have no such key, so its diffs are unchanged. Every printed JSON value has non-printable characters escaped.
 - **`--purge-hooks` and `--user-home`:** the switchboard home (`--home`, else `SWITCHBOARD_HOME` or `~/.switchboard`) doesn't follow `--user-home`, so with `--user-home` the real `~`'s four hook configs are read too (never written); a reference there keeps the copies (`kept (still used by … (your real ~))`).
-- **`install devin`** says in a note that `permissions.allow` pre-approves switchboard's nine tools (they run without an approval prompt), `review` (§37) included, so the grant is visible in `install all`'s combined diff too.
 
 ## 24. Read before pass (fix after M7, 2026-09-25)
 
@@ -2624,20 +2612,20 @@ A public room used to list nobody: "everyone signed in sees it" was the whole an
 ## 45. Updating switchboard (`switchboard update`)
 
 ### 45.1 What it is
-An upgrade was four steps (docs/INSTALL.md): upgrade the copy, restart what runs, re-register the harnesses, restart the agent sessions. A step missed meant a machine running the new switchboard with the old hooks. `switchboard update [--home H] [--version X.Y.Z] [--yes]` does the first three (`switchboard/update.py`, the plan pure, the commands through an injected runner) and says the fourth.
+An upgrade was four steps (docs/INSTALL.md): upgrade the copy, restart what runs, re-register the harnesses, restart the agent sessions. A step missed meant a machine running the new switchboard with the old hooks. `switchboard update [--home H] [--version X.Y.Z]` does the first (`switchboard/update.py`, the plan pure, the commands through an injected runner) and says the rest. Until 0.38.0 it also re-registered the harnesses; `switchboard install` is retired (#385, §9.7) and an agent over HTTPS keeps no switchboard code on its machine (§49), so it no longer does. A script that still passes `--yes` is not broken by it: the flag is accepted and ignored.
 
 ### 45.2 The steps
 1. **Upgrade this copy the way it was installed**, read from `sys.prefix`: a uv tool (`…/uv/tools/switchboard-chat`, with its `uv-receipt.toml`) runs `uv tool install --refresh-package switchboard-chat switchboard-chat@latest`, or `==X.Y.Z`; a pipx one `pipx install --force switchboard-chat`. `--refresh-package` makes uv ask the index again for this one package: uv answers from its copy of the index for up to ten minutes, so right after a release it said "already the newest" (#330). pip asks the index again on every run, so pipx needs nothing. `@latest` also drops a version pinned at install. An editable checkout, the container image (`/opt/switchboard`) or anything else is refused with what to do instead, and so is the `switchboard` tool installed from GitHub before 0.21.1 (it is told to switch to `switchboard-chat` once). `--version` takes only a release number (`\d+.\d+.\d+`): never a URL, a flag or a pre-release. The same version afterwards ends the run there.
 2. **Say what runs.** A running broker is told about, not restarted: its start flags (`--listen`, `--public-url`, `--port`) aren't known here. Nothing that wasn't running is started. (Until 0.38.0 a running dialer of a machine that dialed a hosted broker was restarted here.)
-3. **Re-register the harnesses registered for this home** (`install.common.registered`: uninstalling it would change something), each through the new copy's `switchboard install <harness>`, which shows its diff and asks as always, or not with `--yes`. A harness not registered for this home is left alone, so `update` never registers one the person chose not to.
+3. (Until 0.38.0: **re-register the harnesses registered for this home**, each through the new copy's `switchboard install <harness>`.)
 
-Step 3 runs the new `switchboard` (the same entry point, now the new copy), never the old process's code. Then it says to restart running agent sessions: each keeps the MCP server it started with (§37.5).
+Then it says to restart running agent sessions: each keeps the MCP server it started with (§37.5).
 
 ### 45.3 Security
-`update` adds no authority: it runs the installer the person already used, then the `install` commands they would run, in the same home, and `install` keeps its diff and confirmation. It installs only `switchboard-chat` from the installer's configured index; the version is checked before it reaches a command line.
+`update` adds no authority: it runs the installer the person already used and nothing else (it edits no harness config), in the same home. It installs only `switchboard-chat` from the installer's configured index; the version is checked before it reaches a command line.
 
 ### 45.4 Tests
-`test_update.py` (unit): the installer read from the prefix, the commands per installer and version, refusals, the plan (a broker never restarted), the sequence through a recording runner (the new copy's commands, nothing started that wasn't running, an already-current copy stopping there, a failed upgrade stopping there, `--yes` passed on), `registered` against a real install into a temp home, and the command refusing the editable checkout the tests run from.
+`test_update.py` (unit): the installer read from the prefix, the commands per installer and version, refusals, the plan (a broker never restarted), the sequence through a recording runner (the upgrade as the only command, nothing started that wasn't running, an already-current copy stopping there, a failed upgrade stopping there), and the command refusing the editable checkout the tests run from.
 
 ## 46. Renaming a room (#316)
 
@@ -2775,6 +2763,7 @@ Three things the first live run with Devin CLI 3000.11.92 showed, each now fixed
 Phase 4 of #380 removes the older ways an agent reached a broker, one pull request at a time; the last release that has each is v0.37.2 (`git show v0.37.2:docs/DESIGN.md`). The first took out the links:
 
 - **SSH remotes and the satellite (§27), machines that dial in and pairing (§31.7, §31.8).** The code, the `/link` routes, `/api/remotes`, `/api/machines` and the web UI's Remotes and Machines are gone. An agent on another machine is an agent over HTTPS with its device's token (§49.1, §49.3).
-- **Three verbs keep their names.** `switchboard remote`, `satellite` and `join` print one line to stderr, saying what was retired in 0.38.0 and where agents connect now, and exit 2, whatever arguments they are given (`cli.RETIRED`; `main` uses `parse_known_args` for them alone, so every other verb still refuses an argument it doesn't know). An `authorized_keys` line that runs `switchboard satellite`, a script and an old harness entry learn what happened, not "invalid choice". Test: `tests/unit/test_cli_retired.py`.
+- **Four verbs keep their names.** `switchboard remote`, `satellite`, `join` and (since the second pull request, §9.7) `install` print one line to stderr, saying what was retired in 0.38.0 and where agents connect now, and exit 2, whatever arguments they are given (`cli.RETIRED`; `main` uses `parse_known_args` for them alone, so every other verb still refuses an argument it doesn't know). An `authorized_keys` line that runs `switchboard satellite`, a script and an old harness entry learn what happened, not "invalid choice". Test: `tests/unit/test_cli_retired.py`.
 - **Schema 29** drops the tables `remotes` and `link_machines` and ends the sessions that only those links could reach: a participant with a host and a real MCP pid (an HTTPS session has a device host and pid 0, so it is never touched). Each ends as a session end does (`ended_at`, status `offline`, `status_src = 'retired'`; its memberships leave with reason `retired`, its claims and open deliveries go). The step runs in the migration's one transaction after the verified backup (`switchboard.db.v28.bak`, §4), and the row-count comparison after it covers the tables that stay. Test: `tests/unit/test_db_migrate_v29.py`, from a database a 0.37.2 broker wrote (`tests/fixtures/db/v0_37_2.sql`, made by `make_v0_37_2.py`): every row that should stay is there, only the two retired hosts' sessions end, and a failed step leaves the database at 28.
 - **Files in a home** (`remotes.toml`, `remotes/`, `link/`, `satellite.toml`) are not read and not deleted; the release notes list them.
+- **`switchboard install` (§9.7) and `update`'s re-registering (§45).** An agent over HTTPS registers nothing with its harness's own config but the plugin (§49.5), so `install <harness|all>`, `--print-args` and `--allow-editable` are retired, and `install` prints the same one line and exits 2. `uninstall` stays for what an older install wrote; its tests start from static fixtures of that (`tests/fixtures/install/`, made by the 0.37.2 installer). The live tests that drove real CLIs with `install --print-args` are deleted (§12.4; successors: #470).
