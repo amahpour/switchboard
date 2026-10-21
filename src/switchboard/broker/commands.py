@@ -281,8 +281,8 @@ def review_request(agents: list[str], url: str, note: str) -> str:
         ' (review(action="insist")): settle disagreements between you, and leave a person only'
         ' what you still disagree on. Ask with review(action="ask") what only a person can decide,'
         " with the option you recommend, and agree with the others' questions or pick another"
-        ' option with review(action="concur"). review(action="show") shows the board; the room may'
-        f' have others open, so give every call url="{url}".'
+        ' option with review(action="concur"). review(action="show") shows the board. The room may'
+        " have other boards open: give every call this pull request's link as its url."
     )
     return text + (f"\n\nNote: {note}" if note else "")
 
