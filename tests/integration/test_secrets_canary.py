@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 import subprocess
 import sys
@@ -35,7 +36,11 @@ def test_uninstall_output_and_backups_never_show_secrets(tmp_path: Path, tmp_hom
                                 {
                                     "type": "command",
                                     "command": hook_command(
-                                        sys.executable, str(tmp_home), "0123456789ab", "claude", "Stop"
+                                        sys.executable,
+                                        os.path.realpath(tmp_home),
+                                        "0123456789ab",
+                                        "claude",
+                                        "Stop",
                                     ),
                                     "timeout": 10,
                                 }
