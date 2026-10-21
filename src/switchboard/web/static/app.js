@@ -6031,6 +6031,14 @@
     return a;
   }
 
+  // What GitLab's link to a finding's lines opens (#442): "lines 40–58 at abc1234", "line 40 at
+  // abc1234", or "file at abc1234" for a finding with a file and no lines.
+  function boardLinesLabel(i, b) {
+    const lines = String(i.lines || '');
+    const what = !lines ? 'file' : lines.indexOf('-') >= 0 ? 'lines ' + lines.replace('-', '–') : 'line ' + lines;
+    return what + ' at ' + String(b.head || '').slice(0, 7);
+  }
+
   function boardRow(dl, label, value) {
     const dd = el('dd');
     dd.append(value);
@@ -6117,8 +6125,25 @@
     const rows = el('dl', 'board-rows');
     const where = boardWhere(i);
     if (where) {
-      boardRow(rows, 'Lines', i.lines_url && forge
-        ? forgeLink(b, i.lines_url, 'View ' + where + ' on ' + forge) : el('code', 'board-where', where));
+      if (forge && b.forge.kind === 'gitlab' && (i.lines_url || i.diff_url)) {
+        // GitLab (#442): the lines at the board's head commit, highlighted, and the file in the MR's
+        // diff, each labelled for what it opens. The path is the link's tooltip.
+        const links = el('span', 'board-lines-links');
+        if (i.lines_url) {
+          const lines = forgeLink(b, i.lines_url, boardLinesLabel(i, b));
+          lines.title = where;
+          links.append(lines);
+        }
+        if (i.diff_url) {
+          const diff = forgeLink(b, i.diff_url, 'file in the MR diff');
+          diff.title = i.file;
+          links.append(diff);
+        }
+        boardRow(rows, 'Lines', links);
+      } else {
+        boardRow(rows, 'Lines', i.lines_url && forge
+          ? forgeLink(b, i.lines_url, 'View ' + where + ' on ' + forge) : el('code', 'board-where', where));
+      }
     }
     if (i.commit) {
       boardRow(rows, 'Fix', i.commit_url && forge
