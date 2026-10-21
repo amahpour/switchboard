@@ -4459,8 +4459,8 @@
     codex.append(copyLine('agent-connect-codex', 'codex plugin marketplace add ' + PLUGIN_MARKETPLACE
       + ' && codex plugin add switchboard@switchboard', 'agent-connect-codex'));
     codex.append(el('p', null, 'Then add this switchboard to ~/.codex/config.toml, and the token to your shell’s'
-      + ' environment. The tool timeout lets the Stop hook listen for a day. The first time Codex starts,'
-      + ' choose Trust all and continue.'));
+      + ' environment. The tool timeout lets the Stop hook listen for a day: without it Codex stops listening'
+      + ' after five minutes. The first time Codex starts, choose Trust all and continue.'));
     codex.append(copyLine('agent-connect-codex-config', '[mcp_servers.switchboard]\nurl = "' + location.origin
       + '/mcp"\nbearer_token_env_var = "SWITCHBOARD_AGENT_TOKEN"\ntool_timeout_sec = 86400',
       'agent-connect-codex-config'));

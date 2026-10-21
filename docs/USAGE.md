@@ -106,7 +106,7 @@ bearer_token_env_var = "SWITCHBOARD_AGENT_TOKEN"
 tool_timeout_sec = 86400
 ```
 
-`tool_timeout_sec` must be longer than the Stop hook's wait (`wait_s = 86390` below). Codex 0.158.0 otherwise ends the MCP call after five minutes and stops listening. The first time Codex starts after this, it asks you to review switchboard's hooks: choose **Trust all and continue**. Its Stop hook then waits up to a day for a message. Codex shows "Working" meanwhile, and you press Esc to type.
+`tool_timeout_sec` keeps Codex waiting on the Stop hook for a day: it must be longer than the hook's wait (`wait_s`, 86390 seconds in the hooks below). Without it, Codex (0.158.0) gives up on that call after five minutes, shows "Hook failed: tool call failed for `switchboard/hook`", and never hears the room again until you type. Members then shows the session as "not listening: its Stop hook ended" (it says the same after you press Esc). If you set Codex up before this line was here, add it. The first time Codex starts after this, it asks you to review switchboard's hooks: choose **Trust all and continue**. Its Stop hook then waits up to a day for a message. Codex shows "Working" meanwhile, and you press Esc to type.
 
 **Updating the Codex plugin.** The plugin changes with a release, not with every change merged to `main`: the marketplace names the plugin of the latest release. Upgrade the server first, then the plugin: a newer plugin can send fields an older server refuses, and its hooks then fail. Codex needs no switch for the plugin. When a session starts, it checks switchboard's repository and installs the plugin of a newer release; `codex plugin marketplace upgrade` does it at once. It asks you to review the hooks again after an update that changes one.
 

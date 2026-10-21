@@ -111,9 +111,10 @@ class Engine:
         self.key = key or secrets.token_bytes(32)
         self.test_mode = test_mode
         self.parked: dict[int, str] = {}  # membership_id -> reason
-        # A cancelled HTTPS Stop call has no wake path until its next hook. Keep the
-        # reason even before a message is pending, so Members explains why it is idle.
-        self.lost_stop_waits: set[int] = set()  # participant_id
+        # A Stop wait its own side ended (Esc, a timeout in the harness) leaves no wake path until the
+        # session's next hook (#449). The adapter's reason is kept even with nothing pending, so
+        # Members says why an idle session is deaf. Memory only: a restart ends every connection.
+        self.lost_stops: dict[int, str] = {}  # participant_id -> why it is not listening
         # /wake (#137): membership_id -> the newest message id the person's ask covers
         self.wake_now: dict[int, int] = {}
         self.parked_since: dict[int, float] = {}  # membership_id -> when this parked spell began
@@ -173,12 +174,12 @@ class Engine:
         return envelope.batch_token(self.key, b.id, b.membership_id)
 
     def parked_reason(self, membership_id: int) -> str | None:
-        if self.lost_stop_waits:
-            m = self.store.get_membership(membership_id)
-            if m is not None and m.active and m.participant_id in self.lost_stop_waits:
-                p = self.store.get_participant(m.participant_id)
-                if p is not None and p.active and p.status == "idle":
-                    return "not listening: its Stop hook failed or was interrupted"
+        m = self.store.get_membership(membership_id) if self.lost_stops else None
+        if m is not None and m.active and m.participant_id in self.lost_stops:
+            p = self.store.get_participant(m.participant_id)
+            # idle with no wait open: a session whose Stop hook is waiting again is listening
+            if p is not None and p.active and p.status == "idle" and not self.sinks.parks_for(p.id):
+                return self.lost_stops[m.participant_id]
         return self.parked.get(membership_id)
 
     def wakes_at(self, membership_id: int) -> float | None:
@@ -1128,9 +1129,11 @@ class Engine:
     def close_conn_sinks(self, conn_id: int) -> list[Action]:
         out: list[Action] = []
         for s in self.sinks.for_conn(conn_id):
-            p = self.store.get_participant(s.participant_id)
-            if s.kind == "park" and p is not None and over_https(p.host, p.mcp_pid):
-                self.lost_stop_waits.add(p.id)
+            p = self.store.get_participant(s.participant_id) if s.kind == "park" else None
+            if p is not None and p.status == "idle":
+                why = self.adapter(p).stop_wait_lost(self.now() - s.opened_at)
+                if why is not None:
+                    self.lost_stops[p.id] = why
             out.append(self._close_sink(s, {"status": "cancelled"}, "disconnect"))
             out.append(Snapshot(s.room_id))
         return out
@@ -1213,7 +1216,7 @@ class Engine:
         self.wake_now.pop(membership_id, None)
         m = self.store.get_membership(membership_id)
         if m is not None and not self.store.participant_memberships(m.participant_id):
-            self.lost_stop_waits.discard(m.participant_id)
+            self.lost_stops.pop(m.participant_id, None)
         out: list[Action] = []
         status = "kicked" if reason == "kick" else "left"
         text = (
@@ -1298,7 +1301,7 @@ class Engine:
         E = ev.ev
         out: list[Action] = []
         adapter = self.adapter(p)
-        self.lost_stop_waits.discard(p.id)  # a new hook means the session is reachable again
+        self.lost_stops.pop(p.id, None)  # a new hook means the session is reachable again
         was_idle = p.status in ("idle", "starting")
         upd: dict[str, Any] = {"hooks_seen_at": now, "last_seen": now}
         if ev.sid and adapter.reports_session_id:

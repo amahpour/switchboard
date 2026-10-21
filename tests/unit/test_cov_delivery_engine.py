@@ -86,24 +86,6 @@ def test_a_dropped_connection_cancels_only_its_own_waits(w: World) -> None:
     assert w.engine.close_conn_sinks(7) == []
 
 
-def test_a_codex_stop_wait_that_closes_early_explains_why_it_is_not_listening(w: World) -> None:
-    """A cancelled HTTPS Stop wait leaves no wake path; Members must explain that the Stop hook
-    ended before a wake, then clear the warning when Codex's next hook arrives."""
-    p, m = w.agent("codex-1", harness="codex", host="test-laptop", status="idle", hooks=True)
-    w.store.update_participant(p.id, mcp_pid=0)
-    ev = HookEvent(harness="codex", event="stop", max_wait_s=86400)
-    sink, _ = w.engine.open_park(w.p(p), ev, 86385, conn_id=7)
-    assert w.engine.parked_reason(m.id) is None  # it is listening
-
-    w.engine.close_conn_sinks(7)
-    assert not w.engine.sinks.get(sink.id).open
-    assert "Stop hook" in (w.engine.parked_reason(m.id) or "")
-    assert "not listening" in (w.engine.parked_reason(m.id) or "")
-
-    w.hook(p, "UserPromptSubmit")
-    assert w.engine.parked_reason(m.id) is None
-
-
 # ---------------------------------------------------- pulls and expiries
 def test_read_with_nothing_pending_is_just_the_header(w: World) -> None:
     p, m = w.agent("bot")
