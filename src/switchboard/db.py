@@ -29,7 +29,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 27
+SCHEMA_VERSION = 28
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -191,7 +191,9 @@ CREATE TABLE reviews(
   pr_state TEXT NOT NULL DEFAULT '' CHECK(pr_state IN ('', 'open', 'merged', 'closed')),
   pr_threads INTEGER CHECK(pr_threads IS NULL OR pr_threads BETWEEN 0 AND 999),
   pr_ci TEXT NOT NULL DEFAULT '' CHECK(pr_ci IN ('', 'passing', 'failing', 'running', 'none')),
-  reported_by TEXT NOT NULL DEFAULT '' CHECK(length(reported_by) <= 100), reported_at REAL);
+  reported_by TEXT NOT NULL DEFAULT '' CHECK(length(reported_by) <= 100), reported_at REAL,
+  closed_by TEXT NOT NULL DEFAULT '' CHECK(length(closed_by) <= 100),
+  reopened_by TEXT NOT NULL DEFAULT '' CHECK(length(reopened_by) <= 100), reopened_at REAL);
 CREATE INDEX reviews_room ON reviews(room_id, id);
 CREATE TABLE review_items(
   id INTEGER PRIMARY KEY, review_id INTEGER NOT NULL REFERENCES reviews(id),
@@ -553,6 +555,25 @@ V26_TO_V27 = (
     "UPDATE meta SET value='27' WHERE key='schema_version'",
 )
 
+# v27 -> v28 (#445, DESIGN.md §37.14): a closed board is kept, and a room holds several. A board
+# says who closed it (``closed_by``) and who opened it again (``reopened_by``, ``reopened_at``), and
+# every review event names its board (``data.board``, the review's id): F1 and Q1 are on every board,
+# so a card's history and a handoff's decisions can no longer be read off the room's events by label
+# alone. The events already stored are named by the board that was newest in their room when they
+# were written, which was the room's only one.
+V27_TO_V28 = (
+    "ALTER TABLE reviews ADD COLUMN closed_by TEXT NOT NULL DEFAULT '' CHECK(length(closed_by) <= 100)",
+    "ALTER TABLE reviews ADD COLUMN reopened_by TEXT NOT NULL DEFAULT '' CHECK(length(reopened_by) <= 100)",
+    "ALTER TABLE reviews ADD COLUMN reopened_at REAL",
+    "UPDATE events SET data=json_set(data, '$.board',"
+    " (SELECT r.id FROM reviews r WHERE r.room_id=events.room_id AND r.opened_at<=events.ts"
+    "  ORDER BY r.opened_at DESC, r.id DESC LIMIT 1))"
+    " WHERE kind='review' AND room_id IS NOT NULL AND json_valid(data) AND json_type(data)='object'"
+    " AND json_extract(data, '$.board') IS NULL AND json_extract(data, '$.reviewer') IS NULL"
+    " AND EXISTS (SELECT 1 FROM reviews r WHERE r.room_id=events.room_id AND r.opened_at<=events.ts)",
+    "UPDATE meta SET value='28' WHERE key='schema_version'",
+)
+
 
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
@@ -584,6 +605,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         24: (25, V24_TO_V25, ("agent_tokens",)),
         25: (26, V25_TO_V26, ("review_picks",)),
         26: (27, V26_TO_V27, ()),
+        27: (28, V27_TO_V28, ()),
     }
     out = []
     v = frm

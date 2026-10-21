@@ -55,7 +55,7 @@ def test_a_v26_board_keeps_its_rows_and_a_contested_finding_keeps_waiting_on_a_p
 
     migrated = db.open_db(path)
     fresh = db.open_db(tmp_path / "fresh.db")
-    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 27
+    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 28
     assert db.row_counts(migrated, db.tables_of(26)) == before
     assert [tuple(r) for r in migrated.execute("PRAGMA table_info(review_items)")] == [
         tuple(r) for r in fresh.execute("PRAGMA table_info(review_items)")

@@ -1582,15 +1582,16 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         except ServiceError as e:
             return _svc_err(e)
 
-    # A room's review board (#80, §37.5): read by anyone signed in; a person's moves are
-    # theirs, posted in the room as their own messages. Agents move it through `review`.
+    # A room's review boards (#80, §37.5, §37.14): read by anyone signed in; a person's moves are
+    # theirs, about the board whose `url` they send, posted in the room as their own messages.
+    # Agents move them through `review`.
     @app.get("/api/rooms/{slug}/review")
     async def room_review(request: Request, slug: str) -> Response:
         if session(request) is None:
             return unauthorized()
         try:
             room = state.service.room_for(slug, viewer(request))
-            return _ok({"board": state.boards.board(room)})
+            return _ok({"boards": state.boards.boards(room)})
         except ServiceError as e:
             return _svc_err(e)
 
@@ -1602,9 +1603,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         try:
             body = await _json_body(request)
             allowed = (
-                {"action", "agent"}
+                {"action", "agent", "url"}
                 if body.get("action") == "handoff"
-                else {"action", "item", "option", "owner", "reason"}
+                else {"action", "item", "option", "owner", "reason", "url"}
             )
             if set(body) - allowed:
                 raise ServiceError("bad_request", "unknown fields")

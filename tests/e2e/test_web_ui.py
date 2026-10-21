@@ -3204,10 +3204,10 @@ def test_a_board_frame_with_a_bad_order_or_note_still_lists_every_option_as_aske
 
     def publish(order: Any, notes: Any) -> None:
         def go() -> None:
-            board = ui.world.broker.state.boards.board_named(room)
-            q1 = next(i for i in board["items"] if i["label"] == "Q1")
+            boards = ui.world.broker.state.boards.boards_named(room)
+            q1 = next(i for i in boards[0]["items"] if i["label"] == "Q1")
             q1["consensus"] = {**q1["consensus"], "order": order, "notes": notes}
-            ui.world.broker.state.hub.review(room, board)
+            ui.world.broker.state.hub.review(room, boards)
 
         ui.world.broker.on_loop(go)
 
@@ -3951,3 +3951,125 @@ def test_a_focused_card_keeps_focus_when_an_agent_changes_state(ui: UI) -> None:
     ui.world.broker.on_loop(idle)
     expect(card.locator(".board-pulse")).not_to_have_class(re.compile(r"\bworking\b"))  # it rebuilt
     expect(page.locator('#board .board-card[data-item="F4"]')).to_be_focused()
+
+
+# ------------------------------------------- several boards in a room, kept when closed (#445, §37.14)
+PR_ONE = "https://github.com/example/shop/pull/7"
+PR_TWO = "https://github.com/example/shop/pull/8"
+
+
+def seed_second_board(ui: UI, slug: str) -> None:
+    """A second board in a review_room's room, for another pull request: a finding and a question."""
+    ui.world.seed_second_review("#" + slug, PR_TWO)
+
+
+def board_cards(page: Page) -> list[str]:
+    return page.locator("#board .board-card").evaluate_all("cs => cs.map(c => c.dataset.item)")
+
+
+def test_two_boards_in_a_room_are_tabs_and_each_keeps_its_own_lanes(ui: UI) -> None:
+    """#445: with one open board the page is as it was; with two there is a tab list on the header's
+    first row, the first board is on show, a tab shows the other with its own cards and header, and
+    only the selected tab is in the Tab order. Arrow keys and Home move between tabs and the focus
+    goes with them; a members frame rebuilds the board and the focused tab keeps its focus. Fails if
+    a single board grows tabs, a switch shows the old board's cards, or a redraw drops the focus."""
+    slug = "e2e-board-tabs"
+    page = review_room(ui, slug, PR_ONE)
+    page.click("#board-toggle")
+    expect(page.locator("#board .board-tabs")).to_have_count(0)  # one board: as before
+    seed_second_board(ui, slug)
+    tabs = page.locator("#board .board-tab")
+    expect(tabs).to_have_count(2)
+    expect(page.locator("#board [role=tablist]")).to_have_attribute(
+        "aria-label", "Review boards in this room"
+    )
+    expect(tabs.nth(0)).to_have_text(re.compile(r"shop #7"))
+    expect(tabs.nth(1)).to_have_text(re.compile(r"shop #8"))
+    expect(tabs.nth(1)).to_have_attribute("title", PR_TWO)
+    expect(tabs.nth(0)).to_have_attribute("aria-selected", "true")
+    assert sorted(board_cards(page)) == ["F1", "F2", "F3", "F4", "Q1"]  # the first board's
+    expect(page.locator("#board .board-pr-num")).to_have_text("#7")
+    stops = page.evaluate("[...document.querySelectorAll('#board .board-tab')].map(t => t.tabIndex)")
+    assert stops == [0, -1]  # one stop in the tab list, as in any tab list
+
+    tabs.nth(1).click()
+    expect(tabs.nth(1)).to_have_attribute("aria-selected", "true")
+    expect(page.locator("#board .board-pr-num")).to_have_text("#8")
+    assert sorted(board_cards(page)) == ["F1", "Q1"]
+    expect(page.locator('#board .board-card[data-item="F1"] .board-card-title')).to_have_text(
+        "Cart total is stale after a code is removed"
+    )
+    expect(page.locator("#board-status")).to_have_text("1 needs you")  # this board's, not the first's
+
+    tabs.nth(1).focus()
+    page.keyboard.press("Home")
+    expect(tabs.nth(0)).to_have_attribute("aria-selected", "true")
+    expect(tabs.nth(0)).to_be_focused()
+    page.keyboard.press("ArrowLeft")  # wraps to the last
+    expect(tabs.nth(1)).to_be_focused()
+    expect(page.locator("#board .board-pr-num")).to_have_text("#8")
+    page.evaluate("document.querySelector('#board .board-tab[aria-selected=true]').dataset.old = '1'")
+    ui.world.add_agents("#" + slug, ("codex-2",))  # a members frame: the board is drawn again
+    expect(page.locator("#board .board-tab[aria-selected=true]")).not_to_have_attribute("data-old", "1")
+    expect(page.locator("#board .board-tab[aria-selected=true]")).to_be_focused()
+    assert sorted(board_cards(page)) == ["F1", "Q1"]  # and it is still the second board
+
+
+def test_closing_one_of_two_boards_keeps_it_and_an_agent_opening_it_brings_it_back(ui: UI) -> None:
+    """#445: Close board closes the board on show, naming it by its url, and the other stays; the
+    closed board is kept, so an agent opening its url brings the tab and the cards back. A person's
+    move on a board carries that board's url too. Fails if the close takes the wrong board (or the
+    room's only one), the page keeps a closed board on show, or a returning board comes back empty."""
+    slug = "e2e-board-close-one"
+    page = review_room(ui, slug, PR_ONE)
+    seed_second_board(ui, slug)
+    page.click("#board-toggle")
+    tabs = page.locator("#board .board-tab")
+    expect(tabs).to_have_count(2)
+    tabs.nth(1).click()
+
+    page.click('#board .board-card[data-item="Q1"]')
+    with page.expect_request(
+        lambda r: r.url.endswith(f"/api/rooms/{slug}/review") and r.method == "POST"
+    ) as sent:
+        page.locator('#board .board-detail button[data-option="1"]').click()
+    assert sent.value.post_data_json == {"url": PR_TWO, "action": "answer", "item": "Q1", "option": 1}
+    expect(page.locator('#board .lane-settled .board-card[data-item="Q1"]')).to_be_visible()
+
+    page.click("#board-close")
+    expect(page.locator("#app-dialog")).to_be_visible()
+    expect(page.locator("#app-dialog")).to_contain_text(PR_TWO)
+    expect(page.locator("#app-dialog")).to_contain_text("kept")
+    with page.expect_request(
+        lambda r: r.url.endswith(f"/api/rooms/{slug}/review") and r.method == "POST"
+    ) as closed:
+        page.click("#app-dialog-action")
+    assert closed.value.post_data_json == {"action": "close", "url": PR_TWO}
+    expect(tabs).to_have_count(0)  # one board left: no tabs
+    expect(page.locator("#board .board-pr-num")).to_have_text("#7")
+    expect(page.locator("#board-toggle")).to_be_visible()
+    assert sorted(board_cards(page)) == ["F1", "F2", "F3", "F4", "Q1"]
+
+    ui.world.agent_call("#" + slug, "claude-1", "review", action="open", url=PR_TWO)
+    expect(tabs).to_have_count(2)
+    tabs.nth(1).click()
+    assert sorted(board_cards(page)) == ["F1", "Q1"]  # its cards are back
+    expect(page.locator('#board .lane-settled .board-card[data-item="Q1"]')).to_be_visible()  # and the answer
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_two_boards_fit_a_phone(ui: UI, scheme: str) -> None:
+    """#445: on a phone the tabs sit in the sticky header with the title and Hand off, the page does
+    not scroll sideways, and the tab list scrolls inside itself when it is wider than the screen.
+    Fails if the tabs push the page wider than the phone or leave the header."""
+    slug = f"e2e-board-tabs-phone-{scheme}"
+    page = review_room(ui, slug, PR_ONE, **PHONE, color_scheme=scheme)
+    seed_second_board(ui, slug)
+    page.click("#board-toggle")
+    expect(page.locator("#board .board-tab")).to_have_count(2)
+    expect(page.locator("#board .board-head .board-tabs")).to_be_visible()
+    no_horizontal_scroll(page)
+    page.locator("#board .board-tab").nth(1).click()
+    page.click('#board .board-card[data-item="Q1"]')
+    expect(page.locator("#board .board-detail")).to_be_visible()
+    no_horizontal_scroll(page)

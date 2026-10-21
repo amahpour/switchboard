@@ -105,7 +105,7 @@ class Hub:
         self._settings_pending: dict[str, asyncio.TimerHandle] = {}
         self._settings_fn: Callable[[str], dict[str, Any] | None] | None = None
         # a room's review board follows who is in the room (DESIGN.md §37.12): see _flush_members
-        self._board_fn: Callable[[str], dict[str, Any] | None] | None = None
+        self._board_fn: Callable[[str], list[dict[str, Any]] | None] | None = None
         self._member_names: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
 
     # registration ----------------------------------------------------------
@@ -147,10 +147,10 @@ class Hub:
     def room_settings(self, room: str, settings: dict[str, Any]) -> int:
         return self.publish("room", room, {"settings": settings})
 
-    def review(self, room: str, board: dict[str, Any] | None) -> int:
-        """A room's review board after a move, or None once it's closed (§37.5); the web UI
-        subscribes to it."""
-        return self.publish("review", room, {"board": board})
+    def review(self, room: str, boards: list[dict[str, Any]]) -> int:
+        """A room's open review boards after a move, none once the last is closed (§37.5, §37.14);
+        the web UI subscribes to it."""
+        return self.publish("review", room, {"boards": boards})
 
     def pins(self, room: str, pins: list[dict[str, Any]]) -> int:
         """A room's pinned messages after a pin or an unpin (§48); the web UI subscribes to it."""
@@ -173,7 +173,7 @@ class Hub:
     def set_members_source(self, fn: Callable[[str], list[dict[str, Any]] | None]) -> None:
         self._members_fn = fn
 
-    def set_board_source(self, fn: Callable[[str], dict[str, Any] | None]) -> None:
+    def set_board_source(self, fn: Callable[[str], list[dict[str, Any]] | None]) -> None:
         self._board_fn = fn
 
     def members_changed(self, room: str) -> None:
@@ -207,9 +207,9 @@ class Hub:
         if self._member_names.get(room) == (names, gone):
             return
         self._member_names[room] = (names, gone)
-        board = self._board_fn(room) if self._board_fn is not None else None
-        if board is not None:
-            self.publish("review", room, {"board": board})
+        boards = self._board_fn(room) if self._board_fn is not None else None
+        if boards:
+            self.publish("review", room, {"boards": boards})
 
     def set_settings_source(self, fn: Callable[[str], dict[str, Any] | None]) -> None:
         self._settings_fn = fn
