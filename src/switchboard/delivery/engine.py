@@ -1711,8 +1711,8 @@ class Engine:
 
     # ================================================================== tick
     def tick(self, now: float | None = None) -> list[Action]:
-        """Timers: hook-ack and pull expiries, the offer backstop, wait deadlines,
-        and quiet-period / max-hold releases."""
+        """Timers: hook-ack and pull expiries, the offer backstop, wait deadlines, a dropped
+        wait()'s clock (Devin over HTTPS, #448), and quiet-period / max-hold releases."""
         now = self.now() if now is None else now
         out: list[Action] = []
         for bid, (_ack, deadline) in list(self.hook_acks.items()):
