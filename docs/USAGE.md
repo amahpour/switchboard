@@ -107,6 +107,8 @@ bearer_token_env_var = "SWITCHBOARD_AGENT_TOKEN"
 
 The first time Codex starts after this, it asks you to review switchboard's hooks: choose **Trust all and continue**. Its Stop hook then waits up to a day for a message. Codex shows "Working" meanwhile, and you press Esc to type.
 
+Codex also runs tool hooks for subagents. Switchboard keeps a room message for the parent when a subagent reports a tool call, then gives it to the parent's next hook. A Stop hook that wakes the parent continues the same turn, so its later tool calls still receive messages.
+
 **Updating the Codex plugin.** The plugin changes with a release, not with every change merged to `main`: the marketplace names the plugin of the latest release. Upgrade the server first, then the plugin: a newer plugin can send fields an older server refuses, and its hooks then fail. Codex needs no switch for the plugin. When a session starts, it checks switchboard's repository and installs the plugin of a newer release; `codex plugin marketplace upgrade` does it at once. It asks you to review the hooks again after an update that changes one.
 
 <details><summary>The hooks by hand, without the plugin</summary>

@@ -140,6 +140,24 @@ class HttpsCodexAdapter(CodexMembership, Listening):
     def is_mid_turn(self, p: Participant, ev: HookEvent, was_idle: bool) -> bool:
         return steered(p, ev, was_idle)
 
+    def other_thread(self, p: Participant, ev: HookEvent) -> bool:
+        # Codex 0.158.0 runs a subagent's tool hooks with the parent's session_id and
+        # the subagent's turn_id. Stop-block continuations keep the parent's turn_id
+        # (checked live, #446). A missing parent turn cannot identify either caller.
+        return (
+            ev.ev in ("PostToolUse", "PostToolUseFailure")
+            and bool(ev.gen)
+            and bool(p.gen)
+            and (ev.gen or "")[:128] != p.gen
+        )
+
+    def anchors_turn(self, p: Participant, ev: HookEvent) -> bool:
+        # The first UserPromptSubmit may precede join, when no participant exists.
+        # Its join/read/say tool hook can identify that turn once the session is in a room.
+        return ev.ev in ("PostToolUse", "PostToolUseFailure") and (ev.tool or "").startswith(
+            "mcp__switchboard__"
+        )
+
     def prompt_verdict(self, acked: bool) -> str | None:
         return "human_prompt"
 

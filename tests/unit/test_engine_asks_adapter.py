@@ -13,9 +13,11 @@ from pathlib import Path
 
 import pytest
 from conftest import FakeClock
-from engine_world import World
+from engine_world import KEY, World
 
+from switchboard import envelope
 from switchboard.adapters import HTTPS_CLAUDE, HTTPS_CODEX, HTTPS_DEVIN, REMOTE_CODEX, PullAdapter
+from switchboard.adapters.base import HOOK_CONTEXT_EVENTS
 from switchboard.adapters.codex import steered
 from switchboard.adapters.cursor import CursorAdapter
 from switchboard.config import Config
@@ -187,6 +189,75 @@ def test_input_into_the_running_turn_is_not_a_new_turn(w: World, clock: FakeCloc
     assert w.store.get_batch(bid).state == "offered"
     w.hook(p, "UserPromptSubmit", gen="t2")  # a new turn
     assert w.store.get_batch(bid).state == "expired"
+
+
+class SharedIdAdapter(PullAdapter):
+    """Codex over HTTPS's answer to a subagent, on the unknown harness: a tool hook of another turn
+    than the session's current one is the subagent's."""
+
+    def context_events(self, p: Participant) -> frozenset[str]:
+        return HOOK_CONTEXT_EVENTS["claude"]
+
+    def other_thread(self, p: Participant, ev: HookEvent) -> bool:
+        return (
+            ev.ev in ("PostToolUse", "PostToolUseFailure")
+            and bool(ev.gen)
+            and bool(p.gen)
+            and ev.gen != p.gen
+        )
+
+
+@pytest.mark.parametrize("event", ["PostToolUse", "PostToolUseFailure"])
+def test_a_hook_the_adapter_says_is_another_threads_changes_nothing(
+    w: World, clock: FakeClock, event: str
+) -> None:
+    """A subagent's tool hook carries the session's id (#446). The engine asks the adapter, and a
+    hook it calls another thread's is ignored whole: no context for the subagent, no confirmation of an
+    answer the session holds, no status, no ``last_seen``. The session's own next hook gets it all.
+    Fails if the engine knows only the harnesses it was written for, or lets such a hook through."""
+    w.engine.adapters["unknown"] = SharedIdAdapter("unknown", w.cfg)
+    p, m = w.agent("bot", harness="unknown", status="idle", hooks=True)
+    w.hook(p, "UserPromptSubmit", gen="t1")
+    w.human("hello")
+    _t, bid, *_ = w.engine.pull(w.p(p), w.m(m), "read", 20)
+    w.human("@bot look at the build")
+    seen = w.p(p).last_seen
+    clock.advance(5)
+    w.take()
+    sub = w.hook(
+        p, event, gen="t-sub", tool="Bash", tool_use_id="exec-1", ok=True, tokens=tokens_of(w, bid, m)
+    )
+    assert sub is None and w.take() == []
+    assert w.store.get_batch(bid).state == "offered"  # the subagent's report confirms nothing
+    assert w.p(p).last_seen == seen and w.p(p).status == "busy"
+    own = w.hook(
+        p,
+        "PostToolUse",
+        gen="t1",
+        tool="mcp__x__read",
+        tool_use_id="exec-2",
+        ok=True,
+        tokens=tokens_of(w, bid, m),
+    )
+    assert w.store.get_batch(bid).state == "confirmed"
+    assert own is not None and "look at the build" in own.text
+
+
+def test_with_no_current_turn_known_a_hook_counts_as_the_sessions_own(w: World) -> None:
+    """A session that joined mid-turn has no turn yet, so nothing can tell its hooks from a subagent's:
+    they count as its own, as before (#446). Fails if an unknown turn is treated as a stranger's."""
+    w.engine.adapters["unknown"] = SharedIdAdapter("unknown", w.cfg)
+    p, _m = w.agent("bot", harness="unknown", status="idle", hooks=True)
+    assert w.p(p).gen is None
+    w.human("@bot hello there")
+    out = w.hook(p, "PostToolUse", gen="t1", tool="Bash", tool_use_id="exec-1", ok=True)
+    assert w.p(p).status == "busy" and out is not None and "hello there" in out.text
+
+
+def tokens_of(w: World, bid: int, m: object) -> tuple[tuple[int, str], ...]:
+    t = envelope.TOKEN_RE.fullmatch(envelope.batch_token(KEY, bid, m.id))  # type: ignore[attr-defined]
+    assert t is not None
+    return ((int(t.group(1)), t.group(2)),)
 
 
 def test_a_local_only_harness_on_another_host_gets_its_remote_adapter(w: World) -> None:
