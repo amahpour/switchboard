@@ -147,7 +147,7 @@ def test_the_backup_is_written_before_the_first_statement(tmp_path: Path) -> Non
     con.set_trace_callback(None)
     con.close()
     alters = [ok for sql, ok in seen if sql.lstrip().upper().startswith(("ALTER", "CREATE TABLE"))]
-    per_step = [3, 5, 1, 1, 2, 2, 2, 1, 1, 1, 2, 2, 2, 1, 2, 1, 2, 1, 1, 1, 1, 5, 1, 1, 1, 3]  # v2 -> ... -> v28
+    per_step = [3, 5, 1, 1, 2, 2, 2, 1, 1, 1, 2, 2, 2, 1, 2, 1, 2, 1, 1, 1, 1, 5, 1, 1, 1, 3]  # v2 to v28
     assert len(alters) == sum(per_step) and all(alters)
     assert dump(bak) == original
     c = sqlite3.connect(bak)
