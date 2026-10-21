@@ -36,6 +36,14 @@ def broker(tmp_home: Path):
     b.stop()
 
 
+def page_board(r: Any) -> dict[str, Any] | None:
+    """The room's open board in a ``/review`` reply (DESIGN.md §37.14 sends every open one): these
+    tests keep one open at a time, so it is that one, or None once it is closed."""
+    boards = r.json()["boards"]
+    assert len(boards) <= 1, boards
+    return boards[0] if boards else None
+
+
 def q(b: InProcBroker, sql: str, *args: Any) -> list[sqlite3.Row]:
     con = sqlite3.connect(f"file:{b.paths.db}?mode=ro", uri=True, timeout=5)
     con.row_factory = sqlite3.Row
@@ -72,14 +80,21 @@ def test_handoff_poster_belongs_to_the_person_who_clicks() -> None:
                 file="shop/cart.py",
                 lines="40-58",
             )
-            store.add_event("review", room_id=room.id, data={"item": "F1", "to": "conceded", "by": "alice"})
+            # every review event names its board (§37.14): the plan reads this board's alone
             store.add_event(
-                "review", room_id=room.id, data={"item": "F1", "to": "confirmed", "by": "codex-1"}
+                "review",
+                room_id=room.id,
+                data={"item": "F1", "to": "conceded", "by": "alice", "board": review["id"]},
+            )
+            store.add_event(
+                "review",
+                room_id=room.id,
+                data={"item": "F1", "to": "confirmed", "by": "codex-1", "board": review["id"]},
             )
             hosted.state.agents.refresh_index()
 
         hosted.on_loop(seed)
-        board = alice.get("/api/rooms/build/review").json()["board"]
+        board = page_board(alice.get("/api/rooms/build/review"))
         assert board["agent_people"] == {"claude-1": 0, "codex-1": hosted.state.store.person_named("bob").id}
         assert len(board["plan"]["comments"]) == 1
         assert "alice conceded" in board["plan"]["comments"][0]["body"]
@@ -87,7 +102,7 @@ def test_handoff_poster_belongs_to_the_person_who_clicks() -> None:
         denied = alice.post("/api/rooms/build/review", {"action": "handoff", "agent": "codex-1"})
         assert denied.status_code == 400 and "your agent" in denied.json()["message"]
         accepted = alice.post("/api/rooms/build/review", {"action": "handoff"})
-        assert accepted.status_code == 200 and accepted.json()["board"]["posted_by"] == "claude-1"
+        assert accepted.status_code == 200 and page_board(accepted)["posted_by"] == "claude-1"
     finally:
         stop(hosted)
 
@@ -146,20 +161,20 @@ async def test_a_person_confirms_any_fix_and_the_board_still_flags_the_ones_that
                     "review", room="#build", action="fix", item=item, commit="abc1234", proof="test_total"
                 )
             path = "/api/rooms/build/review"
-            board = web.get(path).json()["board"]
+            board = page_board(web.get(path))
             assert not board["items"][0]["needs_person"]  # its raiser is here to check it
             confirmed = web.post(
                 path, json={"action": "confirm", "item": "F1"}, headers=broker.write_headers()
             )
             assert confirmed.status_code == 200, confirmed.text
-            assert confirmed.json()["board"]["items"][0]["confirmed_by"] == "alice"
+            assert page_board(confirmed)["items"][0]["confirmed_by"] == "alice"
             await reviewer.leave("#build")
-            board = web.get(path).json()["board"]
+            board = page_board(web.get(path))
             assert board["items"][1]["needs_person"]  # no raiser left to check F2
             confirmed = web.post(
                 path, json={"action": "confirm", "item": "F2"}, headers=broker.write_headers()
             )
-            assert confirmed.status_code == 200 and confirmed.json()["board"]["settled"]
+            assert confirmed.status_code == 200 and page_board(confirmed)["settled"]
     finally:
         web.close()
 
@@ -176,7 +191,7 @@ async def test_a_board_from_371_reaches_settled(broker: InProcBroker) -> None:
     def person(body: dict[str, Any]) -> dict[str, Any]:
         r = web.post(path, json=body, headers=broker.write_headers())
         assert r.status_code == 200, r.text
-        return r.json()["board"]
+        return page_board(r)
 
     try:
         async with (
@@ -241,7 +256,7 @@ async def test_findings_deferred_to_a_ticket_settle_the_board(broker: InProcBrok
                 headers=broker.write_headers(),
             )
             assert r.status_code == 200, r.text
-            board = r.json()["board"]
+            board = page_board(r)
             assert [i["deferred_to"] for i in board["items"]] == ["SHOP-123", "SHOP-124"]
             assert board["settled"], board
         texts = [m["text"] for m in web.get("/api/rooms/build/messages").json()["messages"]]
@@ -269,7 +284,7 @@ async def test_an_agent_reports_the_pull_request_and_a_merge_closes_the_board(br
                 "review", room="#build", action="report", state="open", threads=2, ci="failing"
             )
             assert r["ok"] and "2 open on the PR, CI failing (per claude-1" in r["board"], r
-            page = web.get("/api/rooms/build/review").json()["board"]
+            page = page_board(web.get("/api/rooms/build/review"))
             assert page["report"].startswith("2 open on the PR, CI failing (per claude-1")
             assert (page["pr_threads"], page["pr_ci"], page["reported_by"]) == (2, "failing", "claude-1")
             r = await reviewer.call("review", room="#build", action="report", ci="failing")
@@ -278,7 +293,7 @@ async def test_an_agent_reports_the_pull_request_and_a_merge_closes_the_board(br
             assert r["ok"] and "no threads open on the PR, CI passing (per codex-1" in r["board"], r
             r = await author.call("review", room="#build", action="report", state="merged")
             assert r["ok"] and r.get("closed") is True, r
-            assert web.get("/api/rooms/build/review").json()["board"] is None
+            assert page_board(web.get("/api/rooms/build/review")) is None
         texts = [
             m["text"]
             for m in web.get("/api/rooms/build/messages").json()["messages"]
@@ -309,7 +324,7 @@ async def test_agent_closes_a_settled_board_without_a_reason_and_opens_the_next(
             ]
             closed = await author.call("review", room="#build", action="close")
             assert closed["ok"] and closed["closed"] is True, closed
-            assert web.get("/api/rooms/build/review").json()["board"] is None
+            assert page_board(web.get("/api/rooms/build/review")) is None
             opened = await author.call("review", room="#build", action="open", url=GITHUB_PR + "8")
             assert opened["ok"] and opened["board"].startswith(f"Review of {GITHUB_PR}8"), opened
         notices = [
@@ -329,7 +344,7 @@ async def test_agent_close_with_open_items_needs_a_reason_and_lists_them_for_the
 ) -> None:
     """Closing unsettled work is deliberate: an empty or oversized reason is refused without
     changing the board; a valid reason closes it and the room sees every open label. A person can
-    reopen the same PR with /review, while the old board remains in history (#408)."""
+    reopen the same PR with /review, and the board comes back with its items (#408, #445)."""
     web = broker.web_client()
     try:
         async with FakeAgent(broker.home, "close-author") as author:
@@ -347,19 +362,21 @@ async def test_agent_close_with_open_items_needs_a_reason_and_lists_them_for_the
             for reason in ("", "   ", "x" * 501):
                 refused = await author.call("review", room="#build", action="close", reason=reason)
                 assert refused["ok"] is False and "reason" in refused["error"], refused
-                assert web.get("/api/rooms/build/review").json()["board"] is not None
+                assert page_board(web.get("/api/rooms/build/review")) is not None
             closed = await author.call("review", room="#build", action="close", reason="moving to #8")
             assert closed["ok"] and closed["closed"] is True, closed
-            assert web.get("/api/rooms/build/review").json()["board"] is None
+            assert page_board(web.get("/api/rooms/build/review")) is None
             reopened = web_cmd(broker, web, f"/review {GITHUB_PR}")
             assert reopened.status_code == 200, reopened.text
-            assert web.get("/api/rooms/build/review").json()["board"]["items"] == []
+            assert "again, with its findings and history" in reopened.json()["text"]
+            back = page_board(web.get("/api/rooms/build/review"))
+            assert [i["label"] for i in back["items"]] == ["F1", "Q1"]  # kept, not started over
         notices = [
             row["text"] for row in q(broker, "SELECT text FROM messages WHERE kind='notice' ORDER BY id")
         ]
         assert "Review board for #7 closed by claude-1: moving to #8. Open items: F1, Q1." in notices
-        rows = q(broker, "SELECT id, closed_at FROM reviews ORDER BY id")
-        assert len(rows) == 2 and rows[0]["closed_at"] is not None and rows[1]["closed_at"] is None
+        rows = q(broker, "SELECT id, closed_at, closed_by, reopened_by FROM reviews ORDER BY id")
+        assert [tuple(r) for r in rows] == [(1, None, "", "alice")]  # one board, open again
         assert [
             (r["kind"], r["state"]) for r in q(broker, "SELECT kind, state FROM review_items ORDER BY id")
         ] == [
@@ -400,7 +417,7 @@ async def test_agent_close_notice_keeps_every_open_label_at_the_board_limit(brok
             store = broker.state.store
             room = store.get_room("#build")
             assert room is not None
-            rv = store.current_review(room.id)
+            rv = store.review_for_url(room.id, GITHUB_PR)
             assert rv is not None
             for _ in range(200):
                 store.add_review_item(rv["id"], "finding", "raised", title="open", raised_by="claude-1")
@@ -484,8 +501,8 @@ async def test_refusals_say_what_to_fix(broker: InProcBroker) -> None:
         r = await a.call("review", room="#build", action="open", url="file:///etc/passwd")
         assert r["ok"] is False and "http(s) link" in r["error"]
         await a.call("review", room="#build", action="open", url=PR)
-        r = await a.call("review", room="#build", action="open", url=PR + "8")
-        assert r["ok"] is False and "close it before another opens" in r["error"]
+        r = await a.call("review", room="#build", action="show", url=PR + "8")
+        assert r["ok"] is False and f"has no board for {PR}8" in r["error"]
         r = await a.call("review", room="#build", action="concede", item="F9")
         assert r["ok"] is False and "has no F9" in r["error"]
         r = await a.call("review", room="#build", action="tidy")
@@ -518,7 +535,7 @@ async def test_the_board_names_the_forge_its_url_points_at(broker: InProcBroker)
             await reviewer.join("#build", "codex-1")
             url = "https://gitlab.com/example-group/sub/shop/-/merge_requests/12"
             await reviewer.call("review", room="#build", action="open", url=url)
-            got = web.get("/api/rooms/build/review").json()["board"]
+            got = page_board(web.get("/api/rooms/build/review"))
             assert got["forge"] == {
                 "kind": "gitlab",
                 "repo": "example-group/sub/shop",
@@ -556,7 +573,7 @@ async def test_a_person_answers_rules_and_closes_from_the_web(broker: InProcBrok
                 recommend=0,
             )
 
-            got = web.get("/api/rooms/build/review").json()["board"]
+            got = page_board(web.get("/api/rooms/build/review"))
             assert [(i["label"], i["state"], i["needs_person"]) for i in got["items"]] == [
                 ("F1", "contested", True),
                 ("Q1", "open", True),
@@ -572,9 +589,9 @@ async def test_a_person_answers_rules_and_closes_from_the_web(broker: InProcBrok
             r = move(action="answer", item="F1", option=0)
             assert r.status_code == 400 and "can't be answered" in r.json()["message"]
             r = move(action="answer", item="Q1", option=1)
-            assert r.status_code == 200 and r.json()["board"]["items"][1]["answer"] == "after"
+            assert r.status_code == 200 and page_board(r)["items"][1]["answer"] == "after"
             r = move(action="concede", item="F1", owner="codex-1")
-            assert r.status_code == 200 and r.json()["board"]["items"][0]["owner"] == "codex-1"
+            assert r.status_code == 200 and page_board(r)["items"][0]["owner"] == "codex-1"
 
             # the agents hear both decisions as alice's own messages
             text = (await author.read("#build"))["text"]
@@ -582,8 +599,8 @@ async def test_a_person_answers_rules_and_closes_from_the_web(broker: InProcBrok
             assert "Review board: F1 conceded, owner codex-1." in text
 
             r = move(action="close")
-            assert r.status_code == 200 and r.json()["board"] is None
-            assert web.get("/api/rooms/build/review").json()["board"] is None
+            assert r.status_code == 200 and page_board(r) is None
+            assert page_board(web.get("/api/rooms/build/review")) is None
             # closed: the room can open a board for another pull request now
             r = await reviewer.call("review", room="#build", action="open", url=PR + "8")
             assert r["ok"] and r["board"].startswith(f"Review of {PR}8")
@@ -655,13 +672,13 @@ async def test_one_handoff_waits_for_confirmation_and_wakes_only_the_chosen_agen
             denied = move(action="handoff", agent="codex-1")
             assert denied.status_code == 400 and "isn't settled" in denied.json()["message"]
             await reviewer.call("review", room="#build", action="confirm", item="F1")
-            board = web.get("/api/rooms/build/review").json()["board"]
+            board = page_board(web.get("/api/rooms/build/review"))
             assert board["settled"] and board["opened_by"] == "claude-1"
             assert board["plan"]["comments"][0]["line"] == 58
             assert "wrong tax" in board["plan"]["summary"]
             assert move(action="handoff", agent="unknown").status_code == 400
             done = move(action="handoff", agent="codex-1")
-            assert done.status_code == 200 and done.json()["board"]["posted_by"] == "codex-1"
+            assert done.status_code == 200 and page_board(done)["posted_by"] == "codex-1"
             again = move(action="handoff", agent="claude-1")
             assert again.status_code == 400 and "already handed off" in again.json()["message"]
             after = await reviewer.call("review", room="#build", action="raise", title="late finding")
@@ -710,13 +727,13 @@ async def test_handoff_summarizes_all_items_and_defaults_to_the_opener(broker: I
             await reviewer.call("review", room="#build", action="confirm", item="F1")
             await reviewer.call("review", room="#build", action="drop", item="F2", reason="not worth it")
             assert move(action="answer", item="Q1", option=0).status_code == 200
-            board = web.get("/api/rooms/build/review").json()["board"]
+            board = page_board(web.get("/api/rooms/build/review"))
             assert board["settled"] and board["opened_by"] == "codex-1"
             assert board["plan"]["labels"] == ["F1", "F2", "Q1"]
             assert "F2 Dropped" in board["plan"]["summary"] and board["posted_by"] is None
 
             r = move(action="handoff")  # no agent supplied: the active opener is the default
-            assert r.status_code == 200 and r.json()["board"]["posted_by"] == "codex-1"
+            assert r.status_code == 200 and page_board(r)["posted_by"] == "codex-1"
             r = move(action="handoff", agent="claude-1")
             assert r.status_code == 400 and "already handed off" in r.json()["message"]
 
@@ -800,7 +817,7 @@ async def test_a_person_starts_a_review_with_review(broker: InProcBroker) -> Non
                 r.json()["text"]
                 == f"opened the review board for {PR} and asked claude-1 and codex-1 to review it"
             )
-            board = web.get("/api/rooms/build/review").json()["board"]
+            board = page_board(web.get("/api/rooms/build/review"))
             assert (board["url"], board["opened_by"], board["items"]) == (PR, "alice", [])
             rows = q(
                 broker, "SELECT sender_kind, sender_name, text FROM messages WHERE kind='chat' ORDER BY id"
@@ -812,14 +829,15 @@ async def test_a_person_starts_a_review_with_review(broker: InProcBroker) -> Non
             for agent in (author, reviewer):
                 got = (await agent.read("#build"))["text"]
                 assert PR in got and "review(action=" in got  # the envelope escapes the quotes
-            # the same URL again asks again; another URL waits for this board to close
-            assert web_cmd(broker, web, f"/review {PR}").status_code == 200
+            # the same URL again asks again; another URL opens a second board beside it (§37.14)
+            again = web_cmd(broker, web, f"/review {PR}")
+            assert again.status_code == 200
+            assert again.json()["text"].startswith(f"the review board for {PR} is open already: asked")
             r = web_cmd(broker, web, f"/review {PR}8")
-            assert r.status_code == 400
-            assert r.json()["message"] == (
-                f"/review: #build already has a board for {PR}: close it before another opens"
-            )
-            assert len(q(broker, "SELECT id FROM messages WHERE kind='chat'")) == 2
+            assert r.status_code == 200, r.text
+            assert r.json()["text"].startswith(f"opened the review board for {PR}8 and asked")
+            assert [b["url"] for b in web.get("/api/rooms/build/review").json()["boards"]] == [PR, PR + "8"]
+            assert len(q(broker, "SELECT id FROM messages WHERE kind='chat'")) == 3
     finally:
         web.close()
 
@@ -830,7 +848,7 @@ async def test_review_needs_an_agent_and_opens_nothing_without_one(broker: InPro
         r = web_cmd(broker, web, f"/review {PR}")
         assert r.status_code == 400
         assert r.json()["message"] == "/review: no agents in #build to review it: ask one to join first"
-        assert web.get("/api/rooms/build/review").json()["board"] is None
+        assert page_board(web.get("/api/rooms/build/review")) is None
     finally:
         web.close()
 
@@ -843,7 +861,7 @@ async def test_an_agent_cant_run_review(broker: InProcBroker) -> None:
             await agent.join("#build", "claude-1")
             r = await agent.call("say", room="#build", text=f"/review {PR}")
             assert r["ok"], r
-            assert web.get("/api/rooms/build/review").json()["board"] is None
+            assert page_board(web.get("/api/rooms/build/review")) is None
             rows = q(broker, "SELECT sender_kind, text FROM messages WHERE kind='chat'")
             assert [(x["sender_kind"], x["text"]) for x in rows] == [("agent", f"/review {PR}")]
     finally:
@@ -871,7 +889,7 @@ async def test_a_cards_links_and_history_come_with_the_board(broker: InProcBroke
             await author.call(
                 "review", room="#build", action="fix", item="F1", commit="9a1b2c3d4e5f", proof="test_expired"
             )
-            item = web.get("/api/rooms/build/review").json()["board"]["items"][0]
+            item = page_board(web.get("/api/rooms/build/review"))["items"][0]
             digest = hashlib.sha256(b"shop/codes.py").hexdigest()
             assert item["lines_url"] == f"{pr}/files#diff-{digest}R12-R19"
             assert item["commit_url"] == f"{pr}/commits/9a1b2c3d4e5f"
@@ -907,7 +925,7 @@ async def ask_tax(agent: FakeAgent, **more: Any) -> dict[str, Any]:
 
 
 def consensus_of(web: Any, label: str = "Q1") -> dict[str, Any]:
-    board = web.get("/api/rooms/build/review").json()["board"]
+    board = page_board(web.get("/api/rooms/build/review"))
     return next(i for i in board["items"] if i["label"] == label)["consensus"]
 
 
@@ -1045,7 +1063,7 @@ async def test_a_finding_may_offer_fix_options_the_agents_agree_on(broker: InPro
                 "; fix options: 0. cap the retries (codex-1 recommends this) | 1. remove the loop;"
                 in r["board"]
             )
-            got = web.get("/api/rooms/build/review").json()["board"]["items"][0]
+            got = page_board(web.get("/api/rooms/build/review"))["items"][0]
             assert got["options"] == ["cap the retries", "remove the loop"] and got["detail"].startswith(
                 "## Why"
             )
@@ -1081,8 +1099,8 @@ def review_frame(ws: Any, label: str, until: Any, timeout: float = 10.0) -> dict
         left = deadline - time.monotonic()
         assert left > 0, "no review frame with the awaited state"
         f = json.loads(ws.recv(timeout=left))
-        if f.get("t") == "review" and f["board"]:
-            item = next((i for i in f["board"]["items"] if i["label"] == label), None)
+        if f.get("t") == "review" and f["boards"]:
+            item = next((i for i in f["boards"][0]["items"] if i["label"] == label), None)
             if item is not None and until(item["consensus"]):
                 return item["consensus"]
 
@@ -1122,7 +1140,7 @@ async def test_the_board_follows_who_is_in_the_room(broker: InProcBroker) -> Non
 
 # ------------------------------------- a contest goes back to its raiser first (#424, DESIGN.md §37.13)
 def finding_of(web: Any, label: str) -> dict[str, Any]:
-    board = web.get("/api/rooms/build/review").json()["board"]
+    board = page_board(web.get("/api/rooms/build/review"))
     return next(i for i in board["items"] if i["label"] == label)
 
 
@@ -1143,7 +1161,7 @@ async def test_a_contested_finding_is_its_raisers_to_drop_or_insist_on(broker: I
                 await author.call("review", room="#build", action="contest", item=item, reason="not a bug")
             f1 = finding_of(web, "F1")
             assert (f1["state"], f1["needs_person"], f1["insisted"]) == ("contested", False, "")
-            board = web.get("/api/rooms/build/review").json()["board"]
+            board = page_board(web.get("/api/rooms/build/review"))
             assert board["counts"]["needs_person"] == 0 and board["offline"] == []
             shown = (await author.call("review", room="#build", action="show"))["board"]
             assert (
@@ -1189,7 +1207,7 @@ async def test_a_contested_finding_is_its_raisers_to_drop_or_insist_on(broker: I
             )
             r = await reviewer.call("review", room="#build", action="insist", item="F2", reason="x")
             assert r["ok"] is False and "F2 is dropped: only a contested finding" in r["error"]
-            board = web.get("/api/rooms/build/review").json()["board"]
+            board = page_board(web.get("/api/rooms/build/review"))
             assert board["counts"]["needs_person"] == 1  # the one both sides argued
     finally:
         web.close()
@@ -1231,7 +1249,7 @@ async def test_a_contested_finding_goes_to_a_person_when_its_raiser_has_left_or_
             broker.on_loop(set_status, "offline")
             f1 = finding_of(web, "F1")
             assert f1["needs_person"] is True and f1["insisted"] == ""
-            board = web.get("/api/rooms/build/review").json()["board"]
+            board = page_board(web.get("/api/rooms/build/review"))
             assert board["offline"] == ["codex-1"] and board["counts"]["needs_person"] == 1
             shown = (await author.call("review", room="#build", action="show"))["board"]
             assert "contested; codex-1 isn't here to answer: a person decides" in shown

@@ -579,3 +579,32 @@ def test_the_welcome_form_creates_the_named_room() -> None:
     assert out["shown"] and out["label"] == "Create #ops" and out["preview"] == "join switchboard room #ops"
     assert out["posted"] == "#ops" and out["tabs"] == ["#ops"]
     assert out["placeholder"] == "Message #ops — @ to mention, / for commands"
+
+
+def test_a_room_with_several_open_boards_shows_tabs_and_one_board_at_a_time() -> None:
+    """#445: with one open board the page is as it always was (no tab list); with two or more the
+    header has a tab list, the first board is on show, a tab shows another with its own cards, a
+    redraw keeps the chosen board, and the board that closes lets the first take its place. Fails
+    if tabs show for one board, a switch keeps the old board's cards, a members frame jumps back to
+    the first board, or a closed board stays on show."""
+    out = run("board_tabs")
+    assert out["one"]["list"] == 0 and out["one"]["tabs"] == [] and out["one"]["cards"] == ["F1"]
+    three = out["three"]
+    assert three["list"] == 1
+    assert [(t["text"], t["selected"], t["tabindex"], t["role"]) for t in three["tabs"]] == [
+        ("shop #7", "true", 0, "tab"),
+        ("shop #81", "false", -1, "tab"),  # the second has one item that needs a person (the "1")
+        ("git.example.com/pr/3", "false", -1, "tab"),
+    ]
+    assert three["tabs"][1]["label"] == "shop #8, 1 needs you"
+    assert three["tabs"][1]["title"] == "https://github.com/example/shop/pull/8"
+    assert three["cards"] == ["F1"] and three["shown"] == "https://github.com/example/shop/pull/7"
+    second = out["second"]
+    assert sorted(second["cards"]) == ["F1", "Q1"]  # the second board's own cards
+    assert [t["selected"] for t in second["tabs"]] == ["false", "true", "false"]
+    assert second["shown"] == "https://github.com/example/shop/pull/8"
+    assert out["redrawn"]["cards"] == second["cards"] and out["redrawn"]["tabs"] == second["tabs"]
+    assert [t["selected"] for t in out["fell_back"]["tabs"]] == ["true", "false"]  # the first is shown again
+    assert out["fell_back"]["cards"] == ["F1"] and out["fell_back"]["shown"].endswith("/pull/7")
+    assert out["last"]["list"] == 0 and out["last"]["tabs"] == []  # one left: no tabs
+    assert out["none"] == {"hidden": True}

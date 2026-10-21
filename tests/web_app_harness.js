@@ -108,7 +108,7 @@ function makeWorld(rooms) {
     onCommand: null,  // (slug, text) -> body; may change state and deliver frames first
     members: {},      // slug -> [member_dict], for GET /api/rooms/{slug}/members
     me: null,         // the body of GET /api/me, when a scenario needs more than the human's name
-    boards: {},       // slug -> the room's review board, for GET /api/rooms/{slug}/review
+    boards: {},       // slug -> the room's open review boards (one, or a list), for GET /api/rooms/{slug}/review
     details: {},      // 'slug/name' -> the member-detail body; missing -> 404
     commands: [],     // every command text the page sent, in order
     said: [],         // every /say text the page sent, in order
@@ -127,7 +127,10 @@ function makeWorld(rooms) {
     }
     const mr = /^\/api\/rooms\/([^/]+)\/review$/.exec(url);
     if (method === 'GET' && mr) {
-      return function () { return [200, { board: server.boards[decodeURIComponent(mr[1])] || null }]; };
+      return function () {
+        const b = server.boards[decodeURIComponent(mr[1])];
+        return [200, { boards: Array.isArray(b) ? b : b ? [b] : [] }];
+      };
     }
     if (method === 'GET' && url === '/api/rooms') {
       return function () { return [200, { rooms: server.rooms.map(roomDict), closed: server.closed }]; };
@@ -402,7 +405,7 @@ const SCENARIOS = {
                     plan: { summary: '', comments: [] }, agents: ['claude-1', 'codex-1'],
                     agent_people: {}, posted_at: null, posted_by: null };
     w.server.boards.build = board;  // what opening the board reads back
-    ws.deliver({ t: 'review', room: '#build', board: board });
+    ws.deliver({ t: 'review', room: '#build', boards: [board] });
     click(w.$('board-toggle'));
     await settle();
     const checked = function () {
@@ -417,7 +420,7 @@ const SCENARIOS = {
     const before = checked();
     items[2] = { ...items[2], confirmed_by: 'codex-1' };
     w.server.boards.build = { ...board, items: items };
-    ws.deliver({ t: 'review', room: '#build', board: w.server.boards.build });
+    ws.deliver({ t: 'review', room: '#build', boards: [w.server.boards.build] });
     await settle();
     return { cards: cards, before: before, after: checked() };
   },
@@ -1130,7 +1133,7 @@ const SCENARIOS = {
     };
     const show = async function (b) {
       w.server.boards.build = b;
-      ws.deliver({ t: 'review', room: '#build', board: b });
+      ws.deliver({ t: 'review', room: '#build', boards: [b] });
       await settle();
     };
     const header = function () {
@@ -1197,6 +1200,78 @@ const SCENARIOS = {
     cases.done_today.expected = 'Handed off by claude-1 at 12:34';
     await record('done_before', board(ready.items, { posted_by: 'claude-1', posted_at: TS }));
     return { cases: cases, order: order };
+  },
+
+  // Several open review boards in a room (#445): tabs only when there are two or more, one board on
+  // show with its own lanes and header, a switch that shows the other, and a frame that drops one (the
+  // shown board falls back to the first). A move naming its board is checked in the browser (e2e).
+  async board_tabs() {
+    const { w, ws } = await buildRoom(MEMBERS);
+    const item = function (label, state, extra) {
+      return Object.assign({ label: label, kind: label[0] === 'Q' ? 'question' : 'finding', state: state,
+        title: 'title of ' + label, detail: '', file: '', lines: '', raised_by: 'codex-1', owner: '', commit: '',
+        proof: '', confirmed_by: '', outdated_head: '', deferred_to: '', reason: '', options: [], recommend: null,
+        answer: '', answered_by: '', needs_person: false, lines_url: null, commit_url: null, history: [] },
+        extra || {});
+    };
+    const github = function (n) {
+      return { kind: 'github', repo: 'example/shop', number: n, base: 'https://github.com/example/shop' };
+    };
+    const board = function (id, url, forge, items, need) {
+      return { id: id, url: url, forge: forge, head: '', opened_by: 'codex-1', opened_at: 1, settled: false,
+        counts: { needs_person: need, open: items.length }, items: items, plan: { summary: '', comments: [] },
+        agents: ['claude-1', 'codex-1'], agent_people: {}, posted_at: null, posted_by: null };
+    };
+    const a = board(1, 'https://github.com/example/shop/pull/7', github(7), [item('F1', 'raised')], 0);
+    const b = board(2, 'https://github.com/example/shop/pull/8', github(8),
+      [item('Q1', 'open', { needs_person: true, options: ['yes', 'no'] }), item('F1', 'conceded', { owner: 'claude-1' })], 1);
+    const plain = board(3, 'https://git.example.com/pr/3', null, [item('F1', 'raised')], 0);
+    const view = function () {
+      const box = w.$('board');
+      const tabs = findAll(box, function (n) { return n.classList.contains('board-tab'); });
+      const cards = findAll(box, function (n) { return n.classList.contains('board-card'); });
+      const link = findAll(box, function (n) { return n.classList.contains('board-url'); })[0];
+      return {
+        tabs: tabs.map(function (t) {
+          return { text: t.textContent, label: t.attrs['aria-label'], selected: t.attrs['aria-selected'],
+                   tabindex: t.tabIndex, title: t.title, role: t.attrs.role };
+        }),
+        list: findAll(box, function (n) { return n.attrs.role === 'tablist'; }).length,
+        cards: cards.map(function (c) { return c.dataset.item; }),
+        shown: link ? link.attrs['aria-label'] || link.textContent : null,
+      };
+    };
+    const out = {};
+    // what a live frame says is what opening the board reads back, too
+    const show = async function (list) {
+      w.server.boards.build = list;
+      ws.deliver({ t: 'review', room: '#build', boards: list });
+      await settle();
+    };
+    await show([a]);
+    click(w.$('board-toggle'));
+    await settle();
+    out.one = view();  // a single board: no tab list at all
+    await show([a, b, plain]);
+    out.three = view();
+    const tabAt = function (n) {
+      return findAll(w.$('board'), function (x) { return x.classList.contains('board-tab'); })[n];
+    };
+    click(tabAt(1));
+    await settle();
+    out.second = view();
+    // a members frame redraws the board: the chosen board stays chosen
+    ws.deliver({ t: 'members', room: '#build', members: MEMBERS });
+    await settle();
+    out.redrawn = view();
+    // the shown board closes: the first is shown, and its tab alone is left with the other
+    await show([a, plain]);
+    out.fell_back = view();
+    await show([plain]);
+    out.last = view();
+    await show([]);
+    out.none = { hidden: w.$('board-toggle').classList.contains('hidden') };
+    return out;
   },
 
   // First run: the Welcome form creates the room named in its field.

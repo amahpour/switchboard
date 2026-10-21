@@ -2474,13 +2474,36 @@ class Store:
         return int(self.con.execute(sql, args).fetchone()[0])
 
     # ------------------------------------------------------------ review boards (§37.3)
-    # A room's board is its newest review that isn't closed. Values arrive already checked by
-    # ``reviews`` (lengths, shapes); the schema's CHECKs are the last line.
-    def current_review(self, room_id: int) -> dict[str, Any] | None:
+    # A room's boards (§37.14): one per pull request URL, open or closed. A URL's board is its
+    # newest row; an older row of the same URL (from before a closed board was kept, or left by
+    # ``reset``) stays in the table, and is not shown. Values arrive already checked by ``reviews``
+    # (lengths, shapes); the schema's CHECKs are the last line.
+    _NEWEST_REVIEW = "r.id=(SELECT MAX(id) FROM reviews WHERE room_id=r.room_id AND url=r.url)"
+
+    def review_for_url(self, room_id: int, url: str) -> dict[str, Any] | None:
+        """The room's board for ``url``, open or closed: its newest row."""
         r = self.con.execute(
-            "SELECT * FROM reviews WHERE room_id=? AND closed_at IS NULL ORDER BY id DESC LIMIT 1", (room_id,)
+            "SELECT * FROM reviews WHERE room_id=? AND url=? ORDER BY id DESC LIMIT 1", (room_id, url)
         ).fetchone()
         return dict(r) if r else None
+
+    def open_reviews(self, room_id: int) -> list[dict[str, Any]]:
+        """The room's open boards, the one opened first first."""
+        rows = self.con.execute(
+            f"SELECT * FROM reviews r WHERE r.room_id=? AND r.closed_at IS NULL AND {self._NEWEST_REVIEW}"
+            " ORDER BY r.opened_at, r.id",
+            (room_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def room_reviews(self, room_id: int) -> list[dict[str, Any]]:
+        """Every board of the room, open ones first, each group the newest first."""
+        rows = self.con.execute(
+            f"SELECT * FROM reviews r WHERE r.room_id=? AND {self._NEWEST_REVIEW}"
+            " ORDER BY r.closed_at IS NOT NULL, r.id DESC",
+            (room_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def open_review(self, room_id: int, url: str, head: str, opened_by: str) -> dict[str, Any]:
         with db.tx(self.con):
@@ -2491,10 +2514,20 @@ class Store:
         r = self.con.execute("SELECT * FROM reviews WHERE id=?", (cur.lastrowid,)).fetchone()
         return dict(r)
 
+    def reopen_review(self, review_id: int, by: str) -> None:
+        """A closed board open again, with every item and move it had (§37.14). Who closed it is
+        forgotten (it isn't closed); who opened it again is the board's holder now."""
+        with db.tx(self.con):
+            self.con.execute(
+                "UPDATE reviews SET closed_at=NULL, closed_by='', reopened_by=?, reopened_at=? WHERE id=?",
+                (by, self.clock.now(), review_id),
+            )
+
     def set_review(self, review_id: int, **fields: Any) -> None:
         allowed = {
             "head",
             "closed_at",
+            "closed_by",
             "posted_at",
             "posted_by",
             "pr_state",
@@ -2518,12 +2551,14 @@ class Store:
                 ((head, item_id, review_id) for item_id in finding_ids),
             )
 
-    def review_events(self, room_id: int, since: float) -> list[Event]:
-        """The room's ``review`` events from ``since`` (a board's opening) on, oldest first: the
-        moves a card's history is read from (#250)."""
+    def review_events(self, room_id: int, review_id: int, since: float) -> list[Event]:
+        """One board's ``review`` events, oldest first (``since``: when it was opened): the moves a
+        card's history is read from (#250). Every event names its board (``data.board``, §37.14),
+        since F1 and Q1 are on every board of a room."""
         rows = self.con.execute(
-            "SELECT * FROM events WHERE room_id=? AND kind='review' AND ts>=? ORDER BY id",
-            (room_id, since),
+            "SELECT * FROM events WHERE kind='review' AND ts>=? AND room_id=?"
+            " AND json_valid(data) AND json_extract(data, '$.board')=? ORDER BY id",
+            (since, room_id, review_id),
         ).fetchall()
         return [Event.from_row(r) for r in rows]
 

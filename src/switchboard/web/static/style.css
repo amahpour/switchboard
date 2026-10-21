@@ -2856,6 +2856,25 @@ body.login {
 .board-pr-repo { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .board-pr-num { flex: none; color: var(--muted-2); font-variant-numeric: tabular-nums; }
 .board-head-sha { color: var(--muted-2); font-size: calc(12px * var(--text-scale)); }
+/* Two or more open boards in a room (#445, DESIGN.md §37.14): tabs on the header's first row, one
+   board on show below. A tab is the pull request's mark and short name, and the number of items
+   that need a person on it, in the chip-danger colors. */
+.board-tabs { display: flex; gap: 6px; flex: 1 1 100%; order: -1; min-width: 0; overflow-x: auto; padding: 2px 2px 4px; }
+.board-tab {
+  display: inline-flex; align-items: center; gap: 6px; flex: none; max-width: 260px; height: 30px; padding: 0 10px;
+  border-radius: 15px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer;
+  font: inherit; font-size: calc(13px * var(--text-scale));
+}
+.board-tab:hover { border-color: var(--input-border); }
+.board-tab.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); background: var(--accent-tint); }
+.board-tab .mark { width: 14px; height: 14px; flex: none; fill: currentColor; }
+.board-tab .mark-gitlab { fill: var(--forge-gitlab); }
+.board-tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.board-tab-need {
+  flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; display: inline-flex;
+  align-items: center; justify-content: center; background: var(--danger-bg); color: var(--danger);
+  font-size: calc(11px * var(--text-scale)); font-weight: 700; font-variant-numeric: tabular-nums;
+}
 .board-report { font-size: calc(12px * var(--text-scale)); color: var(--muted-2); min-width: 0; overflow-wrap: anywhere; }
 .chip.chip-ok { background: var(--accent-tint); color: var(--green); }
 /* The open card beside the lanes (#343). The card was a fixed 340 px: cramped on a wide window,
@@ -3011,6 +3030,7 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
   .board-head { position: sticky; top: -10px; z-index: 2; margin: -10px -12px 0; padding: 10px 12px 8px;
     background: var(--bg); border-bottom: 1px solid var(--line); }
   .board { scroll-padding-top: 160px; }  /* a card that takes focus by keyboard doesn't land under it */
+  .board.has-tabs { scroll-padding-top: 200px; }  /* and the tabs' row is under it too (#445) */
   #board-status { order: 1; }
   #board-close { order: 2; margin-left: auto; }
   .board-handoff { order: 3; flex: 1 1 100%; justify-content: space-between; }
