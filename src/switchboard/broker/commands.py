@@ -281,14 +281,17 @@ def review_request(agents: list[str], url: str, note: str) -> str:
         ' (review(action="insist")): settle disagreements between you, and leave a person only'
         ' what you still disagree on. Ask with review(action="ask") what only a person can decide,'
         " with the option you recommend, and agree with the others' questions or pick another"
-        ' option with review(action="concur"). review(action="show") shows the board.'
+        ' option with review(action="concur"). review(action="show") shows the board. The room may'
+        " have other boards open: give every call this pull request's link as its url."
     )
     return text + (f"\n\nNote: {note}" if note else "")
 
 
 def _review(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
     """Open the room's board for the URL, as the person, and hand back the request to post
-    (§37.8). Every check comes before the board opens, so a refusal leaves nothing behind."""
+    (§37.8): a board for that URL that was closed comes back with its findings, and a room may
+    have others open (§37.14). Every check comes before the board opens, so a refusal leaves
+    nothing behind."""
     url, note = cmd.args
     agents = [m.name for m in svc.store.members(room.id)]
     if not agents:
@@ -306,11 +309,18 @@ def _review(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Resul
     if svc.boards is None:  # a RoomService on its own, as the human side's unit tests build it
         raise CommandError("bad_request", "/review: this broker has no review boards")
     try:
-        svc.boards.person_open(room, actor.who(svc.cfg.human_name), url)
+        how = svc.boards.person_open(room, actor.who(svc.cfg.human_name), url)
     except ReviewError as e:
         raise CommandError("bad_request", f"/review: {e}") from None
     who = " and ".join([", ".join(agents[:-1]), agents[-1]] if len(agents) > 1 else agents)
-    lines = [f"opened the review board for {url} and asked {who} to review it"]
+    # a board kept after it was closed comes back with its findings (§37.14); an open one stays as it is
+    lines = [
+        {
+            "reopened": f"opened the review board for {url} again, with its findings and history,"
+            f" and asked {who} to review it",
+            "kept": f"the review board for {url} is open already: asked {who} to review it",
+        }.get(how, f"opened the review board for {url} and asked {who} to review it")
+    ]
     if room.paused:
         lines.append(f"{room.name} is paused: the request goes out after /resume")
     return Result(True, "\n".join(lines), post=text)

@@ -932,3 +932,133 @@ def test_the_migrations_line_for_an_old_contest_is_the_one_the_page_shows() -> N
     assert reviews.insist_line(contested("it stays")) == "Insists: it stays"
     assert reviews.insist_line(contested(reviews.LEGACY_INSISTED)) == reviews.LEGACY_INSISTED
     assert reviews.insist_line(contested()) == ""
+
+
+# ------------------------------------------------ several boards in a room, and closed ones kept (#445)
+def board_row(**over: object) -> dict:
+    """A board as ``list`` and ``render`` read it: the row's own columns and its counts."""
+    row = {
+        "url": "https://github.com/example/shop/pull/7", "head": "abc1234def5678", "opened_by": "claude-1",
+        "opened_at": 1_800_000_000.0, "closed_at": None, "closed_by": "", "reopened_by": "",
+        "reopened_at": None, "posted_by": None,
+        "counts": {"needs_person": 0, "open": 3, "fixed": 4, "dropped": 1, "answered": 0},
+    }  # fmt: skip
+    return {**row, **over}
+
+
+def test_a_board_is_named_by_its_number_and_held_by_the_agent_that_opened_it_last() -> None:
+    """``ref`` is built from the checked number alone (so it may go in a person's message, #177) and
+    is empty for a URL that names no forge; the holder is the last to open the board, who alone (with
+    a person) closes it. Fails if a ref is built from the URL's text, or a re-opener isn't the holder."""
+    assert reviews.ref(reviews.forge("https://github.com/example/shop/pull/7")) == "#7"
+    assert reviews.ref(reviews.forge("https://gitlab.com/example/shop/-/merge_requests/12")) == "!12"
+    assert reviews.ref(reviews.forge("https://example.com/@alice/shop/pull/7")) == ""
+    assert reviews.ref(None) == ""
+    assert reviews.holder({"opened_by": "claude-1", "reopened_by": ""}) == "claude-1"
+    assert reviews.holder({"opened_by": "claude-1", "reopened_by": "codex-1"}) == "codex-1"
+    assert reviews.holder({}) == ""
+
+
+def test_list_names_every_board_with_its_state_counts_and_who_opened_and_closed_it() -> None:
+    """One line a board, open ones first: URL, head, state, what is open and settled, who opened it
+    (and again) and who closed it, each with an unambiguous UTC time. The caller's own default is
+    marked, a handed-off board says so, a closed board with no recorded closer (one closed before
+    #445) just says closed, and a long list is cut with a count. Fails if a closed board can't be
+    told from an open one, a time depends on the machine's zone, or nothing says where a call goes."""
+    live = board_row()
+    gone = board_row(
+        url="https://github.com/example/shop/pull/6", head="", closed_at=1_800_003_600.0,
+        closed_by="codex-1", reopened_by="devin-1", reopened_at=1_800_001_800.0, posted_by="claude-1",
+    )  # fmt: skip
+    old = board_row(url="https://example.com/old/pull/1", closed_at=1_700_000_000.0, closed_by="")
+    text = reviews.list_text([live, gone, old], default_url=live["url"])
+    lines = text.splitlines()
+    assert lines[0] == "3 review boards in this room, open ones first:"
+    assert lines[1] == (
+        "https://github.com/example/shop/pull/7 at abc1234def56 [open]: 3 open, 5 settled,"
+        " opened by claude-1 on 2027-01-15 08:00 UTC <- your calls without url go here"
+    )
+    assert lines[2] == (
+        "https://github.com/example/shop/pull/6 [closed, handed off to claude-1]: 3 open, 5 settled,"
+        " opened by claude-1 on 2027-01-15 08:00 UTC, opened again by devin-1 on 2027-01-15 08:30 UTC,"
+        " closed by codex-1 on 2027-01-15 09:00 UTC"
+    )
+    assert lines[3].endswith("closed on 2023-11-14 22:13 UTC") and "closed by" not in lines[3]
+    assert lines[-1].startswith('review(action="show", url=...) reads any')
+    many = reviews.list_text([board_row(url=f"https://example.com/p/{n}") for n in range(60)])
+    assert "... and 10 older closed boards" in many and many.count("[open]") == reviews.MAX_LISTED
+    assert reviews.list_text([]).startswith("This room has no review boards.")
+    assert reviews.list_text([live]).startswith("1 review board in this room")
+
+
+def test_a_closed_board_reads_as_closed_with_who_and_when_and_how_to_bring_it_back() -> None:
+    """``show`` on a kept board says it is closed, by whom and when, and that ``open`` brings it back;
+    a handed-off one doesn't tell its reader to post the review again. Fails if a closed board reads
+    like an open one, or still says "post one review now"."""
+    items = [finding("raised")]
+    open_text = reviews.render(board_row(), items)
+    assert open_text.splitlines()[0].endswith(": open") and "closed" not in open_text.splitlines()[0]
+    closed = reviews.render(board_row(closed_at=1_800_003_600.0, closed_by="codex-1"), items)
+    assert closed.splitlines()[0] == (
+        "Review of https://github.com/example/shop/pull/7 at abc1234def56: open"
+        " (closed by codex-1 on 2027-01-15 09:00 UTC; open(url) brings it back)"
+    )
+    posted = reviews.render(board_row(closed_at=1_800_003_600.0, posted_by="claude-1"), items)
+    assert "handed off to claude-1 (closed on" in posted and "post one review now" not in posted
+    assert "post one review now" in reviews.render(board_row(posted_by="claude-1"), items)
+
+
+def test_with_several_boards_open_a_wake_line_names_its_board_and_every_call_it_suggests_carries_it() -> None:
+    """The line is the mover's own message to the agent who must act next. With one board open it is
+    as before. With several it opens with the board's URL (the mover wrote it, so it may be there) and
+    each suggested call has ``url=``: an agent answering a line about board B must not act on the board
+    it used last. Fails if a line about a second board could be answered on the first."""
+    raised = finding("raised", raised_by="codex-1")
+    who, line = reviews.handoff(raised, "codex-1", ["codex-1", "claude-1"])  # type: ignore[misc]
+    assert who == ("claude-1",) and line.startswith("Review board: F1 raised:") and "url=" not in line
+    url = "https://example.com/shop/pull/8"
+    who, line = reviews.handoff(raised, "codex-1", ["codex-1", "claude-1"], url)  # type: ignore[misc]
+    assert line.startswith(f"Review board {url}: F1 raised: off by one. @claude-1:")
+    assert line.endswith(f'review(action="show", url="{url}") shows the board.')
+    asked = replace(question(), state="open")
+    _, line = reviews.handoff(asked, "codex-1", ["codex-1", "claude-1"], url)  # type: ignore[misc]
+    assert f'review(action="concur", item="Q1", recommend=<index>, url="{url}")' in line
+    contested = replace(finding("contested", raised_by="claude-1"), reason="no")
+    _, line = reviews.handoff(contested, "codex-1", ["codex-1", "claude-1"], url)  # type: ignore[misc]
+    assert f'review(action="insist", item="F1", reason=..., url="{url}")' in line
+
+
+def test_a_handoff_message_names_the_board_by_number_only_when_the_room_has_several() -> None:
+    """The person's handoff message never repeats an agent's URL (#177): with several boards open it
+    says which by ``#7``, built from a checked number. Fails if a board's own text gets in, or the
+    single-board message changes."""
+    plan = {"labels": ["F1"], "comments": [{"item": "F1"}]}
+    plain = reviews.render_handoff(plan, "claude-1", 1000)
+    assert "this board's PR or MR with your own gh or glab" in plain and "(#" not in plain
+    several = reviews.render_handoff(plan, "claude-1", 1000, "#7")
+    assert "this board's PR or MR (#7) with your own gh or glab" in several
+    assert "http" not in several
+
+
+def test_a_urls_board_is_its_newest_row_and_an_older_row_of_the_same_url_stays_unseen(tmp_path: Path) -> None:
+    """Rows are never deleted, so a URL can have several (an older release opened an empty board for a
+    URL it had closed; ``reset`` does it on purpose). The board is the newest, whatever the older say:
+    ``review_for_url``, the open boards and ``room_reviews`` all see only it, in the room asked about.
+    Fails if an older row of a URL shows up as a second board, or another room's board leaks in."""
+    store = Store(db.open_db(tmp_path / "board.db"), FakeClock())
+    room = store.create_room("#build", "alice", 60, 30)
+    other = store.create_room("#other", "alice", 60, 30)
+    url_a, url_b = "https://example.com/shop/pull/7", "https://example.com/shop/pull/8"
+    old = store.open_review(room.id, url_a, "", "codex-1")  # still open: only the newest counts
+    new = store.open_review(room.id, url_a, "", "claude-1")
+    second = store.open_review(room.id, url_b, "", "codex-1")
+    elsewhere = store.open_review(other.id, url_a, "", "codex-1")
+    got = store.review_for_url(room.id, url_a)
+    assert got is not None and got["id"] == new["id"] != old["id"]
+    assert [r["id"] for r in store.open_reviews(room.id)] == [new["id"], second["id"]]
+    assert [r["id"] for r in store.open_reviews(other.id)] == [elsewhere["id"]]
+    store.set_review(new["id"], closed_at=5.0, closed_by="claude-1")
+    assert [r["id"] for r in store.open_reviews(room.id)] == [second["id"]]
+    # open ones first, then closed; each group the newest first; the older row of url_a is not listed
+    assert [r["id"] for r in store.room_reviews(room.id)] == [second["id"], new["id"]]
+    assert store.review_for_url(room.id, "https://example.com/shop/pull/9") is None

@@ -1,0 +1,30 @@
+{
+  "_source": "live claude 2.1.305 (haiku, default mode): a Bash call inside a subagent the Agent tool started (#446)",
+  "_unverified": false,
+  "session_id": "00000000-0000-4000-8000-00000000c100",
+  "transcript_path": "/ws/transcript.jsonl",
+  "cwd": "/ws",
+  "scratchpad_dir": "/tmp/scratch",
+  "prompt_id": "00000000-0000-4000-8000-00000000c102",
+  "permission_mode": "default",
+  "agent_id": "a0123456789abcdef",
+  "agent_type": "general-purpose",
+  "effort": {
+    "level": "low"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "echo sub",
+    "description": "Print sub"
+  },
+  "tool_response": {
+    "stdout": "sub",
+    "stderr": "",
+    "interrupted": false,
+    "isImage": false,
+    "noOutputExpected": false
+  },
+  "tool_use_id": "toolu_fixture_c011",
+  "duration_ms": 63
+}

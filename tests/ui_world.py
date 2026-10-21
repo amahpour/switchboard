@@ -608,6 +608,16 @@ class UIWorld:
                     "| | Total |\n|---|---|\n| Before tax | $86.40 |\n| After tax | $88.00 |",
              options=["Before tax", "After tax"], recommend=0)  # fmt: skip
 
+    def seed_second_review(self, room: str, pr: str = "https://github.com/example/shop/pull/8") -> None:
+        """A second open board in a room ``seed_review`` filled, for another pull request (#445,
+        DESIGN.md §37.14): a finding and a question that wait on a person."""
+        call = self.agent_call
+        call(room, "claude-1", "review", action="open", url=pr, head="7b9c2a4e1d30")
+        call(room, "claude-1", "review", action="raise", url=pr, where="shop/cart.py:61",
+             title="Cart total is stale after a code is removed")  # fmt: skip
+        call(room, "claude-1", "review", action="ask", url=pr, title="Keep the old endpoint?",
+             options=["Keep it", "Remove it"], recommend=1)  # fmt: skip
+
     def agent_say(self, room: str, name: str, text: str, reply_to: int | None = None) -> int:
         """Post from an agent joined by ``add_agents``; returns the posted message id."""
         loop = self._loop

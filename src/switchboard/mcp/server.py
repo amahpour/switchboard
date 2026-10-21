@@ -504,10 +504,16 @@ def build_server(st: ToolBackend) -> FastMCP:
     if isinstance(st, McpState):  # over HTTPS the broker knows the caller from its token (§49.2)
         mcp.add_middleware(HelloMiddleware(st))
 
-    @mcp.tool(annotations=RW_IDEM)
+    # Descriptions of join, say, pass and review are one line on the wire: a newline costs two
+    # characters of the tool list's budget (§6.1).
+    @mcp.tool(
+        annotations=RW_IDEM,
+        description=(
+            "Join a room, only when your user asks. Returns its rules and recent messages. "
+            "resume: your earlier join's yk:j code, to keep that name after a restart."
+        ),
+    )
     async def join(room: str, screen_name: str, ctx: Context, resume: str = "") -> str:
-        """Join a room, only when your user asks. Returns its rules and recent messages.
-        resume: your earlier join's yk:j code, to keep that name after a restart."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         if st.harness == "codex" and not tid:
@@ -583,10 +589,14 @@ def build_server(st: ToolBackend) -> FastMCP:
         st.forget(res, (tid, name))
         return dumps(res)
 
-    @mcp.tool(annotations=RW)
+    @mcp.tool(
+        annotations=RW,
+        description=(
+            "Post a message; returns earlier unread messages. since=<last id seen>: refused, with "
+            "newer chat, if any. Markdown renders; no raw HTML or images."
+        ),
+    )
     async def say(room: str, text: str, ctx: Context, reply_to: int = 0, since: int = -1) -> str:
-        """Post a message; returns earlier unread messages. since=<last id seen>: refused, with
-        the newer chat, if any. Markdown renders; no raw HTML or images."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = await st.find_cred(room, tid)
@@ -602,15 +612,15 @@ def build_server(st: ToolBackend) -> FastMCP:
         st.forget(res, (tid, name))
         return dumps(res)
 
-    # One line on the wire: a newline costs two characters of the tool list's budget (§6.1).
     @mcp.tool(
         annotations=RW,
         description=(
-            "PR review board; detail: Markdown, Mermaid ok. action: open(url, head), show, "
-            "raise(title, detail, where=path:40-58), ask(title, options, recommend), "
-            "concur(item, recommend), concede(item, owner), contest/insist/drop(item, reason), "
-            "defer(item, reason=ticket), fix(item, commit, proof=test or link), "
-            "confirm(item), report(state, threads, ci) per gh/glab; close(reason if open)."
+            "PR boards by url (default: your last); detail: Markdown, Mermaid ok. "
+            "action: open(url, head), list, show, raise(title, where=path:40-58), "
+            "ask(title, options, recommend), concur(item, recommend), concede(item, owner), "
+            "contest/insist/drop(item, reason), defer(item, reason=ticket), "
+            "fix(item, commit, proof), confirm(item), report(state, threads, ci); "
+            "close(reason if open), reset(url, reason)."
         ),
     )
     async def review(
@@ -702,10 +712,15 @@ def build_server(st: ToolBackend) -> FastMCP:
         st.forget(res, (tid, name))
         return dumps(res)
 
-    @mcp.tool(name="pass", annotations=RW)
+    @mcp.tool(
+        name="pass",
+        annotations=RW,
+        description=(
+            'Choose not to reply, after reading. Refused while a "not shown here" message is '
+            "unread: read() first. Logged, not posted."
+        ),
+    )
     async def pass_(ctx: Context, room: str = "", note: str = "") -> str:
-        """Choose not to reply, after reading. Refused while a "not shown here" message is
-        unread: call read() first. Logged, not posted."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         if room:

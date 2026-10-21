@@ -9,8 +9,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx
-from conftest import InProcBroker
-from test_agents_http import make_token, sse_result
+import pytest
+from conftest import FakeClock, InProcBroker
+from test_agents_http import make_token, members, sse_result
+from test_agents_http_wake import participant, until
 
 from switchboard.envelope import TOKEN_RE
 
@@ -19,6 +21,7 @@ ROWS = [json.loads(x) for x in (FIX / "https_mcp.jsonl").read_text().splitlines(
 META = next(x["_meta"] for x in ROWS if x["kind"] == "tools/call")
 PRE = json.loads((FIX / "https_PreToolUse_2.json").read_text())
 POST = json.loads((FIX / "https_PostToolUse_4.json").read_text())
+EXITS = json.loads((FIX / "https_exit_signals.json").read_text())
 SCRIPT = Path(__file__).resolve().parents[2] / "plugins" / "devin" / "bin" / "hook"
 SERVER = "mcp__switchboard_https__"
 
@@ -123,3 +126,63 @@ def test_devin_wait_answer_is_confirmed_by_its_hook_even_when_long(broker: InPro
     dv.post(sid, "call-wait", "wait", output)
     assert broker.on_loop(st.store.get_batch, batch).state == "confirmed"
     dv.c.close()
+
+
+def open_waits(broker: InProcBroker, name: str) -> int:
+    """How many wait() calls of this member the broker holds open."""
+    pid = participant(broker, name).id
+    return len([s for s in broker.on_loop(broker.state.engine.sinks.for_participant, pid) if s.open])
+
+
+def test_a_killed_devin_goes_offline_and_is_back_with_its_next_hook(tmp_home: Path) -> None:
+    """A Devin killed in its tmux session (SIGHUP) or by SIGTERM runs no SessionEnd hook (Devin CLI
+    3000.11.92, live, #448) and stayed busy in Members for good. Its open wait() loses its connection
+    and nothing from the session follows: after a wait round (100 s) and a margin (30 s) of the clock
+    it is offline, and its membership stays. A second Devin on the same token that keeps re-arming
+    its wait through the same time is never marked offline, and the first is busy again with the next
+    hook it sends (a resumed Devin). Fails if a dropped wait leaves a ghost busy, a live Devin is taken
+    offline, or the room loses the killed one."""
+    # what the recording says a signal does and a normal quit doesn't: no SessionEnd
+    by_signal = [c for c in EXITS["cases"] if not c["session_end_hook_ran"]]
+    assert [c["how"].split(":")[0].split(" of ")[0] for c in by_signal] == ["tmux kill-session", "kill -TERM"]
+    assert [c["how"] for c in EXITS["cases"] if c["session_end_hook_ran"]] == [
+        "/exit typed at an idle prompt: a normal quit"
+    ]
+    clock = FakeClock()
+    broker = InProcBroker(tmp_home, clock=clock).start()
+    try:
+        broker.call("room.create", {"name": "#build"})
+        token = make_token(broker)
+        gone, live = Devin(broker, token), Devin(broker, token)
+        for dv, sid, name in ((gone, "session-gone", "gone"), (live, "session-live", "live")):
+            assert dv.call("join", dv.pre(sid, f"join-{name}", {"room": "#build", "screen_name": name}))["ok"]
+            dv.run_hook("start", {"session_id": sid, "hook_event_name": "SessionStart"})
+        # the killed one: a wait that its client drops, as the kernel does for a process that dies
+        doomed = httpx.Client(base_url=broker.base, timeout=httpx.Timeout(10.0, read=1.0))
+        dropped = Devin(broker, token)
+        dropped.c = doomed
+        args = gone.pre("session-gone", "call-wait-1", {"room": "#build", "timeout_s": 100}, "wait")
+        with pytest.raises(httpx.ReadTimeout):
+            dropped.call("wait", args)  # the client gives up and closes the connection
+        until(lambda: open_waits(broker, "gone") == 0)  # the broker saw it go
+        doomed.close()
+        # the live one re-arms: each round the server answers with a timeout, and it calls again
+        for i in range(3):
+            args = live.pre("session-live", f"call-live-{i}", {"room": "#build", "timeout_s": 100}, "wait")
+            with ThreadPoolExecutor(1) as pool:
+                got = pool.submit(live.call, "wait", args)
+                until(lambda: open_waits(broker, "live") == 1)
+                clock.advance(101)
+                answer = got.result(60)
+            assert answer["ok"] and answer["status"] == "timeout", answer
+            assert participant(broker, "live").status != "offline"
+        until(lambda: participant(broker, "gone").status == "offline", timeout=15)
+        assert participant(broker, "live").status != "offline"
+        assert set(members(broker, "#build")) == {"gone", "live"}  # the room keeps the killed one
+        # a resumed Devin: its first hook says it is alive
+        gone.pre("session-gone", "call-wait-2", {"room": "#build", "timeout_s": 100}, "wait")
+        until(lambda: participant(broker, "gone").status == "busy")
+    finally:
+        gone.c.close()
+        live.c.close()
+        broker.stop()

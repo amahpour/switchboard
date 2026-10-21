@@ -102,6 +102,7 @@ HOOK_FIELDS = (
     "stop_hook_active",
     "tool_response",
     "wait_s",
+    "agent_id",
 )
 # a tool of switchboard's own server, by the name a harness gives it: Codex and a hand-made Claude
 # Code server say ``mcp__switchboard__<tool>``, Claude Code's plugin
@@ -206,6 +207,17 @@ def _flag(value: Any) -> bool | None:
     if isinstance(value, bool):
         return value
     return {"true": True, "false": False}.get(value) if isinstance(value, str) else None
+
+
+def from_subagent(fields: dict[str, Any]) -> bool:
+    """True for a hook that Claude Code ran inside a subagent (#446): its ``agent_id`` is set (the
+    plugin fills it from the hook's input, where a subagent's tool calls carry one and the session's
+    own calls carry none, so it is empty). Any value but nothing counts, whatever its length or type:
+    a value that isn't recognized is a subagent's, never the session's own (fails closed). Only
+    ``agent_id`` says so: ``agent_type`` is also set on the main thread of a session started with
+    ``claude --agent``."""
+    value = fields.get("agent_id")
+    return value.strip() != "" if isinstance(value, str) else value not in (None, False)
 
 
 def hook_params(event: str, fields: dict[str, Any], now: float) -> dict[str, Any]:
@@ -451,6 +463,11 @@ class HttpTools:
             use = _id(fields.get("tool_use_id"))
             if c.harness == "claude" and sid and use:
                 self.uses.report(c.token.id, use, sid)
+            return "{}"
+        if from_subagent(fields):
+            # A subagent's tool calls run the session's hooks with the session's id (#446). It is
+            # not in the room, so nothing is delivered to it, and nothing it did settles anything for
+            # the session: no confirmation, no status. The messages wait for the session's own hook.
             return "{}"
         if second_report(event, fields):
             return "{}"
@@ -1000,6 +1017,7 @@ def install(app: "FastAPI", state: "BrokerState") -> Any:
         stop_hook_active: Any = "",
         tool_response: Any = None,  # None: the hook sent none (see ``second_report``)
         wait_s: Any = "",
+        agent_id: Any = "",  # Claude Code: set only in a subagent's hooks (#446)
     ) -> str:
         """For switchboard's hooks, not for the model."""
         await tools.prime(ctx)

@@ -2803,8 +2803,9 @@
         if (state.boardOpen) {
           renderBoard();  // who can use the board may have changed (#249)
           // A departing raiser can put an unconfirmed fix in Needs you (#251).
-          if (r.board && r.board.items.some(function (i) { return i.state === 'fixed' && !i.confirmed_by; }))
-            loadBoard(r);
+          if ((r.boards || []).some(function (x) {
+            return x.items.some(function (i) { return i.state === 'fixed' && !i.confirmed_by; });
+          })) loadBoard(r);
         }
       }
       if (ins && ins.room === f.room) {
@@ -2836,7 +2837,7 @@
       if (!r) return;
       // An older HTTP board read may still be in flight. Keep this live frame authoritative.
       r.boardGeneration = (r.boardGeneration || 0) + 1;
-      r.board = f.board || null;
+      setBoards(r, f.boards);
       if (f.room === state.active) renderBoard();
     } else if (f.t === 'remotes') {
       setRemotes(f.remotes || [], f.config_error || null);
@@ -5408,6 +5409,7 @@
         // a person's /review opened the room's board (#248): show it, in this page only
         if (res.ok && verb.toLowerCase() === '/review' && r.name === state.active) {
           state.boardOpen = true;
+          r.boardUrl = text.split(/\s+/)[1];  // the board it opened, or brought back, is the one on show
           loadBoard(r);
         }
       } else {
@@ -5492,12 +5494,84 @@
     try {
       const res = await api('GET', '/api/rooms/' + encodeURIComponent(r.slug) + '/review');
       if (r.boardGeneration !== generation) return;
-      r.board = res.board || null;
+      setBoards(r, res.boards);
     } catch (e) {
       if (r.boardGeneration !== generation) return;
-      r.board = r.board || null;
+      setBoards(r, r.boards);
     }
     if (r.name === state.active) renderBoard();
+  }
+
+  // A room's open review boards (§37.14), as the broker sends them: all of them, every time. The
+  // page shows one, r.board: the one chosen (r.boardUrl, from a tab or /review), else the first. A
+  // board that has closed falls back to the first, and a card chosen on another board is let go.
+  function setBoards(r, boards) {
+    const before = r.board ? r.board.url : null;
+    r.boards = Array.isArray(boards) ? boards.filter(function (x) {
+      return x && typeof x === 'object' && typeof x.url === 'string' && Array.isArray(x.items);
+    }) : [];
+    r.board = r.boards.find(function (x) { return x.url === r.boardUrl; }) || r.boards[0] || null;
+    r.boardUrl = r.board ? r.board.url : null;
+    if (r.name === state.active && r.boardUrl !== before) state.boardSel = null;
+  }
+
+  function selectBoard(r, url) {
+    r.boardUrl = url;
+    setBoards(r, r.boards);
+    boardDetailCache = null;
+    renderBoard();
+  }
+
+  // The tab's name for a board: the repository's last segment and the number for a pull or merge
+  // request, else the URL without its scheme, cut. The whole URL is its title.
+  function boardTabLabel(x) {
+    const f = x.forge;
+    if (f && FORGE_NAME[f.kind]) return String(f.repo).split('/').pop() + ' ' + (f.kind === 'gitlab' ? '!' : '#') + f.number;
+    const bare = String(x.url).replace(/^https?:\/\//, '');
+    return bare.length > 28 ? bare.slice(0, 27) + '…' : bare;
+  }
+
+  // The room's open boards as tabs, when there are two or more: the page shows one at a time, with
+  // its own lanes and Hand off. A tab names the pull request and counts what needs a person on it.
+  // Arrow keys, Home and End move between tabs, as in any tab list; the selected tab is the only
+  // one in the Tab order.
+  let boardTabEls = {};       // board id -> its tab in the header now on the page
+  let boardTabFocus = null;   // the tab that should hold keyboard focus after the next draw
+  function boardTabs(r) {
+    boardTabEls = {};
+    const bar = el('div', 'board-tabs');
+    bar.setAttribute('role', 'tablist');
+    bar.setAttribute('aria-label', 'Review boards in this room');
+    r.boards.forEach(function (x, n) {
+      const on = x === r.board;
+      const need = (x.counts && x.counts.needs_person) || 0;
+      const tab = btn('board-tab' + (on ? ' selected' : ''));
+      tab.dataset.board = String(x.id);
+      tab.setAttribute('role', 'tab');
+      tab.setAttribute('aria-selected', String(on));
+      tab.setAttribute('aria-label', boardTabLabel(x) + (need ? ', ' + need + ' need' + (need === 1 ? 's' : '') + ' you' : ''));
+      tab.tabIndex = on ? 0 : -1;
+      tab.title = x.url;
+      if (x.forge && FORGE_NAME[x.forge.kind]) tab.append(mark(x.forge.kind));
+      tab.append(el('span', 'board-tab-label', boardTabLabel(x)));
+      if (need) tab.append(el('span', 'board-tab-need', String(need)));
+      tab.addEventListener('click', function () {
+        boardTabFocus = String(x.id);
+        selectBoard(r, x.url);
+      });
+      tab.addEventListener('keydown', function (ev) {
+        const to = ev.key === 'ArrowRight' ? (n + 1) % r.boards.length
+          : ev.key === 'ArrowLeft' ? (n + r.boards.length - 1) % r.boards.length
+            : ev.key === 'Home' ? 0 : ev.key === 'End' ? r.boards.length - 1 : -1;
+        if (to < 0) return;
+        ev.preventDefault();
+        boardTabFocus = String(r.boards[to].id);
+        selectBoard(r, r.boards[to].url);
+      });
+      boardTabEls[x.id] = tab;
+      bar.append(tab);
+    });
+    return bar;
   }
 
   function boardWhere(i) {
@@ -5549,11 +5623,18 @@
     const handoffFocus = document.activeElement && (document.activeElement.id === 'board-handoff'
       || document.activeElement.id === 'board-handoff-status') ? document.activeElement.id : null;
     const dividerFocused = document.activeElement && document.activeElement.id === 'board-divider';
+    // Close board is rebuilt with the rest of the header (#430): a keyboard user who tabbed to it
+    // would otherwise be dropped to the top of the page by the next members or review frame
+    const closeFocused = !!document.activeElement && document.activeElement.id === 'board-close';
     // a card with keyboard focus keeps it through the rebuild: a members frame rebuilds the board on
     // every busy/idle change (#407), and a keyboard or screen-reader user would lose their place
     const focusedCard = document.activeElement && document.activeElement.closest
       ? document.activeElement.closest('#board .board-card') : null;
     const focusedItem = focusedCard ? focusedCard.dataset.item : null;
+    // so does a board tab (§37.14)
+    const focusedTab = document.activeElement && document.activeElement.closest
+      ? document.activeElement.closest('#board .board-tab') : null;
+    const focusedBoard = focusedTab ? focusedTab.dataset.board : null;
     const r = activeRoom();
     const b = r ? r.board : null;
     const toggle = $('board-toggle');
@@ -5618,10 +5699,15 @@
     close.id = 'board-close';
     close.addEventListener('click', async function () {
       const ok = await confirmDialog('Close this review board?',
-        'The board for ' + b.url + ' is kept in the history, and agents can open a new one.', 'Close board');
-      if (ok) boardMove({ action: 'close' });
+        'The board for ' + b.url + ' is kept with its findings and history. An agent, or /review, opens it again.',
+        'Close board');
+      if (ok) boardMove({ action: 'close', url: b.url });
     });
+    // two or more open boards: tabs, on the header's first row (§37.14)
+    const tabbed = (r.boards || []).length > 1;
+    if (tabbed) head.append(boardTabs(r));
     head.append(title, status, boardHandoff(r, b), close);
+    box.classList.toggle('has-tabs', tabbed);
 
     // members whose switchboard can't move cards (#249): the board would stand still for them,
     // while they argue in chat instead. Each line is switchboard's own text (member_dict).
@@ -5706,12 +5792,20 @@
         : $('board-handoff-status');
       if (again) again.focus();
     }
-    // every board event redraws the board: the divider keeps the focus it had
+    // every board event redraws the board: the divider and Close board keep the focus they had
     if (dividerFocused && boardParts) boardParts.divider.focus();
+    if (closeFocused) {
+      const again = $('board-close');
+      if (again) again.focus();
+    }
     if (focusedItem) {
       const again = box.querySelector('.board-card[data-item="' + focusedItem + '"]');
       if (again) again.focus();
     }
+    // a tab keeps keyboard focus through a redraw (§37.14); a switch by keyboard moves it to the new one
+    const wantTab = boardTabFocus || focusedBoard;
+    boardTabFocus = null;
+    if (wantTab && boardTabEls[wantTab]) boardTabEls[wantTab].focus();
     if (detailFocus && detailFocus.isConnected && document.activeElement !== detailFocus) {
       detailFocus.focus({ preventScroll: true });
     }
@@ -5915,7 +6009,7 @@
         const agent = await openDialog({ kind: 'handoff', title: 'Hand off this review',
           body: 'One agent will post this review to ' + b.url + '. The line conversations stay open.',
           action: 'Hand off', agents: mine, initial: defaultAgent, plan: b.plan });
-        if (agent && await boardMove({ action: 'handoff', agent: agent })) {
+        if (agent && await boardMove({ action: 'handoff', agent: agent, url: b.url })) {
           const status = $('board-handoff-status');
           if (status) status.focus();
         }
@@ -6199,12 +6293,15 @@
     return d;
   }
 
+  // A person's move on the board on show: its url says which, since the room may have several.
   async function boardMove(body) {
     const r = activeRoom();
     if (!r) return;
+    if (!body.url && r.board) body = Object.assign({ url: r.board.url }, body);
     try {
       const res = await api('POST', '/api/rooms/' + encodeURIComponent(r.slug) + '/review', body);
-      r.board = res.board || null;
+      r.boardGeneration = (r.boardGeneration || 0) + 1;
+      setBoards(r, res.boards);
       if (!r.board) state.boardOpen = false;
       renderBoard();
       return true;

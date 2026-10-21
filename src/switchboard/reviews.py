@@ -1,8 +1,8 @@
 """A review board in a room: findings and questions about one pull request (DESIGN.md §37).
 
 Pure policy, no I/O: what an item is, the moves an agent or a person may make on it, when a
-board is settled, what the agents' picks among an item's options add up to (§37.12), and how a
-board reads as text. The store keeps the rows (``store.py``), the
+board is settled, what the agents' picks among an item's options add up to (§37.12), who may close
+a board (§37.14), and how a board reads as text. The store keeps the rows (``store.py``), the
 broker applies the moves (``broker/reviews.py``). switchboard never fetches the pull request,
 judges a finding, holds a token or posts anything: the agents and the people do (§37.1).
 """
@@ -13,6 +13,7 @@ import hashlib
 import re
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote, urlsplit
 
@@ -28,6 +29,8 @@ MAX_PROOF = 500
 MAX_OPTION = 200
 MAX_OPTIONS = 4
 MAX_ITEMS = 200  # per review: a board, not a log
+MAX_OPEN_BOARDS = 8  # open boards in one room (§37.14): a room holds several, not any number
+MAX_LISTED = 50  # boards `list` names, open ones first
 FIX_CONFIRM_TIMEOUT_S = 24 * 60 * 60
 
 HEAD_RE = re.compile(r"^[0-9a-f]{7,64}$")
@@ -431,6 +434,63 @@ def commit_url(f: dict[str, Any] | None, sha: str) -> str | None:
     return f"{f['base']}/-/commit/{sha}"
 
 
+def ref(f: dict[str, Any] | None) -> str:
+    """A pull request's or merge request's short name, ``#7`` or ``!7``, built from the checked
+    number alone; empty when the URL names neither. Safe in a person's message (#177)."""
+    return "" if f is None else ("#" if f["kind"] == "github" else "!") + str(f["number"])
+
+
+def holder(review: dict[str, Any]) -> str:
+    """Who holds a board: the agent that opened it, or opened it again last (§37.14). Only the
+    holder or a person closes or resets it."""
+    return str(review.get("reopened_by") or review.get("opened_by") or "")
+
+
+def when(ts: float | None) -> str:
+    """A moment as an agent reads it: UTC, to the minute, the same wherever the broker runs."""
+    if ts is None:
+        return "an unknown time"
+    return datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def list_line(board: dict[str, Any], default: bool = False) -> str:
+    """One board in ``review(action="list")`` (§37.14): its URL, state, what is open and settled,
+    its head, and who opened it, who opened it again and who closed it, each with when."""
+    n = board["counts"]
+    settled_n = n["fixed"] + n["dropped"] + n["answered"]
+    state = "closed" if board.get("closed_at") is not None else "open"
+    if board.get("posted_by"):
+        state += f", handed off to {board['posted_by']}"
+    head_s = f" at {board['head'][:12]}" if board.get("head") else ""
+    bits = [
+        f"{n['open']} open, {settled_n} settled",
+        f"opened by {board['opened_by']} on {when(board['opened_at'])}",
+    ]
+    if board.get("reopened_at") is not None:
+        bits.append(f"opened again by {board['reopened_by']} on {when(board['reopened_at'])}")
+    if board.get("closed_at") is not None:
+        who = f" by {board['closed_by']}" if board.get("closed_by") else ""
+        bits.append(f"closed{who} on {when(board['closed_at'])}")
+    mark = " <- your calls without url go here" if default else ""
+    return f"{board['url']}{head_s} [{state}]: {', '.join(bits)}{mark}"
+
+
+def list_text(boards: Sequence[dict[str, Any]], default_url: str | None = None) -> str:
+    """The room's boards, open first, as an agent reads them. ``boards`` come from the broker with
+    ``counts`` and the row's own columns. At most ``MAX_LISTED``; the rest are counted."""
+    if not boards:
+        return 'This room has no review boards. review(action="open", url=...) starts one.'
+    shown = boards[:MAX_LISTED]
+    out = [f"{len(boards)} review board{'s' if len(boards) != 1 else ''} in this room, open ones first:"]
+    out.extend(list_line(b, b["url"] == default_url) for b in shown)
+    if len(boards) > len(shown):
+        out.append(f"... and {len(boards) - len(shown)} older closed boards")
+    out.append(
+        'review(action="show", url=...) reads any, closed ones too; open(url) brings a closed one back.'
+    )
+    return "\n".join(out)
+
+
 # what each move a board records reads as on a card's history (#250)
 HISTORY_VERBS = {
     "conceded": "conceded it",
@@ -533,7 +593,9 @@ def agent_move(item: Item, move: str, actor: str, owner_here: bool = True) -> st
     return to
 
 
-def handoff(item: Item, actor: str, agents: Sequence[str]) -> tuple[tuple[str, ...], str] | None:
+def handoff(
+    item: Item, actor: str, agents: Sequence[str], board_url: str = ""
+) -> tuple[tuple[str, ...], str] | None:
     """After an agent's move on ``item`` (its state now), who has to act next and the line
     that tells them, or None when it's nobody's move or a person's (§37.4). A raised finding
     is the other agents' to concede or contest; a finding conceded to another agent is that
@@ -541,17 +603,22 @@ def handoff(item: Item, actor: str, agents: Sequence[str]) -> tuple[tuple[str, .
     agree with or answer with another pick (#423: "recommended" means they all agree), before it
     is a person's. A contested finding goes back to its raiser (#424), to drop or insist on; once
     insisted on it waits for a person, who sees it on the page, and a move that leaves the next
-    step with the mover wakes nobody. ``agents``: the room's active agents."""
-    show = 'review(action="show") shows the board.'
+    step with the mover wakes nobody. ``agents``: the room's active agents. ``board_url``: given
+    when the room has several open boards (§37.14), so the line names the board and every call it
+    suggests carries its ``url``; the line is the mover's own message, so the board's URL, which
+    the mover wrote, may be in it."""
+    on = f"Review board {board_url}:" if board_url else "Review board:"
+    pass_url = f', url="{board_url}"' if board_url else ""
+    show = f'review(action="show"{pass_url}) shows the board.'
     if item.kind == "question":
         who = tuple(a for a in agents if a != actor) if item.state == "open" and item.options else ()
         if not who:
             return None
-        concur_s = f'review(action="concur", item="{item.label}", recommend=<index>)'
+        concur_s = f'review(action="concur", item="{item.label}", recommend=<index>{pass_url})'
         stop = "" if item.title.endswith((".", "?", "!")) else "."  # a question usually ends in one
         mention = " ".join("@" + a for a in who)
         return who, (
-            f"Review board: {item.label} asked: {item.title}{stop} {mention}: agree with {actor}'s pick"
+            f"{on} {item.label} asked: {item.title}{stop} {mention}: agree with {actor}'s pick"
             f" or pick another option, {concur_s}. {show}"
         )
     if item.state == "raised":
@@ -566,7 +633,7 @@ def handoff(item: Item, actor: str, agents: Sequence[str]) -> tuple[tuple[str, .
         verb = f"contested: {item.title}"
         then = (
             f'drop it if the contest convinces you, or insist with your reason (review(action="insist", '
-            f'item="{item.label}", reason=...)): only an insisted finding goes to a person'
+            f'item="{item.label}", reason=...{pass_url})): only an insisted finding goes to a person'
         )
     elif item.state == "conceded":
         who = (item.owner,) if item.owner and item.owner != actor and item.owner in agents else ()
@@ -578,7 +645,7 @@ def handoff(item: Item, actor: str, agents: Sequence[str]) -> tuple[tuple[str, .
         return None
     if not who:
         return None
-    return who, f"Review board: {item.label} {verb}. {' '.join('@' + a for a in who)}: {then}. {show}"
+    return who, f"{on} {item.label} {verb}. {' '.join('@' + a for a in who)}: {then}. {show}"
 
 
 def person_move(item: Item, move: str) -> str:
@@ -712,9 +779,13 @@ def render(
     agents, who must all pick an option for it to read "recommended by" (``consensus``), and whose
     raiser a contested finding waits on; ``offline``: those among them who are not there (#424)."""
     head_s = f" at {review['head'][:12]}" if review.get("head") else ""
+    closed = review.get("closed_at") is not None
     state = "settled" if settled(items) else "open"
     if review.get("posted_by"):
-        state = f"handed off to {review['posted_by']}: post one review now, once"
+        state = f"handed off to {review['posted_by']}" + ("" if closed else ": post one review now, once")
+    if closed:  # kept, not gone (§37.14): any member may read it, and open(url) brings it back
+        by = f" by {review['closed_by']}" if review.get("closed_by") else ""
+        state += f" (closed{by} on {when(review['closed_at'])}; open(url) brings it back)"
     out = [f"Review of {review['url']}{head_s}: {state}"]
     line = report_line(review, now if now is not None else float(review.get("reported_at") or 0))
     if line:
@@ -830,12 +901,15 @@ def handoff_plan(
     return {"summary": "\n".join(lines), "comments": comments, "labels": [i.label for i in done]}
 
 
-def render_handoff(plan: dict[str, Any], agent: str, limit: int) -> str:
-    """One human message wakes only the chosen agent, with checked labels and no agent text."""
+def render_handoff(plan: dict[str, Any], agent: str, limit: int, ref: str = "") -> str:
+    """One human message wakes only the chosen agent, with checked labels and no agent text.
+    ``ref``: the board's ``#7`` or ``!7``, given when the room has several open boards (§37.14);
+    it is built from a checked number, never from the board's URL (#177)."""
     labels = ", ".join(plan["labels"])
     decisions = ", ".join(c["item"] for c in plan["comments"]) or "none"
+    which = f" ({ref})" if ref else ""
     message = (
-        f"Hand off: @{agent}, post one review to this board's PR or MR with your own gh or glab, "
+        f"Hand off: @{agent}, post one review to this board's PR or MR{which} with your own gh or glab, "
         'once. review(action="show") has the exact summary and line comments; leave those '
         f"conversations open. Items: {labels}. Person-decided lines: {decisions}."
     )
