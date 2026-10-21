@@ -175,6 +175,11 @@ class HttpsDevinAdapter(DevinAdapter):
     def tier(self, p: Participant | None) -> tuple[str, str | None]:
         return DEVIN_TIER, "over HTTPS: listening through wait()"
 
+    def wait_drop_means_gone(self) -> bool:
+        """Devin loops wait() and its hooks bracket every call, so a dropped wait followed by silence
+        is a Devin that was killed: its SessionEnd hook never reached the server (#448)."""
+        return True
+
     def session_key(self, ident: Any, thread_id: str | None, *, test_session: str | None = None) -> str:
         if not thread_id:
             raise ValueError("this Devin call has no verified session ID")

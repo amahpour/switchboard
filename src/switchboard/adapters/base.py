@@ -303,6 +303,12 @@ class Adapter:
         continue or re-delivery can reach the subagent."""
         return False
 
+    def wait_drop_means_gone(self) -> bool:
+        """True if an open wait() that loses its connection, followed by no call or hook from the
+        session for a round and a margin, means the agent is gone (Devin over HTTPS: a killed one
+        sends no SessionEnd, #448). A live agent re-arms its wait at once."""
+        return False
+
     def ends_session(self, ev: HookEvent) -> bool:
         """True if this SessionEnd takes the session offline (§7.4). Claude's ``/clear``
         keeps the process and its binding, so its ``reason=clear`` doesn't."""

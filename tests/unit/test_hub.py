@@ -164,9 +164,9 @@ def test_the_review_board_is_published_again_only_when_who_is_in_the_room_change
     members: list[dict] = [{"name": "claude-1", "status": "idle"}]
     boards: list[str] = []
 
-    def board(room: str) -> dict | None:
+    def board(room: str) -> list[dict] | None:
         boards.append(room)
-        return {"url": "u", "n": len(boards)}
+        return [{"url": "u", "n": len(boards)}, {"url": "v", "n": len(boards)}]  # a room holds several
 
     h.set_members_source(lambda room: list(members))
     h.set_board_source(board)
@@ -181,7 +181,8 @@ def test_the_review_board_is_published_again_only_when_who_is_in_the_room_change
     members.append({"name": "codex-1", "status": "idle"})
     h.members_changed("#a")
     frames = drained(s)
-    assert [f["t"] for f in frames] == ["members", "review"] and frames[1]["board"]["n"] == 2
+    assert [f["t"] for f in frames] == ["members", "review"]
+    assert [b["n"] for b in frames[1]["boards"]] == [2, 2]
     members.pop(0)
     h.members_changed("#a")
     assert [f["t"] for f in drained(s)] == ["members", "review"]
@@ -191,7 +192,7 @@ def test_the_review_board_is_published_again_only_when_who_is_in_the_room_change
 def test_a_room_with_no_board_gets_no_review_frame_and_a_dropped_room_forgets_its_members() -> None:
     h = Hub()
     h.set_members_source(lambda room: [{"name": "claude-1"}])
-    h.set_board_source(lambda room: None)  # no board is open in the room
+    h.set_board_source(lambda room: [])  # no board is open in the room
     s = WsSubscriber()
     s.rooms = {"#a"}
     h.add(s)
@@ -209,7 +210,7 @@ def test_the_board_is_published_again_when_an_agent_goes_offline_or_comes_back()
     h = Hub()
     members: list[dict] = [{"name": "claude-1", "status": "idle"}, {"name": "codex-1", "status": "idle"}]
     h.set_members_source(lambda room: [dict(m) for m in members])
-    h.set_board_source(lambda room: {"url": "u"})
+    h.set_board_source(lambda room: [{"url": "u"}])
     s = WsSubscriber()
     s.rooms = {"#a"}
     h.add(s)

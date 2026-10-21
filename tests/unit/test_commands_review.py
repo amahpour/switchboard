@@ -116,6 +116,16 @@ def test_the_request_asks_agents_to_settle_a_contest_between_themselves() -> Non
     assert "leave a person only what you still disagree on" in text
 
 
+def test_the_request_tells_agents_to_pass_the_link_as_url_when_other_boards_are_open() -> None:
+    """#445: a room may hold several boards, and an agent that has acted on none would be asked which.
+    The request says to give every call the pull request's link, once, so the link is not repeated
+    (it is a link in the page, and the one in the sentence above it is the person's own). Fails if
+    the request leaves agents to find out from a refusal, or repeats the URL."""
+    text = review_request(["claude-1"], PR, "")
+    assert "give every call this pull request's link as its url" in text
+    assert text.count(PR) == 1
+
+
 def test_help_lists_review() -> None:
     assert "  /review <url> [note]" in HELP_TEXT
 
