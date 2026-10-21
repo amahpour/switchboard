@@ -122,6 +122,13 @@ WAIT_HEADER = b"x-switchboard-wait"  # how long one round of the listener waits
 AGAIN_HEADER = b"x-switchboard-again"  # "1" on the listener's later rounds: only an idle session waits on
 WAIT_MAX_S = 86400.0  # the longest any one wait is held (a Codex Stop hook may ask for a day)
 LISTEN_AGAIN = frozenset({"timeout", "paused"})  # a round that ended so: the listener waits again (408)
+# the states of a session whose turn is running or that has ended: a listener that reconnects (a later
+# round) is refused only then (#436). Any other state, idle or not yet reported, is still listening.
+MOVED_ON = {
+    "busy": "a turn is running",
+    "waiting-approval": "a turn is waiting on an approval",
+    "offline": "the session ended",
+}
 TOOL_USE_KEY = "claudecode/toolUseId"  # the call's id in Claude Code's _meta
 USES_MAX = 4096  # tool calls whose session a hook reported, remembered at once
 USES_TTL_S = 120.0  # how long such a report is kept
@@ -839,8 +846,10 @@ class Listener:
     that wakes it (200, its text); 408 when a round ran out with nothing, so the listener waits
     again; or another refusal (409 and the rest), which ends the listener and wakes nothing. A later
     listener of the session, or any other hook of it, ends this one, and so does ``curl`` going away.
-    A later round (``X-Switchboard-Again: 1``) waits only while the session is still idle, so one
-    that slips in after the session got busy never reports it idle."""
+    A later round (``X-Switchboard-Again: 1``) is the same listener coming back after a proxy cut its
+    wait, so it is refused (409) only when the session has moved on (``MOVED_ON``: a turn started, or
+    the session ended) and waits in any other state. A refusal ends the listener for good, so a state
+    that merely isn't "idle" must not cause one (#436). Each refusal is logged at warning level."""
 
     def __init__(self, auth: AgentAuth, tools: HttpTools) -> None:
         self.auth = auth
@@ -899,10 +908,21 @@ class Listener:
                 p = agents.http_session(conn, sid)
             except ServiceError:
                 p = None
-            if p is None and await self._ended(send, agents, conn, sid):
+            if p is None:
+                if await self._ended(send, agents, conn, sid):
+                    log.warning("listener refused for session %s: it was ended by someone else (410)", sid)
+                    return
+                log.warning("listener refused for session %s: it is in no room (409)", sid)
+                await _reply(send, 409, {"error": "not_idle", "message": "in no room: its next Stop listens"})
                 return
-            if p is None or p.status != "idle":
-                await _reply(send, 409, {"error": "not_idle", "message": "not idle: its next Stop listens"})
+            if p.status in MOVED_ON:
+                why = MOVED_ON[p.status]
+                log.warning("listener refused for session %s: %s (status %s) (409)", sid, why, p.status)
+                await _reply(
+                    send,
+                    409,
+                    {"error": "not_idle", "status": p.status, "message": f"{why}: its next Stop listens"},
+                )
                 return
 
         async def gone() -> None:

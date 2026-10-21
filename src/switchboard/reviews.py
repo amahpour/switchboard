@@ -15,7 +15,7 @@ from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 # Lengths, cut at the boundary: everything here comes from an agent or a person.
 MAX_URL = 500
@@ -376,13 +376,30 @@ def forge(value: str) -> dict[str, Any] | None:
     return {"kind": kind, "repo": repo, "number": int(number), "base": f"{origin}/{repo}"}
 
 
-def lines_url(f: dict[str, Any] | None, file: str, lines: str) -> str | None:
-    """A finding's lines in the PR's or MR's own diff, where the forge draws them in color (#250).
-    GitHub names a file in a PR's diff by the SHA-256 of its path and the new side's lines by
-    ``R<n>``; GitLab names a file by the SHA-1 of its path, and its line anchors need the old
-    side's number too, which a board doesn't have, so a GitLab link opens the file. The path is
-    only hashed, and every other part comes from ``forge``, so nothing an agent wrote is in it."""
+def _url_path(file: str) -> str | None:
+    """``file`` as a path to put in a URL, each segment percent-encoded, or None when it isn't a plain
+    relative path: empty, a leading or doubled slash, a ``.`` or ``..`` segment (a browser would
+    resolve it out of the repository), a backslash or a control character. It is the one agent-written
+    string that reaches a link, so it is refused rather than repaired."""
+    if not file or any(ord(c) < 32 or ord(c) == 127 or c == "\\" for c in file):
+        return None
+    parts = file.split("/")
+    if any(p in ("", ".", "..") for p in parts):
+        return None
+    return "/".join(quote(p, safe="") for p in parts)
+
+
+def lines_url(f: dict[str, Any] | None, file: str, lines: str, head: str = "") -> str | None:
+    """A finding's lines on the forge. On GitHub, in the PR's own diff, where it draws them in color:
+    the file is named by the SHA-256 of its path and the new side's lines by ``R<n>``. On GitLab, in
+    the file at the board's head commit (#442), highlighted: an MR diff's line anchors are line codes
+    that need the old side's position too (``<sha1 of the path>_<old>_<new>``), which a board doesn't
+    have, and the diff has no range anchor, so the diff link goes to the file (``diff_url``) instead.
+    No link without a head on GitLab. Nothing an agent wrote is in a link but the path, percent-encoded
+    by ``_url_path``, and the checked line numbers and head; every other part comes from ``forge``."""
     if f is None or not file:
+        return None
+    if lines and not LINES_RE.match(lines):
         return None
     if f["kind"] == "github":
         anchor = "diff-" + hashlib.sha256(file.encode()).hexdigest()
@@ -390,6 +407,20 @@ def lines_url(f: dict[str, Any] | None, file: str, lines: str) -> str | None:
             start, _, end = lines.partition("-")
             anchor += f"R{start}" + (f"-R{end}" if end else "")
         return f"{f['base']}/pull/{f['number']}/files#{anchor}"
+    path = _url_path(file)
+    if path is None or not HEAD_RE.match(head or ""):
+        return None
+    start, _, end = lines.partition("-")
+    anchor = f"#L{start}" + (f"-{end}" if end else "") if lines else ""
+    return f"{f['base']}/-/blob/{head}/{path}{anchor}"
+
+
+def diff_url(f: dict[str, Any] | None, file: str) -> str | None:
+    """A GitLab finding's file in the merge request's diff, for the colored view (#442): GitLab names
+    a file there by the SHA-1 of its path, so the link opens the file, not the lines. GitHub's
+    ``lines_url`` is already the diff, so there is none for it."""
+    if f is None or f["kind"] != "gitlab" or not file:
+        return None
     digest = hashlib.sha1(file.encode()).hexdigest()  # noqa: S324 - GitLab's own file anchor, not security
     return f"{f['base']}/-/merge_requests/{f['number']}/diffs#{digest}"
 

@@ -59,6 +59,8 @@ outdated-before-{light,dark,phone-light} and outdated-after-{light,dark,phone-li
 (a board's unresolved findings before and after an agent moves its head, #291),
 board-tabs-{light,dark,phone-light} (a room with two open boards: tabs on the header's first row,
 the second on show, #445),
+gitlab-lines-{light,dark,phone-light} (a GitLab finding's Lines row: its lines at the head commit and
+its file in the MR diff, #442),
 icon-theme-dark-on-light, icon-theme-light-on-dark and icon-theme-dark-on-light-phone (Codex's and
 Cursor's icons with the saved Theme against the system's scheme, #443),
 check-waiting-{light,dark,phone-light} and check-confirmed-{light,dark,phone-light} (a fix awaiting
@@ -687,6 +689,43 @@ def shoot_board_tabs(browser: Any, out: Path, world: Any) -> None:
             expect(page.locator("#board .board-detail")).to_be_visible()
             settle(page)
             shot(page, out, "board-tabs-" + slug + ".png")
+        finally:
+            ctx.close()
+
+
+def shoot_gitlab_lines(browser: Any, out: Path, world: Any) -> None:
+    """#442: a GitLab finding's Lines row, on a merge request: the lines at the board's head commit and
+    the file in the MR diff, each labelled for what it opens. The fixed finding's card, in light, dark
+    and on a phone."""
+    from playwright.sync_api import expect
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for slug, size, scheme in (
+        ("light", DESKTOP, "light"),
+        ("dark", DESKTOP, "dark"),
+        ("phone-light", PHONE, "light"),
+    ):
+        room = "#gitlab-lines-" + slug
+        world.create_room(room)
+        world.add_agents(room, ("claude-1", "codex-1"))
+        world.seed_review(room, "https://gitlab.com/example-group/shop/-/merge_requests/12")
+        ctx = browser.new_context(**base, **size, color_scheme=scheme)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="' + room + '"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            page.click("#board-toggle")
+            page.click('#board .board-card[data-item="F2"]')
+            detail = page.locator("#board .board-detail")
+            expect(detail.locator("dd a.board-link").first).to_be_visible()
+            if size is PHONE:
+                detail.scroll_into_view_if_needed()
+            settle(page)
+            shot(page, out, "gitlab-lines-" + slug + ".png")
         finally:
             ctx.close()
 
@@ -1967,6 +2006,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_board_tabs(browser, out, world)
             shoot_outdated_board(browser, out, world)
             shoot_icon_theme(browser, out, world)
+            shoot_gitlab_lines(browser, out, world)
             shoot_claims(browser, out, world)
             shoot_proof_board(browser, out, world)
             shoot_handoff_board(browser, out, world)
