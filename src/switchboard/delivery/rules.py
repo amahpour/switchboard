@@ -306,6 +306,17 @@ def hop_tripped(room: Room) -> bool:
     return (not room.paused) and room.hop_limit > 0 and room.hop_count >= room.hop_limit
 
 
+# A Devin over HTTPS whose open wait() lost its connection and then made no call for this long is gone
+# (#448): one wait round it may be in (``DEVIN_WAIT_CAP_S``, 100 s) and a margin.
+WAIT_DROP_GRACE_S = 130.0
+
+
+def wait_drop_expired(now: float, dropped_at: float) -> bool:
+    """True once a wait() that dropped its connection at ``dropped_at`` has had no call or hook after it
+    for ``WAIT_DROP_GRACE_S``: a live agent re-arms its wait at once, a killed one never does (#448)."""
+    return now - dropped_at >= WAIT_DROP_GRACE_S
+
+
 def clamp_wait(timeout_s: float | int | None, cap_s: int, default: int = 50) -> int:
     """wait() timeout clamped to [1, harness cap]."""
     try:

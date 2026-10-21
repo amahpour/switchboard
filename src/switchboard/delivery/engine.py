@@ -134,6 +134,10 @@ class Engine:
         self.tainted_gens: dict[int, dict[str, float]] = {}
         self.rearm_log: dict[int, list[float]] = {}  # participant_id -> recent re-arm times
         self.rearm_busy: dict[int, float] = {}  # participant_id -> when a re-arm set it busy
+        # Devin over HTTPS (#448): participant_id -> when its open wait()'s connection dropped; and the
+        # sessions the tick then took offline for it, which any later hook brings back
+        self.wait_drops: dict[int, float] = {}
+        self.gone_by_drop: set[int] = set()
         # While a hook event is processed, evaluations are collected here and run
         # once its status and context are settled (see claim_for_hook).
         self._deferred: set[int] | None = None
@@ -1012,6 +1016,7 @@ class Engine:
             deadline=now + float(timeout_s),
             conn_id=conn_id,
         )
+        self.wait_drops.pop(p.id, None)  # it called wait() again: it is alive (#448)
         pre = self.wait_calls.pop(p.id, None)
         if pre is not None and now - pre[1] <= WAIT_PRE_FRESH_S:
             sink.meta["tool_use_id"] = pre[0]  # the PreToolUse of this very wait() call (Devin)
@@ -1101,6 +1106,15 @@ class Engine:
         out += self.evaluate(s.membership_id)
         out.append(Snapshot(s.room_id))
         return out
+
+    def wait_dropped(self, p: Participant) -> list[Action]:
+        """A wait() was cancelled, which is what its connection dropping looks like to the broker. For
+        a harness whose agent is gone when that happens and it doesn't call again (``Adapter.
+        wait_drop_means_gone``), start the clock: the tick takes it offline unless it calls or sends
+        a hook first (#448). Its membership stays, and any later hook brings it back."""
+        if self.adapter(p).wait_drop_means_gone():
+            self.wait_drops[p.id] = self.now()
+        return []
 
     def close_conn_sinks(self, conn_id: int) -> list[Action]:
         out: list[Action] = []
@@ -1300,6 +1314,9 @@ class Engine:
         mode_changed = "approval_mode" in upd and upd["approval_mode"] != p.approval_mode
         p = self.store.update_participant(p.id, **upd)
         self.rearm_busy.pop(p.id, None)  # a hook came: the re-arm (if any) was acted on
+        self.wait_drops.pop(p.id, None)  # a hook came: whatever dropped its wait() is alive (#448)
+        revived = p.id in self.gone_by_drop and p.status == "offline"
+        self.gone_by_drop.discard(p.id)
         adapter.on_hook(p, ev)
         if "unconfirmed_followups" in upd:
             out += self.refresh_tier(p.id)
@@ -1388,6 +1405,8 @@ class Engine:
         elif E == "SessionEnd":
             if adapter.ends_session(ev):
                 new = "offline"
+        elif revived:
+            new = "busy"  # any hook of a session taken offline for a dropped wait() says it is alive (#448)
         p = self.store.get_participant(p.id) or p
         if new is not None and (p.status != "waiting-approval" or new == "offline"):
             out += self.set_status(p, new, f"hook:{E}", bump=bump)
@@ -1725,6 +1744,14 @@ class Engine:
         for s in self.sinks.open_sinks():
             if now >= s.deadline:
                 out += self.sink_timeout(s.id)
+        for pid, dropped_at in list(self.wait_drops.items()):
+            wp = self.store.get_participant(pid)
+            if wp is None or not wp.active or wp.status == "offline":
+                self.wait_drops.pop(pid, None)
+            elif rules.wait_drop_expired(now, dropped_at):
+                self.wait_drops.pop(pid, None)
+                self.gone_by_drop.add(pid)
+                out += self.set_status(wp, "offline", "wait:dropped")
         out += self.watchdog(now)
         for mid in self.store.memberships_with_pending():
             out += self.evaluate(mid)

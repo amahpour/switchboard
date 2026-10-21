@@ -1,0 +1,31 @@
+{
+  "_source": "Live Devin CLI 3000.11.92 (swe-1-6-slow), a private tmux server, 2026-10-20 (#448): a hook wrapper that logged each hook run before running the plugin's hook, and a log of the broker's /mcp and /mcp/event requests. The session had joined a room and sat in a wait(room, 100) loop.",
+  "_unverified": false,
+  "hook_event_name": "ProcessExitTrace",
+  "cases": [
+    {
+      "how": "tmux kill-session: SIGHUP to the pane's process group (devin and its child devin acp)",
+      "processes_gone_after_s": "under 1",
+      "session_end_hook_ran": false,
+      "open_wait_request": "ended with the processes: the client's connection dropped 49 s into a wait of up to 100 s",
+      "participant_after_the_kill": "still busy (status_src hook:PostToolUse) with no wait open, 70 s later, and for as long as it was watched",
+      "with_the_fix": "offline (status_src wait:dropped) 130 s after the drop"
+    },
+    {
+      "how": "kill -TERM of the devin process (the interactive one)",
+      "processes_gone_after_s": "under 1",
+      "session_end_hook_ran": false,
+      "open_wait_request": "ended with the processes: the connection dropped 39 s into the wait",
+      "participant_after_the_kill": "still busy (status_src hook:PostToolUse) with no wait open",
+      "with_the_fix": "offline (status_src wait:dropped) 130 s after the drop"
+    },
+    {
+      "how": "/exit typed at an idle prompt: a normal quit",
+      "processes_gone_after_s": "about 1",
+      "session_end_hook_ran": true,
+      "hook_ran_after_s": "about 1",
+      "session_end_hook_stdin_bytes": 90,
+      "participant_after_the_quit": "offline at once, by that hook (the existing SessionEnd path)"
+    }
+  ]
+}
