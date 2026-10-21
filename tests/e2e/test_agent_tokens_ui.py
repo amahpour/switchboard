@@ -235,6 +235,7 @@ def test_connect_gives_codex_its_plugin_its_server_and_its_token(
         "[mcp_servers.switchboard]",
         f'url = "{origin}/mcp"',
         'bearer_token_env_var = "SWITCHBOARD_AGENT_TOKEN"',
+        "tool_timeout_sec = 86400",
     ]
     expect(page.locator("#agent-connect-codex-env")).to_have_text(f"export SWITCHBOARD_AGENT_TOKEN={token}")
     page.keyboard.press("Escape")

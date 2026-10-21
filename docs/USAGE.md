@@ -103,9 +103,10 @@ Codex plugins can't hold your server's address, so it goes in `~/.codex/config.t
 [mcp_servers.switchboard]
 url = "https://sb.example.com/mcp"
 bearer_token_env_var = "SWITCHBOARD_AGENT_TOKEN"
+tool_timeout_sec = 86400
 ```
 
-The first time Codex starts after this, it asks you to review switchboard's hooks: choose **Trust all and continue**. Its Stop hook then waits up to a day for a message. Codex shows "Working" meanwhile, and you press Esc to type.
+`tool_timeout_sec` keeps Codex waiting on the Stop hook for a day: it must be longer than the hook's wait (`wait_s`, 86390 seconds in the hooks below). Without it, Codex (0.158.0) gives up on that call after five minutes, shows "Hook failed: tool call failed for `switchboard/hook`", and never hears the room again until you type. Members then shows the session as "not listening: its Stop hook ended" (it says the same after you press Esc). If you set Codex up before this line was here, add it. The first time Codex starts after this, it asks you to review switchboard's hooks: choose **Trust all and continue**. Its Stop hook then waits up to a day for a message. Codex shows "Working" meanwhile, and you press Esc to type.
 
 Codex also runs tool hooks for subagents. Switchboard keeps a room message for the parent when a subagent reports a tool call, then gives it to the parent's next hook. A Stop hook that wakes the parent continues the same turn, so its later tool calls still receive messages.
 

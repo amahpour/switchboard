@@ -53,6 +53,15 @@ MIN_PARK_S = 5.0
 IDLE_WHY = "stopped and not listening: no Stop hook waiting (or call wait())"
 
 
+def _held(secs: float) -> str:
+    """How long a wait lasted, in a word or two: ``40 s``, ``5 min``, ``3 h``."""
+    if secs < 90:
+        return f"{max(1, round(secs))} s"
+    if secs < 5400:
+        return f"{round(secs / 60)} min"
+    return f"{round(secs / 3600)} h"
+
+
 class Listening(PullAdapter):
     """What both harnesses share over HTTPS: a Stop hook that waits for a message (a park), hook
     context for a busy session, and a follow-up confirmed by the session's next hook."""
@@ -160,6 +169,16 @@ class HttpsCodexAdapter(CodexMembership, Listening):
 
     def prompt_verdict(self, acked: bool) -> str | None:
         return "human_prompt"
+
+    def stop_wait_lost(self, held_s: float) -> str | None:
+        """Codex ends the call of its Stop hook for Esc, and also when the MCP server's
+        ``tool_timeout_sec`` runs out (#449: after 5 minutes by default, so a session whose setup
+        lacks the setting stops listening at its first Stop). Either way nothing wakes it until its
+        next hook, and it is not shown as waiting."""
+        return (
+            f"not listening: its Stop hook ended after {_held(held_s)} (Esc, or Codex's tool_timeout_sec:"
+            " docs/USAGE.md)"
+        )
 
 
 class HttpsCursorAdapter(Listening):

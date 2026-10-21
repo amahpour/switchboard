@@ -317,6 +317,13 @@ class Adapter:
         sends no SessionEnd, #448). A live agent re-arms its wait at once."""
         return False
 
+    def stop_wait_lost(self, held_s: float) -> str | None:
+        """Why a session is not listening, when the call of its Stop hook (a park) ended from its own
+        side before any message came, after ``held_s`` seconds: Members says so until the session's
+        next hook, because nothing can wake it meanwhile. None: nothing to say (the default; a
+        Claude Code listener comes back by itself, §49.4)."""
+        return None
+
     def ends_session(self, ev: HookEvent) -> bool:
         """True if this SessionEnd takes the session offline (§7.4). Claude's ``/clear``
         keeps the process and its binding, so its ``reason=clear`` doesn't."""

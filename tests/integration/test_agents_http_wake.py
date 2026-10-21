@@ -49,6 +49,12 @@ def member(b: InProcBroker, name: str) -> Any:
     return next(m for m in b.on_loop(st.store.members, room.id) if m.name == name)
 
 
+def row(b: InProcBroker, name: str) -> dict[str, Any]:
+    """A member as Members shows it (``who``): its status, and whether and why it is parked."""
+    who = b.call("room.who", {"room": "#build"})
+    return next(m for m in who["members"] if m["name"] == name)
+
+
 def claude_hook(claude: Claude, **fields: Any) -> str:
     """One of Claude Code's mcp_tool hooks, its input template filled in."""
     body = copy.deepcopy(HOOK["body"])
@@ -662,3 +668,64 @@ def test_a_session_someone_else_ended_hears_why_from_its_listener(build: InProcB
     assert two.call("leave", room="#build")["ok"]
     assert listen(build, token, "00000000-0000-4000-8000-0000000000aa").status_code == 409
     assert listen(build, token, "00000000-0000-4000-8000-0000000000bb").status_code == 409  # never joined
+
+
+def stop_hook_request(codex: Codex, thread: str, **fields: Any) -> tuple[int, dict[str, Any]]:
+    """The request id and body of a Codex Stop hook's call of the hook tool, for a test that sends it
+    itself and so can cancel it by id (``codex_hook`` sends it and waits)."""
+    body = copy.deepcopy(CODEX_CALL["body"])
+    body["id"] = next(codex.ids)
+    body["params"]["name"] = "hook"
+    body["params"]["arguments"] = {"session_id": thread, "event": "Stop", **fields}
+    del body["params"]["_meta"]["threadId"]
+    return body["id"], body
+
+
+def cancel_call(codex: Codex, request_id: int, reason: str) -> None:
+    """What Codex's MCP client sends when it gives up on a call: Esc, or its ``tool_timeout_sec``."""
+    note = {
+        "jsonrpc": "2.0",
+        "method": "notifications/cancelled",
+        "params": {"requestId": request_id, "reason": reason},
+    }
+    r = codex.c.post("/mcp", json=note, headers=codex.headers(CODEX_CALL["headers"]))
+    assert r.status_code == 202, r.text
+
+
+def test_a_codex_whose_stop_hook_was_cancelled_is_shown_as_not_listening_until_its_next_hook(
+    build: InProcBroker,
+) -> None:
+    """#449: a Codex whose MCP server has the default ``tool_timeout_sec`` gave up on its Stop hook after
+    5 minutes ("Hook failed") and stopped listening, and Members showed only an idle session. The
+    cancelled call closes the park, and Members now says the Stop hook ended, until the session's next
+    hook. Fails if a cancelled Stop wait leaves the session looking as if it listens, or if the
+    warning outlives the next hook."""
+    codex = Codex(build, make_token(build, "laptop"))
+    codex.start()
+    assert codex.call("join", THREAD_A, room="#build", screen_name="codex-1")["ok"]
+    codex.call("read", THREAD_A, room="#build")
+    p = participant(build, "codex-1")
+    rid, body = stop_hook_request(codex, THREAD_A, wait_s="60")
+    with ThreadPoolExecutor(1) as pool:
+        waiting = pool.submit(
+            lambda: codex.c.post("/mcp", json=body, headers=codex.headers(CODEX_CALL["headers"]))
+        )
+        until(lambda: parked(build, p.id))
+        assert not row(build, "codex-1")["parked"]  # listening
+        cancel_call(codex, rid, "request timeout")
+        waiting.result(30)
+    until(lambda: not parked(build, p.id))
+    got = row(build, "codex-1")
+    assert got["status"] == "idle" and got["parked"], got
+    assert "not listening: its Stop hook ended" in got["parked_reason"], got
+    assert "tool_timeout_sec" in got["parked_reason"], got
+    # the person writes to it meanwhile: still nothing to wake it with, and it says why
+    build.call("human.say", {"room": "#build", "text": "@codex-1 are you there?"})
+    assert "Stop hook ended" in row(build, "codex-1")["parked_reason"]
+    # its next hook (the person typed, or Codex ran another turn) ends the warning...
+    codex_hook(codex, THREAD_A, event="UserPromptSubmit", turn_id="t-2")
+    got = row(build, "codex-1")
+    assert got["status"] == "busy" and "Stop hook ended" not in (got["parked_reason"] or ""), got
+    # ...and the Stop hook after it is a wait again, which hands over what had waited
+    reply = json.loads(codex_hook(codex, THREAD_A, event="Stop", wait_s="60", turn_id="t-2"))
+    assert reply["decision"] == "block" and "are you there?" in reply["reason"], reply
