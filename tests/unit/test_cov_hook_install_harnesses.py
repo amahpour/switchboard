@@ -9,10 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from switchboard.config import Config
 from switchboard.install import codex, cursor, devin
 from switchboard.install.common import InstallError, dump_json, hook_command
-from switchboard.paths import hook_sha12
 
 PY = "/opt/yk/venv/bin/python"
 HOME = "/opt/yk/home"
@@ -28,7 +26,7 @@ def user_home(tmp_path: Path, files: dict[str, str]) -> Path:
 
 
 def sb_hook(harness: str, event: str, home: str = HOME) -> str:
-    return hook_command(PY, home, hook_sha12(), harness, event)
+    return hook_command(PY, home, "abcdef012345", harness, event)
 
 
 # ------------------------------------------------------------------- codex
@@ -42,19 +40,17 @@ def sb_hook(harness: str, event: str, home: str = HOME) -> str:
 def test_codex_refuses_misplaced_markers(tmp_path: Path, text: str, msg: str) -> None:
     uh = user_home(tmp_path, {".codex/config.toml": text})
     with pytest.raises(InstallError, match=msg):
-        codex.plan(uh, PY, HOME, hook_sha12())
-    with pytest.raises(InstallError, match=msg):
         codex.unplan(uh, HOME)
 
 
 def test_codex_refuses_when_a_key_after_the_block_would_land_in_switchboards_table(tmp_path: Path) -> None:
     """A bare key after the marker block belongs to ``[mcp_servers.switchboard]``
-    in TOML: install won't write a block that picks it up, and uninstall won't
-    remove the block and so move it to the top level."""
-    text = codex.toml_block(PY, HOME) + 'model = "o3"\n'
+    in TOML: uninstall won't remove the block and so move it to the top level."""
+    text = (
+        f'{codex.BEGIN}\n[mcp_servers.switchboard]\ncommand = "{PY}"\n'
+        f'args = ["-I", "-m", "switchboard", "mcp", "--home", "{HOME}"]\n{codex.END}\nmodel = "o3"\n'
+    )
     uh = user_home(tmp_path, {".codex/config.toml": text})
-    with pytest.raises(InstallError, match="couldn't add"):
-        codex.plan(uh, PY, HOME, hook_sha12())
     with pytest.raises(InstallError, match="couldn't remove switchboard's block"):
         codex.unplan(uh, HOME)
     assert (uh / ".codex/config.toml").read_text() == text
@@ -86,71 +82,7 @@ def test_codex_uninstall_masks_a_hand_wrapped_args_array(tmp_path: Path) -> None
     ]
 
 
-@pytest.mark.parametrize(
-    "hooks,msg",
-    [
-        ({"hooks": []}, '"hooks" in ~/.codex/hooks.json is not an object'),
-        ({"hooks": {"Stop": {"hooks": []}}}, '"hooks.Stop" is not a list'),
-    ],
-)
-def test_codex_refuses_hooks_it_cannot_merge_into(tmp_path: Path, hooks: dict, msg: str) -> None:
-    uh = user_home(tmp_path, {".codex/hooks.json": json.dumps(hooks)})
-    with pytest.raises(InstallError, match=msg):
-        codex.plan(uh, PY, HOME, hook_sha12())
-
-
-def test_codex_skips_odd_groups_and_appends_after_them(tmp_path: Path) -> None:
-    mine = {"hooks": [{"type": "command", "command": "echo mine"}]}
-    stop = ["legacy-string", {"hooks": "not-a-list"}, mine]
-    uh = user_home(tmp_path, {".codex/hooks.json": json.dumps({"hooks": {"Stop": stop}})})
-    plan = codex.plan(uh, PY, HOME, hook_sha12())
-    after = json.loads(plan.edits[1].after)["hooks"]["Stop"]
-    assert after[:3] == stop  # untouched, same indices (Codex keys trust by position)
-    assert after[3] == {"hooks": [{"type": "command", "command": sb_hook("codex", "Stop"), "timeout": 10}]}
-    assert any(line.startswith("  + hooks.Stop[3]: ") for line in plan.edits[1].display)
-
-
 # ------------------------------------------------------------------ cursor
-def test_cursor_refuses_a_home_config_it_cannot_read(tmp_path: Path) -> None:
-    home = tmp_path / "sbhome"
-    home.mkdir()
-    (home / "config.toml").write_text("[cursor\nstop_park_s = 5\n")
-    uh = user_home(tmp_path, {})
-    with pytest.raises(InstallError, match="can't read .*config.toml"):
-        cursor.plan(uh, PY, str(home), hook_sha12())
-
-
-def test_cursor_uses_defaults_when_the_home_config_is_not_a_file(tmp_path: Path) -> None:
-    home = tmp_path / "sbhome"
-    (home / "config.toml").mkdir(parents=True)  # read_bytes -> IsADirectoryError (an OSError)
-    assert cursor.config_for(str(home)) == Config()
-    uh = user_home(tmp_path, {})
-    plan = cursor.plan(uh, PY, str(home), hook_sha12())
-    stop = json.loads(plan.edits[1].after)["hooks"]["stop"]
-    assert stop[0]["timeout"] == Config().cursor.stop_park_s + cursor.STOP_TIMEOUT_EXTRA_S
-
-
-@pytest.mark.parametrize(
-    "rel,data,msg",
-    [
-        (
-            ".cursor/hooks.json",
-            {"version": 1, "hooks": {"stop": {"command": "x"}}},
-            '"hooks.stop" is not a list',
-        ),
-        (
-            ".cursor/mcp.json",
-            {"mcpServers": ["switchboard"]},
-            '"mcpServers" in ~/.cursor/mcp.json is not an object',
-        ),
-    ],
-)
-def test_cursor_refuses_shapes_it_cannot_merge_into(tmp_path: Path, rel: str, data: dict, msg: str) -> None:
-    uh = user_home(tmp_path, {rel: json.dumps(data)})
-    with pytest.raises(InstallError, match=msg):
-        cursor.plan(uh, PY, HOME, hook_sha12())
-
-
 def test_cursor_uninstall_leaves_shapes_it_does_not_know(tmp_path: Path) -> None:
     odd = dump_json({"version": 1, "hooks": ["not", "an", "object"]})
     uh = user_home(tmp_path, {".cursor/hooks.json": odd})
@@ -190,36 +122,13 @@ def test_uninstall_notes_a_hook_command_in_a_place_it_does_not_know(tmp_path: Pa
 
 
 # ------------------------------------------------------------------- devin
-@pytest.mark.parametrize(
-    "rel,data,msg",
-    [
-        (
-            ".config/devin/config.json",
-            {"permissions": ["mcp__switchboard__join"]},
-            '"permissions" in ~/.config/devin/config.json is not an object',
-        ),
-        (
-            ".config/devin/config.json",
-            {"permissions": {"allow": "mcp__switchboard__*"}},
-            '"permissions.allow" is not a list',
-        ),
-        (
-            ".config/devin/mcp_config.json",
-            {"mcpServers": "switchboard"},
-            '"mcpServers" in ~/.config/devin/mcp_config.json is not an object',
-        ),
-    ],
-)
-def test_devin_refuses_shapes_it_cannot_merge_into(tmp_path: Path, rel: str, data: dict, msg: str) -> None:
-    uh = user_home(tmp_path, {rel: json.dumps(data)})
-    with pytest.raises(InstallError, match=msg):
-        devin.plan(uh, PY, HOME, hook_sha12())
-
-
 def test_devin_other_mcp_home_reads_only_a_switchboard_entry_for_another_home() -> None:
-    other = json.dumps({"mcpServers": {"switchboard": devin.mcp_entry(PY, "/opt/other")}})
+    def entry(home: str) -> dict:
+        return {"command": PY, "args": ["-I", "-m", "switchboard", "mcp", "--home", home]}
+
+    other = json.dumps({"mcpServers": {"switchboard": entry("/opt/other")}})
     assert devin._other_mcp_home(other, HOME) == "/opt/other"
-    same = json.dumps({"mcpServers": {"switchboard": devin.mcp_entry(PY, HOME)}})
+    same = json.dumps({"mcpServers": {"switchboard": entry(HOME)}})
     assert devin._other_mcp_home(same, HOME) is None
     assert devin._other_mcp_home(json.dumps({"mcpServers": {"x": {"command": "node"}}}), HOME) is None
     assert devin._other_mcp_home(json.dumps(["not", "an", "object"]), HOME) is None

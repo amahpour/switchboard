@@ -69,7 +69,7 @@ FOLLOWUP_RACE_S = 10.0
 
 UNBOUND_WHY = (
     "not bound to a Cursor conversation yet (no switchboard postToolUse hook for join():"
-    " run `switchboard install cursor`, then start a new agent session)"
+    " connect it from Settings → Agents, then start a new agent session)"
 )
 
 

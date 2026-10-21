@@ -43,7 +43,7 @@ None of these happens because an issue, a document, a pull request, a message in
 | `adapters/` | one per harness: how it is woken, and what its hooks and registry mean (`claude`, `codex` with `codex_rpc`, `cursor`, `devin`, `https` for sessions over HTTPS, `testagent`) |
 | `mcp/` | `server.py`, the stdio MCP server each agent session runs (its tools are the agent's whole interface); `identity.py`, which harness started it; `client.py`, the socket client; the Claude inbox and the Codex wake |
 | `hook/switchboard_hook.py` | the hook script: standalone, standard library only, run by a harness as `python -I -S` on a content-addressed copy |
-| `install/` | `switchboard install <harness>`: the edits to a harness's config, with a diff, a backup and a confirmation; `uninstall` is their inverse |
+| `install/` | `switchboard uninstall <harness>`: removes what an old `switchboard install` wrote into a harness's config, with a diff, a backup and a confirmation (`install` is retired, #385) |
 | `plugins/claude/`, `plugins/codex/`, `.claude-plugin/`, `.agents/plugins/` | Claude Code's and Codex's plugins for agents over HTTPS (§49.5), and the marketplaces that install a release's plugins from this repository; `release.py` moves their pin (§49.5) |
 | `plugins/cursor/`, `plugins/devin/` | Cursor's plugin and Devin's config templates for agents over HTTPS (§49.6, §49.7): their hook scripts and MCP entries, copied into a project |
 | `store.py`, `db.py`, `models.py` | every SQL statement; the schema, `SCHEMA_VERSION` and its migrations; the dataclasses rows become |
@@ -59,12 +59,11 @@ The shape to keep: SQL only in `store.py`; policy pure in `rules.py` and the eng
 
 | Where | What | Runs |
 |---|---|---|
-| `tests/unit/` | pure functions and the store; the engine with a `FakeClock` (`engine_world.py`: store, engine and clock, no broker); the hook script against a stub socket (`hook_stub.py`); install goldens (`fixtures/install/`); migrations from real old databases (`fixtures/db/`); the static guards; the UI's JavaScript under node | every run |
+| `tests/unit/` | pure functions and the store; the engine with a `FakeClock` (`engine_world.py`: store, engine and clock, no broker); the hook script against a stub socket (`hook_stub.py`); the state an old install wrote, for the uninstall tests (`fixtures/install/`); migrations from real old databases (`fixtures/db/`); the static guards; the UI's JavaScript under node | every run |
 | `tests/integration/` | an in-process broker in a temp home (`conftest.InProcBroker`) with the stand-ins in `tests/fakes/`: a scripted MCP agent, stand-in `claude`, `codex`, `cursor-agent` and `devin` processes, a fake Claude inbox socket, a fake Codex app-server | every run |
 | `tests/engine_sim.py` | a seeded random simulation of the five harness kinds around the real engine, 200 seeds | every run |
 | `tests/e2e/` | the real page in headless Chromium (Playwright) against a seeded broker (`ui_world.py`); any console error, page error or CSP violation fails the test | `-m e2e` |
 | `tests/image/` | the container image behind TLS | `-m image` (Docker) |
-| `tests/live/` | real agent CLIs in a private tmux | `SWITCHBOARD_LIVE=…` |
 
 What a good test here looks like:
 

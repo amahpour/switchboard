@@ -13,17 +13,17 @@ What it does:
   ``tests/ui_world.py``'s seeded broker: rooms, four agents and a Markdown conversation. Then
   it runs the real ``switchboard`` commands in this process with ``--color always`` and keeps
   what they print. ``status``, ``who``, ``tail`` and ``report`` run against that broker;
-  ``install`` and ``uninstall`` (``--dry-run``) run against a throwaway user home. ``start``
+  ``uninstall`` (``--dry-run``) runs against a throwaway user home that holds what an old
+  ``switchboard install`` wrote (the fixtures of ``tests/fixtures/install/``). ``start``
   shows a local broker.
-- **Stand-ins, never this machine.** The hooks an install writes run an interpreter; the diff
-  shows ``/opt/switchboard/bin/python3`` in place of this checkout's venv. The PATH holds stub
-  ``claude``, ``codex`` and ``devin`` commands and no Cursor CLI, so Cursor shows as skipped.
-  Your own harness configs are never read or written.
+- **Stand-ins, never this machine.** The hooks an old install wrote run an interpreter; the diff
+  shows ``/opt/switchboard/bin/python3`` in place of the venv the fixtures were made with. Your
+  own harness configs are never read or written.
 - **Rendered as a terminal.** Each capture's colour codes become styled HTML: html-escaped
   text, the terminal's 8 colours plus bold and dim, and nothing else, so an unexpected code
   stops the run. Each capture sits in a window titled with its command, and Playwright's
-  Chromium shoots it at DPR 2. Every command is shot in dark; install and tail also in light;
-  and install once more with ``--color never``, for a before/after.
+  Chromium shoots it at DPR 2. Every command is shot in dark; uninstall and tail also in light;
+  and uninstall once more with ``--color never``, for a before/after.
 """
 
 from __future__ import annotations
@@ -168,20 +168,29 @@ def capture(argv: list[str]) -> str:
     return buf.getvalue()
 
 
-def user_home(base: Path) -> Path:
-    """A throwaway user home with a little of the user's own config, and a PATH of stub CLIs."""
+# the fixture of what an old ``switchboard install`` wrote, per file of a user home
+OLD_INSTALL = {
+    ".claude/settings.json": "claude/merge.settings.after.json",
+    ".codex/config.toml": "codex/merge.config.after.toml",
+    ".codex/hooks.json": "codex/merge.hooks.after.json",
+    ".cursor/mcp.json": "cursor/merge.mcp.json.after",
+    ".cursor/hooks.json": "cursor/merge.hooks.json.after",
+    ".config/devin/mcp_config.json": "devin/merge.mcp_config.json.after",
+    ".config/devin/config.json": "devin/merge.config.json.after",
+}
+
+
+def user_home(base: Path, switchboard_home: str) -> Path:
+    """A throwaway user home holding what an old ``switchboard install all`` wrote for
+    ``switchboard_home``, from the fixtures the uninstall tests use."""
     uh = base / "alice"
-    (uh / ".claude").mkdir(parents=True)
-    (uh / ".claude" / "settings.json").write_text('{\n  "model": "sonnet"\n}\n')
-    (uh / ".codex").mkdir()
-    (uh / ".codex" / "config.toml").write_text('model = "gpt-5.5"\n')
-    bin_dir = base / "bin"
-    bin_dir.mkdir()
-    for name in ("claude", "codex", "devin"):  # no `agent` / `cursor-agent`: Cursor is skipped
-        stub = bin_dir / name
-        stub.write_text("#!/bin/sh\nexit 0\n")
-        stub.chmod(0o755)
-    os.environ["PATH"] = f"{bin_dir}:/usr/bin:/bin"
+    fixtures = ROOT / "tests" / "fixtures" / "install"
+    for rel, name in OLD_INSTALL.items():
+        text = (fixtures / name).read_text()
+        text = text.replace("/opt/yk/venv/bin/python", PYTHON_STANDIN).replace("<SHA12>", "0123456789ab")
+        dst = uh / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_text(text.replace("/opt/yk/home", switchboard_home))
     return uh
 
 
@@ -217,26 +226,18 @@ def collect(world: Any, base: Path) -> list[tuple[str, str, str, tuple[str, ...]
         ("dark", "light"),
     )
 
-    uh = user_home(base)
-    real_python = sys.executable
-    sys.executable = PYTHON_STANDIN  # what the hooks would run, as the diff shows it
-    try:
-        u = ["--user-home", str(uh)]
-        add(
-            "install",
-            "switchboard install all --dry-run",
-            ["install", "all", "--dry-run", *h, *u, *c],
-            ("dark", "light"),
-        )
-        add(
-            "install-plain",
-            "switchboard install all --dry-run",
-            ["install", "all", "--dry-run", *h, *u, "--color", "never"],
-        )
-        capture(["install", "all", "--yes", "--allow-editable", *h, *u])  # so uninstall has something to show
-        add("uninstall", "switchboard uninstall all --dry-run", ["uninstall", "all", "--dry-run", *h, *u, *c])
-    finally:
-        sys.executable = real_python
+    u = ["--user-home", str(user_home(base, home))]
+    add(
+        "uninstall",
+        "switchboard uninstall all --dry-run",
+        ["uninstall", "all", "--dry-run", *h, *u, *c],
+        ("dark", "light"),
+    )
+    add(
+        "uninstall-plain",
+        "switchboard uninstall all --dry-run",
+        ["uninstall", "all", "--dry-run", *h, *u, "--color", "never"],
+    )
 
     # two rules that fire, so "Rules that fired" has something to colour
     world.command("build", "/hold codex-1")

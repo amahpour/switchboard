@@ -285,7 +285,8 @@ class ClaudeAdapter(Adapter):
             return Route("none", reason="idle and not listening: call wait() or poke it")
         if p.hooks_seen_at is None:
             return Route(
-                "none", reason="no switchboard hooks seen from this session: run `switchboard install claude`"
+                "none",
+                reason="no switchboard hooks seen from this session: connect it from Settings → Agents",
             )
         if p.status not in ("idle", "starting"):
             return Route("defer", reason="turn still running")

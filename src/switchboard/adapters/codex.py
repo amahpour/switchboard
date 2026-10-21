@@ -951,8 +951,8 @@ class CodexAdapter(CodexMembership, Adapter):
             if p.hooks_seen_at is None:
                 return Route(
                     "none",
-                    reason="no switchboard hooks seen from this thread: run `switchboard install"
-                    " codex` and review the hooks in /hooks",
+                    reason="no switchboard hooks seen from this thread: connect it from Settings → Agents"
+                    " and review the hooks in /hooks",
                 )
             if p.status not in ("idle", "starting"):
                 return Route("defer", reason="turn still running")

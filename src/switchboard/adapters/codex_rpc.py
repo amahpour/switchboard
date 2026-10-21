@@ -407,7 +407,7 @@ def contains(thread: dict[str, Any], needle: str) -> bool:
         return False
 
 
-PROOF_SERVER = "switchboard"  # the MCP server name `switchboard install codex` writes
+PROOF_SERVER = "switchboard"  # the MCP server name an old `switchboard install codex` wrote
 PROOF_TOOL = "join"
 
 

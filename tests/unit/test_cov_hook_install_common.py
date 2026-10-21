@@ -90,28 +90,6 @@ def test_load_json_obj_refuses_anything_but_an_object(tmp_path: Path) -> None:
     assert common.load_json_obj(tmp_path / "missing.json") == (None, {})
 
 
-def test_set_hook_groups_refuses_an_event_that_is_not_a_list() -> None:
-    with pytest.raises(InstallError, match='"hooks.Stop" is not a list'):
-        common.set_hook_groups({"hooks": {"Stop": {"matcher": ""}}}, {"Stop": ("cmd", 30)}, HOME)
-
-
-def test_set_hook_groups_keeps_the_users_handlers_in_a_shared_group() -> None:
-    """An older switchboard handler inside the user's own group is dropped from
-    that group; the user's handlers there stay, and switchboard gets its own group."""
-    old = hook_command(PY, HOME, "0" * 12, "claude", "Stop")
-    new = hook_command(PY, HOME, SHA, "claude", "Stop")
-    mine = {"type": "command", "command": "echo mine"}
-    data = {"hooks": {"Stop": [{"matcher": "x", "hooks": [mine, {"type": "command", "command": old}]}]}}
-    lines = common.set_hook_groups(data, {"Stop": (new, 30)}, HOME)
-    assert data["hooks"]["Stop"] == [
-        {"matcher": "x", "hooks": [mine]},
-        {"matcher": "", "hooks": [{"type": "command", "command": new, "timeout": 30}]},
-    ]
-    assert lines[0] == "  - hooks.Stop: an older switchboard hook" and lines[1].startswith(
-        "  + hooks.Stop[1]: "
-    )
-
-
 def test_remove_hook_groups_skips_events_that_are_not_lists() -> None:
     cmd = hook_command(PY, HOME, SHA, "claude", "Stop")
     data = {"hooks": {"Notification": {"odd": True}, "Stop": [{"hooks": [{"command": cmd}]}]}}
@@ -214,7 +192,7 @@ def test_a_harness_command_that_cannot_start_fails_after_the_file_edits(
     assert "failed (FileNotFoundError); any file edits above were applied" in err
     assert "Run it yourself:\n  claude mcp add switchboard" in err
     summary = io.StringIO()
-    common._summary([run], "install", applied=True, out=summary)
+    common._summary([run], applied=True, out=summary)
     assert (
         summary.getvalue() == "summary:\n  claude: files written, but a harness command failed (see above)\n"
     )

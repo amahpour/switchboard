@@ -1,4 +1,4 @@
-"""``switchboard update``: upgrade this install and bring what it set up along (DESIGN.md §45).
+"""``switchboard update``: upgrade this install and say what still runs the old version (DESIGN.md §45).
 
 It does what docs/INSTALL.md's "To upgrade" says, in order:
 
@@ -8,12 +8,10 @@ It does what docs/INSTALL.md's "To upgrade" says, in order:
    a plain venv) is refused with what to do instead: switchboard can't upgrade what it didn't install.
 2. **Say what is running.** A running broker is left to the person, who knows the flags they
    started it with (``--listen``, ``--public-url``).
-3. **Re-register the harnesses** this home is registered with (the hook file's name changes with
-   each version), through ``switchboard install <harness>``, which shows its diff and asks, or not
-   with ``--yes``. A harness that isn't registered for this home is left alone.
 
-Step 3 runs the *new* ``switchboard`` (a fresh process), never this one's old code.
-The plan is pure (``plan``, ``installer``); ``run`` carries it out through an injected runner.
+It no longer re-registers harnesses: ``switchboard install`` is retired (0.38.0, #385), and an agent
+over HTTPS (DESIGN.md §49) keeps no switchboard code on its machine. The plan is pure (``plan``,
+``installer``); ``run`` carries it out through an injected runner.
 """
 
 from __future__ import annotations
@@ -22,8 +20,8 @@ import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
 
@@ -89,24 +87,22 @@ def install_argv(inst: Installer, version: str | None, tool: str) -> list[str]:
 
 @dataclass
 class Plan:
-    """What ``update`` does after the upgrade: say so of a running broker, re-register what's
-    registered."""
+    """What ``update`` does after the upgrade: say so of a running broker."""
 
     broker_running: bool = False
-    harnesses: list[str] = field(default_factory=list)
 
 
-def plan(*, broker_running: bool, registered: Sequence[str]) -> Plan:
+def plan(*, broker_running: bool) -> Plan:
     """A broker is told about, never restarted (its start flags aren't known here); a stopped one
-    stays stopped. Re-register exactly the harnesses that are."""
-    return Plan(broker_running=broker_running, harnesses=list(registered))
+    stays stopped."""
+    return Plan(broker_running=broker_running)
 
 
 Runner = Callable[[list[str]], "subprocess.CompletedProcess[str]"]
 
 
 def _run(argv: list[str]) -> subprocess.CompletedProcess[str]:
-    # the child's own output goes straight to the terminal (install's diff and its question)
+    # the child's own output goes straight to the terminal
     return subprocess.run(argv, check=False, text=True)
 
 
@@ -121,7 +117,6 @@ def run(
     home: str,
     home_given: bool,
     version: str | None,
-    yes: bool,
     current: str,
     inst: Installer,
     tool: str,
@@ -131,8 +126,8 @@ def run(
     new_version: Callable[[str], str] | None = None,
     out: TextIO | None = None,
 ) -> int:
-    """Upgrade, then restart and re-register through the new ``exe``. ``state`` reads this home
-    (before the upgrade, with this process's code: what runs and what's registered)."""
+    """Upgrade, then say what still runs the old version. ``state`` reads this home (before the
+    upgrade, with this process's code: what runs)."""
     out = out or sys.stdout
     todo = state()
     argv = install_argv(inst, version, tool)
@@ -145,8 +140,6 @@ def run(
         print(f"switchboard {current} is already the newest" + (f" {version}" if version else ""), file=out)
         return 0
     print(f"switchboard {current} -> {after}", file=out)
-    home_args = ["--home", home] if home_given else []
-    rc = 0
     flag = f" --home {home}" if home_given else ""
     if todo.broker_running:
         print(
@@ -156,15 +149,8 @@ def run(
         )
     else:
         print(f"no broker runs in {home}: nothing restarted", file=out)
-    for h in todo.harnesses:
-        print(f"re-registering {h}", file=out)
-        if runner([exe, "install", h, *home_args, *(["--yes"] if yes else [])]).returncode != 0:
-            print(f"switchboard: `switchboard install {h}` didn't finish; run it yourself", file=sys.stderr)
-            rc = 1
-    if not todo.harnesses:
-        print(f"no harness is registered for {home}: nothing to re-register", file=out)
     print("restart your running agent sessions: each keeps the switchboard it started with", file=out)
-    return rc
+    return 0
 
 
 def which(name: str) -> str:
