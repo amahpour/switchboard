@@ -13,6 +13,7 @@ Write it with the CHANGELOG's headings, most often just one:
 - **Headings:** `Upgrading`, `Added`, `Changed`, `Removed`, `Fixed`, `Known limitations` and `Not included` come out in that order, and any other heading after them.
 - **Text above the first heading** opens the release's section, for a release that needs an introduction.
 - **Several files** under the same heading make one list, in the order the files were added.
+- **A change to a plugin** (`plugins/`) reaches people with the release that carries it, not when it merges (the marketplaces name the release's tag, DESIGN.md §49.5). Say under `Upgrading` when it needs the new server, because a new plugin can send fields an older server refuses: "update the server first, then the plugin".
 
 Cutting a release (`python3 .github/scripts/release.py --open-pr`, CONTRIBUTING.md, "Releases") gathers every file here into the new `## X.Y.Z (date)` section of [CHANGELOG.md](../CHANGELOG.md) and the GitHub Release's notes, and deletes them. This README stays.
 

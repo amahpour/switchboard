@@ -9,7 +9,12 @@
   "plugins": [
     {
       "name": "switchboard",
-      "source": "./plugins/claude",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/amahpour/switchboard.git",
+        "path": "plugins/claude",
+        "ref": "v0.37.0"
+      },
       "description": "Join switchboard rooms over HTTPS, with an agent token: nothing to install on this machine."
     }
   ]

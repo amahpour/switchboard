@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import threading
 import time
+import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -81,16 +82,68 @@ def groups_for(groups: list[dict[str, Any]], tool: str) -> list[dict[str, Any]]:
     return [g for g in groups if g.get("matcher") in (None, "", "*") or re.search(g["matcher"], tool)]
 
 
+REPO_URL = "https://github.com/amahpour/switchboard.git"
+
+
+def release_tag() -> str:
+    """The tag of the release this checkout is at: its version in pyproject.toml, which only a release
+    sets. Each marketplace names this tag (``release.py`` moves it), so it holds between releases."""
+    version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+    return f"v{version}"
+
+
+def pinned_source(marketplace: Path, folder: str) -> dict[str, Any]:
+    """The one plugin's source in ``marketplace``, which must be a git-subdir of this repository's
+    ``folder`` at a ref (the release's tag), the only source with a ref that both harnesses take for a
+    plugin that lives in the marketplace's own repository."""
+    [entry] = load(marketplace)["plugins"]
+    source = entry["source"]
+    assert isinstance(source, dict), f"{marketplace.name}: {source!r} is a path in main's checkout"
+    assert source["source"] == "git-subdir" and source["url"] == REPO_URL, source
+    assert source["path"].removeprefix("./") == folder, source
+    return source
+
+
 def test_the_marketplace_lists_the_plugin_where_it_is() -> None:
     """`/plugin install switchboard --marketplace amahpour/switchboard` reads the repo's marketplace,
-    which must point at the plugin's folder and name it as its manifest does. Fails if the two
-    drift apart."""
+    which must point at the plugin's folder in this repository and name it as its manifest does. Fails
+    if the two drift apart."""
     mk = load(ROOT / ".claude-plugin" / "marketplace.json")
     [entry] = mk["plugins"]
-    folder = (ROOT / entry["source"]).resolve()
-    assert folder == CLAUDE_PLUGIN.resolve()
-    manifest = load(folder / ".claude-plugin" / "plugin.json")
+    source = pinned_source(ROOT / ".claude-plugin" / "marketplace.json", "plugins/claude")
+    assert (ROOT / source["path"]).resolve() == CLAUDE_PLUGIN.resolve()
+    manifest = load(CLAUDE_PLUGIN / ".claude-plugin" / "plugin.json")
     assert entry["name"] == manifest["name"] == mk["name"] == "switchboard"
+
+
+def test_the_marketplaces_serve_the_release_and_not_main() -> None:
+    """A plugin merged to main must not reach anyone who has the plugin installed until a release ships
+    it with the server it needs (#462: 0.7.0 sent a field the released server refused, and `claude
+    plugin update` would have installed it the hour it merged). Both marketplaces therefore name this
+    release's tag, which `release.py` moves in the release PR, and not a path in main's checkout, which
+    every update would follow. Fails if either marketplace's plugin is a path again, a branch, or the
+    tag of another release."""
+    for marketplace, folder in (
+        (ROOT / ".claude-plugin" / "marketplace.json", "plugins/claude"),
+        (ROOT / ".agents" / "plugins" / "marketplace.json", "plugins/codex"),
+    ):
+        assert pinned_source(marketplace, folder)["ref"] == release_tag(), marketplace.name
+
+
+def test_the_pinned_tag_holds_the_plugin_when_this_checkout_knows_it() -> None:
+    """Where the tag is in this checkout's history (a developer's; CI's shallow clone has no tags),
+    the plugin at that tag has the name the marketplace gives it, or an install would fail. Fails
+    if a marketplace pins a tag from before the plugin existed there."""
+    if vcs(ROOT, "rev-parse", "-q", "--verify", f"refs/tags/{release_tag()}") is None:
+        pytest.skip(f"{release_tag()} is not in this checkout (the release PR makes it)")
+    for marketplace, folder, manifest in (
+        (ROOT / ".claude-plugin" / "marketplace.json", "plugins/claude", ".claude-plugin/plugin.json"),
+        (ROOT / ".agents" / "plugins" / "marketplace.json", "plugins/codex", ".codex-plugin/plugin.json"),
+    ):
+        source = pinned_source(marketplace, folder)
+        shown = vcs(ROOT, "show", f"{source['ref']}:{folder}/{manifest}")
+        assert shown is not None, f"{source['ref']} has no {folder}/{manifest}"
+        assert json.loads(shown)["name"] == load(marketplace)["plugins"][0]["name"]
 
 
 def test_the_claude_plugin_asks_for_the_server_and_a_secret_token() -> None:
@@ -319,7 +372,8 @@ def test_codexs_marketplace_lists_its_plugin_where_it_is() -> None:
     manifest's name, or Codex refuses to install it. Fails if they drift apart."""
     mk = load(ROOT / ".agents" / "plugins" / "marketplace.json")
     [entry] = mk["plugins"]
-    assert entry["source"] == {"source": "local", "path": "./plugins/codex"}
+    source = pinned_source(ROOT / ".agents" / "plugins" / "marketplace.json", "plugins/codex")
+    assert (ROOT / source["path"]).resolve() == CODEX_PLUGIN.resolve()
     manifest = load(CODEX_PLUGIN / ".codex-plugin" / "plugin.json")
     assert entry["name"] == manifest["name"] == mk["name"] == "switchboard"
     assert manifest["hooks"] == "./hooks/hooks.json" and "mcpServers" not in manifest
