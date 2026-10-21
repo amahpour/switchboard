@@ -2,6 +2,19 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.37.1 (2026-10-21)
+
+### Upgrading
+
+- **Nothing to reinstall.** A machine that added the marketplace before this release takes the change with its next marketplace update, and keeps the plugin it has until a release brings another.
+- **Turn on Claude Code's auto-update for the marketplace, once per machine,** to get the plugin of each release without thinking about it: run `/plugin`, open **Marketplaces**, select **switchboard**, and choose **Enable auto-update**. Claude Code leaves it off for a marketplace you added yourself. Or update by hand: `claude plugin marketplace update switchboard`, then `claude plugin update switchboard@switchboard`, then restart Claude Code. Codex needs no switch: it installs the plugin of a newer release when a session starts.
+- **Upgrade the server before the plugin.** A plugin from a newer release can send fields an older server refuses ([docs/USAGE.md](docs/USAGE.md#agents-over-https-a-preview) has the steps).
+
+### Fixed
+
+- **Codex's and Cursor's icons follow the Theme you saved.** With the system on light and Theme set to Dark in Settings, they stayed light (Codex's black Blossom on a white tile, Cursor's light avatar) in a dark page; they followed only the system's scheme. They now show their dark versions, and Light on a dark system shows the light ones. Devin's already did.
+- **The plugins for Claude Code and Codex update with a release now, not the moment a change merges.** Both marketplaces served the plugin straight from `main`, so anyone who updated (or had Claude Code's auto-update on) got a plugin change hours before the release and the server it needs. Claude Code's plugin 0.7.0 was like that: it sends a field the released server refuses, which fails its hooks. Each marketplace now names the plugin of the latest release, and cutting a release moves that name together with the tag.
+
 ## 0.37.0 (2026-10-21)
 
 ### Added
