@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -477,6 +478,93 @@ def test_a_round_that_runs_out_asks_for_another_while_the_session_stays_idle(bui
     r = listen(build, token, SESSION_1, **{"x-switchboard-again": "1"})
     assert r.status_code == 409 and r.json()["error"] == "not_idle", r.text
     assert not parked(build, p.id)
+
+
+def set_status(b: InProcBroker, name: str, status: str) -> None:
+    """Put the member's session in a state, as a hook would (the listener's door reads it)."""
+    p = participant(b, name)
+    b.on_loop(b.state.store.set_status, p.id, status, "test")
+
+
+@pytest.mark.parametrize("status", ["idle", "starting"])
+def test_a_later_round_waits_in_any_state_that_has_not_moved_on(build: InProcBroker, status: str) -> None:
+    """A reconnecting listener (``X-Switchboard-Again: 1``) is the one a proxy cut, and a refusal ends
+    it for good, leaving the session deaf (#436). So the broker refuses it only when the session has
+    moved on, and any other state is treated as still listening: "idle", and "starting" too, which an
+    older rule that wanted exactly "idle" turned away. Fails if a state that isn't a running turn or
+    an ended session is refused, or a message doesn't reach the round that waited."""
+    claude, token = joined_claude(build)
+    set_status(build, "claude-1", status)
+    p = participant(build, "claude-1")
+    with ThreadPoolExecutor(1) as pool:
+        again = pool.submit(listen, build, token, SESSION_1, 60, **{"x-switchboard-again": "1"})
+        until(lambda: parked(build, p.id))
+        build.call("human.say", {"room": "#build", "text": "@claude-1 are you there"})
+        r = again.result(30)
+    assert r.status_code == 200 and "are you there" in r.text, (r.status_code, r.text)
+
+
+@pytest.mark.parametrize(
+    "status,why",
+    [
+        ("busy", "a turn is running"),
+        ("waiting-approval", "a turn is waiting on an approval"),
+        ("offline", "the session ended"),
+    ],
+)
+def test_a_later_round_is_refused_once_the_session_has_moved_on_and_the_broker_says_so(
+    build: InProcBroker, caplog: pytest.LogCaptureFixture, status: str, why: str
+) -> None:
+    """A turn that started (busy, or waiting on an approval, which a message must never be pushed
+    into) or a session that ended (offline) is the only reason to refuse a reconnecting listener. It
+    is refused with the reason and the state, and the broker logs the refusal at warning level, with
+    the session and the state and not the token, so a deaf session can be explained afterwards (#436).
+    Fails if such a round parks the session, or the refusal leaves no log line."""
+    claude, token = joined_claude(build)
+    set_status(build, "claude-1", status)
+    p = participant(build, "claude-1")
+    with caplog.at_level(logging.WARNING, logger="switchboard.agent_http"):
+        r = listen(build, token, SESSION_1, **{"x-switchboard-again": "1"})
+    assert r.status_code == 409, r.text
+    assert r.json()["error"] == "not_idle" and r.json()["status"] == status and why in r.json()["message"]
+    assert not parked(build, p.id)
+    [rec] = [x for x in caplog.records if x.name == "switchboard.agent_http"]
+    assert rec.levelno == logging.WARNING
+    assert SESSION_1 in rec.getMessage() and status in rec.getMessage() and token not in rec.getMessage()
+
+
+def test_a_later_round_of_a_session_that_never_joined_is_refused_and_logged(
+    build: InProcBroker, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A session with no record here has nothing to be woken for: its reconnecting listener is refused
+    (409) and logged, not parked. One that someone else removed is told so instead, once (410, tested
+    below). Fails if the round parks anything, or leaves no log line."""
+    token = make_token(build, "laptop")
+    with caplog.at_level(logging.WARNING, logger="switchboard.agent_http"):
+        r = listen(build, token, SESSION_1, **{"x-switchboard-again": "1"})
+    assert r.status_code == 409 and r.json()["error"] == "not_idle", r.text
+    [rec] = [x for x in caplog.records if x.name == "switchboard.agent_http"]
+    assert "in no room" in rec.getMessage() and SESSION_1 in rec.getMessage()
+    assert build.on_loop(lambda: build.state.engine.sinks.open_sinks()) == []
+
+
+def test_a_first_round_is_never_logged_as_a_refusal(
+    build: InProcBroker, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Only a reconnect can be refused for its state: a session's first round is its Stop, and ends in
+    the ordinary ways (a takeover, a hook), none of which is a warning. Fails if an idle session's
+    listener, taken over by a newer one, fills the broker's log."""
+    claude, token = joined_claude(build)
+    p = participant(build, "claude-1")
+    with caplog.at_level(logging.WARNING, logger="switchboard.agent_http"), ThreadPoolExecutor(2) as pool:
+        first = pool.submit(listen, build, token, SESSION_1)
+        until(lambda: parked(build, p.id))
+        second = pool.submit(listen, build, token, SESSION_1)  # takes over
+        assert first.result(30).status_code == 409
+        until(lambda: parked(build, p.id))
+        claude_hook(claude, event="UserPromptSubmit")  # the person typed: ends the second
+        assert second.result(30).status_code == 409
+    assert [x for x in caplog.records if x.name == "switchboard.agent_http"] == []
 
 
 def test_a_broker_that_has_run_a_while_keeps_an_agent_over_https(build: InProcBroker) -> None:

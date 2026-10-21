@@ -4,8 +4,10 @@
 # asyncRewake: it sends only this session's id and waits at the switchboard server, round after
 # round, so the session can be woken however long it stays idle. A message prints, and the exit 2
 # makes Claude Code start a turn with it. Exit 0 wakes nothing: when another listener or a hook of
-# the session takes over, the session is busy or gone, the token is refused, or Claude Code quits.
-# One exception: a session that someone else ended (a kick, a closed room) is told so, once.
+# the session takes over, the session is busy or gone, or Claude Code quits. Any other reason the
+# listener stops (a refused token, a server that answers something unexpected) is written to
+# listen.log, and the session is woken once with it, as it is when someone else ended it (a kick,
+# a closed room): a listener that stops without a word leaves the session deaf (#436).
 # A round that runs out starts the next; a server that can't be reached (restarting, or a proxy
 # that cut the wait) is tried again, a little later each time. The token reaches curl on its stdin,
 # never its command line, where other processes could read it.
@@ -35,9 +37,26 @@ body=$(mktemp) || exit 0
 code="$body.code"
 trap 'rm -f "$body" "$code"' EXIT
 trap 'exit 0' HUP INT TERM
+# the plugin's own data folder, or the user's; never a shared one like /tmp, where another account
+# could plant the name first
+dir=${CLAUDE_PLUGIN_DATA:-${HOME:+$HOME/.cache/switchboard}}
+flat() { # what the server said, on one line and cut short: $1 is the body's file
+  tr '\r\n' '  ' <"$1" | cut -c1-300
+}
+logline() { # one line in listen.log: when, the session, the round, the status, what the server said
+  [ -n "$dir" ] && mkdir -p "$dir" 2>/dev/null || return 0
+  if [ -f "$dir/listen.log" ] && [ "$(wc -c <"$dir/listen.log")" -gt 65536 ]; then # a log that stays small
+    tail -n 100 "$dir/listen.log" 2>/dev/null >"$dir/listen.log.tmp" && mv "$dir/listen.log.tmp" "$dir/listen.log"
+  fi
+  printf '%s session=%s round=%s status=%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$sid" "$rounds" "$1" "$2" \
+    2>/dev/null >>"$dir/listen.log"
+  return 0
+}
 again=0
 backoff=1
+rounds=0
 while kill -0 "$owner" 2>/dev/null; do
+  rounds=$((rounds + 1))
   began=$(date +%s)
   printf 'header = "Authorization: Bearer %s"\n' "$token" |
     curl -s --max-time $((round + 30)) -K - -o "$body" -w '%{http_code}' -X POST \
@@ -50,12 +69,12 @@ while kill -0 "$owner" 2>/dev/null; do
   kill "$watch" 2>/dev/null
   kill -0 "$owner" 2>/dev/null || exit 0
   again=1
-  case $(cat "$code" 2>/dev/null) in
-    200) cat "$body" >&2; exit 2 ;;
+  status=$(cat "$code" 2>/dev/null)
+  said=$(flat "$body")
+  case $status in
+    200) [ -n "$dir" ] && rm -f "$dir/stopped-$sid" 2>/dev/null; cat "$body" >&2; exit 2 ;;
     410) # someone else ended the session: say so once, or it goes deaf without a word
-      # the plugin's own data folder, or the user's; never a shared one like /tmp, where another
-      # account could plant the name first
-      dir=${CLAUDE_PLUGIN_DATA:-${HOME:+$HOME/.cache/switchboard}}
+      logline 410 "$said"
       [ -n "$dir" ] && mkdir -p "$dir" 2>/dev/null || exit 0
       seen="$dir/ended-$sid"
       [ "$(cat "$seen" 2>/dev/null)" = "$(cat "$body")" ] && exit 0
@@ -64,7 +83,7 @@ while kill -0 "$owner" 2>/dev/null; do
       exit 2
       ;;
     408) backoff=1; sleep 1 ;;
-    000 | 429 | 500 | 502 | 503 | 504)
+    '' | 000 | 429 | 500 | 502 | 503 | 504)
       if [ $(($(date +%s) - began)) -ge 10 ]; then
         backoff=1 # a long wait that a proxy cut: wait again at once
       else
@@ -72,7 +91,27 @@ while kill -0 "$owner" 2>/dev/null; do
         [ "$backoff" -ge 60 ] || backoff=$((backoff * 2))
       fi
       ;;
-    *) exit 0 ;;
+    409) # busy (a turn is running: its next Stop listens) or taken over by a newer listener or
+      # another hook of the session, which is every turn's ordinary end: only a refusal is logged
+      case $said in *'"not_idle"'*) logline 409 "$said" ;; esac
+      exit 0
+      ;;
+    *) # a reason nobody expects, such as a token that was refused: log it, and wake the session once
+      # with it, because nothing else would tell it the listener is gone. The marker keeps the same
+      # reason from waking it again at every later Stop; a wake clears it.
+      logline "$status" "$said"
+      [ -n "$dir" ] && mkdir -p "$dir" 2>/dev/null || exit 0
+      stopped="$dir/stopped-$sid"
+      # only switchboard's own error word goes to the model, never the rest of the body: whatever
+      # stood in the way (a proxy's page) is in the log
+      what=$(printf '%s' "$said" | grep -o '"error": *"[A-Za-z0-9_-]*"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')
+      reason="$status $what"
+      [ "$(cat "$stopped" 2>/dev/null)" = "$reason" ] && exit 0
+      printf '%s' "$reason" 2>/dev/null >"$stopped" || exit 0 # no marker, no wake: it could loop the session awake
+      printf '[switchboard] The listener for this session stopped, so room messages can no longer wake it while it is idle: the server answered %s%s. Check the plugin settings, the server address and the agent token. The listener starts again at the end of this session'"'"'s next turn. Details: %s/listen.log\n' \
+        "$status" "${what:+ ($what)}" "$dir" >&2
+      exit 2
+      ;;
   esac
 done
 exit 0
