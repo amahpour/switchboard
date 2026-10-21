@@ -57,6 +57,8 @@ handoff-blocked-, handoff-ready-, handoff-dialog- and handoff-after-{light,dark,
 summary and Posted by choice, then the selected agent's handoff, #252 and #425),
 outdated-before-{light,dark,phone-light} and outdated-after-{light,dark,phone-light}
 (a board's unresolved findings before and after an agent moves its head, #291),
+icon-theme-dark-on-light, icon-theme-light-on-dark and icon-theme-dark-on-light-phone (Codex's and
+Cursor's icons with the saved Theme against the system's scheme, #443),
 check-waiting-{light,dark,phone-light} and check-confirmed-{light,dark,phone-light} (a fix awaiting
 its raiser has no check; once confirmed, its card gets a green one in the corner, #427),
 confirm-light, signin-light, setup-person-light and
@@ -647,6 +649,34 @@ def shoot_contest_flow(browser: Any, out: Path, world: Any) -> None:
             if slug == "phone-light":
                 page.locator("#board .board-detail").scroll_into_view_if_needed()
             shot(page, out, "contest-insisted-" + slug + ".png")
+        finally:
+            ctx.close()
+
+
+def shoot_icon_theme(browser: Any, out: Path, world: Any) -> None:
+    """#443: Codex's and Cursor's icons follow the saved Theme, not only the system's scheme. The
+    welcome page's harness cards, with Theme set to Dark on a light system, Light on a dark one, and
+    Dark on a light phone. (The page's data-theme is what Settings saves.)"""
+    from playwright.sync_api import expect
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for name, size, scheme, theme in (
+        ("icon-theme-dark-on-light.png", DESKTOP, "light", "dark"),
+        ("icon-theme-light-on-dark.png", DESKTOP, "dark", "light"),
+        ("icon-theme-dark-on-light-phone.png", PHONE, "light", "dark"),
+    ):
+        ctx = browser.new_context(**base, **size, color_scheme=scheme)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.empty)
+            expect(page.locator("#empty")).to_be_visible()
+            page.evaluate("t => { document.documentElement.dataset.theme = t; }", theme)
+            cursor = page.locator(".harness-head .avatar.h-cursor")
+            cursor.scroll_into_view_if_needed()
+            expect(cursor).to_be_visible()
+            settle(page)
+            shot(page, out, name)
         finally:
             ctx.close()
 
@@ -1897,6 +1927,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_review_card(browser, out, world)
             shoot_contest_flow(browser, out, world)
             shoot_outdated_board(browser, out, world)
+            shoot_icon_theme(browser, out, world)
             shoot_claims(browser, out, world)
             shoot_proof_board(browser, out, world)
             shoot_handoff_board(browser, out, world)

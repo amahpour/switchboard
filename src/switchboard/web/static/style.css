@@ -160,10 +160,6 @@
     --human-fg: #cfbdf7;
     --h-claude-bg: #b9573a;
     --h-claude-fg: #ffffff;
-  --h-codex-img: url('/static/agents/codex-dark.png');
-  --h-codex-tile: #000000;
-  --h-cursor-img: url('/static/agents/cursor-dark.png');
-  --h-icon-ring: rgba(255, 255, 255, 0.1);
     --h-codex-img: url('/static/agents/codex-dark.png');
     --h-codex-tile: #000000;
     --h-cursor-img: url('/static/agents/cursor-dark.png');
@@ -231,7 +227,11 @@
   --human-fg: #cfbdf7;
   --h-claude-bg: #b9573a;
   --h-claude-fg: #ffffff;
+  --h-codex-img: url('/static/agents/codex-dark.png');
+  --h-codex-tile: #000000;
+  --h-cursor-img: url('/static/agents/cursor-dark.png');
   --h-devin-img: url('/static/agents/devin-dark.png');
+  --h-icon-ring: rgba(255, 255, 255, 0.1);
   --h-other-bg: #2e2e33;
   --h-other-fg: #d0d0d6;
   color-scheme: dark;

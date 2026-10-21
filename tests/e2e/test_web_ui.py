@@ -838,6 +838,42 @@ def test_devin_s_logo_follows_the_theme_setting(ui: UI) -> None:
         assert look["img"] == f"/static/agents/devin-{want}.png", (theme, scheme, look)
 
 
+# the four tokens #443 set under the explicit Dark theme: the icon files, Codex's tile and the ring
+ICON_LOOK = """async (el) => {
+  const s = getComputedStyle(el);
+  const m = s.backgroundImage.match(/^url\\("(.*)"\\)$/);
+  return {img: m ? new URL(m[1]).pathname : null, tile: s.backgroundColor, ring: s.boxShadow};
+}"""
+
+
+def test_codex_and_cursor_icons_follow_the_theme_setting(ui: UI) -> None:
+    """#443: the saved Theme (the page's data-theme) picks Codex's and Cursor's icon files, Codex's tile
+    and the ring around both, not only the system's scheme: Dark on a light system shows the dark
+    files on a black tile with the light ring, Light on a dark system the light ones on a white tile,
+    and System follows the system. Fails if the explicit Dark block lacks the tokens, so a person
+    who chose Dark gets Codex's black Blossom on a white tile and Cursor's light avatar in a dark page."""
+    page = ui.open(color_scheme="light")
+    codex = page.locator('#buddy-list .member[data-name="codex-1"] .avatar')
+    cursor = page.locator(".harness-head .avatar.h-cursor")  # no agent in the world runs Cursor
+    for theme, scheme, want in (
+        ("system", "light", "light"),
+        ("dark", "light", "dark"),
+        ("light", "dark", "light"),
+        ("system", "dark", "dark"),
+    ):
+        page.emulate_media(color_scheme=scheme)
+        page.evaluate("t => { document.documentElement.dataset.theme = t; }", theme)
+        tile, ring = ("rgb(0, 0, 0)", "rgba(255, 255, 255, 0.1)") if want == "dark" else (
+            "rgb(255, 255, 255)", "rgba(0, 0, 0, 0.08)"
+        )  # fmt: skip
+        look = codex.evaluate(ICON_LOOK)
+        assert look["img"] == f"/static/agents/codex-{want}.png", (theme, scheme, look)
+        assert look["tile"] == tile and ring in look["ring"], (theme, scheme, look)
+        look = cursor.evaluate(ICON_LOOK)
+        assert look["img"] == f"/static/agents/cursor-{want}.png", (theme, scheme, look)
+        assert ring in look["ring"], (theme, scheme, look)
+
+
 # Where the Inspector's avatar, its word and the name beside it sit, in CSS pixels.
 NAMED_AVATAR_BOXES = """() => {
   const box = e => {
