@@ -237,7 +237,7 @@ def create_app(
         state.agents = AgentService(state)
         state.boards = Boards(state)
         state.service.boards = state.boards
-        state.hub.set_board_source(state.boards.board_named)
+        state.hub.set_board_source(state.boards.boards_named)
         state.service.delivery = state.agents
         state.rpc = RpcServer(paths.sock, state)
         try:
