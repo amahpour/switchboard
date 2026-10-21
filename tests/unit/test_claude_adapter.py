@@ -159,7 +159,7 @@ def test_route_matrix(w: World, clock: FakeClock) -> None:
     assert a.route(busy, wake, None, clock.now()).kind == "defer"
     nohooks = w.store.update_participant(p.id, status="idle", hooks_seen_at=None)
     r = a.route(nohooks, wake, None, clock.now())
-    assert r.kind == "none" and "install claude" in r.reason
+    assert r.kind == "none" and "Settings → Agents" in r.reason
 
 
 def test_unattached_session_is_the_hook_tier(w: World) -> None:

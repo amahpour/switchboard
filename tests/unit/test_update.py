@@ -156,6 +156,15 @@ def test_a_failed_upgrade_stops_there() -> None:
     assert rc == 1 and len(rec.calls) == 1
 
 
+def test_a_script_that_still_passes_yes_is_not_broken(capsys: pytest.CaptureFixture[str]) -> None:
+    """``update --yes`` confirmed the re-registering that is retired; the flag is accepted and ignored. Fails
+    if argparse refuses it (exit 2 and "unrecognized arguments") instead of getting as far as update's
+    own refusal of the checkout the tests run from."""
+    assert cli.main(["update", "--yes"]) == cli.EXIT_ERR
+    err = capsys.readouterr().err
+    assert "runs from a checkout" in err and "unrecognized" not in err
+
+
 def test_the_command_refuses_a_checkout_and_changes_nothing(capsys: pytest.CaptureFixture[str]) -> None:
     """The test run's switchboard is the repo, installed editable: update must say so and stop."""
     assert common.editable_install()
