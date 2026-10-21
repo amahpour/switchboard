@@ -427,12 +427,70 @@ def test_github_lines_link_to_the_pull_requests_files_view(file: str, lines: str
     )
 
 
-def test_gitlab_lines_link_to_the_merge_requests_diff_at_the_file() -> None:
-    """GitLab names a file in an MR's diff by the SHA-1 of its path. Its line anchors also need
-    the old side's line number, which a board doesn't have, so the link opens the file."""
+GL_BASE = "https://git.example.com:8443/group/sub/shop"
+
+
+@pytest.mark.parametrize(
+    ("file", "lines", "tail"),
+    [
+        ("dir/file.c", "40-58", "dir/file.c#L40-58"),
+        ("shop/money.py", "8", "shop/money.py#L8"),
+        ("shop/money.py", "", "shop/money.py"),
+        ("docs/a file.md", "3", "docs/a%20file.md#L3"),
+        ("a/b?c#d/e%f.py", "1-2", "a/b%3Fc%23d/e%25f.py#L1-2"),
+    ],
+)
+def test_gitlab_lines_link_to_the_file_at_the_boards_head_with_the_lines_highlighted(
+    file: str, lines: str, tail: str
+) -> None:
+    """#442: GitLab's MR diff has no range anchor, and a line's anchor needs the old side's position,
+    which a board doesn't have, so the link to the lines is the file at the board's head commit,
+    where ``#L40-58`` highlights exactly the range. The path is percent-encoded a segment at a time,
+    so a ``?``, ``#`` or ``%`` in it can't end the path or start a query or fragment. Fails if the
+    link still opens the MR diff at the top of the file, or the path reaches the URL as written."""
+    assert reviews.lines_url(GL, file, lines, "9a1b2c3d4e5f") == f"{GL_BASE}/-/blob/9a1b2c3d4e5f/{tail}"
+
+
+def test_a_gitlab_lines_link_needs_the_head_and_a_plain_relative_path() -> None:
+    """No head (a board opened without one), a head that isn't hex, or a path a browser would resolve
+    out of the repository, or that has a backslash or a control character in it, gets no link rather
+    than a wrong or a repaired one: the path is the one agent-written string in a link. Fails if
+    ``../`` or a doubled slash can reach another page of the forge, or a link is built with no commit."""
+    ok = reviews.lines_url(GL, "shop/codes.py", "12", "9a1b2c3")
+    assert ok == f"{GL_BASE}/-/blob/9a1b2c3/shop/codes.py#L12"
+    assert reviews.lines_url(GL, "shop/codes.py", "12") is None
+    assert reviews.lines_url(GL, "shop/codes.py", "12", "not-a-sha") is None
+    assert reviews.lines_url(GL, "shop/codes.py", "12", "9a1b2c3/../x") is None
+    for bad in (
+        "../x.py",
+        "a/../../x.py",
+        "/etc/x.py",
+        "a//b.py",
+        "./a.py",
+        "a/./b.py",
+        "a\\b.py",
+        "a\nb.py",
+        "a/",
+    ):
+        assert reviews.lines_url(GL, bad, "12", "9a1b2c3") is None, bad
+    assert reviews.lines_url(GL, "shop/codes.py", "12; x", "9a1b2c3") is None  # lines are checked again
+
+
+def test_gitlab_has_a_second_link_to_the_file_in_the_merge_requests_diff() -> None:
+    """The colored view stays reachable (#442): GitLab names a file in an MR's diff by the SHA-1 of its
+    path, so this link opens the file, and the page says so. GitHub's lines link already is the diff,
+    so it has no second one; nothing without a forge or a file has either."""
     digest = hashlib.sha1(b"shop/codes.py").hexdigest()
-    assert reviews.lines_url(GL, "shop/codes.py", "12-19") == (
-        f"https://git.example.com:8443/group/sub/shop/-/merge_requests/12/diffs#{digest}"
+    assert reviews.diff_url(GL, "shop/codes.py") == f"{GL_BASE}/-/merge_requests/12/diffs#{digest}"
+    assert reviews.diff_url(GL, "shop/codes.py") == reviews.diff_url(GL, "shop/codes.py")
+    assert reviews.diff_url(GH, "shop/codes.py") is None
+    assert reviews.diff_url(None, "shop/codes.py") is None and reviews.diff_url(GL, "") is None
+
+
+def test_github_lines_links_do_not_depend_on_the_head() -> None:
+    """GitHub's link is the PR's diff and never needed a head: it is the same with one or without."""
+    assert reviews.lines_url(GH, "shop/codes.py", "12-19", "9a1b2c3") == reviews.lines_url(
+        GH, "shop/codes.py", "12-19"
     )
 
 

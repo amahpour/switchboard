@@ -77,7 +77,7 @@ class Boards:
             "opened_at": rv["opened_at"],
             "settled": reviews.settled(items),
             "counts": reviews.counts(items, active, now, offline),
-            "items": [item_dict(i, f, events, active, now, agents, offline) for i in items],
+            "items": [item_dict(i, f, events, active, now, agents, offline, rv["head"]) for i in items],
             "plan": reviews.handoff_plan(items, events, self.store.room_agent_names_ever(room.id)),
             "agents": agents,
             "offline": offline,
@@ -532,10 +532,12 @@ def item_dict(
     now: float | None = None,
     present: Sequence[str] = (),
     offline: Sequence[str] = (),
+    head: str = "",
 ) -> dict[str, Any]:
     """An item as the page reads it, with its links on the forge and its history (#250), what
     the room's agents (``present``) have picked among its options (#423), and whether a contested
-    finding is still its raiser's to answer, which ``offline`` agents can't (#424)."""
+    finding is still its raiser's to answer, which ``offline`` agents can't (#424). ``head`` is the
+    board's, for a GitLab finding's link to its lines at that commit (#442)."""
     c = reviews.consensus(i, present)
     return {
         "label": i.label,
@@ -569,7 +571,8 @@ def item_dict(
         "answer": i.answer,
         "answered_by": i.answered_by,
         "needs_person": reviews.needs_person(i, active, now, offline),
-        "lines_url": reviews.lines_url(f, i.file, i.lines),
+        "lines_url": reviews.lines_url(f, i.file, i.lines, head),
+        "diff_url": reviews.diff_url(f, i.file),
         "commit_url": reviews.commit_url(f, i.commit),
         "history": reviews.history(i, events or []),
     }

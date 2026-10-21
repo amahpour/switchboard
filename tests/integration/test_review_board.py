@@ -850,6 +850,43 @@ async def test_an_agent_cant_run_review(broker: InProcBroker) -> None:
         web.close()
 
 
+async def test_a_gitlab_findings_lines_link_to_the_file_at_the_boards_head_and_the_diff_link_opens_the_file(
+    broker: InProcBroker,
+) -> None:
+    """#442: on a GitLab merge request the item carries a link to its lines in the file at the board's
+    head, with the lines highlighted, and a second one to the file in the MR diff. A board opened with
+    no head has only the second (no commit to link), a head moved later reaches the link, and GitHub's
+    are as they were. Fails if the lines link is still the diff at the top of the file."""
+    web = broker.web_client()
+    gl = "https://gitlab.com/example-group/sub/shop/-/merge_requests/12"
+    try:
+        async with FakeAgent(broker.home, "k1") as reviewer:
+            await reviewer.join("#build", "codex-1")
+            await reviewer.call("review", room="#build", action="open", url=gl)
+            await reviewer.call(
+                "review", room="#build", action="raise", title="expired codes", where="dir/file.c:40-58"
+            )
+            digest = hashlib.sha1(b"dir/file.c").hexdigest()
+            diff = f"{gl}/diffs#{digest}"
+            item = web.get("/api/rooms/build/review").json()["board"]["items"][0]
+            assert (item["lines_url"], item["diff_url"]) == (None, diff)  # no head yet: nothing to link to
+            await reviewer.call("review", room="#build", action="open", url=gl, head="9a1b2c3d4e5f")
+            item = web.get("/api/rooms/build/review").json()["board"]["items"][0]
+            blob = "https://gitlab.com/example-group/sub/shop/-/blob/9a1b2c3d4e5f/dir/file.c#L40-58"
+            assert (item["lines_url"], item["diff_url"]) == (blob, diff)
+            await reviewer.call("review", room="#build", action="open", url=gl, head="abc1234")
+            item = web.get("/api/rooms/build/review").json()["board"]["items"][0]
+            assert item["lines_url"].startswith("https://gitlab.com/example-group/sub/shop/-/blob/abc1234/")
+            hostile = await reviewer.call(
+                "review", room="#build", action="raise", title="odd path", where="../../other/x.py:3"
+            )
+            assert hostile["ok"], hostile
+            odd = web.get("/api/rooms/build/review").json()["board"]["items"][1]
+            assert odd["lines_url"] is None  # a path that climbs out of the repository gets no link
+    finally:
+        web.close()
+
+
 async def test_a_cards_links_and_history_come_with_the_board(broker: InProcBroker) -> None:
     """#250: each item carries its lines in the PR's own diff, its fix's commit, and who did
     what to it, in order, from the moves the board recorded."""
@@ -874,6 +911,7 @@ async def test_a_cards_links_and_history_come_with_the_board(broker: InProcBroke
             item = web.get("/api/rooms/build/review").json()["board"]["items"][0]
             digest = hashlib.sha256(b"shop/codes.py").hexdigest()
             assert item["lines_url"] == f"{pr}/files#diff-{digest}R12-R19"
+            assert item["diff_url"] is None  # GitHub's lines link already is the diff
             assert item["commit_url"] == f"{pr}/commits/9a1b2c3d4e5f"
             assert [(h["by"], h["did"]) for h in item["history"]] == [
                 ("codex-1", "raised it"),

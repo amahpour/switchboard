@@ -2785,6 +2785,44 @@ def test_a_card_links_to_its_lines_and_fix_and_shows_its_history(ui: UI) -> None
     expect(detail.locator(".board-rows")).to_contain_text("tests/test_codes.py::test_expiry")
 
 
+GITLAB_MR = "https://gitlab.com/example-group/sub/shop/-/merge_requests/12"
+
+
+@pytest.mark.parametrize("size", ["desktop", "phone"])
+def test_a_gitlab_card_links_to_its_lines_at_the_head_and_to_the_file_in_the_mr_diff(
+    ui: UI, size: str
+) -> None:
+    """#442: on a GitLab merge request a finding's Lines row has two links, each labelled for what it
+    opens: the lines at the board's head commit, highlighted ("lines 12–19 at 4f2c9e1"), and the
+    file in the MR diff ("file in the MR diff"), both with GitLab's mark through the checked link
+    path. The old label promised the lines and opened the top of the file. A finding with one
+    line reads "line 8", and a path that climbs out of the repository has no blob link. Fails if
+    the label still says "View shop/codes.py:12-19" or the link still opens the MR diff."""
+    extra = PHONE if size == "phone" else {}
+    page = review_room(ui, f"e2e-board-gitlab-lines-{size}", pr=GITLAB_MR, **extra)
+    page.click("#board-toggle")
+    page.click('#board .board-card[data-item="F2"]')
+    detail = page.locator("#board .board-detail")
+    links = detail.locator(".board-lines-links a.board-link")
+    expect(links).to_have_count(2)
+    expect(links.nth(0)).to_have_text("lines 12–19 at 4f2c9e1")
+    expect(links.nth(0)).to_have_attribute(
+        "href", "https://gitlab.com/example-group/sub/shop/-/blob/4f2c9e1a7b30/shop/codes.py#L12-19"
+    )
+    expect(links.nth(0)).to_have_attribute("title", "shop/codes.py:12-19")
+    digest = hashlib.sha1(b"shop/codes.py").hexdigest()
+    expect(links.nth(1)).to_have_text("file in the MR diff")
+    expect(links.nth(1)).to_have_attribute("href", f"{GITLAB_MR}/diffs#{digest}")
+    for i in range(2):
+        expect(links.nth(i)).to_have_attribute("rel", re.compile("noopener"))
+        expect(links.nth(i).locator("svg.mark-gitlab")).to_have_count(1)
+    page.click('#board .board-card[data-item="F3"]')  # shop/money.py:8, a single line
+    expect(links.nth(0)).to_have_text("line 8 at 4f2c9e1")
+    expect(links.nth(0)).to_have_attribute("href", re.compile(r"/-/blob/4f2c9e1a7b30/shop/money\.py#L8$"))
+    if size == "phone":
+        no_horizontal_scroll(page)
+
+
 def test_a_conceded_fix_shows_proof_without_the_old_contest_reason(ui: UI) -> None:
     """The fixed card stays in Agents working, shows proof, then moves when its raiser confirms."""
     room = "#e2e-proof-card"
