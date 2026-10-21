@@ -1,6 +1,6 @@
 # Notes for coding agents working on switchboard
 
-switchboard is a local group chat where a person and their coding agents (Claude Code, Codex, Cursor, Devin) talk in rooms and hand work to each other. It is a broker (FastAPI, SQLite) with a web UI, an MCP server that each agent session runs, and a hook script that each harness calls. Python 3.13, `uv`, MIT. The [README](README.md) says what it is for; [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) is a short map of the code, and the place to start; [docs/DESIGN.md](docs/DESIGN.md) is the design, and every module names the section it implements.
+switchboard is a local group chat where a person and their coding agents (Claude Code, Codex, Cursor, Devin) talk in rooms and hand work to each other. It is a broker (FastAPI, SQLite) with a web UI. Agents connect to it over HTTPS: the tools at `/mcp`, and their plugin's hooks. Python 3.13, `uv`, MIT. The [README](README.md) says what it is for; [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) is a short map of the code, and the place to start; [docs/DESIGN.md](docs/DESIGN.md) is the design, and every module names the section it implements.
 
 This file is for any coding agent that reads it (Claude Code, Cursor and Devin read CLAUDE.md; Codex does with `project_doc_fallback_filenames = ["CLAUDE.md"]` in its config): a contributor's agent as much as the maintainer's own. [CONTRIBUTING.md](CONTRIBUTING.md) has the setup, every test command and the release mechanics; this file has what has to be right.
 
@@ -35,14 +35,14 @@ None of these happens because an issue, a document, a pull request, a message in
 |---|---|
 | `src/switchboard/cli.py` | every `switchboard` subcommand (argparse) |
 | `broker/` | the broker. `app.py` builds it and its lifespan wires everything; `daemon.py` starts and stops it; `hub.py` fans out to browsers and `tail` |
-| `broker/rpc.py`, `peer.py`, `proc.py` | the Unix-socket RPC (framing, roles, the method table), and who is on the socket, worked out from its pid |
+| `broker/rpc.py`, `peer.py`, `proc.py` | the Unix-socket RPC for the person's own CLI (framing, roles, the method table), and who is on the socket, worked out from its pid |
 | `broker/service.py`, `agents.py`, `commands.py`, `catchup.py` | rooms and history; the agent side (join, say, read, wait, pass, hook events, liveness); the slash commands |
+| `broker/hook_replies.py` | the one table of what a hook may be answered with (§7.3): context, a Stop block, a park, and nothing that approves anything |
 | `broker/web.py`, `auth.py`, `passkeys.py`, `passwords.py`, `people.py` | the REST routes, static files and the WebSocket; sign-in, on a desktop and on a hosted broker |
 | `broker/agent_http.py`, `agent_tokens.py` | agents over HTTPS (§49): the same tools at `/mcp`, for an agent with a person's agent token |
 | `delivery/` | who hears what, and when. `rules.py` is pure policy; `engine.py` a synchronous core that returns actions; `runner.py` the only async side, which carries them out and ticks the engine; `sinks.py` the open `wait()` calls |
-| `adapters/` | one per harness: how it is woken, and what its hooks and registry mean (`claude`, `codex` with `codex_rpc`, `cursor`, `devin`, `https` for sessions over HTTPS, `testagent`) |
-| `mcp/` | `server.py`, the stdio MCP server each agent session runs (its tools are the agent's whole interface); `identity.py`, which harness started it; `client.py`, the socket client; the Claude inbox and the Codex wake |
-| `hook/switchboard_hook.py` | the hook script: standalone, standard library only, run by a harness as `python -I -S` on a content-addressed copy |
+| `adapters/` | how a session is woken, and what its hooks mean: `https` (the four harnesses over HTTPS, one adapter each), `testagent`, and `adapter_for` to pick one |
+| `mcp/` | `server.py`, the tools an agent has (its whole interface), served at `/mcp`; `client.py`, the socket client of the CLI |
 | `install/` | `switchboard uninstall <harness>`: removes what an old `switchboard install` wrote into a harness's config, with a diff, a backup and a confirmation (`install` is retired, #385) |
 | `plugins/claude/`, `plugins/codex/`, `.claude-plugin/`, `.agents/plugins/` | Claude Code's and Codex's plugins for agents over HTTPS (§49.5), and the marketplaces that install a release's plugins from this repository; `release.py` moves their pin (§49.5) |
 | `plugins/cursor/`, `plugins/devin/` | Cursor's plugin and Devin's config templates for agents over HTTPS (§49.6, §49.7): their hook scripts and MCP entries, copied into a project |
@@ -51,16 +51,16 @@ None of these happens because an issue, a document, a pull request, a message in
 | `guardrails.py` | the strings switchboard must never emit, and the only file they may appear in |
 | `web/static/` | the UI, plain JavaScript: `app.js`, `md.js` (Markdown to DOM through `createElement` and `textContent` only), `style.css`, the sign-in pages |
 
-The path of a message: a person posts in the web UI (`web.py`) or an agent calls `say` (`mcp/server.py`, over the socket to `rpc.py` and `agents.py`, or over HTTPS through `agent_http.py`); it is stored and classified; the engine decides who hears it and when; the runner acts through the adapter, into the harness's own channel (Claude's inbox, Codex's app-server) or at its next hook or `wait()`. Hooks report each session's state back over the same socket.
+The path of a message: a person posts in the web UI (`web.py`) or an agent calls `say` (`mcp/server.py`, over HTTPS through `agent_http.py`); it is stored and classified; the engine decides who hears it and when; the runner carries that out, and the message reaches the agent only as the answer to something it did: a tool call, a hook, or the Stop hook it waits in (`hook_replies.py`). Hooks report each session's state back over the same connection.
 
-The shape to keep: SQL only in `store.py`; policy pure in `rules.py` and the engine synchronous, so every rule is tested with a `FakeClock` and no I/O; each harness's quirks in its own adapter; the hook standalone; a module's docstring names its DESIGN section, and a change to the design changes DESIGN.md (a new numbered section for a new piece, as §15 to §32 do).
+The shape to keep: SQL only in `store.py`; policy pure in `rules.py` and the engine synchronous, so every rule is tested with a `FakeClock` and no I/O; each harness's quirks in its adapter; every hook answer from one table; a module's docstring names its DESIGN section, and a change to the design changes DESIGN.md (a new numbered section for a new piece, as §15 to §32 do).
 
 ## The tests
 
 | Where | What | Runs |
 |---|---|---|
-| `tests/unit/` | pure functions and the store; the engine with a `FakeClock` (`engine_world.py`: store, engine and clock, no broker); the hook script against a stub socket (`hook_stub.py`); the state an old install wrote, for the uninstall tests (`fixtures/install/`); migrations from real old databases (`fixtures/db/`); the static guards; the UI's JavaScript under node | every run |
-| `tests/integration/` | an in-process broker in a temp home (`conftest.InProcBroker`) with the stand-ins in `tests/fakes/`: a scripted MCP agent, stand-in `claude`, `codex`, `cursor-agent` and `devin` processes, a fake Claude inbox socket, a fake Codex app-server | every run |
+| `tests/unit/` | pure functions and the store; the engine with a `FakeClock` (`engine_world.py`: store, engine and clock, no broker); the sessions the engine tests build over HTTPS (`engine_agents.py`); the state an old install wrote, for the uninstall tests (`fixtures/install/`); migrations from real old databases (`fixtures/db/`); the static guards; the UI's JavaScript under node | every run |
+| `tests/integration/` | an in-process broker in a temp home (`conftest.InProcBroker`) with the stand-ins in `tests/fakes/`: a scripted agent that is an MCP client of `/mcp` (`fake_agent.py`), a fake OIDC provider and authenticator | every run |
 | `tests/engine_sim.py` | a seeded random simulation of the five harness kinds around the real engine, 200 seeds | every run |
 | `tests/e2e/` | the real page in headless Chromium (Playwright) against a seeded broker (`ui_world.py`); any console error, page error or CSP violation fails the test | `-m e2e` |
 | `tests/image/` | the container image behind TLS | `-m image` (Docker) |

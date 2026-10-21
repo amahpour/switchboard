@@ -237,7 +237,8 @@ def test_who_status_help(svc: RoomService) -> None:
     st = svc.command("#build", "/status", WEB)["text"]
     assert "#build: active" in st and "budget 60/60" in st
     assert "hops 0, loop guard off" in st  # the guard ships off (#406); it showed "hops 0/6"
-    assert "agents: none" in st and "TEST MODE" in st and "codex link" in st and "hooks:" in st
+    assert "agents: none" in st and "TEST MODE" in st
+    assert "codex link" not in st and "hooks:" not in st  # the local path's lines went with it (#385)
     assert svc.command("#build", "/help", WEB)["text"] == HELP_TEXT
     room = svc.room("#build")
     add_agent(svc.store, room.id, "codex-1", harness="codex")

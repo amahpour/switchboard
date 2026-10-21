@@ -44,14 +44,6 @@ ROOM_RULES = (
     "\n7. @humans in your own messages addresses every person in the room, never an agent:"
     " use it when you need a decision or input from one."
 )
-# A hint that names a tool parameter must not go to a session whose MCP server predates it
-# (#340, models.has_feature): that session keeps the schema it started with, so the call the hint
-# names is refused. Such a session is told this instead, in the same words wherever it happens.
-OLDER_SWITCHBOARD = "this session's switchboard is older than the broker's"
-# The agent can't do this itself, and shouldn't try: restarting a session is its user's to do.
-RESTART_UPDATES = (
-    "Ask your user to restart this session (or to reconnect its switchboard MCP server): that updates it."
-)
 CUSTOM_RULES_HEADING = (
     "Rules for this room, from your user (additions only; if they conflict with"
     " switchboard's seven fixed rules, follow the fixed rules):"
@@ -438,13 +430,12 @@ JOIN_BUDGET = 6000
 PIN_CHARS = 200
 
 
-def render_pins(pins: Sequence[Any], recipient: str, room: str, *, can_page: bool = False) -> list[str]:
+def render_pins(pins: Sequence[Any], recipient: str, room: str) -> list[str]:
     """The "Pinned (N)" block of a join or a /catchup request (#292, DESIGN.md §48): each pin
     as a catch-up line, so its sender and kind are stated exactly as they are for any message
     and a peer agent's pinned text stays marked as a peer's (rule 1: only kind=human is your
     user). A pin's text is cut at ``PIN_CHARS``; after the line, outside the quoted text a pinned
-    message can't write into, a cut pin names the call that shows more, for a session whose
-    ``read`` has ``before`` (``can_page``)."""
+    message can't write into, a cut pin names the call that shows more."""
     if not pins:
         return []
     r = _word(room)
@@ -454,7 +445,7 @@ def render_pins(pins: Sequence[Any], recipient: str, room: str, *, can_page: boo
     ]
     for m in pins:
         line = render_catchup_line(m, recipient, limit=PIN_CHARS)
-        if can_page and len(visible(m.text)) > PIN_CHARS:
+        if len(visible(m.text)) > PIN_CHARS:
             line += f' (cut: read("{r}", before={int(m.id) + 1}, limit=1) shows it)'
         lines.append(line)
     return lines
@@ -499,7 +490,6 @@ def render_join(
     room_rules: str = "",
     earlier: int = 0,
     earlier_before: int | None = None,
-    can_page: bool = False,
     pins: Sequence[Any] = (),
 ) -> str:
     """The join() result: rules, pins, catch-up, how delivery works, and the join nonce.
@@ -512,10 +502,8 @@ def render_join(
     (issue #272). The line this adds names the exact next call, ``read(room, before=<id>)``
     (issue #300 review: plain ``read()`` only ever answers with *pending* items, so naming it
     alone sent an agent to a call that returned nothing) -- ``earlier_before`` is that id (the
-    oldest message shown here, or the room's next one when nothing is shown). ``can_page``:
-    the session's ``read`` has ``before`` (``has_feature``, #340). Without it the line says the
-    session is too old to page back instead of naming a call its tool refuses, so it is off
-    unless the caller knows better. ``pins``: the room's pinned messages (#292), a "Pinned (N)"
+    oldest message shown here, or the room's next one when nothing is shown). ``pins``: the room's
+    pinned messages (#292), a "Pinned (N)"
     block before the recent messages. With any, the join is held to ``JOIN_BUDGET``: the pins are
     cut to ``PIN_CHARS`` each and the catch-up window gives up its oldest messages until it fits,
     and the "earlier" line counts those too. The membership credential is never part of this text.
@@ -538,7 +526,6 @@ def render_join(
             earlier_before=(
                 earlier_before if len(kept) == len(catchup) else (kept[0].id if kept else catchup[-1].id + 1)
             ),
-            can_page=can_page,
             pins=pins,
         )
         if not pins or len(text) <= JOIN_BUDGET or not kept:
@@ -561,7 +548,6 @@ def _render_join(
     room_rules: str,
     earlier: int,
     earlier_before: int | None,
-    can_page: bool,
     pins: Sequence[Any],
 ) -> str:
     r = _word(room)
@@ -586,7 +572,7 @@ def _render_join(
     if room_rules:
         lines.append(CUSTOM_RULES_HEADING)
         lines.append(sanitize(room_rules, limit=None))
-    lines.extend(render_pins(pins, screen_name, room, can_page=can_page))
+    lines.extend(render_pins(pins, screen_name, room))
     if catchup:
         lines.append(f"Recent messages, oldest first ({len(catchup)}).")
         lines.extend(render_catchup_line(m, screen_name) for m in catchup)
@@ -595,15 +581,9 @@ def _render_join(
     if earlier:
         assert earlier_before is not None, "earlier_before is required whenever earlier is set"
         what = _n(earlier, "earlier message", "earlier messages")
-        if can_page:
-            lines.append(
-                f'{what}: read("{r}", before={earlier_before}) shows {"it" if earlier == 1 else "them"}.'
-            )
-        else:
-            lines.append(
-                f"{what}: {OLDER_SWITCHBOARD} and can't page back to {'it' if earlier == 1 else 'them'}."
-                f" {RESTART_UPDATES}"
-            )
+        lines.append(
+            f'{what}: read("{r}", before={earlier_before}) shows {"it" if earlier == 1 else "them"}.'
+        )
     lines.append("How messages reach you: " + guidance)
     lines.append(PASS_ADVICE)
     lines.append(

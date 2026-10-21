@@ -318,15 +318,15 @@ const TS = 1790000000;
 // a room with the four agents of the approved mockups (Chosen.dc): one approvals-off, one
 // parked, one on a remote machine
 const MEMBERS = [
-  { name: 'claude-1', harness: 'claude', status: 'idle', tier: 'claude:inbox', tier_note: '', away: null,
-    approval_mode: 'prompting', env_leak: false, held: false, queued: 0, inflight: 0, parked: false, parked_reason: null, host: '' },
-  { name: 'codex-1', harness: 'codex', status: 'busy', tier: 'codex:daemon', tier_note: '', away: null,
-    approval_mode: 'bypass', env_leak: false, held: false, queued: 2, inflight: 1, parked: false, parked_reason: null, host: '' },
-  { name: 'devin-1', harness: 'devin', status: 'idle', tier: 'devin:wait-loop', tier_note: '', away: null,
-    approval_mode: 'prompting', env_leak: false, held: false, queued: 4, inflight: 0, parked: true,
+  { name: 'claude-1', harness: 'claude', status: 'idle', tier: 'claude:https', tier_note: '', away: null,
+    approval_mode: 'prompting', held: false, queued: 0, inflight: 0, parked: false, parked_reason: null, host: '' },
+  { name: 'codex-1', harness: 'codex', status: 'busy', tier: 'codex:https', tier_note: '', away: null,
+    approval_mode: 'bypass', held: false, queued: 2, inflight: 1, parked: false, parked_reason: null, host: '' },
+  { name: 'devin-1', harness: 'devin', status: 'idle', tier: 'devin:https', tier_note: '', away: null,
+    approval_mode: 'prompting', held: false, queued: 4, inflight: 0, parked: true,
     parked_reason: 'its turn ended without wait()', host: '' },
-  { name: 'bench', harness: 'claude', status: 'idle', tier: 'claude:inbox', tier_note: '', away: null,
-    approval_mode: 'prompting', env_leak: false, held: false, queued: 0, inflight: 0, parked: false, parked_reason: null,
+  { name: 'bench', harness: 'claude', status: 'idle', tier: 'claude:https', tier_note: '', away: null,
+    approval_mode: 'prompting', held: false, queued: 0, inflight: 0, parked: false, parked_reason: null,
     host: 'fpga-pi' },
 ];
 

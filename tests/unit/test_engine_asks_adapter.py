@@ -1,10 +1,8 @@
 """The engine asks a session's adapter what its hooks mean, not its harness name (#169,
 DESIGN.md §9.1): which hooks set the session id and the approval mode, which SessionEnd
-takes it offline, which hook starts a background subagent, how a Stop re-arms, when missed
-stop follow-ups degrade a session, whose tier follows from its row, which prompt is input
-into the running turn, which harness needs another adapter on another host, how a pull
-answer is confirmed, and whose status its sinks give. A harness added with
-its own adapter needs no edit to the engine.
+takes it offline, which hook starts a background subagent, how a Stop re-arms, which prompt is
+input into the running turn, which hooks are a subagent's, how a pull answer is confirmed, and
+whose status its sinks give. A harness added with its own adapter needs no edit to the engine.
 """
 
 from __future__ import annotations
@@ -18,10 +16,8 @@ from engine_world import KEY, World
 from switchboard import envelope
 from switchboard.adapters import HTTPS_CLAUDE, HTTPS_CODEX, HTTPS_DEVIN, PullAdapter
 from switchboard.adapters.base import HOOK_CONTEXT_EVENTS
-from switchboard.adapters.codex import steered
-from switchboard.adapters.cursor import CursorAdapter
-from switchboard.config import Config
-from switchboard.models import HookEvent, Notice, Participant
+from switchboard.adapters.https import steered
+from switchboard.models import HookEvent, Participant
 
 
 class OtherAdapter(PullAdapter):
@@ -53,10 +49,7 @@ class ListeningAdapter(PullAdapter):
 
 
 class SteeredAdapter(PullAdapter):
-    """Codex's answers, on the unknown harness: steered input, and push paths that reach
-    only this machine."""
-
-    local_only = True
+    """Codex's answers, on the unknown harness: steered input."""
 
     def is_mid_turn(self, p: Participant, ev: HookEvent, was_idle: bool) -> bool:
         return steered(p, ev, was_idle)
@@ -70,16 +63,6 @@ class ScriptedAdapter(PullAdapter):
 
     def pull_ack(self, p: Participant, mode: str | None) -> str:
         return "immediate"
-
-
-class FollowupAdapter(CursorAdapter):
-    """Cursor's stop follow-ups, on the unknown harness, degraded after one miss."""
-
-    def followup_limit(self) -> int:
-        return 1
-
-    def degraded_text(self, name: str, n: int) -> str:
-        return f"{name} missed {n}"
 
 
 @pytest.fixture
@@ -151,29 +134,6 @@ def test_a_stop_re_arms_with_the_adapters_text_and_cap(listening: World) -> None
     assert out is not None and out.kind == "continue" and out.text == "listen in #build"
     w.hook(p, "PostToolUse", gen="g1", ok=True)
     assert w.hook(p, "Stop", gen="g1") is None  # one per prompt
-
-
-def test_missed_follow_ups_degrade_by_the_adapters_limit_and_text(tmp_path: Path, clock: FakeClock) -> None:
-    """Fails if the engine takes the limit and the notice from Cursor's config and text, or
-    re-derives the tier and ends the degraded spell only for a session named Cursor's."""
-    w = World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0))
-    w.engine.adapters["unknown"] = FollowupAdapter(w.cfg)
-    p, _m = w.agent("bot", harness="unknown", status="busy", hooks=True)
-    p = w.store.update_participant(p.id, session_key="cursor:conv-bot", bind_state="bound")
-    w.actions += w.engine.refresh_tier(p.id)
-    assert w.p(p).tier_note == "provisional"
-    w.human("try")
-    out = w.hook(p, "Stop", status="completed", loop_count=0, max_wait_s=630.0)
-    sink = w.engine.sinks.get(out.sink_id)
-    assert sink is not None and not sink.open
-    w.engine.on_hook_ack(sink.result["batch_id"], sink.result["ack"])
-    w.take()
-    w.hook(p, "Stop", status="completed", loop_count=0, max_wait_s=630.0)  # the follow-up never ran
-    assert w.p(p).unconfirmed_followups == 1
-    assert any(isinstance(a, Notice) and a.text == "bot missed 1" for a in w.take())
-    assert w.p(p).tier_note == "provisional, degraded"
-    w.hook(p, "UserPromptSubmit", gen="g2")  # the human's next prompt ends the spell
-    assert w.p(p).unconfirmed_followups == 0 and w.p(p).tier_note == "provisional"
 
 
 def test_input_into_the_running_turn_is_not_a_new_turn(w: World, clock: FakeClock) -> None:
@@ -276,29 +236,19 @@ def test_an_adapter_can_take_its_status_from_sinks_and_confirm_pulls_at_once(w: 
 
 def test_each_harness_answers_as_the_engine_did_by_name(w: World) -> None:
     """The move changes nothing: the harnesses the engine named before #169 answer yes. Devin over
-    HTTPS (§49.7) is Devin's adapter with another session key and tier, so it answers as Devin
-    does: a test that left it out would not notice the wait loop quietly dropping out."""
+    HTTPS (§49.7) has the wait loop, so a test that left it out would not notice the loop quietly
+    dropping out."""
     ads = w.engine.adapters
     clear = HookEvent(harness="claude", event="SessionEnd", t=0.0, reason="clear")
-    assert {h for h, a in ads.items() if a.reports_session_id} == {"claude", "devin", HTTPS_DEVIN, "test"}
-    # over HTTPS (§49.4) the mode comes with each hook, and /clear keeps a Claude session too
-    assert {h for h, a in ads.items() if a.reports_approval_mode} == {
-        "claude",
-        "codex",
-        HTTPS_CLAUDE,
-        HTTPS_CODEX,
-    }
-    assert {h for h, a in ads.items() if not a.ends_session(clear)} == {"claude", HTTPS_CLAUDE}
+    assert {h for h, a in ads.items() if a.reports_session_id} == {HTTPS_DEVIN, "test"}
+    # over HTTPS (§49.4) the mode comes with each hook, and /clear keeps a Claude session
+    assert {h for h, a in ads.items() if a.reports_approval_mode} == {HTTPS_CLAUDE, HTTPS_CODEX}
+    assert {h for h, a in ads.items() if not a.ends_session(clear)} == {HTTPS_CLAUDE}
     sub = HookEvent(harness="devin", event="PreToolUse", t=0.0, subagent_bg=True)
-    assert {h for h, a in ads.items() if a.starts_subagent(sub)} == {"devin", HTTPS_DEVIN}
-    assert {h for h, a in ads.items() if a.rearm_caps() != (0, 0)} == {"devin", HTTPS_DEVIN}
+    assert {h for h, a in ads.items() if a.starts_subagent(sub)} == {HTTPS_DEVIN}
+    assert {h for h, a in ads.items() if a.rearm_caps() != (0, 0)} == {HTTPS_DEVIN}
     dv = w.cfg.devin
-    caps = (dv.rearm_max_per_prompt, dv.rearm_max_per_hour)
-    assert ads["devin"].rearm_caps() == caps
-    assert ads[HTTPS_DEVIN].rearm_caps() == caps
-    assert {h for h, a in ads.items() if a.derives_tier} == {"cursor", "devin", HTTPS_DEVIN}
-    assert {h for h, a in ads.items() if a.followup_limit()} == {"cursor"}
-    assert ads["cursor"].followup_limit() == w.cfg.cursor.max_unconfirmed_followups
+    assert ads[HTTPS_DEVIN].rearm_caps() == (dv.rearm_max_per_prompt, dv.rearm_max_per_hour)
     assert {h for h, a in ads.items() if a.sink_status} == {"test"}
     p = w.p(w.agent("bot")[0])
     assert {h for h, a in ads.items() if a.pull_ack(p, None) != "hooks"} == {"test"}

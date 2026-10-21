@@ -68,32 +68,19 @@ class DeliveryCfg:
 
 @dataclass(frozen=True)
 class ClaudeCfg:
-    sessions_dir: str = "~/.claude/sessions"
-    inbox_hold_s: float = 0.3
-    inbox_idle_expire_s: float = 5.0
     wait_cap_s: int = 110
 
 
 @dataclass(frozen=True)
 class CodexCfg:
-    control_socket: str = "~/.codex/app-server-control/app-server-control.sock"
-    home: str = ""
-    bin: str = "codex"
-    queue_fallback: bool = True
-    require_thread_proof: bool = True
     wait_cap_s: int = 240
     ctx_max_chars: int = 5000
-    # a joined thread whose app-server died (e.g. the daemon auto-updated and restarted)
-    # is re-bound if it shows up on the new app-server within this window; 0 = end at once
-    restart_grace_s: float = 30.0
 
 
 @dataclass(frozen=True)
 class CursorCfg:
-    stop_park_s: int = 600
     wait_cap_s: int = 50
     ctx_max_chars: int = 8000
-    max_unconfirmed_followups: int = 2
 
 
 @dataclass(frozen=True)
@@ -110,6 +97,18 @@ class ReviewCfg:
     # Ignored since /catchup (DESIGN.md §26), which never looks for agentsview: still accepted
     # so a 0.2.0 config.toml loads; the broker logs a warning once at start when it is set.
     agentsview: str = ""
+
+
+# Keys that only the local agent path read, retired in 0.38.0 (#385): still accepted, so a config.toml of
+# an earlier release loads, and ignored. The broker logs one warning at start naming those it found, as
+# it does for ``[review] agentsview``.
+RETIRED_KEYS: dict[str, frozenset[str]] = {
+    "claude": frozenset({"sessions_dir", "inbox_hold_s", "inbox_idle_expire_s"}),
+    "codex": frozenset(
+        {"control_socket", "home", "bin", "queue_fallback", "require_thread_proof", "restart_grace_s"}
+    ),
+    "cursor": frozenset({"stop_park_s", "max_unconfirmed_followups"}),
+}
 
 
 @dataclass(frozen=True)
@@ -136,6 +135,8 @@ class Config:
     devin: DevinCfg = field(default_factory=DevinCfg)
     review: ReviewCfg = field(default_factory=ReviewCfg)
     security: SecurityCfg = field(default_factory=SecurityCfg)
+    # the retired keys the file had (``section.key``), ignored: reported once when the broker starts
+    retired: tuple[str, ...] = ()
 
     def replace(self, **changes: Any) -> "Config":
         return dataclasses.replace(self, **changes)
@@ -214,10 +215,16 @@ def from_dict(data: dict[str, Any]) -> Config:
             if not isinstance(top[key], str):
                 raise ConfigError(f"{key} must be a string")
             kwargs[key] = top[key]
+    retired: list[str] = []
     for key, cls in _SECTIONS.items():
         if key in data:
-            kwargs[key] = _section(cls, data[key], key)
-    return Config(**kwargs)
+            table = data[key]
+            gone = RETIRED_KEYS.get(key, frozenset())
+            if isinstance(table, dict):
+                retired += [f"{key}.{k}" for k in sorted(table) if k in gone]
+                table = {k: v for k, v in table.items() if k not in gone}
+            kwargs[key] = _section(cls, table, key)
+    return Config(**kwargs, retired=tuple(retired))
 
 
 # the human's name from the environment: a deployment's manifest names its admin (§32.4),

@@ -79,7 +79,7 @@ def test_find_forbidden_runtime_check() -> None:
     assert guardrails.find_forbidden(["codex", "--dangerously-bypass-approvals"])
 
 
-def test_no_permission_request_hooks_or_decisions_in_hook_script() -> None:
-    hook = (SRC / "hook" / "switchboard_hook.py").read_text()
+def test_no_permission_request_hooks_or_decisions_in_hook_replies() -> None:
+    hook = (SRC / "broker" / "hook_replies.py").read_text()
     assert "PermissionRequest" not in hook
     assert '"decision"' not in hook or "block" in hook

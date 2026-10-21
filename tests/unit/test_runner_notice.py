@@ -23,7 +23,7 @@ from switchboard.broker.hub import Hub, Subscriber
 from switchboard.broker.service import BrokerInfo, RoomService, message_dict
 from switchboard.config import Config
 from switchboard.delivery.runner import Runner
-from switchboard.models import Notice, Push
+from switchboard.models import Notice
 
 STATIC = Path(__file__).resolve().parents[2] / "src" / "switchboard" / "web" / "static"
 
@@ -95,13 +95,11 @@ def test_a_persisted_info_notice_is_one_room_line(w: World, runner: Runner, rec:
 
 def test_room_less_and_unpersisted_notices_stay_transient(w: World, runner: Runner, rec: Rec) -> None:
     runner.execute(
-        [Notice(None, "warn", "hook copy changed"), Notice(w.room.id, "info", "just now", persist=False)]
+        [Notice(None, "warn", "new web login"), Notice(w.room.id, "info", "just now", persist=False)]
     )
-    assert lines_with(rec, "hook copy changed") == [
-        ("notice", None, {"level": "warn", "text": "hook copy changed"})
-    ]
+    assert lines_with(rec, "new web login") == [("notice", None, {"level": "warn", "text": "new web login"})]
     assert lines_with(rec, "just now") == [("notice", "#build", {"level": "info", "text": "just now"})]
-    assert not [x for x in w.store.history(w.room.id) if x.text in ("hook copy changed", "just now")]
+    assert not [x for x in w.store.history(w.room.id) if x.text in ("new web login", "just now")]
 
 
 def test_the_loop_guard_trip_shows_once(w: World, runner: Runner, rec: Rec) -> None:
@@ -109,7 +107,7 @@ def test_the_loop_guard_trip_shows_once(w: World, runner: Runner, rec: Rec) -> N
     _pa, ma = w.agent("a")
     for i in range(6):
         w.agent_says(ma, f"hop {i}")
-    runner.execute([a for a in w.take() if not isinstance(a, Push)])  # no transport here
+    runner.execute(w.take())
     frames = lines_with(rec, "loop guard:")
     assert len(frames) == 1, frames
     kind, _room, data = frames[0]
@@ -125,7 +123,7 @@ def test_history_and_replays_keep_the_engine_warnings_styled(
     for i in range(6):
         w.agent_says(ma, f"hop {i}")
     budget = w.engine._budget_exhausted(w.store.room_by_id(w.room.id))
-    runner.execute([a for a in w.take() + budget if not isinstance(a, Push)])
+    runner.execute(w.take() + budget)
     svc.post_notice(svc.room("#build"), "alice set the hop limit to 30 (was 6) (via web)")
     hist = {m["text"].split(":")[0].split(" (")[0]: m for m in svc.history("#build") if m["kind"] == "notice"}
     assert hist["loop guard"]["level"] == "warn"

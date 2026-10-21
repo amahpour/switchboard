@@ -408,7 +408,7 @@ def test_a_mention_waiting_on_a_parked_member_escalates_once_per_spell(w: World)
     tick(w, 1)
     [note] = notices(w)
     assert note.level == "warn" and "claude-1 is parked — needs a poke" in note.text
-    assert f"#{msg.id}" in note.text and "call wait() or poke it" in note.text
+    assert f"#{msg.id}" in note.text and "no Stop hook waiting" in note.text
     [ev] = w.store.recent_events(kinds=("watchdog_escalate",))
     assert ev.data["why"] == "parked" and ev.data["ids"] == [msg.id]
     tick(w, 3 * W)

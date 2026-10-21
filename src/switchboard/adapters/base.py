@@ -1,10 +1,11 @@
-"""The common adapter interface (DESIGN.md §9.1) and the M2 pull adapter.
+"""The common adapter interface (DESIGN.md §9.1) and the pull adapter.
 
-``route`` is pure: given a participant, what the rules released and the
-member's open sink (if any), it says how the batch goes out:
-``push(path)`` (the adapter's ``send`` transports it), ``sink(id)`` (an open
-wait() call returns it), ``pull`` (the next hook or tool call claims it) or
-``none(reason)`` (parked: nothing can reach the agent right now).
+An adapter is what the engine asks about one harness's sessions (§49): how a session over HTTPS is
+woken and what its hooks mean. ``route`` is pure: given a participant, what the rules released and
+the member's open sink (if any), it says how the batch goes out: ``sink(id)`` (an open wait() call or
+a parked Stop hook returns it), ``pull`` (the next hook or tool call claims it) or ``none(reason)``
+(nothing can reach the agent right now). There is no push route: nothing reaches an agent over HTTPS
+that it hasn't asked for (§49.4).
 """
 
 from __future__ import annotations
@@ -12,23 +13,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from switchboard.broker.peer import McpIdentity
+from switchboard.broker.hook_replies import CONTEXT_MAX as HOOK_CONTEXT_MAX
 from switchboard.config import Config
-from switchboard.hook.switchboard_hook import CONTEXT_MAX as HOOK_CONTEXT_MAX
-from switchboard.models import Batch, HookEvent, Participant, Release, Route
-from switchboard.models import session_key as make_session_key
+from switchboard.models import HookEvent, Participant, Release, Route
 
-INLINE_PATHS = frozenset({"inbox", "wait", "read", "say"})
+INLINE_PATHS = frozenset({"wait", "read", "say"})
 
-
-def start_key(start: float | None) -> str:
-    """A process start time as a session-key component (DESIGN.md §6.3): fixed
-    precision, so a restarted process's new start never collides with the old key."""
-    return f"{start:.2f}" if start is not None else "?"
-
-
-# Hook events whose reply may carry context, per harness (DESIGN.md §7.3,
-# broker side; the hook script has its own copy of the output table).
+# Hook events whose reply may carry context, per harness (DESIGN.md §7.3; the table the broker
+# answers from is ``broker/hook_replies.py``).
 HOOK_CONTEXT_EVENTS: dict[str, frozenset[str]] = {
     "claude": frozenset({"SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure"}),
     "codex": frozenset({"PostToolUse"}),
@@ -38,35 +30,6 @@ HOOK_CONTEXT_EVENTS: dict[str, frozenset[str]] = {
     "test": frozenset({"UserPromptSubmit", "PostToolUse", "PostToolUseFailure"}),
 }
 
-# Events each harness registers (DESIGN.md §7.4), in canonical (Claude) spelling.
-HOOK_EVENTS: dict[str, frozenset[str]] = {
-    "claude": frozenset(
-        {"SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"}
-    ),
-    "codex": frozenset({"UserPromptSubmit", "PostToolUse", "Stop", "Interrupt", "SessionEnd"}),
-    "cursor": frozenset(
-        {"SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"}
-    ),
-    "devin": frozenset(
-        {"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"}
-    ),
-    "test": frozenset(
-        {"SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"}
-    ),
-}
-
-
-class SendError(Exception):
-    """A push that didn't go out. The message is a fixed string (no text, no paths).
-
-    ``counted=False`` marks a re-route (the batch goes back to pending without
-    counting as a push failure): e.g. a Codex steer when the turn already ended."""
-
-    def __init__(self, reason: str, *, counted: bool = True):
-        super().__init__(reason)
-        self.reason = reason[:80]
-        self.counted = counted
-
 
 @dataclass(frozen=True)
 class Caps:
@@ -75,23 +38,10 @@ class Caps:
     inline_paths: frozenset[str] = INLINE_PATHS
 
 
-@dataclass(frozen=True)
-class HelloClaims:
-    """What a harness keeps of a verified ``mcp.hello``'s params beyond what every harness has
-    (DESIGN.md §6.4). The MCP server's own claims, kept only where the harness can use them."""
-
-    env_leak: bool = False  # its environment carried another harness's markers (Claude's never does)
-    test_session: str | None = None  # the scripted test agent's --test-session (§9.6)
-    ack_mode: str | None = None  # its --ack: how its pull answers are confirmed (``pull_ack``)
-
-
 class Adapter:
     """Base class. Subclasses override what their harness supports."""
 
     harness = "unknown"
-    # At most one unconfirmed push frame per session, across its rooms (Claude:
-    # a second frame would queue behind the turn the first one starts).
-    serial_push = False
     # What this harness's hooks may set on the session (§6.3): its own session id (one the
     # history tools know it by), and its approval mode (only Claude's and Codex's hooks carry
     # a ``permission_mode``).
@@ -100,18 +50,8 @@ class Adapter:
     # Its status is inferred from its sinks, not its hooks: an open wait() is idle, anything
     # else busy (the scripted test agent, §9.6).
     sink_status = False
-    # Its tier follows from the participant row alone (Cursor's binding and degraded spell,
-    # Devin's wait loop), so the engine re-derives it when the row changes (§9.4).
-    derives_tier = False
     # A scripted stand-in: it exists only in test mode (§9.6).
     test_only = False
-    # The push channel an MCP connection becomes through ``mcp.attach`` (§6.4, §9.2): its name
-    # ("inbox": Claude's), and the tier it gives. "" when the harness has none. A connection asks
-    # for a channel by ``channel_flag``, the ``mcp.attach`` parameter that names it; the one with
-    # no flag is what a bare attach gets.
-    channel = ""
-    channel_flag = ""
-    channel_tier = ""
 
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -126,128 +66,27 @@ class Adapter:
             "devin": (c.devin.ctx_max_chars, c.devin.wait_cap_s),
         }
         ctx, wait = table.get(self.harness, (c.delivery.batch_max_chars, 50))
-        # never more than the hook script prints for this harness, so its cut
-        # is only a safety net (it prints nothing rather than cut, §7.3)
+        # never more than the broker prints for this harness (``hook_replies``), so its cut is only
+        # a safety net (it answers nothing rather than cut, §7.3)
         ctx = min(ctx, HOOK_CONTEXT_MAX.get(self.harness, ctx))
         return Caps(ctx_max_chars=ctx, wait_cap_s=wait)
 
     def tier(self, p: Participant | None) -> tuple[str, str | None]:
         return "mcp-only", None
 
-    # -- membership: session keys, binding (DESIGN.md §6.3) -----------------
-    def session_key(
-        self, ident: McpIdentity, thread_id: str | None, *, test_session: str | None = None
-    ) -> str:
-        """This harness's session key for a verified ``mcp.hello`` identity: by default,
-        one session per agent process (claude, devin, an unknown harness). Cursor
-        overrides this with a pending key until its join nonce binds a conversation id;
-        the scripted test agent (``test_session``, its ``--test-session``) keys by that
-        instead of its process."""
-        return make_session_key(self.harness, ident.host, f"{ident.agent_pid}@{start_key(ident.agent_start)}")
-
-    def existing_session(self, store: Any, ident: McpIdentity) -> Participant | None:
-        """A session this verified identity already holds under a key other than what
-        ``session_key`` computes right now (Cursor: by its MCP server's agent process,
-        until a conversation id is known) — None for harnesses whose key alone finds it."""
-        return None
-
-    def join_fields(self, existing: Participant | None) -> dict[str, Any]:
-        """Extra participant fields this harness's join needs beyond the common ones
-        (Cursor: a fresh or unbound row starts ``pending`` until its conversation binds
-        it)."""
-        return {}
+    # -- membership: session keys (DESIGN.md §6.3) ---------------------------
+    def session_key(self, host: str, thread_id: str | None, *, test_session: str | None = None) -> str:
+        """This harness's session key for a call on ``host`` (the token's device): what the call
+        names (Codex's thread, Claude Code's session id, ...). A harness with no key refuses with a
+        ``ValueError`` whose message goes to the caller."""
+        raise ValueError(f"a {self.harness} session can't be told apart: its calls name no session")
 
     def join_conflict(self, store: Any, thread_id: str | None, host: str) -> str | None:
-        """Why this verified identity cannot join on ``host``, or None."""
+        """Why this session cannot join from ``host``, or None."""
         return None
-
-    def rebind_fields(self, existing: Participant | None, *, same_mcp: bool) -> dict[str, Any]:
-        """Fields to reset when a join moves to another MCP process."""
-        return {}
 
     def credential_error(self, p: Participant, params: dict[str, Any]) -> str | None:
-        """Why this call's harness identity does not match its membership credential."""
-        return None
-
-    def keep_on_mcp_disconnect(self, p: Participant) -> bool:
-        """Whether another channel keeps this session's status after MCP disconnects."""
-        return False
-
-    def rejoin_notice(self, p: Participant, name: str, *, same_mcp: bool) -> str | None:
-        """A notice for a rotated membership after an MCP process change, or None."""
-        return None
-
-    def conversation_kicked(self, store: Any, room_id: int, p: Participant) -> bool:
-        """True if this session's larger identity (Cursor: its bound conversation) was
-        kicked from ``room_id`` under an earlier participant row, even though ``p``
-        itself wasn't (a resumed conversation, DESIGN.md §9.4) — False for harnesses
-        with no such identity wider than the participant row."""
-        return False
-
-    def join_nonce_bind(self, ev: HookEvent) -> bool:
-        """True if this hook event is this harness's join-nonce bind (Cursor's
-        ``postToolUse`` for ``MCP:join``, carrying ``join_nonce``) — harnesses with no
-        such bind never claim one, however the event's own fields happen to look."""
-        return False
-
-    def nonce_ok(self, p: Participant, ev: HookEvent) -> bool:
-        """True if this hook event carries the join nonce ``p``'s own pending join
-        issued (Cursor's join-nonce bind) — harnesses with no such bind never have one
-        to check."""
-        return False
-
-    def bound_to(self, p: Participant, sid: str | None) -> bool:
-        """True if ``p`` is already bound to this hook's session id."""
-        return False
-
-    def conversation_key(self, p: Participant, sid: str | None) -> str | None:
-        """The session key a join-nonce bind to ``sid`` would set ``p`` to, or None for
-        a harness with no such bind, or a malformed id."""
-        return None
-
-    def conn_tier(self, ident: Any, existing: Participant | None) -> tuple[str, str | None]:
-        """The tier a join from this verified MCP connection gets (Claude: inbox if attached)."""
-        return self.tier(existing)
-
-    # -- ``mcp.hello`` and ``mcp.attach`` (DESIGN.md §6.4) ---------------------
-    def hello_claims(self, params: dict[str, Any]) -> HelloClaims:
-        """What this harness keeps of a verified ``mcp.hello``'s params. ``ValueError`` (its
-        message goes to the caller) for params this harness refuses (the test agent's
-        session key)."""
-        return HelloClaims(env_leak=bool(params.get("env_leak")))
-
-    def channel_refusal(self, ident: Any, *, has_token: bool, guard_ok: bool) -> str | None:
-        """Why this verified MCP connection can't be this harness's ``channel`` (``guard_ok``: the
-        MCP server's own guard passed), or None. Only harnesses with a channel are ever asked."""
-        return f"{self.harness} has no push channel"
-
-    def attach(self, mcp_pid: int, mcp_start: float | None, conn: Any, host: str) -> None:
-        """Make ``conn`` the channel of the sessions of that MCP process (``channel`` only)."""
-        raise NotImplementedError(f"{self.harness} has no push channel")
-
-    def detach(self, conn: Any) -> list[int]:
-        """Forget every channel on ``conn``; wakes waiting on it fail. Returns the mcp pids."""
-        return []
-
-    def posted(self, batch_id: int, conn: Any, result: dict[str, Any]) -> bool:
-        """``mcp.posted`` from the channel a frame was handed to: True if it settled one."""
-        return False
-
-    def on_joined(self, p: Participant, nonce: str, fresh: bool) -> None:
-        """A join (``fresh``: a new membership or another process) was persisted."""
-        return None
-
-    def defer_end(self, p: Participant) -> bool:
-        """The liveness check found ``p``'s agent process gone: True keeps the
-        session for now (Codex: a daemon restart's grace window), False ends it."""
-        return False
-
-    def on_mcp_hello(self, ident: Any, mine: list[Participant]) -> None:
-        """A verified ``mcp.hello`` (``mine``: the sessions of that same MCP process)."""
-        return None
-
-    def status_summary(self) -> str | None:
-        """A one-line state for ``switchboard status`` (Codex: the link), or None."""
+        """Why this call's harness identity does not match its membership."""
         return None
 
     def join_guidance(self, p: Participant, room: str) -> str:
@@ -270,17 +109,13 @@ class Adapter:
     def pull_ack(self, p: Participant, mode: str | None) -> str:
         """How a wait/read/say answer to ``p`` is confirmed (§8.7): ``hooks`` (its hooks,
         or its next switchboard call while none were ever seen), ``next_call``,
-        ``immediate`` or ``never``. ``mode`` is the ``--ack`` its MCP server claimed (§9.6),
+        ``immediate`` or ``never``. ``mode`` is the ack a scripted test agent asked for (§9.6),
         which only the test agent's adapter takes."""
         return "hooks"
 
     # -- routing (pure) -----------------------------------------------------
     def route(self, p: Participant, rel: Release, sink: Any, now: float) -> Route:
         raise NotImplementedError
-
-    def on_hook(self, p: Participant, ev: HookEvent) -> dict[str, Any] | None:
-        """Harness-specific side effects of a hook event (Codex: holds, thread proof)."""
-        return None
 
     def is_mid_turn(self, p: Participant, ev: HookEvent, was_idle: bool) -> bool:
         """True if this UserPromptSubmit is input into the running turn, not a new turn
@@ -303,8 +138,8 @@ class Adapter:
 
     def wait_drop_means_gone(self) -> bool:
         """True if an open wait() that loses its connection, followed by no call or hook from the
-        session for a round and a margin, means the agent is gone (Devin over HTTPS: a killed one
-        sends no SessionEnd, #448). A live agent re-arms its wait at once."""
+        session for a round and a margin, means the agent is gone (Devin: a killed one sends no
+        SessionEnd, #448). A live agent re-arms its wait at once."""
         return False
 
     def stop_wait_lost(self, held_s: float) -> str | None:
@@ -316,33 +151,17 @@ class Adapter:
 
     def ends_session(self, ev: HookEvent) -> bool:
         """True if this SessionEnd takes the session offline (§7.4). Claude's ``/clear``
-        keeps the process and its binding, so its ``reason=clear`` doesn't."""
+        keeps the session, so its ``reason=clear`` doesn't."""
         return True
 
-    # -- stop-time delivery (M5: Cursor stop park, Devin Stop block) ----------
+    # -- stop-time delivery (Cursor's and Claude's listener, Devin's Stop block) --
     def park_s(self, p: Participant, ev: HookEvent) -> float | None:
-        """Seconds a stop hook may park waiting for a follow-up (Cursor), else None."""
+        """Seconds a stop hook may park waiting for a follow-up, else None."""
         return None
 
     def stop_continues(self, p: Participant) -> bool:
         """True if this harness's Stop hook may return a continue at once (Devin)."""
         return False
-
-    def followup_limit(self) -> int:
-        """Unconfirmed stop follow-ups in a row that degrade the session: no more parks
-        until the human's next prompt in it (Cursor, §9.4). 0: never."""
-        return 0
-
-    def followup_missed(self, acked_at: float | None, reason: str, now: float) -> bool:
-        """True if this expiry counts as a stop follow-up the harness never ran."""
-        return True
-
-    def degraded_text(self, name: str, n: int) -> str:
-        """The warn notice when ``followup_limit`` misses in a row degrade the session."""
-        return (
-            f"{name}: {n} stop follow-ups in a row were not confirmed; no more follow-ups"
-            " until your next prompt"
-        )
 
     def rearm_caps(self) -> tuple[int, int]:
         """How many "keep listening" re-arms a Stop with nothing to deliver may return:
@@ -370,9 +189,7 @@ class Adapter:
         the wait() call's own successful PostToolUse)."""
         return True
 
-    def continue_verdict(
-        self, p: Participant, loop_count: int | None, acked: bool, ev: HookEvent
-    ) -> str | None:
+    def continue_verdict(self, p: Participant, acked: bool, ev: HookEvent) -> str | None:
         """For an unconfirmed stop continuation: 'confirm', an expiry reason, or None."""
         return None
 
@@ -380,45 +197,15 @@ class Adapter:
         """How long an acked stop continuation may wait for the session's next hook."""
         return 180.0
 
-    def expire_due(self, p: Participant, b: Batch, now: float) -> str | None:
-        """Event-based expiry of an offered push batch (§8.7): a reason, or None to keep it."""
-        return None
-
-    def push_expired(self, p: Participant, b: Batch, reason: str, now: float) -> None:
-        """A push batch of this participant expired (``p.push_expiries`` already counts it)."""
-        return None
-
-    # -- transport ------------------------------------------------------------
-    async def send(self, p: Participant, batch: Batch, text: str, **meta: Any) -> float | None:
-        """Carry out a push route. Returns when the frame was posted (epoch s), if known."""
-        raise NotImplementedError(f"{self.harness} has no push transport")
-
-    async def start(self, runner: Any) -> None:
-        return None
-
-    async def stop(self) -> None:
-        return None
-
 
 class PullAdapter(Adapter):
-    """Routing for sessions with no harness adapter (``unknown``): an open
-    wait() sink gets wakes; mid-task priority items are pulled by the agent's
-    next read()/say(); otherwise the member is parked. (Claude, Codex, Cursor
-    and Devin have their own adapters since M3-M5.)"""
+    """Routing for sessions with no harness adapter (``unknown``, and the base of the sessions over
+    HTTPS, §49.3): an open wait() sink gets wakes; mid-task priority items are pulled by the agent's
+    next read()/say(); otherwise the member is parked."""
 
     def __init__(self, harness: str, cfg: Config):
         super().__init__(cfg)
         self.harness = harness
-
-    def tier(self, p: Participant | None) -> tuple[str, str | None]:
-        if self.harness == "codex":
-            # _meta.threadId is taken on trust until the M4 thread proof (§9.3)
-            return "mcp-only", "unverified thread"
-        return "mcp-only", None
-
-    def context_events(self, p: Participant) -> frozenset[str]:
-        # Codex, Cursor and Devin hook outputs are enabled with their adapters (M4, M5).
-        return frozenset()
 
     def route(self, p: Participant, rel: Release, sink: Any, now: float) -> Route:
         if sink is not None:

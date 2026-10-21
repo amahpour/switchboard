@@ -30,7 +30,6 @@ def stepped_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Paths
     now[0] += 4.0  # WSL2 adjusted btime after the pidfile was written
     monkeypatch.setattr(proc, "read_linux_btime", lambda: now[0])
     monkeypatch.setattr(proc, "_linux_btime", lambda: now[0])
-    monkeypatch.setattr(proc, "argv", lambda p, s: "switchboard start --foreground")
     return paths, pid, start
 
 

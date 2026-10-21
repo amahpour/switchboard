@@ -1,5 +1,6 @@
 """Schema 29 (#385) drops the tables of SSH remotes and of machines that dial in, ends the sessions that
-only they could reach, and keeps everything else.
+only they could reach, and keeps everything else. The next step (30) has its own file; this one stops
+at 29, so the step is seen on its own.
 
 The database is a real one: ``tests/fixtures/db/v0_37_2.sql`` was written by switchboard 0.37.2, the
 last release with both ways for an agent to reach the broker (``make_v0_37_2.py`` made it), and has
@@ -18,6 +19,12 @@ from switchboard import db
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "db" / "v0_37_2.sql"
 # the sessions of a host that no longer exists: a host name and a real MCP pid
 RETIRED_HOSTS = ("fpga-pi", "work-laptop")
+
+
+@pytest.fixture(autouse=True)
+def stop_at_29(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The step to 30 ends the local sessions too and drops columns; this file is about 29 alone."""
+    monkeypatch.setattr(db, "SCHEMA_VERSION", 29)
 
 
 def database_at_28(tmp_path: Path) -> Path:
@@ -95,23 +102,6 @@ def test_the_0_37_2_database_migrates_keeping_every_row_and_ending_only_the_reti
         assert now == row, key
     assert {r["host"] for r in old_rows.values() if r["mcp_pid"] == 0} == {"laptop", "desktop"}
     con.close()
-
-
-def test_a_migrated_database_has_the_fresh_schemas_tables(tmp_path: Path) -> None:
-    """The step changes no column: what it leaves is what a fresh database has, table by table.
-    Fails if a table or column differs between the migrated and the fresh schema."""
-    migrated = db.open_db(database_at_28(tmp_path))
-    fresh = db.open_db(tmp_path / "fresh.db")
-    names = lambda c: sorted(  # noqa: E731
-        r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-    )
-    assert names(migrated) == names(fresh)
-    for table in db.TABLES:
-        assert [tuple(r) for r in migrated.execute(f"PRAGMA table_info({table})")] == [
-            tuple(r) for r in fresh.execute(f"PRAGMA table_info({table})")
-        ], table
-    migrated.close()
-    fresh.close()
 
 
 def test_a_failed_step_leaves_the_database_as_it_was(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

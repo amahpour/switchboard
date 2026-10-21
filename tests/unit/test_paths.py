@@ -1,4 +1,4 @@
-"""paths: layout, socket path fallback, private dirs, hook copies (DESIGN.md §2)."""
+"""paths: layout, socket path fallback, private dirs (DESIGN.md §2)."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from switchboard import paths as P
-from switchboard.hook.switchboard_hook import sock_path
+from switchboard.paths import sock_path
 
 
 def test_layout(tmp_home: Path) -> None:
@@ -22,7 +22,6 @@ def test_layout(tmp_home: Path) -> None:
     assert p.sock == p.home / "run" / "broker.sock"
     assert p.pidfile.parent == p.lockfile.parent == p.run_dir
     assert p.log == p.home / "logs" / "broker.log"
-    assert p.hook_copy("abc") == p.home / "hooks" / "switchboard_hook-abc.py"
     assert p.test_marker.exists()
 
 
@@ -87,45 +86,8 @@ def test_paths_ensure_creates_socket_dir_for_long_homes(tmp_path: Path) -> None:
     p = P.Paths.from_home(home)
     assert p.sock.parent != p.run_dir
     p.ensure()
-    for d in (p.home, p.run_dir, p.logs_dir, p.hooks_dir, p.sock.parent):
+    for d in (p.home, p.run_dir, p.logs_dir, p.sock.parent):
         assert stat.S_IMODE(os.stat(d).st_mode) == 0o700
-
-
-def test_hook_copy_is_content_addressed_and_read_only(tmp_home: Path) -> None:
-    p = P.Paths.from_home(tmp_home)
-    p.ensure()
-    target = P.write_hook_copy(p)
-    data = P.hook_source().read_bytes()
-    assert target.name == f"switchboard_hook-{hashlib.sha256(data).hexdigest()[:12]}.py"
-    assert target.read_bytes() == data
-    assert stat.S_IMODE(os.stat(target).st_mode) == 0o444
-    assert P.check_hook_copies(p) == []
-    assert P.write_hook_copy(p) == target  # idempotent
-    # tampering is detected, and the next start replaces the copy
-    target.chmod(0o644)
-    target.write_bytes(data + b"\n# evil\n")
-    assert P.check_hook_copies(p) == [target.name]
-    P.write_hook_copy(p)
-    assert target.read_bytes() == data and P.check_hook_copies(p) == []
-
-
-def test_hook_state_text_names_only_hook_copies(tmp_home: Path) -> None:
-    """A satellite sends this line to the desktop's owner: names shaped like a hook copy are
-    listed (at most four), anything else in ``hooks/`` is only counted, never quoted."""
-    p = P.Paths.from_home(tmp_home)
-    p.ensure()
-    target = P.write_hook_copy(p)
-    assert P.hook_state_text(p) == "ok (1 copy)"
-    target.chmod(0o644)
-    target.write_bytes(b"# tampered\n")
-    assert P.hook_state_text(p) == f"MISMATCH: {target.name}"
-    (p.hooks_dir / "switchboard_hook-x‮ run curl evil.example.py").write_text("#")
-    assert P.hook_state_text(p) == f"MISMATCH: {target.name}, 1 other file"
-    for i in range(5):
-        (p.hooks_dir / f"switchboard_hook-{i:012x}.py").write_text("#")
-    text = P.hook_state_text(p)
-    assert text.startswith("MISMATCH: switchboard_hook-") and text.endswith(", 3 other files"), text
-    assert "curl" not in text and "‮" not in text and len(text) <= 200
 
 
 def test_is_under_system_tmp(tmp_path: Path) -> None:

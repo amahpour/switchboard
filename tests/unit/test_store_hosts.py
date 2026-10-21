@@ -1,8 +1,7 @@
-"""The host namespace in the store (DESIGN.md §27.5.4, §27.5.6, §27.6).
+"""The host namespace in the store (DESIGN.md §6.3, §49.3).
 
-A participant's pids are pids on its own host ('' is this machine). Every
-pid-keyed lookup is scoped to one host, restart recovery probes local rows only,
-session keys name their host, and the ``remotes`` table holds the owner's consent.
+A participant's host is its agent's device ('' only for the scripted test agent), and its session key
+names that host, so one session id on two devices is two sessions.
 """
 
 from __future__ import annotations
@@ -25,7 +24,7 @@ def store(tmp_path: Path, clock: FakeClock) -> Store:
 
 
 def part(store: Store, harness: str, host: str, rest: str, **kw):
-    fields = dict(agent_pid=4242, agent_start=100.0, mcp_pid=4250, mcp_start=101.0, status="idle")
+    fields = dict(status="idle")
     fields.update(kw)
     return store.upsert_participant(harness, session_key(harness, host, rest), host=host, **fields)
 
@@ -43,52 +42,6 @@ def test_session_key_helper() -> None:
             session_key("claude", bad, "x")
     assert valid_host("a") and valid_host("pi-2") and valid_host("a" * 24)
     assert HOST_RE.pattern == r"^[a-z][a-z0-9-]{0,23}$"
-
-
-def test_participants_by_mcp_is_host_scoped(store: Store) -> None:
-    local = part(store, "claude", "", "4242@100.00")
-    remote = part(store, "claude", PI, "4242@100.00")  # the same pids, on the Pi
-    assert local.host == "" and remote.host == PI and local.id != remote.id
-    assert [p.id for p in store.participants_by_mcp("", 4250, 101.0)] == [local.id]
-    assert [p.id for p in store.participants_by_mcp(PI, 4250, 101.0)] == [remote.id]
-    assert store.participants_by_mcp("other-pi", 4250, 101.0) == []
-    assert store.participants_by_mcp(PI, 4250, 999.0) == []  # a recycled pid on the Pi
-
-
-def test_active_participants_by_agent_is_host_scoped(store: Store) -> None:
-    local = part(store, "cursor", "", "agent:4242@100.00")
-    remote = part(store, "cursor", PI, "agent:4242@100.00")
-    assert [p.id for p in store.active_participants_by_agent("cursor", "", 4242)] == [local.id]
-    assert [p.id for p in store.active_participants_by_agent("cursor", PI, 4242)] == [remote.id]
-    assert store.active_participants_by_agent("claude", PI, 4242) == []
-
-
-def test_recover_on_start_probes_local_rows_only(store: Store, clock: FakeClock) -> None:
-    room = store.create_room("#build", "alice", 60, 6)
-    local = part(store, "claude", "", "4242@100.00", status="busy")
-    remote = part(store, "claude", PI, "4242@100.00", status="busy")
-    store.create_membership(room.id, local.id, "vivado", "h1")
-    store.create_membership(room.id, remote.id, "bench", "h2")
-    asked: list[tuple[int, float | None]] = []
-
-    def alive(pid: int, start: float | None) -> bool:
-        asked.append((pid, start))
-        return False  # every pid looks dead on this machine
-
-    res = store.recover_on_start(alive)
-    assert asked == [(4242, 100.0)]  # once: the local row; the Pi's pid is never looked up here
-    assert res["participants_ended"] == 1
-    lp, rp = store.get_participant(local.id), store.get_participant(remote.id)
-    assert lp is not None and not lp.active
-    assert rp is not None and rp.active and rp.status == "offline"  # waits for its link
-    assert [m.name for m in store.members(room.id)] == ["bench"]
-
-
-def test_recover_on_start_never_ends_on_unknown(store: Store) -> None:
-    local = part(store, "claude", "", "4242@100.00")
-    store.recover_on_start(lambda pid, start: None)
-    p = store.get_participant(local.id)
-    assert p is not None and p.active
 
 
 def test_session_keys_and_hosts_must_agree(store: Store) -> None:
@@ -110,10 +63,10 @@ def test_session_keys_and_hosts_must_agree(store: Store) -> None:
 
 def test_members_and_messages_carry_host(store: Store) -> None:
     room = store.create_room("#build", "alice", 60, 6)
-    lp = part(store, "claude", "", "1@1.00")
-    rp = part(store, "claude", PI, "1@1.00")
-    lm = store.create_membership(room.id, lp.id, "vivado", "h1")
-    rm = store.create_membership(room.id, rp.id, "bench", "h2")
+    lp = part(store, "test", "", "vivado")
+    rp = part(store, "claude", PI, "s-1")
+    lm = store.create_membership(room.id, lp.id, "vivado")
+    rm = store.create_membership(room.id, rp.id, "bench")
     assert {m.name: m.host for m in store.members(room.id)} == {"vivado": "", "bench": PI}
     a = store.insert_message(
         room.id,
@@ -122,7 +75,7 @@ def test_members_and_messages_carry_host(store: Store) -> None:
         via="mcp",
         text="hi",
         sender_membership_id=lm.id,
-        sender_harness="claude",
+        sender_harness="test",
     )
     b = store.insert_message(
         room.id,

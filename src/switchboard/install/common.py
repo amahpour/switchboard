@@ -41,7 +41,6 @@ from switchboard import DIST_NAME
 from switchboard.colors import PLAIN, Paint, for_args
 
 MASK_RE = re.compile(r"token|key|secret|pass|auth|env|url", re.IGNORECASE)
-_UNSAFE_PATH_CHARS = set("'\"$`\\\n\r")
 
 
 class InstallError(Exception):
@@ -122,35 +121,7 @@ class Plan:
         return "nothing to remove"
 
 
-# ------------------------------------------------------------------ commands
-def check_path(p: str, what: str) -> str:
-    if not os.path.isabs(p):
-        raise InstallError(f"{what} must be an absolute path: {p}")
-    if any(c in _UNSAFE_PATH_CHARS for c in p):
-        raise InstallError(f"{what} contains a quote, $, backslash or newline; install refuses it: {p!r}")
-    return p
-
-
-def hook_command(
-    python: str, home: str, sha12: str, harness: str, event: str, max_wait: float | int | None = None
-) -> str:
-    """DESIGN.md §7.1: a /bin/sh guard, so a missing file or interpreter exits 0."""
-    check_path(python, "python")
-    check_path(home, "home")
-    if (
-        not re.fullmatch(r"[0-9a-f]{12}", sha12)
-        or not re.fullmatch(r"[a-z]+", harness)
-        or not re.fullmatch(r"[A-Za-z]+", event)
-    ):
-        raise InstallError("bad hook command parts")
-    mw = f" --max-wait {int(max_wait)}" if max_wait is not None else ""
-    h = f"{home}/hooks/switchboard_hook-{sha12}.py"
-    return (
-        f'/bin/sh -c \'H="{h}"; P="{python}"; [ -r "$H" ] && [ -x "$P" ] && exec "$P" -I -S "$H"'
-        f' --home "{home}" --harness {harness} --event {event}{mw}; exit 0\''
-    )
-
-
+# ------------------------------------------------------------------ recognising
 def hook_ref(home: str) -> str:
     """The path prefix of every switchboard hook copy for ``home`` (any version).
     A plain substring: used where over-matching is the safe side (purge)."""

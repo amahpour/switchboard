@@ -74,7 +74,7 @@ def two(store: Store) -> tuple[Room, Room, list[int], list[int]]:
     membership ids, so a new room and membership reuse them after the delete."""
     b, _, _ = seed_room(store, "#bravo", "b")
     a, a_mids, a_msgs = seed_room(store, "#alpha", "a")
-    store.end_membership(a_mids[2], "closed", keep_cred=True)
+    store.end_membership(a_mids[2], "closed")
     return a, b, a_mids, a_msgs
 
 

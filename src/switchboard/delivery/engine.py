@@ -2,26 +2,24 @@
 
 The engine owns every delivery decision. It reads and writes the store and
 reads the clock, but does no network or process I/O and never touches
-asyncio: every method returns a list of ``Action``s (Push, ResolveSink,
-Notice, Snapshot) for the async ``Runner`` to carry out. That keeps every
-rule unit-testable with a FakeClock.
+asyncio: every method returns a list of ``Action``s (ResolveSink, Notice,
+Snapshot) for the async ``Runner`` to carry out. That keeps every rule
+unit-testable with a FakeClock.
 
 Offers are two-phase (§8.7): a batch is *offered* when it leaves (a wait()
-result, a read()/say() answer, a hook reply, a push) and *confirmed* only on
+result, a read()/say() answer, a hook reply) and *confirmed* only on
 evidence from the verified session that received it; otherwise it expires
 and its deliveries go back to pending. Duplicates are possible; skips are not.
-
-M3 adds the Claude inbox push path (confirmed by the UserPromptSubmit that
-carries the batch token, expired by the adapter's event rules) and
-re-deliver-once on Stop; M4 the Codex push paths. M5 adds stop-time
-delivery: a Cursor stop hook *parks* (a ``park`` sink the engine fills with a
-follow-up), a Devin Stop hook returns a ``decision: block`` (a wake batch, or
-the "call wait()" re-arm). Both are *continuations*: confirmed by the hook's
-ack plus the session's next hook, per the adapter's ``continue_verdict``.
-M6 adds the watchdog (an unanswered @mention is brought back as a reminder
+There is no push: nothing reaches a session over HTTPS (§49) that it hasn't
+asked for, so an idle one is woken by its own Stop hook, which *parks*
+(a ``park`` sink the engine fills with a follow-up), and a Devin Stop hook returns
+a ``decision: block`` (a wake batch, or the "call wait()" re-arm). Both are
+*continuations*: confirmed by the hook's ack plus the session's next hook, per the
+adapter's ``continue_verdict``.
+The watchdog (an unanswered @mention is brought back as a reminder
 up to ``watchdog_max`` times, then the human is told; a mention waiting on a
 parked member is escalated too), the rate-limit check behind say(), and no
-Cursor park while every room of the session is paused. The read-first rule
+park while every room of the session is paused. The read-first rule
 behind pass() (§24): refused while a peer message reached the member only as
 a "call read()" stub.
 """
@@ -36,6 +34,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from switchboard import envelope
+from switchboard.adapters import adapter_for
 from switchboard.adapters.base import Adapter
 from switchboard.clock import Clock
 from switchboard.config import Config
@@ -43,7 +42,6 @@ from switchboard.delivery import rules
 from switchboard.delivery.sinks import Sink, SinkRegistry
 from switchboard.models import (
     CONTINUE_PATHS,
-    HOOK_PATHS,
     PULL_PATHS,
     WATCHDOG_DONE,
     Action,
@@ -55,14 +53,12 @@ from switchboard.models import (
     Message,
     Notice,
     Participant,
-    Push,
     Release,
     ResolveSink,
     Room,
     Snapshot,
     display_room,
     join_code_hash,
-    over_https,
 )
 from switchboard.store import Store
 
@@ -71,7 +67,6 @@ log = logging.getLogger("switchboard.engine")
 TURN_BOUNDARY_EVENTS = frozenset({"UserPromptSubmit", "Stop", "SessionStart", "SessionEnd", "Interrupt"})
 CONFIRMING_EVENTS = frozenset({"PostToolUse", "UserPromptSubmit"})
 MAX_READ = 50
-PUSH_EXPIRY_WARN = 3  # consecutive push-path expiries before a warn notice (§8.7)
 WAIT_PRE_FRESH_S = 30.0  # a wait()'s PreToolUse is at most this much older than the call
 # statuses a stop continuation (or a Devin re-arm) set; undone if no hook ever follows
 STOP_BUSY_SRCS = frozenset({"stop:followup", "stop:block", "stop:rearm"})
@@ -82,10 +77,9 @@ REARM_WINDOW_S = 3600.0  # the per-participant re-arm cap's window
 
 @dataclass
 class Cont:
-    """An unconfirmed stop continuation (a Cursor follow-up, a Devin Stop block)."""
+    """An unconfirmed stop continuation (a parked Stop hook's follow-up, a Devin Stop block)."""
 
     participant_id: int
-    loop_count: int | None  # Cursor: the stop's loop_count when the follow-up was sent
     created_at: float = 0.0
     acked_at: float | None = None  # the hook printed it (hook.ack)
 
@@ -155,15 +149,11 @@ class Engine:
         return self.clock.now()
 
     def adapter(self, p: Participant) -> Adapter:
-        host = getattr(p, "host", "")
-        return self.adapter_for(p.harness, host, https=over_https(host, getattr(p, "mcp_pid", None)))
+        return self.adapter_for(p.harness)
 
-    def adapter_for(self, harness: str, host: str = "", *, https: bool = False) -> Adapter:
-        """The adapter of a ``harness`` session on ``host`` ('' for this machine). A session over
-        HTTPS has its harness's ``@https`` adapter where there is one (§49.3)."""
-        if https and f"{harness}@https" in self.adapters:
-            return self.adapters[f"{harness}@https"]
-        return self.adapters.get(harness) or self.adapters["unknown"]
+    def adapter_for(self, harness: str) -> Adapter:
+        """The adapter of a ``harness`` session; see ``adapters.adapter_for``."""
+        return adapter_for(self.adapters, harness)
 
     def token(self, b: Batch) -> str:
         return envelope.batch_token(self.key, b.id, b.membership_id)
@@ -424,15 +414,6 @@ class Engine:
         if route.kind == "sink" and sink is not None:
             out += self._fill_sink(p, m, room, rel, sink, pending)
             out += unparked()
-        elif route.kind == "push":
-            if adapter.serial_push and self.store.offered_batch_exists(p.id, PULL_PATHS | HOOK_PATHS):
-                # One frame in flight per session (§9.2): a second frame (another
-                # room) would queue behind the turn the first one starts and could
-                # straddle an approval prompt. It goes when the first settles.
-                pass
-            else:
-                out += self._push(p, m, room, rel, route.path or "inbox")
-            out += unparked()
         elif route.kind == "none":
             reason = route.reason or "no wake path"
             self.parked[m.id] = reason
@@ -548,9 +529,9 @@ class Engine:
         return out
 
     def _fill_park(self, p: Participant, m: Membership, room: Room, rel: Release, sink: Sink) -> list[Action]:
-        """A parked Cursor stop hook returns a wake batch as its ``followup_message``
-        (§9.4): the next user message, so peer text is a stub. Counted as a
-        ``stop_cont`` wake; confirmed by the hook's ack plus the next hook."""
+        """A parked Stop hook returns a wake batch as its follow-up (§9.4, §49.4): the next
+        user message, so peer text is a stub. Counted as a ``stop_cont`` wake; confirmed by the
+        hook's ack plus the next hook."""
         caps = self.adapter(p).caps(p)
         inline = sink.path in caps.inline_paths
         fit = self._fit(
@@ -573,7 +554,7 @@ class Engine:
         self._mark_peer(b, p, items)
         self.store.mark_posted(b.id)
         text = self._render(b, fit, room, m, peer_inline=inline)
-        ack = self._continue(b, p, sink.meta.get("loop_count"))
+        ack = self._continue(b, p)
         sink.batch_id = b.id
         out: list[Action] = [
             self._close_sink(
@@ -609,12 +590,11 @@ class Engine:
         if any(i.prio == 0 for i in items):
             self.peer_marks[b.id] = p.boundary_seq
 
-    def _continue(self, b: Batch, p: Participant, loop_count: Any) -> str:
+    def _continue(self, b: Batch, p: Participant) -> str:
         """Arm a stop continuation: the hook must ack it, then the session's next hook confirms it."""
         ack = secrets.token_hex(16)
         self.hook_acks[b.id] = (ack, self.now() + self.d.hook_ack_s)
-        lc = loop_count if isinstance(loop_count, int) and not isinstance(loop_count, bool) else None
-        self.continues[b.id] = Cont(participant_id=p.id, loop_count=lc, created_at=self.now())
+        self.continues[b.id] = Cont(participant_id=p.id, created_at=self.now())
         return ack
 
     def _set_status_quiet(self, p: Participant, status: str, src: str) -> None:
@@ -624,56 +604,6 @@ class Engine:
             return
         before, after = self.store.set_status(p.id, status, src)
         self._event("status", participant_id=p.id, frm=before.status, to=after.status, src=src)
-
-    def _push(self, p: Participant, m: Membership, room: Room, rel: Release, path: str) -> list[Action]:
-        caps = self.adapter(p).caps(p)
-        inline = path in caps.inline_paths
-        fit = self._fit(
-            list(rel.items),
-            room,
-            m,
-            peer_inline=inline,
-            max_chars=min(self.d.batch_max_chars, caps.ctx_max_chars),
-        )
-        items = list(fit.items)
-        b = self.store.create_batch(
-            m.id,
-            path=path,
-            kind=rel.kind,
-            wake_kind="idle_wake" if rel.kind == "wake" else None,
-            wake_reason=rel.reason,
-            counted=rel.counted,
-            items=envelope.inline_flags(items, inline, fit.partial),
-        )
-        self._mark_peer(b, p, items)
-        text = self._render(b, fit, room, m, peer_inline=inline, mark_seen=False)
-        self._event(
-            "offer",
-            room_id=room.id,
-            membership_id=m.id,
-            participant_id=p.id,
-            batch_id=b.id,
-            path=path,
-            n=len(items),
-            counted=rel.counted,
-            chars=len(text),
-            ids=_ids(items),
-        )
-        out: list[Action] = [
-            Push(
-                b.id,
-                p.id,
-                path,
-                text,
-                room=room.name,
-                sender=items[0].sender_name if items else "",
-                rules_version=fit.rules_version,
-            )
-        ]
-        if rel.counted:
-            out += self._after_counted(room.id)
-        out.append(Snapshot(room.id))
-        return out
 
     def _arm_pull(self, b: Batch, p: Participant) -> list[Action]:
         """How a pull batch (wait/read/say) will be confirmed (§8.7, §9.6)."""
@@ -690,7 +620,7 @@ class Engine:
         self.hook_acks.pop(batch_id, None)
         self.pull_deadlines.pop(batch_id, None)
         self.pull_tool_use.pop(batch_id, None)
-        cont = self.continues.pop(batch_id, None)
+        self.continues.pop(batch_id, None)
         peer_mark = self.peer_marks.pop(batch_id, None)
         b = self.store.confirm_batch(batch_id, evidence)
         if b is None:
@@ -708,23 +638,10 @@ class Engine:
             batch_id=b.id,
             evidence=evidence,
         )
-        extra: list[Action] = []
-        if cont is not None and b.path == "stop_followup":
-            p = self.store.get_participant(m.participant_id)
-            if p is not None and p.unconfirmed_followups:
-                self.store.update_participant(p.id, unconfirmed_followups=0)
-                extra += self.refresh_tier(p.id)
-        # a settled push frame may free another room's frame (one per session)
-        again = self.evaluate_participant(m.participant_id) if is_push_path(b.path) else self.evaluate(m.id)
-        return extra + again + [Snapshot(m.room_id)]
+        return self.evaluate(m.id) + [Snapshot(m.room_id)]
 
-    def on_expire(
-        self, batch_id: int, reason: str, *, state: str = "expired", count_failure: bool = True
-    ) -> list[Action]:
-        """An offer failed: its deliveries go back to pending. ``count_failure=False``
-        (a push re-route: nothing reached the session) doesn't count toward the push-expiry
-        warning, and a counted wake gives its room's budget unit back (the next offer
-        spends it again), so re-routes never drain the budget."""
+    def on_expire(self, batch_id: int, reason: str) -> list[Action]:
+        """An offer failed: its deliveries go back to pending."""
         self.hook_acks.pop(batch_id, None)
         self.pull_deadlines.pop(batch_id, None)
         self.pull_tool_use.pop(batch_id, None)
@@ -736,17 +653,14 @@ class Engine:
                 # cancelled meanwhile (a kick or leave of that room): the busy it set still goes
                 return self._undo_stop_busy(cont.participant_id, cont.created_at, f"expired:{reason}")
             return []
-        push = is_push_path(cur.path)
-        b = self.store.expire_batch(
-            batch_id, reason, state=state, push=push and count_failure, refund=push and not count_failure
-        )
+        b = self.store.expire_batch(batch_id, reason)
         if b is None:
             return []  # pragma: no cover - checked offered just above, in this same synchronous call
         m = self.store.get_membership(b.membership_id)
         if m is None:
             return []  # pragma: no cover - membership rows are deleted only with a room without members (§28)
         self._event(
-            "expire" if state == "expired" else "cancel",
+            "expire",
             room_id=m.room_id,
             membership_id=m.id,
             participant_id=m.participant_id,
@@ -755,37 +669,12 @@ class Engine:
             reason=reason,
         )
         out: list[Action] = []
-        if push and state == "expired" and count_failure:
-            p = self.store.get_participant(m.participant_id)
-            if p is not None:
-                self.adapter(p).push_expired(p, b, reason, self.now())
-                if p.push_expiries == PUSH_EXPIRY_WARN:
-                    out.append(
-                        Notice(
-                            m.room_id,
-                            "warn",
-                            f"{m.screen_name}: deliveries not confirmed; check `switchboard status`",
-                        )
-                    )
         if cont is not None and reason in TIMER_EXPIRIES:
             # the continuation set the member busy; with no hook since, no turn ran
             # (an expiry a hook caused leaves the status to that hook). Set idle
             # before publishing the miss count, which readers use to observe expiry.
             out += self._undo_stop_busy(m.participant_id, cont.created_at, f"expired:{reason}")
-        if (
-            cont is not None
-            and b.path == "stop_followup"
-            and state == "expired"
-            and self._missed(m, cont, reason)
-        ):
-            out += self._followup_expired(m, reason)
-        again = self.evaluate_participant(m.participant_id) if push else self.evaluate(m.id)
-        return out + again + [Snapshot(m.room_id)]
-
-    def _missed(self, m: Membership, cont: Cont, reason: str) -> bool:
-        """Does this expiry count as a stop follow-up the harness never ran (§9.4)?"""
-        p = self.store.get_participant(m.participant_id)
-        return p is not None and self.adapter(p).followup_missed(cont.acked_at, reason, self.now())
+        return out + self.evaluate(m.id) + [Snapshot(m.room_id)]
 
     def _undo_stop_busy(self, participant_id: int, since: float, src: str) -> list[Action]:
         """A stop continuation or re-arm set the member busy (a turn should start).
@@ -797,35 +686,6 @@ class Engine:
         if p.hooks_seen_at is not None and p.hooks_seen_at > since:
             return []
         return self.set_status(p, "idle", src, bump=True)
-
-    def _followup_expired(self, m: Membership, reason: str) -> list[Action]:
-        """A stop follow-up that was never confirmed. After the adapter's
-        ``followup_limit`` in a row the member is degraded: no more parks until the
-        human's next prompt in that session (Cursor, §9.4)."""
-        p = self.store.get_participant(m.participant_id)
-        if p is None:
-            return []  # pragma: no cover - participant rows are never deleted
-        adapter = self.adapter(p)
-        n = p.unconfirmed_followups + 1
-        self.store.update_participant(p.id, unconfirmed_followups=n)
-        limit = adapter.followup_limit()
-        out: list[Action] = []
-        if limit and n == limit:
-            self._event("tier", participant_id=p.id, what="degraded", reason=reason, n=n)
-            out.append(Notice(m.room_id, "warn", adapter.degraded_text(m.screen_name, n)))
-        return out + self.refresh_tier(p.id)
-
-    def refresh_tier(self, participant_id: int) -> list[Action]:
-        """Re-derive a participant's tier from its adapter (binding, degraded, ...)."""
-        p = self.store.get_participant(participant_id)
-        if p is None or not self.adapter(p).derives_tier:
-            return []
-        tier, note = self.adapter(p).tier(p)
-        if (tier, note) == (p.tier, p.tier_note):
-            return []
-        self.store.update_participant(p.id, tier=tier, tier_note=note)
-        self._event("tier", participant_id=p.id, tier=tier, note=note or "")
-        return self._snap(self._rooms_of(p.id))
 
     def expire_pull_batches(
         self,
@@ -1042,9 +902,9 @@ class Engine:
     def open_park(
         self, p: Participant, ev: HookEvent, secs: float, conn_id: int | None = None
     ) -> tuple[Sink, list[Action]]:
-        """A Cursor stop hook parks (§9.4): one live park per conversation (an
-        older one resolves with no continuation), serving every room of the
-        session. The engine fills it with the first wake batch that is due."""
+        """A Stop hook parks (§9.4, §49.4): one live park per session (an older one resolves with
+        no continuation), serving every room of the session. The engine fills it with the first
+        wake batch that is due."""
         out: list[Action] = []
         for old in self.sinks.parks_for(p.id):
             out.append(self._close_sink(old, None, "superseded"))
@@ -1061,9 +921,8 @@ class Engine:
             opened_at=now,
             deadline=now + float(secs),
             conn_id=conn_id,
-            meta={"loop_count": ev.loop_count},
         )
-        self._event("park", participant_id=p.id, secs=round(float(secs), 1), loop_count=ev.loop_count)
+        self._event("park", participant_id=p.id, secs=round(float(secs), 1))
         out += self.evaluate_participant(p.id)
         return sink, out + self._snap(m2.room_id for m2 in ms)
 
@@ -1170,7 +1029,7 @@ class Engine:
         return out + self._pause_actions(room_id)
 
     def _pause_actions(self, room_id: int) -> list[Action]:
-        """/pause (or the loop guard): open waits return 'paused', unposted offers are cancelled."""
+        """/pause (or the loop guard): open waits return 'paused' and held Stop hooks end."""
         out: list[Action] = []
         room = self.store.room_by_id(room_id)
         for s in self.sinks.for_room(room_id):
@@ -1182,9 +1041,6 @@ class Engine:
                 for x in self.store.participant_memberships(m.participant_id)
             ):
                 out += self.release_parks(m.participant_id, "paused")
-            for b in self.store.offered_batches(m.id):
-                if b.posted_at is None:
-                    out += self.on_expire(b.id, "pause", state="cancelled")
             self._unpark(m.id)
         out.append(Snapshot(room_id))
         return out
@@ -1254,20 +1110,8 @@ class Engine:
         before, after = self.store.set_status(p.id, status, src, bump_boundary=bump)
         if before.status != after.status:
             self._event("status", participant_id=p.id, frm=before.status, to=after.status, src=src)
-        out: list[Action] = []
-        if status == "offline":
-            out += self.expire_push_batches(p.id, "offline")
-        out += self.evaluate_participant(p.id)
+        out = self.evaluate_participant(p.id)
         return out + self._snap(self._rooms_of(p.id))
-
-    def expire_push_batches(self, participant_id: int, reason: str) -> list[Action]:
-        """Unconfirmed push offers (Claude inbox, ...) of this participant go back to pending."""
-        out: list[Action] = []
-        for m in self.store.participant_memberships(participant_id):
-            for b in self.store.offered_batches(m.id):
-                if is_push_path(b.path):
-                    out += self.on_expire(b.id, reason)
-        return out
 
     # ================================================================= hooks
     def claim_for_hook(self, p: Participant, ev: HookEvent) -> tuple[HookOut | None, list[Action]]:
@@ -1278,8 +1122,8 @@ class Engine:
         status change) runs once at the end, with the status this event set and
         after its own context was claimed (§9.1 "updates status first"). Without
         that, the UserPromptSubmit that confirms an idle-wake frame would
-        evaluate the member as still idle and push a second frame into the turn
-        that frame just started, instead of giving the rest as hook context."""
+        evaluate the member as still idle and wake it a second time into the turn
+        the first wake just started, instead of giving the rest as hook context."""
         if self._deferred is not None:  # pragma: no cover - hooks are not re-entrant
             return self._claim_for_hook(p, ev)
         self._deferred = set()
@@ -1316,27 +1160,16 @@ class Engine:
                 gen_tainted=int(gen is not None and gen in self.tainted_gens.get(p.id, {})),
                 rearms_in_gen=0,
             )
-            # only a harness with stop follow-ups (Cursor) counts unconfirmed ones
-            limit = adapter.followup_limit()
-            if p.unconfirmed_followups and (not limit or p.unconfirmed_followups >= limit):
-                # the human's prompt ends a degraded spell (§9.4); below the limit the
-                # count stands: only a confirmed follow-up breaks a run of misses
-                upd["unconfirmed_followups"] = 0
         if adapter.starts_subagent(ev):
             self._taint(p.id, gen or p.gen)
             if gen is None or gen == p.gen:
                 upd["gen_tainted"] = 1
-        if E == "Stop" and ev.loop_count is not None:
-            upd["last_loop_count"] = ev.loop_count
         mode_changed = "approval_mode" in upd and upd["approval_mode"] != p.approval_mode
         p = self.store.update_participant(p.id, **upd)
         self.rearm_busy.pop(p.id, None)  # a hook came: the re-arm (if any) was acted on
         self.wait_drops.pop(p.id, None)  # a hook came: whatever dropped its wait() is alive (#448)
         revived = p.id in self.gone_by_drop and p.status == "offline"
         self.gone_by_drop.discard(p.id)
-        adapter.on_hook(p, ev)
-        if "unconfirmed_followups" in upd:
-            out += self.refresh_tier(p.id)
         # A hook of a prompt that started a background subagent may be the subagent's
         # (Devin, F§6 5.2): no context, no continue, no re-deliver for it. Only
         # ``adapter.starts_subagent`` taints a prompt, so only such a harness has one.
@@ -1356,7 +1189,6 @@ class Engine:
 
         # 1. confirmations carried by this event
         confirmed: set[int] = set()
-        woke: int | None = None  # a push batch whose frame started this turn
         if E in CONFIRMING_EVENTS and ev.ok is not False:
             for bid, mac in ev.tokens:
                 b = self.check_token(p.id, bid, mac)
@@ -1367,16 +1199,7 @@ class Engine:
                 ):
                     continue
                 confirmed.add(b.id)
-                if (
-                    E == "UserPromptSubmit"
-                    and is_push_path(b.path)
-                    and (b.wake_kind == "idle_wake" or was_idle)
-                ):
-                    # turn start = the confirming UserPromptSubmit (§12.5); a
-                    # bypass mid-task frame lands inside a running turn: not one
-                    self.store.set_batch_times(b.id, turn_start_at=ev.t if ev.t else now)
-                    woke = b.id
-                elif b.wake_kind == "wait_return" and E == "PostToolUse" and not stale_sub:
+                if b.wake_kind == "wait_return" and E == "PostToolUse" and not stale_sub:
                     # a wait() answer is in context now (§12.5 "in context")
                     self.store.set_batch_times(b.id, turn_start_at=ev.t if ev.t else now)
                     self.first_action[p.id] = b.id
@@ -1399,10 +1222,7 @@ class Engine:
             # it had no first action (a later PreToolUse, e.g. the re-armed wait(), isn't it)
             self.first_action.pop(p.id, None)
         if E == "UserPromptSubmit" and not mid_turn:
-            if woke is not None:
-                self._event("turn_start", participant_id=p.id, src="hook", batch_id=woke)
-            else:
-                self._event("turn_start", participant_id=p.id, src="hook")
+            self._event("turn_start", participant_id=p.id, src="hook")
         # 2. a turn ended without the PostToolUse that would confirm a pull answer
         if E in TURN_BOUNDARY_EVENTS and not mid_turn:
             out += self.expire_pull_batches(p.id, f"hook:{E}", before=ev.t)
@@ -1444,8 +1264,8 @@ class Engine:
         elif E == "Stop" and p.status != "waiting-approval":
             secs = adapter.park_s(p, ev)
             if secs is not None and self._unpaused_memberships(p.id):
-                # Cursor: the hook long-polls; the evaluation at the end of this
-                # event may fill the park at once (§9.4)
+                # the hook long-polls; the evaluation at the end of this event may fill the
+                # park at once (§9.4)
                 sink, acts = self.open_park(p, ev, secs)
                 out += acts
                 hook_out = HookOut("park", "", sink_id=sink.id)
@@ -1455,7 +1275,7 @@ class Engine:
         return hook_out, out
 
     def _unpaused_memberships(self, participant_id: int) -> list[Membership]:
-        """Memberships of this session whose room is not paused. A Cursor stop
+        """Memberships of this session whose room is not paused. A Stop
         hook parks only for these: a park serves every room of the session, and
         /pause ends one only when all of them are paused (§8.5), so a stop that
         arrives then gets no park either (no continuation until /resume)."""
@@ -1505,7 +1325,7 @@ class Engine:
         for bid, c in list(self.continues.items()):
             if c.participant_id != p.id:
                 continue
-            v = adapter.continue_verdict(p, c.loop_count, c.acked_at is not None, ev)
+            v = adapter.continue_verdict(p, c.acked_at is not None, ev)
             if v == "confirm":
                 t = ev.t if ev.t else self.now()
                 self.store.set_batch_times(bid, turn_start_at=t)  # §12.5: "first hook"
@@ -1574,7 +1394,7 @@ class Engine:
             )
             self._mark_peer(b, p, items)
             self.store.mark_posted(b.id)
-            ack = self._continue(b, p, None)
+            ack = self._continue(b, p)
             text = self._render(b, fit, room, m, peer_inline=inline)
             self._event(
                 "offer",
@@ -1717,15 +1537,6 @@ class Engine:
         )
         return HookOut("context", text, b.id, ack), [Snapshot(room.id)]
 
-    def _push_expiry(self, b: Batch, now: float) -> str | None:
-        m = self.store.get_membership(b.membership_id)
-        p = self.store.get_participant(m.participant_id) if m is not None else None
-        if m is None or p is None:
-            # Membership rows are deleted only with a room without members (§28);
-            # participant rows never are.
-            return None  # pragma: no cover - rows deleted only with an empty room (§28)
-        return self.adapter(p).expire_due(p, b, now)
-
     # ================================================================== tick
     def tick(self, now: float | None = None) -> list[Action]:
         """Timers: hook-ack and pull expiries, the offer backstop, wait deadlines, a dropped
@@ -1754,10 +1565,6 @@ class Engine:
         for b in self.store.offered_batches():
             if now - b.created_at >= self.d.offer_backstop_s:
                 out += self.on_expire(b.id, "backstop")
-            elif is_push_path(b.path):
-                reason = self._push_expiry(b, now)
-                if reason:
-                    out += self.on_expire(b.id, reason)
         for s in self.sinks.open_sinks():
             if now >= s.deadline:
                 out += self.sink_timeout(s.id)
@@ -1951,11 +1758,6 @@ BYPASS_MODES = frozenset({"bypassPermissions"})
 # (a future mode, a value no recording has shown) is 'unknown', shown as "?"
 # = treat like ⚠ (fail closed, §6.3).
 PROMPTING_MODES = frozenset({"default", "acceptEdits", "plan", "auto", "dontAsk"})
-
-
-def is_push_path(path: str) -> bool:
-    """A batch pushed by an adapter's transport (Claude inbox; Codex in M4)."""
-    return path not in PULL_PATHS and path not in HOOK_PATHS
 
 
 def approval_mode_of(permission_mode: str) -> str:

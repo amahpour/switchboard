@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 from switchboard import claims, db, reviews
@@ -261,9 +261,8 @@ class Store:
             return self._room_or_raise(room_id)
 
     def reopen_room(self, room_id: int) -> Room:
-        """A closed room gets its name back (DESIGN.md §28.4), and the credentials /close kept
-        (for its error text only) are cleared. NotFound unless the room exists and is closed;
-        Conflict while an open room holds the name. Nobody is re-added."""
+        """A closed room gets its name back (DESIGN.md §28.4). NotFound unless the room exists and is
+        closed; Conflict while an open room holds the name. Nobody is re-added."""
         with db.tx(self.con):
             room = self.room_by_id(room_id)
             if room is None or not room.closed:
@@ -271,9 +270,6 @@ class Store:
             if self.get_room(room.display_name) is not None:
                 raise Conflict(f"{room.display_name} is taken by an open room")
             got = self.rename_room(room_id, room.display_name, expect=room.name)
-            self.con.execute(
-                "UPDATE memberships SET cred_hash=NULL WHERE room_id=? AND left_reason='closed'", (room_id,)
-            )
         return got
 
     def latest_close_event(self, room_id: int) -> Event | None:
@@ -616,7 +612,7 @@ class Store:
             "SELECT m.id AS membership_id, m.participant_id, m.room_id, m.screen_name,"
             " m.held, m.joined_at, p.harness, p.status, p.tier, p.tier_note, p.away,"
             " p.status_line, p.status_line_at,"
-            " p.approval_mode, p.env_leak, p.host,"
+            " p.approval_mode, p.host,"
             " (SELECT COUNT(*) FROM deliveries d WHERE d.membership_id=m.id"
             "   AND d.state='pending') AS queued,"
             " (SELECT COUNT(*) FROM deliveries d WHERE d.membership_id=m.id"
@@ -637,7 +633,6 @@ class Store:
                 tier_note=r["tier_note"],
                 away=r["away"],
                 approval_mode=r["approval_mode"],
-                env_leak=bool(r["env_leak"]),
                 held=bool(r["held"]),
                 joined_at=r["joined_at"],
                 queued=r["queued"],
@@ -711,21 +706,15 @@ class Store:
                 (int(held), now if held else None, membership_id),
             )
 
-    def end_membership(
-        self, membership_id: int, reason: str, *, kicked: bool = False, keep_cred: bool = False
-    ) -> None:
-        """Leave, kick or session end: revoke the credential and open deliveries.
-        ``keep_cred`` (``/close``, DESIGN.md §28.2) keeps the hash so the broker can name the
-        closed room in the error; it never authorizes again (every lookup that does wants
-        ``left_at IS NULL``)."""
+    def end_membership(self, membership_id: int, reason: str, *, kicked: bool = False) -> None:
+        """Leave, kick or session end: revoke the open deliveries and the claims."""
         now = self.clock.now()
         with db.tx(self.con):
             self.con.execute("DELETE FROM claims WHERE membership_id=?", (membership_id,))
             self.con.execute(
                 "UPDATE memberships SET left_at=?, left_reason=?,"
-                " cred_hash=CASE WHEN ? THEN cred_hash ELSE NULL END,"
                 " kicked=MAX(kicked, ?) WHERE id=? AND left_at IS NULL",
-                (now, reason, int(keep_cred), int(kicked), membership_id),
+                (now, reason, int(kicked), membership_id),
             )
             self.con.execute(
                 "UPDATE deliveries SET state='revoked' WHERE membership_id=?"
@@ -1451,15 +1440,12 @@ class Store:
                 self.meta_set("owner_password", password_hash)
 
     # --------------------------------------------------------------- recovery
-    def recover_on_start(self, alive: Callable[[int, float | None], bool | None]) -> dict[str, int]:
-        """Restart semantics (§4): expire open offers, mark everyone offline,
-        end participants whose agent process is gone.
-
-        ``alive`` probes this machine's processes, so only local rows (``host = ''``)
-        are probed: a remote row's pids are pids on its own host. Remote rows go
-        offline like every row and wait for their link (DESIGN.md §27.5.6)."""
+    def recover_on_start(self) -> dict[str, int]:
+        """Restart semantics (§4): expire open offers and mark everyone offline. A session over HTTPS
+        is not tied to a process the broker could probe (§49.3), so none ends here: each comes back
+        with its next hook or call, and one that never does is ended by its device (the token's
+        revocation, a kick, a closed room)."""
         now = self.clock.now()
-        ended: list[tuple[int, int, str]] = []  # (room_id, membership_id, name)
         with db.tx(self.con):
             reverted = self.con.execute(
                 "UPDATE deliveries SET state='pending', attempts=attempts+1 WHERE state='offered'"
@@ -1474,39 +1460,10 @@ class Store:
                 " WHERE ended_at IS NULL",
                 (now,),
             ).rowcount
-            parts = self.con.execute(
-                "SELECT id, agent_pid, agent_start FROM participants"
-                " WHERE ended_at IS NULL AND agent_pid IS NOT NULL AND host=?",
-                (LOCAL_HOST,),
-            ).fetchall()
-            n_ended = 0
-            for p in parts:
-                if alive(p["agent_pid"], p["agent_start"]) is not False:
-                    continue  # alive, or can't tell (None): never ended on a guess
-                n_ended += 1
-                self.con.execute("UPDATE participants SET ended_at=? WHERE id=?", (now, p["id"]))
-                for m in self.con.execute(
-                    "SELECT id, room_id, screen_name FROM memberships"
-                    " WHERE participant_id=? AND left_at IS NULL",
-                    (p["id"],),
-                ).fetchall():
-                    self.end_membership(m["id"], "session_end")
-                    ended.append((m["room_id"], m["id"], m["screen_name"]))
-            for room_id, membership_id, name in ended:
-                self.insert_message(
-                    room_id,
-                    sender_name=name,
-                    sender_kind="agent",
-                    via="system",
-                    kind="leave",
-                    text="left (session ended)",
-                    sender_membership_id=membership_id,
-                )
         return {
             "batches_expired": expired,
             "deliveries_reverted": reverted,
             "participants_offline": offline,
-            "participants_ended": n_ended,
         }
 
     # ============================================================ M2: agents
@@ -1514,21 +1471,12 @@ class Store:
     _PARTICIPANT_COLS = frozenset(
         {
             "session_id",
-            "agent_pid",
-            "agent_start",
-            "mcp_pid",
-            "mcp_start",
-            "claude_socket",
-            "bind_state",
-            "bind_nonce",
-            "thread_proof",
             "status",
             "status_at",
             "status_src",
             "tier",
             "tier_note",
             "approval_mode",
-            "env_leak",
             "away",
             "status_line",
             "status_line_at",
@@ -1536,9 +1484,6 @@ class Store:
             "gen",
             "gen_tainted",
             "rearms_in_gen",
-            "last_loop_count",
-            "unconfirmed_followups",
-            "push_expiries",
             "hooks_seen_at",
             "last_say_at",
             "last_seen",
@@ -1547,31 +1492,6 @@ class Store:
             "host",
         }
     )
-
-    def joins_since_thread_proof(self, participant_id: int) -> set[int]:
-        """The memberships this participant joined with a "verifying..." join line (``join``
-        events with ``verifying: true``) after its last passed Codex thread proof (a ``bind``
-        event with ``what: thread_proof, ok: true``): the joins no "is verified" notice followed
-        yet. A proof whose notice was held for the first look for a TUI (``notice: held``)
-        doesn't count until the notice went out (``what: verified_notice``). Its
-        ``thread_proof`` column is reset by a join from another MCP process; this history
-        isn't (DESIGN.md §9.3)."""
-        rows = self.con.execute(
-            "SELECT * FROM events WHERE kind IN ('join', 'bind') AND participant_id=? ORDER BY id",
-            (participant_id,),
-        ).fetchall()
-        out: set[int] = set()
-        for e in (Event.from_row(r) for r in rows):
-            if e.kind == "join":
-                if e.data.get("verifying") is True and e.membership_id is not None:
-                    out.add(e.membership_id)
-            elif (
-                e.data.get("what") == "thread_proof"
-                and e.data.get("ok") is True
-                and e.data.get("notice") != "held"
-            ) or e.data.get("what") == "verified_notice":
-                out.clear()
-        return out
 
     def get_participant(self, participant_id: int) -> Participant | None:
         r = self.con.execute("SELECT * FROM participants WHERE id=?", (participant_id,)).fetchone()
@@ -1673,28 +1593,6 @@ class Store:
         ).fetchall()
         return [Participant.from_row(r) for r in rows]
 
-    def active_participants_by_agent(self, harness: str, host: str, agent_pid: int) -> list[Participant]:
-        """Active participants of ``harness`` on ``host`` whose agent process is
-        ``agent_pid`` (a pid on that host), newest first."""
-        rows = self.con.execute(
-            "SELECT * FROM participants WHERE harness=? AND host=? AND agent_pid=? AND ended_at IS NULL"
-            " ORDER BY id DESC",
-            (harness, host, agent_pid),
-        ).fetchall()
-        return [Participant.from_row(r) for r in rows]
-
-    def participants_by_mcp(self, host: str, mcp_pid: int, mcp_start: float | None) -> list[Participant]:
-        """Active participants served by the MCP process ``(mcp_pid, mcp_start)`` on ``host``."""
-        rows = self.con.execute(
-            "SELECT * FROM participants WHERE ended_at IS NULL AND host=? AND mcp_pid=?", (host, mcp_pid)
-        ).fetchall()
-        out = [Participant.from_row(r) for r in rows]
-        return [
-            p
-            for p in out
-            if p.mcp_start is not None and mcp_start is not None and abs(p.mcp_start - mcp_start) < 0.011
-        ]
-
     def end_participant(self, participant_id: int, reason: str = "session_end") -> list[Membership]:
         """End a session: leave every room, revoke creds and deliveries. Returns the ended memberships."""
         now = self.clock.now()
@@ -1715,16 +1613,15 @@ class Store:
         room_id: int,
         participant_id: int,
         screen_name: str,
-        cred_hash: str,
         join_code_hash: str | None = None,
     ) -> Membership:
         now = self.clock.now()
         with db.tx(self.con):
             last = self.last_message_id(room_id)
             cur = self.con.execute(
-                "INSERT INTO memberships(room_id, participant_id, screen_name, cred_hash,"
-                " joined_at, join_msg_id, join_code_hash) VALUES(?,?,?,?,?,?,?)",
-                (room_id, participant_id, screen_name, cred_hash, now, last, join_code_hash),
+                "INSERT INTO memberships(room_id, participant_id, screen_name,"
+                " joined_at, join_msg_id, join_code_hash) VALUES(?,?,?,?,?,?)",
+                (room_id, participant_id, screen_name, now, last, join_code_hash),
             )
             if cur.lastrowid is None:
                 raise StoreError("membership insert returned no id")
@@ -1759,26 +1656,6 @@ class Store:
         ).fetchone()
         return Membership.from_row(r) if r else None
 
-    def membership_by_cred(self, cred_hash: str) -> Membership | None:
-        r = self.con.execute(
-            "SELECT * FROM memberships WHERE cred_hash=? AND left_at IS NULL", (cred_hash,)
-        ).fetchone()
-        return Membership.from_row(r) if r else None
-
-    def closed_membership_by_cred(self, cred_hash: str) -> tuple[Membership, Room] | None:
-        """The membership ``/close`` ended with this credential, and its room while that is
-        still closed: only to name the room in the error (it authorizes nothing)."""
-        r = self.con.execute(
-            "SELECT * FROM memberships WHERE cred_hash=? AND left_at IS NOT NULL AND left_reason='closed'"
-            " ORDER BY id DESC LIMIT 1",
-            (cred_hash,),
-        ).fetchone()
-        if r is None:
-            return None
-        m = Membership.from_row(r)
-        room = self.room_by_id(m.room_id)
-        return (m, room) if room is not None and room.closed else None
-
     def participant_memberships(self, participant_id: int) -> list[Membership]:
         rows = self.con.execute(
             "SELECT * FROM memberships WHERE participant_id=? AND left_at IS NULL ORDER BY id",
@@ -1805,15 +1682,6 @@ class Store:
     def all_active_memberships(self) -> list[Membership]:
         rows = self.con.execute("SELECT * FROM memberships WHERE left_at IS NULL ORDER BY id").fetchall()
         return [Membership.from_row(r) for r in rows]
-
-    def rotate_cred(self, membership_id: int, cred_hash: str, join_code_hash: str | None = None) -> None:
-        """A re-join's new credential, and the new join code it was given (#304)."""
-        with db.tx(self.con):
-            self.con.execute(
-                "UPDATE memberships SET cred_hash=?, join_code_hash=COALESCE(?, join_code_hash)"
-                " WHERE id=? AND left_at IS NULL",
-                (cred_hash, join_code_hash, membership_id),
-            )
 
     def set_join_code(self, membership_id: int, join_code_hash: str) -> None:
         """A new join code for a membership that's still in its room (a reminder after a
@@ -1847,18 +1715,6 @@ class Store:
         r = self.con.execute(
             "SELECT 1 FROM memberships WHERE room_id=? AND participant_id=? AND kicked=1 LIMIT 1",
             (room_id, participant_id),
-        ).fetchone()
-        return r is not None
-
-    def was_kicked_session(self, room_id: int, harness: str, session_key: str, *, exclude: int) -> bool:
-        """True if an earlier participant of this session (the key itself, or an ended
-        one renamed ``<key>#ended-<n>``) other than ``exclude`` was kicked from the room."""
-        prefix = f"{session_key}#ended-"
-        r = self.con.execute(
-            "SELECT 1 FROM memberships m JOIN participants p ON p.id=m.participant_id"
-            " WHERE m.room_id=? AND m.kicked=1 AND p.harness=? AND p.id<>?"
-            " AND (p.session_key=? OR substr(p.session_key, 1, ?)=?) LIMIT 1",
-            (room_id, harness, exclude, session_key, len(prefix), prefix),
         ).fetchone()
         return r is not None
 
@@ -2142,31 +1998,11 @@ class Store:
         ).fetchone()
         return r is not None
 
-    def offered_batch_exists(self, participant_id: int, exclude_paths: Iterable[str] = ()) -> bool:
-        """Any offered batch of this participant (any room) on a path not excluded."""
-        ex = list(exclude_paths)
-        sql = (
-            "SELECT 1 FROM batches b JOIN memberships m ON m.id=b.membership_id"
-            " WHERE m.participant_id=? AND b.state='offered'"
-        )
-        if ex:
-            sql += f" AND b.path NOT IN ({','.join('?' * len(ex))})"
-        r = self.con.execute(sql + " LIMIT 1", (participant_id, *ex)).fetchone()
-        return r is not None
-
     def mark_posted(self, batch_id: int, t: float | None = None) -> None:
         with db.tx(self.con):
             self.con.execute(
                 "UPDATE batches SET posted_at=? WHERE id=? AND posted_at IS NULL",
                 (self.clock.now() if t is None else t, batch_id),
-            )
-
-    def refine_posted(self, batch_id: int, t: float) -> None:
-        """The transport's own post time (e.g. the MCP server's ``t_post``), if later."""
-        with db.tx(self.con):
-            self.con.execute(
-                "UPDATE batches SET posted_at=? WHERE id=? AND (posted_at IS NULL OR posted_at<?)",
-                (t, batch_id, t),
             )
 
     def set_batch_times(self, batch_id: int, **fields: float) -> None:
@@ -2212,48 +2048,24 @@ class Store:
                 (now, batch_id),
             )
             self._advance_cursor(b.membership_id)
-            self.con.execute(
-                "UPDATE participants SET push_expiries=0 WHERE id="
-                "(SELECT participant_id FROM memberships WHERE id=?)",
-                (b.membership_id,),
-            )
         return self.get_batch(batch_id)
 
-    def expire_batch(
-        self, batch_id: int, reason: str, *, state: str = "expired", push: bool = False, refund: bool = False
-    ) -> Batch | None:
-        """Offer failed (or was cancelled): its deliveries go back to pending. ``refund``: a
-        wake that reached nobody (a push re-route) gives its room's budget unit back, at most
-        up to the hourly budget, and no longer counts as a counted wake."""
-        if state not in ("expired", "cancelled"):
-            raise ValueError(state)
+    def expire_batch(self, batch_id: int, reason: str) -> Batch | None:
+        """Offer failed: its deliveries go back to pending, and the failed offer counts as an attempt."""
         now = self.clock.now()
         with db.tx(self.con):
             b = self.get_batch(batch_id)
             if b is None or b.state != "offered":
                 return None
             self.con.execute(
-                "UPDATE batches SET state=?, expired_at=?, expire_reason=? WHERE id=?",
-                (state, now, reason, batch_id),
+                "UPDATE batches SET state='expired', expired_at=?, expire_reason=? WHERE id=?",
+                (now, reason, batch_id),
             )
             self.con.execute(
-                "UPDATE deliveries SET state='pending', batch_id=NULL, attempts=attempts+?"
+                "UPDATE deliveries SET state='pending', batch_id=NULL, attempts=attempts+1"
                 " WHERE batch_id=? AND state='offered'",
-                (1 if state == "expired" else 0, batch_id),
+                (batch_id,),
             )
-            if push and state == "expired":
-                self.con.execute(
-                    "UPDATE participants SET push_expiries=push_expiries+1 WHERE id="
-                    "(SELECT participant_id FROM memberships WHERE id=?)",
-                    (b.membership_id,),
-                )
-            if refund and b.budget_counted:
-                self.con.execute("UPDATE batches SET budget_counted=0 WHERE id=?", (batch_id,))
-                self.con.execute(
-                    "UPDATE rooms SET budget_remaining=MIN(budget_remaining+1, budget_per_hour) WHERE id="
-                    "(SELECT room_id FROM memberships WHERE id=?)",
-                    (b.membership_id,),
-                )
         return self.get_batch(batch_id)
 
     def _advance_cursor(self, membership_id: int) -> None:

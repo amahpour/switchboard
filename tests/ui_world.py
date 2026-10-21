@@ -3,8 +3,8 @@
 
 Not a test module (pytest collects only ``test_*.py``). It is built from the suite's own
 pieces: ``conftest.InProcBroker`` (the real app on a real port, in a thread) and
-``fakes.fake_agent.FakeAgent`` (a scripted MCP client driving a real ``switchboard mcp
---harness test``). The caller isolates the environment first (HOME in a temp dir, the agent
+``fakes.fake_agent.FakeAgent`` (a scripted MCP client of the broker's ``/mcp``, DESIGN.md §9.6).
+The caller isolates the environment first (HOME in a temp dir, the agent
 harness variables dropped, ``SWITCHBOARD_TEST=1``): ``tests/conftest.py``'s ``sanitize_env``
 under pytest, ``ui_shots.isolate()`` by hand. ``~/.switchboard`` is never read or written.
 
@@ -12,23 +12,22 @@ What ``UIWorld.start()`` builds:
 
 - **Two throwaway brokers**, each in its own ``/tmp/yk-*`` home: ``b`` with the seeded state
   and ``empty`` with no rooms at all (the first-run Welcome view). Both start in test mode
-  (so scripted ``--harness test`` agents may join) and are switched out of it after the joins,
-  so no TEST MODE band shows.
+  (a broker serves a scripted test agent only in it) and are switched out of it after the
+  joins, so no TEST MODE band shows; a later call of a scripted agent switches it on for that
+  call (``UIWorld._scripted``).
 - **Three rooms**: ``#build`` (the conversation), ``#fpga-bench`` (empty) and ``#docs``
   (closed, so Closed rooms lists one).
 - **Four agents in #build** (``AGENTS``). Their tiers, approval modes, statuses and session
   ids are set through the store; their harness and host (and so their join lines) are
-  rewritten with raw SQL, devin-1's parked reason goes straight into the engine, and the
-  Codex adapter's tier refresh (which needs a live daemon) is switched off: none of these can
-  happen to a scripted test agent. Two room notices (devin-1 parked, codex-1's approvals-off
+  rewritten with raw SQL and devin-1's parked reason goes straight into the engine: none of
+  these can happen to a scripted test agent. Two room notices (devin-1 parked, codex-1's approvals-off
   warning) are posted with the broker's own wording. Everything else (the messages and the
   close of #docs) goes through the real routes and MCP tools.
 - **The conversation** (``md_messages()``): every Markdown construct the UI renders, a
   ``javascript:`` link that must render blocked, raw ``<script>``/``<b>`` that must stay text,
   and one http(s) link.
 
-The agents' MCP sessions must stay open for their memberships to stay live, and their stdio
-transports belong to the event loop and task that opened them. So the agents live in one
+The agents' MCP connections belong to the event loop and task that opened them. So the agents live in one
 background thread running one coroutine: it starts them, seeds the broker, reports ready and
 then waits for ``stop()``, which lets the same coroutine close the four seeded agents. Agents
 added for a test are closed after that test on the same loop. The caller's own thread
@@ -53,12 +52,12 @@ AGENTS = ("claude-1", "codex-1", "devin-1", "bench")
 # (harness, tier, approval mode, status, host, session id) per agent: fixtures, not real
 # sessions. bench runs on another device (host set), the others on this machine ("").
 PROFILE = {
-    "claude-1": ("claude", "claude:inbox", "prompting", "idle", "", "3f2a91c4-7d2e-4b8a-9c1e-5a6b7c8dc91e"),
-    "codex-1": ("codex", "codex:daemon", "bypass", "busy", "", "019a3c2e-55d1-7c40-a0b2-6e1f0c9d2a77"),
-    "devin-1": ("devin", "devin:wait-loop", "prompting", "idle", "", "devin-7c1e2b9a4f"),
+    "claude-1": ("claude", "claude:https", "prompting", "idle", "", "3f2a91c4-7d2e-4b8a-9c1e-5a6b7c8dc91e"),
+    "codex-1": ("codex", "codex:https", "bypass", "busy", "", "019a3c2e-55d1-7c40-a0b2-6e1f0c9d2a77"),
+    "devin-1": ("devin", "devin:https", "prompting", "idle", "", "devin-7c1e2b9a4f"),
     "bench": (
         "claude",
-        "claude:inbox",
+        "claude:https",
         "prompting",
         "idle",
         "fpga-pi",
@@ -210,9 +209,10 @@ async def seed(b: InProcBroker, agents: dict[str, Any]) -> None:
         web.close()
 
     # The agents' profiles. The scripted agents make no more calls after this (a rewritten
-    # host or harness would no longer match the MCP process that joined).
+    # host, harness or session key would no longer match the session that joined).
     def profile() -> None:
         from switchboard import db
+        from switchboard.models import session_key
 
         st = b.state
         s = st.store
@@ -222,8 +222,11 @@ async def seed(b: InProcBroker, agents: dict[str, Any]) -> None:
             s.update_participant(m.participant_id, tier=tier, approval_mode=mode, session_id=sid)
             s.set_status(m.participant_id, status, "hook:PreToolUse" if status == "busy" else "hook:Stop")
             with db.tx(s.con):  # fixtures only: a test agent's harness and host never change
+                # its session key too, as a session of that harness names it (§6.3): /catchup and the
+                # Inspector read the session id from it
                 s.con.execute(
-                    "UPDATE participants SET harness=?, host=? WHERE id=?", (harness, host, m.participant_id)
+                    "UPDATE participants SET harness=?, host=?, session_key=? WHERE id=?",
+                    (harness, host, session_key(harness, host, sid), m.participant_id),
                 )
                 s.con.execute(
                     "UPDATE messages SET sender_harness=?, sender_host=? WHERE sender_membership_id=?",
@@ -251,9 +254,6 @@ async def seed(b: InProcBroker, agents: dict[str, Any]) -> None:
                 st.engine.parked.pop(m.membership_id, None)
             if name == "devin-1":
                 st.engine.parked[m.membership_id] = PARKED
-        # the Codex adapter re-derives its members' tiers from the live daemon link, which this
-        # throwaway broker doesn't have: keep the fixture's codex:daemon
-        st.engine.adapters["codex"].refresh_tiers = lambda: None
         st.hub.members_changed("#build")
 
     b.on_loop(profile)
@@ -340,7 +340,6 @@ class UIWorld:
         self._error: BaseException | None = None
         self._extra: list[Any] = []  # agents add_agents() joined for the current test
         self._extra_named: dict[tuple[str, str], Any] = {}
-        self._old: list[Any] = []  # raw sockets standing in for MCP servers from before #249
         # a signed-in client for the helpers below, made before any browser opens: every sign-in
         # posts a live "new web login" notice, which an open page would show in its log
         self.web: httpx.Client | None = None
@@ -367,9 +366,6 @@ class UIWorld:
         if self.web is not None:
             self.web.close()
             self.web = None
-        for old in self._old:
-            old.close()
-        self._old.clear()
         # the agents first (their coroutine closes them), then the brokers they talk to
         if self._loop is not None and self._stop is not None and not self._loop.is_closed():
             try:
@@ -399,9 +395,6 @@ class UIWorld:
         asyncio.run_coroutine_threadsafe(close_all(), loop).result(30)
         self._extra.clear()
         self._extra_named.clear()
-        for old in self._old:
-            old.close()
-        self._old.clear()
 
     def _agents_thread(self) -> None:
         asyncio.run(self._agents_main())
@@ -476,34 +469,6 @@ class UIWorld:
         finally:
             not_test_mode(b)
 
-    def add_old_agent(
-        self, room: str, name: str, version: str | None = None, tools: list[str] | None = None
-    ) -> None:
-        """Join ``name`` to ``room`` as an MCP server from before #249 would: its mcp.hello lists
-        no tools, so the review board names it as a member that can't use the board. With
-        ``version`` and ``tools``, it reports those instead (#299). A raw socket of this process,
-        kept open until ``stop()``."""
-        from switchboard.mcp.client import Stream
-
-        b = self.broker
-
-        def test_mode_on() -> None:
-            b.state.test_mode = True
-            b.state.info.test_mode = True
-
-        s = Stream(b.paths.sock, timeout=5)
-        self._old.append(s)
-        b.on_loop(test_mode_on)
-        try:
-            claims = {
-                **({"version": version} if version is not None else {}),
-                **({"tools": tools} if tools is not None else {}),
-            }
-            s.call("mcp.hello", {"harness": "test", "test_session": f"old-{name}", **claims}, 5)
-            s.call("agent.join", {"room": room, "screen_name": name}, 5)
-        finally:
-            not_test_mode(b)
-
     def set_approval_modes(self, room: str, modes: dict[str, str]) -> None:
         """Set seeded agents' approval modes and publish the resulting Members frame."""
         b = self.broker
@@ -518,23 +483,37 @@ class UIWorld:
 
         b.on_loop(update)
 
-    def agent_call(self, room: str, name: str, tool: str, **args: Any) -> dict[str, Any]:
-        """Any tool call from an agent joined by ``add_agents`` (the review board's, #80)."""
+    def _scripted(self, coro: Any) -> Any:
+        """Run a scripted agent's call on the agents' loop. A broker serves a scripted test agent
+        (DESIGN.md §9.6) only in test mode, on every call, so it is switched on for this call and off
+        again after it: a page loaded in between shows no TEST MODE band."""
         loop = self._loop
         assert loop is not None, "UIWorld is not started"
+        b = self.broker
+
+        def test_mode_on() -> None:
+            b.state.test_mode = True
+            b.state.info.test_mode = True
+
+        b.on_loop(test_mode_on)
+        try:
+            return asyncio.run_coroutine_threadsafe(coro, loop).result(30)
+        finally:
+            not_test_mode(b)
+
+    def agent_call(self, room: str, name: str, tool: str, **args: Any) -> dict[str, Any]:
+        """Any tool call from an agent joined by ``add_agents`` (the review board's, #80)."""
         agent = self._extra_named.get((room, name))
         assert agent is not None, f"{name} was not added to UIWorld"
-        result = asyncio.run_coroutine_threadsafe(agent.call(tool, room=room, **args), loop).result(30)
+        result = self._scripted(agent.call(tool, room=room, **args))
         assert result.get("ok", True) is not False, result
         return result
 
     def agent_status(self, room: str, name: str, text: str) -> dict[str, Any]:
         """Set an extra agent's session status (the tool has no room argument, #292)."""
-        loop = self._loop
-        assert loop is not None, "UIWorld is not started"
         agent = self._extra_named.get((room, name))
         assert agent is not None, f"{name} was not added to UIWorld"
-        result = asyncio.run_coroutine_threadsafe(agent.call("status", text=text), loop).result(30)
+        result = self._scripted(agent.call("status", text=text))
         assert result.get("ok", True) is not False, result
         return result
 
@@ -609,10 +588,8 @@ class UIWorld:
 
     def agent_say(self, room: str, name: str, text: str, reply_to: int | None = None) -> int:
         """Post from an agent joined by ``add_agents``; returns the posted message id."""
-        loop = self._loop
-        assert loop is not None, "UIWorld is not started"
         agent = self._extra_named.get((room, name))
         assert agent is not None, f"{name} was not added to UIWorld"
-        result = asyncio.run_coroutine_threadsafe(agent.say(room, text, reply_to=reply_to), loop).result(30)
+        result = self._scripted(agent.say(room, text, reply_to=reply_to))
         assert result["ok"] and result["posted_id"], result
         return int(result["posted_id"])

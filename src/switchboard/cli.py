@@ -179,8 +179,6 @@ def cmd_status(args: argparse.Namespace) -> int:
     )
     print(f"  web UI  {p.link(str(st['url']))}  ({st.get('web_clients', 0)} browser tab(s) connected)")
     print(f"  home    {st['home']}")
-    print(f"  hooks   {_lead(p, str(st['hooks']))}")
-    print(f"  codex   {_lead(p, str(st['codex_link']))}")
     if st.get("test_mode"):
         print("  " + p.warn("TEST MODE"))
     rooms = st.get("rooms", [])
@@ -379,8 +377,6 @@ def cmd_who(args: argparse.Namespace) -> int:
             flags.append(p.bad("⚠"))
         elif m["approval_mode"] == "unknown":
             flags.append(p.warn("?"))
-        if m["env_leak"]:
-            flags.append(p.warn("env shared"))
         if m["held"]:
             flags.append(p.warn("held"))
         if m["queued"]:
@@ -449,48 +445,6 @@ def cmd_tail(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def cmd_mcp(args: argparse.Namespace) -> int:
-    from switchboard.mcp.server import main as mcp_main
-
-    argv: list[str] = []
-    if _home_given(args):
-        argv += ["--home", args.home]
-    if args.harness:
-        argv += ["--harness", args.harness]
-    if args.test_session:
-        argv += ["--test-session", args.test_session]
-    if args.ack:
-        argv += ["--ack", args.ack]
-    return mcp_main(argv)
-
-
-def cmd_hook(args: argparse.Namespace) -> int:
-    """Debug helper: exec the installed hook copy, exactly as a harness would."""
-    from switchboard.paths import hook_sha12
-
-    paths = _paths(args)
-    copy = paths.hook_copy(hook_sha12())
-    if not copy.exists():
-        print(f"switchboard: no hook copy at {copy}; run `switchboard start` once", file=sys.stderr)
-        return EXIT_OK
-    argv = [
-        sys.executable,
-        "-I",
-        "-S",
-        str(copy),
-        "--home",
-        str(paths.home),
-        "--harness",
-        args.harness,
-        "--event",
-        args.event,
-    ]
-    if args.max_wait is not None:
-        argv += ["--max-wait", str(args.max_wait)]
-    os.execv(sys.executable, argv)
-    return EXIT_OK  # pragma: no cover
-
-
 def cmd_report(args: argparse.Namespace) -> int:
     """What happened in a room (DESIGN.md §12.6), read from the database (read-only)."""
     import sqlite3
@@ -536,6 +490,16 @@ def cmd_report(args: argparse.Namespace) -> int:
 # that still calls one learns what happened and where to go.
 HTTPS_WHERE = "Agents connect over HTTPS now: Settings → Agents in the web UI, and docs/USAGE.md"
 RETIRED = {
+    "mcp": (
+        "the per-session MCP server was retired in 0.38.0 (#385). "
+        + HTTPS_WHERE
+        + ". An entry that still starts `switchboard mcp` is what `switchboard uninstall <harness>` removes"
+    ),
+    "hook": (
+        "the hook script was retired in 0.38.0 (#385). "
+        + HTTPS_WHERE
+        + ". A hook entry that still runs it is what `switchboard uninstall <harness>` removes"
+    ),
     "install": (
         "registering an MCP server and hooks with a harness was retired in 0.38.0 (#385). "
         + HTTPS_WHERE
@@ -779,20 +743,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     s.set_defaults(func=cmd_uninstall)
 
-    s = sub.add_parser("mcp", parents=[common], help="run the stdio MCP server (harnesses start this)")
-    s.add_argument("--harness", choices=["test"], default=None, help=argparse.SUPPRESS)
-    s.add_argument("--test-session", default=None, help=argparse.SUPPRESS)
-    s.add_argument("--ack", choices=["next_call", "immediate", "never"], default=None, help=argparse.SUPPRESS)
-    s.set_defaults(func=cmd_mcp)
-
-    for verb in ("install", "remote", "satellite", "join"):
+    for verb in ("install", "mcp", "hook", "remote", "satellite", "join"):
         sub.add_parser(verb, parents=[common]).set_defaults(func=cmd_retired)
 
-    s = sub.add_parser("hook", parents=[common], help="run the installed hook script (debugging)")
-    s.add_argument("--harness", required=True, choices=["claude", "codex", "cursor", "devin"])
-    s.add_argument("--event", required=True)
-    s.add_argument("--max-wait", type=float, default=None)
-    s.set_defaults(func=cmd_hook)
     return p
 
 

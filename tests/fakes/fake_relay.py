@@ -1,7 +1,7 @@
 """A stand-in socket relay (DESIGN.md §27.5.7): what ``ssh -R``/``ssh -L`` or
 ``socat`` does to a Unix socket, in the standard library only.
 
-Copied to a path ending in ``/ssh`` (the fake_harness trick), it listens on
+Copied to a path ending in ``/ssh`` (so the broker's argv matcher sees an ssh relay), it listens on
 ``argv[1]`` and forwards every connection, byte for byte, to ``argv[2]`` (the
 broker's socket). The broker's kernel peer is then this relay, never the
 client behind it. Prints ``ready`` once it listens; runs until killed.

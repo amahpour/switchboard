@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -18,29 +17,20 @@ def store(tmp_path: Path, clock: FakeClock) -> Store:
     return Store(db.open_db(tmp_path / "y.db"), clock)
 
 
-def add_agent(
-    store: Store,
-    room_id: int,
-    name: str,
-    *,
-    pid: int | None = None,
-    start: float | None = None,
-    harness: str = "test",
-) -> tuple[int, int]:
+def add_agent(store: Store, room_id: int, name: str, *, harness: str = "test") -> tuple[int, int]:
     """Insert a participant + active membership directly (M2 owns the real join path)."""
     con = store.con
     with db.tx(con):
         cur = con.execute(
-            "INSERT INTO participants(harness, session_key, agent_pid, agent_start, status, created_at)"
-            " VALUES(?,?,?,?, 'idle', 0)",
-            (harness, f"{harness}:{name}", pid, start),
+            "INSERT INTO participants(harness, session_key, status, created_at) VALUES(?,?, 'idle', 0)",
+            (harness, f"{harness}:{name}"),
         )
         pid_row = cur.lastrowid
         last = store.last_message_id(room_id)
         cur = con.execute(
-            "INSERT INTO memberships(room_id, participant_id, screen_name, cred_hash, joined_at, join_msg_id)"
-            " VALUES(?,?,?,?,0,?)",
-            (room_id, pid_row, name, "h" * 64, last),
+            "INSERT INTO memberships(room_id, participant_id, screen_name, joined_at, join_msg_id)"
+            " VALUES(?,?,?,0,?)",
+            (room_id, pid_row, name, last),
         )
         return pid_row, cur.lastrowid
 
@@ -158,7 +148,7 @@ def test_members_view_hold_and_end(store: Store) -> None:
     store.end_membership(mid, "kick", kicked=True)
     assert store.members(r.id) == []
     row = store.con.execute("SELECT * FROM memberships WHERE id=?", (mid,)).fetchone()
-    assert row["kicked"] == 1 and row["cred_hash"] is None and row["left_reason"] == "kick"
+    assert row["kicked"] == 1 and row["left_reason"] == "kick"
     assert {x[0] for x in store.con.execute("SELECT state FROM deliveries")} == {"revoked"}
     # the name is free again for a new active membership
     add_agent(store, r.id, "claude-1")
@@ -196,58 +186,46 @@ def test_web_sessions_slide_and_expire(store: Store, clock: FakeClock) -> None:
 
 
 def test_recover_on_start(store: Store, clock: FakeClock) -> None:
-    """§4 restart semantics: offered batches expire and revert; everyone offline; dead agents end."""
+    """§4 restart semantics: offered batches expire and revert; everyone offline, nobody ended: a session
+    over HTTPS is tied to no process the broker could probe, so each comes back with its next call."""
     r = store.create_room("#b", "alice", 60, 6)
-    live_part, live_m = add_agent(store, r.id, "live", pid=os.getpid(), start=123.0)
-    dead_part, dead_m = add_agent(store, r.id, "dead", pid=999999, start=1.0)
+    first_part, first_m = add_agent(store, r.id, "first")
+    second_part, second_m = add_agent(store, r.id, "second")
     msg = store.insert_message(r.id, sender_name="alice", sender_kind="human", via="web", text="x")
     msg2 = store.insert_message(r.id, sender_name="alice", sender_kind="human", via="web", text="y")
     con = store.con
     with db.tx(con):
         bid = con.execute(
             "INSERT INTO batches(membership_id, path, kind, created_at) VALUES(?, 'wait', 'wake', 0)",
-            (live_m,),
+            (first_m,),
         ).lastrowid
         con.execute(
             "UPDATE deliveries SET state='offered', batch_id=? WHERE membership_id=? AND message_id=?",
-            (bid, live_m, msg.id),
+            (bid, first_m, msg.id),
         )
-    alive = lambda pid, start: pid == os.getpid()  # noqa: E731
-    res = store.recover_on_start(alive)
-    assert res == {
-        "batches_expired": 1,
-        "deliveries_reverted": 1,
-        "participants_offline": 2,
-        "participants_ended": 1,
-    }
+    res = store.recover_on_start()
+    assert res == {"batches_expired": 1, "deliveries_reverted": 1, "participants_offline": 2}
     b = con.execute("SELECT * FROM batches WHERE id=?", (bid,)).fetchone()
     assert b["state"] == "expired" and b["expire_reason"] == "restart"
     d = con.execute(
-        "SELECT * FROM deliveries WHERE membership_id=? AND message_id=?", (live_m, msg.id)
+        "SELECT * FROM deliveries WHERE membership_id=? AND message_id=?", (first_m, msg.id)
     ).fetchone()
     assert d["state"] == "pending" and d["attempts"] == 1
     d2 = con.execute(
-        "SELECT * FROM deliveries WHERE membership_id=? AND message_id=?", (live_m, msg2.id)
+        "SELECT * FROM deliveries WHERE membership_id=? AND message_id=?", (first_m, msg2.id)
     ).fetchone()
     assert d2["state"] == "pending" and d2["attempts"] == 0
-    statuses = {x["id"]: x["status"] for x in con.execute("SELECT id, status FROM participants")}
-    assert statuses == {live_part: "offline", dead_part: "offline"}
-    dm = con.execute("SELECT * FROM memberships WHERE id=?", (dead_m,)).fetchone()
-    assert dm["left_reason"] == "session_end" and dm["cred_hash"] is None
-    assert {x[0] for x in con.execute("SELECT state FROM deliveries WHERE membership_id=?", (dead_m,))} == {
-        "revoked"
-    }
-    leave = store.history(r.id)[-1]
-    assert (leave.kind, leave.sender_name, leave.text) == ("leave", "dead", "left (session ended)")
-    assert [m.name for m in store.members(r.id)] == ["live"]
-    # live credentials persist
-    assert con.execute("SELECT cred_hash FROM memberships WHERE id=?", (live_m,)).fetchone()[0] is not None
-    # a second recovery has nothing left to do
-    assert store.recover_on_start(alive) == {
+    rows = {x["id"]: (x["status"], x["status_src"]) for x in con.execute("SELECT * FROM participants")}
+    assert rows == {first_part: ("offline", "restart"), second_part: ("offline", "restart")}
+    # nobody left a room: both memberships are still active, and the room says nothing
+    assert sorted(m.name for m in store.members(r.id)) == ["first", "second"]
+    assert [m.kind for m in store.history(r.id)] == ["chat", "chat"]
+    assert second_m
+    # a second recovery has nothing left to expire, and takes the (offline) sessions offline again
+    assert store.recover_on_start() == {
         "batches_expired": 0,
         "deliveries_reverted": 0,
-        "participants_offline": 1,
-        "participants_ended": 0,
+        "participants_offline": 2,
     }
 
 

@@ -101,8 +101,6 @@ def test_ancestry_and_argv_of_a_child() -> None:
             time.sleep(0.02)
         assert chain[0].pid == child.pid
         assert chain[1].pid == os.getpid()
-        a = proc.argv(chain[0].pid, chain[0].start)
-        assert "yk-marker-arg" in a
         many = proc.argv_many(chain[:2])
         assert "yk-marker-arg" in many[child.pid] and many[os.getpid()]
         assert proc.tty(child.pid) is None  # a new session has no controlling terminal

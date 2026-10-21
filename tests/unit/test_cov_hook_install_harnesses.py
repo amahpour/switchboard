@@ -8,9 +8,10 @@ import json
 from pathlib import Path
 
 import pytest
+from old_install import hook_command
 
 from switchboard.install import codex, cursor, devin
-from switchboard.install.common import InstallError, dump_json, hook_command
+from switchboard.install.common import InstallError, dump_json
 
 PY = "/opt/yk/venv/bin/python"
 HOME = "/opt/yk/home"

@@ -683,26 +683,20 @@
   // How switchboard wakes an agent of each delivery tier, in a line (#211): the badge says it
   // on hover, the Inspector under the badge, instead of a paragraph under the Members list
   const TIER_HOW = {
-    'claude:inbox': 'Claude Code’s own inbox: switchboard wakes it at once',
-    'claude:hook': 'Claude Code without its inbox: it hears new messages at its next tool call, your next prompt, or wait()',
-    'codex:daemon': 'Codex’s own app-server: switchboard starts a turn when it’s idle',
-    'codex:queue': 'Codex’s queue: switchboard queues the message as its next prompt',
-    'codex:link': 'Codex on another machine: woken through that machine’s own app-server',
-    'codex:hook': 'Codex on another machine without its app-server: it hears new messages at its next hook',
-    'cursor:stop-park': 'Cursor: when its turn ends, switchboard holds it and hands it the next message',
-    'devin:wait-loop': 'Devin waits in wait(): a new message answers it',
+    'claude:https': 'Claude Code over HTTPS: its Stop hook waits for messages and wakes it when it is idle',
+    'codex:https': 'Codex over HTTPS: its Stop hook waits for messages and starts its next turn when it is idle',
+    'cursor:https': 'Cursor over HTTPS: its Stop hook waits for messages and hands it the next one when its turn ends',
+    'devin:https': 'Devin waits in wait(): a new message answers it',
     'mcp-only': 'switchboard can’t wake it: it gets messages when it calls read() or wait()',
   };
 
   function tierHow(m) {
-    if (m.tier_note === 'verifying...') return 'switchboard is checking that this join came from its Codex thread';
     return TIER_HOW[m.tier] || 'switchboard is still working out how to wake it';
   }
 
-  // a Codex thread proof still running reads "verifying...", as in /who (models.tier_label)
+  // the tier and its note, as in /who (models.tier_label)
   function tierChip(m) {
-    const t = m.tier_note === 'verifying...' ? m.tier_note
-      : (m.tier || 'no tier yet') + (m.tier_note ? ' (' + m.tier_note + ')' : '');
+    const t = (m.tier || 'no tier yet') + (m.tier_note ? ' (' + m.tier_note + ')' : '');
     const c = el('code', 'tier', t);
     c.title = 'How switchboard wakes it: ' + tierHow(m);
     return c;
@@ -1264,13 +1258,9 @@
     if (m.wakes_at) st += ' · wakes at ' + hhmm(m.wakes_at);
     if (m.inflight) st += ' · ' + m.inflight + ' in flight';
     if (m.held) st += ' · held';
-    if (m.env_leak) st += ' · env shared';
     const chips = el('span', 'm-chips');
     chips.append(tierChip(m));
     main.append(nameLine, el('span', 'm-status', st), chips);
-    // what it says it runs, only when it matters (#299): the Inspector always has both
-    const claim = claimLine(m);
-    if (claim) main.append(el('span', 'm-claim', claim));
     if (m.status_line) {
       const work = el('span', 'm-work', m.status_line);
       if (statusLineStale(m)) work.append(el('span', 'm-work-stale', 'Stale'));
@@ -1784,30 +1774,6 @@
     if (ins.room === state.active) renderLocal(label(ins.name, ins.host) + ' left ' + ins.room);
   }
 
-  // A reported release behind this broker's by a minor version or more, not a patch (#299; the
-  // broker's behind_by_minor, which posts the join note, is the same rule).
-  function versionBehind(claim) {
-    const re = /^(\d{1,4})\.(\d{1,4})\.\d{1,4}/;
-    const old = re.exec(claim || ''), cur = re.exec((state.me && state.me.version) || '');
-    if (!old || !cur) return false;
-    return Number(old[1]) < Number(cur[1]) || (Number(old[1]) === Number(cur[1]) && Number(old[2]) < Number(cur[2]));
-  }
-
-  // A member's reported switchboard, when it's behind this broker or has no review tool (#299).
-  function claimLine(m) {
-    const noReview = Array.isArray(m.tools_claim) && m.tools_claim.indexOf('review') < 0;
-    const fix = ': run switchboard update there';
-    if (versionBehind(m.version_claim)) {
-      return 'switchboard ' + m.version_claim + (noReview ? ' (behind, no review tool)' : ' (behind)') + fix;
-    }
-    return noReview ? 'no review tool' + fix : '';
-  }
-
-  function toolsText(tools) {
-    if (tools === null || tools === undefined) return 'unknown';
-    return tools.length ? tools.join(', ') : 'none';
-  }
-
   function fact(dl, k, v) {
     const dd = el('dd');
     if (typeof v === 'string') dd.textContent = v;
@@ -1943,9 +1909,6 @@
     if (m.status === 'waiting-approval') {
       notes.push(note('amber', 'hourglass', 'Waiting for approval', [' It is asking in its own terminal.']));
     }
-    if (m.env_leak) {
-      notes.push(note('muted', 'info', 'Environment shared', [' It runs with the Codex daemon’s environment.']));
-    }
     if (notes.length) attn.append(el('div', 'group-label', 'Needs attention'), ...notes);
 
     // 3. details
@@ -1981,9 +1944,6 @@
       fact(dl, 'Session', el('span', 'muted', (d.session && d.session.why) || 'none'));
     }
     fact(dl, 'Joined', has(dm.joined_at) ? dayTime(dm.joined_at) : '—');
-    // what its MCP server reports, a claim (#299)
-    fact(dl, 'switchboard', (m.version_claim || 'unknown') + (versionBehind(m.version_claim) ? ' (behind)' : ''));
-    fact(dl, 'Tools', toolsText(m.tools_claim));
     const what = dm.last_seen_what === 'seen' ? 'status' : dm.last_seen_what;
     fact(dl, 'Last seen', has(dm.last_seen) ? hhmm(dm.last_seen) + (what ? ' · ' + what : '') : '—');
     const queued = m.queued || 0;
@@ -4917,19 +4877,6 @@
     head.append(title, status, boardHandoff(r, b), close);
     box.classList.toggle('has-tabs', tabbed);
 
-    // members whose switchboard can't move cards (#249): the board would stand still for them,
-    // while they argue in chat instead. Each line is switchboard's own text (member_dict).
-    const unable = (r.members || []).filter(function (m) { return m.board_why; });
-    const notes = el('div', 'board-unable');
-    notes.id = 'board-unable';
-    notes.setAttribute('role', 'note');
-    for (const m of unable) {
-      const line = el('p', 'board-unable-line');
-      line.dataset.member = m.name;
-      line.append(icon('warn'), el('span', null, m.board_why));
-      notes.append(line);
-    }
-
     const lanes = el('div', 'board-lanes');
     for (const lane of BOARD_LANES) {
       const items = b.items.filter(lane.test);
@@ -4990,8 +4937,7 @@
       state.boardSel = null;
       boardDetailCache = null;
     }
-    if (unable.length) box.replaceChildren(head, notes, body);
-    else box.replaceChildren(head, body);
+    box.replaceChildren(head, body);
     syncBoardDivider();
     if (handoffFocus) {
       // a button that is now disabled or gone can't take it: the line beside it does

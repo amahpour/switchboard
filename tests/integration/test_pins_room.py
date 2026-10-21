@@ -171,12 +171,14 @@ async def test_an_agent_cannot_pin(broker: InProcBroker) -> None:
     assert pins(broker) == []
     texts = [m["text"] for m in broker.web.get("/api/rooms/build/messages").json()["messages"]]
     assert f"/pin {mid}" in texts
-    with Stream(broker.paths.sock, timeout=5) as s:
-        s.call("mcp.hello", {"harness": "test", "test_session": "pin-raw"}, 5)
-        cred = s.call("agent.join", {"room": "#build", "screen_name": "raw"}, 5)["cred"]
+    async with FakeAgent(broker.home, "k2") as a:
+        names = {t.name for t in await a.list_tools()}
+        assert not {"pin", "unpin", "command"} & names  # no tool for it
+    with Stream(broker.paths.sock, timeout=5) as s:  # and no method on the socket, which is the CLI's
         for method in ("agent.pin", "agent.unpin", "agent.command"):
-            with pytest.raises(RpcError):
-                s.call(method, {"cred": cred, "room": "#build", "text": f"/pin {mid}", "id": mid}, 5)
+            with pytest.raises(RpcError) as e:
+                s.call(method, {"room": "#build", "text": f"/pin {mid}", "id": mid}, 5)
+            assert e.value.code == "not_found"
     assert pins(broker) == []
 
 

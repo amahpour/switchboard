@@ -75,7 +75,7 @@ def test_say_tail_who_cmd_stop(subproc_broker: SubprocBroker) -> None:
     r = b.cli("status")
     assert r.returncode == 0 and "TEST MODE" in r.stdout and "#build: active" in r.stdout
     st = json.loads(b.cli("status", "--json").stdout)
-    assert st["pid"] == b.pid and st["test_mode"] is True and st["hooks"].startswith("ok")
+    assert st["pid"] == b.pid and st["test_mode"] is True
     assert json.loads(b.cli("rooms", "--json").stdout)[0]["name"] == "#build"
     r = b.cli("login")
     assert r.returncode == 0 and f"http://switchboard.localhost:{b.port}/login?t=" in r.stdout

@@ -90,8 +90,8 @@ def test_fresh_db_has_the_v2_columns(tmp_path: Path) -> None:
     assert "sender_host" in {c[1] for c in columns(con, "messages")}
     # the table v2 made for SSH remotes is gone again (schema 29, #385)
     assert "remotes" not in {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    idx = con.execute("SELECT sql FROM sqlite_master WHERE name='participants_host_mcp'").fetchone()
-    assert idx is not None and "WHERE ended_at IS NULL" in idx[0]
+    # nor is the index it made on the host and the MCP pid (schema 30, #385)
+    assert con.execute("SELECT 1 FROM sqlite_master WHERE name='participants_host_mcp'").fetchone() is None
     assert backups(tmp_path / "switchboard.db") == []  # nothing to back up
 
 
@@ -115,11 +115,13 @@ def test_v1_fixture_migrates_to_the_current_schema(tmp_path: Path) -> None:
         assert columns(con, t) == columns(fresh, t), t
     q = "SELECT name, tbl_name FROM sqlite_master WHERE type='index' ORDER BY name"
     assert con.execute(q).fetchall() == fresh.execute(q).fetchall()
-    # and the store works on it: the 0.2.0 rows are readable, new rows carry hosts
+    # and the store works on it: the 0.2.0 rows are readable, new rows carry hosts. The sessions of the
+    # local path were ended by schema 30 (#385): their rows stay and nobody is active
     store = Store(con)
     room = store.get_room("#build")
-    assert room is not None and store.members(room.id)
-    assert all(m.host == "" for m in store.members(room.id))
+    assert room is not None and store.members(room.id) == []
+    assert con.execute("SELECT COUNT(*) FROM memberships").fetchone()[0] > 0
+    assert con.execute("SELECT COUNT(*) FROM memberships WHERE left_at IS NULL").fetchone()[0] == 0
     assert all(m.sender_host is None for m in store.history(room.id))
 
 

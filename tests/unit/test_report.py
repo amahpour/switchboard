@@ -13,8 +13,8 @@ from typing import Any
 
 import pytest
 from conftest import FakeClock
+from engine_agents import listener, result, session, stop
 from engine_world import World
-from test_claude_adapter import FakeConn, ad, claude, pushes, reg, tok
 from test_devin_adapter import WAIT_TOOL, devin, open_wait, tokens
 
 from switchboard import report
@@ -130,29 +130,36 @@ def test_scrubs_paths_and_emails() -> None:
 
 
 # --------------------------------------------------------- latency by path
-def test_claude_inbox_idle_wakes_report_turn_start(w: World, clock: FakeClock) -> None:
-    p, m, _c = claude(w)
+def test_claude_stop_followups_report_first_hook(w: World, clock: FakeClock) -> None:
+    """A listening Claude Code's wakes are the answers to its Stop hook (§49.4): the report measures
+    each from the message to the first hook of the turn it starts."""
+    p, m = session(w, status="busy")
+    w.store.add_event(
+        "join",
+        room_id=w.room.id,
+        membership_id=m.id,
+        participant_id=p.id,
+        data={"harness": "claude", "tier": "claude:https"},
+    )
     for i, d in enumerate((0.05, 0.07, 0.06)):
-        reg(w, w.p(p), "idle")
-        w.human(f"ping {i}")
-        [push] = pushes(w)
-        w.store.mark_posted(push.batch_id)
+        w.human(f"ping {i}")  # the agent is busy: it waits for the Stop
+        res = result(w, stop(w, p, gen=f"g{i}"))  # its turn ends: the wake goes out at once
+        w.engine.on_hook_ack(res["batch_id"], res["ack"])
         clock.advance(d)
-        w.hook(p, "UserPromptSubmit", gen=f"g{i}", tokens=(tok(push.text),), permission_mode="default")
+        w.hook(p, "UserPromptSubmit", gen=f"g{i}", permission_mode="default")
         w.store.mark_handled(m.id)  # it answered: no re-delivery
         clock.advance(2.0)
-        w.hook(p, "Stop", gen=f"g{i}")
         clock.advance(5.0)
     rep = build(w)
-    r = row(rep["latency"]["detail"], harness="claude", path="inbox", label="turn start")
-    assert r["tier"] == "claude:inbox" and r["reason"] == "human" and r["n"] == 3
+    r = row(rep["latency"]["detail"], harness="claude", path="stop_followup", label="first hook")
+    assert r["tier"] == "claude:https" and r["reason"] == "human" and r["n"] == 3
     assert r["p50_ms"] == 60.0 and r["max_ms"] == 70.0
-    assert row(rep["latency"]["by_harness"], harness="claude", label="turn start")["n"] == 3
-    assert row(rep["latency"]["by_tier"], tier="claude:inbox", label="turn start")["p50_ms"] == 60.0
+    assert row(rep["latency"]["by_harness"], harness="claude", label="first hook")["n"] == 3
+    assert row(rep["latency"]["by_tier"], tier="claude:https", label="first hook")["p50_ms"] == 60.0
     [a] = rep["agents"]
     assert a["turns"] == 3 and a["wakes"]["confirmed"] == 3 and a["wakes"]["offered"] == 3
-    assert a["wakes"]["budget_counted"] == 3 and a["wakes"]["by_kind"] == {"idle_wake": 3}
-    assert rep["latency"]["first_delivery_paths"] == {"inbox": 3}
+    assert a["wakes"]["budget_counted"] == 3 and a["wakes"]["by_kind"] == {"stop_cont": 3}
+    assert rep["latency"]["first_delivery_paths"] == {"stop_followup": 3}
 
 
 def test_devin_wait_loop_reports_in_context_and_first_action(w: World, clock: FakeClock) -> None:
@@ -272,7 +279,7 @@ def test_only_the_first_confirmed_batch_counts_per_recipient(w: World, clock: Fa
     lost = offer(
         w, mx, [a], path="turn_start", kind="wake", wake_kind="idle_wake", reason="human", counted=True
     )
-    w.store.expire_batch(lost, "send_error", push=True)
+    w.store.expire_batch(lost, "no_ack")
     clock.advance(1.0)
     b = offer(w, mx, [a], path="turn_start", kind="wake", wake_kind="idle_wake", reason="human", counted=True)
     w.store.set_batch_times(b, turn_start_at=clock.now() + 0.02)
@@ -478,7 +485,7 @@ def test_characters_by_path_and_the_token_estimate(w: World, clock: FakeClock) -
     tokens, characters ÷ 4. A ``wait()`` answer counts as ``wait`` by its path even when it
     carried a wake (a Devin agent's wakes all arrive that way), and ``say()`` answers count with
     ``read()``'s. Fails without the change: nothing recorded any of these lengths."""
-    p, m, _c = claude(w)
+    p, m = session(w)
     w.store.add_event(
         "join_chars", room_id=w.room.id, membership_id=m.id, participant_id=p.id, data={"chars": 1200}
     )
@@ -513,14 +520,14 @@ def test_characters_by_path_and_the_token_estimate(w: World, clock: FakeClock) -
     assert "| join | 1 | 1200 | 300 |" in md
     assert "| wait answers | 2 | 200 | 50 |" in md
     assert "| catch-up | 1 | 500 | 125 |" in md
-    assert f"| {m.screen_name} | wake | 1 | 400 | 100 |" in md
+    assert f"| {m.screen_name}@laptop | wake | 1 | 400 | 100 |" in md
 
 
 def test_characters_are_per_agent_and_a_missing_length_counts_for_nothing(w: World, clock: FakeClock) -> None:
     """Each agent has its own characters; an offer without a length (one made before this
     measure) adds nothing, not zero characters to ``n``; a catch-up request is counted on the
     agent its event names, not on the subject; and no message text leaks."""
-    p1, m1, _c = claude(w)
+    p1, m1 = session(w)
     p2, m2 = w.agent("codex-1", harness="codex", status="idle", hooks=True)
     w.store.add_event(
         "join_chars", room_id=w.room.id, membership_id=m1.id, participant_id=p1.id, data={"chars": 1000}
@@ -554,23 +561,22 @@ def test_characters_are_per_agent_and_a_missing_length_counts_for_nothing(w: Wor
     assert "CATCHUP-MARKER" not in json.dumps(rep) + report.render_markdown(rep)
 
 
-def test_the_engine_records_the_length_of_the_text_it_pushes(w: World, clock: FakeClock) -> None:
+def test_the_engine_records_the_length_of_the_text_it_hands_over(w: World, clock: FakeClock) -> None:
     """The offer event's ``chars`` is the length of the very text the agent was handed: nothing
     in the report can add up what was never recorded."""
-    p, m, _c = claude(w)
-    reg(w, w.p(p), "idle")
+    p, m, park = listener(w)
     w.human("ping")
-    [push] = pushes(w)
+    res = result(w, park)
     [offered] = w.store.recent_events(room_id=w.room.id, kinds=["offer"])
-    assert offered.data["batch_id"] == push.batch_id
-    assert offered.data["chars"] == len(push.text) > 0
+    assert offered.data["batch_id"] == res["batch_id"]
+    assert offered.data["chars"] == len(res["text"]) > 0
 
 
 def test_wakes_not_addressed_to_the_agent(w: World, clock: FakeClock) -> None:
     """A wake whose items were all chatter (no @mention, nothing from the human) woke the
     agent for nothing it was asked to do. One that carries a human message, an @mention, or
     both among chatter was addressed to it; a wake that never reached the agent isn't counted."""
-    p, m, _c = claude(w)
+    p, m = session(w)
     chatter = quiet_msg(w, "fyi", sender="bob-bot", kind="agent")
     human = quiet_msg(w, "ping", sender="alice", kind="human")
     more_chatter = quiet_msg(w, "more fyi", sender="bob-bot", kind="agent")
@@ -587,7 +593,7 @@ def test_wakes_not_addressed_to_the_agent(w: World, clock: FakeClock) -> None:
     )
     w.store.confirm_batch(b3, "test")  # chatter with an @mention in it: addressed
     b4 = offer(w, m, [lost], path="inbox", kind="wake", wake_kind="idle_wake", reason="chatter")
-    w.store.expire_batch(b4, "idle_no_token", push=True)  # never reached the agent
+    w.store.expire_batch(b4, "no_ack")  # never reached the agent
     rep = build(w)
     [ag] = rep["agents"]
     assert ag["wakes"]["offered"] == 4 and ag["wakes"]["confirmed"] == 3
@@ -610,7 +616,7 @@ def test_a_pass_straight_after_a_wake_is_a_turn_spent_for_nothing(w: World, cloc
     """``pass()`` with nothing posted since a confirmed wake counts once for that wake. A pass
     before any wake, a pass after the agent posted, and a second pass in the same turn don't;
     a wake the agent answered by posting isn't spent for nothing."""
-    p, m, _c = claude(w)
+    p, m = session(w)
 
     def pass_() -> None:
         w.store.add_event("pass", room_id=w.room.id, membership_id=m.id, participant_id=p.id, data={})
@@ -649,7 +655,7 @@ def test_a_pass_stamped_with_its_wake_still_counts_and_other_agents_dont_mix(
 ) -> None:
     """The same instant breaks wake before pass (a coarse clock), and one agent's post doesn't
     close another's wake."""
-    p1, m1, _c = claude(w)
+    p1, m1 = session(w)
     p2, m2 = w.agent("codex-1", harness="codex", status="idle", hooks=True)
     for m in (m1, m2):
         bid = offer(w, m, [quiet_msg(w, f"for {m.screen_name}")], path="inbox", kind="wake", reason="human")
@@ -665,7 +671,7 @@ def test_a_pass_stamped_with_its_wake_still_counts_and_other_agents_dont_mix(
 def test_review_board_moves_are_not_counted_as_catchup_requests(w: World, clock: FakeClock) -> None:
     """#259: a review board (§37) records a ``review`` event for every move, the kind 0.2.0's
     /review command used. Only the old command's events (they name the reviewer) are requests."""
-    p1, m1, _c = claude(w)
+    p1, m1 = session(w)
     w.store.add_event("catchup", room_id=w.room.id, data={"via": "web", "agent": m1.id, "mode": "room"})
     w.store.add_event(
         "review", room_id=w.room.id, data={"via": "web", "reviewer": m1.id, "author": m1.id, "message_id": 1}
@@ -683,18 +689,18 @@ def test_review_board_moves_are_not_counted_as_catchup_requests(w: World, clock:
 
 
 def test_output_has_no_text_paths_or_emails(w: World, clock: FakeClock) -> None:
-    p, m, _c = claude(w)
-    reg(w, w.p(p), "idle")
+    p, m, park = listener(w)
     w.human("SECRET-TEXT-123 from me@example.com at /Users/someone/project")
-    [push] = pushes(w)
+    res = result(w, park)
+    w.engine.on_hook_ack(res["batch_id"], res["ack"])
     clock.advance(0.05)
-    w.hook(p, "UserPromptSubmit", gen="g", tokens=(tok(push.text),), permission_mode="default")
+    w.hook(p, "UserPromptSubmit", gen="g", permission_mode="default")
     # a model event can only come from the hook's filter, but the report scrubs it too
     w.store.add_event("model", participant_id=p.id, data={"model": "first.last@example.com"})
     rep = build(w)
     blob = json.dumps(rep) + report.render_markdown(rep)
     assert "SECRET-TEXT" not in blob and "@example.com" not in blob and "/Users/" not in blob
-    assert not re.search(r"claude:\d+@", blob)  # no session keys (pids)
+    assert not re.search(r"claude@laptop:", blob)  # no session keys
     assert rep["agents"][0]["model"] == "<email>"
 
 
@@ -777,13 +783,11 @@ def test_pulls_are_never_held_by_a_pause(w: World, clock: FakeClock) -> None:
 def test_parked_spells_come_from_the_engines_events(w: World, clock: FakeClock) -> None:
     """A member with messages waiting and no way to wake it is parked ("needs a poke", §8.5): the
     engine writes an event at each edge and the report counts the spells and their time."""
-    p, m, _c = claude(w, attached=False)
+    p, m = session(w)  # idle, and its Stop hook is not waiting
     w.human("anyone?")
-    assert pushes(w) == [] and w.engine.parked_reason(m.id)
+    assert w.engine.parked_reason(m.id)
     clock.advance(30.0)
-    ad(w).attach(p.mcp_pid, p.mcp_start, FakeConn())
-    reg(w, w.p(p), "idle")
-    w.actions += w.engine.evaluate_participant(p.id)
+    stop(w, p)  # its next Stop waits on the broker, and the message goes out
     assert w.engine.parked_reason(m.id) is None
     kinds = [e.kind for e in w.store.recent_events(room_id=w.room.id, kinds=["parked", "unparked"])]
     assert kinds == ["unparked", "parked"]
@@ -911,9 +915,12 @@ def test_report_reads_v1_and_v2(tmp_path: Path) -> None:
     hosts = {a["name"]: a["host"] for a in rep2["agents"]}
     assert hosts["bot-a"] == "fpga-pi" and hosts["vivado"] == ""
     assert "| bot-a@fpga-pi |" in md2 and "| vivado |" in md2
-    # everything else reads the same as before the migration
-    strip = [{k: v for k, v in a.items() if k != "host"} for a in rep2["agents"]]
-    assert strip == [{k: v for k, v in a.items() if k != "host"} for a in rep1["agents"]]
+    # everything else reads the same as before the migration, except that schema 30 retired the
+    # sessions of the local path (#385): they left with the reason ``retired``, and their open
+    # deliveries were revoked
+    skip = {"host", "status_now", "undelivered_at_end"}
+    strip = [{k: v for k, v in a.items() if k not in skip} for a in rep2["agents"]]
+    assert strip == [{k: v for k, v in a.items() if k not in skip} for a in rep1["agents"]]
 
 
 # ------------------------------------------------------ closed rooms (#16)
@@ -926,7 +933,7 @@ def close_by_hand(w: World, room_id: int, *, by: str | None = "alice", event: bo
     assert room is not None
     mids = [m.membership_id for m in w.store.members(room_id)]
     for mid in mids:
-        w.store.end_membership(mid, "closed", keep_cred=True)
+        w.store.end_membership(mid, "closed")
     closed = closed_room_name(room.name, room.id)
     if event:
         w.store.add_event(

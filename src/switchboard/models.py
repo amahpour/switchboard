@@ -9,9 +9,7 @@ import json
 import re
 import sqlite3
 from dataclasses import asdict, dataclass, field
-from typing import Any, Literal
-
-from switchboard import __version__
+from typing import Any
 
 ROOM_RE = re.compile(r"^#[a-z0-9][a-z0-9_-]{0,31}$")
 # A closed room keeps its row under ``#<name>~closed-<its id>`` (DESIGN.md §28.2). '~' is
@@ -20,7 +18,6 @@ ROOM_RE = re.compile(r"^#[a-z0-9][a-z0-9_-]{0,31}$")
 CLOSED_ROOM_RE = re.compile(r"(#[a-z0-9][a-z0-9_-]{0,31})~closed-([1-9][0-9]{0,18})")
 SCREEN_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,23}$")
 NAME_REUSE_S = 24 * 3600.0  # a departed agent's screen name is reserved for a day
-RELEASE_RE = re.compile(r"^(\d{1,4})\.(\d{1,4})\.\d{1,4}(?:[.+_-].*)?$")
 
 
 def join_code_hash(code: str) -> str:
@@ -29,43 +26,10 @@ def join_code_hash(code: str) -> str:
     return hashlib.sha256(code.encode()).hexdigest()
 
 
-def behind_by_minor(claim: str | None, broker: str = __version__) -> bool:
-    """A reported release is behind the broker by at least a minor version, not a patch."""
-    old, current = RELEASE_RE.fullmatch(claim or ""), RELEASE_RE.fullmatch(broker)
-    if old is None or current is None:
-        return False
-    return (int(old[1]), int(old[2])) < (int(current[1]), int(current[2]))
-
-
-# The first release whose MCP server has each tool parameter that broker text tells an agent to
-# use (DESIGN.md §6.1, #340). A session keeps the MCP server it started with, so after `switchboard update` it
-# can be older than the broker, and a hint naming a parameter its tool lacks sends it to a call
-# its own schema refuses. Add a line here before writing a hint that names a newer parameter
-# (the release is the first tag that contains the commit that added it).
-Feature = Literal["join.resume", "read.before", "review.proof"]
-FEATURE_SINCE: dict[Feature, tuple[int, int]] = {
-    "join.resume": (0, 25),  # #304
-    "read.before": (0, 25),  # #300
-    "review.proof": (0, 26),  # #251
-}
-_MAX_CLAIM = 32  # a version claim is cut to this (agents.VERSION_RE) before it gets here
-
-
-def has_feature(claim: str | None, feature: Feature) -> bool:
-    """Whether an MCP server that claims release ``claim`` has ``feature``. Fails closed: a claim
-    that is missing, not a string, too long or not ``X.Y.Z`` (with an optional suffix, ignored
-    as ``behind_by_minor`` does) has nothing, so a hint is never sent on a guess. The claim comes
-    from the session, which can say anything; it grants nothing, it only picks the wording.
-    A ``feature`` that is not in ``FEATURE_SINCE`` is a bug in the caller and raises ``KeyError``."""
-    if not isinstance(claim, str) or len(claim) > _MAX_CLAIM:
-        return False
-    got = RELEASE_RE.fullmatch(claim)
-    return got is not None and (int(got[1]), int(got[2])) >= FEATURE_SINCE[feature]
-
-
-# A remote host's name (DESIGN.md §27.5.1): the config name of a remote in remotes.toml.
-# It never contains '@' or ':', so it can't be confused with a session key's parts.
-# The broker's own machine is the empty host ''.
+# An agent device's name (DESIGN.md §49.1): the host of its sessions, as an agent token names it.
+# It never contains '@' or ':', so it can't be confused with a session key's parts. The empty host
+# '' is no device: the scripted test agent of a test-mode broker (§9.6), and the sessions an older
+# release kept on this machine (all ended when schema 30 ran, #385).
 HOST_RE = re.compile(r"^[a-z][a-z0-9-]{0,23}$")
 LOCAL_HOST = ""
 
@@ -74,17 +38,10 @@ VIAS = ("web", "cli", "mcp", "system")
 MSG_KINDS = ("chat", "join", "leave", "notice")
 STATUSES = ("starting", "idle", "busy", "waiting-approval", "offline")
 HARNESSES = ("claude", "codex", "cursor", "devin", "test", "unknown")
-# The tier note of a Codex member whose thread proof is still running (DESIGN.md §9.3): its
-# join line, /who and the buddy list show this instead of "mcp-only". ASCII dots, not "…":
-# text shown through envelope.clean (NFKC) would turn that into "..." in some places only.
-VERIFYING = "verifying..."
 
 
 def tier_label(tier: str | None, note: str | None) -> str:
-    """A member's delivery tier as people read it: ``codex:daemon``, ``mcp-only (unverified
-    thread)``, or just ``verifying...`` while a Codex thread proof runs."""
-    if note == VERIFYING:
-        return VERIFYING
+    """A member's delivery tier as people read it: ``codex:https (over HTTPS: woken at stop)``."""
     return (tier or "-") + (f" ({note})" if note else "")
 
 
@@ -141,16 +98,6 @@ def room_ref(ref: str) -> str:
 def valid_host(host: str) -> bool:
     """A remote host name (``HOST_RE``); the local host '' is not one."""
     return isinstance(host, str) and HOST_RE.fullmatch(host) is not None
-
-
-# A session over HTTPS (DESIGN.md §49.3) has no process: its MCP pid is 0 on its device's host,
-# which no kernel-reported pid is.
-HTTPS_MCP_PID = 0
-
-
-def over_https(host: str, mcp_pid: int | None) -> bool:
-    """A session that reaches the broker at ``/mcp`` with an agent token (§49.3)."""
-    return bool(host) and mcp_pid == HTTPS_MCP_PID
 
 
 def session_key(harness: str, host: str, rest: str) -> str:
@@ -303,17 +250,13 @@ class Member:
     tier_note: str | None
     away: str | None
     approval_mode: str
-    env_leak: bool
     held: bool
     joined_at: float
     queued: int = 0
     inflight: int = 0
     parked: bool = False
     parked_reason: str | None = None
-    host: str = ""  # the participant's host: '' for this machine (DESIGN.md §27.6)
-    board_why: str | None = None  # why it can't use the review board, from its MCP server (#249)
-    version_claim: str | None = None  # this member's MCP server says it runs this version
-    tools_claim: tuple[str, ...] | None = None  # None means the MCP server did not report tools
+    host: str = ""  # the participant's device (DESIGN.md §49.1); '' only for a scripted test agent
     wakes_at: float | None = None  # when held chatter wakes it (#137), from the engine
     status_line: str | None = None
     status_line_at: float | None = None
@@ -439,9 +382,8 @@ MAX_BUDGET = 1_000_000
 MAX_HOPS = 1000
 
 PULL_PATHS = frozenset({"wait", "read", "say"})
-# A turn continuation a hook returns at Stop (DESIGN.md §9.4, §9.5): a Cursor
-# follow-up message, or a Devin Stop block. Two-phase: the hook's ack, then
-# the next hook of that session.
+# A turn continuation a hook returns at Stop (DESIGN.md §9.4, §9.5, §49.4): a follow-up from a parked
+# Stop hook, or a Devin Stop block. Two-phase: the hook's ack, then the next hook of that session.
 CONTINUE_PATHS = frozenset({"stop_followup", "stop_block"})
 HOOK_PATHS = frozenset({"hook_ctx", "hook_ups"}) | CONTINUE_PATHS
 PRIO_LABEL = {2: "human", 1: "mention", 0: "chatter"}
@@ -462,36 +404,24 @@ class Participant:
     harness: str
     session_key: str
     session_id: str | None
-    agent_pid: int | None
-    agent_start: float | None
-    mcp_pid: int | None
-    mcp_start: float | None
-    claude_socket: str | None
-    bind_state: str
-    bind_nonce: str | None
-    thread_proof: bool
     status: str
     status_at: float | None
     status_src: str | None
     tier: str | None
     tier_note: str | None
     approval_mode: str
-    env_leak: bool
     away: str | None
     boundary_seq: int
     gen: str | None
     gen_tainted: bool
     rearms_in_gen: int
-    last_loop_count: int | None
-    unconfirmed_followups: int
-    push_expiries: int
     hooks_seen_at: float | None
     last_say_at: float | None
     created_at: float
     last_seen: float | None
     ended_at: float | None
-    # '' for this machine; a remote's config name for a member on that host, whose
-    # pids are pids on that host (DESIGN.md §27.6)
+    # the agent's device (the host of the token it connects with, DESIGN.md §49.1); '' only for a
+    # scripted test agent
     host: str = LOCAL_HOST
     status_line: str | None = None
     status_line_at: float | None = None
@@ -499,8 +429,7 @@ class Participant:
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "Participant":
         d = _row_dict(r)
-        for k in ("thread_proof", "env_leak", "gen_tainted"):
-            d[k] = bool(d[k])
+        d["gen_tainted"] = bool(d["gen_tainted"])
         return cls(**d)
 
     @property
@@ -514,7 +443,6 @@ class Membership:
     room_id: int
     participant_id: int
     screen_name: str
-    cred_hash: str | None
     joined_at: float
     join_msg_id: int
     left_at: float | None
@@ -662,7 +590,7 @@ class Release:
 
 @dataclass(frozen=True)
 class Route:
-    """An adapter's pure routing verdict: push(path) | sink(id, path) | pull |
+    """An adapter's pure routing verdict: sink(id, path) | pull |
     defer (nothing now, not parked: re-evaluated on the next status change or
     tick) | none(reason) (parked)."""
 
@@ -674,7 +602,7 @@ class Route:
 
 @dataclass(frozen=True)
 class HookEvent:
-    """The allowlisted fields a hook relays (DESIGN.md §7.2 step 4)."""
+    """The allowlisted fields a hook relays (DESIGN.md §7.2 step 4, §49.4)."""
 
     harness: str
     event: str
@@ -683,14 +611,11 @@ class HookEvent:
     tool: str | None = None
     tool_use_id: str | None = None
     ok: bool | None = None
-    status: str | None = None
-    loop_count: int | None = None
     stop_hook_active: bool | None = None
     source: str | None = None
     reason: str | None = None
     permission_mode: str | None = None
     tokens: tuple[tuple[int, str], ...] = ()
-    join_nonce: str | None = None
     subagent_bg: bool = False
     t: float | None = None
     max_wait_s: float | None = None
@@ -720,7 +645,7 @@ def canonical_event(name: str) -> str:
 
 @dataclass(frozen=True)
 class HookOut:
-    kind: str  # 'context' | 'continue' | 'park' (Cursor: the hook waits on sink_id)
+    kind: str  # 'context' | 'continue' | 'park' (a Stop hook that waits on sink_id)
     text: str
     batch_id: int | None = None
     ack: str | None = None
@@ -728,17 +653,6 @@ class HookOut:
 
 
 # ----------------------------------------------------------------- actions
-@dataclass(frozen=True)
-class Push:
-    batch_id: int
-    participant_id: int
-    path: str
-    text: str
-    room: str = ""  # room name, for the transport's sender label
-    sender: str = ""  # first item's sender (the batch is human-first ordered)
-    rules_version: int = 0  # set only after the transport accepts the whole frame
-
-
 @dataclass(frozen=True)
 class ResolveSink:
     sink_id: int
@@ -758,4 +672,4 @@ class Snapshot:
     room_id: int
 
 
-Action = Push | ResolveSink | Notice | Snapshot
+Action = ResolveSink | Notice | Snapshot

@@ -10,8 +10,7 @@ import sys
 from pathlib import Path
 
 from conftest import child_env
-
-from switchboard.install.common import hook_command
+from old_install import hook_command
 
 CANARY = "sk-canary-7f3a9c2e1b"
 CANARY2 = "canary-db-password-91xq"

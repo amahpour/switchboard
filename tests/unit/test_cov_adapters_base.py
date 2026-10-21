@@ -1,8 +1,8 @@
-"""The adapter interface's defaults and the small hook-only adapters, called directly
-(DESIGN.md §9.1, §9.4-§9.6): the base ``Adapter`` answers every harness question
-with its conservative default, ``PullAdapter`` routes an unknown harness to a
-sink, a pull or nowhere, and the Cursor, Devin and test-agent verdicts for the
-events their engine-level tests don't reach."""
+"""The adapter interface's defaults and the adapters of sessions over HTTPS, called directly
+(DESIGN.md §9.1, §9.5, §9.6, §49.4): the base ``Adapter`` answers every harness question with its
+conservative default, ``PullAdapter`` routes an unknown harness to a sink, a pull or nowhere, and the
+Claude Code, Codex, Cursor, Devin and test-agent verdicts for the events their engine-level tests
+don't reach."""
 
 from __future__ import annotations
 
@@ -12,18 +12,37 @@ from typing import Any
 
 import pytest
 
-from switchboard.adapters import build_adapters
-from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, INLINE_PATHS, Adapter, Caps, PullAdapter, SendError
-from switchboard.adapters.cursor import FOLLOWUP_CONFIRM_S, UNBOUND_WHY, CursorAdapter
-from switchboard.adapters.devin import BLOCK_CONFIRM_S, TAINT_WHY, WAIT_TOOL, DevinAdapter, rearm_text
+from switchboard.adapters import (
+    HTTPS_CLAUDE,
+    HTTPS_CODEX,
+    HTTPS_CURSOR,
+    HTTPS_DEVIN,
+    adapter_for,
+    build_adapters,
+)
+from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, INLINE_PATHS, Adapter, Caps, PullAdapter
+from switchboard.adapters.https import (
+    CLAUDE_TIER,
+    CODEX_TIER,
+    CURSOR_TIER,
+    DEVIN_TIER,
+    DEVIN_TOOL_PREFIX,
+    DEVIN_WAIT_CAP_S,
+    HttpsClaudeAdapter,
+    HttpsCodexAdapter,
+    HttpsCursorAdapter,
+    HttpsDevinAdapter,
+    rearm_text,
+)
 from switchboard.adapters.testagent import ACK_MODES, TestAgentAdapter
 from switchboard.config import Config
-from switchboard.models import Batch, HookEvent, Participant, Release
+from switchboard.models import HookEvent, Participant, Release
 
 CFG = Config(human_name="alice")
 WAKE = Release(items=(), kind="wake", counted=True, reason="human")
 PRIO = Release(items=(), kind="priority", counted=False, reason="human")
 SINK = SimpleNamespace(path="wait", id=41)
+WAIT_TOOL = f"{DEVIN_TOOL_PREFIX}wait"
 
 
 def part(**kw: Any) -> Participant:
@@ -32,17 +51,13 @@ def part(**kw: Any) -> Participant:
     base.update(
         id=7,
         harness="unknown",
-        session_key="unknown:s1",
-        bind_state="bound",
-        thread_proof=False,
+        session_key="unknown@laptop:s1",
+        host="laptop",
         status="idle",
-        approval_mode="default",
-        env_leak=False,
+        approval_mode="prompting",
         boundary_seq=0,
         gen_tainted=False,
         rearms_in_gen=0,
-        unconfirmed_followups=0,
-        push_expiries=0,
         created_at=1.0,
     )
     base.update(kw)
@@ -53,36 +68,17 @@ def ev(event: str, harness: str = "test", **kw: Any) -> HookEvent:
     return HookEvent(harness=harness, event=event, **kw)
 
 
-def batch(**kw: Any) -> Batch:
-    base: dict[str, Any] = {f.name: None for f in dataclasses.fields(Batch)}
-    base.update(
-        id=3, membership_id=1, path="wait", kind="wake", budget_counted=True, state="offered", created_at=1.0
-    )
-    base.update(kw)
-    return Batch(**base)
-
-
 # ------------------------------------------------------------------ base
-def test_send_error_truncates_its_reason_and_marks_reroutes() -> None:
-    e = SendError("x" * 200)
-    assert e.reason == "x" * 80 and e.counted is True and str(e) == "x" * 200
-    assert SendError("turn ended", counted=False).counted is False
-
-
 def test_the_base_adapter_defaults_are_the_conservative_answers() -> None:
     a = Adapter(CFG)
     p = part()
-    b = batch()
-    assert a.harness == "unknown" and a.serial_push is False
+    assert a.harness == "unknown"
     # an unknown harness: the delivery batch limit and a 50 s wait cap
     assert a.caps(p) == Caps(ctx_max_chars=CFG.delivery.batch_max_chars, wait_cap_s=50)
     assert a.caps().inline_paths == INLINE_PATHS
     assert a.tier(p) == ("mcp-only", None)
-    assert a.conn_tier(SimpleNamespace(mcp_pid=1), p) == ("mcp-only", None)
-    assert a.on_joined(p, "n" * 16, True) is None
-    assert a.defer_end(p) is False
-    assert a.on_mcp_hello(SimpleNamespace(harness="unknown"), [p]) is None
-    assert a.status_summary() is None
+    assert a.join_conflict(object(), "t", "laptop") is None
+    assert a.credential_error(p, {}) is None
     assert a.join_guidance(p, "#build") == (
         'switchboard can\'t wake this session on its own. Call read("#build") to check for messages,'
         ' or wait("#build", 50) to block until one arrives.'
@@ -91,39 +87,36 @@ def test_the_base_adapter_defaults_are_the_conservative_answers() -> None:
     # /catchup's session id (DESIGN.md §9.1, issue #171): a harness with no adapter of its
     # own keeps no history-tool id, whatever the row otherwise says
     assert a.history_session_id(part(session_id="s1"), CFG) == (None, "a session of an unknown harness")
-    assert a.on_hook(p, ev("Stop")) is None
     assert a.park_s(p, ev("Stop")) is None
     assert a.stop_continues(p) is False
     assert a.redeliver_on_stop(p, ev("Stop")) is True
     assert a.closes_waits(p, ev("PostToolUse")) is False
     assert a.is_wait_pre(ev("PreToolUse")) is False
-    # a harness with no join-nonce bind of its own never claims one (#170), even when the
-    # event happens to carry a join_nonce (the hook script's join-tool match isn't harness-gated)
-    assert a.join_nonce_bind(ev("PostToolUse")) is False
-    assert a.join_nonce_bind(ev("PostToolUse", join_nonce="abc123")) is False
     assert a.pull_confirms("wait", "tu-1", ev("PostToolUse")) is True
-    assert a.continue_verdict(p, 3, True, ev("Stop")) is None
+    assert a.continue_verdict(p, True, ev("Stop")) is None
     assert a.confirm_window_s() == 180.0
-    assert a.expire_due(p, b, 10.0) is None
-    assert a.push_expired(p, b, "offline", 10.0) is None
+    assert a.stop_wait_lost(30.0) is None
+    assert a.ends_session(ev("SessionEnd")) is True
+    assert a.rearm_caps() == (0, 0)
+    with pytest.raises(NotImplementedError, match="unknown has no Stop re-arm"):
+        a.rearm_text("#build", 50)
+    with pytest.raises(NotImplementedError):
+        a.route(p, WAKE, None, 0.0)
+    with pytest.raises(ValueError, match="can't be told apart"):
+        a.session_key("laptop", None)
 
 
-async def test_the_base_adapter_has_no_transport_and_nothing_to_start() -> None:
-    a = Adapter(CFG)
-    with pytest.raises(NotImplementedError, match="unknown has no push transport"):
-        await a.send(part(), batch(), "hi")
-    assert await a.start(object()) is None
-    assert await a.stop() is None
-
-
-def test_caps_come_from_each_harness_config_capped_by_the_hook_script() -> None:
+def test_caps_come_from_each_harness_config_capped_by_what_the_broker_prints() -> None:
     ads = build_adapters(CFG)
-    assert ads["codex"].caps() == Caps(CFG.codex.ctx_max_chars, CFG.codex.wait_cap_s)
-    assert ads["cursor"].caps() == Caps(CFG.cursor.ctx_max_chars, CFG.cursor.wait_cap_s)
-    assert ads["devin"].caps() == Caps(CFG.devin.ctx_max_chars, CFG.devin.wait_cap_s)
-    # a config over the hook script's own print limit is cut down to it (the script never cuts)
+    assert ads[HTTPS_CODEX].caps() == Caps(CFG.codex.ctx_max_chars, CFG.codex.wait_cap_s)
+    assert ads[HTTPS_CURSOR].caps() == Caps(CFG.cursor.ctx_max_chars, CFG.cursor.wait_cap_s)
+    # Devin over HTTPS ends a wait before its client sends the call again (§49.7)
+    assert ads[HTTPS_DEVIN].caps() == Caps(
+        CFG.devin.ctx_max_chars, min(CFG.devin.wait_cap_s, DEVIN_WAIT_CAP_S)
+    )
+    # a config over the broker's own print limit is cut down to it (a batch is never cut after the fact)
     big = CFG.replace(cursor=dataclasses.replace(CFG.cursor, ctx_max_chars=50_000))
-    assert CursorAdapter(big).caps().ctx_max_chars == 8000
+    assert HttpsCursorAdapter(big).caps().ctx_max_chars == 8000
 
 
 def test_pull_adapter_routes_to_a_sink_a_pull_or_nowhere() -> None:
@@ -140,22 +133,26 @@ def test_pull_adapter_routes_to_a_sink_a_pull_or_nowhere() -> None:
     assert r.kind == "none" and "call wait() or poke it" in (r.reason or "")
 
 
-def test_pull_adapter_takes_a_codex_thread_id_on_trust_only_as_unverified() -> None:
-    a = PullAdapter("codex", CFG)
-    assert a.tier(part(harness="codex")) == ("mcp-only", "unverified thread")
-    assert a.context_events(part(harness="codex")) == frozenset()
-
-
 # ------------------------------------------------------------- test agent
 def test_the_scripted_test_agent_adapter() -> None:
     a = TestAgentAdapter(CFG)
-    p = part(harness="test", session_key="test:bot", session_id="k1")
+    p = part(harness="test", session_key="test:bot", session_id="k1", host="")
     assert ACK_MODES == ("next_call", "immediate", "never")
-    # keyed by --test-session, not by process (moved from agents.py's _session_key, #170)
-    assert a.session_key(SimpleNamespace(host=""), None, test_session="bot") == "test:bot"
-    assert a.session_key(SimpleNamespace(host="fpga-pi"), None, test_session="bot") == "test@fpga-pi:bot"
+    # keyed by the test session header, not by a process (§9.6)
+    assert a.session_key("", None, test_session="bot") == "test:bot"
+    assert a.session_key("fpga-pi", None, test_session="bot") == "test@fpga-pi:bot"
+    with pytest.raises(ValueError, match="needs a session key"):
+        a.session_key("", None, test_session="bad key")
+    with pytest.raises(ValueError, match="needs a session key"):
+        a.session_key("", None)
     assert a.tier(p) == ("mcp-only", None)
     assert a.context_events(p) == HOOK_CONTEXT_EVENTS["test"]
+    assert [a.pull_ack(p, m) for m in (None, "immediate", "never", "odd")] == [
+        "next_call",
+        "immediate",
+        "never",
+        "next_call",
+    ]
     # /catchup never gets a test session's id, whatever the row says (issue #171)
     assert a.history_session_id(p, CFG) == (None, "a test session")
     assert a.join_guidance(p, "#build") == (
@@ -169,108 +166,131 @@ def test_the_scripted_test_agent_adapter() -> None:
     assert (r.kind, r.reason) == ("none", "not waiting")
 
 
-# ----------------------------------------------------------------- cursor
-def cursor_part(**kw: Any) -> Participant:
-    return part(**{"harness": "cursor", "session_key": "cursor:conv-1", "host": "", **kw})
-
-
-def test_cursor_routes_an_open_wait_to_its_sink_even_unbound() -> None:
-    a = CursorAdapter(CFG)
-    pending = cursor_part(bind_state="pending", session_key="cursor:agent:123@1.00")
-    r = a.route(pending, WAKE, SINK, 0.0)
+# -------------------------------------------- Claude Code, Codex, Cursor: the Stop hook that waits
+@pytest.mark.parametrize(
+    ("cls", "harness", "tier"),
+    [
+        (HttpsClaudeAdapter, "claude", CLAUDE_TIER),
+        (HttpsCodexAdapter, "codex", CODEX_TIER),
+        (HttpsCursorAdapter, "cursor", CURSOR_TIER),
+    ],
+)
+def test_a_listening_adapters_routes_tier_and_park(cls: type, harness: str, tier: str) -> None:
+    a = cls(CFG)
+    p = part(harness=harness)
+    assert a.tier(p) == (tier, "over HTTPS: woken at stop")
+    assert a.context_events(p) == HOOK_CONTEXT_EVENTS[harness]
+    r = a.route(p, WAKE, SINK, 0.0)
     assert (r.kind, r.sink_id) == ("sink", 41)
-    assert a.route(pending, WAKE, None, 0.0).reason == UNBOUND_WHY
-    assert 'wait("#build", 50)' in a.join_guidance(pending, "#build")
-
-
-def test_cursor_park_needs_a_completed_stop_and_enough_hook_budget() -> None:
-    a = CursorAdapter(CFG)
-    p = cursor_part()
-    assert a.park_s(p, ev("stop", "cursor", status="completed", max_wait_s=None)) is None
-    assert a.park_s(p, ev("stop", "cursor", status="aborted", max_wait_s=630.0)) is None
-    assert a.park_s(p, ev("stop", "cursor", status="completed", max_wait_s=630.0)) == 600.0
-    # the park ends PARK_MARGIN_S before the hook's own budget; under a second is no park
-    assert a.park_s(p, ev("stop", "cursor", status="completed", max_wait_s=60.0)) == 30.0
-    assert a.park_s(p, ev("stop", "cursor", status="completed", max_wait_s=30.5)) is None
-
-
-def test_cursor_follow_up_verdicts_for_every_kind_of_hook() -> None:
-    a = CursorAdapter(CFG)
-    p = cursor_part()
-    v = a.continue_verdict
-    assert v(p, 0, True, ev("beforeSubmitPrompt", "cursor")) == "human_prompt"
-    assert v(p, 0, True, ev("sessionEnd", "cursor")) == "session_end"
-    assert v(p, 0, True, ev("sessionStart", "cursor")) == "session_end"
-    assert v(p, 0, True, ev("stop", "cursor", loop_count=1)) == "confirm"
-    assert v(p, 0, False, ev("stop", "cursor", loop_count=1)) is None
-    assert v(p, 0, True, ev("stop", "cursor", loop_count=0)) == "loop_reset"
-    assert v(p, None, True, ev("stop", "cursor", loop_count=1)) == "loop_reset"
-    assert v(p, 0, True, ev("postToolUseFailure", "cursor")) == "confirm"
-    assert v(p, 0, False, ev("postToolUse", "cursor")) is None
-    # a hook the follow-up protocol doesn't know says nothing either way
-    assert v(p, 0, True, ev("preCompact", "cursor")) is None
-    assert a.confirm_window_s() == FOLLOWUP_CONFIRM_S
-    assert a.redeliver_on_stop(p, ev("stop", "cursor", status="error")) is False
-
-
-def test_cursor_tiers_and_routes_once_bound() -> None:
-    a = CursorAdapter(CFG)
-    p = cursor_part()
-    assert a.tier(None) == ("mcp-only", "binding")
-    assert a.tier(p) == ("cursor:stop-park", "provisional")
-    assert a.context_events(p) == HOOK_CONTEXT_EVENTS["cursor"]
     assert a.route(p, PRIO, None, 0.0).kind == "pull"
-    assert "not parked" in (a.route(p, WAKE, None, 0.0).reason or "")
-    missed = cursor_part(unconfirmed_followups=CFG.cursor.max_unconfirmed_followups)
-    assert a.tier(missed) == ("cursor:stop-park", "provisional, degraded")
-    assert "degraded" in (a.route(missed, WAKE, None, 0.0).reason or "")
-    assert a.park_s(missed, ev("stop", "cursor", status="completed", max_wait_s=630.0)) is None
+    r = a.route(p, WAKE, None, 0.0)
+    assert r.kind == "none" and "no Stop hook waiting" in (r.reason or "")
+    assert "Stop hook waits on switchboard" in a.join_guidance(p, "#build")
+    # a Stop that says how long it may wait parks that long less a margin, up to about a day; one that
+    # doesn't (a status report) or has less than the margin answers at once
+    assert a.park_s(p, ev("Stop", harness)) is None
+    assert a.park_s(p, ev("Stop", harness, max_wait_s=630.0)) == 625.0
+    assert a.park_s(p, ev("Stop", harness, max_wait_s=10_000_000.0)) == 86400.0
+    assert a.park_s(p, ev("Stop", harness, max_wait_s=9.0)) is None
+    assert a.park_s(p, ev("PostToolUse", harness, max_wait_s=630.0)) is None
 
 
-def test_cursor_is_never_degraded_when_the_miss_limit_is_off() -> None:
-    off = CFG.replace(cursor=dataclasses.replace(CFG.cursor, max_unconfirmed_followups=0))
-    a = CursorAdapter(off)
-    p = cursor_part(unconfirmed_followups=99)
-    assert a.degraded(p) is False and a.tier(p) == ("cursor:stop-park", "provisional")
+def test_session_keys_come_from_what_each_harnesss_calls_name() -> None:
+    assert HttpsClaudeAdapter(CFG).session_key("laptop", "sess-1") == "claude@laptop:sess-1"
+    assert HttpsCursorAdapter(CFG).session_key("laptop", "conv-1") == "cursor@laptop:conv-1"
+    assert HttpsCodexAdapter(CFG).session_key("laptop", "thr-1") == "codex@laptop:thr-1"
+    assert HttpsDevinAdapter(CFG).session_key("laptop", "slug-1") == "devin@laptop:slug-1"
+    for a in (
+        HttpsClaudeAdapter(CFG),
+        HttpsCursorAdapter(CFG),
+        HttpsCodexAdapter(CFG),
+        HttpsDevinAdapter(CFG),
+    ):
+        with pytest.raises(ValueError):
+            a.session_key("laptop", None)
 
 
-def test_cursor_history_session_id_needs_the_join_nonce_binding() -> None:
-    """CursorAdapter.history_session_id (DESIGN.md §9.1, issue #171): /catchup's session id
-    for a Cursor conversation, once the join nonce bound it (§6.3); moved out of
-    catchup.session_id's harness branching."""
-    a = CursorAdapter(CFG)
-    assert a.history_session_id(cursor_part(session_id="conv-1"), CFG) == ("conv-1", "")
-    pending = cursor_part(bind_state="pending", session_key="cursor:agent:123@1.00", session_id="conv-1")
-    assert a.history_session_id(pending, CFG) == (
-        None,
-        "not bound to its Cursor conversation yet (after its first tool call following join())",
-    )
-    assert a.history_session_id(cursor_part(session_id=None), CFG) == (None, "no cursor session id known yet")
+def test_the_stop_continuation_verdicts_of_claude_code_and_cursor() -> None:
+    for a in (HttpsClaudeAdapter(CFG), HttpsCursorAdapter(CFG)):
+        p = part(harness=a.harness)
+        v = a.continue_verdict
+        # a follow-up its hook printed (acked) is confirmed by the turn it starts or continues
+        assert v(p, True, ev("UserPromptSubmit", a.harness)) == "confirm"
+        assert v(p, False, ev("UserPromptSubmit", a.harness)) is None
+        for event in ("PostToolUse", "PostToolUseFailure", "Stop"):
+            assert v(p, True, ev(event, a.harness)) == "confirm" and v(p, False, ev(event, a.harness)) is None
+        for event in ("SessionEnd", "SessionStart"):
+            assert v(p, True, ev(event, a.harness)) == "session_end"
+        assert v(p, True, ev("PreCompact", a.harness)) is None  # says nothing either way
+        assert a.confirm_window_s() == 180.0
+    # /clear keeps a Claude Code session (the same id goes on), any other end takes it offline
+    claude = HttpsClaudeAdapter(CFG)
+    assert claude.ends_session(ev("SessionEnd", "claude", reason="clear")) is False
+    assert claude.ends_session(ev("SessionEnd", "claude", reason="logout")) is True
+    assert "named no session" in _error(lambda: claude.session_key("laptop", None))
+
+
+def _error(fn: Any) -> str:
+    with pytest.raises(ValueError) as e:
+        fn()
+    return str(e.value)
+
+
+def test_codex_over_https_a_prompt_before_the_followup_ran_was_the_person() -> None:
+    a = HttpsCodexAdapter(CFG)
+    p = part(harness="codex", session_key="codex@laptop:t1", gen="t1")
+    # a follow-up's turn goes on under the parent turn id: a new prompt means the person pressed Esc
+    assert a.continue_verdict(p, True, ev("UserPromptSubmit", "codex")) == "human_prompt"
+    assert a.continue_verdict(p, True, ev("PostToolUse", "codex")) == "confirm"
+    # a subagent's tool hook carries the session's id with another turn's: another thread's
+    assert a.other_thread(p, ev("PostToolUse", "codex", gen="sub")) is True
+    assert a.other_thread(p, ev("PostToolUse", "codex", gen="t1")) is False
+    assert a.other_thread(p, ev("PostToolUse", "codex")) is False
+    assert a.other_thread(part(harness="codex"), ev("PostToolUse", "codex", gen="sub")) is False
+    assert a.other_thread(p, ev("Stop", "codex", gen="sub")) is False
+    # a thread's calls must name it; another machine's session of the same thread conflicts
+    assert "threadId" in _error(lambda: a.session_key("laptop", None))
+    assert a.credential_error(p, {"thread_id": "t1"}) is None
+    assert "another Codex thread" in (a.credential_error(p, {"thread_id": "t2"}) or "")
+    assert "another Codex thread" in (a.credential_error(p, {}) or "")
+    assert "not listening" in (a.stop_wait_lost(301.0) or "") and "5 min" in (a.stop_wait_lost(301.0) or "")
+
+
+def test_codex_anchors_its_turn_at_the_first_switchboard_tool_hook() -> None:
+    a = HttpsCodexAdapter(CFG)
+    p = part(harness="codex")
+    assert a.anchors_turn(p, ev("PostToolUse", "codex", tool="mcp__switchboard__join")) is True
+    assert a.anchors_turn(p, ev("PostToolUse", "codex", tool="Bash")) is False
+    assert a.anchors_turn(p, ev("Stop", "codex", tool="mcp__switchboard__join")) is False
 
 
 # ------------------------------------------------------------------ devin
 def devin_part(**kw: Any) -> Participant:
-    return part(**{"harness": "devin", "session_key": "devin:s1", **kw})
+    return part(**{"harness": "devin", "session_key": "devin@laptop:s1", **kw})
 
 
 def test_devin_routes_a_sink_first_then_the_taint_then_the_pull() -> None:
-    a = DevinAdapter(CFG)
+    a = HttpsDevinAdapter(CFG)
     p = devin_part()
     tainted = devin_part(gen_tainted=True)
     assert (a.route(tainted, WAKE, SINK, 0.0).kind, a.route(tainted, WAKE, SINK, 0.0).sink_id) == ("sink", 41)
-    assert a.route(tainted, PRIO, None, 0.0).reason == TAINT_WHY
+    assert a.route(tainted, PRIO, None, 0.0).reason == a.taint_why
     assert a.route(p, PRIO, None, 0.0).kind == "pull"
     r = a.route(p, WAKE, None, 0.0)
     assert r.kind == "none" and "re-arm is used up" in (r.reason or "")
     assert a.context_events(tainted) == frozenset() and a.redeliver_on_stop(tainted, ev("Stop")) is False
-    assert a.stop_continues(p) is True
-    assert a.tier(p) == ("devin:wait-loop", None) and a.context_events(p) == HOOK_CONTEXT_EVENTS["devin"]
-    assert 'wait("#build", 600)' in a.join_guidance(p, "#build")
+    assert a.stop_continues(p) is True and a.wait_drop_means_gone() is True
+    assert a.tier(p) == (DEVIN_TIER, "over HTTPS: listening through wait()")
+    assert a.context_events(p) == HOOK_CONTEXT_EVENTS["devin"]
+    assert f'wait("#build", {DEVIN_WAIT_CAP_S})' in a.join_guidance(p, "#build")
     assert rearm_text("#build", 600).startswith("[switchboard] (from switchboard, not your user)")
+    assert a.rearm_text("#build", 600) == rearm_text("#build", 600)
+    assert a.starts_subagent(ev("PreToolUse", "devin", subagent_bg=True)) is True
+    assert a.starts_subagent(ev("PostToolUse", "devin", subagent_bg=True)) is False
 
 
 def test_devin_pull_confirmation_needs_the_wait_calls_own_successful_post() -> None:
-    a = DevinAdapter(CFG)
+    a = HttpsDevinAdapter(CFG)
     ok = ev("PostToolUse", "devin", tool=WAIT_TOOL, ok=True, tool_use_id="tu-1")
     # anything but a wait() answer is confirmed by its token alone
     assert a.pull_confirms("read", "tu-1", ev("Stop", "devin")) is True
@@ -286,7 +306,7 @@ def test_devin_pull_confirmation_needs_the_wait_calls_own_successful_post() -> N
 
 
 def test_devin_wait_pre_and_orphaned_waits() -> None:
-    a = DevinAdapter(CFG)
+    a = HttpsDevinAdapter(CFG)
     p = devin_part()
     assert a.is_wait_pre(ev("PreToolUse", "devin", tool=WAIT_TOOL, tool_use_id="tu-1")) is True
     assert a.is_wait_pre(ev("PreToolUse", "devin", tool=WAIT_TOOL)) is False
@@ -296,20 +316,61 @@ def test_devin_wait_pre_and_orphaned_waits() -> None:
 
 
 def test_devin_block_verdicts() -> None:
-    a = DevinAdapter(CFG)
+    a = HttpsDevinAdapter(CFG)
     p = devin_part()
-    assert a.continue_verdict(p, None, True, ev("UserPromptSubmit", "devin")) == "new_prompt"
-    assert a.continue_verdict(p, None, True, ev("SessionEnd", "devin")) == "session_end"
-    assert a.continue_verdict(p, None, True, ev("SessionStart", "devin")) == "session_end"
-    assert a.continue_verdict(p, None, True, ev("PostToolUse", "devin")) == "confirm"
-    assert a.continue_verdict(p, None, False, ev("PostToolUse", "devin")) is None
-    assert a.confirm_window_s() == BLOCK_CONFIRM_S
+    assert a.continue_verdict(p, True, ev("UserPromptSubmit", "devin")) == "new_prompt"
+    assert a.continue_verdict(p, True, ev("SessionEnd", "devin")) == "session_end"
+    assert a.continue_verdict(p, True, ev("SessionStart", "devin")) == "session_end"
+    assert a.continue_verdict(p, True, ev("PostToolUse", "devin")) == "confirm"
+    assert a.continue_verdict(p, False, ev("PostToolUse", "devin")) is None
+    assert a.confirm_window_s() == a.block_confirm_s
 
 
 def test_devin_history_session_id_is_whatever_its_hooks_report() -> None:
-    """DevinAdapter.history_session_id (DESIGN.md §9.1, issue #171): /catchup's session id
-    for a Devin session is its own slug, with no quirk of its own; moved out of
-    catchup.session_id's harness branching."""
-    a = DevinAdapter(CFG)
+    """HttpsDevinAdapter.history_session_id (DESIGN.md §9.1, issue #171): /catchup's session id
+    for a Devin session is its own slug, with no quirk of its own."""
+    a = HttpsDevinAdapter(CFG)
     assert a.history_session_id(devin_part(session_id="brisk-otter-1"), CFG) == ("brisk-otter-1", "")
     assert a.history_session_id(devin_part(session_id=None), CFG) == (None, "no devin session id known yet")
+
+
+def test_the_engine_builds_one_adapter_per_https_harness_and_the_test_agent() -> None:
+    assert set(build_adapters(CFG)) == {
+        HTTPS_CLAUDE,
+        HTTPS_CODEX,
+        HTTPS_CURSOR,
+        HTTPS_DEVIN,
+        "unknown",
+        "test",
+    }
+
+
+def test_a_session_is_served_by_the_adapter_of_its_harness() -> None:
+    """Each harness has its ``@https`` adapter, the scripted test agent its own, and a harness with no
+    adapter the ``unknown`` one. Fails if a harness gets another's rules (a Codex wake for a Claude
+    session) or the test agent gets a real harness's."""
+    ads = build_adapters(CFG)
+    assert adapter_for(ads, "claude") is ads[HTTPS_CLAUDE]
+    assert adapter_for(ads, "devin") is ads[HTTPS_DEVIN]
+    assert adapter_for(ads, "test") is ads["test"]
+    assert adapter_for(ads, "gemini") is ads["unknown"]
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex", "cursor"])
+def test_catchups_session_id_is_the_one_the_sessions_key_carries(harness: str) -> None:
+    """/catchup (§26) names a session by the harness's own id: for a session over HTTPS, the id its
+    calls name, which is in its session key. Fails if a session's row and key disagree and the id is
+    passed on anyway."""
+    a = build_adapters(CFG)[f"{harness}@https"]
+    key = f"{harness}@laptop:id-1"
+    assert a.history_session_id(part(harness=harness, session_key=key, session_id="id-1"), CFG) == (
+        "id-1",
+        "",
+    )
+    why = f"no {harness} session id known yet"
+    assert a.history_session_id(part(harness=harness, session_key=key, session_id=None), CFG) == (None, why)
+    assert a.history_session_id(part(harness=harness, session_key=key, session_id="id-2"), CFG) == (None, why)
+    assert a.history_session_id(part(harness=harness, session_key="nonsense", session_id="id-1"), CFG) == (
+        None,
+        why,
+    )

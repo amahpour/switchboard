@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 from conftest import FakeClock
+from engine_agents import fills, listener, result, session, stop, woke
 from engine_world import World
-from test_claude_adapter import claude, pushes, reg
 from test_rules_release import NOW, item, rel, room
 
 from switchboard.broker.hub import Hub
@@ -147,7 +147,7 @@ def test_the_store_marks_a_reply_to_the_recipients_own_message(w: World) -> None
 def test_an_idle_agent_gets_the_whole_exchange_in_one_wake_at_the_hold(w: World, clock: FakeClock) -> None:
     """Two other agents talk for a minute without naming claude-1: it is woken once, 270 s after
     the first message, with all three. Fails if it wakes per message (the bug #137 is about)."""
-    p, m, _conn = claude(w)
+    p, m, park = listener(w)
     _pa, a = w.agent("codex-1")
     _pb, b = w.agent("devin-1")
     first = w.agent_says(a, "the cache key is wrong")
@@ -156,17 +156,15 @@ def test_an_idle_agent_gets_the_whole_exchange_in_one_wake_at_the_hold(w: World,
     clock.advance(30)
     third = w.agent_says(a, "fixing it")
     w.actions += w.engine.tick()
-    assert pushes(w) == []
+    assert not woke(w, park)
     assert w.engine.wakes_at(m.id) == pytest.approx(first.ts + 270)
     clock.advance(270 - 60 - 1)
-    reg(w, p, "idle")
     w.actions += w.engine.tick()
-    assert pushes(w) == []
+    assert not woke(w, park)
     clock.advance(1)
-    reg(w, p, "idle")
     w.actions += w.engine.tick()
-    [push] = pushes(w)
-    assert all(f"id={x.id} " in push.text for x in (first, second, third))
+    assert woke(w, park)
+    assert all(f"id={x.id} " in result(w, park)["text"] for x in (first, second, third))
     assert w.engine.wakes_at(m.id) is None
 
 
@@ -186,21 +184,20 @@ def test_wake_now_wakes_an_idle_agent_at_once_and_only_for_what_was_waiting(
 ) -> None:
     """/wake sends the waiting chatter now. Chatter that arrives after it waits on the hold
     again: fails if the ask outlives the messages it was for (it did, in the first draft)."""
-    p, m, _conn = claude(w)
+    p, m, park = listener(w)
     _pa, a = w.agent("codex-1")
     msg = w.agent_says(a, "just chatter")
-    assert pushes(w) == []
+    assert not woke(w, park)
     w.actions += w.engine.on_command(w.room.id, "wake", m.id)
-    [push] = pushes(w)
-    assert f"id={msg.id} " in push.text
-    w.store.mark_posted(push.batch_id)
-    w.actions += w.engine.on_confirm(push.batch_id, "test")
+    res = result(w, park)
+    assert f"id={msg.id} " in res["text"]
+    w.actions += w.engine.on_hook_ack(res["batch_id"], res["ack"])
+    w.hook(p, "UserPromptSubmit", gen="g1")  # the follow-up started a turn
     clock.advance(10)
-    w.actions += w.engine.set_status(w.p(p), "idle", "hook:Stop", bump=True)  # the woken turn ends
-    reg(w, p, "idle")
+    park2 = stop(w, p)  # the woken turn ends
     later = w.agent_says(a, "more chatter")
     w.actions += w.engine.tick()
-    assert pushes(w) == []
+    assert not woke(w, park2)
     assert m.id not in w.engine.wake_now
     assert w.engine.wakes_at(m.id) == pytest.approx(later.ts + 270)
 
@@ -211,24 +208,21 @@ def test_wake_now_on_a_busy_agent_goes_out_when_it_is_idle_not_at_the_hold(
     """A person asked for it now: a busy agent can't take chatter mid-task, so it gets the
     messages the moment it is idle again, not 270 s after they arrived. Fails if the ask is
     dropped while the agent is busy."""
-    p, m, _conn = claude(w, status="busy", registry="busy")
+    p, m = session(w, status="busy")
     _pa, a = w.agent("codex-1")
     msg = w.agent_says(a, "just chatter")
     w.actions += w.engine.on_command(w.room.id, "wake", m.id)
-    assert pushes(w) == []
+    assert not fills(w)
     clock.advance(10)
-    w.hook(p, "Stop")
-    reg(w, p, "idle")
-    w.actions += w.engine.evaluate_participant(p.id)
-    [push] = pushes(w)
-    assert f"id={msg.id} " in push.text
+    res = result(w, stop(w, p))
+    assert f"id={msg.id} " in res["text"]
 
 
 def test_a_parked_agent_shows_no_wake_time(w: World) -> None:
     """Found in the recording: after Wake now on an agent with no wake path, Members still said
     "wakes at", a wake that can't happen. Once it is parked, the time goes (the Inspector says
     to poke it)."""
-    p, m, _conn = claude(w, attached=False)
+    p, m = session(w)  # idle, and its Stop hook is not waiting
     _pa, a = w.agent("codex-1")
     msg = w.agent_says(a, "just chatter")
     assert w.engine.wakes_at(m.id) == pytest.approx(msg.ts + 270)
@@ -238,7 +232,7 @@ def test_a_parked_agent_shows_no_wake_time(w: World) -> None:
 
 
 def test_leaving_drops_a_pending_wake_now(w: World) -> None:
-    p, m, _conn = claude(w, status="busy", registry="busy")
+    p, m = session(w, status="busy")
     _pa, a = w.agent("codex-1")
     w.agent_says(a, "just chatter")
     w.actions += w.engine.on_command(w.room.id, "wake", m.id)
@@ -267,12 +261,6 @@ class Shim:
     def wakes_at(self, membership_id: int) -> float | None:
         return self.w.engine.wakes_at(membership_id)
 
-    def board_reason(self, member) -> None:
-        return None
-
-    def member_claims(self, member) -> tuple[None, None]:
-        return None, None
-
 
 @pytest.fixture
 def svc(w: World, clock: FakeClock) -> RoomService:
@@ -287,14 +275,13 @@ def test_the_wake_command_and_the_member_list(w: World, svc: RoomService) -> Non
     /wake doesn't reach the engine."""
     from test_commands import WEB
 
-    p, m, _conn = claude(w)
+    p, m, park = listener(w)
     _pa, a = w.agent("codex-1")
     msg = w.agent_says(a, "just chatter")
     [row] = [r for r in svc.members("#build") if r["name"] == "claude-1"]
     assert row["wakes_at"] == pytest.approx(msg.ts + 270) and row["queued"] == 1
     assert svc.command("#build", "/wake claude-1", WEB)["text"] == "waking claude-1 for 1 waiting message"
-    [push] = pushes(w)
-    assert f"id={msg.id} " in push.text
+    assert f"id={msg.id} " in result(w, park)["text"]
     [row] = [r for r in svc.members("#build") if r["name"] == "claude-1"]
     assert row["wakes_at"] is None
     assert svc.command("#build", "/wake claude-1", WEB)["text"] == "nothing is waiting for claude-1"
@@ -303,7 +290,7 @@ def test_the_wake_command_and_the_member_list(w: World, svc: RoomService) -> Non
 def test_wake_refuses_a_held_member_and_a_paused_room(w: World, svc: RoomService) -> None:
     from test_commands import WEB
 
-    p, m, _conn = claude(w)
+    p, m, _park = listener(w)
     _pa, a = w.agent("codex-1")
     w.agent_says(a, "just chatter")
     svc.command("#build", "/hold claude-1", WEB)

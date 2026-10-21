@@ -4,11 +4,10 @@
   responses ``{"id", "result"}`` or ``{"id", "error": {"code", "message"}}``;
   pushes ``{"push": kind, "data": {...}}``.
 - Peers with another uid are dropped at accept. Pids come from the kernel.
-- Roles: anon < human_cli < human (see peer.PeerPolicy). ``mcp``: the connection
-  sent ``mcp.hello`` and passed ``verify_mcp_peer``. ``member``: an mcp connection
-  whose ``params.cred`` matches a membership issued to this very MCP process
-  (checked by AgentService). ``hook``: any same-uid peer; AgentService decides
-  which session, if any, the event may affect.
+- Roles: anon < human_cli < human (see peer.PeerPolicy). The socket is for the CLI and for tests:
+  every agent reaches the broker at ``/mcp`` with an agent token (§49), so there is no method for an
+  agent here (the ``mcp.*``, ``agent.*`` and ``hook.*`` methods of earlier releases were retired in
+  0.38.0, #385).
 """
 
 from __future__ import annotations
@@ -85,7 +84,6 @@ class Conn:
         self.out: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=5000)
         self.closed = False
         self.tails: list[TailSubscriber] = []
-        self.mcp: Any = None  # AgentService.McpConn once mcp.hello succeeded
 
     def send(self, obj: dict[str, Any]) -> None:
         if self.closed:
@@ -221,12 +219,6 @@ class RpcServer:
         finally:
             for t in conn.tails:
                 self.state.hub.remove(t)
-            if getattr(self.state, "agents", None) is not None:
-                try:
-                    # MCP sessions go offline; a parked hook's park ends
-                    self.state.agents.conn_closed(conn)
-                except Exception:
-                    log.exception("conn %d: cleanup failed", conn.id)
             conn.close()
             self.conns.discard(conn)
             try:
@@ -303,12 +295,6 @@ class RpcServer:
             if pol.human_allowed(peer):
                 return
             raise RpcError("forbidden", f"{method} needs your web session: use the switchboard web UI")
-        if role in ("mcp", "member"):
-            if conn.mcp is not None:
-                return
-            raise RpcError("unauthorized", f"{method}: send mcp.hello first")
-        if role == "hook":
-            return
         if role == "login":
             if pol.login_allowed(peer):
                 return
@@ -341,7 +327,7 @@ def _socket_alive(p: Path) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# METHODS (§5.2). M1: sys.*, room.*, human.*. M2 adds mcp.*, agent.*, hook.*.
+# METHODS (§5.2): sys.*, room.*, human.*.
 # ---------------------------------------------------------------------------
 def _str(params: dict[str, Any], key: str) -> str:
     v = params.get(key)
@@ -499,56 +485,7 @@ def build_methods(state: "BrokerState") -> dict[str, MethodSpec]:
         state.store.add_event("login", data={"what": "logout_all", "via": "cli", "revoked": n})
         return {"revoked": n}
 
-    agents = lambda: state.agents  # noqa: E731
-
-    async def mcp_hello(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
-        return agents().hello(conn, p)
-
-    async def mcp_attach(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
-        return agents().attach(conn, p)
-
-    async def mcp_posted(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
-        return agents().posted(conn, p)
-
-    async def mcp_bye(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
-        agents().conn_closed(conn)
-        return {}
-
-    def member_op(fn_name: str) -> Handler:
-        async def h(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
-            return getattr(agents(), fn_name)(conn, p)
-
-        return h
-
-    async def agent_wait(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
-        return await agents().wait(conn, p)
-
-    async def hook_event(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
-        return await agents().hook_event(conn, p)
-
-    async def hook_ack(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
-        return agents().hook_ack(conn, p)
-
     return {
-        "mcp.hello": MethodSpec("anon", mcp_hello),
-        "mcp.attach": MethodSpec("mcp", mcp_attach),
-        "mcp.posted": MethodSpec("mcp", mcp_posted),
-        "mcp.bye": MethodSpec("mcp", mcp_bye),
-        "agent.join": MethodSpec("mcp", member_op("join")),
-        "agent.leave": MethodSpec("member", member_op("leave")),
-        "agent.who": MethodSpec("member", member_op("who")),
-        "agent.say": MethodSpec("member", member_op("say")),
-        "agent.review": MethodSpec("member", member_op("review")),
-        "agent.claim": MethodSpec("member", member_op("claim")),
-        "agent.read": MethodSpec("member", member_op("read")),
-        "agent.wait": MethodSpec("member", agent_wait, long_poll=True),
-        "agent.unwait": MethodSpec("member", member_op("unwait")),
-        "agent.pass": MethodSpec("member", member_op("pass_")),
-        "agent.away": MethodSpec("member", member_op("away")),
-        "agent.status": MethodSpec("member", member_op("status")),
-        # a long poll: a Cursor stop hook parks here until a follow-up (or its end)
-        "hook.event": MethodSpec("hook", hook_event, long_poll=True),
-        "hook.ack": MethodSpec("hook", hook_ack),
         "sys.ping": MethodSpec("anon", sys_ping),
         "sys.status": MethodSpec("anon", sys_status),
         "sys.stop": MethodSpec("human_cli", sys_stop),

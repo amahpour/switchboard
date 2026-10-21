@@ -24,7 +24,7 @@ from test_agents_http import THREAD_A, Codex, make_token, members, sse_result
 from test_agents_http_claude import HOOK, SESSION_1, USES, Claude
 
 from switchboard import __version__
-from switchboard.broker import agent_http
+from switchboard.broker import agent_http, hook_replies
 
 TOKEN_IN = re.compile(r"yk:b(\d+)\.([0-9a-f]{8})")
 
@@ -427,7 +427,7 @@ def test_the_reply_is_one_of_the_allowed_shapes_or_nothing() -> None:
     """The broker writes a hook's reply (decision 5), so it checks each against the hook script's
     shapes (§7.3) and Codex's Stop block, and answers nothing otherwise. Fails if a continue reaches
     an event that may not have one, or context reaches an event outside the harness's table."""
-    reply_for = agent_http.reply_for
+    reply_for = hook_replies.reply_for
     assert reply_for("codex", "Stop", {"kind": "continue", "text": "hi"}) == {
         "decision": "block",
         "reason": "hi",

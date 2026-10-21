@@ -11,7 +11,6 @@ session-history tool.
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import json
 import unicodedata
 from pathlib import Path
@@ -35,7 +34,7 @@ from switchboard.broker.service import BrokerInfo, RoomService, ServiceError, me
 from switchboard.config import Config, ConfigError, ReviewCfg, from_dict
 from switchboard.delivery.rules import parse_mentions
 from switchboard.envelope import ITEM_LIMIT, sanitize
-from switchboard.models import VERIFYING, tier_label
+from switchboard.models import tier_label
 from switchboard.store import Store
 
 WEB = Actor(role="human", via="web")
@@ -66,25 +65,18 @@ def agent(
     sid: str | None = None,
     *,
     mode: str = "prompting",
-    bound: bool = True,
-    proven: bool = True,
-    host: str = "",
+    host: str | None = None,
 ) -> int:
-    """A joined member; returns its membership id. Codex and bound Cursor sessions are keyed
-    by their id, as the join path keys them (§6.3); a Codex thread is proven unless
-    ``proven=False`` (§9.3)."""
+    """A joined member; returns its membership id. A real harness is a session over HTTPS on a
+    device (``laptop`` unless said), keyed by its own id as the join path keys it (§6.3, §49.3); the
+    scripted test agent has no device."""
+    if host is None:
+        host = "" if harness == "test" else "laptop"
     head = f"{harness}@{host}" if host else harness
-    if harness in ("codex", "cursor") and sid and bound:
-        key = f"{head}:{sid}"
-    else:
-        key = f"{head}:agent:{name}"
+    key = f"{head}:{sid}" if harness != "test" and sid else f"{head}:agent:{name}"
     fields: dict[str, Any] = dict(status="idle", approval_mode=mode, session_id=sid, host=host)
-    if harness == "cursor":
-        fields["bind_state"] = "bound" if bound else "pending"
-    if harness == "codex":
-        fields["thread_proof"] = int(proven)
     p = svc.store.upsert_participant(harness, key, **fields)
-    return svc.store.create_membership(svc.room("#build").id, p.id, name, "h-" + name).id
+    return svc.store.create_membership(svc.room("#build").id, p.id, name).id
 
 
 def chat(svc: RoomService) -> list[Any]:
@@ -358,20 +350,14 @@ def test_members_without_a_usable_id_say_why(svc: RoomService, clock: FakeClock)
     agent(svc, "tester", "test", "k1")
     agent(svc, "who-knows", "unknown", SID)
     agent(svc, "claude-1", "claude", None)
-    agent(svc, "cursor-1", "cursor", "c-1", bound=False)
+    agent(svc, "cursor-1", "cursor", None)
     agent(svc, "claude-2", "claude", "no good")
-    agent(svc, "codex-2", "codex", "thread-B", proven=False)
-    agent(svc, "codex-3", "codex", "thread-C", bound=False)  # keyed by something else than its id
-    agent(svc, "pi-codex", "codex", "thread-P", proven=False, host="fpga-pi")
     want = {
         "tester": "a test session",
         "who-knows": "a session of an unknown harness",
         "claude-1": "no claude session id known yet",
-        "cursor-1": "not bound to its Cursor conversation yet (after its first tool call following join())",
+        "cursor-1": "no cursor session id known yet",
         "claude-2": "its session id isn't in a form switchboard passes on",
-        "codex-2": "its Codex thread isn't verified yet",
-        "codex-3": "no Codex thread id known",
-        "pi-codex": "a Codex thread on another machine can't be verified",
     }
     room = svc.room("#build")
     for name, why in want.items():
@@ -383,7 +369,7 @@ def test_members_without_a_usable_id_say_why(svc: RoomService, clock: FakeClock)
     res = svc.command("#build", "/catchup codex-1", WEB)
     for name, why in want.items():
         m = svc.store.find_member(room.id, name)
-        host = m.host or "the switchboard machine (yours)"
+        host = f"{m.host} (yours)" if m.host else "the switchboard machine"
         line = (
             f"  subject: {name} · {m.harness} · no session id: ask {name} here for a short"
             f" summary · host: {host}"
@@ -392,28 +378,14 @@ def test_members_without_a_usable_id_say_why(svc: RoomService, clock: FakeClock)
         assert f"{line} ({why})" in res["text"].splitlines()
 
 
-def test_an_unproven_codex_thread_with_proofs_off(tmp_path: Path, clock: FakeClock) -> None:
-    """With ``[codex] require_thread_proof`` off every thread counts as proven (§9.3)."""
-    s = make_svc(
-        tmp_path,
-        clock,
-        Config().replace(codex=dataclasses.replace(Config().codex, require_thread_proof=False)),
-    )
-    agent(s, "claude-1", "claude", SID)
-    agent(s, "codex-1", "codex", "thread-A", proven=False)
-    assert s.session_handles(s.room("#build"))["codex-1"] == "thread-A @ this machine"
-    res = s.command("#build", "/catchup claude-1 on codex-1", WEB)
-    assert "codex-1 · codex · session thread-A · host" in res["text"]
-
-
 def test_handle_lines_per_harness_and_a_remote_host(svc: RoomService, clock: FakeClock) -> None:
     """One raw id per session, the harness's own; no ``<harness>:<id>`` key (AgentsView keeps
     Claude sessions bare and the others prefixed: its exact-id lookup takes the raw id)."""
     for name, h, sid, host in [
-        ("claude-1", "claude", SID, ""),
-        ("codex-1", "codex", TID, ""),
-        ("cursor-1", "cursor", CID, ""),
-        ("devin-1", "devin", "brisk-otter-1", ""),
+        ("claude-1", "claude", SID, None),
+        ("codex-1", "codex", TID, None),
+        ("cursor-1", "cursor", CID, None),
+        ("devin-1", "devin", "brisk-otter-1", None),
         ("bench", "claude", "5eed0000-0000-4000-8000-000000000003", "fpga-pi"),
     ]:
         agent(svc, name, h, sid, host=host)
@@ -423,26 +395,25 @@ def test_handle_lines_per_harness_and_a_remote_host(svc: RoomService, clock: Fak
         assert svc.command("#build", f"/catchup codex-9 on {name}", WEB)["ok"]
         [got[name]] = subject_lines(chat(svc)[-1].text)
     assert got == {
-        "claude-1": f"  subject: claude-1 · claude · session {SID} · host: the switchboard machine (yours)",
-        "codex-1": f"  subject: codex-1 · codex · session {TID} · host: the switchboard machine (yours)",
-        "cursor-1": f"  subject: cursor-1 · cursor · session {CID} · host: the switchboard machine (yours)",
-        "devin-1": "  subject: devin-1 · devin · session brisk-otter-1 · host: the"
-        " switchboard machine (yours)",
+        "claude-1": f"  subject: claude-1 · claude · session {SID} · host: laptop (yours)",
+        "codex-1": f"  subject: codex-1 · codex · session {TID} · host: laptop (yours)",
+        "cursor-1": f"  subject: cursor-1 · cursor · session {CID} · host: laptop (yours)",
+        "devin-1": "  subject: devin-1 · devin · session brisk-otter-1 · host: laptop (yours)",
         "bench": "  subject: bench · claude · session 5eed0000-0000-4000-8000-000000000003 · host: fpga-pi",
     }
     assert f"claude:{SID}" not in chat(svc)[0].text
 
 
 def test_an_agent_on_another_machine_reads_hosts_from_its_side(svc: RoomService) -> None:
-    """The owner's two-machine case: an agent on fpga-pi catching up on a member here reads
-    "the switchboard machine", not "this machine"; one on its own host reads "(yours)"."""
+    """Two machines (§49): an agent on fpga-pi catching up on a member on the laptop reads the
+    device by name, not "this machine"; a subject on its own device reads "(yours)"."""
     agent(svc, "bench", "claude", "5eed0000-0000-4000-8000-000000000003", host="fpga-pi")
     agent(svc, "pi-2", "claude", "5eed0000-0000-4000-8000-000000000005", host="fpga-pi")
     agent(svc, "claude-1", "claude", SID)
     svc.command("#build", "/catchup bench", WEB)
     assert subject_lines(chat(svc)[-1].text) == [
         "  subject: pi-2 · claude · session 5eed0000-0000-4000-8000-000000000005 · host: fpga-pi (yours)",
-        f"  subject: claude-1 · claude · session {SID} · host: the switchboard machine",
+        f"  subject: claude-1 · claude · session {SID} · host: laptop",
     ]
     assert "this machine" not in chat(svc)[-1].text
     # and the other way round
@@ -566,7 +537,7 @@ def test_catchup_posts_one_ordinary_human_message(svc: RoomService, clock: FakeC
         )
     assert svc.room("#build").hop_count == 3
     res = svc.command("#build", "/catchup @codex-1 on claude-1 check the\nerror paths \x1b[1mfirst", WEB)
-    h = handle("claude-1", "claude", SID)
+    h = handle("claude-1", "claude", SID, "laptop")
     since = clock.now() - DAY
     assert res == {
         "ok": True,
@@ -601,7 +572,10 @@ def test_a_topic_goes_to_the_agent_only(svc: RoomService, clock: FakeClock) -> N
     b = agent(svc, "tester", "test", "k1")
     res = svc.command("#build", '/catchup codex-1 on "sprint cleanup" what did we drop?', WEB)
     since = clock.now() - DAY
-    hs = [handle("claude-1", "claude", SID), handle("tester", "test", None, why="a test session")]
+    hs = [
+        handle("claude-1", "claude", SID, "laptop"),
+        handle("tester", "test", None, why="a test session", yours=False),
+    ]
     assert res["text"].splitlines() == [
         f'asked codex-1 to catch up on "sprint cleanup" across 2 session(s) since'
         f" {catchup.when(since)}; it got:",
@@ -707,7 +681,7 @@ def test_members_must_be_in_the_room(svc: RoomService) -> None:
 def test_a_note_that_does_not_fit_is_refused(svc: RoomService, clock: FakeClock) -> None:
     agent(svc, "codex-1", "codex", TID)
     agent(svc, "claude-1", "claude", SID)
-    h = handle("claude-1", "claude", SID)
+    h = handle("claude-1", "claude", SID, "laptop")
     base = request("codex-1", "member", [h], clock.now() - DAY, note="x")
     fits = svc.cfg.delivery.max_msg_chars - (len(base) - 1)
     e = refused(svc, "/catchup codex-1 on claude-1 " + "n" * (fits + 1))
@@ -723,7 +697,7 @@ def test_a_limit_below_the_request_blames_the_limit(tmp_path: Path, clock: FakeC
     s = make_svc(tmp_path, clock, Config().with_delivery(max_msg_chars=500))
     agent(s, "codex-1", "codex", TID)
     agent(s, "claude-1", "claude", SID)
-    h = handle("claude-1", "claude", SID)
+    h = handle("claude-1", "claude", SID, "laptop")
     need = len(request("codex-1", "member", [h], clock.now() - DAY, max_chars=500))
     for text in ("/catchup codex-1 on claude-1", "/catchup codex-1 on claude-1 a note"):
         e = refused(s, text)
@@ -831,41 +805,25 @@ def test_who_shows_session_handles(svc: RoomService) -> None:
     agent(svc, "codex-1", "codex", "thread-A")
     agent(svc, "devin-1", "devin", "brisk-otter-1")
     agent(svc, "tester", "test", "k1")
-    agent(svc, "codex-2", "codex", "thread-B", proven=False)
+    agent(svc, "codex-2", "codex", None)
     agent(svc, "bench", "claude", "5eed0000-0000-4000-8000-000000000003", host="fpga-pi")
     lines = {ln.split()[0]: ln for ln in svc.command("#build", "/who", WEB)["text"].splitlines()[1:]}
-    assert f"session: {SID} @ this machine" in lines["claude-1"]
-    assert "session: thread-A @ this machine" in lines["codex-1"]
-    assert "session: brisk-otter-1 @ this machine" in lines["devin-1"]
+    assert f"session: {SID} @ laptop" in lines["claude-1@laptop"]
+    assert "session: thread-A @ laptop" in lines["codex-1@laptop"]
+    assert "session: brisk-otter-1 @ laptop" in lines["devin-1@laptop"]
     assert "session: 5eed0000-0000-4000-8000-000000000003 @ fpga-pi" in lines["bench@fpga-pi"]
-    assert "session" not in lines["tester"] and "session" not in lines["codex-2"]  # no usable id
+    assert "session" not in lines["tester"] and "session" not in lines["codex-2@laptop"]  # no usable id
     assert svc.session_handles(svc.room("#build")) == {
-        "claude-1": f"{SID} @ this machine",
-        "codex-1": "thread-A @ this machine",
-        "devin-1": "brisk-otter-1 @ this machine",
+        "claude-1": f"{SID} @ laptop",
+        "codex-1": "thread-A @ laptop",
+        "devin-1": "brisk-otter-1 @ laptop",
         "bench": "5eed0000-0000-4000-8000-000000000003 @ fpga-pi",
     }
 
 
-def test_who_and_status_say_verifying(svc: RoomService) -> None:
-    """A Codex member whose first thread-proof tries still run reads "verifying..." (§9.3)."""
-    mid = agent(svc, "codex-1", "codex", TID, proven=False)
-    m = svc.store.find_member(svc.room("#build").id, "codex-1")
-    assert m is not None and m.membership_id == mid
-    svc.store.update_participant(m.participant_id, tier="mcp-only", tier_note=VERIFYING)
-    line = svc.command("#build", "/who", WEB)["text"].splitlines()[1]
-    assert line.startswith("  codex-1  codex  idle  verifying...") and "mcp-only" not in line
-    assert "codex-1: idle, tier verifying...," in svc.command("#build", "/status", WEB)["text"]
-    svc.store.update_participant(m.participant_id, tier_note="unverified thread")
-    assert (
-        "  codex-1  codex  idle  mcp-only (unverified thread)" in svc.command("#build", "/who", WEB)["text"]
-    )
-
-
 def test_tier_label() -> None:
-    assert tier_label("mcp-only", VERIFYING) == "verifying..."
-    assert tier_label("mcp-only", "unverified thread") == "mcp-only (unverified thread)"
-    assert tier_label("codex:daemon", None) == "codex:daemon"
+    assert tier_label("codex:https", "over HTTPS: woken at stop") == "codex:https (over HTTPS: woken at stop)"
+    assert tier_label("mcp-only", None) == "mcp-only"
     assert tier_label(None, None) == "-"
 
 
@@ -875,11 +833,10 @@ def test_cli_who_prints_the_session_flag(
     base = {
         "harness": "claude",
         "status": "idle",
-        "tier": "claude:inbox",
+        "tier": "claude:https",
         "tier_note": None,
         "away": None,
         "approval_mode": "prompting",
-        "env_leak": False,
         "held": False,
         "queued": 0,
         "parked": False,
@@ -888,17 +845,23 @@ def test_cli_who_prints_the_session_flag(
         "room": "#build",
         "human": "alice",
         "members": [
-            {**base, "name": "claude-1", "session": f"{SID} @ this machine\x1b[2J"},
+            {**base, "name": "claude-1", "session": f"{SID} @ laptop\x1b[2J"},
             {**base, "name": "tester", "harness": "test"},
-            {**base, "name": "codex-1", "harness": "codex", "tier": "mcp-only", "tier_note": VERIFYING},
+            {
+                **base,
+                "name": "codex-1",
+                "harness": "codex",
+                "tier": "codex:https",
+                "tier_note": "woken at stop",
+            },
         ],
     }
     monkeypatch.setattr(cli, "_call", lambda args, method, params=None: res)
     assert cli.cmd_who(argparse.Namespace(room="#build", json=False)) == 0
     out = capsys.readouterr().out.splitlines()
-    assert out[1] == f"  claude-1  claude  idle  claude:inbox  session: {SID} @ this machine[2J"
-    assert out[2] == "  tester  test  idle  claude:inbox"
-    assert out[3] == "  codex-1  codex  idle  verifying..."
+    assert out[1] == f"  claude-1  claude  idle  claude:https  session: {SID} @ laptop[2J"
+    assert out[2] == "  tester  test  idle  claude:https"
+    assert out[3] == "  codex-1  codex  idle  codex:https (woken at stop)"
 
 
 # ------------------------------------------------------ switchboard cmd

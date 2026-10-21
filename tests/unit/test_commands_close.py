@@ -135,9 +135,7 @@ def test_close_ends_every_member_and_publishes_under_the_old_name(
         "members": [ma, mb, mc],
     }
     assert stub.ended == [([ma, mb, mc], "closed")]
-    # the kept credential names the room; it authorizes nothing
-    assert svc.store.membership_by_cred("h" * 64) is None
-    assert svc.store.closed_membership_by_cred("h" * 64)[1].id == room.id
+    assert [svc.store.get_membership(m).left_reason for m in (ma, mb, mc)] == ["closed"] * 3
 
 
 def test_close_over_the_cli_leaves_one_audit_notice(svc: RoomService, rec: Rec) -> None:  # noqa: F811
@@ -226,7 +224,6 @@ def test_closed_room_dicts_and_reopen(svc: RoomService, rec: Rec, clock: Any) ->
     # nobody is re-added; the kick still holds, the closed member may join again
     assert svc.store.members(room.id) == []
     assert svc.store.was_kicked(room.id, pk) and not svc.store.was_kicked(room.id, pc)
-    assert svc.store.closed_membership_by_cred("h" * 64) is None  # the kept credentials are cleared
     assert mk and mc
 
 

@@ -1,7 +1,7 @@
 """Mid-task delivery (DESIGN.md §8.2, §9): while an agent is
 working, only priority messages (the human's, and @mentions of it) are delivered,
-and only through hooks, a Codex steer or (bypass Claude) the inbox socket. Never
-chatter, never keystrokes, and never counted against the wake budget."""
+and only as hook context after a tool call. Never chatter, never keystrokes, and never
+counted against the wake budget."""
 
 from __future__ import annotations
 
@@ -10,14 +10,10 @@ from pathlib import Path
 
 import pytest
 from conftest import FakeClock
+from engine_agents import fills, session
 from engine_world import World
-from test_claude_adapter import claude
-from test_codex_adapter import TID, attach, codex
-from test_cursor_adapter import cursor
-from test_devin_adapter import devin
 
 from switchboard.config import Config
-from switchboard.models import Push
 
 
 @pytest.fixture
@@ -35,7 +31,7 @@ def ids(text: str) -> list[int]:
         ("claude", "PostToolUse", {"ok": True}),
         ("claude", "PostToolUseFailure", {"ok": False}),
         ("claude", "UserPromptSubmit", {"gen": "g2"}),
-        ("codex", "PostToolUse", {"ok": True, "sid": TID, "tool": "Bash"}),
+        ("codex", "PostToolUse", {"ok": True, "tool": "Bash"}),
         ("cursor", "postToolUse", {"ok": True}),
         ("cursor", "postToolUseFailure", {"ok": False}),
         ("devin", "PostToolUse", {"ok": True, "tool": "read"}),
@@ -44,20 +40,12 @@ def ids(text: str) -> list[int]:
 def test_priority_rides_the_next_hook_and_chatter_never_does(
     w: World, harness: str, event: str, kw: dict
 ) -> None:
-    if harness == "claude":
-        p, m, _c = claude(w, status="busy", attached=False, registry=None)
-    elif harness == "codex":
-        p, m = codex(w, status="busy", proof=False)  # no steer path: PostToolUse context
-        attach(w, view="busy")
-    elif harness == "cursor":
-        p, m = cursor(w, status="busy")
-    else:
-        p, m = devin(w)
+    p, m = session(w, f"{harness}-1", harness, status="busy")
     _pp, peer = w.agent("peer")
     chat = w.agent_says(peer, "chatter")
     ment = w.agent_says(peer, f"@{m.screen_name} a question", mentions=(m.screen_name,))
     hum = w.human("from alice")
-    assert not [a for a in w.take() if isinstance(a, Push)]
+    assert not fills(w)
     out = w.hook(p, event, **kw)
     assert out is not None and out.kind == "context"
     assert ids(out.text) == [hum.id, ment.id] and chat.id not in ids(out.text)
@@ -66,34 +54,32 @@ def test_priority_rides_the_next_hook_and_chatter_never_does(
     assert w.delivery(m, chat)["state"] == "pending"
 
 
-def test_codex_mid_task_is_a_steer_and_bypass_claude_is_the_inbox(w: World) -> None:
-    px, mx = codex(w, status="busy")
-    attach(w, view="busy")
-    pc, mc, _conn = claude(w, "claude-2", status="busy", mode="bypass", registry="busy")
+def test_a_busy_session_is_handed_nothing_but_a_hook_answer(w: World) -> None:
+    """Nothing reaches a busy session of any harness except as the answer to its own hook (§49.4):
+    a human message sits until its next tool call, whatever the approval mode. Fails if a message
+    is pushed to it (a ``ResolveSink`` for a wait it never made, a park it doesn't have)."""
+    sessions = [
+        session(w, "codex-1", "codex", status="busy"),
+        session(w, "claude-2", "claude", status="busy", mode="bypass"),
+    ]
     _pp, peer = w.agent("peer")
     w.agent_says(peer, "chatter only")
-    assert not [a for a in w.take() if isinstance(a, Push)]
-    w.human("stop and add a test")
-    got = {a.path: a for a in w.take() if isinstance(a, Push)}
-    assert set(got) == {"steer", "inbox"}
-    for push in got.values():
-        b = w.store.get_batch(push.batch_id)
-        assert b.kind == "priority" and not b.budget_counted and "chatter only" not in push.text
-
-
-def test_a_prompting_claude_gets_hook_context_not_the_inbox_mid_task(w: World) -> None:
-    p, m, _conn = claude(w, status="busy", mode="prompting", registry="busy")
-    msg = w.human("mid-task")
-    assert not [a for a in w.take() if isinstance(a, Push)]  # never a frame that could straddle a prompt
-    out = w.hook(p, "PostToolUse", ok=True)
-    assert out is not None and f"id={msg.id} " in out.text
+    assert not fills(w)
+    msg = w.human("stop and add a test")
+    assert not fills(w)
+    for p, _m in sessions:
+        out = w.hook(p, "PostToolUse", ok=True, tool="Bash")
+        assert out is not None and out.kind == "context" and f"id={msg.id} " in out.text
+        assert "chatter only" not in out.text
+        b = w.store.get_batch(out.batch_id)
+        assert b.kind == "priority" and not b.budget_counted
 
 
 def test_waiting_on_an_approval_prompt_gets_nothing(w: World) -> None:
-    p, m, _c = claude(w, status="waiting-approval", attached=False, registry=None)
+    p, m = session(w, status="waiting-approval")
     w.human("held while the prompt is open")
     assert w.hook(p, "PostToolUse", ok=True) is None
-    assert not [a for a in w.take() if isinstance(a, Push)]
+    assert not fills(w)
 
 
 def test_no_keystrokes_anywhere() -> None:
