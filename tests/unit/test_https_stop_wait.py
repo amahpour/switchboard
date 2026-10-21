@@ -76,6 +76,22 @@ def test_a_stop_hook_that_waits_again_is_listening_whatever_was_left_behind(w: W
     assert w.engine.parked_reason(m.id) is None
 
 
+def test_a_subagents_hook_does_not_bring_a_not_listening_codex_back(w: World) -> None:
+    """Codex runs a subagent's tool hooks with the session's id (#446, #465), and the engine ignores
+    them. A late one of those must not end the reason: the session has not heard anything. Fails if
+    any hook with the session's id clears it, not only the session's own."""
+    p, m = https_session(w, "codex", "codex-1", HTTPS_CODEX)
+    w.store.update_participant(p.id, gen="turn-1")
+    stop_wait(w, p, conn_id=7)
+    w.actions += w.engine.close_conn_sinks(7)
+    why = w.engine.parked_reason(m.id)
+    assert why and "not listening" in why
+    w.hook(p, "PostToolUse", gen="turn-of-a-subagent", tool="Bash", tool_use_id="call_1")
+    assert w.engine.parked_reason(m.id) == why  # the subagent's, ignored
+    w.hook(p, "UserPromptSubmit", gen="turn-2")
+    assert w.engine.parked_reason(m.id) != why  # the session's own
+
+
 def test_a_session_that_moved_on_before_its_wait_closed_is_not_marked(w: World, clock: FakeClock) -> None:
     """A wait cancelled after the session's next turn began (the person typed) says nothing: the
     session is busy, and an old reason must not come back at its next Stop. Fails if a busy

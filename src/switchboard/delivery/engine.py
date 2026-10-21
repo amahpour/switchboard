@@ -1301,7 +1301,9 @@ class Engine:
         E = ev.ev
         out: list[Action] = []
         adapter = self.adapter(p)
-        self.lost_stops.pop(p.id, None)  # a new hook means the session is reachable again
+        if adapter.other_thread(p, ev):
+            return None, []  # a subagent's hook must not change or take the session's messages
+        self.lost_stops.pop(p.id, None)  # the session's own hook: it is reachable again
         was_idle = p.status in ("idle", "starting")
         upd: dict[str, Any] = {"hooks_seen_at": now, "last_seen": now}
         if ev.sid and adapter.reports_session_id:
@@ -1311,6 +1313,8 @@ class Engine:
         # input into the running turn (Codex's steers) is not a new turn
         mid_turn = adapter.is_mid_turn(p, ev, was_idle)
         gen = (ev.gen or "")[:128] or None
+        if p.gen is None and gen is not None and adapter.anchors_turn(p, ev):
+            upd["gen"] = gen
         if E == "UserPromptSubmit" and not mid_turn:
             upd.update(
                 gen=gen,

@@ -297,6 +297,14 @@ class Adapter:
         (Codex's steered input, §9.3): the prompt id, the taint and the pull answers stay."""
         return False
 
+    def other_thread(self, p: Participant, ev: HookEvent) -> bool:
+        """Whether this hook belongs to a subagent sharing the session ID."""
+        return False
+
+    def anchors_turn(self, p: Participant, ev: HookEvent) -> bool:
+        """Whether a tool hook can identify the current turn when its prompt preceded join."""
+        return False
+
     def starts_subagent(self, ev: HookEvent) -> bool:
         """True if this hook starts a background subagent whose hooks carry the prompt's own
         ids (Devin's ``run_subagent``, §9.5): the engine taints that prompt, so no context,

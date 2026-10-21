@@ -542,11 +542,55 @@ def test_a_busy_codex_hears_a_message_after_a_shell_call(broker: InProcBroker) -
     broker.call("human.say", {"room": "#build", "text": "@codex-1 stop and check the tests"})
     groups = load(CODEX_PLUGIN / "hooks" / "hooks.json")["hooks"]["PostToolUse"]
     call = second_group_call(
-        "codex_hook_post_tool", "codex/PostToolUse_bash.json", groups, session_id=THREAD_A
+        "codex_hook_post_tool", "codex/PostToolUse_bash.json", groups, session_id=THREAD_A, turn_id="t-1"
     )
     r = codex.c.post("/mcp", json=call["body"], headers=codex.headers(call["headers"]))
     assert r.status_code == 200, r.text
     assert "check the tests" in context_of(sse_result(r)["result"]["content"][0]["text"])
+
+
+def test_a_codex_subagents_tool_call_takes_nothing_from_the_thread_but_its_own_call_does(
+    broker: InProcBroker,
+) -> None:
+    """Codex 0.158.0 runs a subagent's tool hooks with the thread's session_id and the subagent's own
+    turn_id (recorded live, #446), and its plugin can't send the subagent's agent_id (Codex fails a hook
+    that names a field the call lacks). The plugin's group for every tool, filled from the recorded
+    payloads: while the thread is busy in turn t-1 with an @mention waiting, a shell call of the
+    subagent's turn gets ``{}`` and the message stays queued; the thread's own call, of turn t-1, gets
+    it. Fails where the server takes a subagent's hook for the thread's."""
+    broker.call("room.create", {"name": "#build"})
+    codex = Codex(broker, make_token(broker, "laptop"))
+    codex.start()
+    codex_hook(codex, THREAD_A, event="UserPromptSubmit", turn_id="t-1")  # before join, as live
+    assert codex.call("join", THREAD_A, room="#build", screen_name="codex-1")["ok"]
+    codex_hook(
+        codex,
+        THREAD_A,
+        event="PostToolUse",
+        turn_id="t-1",
+        tool_name="mcp__switchboard__join",
+        tool_response="{}",
+    )
+    assert participant(broker, "codex-1").gen == "t-1"
+    codex.call("read", THREAD_A, room="#build")
+    broker.call("human.say", {"room": "#build", "text": "@codex-1 stop and check the tests"})
+    groups = load(CODEX_PLUGIN / "hooks" / "hooks.json")["hooks"]["PostToolUse"]
+
+    def report(payload: str, **given: str) -> str:
+        call = second_group_call(
+            "codex_hook_post_tool", f"codex/{payload}.json", groups, session_id=THREAD_A, **given
+        )
+        r = codex.c.post("/mcp", json=call["body"], headers=codex.headers(call["headers"]))
+        assert r.status_code == 200, r.text
+        return str(sse_result(r)["result"]["content"][0]["text"])
+
+    def queued() -> int:
+        return member(broker, "codex-1").queued
+
+    assert report("PostToolUse_bash_subagent") == "{}"
+    assert queued() == 1 and member(broker, "codex-1").inflight == 0
+    assert "check the tests" in context_of(report("PostToolUse_bash", turn_id="t-1"))
+    assert queued() == 0
 
 
 SUBAGENT_ID = "a0123456789abcdef"  # the agent_id in the recorded subagent payloads
