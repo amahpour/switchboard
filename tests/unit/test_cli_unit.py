@@ -37,34 +37,39 @@ def test_parser_accepts_home_before_or_after_the_verb() -> None:
     assert a.foreground and a.port == 0 and a.test_mode and a.test_trust_uds
 
 
-@pytest.mark.parametrize("command", (("join",), ("remote", "join")))
-def test_join_commands_share_arguments_and_appear_in_help(
-    command: tuple[str, ...], capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Both public spellings accept the same pairing options, including an explicit home."""
-    parser = cli.build_parser()
-    args = parser.parse_args(
-        [*command, "https://sb.example.com", "7KQ4-M2XD-9HVA", "--no-start", "--home", "/tmp/machine"]
-    )
-    assert args.url == "https://sb.example.com" and args.code == "7KQ4-M2XD-9HVA"
-    assert args.no_start and args.home == "/tmp/machine"
-    assert args.func in (cli.cmd_remote, cli.cmd_remote_join)
+@pytest.mark.parametrize("verb", ("remote", "satellite", "join"))
+def test_a_retired_verb_says_so_and_where_to_go(verb: str, capsys: pytest.CaptureFixture[str]) -> None:
+    """SSH remotes and dial-in machines were retired (#385). An old script, or an old ``switchboard
+    update``, that still calls one gets a line naming what happened and where to go, with whatever
+    arguments it used to take, and exit 2: not argparse's "invalid choice" or a usage error. Fails if
+    a retired verb is refused as unknown, takes an exit code other than 2, or fails on its old
+    arguments."""
+    args = {
+        "remote": ["remote", "join", "https://sb.example.com", "7KQ4-M2XD-9HVA", "--no-start"],
+        "satellite": ["satellite", "--name", "pi", "--home", "/tmp/x"],
+        "join": ["join", "https://sb.example.com", "7KQ4-M2XD-9HVA", "--home", "/tmp/machine"],
+    }[verb]
+    assert cli.main(args) == cli.EXIT_USAGE
+    err = capsys.readouterr().err
+    assert f"switchboard {verb}:" in err and "0.38.0" in err and "Settings → Agents" in err
+    assert "invalid choice" not in err and "usage:" not in err
+
+
+def test_an_unknown_argument_of_a_live_verb_is_still_refused(capsys: pytest.CaptureFixture[str]) -> None:
+    """The retired verbs take any arguments, and only they: ``say`` still refuses what it doesn't know."""
     with pytest.raises(SystemExit) as done:
-        parser.parse_args([*command, "--help"])
-    assert done.value.code == 0
-    assert "--no-start" in capsys.readouterr().out
-    parser.print_help()
-    assert "join" in capsys.readouterr().out
+        cli.main(["say", "#build", "hi", "--no-such-flag"])
+    assert done.value.code == 2
+    assert "unrecognized arguments: --no-such-flag" in capsys.readouterr().err
 
 
 def test_start_help_explains_both_home_modes(capsys: pytest.CaptureFixture[str]) -> None:
-    """The detailed start help tells a hosted machine what start does in its paired home."""
+    """The start help says what start does."""
     with pytest.raises(SystemExit) as done:
         cli.build_parser().parse_args(["start", "--help"])
     assert done.value.code == 0
     help_text = " ".join(capsys.readouterr().out.split())
     assert "broker on this machine" in help_text
-    assert "link to a hosted broker" in help_text
 
 
 def test_check_test_mode(tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -191,7 +196,6 @@ class Calls:
             return self.answers[key]
 
         monkeypatch.setattr(cli, "_call", fake)
-        monkeypatch.setattr(cli, "_satellite_home", lambda args: False)
 
 
 def test_rooms_delete_prints_the_plan_and_needs_a_terminal_or_yes(
@@ -255,17 +259,6 @@ def test_rooms_delete_yes_applies_the_plans_room_id(
         {"room": "scratch", "room_id": 12, "name": "#scratch", "created_at": plan["created_at"]},
         120.0,
     )
-
-
-def test_rooms_delete_on_a_satellite_home(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    c = Calls(monkeypatch, {})
-    monkeypatch.setattr(cli, "_satellite_home", lambda args: True)
-    monkeypatch.setattr(cli, "_desktop", lambda args: "desk")
-    assert cli.main(["rooms", "delete", "#build", "--yes"]) == 1
-    assert "run this on the desktop (desk)" in capsys.readouterr().err
-    assert c.calls == []
 
 
 def test_rooms_lists_the_closed_count_and_the_closed_rooms(

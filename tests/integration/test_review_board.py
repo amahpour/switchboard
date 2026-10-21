@@ -66,7 +66,7 @@ def test_handoff_poster_belongs_to_the_person_who_clicks() -> None:
             room = store.get_room("#build")
             assert room is not None
             bob_id = store.person_named("bob").id
-            store.machine_pair("bobs-laptop", b"b" * 32, "fp-bob", {}, person_id=bob_id)
+            store.agent_token_add(bob_id, "bobs-laptop", "b" * 64)  # bob's device: his agents are on it
             for name, host in (("claude-1", ""), ("codex-1", "bobs-laptop")):
                 participant = store.upsert_participant("test", session_key("test", host, name), host=host)
                 store.create_membership(room.id, participant.id, name, "hash-" + name)

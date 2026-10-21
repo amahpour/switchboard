@@ -29,19 +29,10 @@ _NODEV = 0xFFFFFFFF
 # The peer check walks every ancestor up to pid 1; this cap only stops runaway walks.
 MAX_CHAIN = 64
 _PS_CANDIDATES = ("/bin/ps", "/usr/bin/ps")
-# The satellite on Linux (DESIGN.md §27.4.8) runs nothing: /proc only, and what /proc
-# can't tell reads as unknown ("" argv, no process), which fails closed.
-_NO_SPAWN = False
-# The satellite on Linux: the boot time its start times are computed from, fixed for the
-# whole boot (``pin_btime``), so a clock step doesn't change a process's start time.
+# The boot time Linux start times are computed from, fixed for the whole boot (``pin_btime``), so a
+# clock step doesn't change a process's start time.
 _BTIME_PIN: float | None = None
 BOOT_ID_RE = re.compile(r"^[0-9a-f-]{8,64}$")
-
-
-def set_no_spawn(on: bool = True) -> None:
-    """Never run ``ps`` in this process (the satellite on Linux)."""
-    global _NO_SPAWN
-    _NO_SPAWN = on
 
 
 def pin_btime(btime: float | None) -> None:
@@ -61,10 +52,7 @@ def ps_bin() -> str | None:
 
 
 def _run_ps(args: list[str]) -> str:
-    """stdout of ``ps <args>``, or "" if ps is missing or fails (or this process runs
-    nothing: ``set_no_spawn``)."""
-    if _NO_SPAWN:
-        return ""
+    """stdout of ``ps <args>``, or "" if ps is missing or fails."""
     ps = ps_bin()
     if ps is None:
         return ""

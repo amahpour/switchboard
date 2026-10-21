@@ -401,12 +401,6 @@ class HttpTools:
             return {}
         return {(c.thread, room.name): f"m:{m.id}" for room, m in rooms}
 
-    @property
-    def codex_threads(self) -> dict[str, str]:
-        """Nothing kept: a thread's join code is for its proof before a wake on its own machine
-        (§27.7), and nothing here wakes a thread."""
-        return {}
-
     def _served(self) -> Caller | None:
         c = self._caller.get()
         return c if c is not None and c.harness in CLIENTS.values() else None

@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from conftest import InProcBroker
 from fakes.fake_agent import FakeAgent
-from fakes.fake_link import FakeLink, wait_for
+from fakes.waiting import wait_for
 
 from switchboard import __version__
 from switchboard.config import Config
@@ -68,17 +68,6 @@ async def test_a_list_without_review_names_what_is_missing(broker: InProcBroker)
         with Stream(broker.paths.sock, timeout=5) as again:
             again.call("mcp.hello", {**hello, "tools": ["join", "review", "say"]}, 5)
             assert members(broker)["codex-1"]["board_why"] is None
-
-
-async def test_a_remote_members_list_arrives_through_the_link() -> None:
-    with FakeLink(kind="inproc") as link:
-        async with FakeAgent(link.pi, "bench") as a:
-            await a.join("#fpga", "bench")
-            assert next(m for m in link.members() if m["name"] == "bench")["board_why"] is None
-            with Stream(link.pi_paths.sock) as old:
-                old.call("mcp.hello", {"harness": "test", "test_session": "old-pi"})
-                old.call("agent.join", {"room": "#fpga", "screen_name": "codex-1"})
-                assert next(m for m in link.members() if m["name"] == "codex-1")["board_why"] == OLD
 
 
 async def test_who_and_members_show_each_mcp_servers_bounded_claims(broker: InProcBroker) -> None:

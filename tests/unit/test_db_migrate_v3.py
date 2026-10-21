@@ -32,7 +32,7 @@ V2_TABLES = (
     "web_sessions",
     "remotes",
 )
-NEW_TABLES = ("passkeys", "link_machines")
+NEW_TABLES = ("passkeys",)  # and link_machines, which schema 29 dropped again (#385)
 
 
 def make_v2(path: Path) -> list[str]:
@@ -88,9 +88,9 @@ def test_a_fresh_db_has_what_v3_added(tmp_path: Path) -> None:
     tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert set(NEW_TABLES) <= tables and tables == set(db.TABLES) | {"sqlite_sequence"}
     assert (
-        db.tables_of(1) == db.V1_TABLES
-        and db.tables_of(2) == db.V2_TABLES
-        and db.tables_of(3) == db.V3_TABLES
+        db.kept_tables(1) == db.kept(db.V1_TABLES)
+        and db.kept_tables(2) == db.kept(db.V2_TABLES)
+        and db.kept_tables(3) == db.kept(db.V3_TABLES)
     )
     assert backups(tmp_path / "switchboard.db") == []
 
@@ -99,13 +99,13 @@ def test_v2_fixture_migrates_through_v3(tmp_path: Path) -> None:
     p = tmp_path / "switchboard.db"
     original = make_v2(p)
     src = sqlite3.connect(p)
-    before = db.row_counts(src, V2_TABLES)
+    before = db.row_counts(src, db.kept(V2_TABLES))
     src.close()
     con = db.open_db(p)
     assert db.schema_version(con) == db.SCHEMA_VERSION
     assert db.integrity_ok(con) is None
-    assert db.row_counts(con, V2_TABLES) == before
-    assert db.row_counts(con, NEW_TABLES) == {"passkeys": 0, "link_machines": 0}
+    assert db.row_counts(con, db.kept(V2_TABLES)) == before
+    assert db.row_counts(con, NEW_TABLES) == {"passkeys": 0}
     # the migrated schema is the fresh one: same columns in the same order, same indexes
     fresh = db.open_db(tmp_path / "fresh.db")
     for t in db.TABLES:
@@ -117,18 +117,18 @@ def test_v2_fixture_migrates_through_v3(tmp_path: Path) -> None:
     assert bak.name == "switchboard.db.v2.bak" and (os.stat(bak).st_mode & 0o777) == 0o600
     assert dump(bak) == original and version(bak) == 2
     assert not any(tmp_path.glob("switchboard.db.v1.bak*"))  # a version-2 file needs no v1 backup
-    # and the store works on it: the 0.6.5 rows are readable, the remote member kept its host
+    # and the store works on it: the 0.6.5 rows are readable; the remote member kept its host and its
+    # messages, and was ended with its host's table (schema 29, #385), where the local ones stay
     store = Store(con)
     room = store.get_room("#build")
     assert room is not None
     hosts = {m.name: m.host for m in store.members(room.id)}
-    assert hosts["bench"] == "fpga-pi" and hosts["vivado"] == ""
+    assert hosts["vivado"] == "" and "bench" not in hosts
+    assert con.execute("SELECT host, ended_at IS NOT NULL FROM participants WHERE host='fpga-pi'").fetchall()
     assert [m.sender_host for m in store.history(room.id) if m.sender_name == "bench"] == [
         "fpga-pi",
         "fpga-pi",
     ]
-    row = store.remote_row("fpga-pi")
-    assert row is not None and row.enabled_via == "cli"
     # the old web session has no `via`; it is still a session
     assert store.web_session_count() == 1
     assert con.execute("SELECT via FROM web_sessions").fetchone()[0] is None
@@ -147,7 +147,8 @@ def test_the_backup_is_written_before_the_first_statement(tmp_path: Path) -> Non
     con.set_trace_callback(None)
     con.close()
     alters = [ok for sql, ok in seen if sql.lstrip().upper().startswith(("ALTER", "CREATE TABLE"))]
-    per_step = [3, 5, 1, 1, 2, 2, 2, 1, 1, 1, 2, 2, 2, 1, 2, 1, 2, 1, 1, 1, 1, 5, 1, 1, 1, 3]  # v2 to v28
+    # ALTERs and CREATEs per step, v2 to v28 (29 drops two tables and alters none)
+    per_step = [3, 5, 1, 1, 2, 2, 2, 1, 1, 1, 2, 2, 2, 1, 2, 1, 2, 1, 1, 1, 1, 5, 1, 1, 1, 3]
     assert len(alters) == sum(per_step) and all(alters)
     assert dump(bak) == original
     c = sqlite3.connect(bak)
@@ -191,7 +192,7 @@ def test_migration_needs_a_backup_path(tmp_path: Path) -> None:
     original = make_v2(p)
     con = db.connect(p)
     with pytest.raises(
-        db.SchemaError, match="schema version 2 needs a migration to version 28, and a migration"
+        db.SchemaError, match="schema version 2 needs a migration to version 29, and a migration"
     ):
         db.migrate(con)
     con.close()
@@ -221,7 +222,7 @@ def test_the_v1_fixture_takes_both_steps_after_one_backup(tmp_path: Path) -> Non
     original = make_v1(p)
     con = db.open_db(p)
     assert db.schema_version(con) == db.SCHEMA_VERSION
-    assert db.row_counts(con, ("remotes", *NEW_TABLES)) == {"remotes": 0, "passkeys": 0, "link_machines": 0}
+    assert db.row_counts(con, NEW_TABLES) == {"passkeys": 0}
     assert "via" in {c[1] for c in columns(con, "web_sessions")}
     con.close()
     names = sorted(x.name for x in tmp_path.glob("switchboard.db.*.bak*"))

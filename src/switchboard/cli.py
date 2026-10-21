@@ -36,45 +36,6 @@ def _call(
     return call_sync(_paths(args).sock, method, params or {}, timeout)
 
 
-def _satellite_home(args: argparse.Namespace) -> bool:
-    """This home is a satellite home, the far end of a remote link (DESIGN.md §27.3)."""
-    from switchboard.remote.config import is_satellite_home
-
-    return is_satellite_home(_paths(args))
-
-
-def _desktop(args: argparse.Namespace) -> str:
-    from switchboard.remote.config import satellite_desktop
-
-    return satellite_desktop(_paths(args))
-
-
-def _dialing(args: argparse.Namespace) -> Any:
-    """This home's satellite.toml if it dials its broker (``remote join``, DESIGN.md §31.7)."""
-    from switchboard.remote.config import dialing_home
-
-    return dialing_home(_paths(args))
-
-
-def on_desktop(args: argparse.Namespace) -> int:
-    """A human verb on a satellite home: the broker, the web UI and the human's
-    authority are on the desktop, never here."""
-    conf = _dialing(args)
-    if conf is not None:
-        print(
-            f"switchboard: use the broker's web UI ({conf.broker_url}): this machine dials it; the broker and"
-            " the web UI run there",
-            file=sys.stderr,
-        )
-        return EXIT_ERR
-    print(
-        f"switchboard: run this on the desktop ({_desktop(args)}): this is a satellite home;"
-        " the broker and the web UI run there",
-        file=sys.stderr,
-    )
-    return EXIT_ERR
-
-
 def _clean(text: str) -> str:
     from switchboard.envelope import clean
 
@@ -138,37 +99,12 @@ def _lead(p: Any, text: str) -> str:
     return _state(p, word) + sep + rest
 
 
-def _remote_line(p: Any, info: dict[str, Any]) -> str:
-    """``describe(info)``, cleaned, with its state word coloured. The state is found
-    after the remote's own name (remote names can't hold a colon, §27.2), so
-    nothing the remote reported is ever matched or coloured."""
-    from switchboard.remote.describe import describe
-
-    line = _clean(describe(info))
-    head = _clean(str(info.get("name", ""))) + ": "
-    if line.startswith(head):
-        rest = line[len(head) :]
-        for word in ("needs enable", "up", "down", "blocked", "disabled", str(info.get("state") or "")):
-            if word and rest.startswith(word) and rest[len(word) : len(word) + 1] in ("", " ", ":", ","):
-                return head + _state(p, word) + rest[len(word) :]
-    return line
-
-
 # ------------------------------------------------------------------ commands
 def cmd_start(args: argparse.Namespace) -> int:
     from switchboard.broker import daemon
     from switchboard.config import ConfigError, load
 
     paths = _paths(args)
-    if _satellite_home(args):
-        if _dialing(args) is not None:
-            return cmd_start_dialer(args)
-        print(
-            f"switchboard: this is a satellite home: the broker runs on {_desktop(args)}, which dials this"
-            " machine (`switchboard remote status` there)",
-            file=sys.stderr,
-        )
-        return EXIT_ERR
     if args.test_trust_uds and not args.test_mode:
         print("switchboard: --test-trust-uds needs --test-mode", file=sys.stderr)
         return EXIT_USAGE
@@ -220,71 +156,13 @@ def cmd_start(args: argparse.Namespace) -> int:
     )
 
 
-def cmd_start_dialer(args: argparse.Namespace) -> int:
-    """``switchboard start`` on a home that dials its broker: its dialer (DESIGN.md §31.7)."""
-    from switchboard.broker import daemon
-
-    paths = _paths(args)
-    if args.test_mode:
-        why = daemon.check_test_mode(paths, _home_given(args))
-        if why:
-            print(f"switchboard: {why}", file=sys.stderr)
-            return EXIT_USAGE
-    if args.foreground:
-        from switchboard.remote import dialer
-
-        return dialer.main(paths, test_mode=args.test_mode, log_stdout=args.log_stdout)
-    if args.log_stdout:
-        print("switchboard: --log-stdout needs --foreground", file=sys.stderr)
-        return EXIT_USAGE
-    return daemon.start_dialer(paths, test_mode=args.test_mode)
-
-
 def cmd_stop(args: argparse.Namespace) -> int:
     from switchboard.broker import daemon
 
-    if _satellite_home(args):
-        if _dialing(args) is not None:
-            return daemon.stop_dialer(_paths(args))
-        return on_desktop(args)
     return daemon.stop(_paths(args))
 
 
-def cmd_satellite_status(args: argparse.Namespace) -> int:
-    """``switchboard status`` on a satellite home: the satellite answers it, or no one does."""
-    from switchboard.mcp.client import BrokerDown
-
-    try:
-        st = _call(args, "sys.status", timeout=5.0)
-    except (BrokerDown, OSError, TimeoutError):
-        st = None
-    if st is None or st.get("role") != "satellite":
-        print(
-            f"link down: the desktop ({_desktop(args)}) dials this machine; on the desktop run"
-            " `switchboard remote status`"
-        )
-        return EXIT_DOWN
-    if args.json:
-        print(json.dumps(st, indent=2))
-        return EXIT_OK
-    print(f"switchboard satellite {st['version']} for {st['name']}: link {st['link']}, pid {st['pid']}")
-    print(f"  desktop {st.get('desktop') or '?'} (switchboard {st.get('desktop_version') or '?'})")
-    print(f"  rooms   {', '.join(st.get('rooms') or []) or 'none'}")
-    print(f"  hooks   {st.get('hooks')}")
-    if st.get("test_mode"):
-        print("  TEST MODE")
-    return EXIT_OK
-
-
 def cmd_status(args: argparse.Namespace) -> int:
-    if _satellite_home(args):
-        if _dialing(args) is not None:
-            from switchboard.remote.join import status_lines
-
-            for line in status_lines(_paths(args)):
-                print(line)
-            return EXIT_OK
-        return cmd_satellite_status(args)
     st = _call(args, "sys.status")
     if args.json:
         print(json.dumps(st, indent=2))
@@ -325,30 +203,10 @@ def cmd_status(args: argparse.Namespace) -> int:
         )
     if closed:
         print(f"  closed  {closed} room(s) (switchboard rooms --closed)")
-    for info in st.get("remotes") or []:
-        print(f"  remote  {_remote_line(p, info)}")
-    for m in st.get("machines") or []:
-        print(f"  machine {_machine_line(p, m)}")
     return EXIT_OK
 
 
-def _machine_line(p: Any, m: dict[str, Any]) -> str:
-    """A machine that dials in (§31.7), for ``switchboard status``."""
-    name = _clean(str(m.get("name", "?")))
-    state = str(m.get("state") or "?")
-    if state == "pending":
-        what = "waiting for approval" if m.get("dialed_in") else "paired, not approved"
-        return f"{name}: {p.warn('pending')} ({what}), key {m.get('key_fp') or '?'}"
-    if state == "up":
-        rtt = m.get("rtt_ms")
-        return f"{name}: {p.ok('up')}{f' {rtt:.0f} ms' if isinstance(rtt, (int, float)) else ''} (wss)"
-    reason = _clean(str(m.get("reason") or ""))
-    return f"{name}: {_state(p, state)}{f' ({reason})' if reason else ''} (wss)"
-
-
 def cmd_login(args: argparse.Namespace) -> int:
-    if _satellite_home(args):
-        return on_desktop(args)
     res = _call(args, "human.login_link")
     print(f"Sign in (the link works once, for 5 minutes):\n  {res['url']}")
     if args.open:
@@ -359,8 +217,6 @@ def cmd_login(args: argparse.Namespace) -> int:
 
 
 def cmd_logout(args: argparse.Namespace) -> int:
-    if _satellite_home(args):
-        return on_desktop(args)
     if not args.all:
         print(
             "switchboard: use `switchboard logout --all` (or the Log out button in the web UI)",
@@ -417,8 +273,6 @@ def cmd_rooms(args: argparse.Namespace) -> int:
 
 def cmd_rooms_rules(args: argparse.Namespace) -> int:
     """Read or set a room's rules through the broker's human CLI method (§35)."""
-    if _satellite_home(args):
-        return on_desktop(args)
     params = {"room": args.room}
     if args.set_text is not None:
         params["text"] = sys.stdin.read() if args.set_text == "-" else args.set_text
@@ -439,8 +293,6 @@ def cmd_rooms_delete(args: argparse.Namespace) -> int:
     refused while the room has members), you confirm, then the broker writes a checked
     backup and deletes the room pinned by the plan's id, name and creation time. The CLI never
     opens the database."""
-    if _satellite_home(args):
-        return on_desktop(args)
     from switchboard.install import common
 
     plan = _call(args, "room.delete", {"room": args.room, "dry_run": True}, timeout=30.0)
@@ -470,16 +322,12 @@ def cmd_rooms_delete(args: argparse.Namespace) -> int:
 
 
 def cmd_create(args: argparse.Namespace) -> int:
-    if _satellite_home(args):
-        return on_desktop(args)
     res = _call(args, "room.create", {"name": args.room})
     print(f"created {res['room']['name']}")
     return EXIT_OK
 
 
 def cmd_say(args: argparse.Namespace) -> int:
-    if _satellite_home(args):
-        return on_desktop(args)
     text = " ".join(args.text)
     if text == "-":
         text = sys.stdin.read()
@@ -502,8 +350,6 @@ def command_text(words: list[str]) -> str:
 
 
 def cmd_cmd(args: argparse.Namespace) -> int:
-    if _satellite_home(args):
-        return on_desktop(args)
     if not args.command:
         print("usage: switchboard cmd ROOM /command [args ...]", file=sys.stderr)
         return EXIT_USAGE
@@ -685,195 +531,31 @@ def cmd_report(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def _pairing(args: argparse.Namespace) -> int:
-    """``switchboard remote add|accept|remove|doctor`` (DESIGN.md §27.5.8, §27.8)."""
-    from pathlib import Path
-
-    from switchboard.config import ConfigError, load
-    from switchboard.install.common import InstallError
-    from switchboard.remote import pairing
-
-    paths = _paths(args)
-    sat = _satellite_home(args)
-    ak = Path(args.authorized_keys).expanduser() if getattr(args, "authorized_keys", None) else None
-    dialing = _dialing(args) is not None
-    try:
-        if dialing and args.remote_cmd in ("remove", "doctor"):
-            from switchboard.remote import join
-
-            if args.remote_cmd == "remove":
-                return join.leave(paths, args.name, yes=args.yes)
-            for line in join.status_lines(paths):
-                print(line)
-            return EXIT_OK
-        if args.remote_cmd == "add":
-            if sat:
-                return on_desktop(args)
-            return pairing.add(
-                paths,
-                args.name,
-                args.dest,
-                rooms=args.rooms,
-                port=args.port,
-                harnesses=args.harnesses,
-                ssh_config=args.ssh_config,
-                known_hosts=args.known_hosts,
-                authorized_keys=ak,
-                label=args.label,
-            )
-        if args.remote_cmd == "accept":
-            return pairing.accept(
-                paths,
-                args.token,
-                from_=args.from_,
-                ak_path=ak,
-                yes=args.yes,
-                allow_editable=args.allow_editable,
-            )
-        if args.remote_cmd == "remove":
-            if sat:
-                return pairing.remove_remote(paths, args.name, ak_path=ak, yes=args.yes)
-            return pairing.remove_desktop(
-                paths, args.name, yes=args.yes, call=lambda m, p: _call(args, m, p, timeout=30.0)
-            )
-        # doctor
-        akp = ak or pairing.default_authorized_keys()
-        if sat:
-            findings = pairing.doctor_remote(
-                paths,
-                ak_path=akp,
-                environ=os.environ,
-                probe_desktop=args.probe_desktop,
-                status=lambda: _satellite_status(paths),
-            )
-            print(f"switchboard remote doctor (satellite home {paths.home}):")
-        else:
-            if args.probe_desktop is not None:
-                print("switchboard: --probe-desktop is for a remote (satellite) home", file=sys.stderr)
-                return EXIT_USAGE
-            try:
-                allow = load(paths).security.allow_ssh_cli
-            except ConfigError as e:
-                print(f"switchboard: config error: {e}", file=sys.stderr)
-                return EXIT_ERR
-            ssh_dir = (
-                Path(args.ssh_dir).expanduser() if args.ssh_dir else Path(os.path.expanduser("~")) / ".ssh"
-            )
-            findings = pairing.doctor_desktop(
-                paths, ak_path=akp, ssh_dir=ssh_dir, allow_ssh_cli=allow, status=lambda: _remote_status(args)
-            )
-            print(f"switchboard remote doctor (desktop home {paths.home}):")
-        from switchboard.colors import for_args
-
-        return pairing.print_findings(findings, sys.stdout, paint=for_args(args))
-    except (pairing.PairingError, InstallError) as e:
-        print(f"switchboard remote {args.remote_cmd}: {e}", file=sys.stderr)
-        return EXIT_ERR
-
-
-def _satellite_status(paths: Any) -> dict[str, Any] | None:
-    from switchboard.mcp.client import BrokerDown, RpcError, call_sync
-
-    try:
-        return call_sync(paths.sock, "sys.status", {}, 3.0)
-    except (BrokerDown, RpcError, OSError, TimeoutError):
-        return None
-
-
-def _remote_status(args: argparse.Namespace) -> dict[str, Any] | None:
-    from switchboard.mcp.client import BrokerDown, RpcError
-
-    try:
-        return _call(args, "remote.status", {}, timeout=5.0)
-    except (BrokerDown, RpcError, OSError, TimeoutError):
-        return None
-
-
-def cmd_remote(args: argparse.Namespace) -> int:
-    """``switchboard remote add|accept|enable|disable|status|remove|doctor`` (DESIGN.md
-    §27.5.8, §27.8, §27.11). On a satellite home only ``accept``, ``remove`` and
-    ``doctor`` run; the rest belong to the desktop."""
-    from switchboard.colors import for_args
-
-    if args.remote_cmd in ("add", "accept", "remove", "doctor"):
-        return _pairing(args)
-    if args.remote_cmd == "join":
-        return cmd_remote_join(args)
-    if _satellite_home(args):
-        return on_desktop(args)
-    p = for_args(args)
-    if args.remote_cmd == "enable":
-        # the broker dials and waits up to 15 s for the link to come up or fail
-        res = _call(args, "remote.enable", {"name": args.name}, timeout=30.0)
-        print(_clean(res["text"]) if res.get("text") else _remote_line(p, res))
-        return EXIT_OK if res.get("state") == "up" else EXIT_ERR
-    if args.remote_cmd == "disable":
-        res = _call(args, "remote.disable", {"name": args.name})
-        print(_clean(res["text"]) if res.get("text") else _remote_line(p, res))
-        return EXIT_OK
-    params = {"name": args.name} if args.name else {}
-    res = _call(args, "remote.status", params)
-    if args.json:
-        print(json.dumps(res, indent=2))
-        return EXIT_OK
-    if res.get("config_error"):
-        print(f"{p.bad('remotes.toml:')} {_clean(res['config_error'])}")
-    if not res.get("remotes"):
-        print("no remotes (none in remotes.toml)")
-    for info in res.get("remotes", []):
-        print(_remote_line(p, info))
-    return EXIT_OK
-
-
-def cmd_remote_join(args: argparse.Namespace) -> int:
-    """``switchboard join`` and ``switchboard remote join`` (DESIGN.md §31.7)."""
-    from switchboard.remote import join
-
-    paths = _paths(args)
-    command = "switchboard remote join" if args.cmd == "remote" else "switchboard join"
-    if args.test_mode:
-        from switchboard.broker import daemon
-
-        why = daemon.check_test_mode(paths, _home_given(args))
-        if why:
-            print(f"{command}: {why}", file=sys.stderr)
-            return EXIT_USAGE
-    try:
-        return join.join(
-            paths,
-            args.url,
-            args.code,
-            home_given=_home_given(args),
-            test_mode=args.test_mode,
-            start=not args.no_start,
-        )
-    except join.JoinError as e:
-        print(f"{command}: {e}", file=sys.stderr)
-        return EXIT_ERR
-
-
-def cmd_satellite(args: argparse.Namespace) -> int:
-    from switchboard.remote.satellite import main as satellite_main
-
-    if args.test_mode and not _home_given(args):
-        print("switchboard satellite: --test-mode needs an explicit --home", file=sys.stderr)
-        return 2
-    # the default home when none is given ($SWITCHBOARD_HOME or ~/.switchboard), never the cwd
-    argv = ["--home", str(_paths(args).home), "--name", args.name]
-    if args.test_mode:
-        argv.append("--test-mode")
-    return satellite_main(argv)
-
-
 def cmd_install(args: argparse.Namespace) -> int:
     from switchboard.install import common
 
     return common.run_install(args)
 
 
+# Verbs that were retired (#385, DESIGN.md §49.8). Each says so in one line and exits 2, instead of
+# argparse's "invalid choice": an old script, an old harness entry or an old ``switchboard update``
+# that still calls one learns what happened and where to go.
+HTTPS_WHERE = "Agents connect over HTTPS now: Settings → Agents in the web UI, and docs/USAGE.md"
+RETIRED = {
+    "remote": "SSH remotes and the machines that dial in were retired in 0.38.0 (#385). " + HTTPS_WHERE,
+    "satellite": "SSH remotes were retired in 0.38.0 (#385). " + HTTPS_WHERE,
+    "join": "machines that dial in were retired in 0.38.0 (#385). " + HTTPS_WHERE,
+}
+
+
+def cmd_retired(args: argparse.Namespace) -> int:
+    print(f"switchboard {args.cmd}: {RETIRED[args.cmd]}", file=sys.stderr)
+    return EXIT_USAGE
+
+
 def cmd_update(args: argparse.Namespace) -> int:
-    """``switchboard update`` (DESIGN.md §45): upgrade this copy, restart what already runs in the
-    home, re-register the harnesses registered for it."""
+    """``switchboard update`` (DESIGN.md §45): upgrade this copy, say what runs in the home,
+    re-register the harnesses registered for it."""
     import shutil
 
     from switchboard import __version__, update
@@ -889,21 +571,10 @@ def cmd_update(args: argparse.Namespace) -> int:
         return EXIT_ERR
 
     def state() -> update.Plan:
-        satellite = _satellite_home(args)
-        dialing = satellite and _dialing(args) is not None
-        dialer_running = broker_running = False
-        if dialing:
-            from switchboard.remote.dialer import running_pid
+        from switchboard.mcp.client import ping
 
-            dialer_running = running_pid(paths) is not None
-        elif not satellite:  # an SSH satellite has nothing of its own running: the desktop dials it
-            from switchboard.mcp.client import ping
-
-            broker_running = ping(paths.sock, timeout=1.0) is not None
         return update.plan(
-            dialing=dialing,
-            dialer_running=dialer_running,
-            broker_running=broker_running,
+            broker_running=ping(paths.sock, timeout=1.0) is not None,
             registered=[h for h in common.HARNESSES if common.registered(h, home)],
         )
 
@@ -944,16 +615,6 @@ def _port_number(text: str) -> int:
     return port
 
 
-def _join_arguments(parser: argparse.ArgumentParser) -> None:
-    """Keep the short onboarding command and the older remote spelling identical."""
-    parser.add_argument("url", help="the broker's address, e.g. https://sb.example.com")
-    parser.add_argument("code", help="the pairing code from the web UI (Add a machine), e.g. 7KQ4-M2XD-9HVA")
-    parser.add_argument(
-        "--no-start", action="store_true", help="pair only; start the dialer later with `switchboard start`"
-    )
-    parser.add_argument("--test-mode", action="store_true", help=argparse.SUPPRESS)
-
-
 def build_parser() -> argparse.ArgumentParser:
     from switchboard.colors import MODES
 
@@ -982,8 +643,8 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser(
         "start",
         parents=[common],
-        help="start this machine's broker or its link to a hosted broker",
-        description="Start the broker on this machine. In a paired home, start its link to a hosted broker.",
+        help="start the broker on this machine",
+        description="Start the broker on this machine.",
     )
     s.add_argument("--foreground", action="store_true", help="run in this process")
     # a container sets --port, --listen and --public-url through the environment (docs/DEPLOY.md);
@@ -1016,12 +677,6 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--test-mode", action="store_true", help=argparse.SUPPRESS)
     s.add_argument("--test-trust-uds", action="store_true", help=argparse.SUPPRESS)
     s.set_defaults(func=cmd_start)
-
-    s = sub.add_parser(
-        "join", parents=[common], help="pair this machine with a hosted broker using a web UI code"
-    )
-    _join_arguments(s)
-    s.set_defaults(func=cmd_remote_join)
 
     s = sub.add_parser("stop", parents=[common], help="stop the broker")
     s.set_defaults(func=cmd_stop)
@@ -1159,106 +814,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--ack", choices=["next_call", "immediate", "never"], default=None, help=argparse.SUPPRESS)
     s.set_defaults(func=cmd_mcp)
 
-    s = sub.add_parser(
-        "remote",
-        parents=[common],
-        help="remote members: over ssh (add/accept, enable, disable, status, remove, doctor), or a"
-        " machine that dials a hosted broker (join)",
-    )
-    rsub = s.add_subparsers(dest="remote_cmd", metavar="ACTION", required=True)
-    r = rsub.add_parser(
-        "add",
-        parents=[common],
-        help="desktop: pair a remote (link key, pinned host key, remotes.toml) and print its token",
-    )
-    r.add_argument("name", help="the remote's name, e.g. fpga-pi")
-    r.add_argument("dest", help="[user@]host, resolved once with `ssh -G`")
-    r.add_argument(
-        "--rooms",
-        action="append",
-        default=None,
-        help="limit its members to these rooms (comma list, or repeat), e.g. '#fpga'; default: any room",
-    )
-    r.add_argument("--port", type=int, default=None, help="ssh port (default: from your ssh config, else 22)")
-    r.add_argument(
-        "--harnesses",
-        action="append",
-        default=None,
-        help="harnesses allowed there (comma list; default claude,codex,cursor,devin)",
-    )
-    r.add_argument("--ssh-config", default=None, help="ssh config for `ssh -G` (default: yours)")
-    r.add_argument(
-        "--known-hosts",
-        default=None,
-        help="known_hosts file holding the remote's host key (default: your ssh config's)",
-    )
-    r.add_argument(
-        "--authorized-keys",
-        default=None,
-        help="this machine's authorized_keys, scanned for shell keys (default ~/.ssh/authorized_keys)",
-    )
-    r.add_argument("--label", default=None, help="this machine's name in the token (default: its host name)")
-    r = rsub.add_parser(
-        "accept",
-        parents=[common],
-        help="remote: authorize the desktop's link key for the satellite only (shows the line first)",
-    )
-    r.add_argument("token", help="the token `remote add` printed: 'switchboard-link v1 …'")
-    r.add_argument(
-        "--from",
-        dest="from_",
-        default=None,
-        help="accept the key only from this address (the desktop's IP; comma list allowed)",
-    )
-    r.add_argument(
-        "--authorized-keys", default=None, help="the file to write (default ~/.ssh/authorized_keys)"
-    )
-    r.add_argument("--yes", action="store_true", help="apply without asking")
-    # switchboard's own tests only (their venv is editable): refused outside a test home
-    r.add_argument("--allow-editable", action="store_true", help=argparse.SUPPRESS)
-    r = rsub.add_parser(
-        "remove",
-        parents=[common],
-        help="unpair: on the desktop the link, members, key and table; on the remote its key line",
-    )
-    r.add_argument("name")
-    r.add_argument(
-        "--authorized-keys", default=None, help="remote: the file to edit (default ~/.ssh/authorized_keys)"
-    )
-    r.add_argument("--yes", action="store_true", help="apply without asking")
-    r = rsub.add_parser("doctor", parents=[common], help="check this machine's side of its remote links")
-    r.add_argument("--authorized-keys", default=None, help="the authorized_keys to check (default ~/.ssh/…)")
-    r.add_argument(
-        "--ssh-dir", default=None, help="desktop: where this machine's own public keys are (default ~/.ssh)"
-    )
-    r.add_argument(
-        "--probe-desktop",
-        default=None,
-        metavar="DEST",
-        help="remote: also try `ssh DEST true` (a shell on the desktop from here is a warning)",
-    )
-    r = rsub.add_parser(
-        "join",
-        parents=[common],
-        help="same as `switchboard join`: pair with a hosted broker, then dial it",
-    )
-    _join_arguments(r)
-    r = rsub.add_parser(
-        "enable", parents=[common], help="consent to this remote's current config and dial it"
-    )
-    r.add_argument("name")
-    r = rsub.add_parser("disable", parents=[common], help="stop dialing a remote (its members go offline)")
-    r.add_argument("name")
-    r = rsub.add_parser("status", parents=[common], help="show every remote link, or one")
-    r.add_argument("name", nargs="?", default=None)
-    r.add_argument("--json", action="store_true")
-    s.set_defaults(func=cmd_remote)
-
-    # the far end of a remote link: started by sshd as the link key's forced command
-    s = sub.add_parser("satellite", parents=[common])
-    s.add_argument("--name", required=True)
-    s.add_argument("--test-mode", action="store_true")
-    s.set_defaults(func=cmd_satellite)
+    for verb in ("remote", "satellite", "join"):
+        sub.add_parser(verb, parents=[common]).set_defaults(func=cmd_retired)
 
     s = sub.add_parser("hook", parents=[common], help="run the installed hook script (debugging)")
     s.add_argument("--harness", required=True, choices=["claude", "codex", "cursor", "devin"])
@@ -1293,7 +850,9 @@ class _VersionAction(argparse.Action):
 def main(argv: list[str] | None = None) -> int:
     os.umask(0o077)
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args, extra = parser.parse_known_args(argv)
+    if extra and args.cmd not in RETIRED:  # a retired verb takes any arguments it used to
+        parser.error("unrecognized arguments: " + " ".join(extra))
     if not getattr(args, "func", None):
         parser.print_help()
         return EXIT_USAGE

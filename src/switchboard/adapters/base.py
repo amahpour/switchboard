@@ -97,22 +97,18 @@ class Adapter:
     # a ``permission_mode``).
     reports_session_id = False
     reports_approval_mode = False
-    # Its push paths reach only this machine: a session on another host takes the pull-only
-    # adapter registered as ``<harness>@remote``, or the unknown harness's (Codex, §27.7).
-    local_only = False
     # Its status is inferred from its sinks, not its hooks: an open wait() is idle, anything
     # else busy (the scripted test agent, §9.6).
     sink_status = False
     # Its tier follows from the participant row alone (Cursor's binding and degraded spell,
     # Devin's wait loop), so the engine re-derives it when the row changes (§9.4).
     derives_tier = False
-    # A scripted stand-in: it exists only in test mode, and on a remote host only when both
-    # machines are in it (§9.6, §27.5.3).
+    # A scripted stand-in: it exists only in test mode (§9.6).
     test_only = False
-    # The push or wake channel an MCP connection becomes through ``mcp.attach`` (§6.4, §9.2,
-    # §27.7): its name ("inbox": Claude's; "codex": a remote Codex's wake), and the tier it gives.
-    # "" when the harness has none. A connection asks for a channel by ``channel_flag``, the
-    # ``mcp.attach`` parameter that names it; the one with no flag is what a bare attach gets.
+    # The push channel an MCP connection becomes through ``mcp.attach`` (§6.4, §9.2): its name
+    # ("inbox": Claude's), and the tier it gives. "" when the harness has none. A connection asks
+    # for a channel by ``channel_flag``, the ``mcp.attach`` parameter that names it; the one with
+    # no flag is what a bare attach gets.
     channel = ""
     channel_flag = ""
     channel_tier = ""
@@ -220,15 +216,9 @@ class Adapter:
         session key)."""
         return HelloClaims(env_leak=bool(params.get("env_leak")))
 
-    def attested_socket(self, att: dict[str, Any]) -> str | None:
-        """The Claude inbox socket a remote host's satellite attested for this harness's MCP
-        server (``facts.attest``, §27.5.3), or None: only Claude has one."""
-        return None
-
-    def channel_refusal(self, ident: Any, *, has_token: bool, guard_ok: bool, remote: bool) -> str | None:
+    def channel_refusal(self, ident: Any, *, has_token: bool, guard_ok: bool) -> str | None:
         """Why this verified MCP connection can't be this harness's ``channel`` (``guard_ok``: the
-        MCP server's own guard passed; ``remote``: it comes over a link), or None. Only
-        harnesses with a channel are ever asked."""
+        MCP server's own guard passed), or None. Only harnesses with a channel are ever asked."""
         return f"{self.harness} has no push channel"
 
     def attach(self, mcp_pid: int, mcp_start: float | None, conn: Any, host: str) -> None:

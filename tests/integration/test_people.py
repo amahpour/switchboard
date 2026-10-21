@@ -212,7 +212,7 @@ def test_a_teammate_joins_with_a_one_time_password(hosted: InProcBroker) -> None
     # on the one-time password, the only thing to do is to choose their own
     page = bob.get("/")
     assert page.status_code == 200 and "/static/setup.js" in page.text
-    for path in ("/api/me", "/api/rooms", "/api/machines", "/api/people"):
+    for path in ("/api/me", "/api/rooms", "/api/agent-tokens", "/api/people"):
         assert bob.get(path).status_code == 401, path
     assert bob.post("/api/rooms/build/say", {"text": "hi"}).status_code == 401
     with pytest.raises((OSError, InvalidStatus)):
@@ -247,8 +247,8 @@ def test_everyone_signed_in_is_equal_but_for_the_admin_section(hosted: InProcBro
         m["text"] for m in admin.get("/api/rooms/build/messages").json()["messages"] if m["kind"] == "notice"
     ]
     assert any(t.startswith("bob paused the room") for t in notices), notices
-    # machines: anyone signed in, with a fresh check (bob just signed in)
-    r = bob.post("/api/machines/pair", {"name": "bob-laptop"})
+    # agent tokens: anyone signed in, with a fresh check (bob just signed in)
+    r = bob.post("/api/agent-tokens", {"device": "bob-laptop"})
     assert r.status_code == 200, r.text
     members = bob.get("/api/rooms/build/members").json()
     assert members["human"] == "bob" and members["people"] == ["alice", "bob"]
@@ -332,7 +332,7 @@ def test_the_admin_removes_someone(hosted: InProcBroker) -> None:
     bob.post("/api/rooms/build/say", {"text": "hello from bob"})
     [pid] = [p["id"] for p in admin.get("/api/people").json()["people"] if p["name"] == "bob"]
     r = admin.post(f"/api/people/{pid}/remove")
-    assert r.status_code == 200 and r.json() == {"ok": True, "sessions": 1, "machines": []}
+    assert r.status_code == 200 and r.json() == {"ok": True, "sessions": 1}
     assert bob.get("/api/me").status_code == 401
     r = signin(Browser(hosted), "bob@example.com", BOB_PW)
     assert r.status_code == 403 and r.json()["message"] == WRONG_SIGNIN

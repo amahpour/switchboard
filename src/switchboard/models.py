@@ -249,7 +249,7 @@ class Message:
     text: str
     reply_to: int | None
     mentions: list[str] = field(default_factory=list)
-    sender_host: str | None = None  # the remote host of an agent sender (schema v2); None on this machine
+    sender_host: str | None = None  # the device host of an agent sender (schema v2); None on this machine
     sender_person_id: int | None = None  # a human sender other than the owner (schema v4, §32.2)
 
     @classmethod
@@ -353,40 +353,6 @@ class Event:
 
 
 @dataclass(frozen=True)
-class RemoteRow:
-    """A ``remotes`` row (DESIGN.md §27.6): the owner's consent for one remote's
-    exact config, and its last block and link-up times."""
-
-    name: str
-    config_hash: str
-    enabled_at: float | None
-    enabled_via: str | None
-    blocked_at: float | None
-    blocked_reason: str | None
-    last_up_at: float | None
-
-    @classmethod
-    def from_row(cls, r: sqlite3.Row) -> "RemoteRow":
-        return cls(**{k: r[k] for k in r.keys()})
-
-    def enabled_for(self, config_hash: str) -> bool:
-        """The owner's consent is for exactly this config (any edit means "needs
-        enable"). Consent only: a blocked remote is still enabled. Whether to dial
-        is ``may_dial``."""
-        return self.enabled_at is not None and self.config_hash == config_hash
-
-    @property
-    def blocked(self) -> bool:
-        return self.blocked_at is not None
-
-    def may_dial(self, config_hash: str) -> bool:
-        """The one dial gate (DESIGN.md §27.4.7, §27.5.8): enabled for exactly this
-        config and not blocked. A block (a host-key mismatch, an auth failure, a
-        replaced key) holds until the next enable clears it: no automatic retry."""
-        return self.enabled_for(config_hash) and not self.blocked
-
-
-@dataclass(frozen=True)
 class PasskeyRow:
     """A ``passkeys`` row (DESIGN.md §31.2): one of the owner's passkeys, as WebAuthn
     registered it: the credential id, its COSE public key, the signature counter last seen,
@@ -454,50 +420,6 @@ class PersonRow:
     @property
     def active(self) -> bool:
         return self.removed_at is None
-
-
-@dataclass(frozen=True)
-class MachineRow:
-    """A ``link_machines`` row (DESIGN.md §31.7): a machine that dials in. Pending from its
-    pairing until the owner approves it; approved until Remove, which forgets its key."""
-
-    name: str
-    key: bytes
-    key_fp: str
-    facts: dict[str, Any]
-    rooms: list[str]
-    harnesses: list[str]
-    created_at: float
-    approved_at: float | None
-    approved_via: str | None
-    removed_at: float | None
-    last_seen_at: float | None
-    person_id: int | None = None  # who paired it (schema 4, §32.2): None is the owner
-    approved_by: int | None = None  # who approved it (schema 11, #178): None is the owner
-
-    @classmethod
-    def from_row(cls, r: sqlite3.Row) -> "MachineRow":
-        d = {k: r[k] for k in r.keys()}
-        for k, default in (("facts", {}), ("rooms", ["*"]), ("harnesses", [])):
-            try:
-                v = json.loads(d[k] or "null")
-            except ValueError:
-                v = None
-            d[k] = v if isinstance(v, type(default)) else default
-        d["key"] = bytes(d["key"] or b"")
-        return cls(**d)
-
-    @property
-    def removed(self) -> bool:
-        return self.removed_at is not None
-
-    @property
-    def approved(self) -> bool:
-        return self.approved_at is not None and self.removed_at is None
-
-    @property
-    def pending(self) -> bool:
-        return self.approved_at is None and self.removed_at is None
 
 
 # --------------------------------------------------------------------- agents

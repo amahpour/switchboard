@@ -69,11 +69,9 @@ from switchboard.models import (
     canonical_event,
     has_feature,
     join_code_hash,
-    normalize_room,
     over_https,
     split_session_key,
 )
-from switchboard.remote import proto
 from switchboard.reviews import ProofRequired, ReviewError
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -120,8 +118,7 @@ class McpConn:
     session_id: str | None = None
     test_session: str | None = None
     ack_mode: str | None = None  # the test agent's --ack, from its adapter's ``hello_claims``
-    # the channels (an adapter's ``channel``) this connection is: Claude's push inbox, or a
-    # remote Codex's wake channel (issue #63)
+    # the channels (an adapter's ``channel``) this connection is: Claude's push inbox
     attached: set[str] = field(default_factory=set)
     # what the MCP server says it is and offers (#249): claims, shown to a person, granting nothing
     version: str | None = None
@@ -140,25 +137,10 @@ class McpConn:
     def inbox_attached(self, on: bool) -> None:
         (self.attached.add if on else self.attached.discard)("inbox")
 
-    @property
-    def codex_attached(self) -> bool:
-        """Remote Codex: this connection wakes its threads."""
-        return "codex" in self.attached
-
-    @codex_attached.setter
-    def codex_attached(self, on: bool) -> None:
-        (self.attached.add if on else self.attached.discard)("codex")
-
 
 def _mcp_key(host: str, pid: int | None, start: float | None) -> tuple[str, int, str]:
     """One MCP process: its host, pid and start time (to the hundredth, as stored)."""
     return (host, pid or 0, f"{start or 0.0:.2f}")
-
-
-def _remote(conn: Any) -> bool:
-    """A connection carried by a remote host's link (DESIGN.md §27.5.2); a stand-in
-    without the flag is a local one."""
-    return getattr(conn, "remote", False) is True
 
 
 def _http(conn: Any) -> bool:
@@ -258,7 +240,7 @@ def clamp_before(value: Any) -> int:
 class AgentService:
     def __init__(self, state: "BrokerState"):
         self.state = state
-        # host -> agent pids of that host's joined sessions (DESIGN.md §27.5.5)
+        # host -> agent pids of that host's joined sessions
         self._agent_index: dict[str, set[int]] = {}
         self._models: dict[int, str] = {}  # participant id -> last model recorded
         # a SessionStart's model from a session that hasn't joined yet (Claude reports its
@@ -300,15 +282,12 @@ class AgentService:
 
     def refresh_index(self) -> None:
         """Agent pids of joined sessions, per host: hooks from anywhere else are inert at once.
-        A local hook only ever meets the local set (a remote row's pid is a pid on its host)."""
+        A local hook only ever meets the local set."""
         idx: dict[str, set[int]] = {}
         for p in self.store.joined_participants():
             if p.agent_pid:
                 idx.setdefault(p.host, set()).add(p.agent_pid)
         self._agent_index = idx
-        remotes = getattr(self.state, "remotes", None)
-        if remotes is not None:
-            remotes.refresh_watch()  # each link's watch follows its host's joined set (§27.4.4)
 
     # -------------------------------------------------- RoomService hooks
     def on_message(self, msg: Message) -> None:
@@ -359,19 +338,16 @@ class AgentService:
         claimed = claimed if isinstance(claimed, str) and claimed in HARNESSES else "unknown"
         sock = params.get("claude_socket")
         sock = sock if isinstance(sock, str) and len(sock) < 1024 else None
-        if _remote(conn):
-            ident = self._remote_ident(conn, claimed)
-        else:
-            try:
-                ident = verify_mcp_peer(
-                    conn.peer,
-                    claimed,
-                    claude_socket=sock,
-                    sessions_dir=self.cfg.claude.sessions_dir,
-                    test_mode=self.state.test_mode,
-                )
-            except McpRefused as e:
-                raise ServiceError(e.code, e.message) from None
+        try:
+            ident = verify_mcp_peer(
+                conn.peer,
+                claimed,
+                claude_socket=sock,
+                sessions_dir=self.cfg.claude.sessions_dir,
+                test_mode=self.state.test_mode,
+            )
+        except McpRefused as e:
+            raise ServiceError(e.code, e.message) from None
         adapter = self.engine.adapter_for(ident.harness, ident.host)
         try:
             claims = adapter.hello_claims(params)
@@ -433,40 +409,6 @@ class AgentService:
             "test_mode": self.state.test_mode,
         }
 
-    def _remote_ident(self, conn: "Conn", claimed: str) -> McpIdentity:
-        """The identity of an MCP server on a remote host (DESIGN.md §27.5.3): what that
-        host's satellite attested (its own ``verify_mcp_peer`` on its own kernel peer,
-        checked strictly by the link), under this remote's rules: a harness outside its
-        ``harnesses`` list is ``unknown``, and ``test`` needs test mode at both ends.
-        The host is the link's config name; nothing the remote says changes it."""
-        link = getattr(conn, "link", None)
-        att = conn.facts.get("attest")
-        if link is None or not isinstance(att, dict):
-            raise ServiceError("forbidden", "can't identify the MCP server process")
-        host = conn.host
-        harness, note = att["harness"], att["tier_note"]
-        if harness not in (claimed, "unknown"):
-            raise ServiceError("forbidden", "can't identify the MCP server process")
-        adapter = self.engine.adapter_for(harness, host)
-        if adapter.test_only:
-            if not (self.state.test_mode and link.sat_test_mode):
-                raise ServiceError("forbidden", "--harness test needs test mode on both machines")
-        elif harness != "unknown" and harness not in link.entry.harnesses:
-            harness, note = "unknown", f"not allowed for {host}"
-            adapter = self.engine.adapter_for(harness, host)
-        agent = att["agent"]
-        return McpIdentity(
-            harness=harness,
-            mcp_pid=att["mcp"][0],
-            mcp_start=att["mcp"][1],
-            agent_pid=agent[0] if agent else None,
-            agent_start=agent[1] if agent else None,
-            evidence=att["evidence"],
-            tier_note=note,
-            claude_socket=adapter.attested_socket(att),
-            host=host,
-        )
-
     def conn_closed(self, conn: "Conn") -> None:
         """mcp.bye or connection loss: open waits end; the session goes offline (not Codex).
         A hook's connection: a Cursor stop park on it ends (the hook is gone)."""
@@ -515,14 +457,8 @@ class AgentService:
         """``mcp.attach``: make this verified MCP connection its session's push or wake channel
         (DESIGN.md §6.4, §9.2). Each channel's adapter says whether this connection may be it
         (``channel_refusal``: for Claude's inbox a direct child of a claude whose registry names the
-        same inbox socket, with the session token and a passing guard; for a remote Codex's wake
-        channel, a verified Codex over a link whose guard passed); everything else stays on its
-        hooks (``claude:hook``).
-
-        On a remote host (§27.5.6, §27.7) it is the same: the parent, registry and socket check
-        is the one its satellite ran there (``facts.attest``), and the channel is keyed by
-        ``(host, mcp pid)``. Frames to it carry ``chk`` for the satellite's last-mile check
-        (``ClaudeAdapter.send``)."""
+        same inbox socket, with the session token and a passing guard); everything else stays on
+        its hooks (``claude:hook``)."""
         mc = self._mcp(conn)
         adapter = self._channel_asked(params)
         if adapter is None:
@@ -531,7 +467,6 @@ class AgentService:
             mc.ident,
             has_token=mc.has_messaging_token,
             guard_ok=params.get("guard_ok") is True,
-            remote=_remote(conn),
         )
         if why is not None:
             return {"attached": False, "reason": why}
@@ -565,17 +500,12 @@ class AgentService:
         self.run(acts)
 
     def posted(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
-        """``mcp.posted {batch_id, ok, t_post, err?}`` from the channel the frame went to.
-        Over a link it may come from the satellite itself, which marks its own report
-        ``facts.lastmile`` (a client can't set facts): its last-mile check dropped the frame,
-        ``err: "stale_status"`` (the adapter re-routes it, uncounted) or a counted
-        ``no_chk``/``bad_chk`` (§27.5.6)."""
+        """``mcp.posted {batch_id, ok, t_post, err?}`` from the channel the frame went to."""
         mc = self._mcp(conn)
         bid = params.get("batch_id")
         if not isinstance(bid, int) or isinstance(bid, bool) or not mc.attached:
             return {}
-        # the report of a frame handed to this connection: a Claude inbox post, or a remote
-        # Codex server's wake (issue #63), by the channel it is
+        # the report of a frame handed to this connection: a Claude inbox post
         adapter = self._channel_named(min(mc.attached))
         if adapter is None:
             return {}
@@ -593,8 +523,6 @@ class AgentService:
             "t_post": t_post,
             "err": err,
         }
-        if _remote(conn) and conn.facts.get("lastmile") is True:
-            res["lastmile"] = True  # the satellite's own report (§27.5.6)
         adapter.posted(bid, conn, res)
         return {}
 
@@ -734,19 +662,6 @@ class AgentService:
             raise ServiceError("unauthorized", credential_error)
         room = self.store.room_by_id(m.room_id)
         assert room is not None
-        if _remote(conn):
-            # the allowlists hold for every call, not only at join: a membership its remote no
-            # longer allows (the manager ends those at reload) never works over the link (§27.5.2)
-            link = getattr(conn, "link", None)
-            names = (room.name, *self.store.room_aliases(room.id))
-            if link is None or not any(link.entry.allows_room(name) for name in names):
-                raise ServiceError(
-                    "forbidden",
-                    f"members on {p.host} may no longer use {room.name}"
-                    " (the rooms of its remotes.toml entry on the desktop)",
-                )
-            if p.harness != mc.ident.harness:
-                raise ServiceError("unauthorized", "this credential belongs to another process")
         if next_call:
             self.run(self.engine.before_call(p))
             p = self.store.get_participant(p.id) or p
@@ -841,20 +756,6 @@ class AgentService:
         if not isinstance(raw_room, str) or not raw_room.strip():
             raise ServiceError("bad_request", "room is required, e.g. #build")
         host = mc.ident.host
-        link = getattr(conn, "link", None) if _remote(conn) else None
-        if _remote(conn):
-            # a remote host's members may join only its allowlisted rooms (remotes.toml, §27.5.2)
-            try:
-                wanted = normalize_room(raw_room)
-            except ValueError:
-                wanted = ""
-            if link is None or not link.entry.allows_room(wanted):
-                allowed = ", ".join(link.entry.rooms) if link is not None else "none"
-                raise ServiceError(
-                    "forbidden",
-                    f"members on {host} may join only {allowed}"
-                    " (the rooms of its remotes.toml entry on the desktop)",
-                )
         # whose agent this is (§44.3): a private room takes only its own people's agents, and
         # says "no such room" to any other, as it does to the people who aren't in it
         person = self.svc.host_person(host)
@@ -948,24 +849,6 @@ class AgentService:
         fields.update(adapter.rebind_fields(existing, same_mcp=same_mcp))
         fields.update(adapter.join_fields(existing))
         cur = self.store.active_membership(room.id, existing.id) if existing else None
-        if cur is None and link is not None:
-            joined = {p.id for p in self.store.joined_participants() if p.host == host}
-            if (existing is None or existing.id not in joined) and len(joined) >= link.entry.max_members:
-                self.run(
-                    [
-                        Notice(
-                            room.id,
-                            "warn",
-                            f"a join from {host} was refused: it already has"
-                            f" {len(joined)} member(s) (max_members)",
-                        )
-                    ]
-                )
-                raise ServiceError(
-                    "conflict",
-                    f"{host} already has {len(joined)} member(s), its limit"
-                    " (max_members in remotes.toml on the desktop)",
-                )
         resumed: Membership | None = None
         if cur is None:
             other = self.store.active_membership_by_name(room.id, name)
@@ -1475,25 +1358,13 @@ class AgentService:
         event = canonical_event(raw_event if isinstance(raw_event, str) else "")
         if event not in HOOK_EVENTS[harness]:
             return inert
-        if _remote(conn):
-            # a remote host's hook: its satellite walked the chain on that host (§27.5.5)
-            got = self._remote_chain(conn)
-            if got is None:
-                return inert
-            host, chain, argv_fn = got
-            sat_test_mode = getattr(getattr(conn, "link", None), "sat_test_mode", False)
-            if self.engine.adapter_for(harness, host).test_only and not sat_test_mode:
-                return inert
-            pid: int | None = chain[0].pid
-        else:
-            # a local connection: its kernel peer is a process on this machine, and only this
-            # machine's participants can be its candidates
-            host = LOCAL_HOST
-            view = self.hosts.view(host)
-            pid = conn.peer.pid
-            chain = None
-            argv_fn = lambda procs: view.argv_many(procs) or {}  # noqa: E731
-        walked: list[ProcInfo] | None = chain
+        # the connection's kernel peer is a process on this machine, and only this machine's
+        # participants can be its candidates
+        host = LOCAL_HOST
+        view = self.hosts.view(host)
+        pid = conn.peer.pid
+        argv_fn = lambda procs: view.argv_many(procs) or {}  # noqa: E731
+        walked: list[ProcInfo] | None = None
 
         def get_chain() -> list[ProcInfo]:
             nonlocal walked
@@ -1569,27 +1440,6 @@ class AgentService:
         if out is None:
             return inert
         return {"out": {"kind": out.kind, "text": out.text}, "batch_id": out.batch_id, "ack": out.ack}
-
-    @staticmethod
-    def _remote_chain(conn: "Conn") -> tuple[str, list[ProcInfo], Any] | None:
-        """``(host, chain, argv_fn)`` from a remote hook's ``facts.chain``: synthetic
-        ``ProcInfo`` entries (pids on that host) and an argv reader that maps each
-        verdict back to a canonical argv, so ``resolve_hook_participant`` and
-        ``nearest_agent_is`` run unchanged and fail closed exactly as locally. None
-        without a chain (the hook is inert)."""
-        facts = conn.facts.get("chain")
-        if not facts:
-            return None
-        chain = [
-            ProcInfo(pid=pid, ppid=facts[i + 1][0] if i + 1 < len(facts) else 0, start=start, uid=-1)
-            for i, (pid, start, _v) in enumerate(facts)
-        ]
-        verdicts = {pid: v for pid, _s, v in facts}
-
-        def argv_fn(procs: list[ProcInfo]) -> dict[int, str]:
-            return {p.pid: proto.verdict_argv(verdicts.get(p.pid, "?")) for p in procs}
-
-        return conn.host, chain, argv_fn
 
     def _held_elsewhere(self, harness: str, rest: str, host: str) -> Participant | None:
         """An active session of ``harness`` with this global id (a Cursor conversation) on
@@ -1789,7 +1639,7 @@ class AgentService:
             if not p.agent_pid:
                 continue
             # asked of the participant's own host (§27.5.6); None: that host can't tell now
-            # (a remote whose link is down), so the session is left alone, never ended
+            # (a device's session), so the session is left alone, never ended
             if self.hosts.agent_alive(p) is not False:
                 continue
             if self.engine.adapter(p).defer_end(p):
@@ -1812,6 +1662,34 @@ class AgentService:
                     )
             log.info("participant %d ended (agent gone)", p.id)
         self.refresh_index()
+
+    def end_device(self, device: str, why: str) -> int:
+        """End every session of an agent device: its token was revoked, or its person removed.
+        Each leaves its rooms with "left (<device> <why>)". Returns how many ended."""
+        n = 0
+        for p in self.store.joined_participants():
+            if p.host != device:
+                continue
+            n += 1
+            for m in self.store.end_participant(p.id, why):
+                self.run(self.engine.on_membership_ended(m.id, why))
+                room = self.store.room_by_id(m.room_id)
+                if room is not None:
+                    self.svc._post(
+                        room,
+                        sender_name=m.screen_name,
+                        sender_kind="agent",
+                        sender_harness=p.harness,
+                        sender_membership_id=m.id,
+                        via="system",
+                        kind="leave",
+                        text=f"left ({device} {why})",
+                        sender_host=device,
+                    )
+        if n:
+            log.info("device %s: %d session(s) ended (%s)", device, n, why)
+            self.refresh_index()
+        return n
 
     async def liveness_loop(self) -> None:
         while True:

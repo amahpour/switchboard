@@ -11,7 +11,7 @@
 # Two stages. The first has uv build switchboard's wheel from this tree and install it, with
 # the dependencies exactly as uv.lock pins them, into a venv (/opt/switchboard). The runtime is
 # the same slim Python with that venv and tini, and nothing else: no uv, no compiler, no git,
-# no ssh (a remote link needs one: DESIGN.md §30).
+# no ssh.
 #
 # The broker listens on 0.0.0.0:7419 in the container and needs SWITCHBOARD_PUBLIC_URL, the
 # address browsers use; its data lives in $SWITCHBOARD_HOME, /data/switchboard on the /data

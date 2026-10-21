@@ -9,7 +9,8 @@ Schema versions: 1 (0.1.0 and 0.2.0), 2 (remote members: ``participants.host``,
 ``passkeys``, ``web_sessions.via``, ``link_machines``, and the owner's rows in ``meta``)
 4 (people, §32: ``people``, a person on passkeys, web sessions, machines and
 messages, where NULL is the owner), 5 (per-person preferences, §34), 6 (text size, §34),
-and 7 (custom room rules, §35).
+7 (custom room rules, §35), and so on up to 28 (each step is below); 29 (#385) drops the
+``remotes`` and ``link_machines`` tables.
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -29,7 +30,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 28
+SCHEMA_VERSION = 29
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -139,26 +140,12 @@ CREATE TABLE web_sessions(id_hash TEXT PRIMARY KEY, created_at REAL NOT NULL,
   via TEXT,
   person_id INTEGER);
 
-CREATE TABLE remotes(
-  name TEXT PRIMARY KEY, config_hash TEXT NOT NULL,
-  enabled_at REAL, enabled_via TEXT CHECK(enabled_via IN ('cli','web')),
-  blocked_at REAL, blocked_reason TEXT, last_up_at REAL);
-
 CREATE TABLE passkeys(
   credential_id BLOB PRIMARY KEY, public_key BLOB NOT NULL,
   sign_count INTEGER NOT NULL DEFAULT 0,
   name TEXT NOT NULL, aaguid TEXT,
   created_at REAL NOT NULL, last_used_at REAL,
   person_id INTEGER);
-
-CREATE TABLE link_machines(
-  name TEXT PRIMARY KEY, key BLOB NOT NULL, key_fp TEXT NOT NULL,
-  facts TEXT NOT NULL DEFAULT '{}',
-  rooms TEXT NOT NULL DEFAULT '["*"]',
-  harnesses TEXT NOT NULL DEFAULT '["claude","codex","cursor","devin"]',
-  created_at REAL NOT NULL, approved_at REAL, approved_via TEXT CHECK(approved_via IN ('cli','web')),
-  removed_at REAL, last_seen_at REAL,
-  person_id INTEGER, approved_by INTEGER);
 
 CREATE TABLE people(
   id INTEGER PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE,
@@ -240,7 +227,10 @@ CREATE TABLE agent_tokens(
 CREATE UNIQUE INDEX agent_tokens_device ON agent_tokens(device) WHERE revoked_at IS NULL;
 """
 
-TABLES = (
+# The tables of each schema version that a migration must keep the rows of. The older versions'
+# lists name the two tables 29 dropped (``remotes`` and ``link_machines``: #385), because a backup
+# is checked table by table before the steps run; ``TABLES`` is what the current schema has.
+V1_TABLES = (
     "meta",
     "rooms",
     "participants",
@@ -250,31 +240,20 @@ TABLES = (
     "deliveries",
     "events",
     "web_sessions",
-    "remotes",
-    "passkeys",
-    "link_machines",
-    "people",
-    "preferences",
-    "reviews",
-    "review_items",
-    "room_people",
-    "claims",
-    "pins",
-    "agent_tokens",
-    "review_picks",
 )
-# the tables of a version-1 database (0.1.0, 0.2.0) and of a version-2 one (0.3.0 to 0.6.5):
-# the rows a migration must keep
-V1_TABLES = TABLES[:9]
-V2_TABLES = TABLES[:10]
-V3_TABLES = TABLES[:12]
-V4_TABLES = TABLES[:13]
-V8_TABLES = TABLES[:14]
-V14_TABLES = TABLES[:16]  # before room_people (v15)
-V20_TABLES = TABLES[:17]  # before claims (v21)
-V21_TABLES = TABLES[:18]  # before pins (v22)
-V24_TABLES = TABLES[:19]  # before agent_tokens (v25)
-V25_TABLES = TABLES[:20]  # before review_picks (v26)
+V2_TABLES = (*V1_TABLES, "remotes")
+V3_TABLES = (*V2_TABLES, "passkeys", "link_machines")
+V4_TABLES = (*V3_TABLES, "people")
+V8_TABLES = (*V4_TABLES, "preferences")
+V14_TABLES = (*V8_TABLES, "reviews", "review_items")  # before room_people (v15)
+V20_TABLES = (*V14_TABLES, "room_people")  # before claims (v21)
+V21_TABLES = (*V20_TABLES, "claims")  # before pins (v22)
+V24_TABLES = (*V21_TABLES, "pins")  # before agent_tokens (v25)
+V25_TABLES = (*V24_TABLES, "agent_tokens")  # before review_picks (v26)
+V28_TABLES = (*V25_TABLES, "review_picks")  # before 29 took the two retired tables away
+# the tables a step drops, by the version it migrates to
+DROPPED_AT: dict[int, tuple[str, ...]] = {29: ("remotes", "link_machines")}
+TABLES = tuple(t for t in V28_TABLES if t not in DROPPED_AT[29])
 
 # v1 -> v2 (DESIGN.md §27.6): one BEGIN IMMEDIATE, after a verified backup. The
 # columns land at the end of their tables, where the fresh schema above puts them too.
@@ -575,6 +554,32 @@ V27_TO_V28 = (
 )
 
 
+# v28 -> v29 (#385, DESIGN.md §27, §31.7 retired): SSH remotes and the machines that dial in are gone, so
+# their two tables go. A session on one of those hosts (a host name and a real MCP pid: a session over
+# HTTPS has pid 0) has nothing left to reach it, so it ends as a session end does (``Store.end_membership``,
+# ``end_participant``): its membership leaves with reason ``retired``, its open deliveries are revoked,
+# its offered batches cancelled, and it goes offline. Its claims stay, as a claim of an ended membership
+# does until the next ``claim`` call deletes it. Nothing else is touched, and no row is deleted.
+_RETIRED_HOST_SESSION = "p.ended_at IS NULL AND p.host != '' AND p.mcp_pid IS NOT 0"
+_NOW = "CAST(strftime('%s','now') AS REAL)"
+V28_TO_V29 = (
+    "UPDATE deliveries SET state='revoked' WHERE state IN ('pending','offered','in_context')"
+    " AND membership_id IN (SELECT m.id FROM memberships m JOIN participants p ON p.id=m.participant_id"
+    f" WHERE m.left_at IS NULL AND {_RETIRED_HOST_SESSION})",
+    f"UPDATE batches SET state='cancelled', expired_at={_NOW}, expire_reason='retired' WHERE state='offered'"
+    " AND membership_id IN (SELECT m.id FROM memberships m JOIN participants p ON p.id=m.participant_id"
+    f" WHERE m.left_at IS NULL AND {_RETIRED_HOST_SESSION})",
+    f"UPDATE memberships SET left_at={_NOW}, left_reason='retired', cred_hash=NULL WHERE left_at IS NULL"
+    f" AND participant_id IN (SELECT p.id FROM participants p WHERE {_RETIRED_HOST_SESSION})",
+    f"UPDATE participants SET ended_at={_NOW}, status='offline', status_at={_NOW}, status_src='retired'"
+    " WHERE id IN (SELECT p.id FROM participants p"
+    f" WHERE {_RETIRED_HOST_SESSION})",
+    "DROP TABLE remotes",
+    "DROP TABLE link_machines",
+    "UPDATE meta SET value='29' WHERE key='schema_version'",
+)
+
+
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
     the tables the step adds). Read from the module at run time, never cached."""
@@ -606,6 +611,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         25: (26, V25_TO_V26, ("review_picks",)),
         26: (27, V26_TO_V27, ()),
         27: (28, V27_TO_V28, ()),
+        28: (29, V28_TO_V29, ()),
     }
     out = []
     v = frm
@@ -638,7 +644,21 @@ def tables_of(version: int) -> tuple[str, ...]:
         return V24_TABLES
     if version <= 25:
         return V25_TABLES
+    if version <= 28:
+        return V28_TABLES
     return TABLES
+
+
+def kept(tables: tuple[str, ...]) -> tuple[str, ...]:
+    """``tables`` without the ones a later migration drops (``DROPPED_AT``)."""
+    gone = {t for dropped in DROPPED_AT.values() for t in dropped}
+    return tuple(t for t in tables if t not in gone)
+
+
+def kept_tables(version: int) -> tuple[str, ...]:
+    """The tables of a ``version`` database that are still there after a migration to the current
+    one: the rows of these are what a migration must keep."""
+    return kept(tables_of(version))
 
 
 class SchemaError(RuntimeError):
@@ -790,22 +810,23 @@ def backup_verified(
 def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: int) -> Path:
     """Schema ``frm`` -> the current one (DESIGN.md §27.6, §31.2): a verified backup first,
     then every step's statements in one ``BEGIN IMMEDIATE``, then ``integrity_check`` and
-    the row counts again: the old tables' rows are all still there and the new tables are
-    empty. Any failure rolls back and leaves the database as it was."""
+    the row counts again: the rows of every old table that is still there are all still there
+    (``kept_tables``: a step may drop a table, which the backup still counted) and the new tables
+    are empty. Any failure rolls back and leaves the database as it was."""
     if backup_to is None:
         raise SchemaError(
             f"schema version {frm} needs a migration to version {SCHEMA_VERSION}, and a migration"
             " needs a backup path"
         )
-    kept = tables_of(frm)
-    dest, counts = backup_verified(con, backup_to, tables=kept)
+    old_tables = tables_of(frm)
+    dest, counts = backup_verified(con, backup_to, tables=old_tables)
     log.warning("schema migration %d -> %d: backup written to %s", frm, SCHEMA_VERSION, dest.name)
     con.execute("BEGIN IMMEDIATE")
     try:
         v = schema_version(con)
         if v != frm:
             raise SchemaError(f"the database changed to schema version {v} during the migration")
-        if row_counts(con, kept) != counts:
+        if row_counts(con, old_tables) != counts:
             raise SchemaError("the database changed while its migration backup was made; start again")
         added: list[str] = []
         for to, stmts, new in _steps(frm):
@@ -817,9 +838,11 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
         bad = integrity_ok(con)
         if bad is not None:
             raise SchemaError(f"integrity check failed after the migration: {bad}")
-        after = row_counts(con, kept)
-        empty = {t: 0 for t in added}
-        if after != counts or row_counts(con, tuple(added)) != empty:
+        survivors = kept_tables(frm)
+        after = row_counts(con, survivors)
+        made = kept(tuple(added))  # a table made by one step and dropped by a later one is gone
+        empty = {t: 0 for t in made}
+        if after != {t: counts[t] for t in survivors} or row_counts(con, made) != empty:
             raise SchemaError(f"row counts changed in the migration ({after} != {counts})")
         if schema_version(con) != SCHEMA_VERSION:
             raise SchemaError(f"the migration did not set schema version {SCHEMA_VERSION}")

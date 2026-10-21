@@ -6,14 +6,12 @@ import pytest
 
 from switchboard import cli
 from switchboard.broker.rpc import build_methods
-from switchboard.remote.proto import REMOTE_METHODS
 
 
 def test_room_rules_rpc_is_human_cli_only() -> None:
-    """An MCP member or remote satellite cannot call the room-rules method."""
+    """An MCP member cannot call the room-rules method."""
     methods = build_methods(None)  # type: ignore[arg-type]  # handlers resolve state only when called
     assert methods["room.rules"].role == "human_cli"
-    assert "room.rules" not in REMOTE_METHODS
 
 
 def test_rooms_rules_cli_uses_the_human_rpc_path(
@@ -21,7 +19,6 @@ def test_rooms_rules_cli_uses_the_human_rpc_path(
 ) -> None:
     """The CLI parses a set command and sends only its room and bounded text to the broker."""
     sent = []
-    monkeypatch.setattr(cli, "_satellite_home", lambda args: False)
     monkeypatch.setattr(
         cli,
         "_call",

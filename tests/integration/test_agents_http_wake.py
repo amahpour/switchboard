@@ -573,24 +573,6 @@ def test_a_first_round_is_never_logged_as_a_refusal(
     assert [x for x in caplog.records if x.name == "switchboard.agent_http"] == []
 
 
-def test_a_broker_that_has_run_a_while_keeps_an_agent_over_https(build: InProcBroker) -> None:
-    """The remotes sweep ends the members of a host with no machine link once the broker has run
-    15 minutes (``DEFAULT_END_AFTER_S``). An agent over HTTPS has no link: its token is its tie. Seen
-    live on 0.32.0: on a broker up for 40 minutes, every join over HTTPS was ended within a second,
-    "left (macbook unreachable)". Fails if the sweep takes a token's device for a lost machine."""
-    claude, _ = joined_claude(build)
-    rem = build.state.remotes
-
-    def age() -> None:
-        rem.started_at -= 2 * 900  # as if the broker had run half an hour
-
-    build.on_loop(age)
-    build.on_loop(rem.sweep)
-    p = participant(build, "claude-1")
-    assert p.active and p.status != "offline", p
-    assert claude.call("who", room="#build")["ok"]
-
-
 def test_the_join_over_https_says_the_stop_hook_wakes_an_idle_session(build: InProcBroker) -> None:
     """A join over HTTPS, for Claude Code and for Codex (#402), describes how the session is
     reached: its Stop hook waits on the broker and wakes it when idle, and while it works messages

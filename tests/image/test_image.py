@@ -10,8 +10,8 @@ local CA), with ``SWITCHBOARD_PUBLIC_URL=https://sb.test:<port>``. They check th
 runs as the unprivileged user, answers /healthz and Docker's health check, prints one claim link
 in its log and is claimed from it in Chromium with a passkey (a virtual authenticator) and
 signed in to again with it, with no ``docker exec`` anywhere (issue #41), takes a second
-container of the same image as a machine that pairs with a code, dials ``wss://`` through the
-proxy and has a stand-in agent talk in a room, until Remove stops its dialer, gives a sign-in link
+container of the same image as a device whose stand-in agent joins a room and talks at ``/mcp``
+through the proxy with an agent token, until the token is revoked (§49), gives a sign-in link
 through ``docker exec`` too, serves the UI to Chromium over https with its WebSocket over wss,
 stops cleanly on ``docker stop`` and keeps its data (and its owner) across a restart. They also
 mount the two kinds of volume platforms give it: a disk that belongs to root (Render) and a
@@ -49,7 +49,7 @@ CADDY = "caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5
 CADDY_ROOT = "/data/caddy/pki/authorities/local/root.crt"
 # The docker CLI's env, taken at import (before the suite's clean-env fixture moves HOME to a
 # temp dir, where the CLI finds neither its config nor its context): what it needs to reach
-# the daemon, and nothing of any harness (tests/twohost does the same).
+# the daemon, and nothing of any harness.
 DOCKER_ENV = {
     k: v
     for k, v in os.environ.items()
@@ -332,24 +332,39 @@ class Owner:
             return status, text
 
 
-# the stand-in agent on the machine: a scripted MCP client (the mcp package is in the image)
+# the stand-in agent on the other machine: what Codex sends over HTTPS (an `initialize`, then calls that
+# name their thread in `_meta`), with the standard library only, trusting the proxy's CA from a file
 AGENT = """
-import asyncio, json, sys
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
+import json, ssl, sys, urllib.request
 
-async def main():
-    params = StdioServerParameters(command="/opt/switchboard/bin/switchboard",
-                                   args=["mcp", "--home", sys.argv[1]])
-    async with stdio_client(params) as (r, w):
-        async with ClientSession(r, w) as s:
-            await s.initialize()
-            for tool, args in (("join", {"room": "#lab", "screen_name": "bench"}),
-                               ("say", {"room": "#lab", "text": "hello over wss, through the proxy"})):
-                res = await s.call_tool(tool, args)
-                print(json.dumps({"tool": tool, "error": res.is_error, "text": res.content[0].text[:200]}))
+URL, TOKEN, CA = sys.argv[1:4]
+CTX = ssl.create_default_context(cafile=CA)
+HEAD = {"authorization": "Bearer " + TOKEN, "content-type": "application/json",
+        "accept": "application/json, text/event-stream", "mcp-protocol-version": "2025-06-18"}
 
-asyncio.run(main())
+def post(body, sid=None):
+    head = dict(HEAD)
+    if sid:
+        head["mcp-session-id"] = sid
+    req = urllib.request.Request(URL, json.dumps(body).encode(), head, method="POST")
+    with urllib.request.urlopen(req, context=CTX, timeout=30) as r:
+        raw, sid = r.read().decode(), r.headers.get("mcp-session-id") or sid
+    data = [line[5:].strip() for line in raw.splitlines() if line.startswith("data:")]
+    text = data[-1] if data else raw
+    return (json.loads(text) if text.strip() else None), sid
+
+_, sid = post({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+    "protocolVersion": "2025-06-18", "capabilities": {},
+    "clientInfo": {"name": "codex-mcp-client", "version": "0.158.0"}}})
+post({"jsonrpc": "2.0", "method": "notifications/initialized"}, sid)
+THREAD = "00000000-0000-4000-8000-0000000000b1"
+CALLS = (("join", {"room": "#lab", "screen_name": "bench"}),
+         ("say", {"room": "#lab", "text": "hello over https, through the proxy"}))
+for n, (tool, args) in enumerate(CALLS, 2):
+    res, _ = post({"jsonrpc": "2.0", "id": n, "method": "tools/call",
+                   "params": {"name": tool, "arguments": args, "_meta": {"threadId": THREAD}}}, sid)
+    out = json.loads(res["result"]["content"][0]["text"])
+    print(json.dumps({"tool": tool, "ok": out.get("ok"), "error": out.get("error")}))
 """
 
 
@@ -510,15 +525,16 @@ def test_claim_it_from_the_log_and_sign_in_with_a_passkey(stack: Stack, playwrig
     assert "switchboard claimed with a passkey" in docker("logs", stack.broker).stdout
 
 
-def test_a_machine_dials_in_through_the_proxy(image: str, tmp_path_factory: pytest.TempPathFactory) -> None:
-    """Issue #41 part 2 as a platform runs it: a fresh broker, claimed with a passkey over https;
-    a second container of the same image as a machine that trusts the proxy's CA through its
-    system store (``update-ca-certificates``, which truststore reads); ``remote join`` with a
-    code from the API, which starts the dialer; approve; the machine's agent posts in a room
-    over ``wss://`` through the proxy; Remove, and the dialer stops for good."""
+def test_an_agent_connects_over_https_through_the_proxy(
+    image: str, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Agents over HTTPS (§49) as a platform runs them: a fresh broker, claimed with a passkey over
+    https; an agent token made through the API for a device; a second container of the same image as
+    that device, trusting the proxy's CA from a file, whose stand-in agent joins a room and posts at
+    ``/mcp`` through the proxy; it is a member on its device's host; revoking the token ends it."""
     from fakes.fake_authenticator import SoftAuthenticator
 
-    s = Stack(image, tmp_path_factory.mktemp("dialin")).up()
+    s = Stack(image, tmp_path_factory.mktemp("agent")).up()
     machine = f"sbimg-machine-{uuid.uuid4().hex[:8]}"
     try:
         owner = Owner(s)
@@ -531,29 +547,14 @@ def test_a_machine_dials_in_through_the_proxy(image: str, tmp_path_factory: pyte
         )
         assert status == 200, got
         assert owner.call("POST", "/api/rooms", {"name": "#lab"})[0] == 200
-        status, got = owner.call("POST", "/api/machines/pair", {"name": "work-laptop"})
+        status, got = owner.call("POST", "/api/agent-tokens", {"device": "work-laptop"})
         assert status == 200, got
-        code = got["code"]
-        assert got["join"] == f"switchboard remote join {s.public} {code}"
+        agent_token, token_id = got["token"], got["id"]
 
         docker("run", "-d", "--name", machine, "--network", s.net, "--entrypoint", "sleep", image, "infinity")
-        docker("cp", str(s.ca), f"{machine}:/usr/local/share/ca-certificates/sb-test-ca.crt")
-        docker("exec", machine, "update-ca-certificates")
-        r = docker(
-            "exec", machine, "switchboard", "remote", "join", s.public, code, "--home", "/data/machine"
-        )
-        assert "This machine's key: SHA256:" in r.stdout and "Paired as work-laptop" in r.stdout, r.stdout
-        assert "switchboard dialer running" in r.stdout, r.stdout
-        fp = r.stdout.split("This machine's key: ", 1)[1].split()[0]
-        status, got = owner.call("GET", "/api/machines")
-        [m] = got["machines"]
-        assert m["key_fp"] == fp and m["state"] == "pending"
-        wait_for(
-            "the machine dialed in", lambda: owner.call("GET", "/api/machines")[1]["machines"][0]["dialed_in"]
-        )
-        assert owner.call("POST", "/api/machines/work-laptop/approve")[0] == 200
-        wait_for("the link up", lambda: owner.call("GET", "/api/machines")[1]["machines"][0]["state"] == "up")
-
+        docker("cp", str(s.ca), f"{machine}:/tmp/sb-test-ca.crt")
+        # cp keeps the file's mode, and the agent runs as the unprivileged user
+        docker("exec", "-u", "root", machine, "chmod", "644", "/tmp/sb-test-ca.crt")
         out = docker(
             "exec",
             "-i",
@@ -562,26 +563,21 @@ def test_a_machine_dials_in_through_the_proxy(image: str, tmp_path_factory: pyte
             machine,
             "/opt/switchboard/bin/python",
             "-",
-            "/data/machine",
+            f"{s.public}/mcp",
+            agent_token,
+            "/tmp/sb-test-ca.crt",
             stdin=AGENT,
         ).stdout
-        assert '"error": false' in out and '"error": true' not in out, out
+        assert '"ok": true' in out and '"ok": false' not in out, out
         status, got = owner.call("GET", "/api/rooms/lab/messages")
         said = [(x["from"], x.get("host"), x["text"]) for x in got["messages"] if x["kind"] == "chat"]
-        assert said == [("bench", "work-laptop", "hello over wss, through the proxy")]
+        assert said == [("bench", "work-laptop", "hello over https, through the proxy")]
 
-        assert owner.call("POST", "/api/machines/work-laptop/remove")[0] == 200
-        wait_for(
-            "the dialer stopped",
-            lambda: (
-                "stopped (removed)"
-                in docker("exec", machine, "switchboard", "status", "--home", "/data/machine").stdout
-            ),
-        )
-        cmdlines = docker(
-            "exec", machine, "sh", "-c", "for f in /proc/[0-9]*/cmdline; do tr '\\000' ' ' < $f; echo; done"
-        ).stdout
-        assert "start --foreground" not in cmdlines  # the dialer is gone
+        assert owner.call("POST", f"/api/agent-tokens/{token_id}/revoke")[0] == 200
+        status, got = owner.call("GET", "/api/rooms/lab/messages")
+        assert [x["text"] for x in got["messages"] if x["kind"] == "leave"] == [
+            "left (work-laptop token revoked)"
+        ]
     finally:
         docker("rm", "-f", machine, check=False)
         s.down()

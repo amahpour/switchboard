@@ -1,5 +1,5 @@
-"""Host views (DESIGN.md §27.5.6): the local view is this machine's kernel and
-Claude registry; any other host is unknown (``None``) until its link reports on it."""
+"""Host views (DESIGN.md §27.5.6): the local view is this machine's kernel and Claude registry;
+any other host (a device of an agent over HTTPS, §49.3) is unknown (``None``)."""
 
 from __future__ import annotations
 
@@ -7,10 +7,8 @@ import json
 import os
 from pathlib import Path
 
-import pytest
-
 from switchboard.broker import proc
-from switchboard.broker.hosts import HostViews, LocalView, RemoteView
+from switchboard.broker.hosts import HostViews, LocalView, UnknownView
 from switchboard.models import Participant
 
 
@@ -82,117 +80,10 @@ def test_unknown_host_is_unknown(tmp_path: Path) -> None:
     (tmp_path / f"{i.pid}.json").write_text(json.dumps({"pid": i.pid, "status": "idle"}))
     for host in ("fpga-pi", "Bad Host", "x@y"):
         v = views.view(host)
-        assert isinstance(v, RemoteView) and v is not views.local
+        assert isinstance(v, UnknownView) and v is not views.local
         # the local process table and registry are never consulted for another host,
         # even for a pid that is alive (and has a registry file) here
         assert v.alive(i.pid, i.start) is None
         assert v.ancestry(i.pid) is None and v.argv_many([i]) is None and v.read_registry(i.pid) is None
         assert views.alive(host, i.pid, i.start) is None
     assert views.agent_alive(participant("fpga-pi", i.pid, i.start)) is None
-    assert views.remotes == {}  # an unknown host is not remembered
-
-
-def test_configured_remote_is_unknown_until_its_link_reports(tmp_path: Path) -> None:
-    views = HostViews(str(tmp_path))
-    v = views.add_remote("fpga-pi")
-    assert views.add_remote("fpga-pi") is v and views.view("fpga-pi") is v
-    assert set(views.remotes) == {"fpga-pi"}
-    i = me()
-    assert v.alive(i.pid, i.start) is None
-    views.remove_remote("fpga-pi")
-    assert views.view("fpga-pi") is not v
-    with pytest.raises(ValueError):
-        views.add_remote("")  # the local host is not a remote
-    with pytest.raises(ValueError):
-        views.add_remote("Not-A-Host")
-
-
-# ------------------------------------------------ M8c: the link feeds RemoteView
-class Clock:
-    def __init__(self) -> None:
-        self.t = 1_790_000_000.0
-
-    def now(self) -> float:
-        return self.t
-
-
-def fed_view() -> tuple[RemoteView, Clock]:
-    clock = Clock()
-    v = HostViews("/nonexistent", clock).add_remote("fpga-pi")
-    v.link_up()
-    return v, clock
-
-
-def test_remote_view_true_false_none() -> None:
-    v, _clock = fed_view()
-    a, b, c = (1000004242, 10.5), (1000004243, 11.0), (1000009999, 12.0)
-    assert v.alive(*a) is None  # not watched yet
-    v.set_watch(1, {a, b})
-    assert v.alive(*a) is None  # watched, but no alive frame has answered that watch
-    assert v.on_alive(0, []) == set()  # an alive frame for an older watch vouches for nothing new
-    assert v.alive(*a) is None
-    assert v.on_alive(1, [b]) == {b}
-    assert v.alive(*a) is True and v.alive(*b) is False
-    assert v.alive(*c) is None  # never watched
-    assert v.alive(a[0], a[1] + 5.0) is None  # the same pid with another start is another process
-    assert v.alive(a[0], a[1] + 0.005) is True  # start times compare as proc.same_start does
-    # dead is final: a later frame that doesn't list it (it left the watch) keeps it dead
-    v.set_watch(2, {a})
-    v.on_alive(2, [])
-    assert v.alive(*b) is False and v.alive(*a) is True
-    assert v.on_alive(2, [b]) == set()  # already known dead: not "newly" dead
-    assert v.alive(None, None) is None and v.alive(a[0], None) is None
-    # a pair joining a watch later counts only from the watch that named it
-    v.set_watch(3, {a, c})
-    v.on_alive(2, [])
-    assert v.alive(*c) is None
-    v.on_alive(3, [])
-    assert v.alive(*c) is True
-
-
-def test_remote_view_stale_after_3s() -> None:
-    v, clock = fed_view()
-    a = (1000004242, 10.5)
-    v.set_watch(1, {a})
-    v.on_alive(1, [])
-    clock.t += RemoteView.FRESH_S
-    assert v.alive(*a) is True
-    clock.t += 0.01
-    assert v.alive(*a) is None  # no alive frame for over 3 s: can't tell
-    v.on_alive(1, [])
-    assert v.alive(*a) is True
-
-
-def test_remote_view_none_when_link_down() -> None:
-    v, _clock = fed_view()
-    a, b = (1000004242, 10.5), (1000004243, 11.0)
-    v.set_watch(1, {a, b})
-    v.on_alive(1, [b])
-    v.link_down()
-    assert v.alive(*a) is None  # nothing vouches for it while the link is down
-    assert v.alive(*b) is False  # a death already reported stays known
-    v.link_up()
-    assert v.alive(*a) is None  # up again: only a fresh alive frame vouches
-    v.on_alive(1, [])
-    assert v.alive(*a) is True
-
-
-def test_remote_view_registry_is_rebased_and_watched_only() -> None:
-    """A ``reg`` frame (M8d): ages become times on this broker's clock, clamped per field
-    (read_age 0-5 s, since_age 0 s-1 day, §27.4.6), and only watched pairs are taken."""
-    v, clock = fed_view()
-    a, b = (1000004242, 10.5), (1000004243, 11.0)
-    v.set_watch(1, {a})
-    recv = clock.t
-    got = v.registry([(a[0], a[1] + 0.004, "idle", 300.0), (b[0], b[1], "busy", 1.0)], 0.2, recv)
-    assert list(got) == [a]  # b isn't watched; a's start compares as proc.same_start does
-    r = got[a]
-    assert r.status == "idle" and r.read_at == pytest.approx(recv - 0.2)
-    assert r.since == pytest.approx(recv - 300.0)  # an old status stays old (no false Esc)
-    got = v.registry([(*a, None, None)], 60.0, recv)
-    assert got[a].status is None and got[a].since is None and got[a].read_at == pytest.approx(recv - 5.0)
-    got = v.registry([(*a, "idle", -50.0)], -1.0, recv)  # a remote clock ahead: never in the future
-    assert got[a].since == pytest.approx(recv) and got[a].read_at == pytest.approx(recv)
-    got = v.registry([(*a, "idle", 10 * 86400.0)], 0.0, recv)
-    assert got[a].since == pytest.approx(recv - 86400.0)
-    assert v.read_registry(a[0]) is None  # never a file on this machine

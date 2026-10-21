@@ -1,6 +1,6 @@
 """``switchboard update`` (DESIGN.md §45): how it finds its installer, the command it runs, what it
-restarts and re-registers, and that it never starts what wasn't running. The runner is a fake that
-records each command, so nothing here installs, starts or registers anything."""
+says of a running broker and re-registers, and that it never starts what wasn't running. The runner is a
+fake that records each command, so nothing here installs, starts or registers anything."""
 
 from __future__ import annotations
 
@@ -96,12 +96,11 @@ def test_the_old_github_tool_is_told_to_switch_once() -> None:
         update.install_argv(Installer("uv", "switchboard"), None, "/bin/uv")
 
 
-def test_only_a_running_dialer_is_restarted_and_a_broker_never() -> None:
-    assert update.plan(dialing=True, dialer_running=True, broker_running=False, registered=[]).restart_dialer
-    stopped = update.plan(dialing=True, dialer_running=False, broker_running=False, registered=[])
-    assert not stopped.restart_dialer and not stopped.broker_running
-    desk = update.plan(dialing=False, dialer_running=False, broker_running=True, registered=["claude"])
-    assert not desk.restart_dialer and desk.broker_running and desk.harnesses == ["claude"]
+def test_a_running_broker_is_told_about_and_the_registered_harnesses_are_re_registered() -> None:
+    stopped = update.plan(broker_running=False, registered=[])
+    assert not stopped.broker_running and stopped.harnesses == []
+    desk = update.plan(broker_running=True, registered=["claude"])
+    assert desk.broker_running and desk.harnesses == ["claude"]
 
 
 class Recorder:
@@ -126,12 +125,10 @@ def go(
     return rc, rec, out.getvalue()
 
 
-def test_an_update_upgrades_restarts_the_dialer_and_re_registers_with_the_new_copy() -> None:
-    rc, rec, out = go(update.Plan(restart_dialer=True, harnesses=["claude", "codex"]))
+def test_an_update_upgrades_and_re_registers_with_the_new_copy() -> None:
+    rc, rec, out = go(update.Plan(harnesses=["claude", "codex"]))
     assert rc == 0 and rec.calls == [
         ["/bin/uv", "tool", "install", "--refresh-package", "switchboard-chat", "switchboard-chat@latest"],
-        ["/bin/switchboard", "stop", "--home", HOME],
-        ["/bin/switchboard", "start", "--home", HOME],
         ["/bin/switchboard", "install", "claude", "--home", HOME, "--yes"],
         ["/bin/switchboard", "install", "codex", "--home", HOME, "--yes"],
     ]
@@ -140,7 +137,7 @@ def test_an_update_upgrades_restarts_the_dialer_and_re_registers_with_the_new_co
 
 def test_nothing_that_was_not_running_is_started() -> None:
     """The maintainer's worry: `switchboard start` in the wrong home brings an old desktop broker
-    back. Fails if update starts anything when no dialer ran there."""
+    back. Fails if update starts or stops anything."""
     rc, rec, out = go(update.Plan(harnesses=["claude"]))
     assert rc == 0 and not any(c[1] in ("start", "stop") for c in rec.calls)
     assert "nothing restarted" in out
@@ -153,12 +150,12 @@ def test_a_running_broker_is_left_to_the_person() -> None:
 
 
 def test_already_the_newest_changes_nothing_else() -> None:
-    rc, rec, out = go(update.Plan(restart_dialer=True, harnesses=["claude"]), after="0.23.0")
+    rc, rec, out = go(update.Plan(harnesses=["claude"]), after="0.23.0")
     assert rc == 0 and len(rec.calls) == 1 and "already the newest" in out
 
 
 def test_a_failed_upgrade_stops_there() -> None:
-    rc, rec, _out = go(update.Plan(restart_dialer=True, harnesses=["claude"]), rec=Recorder(fail="tool"))
+    rc, rec, _out = go(update.Plan(harnesses=["claude"]), rec=Recorder(fail="tool"))
     assert rc == 1 and len(rec.calls) == 1
 
 

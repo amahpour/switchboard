@@ -11,7 +11,6 @@ from conftest import InProcBroker
 
 from switchboard import db
 from switchboard.broker import proc
-from switchboard.remote import satellite
 
 
 def seed_agents(dbpath: Path, room_name: str) -> dict[str, int]:
@@ -55,7 +54,7 @@ def test_restart_keeps_live_local_sessions_after_clock_step(
     broker.stop()
     base = proc.read_linux_btime()
     bid = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
-    satellite.boot_time(broker.paths, bid, base)
+    proc.boot_time(broker.paths, bid, base)
     monkeypatch.setattr(proc, "_BTIME_PIN", base)
     ids = seed_agents(broker.paths.db, "#build")
     monkeypatch.setattr(proc, "_BTIME_PIN", None)  # the next broker is a fresh process

@@ -203,9 +203,6 @@ def test_property_simulation_exercises_every_path_and_rule(tmp_path: Path) -> No
     paths: set[str] = set()
     reasons: set[str] = set()
     events: set[str] = set()
-    remote_kinds: set[str] = set()
-    link_drops = 0
-    stale = 0
     for seed in range(30):
         (tmp_path / str(seed)).mkdir()
         sim = Sim(tmp_path / str(seed), seed)
@@ -214,9 +211,6 @@ def test_property_simulation_exercises_every_path_and_rule(tmp_path: Path) -> No
         sim.quiesce()
         con = sim.store.con
         kinds |= {m.kind for m in sim.members}
-        remote_kinds |= {m.kind for m in sim.members if m.host}
-        link_drops += "link_drop" in sim.trace
-        stale += sum(t.startswith("stale:") for t in sim.trace)
         paths |= {r[0] for r in con.execute("SELECT DISTINCT path FROM batches")}
         reasons |= {r[0] for r in con.execute("SELECT DISTINCT expire_reason FROM batches") if r[0]}
         for kind, data in con.execute("SELECT kind, data FROM events"):
@@ -224,9 +218,6 @@ def test_property_simulation_exercises_every_path_and_rule(tmp_path: Path) -> No
             if kind == "watchdog_escalate":
                 events.add(f"watchdog_escalate:{json.loads(data)['why']}")
     assert kinds == {"test", "devin", "claude", "cursor", "codex"}
-    # members on a remote host whose link drops and comes back (M8c); remote Claude frames
-    # refused by the satellite's last-mile check and re-routed (M8d)
-    assert remote_kinds == {"test", "devin", "cursor", "claude"} and link_drops >= 5 and stale >= 3
     assert paths == {
         "wait",
         "read",

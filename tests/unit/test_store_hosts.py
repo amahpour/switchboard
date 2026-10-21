@@ -7,7 +7,6 @@ session keys name their host, and the ``remotes`` table holds the owner's consen
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 
 import pytest
@@ -141,66 +140,3 @@ def test_members_and_messages_carry_host(store: Store) -> None:
         store.insert_message(
             room.id, sender_name="x", sender_kind="agent", via="mcp", text="t", sender_host="Not A Host"
         )
-
-
-def test_remotes_rows(store: Store, clock: FakeClock) -> None:
-    h1 = hashlib.sha256(b"config one").hexdigest()
-    h2 = hashlib.sha256(b"config two").hexdigest()
-    assert store.remote_row(PI) is None and store.remote_rows() == []
-    assert store.set_remote_blocked(PI, "auth") is False  # nothing to block before an enable
-    r = store.set_remote_enabled(PI, h1, "cli")
-    assert r.enabled_for(h1) and not r.enabled_for(h2) and r.enabled_via == "cli"
-    assert r.enabled_at == clock.now() and not r.blocked
-    clock.advance(5)
-    assert store.touch_remote_up(PI)
-    assert store.set_remote_blocked(PI, "host_key")
-    r = store.remote_row(PI)
-    assert r is not None and r.blocked and r.blocked_reason == "host_key" and r.last_up_at == clock.now()
-    assert r.enabled_for(h1)  # blocked is separate from consent
-    assert not r.may_dial(h1)  # but a blocked remote is never dialed (no retry until an enable)
-    # enabling (for a changed config) clears the block
-    clock.advance(5)
-    r = store.set_remote_enabled(PI, h2, "web")
-    assert r.enabled_for(h2) and not r.enabled_for(h1) and not r.blocked and r.enabled_via == "web"
-    assert r.may_dial(h2) and not r.may_dial(h1)
-    assert store.set_remote_disabled(PI)
-    r = store.remote_row(PI)
-    assert r is not None and not r.enabled_for(h2) and not r.may_dial(h2) and r.config_hash == h2
-    assert [x.name for x in store.remote_rows()] == [PI]
-    assert store.clear_remote(PI) and store.remote_row(PI) is None
-    assert store.clear_remote(PI) is False
-
-
-@pytest.mark.parametrize(
-    "bad",
-    [
-        dict(name="Bad Name"),
-        dict(config_hash="abc"),
-        dict(config_hash="A" * 64),
-        dict(via="ssh"),
-    ],
-)
-def test_remotes_rows_refuse_bad_values(store: Store, bad: dict[str, str]) -> None:
-    args = dict(name=PI, config_hash="a" * 64, via="cli")
-    args.update(bad)
-    with pytest.raises(ValueError):
-        store.set_remote_enabled(args["name"], args["config_hash"], args["via"])
-    with pytest.raises(ValueError):
-        store.set_remote_blocked(PI, "Host Key Changed!")
-    with pytest.raises(ValueError):
-        store.clear_remote("../x")
-
-
-@pytest.mark.parametrize("reason", ["host_key", "auth", "replaced"])
-def test_a_blocked_remote_is_not_dialable_until_the_next_enable(store: Store, reason: str) -> None:
-    """``may_dial`` is the one dial gate (§27.4.7, §27.5.8): a block, for a host-key
-    mismatch above all (a possible man in the middle), is never retried by itself."""
-    h = hashlib.sha256(b"config").hexdigest()
-    store.set_remote_enabled(PI, h, "cli")
-    assert store.remote_row(PI).may_dial(h)
-    store.set_remote_blocked(PI, reason)
-    r = store.remote_row(PI)
-    assert r.enabled_for(h) and r.blocked and not r.may_dial(h)
-    store.touch_remote_up(PI)  # a later link-up record doesn't lift it
-    assert not store.remote_row(PI).may_dial(h)
-    assert store.set_remote_enabled(PI, h, "web").may_dial(h)  # the owner enabled it again

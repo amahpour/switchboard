@@ -55,28 +55,6 @@ ALLOWED: dict[tuple[str, str], str] = {
         "adapters/codex.py",
         "_codex_app_server",
     ): "this machine's Codex app-servers, named by lsof or by a local mcp.hello",
-    # the satellite (M8c) is the remote host's own view: it runs there and probes only the
-    # machine it runs on, which is exactly what the broker's RemoteView of that host relays
-    ("remote/satellite.py", "_is_satellite"): "an older satellite of this home, before taking it over, or the"
-    " newer one its replace marker names",
-    ("remote/satellite.py", "Satellite.__init__"): "the satellite's own start time",
-    ("remote/satellite.py", "main"): "the satellite's own start time, for its pidfile",
-    ("remote/satellite.py", "Satellite.chain"): "its own kernel peer's chain (a hook on its own machine)",
-    ("remote/satellite.py", "Satellite.send_alive"): "the watched pids, which are pids on its own machine",
-    (
-        "remote/satellite.py",
-        "Satellite.claude_status",
-    ): "a watched Claude on its own machine: that pid, and its"
-    " registry file in this home's sessions dir (M8d)",
-    ("remote/satellite.py", "exposure"): "the satellite's own ancestors (sshd's session process), which hold"
-    " the far ends of its stdio (M8e)",
-    ("remote/satellite.py", "Satellite.last_mile"): "the Codex process a local MCP server was attested under,"
-    " on its own machine, before relaying its wake (issue #63)",
-    # a remote Codex wake (issue #63) runs in the MCP server on the thread's own machine
-    ("mcp/codex_wake.py", "tui_attached"): "lsof peers of that machine's own Codex control socket",
-    # the dialer (§31.7) runs on the machine that dials in and looks only at its own pidfile
-    ("remote/dialer.py", "running_pid"): "the pidfile's dialer process, on the machine it runs on",
-    ("remote/dialer.py", "main"): "the dialer's own start time, for its pidfile",
 }
 
 

@@ -4,7 +4,7 @@ have, and what the admin section shows.
 The owner is whoever set the broker up (the claim, §31.3). Everyone else is a person the
 owner added by name in the admin section, with a one-time password to hand over. Every
 signed-in person is a human in every room: they post under their own name, run every
-command, pair machines, and every agent takes their messages as its user's (kind=human).
+command, make agent tokens, and every agent takes their messages as its user's (kind=human).
 Only the owner has the admin section.
 """
 

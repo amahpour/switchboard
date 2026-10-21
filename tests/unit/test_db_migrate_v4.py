@@ -41,8 +41,8 @@ PERSON_COLUMNS = {
     "messages": "sender_person_id",
     "web_sessions": "person_id",
     "passkeys": "person_id",
-    "link_machines": "person_id",
 }
+# schema 4 also put one on link_machines, which schema 29 dropped (#385)
 
 
 def make_v3(path: Path) -> list[str]:
@@ -85,7 +85,7 @@ def test_fixture_is_a_v3_database_with_rows_in_every_table(tmp_path: Path) -> No
     assert all(db.row_counts(con, V3_TABLES).values())
     tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert tables - {"sqlite_sequence"} == set(V3_TABLES)
-    for t, col in PERSON_COLUMNS.items():
+    for t, col in {**PERSON_COLUMNS, "link_machines": "person_id"}.items():
         assert col not in {c[1] for c in columns(con, t)}
     assert con.execute("SELECT value FROM meta WHERE key='owner_handle'").fetchone() is not None
     con.close()
@@ -93,13 +93,13 @@ def test_fixture_is_a_v3_database_with_rows_in_every_table(tmp_path: Path) -> No
 
 def test_fresh_db_keeps_the_v4_person_columns(tmp_path: Path) -> None:
     con = db.open_db(tmp_path / "switchboard.db")
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 28
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 29
     for t, col in PERSON_COLUMNS.items():
         c = {x[1]: x for x in columns(con, t)}[col]
         assert c[2] == "INTEGER" and c[3] == 0 and c[4] is None  # nullable, no default: NULL is the owner
     tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert set(NEW_TABLES) <= tables and tables == set(db.TABLES) | {"sqlite_sequence"}
-    assert db.tables_of(3) == db.V3_TABLES and db.tables_of(4) == db.V4_TABLES
+    assert db.kept_tables(3) == db.kept(db.V3_TABLES) and db.kept_tables(4) == db.kept(db.V4_TABLES)
     assert backups(tmp_path / "switchboard.db") == []
 
 
@@ -107,12 +107,12 @@ def test_v3_fixture_migrates_to_v4(tmp_path: Path) -> None:
     p = tmp_path / "switchboard.db"
     original = make_v3(p)
     src = sqlite3.connect(p)
-    before = db.row_counts(src, V3_TABLES)
+    before = db.row_counts(src, db.kept(V3_TABLES))
     src.close()
     con = db.open_db(p)
     assert db.schema_version(con) == db.SCHEMA_VERSION
     assert db.integrity_ok(con) is None
-    assert db.row_counts(con, V3_TABLES) == before
+    assert db.row_counts(con, db.kept(V3_TABLES)) == before
     assert db.row_counts(con, NEW_TABLES) == {"people": 0}
     # the migrated schema is the fresh one: same columns in the same order, same indexes
     fresh = db.open_db(tmp_path / "fresh.db")
@@ -127,14 +127,15 @@ def test_v3_fixture_migrates_to_v4(tmp_path: Path) -> None:
     [bak] = backups(p)
     assert bak.name == "switchboard.db.v3.bak" and (os.stat(bak).st_mode & 0o777) == 0o600
     assert dump(bak) == original and version(bak) == 3
-    # and the store works on it: the owner, their passkeys and sessions, the machines
+    # and the store works on it: the owner, their passkeys and sessions, a machine's agent (as history)
     store = Store(con)
     assert store.owner_handle() == bytes.fromhex("00112233445566778899aabbccddeeff")
     assert store.passkey_count() == 2 and store.web_session_count() == 3
-    assert {m.name for m in store.machines()} == {"work-laptop", "lab-box"}
     room = store.get_room("#build")
     assert room is not None
-    assert {m.name: m.host for m in store.members(room.id)}["laptop-1"] == "work-laptop"
+    # the machine's agent kept its host and its messages, and was ended with the machine's table (#385)
+    assert "laptop-1" not in {m.name for m in store.members(room.id)}
+    assert any(m.sender_host == "work-laptop" for m in store.history(room.id))
 
 
 def test_failed_migration_leaves_v3_intact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

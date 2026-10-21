@@ -147,9 +147,9 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
     expect(page.locator(".person-card")).to_have_count(2)
     bob_card = page.locator(".person-card").nth(1)
     expect(bob_card).to_contain_text("hasn't signed in yet: one-time password")
-    expect(bob_card.locator(".remote-name")).to_have_text("Bob Builder")
+    expect(bob_card.locator(".card-name")).to_have_text("Bob Builder")
     expect(bob_card.locator(".person-handle")).to_have_text("@bob")
-    expect(page.locator(".person-card").nth(0).locator(".remote-name")).to_have_text("Alice Liddell")
+    expect(page.locator(".person-card").nth(0).locator(".card-name")).to_have_text("Alice Liddell")
     expect(page.locator(".person-card").nth(0)).not_to_contain_text("no email yet")
 
     # bob, in another browser: the three ways in, his one-time password, then his own
@@ -171,7 +171,14 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
     expect(bob.locator("#me-name")).to_have_text("bob")
     expect(bob.locator("#buddy-me .m-full")).to_have_text("Bob Builder")
     expect(bob.locator("#admin-section")).to_be_hidden()  # the admin section is the admin's
-    expect(bob.locator("#add-machine")).to_be_visible()  # everyone pairs their own machines
+    open_settings(bob, "agents")  # everyone makes agent tokens for their own devices
+    expect(bob.locator("#agent-token-make")).to_be_visible()
+    bob.keyboard.press("Escape")
+    expect(bob.locator("#app-dialog")).to_be_hidden()
+    # the dialog's close handler runs in a task of its own after it hides, and gives focus back to
+    # Settings: wait for it, or it can land between his typing and his Enter, which then opens Settings
+    expect(bob.locator("#app-dialog")).to_have_attribute("data-kind", "")
+    expect(bob.locator("#me-settings")).to_be_focused()
 
     # bob posts as himself; the admin's page shows it under his name
     bob.fill("#input", "hello from bob")

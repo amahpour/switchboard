@@ -8,8 +8,8 @@ against a fake DOM; these run the shipped page in Chromium against a real broker
 CSS, the CSP, focus and the browser's own event order are what is under test.
 
 The world (``tests/ui_world.py``, shared with docs/media/ui_shots.py) is built once per module:
-an in-process test-mode broker in a temp home, seeded with three rooms (``#docs`` closed), a
-never-enabled remote and four scripted agents with a Markdown-rich conversation in ``#build``.
+an in-process test-mode broker in a temp home, seeded with three rooms (``#docs`` closed) and
+four scripted agents with a Markdown-rich conversation in ``#build``.
 Every test gets fresh browser contexts from the ``ui`` fixture, each signed in through its own
 one-time login link. Tests that change state (a hold, a close) undo it or use a room of their own.
 Extra agents joined for a test close with its browser contexts; parallel e2e runs divide this
@@ -25,7 +25,6 @@ On any failure the fixture saves a Playwright trace (open it with ``uv run playw
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
 import shutil
@@ -35,7 +34,7 @@ from typing import Any
 
 import pytest
 from conftest import PHASE_REPORTS, TEST_HUMAN, sanitize_env
-from fakes.fake_link import wait_for
+from fakes.waiting import wait_for
 from playwright.sync_api import (
     Browser,
     BrowserContext,
@@ -912,56 +911,6 @@ def test_the_inspector_writes_claude_under_claude_code_s_bubble(ui: UI, phone: b
         page.click('#buddy-list .member[data-name="codex-1"]')
     expect(page.locator("#insp-name")).to_contain_text("codex-1")
     expect(page.locator("#insp-body .insp-id > .avatar .av-word")).to_have_count(0)
-
-
-# The dot (.remote-state::before) of the row or card head at sel, which is the seeded fpga-pi's
-# (the only remote, never enabled: disabled), and of a clone of it in each of the other states.
-REMOTE_DOTS = """([sel, states]) => {
-  const dot = e => {
-    const s = getComputedStyle(e.querySelector('.remote-state'), '::before');
-    return {bg: s.backgroundColor, ring: s.boxShadow};
-  };
-  const real = document.querySelector(sel);
-  const out = {disabled: dot(real)};
-  for (const st of states) {
-    const c = real.cloneNode(true);
-    c.classList.replace('st-disabled', 'st-' + st);
-    real.after(c);
-    out[st] = dot(c);
-    c.remove();
-  }
-  return out;
-}"""
-
-# each state's dot colour token; a disabled remote's dot is a hollow ring instead
-DOT_COLOUR = {"up": "green", "connecting": "busy", "down": "danger", "error": "danger", "blocked": "danger"}
-
-
-def test_remote_dots_show_their_state(ui: UI) -> None:
-    """A remote's dot takes its state's colour, in the sidebar and in the remotes sheet: green
-    when up, amber when connecting, red when down or blocked, a hollow ring when disabled. The
-    sidebar's base rule used to outweigh the state rules, so every dot there was grey."""
-    page = ui.open(room=None)
-    tok = {
-        k: rgb(page.evaluate(f"getComputedStyle(document.documentElement).getPropertyValue('--{k}')"))
-        for k in ("green", "busy", "danger", "muted")
-    }
-
-    def check(sel: str) -> None:
-        expect(page.locator(sel)).to_have_class(cls("st-disabled"))
-        dots = page.evaluate(REMOTE_DOTS, [sel, list(DOT_COLOUR)])
-        assert dots.pop("disabled") == {
-            "bg": "rgba(0, 0, 0, 0)",
-            "ring": f"{tok['muted']} 0px 0px 0px 1.5px inset",
-        }, sel
-        assert dots == {st: {"bg": tok[k], "ring": "none"} for st, k in DOT_COLOUR.items()}, sel
-
-    check("#remotes .remote")  # the sidebar row
-    expect(page.locator("#add-machine")).to_be_hidden()  # a desktop broker takes no machines that dial in
-    expect(page.locator("#machines .remote")).to_have_count(0)
-    page.click("#remotes .remote")
-    expect(page.locator("#remotes-panel")).to_be_visible()
-    check("#remotes-body .remote-head")  # the sheet's card
 
 
 def test_phone_layout_drawer_and_members_sheet(ui: UI) -> None:
@@ -1853,58 +1802,6 @@ def test_typed_and_inspector_kick_use_the_same_dialog(ui: UI) -> None:
     expect(page.locator('#buddy-list .member[data-name="dialog-agent"]')).to_have_count(0)
 
 
-# A sidebar row per case, cloned from the seeded fpga-pi's with a name, a state and the text
-# chipText() gives it: the name's and the state's [shown, full] widths, how far the state's
-# right edge sits inside the row's padding (negative: it spills out) and its text-overflow.
-REMOTE_ROWS = """(cases) => {
-  const real = document.querySelector('#remotes .remote');
-  return cases.map(([name, st, text]) => {
-    const c = real.cloneNode(true);
-    c.className = 'remote st-' + st;
-    c.querySelector('.remote-name').textContent = name;
-    c.querySelector('.remote-state').textContent = text;
-    real.after(c);
-    const n = c.querySelector('.remote-name'), s = c.querySelector('.remote-state');
-    const inside = c.getBoundingClientRect().right - parseFloat(getComputedStyle(c).paddingRight)
-                   - s.getBoundingClientRect().right;
-    const out = {name: [n.clientWidth, n.scrollWidth], state: [s.clientWidth, s.scrollWidth], inside: inside,
-                 overflow: getComputedStyle(s).textOverflow};
-    c.remove();
-    return out;
-  });
-}"""
-
-LONG_STATES = [
-    ("scope-pi", "down", "down: timeout (retry in 20 s)"),
-    ("build-vm", "blocked", "blocked: forced command failed"),
-    ("dev-box-west", "disabled", "needs enable (config changed)"),
-]
-
-
-@pytest.mark.parametrize("size", ["desktop", "phone"])
-def test_a_long_remote_state_leaves_the_name_readable(ui: UI, size: str) -> None:
-    """A sidebar row gives its name and its state half its width each, and whatever one doesn't
-    need to the other. A long state (down with a countdown, blocked, a changed config) used to
-    take the whole row and squeeze the name to nothing; now it ends in an ellipsis."""
-    page = ui.open(room=None, **(PHONE if size == "phone" else {}))
-    expect(page.locator("#remotes .remote")).to_have_count(1)
-    rows = page.evaluate(
-        REMOTE_ROWS,
-        [
-            *LONG_STATES,
-            ("gpu-box", "up", "up · 14 ms"),
-            ("fpga-bench-lab-02", "down", "down: timeout (retry in 20 s)"),
-        ],
-    )
-    *long, short, both = rows
-    for (name, _, text), r in zip(LONG_STATES, long, strict=True):
-        assert r["name"][0] >= r["name"][1] - 1, f"{size}: {name} is cut to {r['name']} px next to {text!r}"
-    assert all(r["inside"] >= -0.5 and r["overflow"] == "ellipsis" for r in rows), rows  # nothing spills out
-    assert short["name"][0] >= short["name"][1] - 1 and short["state"][0] >= short["state"][1] - 1, short
-    assert abs(short["inside"]) < 0.5, short  # a short state keeps to the right edge
-    assert abs(both["name"][0] - both["state"][0]) <= 2, both  # a long name and a long state: half each
-
-
 def test_the_room_name_is_the_last_thing_the_header_shortens(ui: UI) -> None:
     """The header's flex row shortened the room's name first: a 1280 px window with Members open
     showed "s…" for #sprint-grooming, while "alice and 1 agent" and every chip stayed whole. The
@@ -1956,45 +1853,6 @@ def test_a_phone_shows_a_room_name_that_fits(ui: UI, scheme: str) -> None:
     nav, name, members = (page.locator(part).bounding_box() for part in parts)
     assert nav and name and members
     assert nav["x"] + nav["width"] <= name["x"] + 1 and name["x"] + name["width"] <= members["x"] + 1
-
-
-def test_a_remote_rows_title_has_its_whole_state(ui: UI) -> None:
-    """The row's title has the state in full, since the row may end it in an ellipsis, and it
-    ticks with the retry countdown as the row's text does. /api/remotes answers with fpga-pi
-    down (the seeded world's is never enabled), and the broker's own ``remotes`` frames don't
-    reach the page: one does come when the world's agents on fpga-pi were joined just before
-    (a liveness tick sends the member change), and it put back the real "needs enable"."""
-    ctx = ui.context()
-    down = {"name": "fpga-pi", "state": "down", "reason": "timeout", "retry_in_s": 30, "rtt_ms": None}
-    ctx.route("**/api/remotes", lambda route: route.fulfill(json={"remotes": [down], "config_error": None}))
-
-    def no_remotes_frames(ws: WebSocketRoute) -> None:
-        server = ws.connect_to_server()  # the page's own frames still go up as they are
-
-        def down_to_page(msg: str | bytes) -> None:
-            f = json.loads(msg) if isinstance(msg, str) else None
-            if isinstance(f, dict) and f.get("t") == "remotes":
-                return
-            ws.send(msg)
-
-        server.on_message(down_to_page)
-
-    ctx.route_web_socket("**/ws", no_remotes_frames)
-    page = ctx.new_page()
-    page.goto(ui.world.broker.login_url())
-    expect(page.locator("#st-conn")).to_have_text("Connected")
-    row = page.locator("#remotes .remote")
-    expect(row).to_have_class(cls("st-down"))
-
-    def title_and_text() -> tuple[str, str]:
-        t, s = row.evaluate("r => [r.title, r.querySelector('.remote-state').textContent]")
-        assert re.fullmatch(r"down: timeout \(retry in \d+ s\)", s), s
-        assert t == f"Remote machine fpga-pi ({s}): open the remotes panel", (t, s)
-        return t, s
-
-    _, first = title_and_text()
-    expect(row.locator(".remote-state")).not_to_have_text(first)  # the countdown ticks every second
-    title_and_text()
 
 
 FOCUS_RING = """() => {

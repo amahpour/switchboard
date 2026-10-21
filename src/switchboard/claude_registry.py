@@ -1,8 +1,8 @@
 """Claude Code's session registry file, ``<sessions_dir>/<pid>.json`` (DESIGN.md §9.2, §27.5.6).
 
 A leaf module: the broker (its local host view and the MCP attest in
-``broker/peer.py``) and a remote host's satellite read the registry through it, and
-it imports nothing from the rest of the package, so the satellite loads no adapter.
+``broker/peer.py``) reads the registry through it, and it imports nothing from the rest of the
+package.
 
 ``read_registry`` never blocks and never raises: it opens the file without
 following a final symlink and without blocking (a FIFO swapped in for the file
@@ -60,8 +60,7 @@ def read_registry(sessions_dir: str | os.PathLike[str], pid: int) -> dict[str, A
 
 def registry_status(data: dict[str, Any]) -> tuple[str | None, float | None]:
     """A registry file's ``(status, since)``: the status (None if missing or odd) and
-    when it began, from ``statusUpdatedAt`` (epoch ms; seconds tolerated), else None.
-    The satellite relays exactly these for a remote session (§27.5.6)."""
+    when it began, from ``statusUpdatedAt`` (epoch ms; seconds tolerated), else None."""
     status = data.get("status")
     status = status if isinstance(status, str) and len(status) <= 32 else None
     since: float | None = None

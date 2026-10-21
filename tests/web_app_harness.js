@@ -86,9 +86,8 @@ function makeWorld(rooms) {
         e.id = id;
         e.ownerDocument = document;
         // as index.html starts them
-        if (['empty', 'closed-panel', 'remotes-panel', 'closed-rooms', 'room-empty', 'palette', 'mentions', 'scrim',
-             'remotes-section', 'catchup-menu', 'insp-queue', 'machines-panel', 'passkeys-panel',
-             'add-machine'].includes(id)) e.classList.add('hidden');
+        if (['empty', 'closed-panel', 'closed-rooms', 'room-empty', 'palette', 'mentions', 'scrim',
+             'catchup-menu', 'insp-queue', 'passkeys-panel'].includes(id)) e.classList.add('hidden');
         byId.set(id, e);
       }
       return byId.get(id);
@@ -140,7 +139,6 @@ function makeWorld(rooms) {
       server.rooms = server.rooms.concat([{ id: 9, name: body.name, created_at: 900 }]);
       return function () { return [200, { room: roomDict(server.rooms[server.rooms.length - 1]) }]; };
     }
-    if (method === 'GET' && url === '/api/remotes') return function () { return [200, { remotes: [] }]; };
     if (method === 'GET' && url === '/api/closed-rooms') return function () { return [200, { rooms: [] }]; };
     const m = /^\/api\/rooms\/([^/]+)\/command$/.exec(url);
     if (method === 'POST' && m) {

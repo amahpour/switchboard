@@ -151,7 +151,7 @@ QUEUE_TIMEOUT_S = 30.0
 SEND_BACKOFF_S = (1.0, 30.0)
 LSOF_CANDIDATES = ("/usr/sbin/lsof", "/usr/bin/lsof", "/sbin/lsof", "/bin/lsof")
 RESTART_NOTE = "Codex daemon restarting"
-# a Codex row with a host (a remote member, M8c) is never this machine's daemon's
+# a Codex row with a host (a device's, over HTTPS) is never this machine's daemon's
 REMOTE_WHY = "not a Codex session on this machine"
 # hook events that show a thread whose SessionEnd was seen is running again
 RESUME_EVENTS = frozenset({"UserPromptSubmit", "PostToolUse", "Stop", "Interrupt"})
@@ -574,7 +574,6 @@ def steered(p: Participant, ev: HookEvent, was_idle: bool) -> bool:
 
 class CodexAdapter(CodexMembership, Adapter):
     harness = "codex"
-    local_only = True  # the push paths all talk to this machine's app-server
     serial_push = True  # one turn/start, steer or queue item in flight per thread
     reports_approval_mode = True  # the session id is the thread, proven on its own (§9.3)
 

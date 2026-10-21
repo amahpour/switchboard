@@ -105,12 +105,6 @@ class Paths:
     def test_marker(self) -> Path:
         return self.home / TEST_MARKER
 
-    @property
-    def satellite_conf(self) -> Path:
-        """``satellite.toml``: present only on a satellite home, the far end of a
-        remote link (DESIGN.md §27.3; written by ``switchboard remote accept``)."""
-        return self.home / "satellite.toml"
-
     def hook_copy(self, sha12: str) -> Path:
         return self.hooks_dir / f"switchboard_hook-{sha12}.py"
 
@@ -192,8 +186,7 @@ def write_hook_copy(paths: Paths) -> Path:
 
 def test_mode_refusal(paths: Paths, home_given: bool) -> str | None:
     """Why ``--test-mode`` is refused for this home, or None if it's allowed (§2 test
-    mode). The broker (``switchboard start --test-mode``) and the satellite
-    (``switchboard satellite --test-mode``) share it."""
+    mode, ``switchboard start --test-mode``)."""
     if os.environ.get("SWITCHBOARD_TEST") != "1":
         return "--test-mode needs SWITCHBOARD_TEST=1 in the environment"
     if not home_given:
@@ -208,14 +201,14 @@ def test_mode_refusal(paths: Paths, home_given: bool) -> str | None:
     return None
 
 
-HOOK_STATE_NAMES = 4  # names listed in a MISMATCH (a satellite's hook_state is at most 200 chars)
+HOOK_STATE_NAMES = 4  # names listed in a MISMATCH
 _HOOK_COPY_NAME = re.compile(r"switchboard_hook-[0-9a-f]{12}\.py")
 
 
 def hook_state_text(paths: Paths) -> str:
     """``ok (<n> copies)`` or ``MISMATCH: <names>``: the hook copies in ``<home>/hooks``.
-    A satellite sends this to the desktop, where the owner reads it, so only names shaped
-    like a hook copy are listed (at most ``HOOK_STATE_NAMES``); other files are counted."""
+    The broker reports it to the owner, so only names shaped like a hook copy are listed (at most
+    ``HOOK_STATE_NAMES``); other files are counted."""
     bad = check_hook_copies(paths)
     if bad:
         shown = [b for b in bad if _HOOK_COPY_NAME.fullmatch(b)][:HOOK_STATE_NAMES]

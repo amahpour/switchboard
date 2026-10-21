@@ -140,21 +140,6 @@ def test_people_have_their_own_tokens_and_lose_them_when_removed(hosted: InProcB
     assert st.store.agent_token_by_hash(agent_tokens.token_hash(mine["token"])) is not None
 
 
-def test_a_device_name_is_never_also_a_dial_in_machine(hosted: InProcBroker) -> None:
-    """A token's device and a machine that dials in would both be a host of that name, so each
-    refuses the other's. Fails if a pairing code is made for a token's device, or a token for a
-    paired machine's name."""
-    admin = set_up(hosted)
-    assert admin.post("/api/signin/check", {"password": ADMIN_PW}).status_code == 200
-    assert admin.post(MAKE, {"device": "laptop"}).status_code == 200
-    r = admin.post("/api/machines/pair", {"name": "laptop"})
-    assert r.status_code == 409 and "agent token" in r.json()["message"]
-    st = hosted.state
-    hosted.on_loop(st.store.machine_pair, "pi-box", b"k" * 32, "SHA256:x", {}, None)
-    r = admin.post(MAKE, {"device": "pi-box"})
-    assert r.status_code == 409 and "dials in" in r.json()["message"]
-
-
 def test_a_person_still_on_a_one_time_password_gets_nothing(hosted: InProcBroker) -> None:
     """Someone who hasn't chosen their own password yet may only do that (§32). Fails if they
     can list or make agent tokens first."""

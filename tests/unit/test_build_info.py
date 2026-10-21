@@ -81,7 +81,6 @@ def test_version_and_broker_status_print_the_commit_when_known(
     assert result.value.code == 0
     assert capsys.readouterr().out == f"switchboard {__version__} ({FULL[:7]})\n"
 
-    monkeypatch.setattr(cli, "_satellite_home", lambda args: False)
     monkeypatch.setattr(
         cli,
         "_call",

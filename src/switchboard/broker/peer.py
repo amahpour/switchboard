@@ -479,7 +479,7 @@ class McpIdentity:
     tier_note: str | None = None
     claude_socket: str | None = None
     # the host whose kernel vouched for these pids: '' for this machine (the broker's own
-    # socket peer); a remote's name for an attest from that host's satellite (§27.5.3)
+    # socket peer)
     host: str = LOCAL_HOST
 
 
@@ -520,12 +520,12 @@ def verify_mcp_peer(
     relay = relay_name(argvs.get(me.pid, ""))
     if relay is not None:
         # a forward of the socket (ssh -R/-L, socat): the kernel peer is the relay, so every
-        # process behind it would be one "MCP server" (§27.4.2). A remote machine's agents
-        # join over a remote link (§27.4), never through a forward (M8c; deferred from M8a).
+        # process behind it would be one "MCP server". Agents on another machine connect over
+        # HTTPS (§49), never through a forward.
         raise McpRefused(
             "forbidden",
             f"the process on the socket is {relay}, a relay: agents on another"
-            " machine join over a remote link (switchboard remote), not a socket forward",
+            " machine connect over HTTPS (Settings → Agents), not through a socket forward",
         )
 
     def ident(

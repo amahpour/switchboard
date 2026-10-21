@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 from conftest import InProcBroker
 from fakes.fake_agent import FakeAgent
-from fakes.fake_link import FakeLink
 
 from switchboard.broker.commands import Actor
 from switchboard.broker.service import ServiceError
@@ -95,23 +94,3 @@ def test_rename_refuses_invalid_taken_and_missing_rooms(broker: InProcBroker) ->
         assert r.status_code == status, r.text
     assert web.put("/api/rooms/missing/name", json={"name": "#new"}, headers=h).status_code == 404
     web.close()
-
-
-async def test_remote_member_keeps_old_allowlisted_name_after_reload() -> None:
-    """A remote's old allowlist entry continues to authorize its existing member after rename."""
-    with FakeLink(kind="inproc") as link:
-        broker = link.broker
-        async with FakeAgent(link.pi, "room-rename-remote") as agent:
-            assert (await agent.join("#fpga", "bench"))["ok"]
-            web = broker.web_client()
-            try:
-                renamed = web.put(
-                    "/api/rooms/fpga/name", json={"name": "#board"}, headers=broker.write_headers()
-                )
-                assert renamed.status_code == 200, renamed.text
-                assert "renamed #fpga to #board" in (await agent.read("#fpga"))["text"]
-                entry = broker.state.remotes.links[link.name].entry
-                assert broker.on_loop(lambda: broker.state.remotes.enforce(entry)) == 0
-                assert (await agent.say("#fpga", "remote work continues"))["ok"]
-            finally:
-                web.close()

@@ -1,4 +1,4 @@
-"""BrokerConn reconnect backoff (DESIGN.md §27.14, built in M8a).
+"""BrokerConn reconnect backoff (built in M8a).
 
 Behind a socket that accepts and closes at once (a tunnel whose far end is
 down), the old client reset its backoff on every connect and reconnected
@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import shutil
 import tempfile
 import time
@@ -23,9 +22,7 @@ from typing import Any
 import pytest
 
 from switchboard.mcp import client as client_mod
-from switchboard.mcp import server as srv
-from switchboard.mcp.client import BrokerConn, BrokerDown
-from switchboard.paths import Paths
+from switchboard.mcp.client import DEFAULT_BACKOFF, BrokerConn, BrokerDown
 
 HELLO = {"name": "t", "harness": "test"}
 Script = Callable[[int, asyncio.StreamReader, asyncio.StreamWriter], Awaitable[None]]
@@ -250,40 +247,16 @@ class SleepRecorder:
         await asyncio.sleep(0.001)
 
 
-def test_satellite_home_caps_backoff_at_2s(tmp_path: Path) -> None:
-    desk, pi = Paths.from_home(tmp_path / "desk"), Paths.from_home(tmp_path / "pi")
-    for p in (desk, pi):
-        p.home.mkdir(mode=0o700)
-    pi.satellite_conf.write_text('name = "fpga-pi"\n')
-    assert pi.satellite_conf == pi.home / "satellite.toml"
-    assert srv.broker_backoff(desk) == (0.5, 10.0)
-    assert srv.broker_backoff(pi) == (0.5, 2.0)
+def test_the_reconnect_loop_never_sleeps_longer_than_its_cap(tmp_path: Path) -> None:
+    """The reconnect loop doubles its sleep from 0.5 s and stops at the cap, 10 s by default, behind a
+    socket path with no broker. Fails if the cap is missing or the first steps change."""
 
-    # main() builds its BrokerConn with it
-    seen: list[tuple[float, float]] = []
-
-    async def fake_serve(server: Any, st: Any) -> None:
-        seen.append(st.conn.backoff)
-
-    mp = pytest.MonkeyPatch()
-    old_umask = os.umask(0o022)
-    os.umask(old_umask)
-    try:
-        mp.setattr(srv, "serve", fake_serve)
-        for p in (desk, pi):
-            assert srv.main(["--home", str(p.home)]) == 0
-    finally:
-        mp.undo()
-        os.umask(old_umask)  # main() sets 077
-    assert seen == [(0.5, 10.0), (0.5, 2.0)]
-
-    # and the reconnect loop never sleeps longer than the cap
-    async def run(home: Paths) -> list[float]:
+    async def run(backoff: tuple[float, float]) -> list[float]:
         rec = SleepRecorder()
         mp = pytest.MonkeyPatch()
         mp.setattr(client_mod, "asyncio", rec)
         try:
-            conn = BrokerConn(home.home / "run" / "none.sock", backoff=srv.broker_backoff(home))
+            conn = BrokerConn(tmp_path / "run" / "none.sock", backoff=backoff)
             conn.start()
             while len(rec.delays) < 10:
                 await asyncio.sleep(0.005)
@@ -292,16 +265,16 @@ def test_satellite_home_caps_backoff_at_2s(tmp_path: Path) -> None:
             mp.undo()
         return rec.delays[:10]
 
-    assert asyncio.run(run(pi)) == [0.5, 1.0] + [2.0] * 8
-    assert asyncio.run(run(desk)) == [0.5, 1.0, 2.0, 4.0, 8.0] + [10.0] * 5
+    assert asyncio.run(run(DEFAULT_BACKOFF)) == [0.5, 1.0, 2.0, 4.0, 8.0] + [10.0] * 5
+    assert asyncio.run(run((0.5, 2.0))) == [0.5, 1.0] + [2.0] * 8
 
 
 @pytest.mark.parametrize("hello", [False, True], ids=["no_hello", "hello"])
-async def test_satellite_backoff_levels_off_at_2s_behind_accept_then_close(
+async def test_the_backoff_levels_off_at_its_cap_behind_accept_then_close(
     sock_dir: Path, hello: bool
 ) -> None:
-    """The post-connection sleeps (not only the connect-failure ones) stop at the 2 s cap
-    on a satellite home, and at 10 s by default, behind a socket that accepts and closes."""
+    """The post-connection sleeps (not only the connect-failure ones) stop at the cap, 2 s here and
+    10 s by default, behind a socket that accepts and closes."""
     rec = SleepRecorder()
     mp = pytest.MonkeyPatch()
     mp.setattr(client_mod, "asyncio", rec)

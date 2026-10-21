@@ -29,7 +29,7 @@ def test_open_creates_full_schema_with_wal(tmp_path: Path) -> None:
     tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert EXPECTED_TABLES <= tables
     # v2 since M8b (§27.6), v3 since #41 (§31.2), v4 since #61 (§32.2), v5 since #100
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 28
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 29
     indexes = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='index'")}
     assert {
         "memberships_active_name",
@@ -79,7 +79,10 @@ def test_schema_columns_match_design(tmp_path: Path) -> None:
     )
     assert {"id_hash", "expires_at", "via"} <= cols("web_sessions")
     assert {"credential_id", "public_key", "sign_count"} <= cols("passkeys")
-    assert {"name", "key", "key_fp", "approved_at", "removed_at"} <= cols("link_machines")
+    assert {"id", "person_id", "device", "token_hash", "revoked_at"} <= cols("agent_tokens")
+    assert not {"remotes", "link_machines"} & {
+        r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
 
 
 def test_migrate_is_idempotent_and_refuses_unknown_version(tmp_path: Path) -> None:
@@ -238,9 +241,12 @@ def _room(name: str, rid: int):
     )
 
 
-def _with_remote(p: Path) -> sqlite3.Connection:
+def _with_token(p: Path) -> sqlite3.Connection:
     con = db.open_db(p)
-    con.execute("INSERT INTO remotes(name, config_hash) VALUES('fpga-pi', ?)", ("0" * 64,))
+    con.execute(
+        "INSERT INTO agent_tokens(person_id, device, token_hash, created_at) VALUES(NULL, 'laptop', ?, 1.0)",
+        ("0" * 64,),
+    )
     return con
 
 
@@ -254,10 +260,10 @@ def test_delete_backup_path(tmp_path: Path) -> None:
 
 
 def test_backup_of_every_table(tmp_path: Path) -> None:
-    con = _with_remote(tmp_path / "switchboard.db")
+    con = _with_token(tmp_path / "switchboard.db")
     to = db.delete_backup_path(tmp_path / "switchboard.db", _room("#build~closed-7", 7))
     dest, counts = db.backup_verified(con, to, tables=db.TABLES, what="pre-delete backup")
-    assert dest == to and tuple(counts) == db.TABLES and counts["remotes"] == 1
+    assert dest == to and tuple(counts) == db.TABLES and counts["agent_tokens"] == 1
     assert (os.stat(dest).st_mode & 0o777) == 0o600
     b = sqlite3.connect(dest)
     assert b.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
@@ -269,7 +275,7 @@ def test_backup_of_every_table(tmp_path: Path) -> None:
 
 
 def test_pre_delete_backup_is_never_overwritten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    con = _with_remote(tmp_path / "switchboard.db")
+    con = _with_token(tmp_path / "switchboard.db")
     monkeypatch.setattr(db.time, "time", lambda: 1_790_000_000.0)
     to = db.delete_backup_path(tmp_path / "switchboard.db", _room("#build", 7))
     to.write_bytes(b"kept")
@@ -282,7 +288,7 @@ def test_pre_delete_backup_is_never_overwritten(tmp_path: Path, monkeypatch: pyt
 
 
 def test_backup_errors_name_what_it_is(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    con = _with_remote(tmp_path / "switchboard.db")
+    con = _with_token(tmp_path / "switchboard.db")
     to = tmp_path / "switchboard.db.delete-build-7.bak"
     kw = {"tables": db.TABLES, "what": "pre-delete backup"}
     # the copy fails its integrity check
@@ -302,7 +308,7 @@ def test_backup_errors_name_what_it_is(tmp_path: Path, monkeypatch: pytest.Monke
         calls["n"] += 1
         out = real(c, tables)
         if calls["n"] == 2:
-            out["remotes"] -= 1
+            out["agent_tokens"] -= 1
         return out
 
     with monkeypatch.context() as m:

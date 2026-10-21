@@ -30,14 +30,14 @@ def test_v23_boards_gain_an_empty_report_after_a_backup(tmp_path: Path) -> None:
         (room_id, "https://example.com/shop/pull/7", "aaa1111", "codex-1", 1.0),
     )
     con.commit()
-    before = db.row_counts(con, db.tables_of(23))
+    before = db.row_counts(con, db.kept_tables(23))
     con.close()
     os.chmod(path, 0o600)
 
     migrated = db.open_db(path)
     fresh = db.open_db(tmp_path / "fresh.db")
-    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 28
-    assert db.row_counts(migrated, db.tables_of(23)) == before
+    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 29
+    assert db.row_counts(migrated, db.kept_tables(23)) == before
     row = migrated.execute(
         "SELECT pr_state, pr_threads, pr_ci, reported_by, reported_at FROM reviews"
     ).fetchone()

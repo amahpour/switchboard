@@ -7,7 +7,6 @@ loop; every write is wrapped in ``db.tx`` (``BEGIN IMMEDIATE``).
 from __future__ import annotations
 
 import json
-import re
 import sqlite3
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any
@@ -25,7 +24,6 @@ from switchboard.models import (
     Batch,
     Event,
     Item,
-    MachineRow,
     Member,
     Membership,
     Message,
@@ -33,7 +31,6 @@ from switchboard.models import (
     PasskeyRow,
     PersonRow,
     Pin,
-    RemoteRow,
     Room,
     room_ref,
     split_closed,
@@ -45,8 +42,6 @@ OPEN_DELIVERY_STATES = ("pending", "offered", "in_context")
 # What deleting a room removes (DESIGN.md §28.6): the keys of ``room_delete_counts`` and
 # of ``delete_room``'s result. Participants are never deleted.
 ROOM_DELETE_TABLES = ("rooms", "messages", "memberships", "deliveries", "batches", "events")
-CONFIG_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
-REASON_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 STATUS_LINE_STALE_S = 30 * 60
 
 
@@ -446,7 +441,7 @@ class Store:
         Join/leave/notice messages are not delivered to agents, except a room-rename notice
         explicitly passed with ``deliver_notice`` (#316). ``skip_memberships``
         get no delivery row either (the subjects of a ``/catchup`` request, §26).
-        ``sender_host`` is a remote agent sender's host (§27.6); None on this machine.
+        ``sender_host`` is a device agent sender's host (§49); None on this machine.
         ``sender_person_id`` is a human sender other than the owner (§32.2); every person
         is a human to every agent, so it changes nothing about the deliveries.
         """
@@ -1013,18 +1008,13 @@ class Store:
 
     def reset_owner(self, applied: str) -> dict[str, int]:
         """The owner reset (DESIGN.md §31.5), in one transaction: every passkey and web
-        session is deleted, the owner is cleared, every paired machine goes back to pending
-        (whoever held the broker may have paired one), and ``applied`` (the hash of the
+        session is deleted, the owner is cleared, and ``applied`` (the hash of the
         SWITCHBOARD_RESET_OWNER value acted on) is recorded, so the same value never resets
         again. Returns what it removed or changed."""
         now = self.clock.now()
         with db.tx(self.con):
             n_keys = self.con.execute("DELETE FROM passkeys").rowcount
             n_sess = self.con.execute("DELETE FROM web_sessions").rowcount
-            n_mach = self.con.execute(
-                "UPDATE link_machines SET approved_at=NULL, approved_via=NULL"
-                " WHERE removed_at IS NULL AND approved_at IS NOT NULL"
-            ).rowcount
             # everyone else was added by the old owner: the new owner adds them again
             n_people = self.con.execute(
                 "UPDATE people SET removed_at=?, password_hash=NULL, must_reset=0, email=NULL,"
@@ -1039,7 +1029,7 @@ class Store:
             self.meta_delete("owner_handle")
             self.meta_delete("owner_claimed_at")
             self.meta_set("reset_owner_applied", applied)
-        return {"passkeys": n_keys, "sessions": n_sess, "machines_pending": n_mach, "people": n_people}
+        return {"passkeys": n_keys, "sessions": n_sess, "people": n_people}
 
     # --------------------------------------------------------------- passkeys
     def passkey_add(
@@ -1518,167 +1508,6 @@ class Store:
             "participants_offline": offline,
             "participants_ended": n_ended,
         }
-
-    # ---------------------------------------------------------------- remotes
-    # One row per remote that was ever enabled (DESIGN.md §27.6, §27.5.8): the broker
-    # dials a remote only when its row holds an enabled_at for the current config_hash
-    # and no block (blocked_at is NULL): ``RemoteRow.may_dial`` is the one gate. A
-    # block (host key, auth, replaced) holds until the next enable clears it.
-    def remote_row(self, name: str) -> RemoteRow | None:
-        r = self.con.execute("SELECT * FROM remotes WHERE name=?", (name,)).fetchone()
-        return RemoteRow.from_row(r) if r else None
-
-    def remote_rows(self) -> list[RemoteRow]:
-        return [RemoteRow.from_row(r) for r in self.con.execute("SELECT * FROM remotes ORDER BY name")]
-
-    @staticmethod
-    def _remote_name(name: str) -> str:
-        if not valid_host(name):
-            raise ValueError(f"not a remote name: {name!r}")
-        return name
-
-    def set_remote_enabled(self, name: str, config_hash: str, via: str) -> RemoteRow:
-        """The human enabled this remote for exactly ``config_hash`` (``via`` cli or web).
-        Enabling also clears a block (§27.4.7)."""
-        self._remote_name(name)
-        if not isinstance(config_hash, str) or not CONFIG_HASH_RE.match(config_hash):
-            raise ValueError("config_hash must be a sha256 hex digest")
-        if via not in ("cli", "web"):
-            raise ValueError(f"enabled via {via!r}")
-        now = self.clock.now()
-        with db.tx(self.con):
-            self.con.execute(
-                "INSERT INTO remotes(name, config_hash, enabled_at, enabled_via, blocked_at, blocked_reason)"
-                " VALUES(?,?,?,?,NULL,NULL) ON CONFLICT(name) DO UPDATE SET config_hash=excluded.config_hash,"
-                " enabled_at=excluded.enabled_at, enabled_via=excluded.enabled_via,"
-                " blocked_at=NULL, blocked_reason=NULL",
-                (name, config_hash, now, via),
-            )
-        got = self.remote_row(name)
-        assert got is not None
-        return got
-
-    def set_remote_disabled(self, name: str) -> bool:
-        """``remote disable``: forget the consent (the row and its hash stay). False if no row."""
-        self._remote_name(name)
-        with db.tx(self.con):
-            return (
-                self.con.execute(
-                    "UPDATE remotes SET enabled_at=NULL, enabled_via=NULL WHERE name=?", (name,)
-                ).rowcount
-                == 1
-            )
-
-    def set_remote_blocked(self, name: str, reason: str) -> bool:
-        """The link needs the owner (``host_key``, ``auth``, ``replaced``, ...): no retry
-        until the next enable. False if the remote has no row."""
-        self._remote_name(name)
-        if not isinstance(reason, str) or not REASON_RE.match(reason):
-            raise ValueError(f"blocked reason {reason!r}")
-        now = self.clock.now()
-        with db.tx(self.con):
-            return (
-                self.con.execute(
-                    "UPDATE remotes SET blocked_at=?, blocked_reason=? WHERE name=?", (now, reason, name)
-                ).rowcount
-                == 1
-            )
-
-    def touch_remote_up(self, name: str) -> bool:
-        """The link came up (a handshake completed) now."""
-        self._remote_name(name)
-        now = self.clock.now()
-        with db.tx(self.con):
-            return self.con.execute("UPDATE remotes SET last_up_at=? WHERE name=?", (now, name)).rowcount == 1
-
-    def clear_remote(self, name: str) -> bool:
-        """``remote remove``: drop the row (consent, block and history). False if none."""
-        self._remote_name(name)
-        with db.tx(self.con):
-            return self.con.execute("DELETE FROM remotes WHERE name=?", (name,)).rowcount == 1
-
-    # ------------------------------------------------------ machines (§31.7)
-    # A machine that dials in: pending from its pairing until the owner approves it, approved
-    # until Remove (which forgets its key; the row stays, so a name keeps its history). A code
-    # made for a removed machine's name pairs a new key under it, pending again.
-    def machine(self, name: str) -> MachineRow | None:
-        r = self.con.execute("SELECT * FROM link_machines WHERE name=?", (name,)).fetchone()
-        return MachineRow.from_row(r) if r else None
-
-    def machines(self, *, removed: bool = False) -> list[MachineRow]:
-        sql = (
-            "SELECT * FROM link_machines"
-            + ("" if removed else " WHERE removed_at IS NULL")
-            + " ORDER BY name"
-        )
-        return [MachineRow.from_row(r) for r in self.con.execute(sql)]
-
-    def machine_pair(
-        self, name: str, key: bytes, key_fp: str, facts: dict[str, Any], person_id: int | None = None
-    ) -> MachineRow:
-        """A machine paired with a code: a new pending row, or a removed one's name again.
-        ``person_id``: who made the code (None: the owner)."""
-        if not valid_host(name) or len(key) != 32:
-            raise ValueError("a machine needs a name like work-laptop and a 32-byte key")
-        now = self.clock.now()
-        with db.tx(self.con):
-            old = self.machine(name)
-            if old is not None and not old.removed:
-                raise Conflict(f"{name} is paired already: remove it first")
-            self.con.execute("DELETE FROM link_machines WHERE name=?", (name,))
-            self.con.execute(
-                "INSERT INTO link_machines(name, key, key_fp, facts, created_at, person_id)"
-                " VALUES(?,?,?,?,?,?)",
-                (name, key, key_fp, json.dumps(facts, sort_keys=True), now, person_id),
-            )
-        got = self.machine(name)
-        assert got is not None
-        return got
-
-    def machine_approve(self, name: str, via: str, person_id: int | None = None) -> bool:
-        """Someone approved a pending machine (``person_id``; None: the owner). False if it isn't
-        pending."""
-        if via not in ("cli", "web"):
-            raise ValueError(f"approved via {via!r}")
-        now = self.clock.now()
-        with db.tx(self.con):
-            return (
-                self.con.execute(
-                    "UPDATE link_machines SET approved_at=?, approved_via=?, approved_by=? WHERE name=?"
-                    " AND approved_at IS NULL"
-                    " AND removed_at IS NULL",
-                    (now, via, person_id, name),
-                ).rowcount
-                == 1
-            )
-
-    def machines_of(self, person_id: int) -> list[str]:
-        """The machines (not removed) a person paired or approved: they go when that person does."""
-        rows = self.con.execute(
-            "SELECT name FROM link_machines WHERE removed_at IS NULL AND (person_id=? OR approved_by=?)"
-            " ORDER BY name",
-            (person_id, person_id),
-        ).fetchall()
-        return [r[0] for r in rows]
-
-    def machine_remove(self, name: str) -> bool:
-        """Remove: the key is forgotten (a connection with it is refused from now on)."""
-        now = self.clock.now()
-        with db.tx(self.con):
-            return (
-                self.con.execute(
-                    "UPDATE link_machines SET removed_at=?, key=X'', key_fp='' WHERE name=?"
-                    " AND removed_at IS NULL",
-                    (now, name),
-                ).rowcount
-                == 1
-            )
-
-    def machine_seen(self, name: str, t: float) -> None:
-        with db.tx(self.con):
-            self.con.execute(
-                "UPDATE link_machines SET last_seen_at=? WHERE name=? AND removed_at IS NULL", (t, name)
-            )
 
     # ============================================================ M2: agents
     # ----------------------------------------------------------- participants

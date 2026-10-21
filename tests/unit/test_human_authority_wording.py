@@ -21,7 +21,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from switchboard import envelope
-from switchboard.adapters import REMOTE_CODEX, build_adapters
+from switchboard.adapters import build_adapters
 from switchboard.config import Config
 from switchboard.mcp.server import INSTRUCTIONS
 from switchboard.models import Participant
@@ -92,16 +92,6 @@ def test_every_adapters_join_guidance_says_kind_human_is_the_user_not_that_it_is
     # codex: one guidance string, whatever the tier
     codex = adapters["codex"]
     assert_clean(codex.join_guidance(part(harness="codex"), room), "codex")
-
-    # a Codex session on another machine: pull-only, and link-attached (a different string)
-    remote_codex = adapters[REMOTE_CODEX]
-    p_pull = part(harness="codex", host="fpga-pi")
-    assert_clean(remote_codex.join_guidance(p_pull, room), "remote codex (pull)")
-    rconn = SimpleNamespace(closed=False)
-    remote_codex.attach(456, 200.0, rconn, host="fpga-pi")
-    p_linked = part(harness="codex", mcp_pid=456, mcp_start=200.0, host="fpga-pi")
-    assert remote_codex.attached(p_linked)
-    assert_clean(remote_codex.join_guidance(p_linked, room), "remote codex (link)")
 
     # devin and cursor: one guidance string each
     assert_clean(adapters["devin"].join_guidance(part(harness="devin"), room), "devin")

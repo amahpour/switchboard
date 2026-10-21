@@ -572,26 +572,15 @@ def test_the_reset_acts_once_per_value(monkeypatch: pytest.MonkeyPatch) -> None:
     try:
         br, auth, _ = claim(b)
         st = b.state.store
-        from switchboard import db
-
-        with db.tx(st.con):  # a paired and approved machine (PR 2 makes these): back to pending at the reset
-            st.con.execute(
-                "INSERT INTO link_machines(name, key, key_fp, created_at, approved_at, approved_via)"
-                " VALUES('work-laptop', X'00', 'SHA256:x', 1.0, 2.0, 'web')"
-            )
         first_token = None
         monkeypatch.setenv("SWITCHBOARD_RESET_OWNER", "2026-09-30")
         b.restart()
         st = b.state.store
         assert st.passkey_count() == 0 and st.owner_handle() is None and st.web_session_count() == 0
-        assert tuple(st.con.execute("SELECT approved_at, approved_via FROM link_machines").fetchone()) == (
-            None,
-            None,
-        )
         assert b.state.claim is not None and b.paths.test_claim_link.exists()
         first_token = token_of(claim_link(b))
         assert events(b, "owner_reset") == [
-            {"what": "owner_reset", "passkeys": 1, "sessions": 1, "machines_pending": 1, "people": 0}
+            {"what": "owner_reset", "passkeys": 1, "sessions": 1, "people": 0}
         ]
         assert br.get("/api/me").status_code == 401  # the old session is gone
         # claimed again by the new owner; the same value at the next start changes nothing

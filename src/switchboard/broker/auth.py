@@ -28,10 +28,6 @@ UI_HOST = "switchboard.localhost"
 # paths a platform's health checker may GET without the UI's Host (it probes the container's own
 # address): they answer "ok" and nothing else
 OPEN_PATHS = frozenset({"/healthz"})
-# the one write route a pairing code authenticates, sent by `switchboard remote join` (never a
-# browser: the route refuses any request that has an Origin), so it needs neither Origin nor
-# X-Switchboard here; its Host is checked as everywhere (DESIGN.md §31.7)
-CODE_PATHS = frozenset({"/link/pair"})
 # agents over HTTPS (DESIGN.md §49.2): an agent token authenticates them, never a cookie, and the
 # route itself (``agent_http.AgentAuth``) refuses any request that has an Origin, so a browser can't
 # call it at all; its Host is checked as everywhere
@@ -250,10 +246,9 @@ class HostOriginGuard:
       sends as 403 (websocket). The one exception is a GET or HEAD of ``OPEN_PATHS``
       (``/healthz``), which a platform's health checker sends to the container's own address.
     - Unsafe http methods also need ``Origin`` to be the UI's origin and ``X-Switchboard: 1``,
-      else 403. (The session cookie is checked by routes.) The exceptions are ``CODE_PATHS``
-      (``POST /link/pair``), which a pairing code authenticates, and ``AGENT_PATHS`` (``/mcp``,
-      ``/mcp/listen``, ``/mcp/session``), which an agent token does: both refuse any request that
-      has an Origin.
+      else 403. (The session cookie is checked by routes.) The exception is ``AGENT_PATHS``
+      (``/mcp``, ``/mcp/listen``, ``/mcp/session`` and the command hooks'), which an agent token
+      authenticates: they refuse any request that has an Origin.
     """
 
     def __init__(self, app: ASGIApp, origin: WebOrigin):
@@ -281,7 +276,6 @@ class HostOriginGuard:
         if (
             kind == "http"
             and scope.get("method", "GET").upper() in UNSAFE_METHODS
-            and scope.get("path") not in CODE_PATHS
             and scope.get("path") not in AGENT_PATHS
         ):
             if _header(scope, b"origin") != self.origin or _header(scope, b"x-switchboard") != "1":
