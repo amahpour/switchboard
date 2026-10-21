@@ -20,7 +20,7 @@ import pytest
 from conftest import InProcBroker
 from test_agents_http import CALL as CODEX_CALL
 from test_agents_http import THREAD_A, Codex, make_token, members, sse_result
-from test_agents_http_claude import HOOK, SESSION_1, Claude
+from test_agents_http_claude import HOOK, SESSION_1, USES, Claude
 
 from switchboard import __version__
 from switchboard.broker import agent_http
@@ -288,6 +288,116 @@ def test_a_report_without_a_result_confirms_and_takes_back_nothing(build: InProc
     assert "and then this" in json.loads(out)["hookSpecificOutput"]["additionalContext"]
     assert claude_hook(claude, event="PostToolUse", tool_name="Bash", tool_use_id="toolu_b2") == "{}"
     assert state() == "confirmed" and member(build, "claude-1").queued == 0  # nothing left to hand out
+
+
+SUBAGENT = "a0123456789abcdef"  # Claude Code's agent_id for a subagent: 'a' and 16 hex digits
+
+
+def test_a_subagents_hook_delivers_and_confirms_nothing(build: InProcBroker) -> None:
+    """Claude Code runs the session's hooks for a subagent's tool calls, with the session's id (#446).
+    The subagent is not in the room, so while the session is busy and a message waits, a subagent's
+    PostToolUse or PostToolUseFailure gets ``{}``: the message stays queued, and a read() answer the
+    session is holding stays unconfirmed even when the subagent's report carries its token. The
+    session's own next hook (``agent_id`` empty, as the plugin sends it) confirms and gets everything.
+    Fails if a subagent's tool call takes a message meant for the session, or settles what only the
+    session's own hook may."""
+    claude, _ = joined_claude(build)
+    claude_hook(claude, event="UserPromptSubmit")
+    build.call("human.say", {"room": "#build", "text": "hello claude"})
+    got = claude.call("read", room="#build")
+    bid = int(TOKEN_IN.search(got["text"]).group(1))
+    state = lambda: build.on_loop(build.state.store.get_batch, bid).state  # noqa: E731
+    assert state() == "offered"
+    build.call("human.say", {"room": "#build", "text": "@claude-1 stop and check the tests"})
+    assert member(build, "claude-1").queued == 1
+    for event in ("PostToolUse", "PostToolUseFailure"):
+        assert (
+            claude_hook(claude, event=event, tool_name="Bash", tool_use_id="toolu_a1", agent_id=SUBAGENT)
+            == "{}"
+        )
+    # even a report of switchboard's own tool, carrying the answer's token, is the subagent's
+    assert (
+        claude_hook(
+            claude,
+            event="PostToolUse",
+            tool_name="mcp__switchboard__read",
+            tool_use_id="toolu_a2",
+            agent_id=SUBAGENT,
+            tool_response=json.dumps([{"type": "text", "text": json.dumps(got)}]),
+        )
+        == "{}"
+    )
+    assert state() == "offered" and (
+        member(build, "claude-1").queued,
+        member(build, "claude-1").inflight,
+    ) == (1, 1)
+    assert participant(build, "claude-1").status == "busy"
+    # the session's own report of the same read() (agent_id empty, as the plugin sends it) confirms the
+    # answer, and the message that waited behind it comes with it
+    out = claude_hook(
+        claude,
+        event="PostToolUse",
+        tool_name="mcp__switchboard__read",
+        tool_use_id="toolu_a2",
+        agent_id="",
+        tool_response=json.dumps([{"type": "text", "text": json.dumps(got)}]),
+    )
+    assert state() == "confirmed"
+    assert "check the tests" in json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert member(build, "claude-1").queued == 0
+
+
+def test_a_subagents_tool_calls_leave_an_idle_sessions_listener_waiting(build: InProcBroker) -> None:
+    """A background subagent keeps making tool calls after its parent's turn ended, and each one runs
+    the parent's hooks (#446). The parent is idle with its listener waiting; those calls must neither
+    end the listener (any hook of the session does, §49.4) nor mark the session busy, or an @mention
+    would find no one to wake. Fails if a subagent's PostToolUse ends the wait or changes the status, or
+    the message doesn't reach the listener afterwards."""
+    claude, token = joined_claude(build)
+    p = participant(build, "claude-1")
+    with ThreadPoolExecutor(1) as pool:
+        waiting = pool.submit(listen, build, token, SESSION_1)
+        until(lambda: parked(build, p.id))
+        for event in ("PostToolUse", "PostToolUseFailure", "PostToolUse"):
+            assert (
+                claude_hook(claude, event=event, tool_name="Bash", tool_use_id="toolu_b1", agent_id=SUBAGENT)
+                == "{}"
+            )
+        assert parked(build, p.id) and participant(build, "claude-1").status == "idle"
+        build.call("human.say", {"room": "#build", "text": "@claude-1 are you there"})
+        r = waiting.result(30)
+    assert r.status_code == 200 and "are you there" in r.text, (r.status_code, r.text)
+
+
+def test_a_subagents_own_call_of_a_switchboard_tool_is_still_named_by_its_hook(build: InProcBroker) -> None:
+    """A subagent can call the session's switchboard tools. Its PreToolUse report, which only says which
+    session made the call (§49.3), is kept as it always was (#446), so the call is the session's and is
+    not refused for want of a report. Fails if a PreToolUse with an ``agent_id`` is dropped."""
+    claude, _ = joined_claude(build)
+    use = next(USES)
+    assert (
+        claude_hook(
+            claude, event="PreToolUse", tool_use_id=use, tool_name="mcp__switchboard__read", agent_id=SUBAGENT
+        )
+        == "{}"
+    )
+    r = claude.raw("read", use, room="#build")
+    assert r.status_code == 200 and json.loads(sse_result(r)["result"]["content"][0]["text"])["ok"]
+
+
+def test_what_counts_as_a_subagents_hook() -> None:
+    """``from_subagent`` is true for any ``agent_id`` that says something, of any length or type
+    (a value that isn't recognized is not the session's own: fails closed), and false for nothing:
+    absent, empty or blank. ``agent_type`` alone is not it, because the main thread of a session
+    started with ``claude --agent`` has one. Fails if a long, odd or unexpected value passes for the
+    session's own call and takes its messages."""
+    sub = agent_http.from_subagent
+    for yes in (SUBAGENT, " x ", "x" * 500, "${agent_id}", 7, ["a"], {"a": 1}, True):
+        assert sub({"agent_id": yes}), yes
+    for no in (None, "", "   ", "\n", False):
+        assert not sub({"agent_id": no}), no
+    assert not sub({}) and not sub({"agent_type": "tester"})
+    assert "agent_id" in agent_http.HOOK_FIELDS and "agent_type" not in agent_http.HOOK_FIELDS
 
 
 def test_the_report_of_a_second_tool_is_told_from_the_one_with_a_result() -> None:

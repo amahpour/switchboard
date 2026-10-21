@@ -46,6 +46,7 @@
             "input": {
               "event": "${hook_event_name}",
               "session_id": "${session_id}",
+              "agent_id": "${agent_id}",
               "tool_use_id": "${tool_use_id}",
               "tool_name": "${tool_name}"
             },
@@ -65,6 +66,7 @@
             "input": {
               "event": "${hook_event_name}",
               "session_id": "${session_id}",
+              "agent_id": "${agent_id}",
               "tool_use_id": "${tool_use_id}",
               "tool_name": "${tool_name}",
               "tool_response": "${tool_response}",
@@ -84,6 +86,7 @@
             "input": {
               "event": "${hook_event_name}",
               "session_id": "${session_id}",
+              "agent_id": "${agent_id}",
               "tool_use_id": "${tool_use_id}",
               "tool_name": "${tool_name}"
             },
@@ -103,6 +106,7 @@
             "input": {
               "event": "${hook_event_name}",
               "session_id": "${session_id}",
+              "agent_id": "${agent_id}",
               "tool_use_id": "${tool_use_id}",
               "tool_name": "${tool_name}"
             },
@@ -120,6 +124,7 @@
             "input": {
               "event": "${hook_event_name}",
               "session_id": "${session_id}",
+              "agent_id": "${agent_id}",
               "tool_use_id": "${tool_use_id}",
               "tool_name": "${tool_name}"
             },

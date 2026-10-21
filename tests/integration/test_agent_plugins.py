@@ -20,7 +20,7 @@ import pytest
 from conftest import InProcBroker, child_env
 from test_agents_http import THREAD_A, Codex, make_token, sse_result
 from test_agents_http_claude import SESSION_1, Claude
-from test_agents_http_wake import claude_hook, codex_hook, parked, participant, until
+from test_agents_http_wake import claude_hook, codex_hook, member, parked, participant, until
 
 from switchboard.broker.agent_http import HOOK_FIELDS, HOOK_TOOL, LISTEN_PATH, PATH
 from switchboard.mcp.server import TOOL_NAMES
@@ -43,13 +43,20 @@ FIXTURES = ROOT / "tests" / "fixtures"
 SECRET = "SECRET-OF-THE-TOOL-9f3a"  # stands for a Bash output, a file's contents, a command line, a path
 
 
-def fill(template: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+def fill(template: dict[str, Any], payload: dict[str, Any], missing: str | None = None) -> dict[str, Any]:
     """A hook's input, as the harness fills it: each ``${field}`` is that field of the hook's payload.
-    A field the payload lacks is an error, as it is in Codex (it fails a hook that names one)."""
+    A field the payload lacks is an error, as it is in Codex (it fails a hook that names one), unless
+    ``missing`` says what it becomes: Claude Code 2.1.305 makes it an empty string (the ``agent_id`` of a
+    session's own tool call, #446)."""
     out = {}
     for key, value in template.items():
         named = re.fullmatch(r"\$\{(\w+)\}", value) if isinstance(value, str) else None
-        out[key] = str(payload[named.group(1)]) if named else value
+        if named is None:
+            out[key] = value
+        elif missing is not None and named.group(1) not in payload:
+            out[key] = missing
+        else:
+            out[key] = str(payload[named.group(1)])
     return out
 
 
@@ -126,6 +133,11 @@ def test_every_hook_calls_the_hook_tool_with_fields_it_takes() -> None:
                 assert set(h["input"]) <= set(HOOK_FIELDS), (event, set(h["input"]) - set(HOOK_FIELDS))
                 assert h["input"]["event"] == "${hook_event_name}"
                 assert h["input"]["session_id"] == "${session_id}"
+                # a subagent's tool calls run these hooks with the session's id; its own id says so (#446)
+                if event in ("PreToolUse", "PostToolUse", "PostToolUseFailure"):
+                    assert h["input"]["agent_id"] == "${agent_id}", event
+                else:
+                    assert "agent_id" not in h["input"], event
     own = "mcp__plugin_switchboard_switchboard__.*"
     assert [g["matcher"] for g in hooks["PreToolUse"]] == [own]  # only says who makes a switchboard call
     for event in ("PostToolUse", "PostToolUseFailure"):
@@ -361,7 +373,8 @@ def test_claudes_plugin_reports_every_other_tool_without_its_input_or_result() -
     switchboard tool (their own group carries the result the batch token is read from). It has a short
     timeout, since it runs on every tool call. Filled from Claude Code's recorded payloads with a secret
     in everything the tool did, no secret reaches the input. Fails if a tool matches both groups or
-    neither, the group sends more than those four fields, or waits as long as the others."""
+    neither, the group sends more than those fields (the four and the subagent's id, #446), or waits as
+    long as the others."""
     hooks = claude_hooks()
     prefix = "mcp__plugin_switchboard_switchboard__"
     for event in ("PostToolUse", "PostToolUseFailure"):
@@ -374,9 +387,10 @@ def test_claudes_plugin_reports_every_other_tool_without_its_input_or_result() -
             assert group["matcher"] == prefix + ".*", (event, tool)
         [others] = groups_for(hooks[event], "Bash")
         [h] = others["hooks"]
-        assert set(h["input"]) == {"event", "session_id", "tool_use_id", "tool_name"}, event
+        # the subagent's id (#446) is who made the call, not what it did
+        assert set(h["input"]) == {"event", "session_id", "agent_id", "tool_use_id", "tool_name"}, event
         assert 0 < h["timeout"] <= 2, event  # on every tool call: a slow server must not hold them up
-        filled = fill(h["input"], with_secrets(payload))
+        filled = fill(h["input"], with_secrets(payload), missing="")
         assert filled["event"] == event and filled["tool_name"] == "Bash"
         assert SECRET not in json.dumps(filled), (event, filled)
 
@@ -402,17 +416,21 @@ def test_codexs_plugin_reports_every_tool_without_its_input_or_result() -> None:
 
 
 def test_the_recorded_hook_calls_are_what_the_plugins_templates_send() -> None:
-    """The requests Claude Code 2.1.304 and Codex 0.158.0 sent for the second group (recorded in the
-    live check of #422) name the same fields as the plugins' templates, and carry no result. Fails if
-    a template and what its harness really sends drift apart."""
+    """The requests Claude Code 2.1.305 (recorded in the live check of #446, for a call of the session
+    and for one inside a subagent) and Codex 0.158.0 (#422's) sent for the second group name the same
+    fields as the plugins' templates, and carry no result. Fails if a template and what its harness
+    really sends drift apart."""
     for fixture, [*_, others] in (
         ("claude_hook_post_tool", claude_hooks()["PostToolUse"]),
+        ("claude_hook_post_tool_subagent", claude_hooks()["PostToolUse"]),
         ("codex_hook_post_tool", load(CODEX_PLUGIN / "hooks" / "hooks.json")["hooks"]["PostToolUse"]),
     ):
         sent = load(FIXTURES / "mcp_http" / f"{fixture}.json")["body"]["params"]["arguments"]
         assert set(sent) == set(others["hooks"][0]["input"]), fixture
         assert sent["event"] == "PostToolUse" and sent["tool_name"] == "Bash"
         assert "tool_response" not in sent and "tool_input" not in sent
+        if fixture.startswith("claude"):  # who made the call: empty for the session itself (#446)
+            assert bool(sent["agent_id"]) == fixture.endswith("subagent"), fixture
 
 
 def context_of(text: str) -> str:
@@ -421,7 +439,7 @@ def context_of(text: str) -> str:
 
 
 def second_group_call(
-    fixture: str, payload: str, groups: list[dict[str, Any]], **given: str
+    fixture: str, payload: str, groups: list[dict[str, Any]], missing: str | None = None, **given: str
 ) -> dict[str, Any]:
     """The hook call a harness makes after a Bash call through the plugin's group for every other
     tool: its recorded request (the headers and ``_meta`` it sends), with the arguments the group's
@@ -429,7 +447,7 @@ def second_group_call(
     payload's session."""
     rec = load(FIXTURES / "mcp_http" / f"{fixture}.json")
     [group] = groups_for(groups, "Bash")  # fails where the plugin has no group for a Bash call
-    filled = fill(group["hooks"][0]["input"], {**load(FIXTURES / "payloads" / payload), **given})
+    filled = fill(group["hooks"][0]["input"], {**load(FIXTURES / "payloads" / payload), **given}, missing)
     params = {**rec["body"]["params"], "arguments": filled}
     return {"headers": rec["headers"], "body": {**rec["body"], "params": params}}
 
@@ -448,7 +466,7 @@ def test_a_busy_claude_hears_a_message_after_a_bash_call(broker: InProcBroker) -
     broker.call("human.say", {"room": "#build", "text": "@claude-1 stop and check the tests"})
     groups = claude_hooks()["PostToolUse"]
     call = second_group_call(
-        "claude_hook_post_tool", "claude/PostToolUse_bash.json", groups, session_id=SESSION_1
+        "claude_hook_post_tool", "claude/PostToolUse_bash.json", groups, missing="", session_id=SESSION_1
     )
     r = claude.post(call["body"], call["headers"], "hook")
     assert r.status_code == 200, r.text
@@ -473,6 +491,75 @@ def test_a_busy_codex_hears_a_message_after_a_shell_call(broker: InProcBroker) -
     r = codex.c.post("/mcp", json=call["body"], headers=codex.headers(call["headers"]))
     assert r.status_code == 200, r.text
     assert "check the tests" in context_of(sse_result(r)["result"]["content"][0]["text"])
+
+
+SUBAGENT_ID = "a0123456789abcdef"  # the agent_id in the recorded subagent payloads
+
+
+def test_claudes_plugin_passes_a_subagents_id_and_nothing_for_the_sessions_own_calls() -> None:
+    """Claude Code runs the plugin's tool hooks for a subagent's tool calls too, with the parent's
+    session_id (#446). Its hook input then also has an ``agent_id`` (and ``agent_type``); a session's
+    own calls have neither, and Claude Code 2.1.305 fills a template field they lack with an empty
+    string. A session started with ``claude --agent`` has an ``agent_type`` on every call of its own
+    but no ``agent_id``. Filled from the recorded payloads, every group of PreToolUse, PostToolUse and
+    PostToolUseFailure gets the id for a subagent's call and an empty string for the others. Fails if
+    a group doesn't pass it (the server couldn't tell the two apart), or the template names
+    ``agent_type``, which would make a ``--agent`` session's own calls look like a subagent's."""
+    hooks = claude_hooks()
+    prefix = "mcp__plugin_switchboard_switchboard__"
+    recorded = {  # event -> (a subagent's call, the session's own, the session's own under --agent)
+        "PreToolUse": ("PreToolUse_bash_subagent", "PreToolUse_bash", None),
+        "PostToolUse": ("PostToolUse_bash_subagent", "PostToolUse_bash", "PostToolUse_bash_agent_flag"),
+    }
+    for event, (sub, own_call, flagged) in recorded.items():
+        for tool in ("Bash", prefix + "say"):
+            for group in groups_for(hooks[event], tool):
+                template = group["hooks"][0]["input"]
+                assert "agent_type" not in template, (event, tool)
+                got = fill(template, load(FIXTURES / "payloads" / "claude" / f"{sub}.json"), missing="")
+                assert got["agent_id"] == SUBAGENT_ID, (event, tool)
+                for name in (own_call, flagged):
+                    if name is not None:
+                        payload = load(FIXTURES / "payloads" / "claude" / f"{name}.json")
+                        assert fill(template, payload, missing="")["agent_id"] == "", (event, tool, name)
+    flagged_payload = load(FIXTURES / "payloads" / "claude" / "PostToolUse_bash_agent_flag.json")
+    assert flagged_payload["agent_type"] and "agent_id" not in flagged_payload
+
+
+def test_a_subagents_tool_call_takes_nothing_from_the_session_but_its_own_call_does(
+    broker: InProcBroker,
+) -> None:
+    """The plugin's group for every other tool, filled from Claude Code 2.1.305's recorded payloads and
+    sent in the recorded request (#446): while the session is busy with an @mention waiting, a Bash call
+    inside a subagent gets ``{}`` and the message stays queued; the session's own Bash call, and the
+    one of a session started with ``--agent``, which has an ``agent_type`` but no ``agent_id``, each
+    get it. Fails where the plugin leaves the id out, the server delivers to a subagent, or an
+    ``agent_type`` alone is taken for one."""
+    broker.call("room.create", {"name": "#build"})
+    claude = Claude(broker, make_token(broker, "laptop"), SESSION_1)
+    assert claude.call("join", room="#build", screen_name="claude-1")["ok"]
+    claude.call("read", room="#build")
+    claude_hook(claude, event="UserPromptSubmit")  # busy
+    broker.call("human.say", {"room": "#build", "text": "@claude-1 stop and check the tests"})
+    groups = claude_hooks()["PostToolUse"]
+
+    def report(payload: str) -> str:
+        recorded = (
+            "claude_hook_post_tool_subagent" if payload.endswith("subagent") else "claude_hook_post_tool"
+        )
+        call = second_group_call(recorded, f"claude/{payload}.json", groups, missing="", session_id=SESSION_1)
+        r = claude.post(call["body"], call["headers"], "hook")
+        assert r.status_code == 200, r.text
+        return str(sse_result(r)["result"]["content"][0]["text"])
+
+    queued = lambda: member(broker, "claude-1").queued  # noqa: E731
+    assert report("PostToolUse_bash_subagent") == "{}"
+    assert queued() == 1 and member(broker, "claude-1").inflight == 0
+    assert "check the tests" in context_of(report("PostToolUse_bash_agent_flag"))
+    assert queued() == 0
+    broker.call("human.say", {"room": "#build", "text": "@claude-1 and then this"})
+    assert report("PostToolUse_bash_subagent") == "{}" and queued() == 1
+    assert "and then this" in context_of(report("PostToolUse_bash"))
 
 
 @pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
