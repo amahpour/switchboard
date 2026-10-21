@@ -18,6 +18,7 @@ from switchboard.adapters import HTTPS_DEVIN
 from switchboard.adapters.devin import BLOCK_CONFIRM_S, TAINT_WHY, WAIT_TOOL, DevinAdapter
 from switchboard.adapters.https import DEVIN_TOOL_PREFIX, DEVIN_WAIT_CAP_S
 from switchboard.config import Config
+from switchboard.delivery import rules
 from switchboard.models import HTTPS_MCP_PID, Release
 
 
@@ -162,6 +163,144 @@ def test_a_wait_over_https_ends_before_devins_client_sends_it_again(w: World) ->
     assert out is not None and f'wait("#build", {DEVIN_WAIT_CAP_S})' in out.text
     short = dataclasses.replace(w.cfg, devin=dataclasses.replace(w.cfg.devin, wait_cap_s=30))
     assert type(a)(short).caps(w.p(p)).wait_cap_s == 30
+
+
+def drop_wait(w: World, p: Any, wid: str = "w1") -> None:
+    """What the broker does when a wait() is cancelled, which is how a dropped connection looks to it
+    (``AgentService.unwait``): close the wait, and note that its agent may be gone."""
+    w.actions += w.engine.unwait(w.p(p), wid)
+    w.actions += w.engine.wait_dropped(w.p(p))
+
+
+def tick(w: World) -> None:
+    w.actions += w.engine.tick()
+
+
+def test_a_devin_over_https_whose_wait_dropped_and_who_never_calls_again_goes_offline(
+    w: World, clock: FakeClock
+) -> None:
+    """A Devin killed in its tmux session or by SIGTERM sends no SessionEnd (#448: its Members row
+    stayed busy for an hour, and messages to it queued for a turn that would never end). Its open
+    wait() loses its connection, and a live Devin re-arms it at once; one that has made no call or
+    hook for a wait round (100 s) and a margin (30 s) is gone, and goes offline. Its membership
+    stays. Fails if it stays busy, goes offline before the grace is over, or loses its room."""
+    wait = f"{DEVIN_TOOL_PREFIX}wait"
+    p, m = https_devin(w)
+    open_wait(w, p, m, tuid="call_A", tool=wait)
+    drop_wait(w, p)
+    tick(w)
+    assert w.p(p).status == "busy"
+    clock.advance(rules.WAIT_DROP_GRACE_S - 1)
+    tick(w)
+    assert w.p(p).status == "busy"  # not yet
+    clock.advance(2)
+    tick(w)
+    assert w.p(p).status == "offline" and w.p(p).status_src == "wait:dropped"
+    assert w.m(m).active and w.p(p).active  # the room keeps it
+    clock.advance(3600)
+    tick(w)
+    assert w.p(p).status == "offline"  # and it stays so; nothing repeats
+
+
+def test_a_devin_over_https_that_calls_again_after_a_drop_is_never_marked_offline(
+    w: World, clock: FakeClock
+) -> None:
+    """A live Devin that lost a connection re-arms its wait(): a hook (the PreToolUse report that comes
+    before every call) or the call itself ends the clock, whichever the broker sees first. Fails if
+    a Devin that is still re-arming is taken offline, which would make every network hiccup a ghost
+    in reverse."""
+    wait = f"{DEVIN_TOOL_PREFIX}wait"
+    p, m = https_devin(w)
+    open_wait(w, p, m, tuid="call_A", tool=wait)
+    drop_wait(w, p)
+    clock.advance(rules.WAIT_DROP_GRACE_S - 5)
+    w.hook(p, "PreToolUse", tool=wait, tool_use_id="call_B")  # its hook, before its call
+    clock.advance(rules.WAIT_DROP_GRACE_S - 5)
+    tick(w)
+    assert w.p(p).status == "busy"
+    open_wait(w, p, m, tuid=None, tool=wait, wid="w2")  # the call itself, with no hook seen
+    drop_wait(w, p, "w2")
+    clock.advance(rules.WAIT_DROP_GRACE_S - 5)
+    open_wait(w, p, m, tuid=None, tool=wait, wid="w3")
+    clock.advance(rules.WAIT_DROP_GRACE_S - 5)
+    tick(w)
+    assert w.p(p).status == "busy"
+
+
+def test_a_devin_over_https_listening_through_empty_rounds_is_never_marked_offline(
+    w: World, clock: FakeClock
+) -> None:
+    """The acceptance case of #448: an idle Devin that re-arms its wait() every round, each ending in a
+    timeout the server answers (no connection dropped), is never marked offline, however long it
+    listens. Fails if a round that ends normally counts as a drop."""
+    wait = f"{DEVIN_TOOL_PREFIX}wait"
+    p, m = https_devin(w)
+    for i in range(40):  # about an hour of 100 s rounds, a second of model time between them
+        w.hook(p, "PreToolUse", tool=wait, tool_use_id=f"call_{i}")
+        sink, acts = w.engine.open_wait(w.p(p), w.m(m), f"w{i}", DEVIN_WAIT_CAP_S)
+        w.actions += acts
+        clock.advance(DEVIN_WAIT_CAP_S)
+        tick(w)
+        assert w.resolved(sink.id)[-1]["status"] == "timeout"
+        clock.advance(1)
+        tick(w)
+        assert w.p(p).status == "busy", i
+
+
+def test_a_devin_taken_offline_for_a_dropped_wait_comes_back_with_any_hook(
+    w: World, clock: FakeClock
+) -> None:
+    """A resumed Devin, or one whose connection only broke for a while, says so with its next hook, even
+    the PreToolUse of its first wait(): the session is busy again, and a message that came meanwhile is
+    in the wait it opens. Fails if it stays offline until a hook that sets the status, with its wait open
+    and its messages held."""
+    wait = f"{DEVIN_TOOL_PREFIX}wait"
+    p, m = https_devin(w)
+    open_wait(w, p, m, tuid="call_A", tool=wait)
+    drop_wait(w, p)
+    clock.advance(rules.WAIT_DROP_GRACE_S + 1)
+    tick(w)
+    assert w.p(p).status == "offline"
+    msg = w.human("@dv-https are you there?")
+    assert w.delivery(m, msg)["state"] == "pending"  # held for an offline member
+    w.hook(p, "PreToolUse", tool=wait, tool_use_id="call_B")
+    assert w.p(p).status == "busy"
+    sink = open_wait(w, p, m, tuid=None, tool=wait, wid="w2")
+    res = w.resolved(sink.id)[-1]
+    assert res["status"] == "messages" and f"id={msg.id}" in res["text"]
+
+
+def test_only_a_devin_over_https_is_taken_offline_for_a_dropped_wait(w: World, clock: FakeClock) -> None:
+    """A wait() cancelled for any other harness, or for a local Devin (which has a process to look at),
+    starts no clock. Fails if the rule leaks past the adapter that asks for it (the engine names no
+    harness)."""
+    local, lm = devin(w)
+    cx, _cm = w.agent("cx", harness="codex", status="busy", hooks=True)
+    open_wait(w, local, lm, tuid="call_L")
+    for p in (local, cx):
+        w.actions += w.engine.wait_dropped(w.p(p))
+    assert w.engine.wait_drops == {}
+    clock.advance(rules.WAIT_DROP_GRACE_S + 1)
+    tick(w)
+    assert w.p(local).status == "busy" and w.p(cx).status == "busy"
+
+
+def test_a_session_that_ended_or_left_leaves_no_clock_behind(w: World, clock: FakeClock) -> None:
+    """A SessionEnd that does arrive after a drop takes the session offline itself, and the clock is
+    dropped with the status: a later hook doesn't count as a revival of something the broker never took
+    offline. Fails if the tick takes an offline session offline again, or a session revives that the
+    drop never took."""
+    wait = f"{DEVIN_TOOL_PREFIX}wait"
+    p, m = https_devin(w)
+    open_wait(w, p, m, tuid="call_A", tool=wait)
+    drop_wait(w, p)
+    w.hook(p, "SessionEnd")
+    assert w.p(p).status == "offline"
+    clock.advance(rules.WAIT_DROP_GRACE_S + 1)
+    tick(w)
+    assert w.engine.wait_drops == {} and w.engine.gone_by_drop == set()
+    w.hook(p, "PreToolUse", tool=wait, tool_use_id="call_Z")  # not the broker's doing: stays as it was
+    assert w.p(p).status == "offline"
 
 
 def test_a_newer_wait_supersedes_the_older_one(w: World) -> None:

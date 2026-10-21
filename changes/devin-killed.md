@@ -1,0 +1,3 @@
+### Fixed
+
+- **A Devin over HTTPS that was killed no longer stays "busy" in Members.** Devin runs no SessionEnd hook when its terminal is closed or it gets SIGTERM, so switchboard never heard it had gone, and showed it busy for hours while messages to it waited for a turn that would never end. When a Devin's listening `wait()` loses its connection and nothing follows from that session for a wait round and a margin (130 seconds), Members now shows it offline. It stays in its rooms, and any hook it sends after that (a resumed Devin) brings it back. A Devin that is still re-arming its `wait()` is never marked offline. A Devin on a machine that lost power or its network, whose connection never closes, is not covered.

@@ -1389,6 +1389,7 @@ class AgentService:
         if not isinstance(wid, str) or not WAIT_ID_RE.match(wid):
             raise ServiceError("bad_request", "wait_id is required")
         self.run(self.engine.unwait(p, wid))
+        self.run(self.engine.wait_dropped(p))  # a Devin over HTTPS that never calls again is gone (#448)
         return {}
 
     def pass_(self, conn: "Conn", params: dict[str, Any]) -> dict[str, Any]:
