@@ -10,7 +10,7 @@
         "source": "git-subdir",
         "url": "https://github.com/amahpour/switchboard.git",
         "path": "./plugins/codex",
-        "ref": "v0.37.0"
+        "ref": "v0.37.1"
       },
       "policy": {
         "installation": "AVAILABLE",
