@@ -602,6 +602,22 @@ def human_cli_denial_word() -> str | None:
     return "ssh" if pol.refusal(peer) else "agent"
 
 
+def stand_in_agent(directory: Path) -> list[str]:
+    """An argv prefix that runs a command as the child of a stand-in agent harness, so the production
+    peer check finds an agent in that command's ancestry whoever started pytest.
+
+    ``human_cli_denied_here()`` reads pytest's own ancestry, and so does the broker, each when it is
+    asked: a pytest that an agent started in the background is orphaned part-way through the run (its
+    launching shell exits), the agent drops out of the chain, and a test that was collected as
+    "refused" is granted (#437). Putting the agent in the command's own chain doesn't change with the
+    runner. The stand-in is a script named ``claude`` that runs its arguments as a child, so its argv
+    (``/bin/sh <directory>/claude <command>``) matches the harness patterns in ``broker/peer.py``."""
+    exe = directory / "claude"
+    exe.write_text('#!/bin/sh\n"$@"\n')
+    exe.chmod(0o755)
+    return [str(exe)]
+
+
 def has_controlling_tty() -> bool:
     """True when this pytest process has a controlling terminal (run from a real shell)."""
     from switchboard.broker import proc

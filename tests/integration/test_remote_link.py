@@ -8,12 +8,14 @@ import contextlib
 import os
 import signal
 import socket
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
 
 import pytest
-from conftest import human_cli_denied_here
+from conftest import child_env, human_cli_denied_here, stand_in_agent
 from fakes.fake_agent import FakeAgent, ids_in
 from fakes.fake_link import FakeLink, SatDriver, wait_for
 
@@ -46,12 +48,42 @@ def test_needs_enable_then_link_up_notice() -> None:
         assert len([t for t in link.notices() if "link up" in t]) == 1
 
 
-@pytest.mark.skipif(not human_cli_denied_here(), reason="needs a pytest that the peer check refuses")
 def test_enable_is_human_only_under_the_production_policy() -> None:
+    """Enabling a remote is a human's call: under the production peer check, a CLI whose ancestry has an
+    agent harness is refused, and the remote stays disabled. The agent is a stand-in in the CLI's own
+    chain, so the test says the same thing whoever starts pytest: it used to read pytest's ancestry once,
+    at collection, and the broker read it again when the CLI connected, so a pytest that an agent
+    started in the background (its launching shell exits mid-run) was collected as refused, then
+    granted, and failed with ``assert (0 != 0)`` (#437). Fails if the CLI is let enable the remote."""
     with FakeLink(enable=False, trust=False).start(wait_up=False) as link:
-        r = link.cli("remote", "enable", link.name)
-        assert r.returncode != 0 and "forbidden" in r.stderr
+        r = link.agent_cli("remote", "enable", link.name)
+        assert r.returncode != 0 and "forbidden" in r.stderr, r.stdout + r.stderr
+        assert "not from an agent's shell" in r.stderr, (
+            r.stderr
+        )  # refused as an agent's, not for some other reason
         assert link.status()["state"] == "disabled"
+
+
+def test_the_stand_in_agent_is_an_agent_to_the_production_peer_check(tmp_path: Path) -> None:
+    """The property the test above rests on: a process started under ``stand_in_agent`` is refused a human
+    role by the production policy, however pytest was started. It asks the policy from inside a child,
+    the way the broker asks about the CLI. Fails if the stand-in's argv stops matching a harness."""
+    code = (
+        "import sys; sys.path.insert(0, sys.argv[1]);"
+        " from conftest import human_cli_denial_word; print(human_cli_denial_word())"
+    )
+    tests_dir = str(Path(__file__).resolve().parents[1])
+    r = subprocess.run(
+        [*stand_in_agent(tmp_path), sys.executable, "-c", code, tests_dir],
+        env=child_env(),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "agent", r.stdout + r.stderr
 
 
 def test_config_change_needs_reenable() -> None:

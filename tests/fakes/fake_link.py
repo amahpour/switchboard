@@ -27,7 +27,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from conftest import TEST_HUMAN, InProcBroker, SubprocBroker, child_env, make_tmp_home
+from conftest import TEST_HUMAN, InProcBroker, SubprocBroker, child_env, make_tmp_home, stand_in_agent
 
 from switchboard import db
 from switchboard.clock import SystemClock
@@ -98,6 +98,7 @@ class FakeLink:
         (self.desk / "remotes.toml").write_text(self.toml)
         self._prepare(desk_rooms if desk_rooms is not None else rooms, enable)
         self.broker: Any = None
+        self._agent_dir: Path | None = None  # the stand-in agent harness's directory, once made
         self._saved_env: dict[str, str | None] = {}
         self.broker_cfg = broker_cfg
 
@@ -156,6 +157,8 @@ class FakeLink:
                 os.environ[k] = v
         shutil.rmtree(self.desk, ignore_errors=True)
         shutil.rmtree(self.pi, ignore_errors=True)
+        if self._agent_dir is not None:
+            shutil.rmtree(self._agent_dir, ignore_errors=True)
 
     def __enter__(self) -> "FakeLink":
         return self if self.broker is not None else self.start()
@@ -202,12 +205,21 @@ class FakeLink:
     def cli(self, *args: str, timeout: float = 30.0) -> subprocess.CompletedProcess[str]:
         return self.run_cli(self.desk, *args, timeout=timeout)
 
+    def agent_cli(self, *args: str, timeout: float = 30.0) -> subprocess.CompletedProcess[str]:
+        """The desktop's CLI run as a child of a stand-in agent harness (``conftest.stand_in_agent``):
+        the production peer check refuses it a human role whoever started pytest."""
+        if self._agent_dir is None:
+            self._agent_dir = Path(tempfile.mkdtemp(prefix="yk-ag-", dir="/tmp"))
+        return self.run_cli(self.desk, *args, timeout=timeout, under=stand_in_agent(self._agent_dir))
+
     def pi_cli(self, *args: str, timeout: float = 30.0) -> subprocess.CompletedProcess[str]:
         return self.run_cli(self.pi, *args, timeout=timeout)
 
-    def run_cli(self, home: Path, *args: str, timeout: float = 30.0) -> subprocess.CompletedProcess[str]:
+    def run_cli(
+        self, home: Path, *args: str, timeout: float = 30.0, under: list[str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [sys.executable, "-m", "switchboard", "--home", str(home), *args],
+            [*(under or []), sys.executable, "-m", "switchboard", "--home", str(home), *args],
             env=child_env(**self.env_extra),
             capture_output=True,
             text=True,
