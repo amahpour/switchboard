@@ -224,8 +224,10 @@ def make_repo(tmp_path: Path) -> Path:
     (repo / "deploy" / "compose" / "compose.yaml").write_text(
         "    image: ghcr.io/amahpour/switchboard:0.4.0\n"
     )
-    for rel_path, folder in ((".claude-plugin/marketplace.json", "plugins/claude"),
-                             (".agents/plugins/marketplace.json", "./plugins/codex")):
+    for rel_path, folder in (
+        (".claude-plugin/marketplace.json", "plugins/claude"),
+        (".agents/plugins/marketplace.json", "./plugins/codex"),
+    ):
         (repo / rel_path).parent.mkdir(parents=True)
         (repo / rel_path).write_text(MARKETPLACE.replace("FOLDER", folder))
     git(repo, "init", "-q", "-b", "main")

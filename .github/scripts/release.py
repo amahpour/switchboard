@@ -21,8 +21,8 @@ from origin/main, in a temporary worktree (the checkout it runs from is never to
 - moves the `ref` of each plugin in the two marketplaces (`.claude-plugin/marketplace.json`,
   `.agents/plugins/marketplace.json`) to the new tag, so a plugin reaches the people who
   installed it with a release, never with a merge to main (#462). The tag is made by release.yml
-  a minute after the merge; until then an update finds no such tag, keeps the old plugin and
-  tries again later;
+  a minute after the merge; until then an update finds no such tag and keeps the old plugin
+  (DESIGN.md §49.5 says when each harness tries again);
 - commits that as "release: vX.Y.Z" on `release/vX.Y.Z`, pushes it and opens the PR (`gh`).
 
 Merging the PR releases it: .github/workflows/release.yml tags the merge, publishes the GitHub
@@ -52,7 +52,8 @@ VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 TAG_RE = re.compile(r"^v(\d+\.\d+\.\d+)$")
 PIN_RE = re.compile(r"(git\+https://github\.com/amahpour/switchboard@)v\d+\.\d+\.\d+")
 IMAGE_PIN_RE = re.compile(r"(ghcr\.io/amahpour/switchboard:)\d+\.\d+\.\d+(?![\w.-])")
-MARKETPLACE_REF_RE = re.compile(r'("ref"\s*:\s*")v\d+\.\d+\.\d+(")')   # a plugin pinned to a release tag (#462)
+# a plugin pinned to a release tag (#462)
+MARKETPLACE_REF_RE = re.compile(r'("ref"\s*:\s*")v\d+\.\d+\.\d+(")')
 VERSION_FILES = ("pyproject.toml", "src/switchboard/__init__.py", "uv.lock")
 MARKETPLACE_FILES = (".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json")
 PIN_FILES = ("README.md", "docs/INSTALL.md", "docs/DEPLOY.md", "deploy/compose/compose.yaml",
