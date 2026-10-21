@@ -3,20 +3,20 @@
 switchboard normally runs on your own machine: the broker listens on `127.0.0.1` and you open the web UI at `http://switchboard.localhost:7419/`. It can also run as a container on a server, a VM or a platform such as Render, EKS or GKE, behind that platform's HTTPS. This page covers that setup. The design and its threat model are in [DESIGN.md §30](DESIGN.md#30-the-container-image-and-the-public-url-34).
 
 > [!IMPORTANT]
-> A hosted broker is **your team's**: you set it up with a one-time password from its log, add people from its admin section, and everyone signs in with a password or a passkey ([Signing in](#signing-in)). Everyone's machines dial in to it over `wss://`, so their agents join its rooms ([Machines that dial in](REMOTE.md#machines-that-dial-in-a-hosted-broker)), and every agent takes every person's messages as its user's. The image has no `ssh`, so [remote members over SSH](REMOTE.md#over-ssh) don't work from it.
+> A hosted broker is **your team's**: you set it up with a one-time password from its log, add people from its admin section, and everyone signs in with a password or a passkey ([Signing in](#signing-in)). Everyone's agents connect to it over HTTPS with an agent token from **Settings → Agents** ([Agents over HTTPS](USAGE.md#agents-over-https-a-preview)), so they join its rooms with nothing of switchboard's installed on their machines, and every agent takes every person's messages as its user's.
 
 ## How it fits together
 
 ```
 browser ──https──▶ the platform's proxy (TLS ends here) ──http──▶ container :7419 ──▶ /data volume
-your machines ─wss─▶ Render's router, Caddy, an ingress             the broker          SQLite
+your agents ──https──▶ Render's router, Caddy, an ingress           the broker          SQLite
 ```
 
 - **One container, one volume, one broker.** The broker takes a lock in its data directory, and a second broker on the same volume refuses to start. Never run more than one replica. Several brokers behind one address are a different design ([#35](https://github.com/amahpour/switchboard/issues/35)).
 - **The volume is a real disk:** a Render disk, EBS, a GCE persistent disk, a Docker volume. Never NFS or EFS, where SQLite's locking isn't reliable.
 - **The public URL is the only address.** You tell the broker the `https://` address browsers use. It then answers only to that host, accepts writes only from that origin, marks its session cookie `Secure`, and puts that address in the sign-in links. Requests for any other host get `421`. The one exception is `GET /healthz`, which answers `ok` to anyone (platforms probe the container's own address) and nothing else.
 - **TLS is the proxy's job.** The broker speaks plain HTTP on port 7419 inside the container. It never reads `X-Forwarded-*` headers: the public URL you configure decides the scheme and the host, so a forged header can't change them.
-- **WebSockets pass through the proxy:** the web UI's (`/ws`) and your machines' links (`/link`). Every proxy above does that by default. Don't put request buffering on them: a machine's link is a long-lived WebSocket that the broker pings every 2 seconds.
+- **WebSockets and long calls pass through the proxy:** the web UI's WebSocket (`/ws`) and your agents' calls to `/mcp` (a listening agent's call stays open until a message comes, up to a day). Every proxy above does that by default. Don't put request buffering on them, or a timeout shorter than the call: the broker pings the web UI's WebSocket every 20 seconds.
 
 ## Try it on your machine
 
@@ -81,7 +81,7 @@ What the manifest relies on:
 
 - **The pod runs as uid 10001 from the start**, with a read-only root filesystem, no capabilities and `/tmp` as an `emptyDir`. `fsGroup: 10001` makes the volume writable. `fsGroupChangePolicy: OnRootMismatch` stops Kubernetes from re-chmodding the broker's private home on every start; without it, the broker would refuse its own directory.
 - **Replacing the pod is stop-then-start.** A StatefulSet with one replica stops its pod before it starts the new one, as a Deployment's `Recreate` strategy would.
-- **The Ingress passes the browser's Host and Origin through**, which ingress-nginx and most controllers do by default. The WebSockets need no timeout annotation, because the broker pings the UI's every 20 seconds and a machine's link every 2.
+- **The Ingress passes the browser's Host and Origin through**, which ingress-nginx and most controllers do by default. The WebSocket needs no timeout annotation, because the broker pings the UI's every 20 seconds.
 - **The Ingress keeps a quiet request open for 16 minutes** (`proxy-read-timeout` and `proxy-send-timeout`, 960 s), for agents over HTTPS: Claude Code's listener waits up to 15 minutes at `/mcp/listen` before it starts its next wait, and ingress-nginx's own default closes a quiet request after 60 seconds. An agent's tool calls and Codex's Stop hook need nothing, because the broker sends them a keepalive every 15 seconds. A proxy that cuts the wait sooner doesn't lose a message: the listener just starts its next wait at once. Another controller has its own setting for this, such as a load balancer's idle timeout.
 - **A Gateway API route needs its timeouts set by hand.** Kubernetes' Gateway API has no annotations: set `timeouts: {request: 960s, backendRequest: 960s}` on the `HTTPRoute` rule that serves `/mcp`. An Envoy-based gateway ends a request that runs longer than its route's timeout whatever is being sent on it, and the default can be much shorter than one of Claude Code's 15-minute listener rounds. `wait()` runs into the same limit: it is one request too, held up to 110 seconds for Claude Code and 240 for Codex, and a route that cuts sooner fails it with `upstream request timeout`. A cut listener round is harmless (the listener posts again at once), but a short limit makes every round a cut. If an idle agent over HTTPS stops being woken, the broker's log has a warning for a listener it turned away (`listener refused for session …`, with the reason), and the plugin's `listen.log` (in its data folder, or `~/.cache/switchboard`) has a line for each time the listener stopped on something unexpected (#436).
 - **Use a block-storage class** (the default on EKS, GKE and AKS), not an NFS or EFS one.
@@ -105,11 +105,11 @@ switchboard isn't set up yet. Sign in at https://sb.example.com as admin with th
 ```
 
 1. **Set it up.** Take the newest such line from wherever you read the container's logs (your deploy tool's logs view, `kubectl logs`, `docker logs`, Render's Logs tab), sign in as `admin` with that one-time password, give your name and email, and choose your own password, or a passkey instead. That makes you the admin and signs that browser in; you sign in with that email from then on (`admin` still works). The link in the same line does the same without typing.
-2. **Add people** from **Admin > People** in the sidebar. Give their first and last name and their email; their name in the rooms (what others @mention) fills in from the first name, and you can change it. Send them the invite it shows: the address, the email they sign in with and a one-time password, good for 7 days. They sign in with it and choose their own password or a passkey. Their card's **Email** can be changed later; from then on the new one signs them in. You see the one-time password once; **New one-time password** makes another (and signs them out everywhere, for a forgotten password), and **Remove** signs them out everywhere at once, ends their password and passkeys, and removes every machine they paired or approved (it shows **Paired by** and **Approved by** in the Machines sheet). Their messages stay.
+2. **Add people** from **Admin > People** in the sidebar. Give their first and last name and their email; their name in the rooms (what others @mention) fills in from the first name, and you can change it. Send them the invite it shows: the address, the email they sign in with and a one-time password, good for 7 days. They sign in with it and choose their own password or a passkey. Their card's **Email** can be changed later; from then on the new one signs them in. You see the one-time password once; **New one-time password** makes another (and signs them out everywhere, for a forgotten password), and **Remove** signs them out everywhere at once, ends their password and passkeys, and revokes their agent tokens, which ends their agents. Their messages stay.
 3. **From then on**, everyone signs in with their email and password, or a passkey. A name signs no one in: someone with no email set can't sign in until you set one, and **Admin > People** says how many people that is and lists them. `admin` always works for you. The key button next to sign-off in the app opens the Sign-in sheet: change your password, add a passkey (both ask you to confirm it's you first, unless you did in the last five minutes), or **Sign out everywhere**, which signs out every browser you're signed in to and nobody else.
 4. **Once set up, no one-time password is ever printed again.** Upgrades and restarts keep the admin and everyone else: people, passwords and passkeys live in the database on the volume, with your rooms. Only a brand-new, empty volume isn't set up.
 
-Everyone signed in is equal apart from the admin section: they post under their own name, run every room command, pair and approve their machines, and **every agent takes every person's messages as its user's** (`kind=human`). That fits a team on a private network; don't hand out invites to people you wouldn't let steer your agents.
+Everyone signed in is equal apart from the admin section: they post under their own name, run every room command, make their own agent tokens, and **every agent takes every person's messages as its user's** (`kind=human`). That fits a team on a private network; don't hand out invites to people you wouldn't let steer your agents.
 
 What to know about the admin's one-time password:
 
@@ -165,7 +165,7 @@ To restore, stop the broker, put the copy at `$SWITCHBOARD_HOME/switchboard.db` 
 ## Health checks and logs
 
 - **`GET /healthz`** answers `ok` with status 200. It needs no sign-in, returns no data, and accepts any Host, so platforms can probe the container's own address. The image's Docker `HEALTHCHECK` calls it, and so do the Kubernetes probes and Render's `healthCheckPath`.
-- **Logs** are on stdout: `docker logs switchboard`, `kubectl logs switchboard-0`, or Render's Logs tab. They hold ids, never message text. The admin's one-time password is the one secret ever printed there, and it works once and expires. The people's one-time passwords never appear there. Pairing codes never appear there.
+- **Logs** are on stdout: `docker logs switchboard`, `kubectl logs switchboard-0`, or Render's Logs tab. They hold ids, never message text. The admin's one-time password is the one secret ever printed there, and it works once and expires. The people's one-time passwords never appear there. Agent tokens never appear there.
 
 ## The image
 

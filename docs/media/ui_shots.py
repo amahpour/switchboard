@@ -13,8 +13,8 @@ What it does:
   the human's name is pinned (what ``tests/conftest.py``'s ``sanitize_env`` does), so
   ``~/.switchboard`` is never read or written.
 - **Seeded state**, from ``tests/ui_world.py`` (shared with the Playwright tests in
-  ``tests/e2e/``): three rooms (``#docs`` closed), a never-enabled ``fpga-pi`` remote and four
-  agents in ``#build`` with a Markdown-rich conversation. See that module for how.
+  ``tests/e2e/``): three rooms (``#docs`` closed) and four agents in ``#build`` with a
+  Markdown-rich conversation. See that module for how.
 - **Headless Chromium through Playwright**, in UTC: sign in through a one-time link, wait for
   "Connected", and shoot at 1440x900 (DPR 2) and 390x844 (a phone, DPR 3), light and dark.
   The phone shots use a second browser context that carries the desktop's session cookie (a
@@ -37,8 +37,8 @@ settings-phone-list-{light,dark} and settings-phone-rooms-light (Settings' tabbe
 phone list, #232),
 settings-agents-{empty,made,revoke}-{light,dark} and settings-agents-phone-light (Settings →
 Agents: a device's agent token made, shown once and revoked, #382),
-closed-light, remotes-light, inspector-light, inspector-claude-{light,dark,phone-light} (Claude Code's
-bubble with its name written under it, #62), inspector-remote-light, inspector-dark-parked,
+closed-light, inspector-light, inspector-claude-{light,dark,phone-light} (Claude Code's
+bubble with its name written under it, #62), inspector-device-light, inspector-dark-parked,
 room-rename-before-{light,dark,phone-light}, room-rename-after-{light,dark,phone-light} (#316),
 phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (#129),
 welcome-light and login-light, plus, from a hosted broker
@@ -66,12 +66,7 @@ Cursor's icons with the saved Theme against the system's scheme, #443),
 check-waiting-{light,dark,phone-light} and check-confirmed-{light,dark,phone-light} (a fix awaiting
 its raiser has no check; once confirmed, its card gets a green one in the corner, #427),
 confirm-light, signin-light, setup-person-light and
-signin-phone-dark, and from a second one at
-``http://localhost:<port>``, with test machines that dial in (``tests/fakes/fake_machine.py``:
-made-up facts, the real dialer): machines-pairing-light, machines-pairing-dark,
-machines-approve-light, machines-approve-dark, machines-up-light and machines-phone-dark (all
-.png). In those, the pairing command's ``http://localhost:<port>`` reads ``https://sb.example.com``,
-the address a real deployment shows.
+signin-phone-dark (all .png).
 
 Every wait has a deadline (Playwright's auto-waiting ``expect`` and ``ui_world.wait_js``); a
 timeout exits non-zero. The agents, both brokers and the browser are stopped in ``finally``;
@@ -272,14 +267,10 @@ def shoot(browser: Any, out: Path, world: Any) -> None:
         expect(page.locator("#closed-body .closed-card").first).to_be_visible()
         shot(page, out, "closed-light.png")
         page.click("#closed-close")
-        page.click("#remotes .remote")
-        expect(page.locator("#remotes-body .remote-card").first).to_be_visible()
-        shot(page, out, "remotes-light.png")
-        page.click("#remotes-close")
 
         fresh(page, n_chat)
         inspect(page, "bench")
-        shot(page, out, "inspector-remote-light.png")
+        shot(page, out, "inspector-device-light.png")
         back(page)
 
         page.emulate_media(color_scheme="dark")
@@ -1673,6 +1664,9 @@ def shoot_hosted(browser: Any, out: Path, world: Any) -> None:
 
 
 # the People sheet's text as a deployment shows it: the test broker's origin in the invite
+# the address a real deployment shows, in the pictures of the invite text
+AS_DEPLOYED = "https://sb.example.com"
+
 PEOPLE_AS_DEPLOYED_JS = """([from, to]) => {
   const w = document.createTreeWalker(document.getElementById('people-body'), NodeFilter.SHOW_TEXT);
   for (let n = w.nextNode(); n; n = w.nextNode()) n.nodeValue = n.nodeValue.split(from).join(to);
@@ -1847,136 +1841,6 @@ def shoot_mention_people(browser: Any, out: Path, world: Any) -> None:
         loop.close()
 
 
-# -------------------------------------------------------- the machines' shots
-AS_DEPLOYED = "https://sb.example.com"
-
-# the sheet's text as a deployment shows it: the test broker's origin in the pairing command
-AS_DEPLOYED_JS = """([from, to]) => {
-  const w = document.createTreeWalker(document.getElementById('machines-body'), NodeFilter.SHOW_TEXT);
-  for (let n = w.nextNode(); n; n = w.nextNode()) n.nodeValue = n.nodeValue.split(from).join(to);
-}"""
-
-
-def shoot_machines(browser: Any, out: Path, world: Any) -> None:
-    """Machines that dial in (issue #41 part 3): a pairing under way beside a machine that is up,
-    the approval card of the one that dialed in with the code, both up, and a phone."""
-    from fakes.fake_machine import TestMachine
-    from playwright.sync_api import expect
-
-    origin = world.origin
-    base = {"timezone_id": "UTC", "color_scheme": "light", "locale": "en-US", "reduced_motion": "reduce"}
-    machines: list[Any] = []
-    ctx = browser.new_context(**base, **DESKTOP)
-    ctx.set_default_timeout(WAIT_MS)
-    try:
-        page = ctx.new_page()
-        cdp, laptop = device(ctx, page)
-        page.goto(world.claim_link())
-        expect(page.locator("#step-choose")).to_be_visible()
-        page.fill("#setup-first", "Alice")  # who the admin is (#192)
-        page.fill("#setup-last", "Liddell")
-        page.fill("#setup-email", "alice@example.com")
-        page.click("#passkey-btn")  # set up with a passkey instead of a password (§32.4)
-        expect(page.locator("#step-backup")).to_be_visible()
-        page.click("#skip-btn")
-        connected(page)
-        world.set_test_mode(True)  # the page has no TEST MODE band; the test machines may link now
-
-        def add(name: str) -> str:
-            page.fill("#machine-name", name)
-            page.click("#machine-pair-btn")
-            expect(page.locator("#pair-join")).to_be_visible()
-            return page.locator("#pair-join").inner_text().split()[-1]
-
-        def dial_in(name: str, code: str, facts: dict[str, Any]) -> None:
-            m = TestMachine(origin, facts=facts)
-            machines.append(m)
-            m.pair(code)
-            m.start()
-            card = page.locator(f'.machine-card.st-pending[data-machine="{name}"]')
-            expect(card).to_contain_text("It dialed in")
-
-        def up(name: str) -> None:
-            page.click(f'[data-focus="approve:{name}"]')
-            expect(page.locator(f'#machines .remote.st-up[data-focus="machine:{name}"]')).to_be_visible()
-
-        def as_deployed(p: Any) -> None:
-            p.evaluate(AS_DEPLOYED_JS, [origin, AS_DEPLOYED])
-            p.mouse.move(1, 1)
-
-        page.click("#add-machine")
-        expect(page.locator("#machines-panel")).to_be_visible()
-        dial_in(
-            "lab-pc",
-            add("lab-pc"),
-            {
-                "hostname": "lab-pc",
-                "os": "Ubuntu 24.04",
-                "arch": "x86_64",
-                "version": "0.6.5",
-                "harnesses": ["claude", "codex"],
-            },
-        )
-        up("lab-pc")
-        code = add("work-laptop")
-        as_deployed(page)
-        shot(page, out, "machines-pairing-light.png")
-        page.emulate_media(color_scheme="dark")
-        shot(page, out, "machines-pairing-dark.png")
-        page.emulate_media(color_scheme="light")
-        dial_in(
-            "work-laptop",
-            code,
-            {
-                "hostname": "work-laptop",
-                "os": "macOS 15.6",
-                "arch": "arm64",
-                "version": "0.6.5",
-                "harnesses": ["claude", "codex"],
-            },
-        )
-        page.mouse.move(1, 1)
-        shot(page, out, "machines-approve-light.png")
-        page.emulate_media(color_scheme="dark")
-        shot(page, out, "machines-approve-dark.png")
-        page.emulate_media(color_scheme="light")
-        up("work-laptop")
-        page.locator('.machine-card[data-machine="work-laptop"]').scroll_into_view_if_needed()
-        page.mouse.move(1, 1)
-        shot(page, out, "machines-up-light.png")
-
-        # a phone: the same passkey (copied to its own authenticator), the rooms drawer, the sheet
-        creds = cdp.send("WebAuthn.getCredentials", {"authenticatorId": laptop})["credentials"]
-        ph_ctx = browser.new_context(**{**base, "color_scheme": "dark"}, **PHONE)
-        ph_ctx.set_default_timeout(WAIT_MS)
-        try:
-            ph = ph_ctx.new_page()
-            pcdp, phone = device(ph_ctx, ph)
-            for c in creds:  # ahead of the counter the broker saw
-                pcdp.send(
-                    "WebAuthn.addCredential",
-                    {"authenticatorId": phone, "credential": {**c, "signCount": c.get("signCount", 0) + 100}},
-                )
-            ph.goto(origin + "/")
-            ph.click("#passkey-btn")
-            connected(ph)
-            ph.click("#rooms-toggle")
-            ph.click("#add-machine")
-            expect(ph.locator("#machines-panel")).to_be_visible()
-            ph.fill("#machine-name", "build-box")
-            ph.click("#machine-pair-btn")
-            expect(ph.locator("#pair-join")).to_be_visible()
-            as_deployed(ph)
-            ph.locator("#pair-join").scroll_into_view_if_needed()
-            shot(ph, out, "machines-phone-dark.png")
-        finally:
-            ph_ctx.close()
-    finally:
-        ctx.close()
-        for m in machines:
-            m.close()
-
-
 # -------------------------------------------------------------------- main
 def run(args: argparse.Namespace, pw: Any) -> None:
     from ui_world import HostedWorld, UIWorld
@@ -1987,15 +1851,11 @@ def run(args: argparse.Namespace, pw: Any) -> None:
     hosted = HostedWorld(keep=args.keep)
     weak = HostedWorld(keep=args.keep)
     people = HostedWorld(keep=args.keep)  # alice, bob and carol, for mentioning a person (#418)
-    # a second hosted broker, for the machines that dial in: behind localhost, which their
-    # dialers (other processes) resolve too
-    fleet = HostedWorld(keep=args.keep, host="localhost")
     try:
         world.start()
         hosted.start()
         weak.start()
         people.start()
-        fleet.start()
         env = {**os.environ, "TZ": "UTC", "HOME": REAL_HOME or os.environ["HOME"]}
         browser = pw.chromium.launch(executable_path=args.chrome or None, env=env)
         try:
@@ -2030,18 +1890,16 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_hosted(browser, out, hosted)
             shoot_common_password(browser, out, weak)
             shoot_mention_people(browser, out, people)
-            shoot_machines(browser, out, fleet)
         finally:
             browser.close()
     finally:
-        fleet.stop()
         people.stop()
         weak.stop()
         hosted.stop()
         world.stop()
         if args.keep:
             print(
-                f"kept: {world.home} {world.home2} {hosted.home} {weak.home} {people.home} {fleet.home}",
+                f"kept: {world.home} {world.home2} {hosted.home} {weak.home} {people.home}",
                 file=sys.stderr,
             )
 

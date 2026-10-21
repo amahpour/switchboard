@@ -24,13 +24,13 @@ def test_rooms_stay_public_and_gain_an_empty_people_table_with_a_checked_backup(
     assert db.schema_version(con) == 14
     rooms = con.execute("SELECT COUNT(*) FROM rooms").fetchone()[0]
     assert rooms > 0  # the fixture has rooms, so "they stay public" means something
-    before = db.row_counts(con, db.V14_TABLES)
+    before = db.row_counts(con, db.kept(db.V14_TABLES))
     con.close()
     os.chmod(p, 0o600)
 
     con = db.open_db(p)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 28
-    assert db.row_counts(con, db.V14_TABLES) == before
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 29
+    assert db.row_counts(con, db.kept(db.V14_TABLES)) == before
     assert con.execute("SELECT COUNT(*) FROM rooms WHERE private=0").fetchone()[0] == rooms
     assert con.execute("SELECT COUNT(*) FROM room_people").fetchone()[0] == 0
     assert p.with_name(p.name + ".v14.bak").exists()

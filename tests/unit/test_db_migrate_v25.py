@@ -27,14 +27,14 @@ def test_v24_upgrade_adds_an_empty_agent_tokens_table_after_a_backup(tmp_path: P
             con.execute(statement)
     assert db.schema_version(con) == 24
     con.commit()
-    before = db.row_counts(con, db.tables_of(24))
+    before = db.row_counts(con, db.kept_tables(24))
     con.close()
     os.chmod(path, 0o600)
 
     migrated = db.open_db(path)
     fresh = db.open_db(tmp_path / "fresh.db")
-    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 28
-    assert db.row_counts(migrated, db.tables_of(24)) == before
+    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 29
+    assert db.row_counts(migrated, db.kept_tables(24)) == before
     assert migrated.execute("SELECT COUNT(*) FROM agent_tokens").fetchone()[0] == 0
     assert [tuple(r) for r in migrated.execute("PRAGMA table_info(agent_tokens)")] == [
         tuple(r) for r in fresh.execute("PRAGMA table_info(agent_tokens)")

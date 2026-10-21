@@ -5,12 +5,6 @@ Every ``/api/*`` request needs the session cookie. Unsafe methods also pass
 Origin and the cookie before ``accept()`` and only understands ``hello`` and
 ``ping`` from the client.
 
-Remote links (§27.11): ``GET /api/remotes`` is every remote's state;
-``POST /api/remotes/{name}/enable`` and ``/disable`` are the web UI's Enable /
-reconnect and Disable buttons, the web session's equivalents of the human-only
-``switchboard remote enable|disable`` (consent for exactly the current config,
-recorded as ``via web``). A ``remotes`` WebSocket event carries every change.
-
 The Inspector (§29): ``GET /api/rooms/{slug}/members/{name}`` is one member's detail
 (times, session id, queued ids, delivery counts, a short delivery timeline) for the human's
 web session. Read-only, and never message text.
@@ -26,13 +20,6 @@ signed-in browser, pass a fresh passkey check); ``POST /api/passkeys/begin`` and
 ``/api/passkeys`` add a passkey to a session that passed one; ``GET /api/auth/state``
 tells the sign-in page what applies. None of these need a session but the last two;
 all of them are Origin-checked like every write, and rate-limited on failure.
-
-Machines that dial in (§31.7): ``POST /link/pair`` (a pairing code, sent by ``switchboard
-remote join``: no session, and an Origin is refused), the ``/link`` WebSocket (no Origin, a
-signed handshake), and ``GET /api/machines``, ``POST /api/machines/pair``,
-``/api/machines/{name}/approve``, ``/remove`` and ``/cancel`` (a code), for anyone signed in.
-Making a code and approving need a passkey or password check in the last five minutes, as
-adding a passkey does.
 
 People (§32): everyone but the owner signs in with a name and a password, or a passkey of
 their own. ``POST /api/signin/password`` signs in (the owner's one-time password from the
@@ -81,7 +68,7 @@ from switchboard.broker.passwords import (
     verify_password,
 )
 from switchboard.broker.service import ServiceError, message_dict
-from switchboard.models import InvalidName, normalize_room, valid_host
+from switchboard.models import InvalidName, normalize_room
 from switchboard.reviews import ReviewError
 from switchboard.store import Conflict
 
@@ -106,7 +93,6 @@ DEVICE_COOKIE = "switchboard_device"
 WRONG_SIGNIN = "wrong email or password (no email set for you yet? ask the admin to set one)"
 DEVICE_TTL_S = 30 * 24 * 3600
 OPEN_CHECKS_MAX = 32  # strangers' password checks running or queued; past this, refused before scrypt
-HASH_RE = re.compile(r"[0-9a-f]{64}")  # a remote's config_hash (sha256 hex)
 ROOM_ID_RE = re.compile(r"[1-9][0-9]{0,18}")  # a room id in /api/closed-rooms/{rid}/reopen
 MAX_ROOM_ID = 2**63 - 1  # SQLite's INTEGER: 19 digits can be more (OverflowError, not 400)
 
@@ -849,7 +835,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
     @app.post("/api/signin/check")
     async def signin_check(request: Request) -> Response:
         """A signed-in browser confirms it's them with their password: a fresh check, as a
-        passkey gives one (to add a passkey, add a person, pair or approve a machine)."""
+        passkey gives one (to add a passkey, add a person or make an agent token)."""
         w = who(request)
         if w is None or w.must_reset:
             return unauthorized()
@@ -963,7 +949,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
 
     @app.post("/api/people")
     async def people_add(request: Request) -> Response:
-        w, no = admin(request, True)  # a new way in: a fresh check, as pairing a machine
+        w, no = admin(request, True)  # a new way in: a fresh check, as adding a passkey
         if no is not None:
             return no
         assert w is not None
@@ -1063,23 +1049,13 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         p = state.store.person(int(pid)) if ROOM_ID_RE.fullmatch(pid) and int(pid) <= MAX_ROOM_ID else None
         if p is None or not p.active:
             return _err(404, "not_found", "no such person")
-        theirs = state.store.machines_of(p.id)  # paired or approved by them: they go too (#178)
         devices = [t.device for t in state.store.agent_tokens_of(p.id)]  # revoked with them (§49.1)
         gone = state.store.person_remove(p.id) or []
-        ended = 0
-        if state.remotes is not None:  # their agents over HTTPS leave, as on a revoke (§49.3)
-            ended = sum(state.remotes.end_members(d, "token revoked") for d in devices)
+        # their agents over HTTPS leave, as on a revoke (§49.3)
+        ended = sum(state.agents.end_device(d, "token revoked") for d in devices)
         state.service.person_gone(p.id)  # out of every private room, with their agents (§44.3)
         for g in gone:
             state.hub.close_sessions(g)
-        removed = []
-        if state.machines is not None:
-            for name in theirs:
-                try:
-                    await state.machines.remove(name, "web", w.name, f"{p.name} was removed")
-                    removed.append(name)
-                except ServiceError:
-                    pass  # gone meanwhile
         state.store.add_event(
             "people",
             data={
@@ -1087,15 +1063,13 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 "person": p.name,
                 "by": w.name,
                 "sessions": len(gone),
-                "machines": removed,
                 "agent_devices": devices,
                 "agents_ended": ended,
             },
         )
-        tail = f"; their machines removed: {', '.join(removed)}" if removed else ""
-        state.hub.notice(None, "warn", f"{p.name} removed by {w.name}: signed out everywhere{tail}")
+        state.hub.notice(None, "warn", f"{p.name} removed by {w.name}: signed out everywhere")
         people_changed(state)
-        return _ok({"ok": True, "sessions": len(gone), "machines": removed})
+        return _ok({"ok": True, "sessions": len(gone)})
 
     @app.get("/api/auth/state")
     async def auth_state() -> Response:
@@ -1188,120 +1162,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         resp.delete_cookie(OIDC_COOKIE, path=oidc.CALLBACK_PATH)
         return resp
 
-    # ---------------------------------------------- machines that dial in (§31.7)
-    @app.post("/link/pair", include_in_schema=False)
-    async def link_pair(request: Request) -> Response:
-        # sent by `switchboard remote join`, never by a browser: an Origin is refused outright
-        if request.headers.get("origin") is not None:
-            return _err(403, "forbidden", "this route takes no browser requests")
-        m = state.machines
-        if m is None:
-            return _err(
-                404,
-                "not_found",
-                "this broker takes no machines that dial in (a hosted broker with passkeys does)",
-            )
-        try:
-            body = await _json_body(request)
-        except ServiceError as e:
-            return _svc_err(e)
-        status, data = m.pair(body)
-        return JSONResponse(data, status_code=status, headers=NO_STORE)
-
-    @app.websocket("/link")
-    async def link_ws(ws: WebSocket) -> None:
-        m = state.machines
-        if m is None or ws.headers.get("origin") is not None:  # never a browser
-            await ws.close(code=1008)
-            return
-        await m.serve(ws)
-
-    def owner(request: Request, fresh: bool) -> JSONResponse | None:
-        """Why the machine routes refuse this request, or None: a session (anyone signed in,
-        §32), a broker that takes machines, and (to make a code or approve) a passkey or
-        password check in the last 5 minutes."""
-        h = session(request)
-        if h is None:
-            return unauthorized()
-        if state.machines is None:
-            return _err(404, "not_found", "machines dial in only to a hosted broker behind https")
-        if fresh and not state.fresh_check(h):
-            return _err(403, "reauth", "confirm it's you first")
-        return None
-
-    @app.get("/api/machines")
-    async def machines_list(request: Request) -> Response:
-        if session(request) is None:
-            return unauthorized()
-        m = state.machines
-        if m is None:
-            return _ok({"hosted": False, "machines": []})
-        return _ok(
-            {
-                "hosted": True,
-                "machines": m.summary(),
-                "codes": m.codes.unused(),
-                "broker_fingerprint": m.fingerprint,
-            }
-        )
-
-    @app.post("/api/machines/pair")
-    async def machines_pair(request: Request) -> Response:
-        no = owner(request, True)
-        if no is not None:
-            return no
-        try:
-            body = await _json_body(request)
-            w = who(request)
-            return _ok(state.machines.mint(body.get("name"), w.person_id if w is not None else None))
-        except ServiceError as e:
-            return _svc_err(e)
-
-    @app.post("/api/machines/{name}/approve")
-    async def machines_approve(request: Request, name: str) -> Response:
-        no = owner(request, True)
-        if no is not None:
-            return no
-        try:
-            await _json_body(request)
-            if not valid_host(name):
-                raise ServiceError("bad_request", "machine names look like work-laptop")
-            w = who(request)
-            by = (w.name, w.person_id) if w is not None else None
-            return _ok(state.machines.approve(name, "web", by))
-        except ServiceError as e:
-            return _svc_err(e)
-
-    @app.post("/api/machines/{name}/cancel")
-    async def machines_cancel(request: Request, name: str) -> Response:
-        no = owner(request, False)  # forgetting a code only takes access away
-        if no is not None:
-            return no
-        try:
-            await _json_body(request)
-            if not valid_host(name):
-                raise ServiceError("bad_request", "machine names look like work-laptop")
-            return _ok(state.machines.cancel(name))
-        except ServiceError as e:
-            return _svc_err(e)
-
-    @app.post("/api/machines/{name}/remove")
-    async def machines_remove(request: Request, name: str) -> Response:
-        no = owner(request, False)  # removing only takes access away
-        if no is not None:
-            return no
-        try:
-            await _json_body(request)
-            if not valid_host(name):
-                raise ServiceError("bad_request", "machine names look like work-laptop")
-            w = who(request)
-            return _ok(await state.machines.remove(name, "web", w.name if w is not None else None))
-        except ServiceError as e:
-            return _svc_err(e)
-
     # -------------------------------------------------- agent tokens (#382, §49.1)
     # Each person's own: a desktop's owner, or anyone signed in to a hosted broker. Making one
-    # grants access, so a hosted broker wants a check in the last five minutes, as pairing does.
+    # grants access, so a hosted broker wants a check in the last five minutes, as adding a person does.
     @app.get("/api/agent-tokens")
     async def agent_tokens_list(request: Request) -> Response:
         w = who(request)
@@ -1755,53 +1618,6 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return _ok({"room": state.service.room_dict(room)})
         except ServiceError as e:
             return _svc_err(e)
-
-    # ------------------------------------------------------------ remotes
-    # The web session is the human (§5.4): enabling a remote from here is the same consent
-    # as `switchboard remote enable` (§27.5.8), for exactly the entry's current config.
-    @app.get("/api/remotes")
-    async def remotes(request: Request) -> Response:
-        if session(request) is None:
-            return unauthorized()
-        mgr = state.remotes
-        if mgr is None:  # the broker is still starting its links
-            return _ok({"remotes": [], "config_error": None, "version": __version__})
-        try:
-            return _ok({**(await mgr.status()), "version": __version__})
-        except ServiceError as e:
-            return _svc_err(e)
-
-    async def remote_op(request: Request, name: str, op: str) -> Response:
-        if session(request) is None:
-            return unauthorized()
-        try:
-            body = await _json_body(request)
-            if not valid_host(name):
-                raise ServiceError("bad_request", "remote names look like fpga-pi")
-            mgr = state.remotes
-            if mgr is None:
-                raise ServiceError("conflict", "the broker is still starting its remote links; try again")
-            if op == "enable":
-                # the consent is for the config the page showed (its `config_hash`): an edit of
-                # remotes.toml or the key files since then is a 409, never a silent consent
-                want = body.get("config_hash")
-                if not isinstance(want, str) or not HASH_RE.fullmatch(want):
-                    raise ServiceError(
-                        "bad_request", "config_hash missing: reload the remotes panel and enable again"
-                    )
-                # a long poll, as the CLI's: it dials and waits up to 15 s for the outcome
-                return _ok(await mgr.enable(name, via="web", actor="web session", expect_hash=want))
-            return _ok(await mgr.disable(name, via="web"))
-        except ServiceError as e:
-            return _svc_err(e)
-
-    @app.post("/api/remotes/{name}/enable")
-    async def remote_enable(request: Request, name: str) -> Response:
-        return await remote_op(request, name, "enable")
-
-    @app.post("/api/remotes/{name}/disable")
-    async def remote_disable(request: Request, name: str) -> Response:
-        return await remote_op(request, name, "disable")
 
     # ---------------------------------------------------------- websocket
     @app.websocket("/ws")

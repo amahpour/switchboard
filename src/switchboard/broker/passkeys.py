@@ -41,7 +41,7 @@ from switchboard.clock import Clock, SystemClock
 
 CLAIM_TTL_S = 3600.0  # a claim link lives an hour, then a fresh one is printed
 CEREMONY_TTL_S = 300.0  # a registration or sign-in ceremony (the challenge's life)
-FRESH_CHECK_S = 300.0  # a passkey check this recent lets a session add a passkey or pair a machine
+FRESH_CHECK_S = 300.0  # a passkey check this recent lets a session add a passkey or a person
 CLAIM_GRACE_S = 600.0  # after the claim, the backup-passkey step needs no second check
 MAX_NAME = 40
 RP_NAME = "switchboard"

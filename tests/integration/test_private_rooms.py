@@ -194,28 +194,17 @@ def test_existing_rooms_stay_public(hosted: InProcBroker) -> None:
     json.dumps(room)
 
 
-def test_a_machine_is_told_only_the_private_rooms_its_person_is_in(hosted: InProcBroker) -> None:
-    """A machine that dials in is welcomed with the open rooms' names (§28.8): a private room's
-    name goes only to a machine whose person is in it (§44.3), and an agent there is that
-    person's."""
-    from types import SimpleNamespace
-
-    from switchboard.broker.remote import RemoteLink
-
+def test_an_agent_on_a_device_is_its_tokens_person(hosted: InProcBroker) -> None:
+    """An agent over HTTPS is the person's whose agent token names its device (§44.3, §49.1): the owner's
+    token's device is the owner's, a host with no token is the owner's too, and a private room sees the
+    agent only as that person. Fails if the person of a device is not looked up from its token."""
     admin = set_up(hosted)
     bob = join_as_bob(hosted, admin)
-    admin.post("/api/rooms", {"name": "#open"})
     make_private(bob, "#secret")
     store = hosted.state.store
     bob_id = store.person_named("bob").id
-    hosted.on_loop(lambda: store.machine_pair("bobs-laptop", b"k" * 32, "fp-bob", {}, person_id=bob_id))
-    hosted.on_loop(lambda: store.machine_pair("alices-pi", b"a" * 32, "fp-alice", {}, person_id=None))
-
-    def welcome(name: str) -> list[str]:
-        link = SimpleNamespace(entry=SimpleNamespace(rooms=("*",), name=name), st=hosted.state)
-        return hosted.on_loop(RemoteLink._welcome_rooms, link)
-
-    assert welcome("bobs-laptop") == ["#open", "#secret"]
-    assert welcome("alices-pi") == ["#open"]
+    hosted.on_loop(lambda: store.agent_token_add(bob_id, "bobs-laptop", "k" * 64))
+    hosted.on_loop(lambda: store.agent_token_add(None, "alices-pi", "a" * 64))
     assert hosted.state.service.host_person("bobs-laptop") == bob_id
     assert hosted.state.service.host_person("alices-pi") == 0 and hosted.state.service.host_person("") == 0
+    assert hosted.state.service.host_person("no-such-device") == 0

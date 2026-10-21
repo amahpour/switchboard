@@ -19,7 +19,6 @@ from test_cli_unit import Calls
 
 from switchboard import cli, report
 from switchboard.colors import Paint
-from switchboard.remote.pairing import Finding, print_findings
 
 SGR = re.compile(r"\x1b\[[0-9;]*m")
 # every code switchboard itself emits: reset, bold, dim, the six colours, bold yellow
@@ -141,12 +140,6 @@ STATUS = {
         },
     ],
     "closed_rooms": 1,
-    "remotes": [
-        {"name": "fpga-pi", "state": "up", "rtt_ms": 2.1, "version": "0.4.0", "members": ["bench"]},
-        {"name": "lab", "state": "blocked", "reason": "host_key", "detail": "up \x1b[31mfake\x1b[0m"},
-        {"name": "old", "state": "down", "reason": "unreachable", "retry_in_s": 8},
-        {"name": "new", "state": "disabled", "reason": "not_enabled"},
-    ],
 }
 
 WHO = {
@@ -209,11 +202,6 @@ def spec_who(mp: pytest.MonkeyPatch, tmp: Path, clock: FakeClock) -> tuple[list[
     return ["who", "#build"], True
 
 
-def spec_remote_status(mp: pytest.MonkeyPatch, tmp: Path, clock: FakeClock) -> tuple[list[str], bool]:
-    Calls(mp, {"remote.status": {"remotes": STATUS["remotes"], "config_error": "bad\x1b[2Jentry"}})
-    return ["remote", "status"], True
-
-
 def spec_tail(mp: pytest.MonkeyPatch, tmp: Path, clock: FakeClock) -> tuple[list[str], bool]:
     mp.setattr("switchboard.mcp.client.Stream", FakeStream)
     mp.setattr(
@@ -270,7 +258,6 @@ def spec_uninstall(mp: pytest.MonkeyPatch, tmp: Path, clock: FakeClock) -> tuple
 SPECS: dict[str, Callable[..., tuple[list[str], bool]]] = {
     "status": spec_status,
     "who": spec_who,
-    "remote status": spec_remote_status,
     "tail": spec_tail,
     "report": spec_report,
     "install": spec_install,
@@ -344,25 +331,8 @@ def test_tail_colours_the_framing_and_keeps_room_text_inert(
     assert "\n" + " " * 11 + "second line" in out  # continuation lines keep their indent
 
 
-def test_status_and_remote_lines_colour_state_words_only() -> None:
+def test_status_lines_colour_state_words_only() -> None:
     p = Paint(True)
-    line = cli._remote_line(p, {"name": "lab", "state": "blocked", "reason": "auth", "detail": "up down"})
-    assert line.startswith("lab: \x1b[31mblocked\x1b[0m: auth") and line.endswith("[up down]")
-    assert cli._remote_line(p, {"name": "a", "state": "up", "rtt_ms": 3}).startswith(
-        "a: \x1b[32mup\x1b[0m 3.0 ms"
-    )
-    assert cli._remote_line(p, {"name": "a", "state": "disabled", "reason": "config_changed"}).startswith(
-        "a: \x1b[33mneeds enable\x1b[0m (config changed)"
-    )
-    assert cli._remote_line(p, {"name": "a", "state": "disabled", "reason": "disabled"}).startswith(
-        "a: \x1b[2mdisabled\x1b[0m ("
-    )
-    assert cli._remote_line(p, {"name": "a", "state": "connecting"}) == "a: \x1b[33mconnecting\x1b[0m"
-    # a name holding control characters is cleaned in the line and in the lookup alike:
-    # only switchboard's own codes reach the terminal
-    line = cli._remote_line(p, {"name": "a\x1b[2J", "state": "up", "rtt_ms": 1})
-    assert line.startswith("a[2J: \x1b[32mup\x1b[0m") and only_our_codes(line)
-    assert cli._remote_line(p, {"name": "a", "state": ""}) == "a: "  # no state word: nothing coloured
     assert cli._lead(p, "ok (1 copy)") == "\x1b[32mok\x1b[0m (1 copy)"
     assert cli._lead(p, "off") == "\x1b[2moff\x1b[0m"
     assert cli._lead(p, "down: no daemon") == "\x1b[33mdown:\x1b[0m no daemon"
@@ -382,31 +352,6 @@ def test_report_headings_and_fired_rules(tmp_path: Path, clock: FakeClock) -> No
 
 def test_report_strips_control_characters_from_database_strings() -> None:
     assert report._safe("gpt\x1b[2J-5‮") == "gpt[2J-5"
-
-
-def test_doctor_levels(capsys: pytest.CaptureFixture[str]) -> None:
-    import io
-
-    buf = io.StringIO()
-    rc = print_findings(
-        [Finding("ok", "a"), Finding("note", "b"), Finding("WARN", "c"), Finding("FAIL", "d")],
-        buf,
-        paint=Paint(True),
-    )
-    out = buf.getvalue()
-    assert rc == 1
-    assert "  \x1b[32mok\x1b[0m    a" in out and "  \x1b[2mnote\x1b[0m  b" in out
-    assert "  \x1b[33mWARN\x1b[0m  c" in out and "  \x1b[31mFAIL\x1b[0m  d" in out
-    assert out.endswith("\x1b[31m1 warning(s), 1 failure(s)\x1b[0m\n")
-    buf = io.StringIO()
-    assert print_findings([Finding("ok", "a")], buf, paint=Paint(True)) == 0
-    assert buf.getvalue().endswith("\x1b[32mclean\x1b[0m\n")
-    buf = io.StringIO()
-    print_findings([Finding("WARN", "c")], buf, paint=Paint(True))
-    assert buf.getvalue().endswith("\x1b[33m1 warning(s), 0 failure(s)\x1b[0m\n")
-    buf = io.StringIO()
-    print_findings([Finding("WARN", "c")], buf)
-    assert buf.getvalue() == "  WARN  c\n1 warning(s), 0 failure(s)\n"  # plain is unchanged
 
 
 def test_install_diff_lines_are_made_safe_before_they_are_coloured() -> None:

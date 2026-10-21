@@ -36,7 +36,6 @@ from switchboard.broker.passkeys import (
 )
 from switchboard.broker.passwords import SignInLimiter
 from switchboard.broker.peer import AllowAllHumans, PeerPolicy, ProcessPeerPolicy
-from switchboard.broker.remote import RemoteManager
 from switchboard.broker.reviews import Boards
 from switchboard.broker.rpc import RpcServer
 from switchboard.broker.service import BrokerInfo, RoomService
@@ -66,7 +65,7 @@ class BrokerState:
     login_tokens: LoginTokens
     # where browsers reach the web UI (DESIGN.md §30): switchboard.localhost:<port>, or --public-url
     web_origin: WebOrigin = None  # type: ignore[assignment]
-    # every probe about a participant goes through its host's view (DESIGN.md §27.5.6)
+    # every probe about a participant goes through its host's view
     hosts: HostViews = None  # type: ignore[assignment]
     store: Store = None  # type: ignore[assignment]
     sessions: Sessions = None  # type: ignore[assignment]
@@ -77,10 +76,6 @@ class BrokerState:
     runner: Runner = None  # type: ignore[assignment]
     agents: AgentService = None  # type: ignore[assignment]
     boards: Boards = None  # type: ignore[assignment]
-    # the remote hosts' links (DESIGN.md §27.4); None until the RPC server listens
-    remotes: RemoteManager | None = None
-    # the machines that dial in (DESIGN.md §31.7): a hosted broker with passkeys only
-    machines: Any = None
     shutdown_cb: Callable[[], None] | None = None
     recovery: dict[str, int] = field(default_factory=dict)
     tasks: list[asyncio.Task[Any]] = field(default_factory=list)
@@ -112,8 +107,8 @@ class BrokerState:
 
     def fresh_check(self, sid_hash: str) -> bool:
         """The session passed a passkey or password check in the last FRESH_CHECK_S, or it is
-        the claim's own session within its grace: what adding a passkey or pairing or approving
-        a machine needs (§31.6), so a stolen session can't make itself permanent."""
+        the claim's own session within its grace: what adding a passkey or making an agent token
+        needs (§31.6), so a stolen session can't make itself permanent."""
         now = self.clock.now()
         return (
             now - self.passkey_checks.get(sid_hash, float("-inf")) <= FRESH_CHECK_S
@@ -195,7 +190,7 @@ def create_app(
         ),
         login_tokens=LoginTokens(clock),
         web_origin=web_origin,
-        hosts=HostViews(cfg.claude.sessions_dir, clock),
+        hosts=HostViews(cfg.claude.sessions_dir),
         sealer=Sealer(clock),
         used_challenges=UsedChallenges(clock),
         signin=SignInLimiter(clock),
@@ -216,7 +211,7 @@ def create_app(
             )
         con = db.open_db(paths.db)  # a version-1 database is migrated here, after a backup (§27.6)
         state.store = Store(con, clock)
-        # local rows only: a remote row's pids are pids on its own host (§27.5.6)
+        # local rows only: a session over HTTPS has no pid to probe
         state.recovery = state.store.recover_on_start(state.hosts.local.alive)
         if any(state.recovery.values()):
             log.warning("restart recovery: %s", state.recovery)
@@ -255,16 +250,6 @@ def create_app(
         state.tasks.append(asyncio.create_task(state.agents.liveness_loop()))
         for adapter in state.engine.adapters.values():
             await adapter.start(state.runner)
-        # after the RPC server: a link's requests are dispatched through it (§27.3)
-        state.remotes = RemoteManager(state)
-        await state.remotes.start()
-        state.service.remotes = state.remotes
-        if state.hosted and state.web_origin.secure_context():
-            from switchboard.broker.machines import MachineManager
-
-            state.machines = MachineManager(state)
-            await state.machines.start()
-            state.service.machines = state.machines
         # agents over HTTPS (§49.2): the MCP session manager, once everything it calls is up
         mcp_http = contextlib.AsyncExitStack()
         if state.agent_http is not None:
@@ -276,13 +261,6 @@ def create_app(
             # first: its open streams end before the services they call
             with contextlib.suppress(Exception):
                 await mcp_http.aclose()
-            if state.machines is not None:
-                with contextlib.suppress(Exception):
-                    await state.machines.stop()
-            if state.remotes is not None:
-                # every link's child is killed and reaped; remote members go offline
-                with contextlib.suppress(Exception):
-                    await state.remotes.stop()
             for t in state.tasks:
                 t.cancel()
             for t in state.tasks:
@@ -358,12 +336,10 @@ def _owner_start(state: BrokerState, reset_owner: str | None) -> None:
         if state.store.reset_owner_applied() != applied:
             got = state.store.reset_owner(applied)
             log.warning(
-                "owner reset (%s): %d passkey(s) and %d web session(s) deleted, %d paired machine(s)"
-                " back to pending; this can't be undone",
+                "owner reset (%s): %d passkey(s) and %d web session(s) deleted; this can't be undone",
                 RESET_OWNER_ENV,
                 got["passkeys"],
                 got["sessions"],
-                got["machines_pending"],
             )
             state.store.add_event("login", data={"what": "owner_reset", **got})
     if origin.public and state.unclaimed():

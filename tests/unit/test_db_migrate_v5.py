@@ -19,19 +19,19 @@ def test_v4_database_gains_an_empty_preferences_table_and_a_checked_backup(tmp_p
         con.execute(stmt)
     con.commit()
     assert db.schema_version(con) == 4
-    before = db.row_counts(con, db.V3_TABLES)
+    before = db.row_counts(con, db.kept(db.V3_TABLES))
     con.close()
     os.chmod(p, 0o600)
 
     con = db.open_db(p)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 28
-    assert db.row_counts(con, db.V3_TABLES) == before
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 29
+    assert db.row_counts(con, db.kept(db.V3_TABLES)) == before
     assert con.execute("SELECT person_id, theme FROM preferences").fetchall() == []
     assert db.integrity_ok(con) is None
     backup = p.with_name(p.name + ".v4.bak")
     assert backup.exists() and os.stat(backup).st_mode & 0o777 == 0o600
     old = sqlite3.connect(backup)
     assert db.schema_version(old) == 4
-    assert db.row_counts(old, db.V3_TABLES) == before
+    assert db.row_counts(old, db.kept(db.V3_TABLES)) == before
     old.close()
     con.close()

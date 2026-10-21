@@ -138,7 +138,7 @@ def message_dict(m: Message) -> dict[str, Any]:
         "text": clean(m.text),
         "reply_to": m.reply_to,
         "mentions": m.mentions,
-        # the remote host of an agent sender (DESIGN.md §27.11); None on this machine
+        # the device host of an agent sender (DESIGN.md §49); None on this machine
         "host": m.sender_host,
     }
     if m.kind == "notice" and m.sender_kind == "system" and m.text.startswith(WARN_NOTICE_PREFIXES):
@@ -198,7 +198,7 @@ def member_dict(m: Member) -> dict[str, Any]:
 
 
 def member_label(m: Member) -> str:
-    """``bench@fpga-pi`` for a remote member, the plain name on this machine."""
+    """``bench@laptop`` for a member on a device, the plain name on this machine."""
     return f"{m.name}@{m.host}" if m.host else m.name
 
 
@@ -274,9 +274,6 @@ class RoomService:
         self.on_room_changed: list[Callable[[Room, str], None]] = []
         # The delivery side (AgentService); None in unit tests of the human side.
         self.delivery: DeliveryHooks | None = None
-        # The remote hosts' links (broker/remote.py RemoteManager), once they run.
-        self.remotes: Any = None
-        self.machines: Any = None  # the machines that dial in (§31.7), on a hosted broker
         self.boards: Any = None  # the review boards (broker/reviews.py Boards), for /review (§37.8)
         hub.set_members_source(self._members_snapshot)
         hub.set_settings_source(self._settings_snapshot)
@@ -409,15 +406,13 @@ class RoomService:
 
     def host_person(self, host: str) -> int:
         """Whose agents run on ``host`` (§44.3): a device with a live agent token is its person's
-        (§49.1); a machine that dialed in is the person's who made its pairing code (#178); this
-        machine and an SSH remote are the owner's."""
+        (§49.1); this machine, and a host nothing vouches for any more, is the owner's."""
         if not host:
             return 0
         t = self.store.agent_token_for_device(host)
         if t is not None:
             return t.person_id if t.person_id is not None else 0
-        m = self.store.machine(host)
-        return m.person_id if m is not None and m.person_id is not None else 0
+        return 0
 
     def add_room_person(self, room: Room, name: str, by: int) -> str:
         """Add a person to a private room (any of its people may, §44.2)."""
@@ -1333,6 +1328,4 @@ class RoomService:
             "codex_link": self.info.codex_link,
             "hooks": self.info.hook_state,
             "test_mode": self.info.test_mode,
-            "remotes": self.remotes.summary() if self.remotes is not None else [],
-            "machines": self.machines.summary() if self.machines is not None else [],
         }

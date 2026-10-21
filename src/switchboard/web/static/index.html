@@ -33,8 +33,8 @@
 <body>
 <div class="app" id="app">
 
-  <!-- ============ Sidebar: brand, rooms, remote machines, you ============ -->
-  <nav class="sidebar" id="sidebar" aria-label="Rooms and machines">
+  <!-- ============ Sidebar: brand, rooms, you ============ -->
+  <nav class="sidebar" id="sidebar" aria-label="Rooms">
     <div class="brand">
       <span class="brand-tile" aria-hidden="true">
         <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="4" cy="4" r="1.8"/><circle cx="12" cy="4" r="1.8"/><circle cx="12" cy="12" r="1.8"/><path d="M4 5.8V8a4 4 0 0 0 4 4h2.2M12 5.8v4.4"/></svg>
@@ -52,17 +52,6 @@
               aria-controls="closed-panel" title="Closed rooms: reopen one">
         <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3.5h12v3H2z"/><path d="M3 6.5v6h10v-6M6.5 9h3"/></svg>
         <span class="room-name" id="closed-label">Closed (0)</span>
-      </button>
-    </div>
-
-    <div class="side-section hidden" id="remotes-section" aria-labelledby="remotes-label">
-      <div class="side-label" id="remotes-label">Remote machines</div>
-      <div class="remote-list" id="remotes" role="group" aria-label="Remote machines"></div>
-      <div class="remote-list" id="machines" role="group" aria-label="Machines that dial in"></div>
-      <button type="button" class="room room-add hidden" id="add-machine" aria-haspopup="dialog"
-              aria-controls="machines-panel" title="Add a machine: pair it with a code, then approve it">
-        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>
-        <span class="room-name">Add a machine</span>
       </button>
     </div>
 
@@ -359,34 +348,6 @@
   <div class="scrim hidden" id="scrim"></div>
 
   <!-- ============ Sheets (floating cards) ============ -->
-  <section class="sheet hidden" id="remotes-panel" role="dialog" aria-modal="false" aria-labelledby="remotes-panel-title">
-    <div class="sheet-head">
-      <h2 id="remotes-panel-title">Remote machines</h2>
-      <button type="button" class="icon-btn" id="remotes-close" aria-label="Close" title="Close">
-        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
-      </button>
-    </div>
-    <div class="sheet-body">
-      <p class="fine">Links this broker dials over SSH. Enabling one is your consent for its current
-        <code>remotes.toml</code> entry and key files; any edit needs a new enable.</p>
-      <div id="remotes-body"></div>
-    </div>
-  </section>
-
-  <section class="sheet hidden" id="machines-panel" role="dialog" aria-modal="false" aria-labelledby="machines-panel-title">
-    <div class="sheet-head">
-      <h2 id="machines-panel-title">Machines</h2>
-      <button type="button" class="icon-btn" id="machines-close" aria-label="Close" title="Close">
-        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
-      </button>
-    </div>
-    <div class="sheet-body">
-      <p class="fine">Your machines dial this switchboard over <code>wss://</code>, outbound HTTPS only, and their
-        agents join its rooms as <code>name@machine</code>. They can never act as you.</p>
-      <div id="machines-body"></div>
-    </div>
-  </section>
-
   <section class="sheet hidden" id="people-panel" role="dialog" aria-modal="false" aria-labelledby="people-panel-title">
     <div class="sheet-head">
       <h2 id="people-panel-title">People</h2>
@@ -396,7 +357,7 @@
     </div>
     <div class="sheet-body">
       <p class="fine">Everyone here signs in with the email you set for them (their name until you do), and a password or a
-        passkey<span id="people-google-lead" class="hidden">, or with Google</span>. They post under their own name, pair their own machines, and every agent takes their messages as its user&rsquo;s. Only you can add
+        passkey<span id="people-google-lead" class="hidden">, or with Google</span>. They post under their own name, make their own agent tokens, and every agent takes their messages as its user&rsquo;s. Only you can add
         or remove people.</p>
       <div id="people-body"></div>
     </div>

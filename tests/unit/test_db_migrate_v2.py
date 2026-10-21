@@ -88,7 +88,8 @@ def test_fresh_db_has_the_v2_columns(tmp_path: Path) -> None:
     host = {c[1]: c for c in columns(con, "participants")}["host"]
     assert host[2] == "TEXT" and host[3] == 1 and host[4] == "''"  # NOT NULL DEFAULT ''
     assert "sender_host" in {c[1] for c in columns(con, "messages")}
-    assert "remotes" in {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    # the table v2 made for SSH remotes is gone again (schema 29, #385)
+    assert "remotes" not in {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     idx = con.execute("SELECT sql FROM sqlite_master WHERE name='participants_host_mcp'").fetchone()
     assert idx is not None and "WHERE ended_at IS NULL" in idx[0]
     assert backups(tmp_path / "switchboard.db") == []  # nothing to back up
@@ -104,10 +105,9 @@ def test_v1_fixture_migrates_to_the_current_schema(tmp_path: Path) -> None:
     assert db.schema_version(con) == db.SCHEMA_VERSION
     assert db.integrity_ok(con) is None
     assert db.row_counts(con, V1_TABLES) == before
-    assert db.row_counts(con, ("remotes", "passkeys", "link_machines")) == {
-        "remotes": 0,
-        "passkeys": 0,
-        "link_machines": 0,
+    assert db.row_counts(con, ("passkeys",)) == {"passkeys": 0}
+    assert not {"remotes", "link_machines"} & {
+        r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
     # the migrated schema is the fresh one: same columns in the same order, same indexes
     fresh = db.open_db(tmp_path / "fresh.db")
@@ -261,7 +261,7 @@ def test_a_bad_backup_is_removed_and_nothing_migrates(
     real = db.row_counts
     calls = {"n": 0}
 
-    def counts(con: sqlite3.Connection, tables: tuple[str, ...] = db.V1_TABLES) -> dict[str, int]:
+    def counts(con: sqlite3.Connection, tables: tuple[str, ...] = db.kept(db.V1_TABLES)) -> dict[str, int]:
         calls["n"] += 1
         out = real(con, tables)
         if calls["n"] == 2:  # the copy's counts

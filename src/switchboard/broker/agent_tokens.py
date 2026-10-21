@@ -4,15 +4,13 @@ locally (#380).
 
 - A token is ``sbat_`` and 43 characters of base64url (32 random bytes). It is shown once, in the
   answer that makes it; the store keeps only its sha256, as it keeps a web session's.
-- Its device name is a host name (``valid_host``): the agents on that device will be members on
-  that host, as a machine's are (§27.6). So it may not be the name of a machine that dials in, of
-  an SSH remote, or of another live token, and a machine may not be paired under a live token's
-  name. One live token per device name.
+- Its device name is a host name (``valid_host``): the agents on that device are members on that
+  host (§49.3). So it may not be the name of another live token: one live token per device name.
 - It is for agents only: no web route, cookie or socket method takes it, so it can't sign in to
   the web UI, post as its person or run a command.
 - Making one grants access, so on a hosted broker it needs a password or passkey check in the
-  last five minutes, as pairing a machine does (§31.6). Revoking one, or removing its person,
-  only takes access away and needs no check.
+  last five minutes (§31.6). Revoking one, or removing its person, only takes access away and
+  needs no check.
 """
 
 from __future__ import annotations
@@ -71,13 +69,6 @@ def make(state: "BrokerState", person_id: int | None, device: Any, by: str) -> d
     """A new token for ``person_id``'s device: its listing, and the token itself, this once. The
     caller checked the session (and, on a hosted broker, the fresh check)."""
     name = device_name(device)
-    if state.remotes is not None and name in state.remotes.links:
-        raise ServiceError(
-            "conflict", f"{name} is a remote this broker dials over ssh (remotes.toml): pick another name"
-        )
-    m = state.store.machine(name)
-    if m is not None and not m.removed:
-        raise ServiceError("conflict", f"{name} is a machine that dials in to this broker: pick another name")
     if len(state.store.agent_tokens_of(person_id)) >= MAX_PER_PERSON:
         raise ServiceError(
             "conflict", f"you have {MAX_PER_PERSON} agent tokens already: revoke one you no longer use first"
@@ -103,7 +94,7 @@ def revoke(state: "BrokerState", person_id: int | None, token_id: Any, by: str) 
     if row is None:
         raise ServiceError("not_found", "no such agent token")
     # its agents' sessions end with it: "left (work-laptop's token revoked)" (§49.3)
-    ended = state.remotes.end_members(row.device, "token revoked") if state.remotes is not None else 0
+    ended = state.agents.end_device(row.device, "token revoked")
     state.store.add_event(
         "agent_tokens", data={"what": "revoke", "device": row.device, "by": by, "ended": ended}
     )

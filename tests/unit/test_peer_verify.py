@@ -90,7 +90,7 @@ def test_a_relay_on_the_socket_is_no_mcp_server(relay: str) -> None:
     for claimed in ("claude", "codex", "unknown", "test"):
         with pytest.raises(McpRefused) as ei:
             verify(claimed, [relay, "-zsh", "/sbin/launchd"], test_mode=True)
-        assert ei.value.code == "forbidden" and "remote link" in ei.value.message
+        assert ei.value.code == "forbidden" and "HTTPS" in ei.value.message
     # an MCP server that merely mentions ssh in its arguments is not one
     assert (
         verify("unknown", ["/venv/bin/python -m switchboard mcp --home /tmp/ssh", "-zsh"]).harness

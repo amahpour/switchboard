@@ -46,7 +46,7 @@
   --pre-bg: #f7f7f9;
   --tier-bg: #efeff2;
   --tier-border: #e2e2e7;
-  --remote-bg: #e9eef5;
+  --device-bg: #e9eef5;
   --btn-bg: #ffffff;
   --btn-border: #d6d6dc;
   --input-bg: #ffffff;
@@ -124,7 +124,7 @@
     --pre-bg: #26262a;
     --tier-bg: #2c2c31;
     --tier-border: #3a3a40;
-    --remote-bg: #2a3140;
+    --device-bg: #2a3140;
     --btn-bg: #2a2a2e;
     --btn-border: #46464d;
     --input-bg: #242427;
@@ -191,7 +191,7 @@
   --pre-bg: #26262a;
   --tier-bg: #2c2c31;
   --tier-border: #3a3a40;
-  --remote-bg: #2a3140;
+  --device-bg: #2a3140;
   --btn-bg: #2a2a2e;
   --btn-border: #46464d;
   --input-bg: #242427;
@@ -494,8 +494,7 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
   white-space: nowrap;
 }
 .host-chip .ic { width: 12px; height: 12px; }
-.host-chip.remote { background: var(--remote-bg); }
-.host-chip.bad { background: var(--danger-bg); color: var(--danger); }
+.host-chip.device { background: var(--device-bg); }
 .chip-held {
   display: inline-flex;
   align-items: center;
@@ -557,11 +556,11 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
 .brand-tile .ic { width: 15px; height: 15px; }
 .brand-name { flex: 1; min-width: 0; font-size: calc(14px * var(--text-scale)); font-weight: 600; letter-spacing: -.01em; }
 
-.side-section, .room-list, .remote-list { display: flex; flex-direction: column; gap: 2px; }
+.side-section, .room-list { display: flex; flex-direction: column; gap: 2px; }
 .side-label { padding: 0 10px 4px; font-size: calc(11.5px * var(--text-scale)); font-weight: 600; color: var(--muted); }
 .side-spacer { flex: 1; }
 
-.room, .remote-list > .remote {
+.room {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -577,8 +576,8 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
   text-align: left;
   cursor: pointer;
 }
-.room .ic, .remote-list > .remote .ic { width: 14px; height: 14px; color: var(--muted); }
-.room:hover, .remote-list > .remote:hover { background: var(--row-sel); }
+.room .ic { width: 14px; height: 14px; color: var(--muted); }
+.room:hover { background: var(--row-sel); }
 .room[aria-current="page"] { background: var(--accent); color: var(--accent-fg); font-weight: 500; }
 .room[aria-current="page"] .ic { color: currentColor; }
 .room[aria-current="page"] .badge { background: rgba(255, 255, 255, .22); color: #ffffff; }
@@ -586,7 +585,7 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
 /* Quiet unread marker (#109): other agents talking, nothing addressed to you - a plain dot,
    not the red badge, so it doesn't read as more urgent than it is. */
 .room .dot.quiet { background: var(--muted); }
-.room-name, .remote-name {
+.room-name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -594,43 +593,6 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
   white-space: nowrap;
 }
 .room-closed, .room-add { color: var(--muted-2); }
-
-.remote-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  flex-shrink: 0;
-  font-size: calc(11.5px * var(--text-scale));
-  color: var(--muted-2);
-  white-space: nowrap;
-}
-/* The status dot. :where() adds no weight, so the .st-* rules below always win over it
-   (with the sidebar's .remote-list > .remote counted, it outweighed them). */
-:where(.remote-list > .remote, .remote-head) .remote-state::before {
-  content: "";
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--muted);
-}
-.st-up .remote-state::before { background: var(--green); }
-.st-connecting .remote-state::before { background: var(--busy); }
-.st-down .remote-state::before,
-.st-error .remote-state::before,
-.st-blocked .remote-state::before { background: var(--danger); }
-.st-disabled .remote-state::before,
-.st-offline .remote-state::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
-.st-pending .remote-state::before { background: var(--busy); }
-.st-down .remote-state,
-.st-error .remote-state,
-.st-blocked .remote-state { color: var(--danger); }
-/* A sidebar row gives its name and its state half the width each, and whatever one doesn't need
-   to the other: a long state (down with a countdown, blocked) ends in an ellipsis instead of
-   squeezing the name out. The row's title has the state in full. */
-.remote-list > .remote .remote-name,
-.remote-list > .remote .remote-state { flex: 1 1 0; min-width: 0; max-width: max-content; }
-.remote-list > .remote .remote-state { display: block; margin-left: auto; overflow: hidden; text-overflow: ellipsis; }
-.remote-list > .remote .remote-state::before { display: inline-block; margin-right: 5px; vertical-align: middle; }
 
 .side-foot {
   display: flex;
@@ -1961,7 +1923,7 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 .confirm > div { display: flex; justify-content: flex-end; gap: 8px; }
 .confirm .btn, .confirm .btn-danger { height: 30px; }
 
-/* ==== 12. Sheets (Remote machines, Closed rooms) ===================================== */
+/* ==== 12. Sheets (Closed rooms, People, Settings) ===================================== */
 .sheet {
   position: fixed;
   top: 64px;
@@ -1990,7 +1952,7 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 .sheet-body > .fine { margin: 0; }
 .sheet-body code { font-size: calc(12px * var(--text-scale)); }
 
-.remote-card, .closed-card {
+.closed-card {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -2000,26 +1962,10 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
   border-radius: 8px;
   background: var(--bg);
 }
-.remote-head, .closed-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; }
-.remote-head .ic { width: 15px; height: 15px; color: var(--muted); }
-.remote-card .remote-name, .closed-name { flex: 0 1 auto; font-size: calc(14px * var(--text-scale)); font-weight: 600; }
-.chip-dot { font-size: calc(10px * var(--text-scale)); color: var(--muted); }
-.chip-dot.st-up { color: var(--green); }
-.chip-dot.st-connecting { color: var(--busy); }
-.chip-dot.st-down, .chip-dot.st-error, .chip-dot.st-blocked { color: var(--danger); }
-.remote-facts {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 3px 12px;
-  margin: 0;
-  font-size: calc(12px * var(--text-scale));
-}
-.remote-facts dt { color: var(--muted-2); }
-.remote-facts dd { margin: 0; overflow-wrap: anywhere; }
-.remote-facts dd.remote-keys { white-space: pre-line; font: calc(11px * var(--text-scale))/1.4 var(--mono); }
-.remote-card .cmd-out { margin: 0; }
-.remote-error, .remote-result.bad, .closed-result.bad { color: var(--danger); font-weight: 500; }
-.remote-detail { font-size: calc(12px * var(--text-scale)); color: var(--muted-2); }
+.card-head, .closed-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; }
+.card-head .ic { width: 15px; height: 15px; color: var(--muted); }
+.closed-name { flex: 0 1 auto; font-size: calc(14px * var(--text-scale)); font-weight: 600; }
+.card-error, .closed-result.bad { color: var(--danger); font-weight: 500; }
 .closed-card .fine code { overflow-wrap: anywhere; }
 .closed-delete { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
 .closed-card .closed-delete .cmd-block {
@@ -2197,8 +2143,8 @@ body.login {
 .setup-step { display: flex; flex-direction: column; gap: 12px; }
 .setup-step h1:focus { outline: none; }
 .setup-form { display: flex; flex-direction: column; gap: 8px; }
-.setup-form label, .passkey-add label, .machine-add label { font-size: calc(13px * var(--text-scale)); font-weight: 600; }
-.setup-form input, .passkey-add input, .machine-add input {
+.setup-form label, .passkey-add label, .info-add label { font-size: calc(13px * var(--text-scale)); font-weight: 600; }
+.setup-form input, .passkey-add input, .info-add input {
   height: 34px;
   padding: 0 10px;
   border: 1px solid var(--input-border);
@@ -2207,9 +2153,9 @@ body.login {
   color: var(--fg);
   font-size: calc(13.5px * var(--text-scale));
 }
-.setup-form input:focus, .passkey-add input:focus, .machine-add input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus); }
+.setup-form input:focus, .passkey-add input:focus, .info-add input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus); }
 .passkey-add input { height: 32px; }
-/* the Passkeys sheet (index.html, §31.4): cards like the Remote machines sheet's */
+/* the Passkeys sheet (index.html, §31.4) */
 .passkey-card {
   display: flex;
   flex-direction: column;
@@ -2258,9 +2204,8 @@ body.login {
 .agent-connect-title { margin: 0; font-size: calc(13px * var(--text-scale)); font-weight: 600; }
 .agent-connect-step { display: flex; flex-direction: column; gap: 6px; }
 .agent-connect-step > p { margin: 0; font-size: calc(12.5px * var(--text-scale)); color: var(--muted); }
-/* the Machines sheet (index.html, §31.8): machines that dial in. The same cards as the
-   Passkeys sheet; a pending machine's card is edged in amber until it's approved or rejected. */
-.machine-card {
+/* Cards in the People and Settings sheets: the same as the Passkeys sheet's. */
+.info-card {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -2269,33 +2214,27 @@ body.login {
   border-radius: 8px;
   background: var(--bg);
 }
-.machine-card + .machine-card { margin-top: 10px; }
-.machine-card.st-pending { border-color: var(--busy); }
-.machine-card:focus { outline: none; }
-.machine-card:focus-visible { box-shadow: 0 0 0 3px var(--focus); }
-.machine-card > p { margin: 0; }
-.machine-card .remote-head { flex-wrap: nowrap; gap: 8px; }
-.machine-card .remote-head .ic { flex-shrink: 0; }
-.machine-card .remote-name { flex: 1; min-width: 0; font-size: calc(14px * var(--text-scale)); font-weight: 600; }
-.machine-card .remote-state { flex-shrink: 0; }
-.machine-card .remote-facts { font-size: calc(12.5px * var(--text-scale)); }
-.machine-card .remote-facts dd.remote-keys { font-size: calc(12px * var(--text-scale)); }
-/* wide enough for the pairing commands on one line each */
-#machines-panel { width: min(640px, calc(100vw - 32px)); }
-.machine-card .dialog-buttons .btn, .machine-card .dialog-buttons .btn-primary { min-width: 88px; }
-.machine-add { display: flex; flex-direction: column; gap: 6px; margin: 0; }
-.machine-row { display: flex; align-items: center; gap: 8px; }
+.info-card + .info-card { margin-top: 10px; }
+.info-card:focus { outline: none; }
+.info-card:focus-visible { box-shadow: 0 0 0 3px var(--focus); }
+.info-card > p { margin: 0; }
+.info-card .card-head { flex-wrap: nowrap; gap: 8px; }
+.info-card .card-head .ic { flex-shrink: 0; }
+.info-card .card-name { flex: 1; min-width: 0; font-size: calc(14px * var(--text-scale)); font-weight: 600; }
+.info-card .dialog-buttons .btn, .info-card .dialog-buttons .btn-primary { min-width: 88px; }
+.info-add { display: flex; flex-direction: column; gap: 6px; margin: 0; }
+.info-row { display: flex; align-items: center; gap: 8px; }
 /* a person's full name beside the name in the rooms (#192, §39.6) */
 .m-full, .person-handle { color: var(--muted); font-size: calc(12.5px * var(--text-scale)); margin-left: 6px; }
 /* Add someone (#192): first and last name side by side, the email, then the name in the rooms */
 .person-names { display: flex; gap: 8px; }
 .person-field { display: flex; flex: 1 1 0; min-width: 0; flex-direction: column; gap: 6px; }
 @media (max-width: 420px) { .person-names { flex-direction: column; } }
-.machine-row input { flex: 1; min-width: 0; height: 32px; }
-.machine-row .btn-primary { flex-shrink: 0; }
-.machine-step { margin: 0; font-size: calc(12.5px * var(--text-scale)); color: var(--muted-2); }
-.machine-step b { color: var(--fg); font-weight: 600; }
-.machine-cmd {
+.info-row input { flex: 1; min-width: 0; height: 32px; }
+.info-row .btn-primary { flex-shrink: 0; }
+.info-step { margin: 0; font-size: calc(12.5px * var(--text-scale)); color: var(--muted-2); }
+.info-step b { color: var(--fg); font-weight: 600; }
+.info-cmd {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2305,7 +2244,7 @@ body.login {
   border-radius: 6px;
   background: var(--pre-bg);
 }
-.sheet-body .machine-cmd code {
+.sheet-body .info-cmd code {
   flex: 1;
   min-width: 0;
   padding: 0;
@@ -2315,31 +2254,9 @@ body.login {
   font: calc(12px * var(--text-scale))/1.5 var(--mono);
   overflow-wrap: anywhere;
 }
-.machine-cmd .copy-btn { margin-left: 0; }
-.machine-cmd .nowrap { white-space: nowrap; }
-.machine-wait { display: flex; align-items: center; gap: 8px; font-size: calc(12.5px * var(--text-scale)); color: var(--muted-2); }
-.machine-wait .pulse { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: var(--busy); animation: sb-pulse 1.4s ease-in-out infinite; }
-.machine-wait.expired .pulse { background: var(--danger); animation: none; }
-.machine-wait.expired { color: var(--danger); }
-.machine-left { flex-shrink: 0; margin-left: auto; font-variant-numeric: tabular-nums; }
-.machine-wait .btn-danger-ghost { flex-shrink: 0; height: 26px; margin-left: auto; padding: 0 8px; font-size: calc(12px * var(--text-scale)); }
-@keyframes sb-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
-.machine-label { margin: 0; font-size: calc(12px * var(--text-scale)); font-weight: 600; color: var(--muted-2); }
-.sheet-body .machine-fp {
-  display: block;
-  padding: 7px 10px;
-  border: 1px solid var(--code-border);
-  border-radius: 6px;
-  background: var(--pre-bg);
-  color: var(--fg);
-  font: calc(12.5px * var(--text-scale))/1.5 var(--mono);
-  overflow-wrap: anywhere;
-  user-select: all;
-}
-.machine-check { display: flex; align-items: flex-start; gap: 7px; margin: 0; font-size: calc(12.5px * var(--text-scale)); }
-.machine-check .ic { width: 14px; height: 14px; flex-shrink: 0; margin-top: 1px; color: var(--amber-ink); }
-.machine-result.bad, .email-result.bad, .name-result.bad { color: var(--danger); font-weight: 500; }
-.machine-result:empty { display: none; }
+.info-cmd .copy-btn { margin-left: 0; }
+.info-result.bad, .email-result.bad, .name-result.bad { color: var(--danger); font-weight: 500; }
+.info-result:empty { display: none; }
 
 /* ==== 15. Narrow widths (spec 1.9) =================================================== */
 
@@ -2386,7 +2303,7 @@ body.login {
     visibility: visible;
     transition: transform 260ms var(--ease), visibility 0s linear 0s;
   }
-  .room, .remote-list > .remote { height: 40px; font-size: calc(14.5px * var(--text-scale)); }
+  .room { height: 40px; font-size: calc(14.5px * var(--text-scale)); }
 
   .conv-head {
     display: grid;
@@ -2513,9 +2430,9 @@ body.login {
   .insp-body { margin: -14px -16px -14px; padding: 14px 16px 14px; }
 
   .sheet { top: max(16px, env(safe-area-inset-top)); max-height: calc(100vh - 32px); }
-  .machine-row, .passkey-row { flex-direction: column; align-items: stretch; }
-  .machine-row input, .passkey-row input { flex: 0 0 auto; height: 40px; }
-  .machine-row .btn-primary, .passkey-row .btn-primary { height: 40px; }
+  .info-row, .passkey-row { flex-direction: column; align-items: stretch; }
+  .info-row input, .passkey-row input { flex: 0 0 auto; height: 40px; }
+  .info-row .btn-primary, .passkey-row .btn-primary { height: 40px; }
 
   .welcome { padding: 24px 16px 32px; }
   .welcome-title { font-size: calc(21px * var(--text-scale)); }
@@ -2584,9 +2501,9 @@ body.login {
 }
 
 /* ==== 14c. People and passwords in the app (index.html, DESIGN.md §32) ================= */
-/* the People sheet: as wide as Machines, for the invite text on few lines */
+/* the People sheet: wide, for the invite text on few lines */
 #people-panel { width: min(640px, calc(100vw - 32px)); }
-.person-card .remote-head { align-items: center; }
+.person-card .card-head { align-items: center; }
 .person-card .avatar { flex: none; }
 .person-chip { height: 22px; padding: 0 9px; border-radius: 11px; font-size: calc(11.5px * var(--text-scale)); font-weight: 600; }
 .person-chip.pending { background: var(--amber-bg); color: var(--amber-fg); }

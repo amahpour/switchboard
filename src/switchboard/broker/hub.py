@@ -65,12 +65,11 @@ class Subscriber:
 
 
 class WsSubscriber(Subscriber):
-    """A browser WebSocket. Frames are the §5.5 server->client shapes, plus ``remotes``:
-    every remote link's state, for the header chips and the remotes panel (§27.11), and
-    ``machines``: every machine that dials in (§31.7), ``people``: everyone on a hosted
-    broker and who has a page open (§44.8), and ``pins``: a room's pinned decisions (§48)."""
+    """A browser WebSocket. Frames are the §5.5 server->client shapes, plus ``people``: everyone
+    on a hosted broker and who has a page open (§44.8), and ``pins``: a room's pinned decisions
+    (§48)."""
 
-    kinds: frozenset[str] = Subscriber.kinds | {"remotes", "machines", "review", "people", "pins"}
+    kinds: frozenset[str] = Subscriber.kinds | {"review", "people", "pins"}
 
     def __init__(self) -> None:
         super().__init__()
@@ -79,7 +78,7 @@ class WsSubscriber(Subscriber):
         self.person: int | None = None  # whose page (0: the owner), for private rooms (§44)
 
     def format(self, kind: str, room: str | None, data: dict[str, Any]) -> Any:
-        if kind in ("rooms", "remotes", "machines", "people"):
+        if kind in ("rooms", "people"):
             return {"t": kind, **data}
         return {"t": kind, "room": room, **data}
 
@@ -164,11 +163,6 @@ class Hub:
 
     def rooms_changed(self, names: list[str]) -> int:
         return self.publish("rooms", None, {"rooms": names})
-
-    def remotes_changed(self, remotes: list[dict[str, Any]], config_error: str | None = None) -> int:
-        """Every remote's state (``RemoteManager.summary()``), to the web UI only: the
-        UDS tail subscribers never ask for this kind."""
-        return self.publish("remotes", None, {"remotes": remotes, "config_error": config_error})
 
     def set_members_source(self, fn: Callable[[str], list[dict[str, Any]] | None]) -> None:
         self._members_fn = fn

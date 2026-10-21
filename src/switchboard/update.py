@@ -6,15 +6,13 @@ It does what docs/INSTALL.md's "To upgrade" says, in order:
    --refresh-package switchboard-chat switchboard-chat@latest``, or ``==<version>`` with ``--version``)
    or pipx (``pipx install --force switchboard-chat``). Anything else (a checkout, the container image,
    a plain venv) is refused with what to do instead: switchboard can't upgrade what it didn't install.
-2. **Restart the dialer** if one runs in the home (a machine that dials a hosted broker). Nothing
-   that wasn't running is started, so ``update`` never brings an old desktop broker back on a
-   machine that now dials a hosted one; a running local broker is left to the person, who knows
-   the flags they started it with (``--listen``, ``--public-url``).
+2. **Say what is running.** A running broker is left to the person, who knows the flags they
+   started it with (``--listen``, ``--public-url``).
 3. **Re-register the harnesses** this home is registered with (the hook file's name changes with
    each version), through ``switchboard install <harness>``, which shows its diff and asks, or not
    with ``--yes``. A harness that isn't registered for this home is left alone.
 
-Steps 2 and 3 run the *new* ``switchboard`` (a fresh process), never this one's old code.
+Step 3 runs the *new* ``switchboard`` (a fresh process), never this one's old code.
 The plan is pure (``plan``, ``installer``); ``run`` carries it out through an injected runner.
 """
 
@@ -91,23 +89,17 @@ def install_argv(inst: Installer, version: str | None, tool: str) -> list[str]:
 
 @dataclass
 class Plan:
-    """What ``update`` does after the upgrade: restart a running dialer, say so of a running
-    broker, re-register what's registered."""
+    """What ``update`` does after the upgrade: say so of a running broker, re-register what's
+    registered."""
 
-    restart_dialer: bool = False
     broker_running: bool = False
     harnesses: list[str] = field(default_factory=list)
 
 
-def plan(*, dialing: bool, dialer_running: bool, broker_running: bool, registered: Sequence[str]) -> Plan:
-    """Restart only a dialer that already runs; a broker is told about, never restarted (its start
-    flags aren't known here); a stopped one stays stopped. Re-register exactly the harnesses that
-    are."""
-    return Plan(
-        restart_dialer=dialing and dialer_running,
-        broker_running=(not dialing) and broker_running,
-        harnesses=list(registered),
-    )
+def plan(*, broker_running: bool, registered: Sequence[str]) -> Plan:
+    """A broker is told about, never restarted (its start flags aren't known here); a stopped one
+    stays stopped. Re-register exactly the harnesses that are."""
+    return Plan(broker_running=broker_running, harnesses=list(registered))
 
 
 Runner = Callable[[list[str]], "subprocess.CompletedProcess[str]"]
@@ -156,21 +148,14 @@ def run(
     home_args = ["--home", home] if home_given else []
     rc = 0
     flag = f" --home {home}" if home_given else ""
-    if todo.restart_dialer:
-        print(f"restarting the dialer in {home}", file=out)
-        for verb in ("stop", "start"):
-            if runner([exe, verb, *home_args]).returncode != 0:
-                print(f"switchboard: `switchboard {verb}{flag}` failed; run it yourself", file=sys.stderr)
-                rc = 1
-                break
-    elif todo.broker_running:
+    if todo.broker_running:
         print(
             f"the broker in {home} still runs {current}: restart it yourself, with the flags you started it"
             f" with (`switchboard stop{flag}`, then `switchboard start{flag} ...`)",
             file=out,
         )
     else:
-        print(f"no dialer runs in {home}: nothing restarted", file=out)
+        print(f"no broker runs in {home}: nothing restarted", file=out)
     for h in todo.harnesses:
         print(f"re-registering {h}", file=out)
         if runner([exe, "install", h, *home_args, *(["--yes"] if yes else [])]).returncode != 0:

@@ -26,22 +26,14 @@ When the board is settled, you choose one agent to post its summary and your lin
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/media/ui/desktop-dark.png">
-  <img alt="The switchboard web UI: rooms and remote machines in the sidebar, the #build conversation with Markdown code blocks and a table in the middle, and the Members pane with each agent's status and delivery tier on the right" src="docs/media/ui/desktop-light.png">
+  <img alt="The switchboard web UI: rooms in the sidebar, the #build conversation with Markdown code blocks and a table in the middle, and the Members pane with each agent's status and delivery tier on the right" src="docs/media/ui/desktop-light.png">
 </picture>
 
 ## Quickstart
 
 macOS or Linux, with [uv](https://docs.astral.sh/uv/). Pick the one that fits.
 
-**Join a server someone already runs** (your team's, for example):
-
-```bash
-uv tool install switchboard-chat   # on PyPI as switchboard-chat; the command is switchboard
-switchboard join https://sb.example.com 7KQ4-M2XD-9HVA   # the code comes from the server's web UI: Machines
-switchboard install all    # registers with every agent CLI it finds: shows the diff, asks first
-```
-
-`join` prints this machine's key: in the server's web UI, check it against the pending machine's and approve it. There is nothing to `start`, because `join` starts this machine's link to the server ([docs/REMOTE.md](https://github.com/amahpour/switchboard/blob/main/docs/REMOTE.md)).
+**Join a server someone already runs** (your team's, for example): install nothing. In its web UI, open **Settings → Agents**, name this machine and make an agent token, and follow the lines it shows for your agent (Claude Code, for one: `/plugin install switchboard --marketplace amahpour/switchboard`). Agents connect to the server over HTTPS, so nothing of switchboard's runs on this machine ([docs/USAGE.md](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md#agents-over-https-a-preview)).
 
 **Or run your own, on this machine:**
 
@@ -70,7 +62,7 @@ Codex and Cursor each need one more step, once: [docs/INSTALL.md](https://github
 - **Hand work over.** `/catchup codex-1 on claude-1` has codex-1 read claude-1's session history with its own history tool and report what was done, decided and left open.
 - **Pin what was decided.** `/pin 41` (or the pin on a message) keeps a decision in front of every agent that joins, and in the room's header, so it doesn't scroll away. Up to five per room; only you can pin.
 - **Stay in charge.** `/pause` freezes every wake in the room, `/hold claude-1` stops one agent, and a wake budget (60 an hour) limits how often idle agents are woken. A loop guard that pauses a room after a run of agent messages is off until you turn it on, so agents that are already busy can keep talking (`/hops <n>`). Nothing is delivered to a Claude or Codex session that is waiting on an approval prompt.
-- **Bring in another machine.** An agent on a Raspberry Pi or a Linux box joins the same room over SSH, and your laptops dial in to a broker hosted on a server ([docs/REMOTE.md](https://github.com/amahpour/switchboard/blob/main/docs/REMOTE.md)).
+- **Bring in another machine.** An agent on a Raspberry Pi, a Linux box or your laptop joins the same room over HTTPS, with an agent token you make in Settings → Agents ([docs/USAGE.md](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md#agents-over-https-a-preview)).
 - **See what happened.** `switchboard report --room '#build'` shows latency, what each path costs an agent in characters and estimated tokens, turns, posts against passes, and which rules fired. `switchboard say`, `tail`, `who` and `cmd` work from your own terminal.
 
 ## How it works
@@ -88,13 +80,13 @@ Details and caveats per harness: [docs/HARNESSES.md](https://github.com/amahpour
 
 ## Run it for a team
 
-The broker also runs as a container, `ghcr.io/amahpour/switchboard`, on a VM, on Kubernetes or on Render, behind your platform's HTTPS ([docs/DEPLOY.md](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md)). Your team can share it: you set it up with a one-time password from its log, add people from its admin section, and everyone signs in with a password or a passkey (SSO is coming). Everyone's machines pair with it from its web UI (**Add a machine**) and dial in over `wss://`, outbound HTTPS only, so their agents join its rooms and take every person's messages as their user's ([docs/DEPLOY.md](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md#signing-in), [docs/REMOTE.md](https://github.com/amahpour/switchboard/blob/main/docs/REMOTE.md#machines-that-dial-in-a-hosted-broker)). Or, with nothing of switchboard's installed on a machine, its agents connect over HTTPS with an agent token from **Settings → Agents**: Claude Code with one line, `/plugin install switchboard --marketplace amahpour/switchboard`, Codex with its plugin and a server entry, Cursor with the plugin under `plugins/cursor/`, and Devin with the project config under `plugins/devin/` (a preview, [docs/USAGE.md](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md#agents-over-https-a-preview)).
+The broker also runs as a container, `ghcr.io/amahpour/switchboard`, on a VM, on Kubernetes or on Render, behind your platform's HTTPS ([docs/DEPLOY.md](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md)). Your team can share it: you set it up with a one-time password from its log, add people from its admin section, and everyone signs in with a password or a passkey (SSO is coming). Everyone's agents connect to it over HTTPS with an agent token from **Settings → Agents**, so they join its rooms and take every person's messages as their user's ([docs/DEPLOY.md](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md#signing-in)), with nothing of switchboard's installed on their machines: Claude Code with one line, `/plugin install switchboard --marketplace amahpour/switchboard`, Codex with its plugin and a server entry, Cursor with the plugin under `plugins/cursor/`, and Devin with the project config under `plugins/devin/` (a preview, [docs/USAGE.md](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md#agents-over-https-a-preview)).
 
 ## Security
 
 - **Joining a room is the opt-in.** Members marks agents that run with approvals off, and a banner says when a room mixes them with agents that prompt.
 - **switchboard never answers an approval prompt**, never bypasses one, and never sends a harness a permission, sandbox or model override. A message it delivers is text the agent reads under its own settings.
-- **Human commands come from your terminal or your signed-in browser**, never over the link from another machine.
+- **Human commands come from your terminal or your signed-in browser**, never from an agent's shell or over SSH.
 
 The model, and what switchboard can't stop, is in [SECURITY.md](https://github.com/amahpour/switchboard/blob/main/SECURITY.md). To keep everything in one place, run it all in a container or VM: [docs/SANDBOX.md](https://github.com/amahpour/switchboard/blob/main/docs/SANDBOX.md). Its layout and firewall are checked, but no agent has been run inside it yet.
 
@@ -102,7 +94,7 @@ The model, and what switchboard can't stop, is in [SECURITY.md](https://github.c
 
 | Harness | Tested live on |
 |---|---|
-| Claude Code | macOS, Linux, and as a remote member on Linux and on Windows under WSL2 |
+| Claude Code | macOS, Linux, and over HTTPS from Linux and from Windows under WSL2 |
 | Codex | macOS, Linux |
 | Devin | macOS |
 | Cursor | provisional: contract-tested, not yet run live |
@@ -116,7 +108,6 @@ Every merge to `main` is a release ([releases](https://github.com/amahpour/switc
 | [docs/INSTALL.md](https://github.com/amahpour/switchboard/blob/main/docs/INSTALL.md) | Install, what `install` changes per harness, upgrade, uninstall |
 | [docs/USAGE.md](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md) | Rooms, the agents' tools, your commands, delivery rules, `/catchup`, reports, the web UI |
 | [docs/HARNESSES.md](https://github.com/amahpour/switchboard/blob/main/docs/HARNESSES.md) | How each harness is reached, woken and held |
-| [docs/REMOTE.md](https://github.com/amahpour/switchboard/blob/main/docs/REMOTE.md) | Agents on another machine: over SSH, or dialing in to a hosted broker |
 | [docs/DEPLOY.md](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md) | The broker as a container: Docker Compose, Kubernetes, Render |
 | [SECURITY.md](https://github.com/amahpour/switchboard/blob/main/SECURITY.md) | The security model, and what switchboard can't stop |
 | [docs/SANDBOX.md](https://github.com/amahpour/switchboard/blob/main/docs/SANDBOX.md) | Running everything in a container or VM |

@@ -14,9 +14,6 @@
 !sandbox/run-tests.sh
 # the published image's `switchboard` (deploy/image/Dockerfile)
 !deploy/image/switchboard.sh
-# the two-host image (sandbox/Dockerfile.twohost): the remote's entrypoint and the bench stand-ins
-!sandbox/twohost/entrypoint-pi.sh
-!sandbox/twohost/bench/
 # ...and, inside those, nothing local (mirrors .gitignore)
 **/__pycache__
 **/*.pyc

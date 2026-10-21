@@ -49,14 +49,14 @@ def test_a_v26_board_keeps_its_rows_and_a_contested_finding_keeps_waiting_on_a_p
     or the upgrade quietly hands in-flight contests back to raisers nobody woke."""
     path = tmp_path / "switchboard.db"
     con = database_at_26(path)
-    before = db.row_counts(con, db.tables_of(26))
+    before = db.row_counts(con, db.kept_tables(26))
     con.close()
     os.chmod(path, 0o600)
 
     migrated = db.open_db(path)
     fresh = db.open_db(tmp_path / "fresh.db")
-    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 28
-    assert db.row_counts(migrated, db.tables_of(26)) == before
+    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 29
+    assert db.row_counts(migrated, db.kept_tables(26)) == before
     assert [tuple(r) for r in migrated.execute("PRAGMA table_info(review_items)")] == [
         tuple(r) for r in fresh.execute("PRAGMA table_info(review_items)")
     ]

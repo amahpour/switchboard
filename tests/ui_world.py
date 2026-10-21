@@ -15,8 +15,7 @@ What ``UIWorld.start()`` builds:
   (so scripted ``--harness test`` agents may join) and are switched out of it after the joins,
   so no TEST MODE band shows.
 - **Three rooms**: ``#build`` (the conversation), ``#fpga-bench`` (empty) and ``#docs``
-  (closed, so Closed rooms lists one). A 0600 ``remotes.toml`` names an ``fpga-pi`` remote
-  that is never enabled, so nothing dials.
+  (closed, so Closed rooms lists one).
 - **Four agents in #build** (``AGENTS``). Their tiers, approval modes, statuses and session
   ids are set through the store; their harness and host (and so their join lines) are
   rewritten with raw SQL, devin-1's parked reason goes straight into the engine, and the
@@ -39,7 +38,6 @@ stays free for synchronous work (Playwright's sync API, httpx).
 from __future__ import annotations
 
 import asyncio
-import os
 import shutil
 import threading
 import time
@@ -53,7 +51,7 @@ from conftest import TEST_HUMAN, InProcBroker, make_tmp_home
 AGENTS = ("claude-1", "codex-1", "devin-1", "bench")
 
 # (harness, tier, approval mode, status, host, session id) per agent: fixtures, not real
-# sessions. bench runs on the fpga-pi remote (host set), the others on this machine ("").
+# sessions. bench runs on another device (host set), the others on this machine ("").
 PROFILE = {
     "claude-1": ("claude", "claude:inbox", "prompting", "idle", "", "3f2a91c4-7d2e-4b8a-9c1e-5a6b7c8dc91e"),
     "codex-1": ("codex", "codex:daemon", "bypass", "busy", "", "019a3c2e-55d1-7c40-a0b2-6e1f0c9d2a77"),
@@ -70,10 +68,6 @@ PROFILE = {
 
 # devin-1's parked reason, as the engine words it
 PARKED = "its turn ended without wait()"
-
-# A remote that is configured but never enabled: the sidebar lists it, nothing dials it.
-# The host and user are placeholders (a .local name and the suite's test human).
-REMOTES_TOML = f'[remote.fpga-pi]\nhost = "fpga-pi.local"\nuser = "{TEST_HUMAN}"\nrooms = ["#build"]\n'
 
 # The seeded rooms: #docs is closed once seeded, so it shows under Closed rooms.
 ROOMS = ("#build", "#fpga-bench", "#docs")
@@ -277,8 +271,8 @@ class HostedWorld:
 
     def __init__(self, *, keep: bool = False, host: str = "sb.localhost", test_mode: bool = False) -> None:
         self.keep = keep
-        self.host = host  # "localhost" when a machine's dialer (another process) must resolve it too
-        self.test_mode = test_mode  # kept on: a test machine's dialer (a test-mode satellite) may link
+        self.host = host
+        self.test_mode = test_mode  # kept on when a test needs a scripted agent to join
         self.home = make_tmp_home()
         self.b: InProcBroker | None = None
 
@@ -296,8 +290,7 @@ class HostedWorld:
         return self
 
     def set_test_mode(self, on: bool) -> None:
-        """For the pictures: a page loaded with test mode off shows no TEST MODE band, and a test
-        machine's dialer (a test-mode satellite) links only while it's on."""
+        """For the pictures: a page loaded with test mode off shows no TEST MODE band."""
 
         def flip() -> None:
             self.broker.state.test_mode = on
@@ -355,10 +348,6 @@ class UIWorld:
     # ------------------------------------------------------------ lifecycle
     def start(self) -> UIWorld:
         try:
-            # 0600, created exclusively: the broker refuses a remotes.toml others can write
-            fd = os.open(self.home / "remotes.toml", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "w") as f:
-                f.write(REMOTES_TOML)
             self.b = start_broker(self.home)
             self.empty = start_broker(self.home2)
             not_test_mode(self.empty)

@@ -36,14 +36,14 @@ def test_v22_review_findings_gain_an_empty_deferred_to_after_a_backup(tmp_path: 
         (review_id, "finding", 1, "dropped", "old finding", "codex-1", "not a bug", 2.0, 2.0),
     )
     con.commit()
-    before = db.row_counts(con, db.tables_of(22))
+    before = db.row_counts(con, db.kept_tables(22))
     con.close()
     os.chmod(path, 0o600)
 
     migrated = db.open_db(path)
     fresh = db.open_db(tmp_path / "fresh.db")
-    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 28
-    assert db.row_counts(migrated, db.tables_of(22)) == before
+    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 29
+    assert db.row_counts(migrated, db.kept_tables(22)) == before
     row = migrated.execute("SELECT state, reason, deferred_to FROM review_items").fetchone()
     assert tuple(row) == ("dropped", "not a bug", "")
     assert [tuple(r) for r in migrated.execute("PRAGMA table_info(review_items)")] == [

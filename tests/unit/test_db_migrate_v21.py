@@ -21,15 +21,15 @@ def test_v20_upgrade_adds_empty_claims_with_a_backup(tmp_path: Path) -> None:
         for statement in statements:
             con.execute(statement)
     assert db.schema_version(con) == 20
-    before = db.row_counts(con, db.tables_of(20))
+    before = db.row_counts(con, db.kept_tables(20))
     con.commit()
     con.close()
     os.chmod(path, 0o600)
 
     migrated = db.open_db(path)
     fresh = db.open_db(tmp_path / "fresh.db")
-    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 28  # on through pins (#292)
-    assert db.row_counts(migrated, db.tables_of(20)) == before
+    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 29  # on through pins (#292)
+    assert db.row_counts(migrated, db.kept_tables(20)) == before
     assert migrated.execute("SELECT COUNT(*) FROM claims").fetchone()[0] == 0
     assert [tuple(r) for r in migrated.execute("PRAGMA table_info(claims)")] == [
         tuple(r) for r in fresh.execute("PRAGMA table_info(claims)")

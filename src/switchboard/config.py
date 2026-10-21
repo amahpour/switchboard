@@ -115,8 +115,7 @@ class ReviewCfg:
 @dataclass(frozen=True)
 class SecurityCfg:
     # DESIGN.md §27.5.7: human commands (switchboard say/cmd/login ...) from a process under a
-    # remote login on this machine (sshd, dropbear, mosh-server, ...). Off: refused. A relay peer
-    # is refused either way.
+    # remote login on this machine (sshd, dropbear, mosh-server, ...). Off: refused.
     allow_ssh_cli: bool = False
 
 

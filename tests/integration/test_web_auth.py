@@ -198,9 +198,10 @@ def test_web_say_can_reply_to_a_message_in_its_room(broker: InProcBroker, web: h
 
 
 def test_no_unauthenticated_write_routes(broker: InProcBroker) -> None:
-    """Enumerate every route: each unsafe method refuses a cookie-less request. POST /link/pair is
-    the one route a pairing code authenticates (DESIGN.md §31.7): it refuses any request with an
-    Origin (a browser's), and on a broker that takes no machines it is 404 without one."""
+    """Enumerate every route: each unsafe method refuses a cookie-less request. No path is exempt from
+    the Origin rule but the agent endpoint's (``AGENT_PATHS``, §49.2): the pairing route of machines
+    that dialed in (``/link/pair``, retired in #385) is not, so a request to it is refused like any
+    other write without the page's Origin."""
     from starlette.routing import Mount, Route, WebSocketRoute
 
     c = httpx.Client(base_url=broker.base)
@@ -221,10 +222,8 @@ def test_no_unauthenticated_write_routes(broker: InProcBroker) -> None:
             r = c.post(route.path + "/app.js", headers=broker.write_headers())
             assert r.status_code in (401, 403, 405)
     assert checked >= 4  # POST /logout, /api/rooms, say, command
-    r = c.post(
-        "/link/pair", json={"code": "x", "key": "y"}
-    )  # no Origin: the guard lets it through, the route decides
-    assert r.status_code == 404 and r.json()["error"] == "not_found"
+    r = c.post("/link/pair", json={"code": "x", "key": "y"})  # no Origin, and no longer an exception
+    assert r.status_code == 403 and r.json()["message"] == "bad origin"
 
 
 def test_docs_are_off_and_headers_present(broker: InProcBroker, web: httpx.Client) -> None:

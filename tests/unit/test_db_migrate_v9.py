@@ -21,13 +21,13 @@ def test_v8_database_gains_review_boards_with_a_checked_backup(tmp_path: Path) -
     con.execute("UPDATE rooms SET rules_text='be brief'")
     con.commit()
     assert db.schema_version(con) == 8
-    before = db.row_counts(con, db.V8_TABLES)
+    before = db.row_counts(con, db.kept(db.V8_TABLES))
     con.close()
     os.chmod(p, 0o600)
 
     con = db.open_db(p)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 28
-    assert db.row_counts(con, db.V8_TABLES) == before
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 29
+    assert db.row_counts(con, db.kept(db.V8_TABLES)) == before
     assert db.row_counts(con, ("reviews", "review_items")) == {"reviews": 0, "review_items": 0}
     assert con.execute("SELECT rules_text FROM rooms LIMIT 1").fetchone()[0] == "be brief"
     assert db.integrity_ok(con) is None
@@ -35,7 +35,7 @@ def test_v8_database_gains_review_boards_with_a_checked_backup(tmp_path: Path) -
     assert backup.exists() and os.stat(backup).st_mode & 0o777 == 0o600
     old = sqlite3.connect(backup)
     assert db.schema_version(old) == 8
-    assert db.row_counts(old, db.V8_TABLES) == before
+    assert db.row_counts(old, db.kept(db.V8_TABLES)) == before
     old.close()
     con.close()
 

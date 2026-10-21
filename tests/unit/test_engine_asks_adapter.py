@@ -16,7 +16,7 @@ from conftest import FakeClock
 from engine_world import KEY, World
 
 from switchboard import envelope
-from switchboard.adapters import HTTPS_CLAUDE, HTTPS_CODEX, HTTPS_DEVIN, REMOTE_CODEX, PullAdapter
+from switchboard.adapters import HTTPS_CLAUDE, HTTPS_CODEX, HTTPS_DEVIN, PullAdapter
 from switchboard.adapters.base import HOOK_CONTEXT_EVENTS
 from switchboard.adapters.codex import steered
 from switchboard.adapters.cursor import CursorAdapter
@@ -260,18 +260,6 @@ def tokens_of(w: World, bid: int, m: object) -> tuple[tuple[int, str], ...]:
     return ((int(t.group(1)), t.group(2)),)
 
 
-def test_a_local_only_harness_on_another_host_gets_its_remote_adapter(w: World) -> None:
-    """Fails if only Codex is looked up as ``<harness>@remote``."""
-    local, remote = SteeredAdapter("unknown", w.cfg), PullAdapter("unknown", w.cfg)
-    w.engine.adapters["unknown"] = local
-    w.engine.adapters["unknown@remote"] = remote
-    assert w.engine.adapter_for("unknown", "") is local
-    assert w.engine.adapter_for("unknown", "pi") is remote
-    del w.engine.adapters["unknown@remote"]  # none registered: the unknown harness's, not this one
-    assert w.engine.adapter_for("unknown", "pi") is w.engine.adapters["unknown"] is local
-    assert w.engine.adapter_for("claude", "pi") is w.engine.adapters["claude"]
-
-
 def test_an_adapter_can_take_its_status_from_sinks_and_confirm_pulls_at_once(w: World) -> None:
     """Fails if only a session named the test agent's gets either: with hooks seen, its
     status would follow its hooks, and a pull answer would wait for one."""
@@ -297,7 +285,6 @@ def test_each_harness_answers_as_the_engine_did_by_name(w: World) -> None:
     assert {h for h, a in ads.items() if a.reports_approval_mode} == {
         "claude",
         "codex",
-        REMOTE_CODEX,
         HTTPS_CLAUDE,
         HTTPS_CODEX,
     }
@@ -312,8 +299,6 @@ def test_each_harness_answers_as_the_engine_did_by_name(w: World) -> None:
     assert {h for h, a in ads.items() if a.derives_tier} == {"cursor", "devin", HTTPS_DEVIN}
     assert {h for h, a in ads.items() if a.followup_limit()} == {"cursor"}
     assert ads["cursor"].followup_limit() == w.cfg.cursor.max_unconfirmed_followups
-    assert {h for h, a in ads.items() if a.local_only} == {"codex"}
-    assert w.engine.adapter_for("codex", "pi") is ads[REMOTE_CODEX]
     assert {h for h, a in ads.items() if a.sink_status} == {"test"}
     p = w.p(w.agent("bot")[0])
     assert {h for h, a in ads.items() if a.pull_ack(p, None) != "hooks"} == {"test"}

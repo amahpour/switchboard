@@ -133,13 +133,6 @@ jobs:
       - name: lsof (the Codex client check and a bind test use it)
         if: runner.os == 'Linux'
         run: command -v lsof || (sudo apt-get update && sudo apt-get install -y --no-install-recommends lsof)
-      # The `ssh` tier (tests/integration/test_remote_ssh.py) runs a user-level sshd on 127.0.0.1
-      # (tests/fakes/sshd.py); macOS runners have /usr/sbin/sshd already
-      - name: OpenSSH server and client, rsync (the ssh tier)
-        if: runner.os == 'Linux'
-        run: |
-          if [ -x /usr/sbin/sshd ] && command -v ssh >/dev/null && command -v rsync >/dev/null; then exit 0; fi
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends openssh-server openssh-client rsync
       - run: uv sync --frozen
       # pyproject's addopts deselect `live` (real agent CLIs) and `perf` (timing targets).
       # --cov measures this process and ([tool.coverage.run] patch) its Python children.
@@ -164,31 +157,6 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
-
-  # Two hosts in containers (DESIGN.md §27.13 T2, docs/SANDBOX.md §11): a desktop and a fake
-  # remote machine on an internal network, paired for real, with the production ssh link
-  # between them and stand-in agents on both sides. Not part of the coverage figure.
-  twohost:
-    name: two hosts (containers)
-    needs: changes
-    if: needs.changes.outputs.tests == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      UV_PYTHON_PREFERENCE: only-managed
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
-        with:
-          version: "0.7.13"
-          python-version: "3.13"
-      - run: uv sync --frozen
-      - name: Build the two-host image
-        run: docker compose -f sandbox/twohost/compose.yaml --profile test build
-      # the tests start the containers under a project name of their own and remove them after
-      - run: uv run --frozen pytest -q -p no:cacheprovider -m twohost tests/twohost
 
   # The web UI in headless Chromium (Playwright): tests/e2e against a seeded test-mode broker
   # (marker `e2e`, deselected from the default run above), then docs/media/ui_shots.py into a
@@ -337,7 +305,7 @@ jobs:
   # passed or (docs only, a release PR) the tree scan did.
   ci:
     name: CI
-    needs: [changes, docs, lint, test, twohost, frontend, image, coverage]
+    needs: [changes, docs, lint, test, frontend, image, coverage]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -353,7 +321,7 @@ jobs:
           tests = needs["changes"].get("outputs", {}).get("tests")
           if needs["changes"]["result"] != "success" or tests not in ("true", "false"):
               sys.exit("`what changed` didn't decide whether to run the tests")
-          want = ("lint", "test", "twohost", "frontend", "image", "coverage") if tests == "true" else ("docs",)
+          want = ("lint", "test", "frontend", "image", "coverage") if tests == "true" else ("docs",)
           if failed := [job for job in want if needs[job]["result"] != "success"]:
               sys.exit(f"not passed: {', '.join(failed)}")
           print("tests ran and passed" if tests == "true" else "tests skipped (docs only or a release PR); tree scan passed")

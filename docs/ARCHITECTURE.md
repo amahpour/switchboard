@@ -15,7 +15,6 @@ flowchart TB
   end
   browser["Browser: web/static/"]
   cli["switchboard CLI"]
-  far["Another machine: satellite or dialer"]
   elsewhere["An agent anywhere, over HTTPS"]
   subgraph broker["Broker: switchboard start"]
     web["web.py: REST and WebSocket"]
@@ -35,7 +34,6 @@ flowchart TB
   mcp --> rpc
   hook --> rpc
   cli --> rpc
-  far -- "SSH or wss link: remote.py, machines.py" --> rpc
   elsewhere -- "an agent token" --> http
   web --> svc
   http --> svc
@@ -60,7 +58,6 @@ flowchart TB
 | **Hook script**<br>`hook/` | Run by the harness on each event. It reports the session's state and the batch tokens it saw, and prints the reply the broker allows: context after a tool call, a continue at stop. | [§7](DESIGN.md#7-hook-script-srcswitchboardhookswitchboard_hookpy) |
 | **Web UI**<br>`web/static/` | Plain JavaScript. Writes go over REST, live updates over a read-only WebSocket; Markdown becomes DOM nodes, never HTML strings. | [§29](DESIGN.md#29-the-native-web-ui-and-the-inspector-19), [§5.5](DESIGN.md#55-rest-and-websocket) |
 | **Agents over HTTPS**<br>`broker/agent_http.py`, `broker/agent_tokens.py`, `plugins/` | The same tools at `/mcp`, for an agent with an agent token and nothing of switchboard's on its machine: the token names the person and the device, and the harness names the session: Codex's thread, or the Claude Code, Cursor or Devin session its PreToolUse hook reports. Codex, Claude Code, Cursor and Devin for now. | [§49](DESIGN.md#49-agents-over-https-380) |
-| **Remote links**<br>`broker/remote.py`, `broker/machines.py`, `remote/` | One link per other machine: the broker dials it over SSH (`switchboard satellite` at the far end), or it dials a hosted broker over `wss://`. The far end vouches for that machine's processes, and the broker trusts it for that machine's members only. | [§27](DESIGN.md#27-remote-members-over-ssh-m8), [§31.7](DESIGN.md#317-the-dial-in-link) |
 
 Also: `cli.py`; `install/` ([§9.7](DESIGN.md#97-install-targets-switchboard-install-h)); `envelope.py` ([§8.6](DESIGN.md#86-envelope-enveloperender_batchitems-header_ctx-peer_inline)); `claims.py` ([§47](DESIGN.md#47-advisory-claims-for-work-outside-a-room-293)); `store.py`, `db.py` and `models.py` ([§4](DESIGN.md#4-data-model-sqlite)); `guardrails.py` ([§11](DESIGN.md#11-security-model)).
 
@@ -98,7 +95,7 @@ None now: #170 and #360 moved the last harness branches out of `agents.py` into 
 Start with [§1](DESIGN.md#1-overview), the overview and its design principles, and [§3](DESIGN.md#3-package-layout-pyproject-and-cli), the package layout. Then, for what you're changing:
 
 - **Start, stop, the home directory, config:** [§2](DESIGN.md#2-runtime-layout).
-- **The schema or a migration:** [§4](DESIGN.md#4-data-model-sqlite), then each version's section ([§27.6](DESIGN.md#276-data-model-schema-v2), [§31.2](DESIGN.md#312-data-model-schema-v3), [§32.2](DESIGN.md#322-data-model-schema-v4), [§37.3](DESIGN.md#373-storage-schema-version-9), [§38.3](DESIGN.md#383-storage-schema-version-10)).
+- **The schema or a migration:** [§4](DESIGN.md#4-data-model-sqlite), then each version's section ([§31.2](DESIGN.md#312-data-model-schema-v3), [§32.2](DESIGN.md#322-data-model-schema-v4), [§37.3](DESIGN.md#373-storage-schema-version-9), [§38.3](DESIGN.md#383-storage-schema-version-10)).
 - **The socket, roles, who a peer is, web sign-in:** [§5.2](DESIGN.md#52-methods-and-roles), [§5.3](DESIGN.md#53-peer-identity-and-human-auth-over-the-uds-f11), [§5.4](DESIGN.md#54-web-auth-validated-in-f10-s7-hardened), [§5.5](DESIGN.md#55-rest-and-websocket).
 - **An agent's tools, or the hook script:** [§6](DESIGN.md#6-mcp-server-switchboard-mcp), [§7](DESIGN.md#7-hook-script-srcswitchboardhookswitchboard_hookpy).
 - **Who hears what, and when:** [§8.2](DESIGN.md#82-engine-core-and-runner) engine and runner, [§8.5](DESIGN.md#85-loop-guard-requeue-watchdog-handled-pause) loop guard, [§8.6](DESIGN.md#86-envelope-enveloperender_batchitems-header_ctx-peer_inline) envelope, [§8.7](DESIGN.md#87-offers-confirmation-and-expiry-two-phase-ack-event-based) confirmation.
@@ -106,7 +103,7 @@ Start with [§1](DESIGN.md#1-overview), the overview and its design principles, 
 - **A slash command:** [§10](DESIGN.md#10-commands), [§26](DESIGN.md#26-catchup-an-agent-gets-up-to-speed-on-another-members-work-a-topic-or-the-room-replaces-review-2026-09-28) `/catchup`, [§28](DESIGN.md#28-closing-and-deleting-rooms-16) closing rooms.
 - **A permission, a secret or a guard:** [§11](DESIGN.md#11-security-model) and [SECURITY.md](../SECURITY.md).
 - **Tests:** [§12](DESIGN.md#12-test-strategy), and [CONTRIBUTING.md](../CONTRIBUTING.md) for the commands.
-- **Other machines, a hosted broker, people:** [§27.4](DESIGN.md#274-the-link) the SSH link, [§27.5](DESIGN.md#275-identity-and-authorization) identity, [§30](DESIGN.md#30-the-container-image-and-the-public-url-34) the image, [§31](DESIGN.md#31-a-hosted-broker-you-use-from-the-web-ui-alone-41) a hosted broker, [§32](DESIGN.md#32-people-a-team-on-one-hosted-broker-61) people, [§38](DESIGN.md#38-sign-in-with-google-70) Sign in with Google, [§39](DESIGN.md#39-identity-by-email-192) identity by email.
+- **Other machines, a hosted broker, people:** [§49](DESIGN.md#49-agents-over-https-380) agents over HTTPS, [§30](DESIGN.md#30-the-container-image-and-the-public-url-34) the image, [§31](DESIGN.md#31-a-hosted-broker-you-use-from-the-web-ui-alone-41) a hosted broker, [§32](DESIGN.md#32-people-a-team-on-one-hosted-broker-61) people, [§38](DESIGN.md#38-sign-in-with-google-70) Sign in with Google, [§39](DESIGN.md#39-identity-by-email-192) identity by email.
 - **The web UI:** [§29](DESIGN.md#29-the-native-web-ui-and-the-inspector-19), [§33](DESIGN.md#33-mermaid-diagrams-in-messages-57) diagrams, [§34](DESIGN.md#34-per-person-settings-100) settings, [§35](DESIGN.md#35-custom-room-rules-105) room rules, [§37](DESIGN.md#37-a-review-board-in-a-room-80) review board.
 
 [§15](DESIGN.md#15-implementation-notes-and-deviations-m1) to [§25](DESIGN.md#25-linux-support-2026-09-25) are each milestone's build notes: where it differs from the sections above, and why. F§4 and the like point into [FINDINGS.md](FINDINGS.md), what Milestone 0 measured about each harness.

@@ -2,7 +2,7 @@
 //
 // Security model (DESIGN.md §5.5, §12.1, §29):
 // - Every node is built with createElement / textContent. No HTML strings are ever parsed,
-//   so text from agents (or remote machines) can never become markup or script.
+//   so text from agents can never become markup or script.
 // - Chat bodies go through md.js (window.SBMarkdown.render), which builds a DOM fragment
 //   from a small Markdown subset. md.js owns the only link path in the static JS (http(s)
 //   only, never this switchboard page). This file never sets a link target itself.
@@ -42,14 +42,6 @@
     starting: 'Starting', idle: 'Idle', busy: 'Busy', 'waiting-approval': 'Waiting for approval', offline: 'Offline',
   };
 
-  // blocked(reason) on a remote row: a few words; the panel has the whole story (DESIGN.md §27.11)
-  const BLOCK_SHORT = {
-    host_key: 'host key changed', auth: 'key refused', files: 'key files', proto: 'version mismatch',
-    name: 'wrong name', shell_noise: 'shell prints text', replaced: 'link taken over', local_broker: 'broker there',
-    test_mode: 'test mode', ssh_bin: 'no /usr/bin/ssh', negotiate: 'no common algorithm',
-    command: 'forced command failed', satellite: 'satellite refused', exposed: 'stdio exposed',
-  };
-
   const state = {
     me: null,          // { human, admin, test_mode, version, commit, preferences, hosted, signin, passkeys, password, fresh }
     // name -> { name, slug, id, createdAt, lastId, msgs: [], members: [], settings: {},
@@ -64,12 +56,6 @@
     wsEverOpen: false,  // a socket was up once: a close now is a drop, not the first connect (#129)
     backoff: 500,
     pingTimer: null,
-    remotes: [],       // GET /api/remotes and the `remotes` event: every remote link's state
-    remotesAt: 0,      // when that snapshot arrived (ms), for the retry countdowns
-    remotesError: null,
-    enabling: new Set(),  // remotes whose Enable is in flight (a long poll)
-    chipsKey: null,    // remotesKey() of the sidebar rows and the sheet as rendered
-    panelKey: null,
     sendQueue: null,   // sends (typed or from the Inspector) go out one at a time, in order
     // Inspector: which agent, the latest member-detail GET, and its UI toggles
     inspect: null,     // { room, name } or null (the pane shows Members)
@@ -81,7 +67,7 @@
     insp: {},          // references to Inspector nodes built here (ids are not looked up)
     rowRefs: new Map(),  // member name -> its row button, for focus on "back"
     pop: null,         // composer popover: { kind: 'palette'|'mentions', items, sel, start }
-    sheetOpener: null, // the control that opened the Closed, Remotes or Passkeys sheet (focus returns to it)
+    sheetOpener: null, // the control that opened the Closed or People sheet (focus returns to it)
     passkeyBusy: false, // an Add a passkey ceremony is under way
     boardOpen: false,  // the active room's review board is shown instead of its log (#80)
     everyone: [],        // every person on a hosted broker, from the `people` frame (#354); empty on a desktop
@@ -93,20 +79,8 @@
     // preference fits a plain on/off toggle, and the lint bans browser storage for a new one
     // (§5.5, DESIGN.md §29.1), so it starts off again on every reload.
     focusMode: false,
-    // machines that dial in (a hosted broker, §31.8): GET /api/machines and the `machines` event
-    machinesHosted: false,
-    machines: [],
-    machineCodes: [],  // the live codes nobody used yet: [{ name, expires_in_s }]
-    machinesAt: 0,     // when that list arrived (ms): what's left of those codes
-    pairing: null,     // the code this page made: { name, code, install, join, expiresAt (ms) }
-    codeBusy: false,   // making a code (a passkey check may come first)
-    machineBusy: new Map(),  // machine name -> 'approve' | 'remove', while that request runs
-    machineDraft: '',  // the name typed in Add a machine, kept across renders
-    copiedCmd: null,   // which pairing command was just copied ('install' | 'join')
-    focusAfter: null,  // a data-focus key to move to at the next render (the new approval card)
-    machinesKey: null, // machinesKey() of the sheet as rendered
-    machineRowsKey: null,
-    sheetOpenerKey: null, // its data-focus key, to find it again if renderChips rebuilt it
+    sheetOpenerKey: null, // its data-focus key
+    focusAfter: null,  // a data-focus key to move to at the next render (a new agent token's card)
     draft: null,       // composer text a catch-up entry replaced; it comes back after the command (fillComposer)
     // people (a hosted broker, §32): the admin section's list, and the one-time password just made
     people: [],
@@ -379,7 +353,7 @@
 
   function pad2(n) { return (n < 10 ? '0' : '') + n; }
 
-  // `bench@fpga-pi` for a member or sender on a remote machine, the plain name on this one
+  // `bench@laptop` for a member or sender on a device, the plain name on this machine
   function label(name, host) { return host ? name + '@' + host : name; }
 
   function hhmm(ts) {
@@ -409,8 +383,6 @@
     t.title = d.toLocaleString();
     return t;
   }
-
-  function when(ts) { return ts ? new Date(ts * 1000).toLocaleString() : null; }
 
   function has(v) { return v !== null && v !== undefined; }
 
@@ -736,9 +708,8 @@
     return c;
   }
 
-  function remoteByName(name) { return state.remotes.find(function (x) { return x.name === name; }) || null; }
-
-  // the host chip: "@fpga-pi" in lists, "fpga-pi · up 2 ms" in the Inspector, "This machine" locally
+  // the host chip: "@laptop" in lists, "laptop" in the Inspector, "This machine" for an agent with
+  // no device (one an earlier release left in a room)
   function hostChip(m, long) {
     if (!m.host) {
       const c = el('span', 'host-chip local');
@@ -746,11 +717,9 @@
       c.title = 'runs on this machine';
       return c;
     }
-    const rem = remoteByName(m.host);
-    const c = el('span', 'host-chip remote');
-    c.append(icon('server'), long ? m.host + (rem ? ' · ' + chipText(rem) : '') : '@' + m.host);
-    c.title = 'runs on ' + m.host + ', a remote machine: its text may quote what that machine saw';
-    if (rem && rem.state !== 'up') c.classList.add('bad');
+    const c = el('span', 'host-chip device');
+    c.append(icon('server'), long ? m.host : '@' + m.host);
+    c.title = 'runs on ' + m.host + ', a device with an agent token: its text may quote what that device saw';
     return c;
   }
 
@@ -2737,8 +2706,6 @@
       // The new socket follows nothing until a hello: if the resync fails, hello the tabs we have.
       loadRooms(true).catch(function () { hello(Array.from(state.rooms.keys())); });
       if (!$('closed-panel').classList.contains('hidden')) loadClosed().catch(function () {});
-      loadRemotes().catch(function () {});  // the events missed while the socket was down
-      if (state.machinesHosted) loadMachines().catch(function () {});
       renderStatus();
       renderBuddies();
       clearInterval(state.pingTimer);
@@ -2839,8 +2806,6 @@
       r.boardGeneration = (r.boardGeneration || 0) + 1;
       setBoards(r, f.boards);
       if (f.room === state.active) renderBoard();
-    } else if (f.t === 'remotes') {
-      setRemotes(f.remotes || [], f.config_error || null);
     } else if (f.t === 'people') {
       // who is on this switchboard, and who has a page open (#354): the People list
       state.everyone = Array.isArray(f.people) ? f.people.filter(function (n) { return typeof n === 'string'; }) : [];
@@ -2848,52 +2813,10 @@
       renderRoomPeople();
       renderComposerMentions();  // who can be @mentioned (and their dot in the popover) changed
       if (state.pop && state.pop.kind === 'mentions') updatePopover();
-    } else if (f.t === 'machines') {
-      setMachines(f.machines || [], f.codes || []);
     }
   }
 
-  // ------------------------------------------------------------ remotes
-  // blocked reasons where Enable trusts something new (a host key, a satellite): it asks first
-  const ASK_BEFORE_ENABLE = new Set(['host_key', 'replaced', 'exposed']);
-
-  function retryLeft(r) {
-    if (r.retry_in_s === null || r.retry_in_s === undefined) return null;
-    return Math.max(0, Math.round(r.retry_in_s - (Date.now() - state.remotesAt) / 1000));
-  }
-
-  function fmtMs(ms) { return ms < 10 ? ms.toFixed(1) : String(Math.round(ms)); }
-
-  function needsEnable(r) {
-    return r.state === 'blocked' || (r.state === 'disabled' && r.reason !== 'removed');
-  }
-
-  function chipText(r) {
-    if (r.state === 'up') return 'up' + (has(r.rtt_ms) ? ' · ' + fmtMs(r.rtt_ms) + ' ms' : '');
-    if (r.state === 'connecting') return 'connecting…';
-    if (r.state === 'down') {
-      const left = retryLeft(r);
-      return 'down: ' + (r.reason || '?') + (left !== null ? ' (retry in ' + left + ' s)' : '');
-    }
-    if (r.state === 'blocked') return 'blocked: ' + (BLOCK_SHORT[r.reason] || r.reason || '?');
-    if (r.reason === 'config_changed') return 'needs enable (config changed)';
-    if (r.reason === 'not_enabled') return 'needs enable';
-    return r.reason || r.state;
-  }
-
-  // Everything a render shows except the numbers that tick (the RTT, the retry countdown):
-  // when only those changed, the rows and the sheet update them in place, so the focus
-  // and a selection in the sheet survive the 20 s refresh.
-  function remotesKey() {
-    return JSON.stringify([state.remotesError, Array.from(state.enabling).sort(), state.remotes.map(function (r) {
-      const c = Object.assign({}, r);
-      c.rtt_ms = has(r.rtt_ms);
-      c.retry_in_s = has(r.retry_in_s);
-      delete c.text;
-      return c;
-    })]);
-  }
-
+  // ------------------------------------------------------------ sheets
   function focusKey(box) {
     const f = document.activeElement;
     return f && box.contains(f) && f.dataset ? f.dataset.focus || null : null;
@@ -2908,168 +2831,7 @@
     return false;
   }
 
-  function byRemote(box, cls) {
-    const out = new Map();
-    for (const n of box.getElementsByClassName(cls)) out.set(n.dataset.remote, n);
-    return out;
-  }
-
-  // a row's tooltip: its state in full (a long one ends in an ellipsis in the row) and what a click does
-  function chipTitle(r) {
-    return 'Remote machine ' + r.name + ' (' + chipText(r) + '): open the remotes panel';
-  }
-
-  // the sidebar's Remote machines rows (button.remote.st-<state>); the dot is CSS (::before)
-  function renderChips() {
-    const bar = $('remotes');
-    const key = remotesKey();
-    if (key === state.chipsKey) {
-      if (!state.remotes.length) return;
-      const texts = byRemote(bar, 'remote-state');
-      for (const r of state.remotes) {
-        const t = texts.get(r.name);
-        if (t) {
-          t.textContent = chipText(r);
-          t.parentNode.title = chipTitle(r);
-        }
-      }
-      return;
-    }
-    state.chipsKey = key;
-    const focused = focusKey(bar);
-    bar.replaceChildren();
-    renderRemotesSection();
-    for (const r of state.remotes) {
-      const b = btn('remote st-' + r.state);
-      b.dataset.focus = 'chip:' + r.name;
-      b.title = chipTitle(r);
-      const t = el('span', 'remote-state', chipText(r));
-      t.dataset.remote = r.name;
-      b.append(icon('server'), el('span', 'remote-name', r.name), t);
-      b.addEventListener('click', openRemotes);
-      bar.append(b);
-    }
-    if (state.remotesError) {
-      const b = btn('remote st-error');
-      b.dataset.focus = 'chip:config';
-      b.title = state.remotesError;
-      b.append(icon('server'), el('span', 'remote-name', 'remotes.toml'), el('span', 'remote-state', 'not read'));
-      b.addEventListener('click', openRemotes);
-      bar.append(b);
-    }
-    refocus(bar, focused);
-  }
-
-  function kv(dl, k, v, cls) {
-    if (v === null || v === undefined || v === '') return null;
-    const dd = el('dd', cls || null, v);
-    dl.append(el('dt', null, k), dd);
-    return dd;
-  }
-
-  function remoteCard(r) {
-    const card = el('div', 'remote-card');
-    const head = el('div', 'remote-head');
-    const st = el('span', 'remote-state', chipText(r));
-    st.dataset.remote = r.name;
-    head.append(icon('server'), el('span', 'remote-name', r.name), st);
-    head.classList.add('st-' + r.state);
-    card.append(head);
-    const dl = el('dl', 'remote-facts');
-    kv(dl, 'State', r.state + (r.reason ? ' (' + r.reason + ')' : '') + (r.since ? ' since ' + when(r.since) : ''));
-    kv(dl, 'What to do', r.hint);
-    if (r.state === 'up' && has(r.rtt_ms)) kv(dl, 'RTT', fmtMs(r.rtt_ms) + ' ms', 'remote-rtt').dataset.remote = r.name;
-    // what an Enable consents to: where the link dials, the host key it trusts, the config's hash
-    kv(dl, 'Destination', r.dest);
-    kv(dl, 'Host key', (r.host_keys || []).join('\n'), 'remote-keys');
-    if (r.config_hash) {
-      kv(dl, 'Config', r.config_hash.slice(0, 12) + (r.reason === 'config_changed' ? ' (changed since you enabled it)' : ''));
-    }
-    if (r.version) kv(dl, 'Versions', 'satellite ' + r.version + ' (link protocol ' + r.proto + '), this broker ' + (state.me ? state.me.version : '?'));
-    kv(dl, 'Remote hooks', has(r.hooks) ? r.hooks + ' (as the remote reports)' : null);
-    if (has(r.skew_s)) kv(dl, 'Clock', (r.skew_s >= 0 ? '+' : '') + r.skew_s.toFixed(2) + ' s');
-    kv(dl, 'Hardened', r.harden);
-    kv(dl, 'Transport', r.transport + (r.test_mode ? ' (test mode)' : ''));
-    kv(dl, 'Rooms', (r.rooms || []).join(', '));
-    kv(dl, 'Harnesses', (r.harnesses || []).join(', '));
-    kv(dl, 'Members', (r.members || []).length ? r.members.join(', ') + ' (max ' + r.max_members + ')' : 'none (max ' + r.max_members + ')');
-    kv(dl, 'Enabled', r.enabled ? 'via ' + (r.enabled_via || '?') + ' on ' + when(r.enabled_at) : 'no');
-    kv(dl, 'Last up', when(r.last_up_at));
-    kv(dl, 'Dials', String(r.attempts));
-    card.append(dl);
-    if (r.detail) {
-      // text the remote machine may have printed (ssh's last line): data, shown to you only
-      card.append(el('div', 'fine', 'Last line from the link (the remote may have written it):'),
-        el('pre', 'cmd-out remote-detail', r.detail));
-    }
-    const btns = el('div', 'dialog-buttons');
-    if (needsEnable(r) || state.enabling.has(r.name)) {
-      const b = btn('btn btn-primary', state.enabling.has(r.name) ? 'Dialing…' : (r.state === 'blocked' ? 'Enable / reconnect' : 'Enable'));
-      b.dataset.focus = 'enable:' + r.name;
-      b.disabled = state.enabling.has(r.name);
-      b.title = 'consent to this remote\'s current config (the destination and host key above) and dial it now (the same as `switchboard remote enable ' + r.name + '`)';
-      b.addEventListener('click', function () { enableRemote(r.name); });
-      btns.append(b);
-    }
-    if (r.enabled && (r.state === 'up' || r.state === 'connecting' || r.state === 'down')) {
-      const d = btn('btn', 'Disable');
-      d.dataset.focus = 'disable:' + r.name;
-      d.title = 'stop dialing ' + r.name + ' (its members go offline)';
-      d.addEventListener('click', function () { disableRemote(r.name); });
-      btns.append(d);
-    }
-    if (btns.childNodes.length) card.append(btns);
-    const out = el('div', 'fine remote-result');
-    out.id = 'remote-result-' + r.name;
-    card.append(out);
-    return card;
-  }
-
-  function renderRemotesPanel() {
-    const body = $('remotes-body');
-    if ($('remotes-panel').classList.contains('hidden')) return;
-    const key = remotesKey();
-    if (key === state.panelKey) {
-      const states = byRemote(body, 'remote-state');
-      const rtts = byRemote(body, 'remote-rtt');
-      for (const r of state.remotes) {
-        if (states.has(r.name)) states.get(r.name).textContent = chipText(r);
-        if (rtts.has(r.name) && has(r.rtt_ms)) rtts.get(r.name).textContent = fmtMs(r.rtt_ms) + ' ms';
-      }
-      return;
-    }
-    state.panelKey = key;
-    const focused = focusKey(body);
-    const results = {};  // an Enable's answer survives a re-render
-    for (const n of body.querySelectorAll('.remote-result')) results[n.id] = [n.textContent, n.classList.contains('bad')];
-    body.replaceChildren();
-    if (state.remotesError) body.append(el('p', 'remote-error', 'remotes.toml was not read: ' + state.remotesError));
-    if (!state.remotes.length) body.append(el('p', null, 'No remotes. Add one with `switchboard remote add` in your terminal.'));
-    for (const r of state.remotes) body.append(remoteCard(r));
-    for (const id of Object.keys(results)) {
-      const n = document.getElementById(id);
-      if (n) {
-        n.textContent = results[id][0];
-        n.classList.toggle('bad', results[id][1]);
-      }
-    }
-    refocus(body, focused);
-  }
-
-  function setRemotes(list, err) {
-    state.remotes = list;
-    state.remotesAt = Date.now();
-    state.remotesError = err;
-    renderChips();
-    renderRemotesPanel();
-  }
-
-  async function loadRemotes() {
-    const data = await api('GET', '/api/remotes');
-    setRemotes(data.remotes || [], data.config_error || null);
-  }
-
-  const SHEETS = ['remotes-panel', 'machines-panel', 'closed-panel', 'people-panel'];
+  const SHEETS = ['closed-panel', 'people-panel'];
 
   function openSheet(id) {
     state.sheetOpener = document.activeElement || null;
@@ -3080,486 +2842,17 @@
   }
 
   // Focus goes back to the opener if it can still take it. It can't when the phone's rooms
-  // drawer closed as the sheet opened (the opener sits in the now hidden drawer), when
-  // renderChips rebuilt the remote rows meanwhile, or when the Closed button went away (the last
-  // closed room was reopened elsewhere). Then: the Rooms toggle on a phone, a rebuilt remote row
-  // with the same key, else the composer.
+  // drawer closed as the sheet opened (the opener sits in the now hidden drawer), or when the
+  // Closed button went away (the last closed room was reopened elsewhere). Then: the Rooms
+  // toggle on a phone, else the composer.
   function closeSheet(id) {
     $(id).classList.add('hidden');
     const back = state.sheetOpener;
-    const key = state.sheetOpenerKey;
     state.sheetOpener = null;
     state.sheetOpenerKey = null;
     if (tryFocus(back)) return;
     if (phone() && tryFocus($('rooms-toggle'))) return;
-    if (key && refocus($('remotes'), key)) return;
-    if (key && refocus($('machines'), key)) return;
     $('input').focus();
-  }
-
-  function openRemotes() {
-    openSheet('remotes-panel');
-    state.panelKey = null;  // it was not kept current while closed
-    renderRemotesPanel();
-    loadRemotes().catch(function () {});
-    $('remotes-close').focus();
-  }
-
-  function remoteResult(name, text, bad) {
-    const n = document.getElementById('remote-result-' + name);
-    if (n) {
-      n.textContent = text;
-      n.classList.toggle('bad', !!bad);
-    }
-  }
-
-  // an Enable's or a Disable's outcome, from the broker's facts (the hooks row stays in the
-  // panel, labelled: that text is the remote's)
-  function resultText(res) {
-    if (res.state === 'up') {
-      return 'link ok: satellite ' + (res.version || '?') + ' (link protocol ' + res.proto + ')' +
-        (has(res.rtt_ms) ? ', rtt ' + fmtMs(res.rtt_ms) + ' ms' : '') +
-        (has(res.skew_s) ? ', clock ' + (res.skew_s >= 0 ? '+' : '') + res.skew_s.toFixed(2) + ' s' : '');
-    }
-    return res.state + (res.reason ? ' (' + res.reason + ')' : '') + (res.hint ? ': ' + res.hint : '');
-  }
-
-  async function enableRemote(name) {
-    const r = state.remotes.find(function (x) { return x.name === name; });
-    if (!r) return;
-    if (r.state === 'blocked' && ASK_BEFORE_ENABLE.has(r.reason) &&
-        !await confirmDialog('Enable ' + name + '?',
-          'It is blocked (' + r.reason + '): ' + (r.hint || '') + ' Dial ' + (r.dest || name) + ' again.',
-          'Enable', false)) return;
-    state.enabling.add(name);
-    renderRemotesPanel();
-    remoteResult(name, 'dialing ' + name + '…');
-    try {
-      // the consent is for the config this page shows: the broker refuses it (409) if it changed since
-      const res = await api('POST', '/api/remotes/' + encodeURIComponent(name) + '/enable', { config_hash: r.config_hash });
-      state.enabling.delete(name);
-      await loadRemotes().catch(function () {});
-      remoteResult(name, resultText(res), res.state !== 'up');
-    } catch (e) {
-      state.enabling.delete(name);
-      await loadRemotes().catch(function () {});
-      renderRemotesPanel();
-      remoteResult(name, String(e.message || e), true);
-    }
-  }
-
-  async function disableRemote(name) {
-    if (!await confirmDialog('Disable ' + name + '?',
-      'Its members go offline until you enable it again.', 'Disable', true)) return;
-    try {
-      const res = await api('POST', '/api/remotes/' + encodeURIComponent(name) + '/disable', {});
-      await loadRemotes().catch(function () {});
-      remoteResult(name, resultText(res), false);
-    } catch (e) {
-      remoteResult(name, String(e.message || e), true);
-    }
-  }
-
-  // ------------------------------------------------------------ machines
-  // Machines that dial in (DESIGN.md §31.8), on a hosted broker only: their rows under Remote
-  // machines and Add a machine in the sidebar, and the Machines sheet. In the sheet, top down: a
-  // pending machine's approval card (what it says about itself, shown as its own claims, and its
-  // key's fingerprint to compare with what `remote join` printed there); Add a machine (a name,
-  // then the two commands with Copy buttons, a countdown and "waiting for … to dial in"); and each
-  // approved machine's card (state, last seen, Remove). Making a code and approving need a passkey
-  // check in the last five minutes: withFreshCheck asks for a passkey once, then tries again.
-  const MACHINE_NAME = /^[a-z][a-z0-9-]{0,23}$/;
-  // why a machine's link was refused, each time it dials, until that's fixed on the machine
-  const MACHINE_REFUSED = new Set(['proto', 'name', 'test_mode']);
-
-  function machineState(m) {
-    if (m.state === 'pending') return 'pending';
-    if (m.state === 'blocked' || (m.state === 'down' && MACHINE_REFUSED.has(m.reason))) return 'blocked';
-    if (m.state === 'up' || m.state === 'connecting') return m.state;
-    return 'offline';  // its dialer isn't connected: the machine is off, asleep or out of reach
-  }
-
-  function machineChip(m) {
-    const s = machineState(m);
-    if (s === 'pending') return 'needs approval';
-    if (s === 'up') return 'up' + (has(m.rtt_ms) ? ' · ' + fmtMs(m.rtt_ms) + ' ms' : '');
-    if (s === 'connecting') return 'connecting…';
-    if (s === 'blocked') return 'refused: ' + (BLOCK_SHORT[m.reason] || m.reason || '?');
-    return 'offline';
-  }
-
-  // when a machine was last heard from: "just now", "4 min ago", "3 h ago", then a date
-  function ago(ts) {
-    if (!ts) return null;
-    const s = Math.max(0, Date.now() / 1000 - ts);
-    if (s < 45) return 'just now';
-    if (s < 5400) return Math.max(1, Math.round(s / 60)) + ' min ago';
-    if (s < 129600) return Math.round(s / 3600) + ' h ago';
-    return stamp(ts);
-  }
-
-  function mmss(s) { return Math.floor(s / 60) + ':' + pad2(s % 60); }
-
-  function pairingLeft() {
-    const p = state.pairing;
-    return p ? Math.max(0, Math.ceil((p.expiresAt - Date.now()) / 1000)) : 0;
-  }
-
-  // text whose `quoted` parts are code, into e (a new element with withCode)
-  function fillCode(e, text) {
-    String(text).split('`').forEach(function (part, i) {
-      if (part) e.append(i % 2 ? el('code', null, part) : part);
-    });
-    return e;
-  }
-
-  function withCode(tag, cls, text) { return fillCode(el(tag, cls), text); }
-
-  // the Remote machines section: ssh remotes, machines that dial in, or Add a machine
-  function renderRemotesSection() {
-    $('remotes-section').classList.toggle('hidden',
-      state.remotes.length === 0 && !state.remotesError && !state.machinesHosted);
-    $('add-machine').classList.toggle('hidden', !state.machinesHosted);
-  }
-
-  // the sidebar's rows, as the ssh remotes' (button.remote.st-<state>, the dot from CSS)
-  function renderMachineRows() {
-    renderRemotesSection();
-    const box = $('machines');
-    const key = JSON.stringify(state.machines.map(function (m) { return [m.name, machineState(m), machineChip(m)]; }));
-    if (key === state.machineRowsKey) return;
-    state.machineRowsKey = key;
-    const focused = focusKey(box);
-    box.replaceChildren();
-    for (const m of state.machines) {
-      const b = btn('remote st-' + machineState(m));
-      b.dataset.focus = 'machine:' + m.name;
-      b.title = 'Machine ' + m.name + ' (' + machineChip(m) + '): open Machines';
-      b.append(icon('laptop'), el('span', 'remote-name', m.name), el('span', 'remote-state', machineChip(m)));
-      b.addEventListener('click', function () { openMachines(m.name); });
-      box.append(b);
-    }
-    refocus(box, focused);
-  }
-
-  // Everything the sheet shows except what ticks (the countdown, last seen, the RTT): when only
-  // those changed, tickMachines updates them in place and the focus stays put.
-  function machinesKey() {
-    const p = state.pairing;
-    return JSON.stringify([p && [p.name, p.code, pairingLeft() === 0], state.codeBusy, state.copiedCmd,
-      Array.from(state.machineBusy.entries()).sort(), state.machineCodes.map(function (c) { return c.name; }),
-      state.machines.map(function (m) {
-        const c = Object.assign({}, m);
-        c.rtt_ms = has(m.rtt_ms);
-        delete c.last_seen;
-        return c;
-      })]);
-  }
-
-  function machineHead(m, iconName, title, chip) {
-    const head = el('div', 'remote-head');
-    head.append(icon(iconName), el('span', 'remote-name', title));
-    if (chip) head.append(el('span', 'remote-state', chip));
-    return head;
-  }
-
-  function machineResultLine(id) {
-    const out = el('div', 'fine machine-result');
-    out.id = 'machine-result-' + id;
-    return out;
-  }
-
-  // what a machine said about itself when it paired: its own claims, as text
-  function claimFacts(f) {
-    const dl = el('dl', 'remote-facts');
-    f = f || {};
-    kv(dl, 'Host name', f.hostname);
-    kv(dl, 'System', [f.os, f.arch].filter(Boolean).join(' · ') || null);
-    kv(dl, 'switchboard', f.version);
-    kv(dl, 'Harnesses', (f.harnesses || []).join(', ') || null);
-    return dl;
-  }
-
-  // a machine's card: focusable (not in the tab order), so opening the sheet at it can move the
-  // focus there, and a re-render finds it again by its key
-  function cardFor(m, cls) {
-    const card = el('div', 'machine-card ' + cls);
-    card.dataset.machine = m.name;
-    card.dataset.focus = 'card:' + m.name;
-    card.tabIndex = -1;
-    return card;
-  }
-
-  function approvalCard(m) {
-    const card = cardFor(m, 'st-pending');
-    card.append(machineHead(m, 'laptop', m.name, machineChip(m)));
-    card.append(withCode('p', 'fine', m.dialed_in
-      ? 'It dialed in and is waiting for you. Until you approve it, its agents reach no room.'
-      : 'It paired, and its dialer isn\'t connected: `switchboard start` there starts it. You can approve it first.'));
-    const facts = claimFacts(m.facts);
-    if (facts.childNodes.length) card.append(el('p', 'machine-label', 'What it says about itself'), facts);
-    card.append(el('p', 'machine-label', 'Its key'), el('code', 'machine-fp', m.key_fp));
-    const check = el('p', 'machine-check');
-    check.append(icon('warn'), withCode('span', null,
-      'Check this matches what `remote join` printed on your machine. If it doesn\'t, reject it: someone else used the code.'));
-    card.append(check);
-    const busy = state.machineBusy.get(m.name);
-    const btns = el('div', 'dialog-buttons');
-    const ok = btn('btn-primary', busy === 'approve' ? 'Approving…' : 'Approve');
-    ok.dataset.focus = 'approve:' + m.name;
-    ok.disabled = !!busy;
-    ok.title = (state.me && state.me.fresh ? '' : 'asks for one of your passkeys first, then ') +
-      'lets ' + m.name + ' in: its agents can join rooms';
-    ok.addEventListener('click', function () { approveMachine(m.name); });
-    const no = btn('btn', busy === 'remove' ? 'Rejecting…' : 'Reject');
-    no.dataset.focus = 'reject:' + m.name;
-    no.disabled = !!busy;
-    no.title = 'forget ' + m.name + ' and its key: its dialer stops for good';
-    no.addEventListener('click', function () { removeMachine(m.name, true); });
-    btns.append(ok, no);
-    card.append(btns, machineResultLine(m.name));
-    return card;
-  }
-
-  function stepLine(n, text) {
-    const p = el('p', 'machine-step');
-    p.append(el('b', null, n + '.'), ' ' + text);
-    return p;
-  }
-
-  // a command and its Copy button. The command wraps where it must; with keepLast, its last
-  // word never breaks: the pairing code, typed by hand as often as it's pasted, and the package
-  // to install (`switchboard-chat`, which would otherwise break at its hyphen)
-  function cmdBox(text, key, keepLast) {
-    const box = el('div', 'machine-cmd');
-    const code = el('code');
-    const cut = keepLast ? text.lastIndexOf(' ') + 1 : text.length;
-    code.append(text.slice(0, cut));
-    if (cut < text.length) code.append(el('span', 'nowrap', text.slice(cut)));
-    code.id = 'pair-' + key;
-    const copy = btn('copy-btn');
-    copy.dataset.focus = 'copy:' + key;
-    const copied = state.copiedCmd === key;
-    const lbl = copied ? 'Copied' : 'Copy the command';
-    copy.setAttribute('aria-label', lbl);
-    copy.title = lbl;
-    copy.append(icon(copied ? 'check' : 'copy'));
-    copy.addEventListener('click', function () {
-      clipboardWrite(text).then(function () {
-        state.copiedCmd = key;
-        renderMachinesPanel();
-        setTimeout(function () {
-          if (state.copiedCmd !== key) return;
-          state.copiedCmd = null;
-          renderMachinesPanel();
-        }, COPIED_MS);
-      }, function () { copyFailed(copy, code); });
-    });
-    box.append(code, copy);
-    return box;
-  }
-
-  // the code this page made: the two commands, the countdown, "waiting for … to dial in"
-  function pairingCard(p) {
-    const left = pairingLeft();
-    const card = el('div', 'machine-card');
-    card.append(machineHead(null, 'plus', 'Add ' + p.name, null));
-    card.append(stepLine('1', 'Install switchboard on ' + p.name + ', if it isn\'t there yet:'), cmdBox(p.install, 'install', true),
-      stepLine('2', 'Pair it with this switchboard. The code works once:'), cmdBox(p.join, 'join', true));
-    const wait = el('div', 'machine-wait' + (left ? '' : ' expired'));
-    const t = el('span', 'machine-left', left ? mmss(left) + ' left' : '');
-    t.id = 'pair-left';
-    wait.append(el('span', 'pulse'), el('span', null, left ? 'Waiting for ' + p.name + ' to dial in…'
-      : 'The code expired before a machine used it.'), t);
-    card.append(wait);
-    const btns = el('div', 'dialog-buttons');
-    if (!left) {
-      const again = btn('btn-primary', state.codeBusy ? 'Waiting…' : 'Make a new code');
-      again.dataset.focus = 'pair-again';
-      again.disabled = state.codeBusy;
-      again.addEventListener('click', function () { makeCode(p.name); });
-      btns.append(again);
-    }
-    const cancel = btn('btn', 'Cancel');
-    cancel.dataset.focus = 'pair-cancel';
-    cancel.title = left ? 'the code stops working now' : 'back to Add a machine';
-    cancel.addEventListener('click', function () { cancelCode(p.name); });
-    btns.append(cancel);
-    card.append(btns, machineResultLine('pair'));
-    return card;
-  }
-
-  function agentsAs(typed) {
-    const n = String(typed || '').trim().toLowerCase();
-    return 'Lowercase letters, digits and dashes. Its agents show up as bench@' + (MACHINE_NAME.test(n) ? n : 'work-laptop') + '.';
-  }
-
-  function addCard() {
-    const card = el('div', 'machine-card');
-    card.append(machineHead(null, 'plus', 'Add a machine', null));
-    card.append(el('p', 'fine', 'Name it, and run the two commands you get on it. Once it dials in, you approve it here.'));
-    const form = el('form', 'machine-add');
-    form.id = 'machine-add';
-    form.setAttribute('autocomplete', 'off');
-    const label = el('label', null, 'Its name');
-    label.htmlFor = 'machine-name';
-    const row = el('div', 'machine-row');
-    const input = el('input');
-    input.type = 'text';
-    input.id = 'machine-name';
-    input.name = 'name';
-    input.maxLength = 24;
-    input.spellcheck = false;
-    input.setAttribute('autocapitalize', 'none');
-    input.placeholder = 'work-laptop';
-    input.value = state.machineDraft;
-    input.dataset.focus = 'machine-name';
-    const hint = el('p', 'fine', agentsAs(state.machineDraft));
-    input.addEventListener('input', function () {
-      state.machineDraft = input.value;
-      hint.textContent = agentsAs(input.value);
-    });
-    const go = btn('btn-primary', state.codeBusy ? 'Waiting…' : 'Make a pairing code');
-    go.type = 'submit';
-    go.id = 'machine-pair-btn';
-    go.disabled = state.codeBusy;
-    go.title = (state.me && state.me.fresh ? '' : 'asks for one of your passkeys first, then ') +
-      'makes a code that works once, for 10 minutes';
-    row.append(input, go);
-    form.append(label, row, hint);
-    form.addEventListener('submit', function (ev) {
-      ev.preventDefault();
-      makeCode(input.value);
-    });
-    card.append(form);
-    // codes made elsewhere (another tab, before a reload) that no machine used yet
-    for (const c of state.machineCodes) {
-      const left = c.expires_in_s - (Date.now() - state.machinesAt) / 1000;
-      if (left <= 0) continue;
-      const line = el('div', 'machine-wait');
-      const cancel = btn('btn-danger-ghost', 'Cancel it');
-      cancel.dataset.focus = 'cancel:' + c.name;
-      cancel.title = 'the code for ' + c.name + ' stops working now';
-      cancel.addEventListener('click', function () { cancelCode(c.name); });
-      line.append(el('span', 'pulse'), el('span', null, 'A code for ' + c.name + ' works for ' +
-        Math.max(1, Math.ceil(left / 60)) + ' more min.'), cancel);
-      card.append(line);
-    }
-    card.append(machineResultLine('add'));
-    return card;
-  }
-
-  function machineCard(m) {
-    const s = machineState(m);
-    const card = cardFor(m, 'st-' + s);
-    card.append(machineHead(m, 'laptop', m.name, machineChip(m)));
-    const dl = el('dl', 'remote-facts');
-    const what = { up: 'up', connecting: 'connecting', blocked: 'refused each time it dials (' + (m.reason || '?') + ')',
-                   offline: 'offline: its dialer isn\'t connected' }[s];
-    kv(dl, 'State', what + (m.since && s !== 'offline' ? ' since ' + stamp(m.since) : ''));
-    if (m.hint) {
-      const todo = kv(dl, 'What to do', ' ');
-      todo.textContent = '';
-      fillCode(todo, m.hint);
-    }
-    if (s !== 'up') kv(dl, 'Last seen', ago(m.last_seen) || 'never', 'machine-seen').dataset.machine = m.name;
-    if (s === 'up' && has(m.rtt_ms)) kv(dl, 'RTT', fmtMs(m.rtt_ms) + ' ms');
-    kv(dl, 'Transport', 'wss: it dials in' + (m.test_mode ? ' (test mode)' : ''));
-    kv(dl, 'Key', m.key_fp, 'remote-keys');
-    const f = m.facts || {};
-    kv(dl, 'Says it is', [f.hostname, f.os, f.arch].filter(Boolean).join(' · ') || null);
-    if (m.version) kv(dl, 'Versions', 'switchboard ' + m.version + ' there, ' + (state.me ? state.me.version : '?') + ' here');
-    const members = m.members || [];
-    kv(dl, 'Members', (members.length ? members.join(', ') : 'none') + ' (max ' + (m.max_members || 8) + ')');
-    if (m.paired_by) kv(dl, 'Paired by', m.paired_by);
-    kv(dl, 'Approved', m.approved_at ? (m.approved_by ? 'by ' + m.approved_by + ', ' : '') + 'via ' + (m.approved_via || '?') + ' on ' + stamp(m.approved_at) : null);
-    card.append(dl);
-    if (m.detail) {
-      card.append(el('div', 'fine', 'Last line from the link (the machine may have written it):'),
-        el('pre', 'cmd-out remote-detail', m.detail));
-    }
-    const busy = state.machineBusy.get(m.name);
-    const btns = el('div', 'dialog-buttons');
-    const rm = btn('btn', busy === 'remove' ? 'Removing…' : 'Remove');
-    rm.dataset.focus = 'remove:' + m.name;
-    rm.disabled = !!busy;
-    rm.title = 'forget ' + m.name + ': its agents leave every room at once and its dialer stops for good';
-    rm.addEventListener('click', function () { removeMachine(m.name, false); });
-    btns.append(rm);
-    card.append(btns, machineResultLine(m.name));
-    return card;
-  }
-
-  function renderMachinesPanel(force) {
-    const body = $('machines-body');
-    if ($('machines-panel').classList.contains('hidden')) return;
-    const key = machinesKey();
-    if (!force && key === state.machinesKey) {
-      tickMachines();
-      return;
-    }
-    state.machinesKey = key;
-    const focused = focusKey(body);
-    const f = document.activeElement;
-    const inSheet = !f || f === document.body || $('machines-panel').contains(f);
-    const results = {};  // a result line survives a re-render
-    for (const n of body.querySelectorAll('.machine-result')) results[n.id] = [n.textContent, n.classList.contains('bad')];
-    body.replaceChildren();
-    const note = machineResultLine('note');
-    body.append(note);
-    for (const m of state.machines) if (m.state === 'pending') body.append(approvalCard(m));
-    body.append(state.pairing ? pairingCard(state.pairing) : addCard());
-    for (const m of state.machines) if (m.state !== 'pending') body.append(machineCard(m));
-    for (const id of Object.keys(results)) {
-      const n = document.getElementById(id);
-      if (n) {
-        n.textContent = results[id][0];
-        n.classList.toggle('bad', results[id][1]);
-      }
-    }
-    const after = state.focusAfter;
-    state.focusAfter = null;
-    if (after && inSheet && refocus(body, after)) return;
-    if (focused && !refocus(body, focused)) tryFocus($('machines-close'));
-  }
-
-  function tickMachines() {
-    const t = document.getElementById('pair-left');
-    const left = pairingLeft();
-    if (t && left) t.textContent = mmss(left) + ' left';
-    for (const n of $('machines-body').getElementsByClassName('machine-seen')) {
-      const m = state.machines.find(function (x) { return x.name === n.dataset.machine; });
-      if (m && machineState(m) !== 'up') n.textContent = ago(m.last_seen) || 'never';
-    }
-  }
-
-  function setMachines(list, codes) {
-    const p = state.pairing;
-    state.machines = list;
-    state.machinesAt = Date.now();
-    state.machineCodes = codes.filter(function (c) { return !p || c.name !== p.name; });
-    // the machine this page made a code for has paired: its approval card takes the pairing's place
-    if (p && list.some(function (m) { return m.name === p.name; })) {
-      state.pairing = null;
-      state.copiedCmd = null;
-      state.focusAfter = 'approve:' + p.name;
-    }
-    renderMachineRows();
-    renderMachinesPanel();
-  }
-
-  async function loadMachines() {
-    const data = await api('GET', '/api/machines');
-    state.machinesHosted = !!data.hosted;
-    setMachines(data.machines || [], data.codes || []);
-  }
-
-  function machineResult(id, text, bad) {
-    const n = document.getElementById('machine-result-' + id);
-    if (n) {
-      n.textContent = text;
-      n.classList.toggle('bad', !!bad);
-    }
   }
 
   // A request that needs a password or passkey check in the last five minutes (§32.4). It asks
@@ -3665,105 +2958,6 @@
       await freshCheck();
       return call();
     }
-  }
-
-  async function makeCode(raw) {
-    const name = String(raw || '').trim().toLowerCase();
-    const where = state.pairing ? 'pair' : 'add';
-    if (!MACHINE_NAME.test(name)) {
-      machineResult(where, 'A name looks like work-laptop: a letter first, then letters, digits or dashes, at most 24.', true);
-      return;
-    }
-    if (state.codeBusy) return;
-    state.codeBusy = true;
-    renderMachinesPanel();
-    machineResult(where, '');
-    machineResult('note', '');
-    try {
-      const res = await withFreshCheck(function () { return api('POST', '/api/machines/pair', { name: name }); });
-      state.codeBusy = false;
-      state.machineDraft = '';
-      state.pairing = { name: res.name, code: res.code, install: res.install, join: res.join,
-                        expiresAt: Date.now() + res.expires_in_s * 1000 };
-      state.machineCodes = state.machineCodes.filter(function (c) { return c.name !== res.name; });
-      state.focusAfter = 'copy:install';
-      renderMachinesPanel(true);
-    } catch (e) {
-      state.codeBusy = false;
-      renderMachinesPanel(true);
-      machineResult(where, String(e.message || e), true);
-    }
-  }
-
-  async function cancelCode(name) {
-    if (state.pairing && state.pairing.name === name) {
-      state.pairing = null;
-      state.copiedCmd = null;
-      state.machineDraft = name;
-    }
-    state.machineCodes = state.machineCodes.filter(function (c) { return c.name !== name; });
-    state.focusAfter = 'machine-name';
-    renderMachinesPanel(true);
-    try { await api('POST', '/api/machines/' + encodeURIComponent(name) + '/cancel', {}); } catch (e) { /* it expires anyway */ }
-  }
-
-  async function approveMachine(name) {
-    if (state.machineBusy.has(name)) return;
-    machineResult('note', '');
-    state.machineBusy.set(name, 'approve');
-    renderMachinesPanel();
-    try {
-      await withFreshCheck(function () { return api('POST', '/api/machines/' + encodeURIComponent(name) + '/approve', {}); });
-      state.machineBusy.delete(name);
-      await loadMachines().catch(function () {});
-      renderMachinesPanel(true);
-    } catch (e) {
-      state.machineBusy.delete(name);
-      renderMachinesPanel(true);
-      machineResult(name, String(e.message || e), true);
-    }
-  }
-
-  async function removeMachine(name, pending) {
-    if (!await confirmDialog((pending ? 'Reject ' : 'Remove ') + name + '?', pending
-      ? 'Its key is forgotten and its dialer stops for good. To pair it again, make a new code.'
-      : 'Its agents leave every room at once, and its dialer stops for good. To bring it back, pair it again with a new code.',
-    pending ? 'Reject' : 'Remove', true)) return;
-    machineResult('note', '');
-    state.machineBusy.set(name, 'remove');
-    renderMachinesPanel();
-    try {
-      const res = await api('POST', '/api/machines/' + encodeURIComponent(name) + '/remove', {});
-      state.machineBusy.delete(name);
-      await loadMachines().catch(function () {});
-      renderMachinesPanel(true);
-      machineResult('note', (pending ? 'Rejected ' : 'Removed ') + name +
-        (res && res.ended ? ': ' + plural(res.ended, 'member', 'members') + ' left the rooms.' : '.'), false);
-      tryFocus($('machines-close'));
-    } catch (e) {
-      state.machineBusy.delete(name);
-      renderMachinesPanel(true);
-      machineResult(name, String(e.message || e), true);
-    }
-  }
-
-  // name: the machine whose card to show (a sidebar row), or null for Add a machine
-  function openMachines(name) {
-    openSheet('machines-panel');
-    renderMachinesPanel(true);
-    loadMachines().catch(function () {});
-    const body = $('machines-body');
-    if (name) {
-      for (const c of body.getElementsByClassName('machine-card')) {
-        if (c.dataset.machine !== name) continue;
-        if (typeof c.scrollIntoView === 'function') c.scrollIntoView({ block: 'nearest' });
-        if (tryFocus(c)) return;
-      }
-    } else {
-      if (tryFocus(document.getElementById('machine-name'))) return;
-      if (refocus(body, 'copy:install')) return;
-    }
-    $('machines-close').focus();
   }
 
   // ------------------------------------------------------------ sign-in
@@ -4354,6 +3548,16 @@
     if (focused) refocus(body, focused);
   }
 
+  // when a token was last used: "just now", "4 min ago", "3 h ago", then a date
+  function ago(ts) {
+    if (!ts) return null;
+    const s = Math.max(0, Date.now() / 1000 - ts);
+    if (s < 45) return 'just now';
+    if (s < 5400) return Math.max(1, Math.round(s / 60)) + ' min ago';
+    if (s < 129600) return Math.round(s / 3600) + ' h ago';
+    return stamp(ts);
+  }
+
   // one device's token: its name, when it was made and last used, and Revoke (asked on the row)
   function agentTokenRow(t) {
     const li = el('li', 'agent-token');
@@ -4470,9 +3674,11 @@
     return box;
   }
 
+  const DEVICE_NAME = /^[a-z][a-z0-9-]{0,23}$/;  // models.HOST_RE: a device is a host
+
   async function makeAgentToken(raw) {
     const device = String(raw || '').trim().toLowerCase();
-    if (!MACHINE_NAME.test(device)) {
+    if (!DEVICE_NAME.test(device)) {
       state.agentTokenMsg = { text: 'A device’s name looks like work-laptop: a letter first, then letters, digits or dashes, at most 24.', bad: true };
       state.focusAfter = 'agent-token-device';
       renderSettingsAgents();
@@ -4823,10 +4029,10 @@
   // The admin's view of private rooms (§44.4): their names and people, never what's in them.
   // Privacy is from other people, not from whoever runs the server, who can read the database.
   function privateRoomsCard(rooms) {
-    const card = el('div', 'machine-card private-rooms-card');
+    const card = el('div', 'info-card private-rooms-card');
     card.id = 'private-rooms';
-    const head = el('div', 'remote-head');
-    head.append(icon('lock'), el('span', 'remote-name', 'Private rooms'));
+    const head = el('div', 'card-head');
+    head.append(icon('lock'), el('span', 'card-name', 'Private rooms'));
     card.append(head, el('p', 'fine', 'Only their people see them. You see their names and people here, not what’s in them.'));
     const list = el('ul', 'private-rooms-list');
     for (const r of rooms) {
@@ -4891,15 +4097,15 @@
   }
 
   function inviteCard(inv) {
-    const card = el('div', 'machine-card invite-card');
+    const card = el('div', 'info-card invite-card');
     card.tabIndex = -1;
     card.dataset.focus = 'invite';
-    const head = el('div', 'remote-head');
-    head.append(icon('check'), el('span', 'remote-name', 'Send this to ' + inv.name));
+    const head = el('div', 'card-head');
+    head.append(icon('check'), el('span', 'card-name', 'Send this to ' + inv.name));
     card.append(head);
-    card.append(el('p', 'machine-step', 'It\'s the only time you\'ll see this one-time password. It works for 7 days,'
+    card.append(el('p', 'info-step', 'It\'s the only time you\'ll see this one-time password. It works for 7 days,'
       + ' and only until ' + inv.name + ' chooses their own password or passkey.'));
-    const box = el('div', 'machine-cmd invite-text');
+    const box = el('div', 'info-cmd invite-text');
     const code = el('code', null, inv.invite);
     code.id = 'invite-text';
     const copy = btn('copy-btn');
@@ -4958,11 +4164,11 @@
 
   function addPersonCard() {
     const d = state.peopleDraft;
-    const card = el('div', 'machine-card');
-    const head = el('div', 'remote-head');
-    head.append(icon('plus'), el('span', 'remote-name', 'Add someone'));
+    const card = el('div', 'info-card');
+    const head = el('div', 'card-head');
+    head.append(icon('plus'), el('span', 'card-name', 'Add someone'));
     card.append(head);
-    const form = el('form', 'machine-add person-add-form');
+    const form = el('form', 'info-add person-add-form');
     form.setAttribute('autocomplete', 'off');
     function field(key, id, labelText, type, placeholder, maxLength) {
       const wrap = el('div', 'person-field');
@@ -4996,7 +4202,7 @@
     last.input.addEventListener('input', function () { d.last = last.input.value; follow(); });
     email.input.addEventListener('input', function () { d.email = email.input.value; });
     name.input.addEventListener('input', function () { d.name = name.input.value; d.nameTyped = !!name.input.value; });
-    const row = el('div', 'machine-row');
+    const row = el('div', 'info-row');
     const busy = state.peopleBusy.get('add');
     const add = btn('btn btn-primary', busy ? 'Adding…' : 'Add');
     add.type = 'submit';
@@ -5011,9 +4217,9 @@
       addPerson();
     });
     card.append(form);
-    card.append(el('p', 'machine-step', 'They sign in with that email and a one-time password you send them, then'
+    card.append(el('p', 'info-step', 'They sign in with that email and a one-time password you send them, then'
       + ' choose their own password or a passkey. Their name in the rooms is what others @mention.'));
-    const out = el('div', 'fine machine-result');
+    const out = el('div', 'fine info-result');
     out.id = 'people-result-add';
     card.append(out);
     return card;
@@ -5129,14 +4335,14 @@
   }
 
   function personCard(p) {
-    const card = el('div', 'machine-card person-card');
+    const card = el('div', 'info-card person-card');
     card.tabIndex = -1;
     card.dataset.focus = 'person:' + (p.id === null ? 'admin' : p.id);
-    const head = el('div', 'remote-head');
+    const head = el('div', 'card-head');
     const av = el('span', 'avatar human sm', (p.name || '?').charAt(0).toUpperCase());
     av.setAttribute('aria-hidden', 'true');
     const full = [p.first_name, p.last_name].filter(Boolean).join(' ');
-    head.append(av, el('span', 'remote-name', full || p.name));
+    head.append(av, el('span', 'card-name', full || p.name));
     if (full) head.append(el('span', 'person-handle', '@' + p.name));
     if (p.admin) head.append(el('span', 'chip person-chip', 'admin'));
     else if (p.sign_in === 'one-time' || p.sign_in === 'expired') {
@@ -5151,7 +4357,7 @@
       bits.push(p.admin ? 'no email yet: you sign in as admin'
         : 'no email yet: can’t sign in until you set one');
     }
-    card.append(el('p', 'machine-step', bits.join(' · ')));
+    card.append(el('p', 'info-step', bits.join(' · ')));
     card.append(nameRow(p), emailRow(p));
     if (!p.admin) {
       const btns = el('div', 'dialog-buttons');
@@ -5165,7 +4371,7 @@
       rm.addEventListener('click', function () { removePerson(p); });
       btns.append(again, rm);
       card.append(btns);
-      const out = el('div', 'fine machine-result');
+      const out = el('div', 'fine info-result');
       out.id = 'people-result-' + p.id;
       card.append(out);
     }
@@ -5354,7 +4560,7 @@
     openSheet('closed-panel');
     renderClosedPanel();
     loadClosed().catch(function (e) {
-      $('closed-body').replaceChildren(el('p', 'remote-error', String(e.message || e)));
+      $('closed-body').replaceChildren(el('p', 'card-error', String(e.message || e)));
     });
     $('closed-close').focus();
   }
@@ -6516,9 +5722,6 @@
     });
 
     $('me-settings').addEventListener('click', function () { openSettings(); });
-    $('remotes-close').addEventListener('click', function () { closeSheet('remotes-panel'); });
-    $('add-machine').addEventListener('click', function () { openMachines(null); });
-    $('machines-close').addEventListener('click', function () { closeSheet('machines-panel'); });
     $('open-people').addEventListener('click', openPeople);
     $('people-close').addEventListener('click', function () { closeSheet('people-panel'); });
     $('closed-rooms').addEventListener('click', openClosed);
@@ -6689,30 +5892,12 @@
       $('running-release-foot').replaceChildren(release);
       $('brand-name').setAttribute('title', label);
     }
-    // Sign-in controls live in Settings; machines that dial in belong to a hosted broker (§31.8).
-    // admin section: its admin (§32.3)
+    // Sign-in controls live in Settings. The admin section: its admin (§32.3)
     $('admin-section').classList.toggle('hidden', !(state.me && state.me.admin));
-    state.machinesHosted = !!(state.me && (state.me.hosted || state.me.signin));
-    renderRemotesSection();
     renderBuddies();
     await loadRooms();
     renderStatus();
-    await loadRemotes().catch(function () {});
-    if (state.machinesHosted) await loadMachines().catch(function () {});
     connect();
-    // the rows' countdowns tick; RTTs refresh (a state change arrives at once, by the socket)
-    setInterval(function () {
-      if (state.remotes.some(function (r) { return r.state === 'down'; })) {
-        renderChips();
-        renderRemotesPanel();
-      }
-    }, 1000);
-    setInterval(function () { if (state.remotes.length) loadRemotes().catch(function () {}); }, 20000);
-    if (state.machinesHosted) {
-      // the pairing's countdown and the last-seen times tick; the RTTs refresh with the list
-      setInterval(function () { renderMachinesPanel(); }, 1000);
-      setInterval(function () { if (state.machines.length) loadMachines().catch(function () {}); }, 20000);
-    }
     // Keep the sliding session (and its cookie) fresh while the page is open.
     setInterval(function () { api('GET', '/api/me').catch(function () {}); }, 30 * 60 * 1000);
   }

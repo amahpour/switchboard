@@ -47,16 +47,16 @@ def test_a_v25_board_keeps_its_question_and_gains_an_empty_picks_table_after_a_b
     schema's, or the asker's pick stops counting once the column it lived in is no longer all there is."""
     path = tmp_path / "switchboard.db"
     con = database_at_25(path)
-    before = db.row_counts(con, db.tables_of(25))
-    assert "review_picks" not in db.tables_of(25)
+    before = db.row_counts(con, db.kept_tables(25))
+    assert "review_picks" not in db.kept_tables(25)
     con.close()
     os.chmod(path, 0o600)
 
     migrated = db.open_db(path)
     fresh = db.open_db(tmp_path / "fresh.db")
-    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 28
-    assert db.row_counts(migrated, db.tables_of(25)) == before
-    assert db.tables_of(26)[-1] == "review_picks"
+    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 29
+    assert db.row_counts(migrated, db.kept_tables(25)) == before
+    assert db.kept_tables(26)[-1] == "review_picks"
     assert migrated.execute("SELECT COUNT(*) FROM review_picks").fetchone()[0] == 0
     assert [tuple(r) for r in migrated.execute("PRAGMA table_info(review_picks)")] == [
         tuple(r) for r in fresh.execute("PRAGMA table_info(review_picks)")

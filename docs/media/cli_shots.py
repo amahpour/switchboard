@@ -10,12 +10,11 @@ machine: ``uv run playwright install chromium``.
 
 What it does:
 - **Real commands, seeded data.** It isolates HOME the way ``ui_shots.py`` does and starts
-  ``tests/ui_world.py``'s seeded broker: rooms, four agents, a Markdown conversation and a
-  never-enabled ``fpga-pi`` remote. Then it runs the real ``switchboard`` commands in this
-  process with ``--color always`` and keeps what they print. ``status``, ``who``, ``tail``,
-  ``remote status`` and ``report`` run against that broker; ``install`` and ``uninstall``
-  (``--dry-run``) run against a throwaway user home. ``start`` shows a local broker and a
-  paired machine's link; ``join --help`` shows pairing without using a code.
+  ``tests/ui_world.py``'s seeded broker: rooms, four agents and a Markdown conversation. Then
+  it runs the real ``switchboard`` commands in this process with ``--color always`` and keeps
+  what they print. ``status``, ``who``, ``tail`` and ``report`` run against that broker;
+  ``install`` and ``uninstall`` (``--dry-run``) run against a throwaway user home. ``start``
+  shows a local broker.
 - **Stand-ins, never this machine.** The hooks an install writes run an interpreter; the diff
   shows ``/opt/switchboard/bin/python3`` in place of this checkout's venv. The PATH holds stub
   ``claude``, ``codex`` and ``devin`` commands and no Cursor CLI, so Cursor shows as skipped.
@@ -40,7 +39,6 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "docs" / "media" / "cli"
@@ -211,24 +209,6 @@ def collect(world: Any, base: Path) -> list[tuple[str, str, str, tuple[str, ...]
 
     add("status", "switchboard status", ["status", *h, *c])
     add("start-broker", "switchboard start", ["start", *h, *c], ("dark", "light"))
-    from switchboard.paths import Paths
-    from switchboard.remote.config import write_satellite_conf
-
-    machine = Paths.from_home(base / "work-laptop")
-    machine.ensure()
-    write_satellite_conf(machine, "work-laptop", broker_url="https://sb.example.com", broker_key="A" * 43)
-    # Existing dialer: exercise the real start status path without launching a network link.
-    with (
-        patch("switchboard.remote.dialer.running_pid", return_value=4242),
-        patch("switchboard.remote.dialer.read_state", return_value={"state": "up", "pid": 4242}),
-    ):
-        add(
-            "start-link",
-            "switchboard start --home ~/.switchboard-work",
-            ["start", "--home", str(machine.home), *c],
-            ("dark", "light"),
-        )
-    add("join-help", "switchboard join --help", ["join", "--help"], ("dark", "light"))
     add("who", "switchboard who '#build'", ["who", "#build", *h, *c])
     add(
         "tail",
@@ -236,7 +216,6 @@ def collect(world: Any, base: Path) -> list[tuple[str, str, str, tuple[str, ...]
         ["tail", "#build", "-n", "12", "--no-follow", *h, *c],
         ("dark", "light"),
     )
-    add("remote-status", "switchboard remote status", ["remote", "status", *h, *c])
 
     uh = user_home(base)
     real_python = sys.executable
