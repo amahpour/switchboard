@@ -130,6 +130,50 @@ def test_update_pins() -> None:
         assert rel.update_pins(other, "0.5.0") == other  # not a release pin of this image
 
 
+def test_pin_marketplace_moves_the_release_tag_the_plugins_are_pinned_to() -> None:
+    """A release moves each plugin's `ref` to its own tag (#462), so the plugin an installed copy
+    updates to is the release's and not whatever main holds. Fails if the ref stays on the last
+    release, or anything beside it changes."""
+    old = MARKETPLACE.replace("FOLDER", "plugins/claude")
+    new = rel.pin_marketplace(old, "0.5.0")
+    assert new == old.replace('"ref": "v0.4.0"', '"ref": "v0.5.0"')
+    assert rel.pin_marketplace(new, "0.5.1") == old.replace('"ref": "v0.4.0"', '"ref": "v0.5.1"')
+    assert rel.pin_marketplace('{"ref":"v0.4.0"}', "0.5.0") == '{"ref":"v0.5.0"}'  # however it is spaced
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"plugins": [{"name": "switchboard", "source": "./plugins/claude"}]}',  # a path in main's checkout
+        '{"plugins": [{"name": "switchboard", "source": {"source": "local", "path": "./plugins/codex"}}]}',
+        '{"plugins": [{"source": {"source": "git-subdir", "ref": "main"}}]}',  # a branch moves with main
+        '{"plugins": [{"source": {"source": "git-subdir", "ref": "v0.4"}}]}',  # not a release tag
+    ],
+)
+def test_a_marketplace_that_serves_main_stops_the_release(text: str) -> None:
+    """A marketplace whose plugin names no release tag would hand main's plugin to everyone who
+    updates, before the server that goes with it is out (#462). The release stops, and says which
+    file, instead of passing it on. Fails if such a file is let through."""
+    with pytest.raises(SystemExit, match=r"x/marketplace\.json has no plugin pinned to a release tag"):
+        rel.pin_marketplace(text, "0.5.0", "x/marketplace.json")
+
+
+def test_a_release_with_an_unpinned_marketplace_does_not_open(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    (repo / ".agents/plugins/marketplace.json").write_text('{"plugins": [{"source": "./plugins/codex"}]}\n')
+    git(repo, "commit", "-qam", "fix: back to a path")
+    with pytest.raises(SystemExit, match=r"\.agents/plugins/marketplace\.json has no plugin pinned"):
+        rel.release(repo, tmp_path / "notes.md", "2026-09-29")
+
+
+def test_a_release_pr_may_change_the_marketplaces() -> None:
+    """CI skips the suite for a release PR that changes only release files (ci_scope.py); the two
+    marketplaces are release files now, or a release would run everything."""
+    assert rel.is_release_file(".claude-plugin/marketplace.json")
+    assert rel.is_release_file(".agents/plugins/marketplace.json")
+    assert not rel.is_release_file("plugins/claude/.claude-plugin/plugin.json")  # a plugin itself is not
+
+
 # ------------------------------------------------------------------ a real repo
 def git(repo: Path, *args: str) -> str:
     env = {
@@ -143,6 +187,23 @@ def git(repo: Path, *args: str) -> str:
     return subprocess.run(
         ["git", *args], cwd=repo, check=True, capture_output=True, text=True, env=env
     ).stdout
+
+
+MARKETPLACE = """{
+  "name": "switchboard",
+  "plugins": [
+    {
+      "name": "switchboard",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/amahpour/switchboard.git",
+        "path": "FOLDER",
+        "ref": "v0.4.0"
+      }
+    }
+  ]
+}
+"""
 
 
 def make_repo(tmp_path: Path) -> Path:
@@ -163,6 +224,12 @@ def make_repo(tmp_path: Path) -> Path:
     (repo / "deploy" / "compose" / "compose.yaml").write_text(
         "    image: ghcr.io/amahpour/switchboard:0.4.0\n"
     )
+    for rel_path, folder in (
+        (".claude-plugin/marketplace.json", "plugins/claude"),
+        (".agents/plugins/marketplace.json", "./plugins/codex"),
+    ):
+        (repo / rel_path).parent.mkdir(parents=True)
+        (repo / rel_path).write_text(MARKETPLACE.replace("FOLDER", folder))
     git(repo, "init", "-q", "-b", "main")
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "chore: start")
@@ -188,6 +255,9 @@ def test_a_release_on_a_real_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         "@v0.5.0" in (repo / "README.md").read_text() and "@v0.5.0" in (repo / "docs/INSTALL.md").read_text()
     )
     assert ":0.5.0\n" in (repo / "deploy/compose/compose.yaml").read_text()  # the image pin
+    for market in (".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json"):  # #462
+        pinned = json.loads((repo / market).read_text())["plugins"][0]["source"]
+        assert pinned["ref"] == "v0.5.0" and pinned["url"].endswith("/switchboard.git"), market
     assert notes.read_text() == "Intro.\n\n### Added\n\n- A thing.\n"
     assert (repo / "CHANGELOG.md").read_text().startswith("# Changelog\n\n## 0.5.0 (2026-09-29)\n\nIntro.")
 

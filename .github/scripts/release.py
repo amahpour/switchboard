@@ -18,6 +18,11 @@ from origin/main, in a temporary worktree (the checkout it runs from is never to
 - points the README's and docs/INSTALL.md's `uv tool install …@vX.Y.Z` lines at the new tag,
   and the deployment examples' and docs/DEPLOY.md's `ghcr.io/amahpour/switchboard:X.Y.Z` at
   the new image;
+- moves the `ref` of each plugin in the two marketplaces (`.claude-plugin/marketplace.json`,
+  `.agents/plugins/marketplace.json`) to the new tag, so a plugin reaches the people who
+  installed it with a release, never with a merge to main (#462). The tag is made by release.yml
+  a minute after the merge; until then an update finds no such tag and keeps the old plugin
+  (DESIGN.md §49.5 says when each harness tries again);
 - commits that as "release: vX.Y.Z" on `release/vX.Y.Z`, pushes it and opens the PR (`gh`).
 
 Merging the PR releases it: .github/workflows/release.yml tags the merge, publishes the GitHub
@@ -47,10 +52,14 @@ VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 TAG_RE = re.compile(r"^v(\d+\.\d+\.\d+)$")
 PIN_RE = re.compile(r"(git\+https://github\.com/amahpour/switchboard@)v\d+\.\d+\.\d+")
 IMAGE_PIN_RE = re.compile(r"(ghcr\.io/amahpour/switchboard:)\d+\.\d+\.\d+(?![\w.-])")
+# a plugin pinned to a release tag (#462)
+MARKETPLACE_REF_RE = re.compile(r'("ref"\s*:\s*")v\d+\.\d+\.\d+(")')
 VERSION_FILES = ("pyproject.toml", "src/switchboard/__init__.py", "uv.lock")
+MARKETPLACE_FILES = (".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json")
 PIN_FILES = ("README.md", "docs/INSTALL.md", "docs/DEPLOY.md", "deploy/compose/compose.yaml",
              "deploy/kubernetes/switchboard.yaml", "deploy/render/render.yaml")
-RELEASE_FILES = (*VERSION_FILES, "CHANGELOG.md", *PIN_FILES)  # with the notes files, all a release PR changes
+# with the notes files, all a release PR changes
+RELEASE_FILES = (*VERSION_FILES, "CHANGELOG.md", *PIN_FILES, *MARKETPLACE_FILES)
 CHANGES_DIR = "changes"   # a PR's notes: changes/<name>.md (changes/README.md)
 # a release's headings in this order; any other heading follows them, in the order first seen
 HEADING_ORDER = ("Upgrading", "Added", "Changed", "Removed", "Fixed", "Known limitations", "Not included")
@@ -199,6 +208,17 @@ def update_pins(text: str, version: str) -> str:
     return IMAGE_PIN_RE.sub(rf"\g<1>{version}", PIN_RE.sub(rf"\g<1>v{version}", text))
 
 
+def pin_marketplace(text: str, version: str, where: str = "a marketplace") -> str:
+    """A marketplace file with its plugins pinned to the tag vX.Y.Z (#462). Every `ref` of the form
+    vX.Y.Z in these files is a plugin of this repository and moves. A file with none (its plugins a
+    path in the checkout, or a branch) would serve main to everyone who updates, which is the bug this
+    pin is for, so it stops the release instead of passing."""
+    pinned, n = MARKETPLACE_REF_RE.subn(rf"\g<1>v{version}\g<2>", text)
+    if n == 0:
+        raise SystemExit(f"{where} has no plugin pinned to a release tag (a `ref` of vX.Y.Z)")
+    return pinned
+
+
 # ------------------------------------------------------------------ git
 def git(*args: str, root: Path = ROOT) -> str:
     return subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, text=True).stdout
@@ -278,6 +298,10 @@ def release(root: Path, notes_path: Path, today: str) -> str | None:
         p = root / rel
         if p.exists():
             p.write_text(update_pins(p.read_text(), version))
+    for rel in MARKETPLACE_FILES:
+        p = root / rel
+        if p.exists():
+            p.write_text(pin_marketplace(p.read_text(), version, rel))
     notes_path.write_text(notes)
     return version
 
