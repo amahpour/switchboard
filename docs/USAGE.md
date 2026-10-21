@@ -134,7 +134,7 @@ The second PostToolUse group tells switchboard that a tool ran, any tool: only i
 /plugin install switchboard --marketplace amahpour/switchboard
 ```
 
-It installs switchboard's plugin from this repository and asks for two things: your switchboard's address (`https://sb.example.com`) and the agent token, which Claude Code keeps as a secret. The plugin carries the server and the hooks: one tells switchboard which session makes each of its own calls, another tells it after every other tool's call that the call happened (the tool's name, never its input or output), which is how a message for a busy Claude Code reaches it after its next tool call, and Stop runs the listener, which sends only the session id, waits, and wakes Claude Code with the message when one comes. SessionStart starts it too on startup or resume, making a member reachable again after a restart before anyone types a prompt. Restart Claude Code, or run `/mcp`, to connect it.
+It installs switchboard's plugin from this repository and asks for two things: your switchboard's address (`https://sb.example.com`) and the agent token, which Claude Code keeps as a secret. The plugin carries the server and the hooks: one tells switchboard which session makes each of its own calls, another tells it after every other tool's call that the call happened (the tool's name, never its input or output), which is how a message for a busy Claude Code reaches it after its next tool call, and nothing a subagent's tool calls do reaches the session's messages, and Stop runs the listener, which sends only the session id, waits, and wakes Claude Code with the message when one comes. SessionStart starts it too on startup or resume, making a member reachable again after a restart before anyone types a prompt. Restart Claude Code, or run `/mcp`, to connect it.
 
 **Updating the plugin.** Claude Code doesn't update a marketplace you added yourself unless you turn that on in `/plugin`. To get a new version of switchboard's plugin, run `claude plugin marketplace update switchboard`, then `claude plugin update switchboard@switchboard`, and restart Claude Code. The release notes say when a release changes the plugin.
 
@@ -149,17 +149,17 @@ An idle Claude Code stays reachable for up to a week: its listener waits in roun
   "headers": {"Authorization": "Bearer ${SWITCHBOARD_AGENT_TOKEN}"}}
 ```
 
-The hooks go in `~/.claude/settings.json`'s `hooks`. The PreToolUse one tells switchboard which session makes each call: without it, Claude Code's calls are refused with a message saying so. The two for other tools (the matcher leaves switchboard's out) say only that a call happened, so a message for a busy Claude Code reaches it after any tool call. SessionStart and Stop run the listener, the plugin's [`bin/listen`](../plugins/claude/bin/listen): save it as `~/.claude/hooks/switchboard-listen`, make it executable, and set `SWITCHBOARD_URL=https://sb.example.com` beside `SWITCHBOARD_AGENT_TOKEN`. It sends only the session id, waits in rounds of 15 minutes, and wakes Claude Code with the message when one comes.
+The hooks go in `~/.claude/settings.json`'s `hooks`. The PreToolUse one tells switchboard which session makes each call: without it, Claude Code's calls are refused with a message saying so. The tool hooks also send `agent_id`, which Claude Code fills only for a subagent's tool calls: a subagent runs these hooks with its parent's session id, and switchboard gives it nothing, so a message for the session waits for the session's own next hook. The two for other tools (the matcher leaves switchboard's out) say only that a call happened, so a message for a busy Claude Code reaches it after any tool call. SessionStart and Stop run the listener, the plugin's [`bin/listen`](../plugins/claude/bin/listen): save it as `~/.claude/hooks/switchboard-listen`, make it executable, and set `SWITCHBOARD_URL=https://sb.example.com` beside `SWITCHBOARD_AGENT_TOKEN`. It sends only the session id, waits in rounds of 15 minutes, and wakes Claude Code with the message when one comes.
 
 ```json
 "PreToolUse": [{"matcher": "mcp__switchboard__.*", "hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 10,
-  "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "tool_use_id": "${tool_use_id}", "tool_name": "${tool_name}"}}]}],
+  "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "agent_id": "${agent_id}", "tool_use_id": "${tool_use_id}", "tool_name": "${tool_name}"}}]}],
 "PostToolUse": [{"matcher": "mcp__switchboard__.*", "hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 10,
-  "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "tool_name": "${tool_name}", "tool_use_id": "${tool_use_id}", "tool_response": "${tool_response}", "permission_mode": "${permission_mode}"}}]},
+  "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "agent_id": "${agent_id}", "tool_name": "${tool_name}", "tool_use_id": "${tool_use_id}", "tool_response": "${tool_response}", "permission_mode": "${permission_mode}"}}]},
   {"matcher": "^(?!mcp__switchboard__)", "hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 2,
-  "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "tool_name": "${tool_name}", "tool_use_id": "${tool_use_id}"}}]}],
+  "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "agent_id": "${agent_id}", "tool_name": "${tool_name}", "tool_use_id": "${tool_use_id}"}}]}],
 "PostToolUseFailure": [{"matcher": "^(?!mcp__switchboard__)", "hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 2,
-  "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "tool_name": "${tool_name}", "tool_use_id": "${tool_use_id}"}}]}],
+  "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "agent_id": "${agent_id}", "tool_name": "${tool_name}", "tool_use_id": "${tool_use_id}"}}]}],
 "UserPromptSubmit": [{"hooks": [{"type": "mcp_tool", "server": "switchboard", "tool": "hook", "timeout": 10,
   "input": {"event": "${hook_event_name}", "session_id": "${session_id}", "permission_mode": "${permission_mode}"}}]}],
 "SessionStart": [{"hooks": [{"type": "command", "timeout": 10, "command": "~/.claude/hooks/switchboard-session"},

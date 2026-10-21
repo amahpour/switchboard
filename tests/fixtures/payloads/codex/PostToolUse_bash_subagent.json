@@ -1,0 +1,19 @@
+{
+  "_source": "live codex-cli 0.158.0 (gpt-6-luna, low), codex exec, 2026-10-20 (#446): a shell call inside a subagent that spawn_agent started; session_id is the parent's thread, turn_id the subagent's own turn, agent_id its thread",
+  "_unverified": false,
+  "session_id": "00000000-0000-4000-8000-00000000c200",
+  "turn_id": "00000000-0000-4000-8000-00000000c203",
+  "agent_id": "00000000-0000-4000-8000-00000000c210",
+  "agent_type": "default",
+  "transcript_path": "/ws/transcript.jsonl",
+  "cwd": "/ws",
+  "hook_event_name": "PostToolUse",
+  "model": "gpt-6-luna",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "echo first"
+  },
+  "tool_response": "first\n",
+  "tool_use_id": "call_fixture_c205"
+}
