@@ -980,3 +980,27 @@ def test_a_handoff_message_names_the_board_by_number_only_when_the_room_has_seve
     several = reviews.render_handoff(plan, "claude-1", 1000, "#7")
     assert "this board's PR or MR (#7) with your own gh or glab" in several
     assert "http" not in several
+
+
+def test_a_urls_board_is_its_newest_row_and_an_older_row_of_the_same_url_stays_unseen(tmp_path: Path) -> None:
+    """Rows are never deleted, so a URL can have several (an older release opened an empty board for a
+    URL it had closed; ``reset`` does it on purpose). The board is the newest, whatever the older say:
+    ``review_for_url``, the open boards and ``room_reviews`` all see only it, in the room asked about.
+    Fails if an older row of a URL shows up as a second board, or another room's board leaks in."""
+    store = Store(db.open_db(tmp_path / "board.db"), FakeClock())
+    room = store.create_room("#build", "alice", 60, 30)
+    other = store.create_room("#other", "alice", 60, 30)
+    url_a, url_b = "https://example.com/shop/pull/7", "https://example.com/shop/pull/8"
+    old = store.open_review(room.id, url_a, "", "codex-1")  # still open: only the newest counts
+    new = store.open_review(room.id, url_a, "", "claude-1")
+    second = store.open_review(room.id, url_b, "", "codex-1")
+    elsewhere = store.open_review(other.id, url_a, "", "codex-1")
+    got = store.review_for_url(room.id, url_a)
+    assert got is not None and got["id"] == new["id"] != old["id"]
+    assert [r["id"] for r in store.open_reviews(room.id)] == [new["id"], second["id"]]
+    assert [r["id"] for r in store.open_reviews(other.id)] == [elsewhere["id"]]
+    store.set_review(new["id"], closed_at=5.0, closed_by="claude-1")
+    assert [r["id"] for r in store.open_reviews(room.id)] == [second["id"]]
+    # open ones first, then closed; each group the newest first; the older row of url_a is not listed
+    assert [r["id"] for r in store.room_reviews(room.id)] == [second["id"], new["id"]]
+    assert store.review_for_url(room.id, "https://example.com/shop/pull/9") is None

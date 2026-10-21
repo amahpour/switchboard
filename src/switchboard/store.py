@@ -2478,8 +2478,6 @@ class Store:
     # newest row; an older row of the same URL (from before a closed board was kept, or left by
     # ``reset``) stays in the table, and is not shown. Values arrive already checked by ``reviews``
     # (lengths, shapes); the schema's CHECKs are the last line.
-    _NEWEST_REVIEW = "r.id=(SELECT MAX(id) FROM reviews WHERE room_id=r.room_id AND url=r.url)"
-
     def review_for_url(self, room_id: int, url: str) -> dict[str, Any] | None:
         """The room's board for ``url``, open or closed: its newest row."""
         r = self.con.execute(
@@ -2490,7 +2488,8 @@ class Store:
     def open_reviews(self, room_id: int) -> list[dict[str, Any]]:
         """The room's open boards, the one opened first first."""
         rows = self.con.execute(
-            f"SELECT * FROM reviews r WHERE r.room_id=? AND r.closed_at IS NULL AND {self._NEWEST_REVIEW}"
+            "SELECT * FROM reviews r WHERE r.room_id=? AND r.closed_at IS NULL"
+            " AND r.id=(SELECT MAX(id) FROM reviews WHERE room_id=r.room_id AND url=r.url)"
             " ORDER BY r.opened_at, r.id",
             (room_id,),
         ).fetchall()
@@ -2499,7 +2498,8 @@ class Store:
     def room_reviews(self, room_id: int) -> list[dict[str, Any]]:
         """Every board of the room, open ones first, each group the newest first."""
         rows = self.con.execute(
-            f"SELECT * FROM reviews r WHERE r.room_id=? AND {self._NEWEST_REVIEW}"
+            "SELECT * FROM reviews r WHERE r.room_id=?"
+            " AND r.id=(SELECT MAX(id) FROM reviews WHERE room_id=r.room_id AND url=r.url)"
             " ORDER BY r.closed_at IS NOT NULL, r.id DESC",
             (room_id,),
         ).fetchall()
