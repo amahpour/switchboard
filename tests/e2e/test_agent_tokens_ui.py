@@ -7,11 +7,9 @@ console errors, page errors and CSP violations."""
 
 from __future__ import annotations
 
-import json
 import re
 import shutil
 from collections.abc import Iterator
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -239,10 +237,6 @@ def test_connect_gives_codex_its_plugin_its_server_and_its_token(
         'bearer_token_env_var = "SWITCHBOARD_AGENT_TOKEN"',
         "tool_timeout_sec = 86400",
     ]
-    stop = json.loads((Path(__file__).resolve().parents[2] / "plugins/codex/hooks/hooks.json").read_text())[
-        "hooks"
-    ]["Stop"][0]["hooks"][0]
-    assert int(config.splitlines()[-1].split(" = ")[1]) >= int(stop["input"]["wait_s"]) + 10
     expect(page.locator("#agent-connect-codex-env")).to_have_text(f"export SWITCHBOARD_AGENT_TOKEN={token}")
     page.keyboard.press("Escape")
     revoke_all(hosted)

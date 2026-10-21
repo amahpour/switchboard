@@ -159,7 +159,7 @@ class HttpsCodexAdapter(CodexMembership, Listening):
         next hook, and it is not shown as waiting."""
         return (
             f"not listening: its Stop hook ended after {_held(held_s)} (Esc, or Codex's tool_timeout_sec:"
-            " docs/USAGE.md, Agents over HTTPS)"
+            " docs/USAGE.md)"
         )
 
 
