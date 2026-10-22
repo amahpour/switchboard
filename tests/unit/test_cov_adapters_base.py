@@ -311,8 +311,16 @@ def test_devin_wait_pre_and_orphaned_waits() -> None:
     assert a.is_wait_pre(ev("PreToolUse", "devin", tool=WAIT_TOOL, tool_use_id="tu-1")) is True
     assert a.is_wait_pre(ev("PreToolUse", "devin", tool=WAIT_TOOL)) is False
     assert a.closes_waits(p, ev("PostToolUse", "devin", tool=WAIT_TOOL)) is False
-    assert a.closes_waits(p, ev("PostToolUse", "devin", tool="Bash")) is True
+    # a tool of someone else's server finishing says nothing about the wait (#493: the plugin reports
+    # every tool, and a background subagent's carry the main agent's session)
+    for other in ("Bash", "exec", "mcp__github__create_issue", None):
+        assert a.closes_waits(p, ev("PostToolUse", "devin", tool=other)) is False, other
+    # but anything else the session does ends it: a call of switchboard's own, a tool about to run, a turn
+    assert a.closes_waits(p, ev("PostToolUse", "devin", tool=f"{DEVIN_TOOL_PREFIX}say")) is True
+    assert a.closes_waits(p, ev("PreToolUse", "devin", tool="Bash")) is True
+    assert a.closes_waits(p, ev("PreToolUse", "devin", tool=f"{DEVIN_TOOL_PREFIX}say")) is True
     assert a.closes_waits(p, ev("Stop", "devin")) is True
+    assert a.closes_waits(p, ev("UserPromptSubmit", "devin")) is True
 
 
 def test_devin_block_verdicts() -> None:

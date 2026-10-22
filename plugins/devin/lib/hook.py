@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Devin HTTPS hook: put this hook's session and call IDs into its MCP call."""
+"""Devin HTTPS hook: put this hook's session and call IDs into its MCP call.
+
+``post-other`` runs after every tool (docs/DESIGN.md §49.7, #493), switchboard's own included because Devin's
+matchers can't leave them out, and reports the ones that aren't switchboard's: that the session finished a tool,
+so a busy agent hears its messages after a shell command or an edit too. It sends the event, the session, the
+call's id and the tool's name, and never the tool's input or output."""
 
 import json
 import os
@@ -13,6 +18,8 @@ SERVER = "mcp__switchboard_https__"
 # a delivery's batch token, as switchboard writes it into a tool's answer
 TOKEN = re.compile(r"yk:b\d{1,12}\.[0-9a-f]{8}")
 MAX_TOKENS = 20
+ID_MAX = 128  # an id or a tool's name longer than this is not relayed (the broker takes no more)
+OTHER_TIMEOUT = 1.5  # under the group's own timeout (2 s): the script ends itself, Devin never kills it
 EVENTS = {
     "post": "PostToolUse",
     "start": "SessionStart",
@@ -58,6 +65,38 @@ def report_permission(sid):
         pass
 
 
+def short(value):
+    return value if isinstance(value, str) and 0 < len(value) <= ID_MAX else None
+
+
+def report_other(p, sid):
+    """Tell the broker that this session finished a tool that isn't switchboard's own, and print what it
+    answers if that is context for the model (the broker's pending priority messages, or ``{}``).
+
+    The report is the event, the session, the call's id and the tool's name. Never the tool's input or its
+    result, which Devin hands the hook: they are the user's (a command, its output, a file), and a hosted broker
+    is another machine (docs/DESIGN.md §11). A switchboard tool is not reported here: the group with its answer
+    already did, and a second report could take the context that one was about to carry. What is printed is
+    a PostToolUse `additionalContext` and nothing else, so this hook, which runs after every tool call, can give
+    the model words and nothing more."""
+    tool = short(p.get("tool_name"))
+    if tool is None or tool.startswith(SERVER):
+        return
+    body = {"harness": "devin", "event": "PostToolUse", "session_id": sid, "tool_name": tool}
+    use = short(p.get("tool_use_id"))
+    if use is not None:
+        body["tool_use_id"] = use
+    reply = send("/mcp/event", body, OTHER_TIMEOUT)
+    out = reply.get("hookSpecificOutput") if isinstance(reply, dict) and len(reply) == 1 else None
+    if (
+        isinstance(out, dict)
+        and set(out) == {"hookEventName", "additionalContext"}
+        and out["hookEventName"] == "PostToolUse"
+        and isinstance(out["additionalContext"], str)
+    ):
+        print(json.dumps(reply))
+
+
 def main():
     kind = sys.argv[1]
     try:
@@ -69,6 +108,9 @@ def main():
         return
     if kind == "permission":
         report_permission(sid)
+        return
+    if kind == "post-other":
+        report_other(p, sid)
         return
     if kind == "pre":
         tool = p.get("tool_name", "")

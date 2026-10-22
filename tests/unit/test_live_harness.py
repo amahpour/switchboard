@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -257,18 +259,45 @@ def test_cursors_project_permissions_allow_switchboards_tools_and_the_scratch_sc
     )
 
 
-def test_cursors_mid_task_paths_follow_what_its_hooks_can_do() -> None:
-    """While every tool hook of the Cursor plugin matches switchboard's own tools only, a shell command runs
-    none, and a message for a busy session reaches it with its next switchboard call (``say``, ``read``,
-    ``wait``) or as hook context after one, as for Devin (seen live, #394). Fails if the live test expects
-    that once a tool hook matches other tools too (as Claude Code's and Codex's do, #422): then only
-    ``hook_ctx`` is right, and a looser set would pass a plugin that no longer delivers after a shell call."""
-    hooks = cursor.project_hooks(REPO / "plugins" / "cursor")["hooks"]
-    events = ("preToolUse", "postToolUse", "postToolUseFailure")
-    matchers = [g.get("matcher") for ev in events for g in hooks[ev]]
-    only_switchboard = all(m is not None and m.startswith("MCP:switchboard_") for m in matchers)
-    expected = {"say", "read", "wait", "hook_ctx"} if only_switchboard else {"hook_ctx"}
-    assert set(cursor.CursorRun.mid_paths) == expected, (matchers, cursor.CursorRun.mid_paths)
+def reaches(groups: list[dict], tool: str) -> bool:
+    """Does any of these hook groups run for ``tool``? No matcher or an empty one matches every tool; any
+    other is a regular expression searched in the tool's name."""
+    return any(g.get("matcher") in (None, "", "*") or re.search(g["matcher"], tool) for g in groups)
+
+
+@pytest.mark.parametrize(
+    ("run", "post_hooks", "shell"),
+    [
+        (
+            cursor.CursorRun,
+            lambda: [
+                g
+                for ev in ("postToolUse", "postToolUseFailure")
+                for g in cursor.project_hooks(REPO / "plugins" / "cursor")["hooks"][ev]
+            ],
+            "Shell",
+        ),
+        (
+            devin.DevinRun,
+            lambda: devin.project_config(REPO / "plugins" / "devin")["hooks"]["PostToolUse"],
+            "exec",
+        ),
+    ],
+    ids=["cursor", "devin"],
+)
+def test_the_mid_task_expectation_follows_what_the_tool_hooks_can_do(
+    run: type, post_hooks: Callable[[], list[dict]], shell: str
+) -> None:
+    """A message for a busy session reaches it as hook context after a tool call, any tool's, when the
+    plugin's post-tool hooks run after a shell command (#493, as Claude Code's and Codex's do, #422): then
+    only ``hook_ctx`` is right. While they ran after switchboard's own tools only, a shell command ran none
+    and the message came with the next switchboard call (``say``, ``read``, ``wait``, seen live, #394). Fails
+    if the live test expects the looser set once the hooks cover other tools (it would pass a plugin that no
+    longer delivers after a shell command), or the tighter one while they don't."""
+    after_a_shell = reaches(post_hooks(), shell)
+    expected = {"hook_ctx"} if after_a_shell else {"say", "read", "wait", "hook_ctx"}
+    assert set(run.mid_paths) == expected, (after_a_shell, run.mid_paths)
+    assert after_a_shell, "the plugin's hooks no longer run after a shell command (#493)"
 
 
 def test_the_drift_check_names_the_files_that_changed() -> None:

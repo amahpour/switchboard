@@ -83,10 +83,10 @@ class CursorRun(Run):
     binaries = ("agent",)
     quit_command = "/quit"
     input_marker = "→"
-    # The plugin's tool hooks match switchboard's own tools only (``MCP:switchboard_.*``), so a shell command
-    # runs none of them: a message for a busy Cursor comes with its next switchboard call (its say() answer),
-    # or as hook context after one. Seen live on 2026-10-22: path ``say``, the batch confirmed (#394).
-    mid_paths = frozenset({"say", "read", "wait", "hook_ctx"})
+    # A message for a busy Cursor comes as hook context after its next tool call, any tool's (#493): the
+    # plugin's postToolUse hooks cover every tool. Before that they matched switchboard's own tools only and a
+    # shell command ran none, so the message waited for the next switchboard call (path ``say``, seen live on
+    # 2026-10-22, #394). ``Run.mid_paths`` is ``{"hook_ctx"}``; a unit test holds it to what the hooks do.
     helpers = ("typescript",)  # Cursor's own language-server helper (an npx node process) outlives it
 
     def prepare(self) -> None:

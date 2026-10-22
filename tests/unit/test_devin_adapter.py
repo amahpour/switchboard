@@ -122,7 +122,13 @@ def test_a_token_in_another_tools_output_does_not_confirm_a_wait(w: World, clock
     clock.advance(0.5)
     wait_post(w, p, m, bid, tuid="call_X", tool="exec")  # e.g. the model echoed the token
     b = w.store.get_batch(bid)
-    assert b.state == "expired" and b.confirmed_at is None  # and the agent moved on: it comes back
+    # not confirmed. And a tool of someone else's finishing doesn't take the answer back either (#493: it
+    # may be a background subagent's, with the main agent's ids): the turn's own end does
+    assert b.state == "offered" and b.confirmed_at is None
+    clock.advance(0.5)
+    w.hook(p, "Stop", t=clock.now())  # the agent moved on: the answer comes back
+    b = w.store.get_batch(bid)
+    assert b.state == "expired" and b.confirmed_at is None
 
 
 def https_devin(w: World, name: str = "dv-https") -> tuple[Any, Any]:

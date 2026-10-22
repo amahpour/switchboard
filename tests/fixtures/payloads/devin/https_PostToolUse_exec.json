@@ -1,0 +1,17 @@
+{
+  "_source": "Devin CLI 3000.11.92, devin -p in a temp project with a hook logging every payload (2026-10-22)",
+  "_unverified": false,
+  "hook_event_name": "PostToolUse",
+  "tool_name": "exec",
+  "tool_input": {
+    "command": "echo hello"
+  },
+  "tool_use_id": "call_fixture_0101",
+  "tool_response": {
+    "success": true,
+    "output": "sanitized tool output",
+    "error": null
+  },
+  "session_id": "session-5",
+  "prompt_id": "00000000-0000-4000-8000-000000000202"
+}
