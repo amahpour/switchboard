@@ -408,7 +408,9 @@ def test_what_a_sign_in_refuses(hosted: InProcBroker) -> None:
     r = br.post("/api/passkey/begin")
     opts = r.json()["options"]
     good = br.cookies["switchboard_passkey"]
-    br.cookies["switchboard_passkey"] = good[:-3] + "xyz"
+    # the MAC's first character: all six of its bits count, unlike the last one's (test_passkey_pieces.py)
+    body, mac = good.rsplit(".", 1)
+    br.cookies["switchboard_passkey"] = body + "." + ("B" if mac[0] == "A" else "A") + mac[1:]
     r = br.post("/api/passkey/finish", {"credential": auth.get(opts)})
     assert r.status_code == 403 and r.json()["error"] == "no_ceremony"
     br.cookies["switchboard_passkey"] = good
