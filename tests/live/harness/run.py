@@ -56,9 +56,11 @@ class Run:
     resume_needs_prompt = True  # a resumed session is back only once it has been given a prompt
     helpers: tuple[str, ...] = ()  # words in the command line of a process the CLI itself leaves behind
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, *, broker: Broker | None = None, device: str | None = None) -> None:
+        """``broker`` and ``device`` are for the evals (tests/evals): several sessions in one room of one
+        broker, each its own device. The live tests give neither, and a run owns its broker."""
         self.name = name
-        self.device = f"live-{self.harness}"
+        self.device = device or f"live-{self.harness}"
         self.session = "a1"
         self.results: dict[str, Any] = {"harness": self.harness, "scenarios": {}}
         self.stray_declined = 0
@@ -68,9 +70,10 @@ class Run:
         self.final_screen = ""  # its screen when the run ended
         self.started_at = time.monotonic()
         self.drift_before = drift.snapshot()
-        self.broker = Broker(self.harness)
+        self.shared_broker = broker is not None
+        self.broker = broker or Broker(self.harness)
         self.path = child_path(*self.binaries)
-        self.tmux = Tmux(self.harness, self.path)
+        self.tmux = Tmux(f"{self.harness}-{name}" if self.shared_broker else self.harness, self.path)
         self.token = ""
         self.token_id = 0
 

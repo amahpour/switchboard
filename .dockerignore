@@ -31,3 +31,4 @@
 **/.env*
 **/.DS_Store
 tests/live/_runs
+tests/evals/_results

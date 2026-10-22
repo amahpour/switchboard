@@ -95,12 +95,13 @@ asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 markers = [
     "live: drives real agent CLIs (opt-in via SWITCHBOARD_LIVE)",
+    "eval: real agents graded from the database, tests/evals (opt-in via SWITCHBOARD_EVAL)",
     "perf: strict timing targets (run once per milestone commit)",
     "e2e: the web UI in a real browser through Playwright, tests/e2e (opt-in: -m e2e; needs `playwright install chromium`)",
     "image: the container image behind a TLS proxy, tests/image (opt-in: -m image; needs Docker and Playwright's Chromium)",
 ]
 # pytest-split's per-test durations, which balance CI's shards (CONTRIBUTING.md, "Shards in CI")
-addopts = "-m 'not live and not perf and not e2e and not image' --durations-path=tests/.test_durations"
+addopts = "-m 'not live and not eval and not perf and not e2e and not image' --durations-path=tests/.test_durations"
 # A warning doesn't fail anything on its own, so each one here either fails the suite or is a
 # named, understood exception. error::PytestUnraisableExceptionWarning (#277): a leaked object's
 # __del__ raising (an asyncio transport whose server was already closed, #276) printed a warning

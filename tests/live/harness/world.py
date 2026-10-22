@@ -47,7 +47,8 @@ def skip_reason(harness: str, *binaries: str) -> str | None:
 
 
 class Broker:
-    def __init__(self, label: str) -> None:
+    def __init__(self, label: str, room: str = ROOM) -> None:
+        self.room = room  # the room the person plays in; the evals (tests/evals) name their own
         self.base = Path(tempfile.mkdtemp(prefix=f"sb-live-{label}-"))
         self.home = self.base / "home"
         self.port = 0
@@ -109,7 +110,7 @@ class Broker:
         self.web = httpx.Client(base_url=self.url, timeout=10.0, follow_redirects=False)
         link = call_sync(self.paths.sock, "human.login_link")["url"]
         assert self.web.get(link.removeprefix(self.url)).status_code == 303
-        r = self.web.post("/api/rooms", json={"name": ROOM}, headers=self.hdr)
+        r = self.web.post("/api/rooms", json={"name": self.room}, headers=self.hdr)
         assert r.status_code == 200, r.text
         return self
 
@@ -136,10 +137,10 @@ class Broker:
 
     def say(self, text: str) -> int:
         """A message from the person, as the web page sends it; its id."""
-        return int(self._post(f"/api/rooms/{ROOM.lstrip('#')}/say", {"text": text})["id"])
+        return int(self._post(f"/api/rooms/{self.room.lstrip('#')}/say", {"text": text})["id"])
 
     def command(self, text: str) -> dict[str, Any]:
-        return self._post(f"/api/rooms/{ROOM.lstrip('#')}/command", {"text": text})
+        return self._post(f"/api/rooms/{self.room.lstrip('#')}/command", {"text": text})
 
     def make_token(self, device: str) -> tuple[int, str]:
         """(id, token) of a new agent token for ``device`` (the token is shown once)."""
@@ -157,7 +158,7 @@ class Broker:
 
     def members(self) -> list[dict[str, Any]]:
         assert self.web is not None
-        r = self.web.get(f"/api/rooms/{ROOM.lstrip('#')}/members")
+        r = self.web.get(f"/api/rooms/{self.room.lstrip('#')}/members")
         assert r.status_code == 200, r.text
         return list(r.json()["members"])
 
@@ -166,7 +167,9 @@ class Broker:
 
     def messages(self, after: int = 0) -> list[dict[str, Any]]:
         assert self.web is not None
-        r = self.web.get(f"/api/rooms/{ROOM.lstrip('#')}/messages", params={"after": after, "limit": 500})
+        r = self.web.get(
+            f"/api/rooms/{self.room.lstrip('#')}/messages", params={"after": after, "limit": 500}
+        )
         assert r.status_code == 200, r.text
         return list(r.json()["messages"])
 

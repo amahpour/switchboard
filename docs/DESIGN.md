@@ -1026,7 +1026,7 @@ Neither command can change `budget_per_hour` itself, the rate the room's wake bu
 Since 0.38.0 (#385) an agent is a client of the broker over HTTPS with a token of its own (§49), and nothing of switchboard's runs on its machine but the plugin's hooks. That removed the largest part of this section's surface: a process on the broker's machine that had to be told apart from the human's (the MCP server's and the hook script's ancestry checks), a socket into Claude Code, a connection into the Codex app-server, and a hook script the agent could edit. §11.1 says what each used to guard.
 
 **switchboard never does these.** Each item has a test or a code-level guard.
-1. **Launch, wrap, or type into an agent or terminal.** tmux appears only under `tests/live`.
+1. **Launch, wrap, or type into an agent or terminal.** tmux appears only under `tests/live`, and in `tests/evals`, which runs that driver (§12.7).
 2. **Answer or auto-approve a prompt.**
    - The hook reply table (§7.3, `broker/hook_replies.py`) cannot express `permissionDecision`, `updatedInput`, `behavior` or `updated_mcp_tool_output`, and it writes `decision` only as `"block"` on a Stop (invariant and fuzz test: `tests/unit/test_hook_invariants.py`).
    - **No permission hook that can decide.** Never registered: a permission hook that can decide. Allowed, for status only: a report-only one, which outputs no decision. This was "never registers a PermissionRequest hook" until 2026-10-21, when the maintainer said yes to a report-only PermissionRequest hook for Codex and Devin. The question was whether to add one that "can never approve or deny anything"; the answer, in chat on that day, under #472, was "Do this". The yes goes exactly that far: the rule above, for those two plugins, and no other permission hook. Another one starts in an issue and needs the maintainer's yes again.
@@ -1110,6 +1110,7 @@ fixtures/mcp_http/                                                    the reques
 fixtures/install/<h>/                                                 what an old install wrote, for the uninstall tests
 fixtures/db/                                                          databases real old releases wrote, for the migration tests
 live/              harness/..., test_live_*.py (the real CLIs over HTTPS; opt-in, §12.4)
+evals/             evalkit/, scenarios/*.toml, run_evals.py (real agents graded from the database; opt-in, §12.7)
 ```
 
 ### 12.1 Unit tests (fast, every commit)
@@ -1249,6 +1250,34 @@ Built from `messages`, `batches`, `deliveries`, `events` and `participants`:
 Output is markdown, or JSON with `--json`. It contains no message text and no absolute paths. The JSON carries the characters as `characters` (the room's) and each agent's `chars`, both `{path: {n, chars, tokens_est}}` for the paths that happened, the unaddressed wakes as `agents[].wakes.unaddressed` and the passes as `agents[].passes_after_wake`.
 
 `--room` resolves by the §28.5 rules, so it also takes a closed room's full name (`#build~closed-7`), or its base name when no open room has it. A closed room's report says so: a `closed` block (`name`, `at`, `by`) in JSON, and `(closed)` in the markdown header (§28.7).
+
+### 12.7 Evals (`tests/evals`, opt-in with `SWITCHBOARD_EVAL=claude`; #480, from the spike #119)
+
+The text agents read (`ROOM_RULES`, the join text, the batch framing) and the delivery settings were changed by feel. An eval plays a scripted person against real agents in a throwaway room, grades each run from the broker's database, repeats it, and compares two sets of runs. It is not `tests/engine_sim.py` (pretend agents, the engine's mechanics) and not a live test (§12.4: does the plumbing work): it asks what a model does with the room's rules. The first slice has three scenarios and Claude Code only.
+
+**Layout.** `evalkit/` is the code, `scenarios/*.toml` the scenarios, `run_evals.py` the entry (`run`, `compare`, `list`), `test_eval_claude.py` one opt-in smoke trial (`-m eval`). Results go to `tests/evals/_results/`, which git ignores. Nothing here is packaged or imported by `src/`.
+
+**Scenarios are data.** A TOML file names the room, the agents, the person's messages (`[[steps]]`) and the checks (`[[checks]]`: an `id` for the results, a `grader` and its arguments). `scenario.load` refuses a check, an argument or an agent that does not exist, so a typo fails when the file is read. The first three, with three agents (alpha, bravo, charlie) each:
+- **nobody-named.** A question that names nobody: exactly one agent posts, and what it posts is the right answer.
+- **one-named.** The person names bravo: bravo posts, alpha and charlie do not.
+- **bystander.** The person asks alpha, who asks bravo; alpha and bravo trade messages, and charlie posts nothing.
+
+**Graders are plain functions of a run record** (`graders.py`): `poster_count`, `agents_post`, `agents_do_not_post` and `a_post_matches` (a regular expression on what an agent posted). A `RunRecord` (`record.py`) holds the room's `messages`, `deliveries` and `events` rows, the dict `switchboard report --json` prints for it (`report.build`) and the tokens read from the agents' own session files, all through a read-only connection to the database. A grader reads who posted and who passed, never what an agent meant; no model judges anything.
+
+**One trial** (`trial.run_trial`, the same code for a real world and a scripted one). A *world* is a throwaway broker with agents in it. The trial starts it, posts the person's messages one at a time, waits for the room to settle after each, reads the record, grades it, and always stops the world. The room is `#build` of a broker started with `--test-mode`, and its wake budget (30 an hour) and loop guard (12 agent messages with none from a person) are set through the room's own settings route, so a runaway stops itself. A custom room rule (#105, §35) can be set before the agents join: that is how an experiment changes one thing.
+- **Settled is a state, not a delay.** Every agent is between turns (its hooks say `idle`, and it is not parked), no priority message (a person's or an @mention) is pending or offered, and nothing in the room has moved (no new message, event or batch) for `quiet_s`, 8 s, longer than the engine's own 3 s quiet period. Chatter that addresses nobody is not waited for: the engine holds it for `unaddressed_hold_s`, 270 s by default (§8.2), which is longer than a trial. A late wake of a bystander for that chatter is therefore outside what a trial measures.
+- **A harness error is not a failed check.** A timeout, a crashed CLI, a token cap, or a room the loop guard paused is recorded as a `harness_error` with its kind, no check is graded, and the results count it apart from the checks.
+- **The cost guard.** A cap on all the tokens (cache reads included) the agents of one trial have used, 3 million by default, stops a runaway as a `token_cap` harness error; it is checked every 2 s while the trial waits for the room to settle, from the moment the agents have joined. `run_evals.py run --max-cost` ends the whole run once its trials have cost that many dollars (1.00 by default); the finished trials are kept.
+
+**Real agents** (`claude_world.py`) are the live driver's (§12.4): `claude --model haiku --effort low` with the checkout's plugin over HTTPS and its listener hook, in permission mode `manual` with user settings and connectors off and nothing approved (a prompt that appears is declined with Esc and counted), each in a tmux server of its own with an empty scratch directory, a fresh home, broker and sessions for every trial. The three start and join at once. The typed prompt says to join the room and that messages from the person are the user's: nothing about answering, because how the room's own text makes an agent behave is what is measured. The real `~/.claude/settings.json` must not change, or the run stops. Tokens come from each session's transcript (`~/.claude/projects`; one model call is written as several lines sharing a message id, and counts once), priced at the published rates of the model (Haiku 5.5: $0.10 per million input, $0.50 output, cache reads a tenth, cache writes 1.25 times or, for an hour, twice); the transcripts are deleted with the trial.
+
+**The results file** is one JSON per run: the arm's name, the switchboard version and commit, the CLI, the model, the room's custom rules, the limits and, for each scenario, its trials. A graded trial has each check's verdict and what was seen, and numbers: seconds to settle, tokens and cost after the person's first message (and in all), wakes, wakes that ended in a `pass()` and no post (from the report), posts, and the same per agent. `results.summarize` is the only place counts are made.
+
+**`compare A B [--repeat A2]`** prints each check as `4/5 -> 5/5` (of the graded trials), the harness errors beside them, and the change in each mean (tokens after the question, cost, wakes, wakes that ended in a `pass()`, posts; not the time, which is mostly the 8 s the room is watched after the last thing moved). A change is called real only if it is larger than the spread between two runs of the same baseline, so the baseline is run twice first and its second run is `--repeat`; with no second run nothing is called real.
+
+**Tests, in the regular suite and with no model.** `tests/integration/test_evals_graders.py` runs the same trial against `FakeAgent`s that follow a policy (`evalkit/scripted.py`): for every check, a scripted room that fails it and one that passes it (and a test that fails when a check is added without its pair), a harness error that is not a failed check, a runaway stopped by the token cap, a room paused by the loop guard and a timeout. `tests/unit/test_evals_kit.py` covers scenarios, results, `compare`, the token meter and the opt-in.
+
+**Not in this slice:** Codex and the other harnesses, nightly runs, larger "did it do the task" scenarios, an LLM judge, scenarios replayed from real rooms, the cache keep-alive question, and waiting out the 270 s hold.
 
 ---
 
