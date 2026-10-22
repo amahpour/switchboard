@@ -218,6 +218,18 @@ def test_a_key_is_for_one_session_and_a_signed_in_hook_moves_it(build: InProcBro
     assert r.status_code == 403, r.text
 
 
+def test_a_key_report_that_names_no_session_is_refused(build: InProcBroker) -> None:
+    """A key is for one session, so a report from it has to say which: one with no session id (or a bad one)
+    is a 400, never taken for the key's own. A token's report with none is as it always was. Fails if a key
+    can act without naming its session."""
+    signed_in_member(build)
+    assert session_hook(build, KEY, {"event": "SessionStart", "session_id": SESSION_1}).status_code == 200
+    for body in ({"event": "SessionEnd"}, {"event": "SessionEnd", "session_id": ""}):
+        r = session_hook(build, KEY, body)
+        assert r.status_code == 400 and r.json()["error"] == "bad_request", (body, r.text)
+    assert participant(build, "claude-1").status != "offline"
+
+
 def test_a_hook_of_another_connection_does_not_move_a_key(build: InProcBroker) -> None:
     """Which session a key is for is said by the hooks of the connection that carries its hash, never by
     another connection's: a second Claude Code on the same device, with its own key, names its own session.

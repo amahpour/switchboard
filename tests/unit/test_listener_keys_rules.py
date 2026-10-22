@@ -193,3 +193,20 @@ def test_a_connections_every_request_writes_at_most_once_a_minute(
     store.con.execute("UPDATE listener_keys SET session_id=NULL")  # a write the memory doesn't know of
     keys.name_session(t, h, SESSION_A)  # remembered: not written again
     assert store.listener_key(h)[0].session_id is None  # type: ignore[index]
+
+
+def test_what_the_rules_remember_stays_bounded(
+    store: Store, keys: ListenerKeys, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every request of every signed-in connection carries a hash, so the two memories that spare the store a
+    write each time are capped, and a hash that fell out of one is simply written again. Fails if they grow
+    without end, or forgetting one loses a key."""
+    monkeypatch.setattr(listener_keys, "CACHE_MAX", 3)
+    t = token(store)
+    for n in range(6):
+        keys.claim(t, listener_keys.key_hash(key(n)))
+        keys.name_session(t, listener_keys.key_hash(key(n)), SESSION_A)
+    assert len(keys._claimed) == 3 and len(keys._named) == 3
+    keys.claim(t, listener_keys.key_hash(key(0)))  # forgotten, and claimed again: still one row
+    assert store.listener_key(listener_keys.key_hash(key(0))) is not None
+    assert keys.check(key(0), SESSION_A).token == t
