@@ -451,6 +451,12 @@ class HttpTools:
         if c is None:
             return "{}"
         event, sid = str(fields.get("event") or ""), _id(fields.get("session_id"))
+        if event == "PermissionRequest":
+            # A PermissionRequest hook's output is a permission decision in Codex and Devin, and an
+            # mcp_tool hook's output is this reply (live, Codex 0.158.0: an "allow" in it approved the
+            # call). So the reply is the one thing that must not be able to decide, and this door is shut:
+            # the only way to report a prompt is a command hook that discards the reply (/mcp/event, §49.9).
+            return json.dumps({"out": None, "batch_id": None}) if c.harness == "test" else "{}"
         if event == "PreToolUse":
             use = _id(fields.get("tool_use_id"))
             if c.harness == "claude" and sid and use:
@@ -778,13 +784,17 @@ class CommandHook:
             body = json.loads(raw)
         except ValueError:
             body = None
-        if not isinstance(body, dict) or body.get("harness") not in ("cursor", "devin"):
+        if not isinstance(body, dict) or body.get("harness") not in ("cursor", "devin", "codex"):
             await _reply(send, 400, {"error": "bad_request"})
             return
         harness = body["harness"]
         sid = _id(body.get("session_id"))
         event = body.get("event")
         if sid is None or not isinstance(event, str):
+            await _reply(send, 400, {"error": "bad_request"})
+            return
+        if harness == "codex" and scope.get("path") != EVENT_PATH:
+            # Codex's one command hook reports at /mcp/event, and nowhere else
             await _reply(send, 400, {"error": "bad_request"})
             return
         self.auth.touch(row)
@@ -812,13 +822,31 @@ class CommandHook:
             await _reply(send, 200, {})
             return
         ev = canonical_event(event)
-        allowed = (
-            ("SessionStart", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd")
-            if harness == "cursor"
-            else ("SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "SessionEnd")
-        )
+        allowed = {
+            "cursor": ("SessionStart", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"),
+            "devin": (
+                "SessionStart",
+                "UserPromptSubmit",
+                "PostToolUse",
+                "PermissionRequest",
+                "Stop",
+                "SessionEnd",
+            ),
+            "codex": ("PermissionRequest",),  # its one command hook: the report-only one (§49.9)
+        }[harness]
         if ev not in allowed:
             await _reply(send, 400, {"error": "bad_request"})
+            return
+        if ev == "PermissionRequest":
+            # A report that the session's person has an approval prompt open (#472, §49.9). It reads the
+            # session id and nothing else of the body (not the tool, its input or the rest of the hook's
+            # payload, which the plugin's script doesn't send either), and the reply is always empty: the
+            # hook's command discards it, and the server never writes a decision (§11).
+            conn = self.tools.conn_for(row, harness)
+            await self.tools.state.agents.http_hook(
+                conn, harness, ev, hook_params(ev, {"session_id": sid}, self.tools.state.clock.now())
+            )
+            await _reply(send, 200, {})
             return
         fields = {k: v for k, v in body.items() if k in HOOK_FIELDS}
         fields["session_id"] = sid

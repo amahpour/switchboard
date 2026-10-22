@@ -8,5 +8,5 @@
 
 ### Known limitations
 
-- **Codex, Cursor and Devin don't show it.** The only hook Codex and Devin have at a prompt is PermissionRequest, which switchboard never registers (it can approve), and Cursor has no hook at one. Their sessions look busy while a prompt is open. docs/USAGE.md has the table.
+- **Cursor doesn't show it.** Cursor has no hook at a prompt, so its sessions look busy while a prompt is open. docs/USAGE.md has the table. (Codex and Devin show it too, with a hook that can't decide: see the next note.)
 - **A declined prompt keeps showing until you type again.** Claude Code runs no hook when you decline, so the status ends with your next prompt, which is also when the session is next heard from.

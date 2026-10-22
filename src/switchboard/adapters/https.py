@@ -40,6 +40,10 @@ from switchboard.models import (
 # the Notification type of an open approval prompt in Claude Code (live, 2.1.305: 11 ms after the prompt's
 # PermissionRequest hook); the plugin's matcher and the broker both name it, and no other counts
 APPROVAL_NOTIFICATION = "permission_prompt"
+# Codex's and Devin's hook when they are about to ask their person to approve a tool (live, Codex 0.158.0
+# and Devin 3000.11.92, #472). It can approve or deny in the harness, so the plugins' hook for it is
+# report-only by construction (§11, §49.9): a command that discards the server's reply.
+APPROVAL_REQUEST = "PermissionRequest"
 CLAUDE_TIER = "claude:https"
 CODEX_TIER = "codex:https"
 CURSOR_TIER = "cursor:https"
@@ -223,6 +227,9 @@ class HttpsCodexAdapter(CodexMembership, Listening):
     def prompt_verdict(self, acked: bool) -> str | None:
         return "human_prompt"
 
+    def asks_approval(self, ev: HookEvent) -> bool:
+        return ev.ev == APPROVAL_REQUEST  # Codex's PermissionRequest hook, report-only (§49.9, #472)
+
     def stop_wait_lost(self, held_s: float) -> str | None:
         """Codex ends the call of its Stop hook for Esc, and also when the MCP server's
         ``tool_timeout_sec`` runs out (#449: after 5 minutes by default, so a session whose setup
@@ -347,6 +354,9 @@ class HttpsDevinAdapter(Adapter):
 
     def starts_subagent(self, ev: HookEvent) -> bool:
         return ev.ev == "PreToolUse" and ev.subagent_bg
+
+    def asks_approval(self, ev: HookEvent) -> bool:
+        return ev.ev == APPROVAL_REQUEST  # Devin's PermissionRequest hook, report-only (§49.9, #472)
 
     def stop_continues(self, p: Participant) -> bool:
         return True

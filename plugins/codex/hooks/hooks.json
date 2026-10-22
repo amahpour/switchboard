@@ -1,5 +1,5 @@
 {
-  "description": "switchboard over HTTPS: status, confirmations and waking an idle thread (docs/DESIGN.md \u00a749.4)",
+  "description": "switchboard over HTTPS: status, confirmations, waking an idle thread, and an open approval prompt (docs/DESIGN.md \u00a749.4, \u00a749.9)",
   "hooks": {
     "UserPromptSubmit": [
       {
@@ -54,6 +54,19 @@
               "tool_use_id": "${tool_use_id}"
             },
             "timeout": 2
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$PLUGIN_ROOT\"/bin/approval",
+            "async": true,
+            "timeout": 5
           }
         ]
       }

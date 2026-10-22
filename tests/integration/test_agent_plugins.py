@@ -458,7 +458,11 @@ def test_codexs_hooks_take_what_the_hook_tool_takes_and_what_codex_allows() -> N
     doc = load(CODEX_PLUGIN / "hooks" / "hooks.json")
     assert set(doc) == {"description", "hooks"}
     hooks = doc["hooks"]
-    assert set(hooks) == {"UserPromptSubmit", "PostToolUse", "Stop"}
+    assert set(hooks) == {"UserPromptSubmit", "PostToolUse", "PermissionRequest", "Stop"}
+    # the one command hook is the report-only PermissionRequest one (§49.9), held to its rules by
+    # tests/unit/test_permission_hooks_static.py; every other hook is an mcp_tool hook
+    permission = hooks.pop("PermissionRequest")
+    assert [h["type"] for g in permission for h in g["hooks"]] == ["command"]
     common = {
         "session_id",
         "turn_id",
@@ -736,9 +740,10 @@ def test_claudes_plugin_reports_a_permission_prompt_and_registers_no_permission_
     the hook that fires at the same moment but can approve (SECURITY.md, DESIGN.md §11). It sends the
     event, the session, the subagent flag and the notification's type: never the message, the tool or
     its input. Filled from the payload recorded with Claude Code 2.1.307, it is what the recorded request
-    carries. No plugin of any harness registers a PermissionRequest hook. Fails if the matcher is missing
-    (every notification would count), the hook sends more, a template and the real request drift apart,
-    or any plugin registers a permission hook."""
+    carries. Claude Code's and Cursor's plugins register no PermissionRequest hook (Codex's and Devin's
+    register a report-only one, held to its rules by tests/unit/test_permission_hooks_static.py). Fails
+    if the matcher is missing (every notification would count), the hook sends more, a template and the
+    real request drift apart, or either plugin registers a permission hook."""
     [group] = claude_hooks()["Notification"]
     assert group["matcher"] == "permission_prompt"
     [hook] = group["hooks"]
@@ -759,9 +764,7 @@ def test_claudes_plugin_reports_a_permission_prompt_and_registers_no_permission_
     assert "message" not in filled and "transcript_path" not in filled
     for path in (
         CLAUDE_PLUGIN / "hooks" / "hooks.json",
-        CODEX_PLUGIN / "hooks" / "hooks.json",
         ROOT / "plugins" / "cursor" / "hooks" / "hooks.json",
-        ROOT / "plugins" / "devin" / "config.example.json",
     ):
         assert "PermissionRequest" not in load(path)["hooks"], path
 

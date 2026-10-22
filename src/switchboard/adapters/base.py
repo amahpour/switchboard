@@ -160,8 +160,9 @@ class Adapter:
 
     def asks_approval(self, ev: HookEvent) -> bool:
         """True if this hook says the session has put an approval prompt in front of its person
-        (§7.4): the engine shows it as ``waiting-approval`` until the session's next hook. Only
-        Claude Code has such a hook that isn't a permission hook (its Notification, #472). It is
+        (§7.4): the engine shows it as ``waiting-approval`` until the session's next hook. Claude
+        Code's is its Notification of type ``permission_prompt``, Codex's and Devin's their
+        PermissionRequest, which the plugins' report-only hook sends (§49.9, #472). It is
         information for the room and nothing more: the reply to it is always empty (§7.3)."""
         return False
 

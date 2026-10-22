@@ -37,6 +37,8 @@ settings-phone-list-{light,dark} and settings-phone-rooms-light (Settings' tabbe
 phone list, #232),
 settings-agents-{empty,made,revoke}-{light,dark} and settings-agents-phone-light (Settings →
 Agents: a device's agent token made, shown once and revoked, #382),
+connect-codex-{light,dark,phone-light} (Connect an agent's Codex step: the plugin, config.toml, and the
+environment lines, now with the server's address for the plugin's approval hook, #472),
 closed-light, inspector-light, inspector-claude-{light,dark,phone-light} (Claude Code's
 bubble with its name written under it, #62), inspector-device-light, inspector-dark-parked,
 room-rename-before-{light,dark,phone-light}, room-rename-after-{light,dark,phone-light} (#316),
@@ -1462,6 +1464,54 @@ def shoot_settings_agents(browser: Any, out: Path, world: Any) -> None:
     revoke_all()
 
 
+def shoot_connect_codex(browser: Any, out: Path, world: Any) -> None:
+    """#472: Settings → Agents, the Codex step of Connect an agent, in light, dark and on a phone: the
+    plugin, the ``config.toml`` entry, and the environment lines. The plugin's approval hook is a command, so
+    the step also gives it the server's address (``SWITCHBOARD_URL``) beside the token. It waits for the
+    step's last line, never for its words, so the same script shoots the page before the change."""
+    from playwright.sync_api import expect
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+
+    def revoke_all() -> None:
+        st = world.broker.state
+        for t in world.broker.on_loop(lambda: st.store.agent_tokens_of(None)):
+            world.broker.on_loop(lambda t=t: st.store.agent_token_revoke(t.id, None))
+
+    for suffix, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        revoke_all()
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            if suffix.startswith("phone"):
+                page.click("#rooms-toggle")
+                page.click("#me-settings")
+                page.click("#settings-row-agents")
+            else:
+                page.click("#me-settings")
+                page.click("#settings-tab-agents")
+            page.fill("#agent-token-device", "work-laptop")
+            page.click("#agent-token-make")
+            expect(page.locator("#agent-token-value")).to_be_visible()
+            expect(page.locator("#agent-connect-codex-env")).to_be_visible()
+            step = page.locator("#agent-connect .agent-connect-step").nth(1)
+            step.scroll_into_view_if_needed()
+            page.evaluate("document.activeElement && document.activeElement.blur()")
+            settle(page)
+            path = out / f"connect-codex-{suffix}.png"
+            step.screenshot(path=str(path), animations="disabled", caret="hide")
+            print(path)
+        finally:
+            ctx.close()
+    revoke_all()
+
+
 def shoot_hosted(browser: Any, out: Path, world: Any) -> None:
     """A hosted broker (issues #41, #61): the sign-in page before it's set up, Choose how you'll
     sign in with the admin's email, the People sheet with an invite to send (light, dark), Settings'
@@ -1946,6 +1996,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_room_rename(browser, out, world)
             shoot_settings_tabs(browser, out, world)
             shoot_settings_agents(browser, out, world)
+            shoot_connect_codex(browser, out, world)
             shoot_confirmed_check(browser, out, world)  # rooms of its own, so last in this world
             shoot_approval(browser, out, world)
             shoot_hosted(browser, out, hosted)

@@ -43,6 +43,7 @@ from switchboard.delivery.sinks import Sink, SinkRegistry
 from switchboard.models import (
     CONTINUE_PATHS,
     PULL_PATHS,
+    REPORT_ONLY_EVENTS,
     WATCHDOG_DONE,
     Action,
     Batch,
@@ -1153,7 +1154,9 @@ class Engine:
         out: list[Action] = []
         adapter = self.adapter(p)
         if adapter.other_thread(p, ev):
-            return None, []  # a subagent's hook must not change or take the session's messages
+            # a subagent's hook must not change or take the session's messages; the one thing a tool that
+            # finished in it says is that an approval prompt was answered (#472)
+            return None, self.subagent_tool_ran(p)
         self.lost_stops.pop(p.id, None)  # the session's own hook: it is reachable again
         was_idle = p.status in ("idle", "starting")
         upd: dict[str, Any] = {"hooks_seen_at": now, "last_seen": now}
@@ -1260,7 +1263,7 @@ class Engine:
                 new = "offline"
         elif revived:
             new = "busy"  # any hook of a session taken offline for a dropped wait() says it is alive (#448)
-        elif p.status == "waiting-approval" and E != "Notification":
+        elif p.status == "waiting-approval" and E not in REPORT_ONLY_EVENTS:
             new = "busy"  # a hook with no status of its own (Devin's PreToolUse): the turn moved on
         p = self.store.get_participant(p.id) or p
         if new is not None and (new != "waiting-approval" or p.status != "offline" or revived):
