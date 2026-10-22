@@ -3620,19 +3620,21 @@
     claude.append(copyLine('agent-connect-server', location.origin, 'agent-connect-server'));
     box.append(claude);
     // Codex: its plugin brings the hooks; the server goes in config.toml, since a Codex plugin can't
-    // hold an address, and the token in an environment variable Codex reads (§49.5)
+    // hold an address, and the token in an environment variable Codex reads (§49.5). The plugin's
+    // approval hook is a command, so it reads the address from the environment too (§49.9, #472)
     const codex = el('div', 'agent-connect-step');
     codex.append(el('p', null, 'Codex: run these in a terminal. They install switchboard’s plugin, which brings the hooks.'));
     codex.append(copyLine('agent-connect-codex', 'codex plugin marketplace add ' + PLUGIN_MARKETPLACE
       + ' && codex plugin add switchboard@switchboard', 'agent-connect-codex'));
-    codex.append(el('p', null, 'Then add this switchboard to ~/.codex/config.toml, and the token to your shell’s'
-      + ' environment. The tool timeout lets the Stop hook listen for a day: without it Codex stops listening'
+    codex.append(el('p', null, 'Then add this switchboard to ~/.codex/config.toml, and its address and the token to'
+      + ' your shell’s environment (the plugin’s hook that tells the room an approval prompt is open reads them).'
+      + ' The tool timeout lets the Stop hook listen for a day: without it Codex stops listening'
       + ' after five minutes. The first time Codex starts, choose Trust all and continue.'));
     codex.append(copyLine('agent-connect-codex-config', '[mcp_servers.switchboard]\nurl = "' + location.origin
       + '/mcp"\nbearer_token_env_var = "SWITCHBOARD_AGENT_TOKEN"\ntool_timeout_sec = 86400',
       'agent-connect-codex-config'));
-    codex.append(copyLine('agent-connect-codex-env', 'export SWITCHBOARD_AGENT_TOKEN=' + t.token,
-      'agent-connect-codex-env'));
+    codex.append(copyLine('agent-connect-codex-env', 'export SWITCHBOARD_URL=' + location.origin
+      + '\nexport SWITCHBOARD_AGENT_TOKEN=' + t.token, 'agent-connect-codex-env'));
     box.append(codex);
     return box;
   }
