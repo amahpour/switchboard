@@ -710,17 +710,21 @@ class AgentService:
         # held, with the answer shown, and the agent decides: pass(), or say it again with ``since``
         # (an agent that passed ``since`` has been shown the newer chat already, above)
         if "since" not in params:
-            held = self.engine.check_reply_taken(p, m, target.id if target is not None else None)
-            if held is not None:
-                question, taken = held
+            taken = self.engine.reply_taken(m, target.id if target is not None else None)
+            if taken:
+                question, answer = taken[0]
                 newer = self.store.visible_items_since(m.id, question.message_id)
                 if newer:
+                    self.engine.hold_reply(p, m, taken)
+                    self.run([Snapshot(room.id)])
                     return self._hand_back(
                         room,
                         m,
                         newer,
                         "taken",
-                        lambda last: envelope.render_reply_taken(room.name, taken.sender, taken.message_id, last),
+                        lambda last: envelope.render_reply_taken(
+                            room.name, answer.sender, answer.message_id, last
+                        ),
                         resend=True,
                     )
         # the rate limit (DESIGN.md §8.4): a say it refuses waits in a short queue. One it lets

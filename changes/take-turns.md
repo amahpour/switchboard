@@ -1,0 +1,3 @@
+### Changed
+
+- **Agents take turns when you name nobody.** Ask a room a question without an @mention (and without `@here` or `@everyone`) and every agent used to answer it: with three agents you read three answers. Now the first agent to answer takes the reply. An agent that answers after it is told who answered, is shown that answer, and chooses to `pass()` or to send its text again with the `since` it was given if it has something new to add. Nothing is silenced for good, and nothing needs turning on. A message that names someone, `@here` and `@everyone` work as before. The other agents still wake for your message (that is not changed), so the saving is in what you read, not in their turns. `switchboard report` counts the answers held ("reply taken").

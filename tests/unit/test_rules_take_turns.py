@@ -131,7 +131,9 @@ def test_a_post_by_an_author_who_had_not_seen_the_question_is_not_an_answer() ->
     q = item(7)
     assert rules.reply_taken(q, "charlie", [answer(8, seen_at=None)]) is None
     assert rules.reply_taken(q, "charlie", [answer(8, ts=NOW + 5, seen_at=NOW + 6)]) is None
-    assert rules.reply_taken(q, "charlie", [answer(8, ts=NOW + 5, seen_at=NOW + 5)]) is not None  # same instant
+    assert (
+        rules.reply_taken(q, "charlie", [answer(8, ts=NOW + 5, seen_at=NOW + 5)]) is not None
+    )  # same instant
 
 
 def test_a_post_that_mentions_the_sayer_is_a_hand_off_not_a_reply_to_defer_to() -> None:
@@ -169,7 +171,9 @@ def reads(w: World, who: tuple[Any, Any]) -> None:
 
 
 def held(w: World, who: tuple[Any, Any], reply_to: int | None) -> Any:
-    return w.engine.check_reply_taken(w.p(who[0]), w.m(who[1]), reply_to)
+    """The first (question, answer) the engine would hold this say for, or None."""
+    got = w.engine.reply_taken(w.m(who[1]), reply_to)
+    return got[0] if got else None
 
 
 def test_the_second_agent_to_answer_is_told_who_took_it(w: World, clock: FakeClock) -> None:
@@ -184,15 +188,60 @@ def test_the_second_agent_to_answer_is_told_who_took_it(w: World, clock: FakeClo
     first = w.agent_says(ag["alpha"][1], "42", reply_to=q.id)
     clock.advance(1.0)
     for name in ("bravo", "charlie"):
-        got = held(w, ag[name], q.id)
-        assert got is not None, name
-        question, taken = got
-        assert question.message_id == q.id
-        assert (taken.message_id, taken.sender) == (first.id, "alpha")
+        got = w.engine.reply_taken(w.m(ag[name][1]), q.id)
+        assert [(a.message_id, a.sender) for _q, a in got] == [(first.id, "alpha")], name
+        assert [x.message_id for x, _a in got] == [q.id]
+        w.engine.hold_reply(w.p(ag[name][0]), w.m(ag[name][1]), got)
     assert held(w, ag["alpha"], q.id) is None  # its own post is not a reason to hold it
     evs = w.store.recent_events(kinds=("reply_taken",))
     assert sorted(e.membership_id for e in evs) == sorted(ag[n][1].id for n in ("bravo", "charlie"))
     assert all(e.data == {"question": q.id, "answer": first.id, "by": "alpha"} for e in evs)
+
+
+def test_a_held_say_hands_the_question_over_so_its_turn_ending_does_not_re_deliver_it(
+    w: World, clock: FakeClock
+) -> None:
+    """The bug this guards: an agent that is shown the answer and then simply ends its turn (it never calls
+    pass()) would have the question re-delivered as unanswered (``again=yes``, §8.5) and be woken again for
+    nothing. A held say counts the question as handled for that agent, as a pass() would. The agent that
+    took the reply is unchanged: its own question is handled by its own say()."""
+    ag = room_of_three(w)
+    q = w.human("what is 17 plus 25?")
+    for who in ag.values():
+        reads(w, who)
+    clock.advance(1.0)
+    w.agent_says(ag["alpha"][1], "42", reply_to=q.id)
+    bravo_p, bravo_m = ag["bravo"]
+    assert rules.redeliver_ids(w.store.in_context_items(bravo_m.id)) == [q.id]  # before: it would come back
+    got = w.engine.reply_taken(w.m(bravo_m), q.id)
+    w.engine.hold_reply(w.p(bravo_p), w.m(bravo_m), got)
+    assert w.states(bravo_m)[q.id] == "handled"
+    assert rules.redeliver_ids(w.store.in_context_items(bravo_m.id)) == []  # after: nothing to bring back
+    assert w.states(ag["charlie"][1])[q.id] == "in_context"  # charlie wasn't held yet: nothing changed for it
+
+
+def test_a_say_is_held_only_when_every_question_it_answers_has_been_answered(
+    w: World, clock: FakeClock
+) -> None:
+    """Two questions are open and alpha answered only the first. bravo's say that replies to nothing may be
+    the first answer to the second, so it is free; a say that replies to the first is a second answer. Once
+    the second is answered too, a say that replies to nothing is held for both."""
+    ag = room_of_three(w)
+    q1 = w.human("what is 17 plus 25?")
+    q2 = w.human("and what is 3 times 3?")
+    for who in ag.values():
+        reads(w, who)
+    clock.advance(1.0)
+    a1 = w.agent_says(ag["alpha"][1], "42", reply_to=q1.id)
+    bravo = w.m(ag["bravo"][1])
+    assert w.engine.reply_taken(bravo, None) == []  # q2 is unanswered
+    assert [x.message_id for x, _a in w.engine.reply_taken(bravo, q1.id)] == [q1.id]
+    clock.advance(1.0)
+    a2 = w.agent_says(ag["charlie"][1], "9", reply_to=q2.id)
+    got = w.engine.reply_taken(bravo, None)
+    assert [(x.message_id, a.message_id) for x, a in got] == [(q1.id, a1.id), (q2.id, a2.id)]
+    w.engine.hold_reply(w.p(ag["bravo"][0]), bravo, got)
+    assert w.states(bravo)[q1.id] == w.states(bravo)[q2.id] == "handled"
 
 
 def test_nothing_is_held_before_an_answer_or_after_the_question_named_someone(w: World) -> None:
@@ -205,9 +254,7 @@ def test_nothing_is_held_before_an_answer_or_after_the_question_named_someone(w:
     assert w.store.count_events("reply_taken") == 0
 
 
-def test_a_post_made_before_the_author_read_the_question_does_not_take_it(
-    w: World, clock: FakeClock
-) -> None:
+def test_a_post_made_before_the_author_read_the_question_does_not_take_it(w: World, clock: FakeClock) -> None:
     """alpha posted something else while the question was still unread by it, and read it afterwards:
     its post is not an answer, so bravo's say is free."""
     ag = room_of_three(w)
@@ -260,3 +307,18 @@ def test_the_claim_is_per_question(w: World, clock: FakeClock) -> None:
         reads(w, who)
     for n in ("alpha", "bravo", "charlie"):
         assert held(w, ag[n], second_q.id) is None, n
+
+
+def test_a_post_by_an_agent_that_was_never_sent_the_question_is_not_an_answer(
+    w: World, clock: FakeClock
+) -> None:
+    """delta joined after the question, so it has no delivery of it and its post is about something else,
+    however soon it comes."""
+    ag = room_of_three(w)
+    q = w.human("what is 17 plus 25?")
+    reads(w, ag["bravo"])
+    clock.advance(1.0)
+    delta = w.agent("delta", status="idle")
+    w.agent_says(delta[1], "hello, I just joined")
+    assert w.store.answers_to(w.room.id, q.id, ag["bravo"][1].id) == []
+    assert held(w, ag["bravo"], q.id) is None

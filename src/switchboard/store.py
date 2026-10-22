@@ -1878,7 +1878,9 @@ class Store:
         ).fetchall()
         return [Item.from_row(r) for r in rows]
 
-    def answers_to(self, room_id: int, question_id: int, not_membership_id: int, limit: int = 50) -> list[Answer]:
+    def answers_to(
+        self, room_id: int, question_id: int, not_membership_id: int, limit: int = 50
+    ) -> list[Answer]:
         """The agent chat posts after a person's message, other than one member's own, whose author was
         sent that message (§8.8), oldest first, with when the author had it in context. An author that
         never was sent it (it joined later, or a /catchup request withheld it) isn't answering it."""
@@ -1896,7 +1898,9 @@ class Store:
                 mentions = tuple(str(x) for x in json.loads(r["mentions"] or "[]"))
             except (ValueError, TypeError):
                 mentions = ()
-            out.append(Answer(r["id"], r["sender_name"], r["ts"], r["reply_to"], mentions, r["in_context_at"]))
+            out.append(
+                Answer(r["id"], r["sender_name"], r["ts"], r["reply_to"], mentions, r["in_context_at"])
+            )
         return out
 
     def batch_items(self, batch_id: int) -> list[Item]:
@@ -1944,6 +1948,23 @@ class Store:
                 " AND notified_at IS NOT NULL AND mentioned=1 AND reminders<>?",
                 (WATCHDOG_DONE, membership_id, WATCHDOG_DONE),
             )
+            self._advance_cursor(membership_id)
+        return n
+
+    def handle_items(self, membership_id: int, message_ids: Iterable[int]) -> int:
+        """Those of this member's in-context deliveries become handled, as ``mark_handled`` makes all of
+        them (a reply held because another agent had already answered, §8.8). Returns how many."""
+        ids = sorted(set(message_ids))
+        if not ids:
+            return 0
+        now = self.clock.now()
+        marks = ",".join("?" * len(ids))
+        with db.tx(self.con):
+            n = self.con.execute(
+                "UPDATE deliveries SET state='handled', handled_at=? WHERE membership_id=?"
+                f" AND state='in_context' AND message_id IN ({marks})",
+                (now, membership_id, *ids),
+            ).rowcount
             self._advance_cursor(membership_id)
         return n
 

@@ -51,7 +51,20 @@ def rows(b: InProcBroker, sql: str, *args: Any) -> list[sqlite3.Row]:
 
 
 def posts(b: InProcBroker, sender: str) -> list[str]:
-    return [r["text"] for r in rows(b, "SELECT text FROM messages WHERE sender_name=? AND kind='chat'", sender)]
+    return [
+        r["text"] for r in rows(b, "SELECT text FROM messages WHERE sender_name=? AND kind='chat'", sender)
+    ]
+
+
+def delivery_state(b: InProcBroker, name: str, message: int) -> str:
+    [r] = rows(
+        b,
+        "SELECT d.state FROM deliveries d JOIN memberships m ON m.id=d.membership_id"
+        " WHERE m.screen_name=? AND d.message_id=?",
+        name,
+        message,
+    )
+    return str(r["state"])
 
 
 async def room_of_three(b: InProcBroker, stack: Any) -> dict[str, FakeAgent]:
@@ -98,6 +111,10 @@ async def test_the_first_answer_takes_the_reply_and_the_others_are_told(
     assert held["next_since"] == first["posted_id"] and held["count"] == 1 and held["more"] is False
     assert "queued" not in held
     assert posts(broker, "bravo") == []  # not posted, not queued
+    # bravo was shown the answer: the question is handled for it, as after a pass(), so its turn ending
+    # does not bring the question back as unanswered
+    assert delivery_state(broker, "bravo", q) == "handled"
+    assert delivery_state(broker, "alpha", q) == "handled"
 
     again = await ag["charlie"].say("#build", "Forty-two.")  # no reply_to: still only a second answer
     assert again["code"] == "taken" and ids_in(again["text"]) == [first["posted_id"]]
@@ -117,14 +134,7 @@ async def test_a_held_agent_can_pass_and_that_ends_its_turn(broker: InProcBroker
     assert held["code"] == "taken"
     passed = await ag["bravo"].pass_("#build")
     assert passed["ok"] is True
-    # the held say handled nothing; the pass did, and the question is closed for bravo
-    [state] = rows(
-        broker,
-        "SELECT d.state FROM deliveries d JOIN memberships m ON m.id=d.membership_id"
-        " WHERE m.screen_name='bravo' AND d.message_id=?",
-        q,
-    )
-    assert state["state"] == "handled"
+    assert delivery_state(broker, "bravo", q) == "handled"
     assert posts(broker, "bravo") == []
 
 
