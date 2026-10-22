@@ -3882,6 +3882,22 @@ def test_an_agent_waiting_for_approval_shows_in_members_the_inspector_and_on_its
     expect(pulse).to_have_class(re.compile(r"\bworking\b"))
     expect(pulse).to_have_text("working")
 
+    # a 1280 px window has a lane about 110 px wide: the words wrap under the card's label and state, and
+    # never squeeze the label ("F4") onto two lines (found by the recording of this change)
+    narrow = ui.open(room=None, viewport={"width": 1280, "height": 800})
+    open_room(narrow, slug)
+    status("codex-1", "waiting-approval")
+    narrow.click("#board-toggle")
+    top = narrow.locator('#board .board-card[data-item="F4"] .board-card-top')
+    expect(top.locator(".board-pulse")).to_have_text("waiting for approval")
+    rows = top.evaluate(
+        "t => [...t.children].map(c => { const r = c.getBoundingClientRect();"
+        " return [c.className, Math.round(r.top), Math.round(r.height)]; })"
+    )
+    label = next(r for r in rows if "board-label" in r[0])
+    assert label[2] < 24, rows  # one line of the label, not "F" over "4"
+    assert all(r[1] + r[2] <= label[1] + 2 * 24 for r in rows), rows  # at most a second row
+
     phone = ui.open(room=None, **PHONE)
     open_room(phone, slug)
     status("codex-1", "waiting-approval")
