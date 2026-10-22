@@ -38,6 +38,7 @@ import json
 import logging
 import re
 import secrets
+import urllib.parse
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -54,7 +55,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from switchboard import __version__, build_info, db
-from switchboard.broker import agent_tokens, oidc, people
+from switchboard.broker import agent_tokens, oauth, oidc, people
 from switchboard.broker.auth import COOKIE_NAME, SESSION_TTL_S, app_csp, sha256_hex
 from switchboard.broker.commands import MAX_BUDGET, MAX_HOPS, Actor
 from switchboard.broker.hub import WsSubscriber
@@ -88,6 +89,8 @@ SETUP_COOKIE = "switchboard_setup"
 PASSKEY_COOKIE = "switchboard_passkey"
 ADD_COOKIE = "switchboard_passkey_add"
 DEVICE_COOKIE = "switchboard_device"
+# a signed-out browser's authorize request, sealed, so signing in brings it back to the consent page (§49.9)
+OAUTH_NEXT_COOKIE = "switchboard_oauth_next"
 # a wrong password sign-in, whoever it was (#240): the ask-the-admin half is for someone with no
 # email, who can't sign in at all since name sign-in ended, without saying whether that's who it is
 WRONG_SIGNIN = "wrong email or password (no email set for you yet? ask the admin to set one)"
@@ -167,6 +170,31 @@ async def _json_body(request: Request) -> dict[str, Any]:
     return data
 
 
+async def _capped_body(request: Request, limit: int) -> bytes | None:
+    """The request's body, or None when it is longer than ``limit`` (checked before and while it is
+    read, for the routes anyone can call)."""
+    declared = request.headers.get("content-length")
+    if declared is not None and (not declared.isdigit() or int(declared) > limit):
+        return None
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > limit:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _oauth_err(status: int, code: str, description: str) -> JSONResponse:
+    """RFC 6749's error answer. ``no-store`` and ``no-cache`` as §5.1 says of anything with a token."""
+    return JSONResponse(
+        {"error": code, "error_description": description},
+        status_code=status,
+        headers={**NO_STORE, "Pragma": "no-cache"},
+    )
+
+
 def install(app: FastAPI, state: "BrokerState") -> None:
     # scrypt work (#182). Strangers share two workers and a bounded queue: a flood past it is
     # refused before any scrypt runs, so it can't grow without end. A browser the broker already
@@ -243,6 +271,20 @@ def install(app: FastAPI, state: "BrokerState") -> None:
     @app.get("/", include_in_schema=False)
     async def index(request: Request) -> Response:
         w = who(request)
+        if w is not None and not w.must_reset:
+            # an agent's sign-in (§49.9) sent this browser to sign in first: back to its consent page
+            pending = state.sealer.unseal(request.cookies.get(OAUTH_NEXT_COOKIE))
+            query = pending.get("q") if pending is not None and pending.get("kind") == "oauth_next" else None
+            if request.cookies.get(OAUTH_NEXT_COOKIE) is not None:
+                back = RedirectResponse(
+                    oauth.AUTHORIZE_PATH + "?" + query
+                    if isinstance(query, str) and oauth.NEXT_QUERY_RE.fullmatch(query)
+                    else "/",
+                    status_code=303,
+                    headers=NO_STORE,
+                )
+                _drop_cookie(back, OAUTH_NEXT_COOKIE, secure=state.web_origin.secure)
+                return back
         page = "login.html" if w is None else ("setup.html" if w.must_reset else "index.html")
         # the app page alone allows inline styles, for Mermaid's drawings (§33); SecurityHeaders
         # adds the strict CSP to everything else, this page's sign-in forms included
@@ -1196,6 +1238,161 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return _ok(agent_tokens.revoke(state, w.person_id, n, w.name))
         except ServiceError as e:
             return _svc_err(e)
+
+    # ------------------------------------- browser sign-in for agents (#386, DESIGN.md §49.9)
+    # The two documents an agent reads first (RFC 9728, RFC 8414): public, the same for everyone.
+    @app.get(oauth.PRM_PATH, include_in_schema=False)
+    @app.get(oauth.PRM_PATH + "/mcp", include_in_schema=False)
+    async def oauth_protected_resource() -> Response:
+        return _ok(oauth.protected_resource(state))
+
+    @app.get(oauth.AS_PATH, include_in_schema=False)
+    async def oauth_authorization_server() -> Response:
+        return _ok(oauth.authorization_server(state))
+
+    def oauth_items(request: Request) -> list[tuple[str, str]]:
+        """The authorize request's parameters, in order, with repeats kept: ``parse_authorize`` refuses
+        those. Too many or malformed ones are an error the person is shown."""
+        try:
+            return urllib.parse.parse_qsl(request.url.query, keep_blank_values=True, max_num_fields=40)
+        except ValueError:
+            raise oauth.OAuthError("invalid_request", "the request is malformed") from None
+
+    @app.post(oauth.REGISTER_PATH, include_in_schema=False)
+    async def oauth_register(request: Request) -> Response:
+        """RFC 7591, for a program: a client says its name and where its answer goes (loopback only)
+        and gets an id. No cookie is read, and a request with an Origin (a browser's script) is refused."""
+        if request.headers.get("origin") is not None:
+            return _oauth_err(403, "access_denied", "agents only: a browser can't register a client")
+        raw = await _capped_body(request, oauth.BODY_MAX)
+        if raw is None:
+            return _oauth_err(413, "invalid_client_metadata", "the registration is too long")
+        if not request.headers.get("content-type", "").lower().startswith("application/json"):
+            return _oauth_err(400, "invalid_client_metadata", "send application/json")
+        try:
+            body = json.loads(raw)
+            if not isinstance(body, dict):
+                raise ValueError("not an object")
+            made = oauth.register(state, body)
+        except ValueError:
+            return _oauth_err(400, "invalid_client_metadata", "the registration is not a JSON object")
+        except oauth.OAuthError as e:
+            return _oauth_err(e.status, e.code, e.description)
+        return JSONResponse(made, status_code=201, headers={**NO_STORE, "Pragma": "no-cache"})
+
+    @app.post(oauth.TOKEN_PATH, include_in_schema=False)
+    async def oauth_token(request: Request) -> Response:
+        """RFC 6749's token endpoint for the one grant: a code and its PKCE verifier for the device's
+        agent token. No cookie is read, and a request with an Origin is refused."""
+        if request.headers.get("origin") is not None:
+            return _oauth_err(403, "access_denied", "agents only: a browser can't ask for a token")
+        raw = await _capped_body(request, oauth.BODY_MAX)
+        if raw is None:
+            return _oauth_err(413, "invalid_request", "the request is too long")
+        kind = request.headers.get("content-type", "").lower()
+        if not kind.startswith("application/x-www-form-urlencoded"):
+            return _oauth_err(400, "invalid_request", "send application/x-www-form-urlencoded")
+        try:
+            items = urllib.parse.parse_qsl(
+                raw.decode("ascii"), keep_blank_values=True, strict_parsing=bool(raw), max_num_fields=20
+            )
+        except (ValueError, UnicodeDecodeError):
+            return _oauth_err(400, "invalid_request", "the request is malformed")
+        form = dict(items)
+        if len(form) != len(items):
+            return _oauth_err(400, "invalid_request", "a parameter was sent twice")
+        try:
+            token = oauth.exchange(state, form)
+        except oauth.OAuthError as e:
+            if e.code == "invalid_grant":
+                failed("bad_oauth_code")
+            return _oauth_err(e.status, e.code, e.description)
+        return JSONResponse(token, headers={**NO_STORE, "Pragma": "no-cache"})
+
+    oauth_page = STATIC_DIR / "oauth.html"
+
+    @app.get(oauth.AUTHORIZE_PATH, include_in_schema=False)
+    async def oauth_authorize(request: Request) -> Response:
+        """Where an agent sends its person's browser. A request that can't be answered to the agent is
+        shown to the person (400); one the agent can be told about is sent back to it; a good one is
+        the consent page, after signing in if need be."""
+        try:
+            oauth.parse_authorize(state, oauth_items(request))
+        except oauth.OAuthError as e:
+            if e.redirect_uri is not None:
+                return RedirectResponse(oauth.error_redirect(e), status_code=303, headers=NO_STORE)
+            return FileResponse(oauth_page, status_code=400, media_type="text/html", headers=NO_STORE)
+        resp = FileResponse(oauth_page, media_type="text/html", headers=NO_STORE)
+        w = who(request)
+        query = request.url.query
+        if (w is None or w.must_reset) and oauth.NEXT_QUERY_RE.fullmatch(query):
+            # signing in lands on "/": this brings the browser back here (the consent page checks
+            # the request again, so the cookie is only a way back, never an approval)
+            resp.set_cookie(
+                OAUTH_NEXT_COOKIE,
+                state.sealer.seal({"kind": "oauth_next", "q": query}, oauth.NEXT_TTL_S),
+                max_age=int(oauth.NEXT_TTL_S),
+                path="/",
+                httponly=True,
+                samesite="strict",
+                secure=secure(),
+            )
+        return resp
+
+    @app.get("/api/oauth/consent")
+    async def oauth_consent(request: Request) -> Response:
+        """What the consent page shows: the request checked again, and the person it is for."""
+        try:
+            req = oauth.parse_authorize(state, oauth_items(request))
+        except oauth.OAuthError as e:
+            return _err(400, e.code, e.description)
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        return _ok(oauth.consent_view(state, req, w))
+
+    async def oauth_decision(
+        request: Request,
+    ) -> tuple[oauth.AuthRequest, people.Who, dict[str, Any]] | Response:
+        """The session, and the request named in the body (its query, checked again), for approve and
+        deny. An agent token is no session: only a person's cookie gets here."""
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        try:
+            body = await _json_body(request)
+            query = body.get("query")
+            if not isinstance(query, str) or len(query) > oauth.QUERY_MAX:
+                raise ServiceError("bad_request", "the sign-in request is missing")
+            items = urllib.parse.parse_qsl(query.lstrip("?"), keep_blank_values=True, max_num_fields=40)
+            return oauth.parse_authorize(state, items), w, body
+        except oauth.OAuthError as e:
+            return _err(400, e.code, e.description)
+        except (ServiceError, ValueError) as e:
+            return _err(400, "bad_request", str(e))
+
+    @app.post("/api/oauth/approve")
+    async def oauth_approve(request: Request) -> Response:
+        """The person says yes (a click on the consent page, with the page's Origin, X-Switchboard
+        and their cookie): the one-time code, as the address to send the browser to. A hosted broker
+        wants a password or passkey check in the last five minutes first, as Make a token does."""
+        got = await oauth_decision(request)
+        if isinstance(got, Response):
+            return got
+        req, w, body = got
+        if state.hosted and not state.fresh_check(w.h):
+            return _err(403, "reauth", "confirm it's you first")
+        try:
+            return _ok({"redirect": oauth.approve(state, req, w, body.get("device"))})
+        except ServiceError as e:
+            return _svc_err(e)
+
+    @app.post("/api/oauth/deny")
+    async def oauth_deny(request: Request) -> Response:
+        got = await oauth_decision(request)
+        if isinstance(got, Response):
+            return got
+        return _ok({"redirect": oauth.denied_redirect(got[0])})
 
     # --------------------------------------------------------------- api
     @app.get("/api/me")

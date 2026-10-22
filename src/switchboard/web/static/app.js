@@ -3420,7 +3420,9 @@
   function buildSettingsAgents(panel) {
     panel.append(el('h3', null, 'Agents'),
       el('p', 'fine', 'An agent token lets the coding agents on one device reach this switchboard over HTTPS.'
-        + ' Make one for each device. It is for agents only: it can’t sign you in here, post as you or run a command.'));
+        + ' Make one for each device. It is for agents only: it can’t sign you in here, post as you or run a command.'
+        + ' An agent can also sign in from your browser (Codex: codex mcp login switchboard); that shows here too,'
+        + ' and Revoke ends it the same way.'));
     const body = el('div', 'settings-agents');
     body.id = 'settings-agents';
     panel.append(body);
@@ -3527,8 +3529,10 @@
     li.id = 'agent-token-' + t.id;
     const main = el('div', 'agent-token-main');
     const used = t.last_used_at ? 'last used ' + ago(t.last_used_at) : 'never used';
+    // a browser sign-in (§49.9) says which agent it was; the name is the agent's own claim
+    const how = t.via === 'oauth' ? 'signed in from ' + (t.client || 'an agent') + ' · ' : '';
     main.append(el('span', 'agent-token-device', t.device),
-      el('span', 'agent-token-meta', 'made ' + stamp(t.created_at) + ' · ' + used));
+      el('span', 'agent-token-meta', how + 'made ' + stamp(t.created_at) + ' · ' + used));
     li.append(main);
     const busy = state.agentTokenBusy === t.id;
     if (state.agentTokenArmed === t.id) {
@@ -3537,7 +3541,8 @@
       sure.id = 'agent-token-revoke-' + t.id;
       sure.dataset.focus = 'agent-token-revoke:' + t.id;
       sure.disabled = busy;
-      sure.setAttribute('aria-label', 'Revoke the token for ' + t.device + ': its agents stop working at once');
+      sure.setAttribute('aria-label', 'Revoke the ' + (t.via === 'oauth' ? 'sign-in' : 'token') + ' for ' + t.device
+        + ': its agents stop working at once');
       sure.addEventListener('click', function () { revokeAgentToken(t); });
       const keep = btn('btn', 'Keep');
       keep.id = 'agent-token-keep-' + t.id;
@@ -3553,7 +3558,7 @@
       const ask = btn('btn btn-danger-ghost', 'Revoke');
       ask.id = 'agent-token-ask-' + t.id;
       ask.dataset.focus = 'agent-token-ask:' + t.id;
-      ask.setAttribute('aria-label', 'Revoke the token for ' + t.device);
+      ask.setAttribute('aria-label', 'Revoke the ' + (t.via === 'oauth' ? 'sign-in' : 'token') + ' for ' + t.device);
       ask.addEventListener('click', function () {
         state.agentTokenArmed = t.id;
         state.focusAfter = 'agent-token-keep:' + t.id;

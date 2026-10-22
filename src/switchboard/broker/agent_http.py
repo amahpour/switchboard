@@ -61,6 +61,7 @@ from switchboard.broker.hook_replies import (
     model_name,
     reply_for,
 )
+from switchboard.broker.oauth import challenge
 from switchboard.broker.service import ServiceError
 from switchboard.mcp.server import (
     CLIENT_INFO_META_KEY,
@@ -652,9 +653,10 @@ class AgentAuth:
                 401,
                 {
                     "error": "unauthorized",
-                    "message": "an agent token is needed: make one in Settings → Agents",
+                    "message": "an agent token is needed: make one in Settings → Agents, or sign in"
+                    " from the agent (OAuth)",
                 },
-                (b"www-authenticate", b'Bearer realm="switchboard"'),
+                (b"www-authenticate", challenge(self.state)),
             )
             return
         sid = _header(scope, b"mcp-session-id")

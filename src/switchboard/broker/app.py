@@ -20,7 +20,7 @@ from fastapi import FastAPI
 
 from switchboard import db
 from switchboard.adapters import build_adapters
-from switchboard.broker import agent_http, oidc, web
+from switchboard.broker import agent_http, oauth, oidc, web
 from switchboard.broker.agents import AgentService
 from switchboard.broker.auth import HostOriginGuard, LoginTokens, SecurityHeaders, Sessions, WebOrigin
 from switchboard.broker.hub import Hub, WsSubscriber
@@ -92,6 +92,8 @@ class BrokerState:
     signin: SignInLimiter = None  # type: ignore[assignment]
     # the MCP app behind /mcp, for agents over HTTPS (§49.2): its lifespan runs inside ours
     agent_http: Any = None
+    # the codes of agents signing in through the browser (§49.9), in memory only
+    oauth: oauth.OAuthState = None  # type: ignore[assignment]
 
     @property
     def hosted(self) -> bool:
@@ -190,6 +192,7 @@ def create_app(
         sealer=Sealer(clock),
         used_challenges=UsedChallenges(clock),
         signin=SignInLimiter(clock),
+        oauth=oauth.OAuthState(clock),
     )
 
     @contextlib.asynccontextmanager

@@ -11,7 +11,8 @@ Schema versions: 1 (0.1.0 and 0.2.0), 2 (remote members: ``participants.host``,
 messages, where NULL is the owner), 5 (per-person preferences, §34), 6 (text size, §34),
 7 (custom room rules, §35), and so on up to 28 (each step is below); 29 (#385) drops the
 ``remotes`` and ``link_machines`` tables; 30 (#385) ends the sessions of the local agent path and
-drops the process ids and the stdio credential that only it used.
+drops the process ids and the stdio credential that only it used; 31 (#386) adds the clients that
+register to sign an agent in through the browser, and says how each agent token was made.
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -31,7 +32,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 30
+SCHEMA_VERSION = 31
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -213,8 +214,15 @@ CREATE TABLE agent_tokens(
   id INTEGER PRIMARY KEY, person_id INTEGER,
   device TEXT NOT NULL CHECK(length(device) BETWEEN 1 AND 24),
   token_hash TEXT NOT NULL UNIQUE CHECK(length(token_hash) = 64),
-  created_at REAL NOT NULL, last_used_at REAL, revoked_at REAL);
+  created_at REAL NOT NULL, last_used_at REAL, revoked_at REAL,
+  via TEXT NOT NULL DEFAULT 'token' CHECK(via IN ('token', 'oauth')),
+  client_name TEXT CHECK(client_name IS NULL OR length(client_name) <= 80));
 CREATE UNIQUE INDEX agent_tokens_device ON agent_tokens(device) WHERE revoked_at IS NULL;
+CREATE TABLE oauth_clients(
+  client_id TEXT PRIMARY KEY CHECK(length(client_id) BETWEEN 8 AND 64),
+  client_name TEXT NOT NULL CHECK(length(client_name) BETWEEN 1 AND 80),
+  redirect_uris TEXT NOT NULL CHECK(length(redirect_uris) <= 2000),
+  created_at REAL NOT NULL);
 """
 
 # The tables of each schema version that a migration must keep the rows of. The older versions'
@@ -243,7 +251,8 @@ V25_TABLES = (*V24_TABLES, "agent_tokens")  # before review_picks (v26)
 V28_TABLES = (*V25_TABLES, "review_picks")  # before 29 took the two retired tables away
 # the tables a step drops, by the version it migrates to
 DROPPED_AT: dict[int, tuple[str, ...]] = {29: ("remotes", "link_machines")}
-TABLES = tuple(t for t in V28_TABLES if t not in DROPPED_AT[29])
+V30_TABLES = tuple(t for t in V28_TABLES if t not in DROPPED_AT[29])  # before oauth_clients (v31)
+TABLES = (*V30_TABLES, "oauth_clients")
 
 # v1 -> v2 (DESIGN.md §27.6): one BEGIN IMMEDIATE, after a verified backup. The
 # columns land at the end of their tables, where the fresh schema above puts them too.
@@ -610,6 +619,23 @@ V29_TO_V30 = (
 )
 
 
+# v30 -> v31 (#386, DESIGN.md §49.9): browser sign-in for agents. An agent token now says how it was
+# made (typed in Settings, ``token``, or a browser sign-in, ``oauth``) and, for a sign-in, the name the
+# agent called itself; the old ones are all ``token``. ``oauth_clients`` holds the clients that
+# registered (RFC 7591) and have not been pruned: new, so empty.
+V30_TO_V31 = (
+    "ALTER TABLE agent_tokens ADD COLUMN via TEXT NOT NULL DEFAULT 'token' CHECK(via IN ('token', 'oauth'))",
+    "ALTER TABLE agent_tokens ADD COLUMN client_name TEXT"
+    " CHECK(client_name IS NULL OR length(client_name) <= 80)",
+    "CREATE TABLE oauth_clients("
+    " client_id TEXT PRIMARY KEY CHECK(length(client_id) BETWEEN 8 AND 64),"
+    " client_name TEXT NOT NULL CHECK(length(client_name) BETWEEN 1 AND 80),"
+    " redirect_uris TEXT NOT NULL CHECK(length(redirect_uris) <= 2000),"
+    " created_at REAL NOT NULL)",
+    "UPDATE meta SET value='31' WHERE key='schema_version'",
+)
+
+
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
     the tables the step adds). Read from the module at run time, never cached."""
@@ -643,6 +669,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         27: (28, V27_TO_V28, ()),
         28: (29, V28_TO_V29, ()),
         29: (30, V29_TO_V30, ()),
+        30: (31, V30_TO_V31, ("oauth_clients",)),
     }
     out = []
     v = frm
@@ -677,6 +704,8 @@ def tables_of(version: int) -> tuple[str, ...]:
         return V25_TABLES
     if version <= 28:
         return V28_TABLES
+    if version <= 30:
+        return V30_TABLES
     return TABLES
 
 

@@ -2138,6 +2138,27 @@ body.login {
 .login-actions.stretch > * { flex: 1 1 0; min-width: 0; }
 .login-error { margin: 0; color: var(--danger); font-weight: 500; }
 .login-error:empty { display: none; }
+/* the consent page (oauth.html, §49.9): who is signing in, what the agent calls itself, where it answers */
+.consent-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--side-border);
+  border-radius: 8px;
+  background: var(--side-bg);
+  font-size: calc(13px * var(--text-scale));
+}
+.consent-facts > div { display: flex; gap: 10px; align-items: baseline; }
+.consent-facts dt { flex: 0 0 9.5em; color: var(--muted); }
+.consent-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; font-weight: 600; color: var(--fg); }
+.consent-confirm { display: flex; flex-direction: column; gap: 8px; }
+.consent-confirm .btn { height: 34px; font-size: calc(13.5px * var(--text-scale)); }
+@media (max-width: 480px) {
+  .consent-facts > div { flex-direction: column; gap: 0; }
+  .consent-facts dt { flex: none; }
+}
 /* the claim page (setup.html, §31.3): one step at a time, a name for the passkey */
 .setup-step { display: flex; flex-direction: column; gap: 12px; }
 .setup-step h1:focus { outline: none; }
