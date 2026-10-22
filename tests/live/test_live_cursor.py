@@ -58,7 +58,7 @@ def test_3_woken_while_idle_by_a_mention(model: CursorRun) -> None:
     scenarios.idle_wake(model)
 
 
-def test_4_a_mention_mid_task_arrives_with_its_next_switchboard_call(model: CursorRun) -> None:
+def test_4_a_mention_mid_task_arrives_after_the_next_tool_call(model: CursorRun) -> None:
     scenarios.mid_task(model)
 
 

@@ -1,0 +1,27 @@
+{
+  "_source": "Cursor Agent 2026.10.18, agent -p in a temp project with a hook logging every payload (2026-10-22)",
+  "_unverified": false,
+  "conversation_id": "00000000-0000-4000-8000-000000000110",
+  "generation_id": "00000000-0000-4000-8000-000000000111",
+  "model": "default",
+  "tool_name": "Shell",
+  "tool_input": {
+    "command": "false",
+    "cwd": "",
+    "timeout": 30000
+  },
+  "error_message": "Command failed with exit code 1",
+  "failure_type": "error",
+  "duration": 29.413,
+  "tool_use_id": "00000000-0000-4000-8000-000000000112",
+  "is_interrupt": false,
+  "cwd": "",
+  "session_id": "00000000-0000-4000-8000-000000000110",
+  "hook_event_name": "postToolUseFailure",
+  "cursor_version": "2026.10.18-ea085cb",
+  "workspace_roots": [
+    "/ws"
+  ],
+  "user_email": "alice@example.com",
+  "transcript_path": "/ws/transcript.jsonl"
+}

@@ -70,9 +70,10 @@ class DevinRun(Run):
     binaries = ("devin",)
     input_marker = "❭"
     wake_paths = frozenset({"wait"})
-    # Devin's tool hooks run after switchboard's own tools only, so a message for a busy one comes with its
-    # next switchboard call (its say() or wait() answer), or as hook context after it
-    mid_paths = frozenset({"say", "read", "wait", "hook_ctx"})
+    # A message for a busy Devin comes as hook context after its next tool call, any tool's (#493): the
+    # config's PostToolUse hooks cover every tool. Before that they ran after switchboard's own tools only,
+    # and the message waited for the next switchboard call (its say() or wait() answer).
+    # ``Run.mid_paths`` is ``{"hook_ctx"}``; a unit test holds it to what the hooks do.
 
     def __init__(self, name: str) -> None:
         super().__init__(name)
