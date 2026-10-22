@@ -1192,8 +1192,13 @@ class Engine:
         stale_sub = tainted and gen is not None and gen != p.gen
         if not stale_sub:
             # A parked stop hook of this session ends at any hook of it: a newer
-            # stop parks anew, anything else means the conversation moved on (§9.4).
-            out += self.release_parks(p.id, "superseded" if E == "Stop" else f"hook:{E}")
+            # stop parks anew, anything else means the conversation moved on (§9.4). Except
+            # SessionStart (#484): Claude Code runs its two SessionStart hooks, the report and
+            # the listener, at the same time, so the listener's first round may already be
+            # parked when the report arrives, and ending it left the session deaf. A park a
+            # process that quit left behind ends with its connection (§49.4).
+            if E != "SessionStart":
+                out += self.release_parks(p.id, "superseded" if E == "Stop" else f"hook:{E}")
             # Devin: an interrupt sends no cancel, so the wait() the agent left behind
             # would swallow the next message; any other hook of the session ends it
             # (not a hook that may be a subagent's: the main agent's wait is live).

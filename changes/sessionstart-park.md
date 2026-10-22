@@ -1,0 +1,3 @@
+### Fixed
+
+- **A resumed Claude Code session is woken by an @mention, every time.** When you quit Claude Code and resumed the session while it was still in a room, switchboard often left it deaf: Members showed it idle, but an @mention waited as "stopped and not listening" until you typed in the session. The plugin starts two hooks together at a session's start, one that reports it and one that listens, and when the listener got to the server first, the report ended it. A session's own start no longer ends the listener it opened. This is a change to the server only: update the server, and the plugin you have already works.

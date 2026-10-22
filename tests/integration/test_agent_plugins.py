@@ -399,6 +399,31 @@ def test_a_resumed_claude_is_woken_before_its_first_turn(broker: InProcBroker) -
 
 
 @pytest.mark.usefixtures("impl")
+def test_a_late_session_start_report_does_not_end_the_resumed_listener(broker: InProcBroker) -> None:
+    """Claude Code runs the plugin's two SessionStart hooks at the same time, so the listener's first round
+    can park before the report arrives (most live resumes lost this race, #484). The
+    report must not end that listener: an @mention afterwards still wakes it. Fails if the SessionStart
+    report ends the park (the listener exits 0 with nothing, and the member is parked and deaf)."""
+    broker.call("room.create", {"name": "#build"})
+    token = make_token(broker, "laptop")
+    claude = Claude(broker, token, SESSION_1)
+    assert claude.call("join", room="#build", screen_name="claude-1")["ok"]
+    claude.call("read", room="#build")
+    assert run_session(broker, token, SESSION_1, "SessionEnd", reason="prompt_input_exit").returncode == 0
+    pid = participant(broker, "claude-1").id
+    until(lambda: participant(broker, "claude-1").status == "offline")
+    with ThreadPoolExecutor(1) as pool:
+        waking = pool.submit(run_listen, broker, token, SESSION_1, event="SessionStart", source="resume")
+        until(lambda: parked(broker, pid), timeout=30)
+        # the report arrives after the listener's first round is parked
+        assert run_session(broker, token, SESSION_1, "SessionStart", source="resume").returncode == 0
+        assert parked(broker, pid), "the SessionStart report ended the listener's park"
+        broker.call("human.say", {"room": "#build", "text": "@claude-1 resume now"})
+        r = waking.result(60)
+    assert r.returncode == 2 and "resume now" in r.stderr, r
+
+
+@pytest.mark.usefixtures("impl")
 def test_sessionstart_listens_only_when_idle_before_a_turn() -> None:
     """A /clear or compaction SessionStart may be mid-turn; its listener must leave without
     reporting Stop to the broker. Startup and resume can listen before the first turn."""
