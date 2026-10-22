@@ -1012,6 +1012,10 @@ def shoot_mentions(browser: Any, out: Path, world: Any) -> None:
             if not tab.is_visible():
                 page.click("#rooms-toggle")
             tab.click()
+            # The popover lists the room's members that match, and the page doesn't redo it when they
+            # arrive: typed before their frame, "@skill" shows nothing for good. Wait for them, as
+            # open_build does for #build (the dark shot of CI's run 39835655650 lost this race)
+            expect(page.locator("#buddy-list .member")).to_have_count(2)
             type_in(page, "@skill")
             expect(page.locator("#mentions")).to_be_visible()
             expect(page.locator("#men-darius-skills-agent")).to_be_visible()
