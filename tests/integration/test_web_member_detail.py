@@ -48,6 +48,7 @@ MEMBER_KEYS = {
     "parked",
     "parked_reason",
     "host",
+    "owner",  # whose agent it is, by display name, or None (#496): a name, never an email or text
     "joined_at",
     "held_at",
     "status_at",

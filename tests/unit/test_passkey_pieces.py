@@ -89,11 +89,21 @@ def test_the_seal_holds_the_state_and_its_expiry() -> None:
     assert s.unseal(sealed) is None
 
 
-def test_a_tampered_or_foreign_seal_is_nothing() -> None:
-    s = Sealer(FakeClock())
+# A key under which a seal's MAC ends in characters that decode as if they were "AA": found by search, since
+# it happens for about one key in a thousand. See the test below.
+TRAP_KEY = (545).to_bytes(32, "big")
+
+
+@pytest.mark.parametrize("key", [None, TRAP_KEY], ids=["random key", "trap key"])
+def test_a_tampered_or_foreign_seal_is_nothing(key: bytes | None) -> None:
+    """The MAC is 32 bytes, 43 base64 characters, and the last one carries 4 bits of its 6: replacing the
+    last two characters with "AA" decodes to the same bytes (a valid seal) under about one key in a
+    thousand, which failed CI once (2026-10-22). So the tamper changes the first character, whose six bits
+    all count. Fails under the trap key if the MAC's last characters are used."""
+    s = Sealer(FakeClock(), key)
     sealed = s.seal({"challenge": "abc"}, 300.0)
     body, mac = sealed.split(".")
-    assert s.unseal(body + "." + mac[:-2] + "AA") is None
+    assert s.unseal(body + "." + ("B" if mac[0] == "A" else "A") + mac[1:]) is None
     assert s.unseal(body[:-1] + "." + mac) is None
     assert s.unseal(Sealer(FakeClock()).seal({"challenge": "abc"}, 300.0)) is None  # another key
     for bad in (None, 5, "", "nodot", "a.b", "x" * 5000, body + ".", "." + mac):

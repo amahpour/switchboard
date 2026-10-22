@@ -1,0 +1,17 @@
+name = "one-named"
+about = "The person names one agent: that agent posts, and the others do not."
+room = "#build"
+agents = ["alpha", "bravo", "charlie"]
+
+[[steps]]
+say = "@bravo what is 12 times 12?"
+
+[[checks]]
+id = "named_agent_answers"
+grader = "agents_post"
+agents = ["bravo"]
+
+[[checks]]
+id = "others_do_not_post"
+grader = "agents_do_not_post"
+agents = ["alpha", "charlie"]

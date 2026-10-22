@@ -34,15 +34,16 @@ from switchboard.mcp.client import call_sync
 from switchboard.paths import Paths
 from switchboard.store import Store
 
-_TOKENS: dict[str, str] = {}  # a home -> the token FakeAgent made for it
+_TOKENS: dict[tuple[str, int | None], str] = {}  # (a home, a person) -> the token FakeAgent made for them
 
 
-def endpoint(home: str | Path) -> tuple[str, str, str]:
+def endpoint(home: str | Path, person_id: int | None = None) -> tuple[str, str, str]:
     """``(the broker's /mcp URL, an agent token, the Host to send)`` for the test-mode broker running
     from ``home``. The Host is the one the broker answers to: ``switchboard.localhost:<port>``, or its
-    public URL's host when it is hosted (§30); the connection itself goes to the loopback address."""
+    public URL's host when it is hosted (§30); the connection itself goes to the loopback address.
+    The token is the owner's unless ``person_id`` names someone else, whose agent it makes (#496)."""
     paths = Paths.from_home(home)
-    key = str(paths.home)
+    key = (str(paths.home), person_id)
     status = call_sync(paths.sock, "sys.status")
     url = f"http://127.0.0.1:{status['port']}{PATH}"
     host = urlparse(status["url"]).netloc
@@ -53,7 +54,7 @@ def endpoint(home: str | Path) -> tuple[str, str, str]:
             store = Store(con, SystemClock())
             device = f"test-{secrets.token_hex(3)}"
             if (
-                store.agent_token_add(None, device, agent_tokens.token_hash(token)) is None
+                store.agent_token_add(person_id, device, agent_tokens.token_hash(token)) is None
             ):  # pragma: no cover
                 raise RuntimeError("could not make an agent token for the test agent")
         finally:
@@ -78,17 +79,19 @@ class FakeAgent:
         *,
         ack: str = "next_call",
         client_name: str = TEST_CLIENT,
+        person_id: int | None = None,
     ):
         self.home = Path(home)
         self.key = key
         self.ack = ack
         self.client_name = client_name
+        self.person_id = person_id  # whose agent it is: None, the owner's (#496)
         self.session: ClientSession | None = None
         self._stack: AsyncExitStack | None = None
         self.calls: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
 
     async def start(self) -> "FakeAgent":
-        url, token, host = endpoint(self.home)
+        url, token, host = endpoint(self.home, self.person_id)
         http = httpx2.AsyncClient(
             headers={
                 "Host": host,

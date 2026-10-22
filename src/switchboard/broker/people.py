@@ -246,6 +246,7 @@ def rename(state: "BrokerState", person_id: int | None, new: str, by: str) -> st
     state.store.add_event("people", data={"what": "rename", "from": old, "to": new, "by": by})
     note = f"{old} is now {new}" + ("" if by in (old, new) else f" (renamed by {by})")
     state.service.notice_everywhere(note)
+    state.service.members_changed_everywhere()  # an agent's row names its owner (#496)
     return old
 
 
