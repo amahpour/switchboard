@@ -224,7 +224,7 @@ class Message:
 
 
 MAX_PINS = 5  # a room's pinned decisions (#292, DESIGN.md §48)
-# the avatars an admin may upload (#498, DESIGN.md §29.10): for these harnesses, in these two schemes, as
+# the avatars an admin may upload (#498, DESIGN.md §29.11): for these harnesses, in these two schemes, as
 # these types, at most this big; ``db.SCHEMA`` says the same in its CHECKs
 ICON_HARNESSES = ("claude", "codex", "cursor", "devin")
 ICON_SCHEMES = ("light", "dark")
@@ -270,6 +270,9 @@ class Member:
     status_line_stale: bool = False
     status_line_remaining_s: float | None = None
     claims: tuple[dict[str, Any], ...] = ()  # advisory outside work held by this membership (§46)
+    # the display name of the person it belongs to (#496, §29.10): its device's token's person. None
+    # when that can't be worked out, and the page and who() then say nothing. Set by member_rows
+    owner: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -365,7 +368,7 @@ class OAuthClientRow:
 
 @dataclass(frozen=True)
 class AgentIcon:
-    """An ``agent_icons`` row without its bytes (DESIGN.md §29.10): the avatar an admin uploaded for one
+    """An ``agent_icons`` row without its bytes (DESIGN.md §29.11): the avatar an admin uploaded for one
     harness in one scheme. ``version`` is the start of the image's hash, the cache key in its URL."""
 
     harness: str

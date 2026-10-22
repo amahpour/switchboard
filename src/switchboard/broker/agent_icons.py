@@ -1,4 +1,4 @@
-"""The avatars an admin uploads for each harness (DESIGN.md §29.10, #498): what a file must be before the
+"""The avatars an admin uploads for each harness (DESIGN.md §29.11, #498): what a file must be before the
 broker stores it and sends it to every browser, and the stylesheet that shows it.
 
 An upload is a PNG or a WebP, at most 256 KB and 512 pixels a side, and never an SVG (which can carry
@@ -253,7 +253,7 @@ def stylesheet(icons: list[AgentIcon]) -> str:
         for i in icons
         if i.harness in HARNESSES and i.scheme in SCHEMES and _VERSION_RE.fullmatch(i.version)
     }
-    out = ["/* the avatars an admin uploaded (DESIGN.md §29.10), written by the broker */"]
+    out = ["/* the avatars an admin uploaded (DESIGN.md §29.11), written by the broker */"]
     for h in HARNESSES:
         light, dark = by_slot.get((h, "light")), by_slot.get((h, "dark"))
         if light is None and dark is None:

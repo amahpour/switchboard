@@ -30,7 +30,7 @@ is a password check for a signed-in browser. The owner's admin section: ``GET /a
 (a new one) and ``/remove``. Everyone signed in posts under their own name, and every
 person is a human to every agent.
 
-The agents' avatars (§29.10): ``GET /api/agent-icons`` (what is set and the limits),
+The agents' avatars (§29.11): ``GET /api/agent-icons`` (what is set and the limits),
 ``/api/agent-icons.css`` (the page's stylesheet for them) and ``/api/agent-icons/{harness}/{scheme}``
 (one image) answer any signed-in person; ``PUT`` the same path (the body is the file) and
 ``DELETE /api/agent-icons/{harness}`` are the owner's.
@@ -1424,7 +1424,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 # the owner's name is fixed by SWITCHBOARD_HUMAN_NAME: Settings can't rename it (#114)
                 "name_locked": w.owner and state.cfg.human_name_from_env,
                 "admin": w.owner and state.hosted,  # the admin section (§32.3)
-                # may this person upload the agents' avatars (§29.10)? The owner: on a desktop broker the
+                # may this person upload the agents' avatars (§29.11)? The owner: on a desktop broker the
                 # one person signed in, on a hosted one the admin
                 "can_set_icons": w.owner,
                 "version": __version__,
@@ -1518,7 +1518,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return _err(404, "not_found", "no such person")
         return rename_route(body, p.id, w.name)
 
-    # ------------------------------------------------ the agents' avatars (DESIGN.md §29.10, #498)
+    # ------------------------------------------------ the agents' avatars (DESIGN.md §29.11, #498)
     # Everyone signed in reads them (the page's stylesheet and the images it names); only the owner (a
     # desktop broker's one person, a hosted broker's admin) uploads or resets. The check is the bytes'.
     def icon_session(request: Request) -> tuple[people.Who | None, Response | None]:

@@ -174,7 +174,7 @@ def test_the_agent_icons_are_the_pinned_files() -> None:
 
 
 def test_the_one_stylesheet_the_page_applies_by_script_is_the_brokers_own() -> None:
-    """#498, DESIGN.md §29.10: the uploaded avatars' stylesheet is the one piece of CSS app.js applies from
+    """#498, DESIGN.md §29.11: the uploaded avatars' stylesheet is the one piece of CSS app.js applies from
     script, through a constructable sheet, and its text is only what ``/api/agent-icons.css`` answered:
     no other file touches the CSSOM, nothing is written into a rule by hand, and the page still links
     that stylesheet (after style.css, so it wins at equal weight). A tightening of the lint above, not an

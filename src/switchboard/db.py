@@ -13,7 +13,7 @@ messages, where NULL is the owner), 5 (per-person preferences, §34), 6 (text si
 ``remotes`` and ``link_machines`` tables; 30 (#385) ends the sessions of the local agent path and
 drops the process ids and the stdio credential that only it used; 31 (#386) adds the clients that
 register to sign an agent in through the browser, and says how each agent token was made; 32 (#498)
-adds the avatars an admin uploads for each harness (§29.10).
+adds the avatars an admin uploads for each harness (§29.11).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -648,7 +648,7 @@ V30_TO_V31 = (
 )
 
 
-# v31 -> v32 (#498, DESIGN.md §29.10): the avatars an admin uploads, one image per harness and scheme, kept
+# v31 -> v32 (#498, DESIGN.md §29.11): the avatars an admin uploads, one image per harness and scheme, kept
 # in the database so they are in every backup and need no volume. New, so empty. The CHECKs are the last
 # line of the broker's own validation: only the four harnesses with an avatar, the two schemes, PNG or
 # WebP (never SVG) and the byte and pixel caps.

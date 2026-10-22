@@ -1,4 +1,4 @@
-"""Customizing the agents' avatars over the web API (#498, DESIGN.md §29.10): the admin uploads a PNG or
+"""Customizing the agents' avatars over the web API (#498, DESIGN.md §29.11): the admin uploads a PNG or
 WebP for a harness's light and dark avatar, every signed-in person is served it, and nobody else can
 change one. The files are checked by their bytes and refused with a message the page shows; they are
 served from the page's own origin with the right type, nosniff and a cache key that changes on upload;

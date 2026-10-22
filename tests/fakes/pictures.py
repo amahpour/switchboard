@@ -1,4 +1,4 @@
-"""Generated pictures for the avatar upload tests (#498, DESIGN.md §29.10).
+"""Generated pictures for the avatar upload tests (#498, DESIGN.md §29.11).
 
 Solid-colour PNG and WebP files, made here from nothing: no artwork, and no company's logo, is in
 the repository for these tests. The PNGs are ordinary RGBA files (zlib and CRC from the standard

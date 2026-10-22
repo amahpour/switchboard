@@ -53,6 +53,23 @@ def test_only_a_confirmed_fix_gets_the_check_on_its_board_card() -> None:
     assert out["after"] == ["F1", "F2", "F3"]
 
 
+def test_the_page_names_an_agents_owner_by_the_number_of_people() -> None:
+    """#496: Members says "Owner: alice" under an agent only once the people frame names more than
+    one person, and takes it away when the second leaves; a desktop broker, which sends no people
+    frame, never shows it. The Inspector names the owner and the device whatever the number, and an
+    agent whose owner the broker left null shows no owner line and no empty "Owner:". Fails if the
+    line shows for one person, is not drawn when a second arrives, or is drawn for a null owner."""
+    out = run("member_owner")
+    assert out["desktop"] == [] and out["one"] == []
+    assert out["two"] == ["Owner: alice", "Owner: bob"]  # devin-1 has none
+    assert out["back"] == []
+    assert out["inspector"] == {
+        "alice": ["Owner: alice · device dev-0"],
+        "bob": ["Owner: bob · device dev-1"],
+        "none": [],
+    }
+
+
 def test_every_rooms_frame_subscribes_the_tabs_again() -> None:
     # a close dropped this page's subscription; the reopen (same id) landed before the listing
     out = run("rooms_frame_hellos_again")

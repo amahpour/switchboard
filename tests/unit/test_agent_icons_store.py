@@ -1,4 +1,4 @@
-"""The avatars an admin uploaded, in the store (#498, DESIGN.md §29.10): one image per harness and scheme,
+"""The avatars an admin uploaded, in the store (#498, DESIGN.md §29.11): one image per harness and scheme,
 a replacement keeps the table to one row, a reset takes both schemes of one harness away, and the list
 never carries the bytes (a stylesheet and a settings page need only who has one, and its cache key)."""
 

@@ -1,4 +1,4 @@
-"""Checking an uploaded avatar (DESIGN.md §29.10, #498): what a file must be before the broker stores it
+"""Checking an uploaded avatar (DESIGN.md §29.11, #498): what a file must be before the broker stores it
 and sends it back to every browser, and the stylesheet that shows it.
 
 The checks read the file's own bytes: its magic number, its parsed size and, for a PNG, every chunk's

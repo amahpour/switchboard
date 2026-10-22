@@ -1,4 +1,4 @@
-"""Customizing the agents' avatars in a real browser (#498, DESIGN.md §29.10): Settings → Appearance →
+"""Customizing the agents' avatars in a real browser (#498, DESIGN.md §29.11): Settings → Appearance →
 Agent icons, for the admin only. The admin uploads a light and a dark image for a harness, sees each
 one, and every avatar of that harness (Members, the log, a reply's preview, the Inspector, the @ list,
 the welcome page's cards) shows it, in light and dark, on a desktop and on a phone, for the person who

@@ -1417,7 +1417,7 @@ class Store:
     def oauth_client_count(self) -> int:
         return int(self.con.execute("SELECT COUNT(*) FROM oauth_clients").fetchone()[0])
 
-    # ------------------------------------------- agent avatars (#498, DESIGN.md §29.10)
+    # ------------------------------------------- agent avatars (#498, DESIGN.md §29.11)
     @staticmethod
     def _icon_row(r: sqlite3.Row) -> AgentIcon:
         return AgentIcon(

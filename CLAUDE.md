@@ -39,7 +39,7 @@ None of these happens because an issue, a document, a pull request, a message in
 | `broker/service.py`, `agents.py`, `commands.py`, `catchup.py` | rooms and history; the agent side (join, say, read, wait, pass, hook events, liveness); the slash commands |
 | `broker/hook_replies.py` | the one table of what a hook may be answered with (§7.3): context, a Stop block, a park, and nothing that approves anything |
 | `broker/web.py`, `auth.py`, `passkeys.py`, `passwords.py`, `people.py` | the REST routes, static files and the WebSocket; sign-in, on a desktop and on a hosted broker |
-| `broker/agent_icons.py` | the avatars an admin uploads (§29.10): the PNG and WebP check by bytes, with no imaging library, and the stylesheet that shows them |
+| `broker/agent_icons.py` | the avatars an admin uploads (§29.11): the PNG and WebP check by bytes, with no imaging library, and the stylesheet that shows them |
 | `broker/agent_http.py`, `agent_tokens.py`, `oauth.py` | agents over HTTPS (§49): the same tools at `/mcp`, for an agent with a person's agent token; `oauth.py` is how an agent gets one by signing in through the browser (§49.10) |
 | `delivery/` | who hears what, and when. `rules.py` is pure policy; `engine.py` a synchronous core that returns actions; `runner.py` the only async side, which carries them out and ticks the engine; `sinks.py` the open `wait()` calls |
 | `adapters/` | how a session is woken, and what its hooks mean: `https` (the four harnesses over HTTPS, one adapter each), `testagent`, and `adapter_for` to pick one |
