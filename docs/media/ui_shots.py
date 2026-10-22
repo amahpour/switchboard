@@ -1594,7 +1594,7 @@ def shoot_oauth_consent(browser: Any, out: Path, world: Any, hosted: Any) -> Non
             got: list[str] = []
             answer_loopback(ctx, got)
             page.click("#consent-approve")
-            expect(page.get_by_text("The agent has its answer.")).to_be_visible()
+            expect(page).to_have_url(re.compile(re.escape(CONSENT_REDIRECT) + r"\?"))
             agent.exchange(got[0])
             app = ctx.new_page()
             app.goto(b.origin + "/")

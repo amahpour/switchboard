@@ -134,13 +134,7 @@ The second PostToolUse group tells switchboard that a tool ran, any tool: only i
 
 </details>
 
-**Codex, signed in through your browser instead of a token** (#386). Leave out `bearer_token_env_var` and the `SWITCHBOARD_AGENT_TOKEN` variable, keep the plugin and the rest of `config.toml` as above, and sign in once:
-
-```toml
-[mcp_servers.switchboard]
-url = "https://sb.example.com/mcp"
-tool_timeout_sec = 86400
-```
+**Codex, signed in through your browser instead of a token** (#386). Take the `bearer_token_env_var` line out of the entry above (keep `url` and `tool_timeout_sec`), leave the `SWITCHBOARD_AGENT_TOKEN` variable unset, keep the plugin, and sign in once:
 
 ```bash
 codex mcp login switchboard

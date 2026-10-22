@@ -7,6 +7,7 @@ by, so nothing listens on a port. Marker ``e2e``; any console error, page error 
 
 from __future__ import annotations
 
+import re
 import secrets
 import shutil
 import urllib.parse
@@ -27,6 +28,8 @@ pytestmark = pytest.mark.e2e
 
 REDIRECT = "http://localhost:41234/callback"
 CLIENT = "Claude Code (switchboard)"
+# the page has gone to the agent's own address (it says so itself just before: wait for the address)
+AT_THE_AGENT = re.compile(re.escape(REDIRECT) + r"\?")
 
 
 @pytest.fixture(scope="module")
@@ -117,7 +120,7 @@ def answer_loopback(ctx: BrowserContext, got: list[str]) -> None:
 
     def handle(route: Route) -> None:
         got.append(route.request.url)
-        route.fulfill(status=200, content_type="text/html", body="<p>the agent has its answer</p>")
+        route.fulfill(status=200, content_type="text/html", body="<p>the agent's own page</p>")
 
     ctx.route("http://localhost:41234/**", handle)
 
@@ -166,7 +169,7 @@ def test_approve_hands_the_code_to_the_agent_and_the_agent_gets_a_token(
     assert got == [] and b.on_loop(lambda: b.state.store.agent_tokens_of(None)) == []  # nothing was sent
     page.fill("#consent-device", "Work-Laptop")
     page.click("#consent-approve")
-    expect(page.get_by_text("the agent has its answer")).to_be_visible()  # the agent's page, not ours
+    expect(page).to_have_url(AT_THE_AGENT)
     assert len(got) == 1 and got[0].startswith(REDIRECT + "?"), (got, page.url)
     q = urllib.parse.parse_qs(urllib.parse.urlsplit(got[0]).query)
     assert q["state"] == [agent.state] and set(q) == {"code", "state"}
@@ -203,7 +206,7 @@ def test_deny_sends_the_agent_access_denied(ui: UI, hosted: tuple[InProcBroker, 
     agent = Agent(b.state.web_origin.origin)
     page, got = open_consent(ui, hosted, agent)
     page.click("#consent-deny")
-    expect(page.get_by_text("the agent has its answer")).to_be_visible()
+    expect(page).to_have_url(AT_THE_AGENT)
     assert got == [f"{REDIRECT}?error=access_denied&state={agent.state}"]
     assert b.on_loop(lambda: b.state.store.agent_tokens_of(None)) == []
 
@@ -232,7 +235,7 @@ def test_a_hosted_broker_asks_to_confirm_it_is_you_when_the_check_ran_out(
     assert got == [] and b.on_loop(lambda: b.state.store.agent_tokens_of(None)) == []
     page.fill("#consent-password", ADMIN_PW)
     page.click("#consent-approve")
-    expect(page.get_by_text("the agent has its answer")).to_be_visible()
+    expect(page).to_have_url(AT_THE_AGENT)
     assert len(got) == 1 and "code=" in got[0]
     assert (
         agent.exchange(urllib.parse.parse_qs(urllib.parse.urlsplit(got[0]).query)["code"][0]).status_code
@@ -319,7 +322,7 @@ def test_the_page_builds_nothing_from_the_request(ui: UI, hosted: tuple[InProcBr
     assert page.locator("#step-consent img").count() == 0
     page.fill("#consent-device", "markup")
     page.click("#consent-approve")
-    expect(page.get_by_text("the agent has its answer")).to_be_visible()
+    expect(page).to_have_url(AT_THE_AGENT)
     assert (
         agent.exchange(urllib.parse.parse_qs(urllib.parse.urlsplit(got[0]).query)["code"][0]).status_code
         == 200

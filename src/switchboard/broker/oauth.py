@@ -270,7 +270,8 @@ def redirect_with(uri: str, **params: str | None) -> str:
 
 
 def error_redirect(err: OAuthError) -> str:
-    assert err.redirect_uri is not None
+    if err.redirect_uri is None:
+        raise ValueError("this error is for the person, not for the client")
     return redirect_with(err.redirect_uri, error=err.code, error_description=err.description, state=err.state)
 
 

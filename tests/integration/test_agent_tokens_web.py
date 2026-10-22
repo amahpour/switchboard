@@ -44,7 +44,13 @@ def test_the_owner_makes_lists_and_revokes_a_token_on_a_desktop_broker(broker: I
     assert made["device"] == "work-laptop" and agent_tokens.TOKEN_RE.fullmatch(made["token"])
     assert r.headers["cache-control"] == "no-store"
     listed = c.get(MAKE).json()["tokens"]
-    assert listed == [{k: made[k] for k in ("id", "device", "created_at", "last_used_at")}]
+    assert listed == [
+        {
+            **{k: made[k] for k in ("id", "device", "created_at", "last_used_at")},
+            "via": "token",
+            "client": None,
+        }
+    ]
     st = broker.state
     row = st.store.agent_token_for_device("work-laptop")
     assert row is not None and row.token_hash == agent_tokens.token_hash(made["token"])
