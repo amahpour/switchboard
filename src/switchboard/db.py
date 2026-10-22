@@ -12,7 +12,8 @@ messages, where NULL is the owner), 5 (per-person preferences, §34), 6 (text si
 7 (custom room rules, §35), and so on up to 28 (each step is below); 29 (#385) drops the
 ``remotes`` and ``link_machines`` tables; 30 (#385) ends the sessions of the local agent path and
 drops the process ids and the stdio credential that only it used; 31 (#386) adds the clients that
-register to sign an agent in through the browser, and says how each agent token was made.
+register to sign an agent in through the browser, and says how each agent token was made; 32 (#498)
+adds the avatars an admin uploads for each harness (§29.10).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -32,7 +33,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 31
+SCHEMA_VERSION = 32
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -223,6 +224,16 @@ CREATE TABLE oauth_clients(
   client_name TEXT NOT NULL CHECK(length(client_name) BETWEEN 1 AND 80),
   redirect_uris TEXT NOT NULL CHECK(length(redirect_uris) <= 2000),
   created_at REAL NOT NULL);
+CREATE TABLE agent_icons(
+  harness TEXT NOT NULL CHECK(harness IN ('claude','codex','cursor','devin')),
+  scheme TEXT NOT NULL CHECK(scheme IN ('light','dark')),
+  mime TEXT NOT NULL CHECK(mime IN ('image/png','image/webp')),
+  data BLOB NOT NULL CHECK(length(data) BETWEEN 1 AND 262144),
+  width INTEGER NOT NULL CHECK(width BETWEEN 1 AND 512),
+  height INTEGER NOT NULL CHECK(height BETWEEN 1 AND 512),
+  sha256 TEXT NOT NULL CHECK(length(sha256) = 64),
+  updated_at REAL NOT NULL,
+  PRIMARY KEY(harness, scheme));
 """
 
 # The tables of each schema version that a migration must keep the rows of. The older versions'
@@ -252,7 +263,8 @@ V28_TABLES = (*V25_TABLES, "review_picks")  # before 29 took the two retired tab
 # the tables a step drops, by the version it migrates to
 DROPPED_AT: dict[int, tuple[str, ...]] = {29: ("remotes", "link_machines")}
 V30_TABLES = tuple(t for t in V28_TABLES if t not in DROPPED_AT[29])  # before oauth_clients (v31)
-TABLES = (*V30_TABLES, "oauth_clients")
+V31_TABLES = (*V30_TABLES, "oauth_clients")  # before agent_icons (v32)
+TABLES = (*V31_TABLES, "agent_icons")
 
 # v1 -> v2 (DESIGN.md §27.6): one BEGIN IMMEDIATE, after a verified backup. The
 # columns land at the end of their tables, where the fresh schema above puts them too.
@@ -636,6 +648,25 @@ V30_TO_V31 = (
 )
 
 
+# v31 -> v32 (#498, DESIGN.md §29.10): the avatars an admin uploads, one image per harness and scheme, kept
+# in the database so they are in every backup and need no volume. New, so empty. The CHECKs are the last
+# line of the broker's own validation: only the four harnesses with an avatar, the two schemes, PNG or
+# WebP (never SVG) and the byte and pixel caps.
+V31_TO_V32 = (
+    "CREATE TABLE agent_icons("
+    " harness TEXT NOT NULL CHECK(harness IN ('claude','codex','cursor','devin')),"
+    " scheme TEXT NOT NULL CHECK(scheme IN ('light','dark')),"
+    " mime TEXT NOT NULL CHECK(mime IN ('image/png','image/webp')),"
+    " data BLOB NOT NULL CHECK(length(data) BETWEEN 1 AND 262144),"
+    " width INTEGER NOT NULL CHECK(width BETWEEN 1 AND 512),"
+    " height INTEGER NOT NULL CHECK(height BETWEEN 1 AND 512),"
+    " sha256 TEXT NOT NULL CHECK(length(sha256) = 64),"
+    " updated_at REAL NOT NULL,"
+    " PRIMARY KEY(harness, scheme))",
+    "UPDATE meta SET value='32' WHERE key='schema_version'",
+)
+
+
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
     the tables the step adds). Read from the module at run time, never cached."""
@@ -670,6 +701,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         28: (29, V28_TO_V29, ()),
         29: (30, V29_TO_V30, ()),
         30: (31, V30_TO_V31, ("oauth_clients",)),
+        31: (32, V31_TO_V32, ("agent_icons",)),
     }
     out = []
     v = frm
@@ -706,6 +738,8 @@ def tables_of(version: int) -> tuple[str, ...]:
         return V28_TABLES
     if version <= 30:
         return V30_TABLES
+    if version <= 31:
+        return V31_TABLES
     return TABLES
 
 

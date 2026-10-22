@@ -224,6 +224,13 @@ class Message:
 
 
 MAX_PINS = 5  # a room's pinned decisions (#292, DESIGN.md §48)
+# the avatars an admin may upload (#498, DESIGN.md §29.10): for these harnesses, in these two schemes, as
+# these types, at most this big; ``db.SCHEMA`` says the same in its CHECKs
+ICON_HARNESSES = ("claude", "codex", "cursor", "devin")
+ICON_SCHEMES = ("light", "dark")
+ICON_TYPES = ("image/png", "image/webp")
+ICON_MAX_BYTES = 256 * 1024
+ICON_MAX_SIDE = 512
 
 
 @dataclass(frozen=True)
@@ -354,6 +361,25 @@ class OAuthClientRow:
             redirect_uris=json.loads(r["redirect_uris"]),
             created_at=r["created_at"],
         )
+
+
+@dataclass(frozen=True)
+class AgentIcon:
+    """An ``agent_icons`` row without its bytes (DESIGN.md §29.10): the avatar an admin uploaded for one
+    harness in one scheme. ``version`` is the start of the image's hash, the cache key in its URL."""
+
+    harness: str
+    scheme: str
+    mime: str
+    width: int
+    height: int
+    size: int  # the file's length in bytes
+    sha256: str
+    updated_at: float
+
+    @property
+    def version(self) -> str:
+        return self.sha256[:12]
 
 
 @dataclass(frozen=True)

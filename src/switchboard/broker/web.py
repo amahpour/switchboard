@@ -29,6 +29,10 @@ is a password check for a signed-in browser. The owner's admin section: ``GET /a
 ``POST /api/people`` (a name: a one-time password to hand over), ``/api/people/{id}/password``
 (a new one) and ``/remove``. Everyone signed in posts under their own name, and every
 person is a human to every agent.
+
+The agents' avatars (§29.10): ``GET /api/agent-icons`` (what is set and the limits), ``/api/agent-icons.css``
+(the page's stylesheet for them) and ``/api/agent-icons/{harness}/{scheme}`` (one image) answer any signed-in
+person; ``PUT`` the same path (the body is the file) and ``DELETE /api/agent-icons/{harness}`` are the owner's.
 """
 
 from __future__ import annotations
@@ -55,7 +59,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from switchboard import __version__, build_info, db
-from switchboard.broker import agent_tokens, oauth, oidc, people
+from switchboard.broker import agent_icons, agent_tokens, oauth, oidc, people
 from switchboard.broker.auth import COOKIE_NAME, SESSION_TTL_S, app_csp, sha256_hex
 from switchboard.broker.commands import MAX_BUDGET, MAX_HOPS, Actor
 from switchboard.broker.hub import WsSubscriber
@@ -1419,6 +1423,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 # the owner's name is fixed by SWITCHBOARD_HUMAN_NAME: Settings can't rename it (#114)
                 "name_locked": w.owner and state.cfg.human_name_from_env,
                 "admin": w.owner and state.hosted,  # the admin section (§32.3)
+                # may this person upload the agents' avatars (§29.10)? The owner: on a desktop broker the
+                # one person signed in, on a hosted one the admin
+                "can_set_icons": w.owner,
                 "version": __version__,
                 "commit": build_info.commit(),
                 "test_mode": state.test_mode,
@@ -1509,6 +1516,135 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         if p is None or not p.active:
             return _err(404, "not_found", "no such person")
         return rename_route(body, p.id, w.name)
+
+    # ------------------------------------------------ the agents' avatars (DESIGN.md §29.10, #498)
+    # Everyone signed in reads them (the page's stylesheet and the images it names); only the owner (a
+    # desktop broker's one person, a hosted broker's admin) uploads or resets. The check is the bytes'.
+    def icon_session(request: Request) -> tuple[people.Who | None, Response | None]:
+        w = who(request)
+        if w is None or w.must_reset:
+            return None, unauthorized()
+        return w, None
+
+    def icon_owner(request: Request) -> tuple[people.Who | None, Response | None]:
+        w, no = icon_session(request)
+        if no is None and w is not None and not w.owner:
+            return None, _err(403, "forbidden", "only the admin changes the agents' avatars")
+        return w, no
+
+    def icon_unknown(harness: str, scheme: str | None = None) -> Response | None:
+        if harness not in agent_icons.HARNESSES or (scheme is not None and scheme not in agent_icons.SCHEMES):
+            return _err(404, "not_found", "no such avatar")
+        return None
+
+    @app.get("/api/agent-icons")
+    async def agent_icons_list(request: Request) -> Response:
+        """What is uploaded (never the bytes), what may be, and whether this person may change it."""
+        w, no = icon_session(request)
+        if no is not None or w is None:
+            return no or unauthorized()
+        return _ok(
+            {
+                "can_change": w.owner,
+                "harnesses": list(agent_icons.HARNESSES),
+                "limits": {
+                    "bytes": agent_icons.MAX_BYTES,
+                    "side": agent_icons.MAX_SIDE,
+                    "types": list(agent_icons.TYPES),
+                },
+                "icons": [agent_icons.icon_json(i) for i in state.store.agent_icons()],
+            }
+        )
+
+    @app.get("/api/agent-icons.css", include_in_schema=False)
+    async def agent_icons_css(request: Request) -> Response:
+        """The page's stylesheet for the uploaded avatars, linked after ``style.css``."""
+        _w, no = icon_session(request)
+        if no is not None:
+            return no
+        return Response(
+            agent_icons.stylesheet(state.store.agent_icons()),
+            media_type="text/css",
+            headers={"Cache-Control": "no-cache"},
+        )
+
+    @app.get("/api/agent-icons/{harness}/{scheme}")
+    async def agent_icon_get(request: Request, harness: str, scheme: str) -> Response:
+        _w, no = icon_session(request)
+        if no is not None:
+            return no
+        got = None if icon_unknown(harness, scheme) is not None else state.store.agent_icon(harness, scheme)
+        if got is None:
+            return _err(404, "not_found", "no such avatar")
+        icon, data = got
+        # the URL carries the image's hash: a request that has the current one may be cached for good
+        # (an upload changes the URL), any other is revalidated, so a stale link can't pin old bytes
+        cache = (
+            "private, max-age=31536000, immutable"
+            if request.query_params.get("v") == icon.version
+            else "private, no-cache"
+        )
+        return Response(
+            data,
+            media_type=icon.mime,
+            headers={
+                "Cache-Control": cache,
+                # every response gets nosniff from SecurityHeaders; said here too, since an image served
+                # under another type than its bytes is the whole risk of an upload
+                "X-Content-Type-Options": "nosniff",
+                # opened on its own, the response is inert: no script, no frame, no embedded anything
+                "Content-Security-Policy": "default-src 'none'; sandbox",
+            },
+        )
+
+    @app.put("/api/agent-icons/{harness}/{scheme}")
+    async def agent_icon_put(request: Request, harness: str, scheme: str) -> Response:
+        """Upload the avatar for ``harness`` in ``scheme``: the request body is the file, its
+        Content-Type what it says it is. Judged by its bytes (``agent_icons.check``) before it is kept."""
+        w, no = icon_owner(request)
+        if no is not None or w is None:
+            return no or unauthorized()
+        if (bad := icon_unknown(harness, scheme)) is not None:
+            return bad
+        raw = await _capped_body(request, agent_icons.MAX_BYTES)
+        try:
+            if raw is None:
+                declared = request.headers.get("content-length", "")
+                raise agent_icons.too_large(int(declared) if declared.isdigit() else None)
+            got = agent_icons.check(raw, request.headers.get("content-type"))
+        except agent_icons.IconError as e:
+            return _err(e.status, e.code, e.message)
+        icon = state.store.agent_icon_set(harness, scheme, got.mime, raw, got.width, got.height, got.sha256)
+        state.store.add_event(
+            "icons",
+            data={
+                "what": "set",
+                "harness": harness,
+                "scheme": scheme,
+                "by": w.name,
+                "type": icon.mime,
+                "bytes": icon.size,
+                "sha": icon.version,
+            },
+        )
+        icons_changed(state)
+        return _ok(agent_icons.icon_json(icon))
+
+    @app.delete("/api/agent-icons/{harness}")
+    async def agent_icon_reset(request: Request, harness: str) -> Response:
+        """Reset ``harness``'s avatars, light and dark: the built-in one comes back."""
+        w, no = icon_owner(request)
+        if no is not None or w is None:
+            return no or unauthorized()
+        if (bad := icon_unknown(harness)) is not None:
+            return bad
+        removed = state.store.agent_icon_reset(harness)
+        if removed:
+            state.store.add_event(
+                "icons", data={"what": "reset", "harness": harness, "by": w.name, "removed": removed}
+            )
+            icons_changed(state)
+        return _ok({"removed": removed})
 
     @app.put("/api/me/preferences")
     async def set_preferences(request: Request) -> Response:
@@ -1899,6 +2035,11 @@ def people_frame(state: "BrokerState") -> dict[str, Any] | None:
     online = [state.cfg.human_name] if 0 in here else []
     online += [p.name for p in state.store.people() if p.id in here]
     return {"people": people.names(state), "online": online}
+
+
+def icons_changed(state: "BrokerState") -> None:
+    """Tell every open page an agent's avatar was set or reset: it fetches the stylesheet again."""
+    state.hub.publish("icons", None, {})
 
 
 def people_changed(state: "BrokerState") -> None:

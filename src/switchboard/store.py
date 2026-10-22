@@ -14,12 +14,18 @@ from typing import Any
 from switchboard import claims, db, reviews
 from switchboard.clock import Clock, SystemClock
 from switchboard.models import (
+    ICON_HARNESSES,
+    ICON_MAX_BYTES,
+    ICON_MAX_SIDE,
+    ICON_SCHEMES,
+    ICON_TYPES,
     LOCAL_HOST,
     MAX_BUDGET,
     MAX_HOPS,
     MAX_PINS,
     ROOM_RE,
     WATCHDOG_DONE,
+    AgentIcon,
     AgentTokenRow,
     Batch,
     Event,
@@ -1410,6 +1416,70 @@ class Store:
 
     def oauth_client_count(self) -> int:
         return int(self.con.execute("SELECT COUNT(*) FROM oauth_clients").fetchone()[0])
+
+    # ------------------------------------------- agent avatars (#498, DESIGN.md §29.10)
+    @staticmethod
+    def _icon_row(r: sqlite3.Row) -> AgentIcon:
+        return AgentIcon(
+            harness=r["harness"],
+            scheme=r["scheme"],
+            mime=r["mime"],
+            width=r["width"],
+            height=r["height"],
+            size=r["size"],
+            sha256=r["sha256"],
+            updated_at=r["updated_at"],
+        )
+
+    def agent_icon_set(
+        self, harness: str, scheme: str, mime: str, data: bytes, width: int, height: int, sha256: str
+    ) -> AgentIcon:
+        """Store the avatar an admin uploaded for ``harness`` in ``scheme``, replacing the one there. The
+        caller (``broker.agent_icons.check``) has read the bytes; what is checked here is only that no
+        argument could be a row the schema refuses, so a bug elsewhere is a ValueError, not a stored
+        SVG. The old row goes in the same transaction, so a refused write keeps the old icon."""
+        if (
+            harness not in ICON_HARNESSES
+            or scheme not in ICON_SCHEMES
+            or mime not in ICON_TYPES
+            or not 0 < len(data) <= ICON_MAX_BYTES
+            or not (0 < width <= ICON_MAX_SIDE and 0 < height <= ICON_MAX_SIDE)
+            or len(sha256) != 64
+        ):
+            raise ValueError("not an avatar the broker stores")
+        now = self.clock.now()
+        with db.tx(self.con):
+            self.con.execute(
+                "INSERT INTO agent_icons(harness, scheme, mime, data, width, height, sha256, updated_at)"
+                " VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(harness, scheme) DO UPDATE SET mime=excluded.mime,"
+                " data=excluded.data, width=excluded.width, height=excluded.height,"
+                " sha256=excluded.sha256, updated_at=excluded.updated_at",
+                (harness, scheme, mime, data, width, height, sha256, now),
+            )
+        return AgentIcon(harness, scheme, mime, width, height, len(data), sha256, now)
+
+    def agent_icon(self, harness: str, scheme: str) -> tuple[AgentIcon, bytes] | None:
+        """One avatar and its bytes, or None when the admin has not set it."""
+        r = self.con.execute(
+            "SELECT *, length(data) AS size FROM agent_icons WHERE harness=? AND scheme=?", (harness, scheme)
+        ).fetchone()
+        return (self._icon_row(r), bytes(r["data"])) if r else None
+
+    def agent_icons(self) -> list[AgentIcon]:
+        """Every avatar that is set, without its bytes, harness by harness and light before dark."""
+        rows = self.con.execute(
+            "SELECT harness, scheme, mime, width, height, length(data) AS size, sha256, updated_at"
+            " FROM agent_icons"
+        ).fetchall()
+        order = {(h, s): i for i, (h, s) in enumerate((h, s) for h in ICON_HARNESSES for s in ICON_SCHEMES)}
+        return sorted((self._icon_row(r) for r in rows), key=lambda i: order[(i.harness, i.scheme)])
+
+    def agent_icon_reset(self, harness: str) -> int:
+        """Remove ``harness``'s avatars, light and dark: the built-in one comes back. How many went."""
+        if harness not in ICON_HARNESSES:
+            raise ValueError("not a harness with an avatar")
+        with db.tx(self.con):
+            return self.con.execute("DELETE FROM agent_icons WHERE harness=?", (harness,)).rowcount
 
     # ------------------------------------------------------------ preferences
     # 0 is the owner (desktop or hosted); positive ids belong to the people table.
