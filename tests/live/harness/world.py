@@ -205,6 +205,16 @@ class Broker:
             return ""
 
 
+def poll(fn: Callable[[], Any], timeout: float, step: float = 0.25) -> bool:
+    """Whether ``fn`` turns truthy within ``timeout``; unlike ``wait_for`` it never fails."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if fn():
+            return True
+        time.sleep(step)
+    return False
+
+
 def wait_for(
     fn: Callable[[], Any],
     timeout: float,

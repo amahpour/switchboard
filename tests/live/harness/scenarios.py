@@ -21,7 +21,7 @@ import time
 from typing import Any
 
 from .run import Run
-from .world import ROOM
+from .world import ROOM, poll
 
 
 def nonce() -> str:
@@ -110,7 +110,7 @@ def mid_task(run: Run) -> None:
     run.reply(done, after=task)  # the held command ended and the agent went on
     d = delivery(run, asked)
     assert d["path"] in run.mid_paths, (d["path"], "expected one of", sorted(run.mid_paths), d)
-    answered = run.broker.said_by(run.name, word, after=asked)
+    answered = poll(lambda: run.broker.said_by(run.name, word, after=asked), 20)
     record(run, "mid_task", path=d["path"], acknowledged=True, answered=answered)
 
 
