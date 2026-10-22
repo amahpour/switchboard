@@ -1247,7 +1247,7 @@ def test_mention_popover_matches_any_part_of_a_name(ui: UI) -> None:
 
 
 def test_mention_popover_fills_when_members_frame_arrives_after_typing(ui: UI) -> None:
-    """#505: hold the room's real members frame, type @skill, then release it without typing again."""
+    """#505: hold the room's real members frame, type @, then release it without typing again."""
     room = "e2e-late-mention-members"
     ui.world.create_room(f"#{room}")
     ui.world.add_agents(f"#{room}", ("darius-skills-agent",))
@@ -1274,14 +1274,15 @@ def test_mention_popover_fills_when_members_frame_arrives_after_typing(ui: UI) -
     expect(page.locator("#st-conn")).to_have_text("Connected")
     open_room(page, room)
     expect(page.locator("#buddy-list .member")).to_have_count(0)
-    page.locator("#input").fill("@skill")
-    expect(page.locator("#mentions")).to_be_hidden()
+    page.locator("#input").fill("@")
+    expect(page.locator("#mentions")).to_be_visible()  # broadcasts show before any agent
+    expect(page.locator("#men-darius-skills-agent")).to_have_count(0)
     assert held, "the room's members frame must be held before the release"
 
     # The same input and caret remain; only the WebSocket frame changes.
     page_sockets[-1].send(held.pop(0))
     expect(page.locator("#men-darius-skills-agent")).to_be_visible()
-    expect(page.locator("#input")).to_have_value("@skill")
+    expect(page.locator("#input")).to_have_value("@")
 
 
 def test_broadcast_mentions_lead_the_popover_and_style_like_a_mention_once_sent(ui: UI) -> None:
