@@ -17,6 +17,7 @@ import re
 import shutil
 import stat
 import subprocess
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -334,14 +335,17 @@ def test_a_listener_at_session_start_waits_for_the_helpers_key_file(tmp_path: Pa
 def test_a_listener_at_stop_does_not_wait_for_a_key_that_is_not_there(tmp_path: Path) -> None:
     """By the end of a turn the connection has long made its key, or there never will be one (an older
     Claude Code, a machine that can't make it), so a Stop's listener ends at once and says why in
-    ``listen.log``, quietly: it asks nothing of the server and wakes nobody. Fails if it waits, asks, or wakes."""
+    ``listen.log``, quietly: it asks nothing of the server and wakes nobody. Fails if it waits, asks, or
+    wakes."""
     data = tmp_path / "data"
     data.mkdir()
     stub = Stub([(200, "never sent")])
+    began = time.monotonic()
     try:
-        r = run_listen(None, NO_TOKEN, SESSION_1, url=stub.url, data=data)
+        r = run_listen(None, NO_TOKEN, SESSION_1, url=stub.url, data=data, grace_s=30)
     finally:
         stub.close()
+    assert time.monotonic() - began < 10, "a Stop's listener waited for the key's file"
     assert (r.returncode, r.stderr, stub.requests) == (0, "", []), r
     [line] = listen_log(data)
     assert "status=nokey" in line and "no listener key" in line, line

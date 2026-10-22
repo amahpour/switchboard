@@ -41,11 +41,13 @@ def plugin_dir() -> Path:
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
-def settings_json(server_url: str, token: str) -> dict[str, Any]:
-    """The ``--settings`` file: the plugin's two options for the ``--plugin-dir`` plugin, and the
-    permission rules."""
+def settings_json(server_url: str, token: str | None) -> dict[str, Any]:
+    """The ``--settings`` file: the plugin's options for the ``--plugin-dir`` plugin (its address, and its
+    token unless there is none: a session that signs in through the browser types no token, §49.11), and
+    the permission rules."""
+    options = {"server_url": server_url, **({"token": token} if token else {})}
     return {
-        "pluginConfigs": {"switchboard@inline": {"options": {"server_url": server_url, "token": token}}},
+        "pluginConfigs": {"switchboard@inline": {"options": options}},
         "permissions": {"allow": list(ALLOW), "deny": list(DENY)},
     }
 
@@ -68,6 +70,12 @@ class ClaudeRun(Run):
     tier = "claude:https"
     binaries = ("claude",)
     resume_needs_prompt = False  # SessionStart reports a resume and starts the listener (#412)
+
+    @property
+    def claude_home(self) -> Path:
+        """Where Claude Code keeps its transcripts and the plugin's data: the real home's ``.claude`` (a
+        throwaway config directory, for a run that signs in, is another)."""
+        return Path(REAL_HOME) / ".claude"
 
     def prepare(self) -> None:
         self.settings = self.base / "claude-settings.json"
@@ -94,7 +102,7 @@ class ClaudeRun(Run):
 
     def cost_note(self) -> str:
         """Tokens the session's transcript records: the CLI's own account of what it used."""
-        d = Path(REAL_HOME) / ".claude" / "projects" / project_dir_name(self.ws)
+        d = self.claude_home / "projects" / project_dir_name(self.ws)
         tot = {
             "input_tokens": 0,
             "output_tokens": 0,
@@ -121,12 +129,12 @@ class ClaudeRun(Run):
         """Remove what this run left in the real home: its transcripts (a folder named for the scratch
         directory) and the plugin's markers and log lines for its sessions, which the plugin writes under
         ``~/.claude/plugins/data`` (``--plugin-dir`` plugins share ``switchboard-inline``)."""
-        d = Path(REAL_HOME) / ".claude" / "projects" / project_dir_name(self.ws)
+        d = self.claude_home / "projects" / project_dir_name(self.ws)
         if d.parent.name != "projects" or "-sb-live-claude-" not in d.name:
             return  # only ever the folder of this run's own scratch directory
         sessions = [f.stem for f in d.glob("*.jsonl")]
         shutil.rmtree(d, ignore_errors=True)
-        data = Path(REAL_HOME) / ".claude" / "plugins" / "data" / "switchboard-inline"
+        data = self.claude_home / "plugins" / "data" / "switchboard-inline"
         for sid in sessions:
             if not UUID.fullmatch(sid):
                 continue

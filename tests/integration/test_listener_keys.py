@@ -60,7 +60,7 @@ def stored(b: InProcBroker, key: str = KEY) -> Any:
 
 
 def signed_in_member(b: InProcBroker, key: str = KEY) -> tuple[SignedIn, str]:
-    """A signed-in Claude Code session that joined #build as claude-1 (its hooks and calls carry the header)."""
+    """A signed-in Claude Code session that joined #build as claude-1 (its calls carry the header)."""
     token = make_token(b, "laptop")
     claude = SignedIn(b, token, SESSION_1, key)
     assert claude.call("join", room="#build", screen_name="claude-1")["ok"]

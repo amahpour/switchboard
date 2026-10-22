@@ -69,7 +69,8 @@ def test_the_columns_say_what_they_may_hold(tmp_path: Path) -> None:
         )
     with pytest.raises(sqlite3.IntegrityError):  # not a sha256
         con.execute(
-            "INSERT INTO listener_keys(key_hash, token_id, created_at, last_used_at) VALUES('short',1,1.0,1.0)"
+            "INSERT INTO listener_keys(key_hash, token_id, created_at, last_used_at)"
+            " VALUES('short',1,1.0,1.0)"
         )
     with pytest.raises(sqlite3.IntegrityError):  # a session id that long is not one
         con.execute(

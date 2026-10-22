@@ -78,7 +78,7 @@ class Run:
     def start(self) -> Run:
         self.broker.start()
         self.base = self.broker.base
-        self.token_id, self.token = self.broker.make_token(self.device)
+        self.credentials()
         self.ws = self.base / "ws"
         self.ws.mkdir()
         subprocess.run(["git", "init", "-q"], cwd=self.ws, env=clean_env(self.path), check=True)
@@ -87,6 +87,11 @@ class Run:
         self.results["version"] = self.version()
         self.prepare()
         return self
+
+    def credentials(self) -> None:
+        """What the agent signs in with: an agent token made through the web API (a subclass whose agent signs
+        in through the browser makes none, and the sign-in makes the token)."""
+        self.token_id, self.token = self.broker.make_token(self.device)
 
     def prepare(self) -> None:
         """Write this harness's config for the broker and the token (subclasses)."""
@@ -183,6 +188,10 @@ class Run:
                     return
                 time.sleep(0.25)
         raise AssertionError(f"{self.harness} did not take the prompt:\n" + self.screen(20))
+
+    def after_launch(self) -> None:
+        """What a person does at a first launch before asking for anything: nothing, unless a harness signs in
+        through the browser (``claude_signin.py``)."""
 
     def after_resume(self) -> None:
         """What a person does with a resumed session that needs it: a first prompt."""

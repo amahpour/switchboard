@@ -214,8 +214,9 @@ def test_the_claude_plugin_asks_for_the_server_and_an_optional_secret_token() ->
     (``sensitive``), never in a settings file, and optional: left empty, Claude Code signs in through the
     browser. Its MCP server is that address's /mcp. The typed token goes in ``X-Switchboard-Token`` and never
     in ``Authorization``, because Claude Code starts no browser sign-in for a server with an Authorization
-    header, even an empty one (#488, seen live in 2.1.307), and a command that makes the listener key adds its
-    header. Fails if the token isn't sensitive, is required, or goes in a header that turns the sign-in off."""
+    header, even an empty one (#488, seen live in 2.1.307), and a command that makes the listener key adds
+    its header. Fails if the token isn't sensitive, is required, or goes in a header that turns the sign-in
+    off."""
     cfg = load(CLAUDE_PLUGIN / ".claude-plugin" / "plugin.json")["userConfig"]
     assert cfg["server_url"]["required"] and not cfg["token"]["required"]
     assert cfg["token"]["sensitive"] is True and "sensitive" not in cfg["server_url"]

@@ -5,25 +5,33 @@
 through the real web API (``POST /api/agent-tokens``, §49.1). The token is shown once; the driver keeps
 it in memory and gives it to a child only through its environment or a 0600 file in the run's temp
 directory, never on a command line.
+
+``Broker(label, hosted=True)`` is a hosted broker (§30) whose public URL is ``http://localhost:<port>``,
+the one plain-http address Claude Code will send a sign-in's credentials to (§49.11): its admin is set
+up through the one-time password the test-mode broker writes to a file, and a browser signed in as that
+admin (Playwright, headless) approves an agent's browser sign-in on the consent page (§49.10).
 """
 
 from __future__ import annotations
 
+import contextlib
 import os
+import secrets
 import shutil
 import signal
+import socket
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from .tmuxdrv import clean_env
+from .tmuxdrv import REAL_HOME, clean_env
 
 ROOM = "#build"
 HUMAN = "alice"
@@ -46,8 +54,32 @@ def skip_reason(harness: str, *binaries: str) -> str | None:
     return None
 
 
+@contextlib.contextmanager
+def real_browsers() -> Iterator[None]:
+    """Playwright looks for its browsers under ``$HOME``, which ``tests/conftest.py`` points at a temp
+    directory: point it at the real home's cache for as long as a browser is wanted."""
+    key = "PLAYWRIGHT_BROWSERS_PATH"
+    before = os.environ.get(key)
+    if before is None:
+        os.environ[key] = str(Path(REAL_HOME) / ".cache" / "ms-playwright")
+    try:
+        yield
+    finally:
+        if before is None:
+            os.environ.pop(key, None)
+
+
+def free_port() -> int:
+    """A TCP port nothing listens on now (a hosted broker's public URL names its port before it starts)."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
 class Broker:
-    def __init__(self, label: str) -> None:
+    def __init__(self, label: str, hosted: bool = False) -> None:
+        self.hosted = hosted
+        self.admin_password = ""
         self.base = Path(tempfile.mkdtemp(prefix=f"sb-live-{label}-"))
         self.home = self.base / "home"
         self.port = 0
@@ -73,6 +105,8 @@ class Broker:
             "LOGNAME": HUMAN,
         }
         log = open(self.base / "broker.log", "ab")
+        if self.hosted:
+            self.port = free_port()
         self.proc = subprocess.Popen(
             [
                 sys.executable,
@@ -85,7 +119,8 @@ class Broker:
                 "--home",
                 str(self.home),
                 "--port",
-                "0",
+                str(self.port),
+                *(["--public-url", f"http://localhost:{self.port}"] if self.hosted else []),
             ],  # fmt: skip
             env=env,
             stdin=subprocess.DEVNULL,
@@ -104,14 +139,63 @@ class Broker:
                 break
             time.sleep(0.1)
         assert self.port, "the broker did not start:\n" + (self.base / "broker.log").read_text()
-        self.url = f"http://switchboard.localhost:{self.port}"
+        self.url = (
+            f"http://localhost:{self.port}" if self.hosted else f"http://switchboard.localhost:{self.port}"
+        )
         self.hdr = {"Origin": self.url, "X-Switchboard": "1", "Content-Type": "application/json"}
         self.web = httpx.Client(base_url=self.url, timeout=10.0, follow_redirects=False)
-        link = call_sync(self.paths.sock, "human.login_link")["url"]
-        assert self.web.get(link.removeprefix(self.url)).status_code == 303
+        if self.hosted:
+            self._set_up_admin()
+        else:
+            link = call_sync(self.paths.sock, "human.login_link")["url"]
+            assert self.web.get(link.removeprefix(self.url)).status_code == 303
         r = self.web.post("/api/rooms", json={"name": ROOM}, headers=self.hdr)
         assert r.status_code == 200, r.text
         return self
+
+    def _set_up_admin(self) -> None:
+        """A hosted broker has no admin until someone uses the one-time password it prints; a test-mode broker
+        also writes it to a file. Sign in with it and choose a password, so this driver is signed in as the
+        admin and the consent page's "confirm it's you" has a password to check (§31.6)."""
+        assert self.web is not None
+        deadline = time.monotonic() + 15
+        while not self.paths.test_claim_link.exists() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        one_time = self.paths.test_claim_link.read_text().strip().split("#t=", 1)[1]
+        r = self.web.post(
+            "/api/signin/password", json={"name": "admin", "password": one_time}, headers=self.hdr
+        )
+        assert r.status_code == 200, r.text
+        self.admin_password = secrets.token_urlsafe(12) + "-live-admin"
+        r = self.web.post("/api/setup/password", json={"password": self.admin_password}, headers=self.hdr)
+        assert r.status_code == 200, r.text
+
+    def approve_signin(self, url: str, device: str, timeout: float = 30) -> None:
+        """The person approves an agent's browser sign-in. A headless Chromium, signed in as the admin, opens
+        the address the agent printed, names the device on the consent card and presses Approve (confirming
+        it's the admin first if the last check is more than five minutes old). The browser then goes to the
+        agent's own loopback address, which answers it, and the page has done its part."""
+        from playwright.sync_api import sync_playwright
+
+        assert self.hosted and self.web is not None
+        cookie = self.web.cookies.get("switchboard_session")
+        assert cookie, "the admin is not signed in"
+        ms = int(timeout * 1000)
+        with real_browsers(), sync_playwright() as pw:
+            browser = pw.chromium.launch()
+            try:
+                ctx = browser.new_context()
+                ctx.add_cookies([{"name": "switchboard_session", "value": cookie, "url": self.url}])
+                page = ctx.new_page()
+                page.goto(url, wait_until="domcontentloaded", timeout=ms)
+                page.wait_for_selector("#step-consent:not(.hidden)", timeout=ms)
+                page.fill("#consent-device", device)
+                if page.locator("#consent-confirm:not(.hidden)").count():
+                    page.fill("#consent-password", self.admin_password)
+                with page.expect_navigation(url=lambda u: not u.startswith(self.url), timeout=ms):
+                    page.click("#consent-approve")
+            finally:
+                browser.close()
 
     def stop(self) -> None:
         if self.web is not None:

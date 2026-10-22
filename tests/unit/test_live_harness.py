@@ -19,7 +19,18 @@ LIVE = Path(__file__).resolve().parents[1] / "live"
 REPO = LIVE.parents[1]
 sys.path.insert(0, str(LIVE))
 
-from harness import claude, codex, cursor, devin, drift, preflight, scenarios, screens, world  # noqa: E402
+from harness import (  # noqa: E402
+    claude,
+    claude_signin,
+    codex,
+    cursor,
+    devin,
+    drift,
+    preflight,
+    scenarios,
+    screens,
+    world,
+)
 
 # ------------------------------------------------------------------- screens
 DEVIN_BANNER = " Free plan, use /upgrade to access better models · {} remaining (resets in 3d 7h)\n"
@@ -173,6 +184,33 @@ def test_claudes_settings_hold_the_plugins_options_and_no_unattended_authority()
     assert not [a for a in argv if "dangerously" in a or "bypass" in a.lower()]
 
 
+def test_a_sign_in_run_types_no_token_and_copies_only_the_login() -> None:
+    """A run that signs in through the browser (#488) gives the plugin its address and no token, with the
+    same permission rules, and starts Claude Code with a throwaway config directory holding the account's
+    login and none of the real file's other secrets (its servers' tokens, its plugins' settings). A first
+    run answers its two start-up screens with Enter and nothing else. Fails if a token option creeps in,
+    another secret is copied, or the onboarding keys press anything else."""
+    s = claude.settings_json("http://localhost:1", None)
+    assert s["pluginConfigs"] == {"switchboard@inline": {"options": {"server_url": "http://localhost:1"}}}
+    assert s["permissions"] == claude.settings_json("http://localhost:1", "sbat_x")["permissions"]
+    creds = {
+        "claudeAiOauth": {"accessToken": "a"},
+        "mcpOAuth": {"other": "secret"},
+        "pluginSecrets": {"p": "s"},
+    }
+    assert claude_signin.login_only(creds) == {"claudeAiOauth": {"accessToken": "a"}}
+    assert screens.claude_onboarding(" Choose the text style that looks best with your terminal") == "Enter"
+    assert (
+        screens.claude_onboarding(
+            " Security notes:\n 1. Claude can make mistakes.\n Press Enter to continue…"
+        )
+        == "Enter"
+    )
+    assert screens.claude_onboarding("Yes, I trust this folder") is None
+    assert screens.claude_onboarding("Press Enter to continue") is None  # not the security notes
+    assert screens.claude_onboarding("Yes, I accept") is None  # a bypass-mode warning is never answered here
+
+
 def test_codex_runs_with_approvals_on_request_and_its_hooks_trusted_at_their_hash() -> None:
     """Fails if Codex is launched with approvals off or a wider sandbox, or if a hook of the plugin is left
     untrusted (Codex would skip it and every wake would fail silently)."""
@@ -317,7 +355,7 @@ def test_a_harness_runs_only_when_named(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_a_plain_pytest_skips_every_live_module() -> None:
-    """With no ``SWITCHBOARD_LIVE`` the four live modules are collected and skipped, each with the line that
+    """With no ``SWITCHBOARD_LIVE`` the five live modules are collected and skipped, each with the line that
     says how to run it, and nothing is run. Fails if a live module starts a broker or a CLI on import, or if
     one is added without the opt-in."""
     env = {k: v for k, v in os.environ.items() if not k.startswith(("SWITCHBOARD", "CLAUDE", "CODEX"))}
@@ -327,9 +365,10 @@ def test_a_plain_pytest_skips_every_live_module() -> None:
     )  # fmt: skip
     out = r.stdout + r.stderr
     assert r.returncode in (0, 5), out  # 5: no test was collected, every module skipped itself
-    assert "4 skipped" in out and "passed" not in out and "failed" not in out, out
+    assert "5 skipped" in out and "passed" not in out and "failed" not in out, out
     for h in ("claude", "codex", "devin", "cursor"):
         assert f"SWITCHBOARD_LIVE={h}" in out, out
     assert sorted(p.name for p in (LIVE).glob("test_live_*.py")) == [
-        "test_live_claude.py", "test_live_codex.py", "test_live_cursor.py", "test_live_devin.py",
+        "test_live_claude.py", "test_live_claude_signin.py", "test_live_codex.py", "test_live_cursor.py",
+        "test_live_devin.py",
     ]  # fmt: skip

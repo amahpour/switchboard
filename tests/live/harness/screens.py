@@ -71,6 +71,17 @@ def claude_dialog(screen: str) -> str | None:
     return None
 
 
+def claude_onboarding(screen: str) -> str | None:
+    """A throwaway config directory starts Claude Code as a first run: it asks for a text style and then
+    shows its security notes. Both are answered with Enter (the default, and "continue"): the key to press,
+    or None."""
+    if "Choose the text style" in screen:
+        return "Enter"
+    if "Security notes:" in screen and "Press Enter to continue" in screen:
+        return "Enter"
+    return None
+
+
 def claude_ready(screen: str) -> bool:
     return bool(_CLAUDE_READY.search(screen)) and "Yes, I trust this folder" not in screen
 
