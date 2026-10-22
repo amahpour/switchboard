@@ -327,10 +327,33 @@ class AgentTokenRow:
     created_at: float
     last_used_at: float | None
     revoked_at: float | None
+    via: str = "token"  # how it was made: typed in Settings ("token"), or a browser sign-in ("oauth", §49.9)
+    client_name: str | None = None  # a sign-in: what the agent called itself (a claim, cut to 80)
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "AgentTokenRow":
         return cls(**{k: r[k] for k in r.keys()})
+
+
+@dataclass(frozen=True)
+class OAuthClientRow:
+    """An ``oauth_clients`` row (DESIGN.md §49.9): an agent that registered to sign in through the
+    browser (RFC 7591). A public client: no secret, and loopback redirect URIs only (``redirect_uris``
+    is a JSON list). The name is its own claim, shown on the consent page and nowhere trusted."""
+
+    client_id: str
+    client_name: str
+    redirect_uris: list[str]
+    created_at: float
+
+    @classmethod
+    def from_row(cls, r: sqlite3.Row) -> "OAuthClientRow":
+        return cls(
+            client_id=r["client_id"],
+            client_name=r["client_name"],
+            redirect_uris=json.loads(r["redirect_uris"]),
+            created_at=r["created_at"],
+        )
 
 
 @dataclass(frozen=True)

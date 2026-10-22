@@ -32,6 +32,12 @@ OPEN_PATHS = frozenset({"/healthz"})
 # route itself (``agent_http.AgentAuth``) refuses any request that has an Origin, so a browser can't
 # call it at all; its Host is checked as everywhere
 AGENT_PATHS = frozenset({"/mcp", "/mcp/listen", "/mcp/session", "/mcp/pretool", "/mcp/event"})
+# signing an agent in through the browser (DESIGN.md §49.9, #386): the two OAuth routes a coding agent
+# calls itself, a client registering and a code swapped for a token. A program sends no Origin, so the
+# page's Origin rule can't apply; instead both refuse any request that has one (a browser's script
+# always does) and read no cookie. The consent page's own routes (``/oauth/authorize``,
+# ``/api/oauth/*``) are ordinary web routes, with the full rule.
+OAUTH_PATHS = frozenset({"/oauth/register", "/oauth/token"})
 _DNS_NAME_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*")
 
 Scope = dict[str, Any]
@@ -246,9 +252,10 @@ class HostOriginGuard:
       sends as 403 (websocket). The one exception is a GET or HEAD of ``OPEN_PATHS``
       (``/healthz``), which a platform's health checker sends to the container's own address.
     - Unsafe http methods also need ``Origin`` to be the UI's origin and ``X-Switchboard: 1``,
-      else 403. (The session cookie is checked by routes.) The exception is ``AGENT_PATHS``
+      else 403. (The session cookie is checked by routes.) The exceptions are ``AGENT_PATHS``
       (``/mcp``, ``/mcp/listen``, ``/mcp/session`` and the command hooks'), which an agent token
-      authenticates: they refuse any request that has an Origin.
+      authenticates, and ``OAUTH_PATHS`` (a client registering and a code swapped for a token,
+      §49.9): they refuse any request that has an Origin.
     """
 
     def __init__(self, app: ASGIApp, origin: WebOrigin):
@@ -277,6 +284,7 @@ class HostOriginGuard:
             kind == "http"
             and scope.get("method", "GET").upper() in UNSAFE_METHODS
             and scope.get("path") not in AGENT_PATHS
+            and scope.get("path") not in OAUTH_PATHS
         ):
             if _header(scope, b"origin") != self.origin or _header(scope, b"x-switchboard") != "1":
                 await _json(send, 403, {"error": "forbidden", "message": "bad origin"})

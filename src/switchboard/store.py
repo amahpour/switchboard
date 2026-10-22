@@ -27,6 +27,7 @@ from switchboard.models import (
     Member,
     Membership,
     Message,
+    OAuthClientRow,
     Participant,
     PasskeyRow,
     PersonRow,
@@ -1292,16 +1293,26 @@ class Store:
 
     # ------------------------------------------------------ agent tokens (#382, §49.1)
     # NULL ``person_id`` is the owner, as on passkeys and machines. One live token per device.
-    def agent_token_add(self, person_id: int | None, device: str, token_hash: str) -> AgentTokenRow | None:
-        """A new live token for ``device``, or None when a live one has that name already."""
-        if not valid_host(device) or len(token_hash) != 64:
+    def agent_token_add(
+        self,
+        person_id: int | None,
+        device: str,
+        token_hash: str,
+        via: str = "token",
+        client_name: str | None = None,
+    ) -> AgentTokenRow | None:
+        """A new live token for ``device``, or None when a live one has that name already. ``via`` is
+        how it was made: ``token`` (typed in Settings) or ``oauth`` (a browser sign-in, §49.9, with
+        the name the agent gave itself)."""
+        if not valid_host(device) or len(token_hash) != 64 or via not in ("token", "oauth"):
             raise ValueError("an agent token needs a device name and a sha256")
         now = self.clock.now()
         with db.tx(self.con):
             try:
                 cur = self.con.execute(
-                    "INSERT INTO agent_tokens(person_id, device, token_hash, created_at) VALUES(?,?,?,?)",
-                    (person_id, device, token_hash, now),
+                    "INSERT INTO agent_tokens(person_id, device, token_hash, created_at, via, client_name)"
+                    " VALUES(?,?,?,?,?,?)",
+                    (person_id, device, token_hash, now, via, client_name),
                 )
             except sqlite3.IntegrityError:
                 return None
@@ -1347,6 +1358,21 @@ class Store:
             r = self.con.execute("SELECT * FROM agent_tokens WHERE id=?", (token_id,)).fetchone()
         return AgentTokenRow.from_row(r)
 
+    def agent_token_revoke_id(self, token_id: int) -> AgentTokenRow | None:
+        """Revoke a live token whoever's it is: for the broker's own reasons (a sign-in's code was
+        used twice, §49.9), never on a person's say-so. The row, revoked, or None when it isn't live."""
+        now = self.clock.now()
+        with db.tx(self.con):
+            if (
+                self.con.execute(
+                    "UPDATE agent_tokens SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (now, token_id)
+                ).rowcount
+                != 1
+            ):
+                return None
+            r = self.con.execute("SELECT * FROM agent_tokens WHERE id=?", (token_id,)).fetchone()
+        return AgentTokenRow.from_row(r)
+
     def agent_token_used(self, token_id: int) -> None:
         """An agent used this token now (the list shows when it was last used)."""
         with db.tx(self.con):
@@ -1354,6 +1380,36 @@ class Store:
                 "UPDATE agent_tokens SET last_used_at=? WHERE id=? AND revoked_at IS NULL",
                 (self.clock.now(), token_id),
             )
+
+    # ------------------------------------------------- OAuth clients (#386, §49.9)
+    def oauth_client_add(
+        self, client_id: str, client_name: str, redirect_uris: list[str], keep: int, max_age_s: float
+    ) -> OAuthClientRow:
+        """Record a client that registered. In the same transaction, clients older than ``max_age_s``
+        go (a sign-in starts within minutes of registering), and so do the oldest past ``keep`` rows,
+        so anyone who can reach the server can't grow the table without end."""
+        now = self.clock.now()
+        with db.tx(self.con):
+            self.con.execute("DELETE FROM oauth_clients WHERE created_at < ?", (now - max_age_s,))
+            self.con.execute(
+                "DELETE FROM oauth_clients WHERE client_id IN (SELECT client_id FROM oauth_clients"
+                " ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ?)",
+                (max(keep - 1, 0),),
+            )
+            self.con.execute(
+                "INSERT INTO oauth_clients(client_id, client_name, redirect_uris, created_at)"
+                " VALUES(?,?,?,?)",
+                (client_id, client_name, json.dumps(redirect_uris), now),
+            )
+            r = self.con.execute("SELECT * FROM oauth_clients WHERE client_id=?", (client_id,)).fetchone()
+        return OAuthClientRow.from_row(r)
+
+    def oauth_client(self, client_id: str) -> OAuthClientRow | None:
+        r = self.con.execute("SELECT * FROM oauth_clients WHERE client_id=?", (client_id,)).fetchone()
+        return OAuthClientRow.from_row(r) if r else None
+
+    def oauth_client_count(self) -> int:
+        return int(self.con.execute("SELECT COUNT(*) FROM oauth_clients").fetchone()[0])
 
     # ------------------------------------------------------------ preferences
     # 0 is the owner (desktop or hosted); positive ids belong to the people table.

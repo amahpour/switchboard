@@ -137,6 +137,16 @@ The second PostToolUse group tells switchboard that a tool ran, any tool: only i
 
 </details>
 
+**Codex, signed in through your browser instead of a token** (#386). Take the `bearer_token_env_var` line out of the entry above (keep `url` and `tool_timeout_sec`), leave `SWITCHBOARD_AGENT_TOKEN` unset (or set it too, for the approval hook below), keep the plugin, and sign in once:
+
+```bash
+codex mcp login switchboard
+```
+
+Codex prints an address and tries to open it in the browser on that machine (open it yourself if it can't). If the browser isn't signed in to switchboard, it shows the sign-in page first and then comes back. The card says who is signed in, what the agent calls itself and that its answer goes to a program on this computer. Name the device (`work-laptop`: the same rule as a token's, and one token or sign-in per device) and press **Approve**; **Deny** tells Codex you said no. On a hosted broker, if your last password or passkey check was more than five minutes ago, the card asks you to confirm it's you first. Codex then says it is logged in. Approve only a sign-in you just started: it gives a program on that machine your agents' access on that device.
+
+The sign-in is an agent token: it shows in **Settings → Agents** as "signed in from Codex" beside your tokens, with when it was made and last used, and **Revoke** ends it and its device's sessions at once. It has no expiry, like a token. After a revoke, Codex's next call says login is needed: run `codex mcp login switchboard` again, under the same name if you like, which is free again. Codex waits for your browser on its own machine (the address it prints answers at `127.0.0.1` there), so sign in from a browser on the machine Codex runs on. The Stop hook that wakes an idle Codex and its other tool hooks run through this same connection, so waking and status work as with a token. One thing needs the token: the plugin's approval hook is a command, which reads `SWITCHBOARD_URL` and `SWITCHBOARD_AGENT_TOKEN` from the environment, so a Codex with only a sign-in isn't shown as waiting for approval.
+
 **Claude Code.** In Claude Code, run:
 
 ```text
@@ -144,6 +154,8 @@ The second PostToolUse group tells switchboard that a tool ran, any tool: only i
 ```
 
 It installs switchboard's plugin from this repository and asks for two things: your switchboard's address (`https://sb.example.com`) and the agent token, which Claude Code keeps as a secret. The plugin carries the server and the hooks: one tells switchboard which session makes each of its own calls, another tells it after every other tool's call that the call happened (the tool's name, never its input or output), which is how a message for a busy Claude Code reaches it after its next tool call, and nothing a subagent's tool calls do reaches the session's messages, and Stop runs the listener, which sends only the session id, waits, and wakes Claude Code with the message when one comes. SessionStart starts it too on startup or resume, making a member reachable again after a restart before anyone types a prompt. One more tells switchboard when a permission prompt opens (see "A member waiting for approval" below). Restart Claude Code, or run `/mcp`, to connect it.
+
+**Claude Code and the browser sign-in.** Claude Code can sign a server in through the browser (`/mcp`, then Authenticate), and switchboard answers it, but not yet through this plugin: the plugin sets the token as a fixed `Authorization` header, and Claude Code never starts a sign-in for a server that has one (it says "OAuth fallback is disabled when headers.Authorization is set"). Claude Code's listener also needs a token to wake an idle session, and Claude Code only sends its credentials to an https address (or `localhost`), so it can't sign in to a desktop broker at `switchboard.localhost`. So Claude Code takes a token for now (DESIGN.md §49.10 has the details).
 
 **Updating the plugin.** A plugin changes with a release, not with every change merged to `main`: the marketplace names the plugin of the latest release, so a plugin that a release hasn't shipped yet reaches no one, with auto-update on or off. Upgrade the server first, then let the plugin update: a newer plugin can send fields an older server refuses, and its hooks then fail. The release notes say when a release changes the plugin.
 
