@@ -339,6 +339,13 @@ class InProcBroker:
             except BaseException as e:  # pragma: no cover
                 self.error = e
             finally:
+                # sse_starlette starts a loop-level shutdown watcher for MCP responses.
+                # Uvicorn does not own that task, so finish it before closing this test loop.
+                pending = asyncio.all_tasks(self.loop)
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    self.loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
                 self.loop.close()
 
         self.thread = threading.Thread(target=run, name="yk-broker", daemon=True)
