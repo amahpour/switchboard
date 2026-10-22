@@ -1341,15 +1341,17 @@ def install(app: FastAPI, state: "BrokerState") -> None:
 
     @app.get("/api/oauth/consent")
     async def oauth_consent(request: Request) -> Response:
-        """What the consent page shows: the request checked again, and the person it is for."""
+        """What the consent page shows: the request checked again, and the person it is for. A browser
+        with no session gets ``signed_in: false`` (a 200, since the page asks again every few seconds
+        until someone signs in, and a refused request is a console error each time)."""
         try:
             req = oauth.parse_authorize(state, oauth_items(request))
         except oauth.OAuthError as e:
             return _err(400, e.code, e.description)
         w = who(request)
         if w is None or w.must_reset:
-            return unauthorized()
-        return _ok(oauth.consent_view(state, req, w))
+            return _ok({"signed_in": False})
+        return _ok({"signed_in": True, **oauth.consent_view(state, req, w)})
 
     async def oauth_decision(
         request: Request,

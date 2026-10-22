@@ -42,12 +42,14 @@ def test_static_files_exist() -> None:
         "index.html",
         "login.html",
         "setup.html",
+        "oauth.html",
         "app.js",
         "md.js",
         "diagram.js",
         "webauthn.js",
         "login.js",
         "setup.js",
+        "oauth.js",
         "style.css",
         "favicon.svg",
         "favicon-32.png",
@@ -64,7 +66,7 @@ ICON_LINKS = (
 
 def test_both_pages_link_the_tab_icons_and_the_icon_is_the_sidebar_mark() -> None:
     svg = (STATIC / "favicon.svg").read_text()
-    for page in ("index.html", "login.html", "setup.html"):
+    for page in ("index.html", "login.html", "setup.html", "oauth.html"):
         text = (STATIC / page).read_text()
         assert all(link in text for link in ICON_LINKS), page
         # the tab icon is the sidebar's own glyph on its tile: every shape of the brand tile's

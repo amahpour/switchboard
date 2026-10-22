@@ -175,6 +175,7 @@ def test_an_agent_signs_in_through_the_browser_and_the_token_is_an_agent_token(
     view = web.get("/api/oauth/consent?" + q)
     assert view.status_code == 200, view.text
     assert view.json() == {
+        "signed_in": True,
         "client_name": "Claude Code (switchboard)",
         "redirect_to": "localhost:41234",
         "person": "alice",
@@ -310,7 +311,7 @@ def test_a_code_lasts_a_minute_and_a_second_use_revokes_the_token(tmp_home: Path
         web = broker.web_client()
         agent.register()
         late = code_of(approve(broker, web, agent).json()["redirect"])
-        clock.advance(oauth.CODE_TTL_S + 1)
+        clock.advance(61)  # a code is good for 60 seconds
         r = agent.exchange(late)
         assert r.status_code == 400 and r.json()["error"] == "invalid_grant"
 
@@ -638,7 +639,7 @@ def test_a_signed_out_browser_comes_back_to_the_request_after_signing_in(
     assert (
         cookie.startswith("switchboard_oauth_next=") and "HttpOnly" in cookie and "SameSite=strict" in cookie
     )
-    assert anon.get("/api/oauth/consent?" + q).status_code == 401
+    assert anon.get("/api/oauth/consent?" + q).json() == {"signed_in": False}
     assert (
         "set-cookie" not in anon.get("/").headers or "oauth_next" not in anon.get("/").headers["set-cookie"]
     )
@@ -651,7 +652,7 @@ def test_a_signed_out_browser_comes_back_to_the_request_after_signing_in(
         "switchboard_oauth_next=" in back.headers["set-cookie"] and "Max-Age=0" in back.headers["set-cookie"]
     )
     assert anon.get("/").status_code == 200  # once
-    assert anon.get("/api/oauth/consent?" + q).status_code == 200
+    assert anon.get("/api/oauth/consent?" + q).json()["signed_in"] is True
 
     forged = httpx.Client(base_url=broker.base, timeout=10.0, cookies={"switchboard_oauth_next": "x.y"})
     forged.get(broker.login_url().removeprefix(broker.base))
@@ -712,7 +713,12 @@ def test_on_a_hosted_broker_approving_needs_a_fresh_check_like_making_a_token(ho
     assert agent.c.get("/.well-known/oauth-protected-resource").json()["resource"] == PUBLIC + "/mcp"
     hosted.state.passkey_checks.clear()  # the set-up's own check, gone
     view = admin.get("/api/oauth/consent?" + q).json()
-    assert view["hosted"] is True and view["fresh"] is False and view["password"] is True
+    assert (
+        view["signed_in"] is True
+        and view["hosted"] is True
+        and view["fresh"] is False
+        and view["password"] is True
+    )
     r = admin.post("/api/oauth/approve", {"query": q, "device": DEVICE})
     assert r.status_code == 403 and r.json()["error"] == "reauth" and not hosted.state.oauth._live
     assert admin.post("/api/signin/check", {"password": "not it"}).status_code == 403
@@ -757,6 +763,6 @@ def test_a_sign_in_is_its_persons_and_goes_with_them(hosted: InProcBroker) -> No
     assert st.store.agent_token_by_hash(agent_tokens.token_hash(token)) is None
     gone = other.exchange(code_of(pending.json()["redirect"], "http://localhost:41300/callback"))
     assert gone.status_code == 400 and gone.json()["error"] == "invalid_grant"
-    assert bob.get("/api/oauth/consent?" + other.query()).status_code == 401
+    assert bob.get("/api/oauth/consent?" + other.query()).json() == {"signed_in": False}
     agent.c.close()
     other.c.close()

@@ -208,13 +208,14 @@ def test_a_code_works_once_and_only_for_sixty_seconds(state: Any, clock: FakeClo
     redeemed twice or after its minute."""
     registered(state)
     req = oauth.parse_authorize(state, query())
+    assert oauth.CODE_TTL_S == 60.0
     codes = state.oauth
     code = codes.issue(req, None, "laptop", "alice")
     rec = codes.take(code)
     assert rec is not None and rec.device == "laptop" and rec.redirect_uri == REDIRECT
     assert codes.take(code) is None
     late = codes.issue(req, None, "laptop", "alice")
-    clock.advance(oauth.CODE_TTL_S + 0.1)
+    clock.advance(60.1)
     assert codes.take(late) is None
     assert codes.take("not-a-code") is None
 

@@ -3680,7 +3680,7 @@
     try {
       await api('POST', '/api/agent-tokens/' + encodeURIComponent(t.id) + '/revoke', {});
       if (state.newAgentToken && state.newAgentToken.device === t.device) state.newAgentToken = null;
-      state.agentTokenMsg = { text: 'Revoked the token for ' + t.device + '.', bad: false };
+      state.agentTokenMsg = { text: 'Revoked the ' + (t.via === 'oauth' ? 'sign-in' : 'token') + ' for ' + t.device + '.', bad: false };
     } catch (e) {
       state.agentTokenMsg = { text: String(e.message || e), bad: true };
     }

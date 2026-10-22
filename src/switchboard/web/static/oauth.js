@@ -18,8 +18,10 @@
   // the only place the broker ever sends the browser on: the agent's own machine
   const LOOPBACK = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\]):[0-9]{1,5}\/[^\s]*$/;
   const POLL_MS = 3000;
+  const DEVICE_NAME = /^[a-z][a-z0-9-]{0,23}$/;  // models.HOST_RE: a device is a host, as in Settings → Agents
 
   let needsCheck = false;  // a hosted broker still wants a password or passkey check
+  let deviceRule = '';     // what the broker says a device's name looks like
   let pollTimer = null;
 
   function $(id) { return document.getElementById(id); }
@@ -65,6 +67,7 @@
 
   function showConsent(v) {
     needsCheck = !!(v.hosted && !v.fresh);
+    deviceRule = v.device_rule || '';
     title('Sign in an agent');
     $('consent-lead').textContent = 'An agent is asking to connect to this switchboard.';
     $('consent-person').textContent = v.email ? v.person + ' (' + v.email + ')' : v.person;
@@ -115,8 +118,10 @@
       show('step-error');
       return;
     }
-    if (res.status === 200) { showConsent(res.data); return; }
-    if (res.status === 401) { showSignIn(); return; }
+    if (res.status === 200) {
+      if (res.data && res.data.signed_in) showConsent(res.data); else showSignIn();
+      return;
+    }
     title('This sign-in can’t continue');
     $('error-text').textContent = (res.data && res.data.message) || 'The request isn’t one switchboard can answer.';
     show('step-error');
@@ -125,8 +130,12 @@
   async function approve(ev) {
     ev.preventDefault();
     consentError(null);
-    const device = $('consent-device').value.trim();
-    if (!device) { consentError('Name this device, for example work-laptop.'); $('consent-device').focus(); return; }
+    const device = $('consent-device').value.trim().toLowerCase();
+    if (!device || !DEVICE_NAME.test(device)) {
+      consentError(device ? deviceRule : 'Name this device, for example work-laptop.');
+      $('consent-device').focus();
+      return;
+    }
     busy(true);
     try {
       if (needsCheck) {

@@ -33,7 +33,7 @@ When the board is settled, you choose one agent to post its summary and your lin
 
 macOS or Linux, with [uv](https://docs.astral.sh/uv/). Pick the one that fits.
 
-**Join a server someone already runs** (your team's, for example): install nothing. In its web UI, open **Settings → Agents**, name this machine and make an agent token, and follow the lines it shows for your agent (Claude Code, for one: `/plugin install switchboard --marketplace amahpour/switchboard`). Agents connect to the server over HTTPS, so nothing of switchboard's runs on this machine ([docs/USAGE.md](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md#agents-over-https-a-preview)).
+**Join a server someone already runs** (your team's, for example): install nothing. In its web UI, open **Settings → Agents**, name this machine and make an agent token, and follow the lines it shows for your agent (Claude Code, for one: `/plugin install switchboard --marketplace amahpour/switchboard`). Codex can instead sign in through your browser, with nothing to copy: `codex mcp login switchboard`. Agents connect to the server over HTTPS, so nothing of switchboard's runs on this machine ([docs/USAGE.md](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md#agents-over-https-a-preview)).
 
 **Or run your own, on this machine:**
 
