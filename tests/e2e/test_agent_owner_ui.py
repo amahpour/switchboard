@@ -25,7 +25,6 @@ import pytest
 from conftest import InProcBroker, make_tmp_home, sanitize_env
 from fakes.fake_agent import FakeAgent
 from playwright.sync_api import Browser, Page, expect
-from test_private_rooms_ui import person_cookie
 from test_web_ui import PHASE_REPORTS, PHONE, UI
 
 from switchboard import db
@@ -143,7 +142,10 @@ def open_page(ui: UI, world: Hosted, cookie: str | None = None, **options: Any) 
     page = ctx.new_page()
     page.goto(world.origin + "/")
     expect(page.locator("#st-conn")).to_have_text("Connected")
-    page.locator(f'#tabs .room[data-room="{ROOM}"]').click()
+    tab = page.locator(f'#tabs .room[data-room="{ROOM}"]')
+    if not tab.is_visible():  # a phone keeps the rooms in a drawer
+        page.click("#rooms-toggle")
+    tab.click()
     return page
 
 
@@ -201,14 +203,20 @@ def test_clicking_an_agent_names_its_owner_and_its_device(
     colors = owner.evaluate(
         """el => {
           let n = el, bg = 'rgba(0, 0, 0, 0)';  // the first opaque background behind the text
-          while (n && /rgba\\(.*, 0\\)$/.test(bg)) { bg = getComputedStyle(n).backgroundColor; n = n.parentElement; }
-          return {fg: getComputedStyle(el).color, strong: getComputedStyle(el.querySelector('strong')).color, bg};
+          while (n && /rgba\\(.*, 0\\)$/.test(bg)) {
+            bg = getComputedStyle(n).backgroundColor;
+            n = n.parentElement;
+          }
+          const color = (e) => getComputedStyle(e).color;
+          return {fg: color(el), strong: color(el.querySelector('strong')), bg};
         }"""
     )
     assert contrast(colors["fg"], colors["bg"]) >= 4.5, colors
     assert contrast(colors["strong"], colors["bg"]) >= 4.5, colors
     if phone:
-        width = page.evaluate("() => document.documentElement.scrollWidth - document.documentElement.clientWidth")
+        width = page.evaluate(
+            "() => document.documentElement.scrollWidth - document.documentElement.clientWidth"
+        )
         assert width <= 0
 
 
@@ -231,12 +239,16 @@ def test_members_name_the_owner_only_with_more_than_one_person(ui: UI, hosted: H
     listed = page.locator("#buddy-list").text_content() or ""
     assert "@example.com" not in listed and "bob@" not in listed, listed
     # under the agent's name: its owner comes before its status line
-    order = row(page, "codex-1").locator(".m-main").evaluate(
-        "el => Array.from(el.children).map(c => c.className.split(' ')[0])"
+    order = (
+        row(page, "codex-1")
+        .locator(".m-main")
+        .evaluate("el => Array.from(el.children).map(c => c.className.split(' ')[0])")
     )
     assert order.index("m-name-line") < order.index("m-owner") < order.index("m-status"), order
     if phone:
-        width = page.evaluate("() => document.documentElement.scrollWidth - document.documentElement.clientWidth")
+        width = page.evaluate(
+            "() => document.documentElement.scrollWidth - document.documentElement.clientWidth"
+        )
         assert width <= 0
     hosted.remove(bob)  # a person goes, and with their agent the second person's reason to say whose is whose
     expect(page.locator("#buddy-list .m-owner")).to_have_count(0)

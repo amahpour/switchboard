@@ -2175,7 +2175,12 @@ def shoot_agent_owner(browser: Any, out: Path, world: Any) -> None:
 
     agents = [
         (FakeAgent(world.broker.home, "shots-owner-alice"), "claude-1", "alices-laptop", None),
-        (FakeAgent(world.broker.home, "shots-owner-bob", person_id=bob_id), "codex-1", "bobs-desktop", bob_id),
+        (
+            FakeAgent(world.broker.home, "shots-owner-bob", person_id=bob_id),
+            "codex-1",
+            "bobs-desktop",
+            bob_id,
+        ),
     ]
     try:
         world.set_test_mode(True)  # a test agent joins only in test mode: off again before any page loads

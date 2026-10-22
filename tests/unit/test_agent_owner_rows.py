@@ -100,9 +100,7 @@ def test_an_owner_that_cant_be_resolved_shows_nothing(world: World, svc: RoomSer
     store.con.execute("UPDATE agent_tokens SET revoked_at=1 WHERE device='erins-mac'")
     store.con.commit()
     assert svc.host_person("no-such-device") == 0  # what the gate does with it: the owner's
-    assert owners(svc, world.room.id) == dict.fromkeys(
-        ("a-none", "a-test", "a-gone", "a-mail", "a-revoked")
-    )
+    assert owners(svc, world.room.id) == dict.fromkeys(("a-none", "a-test", "a-gone", "a-mail", "a-revoked"))
 
 
 def test_a_private_room_names_an_owner_only_who_is_in_it(world: World, svc: RoomService) -> None:

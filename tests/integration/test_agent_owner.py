@@ -90,7 +90,10 @@ def test_who_names_each_agents_owner_and_nobody_it_cant(hosted: InProcBroker) ->
     r = Room(hosted)
     try:
         lines = r.who(r.bobs, THREAD_B)
-        assert {n: field(line, "owner") for n, line in lines.items()} == {"codex-1": "alice", "codex-2": "bob"}
+        assert {n: field(line, "owner") for n, line in lines.items()} == {
+            "codex-1": "alice",
+            "codex-2": "bob",
+        }
         assert "host=alices-pi owner=alice status=" in lines["codex-1"]  # right after the device
         store = hosted.state.store
         token = store.agent_token_for_device("bobs-laptop")
@@ -109,7 +112,10 @@ def test_the_members_route_and_the_inspector_carry_the_owner(hosted: InProcBroke
     r = Room(hosted)
     try:
         for person in (r.admin, r.bob):  # everyone sees the same
-            assert {m["name"]: m["owner"] for m in r.members(person)} == {"codex-1": "alice", "codex-2": "bob"}
+            assert {m["name"]: m["owner"] for m in r.members(person)} == {
+                "codex-1": "alice",
+                "codex-2": "bob",
+            }
         detail = r.admin.get("/api/rooms/build/members/codex-2").json()
         assert detail["member"]["owner"] == "bob"
         assert "@" not in json.dumps([m["owner"] for m in r.members(r.admin)])
@@ -149,7 +155,12 @@ def test_a_rename_reaches_every_open_page(hosted: InProcBroker) -> None:
         hosted.on_loop(state.hub.add, sub)
         published: list[str] = []
         real = state.hub.members_changed
-        state.hub.members_changed = lambda room: (published.append(room), real(room))[1]  # type: ignore[method-assign]
+
+        def record(room: str) -> None:
+            published.append(room)
+            real(room)
+
+        state.hub.members_changed = record  # type: ignore[method-assign]
         renamed = r.bob.post("/api/me/name", {"name": "robert"})
         assert renamed.status_code == 200, renamed.text
         assert {"#build", "#ops"} <= set(published), published
