@@ -1230,9 +1230,13 @@ class Engine:
         if E == "Stop" and not tainted and adapter.redeliver_on_stop(p, ev):
             out += self._redeliver(p)
 
-        # 4. status (hooks never touch waiting-approval, §7.4)
+        # 4. status (§7.4). A hook that says the session put an approval prompt up sets
+        # waiting-approval (information for the room, #472); the session's next hook of any kind says
+        # the prompt was answered or given up, so it clears it by the rule of its own event
         new, bump = None, False
-        if E in ("SessionStart",):
+        if adapter.asks_approval(ev):
+            new = "waiting-approval"
+        elif E in ("SessionStart",):
             new = "idle"
         elif E in ("UserPromptSubmit", "PostToolUse", "PostToolUseFailure"):
             new = "busy"
@@ -1244,8 +1248,10 @@ class Engine:
                 new = "offline"
         elif revived:
             new = "busy"  # any hook of a session taken offline for a dropped wait() says it is alive (#448)
+        elif p.status == "waiting-approval" and E != "Notification":
+            new = "busy"  # a hook with no status of its own (Devin's PreToolUse): the turn moved on
         p = self.store.get_participant(p.id) or p
-        if new is not None and (p.status != "waiting-approval" or new == "offline"):
+        if new is not None and (new != "waiting-approval" or p.status != "offline" or revived):
             out += self.set_status(p, new, f"hook:{E}", bump=bump)
             p = self.store.get_participant(p.id) or p
         elif mode_changed:

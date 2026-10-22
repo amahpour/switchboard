@@ -3844,6 +3844,68 @@ def test_a_card_shows_live_whether_the_agent_it_waits_on_is_working(ui: UI) -> N
     assert still.evaluate("e => getComputedStyle(e, '::before').animationName") == "none"
 
 
+def test_an_agent_waiting_for_approval_shows_in_members_the_inspector_and_on_its_board_card(ui: UI) -> None:
+    """#472: when an agent's person has a permission prompt open, everyone looking sees "waiting for
+    approval", not "busy" -- Members says so with its ring dot, the Inspector explains that the other agents
+    see it and decide for themselves whether to wait, and the board card that waits on the agent says so in
+    words, in the amber of a warning, rather than "working". It holds on a phone, where the word must fit its
+    card. Fails if any of the three still says busy or working, or the board's word spills out of the card."""
+    slug = "e2e-board-approval"
+    room = "#" + slug
+    page = review_room(ui, slug)
+
+    def status(name: str, value: str) -> None:
+        def go() -> None:
+            st = ui.world.broker.state
+            r = st.store.get_room(room)
+            assert r is not None
+            m = st.store.find_member(r.id, name)
+            assert m is not None
+            st.store.set_status(m.participant_id, value, "hook:Notification")
+            st.hub.members_changed(room)
+
+        ui.world.broker.on_loop(go)
+
+    page.click("#board-toggle")
+    pulse = page.locator('#board .board-card[data-item="F4"] .board-pulse')  # conceded, owner codex-1
+    expect(pulse).to_have_class(re.compile(r"\bworking\b"))
+    status("codex-1", "waiting-approval")
+    expect(pulse).to_have_class(re.compile(r"\bs-waiting-approval\b"))
+    expect(pulse).not_to_have_class(re.compile(r"\bworking\b"))
+    expect(pulse).to_have_text("waiting for approval")
+    expect(pulse).to_have_attribute(
+        "aria-label", "codex-1 is waiting for approval: its person has a permission prompt open"
+    )
+
+    member = page.locator('#buddy-list .member[data-name="codex-1"]')
+    expect(member.locator(".m-status")).to_contain_text("Waiting for approval")
+    expect(member.locator(".dot")).to_have_attribute("title", "Waiting for approval")
+    member.locator(".m-open").click()
+    attn = page.locator("#insp-body .insp-attn")
+    expect(attn).to_contain_text("Waiting for approval")
+    expect(attn).to_contain_text("Its person has a permission prompt open")
+    expect(attn).to_contain_text("wait or move on")
+    expect(page.locator("#insp-body .insp-status")).to_contain_text("Waiting for approval")
+
+    status("codex-1", "busy")  # the person approved and the tool ran
+    expect(pulse).to_have_class(re.compile(r"\bworking\b"))
+    expect(pulse).to_have_text("working")
+
+    phone = ui.open(room=None, **PHONE)
+    open_room(phone, slug)
+    status("codex-1", "waiting-approval")
+    phone.click("#board-toggle")
+    card = phone.locator('#board .board-card[data-item="F4"]')
+    word = card.locator(".board-pulse")
+    expect(word).to_have_text("waiting for approval")
+    fits = card.evaluate(
+        "c => { const p = c.querySelector('.board-pulse').getBoundingClientRect();"
+        " const r = c.getBoundingClientRect();"
+        " return p.left >= r.left - 0.5 && p.right <= r.right + 0.5 && c.scrollWidth <= c.clientWidth + 1; }"
+    )
+    assert fits, "the board's word spills out of its card on a phone"
+
+
 def test_a_focused_card_keeps_focus_when_an_agent_changes_state(ui: UI) -> None:
     """Every busy/idle change rebuilds the board (its members frame), and with the working dot
     (#407) those frames matter while agents work. A card reached by Tab must keep the focus, or a

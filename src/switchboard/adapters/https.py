@@ -37,6 +37,9 @@ from switchboard.models import (
     split_session_key,
 )
 
+# the Notification type of an open approval prompt in Claude Code (live, 2.1.305: 11 ms after the prompt's
+# PermissionRequest hook); the plugin's matcher and the broker both name it, and no other counts
+APPROVAL_NOTIFICATION = "permission_prompt"
 CLAUDE_TIER = "claude:https"
 CODEX_TIER = "codex:https"
 CURSOR_TIER = "cursor:https"
@@ -177,6 +180,11 @@ class HttpsClaudeAdapter(Listening):
     def ends_session(self, ev: HookEvent) -> bool:
         # /clear keeps the session: the same id goes on (as Claude Code locally, §7.4)
         return ev.reason != "clear"
+
+    def asks_approval(self, ev: HookEvent) -> bool:
+        # Claude Code sends a Notification of type permission_prompt, with the PermissionRequest
+        # hook's event (which switchboard doesn't register, §11), when it puts the prompt up (#472)
+        return ev.ev == "Notification" and ev.notification == APPROVAL_NOTIFICATION
 
 
 class HttpsCodexAdapter(CodexMembership, Listening):

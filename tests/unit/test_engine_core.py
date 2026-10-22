@@ -13,7 +13,7 @@ from engine_world import KEY, World
 
 from switchboard import envelope
 from switchboard.config import Config
-from switchboard.models import Snapshot
+from switchboard.models import Participant, Snapshot
 
 
 @pytest.fixture
@@ -260,17 +260,96 @@ def test_hook_status_transitions(w: World) -> None:
     assert w.p(p).boundary_seq == seq + 1
     w.hook(p, "SessionEnd", reason="clear")
     assert w.p(p).status == "idle"  # /clear keeps the session
-    w.store.set_status(p.id, "waiting-approval", "test")
-    w.hook(p, "PostToolUse", ok=True)
-    assert w.p(p).status == "waiting-approval"  # hooks never touch the approval hold
     w.hook(p, "SessionEnd", reason="prompt_input_exit")
     assert w.p(p).status == "offline"
 
 
 def test_no_hook_output_while_waiting_approval(w: World) -> None:
+    """The guard holds for a session that was put in the state some other way (a store write): a
+    Notification of another type doesn't clear it, so the hook that would carry the message says
+    nothing. Fails if a notification that says nothing about the prompt ends the hold."""
     p, m = w.agent("bot", harness="claude", status="waiting-approval", hooks=True)
     w.human("x")
-    assert w.hook(p, "PostToolUse", ok=True) is None
+    assert w.hook(p, "Notification", notification="idle_prompt") is None
+    assert w.p(p).status == "waiting-approval"
+
+
+# ------------------------------------------------- an open approval prompt, shown to the room (#472)
+def prompt(w: World, p: Participant) -> object:
+    """Claude Code's Notification for an open permission prompt (the recorded payload's type)."""
+    return w.hook(p, "Notification", notification="permission_prompt")
+
+
+def test_an_open_permission_prompt_shows_the_session_as_waiting_approval_and_holds_delivery(w: World) -> None:
+    """Claude Code's Notification of type permission_prompt is how the room learns that a session is
+    paused at its person's approval prompt (#472): the status is information for the other agents, who
+    decide for themselves whether to wait or move on. It is never answered (§7.3), the status event
+    names the hook, and a message for the session stays queued: nothing is offered while the prompt is
+    open. Fails if the hook sets nothing, answers with context, or lets a message through."""
+    p, m = w.agent("bot", harness="claude", status="busy", hooks=True)
+    msg = w.human("hello @bot", mentions=("bot",))
+    assert prompt(w, p) is None
+    assert w.p(p).status == "waiting-approval"
+    assert w.states(m)[msg.id] == "pending"
+    [ev] = [e for e in w.store.recent_events(kinds=["status"]) if e.data.get("to") == "waiting-approval"]
+    assert ev.data["frm"] == "busy" and ev.data["src"] == "hook:Notification"
+
+
+@pytest.mark.parametrize(
+    ("event", "status"),
+    [
+        ("PostToolUse", "busy"),  # the person approved and the tool ran
+        ("PostToolUseFailure", "busy"),
+        ("UserPromptSubmit", "busy"),  # they declined and typed what to do instead
+        ("Stop", "idle"),
+        ("SessionStart", "idle"),
+        ("SessionEnd", "offline"),
+    ],
+)
+def test_the_sessions_next_hook_clears_the_approval_status(w: World, event: str, status: str) -> None:
+    """The prompt has no hook of its own when it is answered (Claude Code 2.1.305 and 2.1.307: approved,
+    the tool's PostToolUse comes; declined, nothing comes until the person's next prompt), so any next
+    hook of the session ends the status, by the rule of its own event. Fails if the status outlives the
+    hook that proves the turn moved on."""
+    p, m = w.agent("bot", harness="claude", status="busy", hooks=True)
+    prompt(w, p)
+    assert w.p(p).status == "waiting-approval"
+    w.hook(p, event, **({"ok": True} if event == "PostToolUse" else {}))
+    assert w.p(p).status == status
+    kinds = [(e.data["frm"], e.data["to"]) for e in w.store.recent_events(kinds=["status"], limit=2)]
+    assert ("waiting-approval", status) in kinds
+
+
+def test_a_message_waits_through_the_prompt_and_arrives_in_the_hook_that_clears_it(w: World) -> None:
+    """Nothing is offered while the prompt is open, and nothing is lost: the tool's PostToolUse that
+    ends the status carries the priority message that waited. Fails if the hook that clears the status
+    still holds back the context (the old guard, which looked at the status before the hook set it)."""
+    p, m = w.agent("bot", harness="claude", status="busy", hooks=True)
+    prompt(w, p)
+    msg = w.human("please look @bot", mentions=("bot",))
+    assert w.states(m)[msg.id] == "pending"
+    out = w.hook(p, "PostToolUse", ok=True)
+    assert out is not None and out.kind == "context" and f"id={msg.id}" in out.text
+
+
+def test_a_notification_of_another_type_is_not_a_prompt_and_clears_nothing(w: World) -> None:
+    """Claude Code sends Notifications for other things too (idle_prompt, auth_success, ...). The plugin
+    asks for permission_prompt only, and the engine checks again: no other type sets the status, and
+    none ends it. Fails if any Notification counts as an approval prompt."""
+    p, _m = w.agent("bot", harness="claude", status="busy", hooks=True)
+    for kind in ("idle_prompt", "auth_success", "", None):
+        w.hook(p, "Notification", notification=kind)
+        assert w.p(p).status == "busy", kind
+
+
+@pytest.mark.parametrize("harness", ["codex", "cursor", "devin"])
+def test_only_claude_code_has_a_hook_for_its_approval_prompt(w: World, harness: str) -> None:
+    """Codex and Devin's only hook at an approval prompt is PermissionRequest and Cursor has none
+    (docs/USAGE.md): switchboard registers no permission hook (§11), so no Notification of theirs counts.
+    Fails if another harness's adapter takes a Notification for a prompt."""
+    p, _m = w.agent(f"a-{harness}", harness=harness, status="busy", hooks=True)
+    w.hook(p, "Notification", notification="permission_prompt")
+    assert w.p(p).status == "busy"
 
 
 @pytest.mark.parametrize("source", ("startup", "clear", "compact"))

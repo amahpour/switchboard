@@ -615,6 +615,7 @@ class HookEvent:
     source: str | None = None
     reason: str | None = None
     permission_mode: str | None = None
+    notification: str | None = None  # a Notification hook's type (``permission_prompt``), §7.4
     tokens: tuple[tuple[int, str], ...] = ()
     subagent_bg: bool = False
     t: float | None = None
@@ -636,6 +637,7 @@ _EVENT_ALIASES = {
     "stop": "Stop",
     "interrupt": "Interrupt",
     "sessionend": "SessionEnd",
+    "notification": "Notification",
 }
 
 

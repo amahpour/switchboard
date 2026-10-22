@@ -2857,6 +2857,7 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 .board-pulse.s-busy::before { background: var(--busy); animation: board-pulse 1.4s ease-in-out infinite; }
 .board-pulse.s-busy { color: var(--fg); font-weight: 600; }
 .board-pulse.s-waiting-approval::before { background: transparent; box-shadow: inset 0 0 0 2px var(--busy); }
+.board-pulse.s-waiting-approval { color: var(--amber-ink); font-weight: 600; }
 .board-pulse.s-offline::before, .board-pulse.s-starting::before {
   background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted);
 }
