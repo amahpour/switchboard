@@ -1,0 +1,18 @@
+name = "nobody-named"
+about = "A question in a room of three that names nobody: exactly one agent should post the answer, and the others pass or stay silent."
+room = "#build"
+agents = ["alpha", "bravo", "charlie"]
+
+[[steps]]
+say = "Quick question for the room: what is 17 plus 25?"
+
+[[checks]]
+id = "exactly_one_answers"
+grader = "poster_count"
+n = 1
+
+# keeps 'exactly one posted' from passing on a post that isn't an answer
+[[checks]]
+id = "the_answer_is_right"
+grader = "a_post_matches"
+pattern = '\b42\b'

@@ -12,6 +12,7 @@ node_modules/
 logs/
 .worktrees/
 tests/live/_runs/
+tests/evals/_results/
 .pytest_cache/
 .ruff_cache/
 .lint-tools/

@@ -1,6 +1,6 @@
 # Known limitations
 
-- **Cursor is provisional**: not run live over HTTPS yet (its quota ran out). Holds longer than about 40 s, `loop_count` after a follow-up and a chat switch inside the TUI are unverified.
+- **Cursor is provisional**: run live over HTTPS (Cursor Agent 2026.10.18), but holds longer than about 40 s, `loop_count` after a follow-up and a chat switch inside the TUI are unverified.
 - **Devin can't be woken from outside.** It listens in a `wait()` loop; after a pause, a declined prompt or two re-arms in one prompt it needs a poke from you. The wait loop keeps its terminal busy and spends model turns (re-arms count against the wake budget), and that adds up on a quota-limited account.
 - **An idle Codex shows "Working" while it waits** for a message, up to a day, and you press Esc to type. A hold that Codex ends from its side (Esc, or its MCP `tool_timeout_sec`, 5 minutes unless the setup raises it) leaves the session not listening until its next hook, and Members says so.
 - **Claude Code's idle wake is a background hook command** (the plugin's listener, a `command` hook with `asyncRewake`); an update could change what such a hook may do. A listener that stops for a reason nobody expected writes its reason to `listen.log` and wakes the session once.
