@@ -37,6 +37,8 @@ settings-phone-list-{light,dark} and settings-phone-rooms-light (Settings' tabbe
 phone list, #232),
 settings-agents-{empty,made,revoke}-{light,dark} and settings-agents-phone-light (Settings →
 Agents: a device's agent token made, shown once and revoked, #382),
+connect-codex-{light,dark,phone-light} (Connect an agent's Codex step: the plugin, config.toml, and the
+environment lines, now with the server's address for the plugin's approval hook, #472),
 oauth-consent-{light,dark,phone-light} (the card an agent that signs in through the browser sends the
 person to, #386), oauth-confirm-light (the same on a hosted broker whose last check ran out: Confirm
 it's you comes first), oauth-signin-light (a browser that isn't signed in yet) and
@@ -1466,6 +1468,54 @@ def shoot_settings_agents(browser: Any, out: Path, world: Any) -> None:
     revoke_all()
 
 
+def shoot_connect_codex(browser: Any, out: Path, world: Any) -> None:
+    """#472: Settings → Agents, the Codex step of Connect an agent, in light, dark and on a phone: the
+    plugin, the ``config.toml`` entry, and the environment lines. The plugin's approval hook is a command, so
+    the step also gives it the server's address (``SWITCHBOARD_URL``) beside the token. It waits for the
+    step's last line, never for its words, so the same script shoots the page before the change."""
+    from playwright.sync_api import expect
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+
+    def revoke_all() -> None:
+        st = world.broker.state
+        for t in world.broker.on_loop(lambda: st.store.agent_tokens_of(None)):
+            world.broker.on_loop(lambda t=t: st.store.agent_token_revoke(t.id, None))
+
+    for suffix, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        revoke_all()
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            if suffix.startswith("phone"):
+                page.click("#rooms-toggle")
+                page.click("#me-settings")
+                page.click("#settings-row-agents")
+            else:
+                page.click("#me-settings")
+                page.click("#settings-tab-agents")
+            page.fill("#agent-token-device", "work-laptop")
+            page.click("#agent-token-make")
+            expect(page.locator("#agent-token-value")).to_be_visible()
+            expect(page.locator("#agent-connect-codex-env")).to_be_visible()
+            step = page.locator("#agent-connect .agent-connect-step").nth(1)
+            step.scroll_into_view_if_needed()
+            page.evaluate("document.activeElement && document.activeElement.blur()")
+            settle(page)
+            path = out / f"connect-codex-{suffix}.png"
+            step.screenshot(path=str(path), animations="disabled", caret="hide")
+            print(path)
+        finally:
+            ctx.close()
+    revoke_all()
+
+
 # ---------------------------------------------------------- the consent page (#386)
 CONSENT_REDIRECT = "http://localhost:41234/callback"
 
@@ -2118,6 +2168,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_room_rename(browser, out, world)
             shoot_settings_tabs(browser, out, world)
             shoot_settings_agents(browser, out, world)
+            shoot_connect_codex(browser, out, world)
             shoot_oauth_consent(browser, out, world, consent)
             shoot_confirmed_check(browser, out, world)  # rooms of its own, so last in this world
             shoot_approval(browser, out, world)

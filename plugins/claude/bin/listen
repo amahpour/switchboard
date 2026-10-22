@@ -11,6 +11,13 @@
 # A round that runs out starts the next; a server that can't be reached (restarting, or a proxy
 # that cut the wait) is tried again, a little later each time. The token reaches curl on its stdin,
 # never its command line, where other processes could read it.
+# Git for Windows' sh (Git Bash) is where Claude Code runs this on Windows when Git is installed; there
+# the PowerShell version does the job (windows/listen.ps1, #440). Windows without Git runs listen.cmd instead.
+case $(uname -s) in
+  MINGW* | MSYS* | CYGWIN*)
+    [ -f "${0%/*}/windows/listen.ps1" ] &&
+      exec powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${0%/*}/windows/listen.ps1" ;;
+esac
 input=$(cat)
 field() {
   printf '%s' "$input" | grep -o "\"$1\": *\"[^\"]*\"" | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/'

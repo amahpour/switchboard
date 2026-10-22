@@ -661,7 +661,16 @@ _EVENT_ALIASES = {
     "interrupt": "Interrupt",
     "sessionend": "SessionEnd",
     "notification": "Notification",
+    "permissionrequest": "PermissionRequest",
 }
+
+# Hook events that only tell the room something about a session and are never answered (DESIGN.md §49.9,
+# #472): a Notification (Claude Code's open permission prompt) and a PermissionRequest (Codex's and
+# Devin's). The first can decide nothing; the second can in the harness, so the plugins' hook for it is a
+# command that discards the server's reply (a hook that cannot approve or deny, §11), and the broker
+# answers it with nothing whatever its state. Everything that handles one checks this set, so a new
+# report-only event is added here and nowhere else.
+REPORT_ONLY_EVENTS = frozenset({"Notification", "PermissionRequest"})
 
 
 def canonical_event(name: str) -> str:

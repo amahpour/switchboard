@@ -216,8 +216,9 @@ def test_connect_gives_codex_its_plugin_its_server_and_its_token(
     ui: UI, hosted: tuple[InProcBroker, str]
 ) -> None:
     """Codex's steps: the plugin (the hooks), this switchboard in config.toml (a Codex plugin can't
-    hold an address), and the token in the environment variable that config names. Fails if any
-    line names another address or another variable, or misses the token just made."""
+    hold an address), and in the environment the token that config names and the address, which the
+    plugin's approval hook (a command) reads. Fails if any line names another address or another
+    variable, or misses the token just made."""
     b, _ = hosted
     revoke_all(hosted)
     checked_now(hosted)
@@ -237,6 +238,10 @@ def test_connect_gives_codex_its_plugin_its_server_and_its_token(
         'bearer_token_env_var = "SWITCHBOARD_AGENT_TOKEN"',
         "tool_timeout_sec = 86400",
     ]
-    expect(page.locator("#agent-connect-codex-env")).to_have_text(f"export SWITCHBOARD_AGENT_TOKEN={token}")
+    # the address is for the plugin's approval hook, a command that reads it from the environment (#472)
+    assert page.locator("#agent-connect-codex-env").inner_text().splitlines() == [
+        f"export SWITCHBOARD_URL={origin}",
+        f"export SWITCHBOARD_AGENT_TOKEN={token}",
+    ]
     page.keyboard.press("Escape")
     revoke_all(hosted)

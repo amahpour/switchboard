@@ -37,6 +37,7 @@ from switchboard.delivery import rules
 from switchboard.envelope import TOKEN_RE, clean, sanitize
 from switchboard.models import (
     NAME_REUSE_S,
+    REPORT_ONLY_EVENTS,
     RESERVED_NAMES,
     SCREEN_NAME_RE,
     Action,
@@ -97,12 +98,22 @@ HOOK_EVENTS: dict[str, frozenset[str]] = {
             "SessionEnd",
         }
     ),
-    "codex": frozenset({"UserPromptSubmit", "PostToolUse", "Stop", "Interrupt", "SessionEnd"}),
+    "codex": frozenset(
+        {"UserPromptSubmit", "PostToolUse", "Stop", "Interrupt", "PermissionRequest", "SessionEnd"}
+    ),
     "cursor": frozenset(
         {"SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"}
     ),
     "devin": frozenset(
-        {"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"}
+        {
+            "SessionStart",
+            "UserPromptSubmit",
+            "PreToolUse",
+            "PostToolUse",
+            "PermissionRequest",
+            "Stop",
+            "SessionEnd",
+        }
     ),
     "test": frozenset(
         {"SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"}
@@ -909,11 +920,20 @@ class AgentService:
         if p is None:
             return inert  # a session that hasn't joined: nothing of it to report
         ev = parse_hook_event(harness, event, params)
-        if ev.ev == "Notification" and not self.engine.adapter_for(harness).asks_approval(ev):
+        report_only = ev.ev in REPORT_ONLY_EVENTS
+        if report_only and not self.engine.adapter_for(harness).asks_approval(ev):
             return inert  # any other notification says nothing about the session's turn (§7.4)
         self._record(harness, event, params)
         self._note_model(p, params.get("model"))
         out, acts = self.engine.claim_for_hook(p, ev)
+        if report_only:
+            # A report is never answered (§49.9, #472): whatever the engine handed back, nothing goes to the
+            # harness, no batch is offered and no Stop hook is parked for it. The engine hands back nothing
+            # for these events (tests/unit/test_engine_core.py), so this is the second lock on the same door.
+            if out is not None:
+                log.warning("a report-only hook (%s) was given an output; it is dropped", ev.ev)
+            self.run(acts)
+            return inert
         if out is not None and out.kind == "park" and out.sink_id is not None:
             return await self._park(conn, out.sink_id, acts, ended=True)
         self.run(acts)

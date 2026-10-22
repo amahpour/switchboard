@@ -1,0 +1,28 @@
+#!/bin/sh
+# switchboard's report that a Codex thread has an approval prompt open (docs/DESIGN.md §49.9, #472).
+#
+# This is a PermissionRequest hook, and in Codex a PermissionRequest hook's output decides: an "allow" in
+# it approves the call and skips the prompt (checked live, Codex 0.158.0). The maintainer allowed one
+# that only reports and "can never approve or deny anything" (DESIGN.md §11), so this script cannot:
+#   - it prints NOTHING, whatever happens: curl's output goes to /dev/null, so the server's reply is
+#     never read, let alone passed on, and a hostile or broken server cannot make this hook decide;
+#   - it exits 0, so Codex shows its own prompt as it always does ("no decision");
+#   - it runs in the background (`async` in hooks.json): Codex ignores the output of an async hook and
+#     documents that it "can't block, approve, rewrite, or otherwise control" the call, and the prompt
+#     is not held up by the request;
+#   - it sends the thread's id and the event's name, never the tool, its input or the rest of the hook's
+#     payload, to the one address and with the one token the thread's tools use.
+# tests/unit/test_permission_hooks_static.py runs it against a server that answers every decision it can.
+# POSIX sh and curl, as Claude Code's `bin/session`. The token reaches curl on its stdin, never its command
+# line, where other processes could read it. It needs SWITCHBOARD_URL (the server's address, without /mcp)
+# and SWITCHBOARD_AGENT_TOKEN in Codex's environment; without them it does nothing.
+input=$(cat)
+sid=$(printf '%s' "$input" | grep -o '"session_id": *"[^"]*"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')
+case $sid in '' | *[!A-Za-z0-9_-]*) exit 0 ;; esac # only what needs no quoting in JSON
+url=${SWITCHBOARD_URL%/}
+[ -n "$url" ] && [ -n "$SWITCHBOARD_AGENT_TOKEN" ] || exit 0
+body=$(printf '{"harness": "codex", "event": "PermissionRequest", "session_id": "%s"}' "$sid")
+printf 'header = "Authorization: Bearer %s"\n' "$SWITCHBOARD_AGENT_TOKEN" |
+  curl -s --connect-timeout 2 --max-time 3 -K - -X POST -H 'Content-Type: application/json' \
+    --data-binary "$body" -o /dev/null "$url/mcp/event" >/dev/null 2>&1
+exit 0

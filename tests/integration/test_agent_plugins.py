@@ -1,6 +1,8 @@
 """The plugins that connect an agent over HTTPS (#384, DESIGN.md §49.5): their files agree with the
-server they talk to, and Claude Code's listener script, run as Claude Code runs it, wakes the
-session with a message and stays quiet otherwise."""
+server they talk to, and Claude Code's listener and session scripts, run as Claude Code runs them,
+wake the session with a message and stay quiet otherwise. The scripts exist twice, ``sh`` and
+``curl`` for Linux and macOS, PowerShell for Windows (#440): the tests that run them run both
+(``impl``), the PowerShell ones wherever ``pwsh`` is installed."""
 
 from __future__ import annotations
 
@@ -10,6 +12,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import tomllib
@@ -31,6 +34,62 @@ ROOT = Path(__file__).resolve().parents[2]
 CLAUDE_PLUGIN = ROOT / "plugins" / "claude"
 LISTEN = CLAUDE_PLUGIN / "bin" / "listen"
 SESSION = CLAUDE_PLUGIN / "bin" / "session"
+LISTEN_PS = CLAUDE_PLUGIN / "bin" / "windows" / "listen.ps1"
+SESSION_PS = CLAUDE_PLUGIN / "bin" / "windows" / "session.ps1"
+# how hooks.json starts a script: in sh, Git Bash and PowerShell alike (DESIGN.md §49.5, #440)
+SESSION_COMMAND = 'cd "${CLAUDE_PLUGIN_ROOT}/bin"; ./session; exit $LASTEXITCODE'
+LISTEN_COMMAND = 'cd "${CLAUDE_PLUGIN_ROOT}/bin"; ./listen; exit $LASTEXITCODE'
+
+PWSH = shutil.which("pwsh")
+if PWSH is None and os.environ.get("SWITCHBOARD_REQUIRE_PWSH") == "1":
+    pytest.fail(
+        "pwsh is not on PATH, and SWITCHBOARD_REQUIRE_PWSH=1 says the Windows scripts' tests must run: "
+        "install PowerShell 7 (GitHub's runners have it) or unset the variable",
+        pytrace=False,
+    )
+CURRENT_IMPL = ["sh"]  # which script the tests marked ``impl`` run now: set by the fixture
+
+
+@pytest.fixture(params=["sh", "pwsh"])
+def impl(request: pytest.FixtureRequest) -> Any:
+    """Run a test once against each implementation of the listener and the session script: the ``sh``
+    one for Linux and macOS, and the PowerShell one for Windows (here under ``pwsh`` 7: the same
+    language, on the machine's own platform; the checks on Windows PowerShell 5.1 itself are in the
+    pull request that added it, #440). Skipped for ``sh`` without ``curl``, and for ``pwsh`` where it
+    isn't installed (CI sets ``SWITCHBOARD_REQUIRE_PWSH=1``, which makes that a failure)."""
+    if request.param == "sh" and shutil.which("curl") is None:
+        pytest.skip("the listener needs curl")
+    if request.param == "pwsh" and PWSH is None:
+        pytest.skip("pwsh is not installed (SWITCHBOARD_REQUIRE_PWSH=1 makes this an error)")
+    CURRENT_IMPL[0] = request.param
+    yield request.param
+    CURRENT_IMPL[0] = "sh"
+
+
+def script_run(name: str, env: dict[str, str]) -> tuple[list[str], Path | None]:
+    """The command that runs ``bin/<name>`` (``listen`` or ``session``) in the implementation under
+    test, and the throwaway home PowerShell gets when the test gives none (it keeps its own files
+    there, and the listener its markers when there is no plugin data folder), or ``None``."""
+    if CURRENT_IMPL[0] == "sh":
+        return ["sh", str(CLAUDE_PLUGIN / "bin" / name)], None
+    assert PWSH is not None
+    home = None
+    if "HOME" not in env:
+        home = Path(tempfile.mkdtemp(prefix="pwsh-home-"))
+        env["HOME"] = str(home)
+    env.update(  # no ICU needed, nothing sent or checked, no diagnostics pipes in TMPDIR
+        DOTNET_SYSTEM_GLOBALIZATION_INVARIANT="1",
+        DOTNET_EnableDiagnostics="0",
+        POWERSHELL_TELEMETRY_OPTOUT="1",
+        POWERSHELL_UPDATECHECK="Off",
+    )
+    return [
+        PWSH,
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        str(CLAUDE_PLUGIN / "bin" / "windows" / f"{name}.ps1"),
+    ], home
 
 
 def load(p: Path) -> Any:
@@ -203,18 +262,18 @@ def test_every_hook_calls_the_hook_tool_with_fields_it_takes() -> None:
         assert others["matcher"] == "^(?!mcp__plugin_switchboard_switchboard__)", event
     for event in ("SessionStart", "SessionEnd"):  # Claude Code runs no mcp_tool hook at these (#399)
         h = hooks[event][0]["hooks"][0]
-        assert h["type"] == "command" and h["command"] == '"${CLAUDE_PLUGIN_ROOT}"/bin/session', event
+        assert h["type"] == "command" and h["command"] == SESSION_COMMAND, event
     [start_listener] = [h for g in hooks["SessionStart"] for h in g["hooks"][1:]]
     assert start_listener == {
         "type": "command",
-        "command": '"${CLAUDE_PLUGIN_ROOT}"/bin/listen',
+        "command": LISTEN_COMMAND,
         "asyncRewake": True,
         "timeout": 604800,
     }
     assert os.access(SESSION, os.X_OK)
     [stop] = [h for g in hooks["Stop"] for h in g["hooks"]]
     assert stop["type"] == "command" and stop["asyncRewake"] is True
-    assert stop["command"] == '"${CLAUDE_PLUGIN_ROOT}"/bin/listen' and stop["timeout"] > 900
+    assert stop["command"] == LISTEN_COMMAND and stop["timeout"] > 900
     assert os.access(LISTEN, os.X_OK)
 
 
@@ -270,12 +329,15 @@ def run_listen(
     stop = json.dumps(
         {"session_id": session, "hook_event_name": event, "source": source, "stop_hook_active": False}
     )
-    return subprocess.run(
-        ["sh", str(LISTEN)], input=stop, env=env, capture_output=True, text=True, timeout=60
-    )
+    argv, throwaway = script_run("listen", env)
+    try:
+        return subprocess.run(argv, input=stop, env=env, capture_output=True, text=True, timeout=60)
+    finally:
+        if throwaway is not None:
+            shutil.rmtree(throwaway, ignore_errors=True)
 
 
-@pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
+@pytest.mark.usefixtures("impl")
 def test_the_listener_wakes_with_the_message_and_is_quiet_otherwise(broker: InProcBroker) -> None:
     """Run the plugin's own listener script against the broker: with a message for the session it
     exits 2 with the message on stderr (which wakes Claude Code); ended by a newer listener, with a
@@ -290,22 +352,26 @@ def test_the_listener_wakes_with_the_message_and_is_quiet_otherwise(broker: InPr
     pid = participant(broker, "claude-1").id
     with ThreadPoolExecutor(2) as pool:
         first = pool.submit(run_listen, broker, token, SESSION_1)
-        until(lambda: parked(broker, pid))
+        until(lambda: parked(broker, pid), timeout=30)
         second = pool.submit(run_listen, broker, token, SESSION_1)  # supersedes the first
         r = first.result(60)
         assert (r.returncode, r.stderr) == (0, ""), r
-        until(lambda: parked(broker, pid))
+        until(lambda: parked(broker, pid), timeout=30)
         broker.call("human.say", {"room": "#build", "text": "@claude-1 wake up"})
         r = second.result(60)
     assert r.returncode == 2 and "wake up" in r.stderr, r
-    assert run_listen(broker, "sbat_" + "x" * 43, SESSION_1).returncode == 0
+    refused = run_listen(broker, "sbat_" + "x" * 43, SESSION_1)
+    if CURRENT_IMPL[0] == "sh":  # no HOME and no plugin data folder: nowhere to say it was refused
+        assert refused.returncode == 0, refused
+    else:  # a Windows user always has a profile folder to say it in (tested below)
+        assert refused.returncode == 2 and "401" in refused.stderr, refused
     nobody = run_listen(broker, token, "00000000-0000-4000-8000-0000000000ff")
     assert (nobody.returncode, nobody.stderr) == (0, ""), nobody
     assert run_listen(broker, token, "not a session; rm -rf ~").returncode == 0  # never sent
     assert LISTEN_PATH == "/mcp/listen"  # the path the script posts to
 
 
-@pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
+@pytest.mark.usefixtures("impl")
 def test_a_resumed_claude_is_woken_before_its_first_turn(broker: InProcBroker) -> None:
     """A stand-in Claude quits and resumes while still a member. Its SessionStart hooks start the
     listener without a prompt or Stop; an @mention wakes it before its first turn (#412). Fails if
@@ -320,19 +386,19 @@ def test_a_resumed_claude_is_woken_before_its_first_turn(broker: InProcBroker) -
     until(lambda: participant(broker, "claude-1").status == "offline")
 
     hooks = [h for g in claude_hooks()["SessionStart"] for h in g["hooks"]]
-    assert hooks[0]["command"] == '"${CLAUDE_PLUGIN_ROOT}"/bin/session'
+    assert hooks[0]["command"] == SESSION_COMMAND
     assert run_session(broker, token, SESSION_1, "SessionStart", source="resume").returncode == 0
     [listener] = [h for h in hooks[1:] if h.get("asyncRewake")]
-    assert listener["command"] == '"${CLAUDE_PLUGIN_ROOT}"/bin/listen'
+    assert listener["command"] == LISTEN_COMMAND
     with ThreadPoolExecutor(1) as pool:
         waking = pool.submit(run_listen, broker, token, SESSION_1, event="SessionStart", source="resume")
-        until(lambda: parked(broker, pid))
+        until(lambda: parked(broker, pid), timeout=30)
         broker.call("human.say", {"room": "#build", "text": "@claude-1 resume now"})
         r = waking.result(60)
     assert r.returncode == 2 and "resume now" in r.stderr, r
 
 
-@pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
+@pytest.mark.usefixtures("impl")
 def test_sessionstart_listens_only_when_idle_before_a_turn() -> None:
     """A /clear or compaction SessionStart may be mid-turn; its listener must leave without
     reporting Stop to the broker. Startup and resume can listen before the first turn."""
@@ -392,7 +458,11 @@ def test_codexs_hooks_take_what_the_hook_tool_takes_and_what_codex_allows() -> N
     doc = load(CODEX_PLUGIN / "hooks" / "hooks.json")
     assert set(doc) == {"description", "hooks"}
     hooks = doc["hooks"]
-    assert set(hooks) == {"UserPromptSubmit", "PostToolUse", "Stop"}
+    assert set(hooks) == {"UserPromptSubmit", "PostToolUse", "PermissionRequest", "Stop"}
+    # the one command hook is the report-only PermissionRequest one (§49.9), held to its rules by
+    # tests/unit/test_permission_hooks_static.py; every other hook is an mcp_tool hook
+    permission = hooks.pop("PermissionRequest")
+    assert [h["type"] for g in permission for h in g["hooks"]] == ["command"]
     common = {
         "session_id",
         "turn_id",
@@ -670,9 +740,10 @@ def test_claudes_plugin_reports_a_permission_prompt_and_registers_no_permission_
     the hook that fires at the same moment but can approve (SECURITY.md, DESIGN.md §11). It sends the
     event, the session, the subagent flag and the notification's type: never the message, the tool or
     its input. Filled from the payload recorded with Claude Code 2.1.307, it is what the recorded request
-    carries. No plugin of any harness registers a PermissionRequest hook. Fails if the matcher is missing
-    (every notification would count), the hook sends more, a template and the real request drift apart,
-    or any plugin registers a permission hook."""
+    carries. Claude Code's and Cursor's plugins register no PermissionRequest hook (Codex's and Devin's
+    register a report-only one, held to its rules by tests/unit/test_permission_hooks_static.py). Fails
+    if the matcher is missing (every notification would count), the hook sends more, a template and the
+    real request drift apart, or either plugin registers a permission hook."""
     [group] = claude_hooks()["Notification"]
     assert group["matcher"] == "permission_prompt"
     [hook] = group["hooks"]
@@ -693,9 +764,7 @@ def test_claudes_plugin_reports_a_permission_prompt_and_registers_no_permission_
     assert "message" not in filled and "transcript_path" not in filled
     for path in (
         CLAUDE_PLUGIN / "hooks" / "hooks.json",
-        CODEX_PLUGIN / "hooks" / "hooks.json",
         ROOT / "plugins" / "cursor" / "hooks" / "hooks.json",
-        ROOT / "plugins" / "devin" / "config.example.json",
     ):
         assert "PermissionRequest" not in load(path)["hooks"], path
 
@@ -799,7 +868,7 @@ def test_a_subagents_hooks_settle_nothing_but_the_end_of_an_approval_prompt(brok
     assert row(broker, "claude-1")["status"] == "busy" and member(broker, "claude-1").queued == 1
 
 
-@pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
+@pytest.mark.usefixtures("impl")
 def test_the_listener_waits_again_when_a_round_runs_out(broker: InProcBroker) -> None:
     """An idle session stays reachable past one round (#384): when a round runs out with nothing,
     the listener starts the next, and a message then wakes it. Fails if the listener gives up after
@@ -816,7 +885,7 @@ def test_the_listener_waits_again_when_a_round_runs_out(broker: InProcBroker) ->
 
     with ThreadPoolExecutor(1) as pool:
         run = pool.submit(run_listen, broker, token, SESSION_1, None, None, 10)  # rounds of 5 s
-        until(lambda: bool(park_ids()))
+        until(lambda: bool(park_ids()), timeout=30)
         first = park_ids()
         until(lambda: bool(park_ids()) and park_ids() != first, timeout=20)  # the second round
         broker.call("human.say", {"room": "#build", "text": "@claude-1 are you there"})
@@ -825,29 +894,39 @@ def test_the_listener_waits_again_when_a_round_runs_out(broker: InProcBroker) ->
 
 
 class Stub:
-    """A stand-in server for the listener: answers each POST with the next scripted reply (a status
-    and a body; ``None`` holds the request until the test lets it go), and records each request's
-    ``X-Switchboard-Again``."""
+    """A stand-in server for the listener and the session script: answers each request with the next
+    scripted reply (a status and a body, and optionally the headers to send; ``None`` holds the
+    request until the test lets it go), and records each POST's ``X-Switchboard-Again`` and the
+    ``requests`` made: (method, path, headers, body)."""
 
-    def __init__(self, replies: list[tuple[int, str] | None]) -> None:
+    def __init__(self, replies: list[tuple[int, str] | tuple[int, str, dict[str, str]] | None]) -> None:
         self.replies = list(replies)
         self.again: list[str] = []
+        self.requests: list[tuple[str, str, dict[str, str], bytes]] = []
         self.release = threading.Event()
         stub = self
 
         class Handler(BaseHTTPRequestHandler):
-            def do_POST(self) -> None:
-                stub.again.append(self.headers.get("X-Switchboard-Again", ""))
+            def answer(self) -> None:
+                size = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(size) if size else b""
+                stub.requests.append((self.command, self.path, dict(self.headers), body))
+                if self.command == "POST":
+                    stub.again.append(self.headers.get("X-Switchboard-Again", ""))
                 reply = stub.replies.pop(0) if stub.replies else (409, "")
                 if reply is None:
                     stub.release.wait(30)
                     reply = (409, "")
-                status, body = reply
-                data = body.encode()
+                status, text, *more = reply
+                data = text.encode()
                 self.send_response(status)
+                for name, value in (more[0] if more else {}).items():
+                    self.send_header(name, value)
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
+
+            do_POST = do_GET = answer
 
             def log_message(self, *args: Any) -> None:
                 pass
@@ -861,7 +940,7 @@ class Stub:
         self.server.shutdown()
 
 
-@pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
+@pytest.mark.usefixtures("impl")
 def test_the_listener_rides_out_a_server_that_is_away_and_says_which_round_it_is() -> None:
     """A server restarting, or a proxy that cut a long wait, answers 5xx (or nothing): the listener
     tries again, then wakes on the message that comes. Its first round is the session's Stop, and
@@ -876,7 +955,7 @@ def test_the_listener_rides_out_a_server_that_is_away_and_says_which_round_it_is
     assert stub.again == ["0", "1", "1"]
 
 
-@pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
+@pytest.mark.usefixtures("impl")
 def test_the_listener_ends_with_claude_code() -> None:
     """A background hook outlives Claude Code when it quits (seen with 2.1.300), so the listener
     watches Claude Code's pid (``CLAUDE_PID``): it never starts for one that's gone, and stops within
@@ -895,7 +974,7 @@ def test_the_listener_ends_with_claude_code() -> None:
     try:
         with ThreadPoolExecutor(1) as pool:
             run = pool.submit(run_listen, None, "sbat_" + "x" * 43, SESSION_1, stub.url, owner.pid)
-            until(lambda: stub.again == ["0"])
+            until(lambda: stub.again == ["0"], timeout=30)
             owner.kill()
             owner.wait()
             t0 = time.monotonic()
@@ -1015,24 +1094,28 @@ def test_the_version_check_sees_a_changed_file_and_a_new_one_and_accepts_a_bump(
 
 
 def run_session(
-    b: InProcBroker, token: str, session: str, event: str, **fields: str
+    b: InProcBroker | None, token: str, session: str, event: str, *, url: str | None = None, **fields: str
 ) -> subprocess.CompletedProcess[str]:
     """``bin/session`` as Claude Code runs it: the hook's input on stdin (compact JSON, as Claude Code
-    writes it), the plugin's settings in ``CLAUDE_PLUGIN_OPTION_*``."""
+    writes it), the plugin's settings in ``CLAUDE_PLUGIN_OPTION_*``. ``url`` is a stand-in server's, for
+    when there is no broker."""
     env = {
         "PATH": os.environ["PATH"],
-        "CLAUDE_PLUGIN_OPTION_SERVER_URL": b.base,
+        "CLAUDE_PLUGIN_OPTION_SERVER_URL": url or (b.base if b else ""),
         "CLAUDE_PLUGIN_OPTION_TOKEN": token,
     }
     hook = json.dumps(
         {"session_id": session, "hook_event_name": event, "cwd": "/x/y", **fields}, separators=(",", ":")
     )
-    return subprocess.run(
-        ["sh", str(SESSION)], input=hook, env=env, capture_output=True, text=True, timeout=30
-    )
+    argv, throwaway = script_run("session", env)
+    try:
+        return subprocess.run(argv, input=hook, env=env, capture_output=True, text=True, timeout=30)
+    finally:
+        if throwaway is not None:
+            shutil.rmtree(throwaway, ignore_errors=True)
 
 
-@pytest.mark.skipif(shutil.which("curl") is None, reason="the script needs curl")
+@pytest.mark.usefixtures("impl")
 def test_the_session_script_takes_a_quit_session_offline(broker: InProcBroker) -> None:
     """Claude Code won't run an mcp_tool hook at SessionEnd (#399), so the plugin's ``bin/session``
     sends it: the session goes offline at once, and the script exits 0 and prints nothing. A
@@ -1061,7 +1144,7 @@ def test_the_session_script_keeps_the_token_off_its_command_line() -> None:
     assert curl_lines and all("token" not in line.lower() for line in curl_lines)
 
 
-@pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
+@pytest.mark.usefixtures("impl")
 def test_the_listener_says_once_that_someone_else_ended_the_session(tmp_path: Path) -> None:
     """A 410 means someone else ended the session (a kick, a closed room): the listener wakes it with
     the server's line, once, and stays quiet when the same line comes back at later Stops, so it
@@ -1091,7 +1174,7 @@ def test_the_listener_says_once_that_someone_else_ended_the_session(tmp_path: Pa
     assert (r.returncode, r.stderr) == (2, later), r
 
 
-@pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
+@pytest.mark.usefixtures("impl")
 def test_the_listener_wakes_nobody_when_it_cant_remember_what_it_said(tmp_path: Path) -> None:
     """The once-only marker is what stops a 410 from waking the session at every Stop, so a listener
     that can't write it stays quiet (F1 on #405's board). Fails if it wakes without the marker, which
@@ -1108,7 +1191,7 @@ def test_the_listener_wakes_nobody_when_it_cant_remember_what_it_said(tmp_path: 
     assert (r.returncode, r.stderr) == (0, ""), r
 
 
-@pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
+@pytest.mark.usefixtures("impl")
 def test_the_listener_keeps_its_marker_out_of_shared_folders(tmp_path: Path) -> None:
     """Set up by hand there's no CLAUDE_PLUGIN_DATA, and the marker goes in the user's own
     ~/.cache/switchboard, never TMPDIR or /tmp, where another account could plant the name first
@@ -1122,7 +1205,8 @@ def test_the_listener_keeps_its_marker_out_of_shared_folders(tmp_path: Path) -> 
     finally:
         stub.close()
     assert r.returncode == 2, r
-    assert list(shared.iterdir()) == []
+    # nothing of the listener's lands there (a runtime may keep files of its own in TMPDIR)
+    assert [p for p in shared.rglob("*") if SESSION_1 in p.name or p.name == "listen.log"] == []
     assert (home / ".cache" / "switchboard" / f"ended-{SESSION_1}").is_file()
 
 
@@ -1146,7 +1230,7 @@ def listened(
         stub.close()
 
 
-@pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
+@pytest.mark.usefixtures("impl")
 def test_the_listener_logs_why_it_stops_and_wakes_the_session_once_with_it(tmp_path: Path) -> None:
     """A listener that stops without a word leaves the session deaf (#436, seen live: "parked: stopped
     and not listening"). When the server refuses it (401 here, on its second round) it writes one line
@@ -1181,7 +1265,7 @@ def test_the_listener_logs_why_it_stops_and_wakes_the_session_once_with_it(tmp_p
     assert "guest network" in listen_log(data)[-1]
 
 
-@pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
+@pytest.mark.usefixtures("impl")
 def test_the_listener_is_quiet_when_it_is_busy_or_taken_over_but_logs_a_refusal(tmp_path: Path) -> None:
     """Every turn ends the listener of the Stop before it (409 "nothing": a newer listener or another
     hook of the session took over), which is ordinary and not logged. A reconnect the server refused
@@ -1199,7 +1283,7 @@ def test_the_listener_is_quiet_when_it_is_busy_or_taken_over_but_logs_a_refusal(
     assert "round=3 status=409" in line and "a turn is running" in line, line
 
 
-@pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
+@pytest.mark.usefixtures("impl")
 def test_the_listeners_log_stays_small(tmp_path: Path) -> None:
     """A listener that stops often must not fill a disk: past 64 KiB the log keeps its last hundred
     lines and goes on. Fails if the file only grows."""
@@ -1242,7 +1326,7 @@ class Gateway:
                 up = http.client.HTTPConnection("127.0.0.1", broker.port, timeout=60)
                 up.request("POST", self.path, body, headers)
                 if cut:
-                    until(parked)
+                    until(parked, timeout=30)
                     up.close()  # hang up on the broker mid-round
                     with gw.lock:
                         gw.cut += 1
@@ -1267,7 +1351,7 @@ class Gateway:
         self.server.shutdown()
 
 
-@pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
+@pytest.mark.usefixtures("impl")
 def test_a_gateway_that_cuts_the_rounds_does_not_end_the_listener(broker: InProcBroker) -> None:
     """A gateway with a short route timeout cuts every listener round (#436): the broker sees the
     connection go, the listener sees a 504 and posts again (``X-Switchboard-Again: 1``). Cut twice
@@ -1295,7 +1379,8 @@ def test_a_gateway_that_cuts_the_rounds_does_not_end_the_listener(broker: InProc
             run = pool.submit(run_listen, None, token, SESSION_1, gw.url)
             until(lambda: gw.cut == 2, timeout=30)
             until(
-                lambda: {s.id for s in broker.on_loop(broker.state.engine.sinks.parks_for, pid)} - cut_parks
+                lambda: {s.id for s in broker.on_loop(broker.state.engine.sinks.parks_for, pid)} - cut_parks,
+                timeout=30,
             )
             broker.call("human.say", {"room": "#build", "text": "@claude-1 are you still there"})
             r = run.result(60)

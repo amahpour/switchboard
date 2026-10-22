@@ -9,4 +9,5 @@
 ### Known limitations
 
 - **Claude Code can't use the sign-in through switchboard's plugin yet.** The plugin sends the token as a fixed `Authorization` header, and Claude Code never starts a browser sign-in for a server that has one. Claude Code's idle wake also needs a token. Claude Code's listener (its idle wake) needs a token too, and Claude Code only sends its credentials to an https address, so it can't sign in to a desktop broker at `switchboard.localhost`. Claude Code takes a token for now.
+- **Codex with only a sign-in isn't shown as waiting for approval.** The plugin's approval hook is a command that needs `SWITCHBOARD_URL` and a token in the environment; everything that runs through Codex's own connection (its Stop hook, its tool hooks) works with the sign-in.
 - **A device has one token or sign-in.** Codex and Claude Code on the same machine sign in under two names (for example `work-laptop` and `work-laptop-codex`).

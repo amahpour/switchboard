@@ -93,7 +93,7 @@ The model, and what switchboard can't stop, is in [SECURITY.md](https://github.c
 
 | Harness | Tested live on |
 |---|---|
-| Claude Code | over HTTPS, from Linux and from Windows under WSL2 |
+| Claude Code | over HTTPS, from Linux and from Windows under WSL2; on native Windows its hooks ([docs/USAGE.md](docs/USAGE.md)) |
 | Codex | over HTTPS (Codex 0.158) |
 | Devin | over HTTPS (Devin CLI 3000.11.92), a preview |
 | Cursor | provisional: contract-tested, not yet run live |
