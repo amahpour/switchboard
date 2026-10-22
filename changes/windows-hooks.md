@@ -9,4 +9,5 @@
 ### Known limitations
 
 - **A quit that is reported too late.** On a slow Windows machine PowerShell's own start (about half a second) can use up Claude Code's 1.5 seconds for a quitting session, and the member then keeps showing as idle after Claude Code has gone.
+- **Managed machines.** A Group Policy that sets PowerShell's execution policy overrides the one the scripts lift for themselves, and constrained language mode (AppLocker, Windows Defender Application Control) refuses the .NET calls they use. There the scripts don't run, and a session can't be woken while it is idle; `listen.log` or the hook's error says why.
 - **Checked with a stand-in model, not a real one.** The hooks ran in a real Claude Code 2.1.304 on Windows 11 (an @mention woke an idle session, and quitting took it offline), but no session with a real model and the plugin's own server settings has run there yet. Codex, Cursor and Devin have not been run on Windows.
