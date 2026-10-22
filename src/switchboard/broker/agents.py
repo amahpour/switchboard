@@ -32,7 +32,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from switchboard import claims, envelope
-from switchboard.adapters.base import APPROVAL_GUIDANCE
 from switchboard.broker.service import MAX_MESSAGE_ID, ServiceError
 from switchboard.delivery import rules
 from switchboard.envelope import TOKEN_RE, clean, sanitize
@@ -509,7 +508,7 @@ class AgentService:
             earlier=earlier,
             earlier_before=earlier_before,
             nonce=nonce,
-            guidance=f"{adapter.join_guidance(p, room.name)} {APPROVAL_GUIDANCE}",
+            guidance=adapter.join_guidance(p, room.name),
             test_mode=self.state.test_mode,
             rejoined=rejoined,
             people=self.svc.room_humans(room),
@@ -921,6 +920,16 @@ class AgentService:
         if out is None:
             return inert
         return {"out": {"kind": out.kind, "text": out.text}, "batch_id": out.batch_id, "ack": out.ack}
+
+    def subagent_tool_ran(self, conn: "HttpConn", sid: Any) -> None:
+        """A tool finished inside a subagent of session ``sid`` (§49.4, #472): ends an approval hold,
+        and does nothing else for the session."""
+        try:
+            p = self.http_session(conn, sid if isinstance(sid, str) and 0 < len(sid) <= 128 else None)
+        except ServiceError:
+            return
+        if p is not None:
+            self.run(self.engine.subagent_tool_ran(p))
 
     async def _park(
         self, conn: "HttpConn", sink_id: int, acts: list[Action], *, ended: bool = False

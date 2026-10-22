@@ -774,10 +774,13 @@ def test_a_notification_that_is_not_a_permission_prompt_changes_nothing(broker: 
     assert row(broker, "claude-1")["status"] == "waiting-approval"  # and it doesn't end one either
 
 
-def test_a_subagents_notification_is_ignored_like_its_other_hooks(broker: InProcBroker) -> None:
-    """A subagent's hooks carry its id and settle nothing for the session (#446). A Notification that
-    names a subagent does the same, so it can't show the session as waiting. Fails if the agent_id
-    check is skipped for a Notification."""
+def test_a_subagents_hooks_settle_nothing_but_the_end_of_an_approval_prompt(broker: InProcBroker) -> None:
+    """A subagent's hooks carry its id and settle nothing for the session (#446): a Notification that names
+    one can't show the session as waiting. (Claude Code 2.1.307 sends the Notification of a subagent's own
+    prompt with no id, and the prompt is the person's to answer for the session, so that one counts.) What a
+    subagent's finished tool does say is that the prompt was answered, so it ends the hold, and nothing
+    else: no message is taken for the session. Fails if the id check is skipped for a Notification, or a
+    prompt in a subagent that runs for minutes keeps the session waiting after the person approved."""
     broker.call("room.create", {"name": "#build"})
     claude = Claude(broker, make_token(broker, "laptop"), SESSION_1)
     assert claude.call("join", room="#build", screen_name="claude-1")["ok"]
@@ -785,6 +788,13 @@ def test_a_subagents_notification_is_ignored_like_its_other_hooks(broker: InProc
     claude_hook(claude, event="UserPromptSubmit")
     claude_hook(claude, event="Notification", notification_type="permission_prompt", agent_id=SUBAGENT_ID)
     assert row(broker, "claude-1")["status"] == "busy"
+    # the same report without the id is the session's own, and does set it: the id is what made the difference
+    claude_hook(claude, event="Notification", notification_type="permission_prompt", agent_id="")
+    assert row(broker, "claude-1")["status"] == "waiting-approval"
+    broker.call("human.say", {"room": "#build", "text": "@claude-1 are you there"})
+    sub = claude_hook(claude, event="PostToolUse", tool_name="Bash", tool_use_id="toolu_01y", agent_id=SUBAGENT_ID)
+    assert sub == "{}"  # a subagent's tool says the prompt was answered, and takes no message for the session
+    assert row(broker, "claude-1")["status"] == "busy" and member(broker, "claude-1").queued == 1
 
 
 @pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")

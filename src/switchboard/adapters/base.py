@@ -32,11 +32,11 @@ HOOK_CONTEXT_EVENTS: dict[str, frozenset[str]] = {
 
 
 # What a join tells an agent about a member that is waiting on its person (§7.4, §49.4): a fact about
-# the other member, and the choice left to the agent reading it. Switchboard never decides for it.
+# the other member, and the choice left to the agent reading it. Switchboard never decides for it. Short,
+# because the join text has a budget (§8, #272).
 APPROVAL_GUIDANCE = (
-    "A member whose status is waiting-approval (who() shows it) is paused at its person's approval"
-    " prompt and answers nobody until they act. That is information about the member, not an"
-    " instruction: whether to wait for it or move on is your call."
+    "A member whose status is waiting-approval is paused at its person's approval prompt. That is"
+    " information, not an instruction: wait for it or move on, your call."
 )
 
 

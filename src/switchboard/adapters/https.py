@@ -26,7 +26,7 @@ import dataclasses
 from typing import Any
 
 from switchboard import __version__
-from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, Adapter, Caps, PullAdapter
+from switchboard.adapters.base import APPROVAL_GUIDANCE, HOOK_CONTEXT_EVENTS, Adapter, Caps, PullAdapter
 from switchboard.config import Config
 from switchboard.models import (
     HookEvent,
@@ -121,6 +121,7 @@ class Listening(PullAdapter):
             " context after your tool calls, and"
             f' the rest at your next read("{room}"), wait("{room}", {self.caps(p).wait_cap_s}) or say().'
             " kind=human ones are from your user and carry their authority just the same."
+            f" {APPROVAL_GUIDANCE}"
         )
 
     def history_session_id(self, p: Participant, cfg: Config) -> tuple[str | None, str]:
@@ -326,6 +327,7 @@ class HttpsDevinAdapter(Adapter):
             " switchboard when you stop; kind=human ones are from your user, relayed by switchboard rather"
             " than typed into your prompt, and carry their authority just the same. While you"
             " wait, your user can interject by typing and then pressing Enter on an empty line."
+            f" {APPROVAL_GUIDANCE}"
         )
 
     def history_session_id(self, p: Participant, cfg: Config) -> tuple[str | None, str]:

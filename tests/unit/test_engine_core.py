@@ -332,6 +332,37 @@ def test_a_message_waits_through_the_prompt_and_arrives_in_the_hook_that_clears_
     assert out is not None and out.kind == "context" and f"id={msg.id}" in out.text
 
 
+def test_a_prompt_in_an_idle_session_ends_its_listener_like_any_other_hook(w: World) -> None:
+    """An idle Claude Code is listening (a parked Stop hook). A permission prompt can open in it while a
+    background subagent works; the Notification is a hook of the session, so it ends the listener as every
+    hook does (§49.4), and nothing is delivered to the session while it waits. Fails if the park stays open
+    and a message could be pushed to a session whose person has a prompt open."""
+    p, _m = w.agent("bot", harness="claude", status="busy", hooks=True)
+    out = w.hook(p, "Stop", max_wait_s=900.0)
+    assert out is not None and out.kind == "park" and out.sink_id is not None
+    assert w.p(p).status == "idle"
+    prompt(w, p)
+    assert w.p(p).status == "waiting-approval"
+    [res] = w.resolved(out.sink_id)
+    assert res["status"] == "cancelled"  # the listener's round ends, as for any hook; the next Stop starts one
+    w.human("anyone there? @bot", mentions=("bot",))
+    assert len([r for r in w.resolved() if r.get("status") == "messages"]) == 0
+
+
+def test_a_tool_that_ran_in_a_subagent_ends_the_hold_and_changes_nothing_else(w: World) -> None:
+    """A subagent's hooks settle nothing for the session (#446), but a tool finishing in one says the
+    session's prompt was answered (#472). It moves waiting-approval to busy, and a session in any other
+    state stays as it is: an idle one is not woken or made busy by a subagent. Fails if it does more than
+    end the hold, or less (a prompt in a subagent that runs for minutes would keep the session waiting)."""
+    p, m = w.agent("bot", harness="claude", status="idle", hooks=True)
+    assert w.engine.subagent_tool_ran(w.p(p)) == [] and w.p(p).status == "idle"
+    w.store.set_status(p.id, "busy", "test")
+    prompt(w, p)
+    msg = w.human("hello @bot", mentions=("bot",))
+    w.actions += w.engine.subagent_tool_ran(w.p(p))
+    assert w.p(p).status == "busy" and w.states(m)[msg.id] == "pending"  # nothing was offered or confirmed
+
+
 def test_a_notification_of_another_type_is_not_a_prompt_and_clears_nothing(w: World) -> None:
     """Claude Code sends Notifications for other things too (idle_prompt, auth_success, ...). The plugin
     asks for permission_prompt only, and the engine checks again: no other type sets the status, and

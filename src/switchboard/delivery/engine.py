@@ -980,6 +980,18 @@ class Engine:
             self.wait_drops[p.id] = self.now()
         return []
 
+    def subagent_tool_ran(self, p: Participant) -> list[Action]:
+        """A tool finished inside a subagent of the session (#472). A subagent's hooks settle nothing for
+        the session (#446) except this: if the session is shown waiting on an approval prompt, a tool
+        running anywhere in it means the prompt was answered (Claude Code sends the prompt's Notification
+        with no subagent id even for a subagent's prompt, and no hook of its own when it is answered), so
+        the hold ends. Without it a prompt in a subagent that runs for minutes would keep the session
+        "waiting" long after the person approved. It never delivers, confirms or reports anything else."""
+        cur = self.store.get_participant(p.id)
+        if cur is None or cur.status != "waiting-approval":
+            return []
+        return self.set_status(cur, "busy", "hook:subagent")
+
     def close_conn_sinks(self, conn_id: int) -> list[Action]:
         out: list[Action] = []
         for s in self.sinks.for_conn(conn_id):

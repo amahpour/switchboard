@@ -460,6 +460,10 @@ class HttpTools:
             # A subagent's tool calls run the session's hooks with the session's id (#446). It is
             # not in the room, so nothing is delivered to it, and nothing it did settles anything for
             # the session: no confirmation, no status. The messages wait for the session's own hook.
+            # The one thing a tool that ran in it says is that an approval prompt was answered (#472).
+            if event in ("PostToolUse", "PostToolUseFailure"):
+                svc: Any = self.state.agents  # an HttpConn stands in for the socket's Conn
+                svc.subagent_tool_ran(c.conn, sid)
             return "{}"
         if second_report(event, fields):
             return "{}"
