@@ -41,6 +41,7 @@ It drives headless Chromium through Playwright (a dev dependency): run `uv run p
 | `passkeys-light.png`, `passkeys-dark.png` | Settings' Sign-in & security tab: your password, your passkeys, sign out everywhere |
 | `settings-phone-list-light.png`, `settings-phone-list-dark.png` | Settings as a list on a phone, each row with a one-line summary (issue #232) |
 | `settings-phone-rooms-light.png` | a phone's own page for one group (New rooms), with Back to the list (issue #232) |
+| `agent-icons-before-{light,dark,phone-light}.png`, `agent-icons-after-{light,dark,phone-light}.png`, `agent-icons-settings-{light,dark,phone-light}.png`, `agent-icons-tip-light.png` | Members and the log with the built-in avatars and then with images an admin uploaded (drawn in the script, no one's logo), Settings → Appearance → Agent icons, and its info tip opened by keyboard (issue #498) |
 | `confirm-light.png` | Confirm it's you, before adding someone once the last check ran out |
 | `signin-light.png`, `signin-phone-dark.png` | the sign-in page's three ways in (a password, a passkey, and SSO coming soon until Sign in with Google is set up), on a desktop and on a phone |
 | `setup-person-light.png` | a teammate choosing their own password after their one-time password |

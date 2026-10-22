@@ -2725,6 +2725,79 @@ body.login {
 }
 .settings-theme-option[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-tint); color: var(--link); }
 .settings-theme-option:disabled { opacity: .6; cursor: default; }
+/* Settings -> Appearance -> Agent icons (#498, DESIGN.md §29.11): the owner uploads a light and a dark
+   avatar for each harness. The images come from the broker's own stylesheet (/api/agent-icons.css,
+   linked after this one), which also gives each stored slot's preview its image. */
+.agent-icons { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; padding-top: 16px; border-top: 1px solid var(--line); }
+/* the tip is placed against the heading's row, not its own button, so on a phone it can't run off the right edge */
+.agent-icons-head { position: relative; display: flex; align-items: center; gap: 6px; }
+.agent-icons-title { margin: 0; font-size: calc(14px * var(--text-scale)); font-weight: 600; }
+.agent-icons > p { margin: 0; }
+.agent-icons-body { display: flex; flex-direction: column; gap: 10px; }
+.info-wrap { display: inline-flex; }
+.info-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted-2);
+  cursor: help;
+}
+.info-btn:hover { background: var(--row-sel); color: var(--fg); }
+.info-btn .ic { width: 15px; height: 15px; }
+.info-tip {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 10;
+  width: min(300px, 100%);
+  padding: 8px 10px;
+  border: 1px solid var(--menu-border);
+  border-radius: 7px;
+  background: var(--menu-bg);
+  box-shadow: var(--menu-shadow);
+  color: var(--fg);
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 400;
+  line-height: 1.4;
+  visibility: hidden;
+  pointer-events: none;
+}
+.info-btn:focus-visible + .info-tip, .info-wrap.tip-open .info-tip { visibility: visible; pointer-events: auto; }
+@media (hover: hover) { .info-wrap:hover .info-tip { visibility: visible; pointer-events: auto; } }
+.info-wrap.tip-dismissed .info-tip { visibility: hidden; }
+.info-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.agent-icon-row { gap: 10px; }
+.agent-icon-head { display: flex; align-items: center; gap: 10px; }
+.agent-icon-head .avatar { flex: none; }
+.agent-icon-who { display: flex; flex: 1; flex-direction: column; gap: 1px; min-width: 0; font-size: calc(14px * var(--text-scale)); }
+.agent-icon-head .btn { flex: none; }
+.agent-icon-slots { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.agent-icon-slot-row { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.agent-icon-slot-text { display: flex; flex-direction: column; flex: 1; min-width: 60px; }
+/* a stored slot shows its image on the surface it is for, whatever the page's theme is */
+.agent-icon-slot {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--side-border);
+  border-radius: 10px;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+}
+.agent-icon-slot.light { background-color: #ffffff; }
+.agent-icon-slot.dark { background-color: #1c1c1f; }
+.agent-icon-slot.empty { border-style: dashed; background-color: transparent; }
+.agent-icons-error:empty, .agent-icons-status:empty { display: none; }
+@media (max-width: 760px) {
+  .agent-icon-slots { grid-template-columns: minmax(0, 1fr); }
+}
 .settings-account { display: flex; flex-direction: column; gap: 10px; }
 .settings-account .passkey-card + .passkey-card { margin-top: 0; }
 .rules-textarea {

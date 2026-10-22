@@ -35,6 +35,9 @@ expanded, #99), settings-rooms-{light,dark} and wake-settings-{light,dark,phone-
 default wake budget and hop limit, and a room's own rate, #131), settings-appearance-{light,dark},
 settings-phone-list-{light,dark} and settings-phone-rooms-light (Settings' tabbed layout and
 phone list, #232),
+agent-icons-{before,after}-{light,dark,phone-light} (Members and the log with the built-in avatars, then
+with images an admin uploaded, #498), agent-icons-settings-{light,dark,phone-light} (Settings →
+Appearance → Agent icons) and agent-icons-tip-light (its info tip, open by keyboard),
 settings-agents-{empty,made,revoke}-{light,dark} and settings-agents-phone-light (Settings →
 Agents: a device's agent token made, shown once and revoked, #382),
 connect-codex-{light,dark,phone-light} (Connect an agent's Codex step: the plugin, config.toml, and the
@@ -1388,6 +1391,125 @@ def shoot_settings_tabs(browser: Any, out: Path, world: Any) -> None:
         ctx.close()
 
 
+# ----------------------------------------------------- customizing the agents' avatars (#498)
+def badge(top: tuple[int, int, int], bottom: tuple[int, int, int], shape: str) -> bytes:
+    """A 128 px PNG drawn here for the pictures: a vertical gradient with a white ring, dot or bars on
+    it. Not a logo of anyone's: it is what an admin might upload."""
+    import struct
+    import zlib
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+    size, rows = 128, []
+    for y in range(size):
+        base = tuple(round(top[i] + (bottom[i] - top[i]) * y / (size - 1)) for i in range(3))
+        row = bytearray([0])
+        for x in range(size):
+            dx, dy = x - 63.5, y - 63.5
+            d = (dx * dx + dy * dy) ** 0.5
+            inked = (
+                (shape == "ring" and 26 <= d <= 38)
+                or (shape == "dot" and d <= 24)
+                or (shape == "bars" and abs(dx) <= 32 and 24 <= y <= 104 and (y // 16) % 2 == 0)
+            )
+            row += bytes((255, 255, 255) if inked else base) + b"\xff"
+        rows.append(bytes(row))
+    header = struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0)
+    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(b"".join(rows)))
+    return png + chunk(b"IEND", b"")
+
+
+# what the admin uploads in the pictures: a light and a dark image for Claude Code and Codex, and
+# one image for Devin (used for both schemes); Cursor keeps its built-in avatar
+UPLOADS = {
+    ("claude", "light"): ((233, 150, 110), (198, 90, 60), "ring"),
+    ("claude", "dark"): ((120, 60, 44), (70, 34, 26), "ring"),
+    ("codex", "light"): ((120, 200, 190), (40, 140, 130), "dot"),
+    ("codex", "dark"): ((26, 70, 74), (14, 38, 42), "dot"),
+    ("devin", "light"): ((130, 130, 230), (70, 70, 180), "bars"),
+}
+
+
+def shoot_agent_icons(browser: Any, out: Path, world: Any) -> None:
+    """#498: the same Members list and log with the built-in avatars and with uploaded ones (light,
+    dark, the phone's Members sheet), and Settings → Appearance → Agent icons (light, dark, the phone's
+    page), with its info tip open by keyboard. The uploads go in through the API, as the page's file
+    chooser would send them, and are reset after, so the world's other shots are untouched."""
+    from playwright.sync_api import expect
+
+    b, n_chat, web = world.broker, world.n_chat, world.web
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+
+    def put(harness: str, scheme: str, args: tuple[Any, Any, str]) -> None:
+        headers = {"Origin": b.origin, "X-Switchboard": "1", "Content-Type": "image/png"}
+        r = web.put(f"/api/agent-icons/{harness}/{scheme}", content=badge(*args), headers=headers)
+        assert r.status_code == 200, r.text
+
+    def members(page: Any, name: str, phone: bool) -> None:
+        open_build(page, n_chat)
+        if phone:
+            page.click("#buddy-toggle")
+            expect(page.locator("#app")).to_have_class(re.compile(r"\bsheet-open\b"))
+        page.locator('#log .line[data-from="codex-1"]').first.scroll_into_view_if_needed()
+        shot(page, out, name)
+
+    def pass_over(kind: str) -> None:
+        for size, scheme, tag in (
+            (DESKTOP, "light", "light"),
+            (DESKTOP, "dark", "dark"),
+            (PHONE, "light", "phone-light"),
+        ):
+            ctx = browser.new_context(**base, **size, color_scheme=scheme)
+            ctx.set_default_timeout(WAIT_MS)
+            try:
+                page = ctx.new_page()
+                sign_in(page, b)
+                members(page, f"agent-icons-{kind}-{tag}.png", size is PHONE)
+            finally:
+                ctx.close()
+
+    def settings_page(name: str, size: dict[str, Any], scheme: str, tip: bool = False) -> None:
+        ctx = browser.new_context(**base, **size, color_scheme=scheme)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, b)
+            if size is PHONE:
+                page.click("#rooms-toggle")
+            page.click("#me-settings")
+            expect(page.locator("#app-dialog")).to_be_visible()
+            page.click("#settings-row-appearance" if size is PHONE else "#settings-tab-appearance")
+            expect(page.locator(".agent-icon-row")).to_have_count(4)
+            expect(page.locator('.agent-icon-row[data-harness="codex"]')).to_contain_text(
+                "Your light and dark images"
+            )
+            title = page.locator("#agent-icons-title")
+            title.scroll_into_view_if_needed()
+            if tip:
+                page.focus("#settings-text-larger")
+                page.keyboard.press("Tab")
+                expect(page.locator("#agent-icons-tip")).to_be_visible()
+            else:
+                page.evaluate("document.activeElement && document.activeElement.blur()")
+            shot(page, out, name)
+        finally:
+            ctx.close()
+
+    try:
+        pass_over("before")
+        for slot, args in UPLOADS.items():
+            put(*slot, args)
+        pass_over("after")
+        settings_page("agent-icons-settings-light.png", DESKTOP, "light")
+        settings_page("agent-icons-settings-dark.png", DESKTOP, "dark")
+        settings_page("agent-icons-settings-phone-light.png", PHONE, "light")
+        settings_page("agent-icons-tip-light.png", DESKTOP, "light", tip=True)
+    finally:
+        for harness in ("claude", "codex", "devin"):
+            web.delete(f"/api/agent-icons/{harness}", headers=b.write_headers())
+
+
 # ---------------------------------------------------------- the hosted shots
 AUTHENTICATOR = {
     "protocol": "ctap2",
@@ -2278,6 +2400,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_wake_settings(browser, out, world)
             shoot_room_rename(browser, out, world)
             shoot_settings_tabs(browser, out, world)
+            shoot_agent_icons(browser, out, world)
             shoot_settings_agents(browser, out, world)
             shoot_connect_codex(browser, out, world)
             shoot_oauth_consent(browser, out, world, consent)

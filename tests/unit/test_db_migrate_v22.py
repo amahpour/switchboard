@@ -44,7 +44,7 @@ def test_an_older_database_gains_an_empty_pins_table_after_a_backup(tmp_path: Pa
 
     migrated = db.open_db(path)
     fresh = db.open_db(tmp_path / "fresh.db")
-    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 31
+    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 32
     assert db.row_counts(migrated, db.kept_tables(version)) == {t: before[t] for t in db.kept_tables(version)}
     assert migrated.execute("SELECT COUNT(*) FROM pins").fetchone()[0] == 0
     assert [tuple(r) for r in migrated.execute("PRAGMA table_info(pins)")] == [
