@@ -574,6 +574,8 @@ class AgentService:
             bits = [f"- {envelope._word(x.name)}", f"harness={x.harness}"]
             if x.host:
                 bits.append(f"host={envelope._word(x.host)}")
+            if x.owner:  # whose agent it is (#496): nothing when the broker can't say
+                bits.append(f"owner={envelope._word(x.owner)}")
             bits += [f"status={x.status}", f"tier={x.tier or '-'}"]
             if x.tier_note:
                 bits.append(f"tier_note={envelope._word(x.tier_note)}")
