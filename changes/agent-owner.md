@@ -1,3 +1,0 @@
-### Added
-
-- **Agents show whose they are.** Click an agent and the Inspector says who it belongs to and which device it runs on ("Owner: alice · device laptop"). When a switchboard has more than one person, Members shows "Owner: alice" under each agent's name too (with one person it would only repeat that person's name, so it is left out). The `who` tool names each agent's owner (`owner=alice` after its device), so an agent can tell whose agent it is talking to. It is the name the person has in the rooms, never an email; an agent whose owner can't be worked out (for example, its device's token was revoked) shows nothing, and a private room shows an owner only to the room's people.
