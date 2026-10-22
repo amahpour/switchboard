@@ -77,12 +77,25 @@ BAD_SCREEN_NAME = "screen names look like claude-1: a-z first, then a-z, 0-9, '_
 # an "@" may carry a version (claude-...@20250514), never a domain (nothing email-shaped)
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:+-]{0,63}(?:@[A-Za-z0-9_:+-]{1,32})?")
 AWAY_MAX = 80
+# what who() adds to a member that is waiting-approval (§49.4): what it means, and whose call it is
+WAITING_APPROVAL_WHO = (
+    "paused at its person's approval prompt; it answers nobody until they act. Wait for it or move on:"
+    " your call"
+)
 
 
 # the harnesses a hook over HTTPS may name (§49.4): the four, and the scripted test agent
 HOOK_EVENTS: dict[str, frozenset[str]] = {
     "claude": frozenset(
-        {"SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"}
+        {
+            "SessionStart",
+            "UserPromptSubmit",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "Notification",
+            "Stop",
+            "SessionEnd",
+        }
     ),
     "codex": frozenset({"UserPromptSubmit", "PostToolUse", "Stop", "Interrupt", "SessionEnd"}),
     "cursor": frozenset(
@@ -561,7 +574,10 @@ class AgentService:
                 bits.append("parked=yes")
             if x.away:
                 bits.append(f"away={sanitize(x.away, 80)}")
-            lines.append(" ".join(bits))
+            line = " ".join(bits)
+            if x.status == "waiting-approval":
+                line += f" ({WAITING_APPROVAL_WHO})"
+            lines.append(line)
         return {"room": room.name, "text": "\n".join(lines), "count": len(rows)}
 
     def review(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
@@ -893,6 +909,8 @@ class AgentService:
         if p is None:
             return inert  # a session that hasn't joined: nothing of it to report
         ev = parse_hook_event(harness, event, params)
+        if ev.ev == "Notification" and not self.engine.adapter_for(harness).asks_approval(ev):
+            return inert  # any other notification says nothing about the session's turn (§7.4)
         self._record(harness, event, params)
         self._note_model(p, params.get("model"))
         out, acts = self.engine.claim_for_hook(p, ev)
@@ -902,6 +920,16 @@ class AgentService:
         if out is None:
             return inert
         return {"out": {"kind": out.kind, "text": out.text}, "batch_id": out.batch_id, "ack": out.ack}
+
+    def subagent_tool_ran(self, conn: "HttpConn", sid: Any) -> None:
+        """A tool finished inside a subagent of session ``sid`` (§49.4, #472): ends an approval hold,
+        and does nothing else for the session."""
+        try:
+            p = self.http_session(conn, sid if isinstance(sid, str) and 0 < len(sid) <= 128 else None)
+        except ServiceError:
+            return
+        if p is not None:
+            self.run(self.engine.subagent_tool_ran(p))
 
     async def _park(
         self, conn: "HttpConn", sink_id: int, acts: list[Action], *, ended: bool = False
@@ -1020,6 +1048,7 @@ def parse_hook_event(harness: str, event: str, p: dict[str, Any]) -> HookEvent:
         source=_s(p.get("source"), 32),
         reason=_s(p.get("reason"), 64),
         permission_mode=_s(p.get("permission_mode"), 32),
+        notification=_s(p.get("ntype"), 32),
         tokens=tuple(toks),
         subagent_bg=p.get("subagent_bg") is True,
         t=float(t) if isinstance(t, (int, float)) and not isinstance(t, bool) else None,

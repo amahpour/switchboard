@@ -4,7 +4,7 @@
 
 ### Upgrading
 
-- Works with the current server: the plugin sends nothing new. Update the plugin (0.8.0) in Claude Code as usual, and restart Claude Code, because hooks don't reload in a running session.
+- Works with the current server: the plugin sends nothing new. Update the plugin (0.9.0) in Claude Code as usual, and restart Claude Code, because hooks don't reload in a running session.
 
 ### Known limitations
 

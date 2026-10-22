@@ -61,7 +61,7 @@ Also: `cli.py`; `install/`, which only removes what an old install wrote ([§23]
 6. **Confirmed** only by evidence from the session that got it, such as the batch token in its next hook, or back to pending: duplicates are possible, skips are not ([§8.7](DESIGN.md#87-offers-confirmation-and-expiry-two-phase-ack-event-based)).
 7. **Answered** with `say()`, back to step 1, or `pass()`.
 
-All along, hooks report each session's state to `/mcp`, and nothing is delivered to a session waiting on an approval.
+All along, hooks report each session's state to `/mcp`, and nothing is delivered to a session waiting on an approval (Claude Code's Notification hook says when one is, [DESIGN.md §49.9](DESIGN.md#499-an-open-approval-prompt-shown-to-the-room-472); the other agents see it in `who` and decide for themselves whether to wait).
 
 ## The shape to keep
 

@@ -65,6 +65,10 @@ icon-theme-dark-on-light, icon-theme-light-on-dark and icon-theme-dark-on-light-
 Cursor's icons with the saved Theme against the system's scheme, #443),
 check-waiting-{light,dark,phone-light} and check-confirmed-{light,dark,phone-light} (a fix awaiting
 its raiser has no check; once confirmed, its card gets a green one in the corner, #427),
+approval-board-{before,after}-{light,dark,phone-light},
+approval-inspector-{before,after}-{light,dark,phone-light} and approval-members-{before,after}-phone-light
+(an agent a review card waits on, busy as every agent at a prompt looked before, then waiting for approval
+because its person has a permission prompt open: the card, the Inspector and Members, #472),
 confirm-light, signin-light, setup-person-light and
 signin-phone-dark (all .png).
 
@@ -1841,6 +1845,62 @@ def shoot_mention_people(browser: Any, out: Path, world: Any) -> None:
         loop.close()
 
 
+def shoot_approval(browser: Any, out: Path, world: Any) -> None:
+    """#472: an agent whose person has a permission prompt open, in the board card that waits on it, the
+    Inspector and (on a phone) Members. "before" is every agent at a prompt until now (busy); "after" is
+    waiting for approval. The state is set as the Notification hook sets it, through the store: no scripted
+    agent can reach it. It waits for the card's state, never for its words, so the same script shoots the
+    page before the change."""
+    from playwright.sync_api import expect
+
+    for slug, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        room = "#approval-" + slug
+        world.create_room(room)
+        world.add_agents(room, ("claude-1", "codex-1"))
+        world.seed_review(room)
+        ctx = browser.new_context(timezone_id="UTC", locale="en-US", **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="' + room + '"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            page.click("#board-toggle")
+            for stage, status in (("before", "busy"), ("after", "waiting-approval")):
+                world.set_member_status(room, "codex-1", status, "hook:Notification")
+                pulse = page.locator('#board .board-card[data-item="F4"] .board-pulse')
+                expect(pulse).to_have_class(re.compile(r"\bs-" + status + r"\b"))
+                if slug == "phone-light":
+                    center(page, '#board .board-card[data-item="F4"]')
+                settle(page)
+                shot(page, out, f"approval-board-{stage}-{slug}.png")
+                phone = slug == "phone-light"
+                if phone:  # Members is a sheet on a phone, with the Inspector inside it
+                    page.click("#buddy-toggle")
+                    expect(page.locator("#app")).to_have_class(re.compile(r"\bsheet-open\b"))
+                    settle(page)
+                    shot(page, out, f"approval-members-{stage}-{slug}.png")
+                with page.expect_response(
+                    lambda r: "/members/codex-1" in r.url and r.request.method == "GET", timeout=WAIT_MS
+                ):
+                    page.click('#buddy-list .member[data-name="codex-1"] .m-open')
+                expect(page.locator("#insp-name")).to_contain_text("codex-1")
+                settle(page)
+                shot(page, out, f"approval-inspector-{stage}-{slug}.png")
+                back(page)
+                if phone:
+                    page.keyboard.press("Escape")
+                    expect(page.locator("#app")).not_to_have_class(re.compile(r"\bsheet-open\b"))
+        finally:
+            ctx.close()
+
+
 # -------------------------------------------------------------------- main
 def run(args: argparse.Namespace, pw: Any) -> None:
     from ui_world import HostedWorld, UIWorld
@@ -1887,6 +1947,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_settings_tabs(browser, out, world)
             shoot_settings_agents(browser, out, world)
             shoot_confirmed_check(browser, out, world)  # rooms of its own, so last in this world
+            shoot_approval(browser, out, world)
             shoot_hosted(browser, out, hosted)
             shoot_common_password(browser, out, weak)
             shoot_mention_people(browser, out, people)

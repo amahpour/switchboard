@@ -25,7 +25,7 @@ import pytest
 from conftest import InProcBroker, child_env
 from test_agents_http import THREAD_A, Codex, make_token, sse_result
 from test_agents_http_claude import SESSION_1, Claude
-from test_agents_http_wake import claude_hook, codex_hook, member, parked, participant, until
+from test_agents_http_wake import claude_hook, codex_hook, member, parked, participant, row, until
 
 from switchboard.broker.agent_http import HOOK_FIELDS, HOOK_TOOL, LISTEN_PATH, PATH
 from switchboard.mcp.server import TOOL_NAMES
@@ -234,9 +234,11 @@ def test_every_hook_calls_the_hook_tool_with_fields_it_takes() -> None:
         "PreToolUse",
         "PostToolUse",
         "PostToolUseFailure",
+        "Notification",
         "Stop",
         "SessionEnd",
     }
+    assert "PermissionRequest" not in hooks  # a permission hook, which switchboard never registers (§11)
     for event, groups in hooks.items():
         for group in groups:
             for h in group["hooks"]:
@@ -247,7 +249,7 @@ def test_every_hook_calls_the_hook_tool_with_fields_it_takes() -> None:
                 assert h["input"]["event"] == "${hook_event_name}"
                 assert h["input"]["session_id"] == "${session_id}"
                 # a subagent's tool calls run these hooks with the session's id; its own id says so (#446)
-                if event in ("PreToolUse", "PostToolUse", "PostToolUseFailure"):
+                if event in ("PreToolUse", "PostToolUse", "PostToolUseFailure", "Notification"):
                     assert h["input"]["agent_id"] == "${agent_id}", event
                 else:
                     assert "agent_id" not in h["input"], event
@@ -726,6 +728,141 @@ def test_a_subagents_tool_call_takes_nothing_from_the_session_but_its_own_call_d
     broker.call("human.say", {"room": "#build", "text": "@claude-1 and then this"})
     assert report("PostToolUse_bash_subagent") == "{}" and queued() == 1
     assert "and then this" in context_of(report("PostToolUse_bash"))
+
+
+def test_claudes_plugin_reports_a_permission_prompt_and_registers_no_permission_hook() -> None:
+    """The plugin tells the room that a session is paused at its person's approval prompt (#472) with
+    Claude Code's Notification hook, matched to the type permission_prompt, and not with PermissionRequest,
+    the hook that fires at the same moment but can approve (SECURITY.md, DESIGN.md §11). It sends the
+    event, the session, the subagent flag and the notification's type: never the message, the tool or
+    its input. Filled from the payload recorded with Claude Code 2.1.307, it is what the recorded request
+    carries. No plugin of any harness registers a PermissionRequest hook. Fails if the matcher is missing
+    (every notification would count), the hook sends more, a template and the real request drift apart,
+    or any plugin registers a permission hook."""
+    [group] = claude_hooks()["Notification"]
+    assert group["matcher"] == "permission_prompt"
+    [hook] = group["hooks"]
+    assert hook["input"] == {
+        "event": "${hook_event_name}",
+        "session_id": "${session_id}",
+        "agent_id": "${agent_id}",
+        "notification_type": "${notification_type}",
+    }
+    assert hook["timeout"] <= 2  # it runs at the prompt; a slow server must not hold it
+    payload = load(FIXTURES / "payloads" / "claude" / "Notification_permission_prompt.json")
+    assert payload["notification_type"] == group["matcher"]
+    filled = fill(hook["input"], payload, missing="")
+    sent = load(FIXTURES / "mcp_http" / "claude_hook_notification.json")["body"]["params"]["arguments"]
+    assert set(filled) == set(sent) and filled["agent_id"] == sent["agent_id"] == ""
+    assert filled["event"] == sent["event"] == "Notification"
+    assert filled["notification_type"] == sent["notification_type"] == "permission_prompt"
+    assert "message" not in filled and "transcript_path" not in filled
+    for path in (
+        CLAUDE_PLUGIN / "hooks" / "hooks.json",
+        CODEX_PLUGIN / "hooks" / "hooks.json",
+        ROOT / "plugins" / "cursor" / "hooks" / "hooks.json",
+        ROOT / "plugins" / "devin" / "config.example.json",
+    ):
+        assert "PermissionRequest" not in load(path)["hooks"], path
+
+
+def notification_call(session_id: str, **given: str) -> dict[str, Any]:
+    """The hook call Claude Code makes at a permission prompt: its recorded request, with the arguments the
+    plugin's Notification template fills in from the recorded payload."""
+    rec = load(FIXTURES / "mcp_http" / "claude_hook_notification.json")
+    [group] = claude_hooks()["Notification"]
+    payload = {**load(FIXTURES / "payloads" / "claude" / "Notification_permission_prompt.json"), **given}
+    filled = fill(group["hooks"][0]["input"], {**payload, "session_id": session_id}, missing="")
+    params = {**rec["body"]["params"], "arguments": filled}
+    return {"headers": rec["headers"], "body": {**rec["body"], "params": params}}
+
+
+def test_a_claude_at_a_permission_prompt_shows_as_waiting_approval_until_its_next_hook(
+    broker: InProcBroker,
+) -> None:
+    """The point of #472, end to end with Claude Code's recorded requests: a busy session's person has a
+    permission prompt open, and the other agents see it. The Notification request makes the member
+    ``waiting-approval`` in Members and in the other agents' ``who`` -- which says what that means and
+    that waiting or moving on is their call (the maintainer's: "I like to give the agents autonomy to
+    make that decision") -- and answers nothing. A message for it is not delivered while the prompt is
+    open; the tool's PostToolUse report (the person approved) ends the status and carries the message.
+    Fails if the status is never set, the others aren't told what it means, a message is delivered into
+    the prompt, or nothing clears it."""
+    broker.call("room.create", {"name": "#build"})
+    token = make_token(broker, "laptop")
+    claude, other = (
+        Claude(broker, token, SESSION_1),
+        Claude(broker, token, "00000000-0000-4000-8000-0000000000d2"),
+    )
+    for agent, name in ((claude, "claude-1"), (other, "claude-2")):
+        joined = agent.call("join", room="#build", screen_name=name)
+        assert joined["ok"]
+        # the join says what the status means, and that waiting or moving on is the reader's call
+        assert "waiting-approval" in joined["text"] and "your call" in joined["text"], joined["text"]
+        agent.call("read", room="#build")
+    claude_hook(claude, event="UserPromptSubmit")  # busy
+    assert row(broker, "claude-1")["status"] == "busy"
+
+    call = notification_call(SESSION_1)
+    r = claude.post(call["body"], call["headers"], "hook")
+    assert r.status_code == 200, r.text
+    assert str(sse_result(r)["result"]["content"][0]["text"]) == "{}"  # a hook that decides nothing
+    assert row(broker, "claude-1")["status"] == "waiting-approval"
+    line = next(x for x in other.call("who", room="#build")["text"].splitlines() if "claude-1" in x)
+    assert "status=waiting-approval" in line and "approval prompt" in line
+    assert "your call" in line and "move on" in line
+    calm = next(x for x in other.call("who", room="#build")["text"].splitlines() if "claude-2" in x)
+    assert "approval prompt" not in calm
+
+    broker.call("human.say", {"room": "#build", "text": "@claude-1 stop and check the tests"})
+    assert member(broker, "claude-1").queued == 1 and member(broker, "claude-1").inflight == 0
+    after = claude_hook(claude, event="PostToolUse", tool_name="Bash", tool_use_id="toolu_01x", agent_id="")
+    assert row(broker, "claude-1")["status"] == "busy"
+    assert "check the tests" in context_of(after)
+
+
+def test_a_notification_that_is_not_a_permission_prompt_changes_nothing(broker: InProcBroker) -> None:
+    """Claude Code sends other notifications (an idle prompt after a minute, a finished login). The
+    plugin's matcher keeps them from the server, and the server ignores one anyway: no status, no
+    other effect. Fails if the server takes any Notification for a prompt, which would hold a session's
+    messages for no reason."""
+    broker.call("room.create", {"name": "#build"})
+    claude = Claude(broker, make_token(broker, "laptop"), SESSION_1)
+    assert claude.call("join", room="#build", screen_name="claude-1")["ok"]
+    claude.call("read", room="#build")
+    claude_hook(claude, event="UserPromptSubmit")  # busy
+    for kind in ("idle_prompt", "auth_success", "", "x" * 500):
+        assert claude_hook(claude, event="Notification", notification_type=kind, agent_id="") == "{}"
+        assert row(broker, "claude-1")["status"] == "busy", kind
+    claude_hook(claude, event="Notification", notification_type="permission_prompt", agent_id="")
+    assert row(broker, "claude-1")["status"] == "waiting-approval"
+    claude_hook(claude, event="Notification", notification_type="idle_prompt", agent_id="")
+    assert row(broker, "claude-1")["status"] == "waiting-approval"  # and it doesn't end one either
+
+
+def test_a_subagents_hooks_settle_nothing_but_the_end_of_an_approval_prompt(broker: InProcBroker) -> None:
+    """A subagent's hooks carry its id and settle nothing for the session (#446): a Notification that names
+    one can't show the session as waiting. (Claude Code 2.1.307 sends the Notification of a subagent's own
+    prompt with no id, and the prompt is the person's to answer for the session, so that one counts.) What a
+    subagent's finished tool does say is that the prompt was answered, so it ends the hold, and nothing
+    else: no message is taken for the session. Fails if the id check is skipped for a Notification, or a
+    prompt in a subagent that runs for minutes keeps the session waiting after the person approved."""
+    broker.call("room.create", {"name": "#build"})
+    claude = Claude(broker, make_token(broker, "laptop"), SESSION_1)
+    assert claude.call("join", room="#build", screen_name="claude-1")["ok"]
+    claude.call("read", room="#build")
+    claude_hook(claude, event="UserPromptSubmit")
+    claude_hook(claude, event="Notification", notification_type="permission_prompt", agent_id=SUBAGENT_ID)
+    assert row(broker, "claude-1")["status"] == "busy"
+    # the same report without the id is the session's own, and does set it: the id is what made the difference
+    claude_hook(claude, event="Notification", notification_type="permission_prompt", agent_id="")
+    assert row(broker, "claude-1")["status"] == "waiting-approval"
+    broker.call("human.say", {"room": "#build", "text": "@claude-1 are you there"})
+    sub = claude_hook(
+        claude, event="PostToolUse", tool_name="Bash", tool_use_id="toolu_01y", agent_id=SUBAGENT_ID
+    )
+    assert sub == "{}"  # a subagent's tool says the prompt was answered, and takes no message for the session
+    assert row(broker, "claude-1")["status"] == "busy" and member(broker, "claude-1").queued == 1
 
 
 @pytest.mark.usefixtures("impl")

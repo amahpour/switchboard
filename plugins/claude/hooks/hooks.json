@@ -133,6 +133,25 @@
         ]
       }
     ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:switchboard:switchboard",
+            "tool": "hook",
+            "input": {
+              "event": "${hook_event_name}",
+              "session_id": "${session_id}",
+              "agent_id": "${agent_id}",
+              "notification_type": "${notification_type}"
+            },
+            "timeout": 2
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

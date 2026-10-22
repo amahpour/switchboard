@@ -76,10 +76,20 @@ def test_a_busy_session_is_handed_nothing_but_a_hook_answer(w: World) -> None:
 
 
 def test_waiting_on_an_approval_prompt_gets_nothing(w: World) -> None:
-    p, m = session(w, status="waiting-approval")
-    w.human("held while the prompt is open")
-    assert w.hook(p, "PostToolUse", ok=True) is None
+    """While the prompt is open (Claude Code's Notification put the session in waiting-approval, #472)
+    nothing is offered or pushed, and a hook that doesn't end the prompt carries nothing either. The hook
+    that does end it (the tool's PostToolUse) is the first to carry the message. Fails if a message is
+    offered into the prompt."""
+    p, m = session(w, status="busy")
+    w.hook(p, "Notification", notification="permission_prompt")
+    assert w.p(p).status == "waiting-approval"
+    msg = w.human("held while the prompt is open")
     assert not fills(w)
+    assert w.states(m)[msg.id] == "pending"
+    assert w.hook(p, "Notification", notification="permission_prompt") is None
+    assert w.states(m)[msg.id] == "pending"
+    out = w.hook(p, "PostToolUse", ok=True)
+    assert out is not None and f"id={msg.id} " in out.text
 
 
 def test_no_keystrokes_anywhere() -> None:
