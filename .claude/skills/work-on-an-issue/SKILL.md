@@ -21,6 +21,7 @@ The rules are in [CLAUDE.md](../../../CLAUDE.md); this is the order of work. It 
    | `src/switchboard/web/static/` | `uv run pytest -m e2e tests/e2e`, and `uv run python docs/media/ui_shots.py --out <dir>` for the previews; for something a person does there (a click path, a dialog), a recording of it working too: the [`record-verification`](../record-verification/SKILL.md) skill |
    | CLI output | `uv run python docs/media/cli_shots.py --out <dir>` for the previews |
    | `deploy/` (the image's `deploy/image/Dockerfile`) | `uv run pytest -m image tests/image` (Docker) |
+   | `plugins/<harness>/`, `adapters/https.py`, hook replies, delivery to a harness | that harness's live test, `SWITCHBOARD_LIVE=<harness> uv run pytest -m live tests/live/test_live_<harness>.py -s -q`: it runs the real CLI against a throwaway broker, costs a few cents and needs the CLI logged in ([CONTRIBUTING.md](../../../CONTRIBUTING.md)); put its `LIVE RESULTS` in the pull request |
    | timing, processes or sockets in a test | that test 20 times alone: `for i in $(seq 20); do uv run pytest -q -p no:cacheprovider <test> \|\| break; done` |
 
    On a machine other agents share, one suite at a time: take the lock and cap the workers before any of these ([CONTRIBUTING.md](../../../CONTRIBUTING.md), "Sharing a machine"). Several `-n auto` runs at once can freeze the machine.
