@@ -85,10 +85,12 @@ def test_an_everyone_broadcast_waiting_on_an_approval_prompt_gets_nothing(w: Wor
     """The exact guard of test_rules_mid_task.py::test_waiting_on_an_approval_prompt_gets_nothing,
     with the member @everyone's own mentioned=1 instead of an ordinary chatter message: being
     the broadcast's target changes nothing about the approval hold."""
-    p, m = session(w, status="waiting-approval")
-    w.human("@everyone held while the prompt is open", mentions=("claude-1", "everyone"))
-    assert w.hook(p, "PostToolUse", ok=True) is None
+    p, m = session(w, status="busy")
+    w.hook(p, "Notification", notification="permission_prompt")
+    msg = w.human("@everyone held while the prompt is open", mentions=("claude-1", "everyone"))
+    assert w.hook(p, "Notification", notification="permission_prompt") is None
     assert not fills(w)
+    assert w.states(m)[msg.id] == "pending"
 
 
 def test_an_everyone_broadcast_in_a_paused_room_delivers_nothing(w: World) -> None:

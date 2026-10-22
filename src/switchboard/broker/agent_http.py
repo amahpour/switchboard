@@ -110,6 +110,7 @@ HOOK_FIELDS = (
     "tool_response",
     "wait_s",
     "agent_id",
+    "notification_type",
 )
 # a tool of switchboard's own server, by the name a harness gives it: Codex and a hand-made Claude
 # Code server say ``mcp__switchboard__<tool>``, Claude Code's plugin
@@ -259,6 +260,7 @@ def hook_params(event: str, fields: dict[str, Any], now: float) -> dict[str, Any
         "source": clip(fields.get("source"), 32),
         "reason": clip(fields.get("reason"), 64),
         "permission_mode": clip(fields.get("permission_mode"), 32),
+        "ntype": clip(fields.get("notification_type"), 32),
         "model": model_name(fields.get("model")),
         "tokens": toks,
         "t": now,
@@ -458,6 +460,10 @@ class HttpTools:
             # A subagent's tool calls run the session's hooks with the session's id (#446). It is
             # not in the room, so nothing is delivered to it, and nothing it did settles anything for
             # the session: no confirmation, no status. The messages wait for the session's own hook.
+            # The one thing a tool that ran in it says is that an approval prompt was answered (#472).
+            if event in ("PostToolUse", "PostToolUseFailure"):
+                svc: Any = self.state.agents  # an HttpConn stands in for the socket's Conn
+                svc.subagent_tool_ran(c.conn, sid)
             return "{}"
         if second_report(event, fields):
             return "{}"
@@ -1025,6 +1031,7 @@ def install(app: "FastAPI", state: "BrokerState") -> Any:
         tool_response: Any = None,  # None: the hook sent none (see ``second_report``)
         wait_s: Any = "",
         agent_id: Any = "",  # Claude Code: set only in a subagent's hooks (#446)
+        notification_type: Any = "",  # Claude Code's Notification hook: ``permission_prompt`` (§7.4)
     ) -> str:
         """For switchboard's hooks, not for the model."""
         await tools.prime(ctx)

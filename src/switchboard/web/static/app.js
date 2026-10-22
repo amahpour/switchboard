@@ -1907,7 +1907,10 @@
       notes.push(note('amber', 'hourglass', 'Parked — needs a poke', rest));
     }
     if (m.status === 'waiting-approval') {
-      notes.push(note('amber', 'hourglass', 'Waiting for approval', [' It is asking in its own terminal.']));
+      notes.push(note('amber', 'hourglass', 'Waiting for approval', [
+        ' Its person has a permission prompt open in its own terminal. The other agents see this and decide'
+        + ' whether to wait or move on.',
+      ]));
     }
     if (notes.length) attn.append(el('div', 'group-label', 'Needs attention'), ...notes);
 
@@ -4762,14 +4765,20 @@
   function boardPulse(who, m) {
     const key = m ? statusKey(m) : 'offline';
     const busy = key === 'busy';
+    // its person has a permission prompt open (#472): the agent isn't working, and it won't answer
+    // until they act, which is worth knowing before waiting on it
+    const asking = key === 'waiting-approval';
     const word = !m ? who + ' has left the room'
-      : busy ? who + ' is working (on this or something else)' : who + ' is ' + statusWord(m).toLowerCase();
+      : busy ? who + ' is working (on this or something else)'
+      : asking ? who + ' is waiting for approval: its person has a permission prompt open'
+      : who + ' is ' + statusWord(m).toLowerCase();
     const s = el('span', 'board-pulse s-' + key + (busy ? ' working' : ''));
     s.dataset.member = who;
     s.title = word;
     s.setAttribute('role', 'img');
     s.setAttribute('aria-label', word);
     if (busy) s.append(el('span', 'board-pulse-word', 'working'));
+    if (asking) s.append(el('span', 'board-pulse-word', 'waiting for approval'));
     return s;
   }
 
