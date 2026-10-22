@@ -515,12 +515,12 @@ class SubprocBroker:
         raise RuntimeError("subprocess broker did not start: " + (self.home / "subproc.out").read_text())
 
     def cli(
-        self, *args: str, input: str | None = None, timeout: float = 20.0
+        self, *args: str, input: str | None = None, timeout: float = 20.0, under: Sequence[str] = ()
     ) -> subprocess.CompletedProcess[str]:
         # A new session: the child never has a controlling terminal, so TTY-gated
         # verbs (``login``) behave the same in a real terminal, under CI and under an agent.
         return subprocess.run(
-            [sys.executable, "-m", "switchboard", "--home", str(self.home), *args],
+            [*under, sys.executable, "-m", "switchboard", "--home", str(self.home), *args],
             env=self.env,
             input=input,
             stdin=None if input is not None else subprocess.DEVNULL,
@@ -569,52 +569,18 @@ def subproc_broker(tmp_home: Path) -> Iterator[SubprocBroker]:
         b.kill()
 
 
-def human_cli_denied_here() -> bool:
-    """True when the production peer check would refuse ``human_cli`` to this
-    pytest process (and so to the CLI children it starts): it runs under an
-    agent harness such as Claude Code or an ssh login, or its chain can't be
-    fully verified. Uses the exact policy the broker uses, so the two never disagree."""
-    return human_cli_denial_word() is not None
-
-
-def human_cli_denial_word() -> str | None:
-    """None when the production peer check would grant ``human_cli`` to this pytest
-    process (and so to the CLI children it starts); else a word the refusal
-    message contains: "ssh" when pytest runs under an ssh login or relay
-    (DESIGN.md §27.5.7), "agent" when it runs under an agent harness such as
-    Claude Code or its chain can't be fully verified."""
-    from switchboard.broker import proc
-    from switchboard.broker.peer import Peer, ProcessPeerPolicy
-
-    me = proc.info(os.getpid())
-    peer = Peer(pid=os.getpid(), uid=os.getuid(), start=me.start if me else None)
-    pol = ProcessPeerPolicy()
-    if pol.human_cli_allowed(peer):
-        return None
-    return "ssh" if pol.refusal(peer) else "agent"
-
-
 def stand_in_agent(directory: Path) -> list[str]:
     """An argv prefix that runs a command as the child of a stand-in agent harness, so the production
     peer check finds an agent in that command's ancestry whoever started pytest.
 
-    ``human_cli_denied_here()`` reads pytest's own ancestry, and so does the broker, each when it is
-    asked: a pytest that an agent started in the background is orphaned part-way through the run (its
-    launching shell exits), the agent drops out of the chain, and a test that was collected as
-    "refused" is granted (#437). Putting the agent in the command's own chain doesn't change with the
-    runner. The stand-in is a script named ``claude`` that runs its arguments as a child, so its argv
+    An agent-started pytest may be orphaned and lose the agent from its own ancestry (#437, #458).
+    Putting the agent in the command's own chain doesn't change with the runner. The stand-in is
+    a script named ``claude`` that runs its arguments as a child, so its argv
     (``/bin/sh <directory>/claude <command>``) matches the harness patterns in ``broker/peer.py``."""
     exe = directory / "claude"
     exe.write_text('#!/bin/sh\n"$@"\n')
     exe.chmod(0o755)
     return [str(exe)]
-
-
-def has_controlling_tty() -> bool:
-    """True when this pytest process has a controlling terminal (run from a real shell)."""
-    from switchboard.broker import proc
-
-    return proc.tty(os.getpid()) is not None
 
 
 def _default_sigint() -> None:  # pragma: no cover - runs in the child

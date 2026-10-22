@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import os
 import socket
+import subprocess
+import sys
 import time
 from itertools import takewhile
 from pathlib import Path
 
 import pytest
-from conftest import InProcBroker, has_controlling_tty, human_cli_denial_word
+from conftest import InProcBroker, child_env, stand_in_agent
 
 from switchboard.broker import proc
 from switchboard.broker.peer import ProcessPeerPolicy
@@ -121,32 +123,43 @@ def test_socket_is_owner_checked_by_clients(tmp_path: Path) -> None:
 
 
 def test_real_peer_policy_roles(tmp_home: Path) -> None:
-    """ProcessPeerPolicy on the live UDS: anon works; 'human' never over the UDS;
-    human_cli and login depend on who runs pytest (agent harness or not, TTY or not)."""
+    """On the live UDS, anon works, human needs web, and an agent has no human CLI role."""
     b = InProcBroker(tmp_home, policy=ProcessPeerPolicy()).start()
     try:
         assert b.call("sys.ping")["pid"] == os.getpid()
         with pytest.raises(RpcError) as e:
             b.call("room.create", {"name": "#build"})
         assert e.value.code == "forbidden" and "web session" in e.value.message
-        word = human_cli_denial_word()
-        denied = word is not None
-        if denied or not has_controlling_tty():
-            with pytest.raises(RpcError) as e:
-                b.call("human.login_link")
-            assert e.value.code == "forbidden"
-        else:  # a real terminal, no agent above it
-            assert "/login?t=" in b.call("human.login_link")["url"]
-        if denied:
-            with pytest.raises(RpcError) as e:
-                b.call("human.say", {"room": "#build", "text": "x"})
-            assert e.value.code == "forbidden" and word in e.value.message
-            with pytest.raises(RpcError):
-                b.call("sys.stop")
-        else:
-            with pytest.raises(RpcError) as e:
-                b.call("human.say", {"room": "#build", "text": "x"})
-            assert e.value.code == "not_found"
+
+        # Ask from a child of the stand-in, so pytest's changing ancestry cannot
+        # change the verdict between this assertion and the broker's peer check.
+        script = """import json, sys
+from pathlib import Path
+from switchboard.mcp.client import RpcError, call_sync
+try:
+    result = call_sync(Path(sys.argv[1]), sys.argv[2], json.loads(sys.argv[3]))
+    print(json.dumps({"result": result}))
+except RpcError as error:
+    print(json.dumps({"code": error.code, "message": error.message}))
+"""
+        agent = stand_in_agent(tmp_home)
+
+        def as_agent(method: str, params: dict[str, str] | None = None) -> dict:
+            r = subprocess.run(
+                [*agent, sys.executable, "-c", script, str(b.paths.sock), method, json.dumps(params or {})],
+                env=child_env(),
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert r.returncode == 0, r.stderr
+            return json.loads(r.stdout)
+
+        assert as_agent("human.login_link")["code"] == "forbidden"
+        denied = as_agent("human.say", {"room": "#build", "text": "x"})
+        assert denied["code"] == "forbidden" and "agent" in denied["message"]
+        assert as_agent("sys.stop")["code"] == "forbidden"
     finally:
         b.stop()
 
