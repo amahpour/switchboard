@@ -375,13 +375,104 @@ def test_a_notification_of_another_type_is_not_a_prompt_and_clears_nothing(w: Wo
 
 
 @pytest.mark.parametrize("harness", ["codex", "cursor", "devin"])
-def test_only_claude_code_has_a_hook_for_its_approval_prompt(w: World, harness: str) -> None:
-    """Codex and Devin's only hook at an approval prompt is PermissionRequest and Cursor has none
-    (docs/USAGE.md): switchboard registers no permission hook (§11), so no Notification of theirs counts.
-    Fails if another harness's adapter takes a Notification for a prompt."""
+def test_only_claude_code_has_a_notification_for_its_approval_prompt(w: World, harness: str) -> None:
+    """Claude Code's Notification of type permission_prompt is Claude Code's alone (docs/USAGE.md): no
+    Notification of another harness counts as a prompt, whatever its type. Fails if another harness's
+    adapter takes a Notification for a prompt."""
     p, _m = w.agent(f"a-{harness}", harness=harness, status="busy", hooks=True)
     w.hook(p, "Notification", notification="permission_prompt")
     assert w.p(p).status == "busy"
+
+
+# ------------------------- a report-only PermissionRequest hook, for Codex and Devin (#472, DESIGN.md §49.9)
+CODEX_DEVIN = ["codex", "devin"]
+
+
+@pytest.mark.parametrize("harness", CODEX_DEVIN)
+def test_a_permission_request_shows_codex_and_devin_as_waiting_approval(w: World, harness: str) -> None:
+    """Codex and Devin run a PermissionRequest hook when they are about to ask their person to approve a
+    tool, and the plugin's hook reports it (the maintainer's yes, 2026-10-21, to a report-only one): the
+    session is shown as waiting-approval, the status event names the hook, a message for it stays queued,
+    and the hook is never answered. Fails if the adapter does not take the event for a prompt, or the
+    hook is answered with anything."""
+    p, m = w.agent(f"a-{harness}", harness=harness, status="busy", hooks=True)
+    msg = w.human(f"hello @a-{harness}", mentions=(f"a-{harness}",))
+    assert w.hook(p, "PermissionRequest") is None
+    assert w.p(p).status == "waiting-approval"
+    assert w.states(m)[msg.id] == "pending"
+    [ev] = [e for e in w.store.recent_events(kinds=["status"]) if e.data.get("to") == "waiting-approval"]
+    assert ev.data["frm"] == "busy" and ev.data["src"] == "hook:PermissionRequest"
+
+
+@pytest.mark.parametrize(
+    ("harness", "event", "status"),
+    [
+        ("codex", "PostToolUse", "busy"),  # the person approved and the tool ran
+        ("codex", "PostToolUseFailure", "busy"),
+        ("codex", "UserPromptSubmit", "busy"),  # they declined and typed what to do instead
+        ("codex", "Stop", "idle"),
+        ("codex", "Interrupt", "idle"),  # Esc on the prompt
+        ("codex", "SessionEnd", "offline"),
+        ("devin", "PreToolUse", "busy"),  # a hook with no status of its own: the turn moved on
+        ("devin", "PostToolUse", "busy"),
+        ("devin", "UserPromptSubmit", "busy"),
+        ("devin", "Stop", "busy"),  # idle, then its re-arm asks it to wait() again (§9.5)
+        ("devin", "SessionEnd", "offline"),
+    ],
+)
+def test_the_next_hook_of_codex_or_devin_clears_the_approval_status(
+    w: World, harness: str, event: str, status: str
+) -> None:
+    """Neither harness has a hook of its own when a prompt is answered, so the session's next hook ends
+    the status, by the rule of its own event (the same path as Claude Code's, §7.4). Fails if the status
+    outlives the hook that proves the turn moved on."""
+    p, _m = w.agent(f"a-{harness}", harness=harness, status="busy", hooks=True)
+    w.hook(p, "PermissionRequest")
+    assert w.p(p).status == "waiting-approval"
+    w.hook(p, event, **({"ok": True} if event == "PostToolUse" else {}))
+    assert w.p(p).status == status
+
+
+@pytest.mark.parametrize("harness", CODEX_DEVIN)
+@pytest.mark.parametrize("status", ["starting", "idle", "busy", "waiting-approval", "offline"])
+def test_a_permission_request_answers_nothing_whatever_the_state(w: World, harness: str, status: str) -> None:
+    """The hook is report-only: the engine hands it no output and delivers nothing, in any state of the
+    session, with a priority message waiting for it. (The reply the plugin's hook relays is nothing too:
+    tests/integration/test_approval_report_only.py.) Fails if a PermissionRequest ever carries a
+    context, a continue or a park, or offers the message that waited into a prompt."""
+    p, m = w.agent(f"a-{harness}", harness=harness, status=status, hooks=True)
+    msg = w.human(f"look @a-{harness}", mentions=(f"a-{harness}",))
+    assert w.hook(p, "PermissionRequest") is None
+    assert w.states(m)[msg.id] == "pending"
+
+
+@pytest.mark.parametrize("harness", ["claude", "cursor", "test"])
+def test_the_other_harnesses_take_no_permission_request(w: World, harness: str) -> None:
+    """Claude Code reports its prompt with a Notification and Cursor has no hook at one: a
+    PermissionRequest of theirs changes no status. Fails if the event counts as a prompt for any
+    adapter but Codex's and Devin's."""
+    p, _m = w.agent(f"a-{harness}", harness=harness, status="busy", hooks=True)
+    w.hook(p, "PermissionRequest")
+    assert w.p(p).status == "busy"
+
+
+def test_a_codex_subagents_finished_tool_ends_the_hold(w: World) -> None:
+    """Codex runs a subagent's tool hooks with the thread's session id and the subagent's own turn id
+    (#446), so a prompt in a subagent shows the thread as waiting (its person has it open), and the
+    subagent's finished tool is the only sign that it was answered. It ends the hold and changes nothing
+    else: no message is taken and a thread that isn't waiting stays as it is. Fails if a subagent that runs
+    on after the person approved keeps the thread "waiting", or a subagent's tool does more than that."""
+    p, m = w.agent("cx", harness="codex", status="busy", hooks=True)
+    w.hook(p, "UserPromptSubmit", gen="turn-main")
+    w.hook(p, "PermissionRequest")
+    assert w.p(p).status == "waiting-approval"
+    msg = w.human("hello @cx", mentions=("cx",))
+    assert w.hook(p, "PostToolUse", gen="turn-sub", ok=True) is None
+    assert w.p(p).status == "busy" and w.states(m)[msg.id] == "pending"
+    w.hook(p, "Stop")
+    assert w.p(p).status == "idle"
+    w.hook(p, "PostToolUse", gen="turn-sub", ok=True)
+    assert w.p(p).status == "idle"  # a subagent's tool does not wake or busy an idle thread
 
 
 @pytest.mark.parametrize("source", ("startup", "clear", "compact"))
