@@ -156,8 +156,8 @@ def test_bytes_that_are_neither_a_png_nor_a_webp_are_refused(data: bytes) -> Non
 def test_a_png_with_markup_appended_is_refused() -> None:
     """A polyglot (a picture followed by HTML, a script or a zip) is no avatar: everything after the
     PNG's last chunk is refused."""
-    refused(PNG + b"<script>alert(1)</script>", "image/png", "bad_png")
-    refused(PNG + b"\x00", "image/png", "bad_png")
+    assert "after its end" in refused(PNG + b"<script>alert(1)</script>", "image/png", "bad_png").message
+    assert "after its end" in refused(PNG + b"\x00", "image/png", "bad_png").message
 
 
 # ------------------------------------------------------------------ damaged PNGs
@@ -227,7 +227,8 @@ def test_a_riff_size_that_does_not_match_the_file_is_refused() -> None:
     means something was appended."""
     refused(pictures.riff_size(WEBP, len(WEBP) - 8 + 2), "image/webp", "bad_webp")
     refused(pictures.riff_size(WEBP, len(WEBP) - 8 - 2), "image/webp", "bad_webp")
-    refused(WEBP + b"<script>", "image/webp", "bad_webp")
+    assert "after its end" in refused(WEBP + b"<script>", "image/webp", "bad_webp").message
+    assert "cut short" in refused(WEBP[:-4], "image/webp", "bad_webp").message
 
 
 def test_a_webp_with_the_wrong_signature_or_first_chunk_is_refused() -> None:

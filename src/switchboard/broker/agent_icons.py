@@ -136,8 +136,12 @@ def png_size(data: bytes) -> tuple[int, int]:
         elif kind == b"IDAT":
             idat = True
         elif kind == b"IEND":
-            if length != 0 or not idat or end != n:
+            if length != 0 or not idat:
                 raise bad
+            if end != n:
+                raise IconError(
+                    "bad_png", "that PNG has other data after its end: save it again as a plain PNG"
+                )
             return width, height
         pos = end
 
@@ -150,7 +154,10 @@ def webp_size(data: bytes) -> tuple[int, int]:
         "bad_webp", "that WebP is damaged or cut short: save it again from the program that made it"
     )
     n = len(data)
-    if _le(data, 4, 4) + 8 != n:
+    declared = _le(data, 4, 4) + 8
+    if declared < n:
+        raise IconError("bad_webp", "that WebP has other data after its end: save it again as a plain WebP")
+    if declared != n:
         raise bad
     pos = 12
     chunks: list[tuple[bytes, int, int]] = []
