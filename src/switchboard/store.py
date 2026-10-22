@@ -30,6 +30,7 @@ from switchboard.models import (
     Batch,
     Event,
     Item,
+    ListenerKeyRow,
     Member,
     Membership,
     Message,
@@ -1385,6 +1386,74 @@ class Store:
             self.con.execute(
                 "UPDATE agent_tokens SET last_used_at=? WHERE id=? AND revoked_at IS NULL",
                 (self.clock.now(), token_id),
+            )
+
+    # ------------------------------------------- listener keys (#488, §49.11)
+    # Only the sha256 of a key is kept: the key itself is made on the agent's machine and never sent.
+    def listener_key_claim(self, token_id: int, key_hash: str, keep: int, idle_s: float) -> bool:
+        """Record that ``token_id`` (a signed-in connection) claims the key whose sha256 this is. True when
+        it is this token's now: new, or claimed by it before (its use is noted). False when another token
+        holds that hash, which is never taken over. A new one first removes the keys idle for ``idle_s``
+        and the token's oldest past ``keep``, so a connection that makes a key each time can't grow the
+        table without end."""
+        now = self.clock.now()
+        with db.tx(self.con):
+            held = self.con.execute(
+                "SELECT token_id FROM listener_keys WHERE key_hash=?", (key_hash,)
+            ).fetchone()
+            if held is not None:
+                if held["token_id"] != token_id:
+                    return False
+                self.con.execute("UPDATE listener_keys SET last_used_at=? WHERE key_hash=?", (now, key_hash))
+                return True
+            self.con.execute("DELETE FROM listener_keys WHERE last_used_at < ?", (now - idle_s,))
+            self.con.execute(
+                "DELETE FROM listener_keys WHERE id IN (SELECT id FROM listener_keys WHERE token_id=?"
+                " ORDER BY last_used_at DESC, id DESC LIMIT -1 OFFSET ?)",
+                (token_id, max(keep - 1, 0)),
+            )
+            self.con.execute(
+                "INSERT INTO listener_keys(token_id, key_hash, created_at, last_used_at) VALUES(?,?,?,?)",
+                (token_id, key_hash, now, now),
+            )
+        return True
+
+    def listener_key(self, key_hash: str) -> tuple[ListenerKeyRow, AgentTokenRow] | None:
+        """The key whose sha256 this is and the token that claimed it, revoked or not (the caller says
+        which: a revoked sign-in is told so)."""
+        r = self.con.execute("SELECT * FROM listener_keys WHERE key_hash=?", (key_hash,)).fetchone()
+        if r is None:
+            return None
+        t = self.con.execute("SELECT * FROM agent_tokens WHERE id=?", (r["token_id"],)).fetchone()
+        return (ListenerKeyRow.from_row(r), AgentTokenRow.from_row(t)) if t is not None else None
+
+    def listener_key_used(self, key_id: int) -> None:
+        with db.tx(self.con):
+            self.con.execute("UPDATE listener_keys SET last_used_at=? WHERE id=?", (self.clock.now(), key_id))
+
+    def listener_key_bind(self, key_id: int, session_id: str) -> str | None:
+        """Pin a key to ``session_id`` if it has no session yet; the session it is for now. Used by the
+        key's own first request, before any signed-in hook has named a session (§49.11)."""
+        with db.tx(self.con):
+            self.con.execute(
+                "UPDATE listener_keys SET session_id=? WHERE id=? AND session_id IS NULL",
+                (session_id, key_id),
+            )
+            r = self.con.execute("SELECT session_id FROM listener_keys WHERE id=?", (key_id,)).fetchone()
+        return r["session_id"] if r is not None else None
+
+    def listener_key_name_session(self, token_id: int, key_hash: str, session_id: str) -> bool:
+        """A signed-in hook of ``token_id``'s connection, which carries this key's hash, named
+        ``session_id``: the key is for that session now (a ``/clear`` or a resume moves it). True when
+        that changed anything."""
+        with db.tx(self.con):
+            return (
+                self.con.execute(
+                    "UPDATE listener_keys SET session_id=?, last_used_at=? WHERE token_id=? AND key_hash=?"
+                    " AND (session_id IS NULL OR session_id != ?)",
+                    (session_id, self.clock.now(), token_id, key_hash, session_id),
+                ).rowcount
+                == 1
             )
 
     # ------------------------------------------------- OAuth clients (#386, §49.9)

@@ -6,6 +6,10 @@
 # context back, which it prints for Claude Code. It always exits 0, and quickly (within 1 s for a
 # SessionEnd): a server that can't be reached changes nothing here. The token reaches curl on its stdin, never its command
 # line, where other processes could read it.
+# With no typed token (the agent signed in through the browser) it presents the listener key that bin/headers
+# made for this Claude Code (docs/DESIGN.md §49.11), once and with no waiting: a SessionStart can come before
+# the connection has told the server about the key, and the listener (bin/listen), which does wait for it,
+# reports the session then; the server takes a key for one session only.
 # Git for Windows' sh (Git Bash) is where Claude Code runs this on Windows when Git is installed; there
 # the PowerShell version does the job (windows/session.ps1, #440). Windows without Git runs session.cmd instead.
 case $(uname -s) in
@@ -27,7 +31,15 @@ case $event in SessionStart | SessionEnd) ;; *) exit 0 ;; esac
 url=${CLAUDE_PLUGIN_OPTION_SERVER_URL:-$SWITCHBOARD_URL}
 url=${url%/}
 token=${CLAUDE_PLUGIN_OPTION_TOKEN:-$SWITCHBOARD_AGENT_TOKEN}
-[ -n "$url" ] && [ -n "$token" ] || exit 0
+[ -n "$url" ] || exit 0
+if [ -z "$token" ]; then # no typed token: the key bin/headers made for this Claude Code, in the plugin's data folder
+  dir=${CLAUDE_PLUGIN_DATA:-${HOME:+$HOME/.cache/switchboard}}
+  [ -n "$dir" ] || exit 0
+  token=$(cat "$dir/listener-key-${CLAUDE_PID:-$PPID}" 2>/dev/null)
+  case $token in sbl_*) ;; *) exit 0 ;; esac
+  case ${token#sbl_} in '' | *[!0-9a-f]*) exit 0 ;; esac
+  [ "${#token}" -eq 68 ] || exit 0
+fi
 body=$(printf '{"event": "%s", "session_id": "%s", "source": "%s", "reason": "%s", "permission_mode": "%s"}' \
   "$event" "$sid" "$(plain "$(field source)")" "$(plain "$(field reason)")" "$(plain "$(field permission_mode)")")
 # Claude Code gives SessionEnd hooks as little as 1.5 s (2.1.299), so that one gets 1 s; a request on

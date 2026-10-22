@@ -60,7 +60,7 @@ def test_an_old_database_gains_the_empty_table_and_keeps_every_row(tmp_path: Pat
     counts = {t: before.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in db.kept_tables(28)}
     before.close()
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 32
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 33
     assert db.row_counts(con, db.kept_tables(28)) == counts
     assert con.execute("SELECT COUNT(*) FROM agent_icons").fetchone()[0] == 0
     assert "agent_icons" in db.TABLES and "agent_icons" not in db.tables_of(31)

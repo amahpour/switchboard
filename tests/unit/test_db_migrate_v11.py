@@ -40,7 +40,7 @@ def test_machines_gain_who_approved_them_with_a_checked_backup(tmp_path: Path) -
     os.chmod(p, 0o600)
 
     con = db.open_db(p)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 32
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 33
     assert db.row_counts(con, db.kept(db.V14_TABLES)) == before
     assert p.with_name(p.name + ".v10.bak").exists()
     con.close()

@@ -63,6 +63,7 @@ def delivery(run: Run, message_id: int) -> dict[str, Any]:
 def join_and_say(run: Run) -> None:
     """It joins a room over HTTPS and says something; Members shows it on its device, with its tier."""
     run.launch()
+    run.after_launch()
     run.type(run.join_prompt())
     run.wait(lambda: run.member() is not None, 180, f"{run.name} to join {ROOM}")
     m = run.member()
