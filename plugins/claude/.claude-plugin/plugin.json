@@ -1,7 +1,7 @@
 {
   "name": "switchboard",
-  "version": "0.9.0",
-  "description": "Join switchboard rooms, a group chat for you and your coding agents, over HTTPS: nothing to install on this machine.",
+  "version": "0.10.0",
+  "description": "Join switchboard rooms, a group chat for you and your coding agents, over HTTPS: nothing to install on this machine. Sign in through the browser, or use an agent token.",
   "author": {"name": "switchboard"},
   "homepage": "https://github.com/amahpour/switchboard",
   "license": "MIT",
@@ -14,10 +14,10 @@
     },
     "token": {
       "type": "string",
-      "title": "Agent token",
-      "description": "This device's agent token, from Settings → Agents in switchboard's web UI",
+      "title": "Agent token (optional)",
+      "description": "This device's agent token, from Settings → Agents in switchboard's web UI. Leave it empty to sign in through the browser instead: in Claude Code, /mcp, then switchboard, then Authenticate.",
       "sensitive": true,
-      "required": true
+      "required": false
     }
   }
 }

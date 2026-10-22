@@ -1,0 +1,71 @@
+#!/bin/sh
+# switchboard's headersHelper for Claude Code (docs/DESIGN.md §49.11, #488). Claude Code runs it each time it
+# connects the plugin's MCP server, and sends what it prints as headers of that connection. It makes a
+# listener key for this Claude Code and prints only the key's sha256, as X-Switchboard-Listener. The key
+# goes to a 0600 file in the plugin's data folder (listener-key-<Claude Code's pid>), where bin/listen and
+# bin/session read it: when the agent signed in through the browser, Claude Code keeps the sign-in's token
+# to itself, so these two scripts have no token to send, and the key is what they present instead. The
+# server records the hash when a request carries it together with the sign-in's token, so only the signed-in
+# connection can make the key count; the key itself never leaves this machine except in the scripts'
+# requests to the server, for the one session it is for, and it opens nothing but those two routes.
+# Whatever goes wrong, it prints {} and exits 0: the connection then has no key, and the scripts do nothing,
+# exactly as before. Claude Code runs it with the plugin's data folder as its one argument (a command can't
+# read the plugin's settings, which is why a typed token goes in X-Switchboard-Token instead).
+# Native Windows has no key yet (the scripts there send a typed token only): the PowerShell scripts of
+# bin/windows know nothing of it, and Git Bash for Windows prints {} here.
+none() {
+  printf '{}\n'
+  exit 0
+}
+case $(uname -s) in MINGW* | MSYS* | CYGWIN*) none ;; esac
+umask 077
+dir=${1:-${CLAUDE_PLUGIN_DATA:-${HOME:+$HOME/.cache/switchboard}}}
+case $dir in /*) ;; *) none ;; esac
+# Claude Code's pid, which its command hooks get as CLAUDE_PID: this script's parent, or that parent's when
+# the parent is the shell Claude Code runs a command in (seen: claude -> sh -c -> this script)
+ppid_of() {
+  if [ -r "/proc/$1/status" ]; then
+    sed -n 's/^PPid:[[:space:]]*//p' "/proc/$1/status" 2>/dev/null
+  else
+    ps -o ppid= -p "$1" 2>/dev/null | tr -d ' '
+  fi
+}
+comm_of() {
+  if [ -r "/proc/$1/comm" ]; then cat "/proc/$1/comm" 2>/dev/null; else ps -o comm= -p "$1" 2>/dev/null; fi
+}
+claude=$PPID
+case $(comm_of "$claude") in *sh) claude=$(ppid_of "$claude") ;; esac
+case $claude in '' | *[!0-9]*) none ;; esac
+[ "$claude" -gt 1 ] || none
+key=sbl_$(od -An -N32 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')
+[ "${#key}" -eq 68 ] || none
+sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 | sed 's/^.*= //'
+  else
+    return 1
+  fi
+}
+hash=$(printf '%s' "$key" | sha256 2>/dev/null | cut -c1-64)
+case $hash in '' | *[!0-9a-f]*) none ;; esac
+[ "${#hash}" -eq 64 ] || none
+mkdir -p "$dir" 2>/dev/null || none
+tmp=$(mktemp "$dir/.listener-key.XXXXXX" 2>/dev/null) || none
+trap 'rm -f "$tmp"' EXIT
+chmod 600 "$tmp" 2>/dev/null
+printf '%s\n' "$key" >"$tmp" 2>/dev/null || none
+# a rename, so a reader never sees half a key, and a link planted at the name is replaced, never followed
+mv -f "$tmp" "$dir/listener-key-$claude" 2>/dev/null || none
+# the keys of Claude Codes that have gone, so the folder holds only live ones
+for f in "$dir"/listener-key-*; do
+  [ -f "$f" ] || continue
+  pid=${f##*/listener-key-}
+  case $pid in '' | *[!0-9]*) continue ;; esac
+  [ "$pid" = "$claude" ] || kill -0 "$pid" 2>/dev/null || rm -f "$f"
+done
+printf '{"X-Switchboard-Listener": "%s"}\n' "$hash"
+exit 0

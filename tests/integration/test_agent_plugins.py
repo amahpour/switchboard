@@ -205,17 +205,26 @@ def test_the_pinned_tag_holds_the_plugin_when_this_checkout_knows_it() -> None:
         assert json.loads(shown)["name"] == load(marketplace)["plugins"][0]["name"]
 
 
-def test_the_claude_plugin_asks_for_the_server_and_a_secret_token() -> None:
-    """The plugin's two settings: the server's address, and the agent token, kept as a secret by
-    Claude Code (``sensitive``), never in a settings file. Its MCP server is that address's /mcp
-    with that token. Fails if the token isn't sensitive or the server's path is wrong."""
+# how .mcp.json starts the helper that makes the listener key: in sh, Git Bash and PowerShell alike (§49.11)
+HELPER_COMMAND = 'cd "${CLAUDE_PLUGIN_ROOT}/bin"; ./headers "${CLAUDE_PLUGIN_DATA}"; exit $LASTEXITCODE'
+
+
+def test_the_claude_plugin_asks_for_the_server_and_an_optional_secret_token() -> None:
+    """The plugin's two settings: the server's address, and the agent token, kept as a secret by Claude Code
+    (``sensitive``), never in a settings file, and optional: left empty, Claude Code signs in through the
+    browser. Its MCP server is that address's /mcp. The typed token goes in ``X-Switchboard-Token`` and never
+    in ``Authorization``, because Claude Code starts no browser sign-in for a server with an Authorization
+    header, even an empty one (#488, seen live in 2.1.307), and a command that makes the listener key adds its
+    header. Fails if the token isn't sensitive, is required, or goes in a header that turns the sign-in off."""
     cfg = load(CLAUDE_PLUGIN / ".claude-plugin" / "plugin.json")["userConfig"]
-    assert cfg["server_url"]["required"] and cfg["token"]["required"]
+    assert cfg["server_url"]["required"] and not cfg["token"]["required"]
     assert cfg["token"]["sensitive"] is True and "sensitive" not in cfg["server_url"]
     [(name, server)] = load(CLAUDE_PLUGIN / ".mcp.json")["mcpServers"].items()
     assert name == "switchboard" and server["type"] == "http"
     assert server["url"] == "${user_config.server_url}" + PATH
-    assert server["headers"] == {"Authorization": "Bearer ${user_config.token}"}
+    assert server["headers"] == {"X-Switchboard-Token": "${user_config.token}"}
+    assert not [h for h in server["headers"] if h.lower() == "authorization"]
+    assert server["headersHelper"] == HELPER_COMMAND
 
 
 def test_every_hook_calls_the_hook_tool_with_fields_it_takes() -> None:
@@ -307,6 +316,7 @@ def run_listen(
     tmp: Path | None = None,
     event: str = "Stop",
     source: str = "",
+    grace_s: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """``bin/listen`` as Claude Code runs it at Stop or SessionStart: the hook's input on stdin,
     the plugin's settings in ``CLAUDE_PLUGIN_OPTION_*``, and Claude Code's own pid in
@@ -320,6 +330,8 @@ def run_listen(
     }
     if round_s is not None:
         env["SWITCHBOARD_LISTEN_S"] = str(round_s)
+    if grace_s is not None:
+        env["SWITCHBOARD_LISTEN_GRACE_S"] = str(grace_s)
     if data is not None:
         env["CLAUDE_PLUGIN_DATA"] = str(data)  # where the plugin keeps what it has said
     if home is not None:
@@ -1119,16 +1131,29 @@ def test_the_version_check_sees_a_changed_file_and_a_new_one_and_accepts_a_bump(
 
 
 def run_session(
-    b: InProcBroker | None, token: str, session: str, event: str, *, url: str | None = None, **fields: str
+    b: InProcBroker | None,
+    token: str,
+    session: str,
+    event: str,
+    *,
+    url: str | None = None,
+    data: Path | None = None,
+    owner: int | None = None,
+    **fields: str,
 ) -> subprocess.CompletedProcess[str]:
     """``bin/session`` as Claude Code runs it: the hook's input on stdin (compact JSON, as Claude Code
     writes it), the plugin's settings in ``CLAUDE_PLUGIN_OPTION_*``. ``url`` is a stand-in server's, for
-    when there is no broker."""
+    when there is no broker; ``data`` the plugin's data folder and ``owner`` Claude Code's pid, which is
+    where and under what name a listener key is kept (§49.11)."""
     env = {
         "PATH": os.environ["PATH"],
         "CLAUDE_PLUGIN_OPTION_SERVER_URL": url or (b.base if b else ""),
         "CLAUDE_PLUGIN_OPTION_TOKEN": token,
     }
+    if data is not None:
+        env["CLAUDE_PLUGIN_DATA"] = str(data)
+    if owner is not None:
+        env["CLAUDE_PID"] = str(owner)
     hook = json.dumps(
         {"session_id": session, "hook_event_name": event, "cwd": "/x/y", **fields}, separators=(",", ":")
     )

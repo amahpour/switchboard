@@ -336,6 +336,24 @@ class AgentTokenRow:
 
 
 @dataclass(frozen=True)
+class ListenerKeyRow:
+    """A ``listener_keys`` row (DESIGN.md §49.11): the sha256 of a key that Claude Code's helper scripts
+    made on the machine and claimed over a signed-in connection, the agent token that claimed it, and
+    the one session it is for (None until the first one is named)."""
+
+    id: int
+    token_id: int
+    key_hash: str
+    session_id: str | None
+    created_at: float
+    last_used_at: float
+
+    @classmethod
+    def from_row(cls, r: sqlite3.Row) -> "ListenerKeyRow":
+        return cls(**{k: r[k] for k in r.keys()})
+
+
+@dataclass(frozen=True)
 class OAuthClientRow:
     """An ``oauth_clients`` row (DESIGN.md §49.9): an agent that registered to sign in through the
     browser (RFC 7591). A public client: no secret, and loopback redirect URIs only (``redirect_uris``

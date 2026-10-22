@@ -12,7 +12,8 @@ messages, where NULL is the owner), 5 (per-person preferences, §34), 6 (text si
 7 (custom room rules, §35), and so on up to 28 (each step is below); 29 (#385) drops the
 ``remotes`` and ``link_machines`` tables; 30 (#385) ends the sessions of the local agent path and
 drops the process ids and the stdio credential that only it used; 31 (#386) adds the clients that
-register to sign an agent in through the browser, and says how each agent token was made.
+register to sign an agent in through the browser, and says how each agent token was made; 32 (#488)
+adds the listener keys of Claude Code's helper scripts (§49.11).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -32,7 +33,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 31
+SCHEMA_VERSION = 32
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -223,6 +224,13 @@ CREATE TABLE oauth_clients(
   client_name TEXT NOT NULL CHECK(length(client_name) BETWEEN 1 AND 80),
   redirect_uris TEXT NOT NULL CHECK(length(redirect_uris) <= 2000),
   created_at REAL NOT NULL);
+CREATE TABLE listener_keys(
+  id INTEGER PRIMARY KEY,
+  token_id INTEGER NOT NULL REFERENCES agent_tokens(id),
+  key_hash TEXT NOT NULL UNIQUE CHECK(length(key_hash) = 64),
+  session_id TEXT CHECK(session_id IS NULL OR length(session_id) <= 128),
+  created_at REAL NOT NULL, last_used_at REAL NOT NULL);
+CREATE INDEX listener_keys_token ON listener_keys(token_id, last_used_at);
 """
 
 # The tables of each schema version that a migration must keep the rows of. The older versions'
@@ -252,7 +260,8 @@ V28_TABLES = (*V25_TABLES, "review_picks")  # before 29 took the two retired tab
 # the tables a step drops, by the version it migrates to
 DROPPED_AT: dict[int, tuple[str, ...]] = {29: ("remotes", "link_machines")}
 V30_TABLES = tuple(t for t in V28_TABLES if t not in DROPPED_AT[29])  # before oauth_clients (v31)
-TABLES = (*V30_TABLES, "oauth_clients")
+V31_TABLES = (*V30_TABLES, "oauth_clients")  # before listener_keys (v32)
+TABLES = (*V31_TABLES, "listener_keys")
 
 # v1 -> v2 (DESIGN.md §27.6): one BEGIN IMMEDIATE, after a verified backup. The
 # columns land at the end of their tables, where the fresh schema above puts them too.
@@ -636,6 +645,21 @@ V30_TO_V31 = (
 )
 
 
+# v31 -> v32 (#488, DESIGN.md §49.11): the listener keys of Claude Code's helper scripts. A key is made on
+# the machine and claimed over a signed-in connection; only its sha256 is kept, with the token that
+# claimed it and the one session it is for. New, so empty.
+V31_TO_V32 = (
+    "CREATE TABLE listener_keys("
+    " id INTEGER PRIMARY KEY,"
+    " token_id INTEGER NOT NULL REFERENCES agent_tokens(id),"
+    " key_hash TEXT NOT NULL UNIQUE CHECK(length(key_hash) = 64),"
+    " session_id TEXT CHECK(session_id IS NULL OR length(session_id) <= 128),"
+    " created_at REAL NOT NULL, last_used_at REAL NOT NULL)",
+    "CREATE INDEX listener_keys_token ON listener_keys(token_id, last_used_at)",
+    "UPDATE meta SET value='32' WHERE key='schema_version'",
+)
+
+
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
     the tables the step adds). Read from the module at run time, never cached."""
@@ -670,6 +694,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         28: (29, V28_TO_V29, ()),
         29: (30, V29_TO_V30, ()),
         30: (31, V30_TO_V31, ("oauth_clients",)),
+        31: (32, V31_TO_V32, ("listener_keys",)),
     }
     out = []
     v = frm
@@ -706,6 +731,8 @@ def tables_of(version: int) -> tuple[str, ...]:
         return V28_TABLES
     if version <= 30:
         return V30_TABLES
+    if version <= 31:
+        return V31_TABLES
     return TABLES
 
 
