@@ -18,14 +18,14 @@ from typing import Any
 FORMAT = 1
 RESULTS_DIR = Path(__file__).resolve().parents[1] / "_results"
 
-# the per-trial numbers compare reports, with a label and whether fewer is better
+# the per-trial numbers compare reports. The time to settle is in each trial but not here: it is mostly the
+# 8 s the room is watched for after the last thing moved, so a difference in it says nothing.
 METRICS: tuple[tuple[str, str], ...] = (
     ("tokens_after_ask", "tokens after the ask"),
     ("cost_usd", "cost after the ask, USD"),
     ("wakes", "wakes"),
     ("wakes_ended_in_pass", "wakes that ended in pass()"),
     ("posts", "agent posts"),
-    ("seconds", "seconds to settle"),
 )
 
 
