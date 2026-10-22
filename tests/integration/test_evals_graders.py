@@ -42,15 +42,17 @@ def passes(name: str, items: list[Item]) -> Move:
     return Move(passes=True)
 
 
-def answers(text: str, when: str = "always") -> Policy:
+def answers(text: str, when: str = "always", insist: bool = False) -> Policy:
     """Answer the person's message with ``text``; ``when="to_you"`` only if it is addressed to this agent,
-    ``"first"`` only if this agent's name sorts first. Anything else is a pass."""
+    ``"first"`` only if this agent's name sorts first. Anything else is a pass. ``insist``: if another agent
+    has already answered a message that names nobody, post anyway (switchboard holds a second answer
+    and says so, §8.8; this agent sends it again)."""
 
     def policy(name: str, items: list[Item]) -> Move:
         p = _person(items)
         if p is None or (when == "to_you" and not p.to_you) or (when == "first" and name != "alpha"):
             return Move(passes=True)
-        return Move(say=text, reply_to=p.id)
+        return Move(say=text, reply_to=p.id, insist=insist)
 
     return policy
 
@@ -93,8 +95,13 @@ ROOMS = {
     ),
     "nobody named, all three answer": (
         "nobody-named",
-        {n: answers("42") for n in ("alpha", "bravo", "charlie")},
+        {n: answers("42", insist=True) for n in ("alpha", "bravo", "charlie")},
         {"exactly_one_answers": False, "the_answer_is_right": True},
+    ),
+    "nobody named, all three try to answer and two are held": (
+        "nobody-named",
+        {n: answers("42") for n in ("alpha", "bravo", "charlie")},
+        {"exactly_one_answers": True, "the_answer_is_right": True},
     ),
     "nobody named, nobody answers": (
         "nobody-named",
