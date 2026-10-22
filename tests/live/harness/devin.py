@@ -14,6 +14,7 @@ cheapest the account offers.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 from . import screens
@@ -76,6 +77,7 @@ class DevinRun(Run):
     def __init__(self, name: str) -> None:
         super().__init__(name)
         self.quota_seen: list[float] = []  # the "N% remaining" Devin's banner showed at each start
+        self.ready_since = 0.0
 
     def prepare(self) -> None:
         self.xdg = self.base / "xdg-config"
@@ -98,14 +100,21 @@ class DevinRun(Run):
             "SWITCHBOARD_AGENT_TOKEN": self.token,
         }
 
+    def launch(self, resume: bool = False) -> None:
+        self.ready_since = 0.0
+        super().launch(resume)
+
     def ready_step(self, screen: str) -> bool:
-        if screens.devin_ready(screen):
-            for q in screens.quota_all(screen):
-                if not self.quota_seen or self.quota_seen[-1] != q:
-                    self.quota_seen.append(q)
-            assert not screens.quota_exhausted(screen), "Devin's quota is used up:\n" + screen
-            return True
-        return False
+        if not screens.devin_ready(screen):
+            return False
+        assert not screens.quota_exhausted(screen), "Devin's quota is used up:\n" + screen
+        now = time.monotonic()
+        self.ready_since = self.ready_since or now
+        left = screens.quota_all(screen)
+        if left and (not self.quota_seen or self.quota_seen[-1] != left[-1]):
+            self.quota_seen.append(left[-1])
+        # the banner with the quota comes a moment after the prompt: wait for it (at most 10 s) to report it
+        return bool(left) or now - self.ready_since > 10
 
     def settled(self) -> bool:
         """Listening: its join turn is over and it is inside its wait() call (Members shows it busy)."""

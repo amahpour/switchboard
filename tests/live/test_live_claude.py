@@ -17,7 +17,7 @@ from harness.world import skip_reason
 
 pytestmark = pytest.mark.live
 
-_why = skip_reason("claude", "claude")
+_why = skip_reason("claude", "claude", "curl")
 if _why:
     pytest.skip(_why, allow_module_level=True)
 

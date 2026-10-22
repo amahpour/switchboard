@@ -210,12 +210,16 @@ class CodexRun(Run):
 
     def start_subagent(self) -> None:
         # Codex holds its prompt while its Stop hook waits, so the task comes as a room message. Naming the
-        # tool is what makes the cheap model call it (a bare "use a subagent" it answers without one).
+        # tool and its arguments is what makes the cheap model call it (a bare "use a subagent" it answers
+        # without one, or says the tool isn't there).
+        task = (
+            'run the shell command "sh hold.sh sub1", and when it has finished the shell command'
+            ' "sh hold.sh sub2", then reply done'
+        )
         self.mention(
-            "Delegate a job to a subagent: call your spawn_agent tool (collaboration.spawn_agent) once, with"
-            ' task_name runner and the message: run the shell command "sh hold.sh sub1", and when it has'
-            ' finished the shell command "sh hold.sh sub2", then reply done. Do not do the job yourself.'
-            " After it has started, do not wait for it: reply with the single word: started."
+            "Your first action must be a call to the tool collaboration.spawn_agent, with the arguments"
+            f' task_name "runner" and message "{task}". Do not do the job yourself. After the call returns,'
+            " do not wait for the subagent: reply with the single word: started."
         )
 
     def cost_note(self) -> str:
