@@ -68,6 +68,10 @@ function Field([string]$name) {
 }
 
 $event = Field 'hook_event_name'
+# Claude Code sets this to 0 for -p (observed with 2.1.307). A one-shot process waits for
+# background hooks at SessionStart and Stop; it cannot hear a later room message after it exits.
+# With the variable absent, keep listening for older Claude Code versions.
+if ($env:CLAUDE_CODE_SESSION_ATTENDED -ceq '0') { exit 0 }
 # A /clear or compaction can happen mid-turn; its next Stop starts the listener. Starting one
 # here would report that busy session idle and could deliver a wake into the running turn.
 if ($event -cne 'Stop' -and -not ($event -ceq 'SessionStart' -and (Field 'source') -cin 'startup', 'resume')) { exit 0 }

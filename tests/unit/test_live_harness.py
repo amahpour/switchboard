@@ -54,6 +54,13 @@ def test_a_quota_is_exhausted_only_at_zero_or_by_its_message() -> None:
         ("claude", "This command requires approval\n Do you want to proceed?\n ❯ 1. Yes\n   4. No\n"),
         ("codex", "Would you like to run the following command?\n  1. Yes, proceed (y)\n"),
         ("devin", "Run `git log`?\n❭ 1 Yes  (Approve once)\n↵ confirm · esc cancel\n"),
+        # recorded from Cursor Agent 2026.10.18 asking about switchboard's own tool, 2026-10-22 (#394)
+        (
+            "cursor",
+            'switchboard-https: switchboard_join\n  {\n    "room": "#build"\n  }\n Run this MCP tool?\n'
+            " → Run (once) (y)\n   Allowlist MCP Tool (tab)\n   Reject & propose changes (p)\n"
+            "   Skip (esc or n)\n",
+        ),
     ],
 )
 def test_an_approval_prompt_is_recognised_so_the_driver_declines_it(harness: str, prompt: str) -> None:
@@ -267,6 +274,39 @@ def test_cursors_project_config_reads_the_address_and_token_from_the_environment
     hooks = json.dumps(cursor.project_hooks(plugin))
     assert "CURSOR_PLUGIN_ROOT" not in hooks and str(plugin) in hooks
     assert cursor.argv(False)[:3] == ["agent", "--model", "auto"]
+
+
+def test_cursors_project_permissions_allow_switchboards_tools_and_the_scratch_script_only() -> None:
+    """Approving the server (``agent mcp enable``) doesn't approve its tools: the first live run stopped at
+    "Run this MCP tool?" on ``switchboard_join`` (#394). Fails if a tool is missing from the allow rules, if
+    a broad rule creeps in (a wildcard server or tool, a bare ``Shell(sh)``, a read or write rule), or if
+    the launch switches approvals off."""
+    cli = cursor.project_cli()
+    assert set(cli) == {"permissions"} and cli["permissions"]["deny"] == []
+    allow = cli["permissions"]["allow"]
+    assert [a for a in allow if a.startswith("Mcp(")] == [
+        f"Mcp(switchboard-https:switchboard_{t})" for t in cursor.TOOLS
+    ]
+    assert len(cursor.TOOLS) == 11 and {"join", "say", "wait", "status"} <= set(cursor.TOOLS)
+    assert [a for a in allow if not a.startswith("Mcp(")] == ["Shell(sh hold.sh)"]
+    assert not any("*" in a for a in allow), allow
+    assert not {"--force", "--yolo", "--approve-mcps", "--sandbox"} & set(
+        cursor.argv(False) + cursor.argv(True)
+    )
+
+
+def test_cursors_mid_task_paths_follow_what_its_hooks_can_do() -> None:
+    """While every tool hook of the Cursor plugin matches switchboard's own tools only, a shell command runs
+    none, and a message for a busy session reaches it with its next switchboard call (``say``, ``read``,
+    ``wait``) or as hook context after one, as for Devin (seen live, #394). Fails if the live test expects
+    that once a tool hook matches other tools too (as Claude Code's and Codex's do, #422): then only
+    ``hook_ctx`` is right, and a looser set would pass a plugin that no longer delivers after a shell call."""
+    hooks = cursor.project_hooks(REPO / "plugins" / "cursor")["hooks"]
+    events = ("preToolUse", "postToolUse", "postToolUseFailure")
+    matchers = [g.get("matcher") for ev in events for g in hooks[ev]]
+    only_switchboard = all(m is not None and m.startswith("MCP:switchboard_") for m in matchers)
+    expected = {"say", "read", "wait", "hook_ctx"} if only_switchboard else {"hook_ctx"}
+    assert set(cursor.CursorRun.mid_paths) == expected, (matchers, cursor.CursorRun.mid_paths)
 
 
 def test_the_drift_check_names_the_files_that_changed() -> None:

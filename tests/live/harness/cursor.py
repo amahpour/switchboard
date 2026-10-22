@@ -7,8 +7,11 @@ The address and the token reach both the server entry and the hooks through the 
 a file or a command line. Cursor runs with a **temp $HOME**, so the user's own ``~/.cursor`` (servers, hooks,
 plugins) is never read or written; its login is the real ``~/.config/cursor`` (``XDG_CONFIG_HOME``), the
 only thing of the real home it is given. The project's server is approved with ``agent mcp enable``, and
-the workspace is trusted per launch with ``--trust`` for the scratch folder only. The model is ``auto``,
-the only one a free account has.
+the workspace is trusted per launch with ``--trust`` for the scratch folder only. Approving the server is not
+approving its tools: Cursor asks "Run this MCP tool?" for each call, so the project's ``.cursor/cli.json``
+allows switchboard's eleven tools by name and the scratch script (``sh hold.sh``), as the Claude Code and
+Devin profiles do, and nothing else; any other prompt is declined with Esc. The model is ``auto``, the only
+one a free account has.
 
 Cursor's quota may be used up (the account here had none until 2026-10-22): the connection test needs no
 quota, and everything that asks the model for something is skipped, with the reason, when the account
@@ -29,6 +32,10 @@ from .tmuxdrv import REAL_HOME, clean_env
 REPO = Path(__file__).resolve().parents[3]
 MODEL = "auto"
 SERVER = "switchboard-https"
+TOOLS = ("join", "leave", "who", "say", "read", "wait", "pass", "away", "claim", "review", "status")
+# ``Mcp(<server>:<tool>)`` is the entry Cursor's own "Allowlist MCP Tool" writes; ``Shell(<command>)`` matches
+# a command that starts with those words, so this is the scratch script and not every ``sh``
+ALLOW = [f"Mcp({SERVER}:switchboard_{t})" for t in TOOLS] + ["Shell(sh hold.sh)"]
 
 
 def plugin_dir() -> Path:
@@ -47,6 +54,12 @@ def project_hooks(plugin: Path) -> dict:
     return json.loads(
         (plugin / "hooks" / "hooks.json").read_text().replace("${CURSOR_PLUGIN_ROOT}", str(plugin))
     )
+
+
+def project_cli() -> dict:
+    """``.cursor/cli.json``: this project's permissions only. Cursor merges them over the user's, which here
+    (a temp $HOME) are Cursor's defaults."""
+    return {"permissions": {"allow": list(ALLOW), "deny": []}}
 
 
 def argv(resume: bool) -> list[str]:
@@ -70,6 +83,10 @@ class CursorRun(Run):
     binaries = ("agent",)
     quit_command = "/quit"
     input_marker = "→"
+    # The plugin's tool hooks match switchboard's own tools only (``MCP:switchboard_.*``), so a shell command
+    # runs none of them: a message for a busy Cursor comes with its next switchboard call (its say() answer),
+    # or as hook context after one. Seen live on 2026-10-22: path ``say``, the batch confirmed (#394).
+    mid_paths = frozenset({"say", "read", "wait", "hook_ctx"})
     helpers = ("typescript",)  # Cursor's own language-server helper (an npx node process) outlives it
 
     def prepare(self) -> None:
@@ -80,6 +97,7 @@ class CursorRun(Run):
         cfg.mkdir()
         (cfg / "mcp.json").write_text(json.dumps(project_mcp(plugin), indent=1))
         (cfg / "hooks.json").write_text(json.dumps(project_hooks(plugin), indent=1))
+        (cfg / "cli.json").write_text(json.dumps(project_cli(), indent=1))
 
     def env(self) -> dict[str, str]:
         return {

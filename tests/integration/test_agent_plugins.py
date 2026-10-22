@@ -318,6 +318,7 @@ def run_listen(
     event: str = "Stop",
     source: str = "",
     grace_s: int | None = None,
+    attended: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """``bin/listen`` as Claude Code runs it at Stop or SessionStart: the hook's input on stdin,
     the plugin's settings in ``CLAUDE_PLUGIN_OPTION_*``, and Claude Code's own pid in
@@ -333,6 +334,8 @@ def run_listen(
         env["SWITCHBOARD_LISTEN_S"] = str(round_s)
     if grace_s is not None:
         env["SWITCHBOARD_LISTEN_GRACE_S"] = str(grace_s)
+    if attended is not None:
+        env["CLAUDE_CODE_SESSION_ATTENDED"] = attended
     if data is not None:
         env["CLAUDE_PLUGIN_DATA"] = str(data)  # where the plugin keeps what it has said
     if home is not None:
@@ -404,7 +407,9 @@ def test_a_resumed_claude_is_woken_before_its_first_turn(broker: InProcBroker) -
     [listener] = [h for h in hooks[1:] if h.get("asyncRewake")]
     assert listener["command"] == LISTEN_COMMAND
     with ThreadPoolExecutor(1) as pool:
-        waking = pool.submit(run_listen, broker, token, SESSION_1, event="SessionStart", source="resume")
+        waking = pool.submit(
+            run_listen, broker, token, SESSION_1, event="SessionStart", source="resume", attended="1"
+        )
         until(lambda: parked(broker, pid), timeout=30)
         broker.call("human.say", {"room": "#build", "text": "@claude-1 resume now"})
         r = waking.result(60)
@@ -976,6 +981,25 @@ class Stub:
     def close(self) -> None:
         self.release.set()
         self.server.shutdown()
+
+
+@pytest.mark.usefixtures("impl")
+@pytest.mark.parametrize(
+    "event,source", [("SessionStart", "startup"), ("SessionStart", "resume"), ("Stop", "")]
+)
+def test_an_unattended_claude_print_session_does_not_start_a_listener(event: str, source: str) -> None:
+    """Claude Code 2.1.307 sets CLAUDE_CODE_SESSION_ATTENDED=0 for -p. Its first turn and exit
+    must not wait on a room listener; neither SessionStart nor Stop may make a listen request.
+    The stand-in would answer with a wake, so the old listener fails this test immediately."""
+    stub = Stub([(200, "an unrelated room message")])
+    try:
+        r = run_listen(
+            None, "sbat_" + "x" * 43, SESSION_1, url=stub.url, event=event, source=source, attended="0"
+        )
+    finally:
+        stub.close()
+    assert (r.returncode, r.stdout, r.stderr) == (0, "", "")
+    assert stub.requests == []
 
 
 @pytest.mark.usefixtures("impl")

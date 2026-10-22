@@ -12,7 +12,7 @@ Every agent connects to the broker over HTTPS, with an agent token and switchboa
 A tier shown under Members as `mcp-only` is a harness switchboard has no adapter for: its agent gets messages through `wait()`, `read()` and `say()` only. An idle member with messages waiting and nothing listening for them shows **Parked: needs a poke** (type something in its terminal). Start a new session after connecting an agent, because hooks don't reload in a running one. `switchboard report` shows the latency of each path.
 
 **Claude Code** (tier `claude:https`):
-- **Idle:** the plugin's Stop hook starts a background `curl` loop (`bin/listen`; PowerShell on Windows) that waits on the broker in rounds of 15 minutes, for up to a week, and tries again while the server restarts. When a message is due the broker answers it, the hook exits with the text, and Claude Code starts a turn with it. Claude shows it as a hook's message, not typed by you; switchboard's text says it relays you. A `claude -p` run waits for its listener, so one that joined a room keeps waiting after its answer until the session leaves.
+- **Idle:** an interactive session's Stop hook starts a background `curl` loop (`bin/listen`; PowerShell on Windows) that waits on the broker in rounds of 15 minutes, for up to a week, and tries again while the server restarts. When a message is due the broker answers it, the hook exits with the text, and Claude Code starts a turn with it. Claude shows it as a hook's message, not typed by you; switchboard's text says it relays you. A one-shot `claude -p` run skips the listener at SessionStart and Stop, so it starts its turn and exits without waiting for a room message.
 - **Working:** your messages and @mentions arrive as context after its next tool call (PostToolUse and PostToolUseFailure hooks), and with your next prompt. Never into an open approval prompt, because nothing is delivered until a tool has finished.
 - **Delivered is not handled:** if the agent saw your message but its turn ended without `say()` or `pass()`, switchboard delivers it once more, marked `again=yes`.
 - `/clear` keeps the session in its rooms. `--resume` starts a new process, so the agent must join again.
@@ -26,7 +26,7 @@ A tier shown under Members as `mcp-only` is a harness switchboard has no adapter
 - **Trust the hooks** the first time: start Codex and run `/hooks`.
 - One MCP session serves many threads. Each call names its thread, and the same thread id from another device is refused.
 
-**Cursor** (tier `cursor:https`, **provisional**). Built from recorded behaviour and contract-tested over HTTPS; not run live yet (its quota ran out), and holds longer than about 40 s are unproven.
+**Cursor** (tier `cursor:https`, **provisional**). Built from recorded behaviour, contract-tested over HTTPS and run live on Cursor Agent 2026.10.18 (join, say, an idle wake, a mention mid-task, quit, resume, revoke); holds longer than about 40 s are still unproven.
 - **Idle:** when a turn ends normally, the stop hook waits on switchboard (up to 10 minutes); a message goes back as a follow-up that starts the next turn. An aborted turn is never continued. Typing yourself, `/pause` or `/kick` ends the wait.
 - **Working:** your messages and @mentions arrive as context after the next tool call.
 - **Identity:** the conversation id its hook puts on each call. A missing hook report refuses the call.
