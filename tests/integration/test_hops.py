@@ -17,7 +17,7 @@ from typing import Any
 
 import httpx
 import pytest
-from conftest import TEST_HUMAN, InProcBroker, SubprocBroker, cookie_of, human_cli_denial_word, ws_connect
+from conftest import TEST_HUMAN, InProcBroker, SubprocBroker, cookie_of, stand_in_agent, ws_connect
 
 from switchboard.broker import proc
 from switchboard.broker.peer import ProcessPeerPolicy
@@ -268,7 +268,7 @@ def test_hops_from_the_cli(subproc_broker: SubprocBroker) -> None:
 
 
 def test_hops_from_the_cli_without_test_trust(tmp_home: Path) -> None:
-    """The real peer check: raising refused either way; lowering allowed from a real terminal."""
+    """The real peer check refuses an agent CLI even when it lowers the hop limit."""
     (tmp_home / "config.toml").write_text(GUARD_ON_TOML)
     b = SubprocBroker(tmp_home, trust=False).start()
     try:
@@ -277,16 +277,11 @@ def test_hops_from_the_cli_without_test_trust(tmp_home: Path) -> None:
             assert web.get(f"/login?t={tok}").status_code == 303
             h = {"Origin": b.base, "X-Switchboard": "1"}
             assert web.post("/api/rooms", json={"name": "#build"}, headers=h).status_code == 200
-        word = human_cli_denial_word()
-        denied = word is not None
-        why = word or "web session"
+        agent = stand_in_agent(tmp_home)
         for args in (("cmd", "#build", "/hops", "30"), ("cmd", "#build", "/hops", "0")):
-            r = b.cli(*args)
-            assert r.returncode == 1 and "forbidden" in r.stderr and why in r.stderr, r.stderr
-        r = b.cli("cmd", "#build", "/hops", "3")
-        if denied:  # this pytest runs under an agent harness (or an ssh login): human_cli is refused too
-            assert r.returncode == 1 and "forbidden" in r.stderr and why in r.stderr
-        else:
-            assert r.returncode == 0 and "hop limit set to 3 (was 6)" in r.stdout, r.stderr
+            r = b.cli(*args, under=agent)
+            assert r.returncode == 1 and "forbidden" in r.stderr and "agent" in r.stderr, r.stderr
+        r = b.cli("cmd", "#build", "/hops", "3", under=agent)
+        assert r.returncode == 1 and "forbidden" in r.stderr and "agent" in r.stderr, r.stderr
     finally:
         b.kill()

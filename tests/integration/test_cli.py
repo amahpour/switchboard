@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 import pytest
-from conftest import SubprocBroker, child_env, human_cli_denial_word
+from conftest import SubprocBroker, child_env, stand_in_agent
 
 from switchboard import __version__, build_info
 from switchboard.broker import proc
@@ -114,11 +114,11 @@ def test_tail_follows_live_messages(subproc_broker: SubprocBroker) -> None:
 
 
 def test_without_test_trust_raising_commands_are_forbidden(tmp_home: Path) -> None:
-    """No --test-trust-uds: the real peer check applies. /resume needs the web session.
+    """No --test-trust-uds: an agent CLI is refused by the real peer check.
 
     The room exists (created through a web session), so every refusal below is
-    the role check itself, not a missing room. The result is the same whether
-    pytest runs in a real terminal, under CI, or inside an agent harness.
+    the role check itself, not a missing room. The stand-in agent makes the
+    verdict independent of who starts pytest or when it is orphaned.
     """
     import httpx
 
@@ -130,30 +130,19 @@ def test_without_test_trust_raising_commands_are_forbidden(tmp_home: Path) -> No
             h = {"Origin": b.base, "X-Switchboard": "1"}
             assert web.post("/api/rooms", json={"name": "#build"}, headers=h).status_code == 200
             assert web.post("/api/rooms/build/command", json={"text": "/pause"}, headers=h).status_code == 200
-        word = human_cli_denial_word()
-        denied = word is not None
-
-        # Raising verbs: refused either way. Outside an agent the reason is the
-        # missing web session; under an agent (or an ssh login), human_cli itself is refused first.
-        why = word or "web session"
+        agent = stand_in_agent(tmp_home)
+        # Raising verbs and lowering verbs are refused for the agent itself.
         for args in (("cmd", "#build", "/resume"), ("cmd", "#build", "/budget", "500")):
-            r = b.cli(*args)
-            assert r.returncode == 1 and "forbidden" in r.stderr and why in r.stderr, r.stderr
-        r = b.cli("create", "#other")
+            r = b.cli(*args, under=agent)
+            assert r.returncode == 1 and "forbidden" in r.stderr and "agent" in r.stderr, r.stderr
+        r = b.cli("create", "#other", under=agent)
         assert r.returncode == 1 and "forbidden" in r.stderr and "web session" in r.stderr, r.stderr
-        r = b.cli("login")  # the CLI child has no controlling terminal
+        r = b.cli("login", under=agent)  # the CLI child has no controlling terminal
         assert r.returncode == 1 and "forbidden" in r.stderr, r.stderr
-        if denied:
-            # this test process runs under an agent harness (or an ssh login): human_cli is refused too
-            r = b.cli("cmd", "#build", "/budget", "1")
-            assert r.returncode == 1 and "forbidden" in r.stderr and why in r.stderr
-            r = b.cli("say", "#build", "hi")
-            assert r.returncode == 1 and "forbidden" in r.stderr and why in r.stderr
-        else:
-            r = b.cli("cmd", "#build", "/budget", "1")  # lowering: allowed at human_cli
-            assert r.returncode == 0 and "budget set to 1" in r.stdout, r.stderr
-            r = b.cli("say", "#build", "hi")
-            assert r.returncode == 0, r.stderr
+        r = b.cli("cmd", "#build", "/budget", "1", under=agent)
+        assert r.returncode == 1 and "forbidden" in r.stderr and "agent" in r.stderr, r.stderr
+        r = b.cli("say", "#build", "hi", under=agent)
+        assert r.returncode == 1 and "forbidden" in r.stderr and "agent" in r.stderr, r.stderr
         assert b.cli("status").returncode == 0  # anon
     finally:
         b.kill()
@@ -219,15 +208,10 @@ def test_cli_through_a_relay_named_ssh_is_forbidden(tmp_home: Path) -> None:
             assert "allow_ssh_cli" not in r.stderr, r.stderr  # no setting relaxes it
         r = b.cli("tail", "#build", "--no-follow")
         assert "through the relay" not in r.stdout and "paused" not in r.stdout, r.stdout
-        # straight to broker.sock the same verb depends only on who runs pytest (the control case)
-        word = human_cli_denial_word()
-        r = b.cli("say", "#build", "direct")
-        if word is None:
-            assert r.returncode == 0, r.stderr
-        else:
-            assert (
-                r.returncode == 1 and word in r.stderr and "the process on the broker socket" not in r.stderr
-            )
+        # The direct agent CLI is refused for its own ancestry, not for the relay.
+        r = b.cli("say", "#build", "direct", under=stand_in_agent(tmp_home))
+        assert r.returncode == 1 and "agent" in r.stderr, r.stderr
+        assert "the process on the broker socket" not in r.stderr, r.stderr
     finally:
         if relay is not None:
             relay.kill()
