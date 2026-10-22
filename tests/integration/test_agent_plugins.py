@@ -971,7 +971,7 @@ def test_the_listener_ends_with_claude_code() -> None:
     try:
         with ThreadPoolExecutor(1) as pool:
             run = pool.submit(run_listen, None, "sbat_" + "x" * 43, SESSION_1, stub.url, owner.pid)
-            until(lambda: stub.again == ["0"])
+            until(lambda: stub.again == ["0"], timeout=30)
             owner.kill()
             owner.wait()
             t0 = time.monotonic()
@@ -1323,7 +1323,7 @@ class Gateway:
                 up = http.client.HTTPConnection("127.0.0.1", broker.port, timeout=60)
                 up.request("POST", self.path, body, headers)
                 if cut:
-                    until(parked)
+                    until(parked, timeout=30)
                     up.close()  # hang up on the broker mid-round
                     with gw.lock:
                         gw.cut += 1
@@ -1376,7 +1376,8 @@ def test_a_gateway_that_cuts_the_rounds_does_not_end_the_listener(broker: InProc
             run = pool.submit(run_listen, None, token, SESSION_1, gw.url)
             until(lambda: gw.cut == 2, timeout=30)
             until(
-                lambda: {s.id for s in broker.on_loop(broker.state.engine.sinks.parks_for, pid)} - cut_parks
+                lambda: {s.id for s in broker.on_loop(broker.state.engine.sinks.parks_for, pid)} - cut_parks,
+                timeout=30,
             )
             broker.call("human.say", {"room": "#build", "text": "@claude-1 are you still there"})
             r = run.result(60)
