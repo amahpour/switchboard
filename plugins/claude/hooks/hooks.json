@@ -6,12 +6,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/session",
+            "command": "cd \"${CLAUDE_PLUGIN_ROOT}/bin\"; ./session; exit $LASTEXITCODE",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/listen",
+            "command": "cd \"${CLAUDE_PLUGIN_ROOT}/bin\"; ./listen; exit $LASTEXITCODE",
             "asyncRewake": true,
             "timeout": 604800
           }
@@ -157,7 +157,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/listen",
+            "command": "cd \"${CLAUDE_PLUGIN_ROOT}/bin\"; ./listen; exit $LASTEXITCODE",
             "asyncRewake": true,
             "timeout": 604800
           }
@@ -169,7 +169,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/session",
+            "command": "cd \"${CLAUDE_PLUGIN_ROOT}/bin\"; ./session; exit $LASTEXITCODE",
             "timeout": 10
           }
         ]

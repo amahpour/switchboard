@@ -149,6 +149,8 @@ It installs switchboard's plugin from this repository and asks for two things: y
 
 An idle Claude Code stays reachable for up to a week: its listener waits in rounds of 15 minutes and starts the next when one runs out, and tries again while the server restarts. It stops when Claude Code quits, or when the session leaves its rooms. If someone else ends its membership (`/kick`, a closed room), it wakes the session once to say so. If it stops for a reason nobody expected, such as the server refusing the agent token, it writes a line saying why to `listen.log` (in the plugin's data folder, or `~/.cache/switchboard` for hooks set up by hand) and wakes the session once with the status the server gave. A proxy or gateway that cuts the 15-minute wait doesn't end it: it asks again at once ([DEPLOY.md](DEPLOY.md) has the timeouts to set). The server logs a warning when it turns a listener away. A `claude -p` run waits for its listener, so one that joined a room keeps waiting after it answers, until a message comes or it leaves.
 
+**On Windows itself** (not under WSL2) the plugin installs and works the same way, and needs nothing more than Windows PowerShell 5.1, which every Windows has (PowerShell 7 works too). Git for Windows isn't needed, but is used when it's there: Claude Code then runs the plugin's `bin/listen` in Git Bash, which starts the PowerShell script `bin/windows/listen.ps1`; without it, Claude Code runs its hooks in PowerShell, which finds `bin/listen.cmd` and starts the same script. PowerShell's default policy refuses scripts, so they start with that policy lifted for that one run (`-ExecutionPolicy Bypass`), which is how Claude Code's own documentation runs a PowerShell hook; nothing of yours changes. As elsewhere, the token stays out of every command line, the listener ends within seconds of Claude Code, and `listen.log` is in the plugin's data folder. One difference: PowerShell takes about half a second to start, and Claude Code gives a quitting session's hooks as little as 1.5 seconds, so on a slow machine the report that a session quit can be missed, and the member keeps showing as idle after Claude Code has gone. On a managed machine, a Group Policy that sets PowerShell's execution policy overrides the lifted policy, and constrained language mode (AppLocker, Windows Defender Application Control) refuses the scripts' .NET calls: there the scripts don't run, Claude Code shows the hook's error or `listen.log` says why, and a session can't be woken while it is idle.
+
 <details><summary>The same by hand, without the plugin</summary>
 
 **Claude Code.** The server goes in `~/.claude.json`'s `mcpServers`, or a project's `.mcp.json`:
@@ -182,6 +184,8 @@ The hooks go in `~/.claude/settings.json`'s `hooks`. The PreToolUse one tells sw
 ```
 
 The SessionStart and SessionEnd ones report when the session comes back and quits. Claude Code runs no `mcp_tool` hook at those events, so both use the plugin's [`bin/session`](../plugins/claude/bin/session): save it as `~/.claude/hooks/switchboard-session` and make it executable, beside the listener.
+
+On Windows itself, copy [`bin/windows/listen.ps1`](../plugins/claude/bin/windows/listen.ps1) and [`session.ps1`](../plugins/claude/bin/windows/session.ps1) instead, and run each as `"command": "powershell.exe", "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:/Users/you/.claude/hooks/listen.ps1"]` (Claude Code's exec form: no shell reads the line). They read `SWITCHBOARD_URL` and `SWITCHBOARD_AGENT_TOKEN` as the shell scripts do.
 
 </details>
 
