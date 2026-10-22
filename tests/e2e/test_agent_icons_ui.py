@@ -225,9 +225,10 @@ def choose(page: Page, harness: str, scheme: str, data: bytes, mime: str, name: 
 # ------------------------------------------------------------------ the heading and its tip
 def test_the_heading_and_its_tip_read_as_the_maintainer_wrote_them_and_work_by_keyboard(ui: UI) -> None:
     """The section's visible heading is upbeat, and a small info button beside it explains why, without
-    naming any company (its text is exactly the maintainer's), to anyone: it is reached by Tab, shows its text on focus, is the button's
-    accessible description (a screen reader reads it), closes on Esc without closing Settings, and shows
-    on hover too. Fails if the tip is only a title attribute, unreachable by keyboard, or another text."""
+    naming any company (its text is exactly the maintainer's): it is reached by Tab, shows its text on
+    focus, is the button's accessible description (a screen reader reads it), closes on Esc without
+    closing Settings, and shows on hover too. Fails if the tip is only a title attribute, unreachable by
+    keyboard, or another text."""
     page = ui.open()
     open_icons(page)
     expect(page.locator("#agent-icons-title")).to_have_text(HEADING)

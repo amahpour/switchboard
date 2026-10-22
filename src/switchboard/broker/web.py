@@ -30,9 +30,10 @@ is a password check for a signed-in browser. The owner's admin section: ``GET /a
 (a new one) and ``/remove``. Everyone signed in posts under their own name, and every
 person is a human to every agent.
 
-The agents' avatars (§29.10): ``GET /api/agent-icons`` (what is set and the limits), ``/api/agent-icons.css``
-(the page's stylesheet for them) and ``/api/agent-icons/{harness}/{scheme}`` (one image) answer any signed-in
-person; ``PUT`` the same path (the body is the file) and ``DELETE /api/agent-icons/{harness}`` are the owner's.
+The agents' avatars (§29.10): ``GET /api/agent-icons`` (what is set and the limits),
+``/api/agent-icons.css`` (the page's stylesheet for them) and ``/api/agent-icons/{harness}/{scheme}``
+(one image) answer any signed-in person; ``PUT`` the same path (the body is the file) and
+``DELETE /api/agent-icons/{harness}`` are the owner's.
 """
 
 from __future__ import annotations
