@@ -380,6 +380,14 @@ def test_the_palette_and_mentions_complete_without_sending() -> None:
     assert out["commands"] == [] and out["said"] == []
 
 
+def test_mention_popover_refreshes_when_members_arrive_after_typing() -> None:
+    """#505: a late members frame adds matching agents to either @ or @skill without a keystroke."""
+    out = run("mention_members_arrive_after_typing")
+    for query in ("@", "@skill"):
+        assert out[query] == {"before": 0, "after": 1, "visible": True, "input": query}
+    assert out["dismissed"] == 0  # Esc before the frame must not reopen the list
+
+
 def test_mention_popover_matches_any_part_of_a_name() -> None:
     """Issue #112: @skill must find darius-skills-agent (a word prefix), not just a name that
     starts with "skill"; the match is case-insensitive; a prefix match ranks above a mid-name

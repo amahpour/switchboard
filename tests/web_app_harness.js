@@ -812,6 +812,31 @@ const SCENARIOS = {
                            mention: mention, esc: esc, commands: w.server.commands, said: w.server.said });
   },
 
+  // #505: typing before members arrive must open (or fill) the mention list when their frame arrives.
+  async mention_members_arrive_after_typing() {
+    const results = {};
+    for (const query of ['@', '@skill']) {
+      const { w, ws } = await buildRoom([]);
+      type(w, query);
+      const before = findAll(w.$('mentions'), function (n) { return n.id === 'men-darius-skills-agent'; }).length;
+      ws.deliver({ t: 'members', room: '#build', members: [Object.assign({}, MEMBERS[0], { name: 'darius-skills-agent' })] });
+      await settle();
+      results[query] = {
+        before: before,
+        after: findAll(w.$('mentions'), function (n) { return n.id === 'men-darius-skills-agent'; }).length,
+        visible: !w.$('mentions').classList.contains('hidden'),
+        input: w.$('input').value,
+      };
+    }
+    const { w, ws } = await buildRoom([]);
+    type(w, '@skill');
+    key(w.$('input'), 'Escape');
+    ws.deliver({ t: 'members', room: '#build', members: [Object.assign({}, MEMBERS[0], { name: 'darius-skills-agent' })] });
+    await settle();
+    results.dismissed = findAll(w.$('mentions'), function (n) { return n.id === 'men-darius-skills-agent'; }).length;
+    return results;
+  },
+
   // Issue #112: the @ popover matches any part of a name, ranked exact, whole-name prefix,
   // word prefix (split on "-"/"_"), then substring; case-insensitively; a prefix match ranks
   // above a mid-name one even when the mid-name match is online and the prefix match isn't;
