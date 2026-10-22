@@ -53,7 +53,6 @@ class Run:
     wake_paths = frozenset({"stop_followup"})  # a message that wakes an idle session
     mid_paths = frozenset({"hook_ctx"})  # a message that reaches a busy one
     quit_command = "/exit"
-    has_subagents = False  # a subagent test applies (the harness runs the session's hooks for one)
     resume_needs_prompt = True  # a resumed session is back only once it has been given a prompt
     helpers: tuple[str, ...] = ()  # words in the command line of a process the CLI itself leaves behind
 

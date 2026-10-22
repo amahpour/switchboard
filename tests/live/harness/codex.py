@@ -107,7 +107,6 @@ class CodexRun(Run):
     binaries = ("codex",)
     quit_command = "/quit"
     input_marker = "›"
-    has_subagents = True
 
     def prepare(self) -> None:
         self.codex_home = self.base / "codex-home"

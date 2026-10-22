@@ -67,7 +67,6 @@ class ClaudeRun(Run):
     harness = "claude"
     tier = "claude:https"
     binaries = ("claude",)
-    has_subagents = True
     resume_needs_prompt = False  # SessionStart reports a resume and starts the listener (#412)
 
     def prepare(self) -> None:

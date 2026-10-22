@@ -17,10 +17,12 @@ import subprocess
 import time
 from pathlib import Path
 
-_PW = pwd.getpwuid(os.getuid())
-# read from the password database, not the environment: tests/conftest.py points $HOME at a temp dir
-REAL_HOME = _PW.pw_dir
-REAL_USER = _PW.pw_name
+try:
+    # read from the password database, not the environment: tests/conftest.py points $HOME at a temp dir
+    _PW = pwd.getpwuid(os.getuid())
+    REAL_HOME, REAL_USER = _PW.pw_dir, _PW.pw_name
+except KeyError:  # a container user with no passwd entry: the live tests are skipped there anyway
+    REAL_HOME, REAL_USER = os.environ.get("HOME", "/"), os.environ.get("USER", "user")
 
 
 def clean_env(path: str, **extra: str) -> dict[str, str]:
