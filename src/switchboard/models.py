@@ -263,6 +263,9 @@ class Member:
     status_line_stale: bool = False
     status_line_remaining_s: float | None = None
     claims: tuple[dict[str, Any], ...] = ()  # advisory outside work held by this membership (§46)
+    # the display name of the person it belongs to (#496, §29.10): its device's token's person. None
+    # when that can't be worked out, and the page and who() then say nothing. Set by member_rows
+    owner: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

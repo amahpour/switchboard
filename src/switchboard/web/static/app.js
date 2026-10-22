@@ -717,6 +717,20 @@
     return c;
   }
 
+  // Whose an agent is (#496, §29.10): m.owner, the display name the broker worked out from its
+  // device's token, or null when it could not (then nothing is shown, never a guess). The Inspector
+  // always names it; Members only on a switchboard with more than one person, where it tells
+  // something: with one, every agent is that person's.
+  function ownerLine(m, long) {
+    if (!m.owner) return null;
+    const p = long ? el('p', 'insp-owner') : el('span', 'm-owner');
+    p.append('Owner: ', el('strong', null, m.owner));
+    if (long && m.host) p.append(' · device ' + m.host);
+    return p;
+  }
+
+  function showOwners() { return state.everyone.length > 1; }
+
   // ------------------------------------------------------------- log rows
   // An @mention of the viewer, from an agent or from another person (#418): m.mentions is what
   // the broker matched against the room's agents and people. Never the viewer's own message,
@@ -1260,7 +1274,10 @@
     if (m.held) st += ' · held';
     const chips = el('span', 'm-chips');
     chips.append(tierChip(m));
-    main.append(nameLine, el('span', 'm-status', st), chips);
+    const owner = showOwners() ? ownerLine(m, false) : null;
+    main.append(nameLine);
+    if (owner) main.append(owner);
+    main.append(el('span', 'm-status', st), chips);
     if (m.status_line) {
       const work = el('span', 'm-work', m.status_line);
       if (statusLineStale(m)) work.append(el('span', 'm-work-stale', 'Stale'));
@@ -1866,6 +1883,11 @@
     }
     const idText = el('div');
     idText.append(nameH, el('p', 'insp-status', statusWord(m) + since + ' · ' + harnessOf(m.harness)[1]));
+    const owner = ownerLine(m, true);
+    if (owner) {
+      owner.id = 'insp-owner';
+      idText.append(owner);
+    }
     // the chips get the pane's full width (InspectorStates.dc), so tier + host + Held fit on one row;
     // under them, what the tier means, which a phone can't hover for (#211)
     const how = el('p', 'insp-tier-how', tierHow(m));
@@ -2771,8 +2793,11 @@
       if (f.room === state.active) renderBoard();
     } else if (f.t === 'people') {
       // who is on this switchboard, and who has a page open (#354): the People list
+      const owners = showOwners();
       state.everyone = Array.isArray(f.people) ? f.people.filter(function (n) { return typeof n === 'string'; }) : [];
       state.online = new Set(Array.isArray(f.online) ? f.online : []);
+      // a second person arriving (or the second leaving) shows (or hides) each agent's owner in Members
+      if (showOwners() !== owners) renderBuddies();
       renderRoomPeople();
       renderComposerMentions();  // who can be @mentioned (and their dot in the popover) changed
       if (state.pop && state.pop.kind === 'mentions') updatePopover();
