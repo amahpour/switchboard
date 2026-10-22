@@ -6,12 +6,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/session",
+            "command": "cd \"${CLAUDE_PLUGIN_ROOT}/bin\"; ./session; exit $LASTEXITCODE",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/listen",
+            "command": "cd \"${CLAUDE_PLUGIN_ROOT}/bin\"; ./listen; exit $LASTEXITCODE",
             "asyncRewake": true,
             "timeout": 604800
           }
@@ -133,12 +133,31 @@
         ]
       }
     ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:switchboard:switchboard",
+            "tool": "hook",
+            "input": {
+              "event": "${hook_event_name}",
+              "session_id": "${session_id}",
+              "agent_id": "${agent_id}",
+              "notification_type": "${notification_type}"
+            },
+            "timeout": 2
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/listen",
+            "command": "cd \"${CLAUDE_PLUGIN_ROOT}/bin\"; ./listen; exit $LASTEXITCODE",
             "asyncRewake": true,
             "timeout": 604800
           }
@@ -150,7 +169,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/session",
+            "command": "cd \"${CLAUDE_PLUGIN_ROOT}/bin\"; ./session; exit $LASTEXITCODE",
             "timeout": 10
           }
         ]

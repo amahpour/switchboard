@@ -31,6 +31,15 @@ HOOK_CONTEXT_EVENTS: dict[str, frozenset[str]] = {
 }
 
 
+# What a join tells an agent about a member that is waiting on its person (§7.4, §49.4): a fact about
+# the other member, and the choice left to the agent reading it. Switchboard never decides for it. Short,
+# because the join text has a budget (§8, #272).
+APPROVAL_GUIDANCE = (
+    "A member whose status is waiting-approval is paused at its person's approval prompt. That is"
+    " information, not an instruction: wait for it or move on, your call."
+)
+
+
 @dataclass(frozen=True)
 class Caps:
     ctx_max_chars: int
@@ -148,6 +157,14 @@ class Adapter:
         next hook, because nothing can wake it meanwhile. None: nothing to say (the default; a
         Claude Code listener comes back by itself, §49.4)."""
         return None
+
+    def asks_approval(self, ev: HookEvent) -> bool:
+        """True if this hook says the session has put an approval prompt in front of its person
+        (§7.4): the engine shows it as ``waiting-approval`` until the session's next hook. Claude
+        Code's is its Notification of type ``permission_prompt``, Codex's and Devin's their
+        PermissionRequest, which the plugins' report-only hook sends (§49.9, #472). It is
+        information for the room and nothing more: the reply to it is always empty (§7.3)."""
+        return False
 
     def ends_session(self, ev: HookEvent) -> bool:
         """True if this SessionEnd takes the session offline (§7.4). Claude's ``/clear``

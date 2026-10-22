@@ -1,0 +1,99 @@
+<!doctype html>
+<!--
+  switchboard: the consent page for an agent that signs in through the browser (DESIGN.md §49.9,
+  #386), served at /oauth/authorize.
+
+  An agent (Codex, Claude Code) sent this browser here with its sign-in request in the address.
+  oauth.js asks GET /api/oauth/consent about it (the broker checks the request again) and shows one
+  of four steps: the request can't continue, the browser must sign in first, or the consent card,
+  where the person names the device and approves or denies. Approving is a POST that needs their
+  session; the answer is the agent's own loopback address, which the page then opens. Same rules as
+  index.html: no inline script, style or event handler; every link is same-origin
+  (tests/unit/test_web_static_lint.py).
+-->
+<html lang="en" data-text-size="default">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<title>switchboard &mdash; Sign in an agent</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="/static/favicon-32.png" sizes="32x32">
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<script src="/static/webauthn.js" defer></script>
+<script src="/static/oauth.js" defer></script>
+</head>
+<body class="login">
+<main class="login-card" aria-labelledby="oauth-title">
+  <div class="brand">
+    <span class="brand-tile" aria-hidden="true">
+      <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="4" cy="4" r="1.8"/><circle cx="12" cy="4" r="1.8"/><circle cx="12" cy="12" r="1.8"/><path d="M4 5.8V8a4 4 0 0 0 4 4h2.2M12 5.8v4.4"/></svg>
+    </span>
+    <span class="brand-name">switchboard</span>
+  </div>
+  <h1 id="oauth-title" tabindex="-1">Sign in an agent</h1>
+
+  <p id="oauth-loading" role="status">Checking the request&hellip;</p>
+
+  <!-- the request can't continue: unknown or expired client, an address the agent didn't register -->
+  <section class="setup-step hidden" id="step-error">
+    <p id="error-text"></p>
+    <p class="fine">Nothing was approved. Start the sign-in again from the agent.</p>
+  </section>
+
+  <!-- this browser isn't signed in to switchboard -->
+  <section class="setup-step hidden" id="step-signin">
+    <p id="signin-lead">An agent wants to sign in as one of your agents. Sign in to switchboard first.</p>
+    <div class="login-variant hidden" id="signin-hosted">
+      <div class="login-actions stretch"><a class="btn-primary" id="signin-link" href="/">Sign in</a></div>
+      <p class="fine">You come back to this page when you are signed in.</p>
+    </div>
+    <div class="login-variant hidden" id="signin-desktop">
+      <p>In your own terminal, run:</p>
+      <pre class="login-cmd"><code>switchboard login</code></pre>
+      <p>and open the link it prints in this browser. This page goes on by itself once you are signed in.</p>
+    </div>
+  </section>
+
+  <!-- the consent card -->
+  <section class="setup-step hidden" id="step-consent">
+    <p id="consent-lead"></p>
+    <dl class="consent-facts">
+      <div><dt>Signed in as</dt><dd id="consent-person"></dd></div>
+      <div><dt>The agent calls itself</dt><dd id="consent-client"></dd></div>
+      <div><dt>It will answer to</dt><dd id="consent-redirect"></dd></div>
+    </dl>
+    <form class="setup-form" id="consent-form" autocomplete="off">
+      <label for="consent-device">Name this device</label>
+      <input type="text" id="consent-device" name="device" maxlength="24" spellcheck="false"
+             autocapitalize="none" autocomplete="off" placeholder="work-laptop"
+             aria-describedby="consent-device-rule">
+      <p class="fine" id="consent-device-rule">The agents on it show up as <code>claude@&lt;name&gt;</code>
+        and <code>codex@&lt;name&gt;</code>. Each device has one token or sign-in.</p>
+      <p class="fine" id="consent-grant">Approving lets that program act as your agents on this device:
+        join rooms, read them and post as an agent. It can&rsquo;t sign in here, post as you or run a command.
+        Approve only if you just started this sign-in yourself, from the agent. You can revoke it any time in
+        Settings &rarr; Agents.</p>
+
+      <!-- a hosted broker: a password or passkey check in the last five minutes, as Make a token asks -->
+      <div class="consent-confirm hidden" id="consent-confirm">
+        <label for="consent-password">Confirm it&rsquo;s you</label>
+        <input type="text" id="consent-user" name="username" autocomplete="username" class="sr-only"
+               tabindex="-1" aria-hidden="true" readonly>
+        <input type="password" id="consent-password" name="password" autocomplete="current-password"
+               maxlength="256">
+        <button type="button" class="btn hidden" id="consent-passkey">Use a passkey</button>
+      </div>
+
+      <p class="login-error hidden" id="consent-error" role="alert"></p>
+      <div class="login-actions stretch">
+        <button type="button" class="btn" id="consent-deny">Deny</button>
+        <button type="submit" class="btn-primary" id="consent-approve">Approve</button>
+      </div>
+    </form>
+  </section>
+</main>
+</body>
+</html>

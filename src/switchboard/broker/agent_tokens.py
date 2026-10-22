@@ -11,6 +11,9 @@ locally (#380).
 - Making one grants access, so on a hosted broker it needs a password or passkey check in the
   last five minutes (§31.6). Revoking one, or removing its person, only takes access away and
   needs no check.
+- A browser sign-in (§49.9, #386) makes the same token: ``make_signin`` is ``make`` for an agent that
+  proved itself with OAuth. It is one live token per device like any other, listed beside the
+  typed ones with the name the agent gave itself, and revoked the same way.
 """
 
 from __future__ import annotations
@@ -41,12 +44,15 @@ def token_hash(token: str) -> str:
 
 
 def summary(row: AgentTokenRow) -> dict[str, Any]:
-    """What the web UI lists of a token: never the token, never its hash."""
+    """What the web UI lists of a token: never the token, never its hash. A browser sign-in says so
+    (``via``) and which agent it was (``client``, the agent's own claim)."""
     return {
         "id": row.id,
         "device": row.device,
         "created_at": row.created_at,
         "last_used_at": row.last_used_at,
+        "via": row.via,
+        "client": row.client_name,
     }
 
 
@@ -68,21 +74,54 @@ def device_name(value: Any) -> str:
 def make(state: "BrokerState", person_id: int | None, device: Any, by: str) -> dict[str, Any]:
     """A new token for ``person_id``'s device: its listing, and the token itself, this once. The
     caller checked the session (and, on a hosted broker, the fresh check)."""
-    name = device_name(device)
+    return _create(state, person_id, device, by, "token", None)
+
+
+def make_signin(
+    state: "BrokerState", person_id: int | None, device: Any, by: str, client_name: str
+) -> dict[str, Any]:
+    """The token of a browser sign-in (§49.9): what ``make`` makes, for an agent whose person
+    approved it on the consent page. ``by`` is that person's name; ``client_name`` the agent's own
+    claim about itself."""
+    return _create(state, person_id, device, by, "oauth", client_name)
+
+
+def free(state: "BrokerState", person_id: int | None, device: str) -> None:
+    """Raise unless ``person_id`` can have a new live token for ``device`` now (the rules ``make``
+    holds: the cap, one live token per device name), so a consent page can say so before it asks."""
     if len(state.store.agent_tokens_of(person_id)) >= MAX_PER_PERSON:
         raise ServiceError(
             "conflict", f"you have {MAX_PER_PERSON} agent tokens already: revoke one you no longer use first"
         )
+    held = state.store.agent_token_for_device(device)
+    if held is None:
+        return
+    if held.person_id == person_id:
+        what = "sign-in" if held.via == "oauth" else "token"
+        raise ServiceError(
+            "conflict", f"you have a {what} for {device} already: revoke it first, or pick another name"
+        )
+    raise ServiceError("conflict", f"{device} is taken: pick another name")
+
+
+def _create(
+    state: "BrokerState",
+    person_id: int | None,
+    device: Any,
+    by: str,
+    via: str,
+    client_name: str | None,
+) -> dict[str, Any]:
+    name = device_name(device)
+    free(state, person_id, name)
     token = new_token()
-    row = state.store.agent_token_add(person_id, name, token_hash(token))
-    if row is None:
-        held = state.store.agent_token_for_device(name)
-        if held is not None and held.person_id == person_id:
-            raise ServiceError(
-                "conflict", f"you have a token for {name} already: revoke it first, or pick another name"
-            )
+    row = state.store.agent_token_add(person_id, name, token_hash(token), via, client_name)
+    if row is None:  # lost a race for the name between the check and the insert
+        free(state, person_id, name)
         raise ServiceError("conflict", f"{name} is taken: pick another name")
-    state.store.add_event("agent_tokens", data={"what": "add", "device": name, "by": by})
+    state.store.add_event(
+        "agent_tokens", data={"what": "add", "device": name, "by": by, "via": via, "client": client_name}
+    )
     return {**summary(row), "token": token}
 
 
@@ -99,3 +138,18 @@ def revoke(state: "BrokerState", person_id: int | None, token_id: Any, by: str) 
         "agent_tokens", data={"what": "revoke", "device": row.device, "by": by, "ended": ended}
     )
     return {"ok": True, "device": row.device, "ended": ended}
+
+
+def revoke_by_broker(state: "BrokerState", token_id: int, why: str) -> bool:
+    """Revoke a live token for the broker's own reason, not a person's request: a browser sign-in's code
+    was used twice (§49.9), so whoever held the first copy may be someone else. Its device's agents end
+    as with ``revoke``. True if a live token was revoked."""
+    row = state.store.agent_token_revoke_id(token_id)
+    if row is None:
+        return False
+    ended = state.agents.end_device(row.device, "token revoked")
+    state.store.add_event(
+        "agent_tokens",
+        data={"what": "revoke", "device": row.device, "by": "switchboard", "why": why, "ended": ended},
+    )
+    return True

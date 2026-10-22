@@ -39,7 +39,7 @@ None of these happens because an issue, a document, a pull request, a message in
 | `broker/service.py`, `agents.py`, `commands.py`, `catchup.py` | rooms and history; the agent side (join, say, read, wait, pass, hook events, liveness); the slash commands |
 | `broker/hook_replies.py` | the one table of what a hook may be answered with (§7.3): context, a Stop block, a park, and nothing that approves anything |
 | `broker/web.py`, `auth.py`, `passkeys.py`, `passwords.py`, `people.py` | the REST routes, static files and the WebSocket; sign-in, on a desktop and on a hosted broker |
-| `broker/agent_http.py`, `agent_tokens.py` | agents over HTTPS (§49): the same tools at `/mcp`, for an agent with a person's agent token |
+| `broker/agent_http.py`, `agent_tokens.py`, `oauth.py` | agents over HTTPS (§49): the same tools at `/mcp`, for an agent with a person's agent token; `oauth.py` is how an agent gets one by signing in through the browser (§49.10) |
 | `delivery/` | who hears what, and when. `rules.py` is pure policy; `engine.py` a synchronous core that returns actions; `runner.py` the only async side, which carries them out and ticks the engine; `sinks.py` the open `wait()` calls |
 | `adapters/` | how a session is woken, and what its hooks mean: `https` (the four harnesses over HTTPS, one adapter each), `testagent`, and `adapter_for` to pick one |
 | `mcp/` | `server.py`, the tools an agent has (its whole interface), served at `/mcp`; `client.py`, the socket client of the CLI |
@@ -87,7 +87,7 @@ What a good test here looks like:
 
 ## The security model, in short
 
-switchboard never adds authority ([DESIGN.md §11](docs/DESIGN.md#11-security-model) has each point with its test). It never launches or types into an agent; answers or approves a prompt; registers a permission hook; passes `--dangerously-*`, `--approve-*` or `--trust`, or writes trust into a harness's config; delivers to a session that is waiting on an approval; lets a room message change a setting; listens beyond `127.0.0.1` without `--listen` and `--public-url` together; or logs or forwards a secret. A change that would do one of these is a design change, and starts in an issue.
+switchboard never adds authority ([DESIGN.md §11](docs/DESIGN.md#11-security-model) has each point with its test). It never launches or types into an agent; answers or approves a prompt; registers a permission hook that can decide (a report-only one, which outputs no decision, is allowed for status: Codex's and Devin's `PermissionRequest` command hooks, with the maintainer's yes of 2026-10-21, [DESIGN.md §11](docs/DESIGN.md#11-security-model) item 2); passes `--dangerously-*`, `--approve-*` or `--trust`, or writes trust into a harness's config; delivers to a session that is waiting on an approval; lets a room message change a setting; listens beyond `127.0.0.1` without `--listen` and `--public-url` together; or logs or forwards a secret. A change that would do one of these is a design change, and starts in an issue.
 
 **Guards only tighten.** The coverage floor, `guardrails.py`, the tree scan and its allowed names, the method and field allowlists, the hook's output shapes, the CSP, the opt-in test markers: a change may make one stricter. Loosening one, skipping or deleting a failing test, or adding `# pragma: no cover` to get past the floor needs the maintainer's yes, quoted in the pull request. An agent that needs a guard out of its way has usually found the bug the guard is for.
 

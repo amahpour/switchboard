@@ -148,8 +148,9 @@ def test_the_backup_is_written_before_the_first_statement(tmp_path: Path) -> Non
     con.set_trace_callback(None)
     con.close()
     alters = [ok for sql, ok in seen if sql.lstrip().upper().startswith(("ALTER", "CREATE TABLE"))]
-    # ALTERs and CREATEs per step, v2 to v30 (29 drops two tables and alters none; 30 drops thirteen columns)
-    per_step = [3, 5, 1, 1, 2, 2, 2, 1, 1, 1, 2, 2, 2, 1, 2, 1, 2, 1, 1, 1, 1, 5, 1, 1, 1, 3, 13]
+    # ALTERs and CREATEs per step, v2 to v31 (29 drops two tables and alters none; 30 drops thirteen columns;
+    # 31 adds two columns and a table)
+    per_step = [3, 5, 1, 1, 2, 2, 2, 1, 1, 1, 2, 2, 2, 1, 2, 1, 2, 1, 1, 1, 1, 5, 1, 1, 1, 3, 13, 3]
     assert len(alters) == sum(per_step) and all(alters)
     assert dump(bak) == original
     c = sqlite3.connect(bak)
@@ -193,7 +194,7 @@ def test_migration_needs_a_backup_path(tmp_path: Path) -> None:
     original = make_v2(p)
     con = db.connect(p)
     with pytest.raises(
-        db.SchemaError, match="schema version 2 needs a migration to version 30, and a migration"
+        db.SchemaError, match="schema version 2 needs a migration to version 31, and a migration"
     ):
         db.migrate(con)
     con.close()

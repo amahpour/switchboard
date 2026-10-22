@@ -2138,6 +2138,27 @@ body.login {
 .login-actions.stretch > * { flex: 1 1 0; min-width: 0; }
 .login-error { margin: 0; color: var(--danger); font-weight: 500; }
 .login-error:empty { display: none; }
+/* the consent page (oauth.html, §49.9): who is signing in, what the agent calls itself, where it answers */
+.consent-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--side-border);
+  border-radius: 8px;
+  background: var(--side-bg);
+  font-size: calc(13px * var(--text-scale));
+}
+.consent-facts > div { display: flex; gap: 10px; align-items: baseline; }
+.consent-facts dt { flex: 0 0 9.5em; color: var(--muted); }
+.consent-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; font-weight: 600; color: var(--fg); }
+.consent-confirm { display: flex; flex-direction: column; gap: 8px; }
+.consent-confirm .btn { height: 34px; font-size: calc(13.5px * var(--text-scale)); }
+@media (max-width: 480px) {
+  .consent-facts > div { flex-direction: column; gap: 0; }
+  .consent-facts dt { flex: none; }
+}
 /* the claim page (setup.html, §31.3): one step at a time, a name for the passkey */
 .setup-step { display: flex; flex-direction: column; gap: 12px; }
 .setup-step h1:focus { outline: none; }
@@ -2842,13 +2863,15 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 }
 .board-card:hover { border-color: var(--input-border); }
 .board-card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-.board-card-top { display: flex; align-items: center; gap: 6px; }
-.board-label { font-weight: 700; font-variant-numeric: tabular-nums; }
+/* the row wraps rather than squeezing: in a narrow lane the agent's words ("waiting for approval", #472)
+   go on a second row, and the label and the words stay whole */
+.board-card-top { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
+.board-label { font-weight: 700; font-variant-numeric: tabular-nums; flex-shrink: 0; }
 /* a confirmed fix's check (#427): the theme's success green, at the end of the card's top row */
 .board-card-top .board-confirmed { margin-left: auto; color: var(--green); }
 /* whose move a card waits on, and whether that agent is busy (#407): the Members dot's colors */
 .board-pulse {
-  display: inline-flex; align-items: center; gap: 4px; margin-left: auto;
+  display: inline-flex; align-items: center; gap: 4px; margin-left: auto; white-space: nowrap;
   font-size: calc(11px * var(--text-scale)); color: var(--muted-2);
 }
 .board-pulse::before {
@@ -2857,6 +2880,7 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 .board-pulse.s-busy::before { background: var(--busy); animation: board-pulse 1.4s ease-in-out infinite; }
 .board-pulse.s-busy { color: var(--fg); font-weight: 600; }
 .board-pulse.s-waiting-approval::before { background: transparent; box-shadow: inset 0 0 0 2px var(--busy); }
+.board-pulse.s-waiting-approval { color: var(--amber-ink); font-weight: 600; }
 .board-pulse.s-offline::before, .board-pulse.s-starting::before {
   background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted);
 }

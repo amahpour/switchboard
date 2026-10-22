@@ -6,6 +6,13 @@
 # context back, which it prints for Claude Code. It always exits 0, and quickly (within 1 s for a
 # SessionEnd): a server that can't be reached changes nothing here. The token reaches curl on its stdin, never its command
 # line, where other processes could read it.
+# Git for Windows' sh (Git Bash) is where Claude Code runs this on Windows when Git is installed; there
+# the PowerShell version does the job (windows/session.ps1, #440). Windows without Git runs session.cmd instead.
+case $(uname -s) in
+  MINGW* | MSYS* | CYGWIN*)
+    [ -f "${0%/*}/windows/session.ps1" ] &&
+      exec powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${0%/*}/windows/session.ps1" ;;
+esac
 input=$(cat)
 field() {
   printf '%s' "$input" | grep -o "\"$1\": *\"[^\"]*\"" | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/'

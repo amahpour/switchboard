@@ -47,7 +47,7 @@ flowchart TB
 | **The tools**<br>`mcp/server.py` | The tool definitions, written once: `join`, `say`, `read`, `wait`, `pass` and a few more are the agent's whole interface, served at `/mcp`. | [§6](DESIGN.md#6-the-mcp-tools) |
 | **Hook replies**<br>`broker/hook_replies.py` | What a hook may be answered with, one table: context after a tool call, a continue at stop, and nothing else. The broker writes every reply from it. | [§7](DESIGN.md#7-hook-events-and-what-a-hook-may-be-answered-with) |
 | **Web UI**<br>`web/static/` | Plain JavaScript. Writes go over REST, live updates over a read-only WebSocket; Markdown becomes DOM nodes, never HTML strings. | [§29](DESIGN.md#29-the-native-web-ui-and-the-inspector-19), [§5.5](DESIGN.md#55-rest-and-websocket) |
-| **Agents over HTTPS**<br>`broker/agent_http.py`, `broker/agent_tokens.py`, `plugins/` | The tools at `/mcp`, for an agent with an agent token and nothing of switchboard's on its machine: the token names the person and the device, and the harness names the session: Codex's thread, or the Claude Code, Cursor or Devin session its PreToolUse hook reports. | [§49](DESIGN.md#49-agents-over-https-380) |
+| **Agents over HTTPS**<br>`broker/agent_http.py`, `broker/agent_tokens.py`, `broker/oauth.py`, `plugins/` | The tools at `/mcp`, for an agent with an agent token and nothing of switchboard's on its machine: the token names the person and the device, and the harness names the session: Codex's thread, or the Claude Code, Cursor or Devin session its PreToolUse hook reports. An agent can get its token by signing in through the browser (OAuth, `oauth.py` and the consent page) instead of being given one. | [§49](DESIGN.md#49-agents-over-https-380), [§49.10](DESIGN.md#4910-signing-an-agent-in-through-the-browser-386) |
 
 Also: `cli.py`; `install/`, which only removes what an old install wrote ([§23](DESIGN.md#23-implementation-notes-and-deviations-uninstall)); `envelope.py` ([§8.6](DESIGN.md#86-envelope-enveloperender_batchitems-header_ctx-peer_inline)); `claims.py` ([§47](DESIGN.md#47-advisory-claims-for-work-outside-a-room-293)); `store.py`, `db.py` and `models.py` ([§4](DESIGN.md#4-data-model-sqlite)); `guardrails.py` ([§11](DESIGN.md#11-security-model)).
 
@@ -61,7 +61,7 @@ Also: `cli.py`; `install/`, which only removes what an old install wrote ([§23]
 6. **Confirmed** only by evidence from the session that got it, such as the batch token in its next hook, or back to pending: duplicates are possible, skips are not ([§8.7](DESIGN.md#87-offers-confirmation-and-expiry-two-phase-ack-event-based)).
 7. **Answered** with `say()`, back to step 1, or `pass()`.
 
-All along, hooks report each session's state to `/mcp`, and nothing is delivered to a session waiting on an approval.
+All along, hooks report each session's state to `/mcp`, and nothing is delivered to a session waiting on an approval (Claude Code's Notification hook says when one is, and so does a report-only PermissionRequest hook in Codex's plugin and Devin's template, a command that prints nothing so it cannot approve, [DESIGN.md §49.9](DESIGN.md#499-an-open-approval-prompt-shown-to-the-room-472); the other agents see it in `who` and decide for themselves whether to wait).
 
 ## The shape to keep
 
@@ -71,7 +71,7 @@ From [CLAUDE.md](../CLAUDE.md). Each rule keeps some part easy to test or to cha
 - **Policy pure in `rules.py` and `claims.py`:** no store, clock or I/O, so each rule has a plain unit test.
 - **The engine synchronous:** it reads the store and a clock and returns actions, with no `await` and no network or process I/O, so every rule runs under a `FakeClock` and `tests/engine_sim.py` drives it through 200 seeds.
 - **Each harness's quirks in its own adapter:** the engine and broker ask the adapter rather than check the harness, so changing a harness touches one module. `tests/unit/test_engine_names_no_harness.py` holds the engine to it.
-- **What a hook may be answered with is one table:** `broker/hook_replies.py` holds the only shapes the broker writes back (context after a tool call, a continue at stop, `{}` for everything else), and `tests/unit/test_hook_invariants.py` checks every event against it, so no hook can be answered with an approval.
+- **What a hook may be answered with is one table:** `broker/hook_replies.py` holds the only shapes the broker writes back (context after a tool call, a continue at stop, `{}` for everything else), and `tests/unit/test_hook_invariants.py` checks every event against it, so no hook can be answered with an approval. The one permission hook the plugins register, Codex's and Devin's PermissionRequest, is a command that discards the answer, and `tests/unit/test_permission_hooks_static.py` holds it to that.
 - **A module's docstring names its DESIGN section** (`tests/unit/test_module_docstrings.py` checks every module), and a design change changes DESIGN.md (a new numbered section for a new piece).
 
 Beside these is the [security model](../CLAUDE.md#the-security-model-in-short) ([§11](DESIGN.md#11-security-model)): switchboard never adds authority, and guards only tighten.

@@ -1,0 +1,6 @@
+# A plugin is installed by a git checkout on the user's machine, and its scripts run where they land.
+# Git for Windows checks files out with CRLF line endings unless told otherwise (core.autocrlf=true is
+# its installer's default), and a shell script with them fails in Git Bash (#440): the scripts in a
+# plugin's bin folder stay LF. A .cmd file is the other way round: cmd.exe wants CRLF.
+plugins/*/bin/** text eol=lf
+*.cmd text eol=crlf

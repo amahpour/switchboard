@@ -5,6 +5,7 @@ what Codex 0.158.0 sends (``tests/fixtures/mcp_http/codex_*.json``, recorded in 
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import itertools
 import json
@@ -32,6 +33,25 @@ THREAD_B = "00000000-0000-4000-8000-0000000000a2"
 
 def make_token(b: InProcBroker, device: str = "laptop", person: int | None = None) -> str:
     return b.on_loop(agent_tokens.make, b.state, person, device, "alice")["token"]
+
+
+def test_stopping_broker_finishes_sse_shutdown_watcher(tmp_home: Path) -> None:
+    """A completed MCP response leaves an SSE watcher that must finish before its loop closes."""
+    b = InProcBroker(tmp_home).start()
+    client = Codex(b, make_token(b))
+    try:
+        assert client.start().status_code == 200
+        watcher = b.on_loop(
+            lambda: next(
+                task for task in asyncio.all_tasks() if task.get_coro().__name__ == "_shutdown_watcher"
+            )
+        )
+        assert not watcher.done()
+        b.stop()
+        assert watcher.done()
+    finally:
+        client.c.close()
+        b.stop()
 
 
 def sse_result(r: httpx.Response) -> dict[str, Any]:

@@ -26,7 +26,7 @@ import dataclasses
 from typing import Any
 
 from switchboard import __version__
-from switchboard.adapters.base import HOOK_CONTEXT_EVENTS, Adapter, Caps, PullAdapter
+from switchboard.adapters.base import APPROVAL_GUIDANCE, HOOK_CONTEXT_EVENTS, Adapter, Caps, PullAdapter
 from switchboard.config import Config
 from switchboard.models import (
     HookEvent,
@@ -37,6 +37,13 @@ from switchboard.models import (
     split_session_key,
 )
 
+# the Notification type of an open approval prompt in Claude Code (live, 2.1.305: 11 ms after the prompt's
+# PermissionRequest hook); the plugin's matcher and the broker both name it, and no other counts
+APPROVAL_NOTIFICATION = "permission_prompt"
+# Codex's and Devin's hook when they are about to ask their person to approve a tool (live, Codex 0.158.0
+# and Devin 3000.11.92, #472). It can approve or deny in the harness, so the plugins' hook for it is
+# report-only by construction (§11, §49.9): a command that discards the server's reply.
+APPROVAL_REQUEST = "PermissionRequest"
 CLAUDE_TIER = "claude:https"
 CODEX_TIER = "codex:https"
 CURSOR_TIER = "cursor:https"
@@ -118,6 +125,7 @@ class Listening(PullAdapter):
             " context after your tool calls, and"
             f' the rest at your next read("{room}"), wait("{room}", {self.caps(p).wait_cap_s}) or say().'
             " kind=human ones are from your user and carry their authority just the same."
+            f" {APPROVAL_GUIDANCE}"
         )
 
     def history_session_id(self, p: Participant, cfg: Config) -> tuple[str | None, str]:
@@ -178,6 +186,11 @@ class HttpsClaudeAdapter(Listening):
         # /clear keeps the session: the same id goes on (as Claude Code locally, §7.4)
         return ev.reason != "clear"
 
+    def asks_approval(self, ev: HookEvent) -> bool:
+        # Claude Code sends a Notification of type permission_prompt, with the PermissionRequest
+        # hook's event (which switchboard doesn't register, §11), when it puts the prompt up (#472)
+        return ev.ev == "Notification" and ev.notification == APPROVAL_NOTIFICATION
+
 
 class HttpsCodexAdapter(CodexMembership, Listening):
     """Codex over HTTPS, keyed by thread. Its Stop hook's ``decision: block`` continues the turn
@@ -213,6 +226,9 @@ class HttpsCodexAdapter(CodexMembership, Listening):
 
     def prompt_verdict(self, acked: bool) -> str | None:
         return "human_prompt"
+
+    def asks_approval(self, ev: HookEvent) -> bool:
+        return ev.ev == APPROVAL_REQUEST  # Codex's PermissionRequest hook, report-only (§49.9, #472)
 
     def stop_wait_lost(self, held_s: float) -> str | None:
         """Codex ends the call of its Stop hook for Esc, and also when the MCP server's
@@ -318,6 +334,7 @@ class HttpsDevinAdapter(Adapter):
             " switchboard when you stop; kind=human ones are from your user, relayed by switchboard rather"
             " than typed into your prompt, and carry their authority just the same. While you"
             " wait, your user can interject by typing and then pressing Enter on an empty line."
+            f" {APPROVAL_GUIDANCE}"
         )
 
     def history_session_id(self, p: Participant, cfg: Config) -> tuple[str | None, str]:
@@ -337,6 +354,9 @@ class HttpsDevinAdapter(Adapter):
 
     def starts_subagent(self, ev: HookEvent) -> bool:
         return ev.ev == "PreToolUse" and ev.subagent_bg
+
+    def asks_approval(self, ev: HookEvent) -> bool:
+        return ev.ev == APPROVAL_REQUEST  # Devin's PermissionRequest hook, report-only (§49.9, #472)
 
     def stop_continues(self, p: Participant) -> bool:
         return True

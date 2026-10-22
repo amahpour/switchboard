@@ -43,6 +43,7 @@ from switchboard.delivery.sinks import Sink, SinkRegistry
 from switchboard.models import (
     CONTINUE_PATHS,
     PULL_PATHS,
+    REPORT_ONLY_EVENTS,
     WATCHDOG_DONE,
     Action,
     Batch,
@@ -980,6 +981,18 @@ class Engine:
             self.wait_drops[p.id] = self.now()
         return []
 
+    def subagent_tool_ran(self, p: Participant) -> list[Action]:
+        """A tool finished inside a subagent of the session (#472). A subagent's hooks settle nothing for
+        the session (#446) except this: if the session is shown waiting on an approval prompt, a tool
+        running anywhere in it means the prompt was answered (Claude Code sends the prompt's Notification
+        with no subagent id even for a subagent's prompt, and no hook of its own when it is answered), so
+        the hold ends. Without it a prompt in a subagent that runs for minutes would keep the session
+        "waiting" long after the person approved. It never delivers, confirms or reports anything else."""
+        cur = self.store.get_participant(p.id)
+        if cur is None or cur.status != "waiting-approval":
+            return []
+        return self.set_status(cur, "busy", "hook:subagent")
+
     def close_conn_sinks(self, conn_id: int) -> list[Action]:
         out: list[Action] = []
         for s in self.sinks.for_conn(conn_id):
@@ -1141,7 +1154,9 @@ class Engine:
         out: list[Action] = []
         adapter = self.adapter(p)
         if adapter.other_thread(p, ev):
-            return None, []  # a subagent's hook must not change or take the session's messages
+            # a subagent's hook must not change or take the session's messages; the one thing a tool that
+            # finished in it says is that an approval prompt was answered (#472)
+            return None, self.subagent_tool_ran(p)
         self.lost_stops.pop(p.id, None)  # the session's own hook: it is reachable again
         was_idle = p.status in ("idle", "starting")
         upd: dict[str, Any] = {"hooks_seen_at": now, "last_seen": now}
@@ -1230,9 +1245,13 @@ class Engine:
         if E == "Stop" and not tainted and adapter.redeliver_on_stop(p, ev):
             out += self._redeliver(p)
 
-        # 4. status (hooks never touch waiting-approval, §7.4)
+        # 4. status (§7.4). A hook that says the session put an approval prompt up sets
+        # waiting-approval (information for the room, #472); the session's next hook of any kind says
+        # the prompt was answered or given up, so it clears it by the rule of its own event
         new, bump = None, False
-        if E in ("SessionStart",):
+        if adapter.asks_approval(ev):
+            new = "waiting-approval"
+        elif E in ("SessionStart",):
             new = "idle"
         elif E in ("UserPromptSubmit", "PostToolUse", "PostToolUseFailure"):
             new = "busy"
@@ -1244,8 +1263,10 @@ class Engine:
                 new = "offline"
         elif revived:
             new = "busy"  # any hook of a session taken offline for a dropped wait() says it is alive (#448)
+        elif p.status == "waiting-approval" and E not in REPORT_ONLY_EVENTS:
+            new = "busy"  # a hook with no status of its own (Devin's PreToolUse): the turn moved on
         p = self.store.get_participant(p.id) or p
-        if new is not None and (p.status != "waiting-approval" or new == "offline"):
+        if new is not None and (new != "waiting-approval" or p.status != "offline" or revived):
             out += self.set_status(p, new, f"hook:{E}", bump=bump)
             p = self.store.get_participant(p.id) or p
         elif mode_changed:

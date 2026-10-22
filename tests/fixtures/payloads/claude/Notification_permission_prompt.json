@@ -1,0 +1,13 @@
+{
+  "_source": "live claude 2.1.307 (haiku, default mode), #472, 2026-10-21; 2.1.305 sent the same",
+  "_note": "an open permission prompt: Claude Code fired PermissionRequest, which switchboard does not register (DESIGN.md section 11), and 11 ms later this. No tool_use_id, no tool name, no agent_id on the session's own prompt; the prompt is declined or approved without any further hook until the tool runs (PostToolUse) or the person types (UserPromptSubmit)",
+  "_unverified": false,
+  "session_id": "00000000-0000-4000-8000-00000000c200",
+  "transcript_path": "/ws/transcript.jsonl",
+  "cwd": "/ws",
+  "scratchpad_dir": "/tmp/scratch",
+  "prompt_id": "00000000-0000-4000-8000-00000000c207",
+  "hook_event_name": "Notification",
+  "message": "Claude needs your permission",
+  "notification_type": "permission_prompt"
+}

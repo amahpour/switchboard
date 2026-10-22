@@ -1907,7 +1907,10 @@
       notes.push(note('amber', 'hourglass', 'Parked — needs a poke', rest));
     }
     if (m.status === 'waiting-approval') {
-      notes.push(note('amber', 'hourglass', 'Waiting for approval', [' It is asking in its own terminal.']));
+      notes.push(note('amber', 'hourglass', 'Waiting for approval', [
+        ' Its person has a permission prompt open in its own terminal. The other agents see this and decide'
+        + ' whether to wait or move on.',
+      ]));
     }
     if (notes.length) attn.append(el('div', 'group-label', 'Needs attention'), ...notes);
 
@@ -3417,7 +3420,9 @@
   function buildSettingsAgents(panel) {
     panel.append(el('h3', null, 'Agents'),
       el('p', 'fine', 'An agent token lets the coding agents on one device reach this switchboard over HTTPS.'
-        + ' Make one for each device. It is for agents only: it can’t sign you in here, post as you or run a command.'));
+        + ' Make one for each device. It is for agents only: it can’t sign you in here, post as you or run a command.'
+        + ' An agent can also sign in from your browser (Codex: codex mcp login switchboard); that shows here too,'
+        + ' and Revoke ends it the same way.'));
     const body = el('div', 'settings-agents');
     body.id = 'settings-agents';
     panel.append(body);
@@ -3524,8 +3529,10 @@
     li.id = 'agent-token-' + t.id;
     const main = el('div', 'agent-token-main');
     const used = t.last_used_at ? 'last used ' + ago(t.last_used_at) : 'never used';
+    // a browser sign-in (§49.9) says which agent it was; the name is the agent's own claim
+    const how = t.via === 'oauth' ? 'signed in from ' + (t.client || 'an agent') + ' · ' : '';
     main.append(el('span', 'agent-token-device', t.device),
-      el('span', 'agent-token-meta', 'made ' + stamp(t.created_at) + ' · ' + used));
+      el('span', 'agent-token-meta', how + 'made ' + stamp(t.created_at) + ' · ' + used));
     li.append(main);
     const busy = state.agentTokenBusy === t.id;
     if (state.agentTokenArmed === t.id) {
@@ -3534,7 +3541,8 @@
       sure.id = 'agent-token-revoke-' + t.id;
       sure.dataset.focus = 'agent-token-revoke:' + t.id;
       sure.disabled = busy;
-      sure.setAttribute('aria-label', 'Revoke the token for ' + t.device + ': its agents stop working at once');
+      sure.setAttribute('aria-label', 'Revoke the ' + (t.via === 'oauth' ? 'sign-in' : 'token') + ' for ' + t.device
+        + ': its agents stop working at once');
       sure.addEventListener('click', function () { revokeAgentToken(t); });
       const keep = btn('btn', 'Keep');
       keep.id = 'agent-token-keep-' + t.id;
@@ -3550,7 +3558,7 @@
       const ask = btn('btn btn-danger-ghost', 'Revoke');
       ask.id = 'agent-token-ask-' + t.id;
       ask.dataset.focus = 'agent-token-ask:' + t.id;
-      ask.setAttribute('aria-label', 'Revoke the token for ' + t.device);
+      ask.setAttribute('aria-label', 'Revoke the ' + (t.via === 'oauth' ? 'sign-in' : 'token') + ' for ' + t.device);
       ask.addEventListener('click', function () {
         state.agentTokenArmed = t.id;
         state.focusAfter = 'agent-token-keep:' + t.id;
@@ -3617,19 +3625,21 @@
     claude.append(copyLine('agent-connect-server', location.origin, 'agent-connect-server'));
     box.append(claude);
     // Codex: its plugin brings the hooks; the server goes in config.toml, since a Codex plugin can't
-    // hold an address, and the token in an environment variable Codex reads (§49.5)
+    // hold an address, and the token in an environment variable Codex reads (§49.5). The plugin's
+    // approval hook is a command, so it reads the address from the environment too (§49.9, #472)
     const codex = el('div', 'agent-connect-step');
     codex.append(el('p', null, 'Codex: run these in a terminal. They install switchboard’s plugin, which brings the hooks.'));
     codex.append(copyLine('agent-connect-codex', 'codex plugin marketplace add ' + PLUGIN_MARKETPLACE
       + ' && codex plugin add switchboard@switchboard', 'agent-connect-codex'));
-    codex.append(el('p', null, 'Then add this switchboard to ~/.codex/config.toml, and the token to your shell’s'
-      + ' environment. The tool timeout lets the Stop hook listen for a day: without it Codex stops listening'
+    codex.append(el('p', null, 'Then add this switchboard to ~/.codex/config.toml, and its address and the token to'
+      + ' your shell’s environment (the plugin’s hook that tells the room an approval prompt is open reads them).'
+      + ' The tool timeout lets the Stop hook listen for a day: without it Codex stops listening'
       + ' after five minutes. The first time Codex starts, choose Trust all and continue.'));
     codex.append(copyLine('agent-connect-codex-config', '[mcp_servers.switchboard]\nurl = "' + location.origin
       + '/mcp"\nbearer_token_env_var = "SWITCHBOARD_AGENT_TOKEN"\ntool_timeout_sec = 86400',
       'agent-connect-codex-config'));
-    codex.append(copyLine('agent-connect-codex-env', 'export SWITCHBOARD_AGENT_TOKEN=' + t.token,
-      'agent-connect-codex-env'));
+    codex.append(copyLine('agent-connect-codex-env', 'export SWITCHBOARD_URL=' + location.origin
+      + '\nexport SWITCHBOARD_AGENT_TOKEN=' + t.token, 'agent-connect-codex-env'));
     box.append(codex);
     return box;
   }
@@ -3672,7 +3682,7 @@
     try {
       await api('POST', '/api/agent-tokens/' + encodeURIComponent(t.id) + '/revoke', {});
       if (state.newAgentToken && state.newAgentToken.device === t.device) state.newAgentToken = null;
-      state.agentTokenMsg = { text: 'Revoked the token for ' + t.device + '.', bad: false };
+      state.agentTokenMsg = { text: 'Revoked the ' + (t.via === 'oauth' ? 'sign-in' : 'token') + ' for ' + t.device + '.', bad: false };
     } catch (e) {
       state.agentTokenMsg = { text: String(e.message || e), bad: true };
     }
@@ -4762,14 +4772,20 @@
   function boardPulse(who, m) {
     const key = m ? statusKey(m) : 'offline';
     const busy = key === 'busy';
+    // its person has a permission prompt open (#472): the agent isn't working, and it won't answer
+    // until they act, which is worth knowing before waiting on it
+    const asking = key === 'waiting-approval';
     const word = !m ? who + ' has left the room'
-      : busy ? who + ' is working (on this or something else)' : who + ' is ' + statusWord(m).toLowerCase();
+      : busy ? who + ' is working (on this or something else)'
+      : asking ? who + ' is waiting for approval: its person has a permission prompt open'
+      : who + ' is ' + statusWord(m).toLowerCase();
     const s = el('span', 'board-pulse s-' + key + (busy ? ' working' : ''));
     s.dataset.member = who;
     s.title = word;
     s.setAttribute('role', 'img');
     s.setAttribute('aria-label', word);
     if (busy) s.append(el('span', 'board-pulse-word', 'working'));
+    if (asking) s.append(el('span', 'board-pulse-word', 'waiting for approval'));
     return s;
   }
 

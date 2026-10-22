@@ -37,6 +37,12 @@ settings-phone-list-{light,dark} and settings-phone-rooms-light (Settings' tabbe
 phone list, #232),
 settings-agents-{empty,made,revoke}-{light,dark} and settings-agents-phone-light (Settings →
 Agents: a device's agent token made, shown once and revoked, #382),
+connect-codex-{light,dark,phone-light} (Connect an agent's Codex step: the plugin, config.toml, and the
+environment lines, now with the server's address for the plugin's approval hook, #472),
+oauth-consent-{light,dark,phone-light} (the card an agent that signs in through the browser sends the
+person to, #386), oauth-confirm-light (the same on a hosted broker whose last check ran out: Confirm
+it's you comes first), oauth-signin-light (a browser that isn't signed in yet) and
+settings-agents-signin-light (the sign-in listed beside a token, with Revoke),
 closed-light, inspector-light, inspector-claude-{light,dark,phone-light} (Claude Code's
 bubble with its name written under it, #62), inspector-device-light, inspector-dark-parked,
 room-rename-before-{light,dark,phone-light}, room-rename-after-{light,dark,phone-light} (#316),
@@ -65,6 +71,10 @@ icon-theme-dark-on-light, icon-theme-light-on-dark and icon-theme-dark-on-light-
 Cursor's icons with the saved Theme against the system's scheme, #443),
 check-waiting-{light,dark,phone-light} and check-confirmed-{light,dark,phone-light} (a fix awaiting
 its raiser has no check; once confirmed, its card gets a green one in the corner, #427),
+approval-board-{before,after}-{light,dark,phone-light},
+approval-inspector-{before,after}-{light,dark,phone-light} and approval-members-{before,after}-phone-light
+(an agent a review card waits on, busy as every agent at a prompt looked before, then waiting for approval
+because its person has a permission prompt open: the card, the Inspector and Members, #472),
 confirm-light, signin-light, setup-person-light and
 signin-phone-dark (all .png).
 
@@ -1458,6 +1468,220 @@ def shoot_settings_agents(browser: Any, out: Path, world: Any) -> None:
     revoke_all()
 
 
+def shoot_connect_codex(browser: Any, out: Path, world: Any) -> None:
+    """#472: Settings → Agents, the Codex step of Connect an agent, in light, dark and on a phone: the
+    plugin, the ``config.toml`` entry, and the environment lines. The plugin's approval hook is a command, so
+    the step also gives it the server's address (``SWITCHBOARD_URL``) beside the token. It waits for the
+    step's last line, never for its words, so the same script shoots the page before the change."""
+    from playwright.sync_api import expect
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+
+    def revoke_all() -> None:
+        st = world.broker.state
+        for t in world.broker.on_loop(lambda: st.store.agent_tokens_of(None)):
+            world.broker.on_loop(lambda t=t: st.store.agent_token_revoke(t.id, None))
+
+    for suffix, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        revoke_all()
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            if suffix.startswith("phone"):
+                page.click("#rooms-toggle")
+                page.click("#me-settings")
+                page.click("#settings-row-agents")
+            else:
+                page.click("#me-settings")
+                page.click("#settings-tab-agents")
+            page.fill("#agent-token-device", "work-laptop")
+            page.click("#agent-token-make")
+            expect(page.locator("#agent-token-value")).to_be_visible()
+            expect(page.locator("#agent-connect-codex-env")).to_be_visible()
+            step = page.locator("#agent-connect .agent-connect-step").nth(1)
+            step.scroll_into_view_if_needed()
+            page.evaluate("document.activeElement && document.activeElement.blur()")
+            settle(page)
+            path = out / f"connect-codex-{suffix}.png"
+            step.screenshot(path=str(path), animations="disabled", caret="hide")
+            print(path)
+        finally:
+            ctx.close()
+    revoke_all()
+
+
+# ---------------------------------------------------------- the consent page (#386)
+CONSENT_REDIRECT = "http://localhost:41234/callback"
+
+
+class SignInAgent:
+    """An agent that signs in through the browser (#386, DESIGN.md §49.9): it registers the way Claude
+    Code does and builds the address it sends its person's browser to. Its loopback address is a route
+    the page's navigation is answered by (``answer_loopback``), so nothing listens on a port."""
+
+    def __init__(self, origin: str, name: str = "Claude Code (switchboard)") -> None:
+        import secrets
+
+        import httpx
+
+        from switchboard.broker import oauth
+
+        self.origin, self.s256 = origin, oauth.s256
+        self.verifier = secrets.token_urlsafe(32)
+        self.state = secrets.token_urlsafe(12)
+        r = httpx.post(
+            origin + "/oauth/register",
+            json={
+                "client_name": name,
+                "redirect_uris": [CONSENT_REDIRECT],
+                "token_endpoint_auth_method": "none",
+            },
+            timeout=10.0,
+        )
+        r.raise_for_status()
+        self.client_id = r.json()["client_id"]
+
+    def url(self) -> str:
+        import urllib.parse
+
+        q = urllib.parse.urlencode(
+            {
+                "response_type": "code",
+                "client_id": self.client_id,
+                "code_challenge": self.s256(self.verifier),
+                "code_challenge_method": "S256",
+                "redirect_uri": CONSENT_REDIRECT,
+                "state": self.state,
+                "resource": self.origin + "/mcp",
+            }
+        )
+        return f"{self.origin}/oauth/authorize?{q}"
+
+    def exchange(self, answered: str) -> None:
+        import urllib.parse
+
+        import httpx
+
+        code = urllib.parse.parse_qs(urllib.parse.urlsplit(answered).query)["code"][0]
+        r = httpx.post(
+            self.origin + "/oauth/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "code_verifier": self.verifier,
+                "redirect_uri": CONSENT_REDIRECT,
+                "client_id": self.client_id,
+            },
+            timeout=10.0,
+        )
+        r.raise_for_status()
+
+
+def answer_loopback(ctx: Any, got: list[str]) -> None:
+    """The agent's own address, answered by the context: the page's navigation lands here, and the address
+    (with the code) is kept for the agent to swap."""
+
+    def handle(route: Any) -> None:
+        got.append(route.request.url)
+        route.fulfill(status=200, content_type="text/html", body="<p>The agent has its answer.</p>")
+
+    ctx.route("http://localhost:41234/**", handle)
+
+
+def shoot_oauth_consent(browser: Any, out: Path, world: Any, hosted: Any) -> None:
+    """The consent page of an agent that signs in through the browser (#386): the card on a desktop
+    broker (light, dark) and a phone, the sign-in step of a browser with no session, the same card on a
+    hosted broker whose person must confirm it's them first, and the sign-in listed in Settings →
+    Agents beside a token. The agent and its address are made up for the pictures."""
+    import httpx
+    from playwright.sync_api import expect
+
+    base = {"timezone_id": "UTC", "locale": "en-US", "reduced_motion": "reduce"}
+    b = world.broker
+
+    def revoke_all(broker: Any) -> None:
+        for t in broker.on_loop(lambda: broker.state.store.agent_tokens_of(None)):
+            broker.on_loop(lambda t=t: broker.state.store.agent_token_revoke(t.id, None))
+
+    revoke_all(b)
+    agent = SignInAgent(b.origin)
+    # signed out first: the page asks the browser to sign in
+    ctx = browser.new_context(**base, **DESKTOP, color_scheme="light")
+    ctx.set_default_timeout(WAIT_MS)
+    try:
+        page = ctx.new_page()
+        page.goto(agent.url())
+        expect(page.locator("#step-signin")).to_be_visible()
+        expect(page.locator("#signin-desktop")).to_be_visible()
+        shot(page, out, "oauth-signin-light.png")
+    finally:
+        ctx.close()
+
+    for suffix, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, b)
+            page.goto(agent.url())
+            expect(page.locator("#step-consent")).to_be_visible()
+            page.fill("#consent-device", "work-laptop")
+            page.evaluate("document.activeElement && document.activeElement.blur()")
+            shot(page, out, f"oauth-consent-{suffix}.png")
+            if suffix != "light":
+                continue
+            # approve it, so Settings → Agents has the sign-in to list
+            got: list[str] = []
+            answer_loopback(ctx, got)
+            page.click("#consent-approve")
+            expect(page).to_have_url(re.compile(re.escape(CONSENT_REDIRECT) + r"\?"))
+            agent.exchange(got[0])
+            app = ctx.new_page()
+            app.goto(b.origin + "/")
+            connected(app)
+            app.click("#me-settings")
+            app.click("#settings-tab-agents")
+            expect(app.locator("#agent-tokens .agent-token")).to_have_count(1)
+            app.evaluate("document.activeElement && document.activeElement.blur()")
+            shot(app, out, "settings-agents-signin-light.png")
+        finally:
+            ctx.close()
+    revoke_all(b)
+
+    # a hosted broker, whose person's last check ran out: Confirm it's you comes first
+    origin = hosted.origin
+    one_time = hosted.claim_link().split("#t=", 1)[1]
+    hdr = {"Origin": origin, "X-Switchboard": "1"}
+    with httpx.Client(base_url=origin, headers=hdr, timeout=10.0) as c:
+        c.post("/api/signin/password", json={"name": "admin", "password": one_time}).raise_for_status()
+        c.post("/api/setup/password", json={"password": "correct horse battery"}).raise_for_status()
+        cookie = c.cookies.get("switchboard_session")
+    hosted.broker.on_loop(lambda: hosted.broker.state.passkey_checks.clear())
+    agent = SignInAgent(origin)
+    ctx = browser.new_context(**base, **DESKTOP, color_scheme="light")
+    ctx.set_default_timeout(WAIT_MS)
+    try:
+        ctx.add_cookies([{"name": "switchboard_session", "value": cookie, "url": origin}])
+        page = ctx.new_page()
+        page.goto(agent.url())
+        expect(page.locator("#consent-confirm")).to_be_visible()
+        page.fill("#consent-device", "work-laptop")
+        page.evaluate("document.activeElement && document.activeElement.blur()")
+        shot(page, out, "oauth-confirm-light.png")
+    finally:
+        ctx.close()
+
+
 def shoot_hosted(browser: Any, out: Path, world: Any) -> None:
     """A hosted broker (issues #41, #61): the sign-in page before it's set up, Choose how you'll
     sign in with the admin's email, the People sheet with an invite to send (light, dark), Settings'
@@ -1841,6 +2065,62 @@ def shoot_mention_people(browser: Any, out: Path, world: Any) -> None:
         loop.close()
 
 
+def shoot_approval(browser: Any, out: Path, world: Any) -> None:
+    """#472: an agent whose person has a permission prompt open, in the board card that waits on it, the
+    Inspector and (on a phone) Members. "before" is every agent at a prompt until now (busy); "after" is
+    waiting for approval. The state is set as the Notification hook sets it, through the store: no scripted
+    agent can reach it. It waits for the card's state, never for its words, so the same script shoots the
+    page before the change."""
+    from playwright.sync_api import expect
+
+    for slug, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        room = "#approval-" + slug
+        world.create_room(room)
+        world.add_agents(room, ("claude-1", "codex-1"))
+        world.seed_review(room)
+        ctx = browser.new_context(timezone_id="UTC", locale="en-US", **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="' + room + '"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            page.click("#board-toggle")
+            for stage, status in (("before", "busy"), ("after", "waiting-approval")):
+                world.set_member_status(room, "codex-1", status, "hook:Notification")
+                pulse = page.locator('#board .board-card[data-item="F4"] .board-pulse')
+                expect(pulse).to_have_class(re.compile(r"\bs-" + status + r"\b"))
+                if slug == "phone-light":
+                    center(page, '#board .board-card[data-item="F4"]')
+                settle(page)
+                shot(page, out, f"approval-board-{stage}-{slug}.png")
+                phone = slug == "phone-light"
+                if phone:  # Members is a sheet on a phone, with the Inspector inside it
+                    page.click("#buddy-toggle")
+                    expect(page.locator("#app")).to_have_class(re.compile(r"\bsheet-open\b"))
+                    settle(page)
+                    shot(page, out, f"approval-members-{stage}-{slug}.png")
+                with page.expect_response(
+                    lambda r: "/members/codex-1" in r.url and r.request.method == "GET", timeout=WAIT_MS
+                ):
+                    page.click('#buddy-list .member[data-name="codex-1"] .m-open')
+                expect(page.locator("#insp-name")).to_contain_text("codex-1")
+                settle(page)
+                shot(page, out, f"approval-inspector-{stage}-{slug}.png")
+                back(page)
+                if phone:
+                    page.keyboard.press("Escape")
+                    expect(page.locator("#app")).not_to_have_class(re.compile(r"\bsheet-open\b"))
+        finally:
+            ctx.close()
+
+
 # -------------------------------------------------------------------- main
 def run(args: argparse.Namespace, pw: Any) -> None:
     from ui_world import HostedWorld, UIWorld
@@ -1851,11 +2131,13 @@ def run(args: argparse.Namespace, pw: Any) -> None:
     hosted = HostedWorld(keep=args.keep)
     weak = HostedWorld(keep=args.keep)
     people = HostedWorld(keep=args.keep)  # alice, bob and carol, for mentioning a person (#418)
+    consent = HostedWorld(keep=args.keep)  # an admin whose check has run out, for the consent page (#386)
     try:
         world.start()
         hosted.start()
         weak.start()
         people.start()
+        consent.start()
         env = {**os.environ, "TZ": "UTC", "HOME": REAL_HOME or os.environ["HOME"]}
         browser = pw.chromium.launch(executable_path=args.chrome or None, env=env)
         try:
@@ -1886,13 +2168,17 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_room_rename(browser, out, world)
             shoot_settings_tabs(browser, out, world)
             shoot_settings_agents(browser, out, world)
+            shoot_connect_codex(browser, out, world)
+            shoot_oauth_consent(browser, out, world, consent)
             shoot_confirmed_check(browser, out, world)  # rooms of its own, so last in this world
+            shoot_approval(browser, out, world)
             shoot_hosted(browser, out, hosted)
             shoot_common_password(browser, out, weak)
             shoot_mention_people(browser, out, people)
         finally:
             browser.close()
     finally:
+        consent.stop()
         people.stop()
         weak.stop()
         hosted.stop()

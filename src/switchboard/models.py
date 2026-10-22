@@ -327,10 +327,33 @@ class AgentTokenRow:
     created_at: float
     last_used_at: float | None
     revoked_at: float | None
+    via: str = "token"  # how it was made: typed in Settings ("token"), or a browser sign-in ("oauth", §49.9)
+    client_name: str | None = None  # a sign-in: what the agent called itself (a claim, cut to 80)
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "AgentTokenRow":
         return cls(**{k: r[k] for k in r.keys()})
+
+
+@dataclass(frozen=True)
+class OAuthClientRow:
+    """An ``oauth_clients`` row (DESIGN.md §49.9): an agent that registered to sign in through the
+    browser (RFC 7591). A public client: no secret, and loopback redirect URIs only (``redirect_uris``
+    is a JSON list). The name is its own claim, shown on the consent page and nowhere trusted."""
+
+    client_id: str
+    client_name: str
+    redirect_uris: list[str]
+    created_at: float
+
+    @classmethod
+    def from_row(cls, r: sqlite3.Row) -> "OAuthClientRow":
+        return cls(
+            client_id=r["client_id"],
+            client_name=r["client_name"],
+            redirect_uris=json.loads(r["redirect_uris"]),
+            created_at=r["created_at"],
+        )
 
 
 @dataclass(frozen=True)
@@ -615,6 +638,7 @@ class HookEvent:
     source: str | None = None
     reason: str | None = None
     permission_mode: str | None = None
+    notification: str | None = None  # a Notification hook's type (``permission_prompt``), §7.4
     tokens: tuple[tuple[int, str], ...] = ()
     subagent_bg: bool = False
     t: float | None = None
@@ -636,7 +660,17 @@ _EVENT_ALIASES = {
     "stop": "Stop",
     "interrupt": "Interrupt",
     "sessionend": "SessionEnd",
+    "notification": "Notification",
+    "permissionrequest": "PermissionRequest",
 }
+
+# Hook events that only tell the room something about a session and are never answered (DESIGN.md §49.9,
+# #472): a Notification (Claude Code's open permission prompt) and a PermissionRequest (Codex's and
+# Devin's). The first can decide nothing; the second can in the harness, so the plugins' hook for it is a
+# command that discards the server's reply (a hook that cannot approve or deny, §11), and the broker
+# answers it with nothing whatever its state. Everything that handles one checks this set, so a new
+# report-only event is added here and nowhere else.
+REPORT_ONLY_EVENTS = frozenset({"Notification", "PermissionRequest"})
 
 
 def canonical_event(name: str) -> str:
