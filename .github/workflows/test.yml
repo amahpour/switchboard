@@ -118,6 +118,9 @@ jobs:
       # the plugin version check (tests/integration/test_agent_plugins.py) needs the history
       # fetch-depth: 2 brings; here a missing base fails it instead of skipping
       SWITCHBOARD_REQUIRE_GIT_BASE: "1"
+      # the Windows scripts' tests (tests/integration/test_agent_plugins.py) run under pwsh, which
+      # GitHub's runners have; where it is missing they skip, and here that fails the run instead
+      SWITCHBOARD_REQUIRE_PWSH: "1"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
         with:
