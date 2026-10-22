@@ -534,12 +534,17 @@
   }
 
   // ------------------------------------------------------------------ api
-  async function api(method, path, body) {
+  async function api(method, path, body, file) {
     const opts = { method: method, credentials: 'same-origin', cache: 'no-store', headers: {} };
     if (method !== 'GET') {
-      opts.headers['Content-Type'] = 'application/json';
       opts.headers['X-Switchboard'] = '1';
-      opts.body = JSON.stringify(body || {});
+      if (file) {  // a chosen file goes as the whole body, with the type the browser named it
+        opts.headers['Content-Type'] = file.type || 'application/octet-stream';
+        opts.body = file;
+      } else {
+        opts.headers['Content-Type'] = 'application/json';
+        opts.body = JSON.stringify(body || {});
+      }
     }
     const r = await fetch(path, opts);
     let data;
@@ -716,6 +721,20 @@
     c.title = 'runs on ' + m.host + ', a device with an agent token: its text may quote what that device saw';
     return c;
   }
+
+  // Whose an agent is (#496, §29.10): m.owner, the display name the broker worked out from its
+  // device's token, or null when it could not (then nothing is shown, never a guess). The Inspector
+  // always names it; Members only on a switchboard with more than one person, where it tells
+  // something: with one, every agent is that person's.
+  function ownerLine(m, long) {
+    if (!m.owner) return null;
+    const p = long ? el('p', 'insp-owner') : el('span', 'm-owner');
+    p.append('Owner: ', el('strong', null, m.owner));
+    if (long && m.host) p.append(' · device ' + m.host);
+    return p;
+  }
+
+  function showOwners() { return state.everyone.length > 1; }
 
   // ------------------------------------------------------------- log rows
   // An @mention of the viewer, from an agent or from another person (#418): m.mentions is what
@@ -1260,7 +1279,10 @@
     if (m.held) st += ' · held';
     const chips = el('span', 'm-chips');
     chips.append(tierChip(m));
-    main.append(nameLine, el('span', 'm-status', st), chips);
+    const owner = showOwners() ? ownerLine(m, false) : null;
+    main.append(nameLine);
+    if (owner) main.append(owner);
+    main.append(el('span', 'm-status', st), chips);
     if (m.status_line) {
       const work = el('span', 'm-work', m.status_line);
       if (statusLineStale(m)) work.append(el('span', 'm-work-stale', 'Stale'));
@@ -1866,6 +1888,11 @@
     }
     const idText = el('div');
     idText.append(nameH, el('p', 'insp-status', statusWord(m) + since + ' · ' + harnessOf(m.harness)[1]));
+    const owner = ownerLine(m, true);
+    if (owner) {
+      owner.id = 'insp-owner';
+      idText.append(owner);
+    }
     // the chips get the pane's full width (InspectorStates.dc), so tier + host + Held fit on one row;
     // under them, what the tier means, which a phone can't hover for (#211)
     const how = el('p', 'insp-tier-how', tierHow(m));
@@ -2662,8 +2689,10 @@
     const ws = new WebSocket(proto + location.host + '/ws');
     state.ws = ws;
     ws.addEventListener('open', function () {
+      const reopened = state.wsEverOpen;
       state.wsOpen = true;
       state.wsEverOpen = true;
+      if (reopened) refreshAgentIcons();  // an avatar may have changed while the socket was down
       state.backoff = 500;
       // a close, reopen, create or delete missed while the socket was down: resync, then hello all.
       // The new socket follows nothing until a hello: if the resync fails, hello the tabs we have.
@@ -2769,10 +2798,17 @@
       r.boardGeneration = (r.boardGeneration || 0) + 1;
       setBoards(r, f.boards);
       if (f.room === state.active) renderBoard();
+    } else if (f.t === 'icons') {
+      // an agent's avatar was set or reset (§29.11): the stylesheet, and the list if Settings shows it
+      refreshAgentIcons();
+      if (document.getElementById('settings-agent-icons-body')) loadAgentIcons();
     } else if (f.t === 'people') {
       // who is on this switchboard, and who has a page open (#354): the People list
+      const owners = showOwners();
       state.everyone = Array.isArray(f.people) ? f.people.filter(function (n) { return typeof n === 'string'; }) : [];
       state.online = new Set(Array.isArray(f.online) ? f.online : []);
+      // a second person arriving (or the second leaving) shows (or hides) each agent's owner in Members
+      if (showOwners() !== owners) renderBuddies();
       renderRoomPeople();
       renderComposerMentions();  // who can be @mentioned (and their dot in the popover) changed
       if (state.pop && state.pop.kind === 'mentions') updatePopover();
@@ -3322,6 +3358,231 @@
       sizeChoices.append(option);
     }
     panel.append(sizeLabel, sizeChoices);
+    if ((state.me || {}).can_set_icons) buildAgentIcons(panel);
+  }
+
+  // ------------------------------------------- the agents' avatars (#498, DESIGN.md §29.11)
+  // Settings → Appearance → Agent icons, for the owner (the admin on a hosted broker): per harness, a
+  // light and a dark image to upload, a preview of each, and Reset. The wording is the maintainer's.
+  const ICON_HEADING = "Customize your coding harnesses' avatars!";
+  const ICON_TIP = "Some companies don't allow their logos to be used, so switchboard can't ship them. "
+    + "You're welcome to upload any replacement you like.";
+
+  function buildAgentIcons(panel) {
+    const section = el('section', 'agent-icons');
+    section.id = 'settings-agent-icons';
+    section.setAttribute('aria-labelledby', 'agent-icons-title');
+    const head = el('div', 'agent-icons-head');
+    const title = el('h4', 'agent-icons-title', ICON_HEADING);
+    title.id = 'agent-icons-title';
+    // the info button: a real button (so the keyboard reaches it), described by the tip it shows on
+    // hover (where there is one), on keyboard focus and on a tap. Esc hides the tip first, and Settings
+    // only on a second Esc; the tip is back on the next hover or focus.
+    const wrap = el('span', 'info-wrap');
+    const info = btn('info-btn', null);
+    info.id = 'agent-icons-info';
+    info.setAttribute('aria-label', "Why switchboard doesn't ship these avatars");
+    info.setAttribute('aria-describedby', 'agent-icons-tip');
+    info.append(icon('info'));
+    const tip = el('span', 'info-tip', ICON_TIP);
+    tip.id = 'agent-icons-tip';
+    tip.setAttribute('role', 'tooltip');
+    const tipShown = function () {
+      return !wrap.classList.contains('tip-dismissed')
+        && (wrap.classList.contains('tip-open') || wrap.matches(':hover') || info.matches(':focus-visible'));
+    };
+    info.addEventListener('click', function () {
+      wrap.classList.remove('tip-dismissed');
+      wrap.classList.toggle('tip-open');
+    });
+    info.addEventListener('blur', function () { wrap.classList.remove('tip-open', 'tip-dismissed'); });
+    wrap.addEventListener('mouseenter', function () { wrap.classList.remove('tip-dismissed'); });
+    info.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape' && tipShown()) {
+        wrap.classList.remove('tip-open');
+        wrap.classList.add('tip-dismissed');
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+    });
+    wrap.append(info, tip);
+    head.append(title, wrap);
+    const body = el('div', 'agent-icons-body');
+    body.id = 'settings-agent-icons-body';
+    // two lines that stay in the page between renders, so a screen reader hears the change in them
+    const status = el('p', 'fine agent-icons-status');
+    status.id = 'agent-icons-status';
+    status.setAttribute('role', 'status');
+    const error = el('p', 'app-dialog-error agent-icons-error');
+    error.id = 'agent-icons-error';
+    error.setAttribute('role', 'alert');
+    section.append(head, el('p', 'fine', 'A PNG or a WebP, up to 256 KB and 512 × 512 pixels: one image for the light'
+      + ' theme and one for the dark. With only one, it is used for both. Everyone on this switchboard sees them.'),
+    body, status, error);
+    panel.append(section);
+    state.agentIconRefs = { body: body, status: status, error: error };
+    state.agentIcons = null;
+    state.agentIconMsg = null;
+    state.agentIconBusy = false;
+    renderAgentIcons();
+    loadAgentIcons();
+  }
+
+  function loadAgentIcons() {
+    return api('GET', '/api/agent-icons').then(function (res) {
+      state.agentIcons = res;
+      renderAgentIcons();
+    }, function (e) {
+      state.agentIconMsg = { text: String(e.message || e), bad: true };
+      renderAgentIcons();
+    });
+  }
+
+  // The stylesheet for uploaded avatars is linked from index.html, so it is there at first paint. When
+  // an avatar is set or reset with the page open (here, or on another page: an `icons` frame), the
+  // stylesheet is fetched again and applied as a constructable sheet, and the linked one is switched
+  // off: the new one holds everything the old did, so a reset takes effect too. A browser without
+  // constructable sheets shows the change on its next load.
+  let iconSheet = null;
+  async function refreshAgentIcons() {
+    if (typeof CSSStyleSheet !== 'function' || !('adoptedStyleSheets' in document)) return;
+    let css;
+    try {
+      const r = await fetch('/api/agent-icons.css', { credentials: 'same-origin', cache: 'no-store' });
+      if (!r.ok) return;
+      css = await r.text();
+    } catch (e) { return; }
+    if (!iconSheet) iconSheet = new CSSStyleSheet();
+    iconSheet.replaceSync(css);
+    if (!document.adoptedStyleSheets.includes(iconSheet)) {
+      document.adoptedStyleSheets = document.adoptedStyleSheets.concat([iconSheet]);
+    }
+    const linked = $('agent-icons-css');
+    if (linked) linked.disabled = true;
+  }
+
+  function iconSentence(text) {
+    const t = String(text || '');
+    const up = t.charAt(0).toUpperCase() + t.slice(1);
+    return /[.!?]$/.test(up) ? up : up + '.';
+  }
+
+  function agentIconState(have) {
+    if (have.light && have.dark) return 'Your light and dark images';
+    if (have.light) return 'Your light image, used for dark too';
+    if (have.dark) return 'Your dark image, used for light too';
+    return 'The built-in avatar';
+  }
+
+  function agentIconRow(h, data) {
+    const name = harnessOf(h)[1];
+    const have = {};
+    for (const i of data.icons) if (i.harness === h) have[i.scheme] = i;
+    const row = el('div', 'passkey-card agent-icon-row');
+    row.dataset.harness = h;
+    const head = el('div', 'agent-icon-head');
+    const who = el('span', 'agent-icon-who');
+    who.append(el('strong', null, name), el('span', 'fine agent-icon-state', agentIconState(have)));
+    const reset = btn('btn', 'Reset');
+    reset.id = 'agent-icon-reset-' + h;
+    reset.dataset.focus = 'reset-' + h;
+    reset.setAttribute('aria-label', 'Reset ' + name + ' to the built-in avatar');
+    reset.disabled = state.agentIconBusy || !(have.light || have.dark);
+    reset.addEventListener('click', function () { resetAgentIcon(h, name); });
+    head.append(avatar(h, 'agent', name, 'lg'), who, reset);
+    row.append(head);
+    const slots = el('div', 'agent-icon-slots');
+    for (const scheme of ['light', 'dark']) {
+      const cur = have[scheme];
+      const slot = el('div', 'agent-icon-slot-row');
+      const swatch = el('span', 'agent-icon-slot ' + scheme + (cur ? ' slot-' + h + '-' + scheme : ' empty'));
+      swatch.setAttribute('role', 'img');
+      swatch.setAttribute('aria-label', name + ' ' + scheme + ' image: '
+        + (cur ? cur.width + ' by ' + cur.height + ' pixels' : 'none'));
+      const caption = el('span', 'agent-icon-slot-text');
+      caption.append(el('span', 'settings-label', scheme === 'light' ? 'Light' : 'Dark'),
+        el('span', 'fine', cur ? cur.width + ' × ' + cur.height + ', ' + Math.max(1, Math.round(cur.bytes / 1024)) + ' KB'
+          : 'None yet'));
+      const input = el('input');
+      input.type = 'file';
+      input.accept = 'image/png,image/webp';
+      input.hidden = true;
+      input.tabIndex = -1;
+      input.id = 'agent-icon-file-' + h + '-' + scheme;
+      input.addEventListener('change', function () { uploadAgentIcon(h, name, scheme, input); });
+      const pick = btn('btn', cur ? 'Replace' : 'Upload');
+      pick.id = 'agent-icon-upload-' + h + '-' + scheme;
+      pick.dataset.focus = 'upload-' + h + '-' + scheme;
+      pick.setAttribute('aria-label', (cur ? 'Replace' : 'Upload') + ' the ' + scheme + ' image for ' + name);
+      pick.disabled = state.agentIconBusy;
+      pick.addEventListener('click', function () { input.click(); });
+      slot.append(swatch, caption, pick, input);
+      slots.append(slot);
+    }
+    row.append(slots);
+    return row;
+  }
+
+  function renderAgentIcons() {
+    const refs = state.agentIconRefs;
+    if (!refs) return;
+    const body = refs.body;
+    const focused = focusKey(body);
+    const data = state.agentIcons;
+    body.replaceChildren();
+    if (data) for (const h of data.harnesses) body.append(agentIconRow(h, data));
+    else body.append(el('p', 'fine', 'Loading…'));
+    const msg = state.agentIconMsg;
+    refs.status.textContent = msg && !msg.bad ? msg.text : '';
+    refs.error.textContent = msg && msg.bad ? msg.text : '';
+    refocus(body, focused);
+  }
+
+  async function uploadAgentIcon(h, name, scheme, input) {
+    const file = input.files && input.files[0];
+    input.value = '';  // the same file may be chosen again
+    if (!file || state.agentIconBusy || !state.agentIcons) return;
+    const limits = state.agentIcons.limits;
+    state.agentIconMsg = null;
+    if (file.size > limits.bytes) {
+      state.agentIconMsg = { bad: true, text: iconSentence('that file is ' + Math.ceil(file.size / 1024)
+        + ' KB: the most is ' + Math.round(limits.bytes / 1024) + ' KB') };
+      renderAgentIcons();
+      return;
+    }
+    const key = 'upload-' + h + '-' + scheme;  // its button is disabled while this runs, then it is back
+    state.agentIconBusy = true;
+    renderAgentIcons();
+    try {
+      await api('PUT', '/api/agent-icons/' + h + '/' + scheme, null, file);
+      await Promise.all([refreshAgentIcons(), loadAgentIcons()]);
+      state.agentIconMsg = { bad: false, text: 'Set the ' + scheme + ' image for ' + name + '.' };
+    } catch (e) {
+      state.agentIconMsg = { bad: true, text: iconSentence(e.message || e) };
+    } finally {
+      state.agentIconBusy = false;
+      renderAgentIcons();
+      refocus(state.agentIconRefs.body, key);
+    }
+  }
+
+  async function resetAgentIcon(h, name) {
+    if (state.agentIconBusy) return;
+    state.agentIconMsg = null;
+    state.agentIconBusy = true;
+    renderAgentIcons();
+    try {
+      await api('DELETE', '/api/agent-icons/' + h);
+      await Promise.all([refreshAgentIcons(), loadAgentIcons()]);
+      state.agentIconMsg = { bad: false, text: name + ' is back to its built-in avatar.' };
+    } catch (e) {
+      state.agentIconMsg = { bad: true, text: iconSentence(e.message || e) };
+    } finally {
+      state.agentIconBusy = false;
+      renderAgentIcons();
+      // Reset is disabled now that nothing is set: focus goes to the first thing to do next
+      refocus(state.agentIconRefs.body, 'upload-' + h + '-light');
+    }
   }
 
   function buildSettingsRooms(panel) {

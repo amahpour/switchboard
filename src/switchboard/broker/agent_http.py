@@ -118,8 +118,11 @@ HOOK_FIELDS = (
 )
 # a tool of switchboard's own server, by the name a harness gives it: Codex and a hand-made Claude
 # Code server say ``mcp__switchboard__<tool>``, Claude Code's plugin
-# ``mcp__plugin_switchboard_switchboard__<tool>``
-OWN_TOOL_RE = re.compile(r"mcp__(?:plugin_switchboard_)?switchboard__")
+# ``mcp__plugin_switchboard_switchboard__<tool>``, Devin ``mcp__switchboard_https__<tool>`` and Cursor
+# ``MCP:switchboard_<tool>``
+OWN_TOOL_RE = re.compile(
+    r"mcp__(?:plugin_switchboard_)?switchboard__|mcp__switchboard_https__|MCP:switchboard_"
+)
 LISTEN_PATH = "/mcp/listen"  # Claude Code's listener waits here (§49.4)
 SESSION_PATH = "/mcp/session"  # Claude Code's SessionStart and SessionEnd, as command hooks (§49.4)
 SESSION_EVENTS = frozenset({"SessionStart", "SessionEnd"})  # Claude Code runs no mcp_tool hook at these
@@ -277,10 +280,10 @@ def hook_params(event: str, fields: dict[str, Any], now: float) -> dict[str, Any
 
 def second_report(event: str, fields: dict[str, Any]) -> bool:
     """True for the report that comes with no result after a switchboard tool's own call: the plugins
-    send one for every other tool (#422), and Codex's matcher can't leave switchboard's tools out
-    (no look-around), so its second group reports those calls too. The first group's report, which
-    carries the result, does everything this one would, so this one is dropped: without that it could
-    take the context the other was about to carry, or report the call twice. ``tool_response`` is
+    send one for every other tool (#422, #493), and Codex's and Devin's matchers can't leave switchboard's
+    tools out (no look-around), so their groups for every tool report those calls too. The first group's
+    report, which carries the result, does everything this one would, so this one is dropped: without that
+    it could take the context the other was about to carry, or report the call twice. ``tool_response`` is
     ``None`` only when the hook sent none; a result that happens to be empty is still a result."""
     return (
         event == "PostToolUse"
@@ -920,6 +923,11 @@ class CommandHook:
             return
         fields = {k: v for k, v in body.items() if k in HOOK_FIELDS}
         fields["session_id"] = sid
+        if second_report(ev, fields):
+            # the plugin's script reports no switchboard tool a second time either (#493); this is for a
+            # project whose hooks were merged by hand, so a call is never reported twice
+            await _reply(send, 200, {})
+            return
         agents: Any = self.tools.state.agents
         conn = self.tools.conn_for(row, harness)
         res = await agents.http_hook(

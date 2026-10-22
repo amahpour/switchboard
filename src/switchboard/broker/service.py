@@ -182,6 +182,8 @@ def member_dict(m: Member) -> dict[str, Any]:
         "parked_reason": m.parked_reason,
         # the member's device (§49.1): '' only for a scripted test agent
         "host": m.host,
+        # whose agent it is, by display name (#496, §29.10), or None: the page then shows no owner
+        "owner": m.owner,
         "claims": list(m.claims),
     }
 
@@ -403,6 +405,22 @@ class RoomService:
             return t.person_id if t.person_id is not None else 0
         return 0
 
+    def agent_owner(self, host: str, room: Room | None = None) -> str | None:
+        """The display name of the person whose agent runs on ``host``, to show next to it (#496,
+        §29.10), or None. Stricter than ``host_person``, which falls back to the machine's owner so a
+        private room's gate fails closed: a name on screen is a claim about someone, so it needs
+        something to stand on. That is a live agent token for the device (§49.1), whose person is
+        still here and whose name is a screen name, never an email. In a private room (§44) the
+        person has to be one of its people: a name is shown only where the agent already is."""
+        t = self.store.agent_token_for_device(host) if host else None
+        if t is None:
+            return None
+        key = self.person_key(t.person_id)
+        if room is not None and room.private and key not in self.store.room_people(room.id):
+            return None
+        name = self.person_name(key)
+        return name if name is not None and SCREEN_NAME_RE.fullmatch(name) else None
+
     def add_room_person(self, room: Room, name: str, by: int) -> str:
         """Add a person to a private room (any of its people may, §44.2)."""
         if not room.private:
@@ -523,10 +541,15 @@ class RoomService:
                     "remaining_s": max(0.0, claim.expires_at - now),
                 }
             )
-        rows = [
-            dataclasses.replace(m, claims=tuple(by_member.get(m.membership_id, ())))
-            for m in self.store.members(room_id)
-        ]
+        room = self.store.room_by_id(room_id)
+        owners: dict[str, str | None] = {}
+        rows = []
+        for m in self.store.members(room_id):
+            if m.host not in owners:
+                owners[m.host] = self.agent_owner(m.host, room)
+            rows.append(
+                dataclasses.replace(m, claims=tuple(by_member.get(m.membership_id, ())), owner=owners[m.host])
+            )
         if self.delivery is None:
             return rows
         out = []
@@ -781,6 +804,12 @@ class RoomService:
             self._post(
                 room, sender_name="switchboard", sender_kind="system", via="system", kind="notice", text=text
             )
+
+    def members_changed_everywhere(self) -> None:
+        """Publish every open room's members again (a person renamed, #496): their name is the owner
+        shown on each of their agents' rows, which nothing else would refresh on an open page."""
+        for room in self.store.list_rooms():
+            self.hub.members_changed(room.name)
 
     def rooms_changed(self) -> None:
         """Tell web clients the open rooms changed (create, close, reopen, delete). A private

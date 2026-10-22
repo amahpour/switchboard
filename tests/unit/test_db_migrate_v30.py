@@ -76,7 +76,7 @@ def test_the_0_37_2_database_migrates_keeping_every_row_and_ending_every_local_s
     old.close()
 
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 32
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 33
     assert db.integrity_ok(con) is None
     assert db.row_counts(con, db.kept_tables(28)) == {t: before[t] for t in db.kept_tables(28)}
     assert path.with_name(path.name + ".v28.bak").exists()

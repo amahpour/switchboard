@@ -43,7 +43,7 @@ def test_2_woken_while_idle_by_a_mention(run: DevinRun) -> None:
     scenarios.idle_wake(run)
 
 
-def test_3_a_mention_mid_task_arrives_with_its_next_switchboard_call(run: DevinRun) -> None:
+def test_3_a_mention_mid_task_arrives_after_the_next_tool_call(run: DevinRun) -> None:
     scenarios.mid_task(run)
 
 

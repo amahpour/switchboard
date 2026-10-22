@@ -35,6 +35,9 @@ expanded, #99), settings-rooms-{light,dark} and wake-settings-{light,dark,phone-
 default wake budget and hop limit, and a room's own rate, #131), settings-appearance-{light,dark},
 settings-phone-list-{light,dark} and settings-phone-rooms-light (Settings' tabbed layout and
 phone list, #232),
+agent-icons-{before,after}-{light,dark,phone-light} (Members and the log with the built-in avatars, then
+with images an admin uploaded, #498), agent-icons-settings-{light,dark,phone-light} (Settings →
+Appearance → Agent icons) and agent-icons-tip-light (its info tip, open by keyboard),
 settings-agents-{empty,made,revoke}-{light,dark} and settings-agents-phone-light (Settings →
 Agents: a device's agent token made, shown once and revoked, #382),
 connect-codex-{light,dark,phone-light} (Connect an agent's Codex step: the plugin, config.toml, and the
@@ -75,6 +78,8 @@ approval-board-{before,after}-{light,dark,phone-light},
 approval-inspector-{before,after}-{light,dark,phone-light} and approval-members-{before,after}-phone-light
 (an agent a review card waits on, busy as every agent at a prompt looked before, then waiting for approval
 because its person has a permission prompt open: the card, the Inspector and Members, #472),
+agent-owner-{members,inspector}-{light,dark,phone-light} (Members naming each agent's owner under its name,
+once there are two people; the Inspector naming the owner and the device, #496),
 confirm-light, signin-light, setup-person-light and
 signin-phone-dark (all .png).
 
@@ -1010,6 +1015,10 @@ def shoot_mentions(browser: Any, out: Path, world: Any) -> None:
             if not tab.is_visible():
                 page.click("#rooms-toggle")
             tab.click()
+            # The popover lists the room's members that match, and the page doesn't redo it when they
+            # arrive: typed before their frame, "@skill" shows nothing for good. Wait for them, as
+            # open_build does for #build (the dark shot of CI's run 39835655650 lost this race)
+            expect(page.locator("#buddy-list .member")).to_have_count(2)
             type_in(page, "@skill")
             expect(page.locator("#mentions")).to_be_visible()
             expect(page.locator("#men-darius-skills-agent")).to_be_visible()
@@ -1384,6 +1393,125 @@ def shoot_settings_tabs(browser: Any, out: Path, world: Any) -> None:
         shot(page, out, "settings-phone-rooms-light.png")
     finally:
         ctx.close()
+
+
+# ----------------------------------------------------- customizing the agents' avatars (#498)
+def badge(top: tuple[int, int, int], bottom: tuple[int, int, int], shape: str) -> bytes:
+    """A 128 px PNG drawn here for the pictures: a vertical gradient with a white ring, dot or bars on
+    it. Not a logo of anyone's: it is what an admin might upload."""
+    import struct
+    import zlib
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+    size, rows = 128, []
+    for y in range(size):
+        base = tuple(round(top[i] + (bottom[i] - top[i]) * y / (size - 1)) for i in range(3))
+        row = bytearray([0])
+        for x in range(size):
+            dx, dy = x - 63.5, y - 63.5
+            d = (dx * dx + dy * dy) ** 0.5
+            inked = (
+                (shape == "ring" and 26 <= d <= 38)
+                or (shape == "dot" and d <= 24)
+                or (shape == "bars" and abs(dx) <= 32 and 24 <= y <= 104 and (y // 16) % 2 == 0)
+            )
+            row += bytes((255, 255, 255) if inked else base) + b"\xff"
+        rows.append(bytes(row))
+    header = struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0)
+    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(b"".join(rows)))
+    return png + chunk(b"IEND", b"")
+
+
+# what the admin uploads in the pictures: a light and a dark image for Claude Code and Codex, and
+# one image for Devin (used for both schemes); Cursor keeps its built-in avatar
+UPLOADS = {
+    ("claude", "light"): ((233, 150, 110), (198, 90, 60), "ring"),
+    ("claude", "dark"): ((120, 60, 44), (70, 34, 26), "ring"),
+    ("codex", "light"): ((120, 200, 190), (40, 140, 130), "dot"),
+    ("codex", "dark"): ((26, 70, 74), (14, 38, 42), "dot"),
+    ("devin", "light"): ((130, 130, 230), (70, 70, 180), "bars"),
+}
+
+
+def shoot_agent_icons(browser: Any, out: Path, world: Any) -> None:
+    """#498: the same Members list and log with the built-in avatars and with uploaded ones (light,
+    dark, the phone's Members sheet), and Settings → Appearance → Agent icons (light, dark, the phone's
+    page), with its info tip open by keyboard. The uploads go in through the API, as the page's file
+    chooser would send them, and are reset after, so the world's other shots are untouched."""
+    from playwright.sync_api import expect
+
+    b, n_chat, web = world.broker, world.n_chat, world.web
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+
+    def put(harness: str, scheme: str, args: tuple[Any, Any, str]) -> None:
+        headers = {"Origin": b.origin, "X-Switchboard": "1", "Content-Type": "image/png"}
+        r = web.put(f"/api/agent-icons/{harness}/{scheme}", content=badge(*args), headers=headers)
+        assert r.status_code == 200, r.text
+
+    def members(page: Any, name: str, phone: bool) -> None:
+        open_build(page, n_chat)
+        if phone:
+            page.click("#buddy-toggle")
+            expect(page.locator("#app")).to_have_class(re.compile(r"\bsheet-open\b"))
+        page.locator('#log .line[data-from="codex-1"]').first.scroll_into_view_if_needed()
+        shot(page, out, name)
+
+    def pass_over(kind: str) -> None:
+        for size, scheme, tag in (
+            (DESKTOP, "light", "light"),
+            (DESKTOP, "dark", "dark"),
+            (PHONE, "light", "phone-light"),
+        ):
+            ctx = browser.new_context(**base, **size, color_scheme=scheme)
+            ctx.set_default_timeout(WAIT_MS)
+            try:
+                page = ctx.new_page()
+                sign_in(page, b)
+                members(page, f"agent-icons-{kind}-{tag}.png", size is PHONE)
+            finally:
+                ctx.close()
+
+    def settings_page(name: str, size: dict[str, Any], scheme: str, tip: bool = False) -> None:
+        ctx = browser.new_context(**base, **size, color_scheme=scheme)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, b)
+            if size is PHONE:
+                page.click("#rooms-toggle")
+            page.click("#me-settings")
+            expect(page.locator("#app-dialog")).to_be_visible()
+            page.click("#settings-row-appearance" if size is PHONE else "#settings-tab-appearance")
+            expect(page.locator(".agent-icon-row")).to_have_count(4)
+            expect(page.locator('.agent-icon-row[data-harness="codex"]')).to_contain_text(
+                "Your light and dark images"
+            )
+            title = page.locator("#agent-icons-title")
+            title.scroll_into_view_if_needed()
+            if tip:
+                page.focus("#settings-text-larger")
+                page.keyboard.press("Tab")
+                expect(page.locator("#agent-icons-tip")).to_be_visible()
+            else:
+                page.evaluate("document.activeElement && document.activeElement.blur()")
+            shot(page, out, name)
+        finally:
+            ctx.close()
+
+    try:
+        pass_over("before")
+        for slot, args in UPLOADS.items():
+            put(*slot, args)
+        pass_over("after")
+        settings_page("agent-icons-settings-light.png", DESKTOP, "light")
+        settings_page("agent-icons-settings-dark.png", DESKTOP, "dark")
+        settings_page("agent-icons-settings-phone-light.png", PHONE, "light")
+        settings_page("agent-icons-tip-light.png", DESKTOP, "light", tip=True)
+    finally:
+        for harness in ("claude", "codex", "devin"):
+            web.delete(f"/api/agent-icons/{harness}", headers=b.write_headers())
 
 
 # ---------------------------------------------------------- the hosted shots
@@ -2121,6 +2249,113 @@ def shoot_approval(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def shoot_agent_owner(browser: Any, out: Path, world: Any) -> None:
+    """#496: whose an agent is, on a hosted broker with two people: alice (the admin, whose page this is)
+    and bob, and an agent each in #build, claude-1 on alice's laptop and codex-1 on bob's. Members names
+    each agent's owner under its name; the Inspector names the owner and the device. Light, dark and the
+    phone. It waits for the rows and the second person, never for the owner line, so the same script
+    shoots the page before the change."""
+    import asyncio
+    import hashlib
+    import threading
+
+    import httpx
+    from fakes.fake_agent import FakeAgent
+    from playwright.sync_api import expect
+
+    from switchboard import db
+    from switchboard.models import session_key
+
+    origin = world.origin
+    headers = {"Origin": origin, "X-Switchboard": "1"}
+    with httpx.Client(base_url=origin, headers=headers) as c:
+        one_time = world.claim_link().split("#t=", 1)[1]
+        assert c.post("/api/signin/password", json={"name": "admin", "password": one_time}).status_code == 200
+        assert c.post("/api/setup/password", json={"password": "correct horse battery"}).status_code == 200
+        added = c.post("/api/people", json={"name": "bob", "email": "bob@example.com"})
+        assert added.status_code == 200, added.text
+        bob_id = int(added.json()["person"]["id"])
+        admin_cookie = c.cookies.get("switchboard_session")
+    assert admin_cookie
+
+    def adopt(name: str, device: str, person: int | None) -> None:
+        """Fixtures only: a scripted agent has no device, so move it onto one whose agent token is the
+        person's, as a session over HTTPS is."""
+        store = world.broker.state.store
+        assert store.agent_token_add(person, device, hashlib.sha256(device.encode()).hexdigest())
+        room = store.get_room("#build")
+        member = next(m for m in store.members(room.id) if m.name == name)
+        with db.tx(store.con):
+            store.con.execute(
+                "UPDATE participants SET host=?, session_key=? WHERE id=?",
+                (device, session_key("test", device, name), member.participant_id),
+            )
+        world.broker.state.hub.members_changed("#build")
+
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+
+    def run_agent(coro: Any) -> Any:
+        return asyncio.run_coroutine_threadsafe(coro, loop).result(60)
+
+    agents = [
+        (FakeAgent(world.broker.home, "shots-owner-alice"), "claude-1", "alices-laptop", None),
+        (
+            FakeAgent(world.broker.home, "shots-owner-bob", person_id=bob_id),
+            "codex-1",
+            "bobs-desktop",
+            bob_id,
+        ),
+    ]
+    try:
+        world.set_test_mode(True)  # a test agent joins only in test mode: off again before any page loads
+        try:
+            for agent, name, device, person in agents:
+                run_agent(agent.start())
+                assert run_agent(agent.join("#build", name))["ok"]
+                world.broker.on_loop(adopt, name, device, person)
+        finally:
+            world.set_test_mode(False)
+        for slug, ctx_args in (
+            ("light", {**DESKTOP, "color_scheme": "light"}),
+            ("dark", {**DESKTOP, "color_scheme": "dark"}),
+            ("phone-light", {**PHONE, "color_scheme": "light"}),
+        ):
+            ctx = browser.new_context(timezone_id="UTC", locale="en-US", **ctx_args)
+            ctx.set_default_timeout(WAIT_MS)
+            ctx.add_cookies([{"name": "switchboard_session", "value": admin_cookie, "url": origin}])
+            try:
+                page = ctx.new_page()
+                page.goto(origin + "/")
+                connected(page)
+                tab = page.locator('#tabs .room[data-room="#build"]')
+                if not tab.is_visible():
+                    page.click("#rooms-toggle")
+                tab.click()
+                phone = slug == "phone-light"
+                if phone:  # Members is a sheet on a phone, with the Inspector inside it
+                    page.click("#buddy-toggle")
+                    expect(page.locator("#app")).to_have_class(re.compile(r"\bsheet-open\b"))
+                expect(page.locator("#buddy-list .member")).to_have_count(2)
+                expect(page.locator("#room-people .person-row")).to_have_count(2)  # bob is on the list
+                shot(page, out, f"agent-owner-members-{slug}.png")
+                with page.expect_response(
+                    lambda r: "/members/codex-1" in r.url and r.request.method == "GET", timeout=WAIT_MS
+                ):
+                    page.click('#buddy-list .member[data-name="codex-1"] .m-open')
+                expect(page.locator("#insp-name")).to_contain_text("codex-1")
+                shot(page, out, f"agent-owner-inspector-{slug}.png")
+            finally:
+                ctx.close()
+    finally:
+        for agent, *_ in agents:
+            run_agent(agent.close())
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(10)
+        loop.close()
+
+
 # -------------------------------------------------------------------- main
 def run(args: argparse.Namespace, pw: Any) -> None:
     from ui_world import HostedWorld, UIWorld
@@ -2132,12 +2367,14 @@ def run(args: argparse.Namespace, pw: Any) -> None:
     weak = HostedWorld(keep=args.keep)
     people = HostedWorld(keep=args.keep)  # alice, bob and carol, for mentioning a person (#418)
     consent = HostedWorld(keep=args.keep)  # an admin whose check has run out, for the consent page (#386)
+    owners = HostedWorld(keep=args.keep)  # alice, bob and an agent each, for whose an agent is (#496)
     try:
         world.start()
         hosted.start()
         weak.start()
         people.start()
         consent.start()
+        owners.start()
         env = {**os.environ, "TZ": "UTC", "HOME": REAL_HOME or os.environ["HOME"]}
         browser = pw.chromium.launch(executable_path=args.chrome or None, env=env)
         try:
@@ -2167,6 +2404,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_wake_settings(browser, out, world)
             shoot_room_rename(browser, out, world)
             shoot_settings_tabs(browser, out, world)
+            shoot_agent_icons(browser, out, world)
             shoot_settings_agents(browser, out, world)
             shoot_connect_codex(browser, out, world)
             shoot_oauth_consent(browser, out, world, consent)
@@ -2175,9 +2413,11 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_hosted(browser, out, hosted)
             shoot_common_password(browser, out, weak)
             shoot_mention_people(browser, out, people)
+            shoot_agent_owner(browser, out, owners)
         finally:
             browser.close()
     finally:
+        owners.stop()
         consent.stop()
         people.stop()
         weak.stop()
@@ -2185,7 +2425,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
         world.stop()
         if args.keep:
             print(
-                f"kept: {world.home} {world.home2} {hosted.home} {weak.home} {people.home}",
+                f"kept: {world.home} {world.home2} {hosted.home} {weak.home} {people.home} {owners.home}",
                 file=sys.stderr,
             )
 

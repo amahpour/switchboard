@@ -1,6 +1,6 @@
 ### Upgrading
 
-- **Update the server first, then the plugin.** Claude Code's plugin (0.10.0) sends a token typed into its settings as `X-Switchboard-Token`, which a server from before this release ignores: with the new plugin on an older server the plugin's connection is refused and its tools are gone. Upgrade the server, then run `claude plugin marketplace update switchboard` and `claude plugin update switchboard@switchboard` (or let auto-update do it). The database moves to schema 32 the first time this release starts, after the usual checked backup (`switchboard.db.v31.bak`): it adds an empty `listener_keys` table, and nothing else changes.
+- **Update the server first, then the plugin.** Claude Code's plugin (0.10.0) sends a token typed into its settings as `X-Switchboard-Token`, which a server from before this release ignores: with the new plugin on an older server the plugin's connection is refused and its tools are gone. Upgrade the server, then run `claude plugin marketplace update switchboard` and `claude plugin update switchboard@switchboard` (or let auto-update do it). The database moves to schema 33 the first time this release starts, after the usual checked backup; this change's step adds an empty `listener_keys` table.
 - **If a proxy in front of switchboard logs request headers**, redact `X-Switchboard-Token` as you do `Authorization` ([docs/DEPLOY.md](docs/DEPLOY.md)). The broker logs no header, and the proxies the deploy examples use log none by default.
 
 ### Added

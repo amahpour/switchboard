@@ -173,6 +173,30 @@ def test_the_agent_icons_are_the_pinned_files() -> None:
         assert source in notice, source
 
 
+def test_the_one_stylesheet_the_page_applies_by_script_is_the_brokers_own() -> None:
+    """#498, DESIGN.md §29.11: the uploaded avatars' stylesheet is the one piece of CSS app.js applies from
+    script, through a constructable sheet, and its text is only what ``/api/agent-icons.css`` answered:
+    no other file touches the CSSOM, nothing is written into a rule by hand, and the page still links
+    that stylesheet (after style.css, so it wins at equal weight). A tightening of the lint above, not an
+    exception to it: ``.style``, inline styles and creating <link> or <img> stay banned."""
+    js = {p.name: p.read_text() for p in files("js")}
+    for name, text in js.items():
+        if name != "app.js":
+            assert not re.search(r"CSSStyleSheet|adoptedStyleSheets|insertRule|replaceSync", text), name
+    app = js["app.js"]
+    assert app.count("replaceSync(") == 1 and app.count("new CSSStyleSheet(") == 1
+    assert not re.search(r"insertRule|addRule|\.cssText|document\.styleSheets", app)
+    refresh = app[app.index("async function refreshAgentIcons()") :]
+    refresh = refresh[: refresh.index("\n  }\n")]
+    assert "fetch('/api/agent-icons.css'" in refresh and "css = await r.text();" in refresh
+    assert "iconSheet.replaceSync(css);" in refresh
+    html = (STATIC / "index.html").read_text()
+    link = '<link rel="stylesheet" href="/api/agent-icons.css" id="agent-icons-css">'
+    assert html.count(link) == 1 and html.index('href="/static/style.css"') < html.index(link)
+    for page in ("login.html", "setup.html", "oauth.html"):
+        assert "agent-icons" not in (STATIC / page).read_text(), page  # only the app shows avatars
+
+
 def test_writes_carry_the_csrf_header() -> None:
     js = (STATIC / "app.js").read_text()
     assert "'X-Switchboard'" in js and "credentials: 'same-origin'" in js

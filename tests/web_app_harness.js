@@ -691,6 +691,39 @@ const SCENARIOS = {
     });
   },
 
+  // Whose an agent is (#496): a Members row names its owner only once the `people` frame names
+  // more than one person (and drops it again when the second leaves); the Inspector always names
+  // the owner and the device; an agent whose owner the broker could not work out shows none.
+  async member_owner() {
+    const rows = MEMBERS.slice(0, 3).map(function (m, i) {
+      return Object.assign({}, m, { owner: [ 'alice', 'bob', null ][i], host: i < 2 ? 'dev-' + i : '' });
+    });
+    const { w, ws } = await buildRoom(rows);
+    const owners = function () {
+      return findAll(w.$('buddy-list'), function (n) { return n.classList.contains('m-owner'); })
+        .map(function (n) { return n.textContent; });
+    };
+    const seen = { desktop: owners() };  // a desktop broker sends no people frame
+    ws.deliver({ t: 'people', people: ['alice'], online: ['alice'] });
+    await settle();
+    seen.one = owners();
+    ws.deliver({ t: 'people', people: ['alice', 'bob'], online: ['alice'] });
+    await settle();
+    seen.two = owners();
+    ws.deliver({ t: 'people', people: ['alice'], online: ['alice'] });
+    await settle();
+    seen.back = owners();
+    const inspector = async function (name) {
+      w.server.details['build/' + name] = { room: '#build', member: rows.find(function (m) { return m.name === name; }),
+                                             session: { id: null, why: 'x' }, queued: [], timeline: [] };
+      click(memberButton(w, name));
+      await settle();
+      return findAll(w.$('insp-body'), function (n) { return n.id === 'insp-owner'; }).map(function (n) { return n.textContent; });
+    };
+    seen.inspector = { alice: await inspector('claude-1'), bob: await inspector('codex-1'), none: await inspector('devin-1') };
+    return seen;
+  },
+
   // The Inspector's Hold and Kick run the same command path as the composer.
   async inspector_actions() {
     const { w, ws } = await buildRoom(MEMBERS);

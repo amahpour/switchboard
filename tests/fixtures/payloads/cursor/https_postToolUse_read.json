@@ -1,0 +1,21 @@
+{
+  "_source": "Cursor Agent 2026.10.18, agent -p in a temp project with a hook logging every payload (2026-10-22); the person's address field is left out, as test_fixtures_scan requires",
+  "_unverified": false,
+  "conversation_id": "00000000-0000-4000-8000-000000000120",
+  "generation_id": "00000000-0000-4000-8000-000000000121",
+  "model": "default",
+  "tool_name": "Read",
+  "tool_input": {
+    "file_path": "/ws/notes.txt"
+  },
+  "tool_output": "{\"file_path\":\"/ws/notes.txt\",\"content\":\"sanitized tool output\"}",
+  "duration": 5.958,
+  "tool_use_id": "call-00000000-0000-4000-8000-000000000122-0\nfc_00000000-0000-4000-8000-000000000123_0",
+  "session_id": "00000000-0000-4000-8000-000000000120",
+  "hook_event_name": "postToolUse",
+  "cursor_version": "2026.10.18-ea085cb",
+  "workspace_roots": [
+    "/ws"
+  ],
+  "transcript_path": "/ws/transcript.jsonl"
+}

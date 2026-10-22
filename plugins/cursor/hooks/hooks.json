@@ -13,6 +13,11 @@
         "command": "\"${CURSOR_PLUGIN_ROOT}/bin/hook\" post",
         "matcher": "MCP:switchboard_.*",
         "timeout": 10
+      },
+      {
+        "command": "\"${CURSOR_PLUGIN_ROOT}/bin/hook\" post-other",
+        "matcher": "^(?!MCP:switchboard_)",
+        "timeout": 2
       }
     ],
     "postToolUseFailure": [
@@ -20,6 +25,11 @@
         "command": "\"${CURSOR_PLUGIN_ROOT}/bin/hook\" failure",
         "matcher": "MCP:switchboard_.*",
         "timeout": 10
+      },
+      {
+        "command": "\"${CURSOR_PLUGIN_ROOT}/bin/hook\" failure-other",
+        "matcher": "^(?!MCP:switchboard_)",
+        "timeout": 2
       }
     ],
     "sessionStart": [

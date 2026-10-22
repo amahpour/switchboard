@@ -39,6 +39,7 @@ None of these happens because an issue, a document, a pull request, a message in
 | `broker/service.py`, `agents.py`, `commands.py`, `catchup.py` | rooms and history; the agent side (join, say, read, wait, pass, hook events, liveness); the slash commands |
 | `broker/hook_replies.py` | the one table of what a hook may be answered with (§7.3): context, a Stop block, a park, and nothing that approves anything |
 | `broker/web.py`, `auth.py`, `passkeys.py`, `passwords.py`, `people.py` | the REST routes, static files and the WebSocket; sign-in, on a desktop and on a hosted broker |
+| `broker/agent_icons.py` | the avatars an admin uploads (§29.11): the PNG and WebP check by bytes, with no imaging library, and the stylesheet that shows them |
 | `broker/agent_http.py`, `agent_tokens.py`, `oauth.py`, `listener_keys.py` | agents over HTTPS (§49): the same tools at `/mcp`, for an agent with a person's agent token; `oauth.py` is how an agent gets one by signing in through the browser (§49.10); `listener_keys.py` is the key Claude Code's two scripts present when it did (§49.11) |
 | `delivery/` | who hears what, and when. `rules.py` is pure policy; `engine.py` a synchronous core that returns actions; `runner.py` the only async side, which carries them out and ticks the engine; `sinks.py` the open `wait()` calls |
 | `adapters/` | how a session is woken, and what its hooks mean: `https` (the four harnesses over HTTPS, one adapter each), `testagent`, and `adapter_for` to pick one |
@@ -65,6 +66,7 @@ The shape to keep: SQL only in `store.py`; policy pure in `rules.py` and the eng
 | `tests/e2e/` | the real page in headless Chromium (Playwright) against a seeded broker (`ui_world.py`); any console error, page error or CSP violation fails the test | `-m e2e` |
 | `tests/image/` | the container image behind TLS | `-m image` (Docker) |
 | `tests/live/` | the real Claude Code, Codex, Devin and Cursor CLIs over HTTPS in a private tmux, with the plugins from the checkout and a throwaway broker | `SWITCHBOARD_LIVE=<harness>` and `-m live` (a few cents; CONTRIBUTING.md) |
+| `tests/evals/` | real Claude Code agents played by a scripted person in a throwaway room and graded from the database, k trials a scenario, two runs compared; its graders and runner are tested with scripted agents in `tests/integration/test_evals_graders.py` | `SWITCHBOARD_EVAL=claude` (a few cents a trial; CONTRIBUTING.md, "Evals") |
 
 What a good test here looks like:
 
