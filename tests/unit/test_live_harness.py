@@ -301,6 +301,12 @@ def test_scenarios_name_what_they_check() -> None:
 
 # --------------------------------------------------------------- the opt-in
 def test_a_harness_runs_only_when_named(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The opt-in is the harness's name (or ``all``) in ``SWITCHBOARD_LIVE``, and the CLIs and tmux must be
+    there. Fails if a harness runs without being named, or if a missing CLI is not named in the reason. The
+    PATH lookup is faked: a CI runner may have no tmux."""
+    monkeypatch.setattr(
+        world.shutil, "which", lambda name, path=None: None if name == "no-such-cli" else "/bin/x"
+    )
     monkeypatch.delenv("SWITCHBOARD_LIVE", raising=False)
     assert "SWITCHBOARD_LIVE=claude" in (world.skip_reason("claude", "sh") or "")
     monkeypatch.setenv("SWITCHBOARD_LIVE", "codex, devin")
