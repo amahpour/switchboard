@@ -1954,17 +1954,15 @@ class Store:
     def handle_items(self, membership_id: int, message_ids: Iterable[int]) -> int:
         """Those of this member's in-context deliveries become handled, as ``mark_handled`` makes all of
         them (a reply held because another agent had already answered, §8.8). Returns how many."""
-        ids = sorted(set(message_ids))
-        if not ids:
-            return 0
         now = self.clock.now()
-        marks = ",".join("?" * len(ids))
+        n = 0
         with db.tx(self.con):
-            n = self.con.execute(
-                "UPDATE deliveries SET state='handled', handled_at=? WHERE membership_id=?"
-                f" AND state='in_context' AND message_id IN ({marks})",
-                (now, membership_id, *ids),
-            ).rowcount
+            for message_id in sorted(set(message_ids)):  # a question or two: one statement each
+                n += self.con.execute(
+                    "UPDATE deliveries SET state='handled', handled_at=? WHERE membership_id=?"
+                    " AND message_id=? AND state='in_context'",
+                    (now, membership_id, message_id),
+                ).rowcount
             self._advance_cursor(membership_id)
         return n
 
