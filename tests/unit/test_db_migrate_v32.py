@@ -105,18 +105,18 @@ def test_a_fresh_database_and_a_migrated_one_have_the_same_table(tmp_path: Path)
 @pytest.mark.parametrize(
     "bad",
     [
-        {"harness": "test"},  # only the four harnesses with an avatar of their own
-        {"harness": "unknown"},
-        {"scheme": "sepia"},
-        {"mime": "image/svg+xml"},  # never SVG, even if a store function forgot to ask
-        {"mime": "image/gif"},
-        {"data": b""},
-        {"data": b"x" * (256 * 1024 + 1)},
-        {"width": 0},
-        {"width": 513},
-        {"height": 0},
-        {"height": 513},
-        {"sha256": "short"},
+        pytest.param({"harness": "test"}, id="harness-test"),  # only the four with an avatar of their own
+        pytest.param({"harness": "unknown"}, id="harness-unknown"),
+        pytest.param({"scheme": "sepia"}, id="scheme-sepia"),
+        pytest.param({"mime": "image/svg+xml"}, id="svg"),  # never SVG, even if a store function forgot
+        pytest.param({"mime": "image/gif"}, id="gif"),
+        pytest.param({"data": b""}, id="no-bytes"),
+        pytest.param({"data": b"x" * (256 * 1024 + 1)}, id="over-256-kb"),
+        pytest.param({"width": 0}, id="width-0"),
+        pytest.param({"width": 513}, id="width-513"),
+        pytest.param({"height": 0}, id="height-0"),
+        pytest.param({"height": 513}, id="height-513"),
+        pytest.param({"sha256": "short"}, id="short-hash"),
     ],
 )
 def test_the_columns_say_what_they_may_hold(tmp_path: Path, bad: dict[str, object]) -> None:

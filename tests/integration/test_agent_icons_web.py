@@ -171,23 +171,29 @@ def test_an_unknown_harness_or_scheme_is_not_found(broker: InProcBroker, web: ht
     assert stored(web) == [] and icon_events(broker) == []
 
 
-@pytest.mark.parametrize(
-    ("data", "ctype", "status", "code", "words"),
-    [
-        (pictures.SVG, "image/svg+xml", 415, "svg", ("SVG", "script")),
-        (pictures.SVG, "image/png", 415, "svg", ("SVG",)),
-        (PNG, "image/webp", 400, "mismatch", ("PNG", "image/webp")),
-        (WEBP, "image/png", 400, "mismatch", ("WebP", "image/png")),
-        (PNG, "image/jpeg", 415, "type", ("PNG", "WebP")),
-        (PNG, None, 415, "type", ("PNG", "WebP")),
-        (b"", "image/png", 400, "empty", ("empty",)),
-        (b"not a picture at all", "image/png", 415, "not_an_image", ("PNG", "WebP")),
-        (pictures.png_with_size(513, 100), "image/png", 400, "dimensions", ("513", "512")),
-        (PNG[:-9], "image/png", 400, "bad_png", ("PNG",)),
-        (PNG + b"<script>alert(1)</script>", "image/png", 400, "bad_png", ("PNG",)),
-        (pictures.png(64, 64, pad=300_000), "image/png", 413, "too_large", ("256 KB",)),
-    ],
-)
+REFUSED = [
+    pytest.param(pictures.SVG, "image/svg+xml", 415, "svg", ("SVG", "script"), id="svg-called-svg"),
+    pytest.param(pictures.SVG, "image/png", 415, "svg", ("SVG",), id="svg-called-png"),
+    pytest.param(PNG, "image/webp", 400, "mismatch", ("PNG", "image/webp"), id="png-called-webp"),
+    pytest.param(WEBP, "image/png", 400, "mismatch", ("WebP", "image/png"), id="webp-called-png"),
+    pytest.param(PNG, "image/jpeg", 415, "type", ("PNG", "WebP"), id="other-type"),
+    pytest.param(PNG, None, 415, "type", ("PNG", "WebP"), id="no-type"),
+    pytest.param(b"", "image/png", 400, "empty", ("empty",), id="empty"),
+    pytest.param(b"not a picture at all", "image/png", 415, "not_an_image", ("PNG", "WebP"), id="text"),
+    pytest.param(
+        pictures.png_with_size(513, 100), "image/png", 400, "dimensions", ("513", "512"), id="513-wide"
+    ),
+    pytest.param(PNG[:-9], "image/png", 400, "bad_png", ("PNG",), id="cut-short"),
+    pytest.param(
+        PNG + b"<script>alert(1)</script>", "image/png", 400, "bad_png", ("PNG",), id="markup-appended"
+    ),
+    pytest.param(
+        pictures.png(64, 64, pad=300_000), "image/png", 413, "too_large", ("256 KB",), id="over-256-kb"
+    ),
+]
+
+
+@pytest.mark.parametrize(("data", "ctype", "status", "code", "words"), REFUSED)
 def test_a_refused_file_says_why_and_changes_nothing(
     broker: InProcBroker,
     web: httpx.Client,

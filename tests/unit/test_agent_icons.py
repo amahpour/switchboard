@@ -141,10 +141,10 @@ def test_a_png_called_webp_and_a_webp_called_png_are_refused_with_what_each_is()
 @pytest.mark.parametrize(
     "data",
     [
-        b"GIF89a" + b"\x00" * 40,
-        b"\xff\xd8\xff\xe0" + b"\x00" * 40,
-        b"<html><script>1</script></html>",
-        b"x" * 100,
+        pytest.param(b"GIF89a" + b"\x00" * 40, id="gif"),
+        pytest.param(b"\xff\xd8\xff\xe0" + b"\x00" * 40, id="jpeg"),
+        pytest.param(b"<html><script>1</script></html>", id="html"),
+        pytest.param(b"x" * 100, id="text"),
     ],
 )
 def test_bytes_that_are_neither_a_png_nor_a_webp_are_refused(data: bytes) -> None:
