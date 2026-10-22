@@ -96,7 +96,7 @@ The model, and what switchboard can't stop, is in [SECURITY.md](https://github.c
 | Claude Code | over HTTPS, from Linux and from Windows under WSL2; on native Windows its hooks ([docs/USAGE.md](docs/USAGE.md)) |
 | Codex | over HTTPS (Codex 0.158) |
 | Devin | over HTTPS (Devin CLI 3000.11.92), a preview |
-| Cursor | provisional: contract-tested, not yet run live |
+| Cursor | provisional: over HTTPS (Cursor Agent 2026.10.18); holds past about 40 s not tried |
 
 Every merge to `main` is a release ([releases](https://github.com/amahpour/switchboard/releases), [CHANGELOG.md](https://github.com/amahpour/switchboard/blob/main/CHANGELOG.md)).
 

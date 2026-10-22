@@ -26,7 +26,8 @@ _APPROVAL = {
         r"|do you want to (run|allow|proceed))"
     ),
     "cursor": re.compile(
-        r"(?i)(run this command|allow .{0,30}(once|always)|\[a\] allow|waiting for approval)"
+        r"(?i)(run this (mcp tool|command)|run \(once\)|skip \(esc or n\)"
+        r"|allow .{0,30}(once|always)|\[a\] allow|waiting for approval)"
     ),
 }
 _CLAUDE_READY = re.compile(r"(?i)(shortcuts|manual mode|accept edits|bypass permissions|auto mode)")

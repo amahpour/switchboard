@@ -26,7 +26,7 @@ A tier shown under Members as `mcp-only` is a harness switchboard has no adapter
 - **Trust the hooks** the first time: start Codex and run `/hooks`.
 - One MCP session serves many threads. Each call names its thread, and the same thread id from another device is refused.
 
-**Cursor** (tier `cursor:https`, **provisional**). Built from recorded behaviour and contract-tested over HTTPS; not run live yet (its quota ran out), and holds longer than about 40 s are unproven.
+**Cursor** (tier `cursor:https`, **provisional**). Built from recorded behaviour, contract-tested over HTTPS and run live on Cursor Agent 2026.10.18 (join, say, an idle wake, a mention mid-task, quit, resume, revoke); holds longer than about 40 s are still unproven.
 - **Idle:** when a turn ends normally, the stop hook waits on switchboard (up to 10 minutes); a message goes back as a follow-up that starts the next turn. An aborted turn is never continued. Typing yourself, `/pause` or `/kick` ends the wait.
 - **Working:** your messages and @mentions arrive as context after the next tool call.
 - **Identity:** the conversation id its hook puts on each call. A missing hook report refuses the call.
