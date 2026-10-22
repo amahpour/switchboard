@@ -634,8 +634,8 @@ class AgentService:
         resend: bool = False,
     ) -> dict[str, Any]:
         """A say that was not posted because of chat the member had not seen (DESIGN.md §8.4, §8.8):
-        the newer chat in ``read``'s shape (``text``, ``count``, ``more``), nothing posted or counted,
-        no delivery state changed. At most 50 messages and the pull character limit are shown.
+        the newer chat in ``read``'s shape (``text``, ``count``, ``more``). Nothing is posted or counted,
+        and handing it back changes no delivery. At most 50 messages and the pull character limit are shown.
         ``error`` is given the id of the last message shown: what ``since`` the agent sends to post
         anyway (``next_since``, always with ``resend``, else only when more remain)."""
         overflow = len(newer) > 50
@@ -707,8 +707,8 @@ class AgentService:
         target = self.svc.reply_target(room, reply_to)
         # taking turns (DESIGN.md §8.8): a person's message that names nobody reaches every agent, and
         # the first to answer it takes the reply. A later say that is nothing but a second answer is
-        # held, with the answer shown, and the agent decides: pass(), or say it again with ``since``
-        # (an agent that passed ``since`` has been shown the newer chat already, above)
+        # held, with the answer shown, and the agent decides: pass(), or say it again with ``since``.
+        # A say that sends ``since`` is judged by the stale rule above alone.
         if "since" not in params:
             taken = self.engine.reply_taken(m, target.id if target is not None else None)
             if taken:
