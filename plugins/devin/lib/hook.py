@@ -44,6 +44,20 @@ def send(path, body, timeout=5):
         return None
 
 
+def report_permission(sid):
+    """Tell switchboard that this session has an approval prompt open (docs/DESIGN.md §49.9, #472).
+
+    In Devin a PermissionRequest hook's output is a permission decision, so this one cannot make one:
+    it prints nothing and returns nothing, the server's reply is dropped (never printed), and whatever goes
+    wrong (no server, a refusal, a crash) is swallowed, so Devin shows its own prompt as it always does.
+    It sends the session's id and the event's name, never the tool or its input.
+    tests/unit/test_permission_hooks_static.py runs it against a server that answers every decision."""
+    try:
+        send("/mcp/event", {"harness": "devin", "event": "PermissionRequest", "session_id": sid}, timeout=2)
+    except Exception:  # noqa: BLE001 - nothing this hook does may reach Devin as a result
+        pass
+
+
 def main():
     kind = sys.argv[1]
     try:
@@ -52,6 +66,9 @@ def main():
         return
     sid = p.get("session_id")
     if not isinstance(sid, str) or not 0 < len(sid) <= 128:
+        return
+    if kind == "permission":
+        report_permission(sid)
         return
     if kind == "pre":
         tool = p.get("tool_name", "")
