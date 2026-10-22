@@ -27,6 +27,7 @@ from switchboard.models import (
     WATCHDOG_DONE,
     AgentIcon,
     AgentTokenRow,
+    Answer,
     Batch,
     Event,
     Item,
@@ -1876,6 +1877,27 @@ class Store:
             (membership_id, since, limit),
         ).fetchall()
         return [Item.from_row(r) for r in rows]
+
+    def answers_to(self, room_id: int, question_id: int, not_membership_id: int, limit: int = 50) -> list[Answer]:
+        """The agent chat posts after a person's message, other than one member's own, whose author was
+        sent that message (§8.8), oldest first, with when the author had it in context. An author that
+        never was sent it (it joined later, or a /catchup request withheld it) isn't answering it."""
+        rows = self.con.execute(
+            "SELECT n.id, n.ts, n.sender_name, n.reply_to, n.mentions, d.in_context_at"
+            " FROM messages n JOIN deliveries d"
+            "   ON d.membership_id=n.sender_membership_id AND d.message_id=?"
+            " WHERE n.room_id=? AND n.id>? AND n.kind='chat' AND n.sender_kind='agent'"
+            " AND n.sender_membership_id<>? ORDER BY n.id LIMIT ?",
+            (question_id, room_id, question_id, not_membership_id, limit),
+        ).fetchall()
+        out = []
+        for r in rows:
+            try:
+                mentions = tuple(str(x) for x in json.loads(r["mentions"] or "[]"))
+            except (ValueError, TypeError):
+                mentions = ()
+            out.append(Answer(r["id"], r["sender_name"], r["ts"], r["reply_to"], mentions, r["in_context_at"]))
+        return out
 
     def batch_items(self, batch_id: int) -> list[Item]:
         rows = self.con.execute(

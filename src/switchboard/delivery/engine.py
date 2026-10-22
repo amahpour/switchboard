@@ -46,6 +46,7 @@ from switchboard.models import (
     REPORT_ONLY_EVENTS,
     WATCHDOG_DONE,
     Action,
+    Answer,
     Batch,
     HookEvent,
     HookOut,
@@ -786,6 +787,28 @@ class Engine:
                 retry_after_s=retry,
             )
         return retry
+
+    def check_reply_taken(
+        self, p: Participant, m: Membership, reply_to: int | None
+    ) -> tuple[Item, Answer] | None:
+        """Taking turns on a person's message that names nobody (§8.8): None if the say may go ahead,
+        else the question and the other agent's earlier answer to it (and a ``reply_taken`` event).
+        Only a say that can be nothing but a second answer is held: see ``rules.questions_answered``.
+        Nothing is handled and nothing posted; the agent decides what to do with what it is shown."""
+        for q in rules.questions_answered(self.store.in_context_items(m.id), reply_to):
+            taken = rules.reply_taken(q, m.screen_name, self.store.answers_to(m.room_id, q.message_id, m.id))
+            if taken is not None:
+                self._event(
+                    "reply_taken",
+                    room_id=m.room_id,
+                    membership_id=m.id,
+                    participant_id=p.id,
+                    question=q.message_id,
+                    answer=taken.message_id,
+                    by=taken.sender,
+                )
+                return q, taken
+        return None
 
     def check_pass(self, p: Participant, m: Membership) -> list[int]:
         """The read-first rule (§24): [] if pass() may go ahead, else the ids of peer

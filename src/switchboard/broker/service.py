@@ -1283,6 +1283,7 @@ class RoomService:
             "loop_guard",
             "hop_limit_set",
             "rate_limited",
+            "reply_taken",
             "pass_refused",
             "hold",
             "release",

@@ -597,6 +597,20 @@ class Item:
 
 
 @dataclass(frozen=True)
+class Answer:
+    """Another agent's chat message that may have answered a person's question (DESIGN.md §8.8): who
+    posted it and when, what it replied to and @mentioned, and when its author had the question in
+    context (None: never, so the post is not an answer to it)."""
+
+    message_id: int
+    sender: str
+    ts: float
+    reply_to: int | None
+    mentions: tuple[str, ...]
+    seen_at: float | None
+
+
+@dataclass(frozen=True)
 class Batch:
     id: int
     membership_id: int
