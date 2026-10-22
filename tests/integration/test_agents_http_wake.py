@@ -408,17 +408,30 @@ def test_what_counts_as_a_subagents_hook() -> None:
 
 
 def test_the_report_of_a_second_tool_is_told_from_the_one_with_a_result() -> None:
-    """``second_report`` is true only for a PostToolUse of a switchboard tool (by either harness's name
-    for it) that sent no ``tool_response`` at all. Fails if it drops a report that has a result (empty
-    or not), another tool's report, or a failure's (which never has a result)."""
+    """``second_report`` is true only for a PostToolUse of a switchboard tool (by any harness's name
+    for it: Claude Code's, Codex's, Devin's and Cursor's) that sent no ``tool_response`` at all. Fails if
+    it drops a report that has a result (empty or not), another tool's report, or a failure's (which never
+    has a result)."""
     second = agent_http.second_report
     none: dict[str, Any] = {"tool_response": None}
-    for tool in ("mcp__switchboard__say", "mcp__plugin_switchboard_switchboard__wait"):
+    for tool in (
+        "mcp__switchboard__say",
+        "mcp__plugin_switchboard_switchboard__wait",
+        "mcp__switchboard_https__wait",
+        "MCP:switchboard_say",
+    ):
         assert second("PostToolUse", {"tool_name": tool, **none})
         assert not second("PostToolUse", {"tool_name": tool, "tool_response": ""})
         assert not second("PostToolUse", {"tool_name": tool, "tool_response": '[{"type": "text"}]'})
         assert not second("PostToolUseFailure", {"tool_name": tool, **none})
-    for tool in ("Bash", "mcp__github__say", "mcp__switchboard_https__wait", "xmcp__switchboard__say", ""):
+    for tool in (
+        "Bash",
+        "mcp__github__say",
+        "MCP:github_say",
+        "xmcp__switchboard__say",
+        "xMCP:switchboard_say",
+        "",
+    ):
         assert not second("PostToolUse", {"tool_name": tool, **none}), tool
     assert not second("PostToolUse", none)  # no tool name at all
 

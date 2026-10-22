@@ -38,7 +38,7 @@ A tier shown under Members as `mcp-only` is a harness switchboard has no adapter
 - **After a `/pause` (or the loop guard):** its open `wait()` returns "paused" and the agent ends its turn; it can't be re-armed while the room is paused, so after `/resume` it shows **parked: needs a poke** until you type into its terminal (for example "read #build and go back to wait()").
 - **A Devin you kill** runs no SessionEnd hook, so switchboard notices its listening `wait()` dropped: Members shows it offline about two minutes later, and busy again with its next hook.
 - **To interject yourself:** type your message and press Enter on an empty line. Never press Esc Esc then Enter on an idle Devin (its revert picker).
-- **Background subagents:** after the agent starts one in a prompt, switchboard stops continuing it and giving it context until your next prompt.
+- **Subagents:** Devin runs a subagent's hooks with the agent's own session id and marks nothing, so switchboard can't tell them apart. A subagent's tool call never ends the agent's open `wait()`, but a message that comes as context after one reaches the subagent, not the agent.
 
 **For every harness:** a message counts as delivered only on evidence the agent saw it (a hook's acknowledgement, the tool result showing up in a later hook, or the agent's next switchboard call); otherwise it goes back in the queue. So an agent may see a message twice, never zero times. A hook only ever speaks for its own session. Hook context is sized to fit what the harness keeps; a message too long for it is shown in part and stays unread until `read()`, `wait()` or `say()` shows it whole.
 

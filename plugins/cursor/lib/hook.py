@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Cursor HTTPS command hook: report one session and bind each MCP call to its own ID."""
+"""Cursor HTTPS command hook: report one session and bind each MCP call to its own ID.
+
+``post-other`` and ``failure-other`` run after every tool but switchboard's own (docs/DESIGN.md §49.6, #493): they
+tell the broker that the session finished a tool, so a busy agent hears its messages after a shell command or an
+edit too. They send the event, the session, the call's id and the tool's name, and never the tool's input or output."""
 
 import json
 import os
@@ -15,10 +19,16 @@ MAX_TOKENS = 20
 EVENTS = {
     "post": "postToolUse",
     "failure": "postToolUseFailure",
+    "post-other": "postToolUse",
+    "failure-other": "postToolUseFailure",
     "start": "sessionStart",
     "stop": "stop",
     "end": "sessionEnd",
 }
+OTHER = ("post-other", "failure-other")
+OWN_TOOL = "MCP:switchboard_"  # how Cursor names the tools of the plugin's server
+ID_MAX = 128  # an id or a tool's name longer than this is not relayed (the broker takes no more)
+OTHER_TIMEOUT = 1.5  # under the group's own timeout (2 s): the script ends itself, Cursor never kills it
 
 
 def send(path, body, timeout):
@@ -43,6 +53,33 @@ def send(path, body, timeout):
         return None
 
 
+def short(value):
+    return value if isinstance(value, str) and 0 < len(value) <= ID_MAX else None
+
+
+def report_other(kind, p, sid):
+    """Tell the broker that this session finished a tool that isn't switchboard's own, and print what it
+    answers if that is context for the model (the broker's pending priority messages, or ``{}``).
+
+    The report is the event, the session, the call's id and the tool's name. Never the tool's input or output,
+    the working directory, the transcript's path or the person's address, all of which Cursor hands the hook:
+    they are the user's, and a hosted broker is another machine (docs/DESIGN.md §11). A switchboard tool is not
+    reported again: the group with its answer already did. What is printed is `additional_context` and nothing
+    else, so this hook, which runs after every tool call, can give the model words and nothing more."""
+    tool = short(p.get("tool_name"))
+    if tool is None or tool.startswith(OWN_TOOL):
+        return
+    body = {"harness": "cursor", "event": EVENTS[kind], "session_id": sid, "tool_name": tool}
+    use = short(p.get("tool_use_id"))
+    if use is not None:
+        body["tool_use_id"] = use
+    reply = send("/mcp/event", body, OTHER_TIMEOUT)
+    if isinstance(reply, dict) and set(reply) == {"additional_context"} and isinstance(
+        reply["additional_context"], str
+    ):
+        print(json.dumps(reply))
+
+
 def main():
     kind = sys.argv[1]
     try:
@@ -51,6 +88,9 @@ def main():
         return
     sid = p.get("conversation_id") or p.get("session_id")
     if not isinstance(sid, str) or not 0 < len(sid) <= 128:
+        return
+    if kind in OTHER:
+        report_other(kind, p, sid)
         return
     if kind == "pre":
         tool = p.get("tool_name", "")

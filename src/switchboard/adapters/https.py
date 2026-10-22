@@ -373,7 +373,16 @@ class HttpsDevinAdapter(Adapter):
 
     def closes_waits(self, p: Participant, ev: HookEvent) -> bool:
         """Any hook of this session other than the wait() call's own ends an open
-        wait(): the agent has moved on (an interrupt sends no cancel)."""
+        wait(): the agent has moved on (an interrupt sends no cancel).
+
+        Except that a tool of someone else's finishing says nothing of the kind (#493). The plugin reports
+        every tool now, and Devin's hooks carry no marker of a subagent: a background subagent that works
+        while the main agent listens in its wait() reports each of its tool calls with the main agent's
+        session. If those ended the wait, a listening Devin would be woken by its own helper's tool calls
+        and told its session "moved on", over and over. An interrupt is followed by the person's next
+        prompt or the turn's Stop, and those end the wait."""
+        if ev.ev == "PostToolUse" and not (ev.tool or "").startswith(DEVIN_TOOL_PREFIX):
+            return False
         return not (ev.ev in ("PreToolUse", "PostToolUse") and ev.tool == self.wait_tool)
 
     def is_wait_pre(self, ev: HookEvent) -> bool:
