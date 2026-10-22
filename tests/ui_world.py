@@ -469,6 +469,20 @@ class UIWorld:
         finally:
             not_test_mode(b)
 
+    def set_member_status(self, room: str, name: str, status: str, src: str = "hook:Stop") -> None:
+        """Set a seeded agent's status the way a hook would, and publish the resulting Members frame
+        (a status no scripted agent can reach, such as ``waiting-approval``, #472)."""
+        b = self.broker
+
+        def update() -> None:
+            st = b.state
+            row = st.store.get_room(room)
+            member = st.store.find_member(row.id, name)
+            st.store.set_status(member.participant_id, status, src)
+            st.hub.members_changed(room)
+
+        b.on_loop(update)
+
     def set_approval_modes(self, room: str, modes: dict[str, str]) -> None:
         """Set seeded agents' approval modes and publish the resulting Members frame."""
         b = self.broker

@@ -3855,16 +3855,7 @@ def test_an_agent_waiting_for_approval_shows_in_members_the_inspector_and_on_its
     page = review_room(ui, slug)
 
     def status(name: str, value: str) -> None:
-        def go() -> None:
-            st = ui.world.broker.state
-            r = st.store.get_room(room)
-            assert r is not None
-            m = st.store.find_member(r.id, name)
-            assert m is not None
-            st.store.set_status(m.participant_id, value, "hook:Notification")
-            st.hub.members_changed(room)
-
-        ui.world.broker.on_loop(go)
+        ui.world.set_member_status(room, name, value, "hook:Notification")
 
     page.click("#board-toggle")
     pulse = page.locator('#board .board-card[data-item="F4"] .board-pulse')  # conceded, owner codex-1

@@ -792,7 +792,9 @@ def test_a_subagents_hooks_settle_nothing_but_the_end_of_an_approval_prompt(brok
     claude_hook(claude, event="Notification", notification_type="permission_prompt", agent_id="")
     assert row(broker, "claude-1")["status"] == "waiting-approval"
     broker.call("human.say", {"room": "#build", "text": "@claude-1 are you there"})
-    sub = claude_hook(claude, event="PostToolUse", tool_name="Bash", tool_use_id="toolu_01y", agent_id=SUBAGENT_ID)
+    sub = claude_hook(
+        claude, event="PostToolUse", tool_name="Bash", tool_use_id="toolu_01y", agent_id=SUBAGENT_ID
+    )
     assert sub == "{}"  # a subagent's tool says the prompt was answered, and takes no message for the session
     assert row(broker, "claude-1")["status"] == "busy" and member(broker, "claude-1").queued == 1
 

@@ -344,7 +344,8 @@ def test_a_prompt_in_an_idle_session_ends_its_listener_like_any_other_hook(w: Wo
     prompt(w, p)
     assert w.p(p).status == "waiting-approval"
     [res] = w.resolved(out.sink_id)
-    assert res["status"] == "cancelled"  # the listener's round ends, as for any hook; the next Stop starts one
+    # the listener's round ends, as for any hook; the next Stop starts one
+    assert res["status"] == "cancelled"
     w.human("anyone there? @bot", mentions=("bot",))
     assert len([r for r in w.resolved() if r.get("status") == "messages"]) == 0
 
