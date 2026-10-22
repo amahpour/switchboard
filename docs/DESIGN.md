@@ -1138,6 +1138,7 @@ live/              harness/..., test_live_*.py (opt-in; retired, §12.4)
 - **web static lint:** no `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write`, `eval`, `new Function`, inline `<script>` or `style=` in `web/static`.
 
 ### 12.2 Integration tests (in-process broker, temp home)
+- **Broker lifecycle:** after uvicorn shuts down, the test broker cancels and awaits any loop-level tasks (including the SSE shutdown watcher started by an MCP response) before closing its event loop (#473). A completed `/mcp` response followed by `stop()` leaves no pending watcher.
 - **Persistence:** post, restart the broker, and check that history and pending/unread items survive, and that offered batches expire and revert.
 - **Web auth:**
   - 421 on other hosts, including a WebSocket with `Host: 127.0.0.1` and a valid cookie;
