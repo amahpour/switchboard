@@ -185,9 +185,12 @@ def planted(fixture: str) -> dict[str, Any]:
     for key in ("tool_input", "tool_output", "tool_response", "error_message"):
         if key in doc:
             doc[key] = {"command": SECRET} if key == "tool_input" else SECRET
-    for key in ("cwd", "transcript_path", "user_email"):
+    for key in ("cwd", "transcript_path"):
         if key in doc:
             doc[key] = f"/{SECRET}"
+    if fixture.startswith("cursor/"):
+        # Cursor hands every hook the person's address; the fixtures leave it out (test_fixtures_scan)
+        doc["user_email"] = f"{SECRET}@example.com"
     doc["workspace_roots"] = [f"/{SECRET}"] if "workspace_roots" in doc else None
     return {k: v for k, v in doc.items() if v is not None}
 
