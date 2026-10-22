@@ -24,7 +24,7 @@ def test_v4_database_gains_an_empty_preferences_table_and_a_checked_backup(tmp_p
     os.chmod(p, 0o600)
 
     con = db.open_db(p)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 32
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 33
     assert db.row_counts(con, db.kept(db.V3_TABLES)) == before
     assert con.execute("SELECT person_id, theme FROM preferences").fetchall() == []
     assert db.integrity_ok(con) is None

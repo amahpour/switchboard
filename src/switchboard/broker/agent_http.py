@@ -25,6 +25,9 @@ runs on the agent's machine.
   made a call, so a busy session hears its priority messages after every tool call.
 - **The listener** (``/mcp/listen``): Claude Code's Stop hook posts its session id there and waits,
   round after round, and the answer is the message that wakes it (§49.4).
+- **A listener key** (§49.11, #488) is what that hook, and ``/mcp/session``, present when the agent
+  signed in through the browser and no token is within a script's reach: a bearer for those two routes
+  and for one session, claimed over the signed-in connection and never accepted anywhere else.
 - **No credentials.** A session's memberships are read from the store on every call, so a broker
   restart drops nobody. A call names its membership (``m:<id>``), and ``AgentService`` checks it
   against the caller's own session.
@@ -51,7 +54,7 @@ from mcp.types import TextContent, ToolAnnotations
 from starlette.routing import Route
 
 from switchboard.adapters.https import DEVIN_TOOL_PREFIX
-from switchboard.broker import agent_tokens
+from switchboard.broker import agent_tokens, listener_keys
 from switchboard.broker.agents import AgentConn
 from switchboard.broker.hook_replies import (
     FIELD_SCAN_MAX,
@@ -129,6 +132,7 @@ INPUT_SESSION = "switchboard_session_id"
 INPUT_USE = "switchboard_tool_use_id"
 PRETOOL_PATH = "/mcp/pretool"
 EVENT_PATH = "/mcp/event"
+TOKEN_HEADER = b"x-switchboard-token"  # where the plugin sends a typed token: not Authorization (§49.5, #488)
 SESSION_HEADER = b"x-switchboard-session"  # the listener's session id, the only thing it sends
 WAIT_HEADER = b"x-switchboard-wait"  # how long one round of the listener waits
 AGAIN_HEADER = b"x-switchboard-again"  # "1" on the listener's later rounds: only an idle session waits on
@@ -186,6 +190,7 @@ class Caller:
     harness: str
     thread: str | None
     conn: HttpConn
+    key: str | None = None  # the sha256 of the listener key its connection carries, if it does (§49.11)
 
 
 @dataclass
@@ -420,7 +425,8 @@ class HttpTools:
             thread = await self.uses.session(token.id, use) if use is not None else None
         else:
             thread = self._thread_of(ctx)
-        self._caller.set(Caller(token, harness, thread, conn))
+        key = scope.get("state", {}).get("listener_key")
+        self._caller.set(Caller(token, harness, thread, conn, key if isinstance(key, str) else None))
         if harness == "codex" and thread is not None and self.session_auth is not None:
             sid = _header(scope, b"mcp-session-id")
             if sid is not None and scope.get("method") == "POST":
@@ -455,6 +461,9 @@ class HttpTools:
         if c is None:
             return "{}"
         event, sid = str(fields.get("event") or ""), _id(fields.get("session_id"))
+        if c.harness == "claude" and c.key is not None and sid:
+            # the signed-in connection that carries a listener key's hash says which session the key is for
+            self.state.listener_keys.name_session(c.token, c.key, sid)
         if event == "PermissionRequest":
             # A PermissionRequest hook's output is a permission decision in Codex and Devin, and an
             # mcp_tool hook's output is this reply (live, Codex 0.158.0: an "allow" in it approved the
@@ -591,6 +600,15 @@ def _header(scope: Scope, name: bytes) -> str | None:
     return None
 
 
+@dataclass(frozen=True)
+class Door:
+    """Who is at ``/mcp/listen`` or ``/mcp/session``: the token (a key's own token, when it came in with a
+    listener key) and the key itself, or None for a token."""
+
+    row: AgentTokenRow
+    key: str | None = None
+
+
 class AgentAuth:
     """In front of ``/mcp`` (§49.2): no browser, a live agent token, and an MCP session used only
     with the token that opened it."""
@@ -607,11 +625,55 @@ class AgentAuth:
         self.touched: dict[int, float] = {}  # token id -> when its last use was written
 
     def token(self, scope: Scope) -> AgentTokenRow | None:
+        """The live agent token this request carries: ``Authorization: Bearer sbat_…`` (a hand-made server,
+        a browser sign-in), else ``X-Switchboard-Token`` (the plugin's typed token: Claude Code starts no
+        browser sign-in for a server with an Authorization header, even an empty one, §49.5). The first
+        that is live wins, and a listener key (``sbl_``) is neither."""
+        scheme, _, value = (_header(scope, b"authorization") or "").partition(" ")
+        for given in (
+            value.strip() if scheme.lower() == "bearer" else "",
+            (_header(scope, TOKEN_HEADER) or "").strip(),
+        ):
+            if agent_tokens.TOKEN_RE.fullmatch(given):
+                row = self.state.store.agent_token_by_hash(agent_tokens.token_hash(given))
+                if row is not None:
+                    return row
+        return None
+
+    async def door(self, scope: Scope, send: Send, message: str) -> "Door | None":
+        """Who is at ``/mcp/listen`` or ``/mcp/session`` (§49.4, §49.11): an agent token, or a listener
+        key, which is only ever taken here, as ``Authorization: Bearer sbl_…``. A refusal is answered here
+        (401: ``unauthorized`` for a token, ``unknown_key`` or ``revoked`` for a key) and returns None."""
         scheme, _, value = (_header(scope, b"authorization") or "").partition(" ")
         value = value.strip()
-        if scheme.lower() != "bearer" or not agent_tokens.TOKEN_RE.fullmatch(value):
+        if scheme.lower() == "bearer" and value.startswith(listener_keys.PREFIX):
+            got = self.state.listener_keys.check(value, None)
+            if got.token is None:
+                await _reply(send, 401, {"error": got.why, "message": "the listener key was not accepted"})
+                return None
+            self.touch(got.token)
+            return Door(got.token, value)
+        row = self.token(scope)
+        if row is None:
+            await _reply(send, 401, {"error": "unauthorized", "message": message})
             return None
-        return self.state.store.agent_token_by_hash(agent_tokens.token_hash(value))
+        self.touch(row)
+        return Door(row)
+
+    async def other_session(self, door: "Door", session_id: str | None, send: Send) -> bool:
+        """A key is for one session: True, after answering 403 ``wrong_session``, when this one is another
+        (or none). A token is for any of its device's sessions."""
+        if door.key is None:
+            return False
+        if session_id is None:
+            await _reply(send, 400, {"error": "bad_request", "message": "a session id is needed"})
+            return True
+        if self.state.listener_keys.check(door.key, session_id).token is None:
+            await _reply(
+                send, 403, {"error": "wrong_session", "message": "the listener key is for another session"}
+            )
+            return True
+        return False
 
     def touch(self, row: AgentTokenRow) -> None:
         now = self.state.clock.now()
@@ -679,6 +741,11 @@ class AgentAuth:
             return
         self.touch(row)
         scope.setdefault("state", {})["agent_token"] = row
+        h = listener_keys.ListenerKeys.hash_in(_header(scope, listener_keys.HEADER))
+        if h is not None:
+            # the signed-in connection carries the sha256 of the key its machine made: the key is its token's
+            self.state.listener_keys.claim(row, h)
+            scope["state"]["listener_key"] = h
 
         response_status: int | None = None
 
@@ -724,10 +791,10 @@ class SessionHook:
         if _header(scope, b"origin") is not None:
             await _reply(send, 403, {"error": "forbidden", "message": "agents only"})
             return
-        row = self.auth.token(scope)
-        if row is None:
-            await _reply(send, 401, {"error": "unauthorized", "message": "an agent token is needed"})
+        door = await self.auth.door(scope, send, "an agent token is needed")
+        if door is None:
             return
+        row = door.row
         raw = b""
         while True:
             msg = await receive()
@@ -744,8 +811,9 @@ class SessionHook:
         if not isinstance(body, dict) or body.get("event") not in SESSION_EVENTS:
             await _reply(send, 400, {"error": "bad_request", "message": "SessionStart or SessionEnd"})
             return
-        self.auth.touch(row)
         fields = {k: body[k] for k in SESSION_FIELDS if isinstance(body.get(k), str)}
+        if await self.auth.other_session(door, _id(fields.get("session_id")), send):
+            return
         event = fields["event"]
         state = self.tools.state
         agents: Any = state.agents  # an HttpConn stands in for the socket's Conn
@@ -918,19 +986,20 @@ class Listener:
         if _header(scope, b"origin") is not None:
             await _reply(send, 403, {"error": "forbidden", "message": "agents only: a browser can't listen"})
             return
-        row = self.auth.token(scope)
-        if row is None:
-            await _reply(send, 401, {"error": "unauthorized", "message": "an agent token is needed"})
+        door = await self.auth.door(scope, send, "an agent token is needed")
+        if door is None:
             return
+        row = door.row
         sid = _id(_header(scope, SESSION_HEADER))
         if sid is None:
             await _reply(send, 400, {"error": "bad_request", "message": "X-Switchboard-Session is needed"})
+            return
+        if await self.auth.other_session(door, sid, send):
             return
         try:
             wait = float(_header(scope, WAIT_HEADER) or 900)
         except ValueError:
             wait = 900.0
-        self.auth.touch(row)
         state = self.tools.state
         agents: Any = state.agents  # an HttpConn stands in for the socket's Conn
         conn = self.tools.conn_for(row, "claude")

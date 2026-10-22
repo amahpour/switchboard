@@ -11,6 +11,12 @@
 # A round that runs out starts the next; a server that can't be reached (restarting, or a proxy
 # that cut the wait) is tried again, a little later each time. The token reaches curl on its stdin,
 # never its command line, where other processes could read it.
+# With no typed token (the agent signed in through the browser, and Claude Code keeps that token to itself)
+# it presents the listener key that bin/headers made for this Claude Code instead (docs/DESIGN.md §49.11):
+# a bearer for this one route, for one session. A resumed session's listener starts before the connection
+# has told the server about the key, so at SessionStart it waits up to a minute (SWITCHBOARD_LISTEN_GRACE_S) for
+# the key's file and, while the server answers unknown_key, asks again every second; a later Stop's listener
+# doesn't wait.
 # Git for Windows' sh (Git Bash) is where Claude Code runs this on Windows when Git is installed; there
 # the PowerShell version does the job (windows/listen.ps1, #440). Windows without Git runs listen.cmd instead.
 case $(uname -s) in
@@ -39,10 +45,12 @@ case $sid in '' | *[!A-Za-z0-9_-]*) exit 0 ;; esac
 url=${CLAUDE_PLUGIN_OPTION_SERVER_URL:-$SWITCHBOARD_URL}
 url=${url%/}
 token=${CLAUDE_PLUGIN_OPTION_TOKEN:-$SWITCHBOARD_AGENT_TOKEN}
-[ -n "$url" ] && [ -n "$token" ] || exit 0
+[ -n "$url" ] || exit 0
 round=${SWITCHBOARD_LISTEN_S:-900}
 case $round in '' | *[!0-9]*) round=900 ;; esac
 [ "$round" -ge 10 ] || round=10
+grace=${SWITCHBOARD_LISTEN_GRACE_S:-60} # how long a SessionStart listener asks again for a key the server doesn't know yet
+case $grace in '' | *[!0-9]*) grace=60 ;; esac
 owner=${CLAUDE_PID:-$PPID}
 body=$(mktemp) || exit 0
 code="$body.code"
@@ -51,6 +59,19 @@ trap 'exit 0' HUP INT TERM
 # the plugin's own data folder, or the user's; never a shared one like /tmp, where another account
 # could plant the name first
 dir=${CLAUDE_PLUGIN_DATA:-${HOME:+$HOME/.cache/switchboard}}
+# no typed token: the key bin/headers made for this Claude Code stands in for it
+keyfile=
+if [ -z "$token" ]; then
+  [ -n "$dir" ] || exit 0
+  keyfile="$dir/listener-key-$owner"
+fi
+read_key() { # the key in the key file, if it holds one (sbl_ and 64 hex)
+  k=$(cat "$keyfile" 2>/dev/null)
+  case $k in sbl_*) ;; *) return 1 ;; esac
+  case ${k#sbl_} in '' | *[!0-9a-f]*) return 1 ;; esac
+  [ "${#k}" -eq 68 ] || return 1
+  printf '%s' "$k"
+}
 flat() { # what the server said, on one line and cut short: $1 is the body's file
   tr '\r\n' '  ' <"$1" | cut -c1-300
 }
@@ -66,9 +87,43 @@ logline() { # one line in listen.log: when, the session, the round, the status, 
 again=0
 backoff=1
 rounds=0
+first=$(date +%s)
+if [ -n "$keyfile" ]; then
+  until token=$(read_key); do
+    # the helper runs as Claude Code connects the server, which can be just after this hook starts
+    if [ "$event" = SessionStart ] && [ $(($(date +%s) - first)) -lt "$grace" ] && kill -0 "$owner" 2>/dev/null; then
+      sleep 1
+    else
+      logline nokey "no listener key in $keyfile"
+      exit 0
+    fi
+  done
+fi
+if [ -n "$keyfile" ]; then
+  fix='Sign in to switchboard again from Claude Code (/mcp, then Authenticate).'
+else
+  fix='Check the plugin settings, the server address and the agent token.'
+fi
+stopped() { # a reason nobody expects, such as a token that was refused: log it, and wake the session once
+  # with it, because nothing else would tell it the listener is gone. The marker keeps the same
+  # reason from waking it again at every later Stop; a wake clears it.
+  logline "$status" "$said"
+  [ -n "$dir" ] && mkdir -p "$dir" 2>/dev/null || exit 0
+  marker="$dir/stopped-$sid"
+  # only switchboard's own error word goes to the model, never the rest of the body: whatever
+  # stood in the way (a proxy's page) is in the log
+  what=$(printf '%s' "$said" | grep -o '"error": *"[A-Za-z0-9_-]*"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')
+  reason="$status $what"
+  [ "$(cat "$marker" 2>/dev/null)" = "$reason" ] && exit 0
+  printf '%s' "$reason" 2>/dev/null >"$marker" || exit 0 # no marker, no wake: it could loop the session awake
+  printf '[switchboard] The listener for this session stopped, so room messages can no longer wake it while it is idle: the server answered %s%s. %s The listener starts again at the end of this session'"'"'s next turn. Details: %s/listen.log\n' \
+    "$status" "${what:+ ($what)}" "$fix" "$dir" >&2
+  exit 2
+}
 while kill -0 "$owner" 2>/dev/null; do
   rounds=$((rounds + 1))
   began=$(date +%s)
+  if [ -n "$keyfile" ]; then k=$(read_key) && token=$k; fi # a reconnect makes a new key: the newest one
   printf 'header = "Authorization: Bearer %s"\n' "$token" |
     curl -s --max-time $((round + 30)) -K - -o "$body" -w '%{http_code}' -X POST \
       -H "X-Switchboard-Session: $sid" -H "X-Switchboard-Wait: $round" -H "X-Switchboard-Again: $again" \
@@ -107,22 +162,29 @@ while kill -0 "$owner" 2>/dev/null; do
       case $said in *'"not_idle"'*) logline 409 "$said" ;; esac
       exit 0
       ;;
-    *) # a reason nobody expects, such as a token that was refused: log it, and wake the session once
-      # with it, because nothing else would tell it the listener is gone. The marker keeps the same
-      # reason from waking it again at every later Stop; a wake clears it.
-      logline "$status" "$said"
-      [ -n "$dir" ] && mkdir -p "$dir" 2>/dev/null || exit 0
-      stopped="$dir/stopped-$sid"
-      # only switchboard's own error word goes to the model, never the rest of the body: whatever
-      # stood in the way (a proxy's page) is in the log
-      what=$(printf '%s' "$said" | grep -o '"error": *"[A-Za-z0-9_-]*"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')
-      reason="$status $what"
-      [ "$(cat "$stopped" 2>/dev/null)" = "$reason" ] && exit 0
-      printf '%s' "$reason" 2>/dev/null >"$stopped" || exit 0 # no marker, no wake: it could loop the session awake
-      printf '[switchboard] The listener for this session stopped, so room messages can no longer wake it while it is idle: the server answered %s%s. Check the plugin settings, the server address and the agent token. The listener starts again at the end of this session'"'"'s next turn. Details: %s/listen.log\n' \
-        "$status" "${what:+ ($what)}" "$dir" >&2
-      exit 2
+    401) # with a key: not known yet is asked again, for a minute at SessionStart; any other refusal is told
+      if [ -n "$keyfile" ]; then
+        case $said in
+          *'"unknown_key"'*)
+            if [ "$event" = SessionStart ] && [ $(($(date +%s) - first)) -lt "$grace" ]; then
+              again=0 # not parked yet: this is still the first round
+              sleep 1
+              continue
+            fi
+            logline "$status" "$said" # a Stop's listener, or a key that is not coming: nothing to wake for
+            exit 0
+            ;;
+        esac
+      fi
+      stopped
       ;;
+    403) # a key is for one session: a round for another (after /clear) is a refusal to log, not to wake for
+      if [ -n "$keyfile" ]; then
+        case $said in *'"wrong_session"'*) logline "$status" "$said"; exit 0 ;; esac
+      fi
+      stopped
+      ;;
+    *) stopped ;;
   esac
 done
 exit 0

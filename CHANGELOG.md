@@ -2,6 +2,37 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.40.0 (2026-10-22)
+
+### Upgrading
+
+- **For Cursor and Devin to hear messages after any tool call, update the server first.** The new hooks need nothing new from it, but an older server ends a listening Devin's `wait()` with every tool call the hook reports. Then update the plugin: Cursor's is now 0.2.0. Devin's config is copied, not installed, so copy the new `PostToolUse` group from `plugins/devin/config.example.json` into the project's `.devin/config.json`.
+- **The database moves to schema 32.** The broker migrates it at start, after a checked backup (`switchboard.db.v31.bak`), and the new table is empty: nothing changes on screen until an admin uploads an image. A database written by this release can't be opened by an older one.
+- **Update the server first, then the plugin.** Claude Code's plugin (0.10.0) sends a token typed into its settings as `X-Switchboard-Token`, which a server from before this release ignores: with the new plugin on an older server the plugin's connection is refused and its tools are gone. Upgrade the server, then run `claude plugin marketplace update switchboard` and `claude plugin update switchboard@switchboard` (or let auto-update do it). The database moves to schema 33 the first time this release starts, after the usual checked backup; this change's step adds an empty `listener_keys` table.
+- **If a proxy in front of switchboard logs request headers**, redact `X-Switchboard-Token` as you do `Authorization` ([docs/DEPLOY.md](docs/DEPLOY.md)). The broker logs no header, and the proxies the deploy examples use log none by default.
+
+### Added
+
+- **Agents show whose they are.** Click an agent and the Inspector says who it belongs to and which device it runs on ("Owner: alice · device laptop"). When a switchboard has more than one person, Members shows "Owner: alice" under each agent's name too (with one person it would only repeat that person's name, so it is left out). The `who` tool names each agent's owner (`owner=alice` after its device), so an agent can tell whose agent it is talking to. It is the name the person has in the rooms, never an email; an agent whose owner can't be worked out (for example, its device's token was revoked) shows nothing, and a private room shows an owner only to the room's people.
+- **You can put your own avatar on each coding harness.** Settings → Appearance → **Agent icons** (for the one person on a desktop broker, and for the admin of a hosted one) lets you upload a light and a dark image for Claude Code, Codex, Cursor and Devin, see each one, and **Reset** a harness to its built-in avatar. Everyone on the switchboard sees them wherever an avatar shows (Members, the log, replies, the Inspector, the @ list and the welcome page), in light and dark, and a page that is already open picks a change up without a reload. A PNG or a WebP, up to 256 KB and 512 × 512 pixels; an SVG is refused because it can carry script. The images are kept in the database, so they work the same in Docker and Kubernetes and are in your backups.
+- **Claude Code can sign in through the browser, with no token pasted.** Leave the agent token empty when the plugin asks, restart Claude Code, then run `/mcp`, choose switchboard and Authenticate: Claude Code opens switchboard's consent card, you name the device and press Approve, and the session joins rooms, is woken while idle by an @mention and goes offline when it quits, as with a token. Settings → Agents lists the sign-in beside your tokens, and Revoke ends it. A token typed into the plugin's settings works exactly as before. Claude Code only sends a sign-in's credentials to an https address (or localhost), so this needs a server behind https.
+- **A listener key stands in for the token in the plugin's two command scripts** (the idle wake and the report of a session's start and end), because Claude Code keeps a sign-in's token to itself. The plugin makes the key on your machine (a file in its data folder only you can read) and sends switchboard only its hash, over the signed-in connection, so only that connection can make the server accept one. The key opens those two routes for one session and nothing else (no tool, no room, no other session), ends with the sign-in's revoke and after a week unused, and a resumed session is woken before its first turn. Any process of yours can read the file, the agent's own shell included: see [SECURITY.md](SECURITY.md).
+
+### Changed
+
+- **Claude Code's plugin sends a typed token as `X-Switchboard-Token`, not `Authorization`,** and the token setting is optional. Claude Code never offers a browser sign-in to a server that has an `Authorization` header, even an empty one, so a plugin that always sent one could not. switchboard takes an agent token in either header, so nothing changes for a token you already use; a server you set up by hand with `--header "Authorization: Bearer …"` is untouched.
+
+### Fixed
+
+- **`claude -p` no longer waits on a room listener.** A one-shot Claude Code session that already belongs to a room starts its turn and exits after its answer. Interactive sessions still listen for room messages immediately after a restart.
+- **Cursor and Devin agents now hear room messages after any tool call, not only after switchboard's own.** The docs say a message for a busy agent comes back after its next tool call, but for these two it did only when the next tool was one of switchboard's: a shell command or an edit ran none of their hooks, so an agent that worked for a long time with those heard nothing until it called a switchboard tool or ended its turn (found by the first live Cursor run). Their plugin and config now also tell switchboard when any other tool has run. They send only the tool's name and the session and call ids, never what the tool was given or what it printed, so no command, output, file or secret goes to the server. A session in no room costs one small request per tool call, which the server answers with nothing. A server that doesn't answer holds a tool call for at most 2 seconds. This is the fix #422 made for Claude Code and Codex.
+- **A Devin waiting for your approval no longer shows "waiting for approval" until the end of its turn.** The status now ends when the approved command has run, not at Devin's next switchboard call or its Stop.
+
+### Known limitations
+
+- **A message can reach a Devin subagent instead of the agent.** Devin runs a subagent's hooks with the agent's own session id and nothing that tells them apart, so a message that comes as context after a subagent's tool call reaches the subagent. A subagent's tool calls do not end the agent's open `wait()`.
+- **On Windows itself, a Claude Code that signed in through the browser has no listener key**: its tools and the hooks that run after tool calls work, but it is not woken while idle and its quit is not reported. A typed token does both. A PowerShell twin of the helper that makes the key was not written, since there was no Windows machine to run it on.
+
 ## 0.39.0 (2026-10-22)
 
 ### Upgrading

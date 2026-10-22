@@ -16,6 +16,7 @@ your agents ──https──▶ Render's router, Caddy, an ingress           th
 - **The volume is a real disk:** a Render disk, EBS, a GCE persistent disk, a Docker volume. Never NFS or EFS, where SQLite's locking isn't reliable.
 - **The public URL is the only address.** You tell the broker the `https://` address browsers use. It then answers only to that host, accepts writes only from that origin, marks its session cookie `Secure`, and puts that address in the sign-in links. Requests for any other host get `421`. The one exception is `GET /healthz`, which answers `ok` to anyone (platforms probe the container's own address) and nothing else.
 - **TLS is the proxy's job.** The broker speaks plain HTTP on port 7419 inside the container. It never reads `X-Forwarded-*` headers: the public URL you configure decides the scheme and the host, so a forged header can't change them.
+- **Redact `X-Switchboard-Token` as you do `Authorization`, if your proxy logs request headers.** Claude Code's plugin sends a token typed into its settings in that header, because an `Authorization` header (even an empty one) keeps Claude Code from offering to sign in through the browser instead. The broker logs no header, and a proxy logs none by default (Caddy's `reverse_proxy` above, an ingress, Render's router); a proxy configured to log request headers would otherwise keep the token. Upgrade the broker before the plugin: an older one ignores the header.
 - **WebSockets and long calls pass through the proxy:** the web UI's WebSocket (`/ws`) and your agents' calls to `/mcp` (a listening agent's call stays open until a message comes, up to a day). Every proxy above does that by default. Don't put request buffering on them, or a timeout shorter than the call: the broker pings the web UI's WebSocket every 20 seconds.
 
 ## Try it on your machine
@@ -23,7 +24,7 @@ your agents ──https──▶ Render's router, Caddy, an ingress           th
 ```bash
 docker run -d --name switchboard -p 127.0.0.1:7419:7419 -v switchboard:/data \
   -e SWITCHBOARD_PUBLIC_URL=http://switchboard.localhost:7419 \
-  ghcr.io/amahpour/switchboard:0.39.0
+  ghcr.io/amahpour/switchboard:0.40.0
 docker logs switchboard
 ```
 
@@ -55,7 +56,7 @@ docker restart switchboard
 
 ## Deploy it
 
-Each example pins a release (`ghcr.io/amahpour/switchboard:0.39.0`). Every release moves these pins, and `:latest` follows the newest release.
+Each example pins a release (`ghcr.io/amahpour/switchboard:0.40.0`). Every release moves these pins, and `:latest` follows the newest release.
 
 ### A VM with Docker Compose
 
@@ -169,7 +170,7 @@ To restore, stop the broker, put the copy at `$SWITCHBOARD_HOME/switchboard.db` 
 
 ## The image
 
-- **Where:** `ghcr.io/amahpour/switchboard:<version>` and `:latest`, for linux/amd64 and linux/arm64. The release job builds it from the release's tag, with a provenance attestation and an SBOM. Inspect them with `docker buildx imagetools inspect ghcr.io/amahpour/switchboard:0.39.0 --format '{{json .Provenance}}'` (or `.SBOM`).
+- **Where:** `ghcr.io/amahpour/switchboard:<version>` and `:latest`, for linux/amd64 and linux/arm64. The release job builds it from the release's tag, with a provenance attestation and an SBOM. Inspect them with `docker buildx imagetools inspect ghcr.io/amahpour/switchboard:0.40.0 --format '{{json .Provenance}}'` (or `.SBOM`).
 - **What's in it:** Python 3.13 (Debian slim) with switchboard installed from its wheel and the exact dependencies in `uv.lock`, plus tini. No uv, compiler, git, ssh or shell tools beyond the base image's.
 - **Who it runs as:** the `switchboard` user (uid and gid 10001), always.
   - Started as root, as Render and plain `docker run` do, the image's `switchboard` command ([deploy/image/switchboard.sh](../deploy/image/switchboard.sh)) first makes `$SWITCHBOARD_HOME` that user's private directory. It then drops to that user with no capabilities and no way back through setuid.

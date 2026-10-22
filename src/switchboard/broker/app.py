@@ -20,7 +20,7 @@ from fastapi import FastAPI
 
 from switchboard import db
 from switchboard.adapters import build_adapters
-from switchboard.broker import agent_http, oauth, oidc, web
+from switchboard.broker import agent_http, listener_keys, oauth, oidc, web
 from switchboard.broker.agents import AgentService
 from switchboard.broker.auth import HostOriginGuard, LoginTokens, SecurityHeaders, Sessions, WebOrigin
 from switchboard.broker.hub import Hub, WsSubscriber
@@ -94,6 +94,8 @@ class BrokerState:
     agent_http: Any = None
     # the codes of agents signing in through the browser (§49.9), in memory only
     oauth: oauth.OAuthState = None  # type: ignore[assignment]
+    # the listener keys Claude Code's helper scripts claim and present (§49.11), over the store
+    listener_keys: listener_keys.ListenerKeys = None  # type: ignore[assignment]
 
     @property
     def hosted(self) -> bool:
@@ -212,6 +214,7 @@ def create_app(
             )
         con = db.open_db(paths.db)  # a version-1 database is migrated here, after a backup (§27.6)
         state.store = Store(con, clock)
+        state.listener_keys = listener_keys.ListenerKeys(state.store, clock)
         state.recovery = state.store.recover_on_start()
         if any(state.recovery.values()):
             log.warning("restart recovery: %s", state.recovery)
