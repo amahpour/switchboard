@@ -165,6 +165,7 @@ export async function setup(ctx, {env = process.env, request = globalThis.fetch,
     return s.chain;
   }
   async function handle(s, event, fields, revision) {
+    const progress = event.startsWith('tool.execute.');
     if (event === 'session.deleted') {
       // 2.1.4 emits only the ID, after get() is gone. A tombstone may end a previously
       // verified local session, never create ownership or authorize a wake. A known move clears owned.
@@ -176,9 +177,9 @@ export async function setup(ctx, {env = process.env, request = globalThis.fetch,
       sessions.delete(s.sessionID);
       return;
     }
-    if (!await own(s) || closed || revision !== s.revision) return;
+    if (!await own(s) || closed || (!progress && revision !== s.revision)) return;
     if (event === 'permission.asked') { await report(s, event); return; }
-    if (!await permissions(s) || closed || revision !== s.revision) return;
+    if (!await permissions(s) || closed || (!progress && revision !== s.revision)) return;
     const ok = await report(s, event, fields);
     if (s.state !== 'idle' || !ok || closed || revision !== s.revision) return;
     stop(s);
@@ -212,7 +213,7 @@ export async function setup(ctx, {env = process.env, request = globalThis.fetch,
     sessions.clear();
   }
   for (const hook of ['execute.before', 'execute.after']) {
-    registrations.push(await ctx.tool.hook(hook, async e => {
+    registrations.push(await ctx.tool.hook(hook, e => {
       const s = record(e.sessionID);
       if (!s || closed) return;
       s.revision++;
@@ -230,7 +231,8 @@ export async function setup(ctx, {env = process.env, request = globalThis.fetch,
       const type = hook === 'execute.before' ? 'tool.execute.before'
         : e.status === 'completed' ? 'tool.execute.after' : 'tool.execute.failed';
       const revision = s.revision;
-      await enqueue(s, () => handle(s, type, fields, revision));
+      // A tool must never wait on this chain (including earlier reports or an unreachable broker).
+      void enqueue(s, () => handle(s, type, fields, revision));
     }));
   }
   void (async () => {

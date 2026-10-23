@@ -193,6 +193,7 @@ test('tool reports send only identifiers and switchboard batch tokens, with no c
     await w.hooks.get('execute.after')({sessionID, tool, id: 'call-1', input, status: 'completed',
       result: {content: [{type: 'text', text: `secret=${token} yk:b1.00000000`}]}});
   }
+  await until(() => w.requests.filter(r => r.options.body?.includes('tool.execute.after')).length === 3);
   const bodies = w.requests.filter(r => r.options.body).map(r => JSON.parse(r.options.body));
   assert.ok(bodies.length >= 3);
   assert.ok(!JSON.stringify(bodies).includes(token));
@@ -200,6 +201,38 @@ test('tool reports send only identifiers and switchboard batch tokens, with no c
   assert.equal(bodies.find(b => b.tool_response).tool_response, 'yk:b1.00000000');
   assert.deepEqual(w.prompts, []);
   await cleanup();
+});
+
+// A silent broker must never hold up a tool; releasing its first report must flush both hooks in order.
+test('tool hooks return within 100 ms while status reports wait in session order', async () => {
+  const w = world(), reports = [];
+  let release;
+  const cleanup = await setup(w.ctx, {env: {SWITCHBOARD_URL: 'https://example.com',
+    SWITCHBOARD_AGENT_TOKEN: token}, warn: text => w.logs.push(text),
+    request: async (url, options) => {
+      const body = JSON.parse(options.body);
+      reports.push(body.event);
+      if (reports.length === 1) await new Promise(resolve => {release = resolve;});
+      return new Response('{}');
+    }});
+  try {
+    for (const hook of ['execute.before', 'execute.after']) {
+      const start = performance.now();
+      let timer;
+      try {
+        await Promise.race([
+          w.hooks.get(hook)({sessionID, tool: 'bash', id: 'call-1', status: 'completed', result: {content: []}}),
+          new Promise((_, reject) => {timer = setTimeout(() => reject(new Error(`${hook} waited on broker`)), 100);}),
+        ]);
+      } finally {clearTimeout(timer);}
+      assert.ok(performance.now() - start < 100, `${hook} blocked`);
+    }
+    await until(() => release);
+    assert.deepEqual(reports, ['permission.cleared']);
+    release();
+    await until(() => reports.length === 3);
+    assert.deepEqual(reports, ['permission.cleared', 'tool.execute.before', 'tool.execute.after']);
+  } finally { release?.(); await cleanup(); }
 });
 
 // Cleanup stops all in-flight work and reports own sessions offline without leaving a retry timer alive.
