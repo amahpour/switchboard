@@ -177,6 +177,10 @@ class Adapter:
         """Seconds a stop hook may park waiting for a follow-up, else None."""
         return None
 
+    def listener_retry(self, p: Participant, has_continue: bool) -> bool:
+        """Whether a reconnect may recover an offered wake before a turn has confirmed it (§49.12)."""
+        return False
+
     def stop_continues(self, p: Participant) -> bool:
         """True if this harness's Stop hook may return a continue at once (Devin)."""
         return False

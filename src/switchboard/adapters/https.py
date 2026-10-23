@@ -286,6 +286,17 @@ class HttpsOpenCodeAdapter(Listening):
     def asks_approval(self, ev: HookEvent) -> bool:
         return ev.ev == APPROVAL_REQUEST
 
+    def continue_verdict(self, p: Participant, acked: bool, ev: HookEvent) -> str | None:
+        # A listener reconnect is another synthetic Stop, not evidence that prompt() started
+        # a turn. Its 200 body may have been cut by a proxy. Return that unconfirmed wake to
+        # pending; execution start and tool progress still confirm through Listening.
+        if ev.ev == "Stop":
+            return "listen_retry" if acked else None
+        return super().continue_verdict(p, acked, ev)
+
+    def listener_retry(self, p: Participant, has_continue: bool) -> bool:
+        return has_continue and p.status == "busy" and p.status_src == "stop:followup"
+
     def join_guidance(self, p: Participant, room: str) -> str:
         return (
             f"This is switchboard {__version__}. Room messages wake this session when it is idle: its"

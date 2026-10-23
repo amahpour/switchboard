@@ -191,6 +191,8 @@ def test_idle_wake_is_the_brokers_envelope_with_peer_text_stubbed(build: InProcB
     assert report(build, token, "session.execution.started").json() == {}
     assert build.on_loop(build.state.store.get_batch, bid).state == "confirmed"
     assert participant(build, "opencode-1").status == "busy"
+    for again in ("0", "1"):
+        assert listen(build, token, **{"x-switchboard-again": again}).status_code == 409
 
 
 @pytest.mark.parametrize("idle", ["succeeded", "failed", "interrupted"])
@@ -237,3 +239,34 @@ def test_adapter_is_listening_without_permission_mode_or_hook_context() -> None:
     assert not adapter.reports_approval_mode
     assert adapter.session_key("laptop", SESSION_A) == f"opencode@laptop:{SESSION_A}"
     assert adapter.context_events(None) == frozenset()
+
+
+@pytest.mark.parametrize("signal", ["listen", "idle_report"])
+def test_a_retried_listener_does_not_confirm_a_wake_that_never_started_a_turn(
+    build: InProcBroker, signal: str
+) -> None:
+    """Losing a 200 body before prompt admission must redeliver it.
+    Another listen round or idle report is not evidence that the turn ran."""
+    c, token = joined(build)
+    c.call("read", SESSION_A, room="#build")
+    report(build, token, "session.execution.succeeded")
+    p = participant(build, "opencode-1")
+    with ThreadPoolExecutor(1) as pool:
+        first = pool.submit(listen, build, token)
+        until(lambda: parked(build, p.id))
+        build.call("human.say", {"room": "#build", "text": "@opencode-1 missed-body-canary"})
+        wake = first.result(30)
+        assert wake.status_code == 200
+        bid = int(TOKEN_IN.search(wake.text).group(1))
+        # Model the lost body: there is no execution.started or tool progress before reconnecting.
+        if signal == "idle_report":
+            report(build, token, "session.execution.succeeded")
+        second = pool.submit(listen, build, token, **{"x-switchboard-again": "1"})
+        try:
+            until(lambda: build.on_loop(build.state.store.get_batch, bid).state != "offered")
+            assert build.on_loop(build.state.store.get_batch, bid).state == "expired"
+            retry = second.result(30)
+            assert retry.status_code == 200 and "missed-body-canary" in retry.text
+        finally:
+            report(build, token, "session.execution.started")
+            second.result(30)

@@ -1122,7 +1122,10 @@ class Listener:
                 log.warning("listener refused for session %s: it is in no room (409)", sid)
                 await _reply(send, 409, {"error": "not_idle", "message": "in no room: its next Stop listens"})
                 return
-            if p.status in MOVED_ON:
+            retry = _header(scope, AGAIN_HEADER) == "1" and state.engine.adapter(p).listener_retry(
+                p, any(c.participant_id == p.id for c in state.engine.continues.values())
+            )
+            if p.status in MOVED_ON and not retry:
                 why = MOVED_ON[p.status]
                 log.warning("listener refused for session %s: %s (status %s) (409)", sid, why, p.status)
                 await _reply(
