@@ -20,7 +20,7 @@ def test_v24_upgrade_adds_an_empty_agent_tokens_table_after_a_backup(tmp_path: P
     path = tmp_path / "switchboard.db"
     con = sqlite3.connect(path)
     con.executescript(FIXTURE.read_text())
-    for to, statements, _new in db._steps(3):
+    for to, statements, _new, _edits in db._steps(3):
         if to == 25:
             break
         for statement in statements:

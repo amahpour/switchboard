@@ -15,7 +15,7 @@ def test_v20_upgrade_adds_empty_claims_with_a_backup(tmp_path: Path) -> None:
     path = tmp_path / "switchboard.db"
     con = sqlite3.connect(path)
     con.executescript(FIXTURE.read_text())
-    for to, statements, _new in db._steps(3):
+    for to, statements, _new, _edits in db._steps(3):
         if to == 21:
             break
         for statement in statements:

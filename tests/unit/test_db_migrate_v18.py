@@ -15,7 +15,7 @@ def test_rooms_start_with_no_aliases_after_checked_backup(tmp_path: Path) -> Non
     p = tmp_path / "switchboard.db"
     con = sqlite3.connect(p)
     con.executescript(FIXTURE.read_text())
-    for to, statements, _new in db._steps(3):
+    for to, statements, _new, _edits in db._steps(3):
         if to == 18:
             break
         for stmt in statements:

@@ -18,7 +18,7 @@ def test_v22_review_findings_gain_an_empty_deferred_to_after_a_backup(tmp_path: 
     path = tmp_path / "switchboard.db"
     con = sqlite3.connect(path)
     con.executescript(FIXTURE.read_text())
-    for to, statements, _new in db._steps(3):
+    for to, statements, _new, _edits in db._steps(3):
         if to == 23:
             break
         for statement in statements:

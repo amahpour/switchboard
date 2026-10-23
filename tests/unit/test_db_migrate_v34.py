@@ -69,3 +69,52 @@ def test_failed_enum_migration_rolls_back_and_turns_schema_editing_off(
         assert db.integrity_ok(con) is None
     finally:
         con.close()
+
+
+def test_unmatched_check_fails_closed_with_v33_and_its_backup_intact(tmp_path: Path) -> None:
+    """An equivalent CHECK with different spacing cannot silently skip the enum update.
+    A failed match must roll back schema 34, preserve all rows and keep the verified v33 backup.
+    """
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript(FIXTURE.read_text())
+    old.commit()
+    old.close()
+    # Build the real pre-34 schema, with the old constraint spelled differently but equally strict.
+    con = db.connect(path)
+    original_version = db.SCHEMA_VERSION
+    try:
+        db.SCHEMA_VERSION = 33
+        db.migrate(con, backup_to=tmp_path / "before-33.db")
+    finally:
+        db.SCHEMA_VERSION = original_version
+    con.execute("PRAGMA writable_schema=ON")
+    con.execute(
+        "UPDATE sqlite_master SET sql=replace(sql, '''claude'',''codex''', '''claude'', ''codex''')"
+        " WHERE type='table' AND name='participants'"
+    )
+    con.execute("PRAGMA writable_schema=RESET")
+    before_sql = con.execute("SELECT sql FROM sqlite_master WHERE name='participants'").fetchone()[0]
+    counts = db.row_counts(con, db.TABLES)
+    backup = tmp_path / "before-34.db"
+    try:
+        with pytest.raises(db.SchemaError, match="opencode.*unchanged, still schema version 33"):
+            db.migrate(con, backup_to=backup)
+        assert db.schema_version(con) == 33
+        assert (
+            con.execute("SELECT sql FROM sqlite_master WHERE name='participants'").fetchone()[0] == before_sql
+        )
+        assert db.row_counts(con, db.TABLES) == counts
+        assert con.execute("PRAGMA writable_schema").fetchone()[0] == 0
+        assert con.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        assert db.integrity_ok(con) is None
+        with sqlite3.connect(backup) as saved:
+            assert db.schema_version(saved) == 33
+            assert db.row_counts(saved, db.TABLES) == counts
+            assert (
+                saved.execute("SELECT sql FROM sqlite_master WHERE name='participants'").fetchone()[0]
+                == before_sql
+            )
+            assert db.integrity_ok(saved) is None
+    finally:
+        con.close()

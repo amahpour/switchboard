@@ -155,8 +155,8 @@ def test_a_failed_step_leaves_the_database_as_it_was(tmp_path: Path, monkeypatch
 
     def broken(frm: int):  # noqa: ANN202
         out = steps(frm)
-        to, stmts, new = out[-1]
-        return [*out[:-1], (to, (*stmts[:-1], "DROP TABLE no_such_table", stmts[-1]), new)]
+        to, stmts, new, edits = out[-1]
+        return [*out[:-1], (to, (*stmts[:-1], "DROP TABLE no_such_table", stmts[-1]), new, edits)]
 
     monkeypatch.setattr(db, "_steps", broken)
     with pytest.raises(db.SchemaError):

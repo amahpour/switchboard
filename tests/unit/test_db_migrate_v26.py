@@ -20,7 +20,7 @@ def database_at_25(path: Path) -> sqlite3.Connection:
     asked with a recommendation (the only pick that existed before: the asker's)."""
     con = sqlite3.connect(path)
     con.executescript(FIXTURE.read_text())
-    for to, statements, _new in db._steps(3):
+    for to, statements, _new, _edits in db._steps(3):
         if to == 26:
             break
         for statement in statements:

@@ -26,7 +26,7 @@ def database_at_27(path: Path) -> sqlite3.Connection:
     review event that is not JSON, none of which a migration may touch or choke on."""
     con = sqlite3.connect(path)
     con.executescript(FIXTURE.read_text())
-    for to, statements, _new in db._steps(3):
+    for to, statements, _new, _edits in db._steps(3):
         if to == 28:
             break
         for statement in statements:

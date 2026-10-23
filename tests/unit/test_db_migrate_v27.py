@@ -20,7 +20,7 @@ def database_at_26(path: Path) -> sqlite3.Connection:
     contested before agents could insist, one raised and one conceded."""
     con = sqlite3.connect(path)
     con.executescript(FIXTURE.read_text())
-    for to, statements, _new in db._steps(3):
+    for to, statements, _new, _edits in db._steps(3):
         if to == 27:
             break
         for statement in statements:

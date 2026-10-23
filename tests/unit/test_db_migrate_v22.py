@@ -18,7 +18,7 @@ def database_at(path: Path, version: int) -> sqlite3.Connection:
     """A database from the 0.7.0 fixture, stepped up to ``version`` and holding one message."""
     con = sqlite3.connect(path)
     con.executescript(FIXTURE.read_text())
-    for to, statements, _new in db._steps(3):
+    for to, statements, _new, _edits in db._steps(3):
         if to > version:
             break
         for statement in statements:
