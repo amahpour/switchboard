@@ -4,7 +4,7 @@
       "type": "http",
       "url": "${user_config.server_url}/mcp",
       "headers": {"X-Switchboard-Token": "${user_config.token}"},
-      "headersHelper": "cd \"${CLAUDE_PLUGIN_ROOT}/bin\"; ./headers \"${CLAUDE_PLUGIN_DATA}\"; exit $LASTEXITCODE"
+      "headersHelper": "\"${CLAUDE_PLUGIN_ROOT}/bin/headers\" \"${CLAUDE_PLUGIN_DATA}\""
     }
   }
 }

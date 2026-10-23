@@ -10,6 +10,12 @@
 # room). A round that runs out starts the next; a server that can't be reached is tried again, a
 # little later each time. The token goes to the server in a request header built here, never on a
 # command line, where other processes could read it.
+# With no typed token (the agent signed in through the browser, and Claude Code keeps that token to itself) it
+# presents the listener key that bin/headers.cmd made for this Claude Code instead (docs/DESIGN.md section
+# 49.11): a bearer for this one route, for one session. A resumed session's listener starts before the
+# connection has told the server about the key, so at SessionStart it waits up to a minute
+# (SWITCHBOARD_LISTEN_GRACE_S) for the key's file and, while the server answers unknown_key, asks again every
+# second; a later Stop's listener doesn't wait.
 # It runs under Windows PowerShell 5.1, which ships with Windows, and under PowerShell 7. Keep this
 # file ASCII: 5.1 reads a file without a byte-order mark as ANSI.
 $ErrorActionPreference = 'Stop'
@@ -80,12 +86,45 @@ if ($sid -cnotmatch '^[A-Za-z0-9_-]+\z') { exit 0 }
 $url = First $env:CLAUDE_PLUGIN_OPTION_SERVER_URL $env:SWITCHBOARD_URL
 if ($url -and $url.EndsWith('/')) { $url = $url.Substring(0, $url.Length - 1) }
 $token = First $env:CLAUDE_PLUGIN_OPTION_TOKEN $env:SWITCHBOARD_AGENT_TOKEN
-if (-not $url -or -not $token) { exit 0 }
+if (-not $url) { exit 0 }
 $round = 900
 if ($env:SWITCHBOARD_LISTEN_S -cmatch '^[0-9]{1,9}\z') { $round = [Math]::Max(10, [int]$env:SWITCHBOARD_LISTEN_S) }
+$grace = 60 # how long a SessionStart listener asks again for a key the server doesn't know yet
+if ($env:SWITCHBOARD_LISTEN_GRACE_S -cmatch '^[0-9]{1,9}\z') { $grace = [int]$env:SWITCHBOARD_LISTEN_GRACE_S }
 $owner = 0
 if ($env:CLAUDE_PID -cmatch '^[0-9]{1,9}\z') { $owner = [int]$env:CLAUDE_PID }
 if ($owner -le 0) { LogLine 'no-owner' 'CLAUDE_PID is not set, so the listener can not tell when Claude Code quits'; exit 0 }
+# no typed token: the key bin/headers.cmd made for this Claude Code stands in for it
+$keyfile = ''
+if (-not $token) {
+    if (-not $dir) { exit 0 }
+    $keyfile = Join-Path $dir "listener-key-$owner"
+}
+function ReadKey { # the key in the key file, if it holds one (sbl_ and 64 hex), else ''
+    try {
+        # shared for reading, writing and deleting, so the helper can replace the file while this reads it
+        $fs = [IO.File]::Open($keyfile, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+        try {
+            $buffer = New-Object byte[] 256
+            $text = [Text.Encoding]::ASCII.GetString($buffer, 0, $fs.Read($buffer, 0, 256)).Trim()
+        } finally { $fs.Dispose() }
+        if ($text -cmatch '^sbl_[0-9a-f]{64}\z') { $text } else { '' }
+    } catch { '' }
+}
+$first = Get-Date
+if ($keyfile) {
+    while (-not ($token = ReadKey)) {
+        # the helper runs as Claude Code connects the server, which can be just after this hook starts
+        if ($event -ceq 'SessionStart' -and ((Get-Date) - $first).TotalSeconds -lt $grace -and (Alive)) {
+            Start-Sleep -Seconds 1
+        } else {
+            LogLine 'nokey' "no listener key in $keyfile"
+            exit 0
+        }
+    }
+}
+$fix = 'Check the plugin settings, the server address and the agent token.'
+if ($keyfile) { $fix = 'Sign in to switchboard again from Claude Code (/mcp, then Authenticate).' }
 
 Add-Type -AssemblyName System.Net.Http
 # an older .NET Framework offers TLS 1.0 by default, which servers no longer take; a newer one lets Windows choose
@@ -112,11 +151,28 @@ function Round($again) { # one request: the status ('' when nothing answered) an
     }
 }
 
+function Stopped { # a reason nobody expects, such as a token that was refused: log it, and wake the session once
+    # with it, because nothing else would tell it the listener is gone. The marker keeps the same
+    # reason from waking it again at every later Stop; a wake clears it.
+    LogLine $status $said
+    # only switchboard's own error word goes to the model, never the rest of the body: whatever
+    # stood in the way (a proxy's page) is in the log
+    $m = [regex]::Match($said, '"error":\s*"([A-Za-z0-9_-]*)"')
+    $what = if ($m.Success) { $m.Groups[1].Value } else { '' }
+    $reason = "$status $what"
+    if (Remembers "stopped-$sid" $reason) { exit 0 }
+    if (-not (Remember "stopped-$sid" $utf8.GetBytes($reason))) { exit 0 }
+    $named = if ($what) { " ($what)" } else { '' }
+    SayText ("[switchboard] The listener for this session stopped, so room messages can no longer wake it while it is idle: the server answered $status$named. $fix The listener starts again at the end of this session's next turn. Details: " + (Join-Path $dir 'listen.log') + "`n")
+    exit 2
+}
+
 $again = 0
 $backoff = 1
 while (Alive) {
     $rounds++
     $began = Get-Date
+    if ($keyfile) { $newest = ReadKey; if ($newest) { $token = $newest } } # a reconnect makes a new key: the newest one
     $answer = Round $again
     if ($null -eq $answer -or -not (Alive)) { exit 0 }
     $again = 1
@@ -150,21 +206,22 @@ while (Alive) {
             if ($said.Contains('"not_idle"')) { LogLine 409 $said }
             exit 0
         }
-        default { # a reason nobody expects, such as a token that was refused: log it, and wake the session once
-            # with it, because nothing else would tell it the listener is gone. The marker keeps the same
-            # reason from waking it again at every later Stop; a wake clears it.
-            LogLine $status $said
-            # only switchboard's own error word goes to the model, never the rest of the body: whatever
-            # stood in the way (a proxy's page) is in the log
-            $m = [regex]::Match($said, '"error":\s*"([A-Za-z0-9_-]*)"')
-            $what = if ($m.Success) { $m.Groups[1].Value } else { '' }
-            $reason = "$status $what"
-            if (Remembers "stopped-$sid" $reason) { exit 0 }
-            if (-not (Remember "stopped-$sid" $utf8.GetBytes($reason))) { exit 0 }
-            $named = if ($what) { " ($what)" } else { '' }
-            SayText ("[switchboard] The listener for this session stopped, so room messages can no longer wake it while it is idle: the server answered $status$named. Check the plugin settings, the server address and the agent token. The listener starts again at the end of this session's next turn. Details: " + (Join-Path $dir 'listen.log') + "`n")
-            exit 2
+        '401' { # with a key: not known yet is asked again, for a minute at SessionStart; any other refusal is told
+            if ($keyfile -and $said.Contains('"unknown_key"')) {
+                if ($event -ceq 'SessionStart' -and ((Get-Date) - $first).TotalSeconds -lt $grace) {
+                    $again = 0 # not parked yet: this is still the first round
+                    Start-Sleep -Seconds 1
+                } else {
+                    LogLine $status $said # a Stop's listener, or a key that is not coming: nothing to wake for
+                    exit 0
+                }
+            } else { Stopped }
         }
+        '403' { # a key is for one session: a round for another (after /clear) is a refusal to log, not to wake for
+            if ($keyfile -and $said.Contains('"wrong_session"')) { LogLine $status $said; exit 0 }
+            Stopped
+        }
+        default { Stopped }
     }
 }
 exit 0

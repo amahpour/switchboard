@@ -1,12 +1,15 @@
-"""Claude Code's plugin when the agent signed in through the browser and no token is typed (#488,
+"""Claude Code's plugin when the agent signed in through the browser and no token is typed (#488, #499,
 DESIGN.md §49.11).
 
 Claude Code keeps a browser sign-in's token to itself, so the plugin's scripts have none to send. Its MCP
-server sends a header made by ``bin/headers`` (the sha256 of a listener key the script keeps in a 0600 file of
-the plugin's data folder), the server learns the key over the signed-in connection, and ``bin/listen`` and
-``bin/session`` present the key. These tests run the three scripts as Claude Code runs them (the POSIX ones:
-native Windows has no key), against stand-in servers for each answer and against a broker for the whole way.
-What the server does with a key is in ``test_listener_keys.py``."""
+server sends a header made by ``bin/headers`` (the sha256 of a listener key the script keeps in a file of the
+plugin's data folder that only the user can read), the server learns the key over the signed-in connection,
+and ``bin/listen`` and ``bin/session`` present the key. These tests run the three scripts as Claude Code runs
+them, against stand-in servers for each answer and against a broker for the whole way, once for the ``sh``
+scripts of Linux and macOS and once for their PowerShell twins of Windows (``impl``, under ``pwsh`` where it
+is installed: the helper's Windows-only parts, its access list and its walk to Claude Code's pid, are checked
+in ``test_claude_plugin_windows.py`` and were run on Windows itself for #499). What the server does with a
+key is in ``test_listener_keys.py``."""
 
 from __future__ import annotations
 
@@ -17,22 +20,28 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 import pytest
 from conftest import InProcBroker
-from test_agent_plugins import (
+from test_agent_plugins import (  # noqa: F401  (impl is a fixture)
     CLAUDE_PLUGIN,
+    CURRENT_IMPL,
     HELPER_COMMAND,
+    PWSH,
     SESSION_1,
     TOKEN,
     Gateway,
     Stub,
+    impl,
     listen_log,
     run_listen,
     run_session,
+    script_run,
 )
 from test_agents_http import make_token
 from test_agents_http_claude import SESSION_2
@@ -58,16 +67,37 @@ def run_headers(
     root: Path = CLAUDE_PLUGIN,
     path: str | None = None,
     command: str = HELPER_COMMAND,
+    via_shell: bool | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """``bin/headers`` as Claude Code runs a headersHelper: the command in ``sh -c`` (so Claude Code, here the
-    test, is the shell's parent), the plugin's root and data folder filled in. Claude Code gives it nothing
-    else (not the plugin's settings, which is why a typed token goes in a header of its own)."""
+    """The helper as Claude Code runs a headersHelper, in the implementation under test. ``sh``: the command
+    in ``sh -c`` (Claude Code, here the test, is the shell's parent, or the script's when the shell runs a
+    single command in place), the plugin's root and data folder filled in. ``pwsh``: ``headers.ps1`` with the
+    data folder as its argument, which is what ``headers.cmd`` starts under ``cmd.exe`` on Windows. Claude
+    Code gives it nothing else (not the plugin's settings, which is why a typed token goes in a header of its
+    own). ``via_shell`` puts a shell that stays between the test and the script (``True``), or none
+    (``False``); ``None`` is the default way."""
+    sh = shutil.which("sh") or "/bin/sh"
+    env = {"PATH": path if path is not None else os.environ["PATH"]}
+    if CURRENT_IMPL[0] == "pwsh":
+        argv, throwaway = script_run("headers", env)
+        try:
+            argv = [*argv, str(data)]
+            if via_shell:
+                argv = [sh, "-c", '"$@"; exit $?', "sh", *argv]
+            return subprocess.run(
+                argv, env=env, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL
+            )
+        finally:
+            if throwaway is not None:
+                shutil.rmtree(throwaway, ignore_errors=True)
     cmd = command.replace("${CLAUDE_PLUGIN_ROOT}", root.as_posix()).replace(
         "${CLAUDE_PLUGIN_DATA}", str(data)
     )
-    env = {"PATH": path if path is not None else os.environ["PATH"]}
-    sh = shutil.which("sh") or "/bin/sh"
-    return subprocess.run([sh, "-c", cmd], env=env, capture_output=True, text=True, timeout=30)
+    if via_shell is False:
+        argv = [str(root / "bin" / "headers"), str(data)]
+    else:
+        argv = [sh, "-c", cmd + ("; exit $?" if via_shell else "")]
+    return subprocess.run(argv, env=env, capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
 
 
 def printed_hash(r: subprocess.CompletedProcess[str]) -> str:
@@ -91,8 +121,10 @@ def put_key(data: Path, key: str = KEY, owner: int = ME) -> Path:
 
 
 # ------------------------------------------------------------------------------------ the helper
+@pytest.mark.usefixtures("impl")
 def test_the_helper_makes_a_key_for_this_claude_code_and_prints_only_its_hash(tmp_path: Path) -> None:
-    """Run as Claude Code runs it, the helper keeps a new key (``sbl_`` and 64 hex) in a 0600 file named for
+    """Run as Claude Code runs it, the helper keeps a new key (``sbl_`` and 64 hex) in a file only the user
+    can read (0600; on Windows an access list of the user alone, which the Windows tests check) named for
     Claude Code's pid and prints one header, the key's sha256, and nothing else: the key never leaves the
     machine in this output. A second run (the next connection) makes a new key in the same file and leaves no
     temporary file behind. Fails if the key is printed, is guessable or is readable by others."""
@@ -110,25 +142,59 @@ def test_the_helper_makes_a_key_for_this_claude_code_and_prints_only_its_hash(tm
     assert [p.name for p in data.iterdir()] == [f.name]
 
 
-def test_the_helper_is_started_by_a_shell_or_directly_and_names_claude_codes_pid_both_ways(
+@pytest.mark.usefixtures("impl")
+def test_the_helper_is_started_by_a_shell_or_directly_and_names_claude_codes_pid_all_ways(
     tmp_path: Path,
 ) -> None:
-    """Claude Code runs a helper as ``sh -c <command>`` (seen in 2.1.307: claude, then the shell, then the
-    script), and the file must carry the pid its command hooks get as ``CLAUDE_PID``, which is Claude Code's
-    own. The script takes its parent's, or its parent's parent when that is a shell, so a Claude Code that
-    one day starts it with no shell in between still names the same pid. Fails if the file is named for the
-    shell."""
+    """Claude Code runs a helper as ``sh -c <command>`` on Linux and macOS (seen in 2.1.307: claude, then the
+    shell, then the script; a shell that runs one command may run it in place) and with ``cmd.exe`` on
+    Windows (seen in 2.1.308: claude.exe, then cmd.exe, then the script), and the file must carry the pid its
+    command hooks get as ``CLAUDE_PID``, which is Claude Code's own. The script takes the first ancestor that
+    is not a shell, so a Claude Code that one day starts it with no shell in between, or with two, still
+    names the same pid. Fails if the file is named for a shell."""
+    for how, via_shell in (("default", None), ("a shell between", True), ("directly", False)):
+        data = tmp_path / how
+        printed_hash(run_headers(data, via_shell=via_shell))
+        assert [p.name for p in data.iterdir()] == [f"listener-key-{ME}"], how
+
+
+@pytest.mark.usefixtures("impl")
+def test_the_helper_names_the_first_ancestor_that_is_not_a_shell(tmp_path: Path) -> None:
+    """The pid in the file's name is the first ancestor that is not a shell, not the last one: a Claude Code
+    started by a program of the user's (a supervisor, an editor, another Claude Code) has that program above
+    it, and the file must still carry Claude Code's own pid. Checked by starting the helper from a Python
+    process of its own, which is the ancestor to find, under the test. Fails if the file is named for the
+    test (the program above) or for a shell."""
     data = tmp_path / "data"
-    printed_hash(run_headers(data))
-    assert key_file(data).is_file() and [p.name for p in data.iterdir()] == [f"listener-key-{ME}"]
-    other = tmp_path / "direct"
-    r = subprocess.run(
-        [str(CLAUDE_PLUGIN / "bin" / "headers"), str(other)], capture_output=True, text=True, timeout=30
+    pidfile = tmp_path / "ancestor.pid"
+    wrapper = (
+        "import os, subprocess, sys\n"
+        "open(sys.argv[1], 'w').write(str(os.getpid()))\n"
+        "sys.exit(subprocess.run(sys.argv[2:]).returncode)\n"
     )
+    env = {"PATH": os.environ["PATH"]}
+    if CURRENT_IMPL[0] == "pwsh":
+        argv, throwaway = script_run("headers", env)
+    else:
+        argv, throwaway = [str(CLAUDE_PLUGIN / "bin" / "headers")], None
+    try:
+        r = subprocess.run(
+            [sys.executable, "-I", "-c", wrapper, str(pidfile), *argv, str(data)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    finally:
+        if throwaway is not None:
+            shutil.rmtree(throwaway, ignore_errors=True)
     printed_hash(r)
-    assert key_file(other).is_file()
+    ancestor = int(pidfile.read_text())
+    assert ancestor != ME
+    assert [p.name for p in data.iterdir()] == [f"listener-key-{ancestor}"]
 
 
+@pytest.mark.usefixtures("impl")
 def test_the_helper_removes_the_keys_of_claude_codes_that_have_gone(tmp_path: Path) -> None:
     """Each connection leaves a file, so the helper removes those of processes that no longer exist and
     keeps the live ones' and anything else in the folder. Fails if the folder fills with dead keys, or a
@@ -152,6 +218,7 @@ def test_the_helper_removes_the_keys_of_claude_codes_that_have_gone(tmp_path: Pa
         alive.wait()
 
 
+@pytest.mark.usefixtures("impl")
 def test_the_helper_replaces_a_link_planted_at_the_keys_name_and_never_follows_it(tmp_path: Path) -> None:
     """The key is written to a temporary file and renamed over its name, so a link someone planted there
     (to a file of the person's) is replaced and never written through. Fails if the file the link points
@@ -167,9 +234,11 @@ def test_the_helper_replaces_a_link_planted_at_the_keys_name_and_never_follows_i
     assert not f.is_symlink() and KEY_RE.fullmatch(f.read_text().strip())
 
 
-def test_the_helper_works_from_a_plugin_folder_with_spaces_and_an_apostrophe(tmp_path: Path) -> None:
-    """The command is quoted for ``sh``, Git Bash and PowerShell alike, so a plugin folder or a data folder
-    with a space or an apostrophe in its name is no trouble. Fails if either breaks the command."""
+@pytest.mark.usefixtures("impl")
+def test_the_helper_works_with_spaces_and_an_apostrophe_in_the_folders_names(tmp_path: Path) -> None:
+    """The command is quoted for ``sh`` and ``cmd.exe`` alike, so a plugin folder or a data folder with a
+    space or an apostrophe in its name is no trouble (the plugin's own folder is checked for ``sh``, which
+    starts the script by its path). Fails if either breaks the command."""
     root = tmp_path / "it's a plugin folder"
     shutil.copytree(CLAUDE_PLUGIN / "bin", root / "bin")
     data = tmp_path / "plugin data's folder"
@@ -204,9 +273,10 @@ def tools_without(tmp_path: Path, *missing: str) -> str:
 @pytest.mark.parametrize("why", ["unwritable", "relative", "none", "no hash tool", "windows"])
 def test_the_helper_prints_an_empty_object_when_it_cant_make_a_key(tmp_path: Path, why: str) -> None:
     """Whatever stops it (a folder it can't write, a relative or no folder, a machine with no way to hash,
-    native Windows, which has no key yet), it prints ``{}`` and exits 0, so the connection simply has no key
-    and the scripts do nothing, as before: it never breaks the connection. Fails if it prints an error, a
-    partial header or a code that makes Claude Code complain."""
+    Git Bash on Windows, where it can't find Claude Code's pid), it prints ``{}`` and exits 0, so the
+    connection simply has no key and the scripts do nothing, as before: it never breaks the connection.
+    Fails if it prints an error, a partial header or a code that makes Claude Code complain. (The ``sh``
+    script; the PowerShell one is next.)"""
     data = tmp_path / "data"
     data.mkdir()
     path: str | None = None
@@ -235,18 +305,72 @@ def test_the_helper_prints_an_empty_object_when_it_cant_make_a_key(tmp_path: Pat
     assert [p.name for p in data.iterdir()] == []
 
 
+@pytest.fixture
+def pwsh_only() -> Any:
+    """For a test of the PowerShell helper alone: ``run_headers`` runs ``headers.ps1`` under ``pwsh``.
+    Skipped where ``pwsh`` isn't installed (CI sets ``SWITCHBOARD_REQUIRE_PWSH=1``, which makes that a
+    failure)."""
+    if PWSH is None:
+        pytest.skip("pwsh is not installed (SWITCHBOARD_REQUIRE_PWSH=1 makes this an error)")
+    CURRENT_IMPL[0] = "pwsh"
+    yield
+    CURRENT_IMPL[0] = "sh"
+
+
+@pytest.mark.usefixtures("pwsh_only")
+@pytest.mark.parametrize("why", ["unwritable", "relative", "a file where the folder should be"])
+def test_the_powershell_helper_prints_an_empty_object_when_it_cant_make_a_key(
+    tmp_path: Path, why: str
+) -> None:
+    """The same promise for the PowerShell helper: a folder it can't write, a relative one, a name that is a
+    file already, and it prints ``{}`` and exits 0, never an error, a partial header or a leftover temporary
+    file. Fails otherwise. (Run under pwsh, which fails the same ways on Linux and macOS as Windows
+    PowerShell does on Windows.)"""
+    data = tmp_path / "data"
+    data.mkdir()
+    arg: Path | str = data
+    if why == "unwritable":
+        data.chmod(0o500)
+    elif why == "relative":
+        arg = "relative/folder"
+    else:
+        arg = data / "afile"
+        arg.write_text("x")
+    try:
+        r = run_headers(arg)
+    finally:
+        data.chmod(0o700)
+    assert (r.returncode, r.stdout, r.stderr) == (0, "{}\n", ""), r
+    assert sorted(p.name for p in data.iterdir()) == (["afile"] if why.startswith("a file") else [])
+
+
+@pytest.mark.usefixtures("pwsh_only")
+def test_the_powershell_helper_without_an_argument_falls_back_to_the_profiles_cache(tmp_path: Path) -> None:
+    """Started with no folder and no ``CLAUDE_PLUGIN_DATA``, it keeps the key in ``.cache/switchboard`` of the
+    user's profile, as the ``sh`` one does with ``$HOME`` (never a shared folder like the temp folder, where
+    another account could plant the name first). Fails if the key lands anywhere else."""
+    home = tmp_path / "profile"
+    home.mkdir()
+    env = {"PATH": os.environ["PATH"], "HOME": str(home)}
+    argv, _ = script_run("headers", env)
+    r = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+    printed_hash(r)
+    assert key_file(home / ".cache" / "switchboard").is_file()
+
+
 def test_the_command_for_the_helper_runs_in_sh_and_names_the_plugins_own_folders() -> None:
-    """The headersHelper is one command string that means the same in ``sh``, Git Bash and PowerShell (the
-    hooks' trick, #440): ``cd`` into ``bin``, run ``./headers`` with the data folder, and exit with its
-    code. Fails if the command changes, or the script isn't one a shell can start."""
-    assert (
-        HELPER_COMMAND
-        == 'cd "${CLAUDE_PLUGIN_ROOT}/bin"; ./headers "${CLAUDE_PLUGIN_DATA}"; exit $LASTEXITCODE'
-    )
+    """The headersHelper is one command string that ``sh`` (Linux, macOS) and ``cmd.exe`` (Windows, which
+    runs it under ``cmd.exe /d /s /c``, seen in Claude Code 2.1.308) both read the same way: the script's
+    full path in double quotes, and the data folder in double quotes. Nothing else would do for both: ``;``
+    does not separate commands in ``cmd.exe``, ``./`` is a switch there, and ``cmd.exe`` finds ``headers.cmd``
+    for the path with no extension. Fails if the command changes, or the script isn't one a shell can
+    start."""
+    assert HELPER_COMMAND == '"${CLAUDE_PLUGIN_ROOT}/bin/headers" "${CLAUDE_PLUGIN_DATA}"'
     assert os.access(CLAUDE_PLUGIN / "bin" / "headers", os.X_OK)
 
 
 # ----------------------------------------------------------------------------------- the listener
+@pytest.mark.usefixtures("impl")
 def test_with_no_typed_token_the_listener_presents_the_key_and_a_typed_token_still_wins(
     tmp_path: Path,
 ) -> None:
@@ -300,6 +424,7 @@ def test_the_listener_keeps_the_key_and_the_token_off_every_command_line(
     )
 
 
+@pytest.mark.usefixtures("impl")
 def test_a_listener_at_session_start_waits_for_the_helpers_key_file(tmp_path: Path) -> None:
     """Claude Code starts the SessionStart hooks and connects the server about together, so the helper may
     not have made the key yet. A listener at SessionStart waits for the file (up to a minute) and goes on
@@ -332,6 +457,7 @@ def test_a_listener_at_session_start_waits_for_the_helpers_key_file(tmp_path: Pa
     assert (r.returncode, r.stderr) == (2, "woken before the first turn"), r
 
 
+@pytest.mark.usefixtures("impl")
 def test_a_listener_at_stop_does_not_wait_for_a_key_that_is_not_there(tmp_path: Path) -> None:
     """By the end of a turn the connection has long made its key, or there never will be one (an older
     Claude Code, a machine that can't make it), so a Stop's listener ends at once and says why in
@@ -351,6 +477,7 @@ def test_a_listener_at_stop_does_not_wait_for_a_key_that_is_not_there(tmp_path: 
     assert "status=nokey" in line and "no listener key" in line, line
 
 
+@pytest.mark.usefixtures("impl")
 @pytest.mark.parametrize(
     "held", ["sbl_short", "x" * 68, "sbl_" + "G" * 64, "sbl_" + "0" * 65, "sbat_" + "x" * 43, ""]
 )
@@ -368,6 +495,7 @@ def test_a_key_file_that_doesnt_hold_a_key_is_no_key(tmp_path: Path, held: str) 
     assert (r.returncode, r.stderr, stub.requests) == (0, "", []), r
 
 
+@pytest.mark.usefixtures("impl")
 def test_a_listener_at_session_start_asks_again_while_the_server_doesnt_know_the_key(tmp_path: Path) -> None:
     """The signed-in connection's first request, which tells the server about the key, can come a moment
     after a resumed session's listener (answered 401 ``unknown_key``): the listener asks again, as a first
@@ -387,6 +515,7 @@ def test_a_listener_at_session_start_asks_again_while_the_server_doesnt_know_the
     assert listen_log(data) == []
 
 
+@pytest.mark.usefixtures("impl")
 def test_a_listener_gives_up_quietly_on_a_key_the_server_never_learns(tmp_path: Path) -> None:
     """A person who never signed in has a key the server never hears of. At SessionStart the listener asks
     again for the grace it has (here 2 s, a minute in the plugin), then ends: logged, and no wake, because
@@ -417,6 +546,7 @@ def test_a_listener_gives_up_quietly_on_a_key_the_server_never_learns(tmp_path: 
         stub.close()
 
 
+@pytest.mark.usefixtures("impl")
 def test_a_revoked_sign_in_wakes_the_session_once_and_says_to_sign_in_again(tmp_path: Path) -> None:
     """The server says ``revoked`` when the sign-in the key belongs to was revoked. That is the person's
     doing and the session should hear it, once, as it does for a refused token: the status and the error
@@ -442,6 +572,7 @@ def test_a_revoked_sign_in_wakes_the_session_once_and_says_to_sign_in_again(tmp_
     assert (again.returncode, again.stderr) == (0, ""), again  # the same reason: logged, not told again
 
 
+@pytest.mark.usefixtures("impl")
 def test_a_key_for_another_session_is_logged_and_not_told(tmp_path: Path) -> None:
     """A key is for one session, so a round for another (the key's session was ended by /clear, and this
     listener is the old one's) is refused ``wrong_session``. That is ordinary and wakes nobody, but it is
@@ -464,6 +595,7 @@ def test_a_key_for_another_session_is_logged_and_not_told(tmp_path: Path) -> Non
     assert r.returncode == 2 and "403" in r.stderr and "guest network" not in r.stderr, r
 
 
+@pytest.mark.usefixtures("impl")
 def test_a_token_is_still_told_to_check_the_settings_not_to_sign_in(tmp_path: Path) -> None:
     """The refused-token message is the one it was for a typed token. Fails if the sign-in wording reaches a
     setup that has a token to check."""
@@ -477,6 +609,7 @@ def test_a_token_is_still_told_to_check_the_settings_not_to_sign_in(tmp_path: Pa
     assert r.returncode == 2 and "Check the plugin settings" in r.stderr and "Authenticate" not in r.stderr, r
 
 
+@pytest.mark.usefixtures("impl")
 def test_the_listener_takes_the_newest_key_each_round(tmp_path: Path) -> None:
     """A reconnect makes a new key in the same file; the listener reads the file at every round, so a
     listener that has waited through one still presents a key the server knows. Fails if it keeps the key it
@@ -498,6 +631,7 @@ def test_the_listener_takes_the_newest_key_each_round(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------------- the session report
+@pytest.mark.usefixtures("impl")
 def test_the_session_script_presents_the_key_for_no_typed_token(tmp_path: Path) -> None:
     """Without a token the report of a session's start and end carries the key as the bearer, with the
     event and the session's id and nothing else; with a token typed, it sends that. Fails if the key isn't
@@ -525,6 +659,7 @@ def test_the_session_script_presents_the_key_for_no_typed_token(tmp_path: Path) 
         }
 
 
+@pytest.mark.usefixtures("impl")
 @pytest.mark.parametrize("held", [None, "sbl_short", "x" * 68, "sbat_" + "x" * 43])
 def test_the_session_script_sends_nothing_without_a_key_it_can_use(tmp_path: Path, held: str | None) -> None:
     """No key file, or one that holds anything but a key, and no token: the script exits 0 quietly and asks
@@ -555,6 +690,7 @@ def signed_in(b: InProcBroker, data: Path, session: str = SESSION_1) -> tuple[Si
     return SignedIn(b, token, session, header=printed_hash(run_headers(data))), token
 
 
+@pytest.mark.usefixtures("impl")
 def test_a_signed_in_claude_with_no_typed_token_is_woken_while_idle_and_goes_offline_when_it_quits(
     build: InProcBroker, tmp_path: Path
 ) -> None:
@@ -578,6 +714,7 @@ def test_a_signed_in_claude_with_no_typed_token_is_woken_while_idle_and_goes_off
     until(lambda: participant(build, "claude-1").status == "offline")
 
 
+@pytest.mark.usefixtures("impl")
 def test_a_resumed_signed_in_claude_is_woken_before_its_first_turn_though_its_key_is_not_known_yet(
     build: InProcBroker, tmp_path: Path
 ) -> None:
@@ -624,6 +761,7 @@ def test_a_resumed_signed_in_claude_is_woken_before_its_first_turn_though_its_ke
     assert listen_log(data) == []
 
 
+@pytest.mark.usefixtures("impl")
 def test_a_key_made_for_one_claude_code_wakes_no_other_session(build: InProcBroker, tmp_path: Path) -> None:
     """The key a Claude Code made is for its session: a listener of that Claude Code for any other session
     (the pid's file is the same) is refused and wakes nobody, and says so in the log. Fails if the key works
@@ -636,6 +774,7 @@ def test_a_key_made_for_one_claude_code_wakes_no_other_session(build: InProcBrok
     assert "status=403" in listen_log(data)[-1] and "wrong_session" in listen_log(data)[-1]
 
 
+@pytest.mark.usefixtures("impl")
 def test_a_revoked_sign_in_tells_the_idle_session_through_its_listener(
     build: InProcBroker, tmp_path: Path
 ) -> None:

@@ -11,8 +11,9 @@
 # Whatever goes wrong, it prints {} and exits 0: the connection then has no key, and the scripts do nothing,
 # exactly as before. Claude Code runs it with the plugin's data folder as its one argument (a command can't
 # read the plugin's settings, which is why a typed token goes in X-Switchboard-Token instead).
-# Native Windows has no key yet (the scripts there send a typed token only): the PowerShell scripts of
-# bin/windows know nothing of it, and Git Bash for Windows prints {} here.
+# Native Windows has its own: Claude Code runs a headersHelper with cmd.exe there, whichever shell its hooks use,
+# so "bin/headers" finds headers.cmd, which starts windows/headers.ps1 (#499). This script prints {} under Git
+# Bash, MSYS and Cygwin: their process tree is not Windows', so it could not find Claude Code's pid.
 none() {
   printf '{}\n'
   exit 0
