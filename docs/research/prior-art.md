@@ -364,7 +364,7 @@ Order of work:
 
 ## 8. Recommended edits to the draft spec
 
-1. **Scope: add Cursor IDE, cursor-agent, Devin Desktop, and the Claude and Codex extensions running inside both IDEs. Remove "Devin Local out of scope".** Devin Desktop's new chats *are* Devin Local and "never start on Cascade" ([devin-local](https://docs.devin.ai/desktop/devin-local)). Keep OpenCode out of scope.
+1. **Scope: add Cursor IDE, cursor-agent, Devin Desktop, and the Claude and Codex extensions running inside both IDEs. Remove "Devin Local out of scope".** Devin Desktop's new chats *are* Devin Local and "never start on Cascade" ([devin-local](https://docs.devin.ai/desktop/devin-local)). OpenCode is now in scope for the HTTPS path (#513), reversing the earlier decision to keep it out of scope.
 
 2. **Replace the model-reported "chatting / working" state (`set_state`) with a state machine derived from the harness.** Its states are `starting`, `idle`, `busy`, `waiting-approval`, `parked` (an IDE agent that is idle and can't be reached) and `offline`. Sources:
    - hooks: UserPromptSubmit and PostToolUse mean busy, Stop means idle ([agents-connector map](https://github.com/Aldenysq/agents-connector/blob/44c195a6ed9e4df608d9fde30e3d8759fc92b900/src/hook/mod.rs#L88-L135));

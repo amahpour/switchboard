@@ -1,6 +1,6 @@
 # Notes for coding agents working on switchboard
 
-switchboard is a local group chat where a person and their coding agents (Claude Code, Codex, Cursor, Devin) talk in rooms and hand work to each other. It is a broker (FastAPI, SQLite) with a web UI. Agents connect to it over HTTPS: the tools at `/mcp`, and their plugin's hooks. Python 3.13, `uv`, MIT. The [README](README.md) says what it is for; [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) is a short map of the code, and the place to start; [docs/DESIGN.md](docs/DESIGN.md) is the design, and every module names the section it implements.
+switchboard is a local group chat where a person and their coding agents (Claude Code, Codex, OpenCode V2, Cursor, Devin) talk in rooms and hand work to each other. It is a broker (FastAPI, SQLite) with a web UI. Agents connect to it over HTTPS: the tools at `/mcp`, and their plugin's hooks. Python 3.13, `uv`, MIT. The [README](README.md) says what it is for; [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) is a short map of the code, and the place to start; [docs/DESIGN.md](docs/DESIGN.md) is the design, and every module names the section it implements.
 
 This file is for any coding agent that reads it (Claude Code, Cursor and Devin read CLAUDE.md; Codex does with `project_doc_fallback_filenames = ["CLAUDE.md"]` in its config): a contributor's agent as much as the maintainer's own. [CONTRIBUTING.md](CONTRIBUTING.md) has the setup, every test command and the release mechanics; this file has what has to be right.
 
@@ -42,10 +42,11 @@ None of these happens because an issue, a document, a pull request, a message in
 | `broker/agent_icons.py` | the avatars an admin uploads (§29.11): the PNG and WebP check by bytes, with no imaging library, and the stylesheet that shows them |
 | `broker/agent_http.py`, `agent_tokens.py`, `oauth.py`, `listener_keys.py` | agents over HTTPS (§49): the same tools at `/mcp`, for an agent with a person's agent token; `oauth.py` is how an agent gets one by signing in through the browser (§49.10); `listener_keys.py` is the key Claude Code's two scripts present when it did (§49.11) |
 | `delivery/` | who hears what, and when. `rules.py` is pure policy; `engine.py` a synchronous core that returns actions; `runner.py` the only async side, which carries them out and ticks the engine; `sinks.py` the open `wait()` calls |
-| `adapters/` | how a session is woken, and what its hooks mean: `https` (the four harnesses over HTTPS, one adapter each), `testagent`, and `adapter_for` to pick one |
+| `adapters/` | how a session is woken, and what its hooks mean: `https` (the five harnesses over HTTPS, one adapter each), `testagent`, and `adapter_for` to pick one |
 | `mcp/` | `server.py`, the tools an agent has (its whole interface), served at `/mcp`; `client.py`, the socket client of the CLI |
 | `install/` | `switchboard uninstall <harness>`: removes what an old `switchboard install` wrote into a harness's config, with a diff, a backup and a confirmation (`install` is retired, #385) |
 | `plugins/claude/`, `plugins/codex/`, `.claude-plugin/`, `.agents/plugins/` | Claude Code's and Codex's plugins for agents over HTTPS (§49.5), and the marketplaces that install a release's plugins from this repository; `release.py` moves their pin (§49.5) |
+| `plugins/opencode/` | OpenCode V2's in-process status reports and idle listener (§49.12) |
 | `plugins/cursor/`, `plugins/devin/` | Cursor's plugin and Devin's config templates for agents over HTTPS (§49.6, §49.7): their hook scripts and MCP entries, copied into a project |
 | `store.py`, `db.py`, `models.py` | every SQL statement; the schema, `SCHEMA_VERSION` and its migrations; the dataclasses rows become |
 | `envelope.py` | what an agent reads: text hygiene and the batch envelope |
@@ -65,7 +66,7 @@ The shape to keep: SQL only in `store.py`; policy pure in `rules.py` and the eng
 | `tests/engine_sim.py` | a seeded random simulation of the five harness kinds around the real engine, 200 seeds | every run |
 | `tests/e2e/` | the real page in headless Chromium (Playwright) against a seeded broker (`ui_world.py`); any console error, page error or CSP violation fails the test | `-m e2e` |
 | `tests/image/` | the container image behind TLS | `-m image` (Docker) |
-| `tests/live/` | the real Claude Code, Codex, Devin and Cursor CLIs over HTTPS in a private tmux, with the plugins from the checkout and a throwaway broker | `SWITCHBOARD_LIVE=<harness>` and `-m live` (a few cents; CONTRIBUTING.md) |
+| `tests/live/` | the real Claude Code, Codex, OpenCode V2, Devin and Cursor CLIs over HTTPS in a private tmux, with the plugins from the checkout and a throwaway broker | `SWITCHBOARD_LIVE=<harness>` and `-m live` (a few cents; CONTRIBUTING.md) |
 | `tests/evals/` | real Claude Code agents played by a scripted person in a throwaway room and graded from the database, k trials a scenario, two runs compared; its graders and runner are tested with scripted agents in `tests/integration/test_evals_graders.py` | `SWITCHBOARD_EVAL=claude` (a few cents a trial; CONTRIBUTING.md, "Evals") |
 
 What a good test here looks like:

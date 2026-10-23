@@ -1,0 +1,231 @@
+// OpenCode V2 plugin contract (#513, DESIGN.md §49.12). All scheduling is event-driven.
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { mkdtemp, symlink, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { listen, setup } from '../plugins/opencode/listener.mjs';
+
+const token = 'sbat_test-token-canary';
+const sessionID = 'ses_00000000000000000000000001';
+const wake = '[switchboard] from peer: call read("#build") [yk:b1.00000000]';
+const turn = () => new Promise(resolve => setImmediate(resolve));
+async function until(check) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    if (check()) return;
+    await turn();
+  }
+  assert.fail('expected event did not arrive');
+}
+
+// Each terminal response stops once, while timeouts and connection failures re-arm with bounded backoff.
+test('listener rounds: 200, 408, 409, 401, unreachable; no credentials in output or argv', async () => {
+  for (const terminal of [200, 409, 401]) {
+    const requests = [], prompts = [], logs = [], delays = [];
+    const responses = [new Error(token), new Error(token), new Response('', {status: 408}),
+      new Response(terminal === 200 ? wake : token, {status: terminal})];
+    await listen({url: 'https://example.com', token, sessionID,
+      signal: new AbortController().signal, canWake: async () => true,
+      ctx: {session: {prompt: async p => prompts.push(p)}},
+      request: async (url, options) => {
+        requests.push({url, options});
+        const next = responses.shift();
+        if (next instanceof Error) throw next;
+        assert.ok(next, 'must stop after a terminal status');
+        return next;
+      }, sleep: async ms => delays.push(ms), warn: text => logs.push(text)});
+    assert.equal(requests.length, 4);
+    assert.deepEqual(delays, [1000, 2000, 1000]);
+    assert.deepEqual(requests.map(r => r.options.headers['X-Switchboard-Again']), ['0','1','1','1']);
+    for (const r of requests) {
+      assert.equal(r.options.headers.Authorization, `Bearer ${token}`);
+      assert.equal(r.options.headers['X-Switchboard-Harness'], 'opencode');
+      assert.equal(r.options.redirect, 'error');
+      assert.ok(!r.url.includes(token));
+    }
+    assert.deepEqual(prompts, terminal === 200 ? [{sessionID, text: wake, delivery: 'queue',
+      metadata: {source: 'switchboard'}}] : []);
+    assert.ok(!JSON.stringify(logs).includes(token));
+    assert.ok(!process.argv.join(' ').includes(token));
+  }
+});
+
+// Even a response already received cannot wake an approval-blocked, moved, busy or deleted session.
+test('listener rechecks eligibility after 200 and rejects oversized or credential-bearing text', async () => {
+  for (const [text, allowed] of [[wake, false], [token, true], ['x'.repeat(65537), true], ['', true]]) {
+    const prompts = [];
+    await listen({url: 'https://example.com', token, sessionID, signal: new AbortController().signal,
+      canWake: async () => allowed, ctx: {session: {prompt: async p => prompts.push(p)}},
+      request: async () => new Response(text), sleep: async () => {}, warn: () => {}});
+    assert.deepEqual(prompts, []);
+  }
+});
+
+// A gateway may send 200 headers and then drop the body; no turn was admitted, so this is still a retryable outage.
+test('a broken 200 body retries without losing the listener or logging credentials', async () => {
+  const prompts = [], logs = [], delays = [];
+  let requests = 0;
+  const broken = new ReadableStream({start(controller) {controller.error(new Error(token));}});
+  await listen({url: 'https://example.com', token, sessionID, signal: new AbortController().signal,
+    canWake: async () => true, ctx: {session: {prompt: async p => prompts.push(p)}},
+    request: async () => ++requests === 1 ? new Response(broken) : new Response(wake),
+    sleep: async ms => delays.push(ms), warn: text => logs.push(text)});
+  assert.equal(requests, 2);
+  assert.deepEqual(delays, [1000]);
+  assert.equal(prompts.length, 1);
+  assert.equal(prompts[0].text, wake);
+  assert.ok(!JSON.stringify(logs).includes(token));
+});
+
+function world() {
+  const queue = [], requests = [], prompts = [], hooks = new Map(), logs = [];
+  let notify, closed = false;
+  const state = {directory: '/project', pending: [], outcome: 'succeeded'};
+  const ctx = {
+    location: {directory: '/project'},
+    session: {get: async () => ({location: {directory: state.directory}, outcome: state.outcome}),
+      prompt: async p => prompts.push(p)},
+    permission: {list: async () => state.pending},
+    tool: {hook: async (name, fn) => {hooks.set(name, fn); return {dispose: async () => {}};}},
+    event: {subscribe: async function* ({signal}) {
+      signal.addEventListener('abort', () => {closed = true; notify?.();}, {once: true});
+      while (!closed) {
+        if (!queue.length) await new Promise(resolve => {notify = resolve;});
+        if (queue.length) yield queue.shift();
+      }
+    }},
+  };
+  const request = async (url, options) => {
+    const row = {url, options};
+    requests.push(row);
+    if (url.endsWith('/mcp/status')) return new Response('{}');
+    return new Promise((resolve, reject) => {
+      row.resolve = resolve;
+      options.signal.addEventListener('abort', () => reject(new Error(token)), {once: true});
+    });
+  };
+  return {ctx, state, requests, prompts, hooks, logs,
+    emit: type => {queue.push({type, data: {sessionID}}); notify?.();},
+    start: (extra = {}) => setup(ctx, {env: {SWITCHBOARD_URL: 'https://example.com', SWITCHBOARD_AGENT_TOKEN: token, ...extra},
+      request, sleep: async () => {}, warn: text => logs.push(text)})};
+}
+
+// The documented desktop URL is a .localhost name; plain HTTP to a remote host remains refused.
+test('desktop localhost URL connects, remote HTTP is inert', async () => {
+  for (const url of ['http://switchboard.localhost:1234', 'http://example.com']) {
+    const w = world();
+    const cleanup = await w.start({SWITCHBOARD_URL: url});
+    w.emit('session.execution.succeeded');
+    if (url.includes('.localhost')) await until(() => w.requests.some(r => r.resolve));
+    else { await turn(); assert.deepEqual(w.requests, []); }
+    await cleanup();
+  }
+});
+
+// macOS presents the same temp project via /var and /private/var; path spelling must not disable its listener.
+test('location ownership compares canonical directories', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'switchboard-plugin-'));
+  const alias = root + '-alias';
+  await symlink(root, alias);
+  const w = world();
+  w.ctx.location.directory = alias;
+  w.state.directory = root;
+  const cleanup = await w.start();
+  try {
+    w.emit('session.execution.succeeded');
+    await until(() => w.requests.some(r => r.resolve));
+  } finally {
+    await cleanup();
+    await rm(alias);
+    await rm(root, {recursive: true});
+  }
+});
+
+// A location's plugin sees the service-wide stream, but must send nothing for a different location.
+test('foreign sessions do not report status, park or prompt; moves are rechecked', async () => {
+  const w = world();
+  const cleanup = await w.start();
+  w.state.directory = '/other';
+  w.emit('session.execution.succeeded');
+  for (let i = 0; i < 5; i++) await turn();
+  assert.deepEqual(w.requests, []);
+  w.state.directory = '/project';
+  w.emit('session.execution.succeeded');
+  await until(() => w.requests.some(r => r.url.endsWith('/mcp/listen')));
+  w.state.directory = '/other';
+  w.requests.find(r => r.resolve).resolve(new Response(wake));
+  for (let i = 0; i < 5; i++) await turn();
+  assert.deepEqual(w.prompts, []);
+  await cleanup();
+});
+
+// Approval events abort a park immediately; only a read-only empty permission.list clears the hold.
+test('approval blocks idle status and a racing wake until permissions are empty', async () => {
+  const w = world();
+  const cleanup = await w.start();
+  w.emit('session.execution.succeeded');
+  await until(() => w.requests.some(r => r.resolve));
+  const parked = w.requests.find(r => r.resolve);
+  w.state.pending = [{id: 'permission-1'}];
+  w.emit('permission.asked');
+  await until(() => w.requests.some(r => r.options.body?.includes('permission.asked')));
+  assert.ok(parked.options.signal.aborted);
+  parked.resolve(new Response(wake));
+  w.emit('session.execution.succeeded');
+  await turn();
+  assert.deepEqual(w.prompts, []);
+  assert.equal(w.requests.filter(r => r.resolve).length, 1);
+  w.state.pending = [];
+  w.emit('session.execution.succeeded');
+  await until(() => w.requests.filter(r => r.resolve).length === 2);
+  assert.ok(w.requests.some(r => r.options.body?.includes('permission.cleared')));
+  await cleanup();
+  assert.ok(!JSON.stringify(w.logs).includes(token));
+});
+
+// Only the inner MCP hook's batch tokens leave OpenCode, even when execute contains secrets and duplicate results.
+test('tool reports send only identifiers and switchboard batch tokens, with no context injection', async () => {
+  const w = world();
+  const cleanup = await w.start();
+  const input = {secret: token};
+  for (const tool of ['execute', 'bash', 'switchboard_read']) {
+    await w.hooks.get('execute.after')({sessionID, tool, id: 'call-1', input, status: 'completed',
+      result: {content: [{type: 'text', text: `secret=${token} yk:b1.00000000`}]}});
+  }
+  const bodies = w.requests.filter(r => r.options.body).map(r => JSON.parse(r.options.body));
+  assert.ok(bodies.length >= 3);
+  assert.ok(!JSON.stringify(bodies).includes(token));
+  assert.equal(bodies.filter(b => b.tool_response).length, 1);
+  assert.equal(bodies.find(b => b.tool_response).tool_response, 'yk:b1.00000000');
+  assert.deepEqual(w.prompts, []);
+  await cleanup();
+});
+
+// Cleanup stops all in-flight work and reports own sessions offline without leaving a retry timer alive.
+test('shutdown cancels listener and reports offline', async () => {
+  const w = world();
+  const cleanup = await w.start();
+  w.emit('session.execution.succeeded');
+  await until(() => w.requests.some(r => r.resolve));
+  const parked = w.requests.find(r => r.resolve);
+  await cleanup();
+  assert.ok(parked.options.signal.aborted);
+  assert.ok(w.requests.some(r => r.options.body?.includes('location.shutdown')));
+  assert.deepEqual(w.prompts, []);
+});
+
+// 2.1.4 deletes session.get data before emitting the id-only tombstone; only a previously verified session can go offline.
+test('deleted session reports offline using its last verified ownership, never wakes', async () => {
+  const w = world();
+  const cleanup = await w.start();
+  w.emit('session.execution.succeeded');
+  await until(() => w.requests.some(r => r.resolve));
+  const parked = w.requests.find(r => r.resolve);
+  w.ctx.session.get = async () => { throw new Error('session removed'); };
+  w.emit('session.deleted');
+  await until(() => w.requests.some(r => r.options.body?.includes('session.deleted')));
+  assert.ok(parked.options.signal.aborted);
+  assert.deepEqual(w.prompts, []);
+  await cleanup();
+});

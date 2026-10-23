@@ -245,3 +245,38 @@ def test_connect_gives_codex_its_plugin_its_server_and_its_token(
     ]
     page.keyboard.press("Escape")
     revoke_all(hosted)
+
+
+def test_connect_gives_opencode_v2_its_plugin_and_environment_token(
+    ui: UI, hosted: tuple[InProcBroker, str]
+) -> None:
+    """OpenCode's copyable config has this broker and the local V2 plugin; the credential stays in the
+    environment."""
+    import json
+
+    b, _ = hosted
+    revoke_all(hosted)
+    checked_now(hosted)
+    page = open_page(ui, hosted)
+    open_settings(page, "agents")
+    page.fill("#agent-token-device", "opencode-box")
+    page.click("#agent-token-make")
+    token = page.locator("#agent-token-value").inner_text()
+    config = json.loads(page.locator("#agent-connect-opencode-config").inner_text())
+    assert config["plugins"] == ["./.opencode-switchboard"]
+    assert config["mcp"]["servers"]["switchboard"] == {
+        "type": "remote",
+        "url": b.state.web_origin.origin + "/mcp",
+        "oauth": False,
+        "headers": {"Authorization": "Bearer {env:SWITCHBOARD_AGENT_TOKEN}"},
+    }
+    assert token not in json.dumps(config)
+    expect(page.locator("#agent-connect-opencode-config-copy")).to_be_visible()
+    assert page.locator("#agent-connect-opencode-env").inner_text().splitlines() == [
+        f"export SWITCHBOARD_URL={b.state.web_origin.origin}",
+        f"export SWITCHBOARD_AGENT_TOKEN={token}",
+    ]
+    page.keyboard.press("Escape")
+    open_settings(page, "agents")
+    expect(page.locator("#agent-connect-opencode-config")).to_have_count(0)
+    revoke_all(hosted)

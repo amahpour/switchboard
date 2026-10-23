@@ -54,6 +54,8 @@ For review board head changes, `ui_shots.py` also writes `outdated-before-*` and
 For the review card (§37.12), it writes `review-card-markdown-*` (a finding whose detail is Markdown with a drawn Mermaid diagram) and `review-options-agreed-*` (a question whose recommendation both agents picked) in light, dark and phone light, plus `review-options-one-pick-light.png` and `review-options-split-light.png` (one agent's pick, and two that differ).
 For a contested finding (§37.13), it writes `contest-waiting-*` (the finding in Agents working, waiting on its raiser) and `contest-insisted-*` (in Needs you after the raiser insists, both reasons side by side) in light, dark and phone light.
 For Connect an agent's Codex step (#472), it writes `connect-codex-{light,dark,phone-light}.png`: the plugin, the `config.toml` entry and the two environment lines (the server's address for the plugin's approval hook, and the token).
+For OpenCode V2 (#513), `connect-opencode-{light,dark,phone-light}.png` shows the local plugin entry, `mcp.servers` config and environment lines.
+
 For an agent waiting for its person's approval (#472), it writes `approval-board-{before,after}-*` and `approval-inspector-{before,after}-*` (the review card that waits on the agent, and its Inspector, in light, dark and phone light) and `approval-members-{before,after}-phone-light`: busy, as every agent at a prompt looked before, then waiting for approval.
 For the board's confirmed-fix check (#427), it writes `check-waiting-*` and `check-confirmed-*` PNGs in light, dark and phone light: a fix awaiting its raiser's confirmation has no check, and the same card has a green one once confirmed.
 
