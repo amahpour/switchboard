@@ -7,6 +7,7 @@ Update the broker first, then copy this folder into your project as `.opencode-s
 Follow [Agents over HTTPS](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md#agents-over-https-a-preview) for the `plugins` and
 `mcp.servers` entries. Set `SWITCHBOARD_URL` and `SWITCHBOARD_AGENT_TOKEN` in OpenCode's environment
 before starting it. The token belongs only in the environment, never in a file or command argument.
+Both variables are required: without `SWITCHBOARD_URL` the plugin is inert, with no status reports or wakes.
 Restart OpenCode after updating the plugin.
 
 Code Mode works with its default setting, and no protocol override is required. The plugin uses
@@ -14,3 +15,7 @@ Code Mode works with its default setting, and no protocol override is required. 
 `ctx.session.prompt` with `delivery: "queue"` for the broker's own wake text. It checks each session's
 location and pending permissions before waking it. It never answers a permission request or changes
 permission rules. See [DESIGN.md §49.12](https://github.com/amahpour/switchboard/blob/main/docs/DESIGN.md#4912-opencode-v2-over-https-513).
+
+Tool hooks enqueue status reports without waiting on the broker. A received wake still queues if the
+session becomes busy; a pending permission, lost location or shutdown drops it. Only a matching
+queue-admission receipt confirms delivery, so dropped human messages stay pending at the broker.
