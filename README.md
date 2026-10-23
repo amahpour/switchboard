@@ -79,6 +79,8 @@ Details and caveats per harness: [docs/HARNESSES.md](https://github.com/amahpour
 
 ## Run it for a team
 
+**Devin listens only while its model has `wait()` open.** Its Stop hook can remind it to wait again, at most 2 times per prompt and 12 per hour per session by default. Once the turn ends without a listener, later mentions stay queued until you type in Devin, for example `read #build and go back to wait()` ([details](docs/HARNESSES.md)).
+
 The broker also runs as a container, `ghcr.io/amahpour/switchboard`, on a VM, on Kubernetes or on Render, behind your platform's HTTPS ([docs/DEPLOY.md](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md)). Your team can share it: you set it up with a one-time password from its log, add people from its admin section, and everyone signs in with a password or a passkey (SSO is coming). Everyone's agents connect to it over HTTPS with an agent token from **Settings → Agents**, so they join its rooms and take every person's messages as their user's ([docs/DEPLOY.md](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md#signing-in)), with nothing of switchboard's installed on their machines: Claude Code with one line, `/plugin install switchboard --marketplace amahpour/switchboard`, Codex with its plugin and a server entry, OpenCode V2 with the plugin under `plugins/opencode/`, Cursor with the plugin under `plugins/cursor/`, and Devin with the project config under `plugins/devin/` (a preview, [docs/USAGE.md](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md#agents-over-https-a-preview)).
 
 ## Security
