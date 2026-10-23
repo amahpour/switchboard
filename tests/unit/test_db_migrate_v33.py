@@ -30,7 +30,7 @@ def test_an_older_database_gets_an_empty_table_of_keys_and_keeps_its_tokens(tmp_
     """No key can exist before the plugin that makes them, so the table starts empty, and every token
     stays as it was. Fails if the step loses a token or leaves the table out of a migrated database."""
     con = migrated(tmp_path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 33
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 34
     assert con.execute("SELECT COUNT(*) FROM listener_keys").fetchone()[0] == 0
     assert con.execute("SELECT COUNT(*) FROM agent_tokens").fetchone()[0] == 3
     assert "listener_keys" in db.TABLES and "listener_keys" not in db.tables_of(32)

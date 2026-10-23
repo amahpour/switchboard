@@ -1,0 +1,75 @@
+{
+  "_source": "OpenCode v2.1.4, private standalone runs, 2026-10-23 (#513)",
+  "_note": "Observed public events and inner MCP hooks in Code Mode; IDs sanitized; no config or credentials recorded.",
+  "events": [
+    {
+      "type": "session.execution.started",
+      "data": {
+        "sessionID": "ses_00000000000000000000000001"
+      }
+    },
+    {
+      "type": "session.execution.succeeded",
+      "data": {
+        "sessionID": "ses_00000000000000000000000001"
+      }
+    },
+    {
+      "type": "permission.asked",
+      "data": {
+        "id": "per_00000000000000000000000001",
+        "sessionID": "ses_00000000000000000000000001",
+        "action": "live-probe",
+        "resources": [
+          "test-only"
+        ]
+      }
+    },
+    {
+      "type": "session.deleted",
+      "data": {
+        "sessionID": "ses_00000000000000000000000001"
+      }
+    }
+  ],
+  "tool_hooks": [
+    {
+      "hook": "execute.before",
+      "event": {
+        "tool": "switchboard_record",
+        "sessionID": "ses_00000000000000000000000001",
+        "agent": "build",
+        "messageID": "msg_00000000000000000000000001",
+        "id": "call_00000000000000000000000001",
+        "input": {
+          "note": "gate-ok"
+        }
+      }
+    },
+    {
+      "hook": "execute.after",
+      "event": {
+        "tool": "switchboard_record",
+        "sessionID": "ses_00000000000000000000000001",
+        "agent": "build",
+        "messageID": "msg_00000000000000000000000001",
+        "id": "call_00000000000000000000000001",
+        "input": {
+          "note": "gate-ok"
+        },
+        "status": "completed",
+        "result": {
+          "output": {
+            "result": "gate-ok: recorded"
+          },
+          "content": [
+            {
+              "type": "text",
+              "text": "gate-ok: recorded"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

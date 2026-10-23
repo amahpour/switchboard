@@ -194,7 +194,7 @@ def test_migration_needs_a_backup_path(tmp_path: Path) -> None:
     original = make_v2(p)
     con = db.connect(p)
     with pytest.raises(
-        db.SchemaError, match="schema version 2 needs a migration to version 33, and a migration"
+        db.SchemaError, match="schema version 2 needs a migration to version 34, and a migration"
     ):
         db.migrate(con)
     con.close()

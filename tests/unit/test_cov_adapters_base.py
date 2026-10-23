@@ -17,6 +17,7 @@ from switchboard.adapters import (
     HTTPS_CODEX,
     HTTPS_CURSOR,
     HTTPS_DEVIN,
+    HTTPS_OPENCODE,
     adapter_for,
     build_adapters,
 )
@@ -348,6 +349,7 @@ def test_the_engine_builds_one_adapter_per_https_harness_and_the_test_agent() ->
         HTTPS_CODEX,
         HTTPS_CURSOR,
         HTTPS_DEVIN,
+        HTTPS_OPENCODE,
         "unknown",
         "test",
     }

@@ -14,7 +14,7 @@ messages, where NULL is the owner), 5 (per-person preferences, §34), 6 (text si
 drops the process ids and the stdio credential that only it used; 31 (#386) adds the clients that
 register to sign an agent in through the browser, and says how each agent token was made; 32 (#498)
 adds the avatars an admin uploads for each harness (§29.11); 33 (#488) adds the listener keys of Claude
-Code's helper scripts (§49.11).
+Code's helper scripts (§49.11); 34 (#513) admits OpenCode in participants (§49.12).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -34,7 +34,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 33
+SCHEMA_VERSION = 34
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -54,7 +54,7 @@ CREATE TABLE rooms(
 
 CREATE TABLE participants(
   id INTEGER PRIMARY KEY,
-  harness TEXT NOT NULL CHECK(harness IN ('claude','codex','cursor','devin','test','unknown')),
+  harness TEXT NOT NULL CHECK(harness IN ('claude','codex','cursor','devin','opencode','test','unknown')),
   session_key TEXT NOT NULL,
   session_id TEXT,
   status TEXT NOT NULL DEFAULT 'starting'
@@ -691,6 +691,19 @@ V32_TO_V33 = (
 )
 
 
+# v33 -> v34 (#513, §49.12): only the participants CHECK gains a harness. SQLite's documented
+# schema-text procedure for a CHECK change leaves rows, indexes and incoming foreign keys intact
+# (https://www.sqlite.org/lang_altertable.html#otheralter). _migrate brackets this one step with
+# schema editing, advances SQLite's schema cookie, reloads the schema and checks integrity before commit.
+V33_TO_V34 = (
+    "UPDATE sqlite_master SET sql=replace(sql,"
+    " '''claude'',''codex'',''cursor'',''devin'',''test'',''unknown''',"
+    " '''claude'',''codex'',''cursor'',''devin'',''opencode'',''test'',''unknown''')"
+    " WHERE type='table' AND name='participants'",
+    "UPDATE meta SET value='34' WHERE key='schema_version'",
+)
+
+
 def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
     """The migration steps from schema ``frm`` up to the current one: (to, statements,
     the tables the step adds). Read from the module at run time, never cached."""
@@ -727,6 +740,7 @@ def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
         30: (31, V30_TO_V31, ("oauth_clients",)),
         31: (32, V31_TO_V32, ("agent_icons",)),
         32: (33, V32_TO_V33, ("listener_keys",)),
+        33: (34, V33_TO_V34, ()),
     }
     out = []
     v = frm
@@ -951,8 +965,17 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
             raise SchemaError("the database changed while its migration backup was made; start again")
         added: list[str] = []
         for to, stmts, new in _steps(frm):
-            for stmt in stmts:
-                con.execute(stmt)
+            if to == 34:
+                cookie = int(con.execute("PRAGMA schema_version").fetchone()[0])
+                con.execute("PRAGMA writable_schema=ON")
+            try:
+                for stmt in stmts:
+                    con.execute(stmt)
+                if to == 34:
+                    con.execute(f"PRAGMA schema_version={cookie + 1}")
+            finally:
+                if to == 34:
+                    con.execute("PRAGMA writable_schema=RESET")
             if schema_version(con) != to:
                 raise SchemaError(f"the migration did not set schema version {to}")
             added += new

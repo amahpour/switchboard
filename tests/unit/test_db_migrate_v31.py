@@ -32,7 +32,7 @@ def test_every_token_of_an_older_database_stays_a_typed_one(tmp_path: Path) -> N
     no client name, and keep every other column. Fails if a row is lost or changed, or if an old token
     would show as a sign-in."""
     con = migrated(tmp_path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 33
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 34
     rows = con.execute("SELECT * FROM agent_tokens ORDER BY id").fetchall()
     assert [(r["id"], r["device"], r["via"], r["client_name"]) for r in rows] == [
         (1, "laptop", "token", None),

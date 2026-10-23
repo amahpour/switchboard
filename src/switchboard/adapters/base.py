@@ -26,6 +26,7 @@ HOOK_CONTEXT_EVENTS: dict[str, frozenset[str]] = {
     "codex": frozenset({"PostToolUse"}),
     "devin": frozenset({"PostToolUse"}),
     "cursor": frozenset({"PostToolUse", "PostToolUseFailure"}),
+    "opencode": frozenset(),  # V2 status reports never inject tool context (§49.12)
     # synthetic hook events from scripted test agents (test mode only)
     "test": frozenset({"UserPromptSubmit", "PostToolUse", "PostToolUseFailure"}),
 }

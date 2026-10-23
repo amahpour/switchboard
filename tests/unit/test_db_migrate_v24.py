@@ -36,7 +36,7 @@ def test_v23_boards_gain_an_empty_report_after_a_backup(tmp_path: Path) -> None:
 
     migrated = db.open_db(path)
     fresh = db.open_db(tmp_path / "fresh.db")
-    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 33
+    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 34
     assert db.row_counts(migrated, db.kept_tables(23)) == before
     row = migrated.execute(
         "SELECT pr_state, pr_threads, pr_ci, reported_by, reported_at FROM reviews"

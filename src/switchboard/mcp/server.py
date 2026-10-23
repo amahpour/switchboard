@@ -37,7 +37,15 @@ INSTRUCTIONS = (
 
 
 # wait() caps per harness (DESIGN.md §6.1); the broker clamps again.
-WAIT_CAPS = {"claude": 110, "codex": 240, "cursor": 50, "devin": 600, "test": 50, "unknown": 50}
+WAIT_CAPS = {
+    "claude": 110,
+    "codex": 240,
+    "cursor": 50,
+    "devin": 600,
+    "opencode": 50,
+    "test": 50,
+    "unknown": 50,
+}
 # MCP 2026-07-28 ("server/discover"): no initialize; every request's _meta carries clientInfo.
 CLIENT_INFO_META_KEY = "io.modelcontextprotocol/clientInfo"
 

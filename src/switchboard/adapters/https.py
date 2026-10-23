@@ -14,7 +14,11 @@ hook, which waits on the broker (a park, as Cursor's stop hook does, §9.4) unti
   Codex shows "Working" meanwhile, up to a day, and the person presses Esc to type (#380's
   decision 2).
 
-A busy session gets priority messages as hook context after its tool calls, and everything else at
+OpenCode V2 uses the same listener path from its plugin, and queues the broker's exact wake text
+as its next turn (§49.12). Its busy sessions pull through read()/wait()/say() only.
+
+A busy Claude Code, Codex or Cursor session gets priority messages as hook context after its tool calls,
+and everything else at
 its next ``read()``, ``wait()`` or ``say()``. Each harness's session key comes from what its calls
 name: Claude Code's session id, which its PreToolUse hook reports before each call
 (``claude@<device>:<session id>``), and Codex's thread (``codex@<device>:<thread id>``).
@@ -48,6 +52,7 @@ CLAUDE_TIER = "claude:https"
 CODEX_TIER = "codex:https"
 CURSOR_TIER = "cursor:https"
 DEVIN_TIER = "devin:https"
+OPENCODE_TIER = "opencode:https"
 # how Devin names the tools of the plugin's HTTPS server in its hooks (``mcp__<server>__<tool>``)
 DEVIN_TOOL_PREFIX = "mcp__switchboard_https__"
 # Devin's HTTP client sends a call again after 120 s of silence (measured, Devin CLI 3000.11.92); the
@@ -58,6 +63,10 @@ NOTE = "over HTTPS: woken at stop"
 NO_SESSION = (
     "this Claude Code call named no session: switchboard's PreToolUse hook reports it before each"
     " call (docs/USAGE.md, Agents over HTTPS)"
+)
+OPENCODE_NO_SESSION = (
+    'this OpenCode call has no _meta["ai.opencode/sessionID"]: use OpenCode V2 with session context'
+    " (docs/USAGE.md, Agents over HTTPS)"
 )
 LISTEN_S = 86400.0  # the longest a Stop hook is held before it answers with nothing: a day
 PARK_MARGIN_S = 5.0  # an answer this long before the hook's own deadline
@@ -108,7 +117,7 @@ def steered(p: Participant, ev: HookEvent, was_idle: bool) -> bool:
 
 
 class Listening(PullAdapter):
-    """What both harnesses share over HTTPS: a Stop hook that waits for a message (a park), hook
+    """What the listening harnesses share over HTTPS: a Stop hook that waits for a message (a park), hook
     context for a busy session, and a follow-up confirmed by the session's next hook."""
 
     reports_approval_mode = True  # permission_mode comes with each hook (§9.2, §9.3)
@@ -256,6 +265,36 @@ class HttpsCursorAdapter(Listening):
         if not thread_id:
             raise ValueError("this Cursor call has no verified conversation ID")
         return session_key("cursor", host, thread_id)
+
+
+class HttpsOpenCodeAdapter(Listening):
+    """OpenCode V2 (§49.12): its plugin parks at idle and queues the broker's wake as a turn."""
+
+    reports_approval_mode = False  # OpenCode has permission rules, not a permission mode
+
+    def __init__(self, cfg: Config):
+        super().__init__("opencode", cfg)
+
+    def tier(self, p: Participant | None) -> tuple[str, str | None]:
+        return OPENCODE_TIER, "over HTTPS: woken by the plugin when idle"
+
+    def session_key(self, host: str, thread_id: str | None, *, test_session: str | None = None) -> str:
+        if not thread_id:
+            raise ValueError(OPENCODE_NO_SESSION)
+        return session_key("opencode", host, thread_id)
+
+    def asks_approval(self, ev: HookEvent) -> bool:
+        return ev.ev == APPROVAL_REQUEST
+
+    def join_guidance(self, p: Participant, room: str) -> str:
+        return (
+            f"This is switchboard {__version__}. Room messages wake this session when it is idle: its"
+            " OpenCode plugin waits on switchboard and queues the broker's message as the next turn."
+            f' While working, messages arrive at your next read("{room}"),'
+            f' wait("{room}", {self.caps(p).wait_cap_s}) or say().'
+            " kind=human ones are from your user and carry their authority just the same."
+            f" {APPROVAL_GUIDANCE}"
+        )
 
 
 def rearm_text(room: str, wait_s: int) -> str:

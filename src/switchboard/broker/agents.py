@@ -87,7 +87,7 @@ WAITING_APPROVAL_WHO = (
 )
 
 
-# the harnesses a hook over HTTPS may name (§49.4): the four, and the scripted test agent
+# the harnesses a hook over HTTPS may name (§49.4): the five, and the scripted test agent
 HOOK_EVENTS: dict[str, frozenset[str]] = {
     "claude": frozenset(
         {
@@ -119,6 +119,17 @@ HOOK_EVENTS: dict[str, frozenset[str]] = {
     ),
     "test": frozenset(
         {"SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"}
+    ),
+    "opencode": frozenset(
+        {
+            "UserPromptSubmit",
+            "PreToolUse",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "PermissionRequest",
+            "Stop",
+            "SessionEnd",
+        }
     ),
 }
 

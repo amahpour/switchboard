@@ -8,6 +8,7 @@ from switchboard.adapters.https import (
     HttpsCodexAdapter,
     HttpsCursorAdapter,
     HttpsDevinAdapter,
+    HttpsOpenCodeAdapter,
 )
 from switchboard.adapters.testagent import TestAgentAdapter
 from switchboard.config import Config
@@ -17,6 +18,7 @@ HTTPS_CLAUDE = "claude@https"
 HTTPS_CODEX = "codex@https"
 HTTPS_CURSOR = "cursor@https"
 HTTPS_DEVIN = "devin@https"
+HTTPS_OPENCODE = "opencode@https"
 
 
 def build_adapters(cfg: Config) -> dict[str, Adapter]:
@@ -28,6 +30,7 @@ def build_adapters(cfg: Config) -> dict[str, Adapter]:
         HTTPS_CODEX: HttpsCodexAdapter(cfg),
         HTTPS_CURSOR: HttpsCursorAdapter(cfg),
         HTTPS_DEVIN: HttpsDevinAdapter(cfg),
+        HTTPS_OPENCODE: HttpsOpenCodeAdapter(cfg),
         "unknown": PullAdapter("unknown", cfg),
         "test": TestAgentAdapter(cfg),
     }
@@ -45,12 +48,14 @@ __all__ = [
     "HTTPS_CODEX",
     "HTTPS_CURSOR",
     "HTTPS_DEVIN",
+    "HTTPS_OPENCODE",
     "Adapter",
     "Caps",
     "HttpsClaudeAdapter",
     "HttpsCodexAdapter",
     "HttpsCursorAdapter",
     "HttpsDevinAdapter",
+    "HttpsOpenCodeAdapter",
     "PullAdapter",
     "TestAgentAdapter",
     "adapter_for",
