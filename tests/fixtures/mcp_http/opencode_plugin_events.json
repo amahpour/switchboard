@@ -1,6 +1,6 @@
 {
   "_source": "OpenCode v2.1.4, private standalone runs, 2026-10-23 (#513)",
-  "_note": "Observed public events and inner MCP hooks in Code Mode; IDs sanitized; no config or credentials recorded.",
+  "_note": "Observed public events and inner MCP hooks in Code Mode; location.shutdown re-recorded from a private standalone exit. IDs and directories sanitized; no config or credentials recorded.",
   "events": [
     {
       "type": "session.execution.started",
@@ -30,6 +30,13 @@
       "data": {
         "sessionID": "ses_00000000000000000000000001"
       }
+    },
+    {
+      "type": "location.shutdown",
+      "location": {
+        "directory": "/project"
+      },
+      "data": {}
     }
   ],
   "tool_hooks": [

@@ -137,15 +137,18 @@ export async function setup(ctx, {env = process.env, request = globalThis.fetch,
     if (listener.received && !force && !closed && !s.pending && s.state !== 'offline') return;
     listener.controller.abort(); s.listener = null;
   }
+  async function sameLocation(directory) {
+    if (typeof directory !== 'string' || !directory) return false;
+    if (directory === ctx.location.directory) return true;
+    try {
+      const [sessionDir, pluginDir] = await Promise.all([realpath(directory), realpath(ctx.location.directory)]);
+      return sessionDir === pluginDir;
+    } catch {return false;}
+  }
   async function own(s) {
     try {
       const info = await ctx.session.get({sessionID: s.sessionID});
-      const directory = info.location.directory;
-      s.owned = directory === ctx.location.directory;
-      if (!s.owned) {
-        const [sessionDir, pluginDir] = await Promise.all([realpath(directory), realpath(ctx.location.directory)]);
-        s.owned = sessionDir === pluginDir;
-      }
+      s.owned = await sameLocation(info.location?.directory);
       if (!s.owned) stop(s, true);
       return s.owned;
     } catch { stop(s, true); return false; }
@@ -266,7 +269,7 @@ export async function setup(ctx, {env = process.env, request = globalThis.fetch,
     try {
       for await (const e of ctx.event.subscribe({signal: events.signal})) {
         if (closed) break;
-        if (e.type === 'location.shutdown' && e.data.directory === ctx.location.directory) {
+        if (e.type === 'location.shutdown' && await sameLocation(e.location?.directory)) {
           await cleanup(); break;
         }
         if (EVENTS.has(e.type)) void event(e.type, e.data.sessionID);

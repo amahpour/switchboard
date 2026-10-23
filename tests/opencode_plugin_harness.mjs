@@ -1,7 +1,7 @@
 // OpenCode V2 plugin contract (#513, DESIGN.md §49.12). All scheduling is event-driven.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtemp, symlink, rm } from 'node:fs/promises';
+import { mkdtemp, symlink, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listen, setup } from '../plugins/opencode/listener.mjs';
@@ -301,6 +301,42 @@ test('shutdown cancels listener and reports offline', async () => {
   assert.ok(parked.options.signal.aborted);
   assert.ok(w.requests.some(r => r.options.body?.includes('location.shutdown')));
   assert.deepEqual(w.prompts, []);
+});
+
+// The service sends location at the top level, with empty data. Another location must not stop this one;
+// the canonical own event must cancel its park, report offline and dispose both hook registrations.
+test('recorded location.shutdown travels through the event stream and matches canonical ownership', async () => {
+  const fixture = JSON.parse(await readFile(new URL('./fixtures/mcp_http/opencode_plugin_events.json', import.meta.url)));
+  const recorded = fixture.events.find(e => e.type === 'location.shutdown');
+  assert.deepEqual(recorded.data, {});
+  assert.equal(typeof recorded.location.directory, 'string');
+  const root = await mkdtemp(join(tmpdir(), 'switchboard-shutdown-'));
+  const alias = root + '-alias';
+  await symlink(root, alias);
+  const w = world(), disposed = [];
+  w.ctx.location.directory = alias;
+  w.state.directory = root;
+  w.ctx.tool.hook = async (name, fn) => {
+    w.hooks.set(name, fn); return {dispose: async () => {disposed.push(name);}};
+  };
+  const cleanup = await w.start();
+  try {
+    w.emit('session.execution.succeeded');
+    await until(() => w.requests.some(r => r.resolve));
+    w.emit({...recorded, location: {directory: root + '-foreign'}});
+    w.emit('session.execution.succeeded'); // processed after the foreign event: this location is still active
+    await until(() => w.requests.filter(r => r.resolve).length === 2);
+    assert.ok(!w.requests.some(r => r.options.body?.includes('location.shutdown')));
+    const parked = w.requests.filter(r => r.resolve)[1];
+    w.emit({...recorded, location: {directory: root}});
+    await until(() => disposed.length === 2);
+    assert.ok(parked.options.signal.aborted);
+    assert.equal(w.requests.filter(r => r.options.body?.includes('location.shutdown')).length, 1);
+    assert.deepEqual(w.prompts, []);
+    const before = w.requests.length;
+    await w.hooks.get('execute.before')({sessionID, tool: 'bash', id: 'call-1'});
+    assert.equal(w.requests.length, before);
+  } finally {await cleanup(); await rm(alias); await rm(root, {recursive: true});}
 });
 
 // 2.1.4 deletes session.get data before emitting the id-only tombstone; only a previously verified session can go offline.
