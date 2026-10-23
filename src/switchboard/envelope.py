@@ -650,6 +650,16 @@ def render_read_first(room: str, ids: Sequence[int]) -> str:
     )
 
 
+def render_reply_taken(room: str, taker: str, answer_id: int, since: int) -> str:
+    """say() held because another agent already answered the person's message (DESIGN.md §8.8):
+    who, which message, and the two things the agent may do. The agent still decides."""
+    return (
+        f"[switchboard] {_word(taker)} already answered this in {_word(room)} (message {int(answer_id)}),"
+        " shown below. Yours was not posted. If that covers it, call pass()."
+        f" If you have something new to add, send it again with since={int(since)}."
+    )
+
+
 def unread_note(room: str, n: int) -> str:
     """Appended to a wait() timeout while announced peer messages are still unread (§24)."""
     r = _word(room)

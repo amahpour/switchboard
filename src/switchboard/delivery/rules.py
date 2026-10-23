@@ -13,7 +13,8 @@ Issue #111 adds broadcast mentions (``@here``, ``@everyone``): who a person's
 broadcast reaches, not whether it may (the caller's job). Issue #138 adds
 ``@humans``, the opposite direction: it addresses every person, never an
 agent, and (unlike ``@here``/``@everyone``) works the same from a person's
-message or an agent's own ``say()``.
+message or an agent's own ``say()``. Issue #507 adds taking turns on a person's message that
+names nobody: which says are a second answer to it, and which post was the first (§8.8).
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ import re
 from collections.abc import Iterable, Sequence
 
 from switchboard import envelope
-from switchboard.models import Item, Release, Room
+from switchboard.models import Answer, Item, Release, Room
 
 MENTION_RE = re.compile(r"(?<![\w@])@([a-z][a-z0-9_-]{0,23})(?![a-z0-9_-])", re.IGNORECASE)
 
@@ -299,6 +300,47 @@ def rate_limit_exempt(
     if sender_name.lower() in {m.lower() for m in reply_to_mentions}:
         return True
     return unhandled_priority > 0
+
+
+# ------------------------------------------------- take turns on an unaddressed message (§8.8)
+def is_unaddressed_question(item: Item) -> bool:
+    """A person's message that names nobody (no @mention, no ``@here``/``@everyone``, which name
+    everyone): every agent in the room hears it as ``to_you=yes``, and each is free to answer."""
+    return item.sender_kind == "human" and not item.mentions
+
+
+def questions_answered(in_context: Sequence[Item], reply_to: int | None) -> list[Item]:
+    """The unaddressed questions a say answers, of the items that reached the sayer's context.
+
+    - A say that replies to one of them answers that one; a reply to anything else (a peer's message,
+      a question that named someone) answers none of them.
+    - A say that replies to nothing answers all of them, unless something addressed to the sayer is
+      waiting too (an @mention of it, a reply to its own message): that is more likely what it
+      answers, and a say is only ever held when it can be nothing but a second answer.
+    """
+    questions = [i for i in in_context if is_unaddressed_question(i)]
+    if reply_to is not None:
+        return [q for q in questions if q.message_id == reply_to]
+    if any(i.mentioned or i.reply_to_me for i in in_context):
+        return []
+    return questions
+
+
+def reply_taken(question: Item, sayer: str, answers: Sequence[Answer]) -> Answer | None:
+    """The first answer another agent gave to ``question`` (§8.8), or None: the reply is free.
+
+    An answer is a chat post after the question that replies to it or to nothing, whose author had
+    the question in context before posting. Not one that @mentions the sayer: that is addressed to
+    it, a hand-off, not a reply to defer to. ``answers`` are the other agents' posts after the
+    question (the store's), in any order."""
+    me = sayer.lower()
+    for a in sorted(answers, key=lambda a: a.message_id):
+        if a.message_id <= question.message_id or a.reply_to not in (None, question.message_id):
+            continue
+        if a.seen_at is None or a.seen_at > a.ts or me in {n.lower() for n in a.mentions}:
+            continue
+        return a
+    return None
 
 
 def hop_tripped(room: Room) -> bool:

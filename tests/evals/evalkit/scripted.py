@@ -50,6 +50,9 @@ class Move:
         None  # a message id; a reply to a person or an @mention is exempt from the rate limit
     )
     passes: bool = False
+    # an agent that posts anyway when told another agent already answered (DESIGN.md §8.8): it sends
+    # the same text again with the ``since`` it was given. Without it the agent takes the refusal.
+    insist: bool = False
 
 
 Policy = Callable[[str, list[Item]], Move]
@@ -143,7 +146,11 @@ class ScriptedWorld:
                     self.spent[name] += self.tokens_per_batch
                     move = self.policies[name](name, parse(r["text"]))
                     if move.say is not None:
-                        await agent.say(self._room, move.say, reply_to=move.reply_to)
+                        res = await agent.say(self._room, move.say, reply_to=move.reply_to)
+                        if move.insist and res.get("code") == "taken":
+                            await agent.say(
+                                self._room, move.say, reply_to=move.reply_to, since=res["next_since"]
+                            )
                     elif move.passes:
                         await agent.pass_(self._room)
                     self.waiting[name] = True

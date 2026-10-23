@@ -546,6 +546,7 @@ def build(
     )
     passes = Counter(e["membership_id"] for e in room_ev if e["kind"] == "pass")
     rate_limited = Counter(e["membership_id"] for e in room_ev if e["kind"] == "rate_limited")
+    says_held = Counter(e["membership_id"] for e in room_ev if e["kind"] == "reply_taken")
     rearms = Counter(e["membership_id"] for e in room_ev if e["kind"] == "rearm")
     turns = Counter(e["participant_id"] for e in part_ev if e["kind"] == "turn_start")
     # the last model each session reported by the end of the window (one reported before the
@@ -607,6 +608,8 @@ def build(
                 # nothing (issue #275)
                 "passes_after_wake": passes_after_wake.get(m.membership_id, 0),
                 "rate_limited": rate_limited.get(m.membership_id, 0),
+                # says not posted because another agent had already answered the person (§8.8)
+                "says_held": says_held.get(m.membership_id, 0),
                 "chars": _chars_by_path(chars.get(m.membership_id, {})),
                 "parked": {
                     "spells": len(parked.get(m.membership_id, [])),
@@ -640,6 +643,7 @@ def build(
         "loop_guard": kinds.get("loop_guard", 0),
         "budget_exhausted": kinds.get("budget_exhausted", 0),
         "rate_limited": kinds.get("rate_limited", 0),
+        "reply_taken": kinds.get("reply_taken", 0),
         "pass_refused": kinds.get("pass_refused", 0),
         "watchdog_remind": kinds.get("watchdog_remind", 0),
         "watchdog_escalate": dict(sorted(esc.items())),
@@ -1070,6 +1074,7 @@ def render_markdown(rep: dict[str, Any], *, title: str | None = None, paint: Any
     rule("loop guard (room paused after the hop limit)", r["loop_guard"])
     rule("budget exhausted", r["budget_exhausted"])
     rule("rate limit (say queued or refused)", r["rate_limited"])
+    rule("reply taken (a second answer to the person, not posted)", r.get("reply_taken", 0))
     rule("read first (pass refused: a stub not read yet)", r.get("pass_refused", 0))
     rule("watchdog reminders", r["watchdog_remind"])
     rule(

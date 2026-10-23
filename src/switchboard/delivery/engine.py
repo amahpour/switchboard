@@ -46,6 +46,7 @@ from switchboard.models import (
     REPORT_ONLY_EVENTS,
     WATCHDOG_DONE,
     Action,
+    Answer,
     Batch,
     HookEvent,
     HookOut,
@@ -786,6 +787,37 @@ class Engine:
                 retry_after_s=retry,
             )
         return retry
+
+    def reply_taken(self, m: Membership, reply_to: int | None) -> list[tuple[Item, Answer]]:
+        """Taking turns on a person's message that names nobody (§8.8): empty if the say may go ahead,
+        else each question it answers with the other agent's earlier answer to it, oldest first. A say
+        is held only when it can be nothing but a second answer: every question it answers
+        (``rules.questions_answered``) has been answered by another agent already, so a question nobody
+        has answered yet leaves the say free. Reads only."""
+        taken = []
+        for q in rules.questions_answered(self.store.in_context_items(m.id), reply_to):
+            a = rules.reply_taken(q, m.screen_name, self.store.answers_to(m.room_id, q.message_id, m.id))
+            if a is None:
+                return []
+            taken.append((q, a))
+        return taken
+
+    def hold_reply(self, p: Participant, m: Membership, taken: list[tuple[Item, Answer]]) -> None:
+        """A say was held for these answers (``reply_taken``): nothing is posted. The questions count as
+        handled for this member, as a ``pass()`` would make them: it was shown the answer, and a question
+        another agent has answered is not re-delivered as unanswered when its turn ends (§8.5). Writes a
+        ``reply_taken`` event. What to do next is the agent's: pass(), or say it again with ``since``."""
+        question, answer = taken[0]
+        self.store.handle_items(m.id, [q.message_id for q, _ in taken])
+        self._event(
+            "reply_taken",
+            room_id=m.room_id,
+            membership_id=m.id,
+            participant_id=p.id,
+            question=question.message_id,
+            answer=answer.message_id,
+            by=answer.sender,
+        )
 
     def check_pass(self, p: Participant, m: Membership) -> list[int]:
         """The read-first rule (§24): [] if pass() may go ahead, else the ids of peer

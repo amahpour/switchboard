@@ -27,6 +27,7 @@ import re
 import secrets
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -42,6 +43,7 @@ from switchboard.models import (
     SCREEN_NAME_RE,
     Action,
     HookEvent,
+    Item,
     Membership,
     Message,
     Participant,
@@ -621,6 +623,57 @@ class AgentService:
             )
         return res
 
+    def _hand_back(
+        self,
+        room: Room,
+        m: Membership,
+        newer: list[Item],
+        code: str,
+        error: Callable[[int], str],
+        *,
+        resend: bool = False,
+    ) -> dict[str, Any]:
+        """A say that was not posted because of chat the member had not seen (DESIGN.md §8.4, §8.8):
+        the newer chat in ``read``'s shape (``text``, ``count``, ``more``). Nothing is posted or counted,
+        and handing it back changes no delivery. At most 50 messages and the pull character limit are shown.
+        ``error`` is given the id of the last message shown: what ``since`` the agent sends to post
+        anyway (``next_since``, always with ``resend``, else only when more remain)."""
+        overflow = len(newer) > 50
+        fit = envelope.fit_batch(
+            newer[:50],
+            room=room.name,
+            recipient=m.screen_name,
+            human_name=self.cfg.human_name,
+            peer_inline=True,
+            max_chars=self.cfg.delivery.pull_max_chars,
+            item_limit=None,
+            shrink=False,
+        )
+        more = overflow or fit.more
+        handback = envelope.render_batch(
+            fit.items,
+            room=room.name,
+            recipient=m.screen_name,
+            human_name=self.cfg.human_name,
+            token=None,
+            peer_inline=True,
+            item_limit=None,
+            limits=fit.limits,
+        )
+        last = fit.items[-1].message_id
+        return {
+            "ok": False,
+            "code": code,
+            "error": error(last),
+            "posted_id": None,
+            "text": handback,
+            "batch_id": None,
+            "count": len(fit.items),
+            "more": more,
+            **({"next_since": last} if more or resend else {}),
+            **({"note": "more newer messages: retry say with next_since to see them"} if more else {}),
+        }
+
     def say(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
         p, m, room = self._member(conn, params)
         text = params.get("text")
@@ -643,48 +696,37 @@ class AgentService:
             # see may make a composed answer stale. Refuse before rate limiting or queueing.
             newer = self.store.visible_items_since(m.id, since)
             if newer:
-                overflow = len(newer) > 50
-                fit = envelope.fit_batch(
-                    newer[:50],
-                    room=room.name,
-                    recipient=m.screen_name,
-                    human_name=self.cfg.human_name,
-                    peer_inline=True,
-                    max_chars=self.cfg.delivery.pull_max_chars,
-                    item_limit=None,
-                    shrink=False,
+                return self._hand_back(
+                    room,
+                    m,
+                    newer,
+                    "stale",
+                    lambda _last: "newer messages arrived; revise your post and send it again",
                 )
-                more = overflow or fit.more
-                handback = envelope.render_batch(
-                    fit.items,
-                    room=room.name,
-                    recipient=m.screen_name,
-                    human_name=self.cfg.human_name,
-                    token=None,
-                    peer_inline=True,
-                    item_limit=None,
-                    limits=fit.limits,
-                )
-                return {
-                    "ok": False,
-                    "code": "stale",
-                    "error": "newer messages arrived; revise your post and send it again",
-                    "posted_id": None,
-                    "text": handback,
-                    "batch_id": None,
-                    "count": len(fit.items),
-                    "more": more,
-                    **(
-                        {
-                            "next_since": fit.items[-1].message_id,
-                            "note": "more newer messages: retry say with next_since to see them",
-                        }
-                        if more
-                        else {}
-                    ),
-                }
         reply_to = params.get("reply_to")
         target = self.svc.reply_target(room, reply_to)
+        # taking turns (DESIGN.md §8.8): a person's message that names nobody reaches every agent, and
+        # the first to answer it takes the reply. A later say that is nothing but a second answer is
+        # held, with the answer shown, and the agent decides: pass(), or say it again with ``since``.
+        # A say that sends ``since`` is judged by the stale rule above alone.
+        if "since" not in params:
+            taken = self.engine.reply_taken(m, target.id if target is not None else None)
+            if taken:
+                question, answer = taken[0]
+                newer = self.store.visible_items_since(m.id, question.message_id)
+                if newer:
+                    self.engine.hold_reply(p, m, taken)
+                    self.run([Snapshot(room.id)])
+                    return self._hand_back(
+                        room,
+                        m,
+                        newer,
+                        "taken",
+                        lambda last: envelope.render_reply_taken(
+                            room.name, answer.sender, answer.message_id, last
+                        ),
+                        resend=True,
+                    )
         # the rate limit (DESIGN.md §8.4): a say it refuses waits in a short queue. One it lets
         # through (a reply to a person, or to a mention of this agent) goes now, even ahead of it
         retry = self.engine.check_say(p, m, target)
