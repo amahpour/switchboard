@@ -26,6 +26,7 @@ HOOK_CONTEXT_EVENTS: dict[str, frozenset[str]] = {
     "codex": frozenset({"PostToolUse"}),
     "devin": frozenset({"PostToolUse"}),
     "cursor": frozenset({"PostToolUse", "PostToolUseFailure"}),
+    "opencode": frozenset(),  # V2 status reports never inject tool context (§49.12)
     # synthetic hook events from scripted test agents (test mode only)
     "test": frozenset({"UserPromptSubmit", "PostToolUse", "PostToolUseFailure"}),
 }
@@ -175,6 +176,10 @@ class Adapter:
     def park_s(self, p: Participant, ev: HookEvent) -> float | None:
         """Seconds a stop hook may park waiting for a follow-up, else None."""
         return None
+
+    def listener_retry(self, p: Participant, has_continue: bool) -> bool:
+        """Whether a reconnect may recover an offered wake before a turn has confirmed it (§49.12)."""
+        return False
 
     def stop_continues(self, p: Participant) -> bool:
         """True if this harness's Stop hook may return a continue at once (Devin)."""

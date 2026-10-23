@@ -18,7 +18,7 @@ def test_v23_boards_gain_an_empty_report_after_a_backup(tmp_path: Path) -> None:
     path = tmp_path / "switchboard.db"
     con = sqlite3.connect(path)
     con.executescript(FIXTURE.read_text())
-    for to, statements, _new in db._steps(3):
+    for to, statements, _new, _edits in db._steps(3):
         if to == 24:
             break
         for statement in statements:
@@ -36,7 +36,7 @@ def test_v23_boards_gain_an_empty_report_after_a_backup(tmp_path: Path) -> None:
 
     migrated = db.open_db(path)
     fresh = db.open_db(tmp_path / "fresh.db")
-    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 33
+    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 34
     assert db.row_counts(migrated, db.kept_tables(23)) == before
     row = migrated.execute(
         "SELECT pr_state, pr_threads, pr_ci, reported_by, reported_at FROM reviews"

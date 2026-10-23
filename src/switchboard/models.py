@@ -37,7 +37,7 @@ SENDER_KINDS = ("human", "agent", "system")
 VIAS = ("web", "cli", "mcp", "system")
 MSG_KINDS = ("chat", "join", "leave", "notice")
 STATUSES = ("starting", "idle", "busy", "waiting-approval", "offline")
-HARNESSES = ("claude", "codex", "cursor", "devin", "test", "unknown")
+HARNESSES = ("claude", "codex", "cursor", "devin", "opencode", "test", "unknown")
 
 
 def tier_label(tier: str | None, note: str | None) -> str:

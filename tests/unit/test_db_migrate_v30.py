@@ -76,7 +76,7 @@ def test_the_0_37_2_database_migrates_keeping_every_row_and_ending_every_local_s
     old.close()
 
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 33
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 34
     assert db.integrity_ok(con) is None
     assert db.row_counts(con, db.kept_tables(28)) == {t: before[t] for t in db.kept_tables(28)}
     assert path.with_name(path.name + ".v28.bak").exists()
@@ -155,8 +155,8 @@ def test_a_failed_step_leaves_the_database_as_it_was(tmp_path: Path, monkeypatch
 
     def broken(frm: int):  # noqa: ANN202
         out = steps(frm)
-        to, stmts, new = out[-1]
-        return [*out[:-1], (to, (*stmts[:-1], "DROP TABLE no_such_table", stmts[-1]), new)]
+        to, stmts, new, edits = out[-1]
+        return [*out[:-1], (to, (*stmts[:-1], "DROP TABLE no_such_table", stmts[-1]), new, edits)]
 
     monkeypatch.setattr(db, "_steps", broken)
     with pytest.raises(db.SchemaError):

@@ -95,12 +95,12 @@ On Linux, the fixture waits for the Docker bridge and both container links to fi
 
 ### Live tests (real agent CLIs, opt-in)
 
-`tests/live/` drives the real Claude Code, Codex, Devin and Cursor CLIs over HTTPS ([DESIGN.md §12.4](docs/DESIGN.md) has the design). They are marked `live`, never run by a plain `pytest` (each module skips itself with the line that says how to run it) and never in CI. Each starts a throwaway broker in a temp home, makes an agent token through the web API, and runs one CLI in a private tmux server with the plugin or config from your checkout. It then plays the person through the web API: the agent joins and says something; an @mention wakes it while idle; one arrives mid-task and is delivered after its next tool call; a subagent's tool calls take nothing meant for the session; quitting shows it offline and resuming brings it back; a killed Devin shows offline; a revoked token ends it.
+`tests/live/` drives the real Claude Code, Codex, OpenCode V2, Devin and Cursor CLIs over HTTPS ([DESIGN.md §12.4](docs/DESIGN.md) has the design). They are marked `live`, never run by a plain `pytest` (each module skips itself with the line that says how to run it) and never in CI. Each starts a throwaway broker in a temp home, makes an agent token through the web API, and runs one CLI in a private tmux server with the plugin or config from your checkout (OpenCode uses a private standalone server, below). It then plays the person through the web API: the agent joins and says something; an @mention wakes it while idle; one arrives mid-task and is delivered after its next tool call; a subagent's tool calls take nothing meant for the session; quitting shows it offline and resuming brings it back; a killed Devin shows offline; a revoked token ends it.
 
 ```bash
 SWITCHBOARD_LIVE=claude uv run pytest -m live tests/live/test_live_claude.py -s -q   # or codex, devin, cursor
 SWITCHBOARD_LIVE=claude uv run pytest -m live tests/live/test_live_claude_signin.py -s -q   # Claude Code signed in through the browser
-SWITCHBOARD_LIVE=claude,codex,devin,cursor uv run pytest -m live tests/live -s -q    # all of them, one after the other
+SWITCHBOARD_LIVE=claude,codex,opencode,devin,cursor uv run pytest -m live tests/live -s -q    # all of them, one after the other
 ```
 
 - **What you need:** the CLI on `PATH`, logged in (`claude`, `codex login`, `devin auth login`, `agent login`), `tmux` and `curl`. A harness whose CLI or login is missing is skipped with the reason.
@@ -110,6 +110,14 @@ SWITCHBOARD_LIVE=claude,codex,devin,cursor uv run pytest -m live tests/live -s -
 - **Trying a plugin change:** `SWITCHBOARD_LIVE_CLAUDE_PLUGIN`, `SWITCHBOARD_LIVE_CODEX_PLUGIN` and `SWITCHBOARD_LIVE_CURSOR_PLUGIN` name a plugin folder to use instead of the checkout's, for a change that isn't a plugin version yet, or to see a scenario fail against a plugin with a hook taken out. `SWITCHBOARD_LIVE_KEEP=1` keeps the run's temp directory (the broker's log and database; not the Codex login).
 - **A failure** prints the CLI's screen, the broker's log, Members, the engine's last events and the run's processes. Every wait has a deadline and none sleeps to mean "by now". A live test that fails sometimes is a bug in the test or in the product (the first is fixed, the second gets an issue): never re-run it until it passes.
 - **Run them** when a change touches `plugins/`, `adapters/https.py`, the hook replies or the engine's delivery to a harness, and say in the pull request what they printed. `tests/unit/test_live_harness.py` runs on every run and checks everything about them that needs no model.
+
+**OpenCode V2** (#513) has a separate private-server test:
+
+```bash
+SWITCHBOARD_LIVE=opencode uv run pytest -m live tests/live/test_live_opencode.py -s -q
+```
+
+It needs `opencode` (tested on 2.1.4) and `OPENAI_API_KEY`, uses `openai/gpt-5.4-nano`, and prints `LIVE RESULTS`. It runs `opencode run --standalone` with a temporary HOME, all XDG paths, `OPENCODE_CONFIG_DIR`, project and `OPENCODE_CONFIG_CONTENT`. It never reads or writes the real OpenCode configuration or database, starts no background service, and performs no sign-in. Only the provider key is inherited through the allowlisted environment. A test-only local driver holds the standalone server open while a second real session joins, talks and is woken; it creates a private permission request and never answers it. The shipped plugin supplies all broker status and wake behavior. A plain suite skips this module, as it does the other `live` modules.
 
 ### Evals (real agents, graded from the database, opt-in)
 

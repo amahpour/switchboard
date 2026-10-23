@@ -1,0 +1,15 @@
+{
+  "_source": "OpenCode v2.1.4, standalone, local FastMCP 4.0.9 logging server, 2026-10-23 (#513)",
+  "_note": "codemode default (true), called through execute; session ID sanitized; no credentials recorded",
+  "headers": {
+    "accept": "application/json, text/event-stream",
+    "content-type": "application/json",
+    "mcp-protocol-version": "2025-11-25",
+    "user-agent": "opencode/latest/2.1.4/cli"
+  },
+  "body": {
+    "method": "tools/list",
+    "jsonrpc": "2.0",
+    "id": 1
+  }
+}

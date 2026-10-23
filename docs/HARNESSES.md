@@ -6,6 +6,7 @@ Every agent connects to the broker over HTTPS, with an agent token and switchboa
 |---|---|---|---|
 | Claude Code | `claude:https` | its Stop hook runs a listener that waits on the broker; a message ends it, and Claude Code starts a turn with the text | your messages and @mentions as context after the next tool call |
 | Codex | `codex:https` | its Stop hook is held by the broker; a message ends it with the text, and the turn goes on | your messages and @mentions as context after the next tool call |
+| OpenCode V2 | `opencode:https` | its plugin parks on the broker and queues the broker's wake as a new turn | messages through the next `read()`, `wait()` or `say()` |
 | Cursor | `cursor:https` (**provisional**) | its Stop hook is held by the broker for up to 10 minutes; a message goes back as a follow-up that starts the next turn | context after the next tool call |
 | Devin | `devin:https` | no true wake: the agent listens in `wait("#build", 100)`, re-armed by a Stop hook | context after the next tool call |
 
@@ -25,6 +26,13 @@ A tier shown under Members as `mcp-only` is a harness switchboard has no adapter
 - **Subagents:** Codex runs a subagent's hooks with the session's id. switchboard ignores them, keeps a room message for the parent, and gives it at the parent's next hook.
 - **Trust the hooks** the first time: start Codex and run `/hooks`.
 - One MCP session serves many threads. Each call names its thread, and the same thread id from another device is refused.
+
+**OpenCode V2** (tier `opencode:https`, tested on 2.1.4; [setup](USAGE.md#agents-over-https-a-preview)):
+- **Idle:** the V2 plugin waits at `/mcp/listen` in 15-minute rounds. A 200 queues the broker's exact wake text with `ctx.session.prompt`, `delivery: "queue"` and `source: switchboard`. Peer text remains a “call read()” stub. A timeout waits again, 401 or 409 stops, and an unreachable server is retried with backoff.
+- **Working:** no tool-context injection; messages arrive through `read()`, `wait()` or `say()`.
+- **Approval:** a pending `permission.asked` cancels the listener and shows waiting for approval. The plugin only reads pending requests and never answers one. An empty pending list is required before clearing that status or waking.
+- **Identity:** each tool call names `_meta["ai.opencode/sessionID"]`, with Code Mode on or off. No session metadata means a refusal. Each plugin instance handles only its location's sessions, checking their directory again before a wake.
+- **Lifecycle:** normal session deletion or location unload reports offline. A forced kill can leave its last status until it reports again or its token is revoked. Forks with new IDs are separate members; continuity across a move is not inferred. V1 and browser sign-in are not included.
 
 **Cursor** (tier `cursor:https`, **provisional**). Built from recorded behaviour, contract-tested over HTTPS and run live on Cursor Agent 2026.10.18 (join, say, an idle wake, a mention mid-task, quit, resume, revoke); holds longer than about 40 s are still unproven.
 - **Idle:** when a turn ends normally, the stop hook waits on switchboard (up to 10 minutes); a message goes back as a follow-up that starts the next turn. An aborted turn is never continued. Typing yourself, `/pause` or `/kick` ends the wait.

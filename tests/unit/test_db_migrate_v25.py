@@ -20,7 +20,7 @@ def test_v24_upgrade_adds_an_empty_agent_tokens_table_after_a_backup(tmp_path: P
     path = tmp_path / "switchboard.db"
     con = sqlite3.connect(path)
     con.executescript(FIXTURE.read_text())
-    for to, statements, _new in db._steps(3):
+    for to, statements, _new, _edits in db._steps(3):
         if to == 25:
             break
         for statement in statements:
@@ -33,7 +33,7 @@ def test_v24_upgrade_adds_an_empty_agent_tokens_table_after_a_backup(tmp_path: P
 
     migrated = db.open_db(path)
     fresh = db.open_db(tmp_path / "fresh.db")
-    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 33
+    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 34
     assert db.row_counts(migrated, db.kept_tables(24)) == before
     assert migrated.execute("SELECT COUNT(*) FROM agent_tokens").fetchone()[0] == 0
     assert [tuple(r) for r in migrated.execute("PRAGMA table_info(agent_tokens)")] == [

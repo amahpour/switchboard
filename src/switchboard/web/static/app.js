@@ -691,6 +691,7 @@
   const TIER_HOW = {
     'claude:https': 'Claude Code over HTTPS: its Stop hook waits for messages and wakes it when it is idle',
     'codex:https': 'Codex over HTTPS: its Stop hook waits for messages and starts its next turn when it is idle',
+    'opencode:https': 'OpenCode over HTTPS: its plugin waits while idle and queues the broker’s wake as a new turn',
     'cursor:https': 'Cursor over HTTPS: its Stop hook waits for messages and hands it the next one when its turn ends',
     'devin:https': 'Devin waits in wait(): a new message answers it',
     'mcp-only': 'switchboard can’t wake it: it gets messages when it calls read() or wait()',
@@ -3906,6 +3907,19 @@
     codex.append(copyLine('agent-connect-codex-env', 'export SWITCHBOARD_URL=' + location.origin
       + '\nexport SWITCHBOARD_AGENT_TOKEN=' + t.token, 'agent-connect-codex-env'));
     box.append(codex);
+    const opencode = el('div', 'agent-connect-step');
+    opencode.id = 'agent-connect-opencode';
+    opencode.append(el('p', null, 'OpenCode V2 (2.1.4 or newer): copy plugins/opencode/ from this switchboard'
+      + ' release into your project as .opencode-switchboard/. Add this to opencode.json, then set the'
+      + ' environment before starting OpenCode. The plugin reports status and listens while idle.'));
+    opencode.append(copyLine('agent-connect-opencode-config', JSON.stringify({
+      plugins: ['./.opencode-switchboard'],
+      mcp: { servers: { switchboard: { type: 'remote', url: location.origin + '/mcp', oauth: false,
+        headers: { Authorization: 'Bearer {env:SWITCHBOARD_AGENT_TOKEN}' } } } },
+    }, null, 2), 'agent-connect-opencode-config'));
+    opencode.append(copyLine('agent-connect-opencode-env', 'export SWITCHBOARD_URL=' + location.origin
+      + '\nexport SWITCHBOARD_AGENT_TOKEN=' + t.token, 'agent-connect-opencode-env'));
+    box.append(opencode);
     return box;
   }
 

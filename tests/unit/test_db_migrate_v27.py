@@ -20,7 +20,7 @@ def database_at_26(path: Path) -> sqlite3.Connection:
     contested before agents could insist, one raised and one conceded."""
     con = sqlite3.connect(path)
     con.executescript(FIXTURE.read_text())
-    for to, statements, _new in db._steps(3):
+    for to, statements, _new, _edits in db._steps(3):
         if to == 27:
             break
         for statement in statements:
@@ -55,7 +55,7 @@ def test_a_v26_board_keeps_its_rows_and_a_contested_finding_keeps_waiting_on_a_p
 
     migrated = db.open_db(path)
     fresh = db.open_db(tmp_path / "fresh.db")
-    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 33
+    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 34
     assert db.row_counts(migrated, db.kept_tables(26)) == before
     assert [tuple(r) for r in migrated.execute("PRAGMA table_info(review_items)")] == [
         tuple(r) for r in fresh.execute("PRAGMA table_info(review_items)")

@@ -10,8 +10,9 @@ runs on the agent's machine.
   token's last use is written at most once a minute.
 - **Who is calling** (``HttpTools.prime``): the token's person and device, the device being the
   host of its agents' sessions (§27.6). The harness is the client's own claim, from its
-  ``clientInfo`` (Codex, Claude Code, or Cursor). The session is the
-  harness's own. Codex names its thread on every call (``_meta.threadId``). Claude Code names
+  ``clientInfo`` (Codex, Claude Code, OpenCode, Cursor or Devin). The session is the
+  harness's own. Codex names its thread on every call (``_meta.threadId``), OpenCode its session
+  (``_meta["ai.opencode/sessionID"]``, §49.12). Claude Code names
   the call (``_meta["claudecode/toolUseId"]``), and its PreToolUse hook, a call of the hidden
   ``hook`` tool just before, reports which session made that call (``HookUses``). Cursor's
   command hook injects a checked conversation ID into its call's arguments. Any other client
@@ -23,8 +24,10 @@ runs on the agent's machine.
   kinds of report (#422): a switchboard tool's own, which carries its result (its batch tokens
   confirm an answer), and any other tool's, which carries no result at all, only that the session
   made a call, so a busy session hears its priority messages after every tool call.
-- **The listener** (``/mcp/listen``): Claude Code's Stop hook posts its session id there and waits,
-  round after round, and the answer is the message that wakes it (§49.4).
+- **The listener** (``/mcp/listen``): Claude Code's Stop hook and OpenCode's idle plugin post their
+  session id there and wait, round after round, for the broker's wake text (§49.4, §49.12).
+- **OpenCode status** (``/mcp/status``, §49.12): a POST-only report route with fixed fields and events,
+  the same agent token, no MCP client in the plugin, and no context or permission decision in its reply.
 - **A listener key** (§49.11, #488) is what that hook, and ``/mcp/session``, present when the agent
   signed in through the browser and no token is within a script's reach: a bearer for those two routes
   and for one session, claimed over the signed-in connection and never accepted anywhere else.
@@ -90,8 +93,9 @@ CLIENTS = {
     "claude-code": "claude",
     "Cursor": "cursor",
     "rmcp": "devin",  # Devin's Rust transport; a matching input hook is still required
+    "opencode": "opencode",
 }
-UNSUPPORTED = "switchboard over HTTPS works with Codex, Claude Code, Cursor and Devin for now"
+UNSUPPORTED = "switchboard over HTTPS works with Codex, Claude Code, OpenCode, Cursor and Devin"
 # the scripted test agent (§9.6): a client of this name on a test-mode broker, naming its session and
 # how its answers are confirmed in two headers. A broker that isn't in test mode never serves it.
 TEST_CLIENT = "switchboard-test-agent"
@@ -123,7 +127,7 @@ HOOK_FIELDS = (
 OWN_TOOL_RE = re.compile(
     r"mcp__(?:plugin_switchboard_)?switchboard__|mcp__switchboard_https__|MCP:switchboard_"
 )
-LISTEN_PATH = "/mcp/listen"  # Claude Code's listener waits here (§49.4)
+LISTEN_PATH = "/mcp/listen"  # Claude Code's and OpenCode's listeners wait here (§49.4, §49.12)
 SESSION_PATH = "/mcp/session"  # Claude Code's SessionStart and SessionEnd, as command hooks (§49.4)
 SESSION_EVENTS = frozenset({"SessionStart", "SessionEnd"})  # Claude Code runs no mcp_tool hook at these
 SESSION_FIELDS = ("event", "session_id", "source", "reason", "permission_mode")  # all /mcp/session reads
@@ -132,6 +136,27 @@ INPUT_SESSION = "switchboard_session_id"
 INPUT_USE = "switchboard_tool_use_id"
 PRETOOL_PATH = "/mcp/pretool"
 EVENT_PATH = "/mcp/event"
+STATUS_PATH = "/mcp/status"  # OpenCode V2's report-only plugin (§49.12)
+OPENCODE_SESSION_KEY = "ai.opencode/sessionID"
+# This route speaks HTTP, never MCP. Each new method/event and field is enumerated, with no fallback.
+OPENCODE_STATUS_EVENTS = {
+    "session.execution.started": "UserPromptSubmit",
+    "session.execution.succeeded": "Stop",
+    "session.execution.failed": "Stop",
+    "session.execution.interrupted": "Stop",
+    "session.deleted": "SessionEnd",
+    "location.shutdown": "SessionEnd",
+    "permission.asked": "PermissionRequest",
+    "permission.cleared": "PreToolUse",  # the plugin checked permission.list: no request remains
+    "tool.execute.before": "PreToolUse",
+    "tool.execute.after": "PostToolUse",
+    "tool.execute.failed": "PostToolUseFailure",
+}
+OPENCODE_WAKE_EVENTS = frozenset({"wake.queued", "wake.dropped"})
+OPENCODE_STATUS_FIELDS = frozenset(
+    {"event", "session_id", "tool_name", "tool_use_id", "tool_response", "batch_id", "ack"}
+)
+HARNESS_HEADER = b"x-switchboard-harness"  # absent means Claude, as before; OpenCode says so explicitly
 TOKEN_HEADER = b"x-switchboard-token"  # where the plugin sends a typed token: not Authorization (§49.5, #488)
 SESSION_HEADER = b"x-switchboard-session"  # the listener's session id, the only thing it sends
 WAIT_HEADER = b"x-switchboard-wait"  # how long one round of the listener waits
@@ -423,6 +448,8 @@ class HttpTools:
         elif harness == "claude":
             use = _id(request_meta(ctx).get(TOOL_USE_KEY))
             thread = await self.uses.session(token.id, use) if use is not None else None
+        elif harness == "opencode":
+            thread = _id(request_meta(ctx).get(OPENCODE_SESSION_KEY))
         else:
             thread = self._thread_of(ctx)
         key = scope.get("state", {}).get("listener_key")
@@ -458,7 +485,7 @@ class HttpTools:
         session of the call it precedes; every other event goes to the session it names (§49.4),
         and the answer is the hook's reply, checked (``reply_for``)."""
         c = self._served()
-        if c is None:
+        if c is None or c.harness == "opencode":
             return "{}"
         event, sid = str(fields.get("event") or ""), _id(fields.get("session_id"))
         if c.harness == "claude" and c.key is not None and sid:
@@ -939,6 +966,103 @@ class CommandHook:
             agents.hook_ack(conn, {"batch_id": res.get("batch_id"), "ack": res.get("ack")})
 
 
+class OpenCodeStatus:
+    """OpenCode V2's POST-only status reports (§49.12), under the agent token's device.
+
+    Replies are always empty: neither tool context nor a permission decision. An approval hold
+    survives every ordinary status report, until the plugin explicitly reports no pending request.
+    """
+
+    def __init__(self, auth: AgentAuth, tools: HttpTools) -> None:
+        self.auth, self.tools = auth, tools
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("method") != "POST":
+            await _reply(send, 405, {"error": "method"})
+            return
+        if _header(scope, b"origin") is not None:
+            await _reply(send, 403, {"error": "forbidden"})
+            return
+        row = self.auth.token(scope)  # listener keys and web cookies never open this route
+        if row is None:
+            await _reply(send, 401, {"error": "unauthorized"})
+            return
+        raw = bytearray()
+        while True:
+            msg = await receive()
+            if msg["type"] == "http.disconnect":
+                return
+            raw.extend(msg.get("body", b""))
+            if len(raw) > 4096:
+                await _reply(send, 413, {"error": "too_large"})
+                return
+            if not msg.get("more_body"):
+                break
+        try:
+            body = json.loads(raw)
+        except ValueError:
+            body = None
+        if not isinstance(body, dict) or body.keys() - OPENCODE_STATUS_FIELDS:
+            await _reply(send, 400, {"error": "bad_request"})
+            return
+        event, sid = body.get("event"), _id(body.get("session_id"))
+        if isinstance(event, str) and event in OPENCODE_WAKE_EVENTS:
+            # These are receipts for this exact listener offer, never generic status or model text.
+            if (
+                set(body) != {"event", "session_id", "batch_id", "ack"}
+                or sid is None
+                or type(body.get("batch_id")) is not int
+                or not 0 < body["batch_id"] < 10**12
+                or not isinstance(body.get("ack"), str)
+                or not re.fullmatch(r"[0-9a-f]{32}", body["ack"])
+            ):
+                await _reply(send, 400, {"error": "bad_request"})
+                return
+            self.auth.touch(row)
+            conn = self.tools.conn_for(row, "opencode")
+            self.tools.state.agents.http_continue(
+                conn, sid, body["batch_id"], body["ack"], queued=event == "wake.queued"
+            )
+            await _reply(send, 200, {})
+            return
+        if (
+            not isinstance(event, str)
+            or event not in OPENCODE_STATUS_EVENTS
+            or bool(body.keys() & {"batch_id", "ack"})
+            or sid is None
+            or any(k in body and _id(body[k]) is None for k in ("tool_name", "tool_use_id"))
+            or ("tool_response" in body and not isinstance(body["tool_response"], str))
+        ):
+            await _reply(send, 400, {"error": "bad_request"})
+            return
+        fields = {k: body[k] for k in OPENCODE_STATUS_FIELDS if k in body}
+        if "tool_response" in fields:
+            # Only the batch tokens of switchboard's own successful call may be confirmed.
+            own = fields.get("tool_name") in {f"switchboard_{name}" for name in TOOL_NAMES}
+            tokens = TOKEN_RE.findall(fields["tool_response"])
+            if not own or event != "tool.execute.after" or len(tokens) > MAX_TOKENS:
+                await _reply(send, 400, {"error": "bad_request"})
+                return
+            if fields["tool_response"] != " ".join(f"yk:b{bid}.{mac}" for bid, mac in tokens):
+                await _reply(send, 400, {"error": "bad_request"})
+                return
+        self.auth.touch(row)
+        conn = self.tools.conn_for(row, "opencode")
+        agents = self.tools.state.agents
+        p = agents.http_session(conn, sid)
+        ev = OPENCODE_STATUS_EVENTS[event]
+        if (
+            p is not None
+            and p.status == "waiting-approval"
+            and event != "permission.cleared"
+            and ev != "SessionEnd"
+        ):
+            await _reply(send, 200, {})
+            return
+        await agents.http_hook(conn, "opencode", ev, hook_params(ev, fields, self.tools.state.clock.now()))
+        await _reply(send, 200, {})
+
+
 class Listener:
     """``/mcp/listen`` (§49.4): Claude Code's Stop hook, a ``curl`` loop with ``asyncRewake``, posts
     here with nothing but its session id and waits, round after round. The answer is the message
@@ -990,6 +1114,10 @@ class Listener:
         if door is None:
             return
         row = door.row
+        harness = _header(scope, HARNESS_HEADER) or "claude"
+        if harness not in ("claude", "opencode") or (harness == "opencode" and door.key is not None):
+            await _reply(send, 400, {"error": "bad_request"})
+            return
         sid = _id(_header(scope, SESSION_HEADER))
         if sid is None:
             await _reply(send, 400, {"error": "bad_request", "message": "X-Switchboard-Session is needed"})
@@ -1002,8 +1130,10 @@ class Listener:
             wait = 900.0
         state = self.tools.state
         agents: Any = state.agents  # an HttpConn stands in for the socket's Conn
-        conn = self.tools.conn_for(row, "claude")
-        if _header(scope, AGAIN_HEADER) == "1":
+        conn = self.tools.conn_for(row, harness)
+        # OpenCode has already reported idle. Even a first round must not turn a busy or
+        # approval-blocked session idle when its state changed between that report and this POST.
+        if harness == "opencode" or _header(scope, AGAIN_HEADER) == "1":
             try:
                 p = agents.http_session(conn, sid)
             except ServiceError:
@@ -1015,7 +1145,10 @@ class Listener:
                 log.warning("listener refused for session %s: it is in no room (409)", sid)
                 await _reply(send, 409, {"error": "not_idle", "message": "in no room: its next Stop listens"})
                 return
-            if p.status in MOVED_ON:
+            retry = _header(scope, AGAIN_HEADER) == "1" and state.engine.adapter(p).listener_retry(
+                p, any(c.participant_id == p.id for c in state.engine.continues.values())
+            )
+            if p.status in MOVED_ON and not retry:
                 why = MOVED_ON[p.status]
                 log.warning("listener refused for session %s: %s (status %s) (409)", sid, why, p.status)
                 await _reply(
@@ -1034,7 +1167,7 @@ class Listener:
         watch = asyncio.create_task(gone())
         try:
             params = {"sid": sid, "max_wait_s": min(max(wait, 0.0), WAIT_MAX_S), "t": state.clock.now()}
-            res = await agents.http_hook(conn, "claude", "Stop", params)
+            res = await agents.http_hook(conn, harness, "Stop", params)
         finally:
             watch.cancel()
         out = res.get("out")
@@ -1045,17 +1178,25 @@ class Listener:
             elif not await self._ended(send, agents, conn, sid):
                 await _reply(send, 409, {"error": "nothing", "message": "nothing to wake for"})
             return
-        agents.hook_ack(conn, {"batch_id": res.get("batch_id"), "ack": res.get("ack")})
+        if harness != "opencode":
+            agents.hook_ack(conn, {"batch_id": res.get("batch_id"), "ack": res.get("ack")})
         body = text.encode("utf-8")
+        headers = [
+            (b"content-type", b"text/plain; charset=utf-8"),
+            (b"content-length", str(len(body)).encode()),
+            (b"cache-control", b"no-store"),
+        ]
+        if harness == "opencode":
+            # Headers are not queue admission. Only the plugin's matching receipt can settle it.
+            headers += [
+                (b"x-switchboard-batch", str(res["batch_id"]).encode()),
+                (b"x-switchboard-ack", res["ack"].encode()),
+            ]
         await send(
             {
                 "type": "http.response.start",
                 "status": 200,
-                "headers": [
-                    (b"content-type", b"text/plain; charset=utf-8"),
-                    (b"content-length", str(len(body)).encode()),
-                    (b"cache-control", b"no-store"),
-                ],
+                "headers": headers,
             }
         )
         await send({"type": "http.response.body", "body": body})
@@ -1157,4 +1298,5 @@ def install(app: "FastAPI", state: "BrokerState") -> Any:
     command_hook = CommandHook(auth, tools)
     app.router.routes.append(Route(PRETOOL_PATH, endpoint=command_hook))
     app.router.routes.append(Route(EVENT_PATH, endpoint=command_hook))
+    app.router.routes.append(Route(STATUS_PATH, endpoint=OpenCodeStatus(auth, tools)))
     return mcp_app

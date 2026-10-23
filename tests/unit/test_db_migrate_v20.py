@@ -16,7 +16,7 @@ def test_v19_review_findings_gain_an_empty_outdated_head_after_backup(tmp_path: 
     path = tmp_path / "switchboard.db"
     con = sqlite3.connect(path)
     con.executescript(FIXTURE.read_text())
-    for to, statements, _new in db._steps(3):
+    for to, statements, _new, _edits in db._steps(3):
         if to == 20:
             break
         for statement in statements:
@@ -40,7 +40,7 @@ def test_v19_review_findings_gain_an_empty_outdated_head_after_backup(tmp_path: 
 
     migrated = db.open_db(path)
     fresh = db.open_db(tmp_path / "fresh.db")
-    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 33
+    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 34
     assert db.row_counts(migrated, db.kept(db.V20_TABLES)) == before
     assert tuple(migrated.execute("SELECT title, outdated_head FROM review_items").fetchone()) == (
         "old finding",

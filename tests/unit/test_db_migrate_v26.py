@@ -20,7 +20,7 @@ def database_at_25(path: Path) -> sqlite3.Connection:
     asked with a recommendation (the only pick that existed before: the asker's)."""
     con = sqlite3.connect(path)
     con.executescript(FIXTURE.read_text())
-    for to, statements, _new in db._steps(3):
+    for to, statements, _new, _edits in db._steps(3):
         if to == 26:
             break
         for statement in statements:
@@ -54,7 +54,7 @@ def test_a_v25_board_keeps_its_question_and_gains_an_empty_picks_table_after_a_b
 
     migrated = db.open_db(path)
     fresh = db.open_db(tmp_path / "fresh.db")
-    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 33
+    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 34
     assert db.row_counts(migrated, db.kept_tables(25)) == before
     assert db.kept_tables(26)[-1] == "review_picks"
     assert migrated.execute("SELECT COUNT(*) FROM review_picks").fetchone()[0] == 0

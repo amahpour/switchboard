@@ -40,6 +40,7 @@ with images an admin uploaded, #498), agent-icons-settings-{light,dark,phone-lig
 Appearance → Agent icons) and agent-icons-tip-light (its info tip, open by keyboard),
 settings-agents-{empty,made,revoke}-{light,dark} and settings-agents-phone-light (Settings →
 Agents: a device's agent token made, shown once and revoked, #382),
+connect-opencode-{light,dark,phone-light} (OpenCode V2's plugin, mcp.servers config and environment, #513),
 connect-codex-{light,dark,phone-light} (Connect an agent's Codex step: the plugin, config.toml, and the
 environment lines, now with the server's address for the plugin's approval hook, #472),
 oauth-consent-{light,dark,phone-light} (the card an agent that signs in through the browser sends the
@@ -1644,6 +1645,49 @@ def shoot_connect_codex(browser: Any, out: Path, world: Any) -> None:
     revoke_all()
 
 
+def shoot_connect_opencode(browser: Any, out: Path, world: Any) -> None:
+    """#513: the OpenCode V2 config and environment lines, in light, dark and on a phone."""
+    from playwright.sync_api import expect
+
+    st = world.broker.state
+
+    def revoke_all() -> None:
+        for t in world.broker.on_loop(lambda: st.store.agent_tokens_of(None)):
+            world.broker.on_loop(lambda t=t: st.store.agent_token_revoke(t.id, None))
+
+    for suffix, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        revoke_all()
+        ctx = browser.new_context(timezone_id="UTC", locale="en-US", **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            if suffix.startswith("phone"):
+                page.click("#rooms-toggle")
+                page.click("#me-settings")
+                page.click("#settings-row-agents")
+            else:
+                page.click("#me-settings")
+                page.click("#settings-tab-agents")
+            page.fill("#agent-token-device", "work-laptop")
+            page.click("#agent-token-make")
+            expect(page.locator("#agent-connect-opencode-env")).to_be_visible()
+            step = page.locator("#agent-connect-opencode")
+            step.scroll_into_view_if_needed()
+            page.evaluate("document.activeElement && document.activeElement.blur()")
+            settle(page)
+            path = out / f"connect-opencode-{suffix}.png"
+            step.screenshot(path=str(path), animations="disabled", caret="hide")
+            print(path)
+        finally:
+            ctx.close()
+    revoke_all()
+
+
 # ---------------------------------------------------------- the consent page (#386)
 CONSENT_REDIRECT = "http://localhost:41234/callback"
 
@@ -2407,6 +2451,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_agent_icons(browser, out, world)
             shoot_settings_agents(browser, out, world)
             shoot_connect_codex(browser, out, world)
+            shoot_connect_opencode(browser, out, world)
             shoot_oauth_consent(browser, out, world, consent)
             shoot_confirmed_check(browser, out, world)  # rooms of its own, so last in this world
             shoot_approval(browser, out, world)

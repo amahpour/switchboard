@@ -15,7 +15,7 @@ def test_rooms_start_with_no_aliases_after_checked_backup(tmp_path: Path) -> Non
     p = tmp_path / "switchboard.db"
     con = sqlite3.connect(p)
     con.executescript(FIXTURE.read_text())
-    for to, statements, _new in db._steps(3):
+    for to, statements, _new, _edits in db._steps(3):
         if to == 18:
             break
         for stmt in statements:
@@ -27,7 +27,7 @@ def test_rooms_start_with_no_aliases_after_checked_backup(tmp_path: Path) -> Non
     os.chmod(p, 0o600)
 
     con = db.open_db(p)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 33
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 34
     assert db.row_counts(con, db.kept(db.V20_TABLES)) == before
     assert con.execute("SELECT COUNT(*) FROM rooms WHERE renamed_from <> '[]'").fetchone()[0] == 0
     assert p.with_name(p.name + ".v17.bak").exists()

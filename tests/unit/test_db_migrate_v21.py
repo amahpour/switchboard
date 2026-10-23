@@ -15,7 +15,7 @@ def test_v20_upgrade_adds_empty_claims_with_a_backup(tmp_path: Path) -> None:
     path = tmp_path / "switchboard.db"
     con = sqlite3.connect(path)
     con.executescript(FIXTURE.read_text())
-    for to, statements, _new in db._steps(3):
+    for to, statements, _new, _edits in db._steps(3):
         if to == 21:
             break
         for statement in statements:
@@ -28,7 +28,7 @@ def test_v20_upgrade_adds_empty_claims_with_a_backup(tmp_path: Path) -> None:
 
     migrated = db.open_db(path)
     fresh = db.open_db(tmp_path / "fresh.db")
-    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 33  # on through pins (#292)
+    assert db.schema_version(migrated) == db.SCHEMA_VERSION == 34  # on through pins (#292)
     assert db.row_counts(migrated, db.kept_tables(20)) == before
     assert migrated.execute("SELECT COUNT(*) FROM claims").fetchone()[0] == 0
     assert [tuple(r) for r in migrated.execute("PRAGMA table_info(claims)")] == [

@@ -14,7 +14,7 @@ messages, where NULL is the owner), 5 (per-person preferences, §34), 6 (text si
 drops the process ids and the stdio credential that only it used; 31 (#386) adds the clients that
 register to sign an agent in through the browser, and says how each agent token was made; 32 (#498)
 adds the avatars an admin uploads for each harness (§29.11); 33 (#488) adds the listener keys of Claude
-Code's helper scripts (§49.11).
+Code's helper scripts (§49.11); 34 (#513) admits OpenCode in participants (§49.12).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -29,12 +29,13 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import NamedTuple
 
 from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 33
+SCHEMA_VERSION = 34
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -54,7 +55,7 @@ CREATE TABLE rooms(
 
 CREATE TABLE participants(
   id INTEGER PRIMARY KEY,
-  harness TEXT NOT NULL CHECK(harness IN ('claude','codex','cursor','devin','test','unknown')),
+  harness TEXT NOT NULL CHECK(harness IN ('claude','codex','cursor','devin','opencode','test','unknown')),
   session_key TEXT NOT NULL,
   session_id TEXT,
   status TEXT NOT NULL DEFAULT 'starting'
@@ -691,49 +692,70 @@ V32_TO_V33 = (
 )
 
 
-def _steps(frm: int) -> list[tuple[int, tuple[str, ...], tuple[str, ...]]]:
-    """The migration steps from schema ``frm`` up to the current one: (to, statements,
-    the tables the step adds). Read from the module at run time, never cached."""
+# v33 -> v34 (#513, §49.12): only the participants CHECK gains a harness. SQLite's documented
+# schema-text procedure for a CHECK change leaves rows, indexes and incoming foreign keys intact
+# (https://www.sqlite.org/lang_altertable.html#otheralter). _migrate brackets this one step with
+# schema editing, advances SQLite's schema cookie, reloads the schema and checks integrity before commit.
+V33_TO_V34 = (
+    "UPDATE sqlite_master SET sql=replace(sql,"
+    " '''claude'',''codex'',''cursor'',''devin'',''test'',''unknown''',"
+    " '''claude'',''codex'',''cursor'',''devin'',''opencode'',''test'',''unknown''')"
+    " WHERE type='table' AND name='participants'",
+    "UPDATE meta SET value='34' WHERE key='schema_version'",
+)
+
+
+class MigrationStep(NamedTuple):
+    to: int
+    statements: tuple[str, ...]
+    new_tables: tuple[str, ...]
+    # Nonempty enables writable_schema for this step and verifies each required SQL fragment.
+    schema_edits: tuple[tuple[str, str], ...] = ()
+
+
+def _steps(frm: int) -> list[MigrationStep]:
+    """Migration statements, new tables and schema-edit checks, read at run time, never cached."""
     all_steps = {
-        1: (2, V1_TO_V2, ("remotes",)),
-        2: (3, V2_TO_V3, ("passkeys", "link_machines")),
-        3: (4, V3_TO_V4, ("people",)),
-        4: (5, V4_TO_V5, ("preferences",)),
-        5: (6, V5_TO_V6, ()),
-        6: (7, V6_TO_V7, ()),
-        7: (8, V7_TO_V8, ()),
-        8: (9, V8_TO_V9, ("reviews", "review_items")),
-        9: (10, V9_TO_V10, ()),
-        10: (11, V10_TO_V11, ()),
-        11: (12, V11_TO_V12, ()),
-        12: (13, V12_TO_V13, ()),
-        13: (14, V13_TO_V14, ()),
-        14: (15, V14_TO_V15, ("room_people",)),
-        15: (16, V15_TO_V16, ()),
-        16: (17, V16_TO_V17, ()),
-        17: (18, V17_TO_V18, ()),
-        18: (19, V18_TO_V19, ()),
-        19: (20, V19_TO_V20, ()),
-        20: (21, V20_TO_V21, ("claims",)),
-        21: (22, V21_TO_V22, ("pins",)),
-        22: (23, V22_TO_V23, ()),
-        23: (24, V23_TO_V24, ()),
-        24: (25, V24_TO_V25, ("agent_tokens",)),
-        25: (26, V25_TO_V26, ("review_picks",)),
-        26: (27, V26_TO_V27, ()),
-        27: (28, V27_TO_V28, ()),
-        28: (29, V28_TO_V29, ()),
-        29: (30, V29_TO_V30, ()),
-        30: (31, V30_TO_V31, ("oauth_clients",)),
-        31: (32, V31_TO_V32, ("agent_icons",)),
-        32: (33, V32_TO_V33, ("listener_keys",)),
+        1: MigrationStep(2, V1_TO_V2, ("remotes",)),
+        2: MigrationStep(3, V2_TO_V3, ("passkeys", "link_machines")),
+        3: MigrationStep(4, V3_TO_V4, ("people",)),
+        4: MigrationStep(5, V4_TO_V5, ("preferences",)),
+        5: MigrationStep(6, V5_TO_V6, ()),
+        6: MigrationStep(7, V6_TO_V7, ()),
+        7: MigrationStep(8, V7_TO_V8, ()),
+        8: MigrationStep(9, V8_TO_V9, ("reviews", "review_items")),
+        9: MigrationStep(10, V9_TO_V10, ()),
+        10: MigrationStep(11, V10_TO_V11, ()),
+        11: MigrationStep(12, V11_TO_V12, ()),
+        12: MigrationStep(13, V12_TO_V13, ()),
+        13: MigrationStep(14, V13_TO_V14, ()),
+        14: MigrationStep(15, V14_TO_V15, ("room_people",)),
+        15: MigrationStep(16, V15_TO_V16, ()),
+        16: MigrationStep(17, V16_TO_V17, ()),
+        17: MigrationStep(18, V17_TO_V18, ()),
+        18: MigrationStep(19, V18_TO_V19, ()),
+        19: MigrationStep(20, V19_TO_V20, ()),
+        20: MigrationStep(21, V20_TO_V21, ("claims",)),
+        21: MigrationStep(22, V21_TO_V22, ("pins",)),
+        22: MigrationStep(23, V22_TO_V23, ()),
+        23: MigrationStep(24, V23_TO_V24, ()),
+        24: MigrationStep(25, V24_TO_V25, ("agent_tokens",)),
+        25: MigrationStep(26, V25_TO_V26, ("review_picks",)),
+        26: MigrationStep(27, V26_TO_V27, ()),
+        27: MigrationStep(28, V27_TO_V28, ()),
+        28: MigrationStep(29, V28_TO_V29, ()),
+        29: MigrationStep(30, V29_TO_V30, ()),
+        30: MigrationStep(31, V30_TO_V31, ("oauth_clients",)),
+        31: MigrationStep(32, V31_TO_V32, ("agent_icons",)),
+        32: MigrationStep(33, V32_TO_V33, ("listener_keys",)),
+        33: MigrationStep(34, V33_TO_V34, (), (("participants", "'opencode'"),)),
     }
     out = []
     v = frm
     while v < SCHEMA_VERSION:
-        to, stmts, new = all_steps[v]
-        out.append((to, stmts, new))
-        v = to
+        step = all_steps[v]
+        out.append(step)
+        v = step.to
     return out
 
 
@@ -950,9 +972,24 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
         if row_counts(con, old_tables) != counts:
             raise SchemaError("the database changed while its migration backup was made; start again")
         added: list[str] = []
-        for to, stmts, new in _steps(frm):
-            for stmt in stmts:
-                con.execute(stmt)
+        for to, stmts, new, schema_edits in _steps(frm):
+            if schema_edits:
+                cookie = int(con.execute("PRAGMA schema_version").fetchone()[0])
+                con.execute("PRAGMA writable_schema=ON")
+            try:
+                for stmt in stmts:
+                    con.execute(stmt)
+                for table, required in schema_edits:
+                    row = con.execute(
+                        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
+                    ).fetchone()
+                    if row is None or required not in row[0]:
+                        raise SchemaError(f"schema edit of {table} did not add {required}")
+                if schema_edits:
+                    con.execute(f"PRAGMA schema_version={cookie + 1}")
+            finally:
+                if schema_edits:
+                    con.execute("PRAGMA writable_schema=RESET")
             if schema_version(con) != to:
                 raise SchemaError(f"the migration did not set schema version {to}")
             added += new

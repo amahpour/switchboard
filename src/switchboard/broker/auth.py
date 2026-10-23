@@ -31,7 +31,7 @@ OPEN_PATHS = frozenset({"/healthz"})
 # agents over HTTPS (DESIGN.md §49.2): an agent token authenticates them, never a cookie, and the
 # route itself (``agent_http.AgentAuth``) refuses any request that has an Origin, so a browser can't
 # call it at all; its Host is checked as everywhere
-AGENT_PATHS = frozenset({"/mcp", "/mcp/listen", "/mcp/session", "/mcp/pretool", "/mcp/event"})
+AGENT_PATHS = frozenset({"/mcp", "/mcp/listen", "/mcp/session", "/mcp/pretool", "/mcp/event", "/mcp/status"})
 # signing an agent in through the browser (DESIGN.md §49.9, #386): the two OAuth routes a coding agent
 # calls itself, a client registering and a code swapped for a token. A program sends no Origin, so the
 # page's Origin rule can't apply; instead both refuse any request that has one (a browser's script
