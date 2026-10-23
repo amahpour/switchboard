@@ -7,6 +7,10 @@
 # quickly (within 1 s for a SessionEnd): a server that can't be reached changes nothing here. The
 # token goes to the server in a request header built here, never on a command line, where other
 # processes could read it.
+# With no typed token (the agent signed in through the browser) it presents the listener key that
+# bin/headers.cmd made for this Claude Code (docs/DESIGN.md section 49.11), once and with no waiting: a
+# SessionStart can come before the connection has told the server about the key, and the listener
+# (listen.ps1), which does wait for it, reports the session then; the server takes a key for one session only.
 # It runs under Windows PowerShell 5.1, which ships with Windows, and under PowerShell 7. Keep this
 # file ASCII: 5.1 reads a file without a byte-order mark as ANSI.
 $ErrorActionPreference = 'Stop'
@@ -28,7 +32,22 @@ if (-not $sid) { exit 0 }
 $url = First $env:CLAUDE_PLUGIN_OPTION_SERVER_URL $env:SWITCHBOARD_URL
 if ($url -and $url.EndsWith('/')) { $url = $url.Substring(0, $url.Length - 1) }
 $token = First $env:CLAUDE_PLUGIN_OPTION_TOKEN $env:SWITCHBOARD_AGENT_TOKEN
-if (-not $url -or -not $token) { exit 0 }
+if (-not $url) { exit 0 }
+if (-not $token) { # no typed token: the key bin/headers.cmd made for this Claude Code, in the plugin's data folder
+    $profile_dir = [Environment]::GetFolderPath('UserProfile')
+    $dir = First $env:CLAUDE_PLUGIN_DATA $(if ($profile_dir) { Join-Path (Join-Path $profile_dir '.cache') 'switchboard' })
+    if (-not $dir -or $env:CLAUDE_PID -cnotmatch '^[0-9]{1,9}\z') { exit 0 }
+    try {
+        # shared for reading, writing and deleting, so the helper can replace the file while this reads it
+        $fs = [IO.File]::Open((Join-Path $dir "listener-key-$env:CLAUDE_PID"), [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+        try {
+            $buffer = New-Object byte[] 256
+            $text = [Text.Encoding]::ASCII.GetString($buffer, 0, $fs.Read($buffer, 0, 256)).Trim()
+        } finally { $fs.Dispose() }
+    } catch { exit 0 }
+    if ($text -cnotmatch '^sbl_[0-9a-f]{64}\z') { exit 0 }
+    $token = $text
+}
 $body = '{{"event": "{0}", "session_id": "{1}", "source": "{2}", "reason": "{3}", "permission_mode": "{4}"}}' -f
     $event, $sid, (Plain 'source'), (Plain 'reason'), (Plain 'permission_mode')
 # Claude Code gives SessionEnd hooks as little as 1.5 s (2.1.299), and starting PowerShell takes a third of

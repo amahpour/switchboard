@@ -205,8 +205,9 @@ def test_the_pinned_tag_holds_the_plugin_when_this_checkout_knows_it() -> None:
         assert json.loads(shown)["name"] == load(marketplace)["plugins"][0]["name"]
 
 
-# how .mcp.json starts the helper that makes the listener key: in sh, Git Bash and PowerShell alike (§49.11)
-HELPER_COMMAND = 'cd "${CLAUDE_PLUGIN_ROOT}/bin"; ./headers "${CLAUDE_PLUGIN_DATA}"; exit $LASTEXITCODE'
+# how .mcp.json starts the helper that makes the listener key (§49.11): a quoted path and a quoted argument
+# and nothing else, because Claude Code runs it with sh on Linux and macOS and with cmd.exe on Windows (#499)
+HELPER_COMMAND = '"${CLAUDE_PLUGIN_ROOT}/bin/headers" "${CLAUDE_PLUGIN_DATA}"'
 
 
 def test_the_claude_plugin_asks_for_the_server_and_an_optional_secret_token() -> None:

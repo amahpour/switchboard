@@ -12,7 +12,14 @@ the shell scripts' hand-over with stand-ins for ``uname`` and ``powershell.exe``
 scripts under ``pwsh`` where it is installed (``test_agent_plugins.py`` runs the same scenarios against
 both implementations), and static checks on the files Windows reads. What only Windows can show
 (Windows PowerShell 5.1, Git Bash, ``cmd.exe``, a real ``claude.exe``) was run natively for #440 and is
-in its pull request."""
+in its pull request.
+
+The helper that makes the listener key (#499, DESIGN.md §49.11) is the exception to the hook shells: Claude
+Code runs a ``headersHelper`` with ``cmd.exe`` on Windows (seen in 2.1.308, with Git Bash installed too), so
+``.mcp.json`` has one command that ``sh`` and ``cmd.exe`` read alike, and ``headers.cmd`` starts
+``windows/headers.ps1``. Its run under ``pwsh`` is in ``test_claude_plugin_signin.py``; here are the checks
+on what only Windows does with it (the access list that stands in for mode 0600, the walk to Claude Code's
+pid), which were run on Windows itself."""
 
 from __future__ import annotations
 
@@ -26,6 +33,7 @@ from pathlib import Path
 import pytest
 from test_agent_plugins import (  # noqa: F401  (impl is a fixture)
     CLAUDE_PLUGIN,
+    HELPER_COMMAND,
     LISTEN_COMMAND,
     ROOT,
     SESSION_1,
@@ -199,7 +207,7 @@ def test_powershell_finds_the_cmd_file_for_the_command_and_nothing_else() -> Non
         "session.cmd",
         "windows",
     ]
-    assert sorted(p.name for p in (BIN / "windows").iterdir()) == ["listen.ps1", "session.ps1"]
+    assert sorted(p.name for p in (BIN / "windows").iterdir()) == ["headers.ps1", "listen.ps1", "session.ps1"]
 
 
 @pytest.mark.parametrize("name", ["listen", "session"])
@@ -231,7 +239,7 @@ def code_lines(path: Path) -> list[str]:
     return out
 
 
-@pytest.mark.parametrize("name", ["listen", "session"])
+@pytest.mark.parametrize("name", ["listen", "session", "headers"])
 def test_the_powershell_scripts_run_on_windows_powershell_5_1(name: str) -> None:
     """Windows PowerShell 5.1 ships with Windows, so the scripts must run there: no syntax that only
     PowerShell 7 has (``&&``, ``||``, ``??``, ``?.``), and only ASCII, because 5.1 reads a file without a
@@ -244,8 +252,12 @@ def test_the_powershell_scripts_run_on_windows_powershell_5_1(name: str) -> None
     for seven_only in ("&&", "||", "??", "?.", "?["):
         assert seven_only not in "\n".join(code_lines(path)), seven_only
     assert "Set-StrictMode" not in text and "$ErrorActionPreference = 'Stop'" in text
-    # whatever goes wrong, never an exit code that would read as a wake
-    assert re.search(r"^trap \{.*exit 0 \}$", text, re.M)
+    # whatever goes wrong, never an exit code that would read as a wake (the helper prints {} first)
+    assert re.search(r"^trap \{.*exit 0 \}$", text, re.M) or (
+        name == "headers"
+        and "trap { None }" in text
+        and re.search(r"^function None \{.*exit 0 \}$", text, re.M)
+    )
 
 
 @pytest.mark.parametrize("name", ["listen", "session"])
@@ -273,12 +285,15 @@ def test_the_powershell_scripts_keep_the_token_off_every_command_line(name: str)
         assert forbidden not in code, forbidden
     assert not any(ln.lstrip().startswith("&") for ln in lines), "no call operator"
     mentions = [ln.strip() for ln in lines if "$token" in ln]
+    allowed = (  # the token, or with none typed the listener key (#499): read, checked, put in the header
+        "$token = First $env:CLAUDE_PLUGIN_OPTION_TOKEN $env:SWITCHBOARD_AGENT_TOKEN",
+        "if (-not $token) {",
+        "while (-not ($token = ReadKey)) {",
+        "if ($keyfile) { $newest = ReadKey; if ($newest) { $token = $newest } }",
+        "$token = $text",
+    )
     for ln in mentions:
-        assert (
-            ln.startswith("$token = First $env:CLAUDE_PLUGIN_OPTION_TOKEN $env:SWITCHBOARD_AGENT_TOKEN")
-            or ln == "if (-not $url -or -not $token) { exit 0 }"
-            or '"Bearer $token"' in ln
-        ), ln
+        assert ln.startswith(allowed) or '"Bearer $token"' in ln, ln
     assert any('"Bearer $token"' in ln for ln in mentions)
     assert "$handler.AllowAutoRedirect = $false" in code
 
@@ -293,11 +308,14 @@ def test_the_scripts_are_checked_out_with_the_line_endings_they_need() -> None:
     files = [
         "plugins/claude/bin/listen",
         "plugins/claude/bin/session",
+        "plugins/claude/bin/headers",
         "plugins/claude/bin/windows/listen.ps1",
+        "plugins/claude/bin/windows/headers.ps1",
         "plugins/cursor/bin/hook",
         "plugins/devin/bin/hook",
         "plugins/claude/bin/listen.cmd",
         "plugins/claude/bin/session.cmd",
+        "plugins/claude/bin/headers.cmd",
     ]
     out = subprocess.run(
         ["git", "-C", str(ROOT), "check-attr", "eol", "--", *files],
@@ -306,7 +324,135 @@ def test_the_scripts_are_checked_out_with_the_line_endings_they_need() -> None:
         check=True,
     ).stdout
     eol = {ln.split(":")[0]: ln.rsplit(" ", 1)[1] for ln in out.splitlines()}
-    assert {f: eol[f] for f in files} == {**{f: "lf" for f in files[:5]}, **{f: "crlf" for f in files[5:]}}
+    assert {f: eol[f] for f in files} == {**{f: "lf" for f in files[:7]}, **{f: "crlf" for f in files[7:]}}
+
+
+# ------------------------------------------------ the helper that makes the listener key (#499, §49.11)
+def test_the_helpers_command_is_read_the_same_by_sh_and_cmd_exe() -> None:
+    """Claude Code runs a ``headersHelper`` with ``sh -c`` on Linux and macOS and with ``cmd.exe /d /s /c`` on
+    Windows, even where Git Bash is installed (seen in 2.1.308), so the one command in ``.mcp.json`` has to
+    mean the same to both: the script's path in double quotes and the data folder in double quotes, with the
+    two placeholders Claude Code fills in (with forward slashes on Windows) and nothing else. ``;`` is not a
+    separator in ``cmd.exe``, ``./`` is a switch there, ``$LASTEXITCODE`` is not a variable, and a single
+    quote is no quote. (The PowerShell hooks' trick, ``cd ...; ./x; exit $LASTEXITCODE``, made the helper
+    fail in 45 ms on Windows and #500 shipped it.) Fails if anything but that shape is in the command."""
+    plain = HELPER_COMMAND.replace("${CLAUDE_PLUGIN_ROOT}", "ROOT").replace("${CLAUDE_PLUGIN_DATA}", "DATA")
+    assert re.fullmatch(r'"ROOT/bin/headers" "DATA"', plain), HELPER_COMMAND
+    assert (
+        json.loads((CLAUDE_PLUGIN / ".mcp.json").read_text())["mcpServers"]["switchboard"]["headersHelper"]
+        == HELPER_COMMAND
+    )
+
+
+def test_headers_cmd_starts_the_powershell_helper_with_the_data_folder() -> None:
+    """``cmd.exe`` finds ``headers.cmd`` for the path with no extension (and not the shell script beside it),
+    and the file starts ``windows/headers.ps1`` in Windows PowerShell 5.1 with the profile skipped and the
+    execution policy lifted for that one run, passing the data folder, the helper's one argument, in quotes
+    (the folder is Claude Code's, and may have spaces). The script is found from the file's own folder, and
+    the file's code is the script's. CRLF line endings, ASCII, as ``cmd.exe`` wants. Fails if the argument is
+    dropped or unquoted, or the path depends on the folder Claude Code runs in."""
+    raw = (BIN / "headers.cmd").read_bytes()
+    assert raw.isascii() and b"\r\n" in raw and b"\n" not in raw.replace(b"\r\n", b""), "ASCII, CRLF only"
+    lines = [ln for ln in raw.decode().splitlines() if not ln.lower().startswith("rem ")]
+    assert lines == [
+        "@echo off",
+        f'{POWERSHELL_LINE} "%~dp0windows\\headers.ps1" "%~1"',
+        "exit /b %ERRORLEVEL%",
+    ]
+
+
+def helper_lines() -> list[str]:
+    return code_lines(BIN / "windows" / "headers.ps1")
+
+
+def test_the_powershell_helper_makes_the_keys_file_private_before_the_key_is_in_it() -> None:
+    """The POSIX helper's ``umask 077`` and ``chmod 600`` have no meaning on Windows, whose files are guarded
+    by an access list. So the helper makes the temporary file, empty; replaces its access list with the
+    user's alone, protected from the folder's (no rule inherited); reads the list back and fails if it is not
+    exactly that (a rule for anyone else, or an inherited one); and only then writes the key into it and
+    renames it to its name. Checked in the source, since only Windows has the lists (the run on Windows is
+    in the pull request): fails if the key is written before the list is set, if the list is not protected,
+    if any account but the user's is granted, or if the helper stops checking what it set."""
+    code = "\n".join(helper_lines())
+    create = code.index("[IO.File]::WriteAllBytes($tmp, [byte[]]@())")
+    private = code.index("MakePrivate $tmp")
+    write = code.index("[IO.File]::WriteAllBytes($tmp, [Text.Encoding]::ASCII.GetBytes($key")
+    rename = code.index("Move-Item -LiteralPath $tmp")
+    assert create < private < write < rename
+    assert "$rules.SetAccessRuleProtection($true, $false)" in code  # no inherited rule, and none kept
+    assert "[Security.Principal.WindowsIdentity]::GetCurrent().User" in code
+    assert code.count("New-Object Security.AccessControl.FileSystemAccessRule") == 1
+    assert "FileSystemAccessRule $me, $full, $allow" in code
+    assert "[Security.AccessControl.FileSystemRights]::FullControl" in code
+    assert "[Security.AccessControl.AccessControlType]::Allow" in code
+    for other in ("Everyone", "BUILTIN", "Authenticated", "S-1-", "NTAccount", "icacls", "cacls"):
+        assert other not in code, other
+    # what it checks after setting: protected, and every rule is the user's
+    assert "if (-not $now.AreAccessRulesProtected) { throw 'inherited rules' }" in code
+    assert "$now.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])" in code
+    assert "if ($rule.IdentityReference.Value -cne $me.Value) { throw 'another account has access' }" in code
+    # off Windows (the tests run it under pwsh) the file mode stands in for the list
+    assert "& chmod 600 $path" in code
+
+
+def test_the_powershell_helper_keeps_the_key_off_every_command_line() -> None:
+    """As the listener's and the session script's token: the key is never an argument of any process, where
+    others on the machine could read it. The helper starts no process on Windows; off Windows (the tests,
+    under pwsh) it starts ``ps`` with a pid and ``chmod`` with a file name, neither with the key. It uses no
+    network (the key goes to the server only in the scripts' requests), runs no text as code, and mentions
+    the key only to make it, hash it, check its length and write it to the file; what it prints is the hash.
+    Fails if any other process can start, or the key appears anywhere else."""
+    lines = helper_lines()
+    code = "\n".join(lines)
+    for forbidden in (
+        "Start-Process",
+        "ArgumentList",
+        "Invoke-Expression",
+        "iex ",
+        "Invoke-Command",
+        "Invoke-WebRequest",
+        "Invoke-RestMethod",
+        "curl",
+        "cmd /c",
+        "[Diagnostics.Process]::Start",
+        "Net.",
+        "Http",
+        "WebClient",
+        "Out-File",
+    ):
+        assert forbidden not in code, forbidden
+    calls = [ln.strip() for ln in lines if re.search(r"(^|[=(;{]\s*)&\s", ln.strip())]
+    assert calls == ["$got = & ps -o ppid= -p $id 2>$null", "& chmod 600 $path"], calls
+    mentions = [ln.strip() for ln in lines if re.search(r"\$key\b", ln)]
+    assert mentions == [
+        "$key = 'sbl_' + (($bytes | ForEach-Object { $_.ToString('x2') }) -join '')",
+        "if ($key.Length -ne 68) { None }",
+        "$hash = (($sha.ComputeHash([Text.Encoding]::ASCII.GetBytes($key)) | ForEach-Object "
+        "{ $_.ToString('x2') }) -join '')",
+        '[IO.File]::WriteAllBytes($tmp, [Text.Encoding]::ASCII.GetBytes($key + "`n"))',
+    ], mentions
+    assert "Show ('{\"X-Switchboard-Listener\": \"' + $hash + '\"}')" in code
+    assert "[Security.Cryptography.RandomNumberGenerator]::Create()" in code  # the system's generator
+
+
+def test_the_powershell_helper_finds_claude_codes_pid_from_its_ancestors_without_cim() -> None:
+    """The file is named for the pid the hooks get as ``CLAUDE_PID``: Claude Code's own, which the helper's
+    own ``CLAUDE_PID`` is not (it is whoever started Claude Code's). On Windows the helper's chain is
+    ``claude.exe``, ``cmd.exe``, then the helper (seen in 2.1.308, where ``CLAUDE_PID`` of its hooks is that
+    ``claude.exe``), so it takes the first ancestor that is not a shell. It asks Windows for a parent with
+    one call into ``ntdll``, on a process handle opened for query only, and not through CIM, which took 2.5 s
+    a question on the maintainer's machine, and Claude Code puts a time limit on a helper. It skips a
+    parent that started after its child (a pid reused since) and fails closed when there is no parent to be
+    found. Fails if the walk goes through CIM or WMI, opens more than it needs, or stops asking for a
+    start time."""
+    code = "\n".join(helper_lines())
+    for slow in ("Get-CimInstance", "Get-WmiObject", "Win32_Process", "wmic", "ManagementObjectSearcher"):
+        assert slow not in code, slow
+    assert "NtQueryInformationProcess" in code and "OpenProcess(0x1000, false, pid)" in code
+    assert "$shells = 'cmd', 'powershell', 'pwsh', 'bash', 'sh', 'dash', 'zsh', 'conhost'" in code
+    assert "if ($shells -notcontains $found.ProcessName.ToLowerInvariant()) { return $parent }" in code
+    assert "if ($born -and $mine -and $born -gt $mine) { return 0 }" in code
+    assert "if ($claude -le 1) { None }" in code
 
 
 # ------------------------------------------------ the PowerShell script and the sh script, side by side
