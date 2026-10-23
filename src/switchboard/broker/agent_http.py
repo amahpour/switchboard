@@ -152,7 +152,10 @@ OPENCODE_STATUS_EVENTS = {
     "tool.execute.after": "PostToolUse",
     "tool.execute.failed": "PostToolUseFailure",
 }
-OPENCODE_STATUS_FIELDS = frozenset({"event", "session_id", "tool_name", "tool_use_id", "tool_response"})
+OPENCODE_WAKE_EVENTS = frozenset({"wake.queued", "wake.dropped"})
+OPENCODE_STATUS_FIELDS = frozenset(
+    {"event", "session_id", "tool_name", "tool_use_id", "tool_response", "batch_id", "ack"}
+)
 HARNESS_HEADER = b"x-switchboard-harness"  # absent means Claude, as before; OpenCode says so explicitly
 TOKEN_HEADER = b"x-switchboard-token"  # where the plugin sends a typed token: not Authorization (§49.5, #488)
 SESSION_HEADER = b"x-switchboard-session"  # the listener's session id, the only thing it sends
@@ -1003,9 +1006,29 @@ class OpenCodeStatus:
             await _reply(send, 400, {"error": "bad_request"})
             return
         event, sid = body.get("event"), _id(body.get("session_id"))
+        if isinstance(event, str) and event in OPENCODE_WAKE_EVENTS:
+            # These are receipts for this exact listener offer, never generic status or model text.
+            if (
+                set(body) != {"event", "session_id", "batch_id", "ack"}
+                or sid is None
+                or type(body.get("batch_id")) is not int
+                or not 0 < body["batch_id"] < 10**12
+                or not isinstance(body.get("ack"), str)
+                or not re.fullmatch(r"[0-9a-f]{32}", body["ack"])
+            ):
+                await _reply(send, 400, {"error": "bad_request"})
+                return
+            self.auth.touch(row)
+            conn = self.tools.conn_for(row, "opencode")
+            self.tools.state.agents.http_continue(
+                conn, sid, body["batch_id"], body["ack"], queued=event == "wake.queued"
+            )
+            await _reply(send, 200, {})
+            return
         if (
             not isinstance(event, str)
             or event not in OPENCODE_STATUS_EVENTS
+            or bool(body.keys() & {"batch_id", "ack"})
             or sid is None
             or any(k in body and _id(body[k]) is None for k in ("tool_name", "tool_use_id"))
             or ("tool_response" in body and not isinstance(body["tool_response"], str))
@@ -1155,17 +1178,25 @@ class Listener:
             elif not await self._ended(send, agents, conn, sid):
                 await _reply(send, 409, {"error": "nothing", "message": "nothing to wake for"})
             return
-        agents.hook_ack(conn, {"batch_id": res.get("batch_id"), "ack": res.get("ack")})
+        if harness != "opencode":
+            agents.hook_ack(conn, {"batch_id": res.get("batch_id"), "ack": res.get("ack")})
         body = text.encode("utf-8")
+        headers = [
+            (b"content-type", b"text/plain; charset=utf-8"),
+            (b"content-length", str(len(body)).encode()),
+            (b"cache-control", b"no-store"),
+        ]
+        if harness == "opencode":
+            # Headers are not queue admission. Only the plugin's matching receipt can settle it.
+            headers += [
+                (b"x-switchboard-batch", str(res["batch_id"]).encode()),
+                (b"x-switchboard-ack", res["ack"].encode()),
+            ]
         await send(
             {
                 "type": "http.response.start",
                 "status": 200,
-                "headers": [
-                    (b"content-type", b"text/plain; charset=utf-8"),
-                    (b"content-length", str(len(body)).encode()),
-                    (b"cache-control", b"no-store"),
-                ],
+                "headers": headers,
             }
         )
         await send({"type": "http.response.body", "body": body})

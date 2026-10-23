@@ -9,6 +9,8 @@ import { listen, setup } from '../plugins/opencode/listener.mjs';
 const token = 'sbat_test-token-canary';
 const sessionID = 'ses_00000000000000000000000001';
 const wake = '[switchboard] from peer: call read("#build") [yk:b1.00000000]';
+const ack = '0123456789abcdef0123456789abcdef';
+const wakeResponse = text => new Response(text, {headers: {'X-Switchboard-Batch': '1', 'X-Switchboard-Ack': ack}});
 const turn = () => new Promise(resolve => setImmediate(resolve));
 async function until(check) {
   const deadline = Date.now() + 5000;
@@ -24,7 +26,7 @@ test('listener rounds: 200, 408, 409, 401, unreachable; no credentials in output
   for (const terminal of [200, 409, 401]) {
     const requests = [], prompts = [], logs = [], delays = [];
     const responses = [new Error(token), new Error(token), new Response('', {status: 408}),
-      new Response(terminal === 200 ? wake : token, {status: terminal})];
+      terminal === 200 ? wakeResponse(wake) : new Response(token, {status: terminal})];
     await listen({url: 'https://example.com', token, sessionID,
       signal: new AbortController().signal, canWake: async () => true,
       ctx: {session: {prompt: async p => prompts.push(p)}},
@@ -51,13 +53,13 @@ test('listener rounds: 200, 408, 409, 401, unreachable; no credentials in output
   }
 });
 
-// Even a response already received cannot wake an approval-blocked, moved, busy or deleted session.
+// Even a response already received cannot wake an approval-blocked, moved or deleted session.
 test('listener rechecks eligibility after 200 and rejects oversized or credential-bearing text', async () => {
   for (const [text, allowed] of [[wake, false], [token, true], ['x'.repeat(65537), true], ['', true]]) {
     const prompts = [];
     await listen({url: 'https://example.com', token, sessionID, signal: new AbortController().signal,
       canWake: async () => allowed, ctx: {session: {prompt: async p => prompts.push(p)}},
-      request: async () => new Response(text), sleep: async () => {}, warn: () => {}});
+      request: async () => wakeResponse(text), sleep: async () => {}, warn: () => {}});
     assert.deepEqual(prompts, []);
   }
 });
@@ -69,7 +71,7 @@ test('a broken 200 body retries without losing the listener or logging credentia
   const broken = new ReadableStream({start(controller) {controller.error(new Error(token));}});
   await listen({url: 'https://example.com', token, sessionID, signal: new AbortController().signal,
     canWake: async () => true, ctx: {session: {prompt: async p => prompts.push(p)}},
-    request: async () => ++requests === 1 ? new Response(broken) : new Response(wake),
+    request: async () => ++requests === 1 ? wakeResponse(broken) : wakeResponse(wake),
     sleep: async ms => delays.push(ms), warn: text => logs.push(text)});
   assert.equal(requests, 2);
   assert.deepEqual(delays, [1000]);
@@ -106,7 +108,7 @@ function world() {
     });
   };
   return {ctx, state, requests, prompts, hooks, logs,
-    emit: type => {queue.push({type, data: {sessionID}}); notify?.();},
+    emit: type => {queue.push(typeof type === 'string' ? {type, data: {sessionID}} : type); notify?.();},
     start: (extra = {}) => setup(ctx, {env: {SWITCHBOARD_URL: 'https://example.com', SWITCHBOARD_AGENT_TOKEN: token, ...extra},
       request, sleep: async () => {}, warn: text => logs.push(text)})};
 }
@@ -154,7 +156,7 @@ test('foreign sessions do not report status, park or prompt; moves are rechecked
   w.emit('session.execution.succeeded');
   await until(() => w.requests.some(r => r.url.endsWith('/mcp/listen')));
   w.state.directory = '/other';
-  w.requests.find(r => r.resolve).resolve(new Response(wake));
+  w.requests.find(r => r.resolve).resolve(wakeResponse(wake));
   for (let i = 0; i < 5; i++) await turn();
   assert.deepEqual(w.prompts, []);
   await cleanup();
@@ -171,7 +173,7 @@ test('approval blocks idle status and a racing wake until permissions are empty'
   w.emit('permission.asked');
   await until(() => w.requests.some(r => r.options.body?.includes('permission.asked')));
   assert.ok(parked.options.signal.aborted);
-  parked.resolve(new Response(wake));
+  parked.resolve(wakeResponse(wake));
   w.emit('session.execution.succeeded');
   await turn();
   assert.deepEqual(w.prompts, []);
@@ -233,6 +235,59 @@ test('tool hooks return within 100 ms while status reports wait in session order
     await until(() => reports.length === 3);
     assert.deepEqual(reports, ['permission.cleared', 'tool.execute.before', 'tool.execute.after']);
   } finally { release?.(); await cleanup(); }
+});
+
+// A user or tool becoming busy during a 200 body does not discard its human messages: queue is safe concurrently.
+test('a session becoming busy mid-body still queues the exact wake and reports admission', async () => {
+  const w = world();
+  const cleanup = await w.start();
+  try {
+    w.emit('session.execution.succeeded');
+    await until(() => w.requests.some(r => r.resolve));
+    const parked = w.requests.find(r => r.resolve);
+    let body;
+    const stream = new ReadableStream({start(controller) {body = controller;}});
+    parked.resolve(wakeResponse(stream));
+    await until(() => stream.locked);
+    w.emit('session.execution.started');
+    await w.hooks.get('execute.before')({sessionID, tool: 'bash', id: 'call-1'});
+    assert.equal(parked.options.signal.aborted, false);
+    body.enqueue(new TextEncoder().encode(wake)); body.close();
+    await until(() => w.prompts.length === 1);
+    await until(() => w.requests.some(r => r.options.body?.includes('wake.queued')));
+    assert.deepEqual(w.prompts, [{sessionID, text: wake, delivery: 'queue', metadata: {source: 'switchboard'}}]);
+    const receipt = JSON.parse(w.requests.find(r => r.options.body?.includes('wake.queued')).options.body);
+    assert.deepEqual(receipt, {event: 'wake.queued', session_id: sessionID, batch_id: 1, ack});
+    assert.ok(!w.requests.some(r => r.options.body?.includes('wake.dropped')));
+  } finally {await cleanup();}
+});
+
+// Only permission, lost ownership or shutdown may discard a received body, and each reports the exact offer dropped.
+test('a permission, move or shutdown during a 200 body drops rather than acknowledges the wake', async () => {
+  for (const cause of ['permission', 'move', 'shutdown']) {
+    const w = world();
+    const cleanup = await w.start();
+    try {
+      w.emit('session.execution.succeeded');
+      await until(() => w.requests.some(r => r.resolve));
+      const parked = w.requests.find(r => r.resolve);
+      let body;
+      const stream = new ReadableStream({start(controller) {body = controller;}});
+      parked.resolve(wakeResponse(stream));
+      await until(() => stream.locked);
+      if (cause === 'permission') {
+        w.state.pending = [{id: 'permission-1'}]; w.emit('permission.asked');
+        await until(() => parked.options.signal.aborted);
+      } else if (cause === 'move') {
+        w.state.directory = '/other';
+      } else {void cleanup(); await until(() => parked.options.signal.aborted);}
+      if (!parked.options.signal.aborted) {body.enqueue(new TextEncoder().encode(wake)); body.close();}
+      await until(() => w.requests.some(r => r.options.body?.includes('wake.dropped')));
+      assert.deepEqual(w.prompts, []);
+      assert.ok(!w.requests.some(r => r.options.body?.includes('wake.queued')));
+      assert.ok(!JSON.stringify(w.logs).includes(token));
+    } finally {await cleanup();}
+  }
 });
 
 // Cleanup stops all in-flight work and reports own sessions offline without leaving a retry timer alive.

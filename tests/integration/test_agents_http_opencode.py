@@ -188,6 +188,7 @@ def test_idle_wake_is_the_brokers_envelope_with_peer_text_stubbed(build: InProcB
         r = pending.result(30)
     assert r.status_code == 200 and "read(" in r.text and "peer-canary" not in r.text, r.text
     bid = int(TOKEN_IN.search(r.text).group(1))
+    assert report(build, token, "wake.queued", batch_id=bid, ack=r.headers["x-switchboard-ack"]).json() == {}
     assert report(build, token, "session.execution.started").json() == {}
     assert build.on_loop(build.state.store.get_batch, bid).state == "confirmed"
     assert participant(build, "opencode-1").status == "busy"
@@ -270,3 +271,74 @@ def test_a_retried_listener_does_not_confirm_a_wake_that_never_started_a_turn(
         finally:
             report(build, token, "session.execution.started")
             second.result(30)
+
+
+@pytest.mark.parametrize("drop", ["wake.dropped", "permission.asked", "location.shutdown"])
+def test_unadmitted_wake_survives_an_unrelated_turn_and_returns_to_pending(
+    build: InProcBroker, drop: str
+) -> None:
+    """Receipt of HTTP 200 cannot prove queue admission: even a person's next turn and tool call
+    must not confirm a dropped human message. Dropping, approval or shutdown returns it to pending.
+    """
+    c, token = joined(build)
+    c.call("read", SESSION_A, room="#build")
+    report(build, token, "session.execution.succeeded")
+    p = participant(build, "opencode-1")
+    with ThreadPoolExecutor(1) as pool:
+        first = pool.submit(listen, build, token)
+        until(lambda: parked(build, p.id))
+        build.call("human.say", {"room": "#build", "text": "@opencode-1 human-wake-not-submitted"})
+        wake = first.result(30)
+    assert wake.status_code == 200
+    bid = int(TOKEN_IN.search(wake.text).group(1))
+    report(build, token, "session.execution.started")  # the person's own prompt, before the drop report
+    report(build, token, "tool.execute.after", tool_name="bash", tool_use_id="call-1")
+    assert c.call("who", SESSION_A, room="#build")["ok"]
+    assert build.on_loop(build.state.store.get_batch, bid).state == "offered"
+    fields = {"batch_id": bid, "ack": wake.headers["x-switchboard-ack"]} if drop == "wake.dropped" else {}
+    assert report(build, token, drop, **fields).json() == {}
+    assert build.on_loop(build.state.store.get_batch, bid).state == "expired"
+    if drop == "permission.asked":
+        report(build, token, "permission.cleared")
+    report(build, token, "session.execution.started")
+    assert build.on_loop(build.state.store.get_batch, bid).state == "expired"
+    assert "human-wake-not-submitted" in c.call("read", SESSION_A, room="#build")["text"]
+
+
+def test_wake_receipts_are_bound_to_the_token_session_and_exact_unconfirmed_offer(
+    build: InProcBroker,
+) -> None:
+    """A delayed, malformed or foreign queue/drop receipt cannot settle another session's offer.
+    Only a matching one-use receipt proves prompt admission; ordinary progress never substitutes.
+    """
+    c, token = joined(build)
+    c.call("read", SESSION_A, room="#build")
+    report(build, token, "session.execution.succeeded")
+    p = participant(build, "opencode-1")
+    with ThreadPoolExecutor(1) as pool:
+        first = pool.submit(listen, build, token)
+        until(lambda: parked(build, p.id))
+        build.call("human.say", {"room": "#build", "text": "@opencode-1 receipt-canary"})
+        wake = first.result(30)
+    bid = int(TOKEN_IN.search(wake.text).group(1))
+    assert int(wake.headers["x-switchboard-batch"]) == bid
+    receipt = {"batch_id": bid, "ack": wake.headers["x-switchboard-ack"]}
+    other = make_token(build, "desktop")
+    for bad in (
+        {},
+        {"batch_id": True, "ack": "a" * 32},
+        {**receipt, "tool_name": "bash"},
+        {**receipt, "batch_id": -1},
+        {**receipt, "ack": "x" * 33},
+    ):
+        assert report(build, token, "wake.queued", **bad).status_code == 400
+    assert report(build, token, "session.execution.started", **receipt).status_code == 400
+    for event in ("wake.queued", "wake.dropped"):
+        assert report(build, other, event, **receipt).json() == {}
+        assert report(build, token, event, sid=SESSION_B, **receipt).json() == {}
+        assert report(build, token, event, **{**receipt, "ack": "0" * 32}).json() == {}
+        assert build.on_loop(build.state.store.get_batch, bid).state == "offered"
+    assert report(build, token, "wake.queued", **receipt).json() == {}
+    assert build.on_loop(build.state.store.get_batch, bid).state == "confirmed"
+    assert report(build, token, "wake.dropped", **receipt).json() == {}
+    assert build.on_loop(build.state.store.get_batch, bid).state == "confirmed"

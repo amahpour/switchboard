@@ -19,12 +19,15 @@ function sleep(ms, signal) {
   });
 }
 
-async function readWake(response) {
+async function readWake(response, signal) {
   if (!response.body) return '';
   const reader = response.body.getReader();
   const chunks = [];
   let size = 0;
+  const cancel = () => {void reader.cancel().catch(() => {});};
+  signal.addEventListener('abort', cancel, {once: true});
   try {
+    if (signal.aborted) return '';
     for (;;) {
       const {done, value} = await reader.read();
       if (done) break;
@@ -32,7 +35,7 @@ async function readWake(response) {
       if (size > TEXT_MAX) { await reader.cancel(); return ''; }
       chunks.push(value);
     }
-  } finally { reader.releaseLock(); }
+  } finally { signal.removeEventListener('abort', cancel); reader.releaseLock(); }
   const bytes = new Uint8Array(size);
   let offset = 0;
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
@@ -40,6 +43,7 @@ async function readWake(response) {
 }
 
 export async function listen({url, token, sessionID, ctx, signal, canWake,
+  received = () => {}, settle = async () => {},
   request = globalThis.fetch, sleep: pause = sleep, warn = console.warn}) {
   let again = '0', backoff = 1000;
   while (!signal.aborted) {
@@ -53,26 +57,36 @@ export async function listen({url, token, sessionID, ctx, signal, canWake,
     } catch {
       if (signal.aborted) return;
     }
-    if (signal.aborted) return;
     again = '1';
     if (response?.status === 200) {
+      const batch = response.headers.get('X-Switchboard-Batch'), ack = response.headers.get('X-Switchboard-Ack');
+      if (!/^[1-9]\d{0,11}$/.test(batch ?? '') || !/^[0-9a-f]{32}$/.test(ack ?? '')) {
+        await response.body?.cancel(); return; // requires the broker's matching admission-receipt protocol
+      }
+      const receipt = {batch_id: Number(batch), ack};
+      received(); // synchronous: a busy hook can cancel a park, but must keep an already received wake
       let text;
       try {
-        text = await readWake(response);
+        text = await readWake(response, signal);
       } catch {
+        await settle('wake.dropped', receipt);
         if (signal.aborted) return;
         await pause(backoff, signal);
         backoff = Math.min(backoff * 2, 60000);
         continue; // headers arrived, but no wake body: a proxy cut the round, so wait again
       }
+      let queued = false;
       try {
         if (signal.aborted || !text || text.includes(token) || !await canWake() || signal.aborted) return;
         // The broker already wrote and bounded the envelope, with peer text as read() stubs.
         // Queue was measured starting an idle 2.1.4 session; it also preserves any concurrent user input.
         await ctx.session.prompt({sessionID, text, delivery: 'queue', metadata: {source: 'switchboard'}});
+        queued = true;
       } catch { if (!signal.aborted) warn('[switchboard] wake could not be queued'); }
+      finally {await settle(queued ? 'wake.queued' : 'wake.dropped', receipt);}
       return; // never retry a prompt: admission may have succeeded even if its answer was lost
     }
+    if (signal.aborted) return;
     if (response?.status === 408) {
       await response.body?.cancel();
       backoff = 1000;
@@ -107,15 +121,22 @@ export async function setup(ctx, {env = process.env, request = globalThis.fetch,
   const sessions = new Map();
   const events = new AbortController();
   const registrations = [];
+  const listeners = new Set();
   let closed = false;
 
   function record(sessionID) {
     if (!ID.test(sessionID ?? '')) return;
     if (!sessions.has(sessionID)) sessions.set(sessionID, {sessionID, revision: 0, state: 'busy',
-      pending: false, permissionsKnown: false, owned: false, chain: Promise.resolve(), listener: null});
+      permissionRevision: 0, pending: false, permissionsKnown: false, owned: false,
+      chain: Promise.resolve(), listener: null});
     return sessions.get(sessionID);
   }
-  function stop(s) { s.listener?.abort(); s.listener = null; }
+  function stop(s, force = false) {
+    const listener = s.listener;
+    if (!listener) return;
+    if (listener.received && !force && !closed && !s.pending && s.state !== 'offline') return;
+    listener.controller.abort(); s.listener = null;
+  }
   async function own(s) {
     try {
       const info = await ctx.session.get({sessionID: s.sessionID});
@@ -125,9 +146,9 @@ export async function setup(ctx, {env = process.env, request = globalThis.fetch,
         const [sessionDir, pluginDir] = await Promise.all([realpath(directory), realpath(ctx.location.directory)]);
         s.owned = sessionDir === pluginDir;
       }
-      if (!s.owned) stop(s);
+      if (!s.owned) stop(s, true);
       return s.owned;
-    } catch { stop(s); return false; }
+    } catch { stop(s, true); return false; }
   }
   async function report(s, event, fields = {}) {
     try {
@@ -141,9 +162,9 @@ export async function setup(ctx, {env = process.env, request = globalThis.fetch,
   }
   async function permissions(s) {
     // Fail closed on an unavailable API, including a restart with no permission.asked in memory.
-    const revision = s.revision;
+    const revision = s.permissionRevision;
     const pending = await ctx.permission.list({sessionID: s.sessionID});
-    if (revision !== s.revision || closed) return false;
+    if (revision !== s.permissionRevision || closed) return false;
     if (!Array.isArray(pending) || pending.length) {
       s.pending = true;
       stop(s);
@@ -183,21 +204,26 @@ export async function setup(ctx, {env = process.env, request = globalThis.fetch,
     const ok = await report(s, event, fields);
     if (s.state !== 'idle' || !ok || closed || revision !== s.revision) return;
     stop(s);
+    if (s.listener) return; // a received body is still being queued, even if an idle event raced it
     const controller = new AbortController();
-    s.listener = controller;
-    void listen({url, token, sessionID: s.sessionID, ctx, signal: controller.signal, request,
+    const listener = {controller, received: false};
+    s.listener = listener;
+    const running = listen({url, token, sessionID: s.sessionID, ctx, signal: controller.signal, request,
+      received: () => {listener.received = true;}, settle: (event, fields) => report(s, event, fields),
       sleep: pause, warn, canWake: async () => {
-        if (closed || s.state !== 'idle' || s.pending || s.revision !== revision || !await own(s)) return false;
-        return await permissions(s) && !closed && s.state === 'idle' && !s.pending && s.revision === revision;
-      }}).catch(() => { if (!controller.signal.aborted) warn('[switchboard] listener ended'); });
+        if (closed || s.state === 'offline' || s.pending || !await own(s)) return false;
+        return await permissions(s) && !closed && s.state !== 'offline' && !s.pending;
+      }}).catch(() => { if (!controller.signal.aborted) warn('[switchboard] listener ended'); })
+      .finally(() => {listeners.delete(running); if (s.listener === listener) s.listener = null;});
+    listeners.add(running);
   }
   function event(type, sessionID) {
     const s = record(sessionID);
     if (!s) return;
     s.revision++;
-    stop(s); // before any await: a permission event must win a race with an arriving wake
-    if (type === 'permission.asked') s.pending = true;
+    if (type === 'permission.asked') {s.pending = true; s.permissionRevision++;}
     else s.state = IDLE.has(type) ? 'idle' : type === 'session.deleted' ? 'offline' : 'busy';
+    stop(s); // before any await: a permission event must win a race with an arriving wake
     const revision = s.revision;
     return enqueue(s, () => handle(s, type, {}, revision));
   }
@@ -206,6 +232,7 @@ export async function setup(ctx, {env = process.env, request = globalThis.fetch,
     closed = true;
     events.abort();
     for (const s of sessions.values()) { s.revision++; stop(s); }
+    await Promise.allSettled([...listeners]);
     await Promise.all([...sessions.values()].map(s => enqueue(s, async () => {
       if (await own(s)) await report(s, 'location.shutdown');
     })));

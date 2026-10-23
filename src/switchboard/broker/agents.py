@@ -1032,6 +1032,24 @@ class AgentService:
             return {"out": None, "ended": res.get("status")} if ended else {"out": None}
         return {"out": {"kind": "continue", "text": text}, "batch_id": bid, "ack": ack}
 
+    def http_continue(self, conn: "HttpConn", sid: str, bid: int, ack: str, *, queued: bool) -> None:
+        """OpenCode's exact listener receipt (§49.12): queue admission confirms; a drop expires.
+        HTTP receipt alone is never acked, so unrelated hooks/calls cannot consume an unsubmitted wake.
+        Only the one-use nonce of this token/device/session's still-unconfirmed continuation is accepted.
+        """
+        p = self.http_session(conn, sid)
+        cont = self.engine.continues.get(bid)
+        want = self.engine.hook_acks.get(bid)
+        if p is None or cont is None or cont.participant_id != p.id or want is None:
+            return
+        if not hmac.compare_digest(want[0], ack):
+            return
+        if queued and p.status not in ("waiting-approval", "offline"):
+            self.run(self.engine.on_hook_ack(bid, ack))
+            self.run(self.engine.on_confirm(bid, "opencode:queued"))
+        else:
+            self.run(self.engine.on_expire(bid, "no_ack"))
+
     def hook_ack(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
         bid = params.get("batch_id")
         ack = params.get("ack")

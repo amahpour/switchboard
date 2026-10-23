@@ -289,9 +289,12 @@ class HttpsOpenCodeAdapter(Listening):
     def continue_verdict(self, p: Participant, acked: bool, ev: HookEvent) -> str | None:
         # A listener reconnect is another synthetic Stop, not evidence that prompt() started
         # a turn. Its 200 body may have been cut by a proxy. Return that unconfirmed wake to
-        # pending; execution start and tool progress still confirm through Listening.
+        # pending even before admission. A permission hold must expire it too. Only a matching
+        # queue receipt acknowledges an OpenCode offer, so unrelated progress cannot confirm it.
         if ev.ev == "Stop":
-            return "listen_retry" if acked else None
+            return "listen_retry"
+        if self.asks_approval(ev):
+            return "approval_pending"
         return super().continue_verdict(p, acked, ev)
 
     def listener_retry(self, p: Participant, has_continue: bool) -> bool:
