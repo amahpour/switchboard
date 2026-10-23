@@ -20,9 +20,11 @@ from __future__ import annotations
 import ast
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -71,6 +73,64 @@ def test_only_codex_and_devin_register_a_permission_hook_and_each_registers_one(
     for path, (event, _script) in ALLOWED.items():
         [group] = files[path][event]
         assert group.get("matcher") == "" and len(group["hooks"]) == 1, path
+
+
+def test_opencode_sources_only_read_permissions_and_never_spawn_or_write() -> None:
+    """V2 registers in code, outside the JSON registry: inspect every shipped JS/TS source too.
+    Only the literal permission.list call and realpath fs import are permitted; aliases, other
+    permission access, subprocess imports and file mutation APIs must fail CI instead of just warning.
+    """
+    files = sorted(
+        p
+        for p in (PLUGINS / "opencode").rglob("*")
+        if p.suffix in {".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".jsx", ".tsx"}
+    )
+    assert {p.name for p in files} >= {"index.ts", "listener.mjs"}
+    for path in files:
+        code = path.read_text()
+        permission_reads = re.sub(r"ctx\.permission\.list\s*\(", "READ_PENDING(", code)
+        assert not re.search(
+            r"\bctx\s*(?:\??\.\s*permission\b|\[\s*['\"]permission['\"]\s*\])", permission_reads
+        ), path
+        assert "child_process" not in code, path
+        # Read-only canonicalization is the sole fs use. Reject namespace/default/dynamic imports
+        # (and aliases) rather than trying to prove which method they might eventually call.
+        without_realpath = code.replace("import { realpath } from 'node:fs/promises';", "")
+        assert not re.search(r"['\"](?:node:)?fs(?:/[^'\"]*)?['\"]", without_realpath), path
+        assert not re.search(
+            r"\b(?:write\w*|append\w*|createWriteStream|truncate\w*|ftruncate\w*|"
+            r"unlink\w*|rm\w*|mkdir\w*|rename\w*|copyFile\w*|cp\w*|chmod\w*|chown\w*|"
+            r"link\w*|symlink\w*|utimes\w*|open\w*)\s*\(",
+            code,
+        ), path
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "ctx.permission.reply({});",
+        "ctx.permission.register({});",
+        "ctx['permission'].reply({});",
+        "import { spawn } from 'child_process';",
+        "import cp from 'node:child_process';",
+        "import fs from 'node:fs'; fs.writeFileSync('x', 'x');",
+        "import { writeFile as save } from 'fs/promises'; save('x', 'x');",
+        "writeFile('x', 'x');",
+        "appendFile('x', 'x');",
+        "createWriteStream('x');",
+    ],
+)
+def test_opencode_static_guard_rejects_decisions_processes_and_file_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: str
+) -> None:
+    """Exercise the source guard with forbidden snippets, so a missing scan cannot pass silently."""
+    plugin = tmp_path / "opencode"
+    plugin.mkdir()
+    (plugin / "index.ts").write_text("")
+    (plugin / "listener.mjs").write_text(code)
+    monkeypatch.setattr(sys.modules[__name__], "PLUGINS", tmp_path)
+    with pytest.raises(AssertionError):
+        test_opencode_sources_only_read_permissions_and_never_spawn_or_write()
 
 
 def test_a_permission_hook_is_a_command_that_runs_its_plugins_script() -> None:
