@@ -67,6 +67,7 @@
     insp: {},          // references to Inspector nodes built here (ids are not looked up)
     rowRefs: new Map(),  // member name -> its row button, for focus on "back"
     pop: null,         // composer popover: { kind: 'palette'|'mentions', items, sel, start }
+    mentionIntent: false, // an @ query can have no matches until a members frame arrives (#505)
     sheetOpener: null, // the control that opened the Closed or People sheet (focus returns to it)
     passkeyBusy: false, // an Add a passkey ceremony is under way
     boardOpen: false,  // the active room's review board is shown instead of its log (#80)
@@ -2440,8 +2441,9 @@
     const input = $('input');
     const v = String(input.value);
     const r = activeRoom();
-    if (!r) return closePop();
+    if (!r) { state.mentionIntent = false; return closePop(); }
     if (/^\/[a-z]*$/.test(v) && !v.startsWith('//')) {
+      state.mentionIntent = false;
       const pre = v.slice(1);
       const items = COMMANDS.filter(function (c) { return c.cmd.startsWith(pre); });
       if (!items.length) return closePop();
@@ -2450,6 +2452,7 @@
     }
     const caret = typeof input.selectionStart === 'number' ? input.selectionStart : v.length;
     const mm = /(^|[\s(])@([A-Za-z0-9_-]{0,23})$/.exec(v.slice(0, caret));
+    state.mentionIntent = !!mm;
     if (mm) {
       const pre = mm[2];
       const query = pre.toLowerCase();
@@ -2759,6 +2762,7 @@
         renderBuddies();
         updateRoomEmpty();
         renderComposerMentions();  // an agent just joined or left: who can be @mentioned changed
+        if (state.mentionIntent) updatePopover();  // a query with no earlier matches can now have some
         if (state.boardOpen) {
           renderBoard();  // who can use the board may have changed (#249)
           // A departing raiser can put an unconfirmed fix in Needs you (#251).
@@ -5849,6 +5853,7 @@
       input.focus();
     });
     input.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape') state.mentionIntent = false;
       // the popover (palette or mentions) takes the keys first
       if (state.pop) {
         if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
@@ -5891,7 +5896,7 @@
     // out of sync on its own; it only needs to follow #input's when that one scrolls.
     input.addEventListener('scroll', function () { $('input-mirror').scrollTop = input.scrollTop; });
     input.addEventListener('click', updatePopover);
-    input.addEventListener('blur', closePop);
+    input.addEventListener('blur', function () { state.mentionIntent = false; closePop(); });
     $('cmd-btn').addEventListener('click', function () {
       if (!input.value) input.value = '/';
       input.focus();
