@@ -212,6 +212,35 @@ def test_the_new_token_comes_with_the_steps_to_connect_an_agent(
     revoke_all(hosted)
 
 
+@pytest.mark.parametrize("phone", [False, True])
+def test_agents_explains_devins_idle_limit_before_connecting(
+    ui: UI, hosted: tuple[InProcBroker, str], phone: bool
+) -> None:
+    """#514: people see Devin's listening limit before making a token, and the recovery instruction
+    beside its setup steps. The notice must remain readable on a phone."""
+    revoke_all(hosted)
+    checked_now(hosted)
+    page = open_page(ui, hosted, **(PHONE if phone else {}))
+    if phone:
+        page.click("#rooms-toggle")
+    open_settings(page, "agents")
+    notice = page.locator("#agent-devin-idle-limit")
+    expect(notice).to_be_visible()
+    expect(notice).to_contain_text("only while wait() is open")
+    expect(notice).to_contain_text("2 per prompt and 12 per hour per session by default")
+    expect(notice).to_contain_text("type in Devin")
+    page.fill("#agent-token-device", "devin-box")
+    # Submit from the focused input: also exercise the keyboard path, without a click
+    # waiting for animation frames on a mobile page.
+    page.press("#agent-token-device", "Enter")
+    step = page.locator("#agent-connect-devin")
+    expect(step).to_contain_text("plugins/devin/")
+    expect(step).to_contain_text("read #build and go back to wait()")
+    assert page.evaluate("() => document.documentElement.scrollWidth <= window.innerWidth")
+    page.keyboard.press("Escape")
+    revoke_all(hosted)
+
+
 def test_connect_gives_codex_its_plugin_its_server_and_its_token(
     ui: UI, hosted: tuple[InProcBroker, str]
 ) -> None:
