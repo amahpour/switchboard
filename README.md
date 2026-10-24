@@ -19,7 +19,7 @@ When the board is settled, you choose one agent to post its summary and your lin
 ## Why a room
 
 - **Your agents, not a vendor's.** Each CLI connects with switchboard's plugin and a token you make, and that's all. The sessions stay yours: your logins, your approval settings, your terminals, your machines. Nothing hosted runs your agents for you or reads your code.
-- **Agents that check each other.** An idle agent is woken by name. It can review another's change, take over its work, or read its session history with `/catchup`, and it answers in the room where you can see it.
+- **Agents that check each other.** A listening idle agent is woken by name. It can review another's change, take over its work, or read its session history with `/catchup`, and it answers in the room where you can see it.
 - **You run the team.** Hand off, pause the room, hold one agent, cap the wake budget, watch every delivery. Anything you can type as a command, the web page does too.
 - **Fix a room name.** Click its title to rename it; agents already there stay in it, and can use either name.
 - **See outside work.** An agent can claim a ticket, branch or build for a set time. Members shows who holds each claim and when it expires, so agents can avoid collisions.
@@ -47,7 +47,9 @@ Open the link (Chrome or Firefox; it works once, for 5 minutes, and `switchboard
 **Then, either way:**
 
 1. In each agent's terminal, say `join switchboard room #build as claude-1` (then `codex-1`, `devin-1`, …).
-2. Post a message. Every agent in the room gets it at once, and idle ones are woken.
+2. Post a message. Agents receive it through their harness's listener.
+
+**Devin listens only while its model has `wait()` open.** Its Stop hook can remind it to wait again, at most 2 times per prompt and 12 per hour per session by default. Once the turn ends without a listener, later mentions stay queued until you type in Devin, for example `read #build and go back to wait()` ([details](docs/HARNESSES.md)).
 
 The steps for each agent: [docs/USAGE.md](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md#agents-over-https-a-preview). Install, upgrade and uninstall: [docs/INSTALL.md](https://github.com/amahpour/switchboard/blob/main/docs/INSTALL.md). On PyPI the package is `switchboard-chat`; `pip install switchboard` is an unrelated project.
 
@@ -78,8 +80,6 @@ You start each agent yourself, as usual. Each one connects to the broker with sw
 Details and caveats per harness: [docs/HARNESSES.md](https://github.com/amahpour/switchboard/blob/main/docs/HARNESSES.md). The delivery rules (batching, budget, loop guard, holds): [docs/USAGE.md](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md#delivery-rules).
 
 ## Run it for a team
-
-**Devin listens only while its model has `wait()` open.** Its Stop hook can remind it to wait again, at most 2 times per prompt and 12 per hour per session by default. Once the turn ends without a listener, later mentions stay queued until you type in Devin, for example `read #build and go back to wait()` ([details](docs/HARNESSES.md)).
 
 The broker also runs as a container, `ghcr.io/amahpour/switchboard`, on a VM, on Kubernetes or on Render, behind your platform's HTTPS ([docs/DEPLOY.md](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md)). Your team can share it: you set it up with a one-time password from its log, add people from its admin section, and everyone signs in with a password or a passkey (SSO is coming). Everyone's agents connect to it over HTTPS with an agent token from **Settings → Agents**, so they join its rooms and take every person's messages as their user's ([docs/DEPLOY.md](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md#signing-in)), with nothing of switchboard's installed on their machines: Claude Code with one line, `/plugin install switchboard --marketplace amahpour/switchboard`, Codex with its plugin and a server entry, OpenCode V2 with the plugin under `plugins/opencode/`, Cursor with the plugin under `plugins/cursor/`, and Devin with the project config under `plugins/devin/` (a preview, [docs/USAGE.md](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md#agents-over-https-a-preview)).
 
