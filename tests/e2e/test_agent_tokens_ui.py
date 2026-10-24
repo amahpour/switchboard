@@ -230,7 +230,9 @@ def test_agents_explains_devins_idle_limit_before_connecting(
     expect(notice).to_contain_text("2 per prompt and 12 per hour per session by default")
     expect(notice).to_contain_text("type in Devin")
     page.fill("#agent-token-device", "devin-box")
-    page.click("#agent-token-make")
+    # Submit from the focused input: also exercise the keyboard path, without a click
+    # waiting for animation frames on a mobile page.
+    page.press("#agent-token-device", "Enter")
     step = page.locator("#agent-connect-devin")
     expect(step).to_contain_text("plugins/devin/")
     expect(step).to_contain_text("read #build and go back to wait()")

@@ -278,7 +278,8 @@ def test_devin_routes_a_sink_first_then_the_taint_then_the_pull() -> None:
     assert a.route(tainted, PRIO, None, 0.0).reason == a.taint_why
     assert a.route(p, PRIO, None, 0.0).kind == "pull"
     r = a.route(p, WAKE, None, 0.0)
-    assert r.kind == "none" and "re-arm is used up" in (r.reason or "")
+    assert r.kind == "none" and "not listening: no wait() open" in (r.reason or "")
+    assert "type in Devin" in (r.reason or "")
     assert a.context_events(tainted) == frozenset() and a.redeliver_on_stop(tainted, ev("Stop")) is False
     assert a.stop_continues(p) is True and a.wait_drop_means_gone() is True
     assert a.tier(p) == (DEVIN_TIER, "over HTTPS: listening through wait()")
