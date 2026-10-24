@@ -282,7 +282,8 @@ def test_devin_routes_a_sink_first_then_the_taint_then_the_pull() -> None:
     assert "type in Devin" in (r.reason or "")
     assert a.context_events(tainted) == frozenset() and a.redeliver_on_stop(tainted, ev("Stop")) is False
     assert a.stop_continues(p) is True and a.wait_drop_means_gone() is True
-    assert a.tier(p) == (DEVIN_TIER, "over HTTPS: listening through wait()")
+    tier, note = a.tier(p)
+    assert tier == DEVIN_TIER and "wait() only" in note and "Stop reminders 2/prompt, 12/hour" in note
     assert a.context_events(p) == HOOK_CONTEXT_EVENTS["devin"]
     assert f'wait("#build", {DEVIN_WAIT_CAP_S})' in a.join_guidance(p, "#build")
     assert rearm_text("#build", 600).startswith("[switchboard] (from switchboard, not your user)")
