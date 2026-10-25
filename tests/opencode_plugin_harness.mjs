@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { mkdtemp, symlink, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { listen, setup } from '../plugins/opencode/listener.mjs';
+import { listedSessions, listen, setup } from '../plugins/opencode/listener.mjs';
 
 const token = 'sbat_test-token-canary';
 const sessionID = 'ses_00000000000000000000000001';
@@ -352,4 +352,148 @@ test('deleted session reports offline using its last verified ownership, never w
   assert.ok(parked.options.signal.aborted);
   assert.deepEqual(w.prompts, []);
   await cleanup();
+});
+
+// ---- #520: a session that was idle before the plugin (re)loaded
+// A world where several sessions exist when the plugin starts. ``dirs`` and ``permissions`` are per session;
+// ``list`` is what ctx.session.list answers (a function, so a test can hold or change it).
+function restarted(rows, {dirs = {}, permissions = {}} = {}) {
+  const w = world(), gets = [];
+  w.ctx.session.get = async ({sessionID: id}) => {
+    gets.push(id);
+    return {location: {directory: dirs[id] ?? '/project'}};
+  };
+  w.ctx.permission.list = async ({sessionID: id}) => permissions[id] ?? [];
+  w.listCalls = [];
+  w.ctx.session.list = async input => {
+    w.listCalls.push(input);
+    return typeof rows === 'function' ? rows() : rows;
+  };
+  w.gets = gets;
+  w.sent = id => w.requests.filter(r => r.options.headers['X-Switchboard-Session'] === id
+    || r.options.body?.includes(`"${id}"`));
+  w.parked = id => w.requests.filter(r => r.url.endsWith('/mcp/listen')
+    && r.options.headers['X-Switchboard-Session'] === id);
+  w.events = id => w.requests.filter(r => r.options.body?.includes(`"${id}"`))
+    .map(r => JSON.parse(r.options.body).event);
+  return w;
+}
+const row = (id, extra = {}) => ({id, ...extra});
+const settle = async () => { for (let i = 0; i < 20; i++) await turn(); };
+
+// The point of #520: after a restart an idle session is reported idle and listened for without a new turn,
+// and a mention then wakes it; a foreign location, a pending permission and a stale session are not.
+test('startup lists this location\'s recent sessions and listens for the idle ones', async () => {
+  const day = 24 * 3600 * 1000, now = Date.now();
+  const w = restarted({items: [
+    row('ses_idle', {time: {updated: now - 1000}}),
+    row('ses_foreign'),
+    row('ses_asking'),
+    row('ses_stale', {time: {updated: now - 3 * day}}),
+    row('ses_nested'),
+  ]}, {dirs: {ses_foreign: '/other'}, permissions: {ses_asking: [{id: 'permission-1'}]}});
+  const cleanup = await w.start();
+  try {
+    await until(() => w.parked('ses_idle').length === 1 && w.parked('ses_nested').length === 1);
+    await settle();
+    assert.deepEqual(w.listCalls, [{directory: '/project', limit: 20}]);
+    assert.deepEqual(w.events('ses_idle'), ['permission.cleared', 'session.execution.succeeded']);
+    // a foreign location sends nothing, a stale session isn't even asked about
+    assert.deepEqual(w.sent('ses_foreign'), []);
+    assert.deepEqual(w.sent('ses_stale'), []);
+    assert.ok(!w.gets.includes('ses_stale'));
+    // a pending permission is reported, and is never listened for
+    assert.deepEqual(w.events('ses_asking'), ['permission.asked']);
+    assert.deepEqual(w.parked('ses_asking'), []);
+    // the broker's answer to the idle session's round wakes it
+    w.parked('ses_idle')[0].resolve(wakeResponse(wake));
+    await until(() => w.prompts.length === 1);
+    assert.deepEqual(w.prompts, [{sessionID: 'ses_idle', text: wake, delivery: 'queue',
+      metadata: {source: 'switchboard'}}]);
+    assert.ok(!JSON.stringify(w.logs).includes(token));
+  } finally {await cleanup();}
+});
+
+// A bare array is accepted too, and the cap holds however long the list is.
+test('startup looks at no more than 20 sessions, in the order listed, and takes a bare array', async () => {
+  const w = restarted(Array.from({length: 35}, (_, i) => row(`ses_${String(i).padStart(2, '0')}`)));
+  const cleanup = await w.start();
+  try {
+    await until(() => w.requests.filter(r => r.url.endsWith('/mcp/listen')).length === 20);
+    await settle();
+    assert.equal(new Set(w.gets).size, 20);
+    assert.ok(w.gets.includes('ses_19') && !w.gets.includes('ses_20'));
+  } finally {await cleanup();}
+});
+
+// Whatever happened since the plugin started is newer than a list: an event or a tool call that named the session
+// first decides its state, so a session that has just begun a turn isn't called idle.
+test('a session an event already named is not overwritten by the startup list', async () => {
+  let release;
+  const gate = new Promise(resolve => {release = resolve;});
+  const w = restarted(async () => {await gate; return {items: [row('ses_busy'), row('ses_idle')]};});
+  const cleanup = await w.start();
+  try {
+    w.emit({type: 'session.execution.started', data: {sessionID: 'ses_busy'}});
+    await until(() => w.events('ses_busy').includes('session.execution.started'));
+    release();
+    await until(() => w.parked('ses_idle').length === 1);
+    await settle();
+    assert.ok(!w.events('ses_busy').includes('session.execution.succeeded'));
+    assert.deepEqual(w.parked('ses_busy'), []);
+  } finally {release(); await cleanup();}
+});
+
+// A tool must never wait on the startup list, and a plugin that is closed while it is slow does nothing after.
+test('a slow or never-answered list holds up neither setup nor tool hooks, and cleanup ends it', async () => {
+  let release;
+  const w = restarted(() => new Promise(resolve => {release = () => resolve({items: [row('ses_idle')]});}));
+  const started = performance.now();
+  const cleanup = await w.start();
+  assert.ok(performance.now() - started < 100, 'setup waited on the list');
+  const t = performance.now();
+  await w.hooks.get('execute.before')({sessionID, tool: 'bash', id: 'call-1'});
+  assert.ok(performance.now() - t < 100, 'a tool hook waited on the list');
+  await cleanup();
+  const before = w.requests.length;
+  release();
+  await settle();
+  assert.equal(w.requests.length, before, 'sent something after cleanup');
+  assert.ok(!w.gets.includes('ses_idle'), 'looked at a listed session after cleanup');
+});
+
+// Fail closed: a list this plugin can't read, or that throws, or that isn't there, starts nothing, says so once, and
+// leaves the event path as it was.
+test('an unavailable or unrecognized list starts nothing and logs one line without credentials', async () => {
+  for (const rows of [() => {throw new Error(token);}, {unexpected: [row('ses_idle')]}, 'ses_idle', null, undefined]) {
+    const w = restarted(rows);
+    const cleanup = await w.start();
+    try {
+      await settle();
+      assert.deepEqual(w.requests, []);
+      assert.equal(w.logs.filter(l => l.includes('could not list sessions')).length, 1);
+      assert.ok(!JSON.stringify(w.logs).includes(token));
+      w.emit('session.execution.succeeded');
+      await until(() => w.requests.some(r => r.resolve));
+    } finally {await cleanup();}
+  }
+  const w = world(); // OpenCode without ctx.session.list at all (the other tests' world has none)
+  const cleanup = await w.start();
+  await settle();
+  assert.deepEqual(w.requests, []);
+  assert.equal(w.logs.filter(l => l.includes('could not list sessions')).length, 1);
+  await cleanup();
+});
+
+// The parsing on its own: ids are bounded and unique, odd rows are skipped, times may be seconds or milliseconds.
+test('listedSessions reads ids and recency defensively', () => {
+  const now = Date.UTC(2026, 9, 25);
+  const day = 24 * 3600;
+  const page = {data: [row('ses_a', {time: {updated: now / 1000 - 10}}), row('ses_a'), {sessionID: 'ses_b'},
+    row('bad id'), row(7), null, 'x', row('ses_old', {time: {updated: now / 1000 - 2 * day}}),
+    row('ses_ms', {time: {created: now - 5}})]};
+  assert.deepEqual(listedSessions(page, now), ['ses_a', 'ses_b', 'ses_ms']);
+  assert.equal(listedSessions({}, now), undefined);
+  assert.equal(listedSessions({items: 'nope'}, now), undefined);
+  assert.deepEqual(listedSessions([], now), []);
 });
