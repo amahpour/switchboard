@@ -96,7 +96,9 @@ class Run:
         self.shared_broker = broker is not None
         self.broker = broker or Broker(self.harness)
         self.path = child_path(*self.binaries)
-        self.tmux = Tmux(f"{self.harness}-{name}" if self.shared_broker else self.harness, self.path)
+        self.tmux = Tmux(
+            f"{self.harness}-{name}" if self.shared_broker else self.harness, self.path, REAL_PATH
+        )
         self.token = ""
         self.token_id = 0
 
@@ -354,14 +356,25 @@ class Run:
 
     # ------------------------------------------------------------- the end
     def stop(self) -> None:
+        """End the run. Stopping tmux and stopping the broker are independent: each is tried, the sweep runs
+        either way, and the first error is raised once the results are recorded (#529: a tmux that couldn't
+        be run used to skip the broker's stop and leave it running)."""
         try:
             try:
                 self.final_screen = self.tmux.capture(self.session, history=500)
             except Exception:
                 self.final_screen = ""
-            self.tmux.kill_server()
-            self.broker.stop()
-            left = self.sweep()
+            teardown_error: Exception | None = None
+            for step in (self.tmux.kill_server, self.broker.stop):
+                try:
+                    step()
+                except Exception as e:
+                    teardown_error = teardown_error or e
+            try:
+                left = self.sweep()
+            except Exception as e:
+                teardown_error = teardown_error or e
+                left = []
             self.results["leftover_processes"] = [
                 c[:100] for c in left if not any(h in c for h in self.helpers)
             ]
@@ -374,6 +387,9 @@ class Run:
                 self.results["cost"] = self.cost_note()
             except Exception as e:  # the cost line is a report: it must not hide a result
                 self.results["cost"] = f"unavailable ({type(e).__name__})"
+            if teardown_error is not None:
+                self.results["teardown_error"] = f"{type(teardown_error).__name__}: {teardown_error}"[:200]
+                raise teardown_error
         finally:
             self.cleanup()
             print("\nLIVE RESULTS", json.dumps(self.results, indent=1))
