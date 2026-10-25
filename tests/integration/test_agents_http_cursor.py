@@ -113,6 +113,78 @@ def test_cursor_input_hook_routes_two_conversations_and_rejects_unmatched_calls(
         assert r.status_code == 200, r.text
 
 
+def tool_result(c: Codex, tool: str, arguments: dict[str, object]) -> dict[str, object]:
+    """One tools/call as Cursor's client makes it; the whole JSON-RPC ``result``, not just its text."""
+    params = {"name": tool, "arguments": arguments}
+    body = {"jsonrpc": "2.0", "id": 41, "method": "tools/call", "params": params}
+    headers = c.headers(
+        {
+            "accept": "application/json, text/event-stream",
+            "content-type": "application/json",
+            "mcp-protocol-version": "2025-06-18",
+        }
+    )
+    r = c.c.post("/mcp", json=body, headers=headers, timeout=60)
+    assert r.status_code == 200, r.text
+    return sse_result(r)["result"]
+
+
+def test_cursor_refusals_carry_the_structured_content_the_output_schema_promises(
+    broker: InProcBroker,
+) -> None:
+    """Every switchboard tool advertises an ``outputSchema`` (``{"result": string}``), and Cursor
+    2026.10.22 turns a reply without ``structuredContent`` into `MCP error -32600: ... has an output
+    schema but did not return structured content`, hiding switchboard's own message (#533). So a
+    refusal by the input check (a tool that isn't a ``switchboard_`` one, and a call with no
+    matching hook report) must carry ``structuredContent`` equal to a successful reply's shape:
+    ``{"result": <the text>}``. Fails if either refusal returns text content alone."""
+    broker.call("room.create", {"name": "#build"})
+    c = Codex(broker, make_token(broker), client="Cursor")
+    assert c.start().status_code == 200
+    tools = c.c.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 42, "method": "tools/list", "params": {}},
+        headers=c.headers(
+            {"accept": "application/json, text/event-stream", "content-type": "application/json"}
+        ),
+    )
+    schema = sse_result(tools)["result"]["tools"][0]["outputSchema"]
+    assert schema["properties"] == {"result": {"type": "string"}}
+
+    ok = c.c.post(
+        "/mcp/pretool",
+        json={
+            "harness": "cursor",
+            "event": "preToolUse",
+            "session_id": SID_A,
+            "tool_use_id": "use-ok",
+            "tool_name": "switchboard_who",
+        },
+        headers={"authorization": f"Bearer {c.token}"},
+    )
+    assert ok.status_code == 200
+    reply = tool_result(
+        c,
+        "switchboard_who",
+        {"room": "#build", "switchboard_session_id": SID_A, "switchboard_tool_use_id": "use-ok"},
+    )
+    reply_text = reply["content"][0]["text"]  # type: ignore[index]
+    assert reply["structuredContent"] == {"result": reply_text}  # the shape a refusal must match
+
+    refusals = {
+        "use the Cursor switchboard tools": tool_result(c, "join", {"room": "#build"}),
+        "this call has no matching session hook": tool_result(
+            c,
+            "switchboard_who",
+            {"room": "#build", "switchboard_session_id": SID_A, "switchboard_tool_use_id": "missing"},
+        ),
+    }
+    for message, res in refusals.items():
+        text = res["content"][0]["text"]  # type: ignore[index]
+        assert json.loads(text) == {"ok": False, "error": message, "code": "bad_request"}
+        assert res["structuredContent"] == {"result": text}, res
+
+
 def test_cursor_command_hook_inserts_the_reported_ids(broker: InProcBroker) -> None:
     """The actual command hook sends its report before printing updated_input; the server can
     then check a tool call without inferring which conversation is active."""
