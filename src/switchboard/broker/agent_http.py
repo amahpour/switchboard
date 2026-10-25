@@ -1209,6 +1209,14 @@ class HideHook(Middleware):
         return [t for t in await call_next(context) if t.name != HOOK_TOOL]
 
 
+def refusal(message: str) -> ToolResult:
+    """The input check's refusal, shaped like a tool's own reply: the text, and the same text as
+    ``structuredContent`` ``{"result": ...}``, because every tool advertises an ``outputSchema`` and
+    Cursor replaces a reply without it by a generic schema error, hiding ``message`` (#533)."""
+    text = err(message, "bad_request")
+    return ToolResult(content=[TextContent(text=text)], structured_content={"result": text})
+
+
 class InputIdentity(Middleware):
     """Remove injected arguments before tool validation; accept only a matching hook report."""
 
@@ -1228,9 +1236,7 @@ class InputIdentity(Middleware):
             return await call_next(context)
         harness = "cursor" if info.get("name") == "Cursor" else "devin"
         if harness == "cursor" and not context.message.name.startswith("switchboard_"):
-            return ToolResult(
-                content=[TextContent(text=err("use the Cursor switchboard tools", "bad_request"))]
-            )
+            return refusal("use the Cursor switchboard tools")
         args = context.message.arguments or {}
         sid, use = _id(args.get(INPUT_SESSION)), _id(args.get(INPUT_USE))
         try:
@@ -1243,9 +1249,7 @@ class InputIdentity(Middleware):
             or use is None
             or not self.tools.input_uses.take(token.id, harness, sid, use, context.message.name)
         ):
-            return ToolResult(
-                content=[TextContent(text=err("this call has no matching session hook", "bad_request"))]
-            )
+            return refusal("this call has no matching session hook")
         clean = {k: v for k, v in args.items() if k not in (INPUT_SESSION, INPUT_USE)}
         marker = self.tools.input_session.set(sid)
         try:

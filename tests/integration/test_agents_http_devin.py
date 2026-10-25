@@ -98,6 +98,29 @@ def test_devin_hook_routes_two_sessions_on_one_token(broker: InProcBroker) -> No
     dv.c.close()
 
 
+def test_devin_refusal_carries_structured_content_for_the_output_schema(broker: InProcBroker) -> None:
+    """Devin goes through the same input check as Cursor. A call with no matching hook report is
+    refused with ``structuredContent`` ``{"result": <the text>}`` as well as the text, because every
+    tool advertises an ``outputSchema`` and a client may reject a reply without it (#533). Fails if
+    the refusal returns text content alone."""
+    broker.call("room.create", {"name": "#build"})
+    dv = Devin(broker, make_token(broker))
+    body = {
+        "jsonrpc": "2.0",
+        "id": 41,
+        "method": "tools/call",
+        "params": {"_meta": META, "name": "who", "arguments": {"room": "#build"}},
+    }
+    headers = {**dv.headers, "mcp-method": "tools/call", "mcp-name": "who"}
+    r = dv.c.post("/mcp", json=body, headers=headers)
+    assert r.status_code == 200, r.text
+    res = sse_result(r)["result"]
+    text = res["content"][0]["text"]
+    assert json.loads(text)["error"] == "this call has no matching session hook"
+    assert res["structuredContent"] == {"result": text}, res
+    dv.c.close()
+
+
 def test_devin_wait_answer_is_confirmed_by_its_hook_even_when_long(broker: InProcBroker) -> None:
     """Devin's wait loop (§9.5) holds over HTTPS: the answer to wait() is confirmed by that call's
     own PostToolUse report, which the hook sends as batch tokens only, so an answer longer than the
