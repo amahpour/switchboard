@@ -153,7 +153,8 @@ def test_old_ctx_permission_text_patterns_miss_a_destructured_call() -> None:
     cannot return by weakening the guard back to those patterns."""
     code = "const { permission } = ctx; permission.reply({});"
     permission_reads = re.sub(r"ctx\.permission\.list\s*\(", "READ_PENDING(", code)
-    assert not re.search(r"\bctx\s*(?:\??\.\s*permission\b|\[\s*['\"]permission['\"]\s*\])", permission_reads)
+    old_pattern = r"\bctx\s*(?:\??\.\s*permission\b|\[\s*['\"]permission['\"]\s*\])"
+    assert not re.search(old_pattern, permission_reads)
     with pytest.raises(AssertionError):
         check_opencode_permission_rules(code)
 
@@ -170,10 +171,20 @@ def test_old_ctx_permission_text_patterns_miss_a_destructured_call() -> None:
         "Reflect.get(ctx, 'permission').reply({});",
     ],
 )
-def test_opencode_permission_guard_rejects_aliasing_and_decisions(code: str) -> None:
-    """Each way to call something other than ``ctx.permission.list(`` must fail the two rules."""
+def test_opencode_permission_guard_rejects_aliasing_and_decisions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: str
+) -> None:
+    """Each way to call something other than ``ctx.permission.list(`` must fail the source guard itself,
+    not only the rule function, so a guard that stopped calling the rules couldn't pass silently."""
     with pytest.raises(AssertionError):
         check_opencode_permission_rules(code)
+    plugin = tmp_path / "opencode"
+    plugin.mkdir()
+    (plugin / "index.ts").write_text("")
+    (plugin / "listener.mjs").write_text(code)
+    monkeypatch.setattr(sys.modules[__name__], "PLUGINS", tmp_path)
+    with pytest.raises(AssertionError):
+        test_opencode_sources_only_read_permissions_and_never_spawn_or_write()
 
 
 @pytest.mark.parametrize(
