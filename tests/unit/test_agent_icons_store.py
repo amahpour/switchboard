@@ -65,6 +65,25 @@ def test_the_list_has_no_bytes_and_is_in_a_fixed_order(store: Store) -> None:
     assert not any(hasattr(r, "data") for r in rows)
 
 
+def test_opencode_s_avatar_is_stored_listed_last_and_reset_like_the_others(store: Store) -> None:
+    """OpenCode (#518) is a harness with an uploadable avatar: both schemes are stored byte for byte,
+    listed after the four that came first, and a reset takes both of them and only them. Fails if the
+    store's harness list (or the schema's CHECK behind it) lacks OpenCode, so the write is a ValueError."""
+    put(store, "opencode", "dark", b"oc-dark")
+    put(store, "devin", "light", b"dv-light")
+    put(store, "opencode", "light", b"oc-light")
+    assert [(r.harness, r.scheme) for r in store.agent_icons()] == [
+        ("devin", "light"),
+        ("opencode", "light"),
+        ("opencode", "dark"),
+    ]
+    assert store.agent_icon("opencode", "light")[1] == b"oc-light"  # type: ignore[index]
+    assert store.agent_icon_reset("opencode") == 2
+    assert [(r.harness, r.scheme) for r in store.agent_icons()] == [("devin", "light")]
+    assert store.agent_icon("opencode", "dark") is None
+    assert store.agent_icon_reset("opencode") == 0
+
+
 def test_a_reset_takes_both_schemes_of_one_harness_and_leaves_the_others(store: Store) -> None:
     """Reset is per harness (the built-in avatar comes back in light and dark together) and says how many
     images it removed; a harness with none removes none."""
@@ -78,7 +97,7 @@ def test_a_reset_takes_both_schemes_of_one_harness_and_leaves_the_others(store: 
 
 
 def test_the_store_refuses_a_harness_the_schema_does_not_know(store: Store) -> None:
-    """A name outside the four harnesses is no row: SQLite's own CHECK is the last line, and the store
+    """A name outside the five harnesses is no row: SQLite's own CHECK is the last line, and the store
     turns it into a ValueError so the caller never sees a database error for a bad argument."""
     for harness, scheme in (("test", "light"), ("codex", "sepia"), ("../x", "light"), ("", "dark")):
         with pytest.raises(ValueError):

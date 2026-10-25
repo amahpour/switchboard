@@ -102,7 +102,7 @@ def test_the_list_says_what_is_stored_and_what_may_be_uploaded(
 ) -> None:
     empty = listing(web)
     assert empty["icons"] == [] and empty["can_change"] is True
-    assert empty["harnesses"] == ["claude", "codex", "cursor", "devin"]
+    assert empty["harnesses"] == ["claude", "codex", "cursor", "devin", "opencode"]
     assert empty["limits"] == {"bytes": 256 * 1024, "side": 512, "types": ["image/png", "image/webp"]}
     put(web, broker, "devin", "dark", PNG, "image/png")
     put(web, broker, "claude", "light", WEBP, "image/webp")
@@ -113,6 +113,25 @@ def test_the_list_says_what_is_stored_and_what_may_be_uploaded(
     ]
     assert icons[1]["width"] == 64 and icons[1]["bytes"] == len(PNG) and len(icons[1]["v"]) == 12
     assert "data" not in icons[1]
+
+
+def test_an_admin_can_upload_and_reset_opencode_s_avatar(broker: InProcBroker, web: httpx.Client) -> None:
+    """OpenCode (#518) takes a light and a dark upload like the other four: each is served back, listed
+    after the others, written into the page's stylesheet for `.avatar.h-opencode` (which hides the built-in
+    glyph), and a reset removes both and the stylesheet's rules. Fails with a 404 on the PUT if
+    `opencode` is not in the harness list, and on the schema's CHECK if the migration is missing."""
+    light = put(web, broker, "opencode", "light", PNG, "image/png")
+    assert light.status_code == 200 and light.json()["harness"] == "opencode"
+    dark = put(web, broker, "opencode", "dark", PNG_DARK, "image/png")
+    assert web.get(f"/api/agent-icons/opencode/dark?v={dark.json()['v']}").content == PNG_DARK
+    assert "opencode" in listing(web)["harnesses"]
+    assert stored(web) == [("opencode", "light"), ("opencode", "dark")]
+    css = web.get("/api/agent-icons.css").text
+    assert ".avatar.h-opencode > .ic, .avatar.h-opencode > .av-word { display: none; }" in css
+    assert f"/api/agent-icons/opencode/light?v={light.json()['v']}" in css
+    assert web.delete("/api/agent-icons/opencode", headers=broker.write_headers()).json() == {"removed": 2}
+    assert stored(web) == [] and "opencode" not in web.get("/api/agent-icons.css").text
+    assert web.get("/api/agent-icons/opencode/light").status_code == 404
 
 
 def test_the_stylesheet_follows_the_uploads_and_a_reset(broker: InProcBroker, web: httpx.Client) -> None:

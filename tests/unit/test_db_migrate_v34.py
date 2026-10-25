@@ -22,7 +22,7 @@ def test_old_rows_and_constraints_survive_and_opencode_can_join(tmp_path: Path) 
     counts = db.row_counts(old, db.kept_tables(28))
     old.close()
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 34
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 35
     assert db.row_counts(con, db.kept_tables(28)) == counts
     assert list(con.execute("PRAGMA foreign_key_check")) == []
     assert con.execute("PRAGMA foreign_keys").fetchone()[0] == 1

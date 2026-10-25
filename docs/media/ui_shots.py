@@ -47,6 +47,8 @@ oauth-consent-{light,dark,phone-light} (the card an agent that signs in through 
 person to, #386), oauth-confirm-light (the same on a hosted broker whose last check ran out: Confirm
 it's you comes first), oauth-signin-light (a browser that isn't signed in yet) and
 settings-agents-signin-light (the sign-in listed beside a token, with Revoke),
+opencode-upload-after-{light,dark} and -{log,members}-phone-light (the same room with an admin's uploaded
+OpenCode images, #518), opencode-upload-settings-{light,dark,phone-light} (OpenCode's card in Agent icons),
 opencode-avatar-{light,dark} (an OpenCode session's own avatar in the log and the Inspector, #518),
 opencode-avatar-{log,members}-phone-light, closed-light, inspector-light, inspector-claude-{light,dark,phone-light} (Claude Code's
 bubble with its name written under it, #62), inspector-device-light, inspector-dark-parked,
@@ -416,15 +418,20 @@ def shoot_opencode_avatar(browser: Any, out: Path, world: Any, stem: str = "open
     """#518: an OpenCode session in a room of its own, with a reply, light and dark on a desktop (the log,
     Members and the Inspector's large avatar) and on a phone (the log, and the
     Members sheet). ``stem`` names the files, so the same picture can be made before the change."""
-    from playwright.sync_api import expect
-    from ui_world import wait_js
-
-    b = world.broker
     world.create_room("#opencode")
     world.add_agents("#opencode", ("open-1",))
     first = world.agent_say("#opencode", "open-1", "Starting on the parser.")
     world.agent_say("#opencode", "open-1", "Parser done: tests pass.", reply_to=first)
     world.set_member_harness("#opencode", "open-1", "opencode")
+    shoot_opencode_room(browser, out, world.broker, stem)
+
+
+def shoot_opencode_room(browser: Any, out: Path, b: Any, stem: str) -> None:
+    """The #opencode room of ``shoot_opencode_avatar``, as its pictures: light and dark on a desktop (the log,
+    Members and the Inspector's large avatar) and on a phone (the log, and the Members sheet)."""
+    from playwright.sync_api import expect
+    from ui_world import wait_js
+
     base = {"timezone_id": "UTC", "locale": "en-US"}
 
     def open_room(page: Any) -> None:
@@ -459,6 +466,50 @@ def shoot_opencode_avatar(browser: Any, out: Path, world: Any, stem: str = "open
                 shot(page, out, f"{stem}-{tag}.png")
         finally:
             ctx.close()
+
+
+def shoot_opencode_upload(browser: Any, out: Path, world: Any) -> None:
+    """#518: an admin uploads OpenCode's light and dark images. The #opencode room (made by
+    ``shoot_opencode_avatar``, which runs first) as it looks after: ``opencode-upload-after-*``, and
+    Settings → Appearance → Agent icons on OpenCode's card, ``opencode-upload-settings-*``, in light, dark
+    and on the phone. The pictures are drawn in ``badge``, nobody's logo, and the uploads are reset after."""
+    from playwright.sync_api import expect
+
+    b, web = world.broker, world.web
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    headers = {"Origin": b.origin, "X-Switchboard": "1", "Content-Type": "image/png"}
+    for scheme, args in (
+        ("light", ((120, 190, 205), (40, 120, 140), "bars")),
+        ("dark", ((30, 60, 70), (14, 34, 40), "bars")),
+    ):
+        r = web.put(f"/api/agent-icons/opencode/{scheme}", content=badge(*args), headers=headers)
+        assert r.status_code == 200, r.text
+    try:
+        shoot_opencode_room(browser, out, b, "opencode-upload-after")
+        for size, scheme, tag in (
+            (DESKTOP, "light", "light"),
+            (DESKTOP, "dark", "dark"),
+            (PHONE, "light", "phone-light"),
+        ):
+            ctx = browser.new_context(**base, **size, color_scheme=scheme)
+            ctx.set_default_timeout(WAIT_MS)
+            try:
+                page = ctx.new_page()
+                sign_in(page, b)
+                if size is PHONE:
+                    page.click("#rooms-toggle")
+                page.click("#me-settings")
+                expect(page.locator("#app-dialog")).to_be_visible()
+                page.click("#settings-row-appearance" if size is PHONE else "#settings-tab-appearance")
+                row = page.locator('.agent-icon-row[data-harness="opencode"]')
+                expect(row).to_contain_text("Your light and dark images")
+                row.scroll_into_view_if_needed()
+                page.evaluate("document.activeElement && document.activeElement.blur()")
+                shot(page, out, f"opencode-upload-settings-{tag}.png")
+            finally:
+                ctx.close()
+    finally:
+        web.delete("/api/agent-icons/opencode", headers=b.write_headers())
 
 
 def shoot_offline(browser: Any, out: Path, world: Any) -> None:
@@ -1535,7 +1586,7 @@ def shoot_agent_icons(browser: Any, out: Path, world: Any) -> None:
             page.click("#me-settings")
             expect(page.locator("#app-dialog")).to_be_visible()
             page.click("#settings-row-appearance" if size is PHONE else "#settings-tab-appearance")
-            expect(page.locator(".agent-icon-row")).to_have_count(4)
+            expect(page.locator(".agent-icon-row")).to_have_count(5)
             expect(page.locator('.agent-icon-row[data-harness="codex"]')).to_contain_text(
                 "Your light and dark images"
             )
@@ -2506,6 +2557,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_confirmed_check(browser, out, world)  # rooms of its own, so last in this world
             shoot_approval(browser, out, world)
             shoot_opencode_avatar(browser, out, world)  # a room of its own, so after the others
+            shoot_opencode_upload(browser, out, world)  # in that room, so right after
             shoot_hosted(browser, out, hosted)
             shoot_common_password(browser, out, weak)
             shoot_mention_people(browser, out, people)
