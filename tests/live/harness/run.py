@@ -34,6 +34,29 @@ touch "$1.done"
 """
 
 
+# The process table comes from ps and not from /proc, which macOS doesn't have. This prints the same two
+# columns, with no header, on Linux and macOS, and a pipe is never cut to a width.
+PS_COMMAND = ["ps", "-axo", "pid=,command="]
+
+
+def parse_ps(text: str) -> dict[int, str]:
+    """``{pid: command line}`` from the output of ``PS_COMMAND``: a pid (padded with spaces), a space, the
+    command line. A line that isn't that is skipped."""
+    found: dict[int, str] = {}
+    for line in text.splitlines():
+        pid, _, command = line.strip().partition(" ")
+        if pid.isdecimal():
+            found[int(pid)] = command.strip()
+    return found
+
+
+def list_processes() -> dict[int, str]:
+    """Every process on the machine, by pid, with its command line. A ``ps`` that fails raises: a table that
+    couldn't be read must not pass for 'nothing is left'. A command line that isn't UTF-8 is read lossily."""
+    r = subprocess.run(PS_COMMAND, capture_output=True, text=True, errors="replace", check=True, timeout=30)
+    return parse_ps(r.stdout)
+
+
 def child_path(*binaries: str) -> str:
     """PATH for a child: the directories of the CLIs it needs, then the system's. Not the PATH pytest has,
     which may carry a plugin's bin directory or a virtualenv."""
@@ -365,17 +388,7 @@ class Run:
         me = os.getpid()
 
         def alive() -> dict[int, str]:
-            found: dict[int, str] = {}
-            for d in Path("/proc").iterdir():
-                if not d.name.isdigit() or int(d.name) == me:
-                    continue
-                try:
-                    cmd = (d / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
-                except OSError:
-                    continue
-                if base in cmd:
-                    found[int(d.name)] = cmd
-            return found
+            return {pid: cmd for pid, cmd in list_processes().items() if pid != me and base in cmd}
 
         deadline = time.monotonic() + grace
         left = alive()
