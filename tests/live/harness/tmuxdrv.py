@@ -56,11 +56,19 @@ def launch_command(script: Path, env: dict[str, str], argv: list[str]) -> str:
 
 
 class Tmux:
-    def __init__(self, label: str, path: str):
+    def __init__(self, label: str, path: str, search_path: str | None = None):
+        """``path`` is the children's PATH (allowlisted: the CLI's directory and the system's).
+        ``search_path`` is where to look for tmux itself, the PATH pytest was started with: Homebrew puts
+        tmux in ``/opt/homebrew/bin``, which the children's PATH does not carry (#529). ``bin`` is then
+        absolute, and the children's environment is the same as it was."""
         self.sock = f"sb-live-{label}-{os.getpid()}"
         self.path = path
         self.env = clean_env(path)
-        self.bin = shutil.which("tmux", path=path) or "tmux"
+        self.bin = (
+            shutil.which("tmux", path=path)
+            or (shutil.which("tmux", path=search_path) if search_path else None)
+            or "tmux"
+        )
 
     def run(self, *args: str, timeout: float = 15) -> subprocess.CompletedProcess[str]:
         return subprocess.run(

@@ -359,6 +359,73 @@ def test_the_child_path_carries_the_cli_and_the_system_not_this_processes_path(
     assert path.endswith(run.SYSTEM_PATH) and "/opt/plugin/bin" not in path and ".venv" not in path
 
 
+def test_tmux_is_found_where_it_is_installed_and_the_child_path_stays_allowlisted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """tmux lives in ``/opt/homebrew/bin`` on a Mac, which the children's PATH (the CLI's directory and the
+    system's) does not carry, so ``Tmux.bin`` used to fall back to a bare ``tmux`` that the clean environment
+    could not run, and teardown crashed (#529). It is looked up in the PATH pytest started with. Fails if
+    ``bin`` is not the absolute path found there, or if finding it widened the children's PATH."""
+    from harness import run, tmuxdrv
+
+    brew = tmp_path / "opt" / "homebrew" / "bin"
+    brew.mkdir(parents=True)
+    fake = brew / "tmux"
+    fake.write_text("#!/bin/sh\n")
+    fake.chmod(0o755)
+    nothing = tmp_path / "empty"
+    nothing.mkdir()
+    monkeypatch.setattr(run, "REAL_PATH", f"{brew}:{nothing}")
+    monkeypatch.setattr(run, "SYSTEM_PATH", str(nothing))  # a box whose system directories have no tmux
+    r = run.Run("t")
+    try:
+        assert r.tmux.bin == str(fake)
+        assert str(brew) not in r.path and str(brew) not in r.tmux.env["PATH"]
+    finally:
+        r.broker.cleanup()
+    assert tmuxdrv.Tmux("x", str(nothing)).bin == "tmux"  # nowhere to look: the old fallback, unchanged
+
+
+def test_stop_stops_the_broker_and_sweeps_when_tmux_cannot_be_stopped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tmux that can't be run (``FileNotFoundError`` on a Mac, #529) used to raise out of ``stop`` before
+    the broker was stopped or the sweep ran, so every such run leaked its broker. Fails if the broker is not
+    stopped, the sweep does not run, the results are not recorded, or the original error is swallowed."""
+    from harness import run
+
+    calls: list[str] = []
+
+    class BrokenTmux:
+        def capture(self, *a: Any, **k: Any) -> str:
+            return "screen"
+
+        def kill_server(self) -> None:
+            calls.append("tmux")
+            raise FileNotFoundError(2, "No such file or directory", "tmux")
+
+    class FakeBroker:
+        base = Path("/nowhere")
+
+        def stop(self) -> None:
+            calls.append("broker")
+
+        def cleanup(self) -> None:
+            calls.append("cleanup")
+
+    r = run.Run("t")
+    r.broker.cleanup()
+    r.broker, r.tmux = FakeBroker(), BrokenTmux()  # type: ignore[assignment]
+    monkeypatch.setattr(r, "sweep", lambda: calls.append("sweep") or ["leftover"])
+    monkeypatch.setattr(run.drift, "compare", lambda before, after: ([], []))
+    monkeypatch.setattr(run.drift, "snapshot", dict)
+    with pytest.raises(FileNotFoundError):
+        r.stop()
+    assert calls == ["tmux", "broker", "sweep", "cleanup"]
+    assert r.results["leftover_processes"] == ["leftover"]
+    assert r.results["teardown_error"].startswith("FileNotFoundError")
+
+
 def test_a_clis_environment_reaches_it_through_a_script_and_never_a_command_line(tmp_path: Path) -> None:
     """The agent token is in the child's environment, not in any argv: tmux is given ``env -i /bin/sh
     <script>``, and the script (0700) holds the exports. Fails if the token is in the command tmux is
