@@ -23,7 +23,15 @@ from conftest import InProcBroker, make_tmp_home, sanitize_env
 from fakes import pictures
 from playwright.sync_api import Browser, Locator, Page, expect
 from test_private_rooms_ui import person_cookie
-from test_web_ui import PHASE_REPORTS, PHONE, UI, no_horizontal_scroll, open_room, open_settings
+from test_web_ui import (
+    PHASE_REPORTS,
+    PHONE,
+    UI,
+    an_opencode_room,
+    no_horizontal_scroll,
+    open_room,
+    open_settings,
+)
 from ui_world import UIWorld, wait_js
 
 from switchboard import db
@@ -43,8 +51,17 @@ COLORS = {
     "codex": {"light": (30, 160, 60), "dark": (20, 200, 200)},
     "cursor": {"light": (120, 40, 200), "dark": (230, 40, 160)},
     "devin": {"light": (230, 200, 20), "dark": (20, 30, 120)},
+    "opencode": {"light": (10, 130, 150), "dark": (190, 90, 150)},
 }
-NAMES = {"claude": "Claude Code", "codex": "Codex", "cursor": "Cursor", "devin": "Devin"}
+NAMES = {
+    "claude": "Claude Code",
+    "codex": "Codex",
+    "cursor": "Cursor",
+    "devin": "Devin",
+    "opencode": "OpenCode",
+}
+# the harnesses with a card on the welcome page's "Once per harness" list (OpenCode has none: #518)
+WELCOME = ("claude", "codex", "cursor", "devin")
 BUILT_IN = {"codex": "/static/agents/codex-light.png", "devin": "/static/agents/devin-light.png"}
 
 # The image an element draws as its background: its path, its width and its middle pixel. A decode
@@ -207,12 +224,12 @@ def settings_icons(page: Page) -> Locator:
 
 
 def open_icons(page: Page) -> None:
-    """Settings → Appearance, with the four harnesses' rows loaded."""
+    """Settings → Appearance, with the five harnesses' rows loaded."""
     if (page.viewport_size or {}).get("width", 1440) <= 760:
         page.click("#rooms-toggle")  # a phone's sidebar is a drawer, and Settings is at its foot
     open_settings(page, "appearance")
     expect(settings_icons(page)).to_be_visible()
-    expect(page.locator(".agent-icon-row")).to_have_count(4)
+    expect(page.locator(".agent-icon-row")).to_have_count(5)
 
 
 def choose(page: Page, harness: str, scheme: str, data: bytes, mime: str, name: str = "avatar.png") -> None:
@@ -360,7 +377,7 @@ def test_the_admin_uploads_light_and_dark_images_sees_them_and_resets(ui: UI) ->
 
 @pytest.mark.parametrize("scheme", ["light", "dark"])
 def test_every_harness_s_uploaded_icon_shows_everywhere_its_avatar_does(ui: UI, scheme: str) -> None:
-    """All four harnesses, one of them a WebP: in Members, the log, a reply's preview, the @ list and the
+    """All five harnesses, one of them a WebP: in Members, the log, a reply's preview, the @ list and the
     Inspector (and on the welcome page's cards), each agent's avatar is its harness's uploaded image for
     the scheme, and Claude Code's drawn bubble and the word under it are gone, for both of its agents.
     Fails if any place still draws the built-in avatar or the monogram."""
@@ -371,7 +388,7 @@ def test_every_harness_s_uploaded_icon_shows_everywhere_its_avatar_does(ui: UI, 
             put_icon(ui.world, harness, s)
     page = ui.open(color_scheme=scheme)
     every_place(page, scheme)
-    for harness in COLORS:
+    for harness in WELCOME:
         shows(page.locator(f".harness-head .avatar.h-{harness}"), harness, scheme, where=f"welcome {harness}")
     open_room(page, room)
     expect(page.locator("#buddy-list .member")).to_have_count(1)
@@ -391,6 +408,109 @@ def test_every_harness_s_uploaded_icon_shows_everywhere_its_avatar_does(ui: UI, 
     shows(inspect(page, "cursor-1"), "cursor", scheme, where="inspector cursor-1")
     got = page.locator("#insp-body .insp-id > .avatar").evaluate(PIXEL)
     assert got["width"] == 48  # the WebP's own size, decoded
+
+
+OPENCODE_TILE = {"bg": "rgb(47, 111, 115)", "img": "none"}  # the built-in teal tile, no image
+LOOK = "el => { const s = getComputedStyle(el); return {bg: s.backgroundColor, img: s.backgroundImage}; }"
+
+
+def opencode_glyph(avatar: Locator, *, where: str) -> None:
+    """The built-in OpenCode avatar: the angle-brackets glyph on its teal tile, no uploaded image."""
+    expect(avatar.locator("svg.ic-code"), where).to_be_visible()
+    assert avatar.evaluate(LOOK) == OPENCODE_TILE, where
+
+
+def opencode_places(page: Page) -> dict[str, Locator]:
+    """The avatars of open-1 in the Members list and the log (the room's first line, and the reply)."""
+    return {
+        "members": member(page, "open-1"),
+        "log": page.locator('#log .line[data-from="open-1"] > .avatar').first,
+        "reply preview": page.locator("#log .reply-to .avatar.mini.h-opencode").first,
+    }
+
+
+def test_the_admin_uploads_opencode_s_images_and_reset_brings_the_glyph_back(ui: UI) -> None:
+    """#518: OpenCode has the same Agent icons row as the other four. The admin presses Upload for its
+    light and its dark image; Members, the log, a reply's preview, the @ list and the Inspector then show
+    that file (the right one for the scheme, over the built-in glyph, with no "OC" under it), including for
+    the saved Theme, and Reset brings the built-in glyph back everywhere. Fails if OpenCode has no row (the
+    broker's harness list lacks it), the upload is refused (the schema's CHECK), the glyph or its word
+    still shows over the image, or Reset leaves the image."""
+    room = "opencode-icons"
+    an_opencode_room(ui, room)
+    page = ui.open(room=room, color_scheme="light")
+    for place, avatar in opencode_places(page).items():
+        opencode_glyph(avatar, where=f"before, {place}")
+    open_icons(page)
+    row = page.locator('.agent-icon-row[data-harness="opencode"]')
+    expect(row.locator("strong")).to_have_text("OpenCode")
+    expect(row).to_contain_text("The built-in avatar")
+    expect(page.locator("#agent-icon-reset-opencode")).to_be_disabled()
+    opencode_glyph(row.locator(".avatar"), where="the row's own avatar, before")
+
+    data, mime = picture("opencode", "light")
+    choose(page, "opencode", "light", data, mime, "opencode-light.png")
+    expect(page.locator("#agent-icons-status")).to_have_text("Set the light image for OpenCode.")
+    expect(row).to_contain_text("Your light image, used for dark too")
+    shows(row.locator(".agent-icon-slot.light"), "opencode", "light", where="light slot")
+    shows(row.locator(".avatar"), "opencode", "light", where="the row's avatar")
+    shows(member(page, "open-1"), "opencode", "light", where="members, at once")  # no reload
+    data, mime = picture("opencode", "dark")
+    choose(page, "opencode", "dark", data, mime, "opencode-dark.png")
+    expect(page.locator("#agent-icons-status")).to_have_text("Set the dark image for OpenCode.")
+    expect(row).to_contain_text("Your light and dark images")
+    shows(row.locator(".agent-icon-slot.dark"), "opencode", "dark", where="dark slot")
+    expect(page.locator("#agent-icon-reset-opencode")).to_be_enabled()
+    # the other harnesses' rows are untouched
+    expect(page.locator('.agent-icon-row[data-harness="devin"]')).to_contain_text("The built-in avatar")
+    page.click("#settings-close")
+
+    for scheme in ("light", "dark"):
+        page.emulate_media(color_scheme=scheme)
+        for place, avatar in opencode_places(page).items():
+            avatar.scroll_into_view_if_needed()
+            shows(avatar, "opencode", scheme, where=f"{place}, {scheme}")
+        expect(member(page, "open-1").locator("svg.ic")).to_be_hidden()  # the glyph is gone under the image
+        box = page.locator("#input")
+        box.focus()
+        page.keyboard.type("@")
+        shows(page.locator("#men-open-1 .avatar"), "opencode", scheme, where=f"@ list, {scheme}")
+        page.keyboard.press("Escape")
+        box.fill("")
+        big = inspect(page, "open-1")
+        shows(big, "opencode", scheme, where=f"inspector, {scheme}")
+        expect(big.locator(".av-word")).to_be_hidden()  # no "OC" written over the image
+        page.click("#insp-back")
+    page.emulate_media(color_scheme="light")
+    for theme, scheme, want in (
+        ("dark", "light", "dark"),
+        ("light", "dark", "light"),
+        ("system", "dark", "dark"),
+    ):
+        page.emulate_media(color_scheme=scheme)
+        page.evaluate("t => { document.documentElement.dataset.theme = t; }", theme)
+        shows(member(page, "open-1"), "opencode", want, where=f"theme {theme} on a {scheme} system")
+    page.evaluate("() => { document.documentElement.dataset.theme = 'system'; }")
+    page.emulate_media(color_scheme="light")
+
+    page.reload()  # from the first paint: the linked stylesheet has it
+    expect(page.locator("#st-conn")).to_have_text("Connected")
+    open_room(page, room)
+    shows(member(page, "open-1"), "opencode", "light", where="members after a reload")
+
+    open_icons(page)
+    page.click("#agent-icon-reset-opencode")
+    expect(page.locator("#agent-icons-status")).to_have_text("OpenCode is back to its built-in avatar.")
+    expect(row).to_contain_text("The built-in avatar")
+    expect(row.locator(".agent-icon-slot.empty")).to_have_count(2)
+    expect(page.locator("#agent-icon-upload-opencode-light")).to_be_focused()
+    opencode_glyph(row.locator(".avatar"), where="the row's avatar, after Reset")
+    page.click("#settings-close")
+    for place, avatar in opencode_places(page).items():
+        opencode_glyph(avatar, where=f"after Reset, {place}")
+    big = inspect(page, "open-1")
+    opencode_glyph(big, where="inspector after Reset")
+    expect(big.locator(".av-word")).to_have_text("OC")  # the word is back under the glyph
 
 
 def test_a_phone_shows_them_too(ui: UI) -> None:
@@ -583,7 +703,7 @@ def test_a_person_who_is_not_the_admin_sees_the_icons_but_not_the_section(
     admin = open_as(hosted_ui, hosted, hosted.admin)
     open_settings(admin, "appearance")
     expect(admin.locator("#agent-icons-title")).to_have_text(HEADING)
-    expect(admin.locator(".agent-icon-row")).to_have_count(4)
+    expect(admin.locator(".agent-icon-row")).to_have_count(5)
     bob = open_as(hosted_ui, hosted, hosted.bob)
     shows(bob.locator(".harness-head .avatar.h-codex"), "codex", "light", where="bob's welcome page")
     open_settings(bob, "appearance")

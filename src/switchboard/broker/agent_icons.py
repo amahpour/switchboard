@@ -12,7 +12,7 @@ script). The check reads the bytes and trusts nothing the sender says about them
 - nothing is decoded and nothing is re-encoded: the server image has no imaging library, and the
   caps on bytes and pixels are what bound the work the browser does.
 
-``stylesheet`` writes the page's CSS for the icons that are set. Every value in it is one of four harness
+``stylesheet`` writes the page's CSS for the icons that are set. Every value in it is one of five harness
 names, one of two schemes or twelve hex digits, so no byte of an upload or of a request reaches it.
 """
 

@@ -14,7 +14,8 @@ messages, where NULL is the owner), 5 (per-person preferences, §34), 6 (text si
 drops the process ids and the stdio credential that only it used; 31 (#386) adds the clients that
 register to sign an agent in through the browser, and says how each agent token was made; 32 (#498)
 adds the avatars an admin uploads for each harness (§29.11); 33 (#488) adds the listener keys of Claude
-Code's helper scripts (§49.11); 34 (#513) admits OpenCode in participants (§49.12).
+Code's helper scripts (§49.11); 34 (#513) admits OpenCode in participants (§49.12); 35 (#518) admits it in
+``agent_icons``, so an admin can upload its avatar (§29.11).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -35,7 +36,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 34
+SCHEMA_VERSION = 35
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -227,7 +228,7 @@ CREATE TABLE oauth_clients(
   redirect_uris TEXT NOT NULL CHECK(length(redirect_uris) <= 2000),
   created_at REAL NOT NULL);
 CREATE TABLE agent_icons(
-  harness TEXT NOT NULL CHECK(harness IN ('claude','codex','cursor','devin')),
+  harness TEXT NOT NULL CHECK(harness IN ('claude','codex','cursor','devin','opencode')),
   scheme TEXT NOT NULL CHECK(scheme IN ('light','dark')),
   mime TEXT NOT NULL CHECK(mime IN ('image/png','image/webp')),
   data BLOB NOT NULL CHECK(length(data) BETWEEN 1 AND 262144),
@@ -705,6 +706,20 @@ V33_TO_V34 = (
 )
 
 
+# v34 -> v35 (#518, §29.11): only the agent_icons CHECK gains a harness, so an admin can upload OpenCode's
+# avatar. The same schema-text edit as v33 -> v34, with the same checks: _migrate brackets this step with
+# schema editing, verifies the new CHECK is in the table's text (or fails closed and rolls back), advances
+# SQLite's schema cookie and checks integrity. Rows are untouched. The needle ends at the closing
+# parenthesis, so it can only match the CHECK on harness.
+V34_TO_V35 = (
+    "UPDATE sqlite_master SET sql=replace(sql,"
+    " '''claude'',''codex'',''cursor'',''devin'')',"
+    " '''claude'',''codex'',''cursor'',''devin'',''opencode'')')"
+    " WHERE type='table' AND name='agent_icons'",
+    "UPDATE meta SET value='35' WHERE key='schema_version'",
+)
+
+
 class MigrationStep(NamedTuple):
     to: int
     statements: tuple[str, ...]
@@ -749,6 +764,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         31: MigrationStep(32, V31_TO_V32, ("agent_icons",)),
         32: MigrationStep(33, V32_TO_V33, ("listener_keys",)),
         33: MigrationStep(34, V33_TO_V34, (), (("participants", "'opencode'"),)),
+        34: MigrationStep(35, V34_TO_V35, (), (("agent_icons", "'devin','opencode'"),)),
     }
     out = []
     v = frm

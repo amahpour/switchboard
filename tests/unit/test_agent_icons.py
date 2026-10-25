@@ -312,11 +312,15 @@ def test_one_image_is_used_for_both_schemes() -> None:
     assert only_dark.count("v=dddddddddddd") >= 3 and "cursor/light" not in only_dark
 
 
-def test_a_custom_icon_hides_the_built_in_glyph_and_the_word_under_it() -> None:
-    """Claude Code's built-in avatar is a drawn glyph (and, on the Inspector's, the word Claude): with
-    an uploaded image on the tile neither may show over it."""
-    css = ai.stylesheet(rows(("claude", "light", "e")))
-    assert ".avatar.h-claude > .ic, .avatar.h-claude > .av-word { display: none; }" in css
+@pytest.mark.parametrize("harness", ["claude", "opencode"])
+def test_a_custom_icon_hides_the_built_in_glyph_and_the_word_under_it(harness: str) -> None:
+    """Claude Code's and OpenCode's built-in avatars are drawn glyphs (and, on the Inspector's, a word
+    under them): with an uploaded image on the tile neither may show over it, and the tile's own colour
+    is gone. Fails if OpenCode (#518) is not a harness the stylesheet writes a rule for, so its uploaded
+    image never reaches the page."""
+    css = ai.stylesheet(rows((harness, "light", "e")))
+    assert f".avatar.h-{harness} > .ic, .avatar.h-{harness} > .av-word {{ display: none; }}" in css
+    assert f"url('/api/agent-icons/{harness}/light?v=eeeeeeeeeeee')" in css
     assert "background-color: transparent" in css
 
 
@@ -327,13 +331,15 @@ def test_the_settings_previews_are_the_stored_slots_not_the_fallback() -> None:
 
 def test_the_stylesheet_has_only_known_names_and_one_shape_of_url() -> None:
     """Whatever the rows hold, every url() in the stylesheet is ``/api/agent-icons/<harness>/<scheme>?v=``
-    and twelve hex digits, and nothing else loads or imports anything. A row with a name outside the four
+    and twelve hex digits, and nothing else loads or imports anything. A row with a name outside the five
     harnesses (it can't be in the database: its CHECK refuses it) is left out rather than written."""
     every = [(h, s, "9") for h in ai.HARNESSES for s in ai.SCHEMES]
     css = ai.stylesheet(rows(*every, ("nope", "light", "9")))
     urls = re.findall(r"url\(([^)]*)\)", css)
     assert urls and all(
-        re.fullmatch(r"'/api/agent-icons/(claude|codex|cursor|devin)/(light|dark)\?v=[0-9a-f]{12}'", u)
+        re.fullmatch(
+            r"'/api/agent-icons/(claude|codex|cursor|devin|opencode)/(light|dark)\?v=[0-9a-f]{12}'", u
+        )
         for u in urls
     )
     assert (

@@ -226,7 +226,7 @@ class Message:
 MAX_PINS = 5  # a room's pinned decisions (#292, DESIGN.md §48)
 # the avatars an admin may upload (#498, DESIGN.md §29.11): for these harnesses, in these two schemes, as
 # these types, at most this big; ``db.SCHEMA`` says the same in its CHECKs
-ICON_HARNESSES = ("claude", "codex", "cursor", "devin")
+ICON_HARNESSES = ("claude", "codex", "cursor", "devin", "opencode")
 ICON_SCHEMES = ("light", "dark")
 ICON_TYPES = ("image/png", "image/webp")
 ICON_MAX_BYTES = 256 * 1024
