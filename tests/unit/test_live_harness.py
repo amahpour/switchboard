@@ -2,7 +2,8 @@
 
 The live tests drive real agent CLIs and run only when asked (``SWITCHBOARD_LIVE=...``). What they hand each
 CLI is checked here on every run: the screens they read, the config they write, the flags they launch with
-(never an approval switched off), and that a plain ``pytest`` skips every one of them.
+(never an approval switched off), the sweep that ends what a run leaves behind, and that a plain ``pytest``
+skips every one of them.
 """
 
 from __future__ import annotations
@@ -10,10 +11,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -404,6 +407,148 @@ def test_scenarios_name_what_they_check() -> None:
         "revoked_token",
     ):
         assert (getattr(scenarios, name).__doc__ or "").strip(), name
+
+
+# ----------------------------------------------------------------- the sweep
+class FakeTime:
+    """The sweep's clock: ``sleep`` moves ``monotonic``, so a grace period passes at once and exactly."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def a_run_that_sweeps(
+    monkeypatch: pytest.MonkeyPatch, base: str, tables: list[dict[int, str]]
+) -> tuple[Any, list[tuple[int, int]]]:
+    """A ``Run`` in a temp directory ``base`` whose process table is ``tables``, one for each look (the last
+    one repeats), on a fake clock, and a ``kill`` that records instead of killing."""
+    from harness import run
+
+    looks = list(tables)
+    killed: list[tuple[int, int]] = []
+    monkeypatch.setattr(run, "list_processes", lambda: dict(looks.pop(0) if len(looks) > 1 else looks[0]))
+    monkeypatch.setattr(run, "time", FakeTime())
+    monkeypatch.setattr(run.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    r = object.__new__(run.Run)
+    r.base = Path(base)
+    return r, killed
+
+
+def test_the_ps_table_is_read_into_pids_and_whole_command_lines() -> None:
+    """``parse_ps`` takes a padded pid and the rest of the line, inner spacing and all, as the command, and
+    skips what is not a process line (a header, a blank line, text). Fails if a padded pid isn't read (the
+    sweep would find nothing and report a clean teardown), or if a command is cut at its first space (the
+    run's temp directory is usually in a later argument)."""
+    from harness import run
+
+    table = "    1 /sbin/init splash\n 4242 node  /x/server.js --port 1\n\nPID COMMAND\nnot a process\n"
+    assert run.parse_ps(table) == {1: "/sbin/init splash", 4242: "node  /x/server.js --port 1"}
+
+
+def test_the_process_list_is_asked_of_ps_and_never_of_proc(monkeypatch: pytest.MonkeyPatch) -> None:
+    """macOS has no ``/proc``: the list must come from ``ps -axo pid=,command=``, which prints the same two
+    columns there and on Linux. Fails if the list is read some other way, or ``ps`` is asked for another
+    shape (a header or a third column would not parse)."""
+    from harness import run
+
+    asked: list[list[str]] = []
+
+    def fake_run(argv: list[str], **_kw: Any) -> subprocess.CompletedProcess[str]:
+        asked.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="    7 sleep 60 /x\n", stderr="")
+
+    monkeypatch.setattr(run.subprocess, "run", fake_run)
+    assert run.list_processes() == {7: "sleep 60 /x"}
+    assert asked == [["ps", "-axo", "pid=,command="]]
+
+
+def test_a_ps_that_fails_is_an_error_and_not_an_empty_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A table that could not be read must not pass for 'nothing is left': the sweep would end a teardown as
+    clean with a process still alive. Fails if a ``ps`` that exits non-zero gives back an empty table."""
+    from harness import run
+
+    monkeypatch.setattr(run, "PS_COMMAND", [sys.executable, "-c", "import sys; sys.exit(3)"])
+    with pytest.raises(subprocess.CalledProcessError):
+        run.list_processes()
+
+
+def test_the_real_ps_lists_a_child_by_the_directory_on_its_command_line(tmp_path: Path) -> None:
+    """The stubbed tests can't say whether this machine's ``ps`` prints what ``parse_ps`` reads, so this one
+    runs it: a child that has a temp directory as an argument is in the table under its own pid, with that
+    argument, and so is this process. Fails if the table is empty or has another shape. The child is
+    started (``Popen`` returns once it has exec'd) before the table is read, so nothing waits for it."""
+    from conftest import child_env
+    from harness import run
+
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)", str(tmp_path)],
+        env=child_env(),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        table = run.list_processes()
+    finally:
+        child.kill()
+        child.wait()
+    assert str(tmp_path) in table[child.pid]
+    assert os.getpid() in table
+
+
+def test_the_sweep_kills_what_holds_the_run_directory_and_nothing_else(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Every process whose command line holds the run's temp directory is reported and killed (a daemon the
+    CLI started, a tmux server); one that doesn't is left alone, even if it is another run's; and this
+    process is never touched, though its own command line may hold the directory. Fails if a leftover is
+    missed (it would outlive the test), another run's process is killed, or the test process is."""
+    base = str(tmp_path / "sb-live-abc")
+    table = {
+        1: "/sbin/init splash",
+        os.getpid(): f"python -m pytest {base}",
+        101: f"codex app-server --listen unix://{base}/home/codex.sock",
+        102: f"codex app-server --listen unix://{tmp_path}/sb-live-other/home/codex.sock",
+        103: f"tmux -L sb-live-codex-1 new-session -c {base}/ws",
+    }
+    r, killed = a_run_that_sweeps(monkeypatch, base, [table])
+    assert r.sweep(grace=0) == [table[101], table[103]]
+    assert killed == [(101, signal.SIGKILL), (103, signal.SIGKILL)]
+
+
+def test_the_sweep_lets_a_process_that_is_ending_finish_and_does_not_wait_for_more(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """After their tmux server and broker are gone, processes get a moment to end by themselves. Fails if a
+    process that ends within the grace period is killed and reported (a clean shutdown would show up as a
+    leftover), or if the sweep goes on waiting once nothing is left."""
+    from harness import run
+
+    base = str(tmp_path / "sb-live-abc")
+    slow = {101: f"codex app-server {base}"}
+    r, killed = a_run_that_sweeps(monkeypatch, base, [slow, slow, {}])
+    assert r.sweep(grace=8.0) == [] and killed == []
+    assert run.time.now == pytest.approx(0.4), "it waited out more than the two looks it needed"
+
+
+def test_the_sweep_kills_a_process_that_outlasts_the_grace_period(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A process that is still there when the grace period is over is killed and reported, and the sweep
+    ends. Fails if the sweep gives up early (a leftover is missed) or never gives up (the teardown hangs)."""
+    from harness import run
+
+    base = str(tmp_path / "sb-live-abc")
+    stuck = {101: f"codex app-server {base}"}
+    r, killed = a_run_that_sweeps(monkeypatch, base, [stuck])
+    assert r.sweep(grace=1.0) == [stuck[101]] and killed == [(101, signal.SIGKILL)]
+    assert run.time.now >= 1.0
 
 
 # --------------------------------------------------------------- the opt-in
