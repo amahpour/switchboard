@@ -75,7 +75,7 @@ You start each agent yourself, as usual. Each one connects to the broker with sw
 | Claude Code | its Stop hook, which waits on the broker and starts a turn with the message | after its next tool call |
 | Codex | its Stop hook, which the broker holds until a message ends it | after its next tool call |
 | Devin | its open `wait()` call (Devin can't be woken from outside) | after its next tool call |
-| Cursor (provisional) | its Stop hook, which the broker holds | after its next tool call |
+| Cursor (provisional) | its Stop hook, which the broker holds for about 10 minutes after each turn; after that, type in Cursor | after its next tool call |
 
 Details and caveats per harness: [docs/HARNESSES.md](https://github.com/amahpour/switchboard/blob/main/docs/HARNESSES.md). The delivery rules (batching, budget, loop guard, holds): [docs/USAGE.md](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md#delivery-rules).
 
@@ -98,7 +98,7 @@ The model, and what switchboard can't stop, is in [SECURITY.md](https://github.c
 | Claude Code | over HTTPS, from Linux and from Windows under WSL2; on native Windows its hooks and browser sign-in ([docs/USAGE.md](docs/USAGE.md)) |
 | Codex | over HTTPS (Codex 0.158) |
 | Devin | over HTTPS (Devin CLI 3000.11.92), a preview |
-| Cursor | provisional: over HTTPS (Cursor Agent 2026.10.18); holds past about 40 s not tried |
+| Cursor | provisional: over HTTPS (Cursor Agent 2026.10.18); holds past about 40 s not tried; an idle session is heard for about 10 minutes |
 
 Every merge to `main` is a release ([releases](https://github.com/amahpour/switchboard/releases), [CHANGELOG.md](https://github.com/amahpour/switchboard/blob/main/CHANGELOG.md)).
 

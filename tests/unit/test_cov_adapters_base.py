@@ -179,7 +179,9 @@ def test_the_scripted_test_agent_adapter() -> None:
 def test_a_listening_adapters_routes_tier_and_park(cls: type, harness: str, tier: str) -> None:
     a = cls(CFG)
     p = part(harness=harness)
-    assert a.tier(p) == (tier, "over HTTPS: woken at stop")
+    assert a.tier(p)[0] == tier
+    if harness != "cursor":  # Cursor's note names its limit (below)
+        assert a.tier(p) == (tier, "over HTTPS: woken at stop")
     assert a.context_events(p) == HOOK_CONTEXT_EVENTS[harness]
     r = a.route(p, WAKE, SINK, 0.0)
     assert (r.kind, r.sink_id) == ("sink", 41)
@@ -194,6 +196,27 @@ def test_a_listening_adapters_routes_tier_and_park(cls: type, harness: str, tier
     assert a.park_s(p, ev("Stop", harness, max_wait_s=10_000_000.0)) == 86400.0
     assert a.park_s(p, ev("Stop", harness, max_wait_s=9.0)) is None
     assert a.park_s(p, ev("PostToolUse", harness, max_wait_s=630.0)) is None
+
+
+def test_cursors_idle_limit_is_said_in_its_note_its_parked_reason_and_its_join_text() -> None:
+    """#519: Cursor's Stop hook is held about ten minutes and nothing starts another park, so a mention after
+    that waits until the person types. The tier note, the parked reason and the join text must say so and how
+    to recover; fails if Cursor reads like Claude Code's listener, which comes back by itself. The other
+    listening harnesses keep their wording (their holds are a day or more)."""
+    a = HttpsCursorAdapter(CFG)
+    p = part(harness="cursor")
+    note = a.tier(p)[1] or ""
+    assert "about 10 min" in note and "type in Cursor" in note
+    why = a.route(p, WAKE, None, 0.0).reason or ""
+    assert "about 10 min" in why and "type in Cursor" in why and "no Stop hook waiting" in why
+    guidance = a.join_guidance(p, "#build")
+    assert "Stop hook waits on switchboard for them, for about 10 minutes" in guidance
+    assert "later mentions stay queued until your user types in Cursor" in guidance
+    assert 'read("#build")' in guidance and "after your tool calls" in guidance
+    for other in (HttpsClaudeAdapter(CFG), HttpsCodexAdapter(CFG)):
+        q = part(harness=other.harness)
+        assert "minutes" not in other.join_guidance(q, "#build")
+        assert "type in" not in (other.route(q, WAKE, None, 0.0).reason or "")
 
 
 def test_session_keys_come_from_what_each_harnesss_calls_name() -> None:
