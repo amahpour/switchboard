@@ -83,6 +83,8 @@
   --human-fg: #5a3d99;
   --h-claude-bg: #b9573a;
   --h-claude-fg: #ffffff;
+  --h-opencode-bg: #2f6f73;
+  --h-opencode-fg: #ffffff;
   /* the agents' icons (#62, #441, DESIGN.md §29.9): the only files this stylesheet loads, each pinned */
   --h-codex-img: url('/static/agents/codex-light.png');
   --h-codex-tile: #ffffff;
@@ -160,6 +162,8 @@
     --human-fg: #cfbdf7;
     --h-claude-bg: #b9573a;
     --h-claude-fg: #ffffff;
+    --h-opencode-bg: #2f6f73;
+    --h-opencode-fg: #ffffff;
     --h-codex-img: url('/static/agents/codex-dark.png');
     --h-codex-tile: #000000;
     --h-cursor-img: url('/static/agents/cursor-dark.png');
@@ -227,6 +231,8 @@
   --human-fg: #cfbdf7;
   --h-claude-bg: #b9573a;
   --h-claude-fg: #ffffff;
+  --h-opencode-bg: #2f6f73;
+  --h-opencode-fg: #ffffff;
   --h-codex-img: url('/static/agents/codex-dark.png');
   --h-codex-tile: #000000;
   --h-cursor-img: url('/static/agents/cursor-dark.png');
@@ -969,7 +975,9 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
   user-select: none;
 }
 .avatar.h-claude { background: var(--h-claude-bg); color: var(--h-claude-fg); }
-.avatar.h-claude .ic { width: 66%; height: 66%; stroke-width: 1.6; }
+/* OpenCode has switchboard's own angle-brackets glyph too (#518): a neutral drawing, no company's mark. */
+.avatar.h-opencode { background: var(--h-opencode-bg); color: var(--h-opencode-fg); }
+.avatar.h-claude .ic, .avatar.h-opencode .ic { width: 66%; height: 66%; stroke-width: 1.6; }
 /* The Inspector's avatar writes the name under the bubble, so it grows to 48 px and sits the word
    high enough to clear the status dot; white on this tile is 4.6:1. */
 .avatar.lg.named {

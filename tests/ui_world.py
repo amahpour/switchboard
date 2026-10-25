@@ -483,6 +483,31 @@ class UIWorld:
 
         b.on_loop(update)
 
+    def set_member_harness(self, room: str, name: str, harness: str) -> None:
+        """Make a scripted agent (joined by ``add_agents``) a session of ``harness``, for the screens only, as
+        the seeding does for #build's four: its participant row and the harness its messages carry are
+        rewritten, and the Members frame is published again. A test agent's harness never changes in real
+        life, and it makes no more calls under another harness afterwards."""
+        b = self.broker
+
+        def update() -> None:
+            from switchboard import db
+
+            st = b.state
+            s = st.store
+            member = s.find_member(s.get_room(room).id, name)
+            with db.tx(s.con):
+                s.con.execute(
+                    "UPDATE participants SET harness=? WHERE id=?", (harness, member.participant_id)
+                )
+                s.con.execute(
+                    "UPDATE messages SET sender_harness=? WHERE sender_membership_id=?",
+                    (harness, member.membership_id),
+                )
+            st.hub.members_changed(room)
+
+        b.on_loop(update)
+
     def set_approval_modes(self, room: str, modes: dict[str, str]) -> None:
         """Set seeded agents' approval modes and publish the resulting Members frame."""
         b = self.broker
