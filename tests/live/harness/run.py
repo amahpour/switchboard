@@ -259,10 +259,18 @@ class Run:
 
     def _processes_text(self) -> str:
         """What of this run is alive, by command line (no environment): the listener of a Claude Code
-        session is one of them."""
-        out = subprocess.run(["ps", "-eo", "pid,etimes,args"], capture_output=True, text=True).stdout
+        session is one of them. The table is ``list_processes()``'s, which is the same ``ps`` form on Linux
+        and macOS. A ``ps`` that fails is an error line (with what it printed on stderr), never an empty
+        section, which would read as 'nothing was alive'."""
+        try:
+            table = list_processes()
+        except Exception as e:  # a failing dump must not hide the failure it describes
+            why = str(e)
+            err = (getattr(e, "stderr", "") or "").strip()
+            return f"<processes unavailable: {(why + (': ' + err if err else ''))[:300]}>"
         base = str(self.base)
-        return "\n".join(x[:150] for x in out.splitlines() if base in x and " ps -eo" not in x)
+        lines = [f"{pid} {cmd}"[:150] for pid, cmd in table.items() if base in cmd]
+        return "\n".join(lines) if lines else "<none of this run's processes is alive>"
 
     def _members_text(self) -> str:
         try:
