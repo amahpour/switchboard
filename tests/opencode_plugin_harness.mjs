@@ -378,20 +378,28 @@ function restarted(rows, {dirs = {}, permissions = {}} = {}) {
     .map(r => JSON.parse(r.options.body).event);
   return w;
 }
-const row = (id, extra = {}) => ({id, ...extra});
+// A row as OpenCode 2.1.4 lists it (measured live): times in ms, an idle session has ``outcome`` and ``time.idle``,
+// a session mid-turn has neither.
+const NOW = Date.now();
+const row = (id, extra = {}) => ({id, projectID: 'prj_1', model: {id: 'm'}, cost: 0, tokens: {input: 1},
+  outcome: 'succeeded', time: {created: NOW - 5000, updated: NOW - 2000, idle: NOW - 1000}, title: 'a session',
+  location: {directory: '/project'}, ...extra});
+const busy = (id, extra = {}) => ({...row(id, extra), outcome: undefined,
+  time: {created: NOW - 5000, updated: NOW - 1000}});
+const page = rows => ({data: rows, cursor: {}});
 const settle = async () => { for (let i = 0; i < 20; i++) await turn(); };
 
 // The point of #520: after a restart an idle session is reported idle and listened for without a new turn,
 // and a mention then wakes it; a foreign location, a pending permission and a stale session are not.
 test('startup lists this location\'s recent sessions and listens for the idle ones', async () => {
   const day = 24 * 3600 * 1000, now = Date.now();
-  const w = restarted({items: [
-    row('ses_idle', {time: {updated: now - 1000}}),
+  const w = restarted(page([
+    row('ses_idle', {time: {created: now - 5000, updated: now - 2000, idle: now - 1000}}),
     row('ses_foreign'),
     row('ses_asking'),
-    row('ses_stale', {time: {updated: now - 3 * day}}),
+    row('ses_stale', {time: {created: now - 4 * day, updated: now - 3 * day, idle: now - 3 * day}}),
     row('ses_nested'),
-  ]}, {dirs: {ses_foreign: '/other'}, permissions: {ses_asking: [{id: 'permission-1'}]}});
+  ]), {dirs: {ses_foreign: '/other'}, permissions: {ses_asking: [{id: 'permission-1'}]}});
   const cleanup = await w.start();
   try {
     await until(() => w.parked('ses_idle').length === 1 && w.parked('ses_nested').length === 1);
@@ -431,7 +439,7 @@ test('startup looks at no more than 20 sessions, in the order listed, and takes 
 test('a session an event already named is not overwritten by the startup list', async () => {
   let release;
   const gate = new Promise(resolve => {release = resolve;});
-  const w = restarted(async () => {await gate; return {items: [row('ses_busy'), row('ses_idle')]};});
+  const w = restarted(async () => {await gate; return page([row('ses_busy'), row('ses_idle')]);});
   const cleanup = await w.start();
   try {
     w.emit({type: 'session.execution.started', data: {sessionID: 'ses_busy'}});
@@ -447,7 +455,7 @@ test('a session an event already named is not overwritten by the startup list', 
 // A tool must never wait on the startup list, and a plugin that is closed while it is slow does nothing after.
 test('a slow or never-answered list holds up neither setup nor tool hooks, and cleanup ends it', async () => {
   let release;
-  const w = restarted(() => new Promise(resolve => {release = () => resolve({items: [row('ses_idle')]});}));
+  const w = restarted(() => new Promise(resolve => {release = () => resolve(page([row('ses_idle')]));}));
   const started = performance.now();
   const cleanup = await w.start();
   assert.ok(performance.now() - started < 100, 'setup waited on the list');
@@ -489,11 +497,62 @@ test('an unavailable or unrecognized list starts nothing and logs one line witho
 test('listedSessions reads ids and recency defensively', () => {
   const now = Date.UTC(2026, 9, 25);
   const day = 24 * 3600;
-  const page = {data: [row('ses_a', {time: {updated: now / 1000 - 10}}), row('ses_a'), {sessionID: 'ses_b'},
-    row('bad id'), row(7), null, 'x', row('ses_old', {time: {updated: now / 1000 - 2 * day}}),
-    row('ses_ms', {time: {created: now - 5}})]};
-  assert.deepEqual(listedSessions(page, now), ['ses_a', 'ses_b', 'ses_ms']);
+  const ids = p => listedSessions(p, now)?.map(r => r.id);
+  const sec = (id, at) => ({id, time: {updated: at / 1000, idle: at / 1000}});
+  const p = {data: [sec('ses_a', now - 10000), row('ses_a'), {sessionID: 'ses_b'},
+    row('bad id'), row(7), null, 'x', {id: 'ses_old', time: {updated: now / 1000 - 2 * day, idle: now / 1000 - 2 * day}},
+    {id: 'ses_ms', outcome: 'failed', time: {created: now - 5}}]};
+  assert.deepEqual(ids(p), ['ses_a', 'ses_b', 'ses_ms']);
   assert.equal(listedSessions({}, now), undefined);
   assert.equal(listedSessions({items: 'nope'}, now), undefined);
   assert.deepEqual(listedSessions([], now), []);
+});
+
+// What the live OpenCode 2.1.4 answers: an idle row has an outcome and time.idle; a row mid-turn has neither and
+// must never be called idle (it would show idle in Members and park a listener on a running session).
+test('listedSessions takes an idle row and skips a row that is mid-turn', () => {
+  const now = Date.now();
+  const ids = rows => listedSessions(page(rows), now).map(r => r.id);
+  assert.deepEqual(ids([row('ses_idle')]), ['ses_idle']);
+  assert.deepEqual(ids([busy('ses_busy')]), []);
+  assert.deepEqual(ids([busy('ses_busy'), row('ses_idle')]), ['ses_idle']);
+  // time.idle alone, or an outcome alone, is enough
+  assert.deepEqual(ids([row('ses_a', {outcome: undefined}), row('ses_b', {time: {created: now - 9}})]), ['ses_a', 'ses_b']);
+  // idle before the last update means work since: mid-turn, even though an outcome is still set
+  assert.deepEqual(ids([row('ses_c', {time: {created: now - 9, updated: now - 2, idle: now - 5}}),
+    row('ses_d', {outcome: undefined, time: {created: now - 9, updated: now - 2, idle: now - 5}})]), []);
+  // idle exactly at the update is idle
+  assert.deepEqual(ids([row('ses_e', {outcome: undefined, time: {updated: now - 3, idle: now - 3}})]), ['ses_e']);
+  // no time at all: nothing says it is busy, so it is kept (as before)
+  assert.deepEqual(ids([{id: 'ses_f'}, {id: 'ses_g', outcome: undefined, time: undefined}]), ['ses_f', 'ses_g']);
+});
+
+// A busy session in the listing gets no idle report and no listener, however the rest of the list goes.
+test('startup skips a row that is mid-turn and takes the idle one', async () => {
+  const w = restarted(page([busy('ses_busy'), row('ses_idle'), {id: 'ses_notime'}]));
+  const cleanup = await w.start();
+  try {
+    await until(() => w.parked('ses_idle').length === 1 && w.parked('ses_notime').length === 1);
+    await settle();
+    assert.deepEqual(w.sent('ses_busy'), []);
+    assert.ok(!w.gets.includes('ses_busy'));
+    assert.deepEqual(w.events('ses_idle'), ['permission.cleared', 'session.execution.succeeded']);
+  } finally {await cleanup();}
+});
+
+// If OpenCode ignores the ``directory`` argument, a row that names another location is left out before the cap.
+test('startup skips a row whose location is another directory, and a symlinked alias is still this one', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sb-list-'));
+  const alias = root + '-alias';
+  await symlink(root, alias);
+  const foreign = Array.from({length: 25}, (_, i) => row(`ses_f${i}`, {location: {directory: '/other'}}));
+  const w = restarted(page([...foreign, row('ses_here', {location: {directory: root}}),
+    row('ses_alias', {location: {directory: alias}})]), {dirs: {ses_here: root, ses_alias: alias}});
+  w.ctx.location.directory = root;
+  const cleanup = await w.start();
+  try {
+    await until(() => w.parked('ses_here').length === 1 && w.parked('ses_alias').length === 1);
+    await settle();
+    assert.equal(w.gets.filter(id => id.startsWith('ses_f')).length, 0);
+  } finally {await cleanup(); await rm(alias); await rm(root, {recursive: true});}
 });
