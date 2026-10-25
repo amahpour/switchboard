@@ -583,6 +583,72 @@ def test_the_real_ps_lists_a_child_by_the_directory_on_its_command_line(tmp_path
     assert os.getpid() in table
 
 
+def a_run_with_ps_output(
+    monkeypatch: pytest.MonkeyPatch, base: str, stdout: str, returncode: int = 0, stderr: str = ""
+) -> tuple[Any, list[list[str]]]:
+    """A ``Run`` in a temp directory ``base`` whose ``ps`` prints ``stdout`` (and exits ``returncode``), and
+    the argument lists ``ps`` was asked with."""
+    from harness import run
+
+    asked: list[list[str]] = []
+
+    def fake_run(argv: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        asked.append(argv)
+        if kw.get("check") and returncode:
+            raise subprocess.CalledProcessError(returncode, argv, output=stdout, stderr=stderr)
+        return subprocess.CompletedProcess(argv, returncode, stdout=stdout, stderr=stderr)
+
+    monkeypatch.setattr(run.subprocess, "run", fake_run)
+    r = object.__new__(run.Run)
+    r.base = Path(base)
+    return r, asked
+
+
+def test_the_failure_dump_lists_the_runs_processes_and_not_others(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The dump of a failed live test names what of the run is still alive: the processes whose command line
+    holds the run's temp directory, and no others. It asks ``ps`` in the form macOS and Linux both accept (the
+    one the sweep uses). Fails if the dump asks for ``etimes`` (a Linux-only keyword, so on macOS ``ps``
+    fails and the section is empty), or lists a process of another run."""
+    from harness import run
+
+    table = (
+        "  101 node /tmp/run-a/listener.js --port 1\n"
+        "  102 /usr/bin/tmux -S /tmp/run-b/tmux.sock\n"
+        "  103 claude --plugin-dir /tmp/run-a/plugin\n"
+    )
+    r, asked = a_run_with_ps_output(monkeypatch, "/tmp/run-a", table)
+    text = r._processes_text()
+    assert asked == [run.PS_COMMAND]
+    assert "101 node /tmp/run-a/listener.js --port 1" in text
+    assert "103 claude --plugin-dir /tmp/run-a/plugin" in text
+    assert "run-b" not in text
+
+
+def test_the_failure_dump_cuts_a_long_command_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A process line in the dump is cut to 150 characters, so one huge command line doesn't bury the rest.
+    Fails if the cut is dropped."""
+    r, _ = a_run_with_ps_output(monkeypatch, "/tmp/run-a", f"  7 node /tmp/run-a/{'x' * 400}\n")
+    assert len(r._processes_text()) == 150
+
+
+def test_a_failing_ps_is_an_error_line_in_the_failure_dump(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When ``ps`` itself fails, the dump says so, with its status and what it printed on stderr, instead
+    of an empty section that reads as 'nothing was alive'. Fails if a ``ps`` that exits non-zero gives back
+    an empty string."""
+    r, _ = a_run_with_ps_output(monkeypatch, "/tmp/run-a", "", returncode=1, stderr="ps: unknown option -- e")
+    text = r._processes_text()
+    assert text.startswith("<processes unavailable:")
+    assert "status 1" in text
+    assert "unknown option" in text
+
+
+def test_a_run_with_nothing_alive_says_so_in_the_failure_dump(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ``ps`` that works and finds none of the run's processes is told apart from one that failed: the
+    section says nothing is alive. Fails if that section is empty, which reads like the failing case."""
+    r, _ = a_run_with_ps_output(monkeypatch, "/tmp/run-a", "  102 /usr/bin/tmux -S /tmp/run-b/tmux.sock\n")
+    assert "none" in r._processes_text()
+
+
 def test_the_sweep_kills_what_holds_the_run_directory_and_nothing_else(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
