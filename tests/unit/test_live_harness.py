@@ -175,6 +175,20 @@ def test_cursor_quota_and_login_failures_are_named() -> None:
     assert cursor.unavailable("ok") is None
 
 
+def test_cursor_login_failure_on_macos_says_the_keychain_is_why() -> None:
+    """On macOS Cursor's login is in the Keychain, which the run's temp home can't see, so a logged-in
+    Cursor still reads as not logged in (#530). The skip says so and says to use Linux, and elsewhere it
+    keeps pointing at ``agent login``. Fails if the macOS line is the plain one (a person logs in again and
+    sees the same skip) or if the Keychain note leaks into the Linux line."""
+    mac = cursor.unavailable("Error: Not logged in", platform="darwin") or ""
+    assert "Keychain" in mac and "Linux" in mac and "agent login" not in mac
+    linux = cursor.unavailable("Error: Not logged in", platform="linux") or ""
+    assert "agent login" in linux and "Keychain" not in linux
+    assert cursor.unavailable("ActionRequiredError: You've hit your usage limit", platform="darwin") == (
+        "the account has hit its usage limit"
+    )
+
+
 # ------------------------------------------------------------------- config
 def test_claudes_settings_hold_the_plugins_options_and_no_unattended_authority() -> None:
     """The ``--settings`` file gives the ``--plugin-dir`` plugin its address and token, allows switchboard's
