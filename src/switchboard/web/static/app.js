@@ -36,7 +36,8 @@
   //                  a word written under the glyph on the Inspector's large avatar]
   const HARNESS = {
     claude: ['CC', 'Claude Code', 'bubble', 'Claude'], codex: ['CX', 'Codex'], devin: ['DV', 'Devin'],
-    cursor: ['CU', 'Cursor'], test: ['TS', 'Test'], unknown: ['??', 'Unknown'],
+    cursor: ['CU', 'Cursor'], opencode: ['OC', 'OpenCode', 'code', 'OC'],
+    test: ['TS', 'Test'], unknown: ['??', 'Unknown'],
   };
   const STATUS_WORD = {
     starting: 'Starting', idle: 'Idle', busy: 'Busy', 'waiting-approval': 'Waiting for approval', offline: 'Offline',
@@ -460,6 +461,9 @@
     // a chat bubble with a prompt chevron: Claude Code's avatar, switchboard's own drawing, not
     // Anthropic's mark, which its terms don't let a third party use as an avatar (#62)
     bubble: 'M3 3.5h10a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H7.5L4.6 13.6V11.5H3a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1zM6.2 6l1.8 1.5L6.2 9',
+    // angle brackets around a slash: OpenCode's avatar, switchboard's own generic "code" drawing,
+    // not any company's mark (#518)
+    code: 'M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5M9 3.5 7 12.5',
     plus: 'M8 3v10M3 8h10',
     archive: 'M2 3.5h12v3H2zM3 6.5v6h10v-6M6.5 9h3',
     server: rr(2.5, 3, 11, 4.5, 1.2) + rr(2.5, 8.5, 11, 4.5, 1.2) + 'M5 5.25h.01M5 10.75h.01',

@@ -872,6 +872,87 @@ def test_codex_and_cursor_icons_follow_the_theme_setting(ui: UI) -> None:
         assert ring in look["ring"], (theme, scheme, look)
 
 
+def an_opencode_room(ui: UI, room: str) -> None:
+    """A room with one agent, open-1, that is an OpenCode session, and two messages from it (the second
+    replies to the first), so every place an avatar shows has one."""
+    ui.world.create_room(f"#{room}")
+    ui.world.add_agents(f"#{room}", ("open-1",))
+    first = ui.world.agent_say(f"#{room}", "open-1", "Starting on the parser.")
+    ui.world.agent_say(f"#{room}", "open-1", "Parser done.", reply_to=first)
+    ui.world.set_member_harness(f"#{room}", "open-1", "opencode")
+
+
+@pytest.mark.parametrize("phone", [False, True])
+def test_an_opencode_agent_has_its_own_avatar_and_name_everywhere(ui: UI, phone: bool) -> None:
+    """#518: an OpenCode session shows switchboard's own angle-brackets glyph and the name "OpenCode" in
+    Members, the log, a reply preview, the Inspector (with "OC" under the glyph, inside its tile) and the
+    @ list, on a desktop and on a phone; it is not the unknown client's "??" tile and nothing says
+    "Unknown". Fails if the harness falls through to the unknown entry, so the tile is grey with "??" and
+    the status line says "Unknown", or the glyph is missing from any of the places."""
+    room = "opencode-room-phone" if phone else "opencode-room"
+    an_opencode_room(ui, room)
+    page = ui.open(room=room, **(PHONE if phone else {}))
+
+    def glyph(avatar: Locator, word: bool = False) -> None:
+        expect(avatar).to_be_visible()
+        expect(avatar.locator("svg.ic-code")).to_be_visible()
+        expect(avatar).not_to_contain_text("??")
+        if not word:  # only the Inspector's large avatar writes anything under the glyph
+            expect(avatar).not_to_contain_text("OC")
+
+    glyph(page.locator('#log .line[data-from="open-1"] > .avatar.h-opencode').first)
+    glyph(page.locator("#log .reply-to .avatar.mini.h-opencode").first)
+    page.keyboard.press("Escape")
+    box = page.locator("#input")
+    box.focus()
+    page.keyboard.type("@")
+    option = page.locator("#mentions [role=option]").filter(has_text="open-1")
+    glyph(option.locator(".avatar.h-opencode"))
+    expect(option.locator(".m-status")).to_contain_text("OpenCode")
+    box.fill("")
+    if phone:
+        page.click("#buddy-toggle")
+    member = page.locator('#buddy-list .member[data-name="open-1"]')
+    glyph(member.locator(".avatar.h-opencode"))
+    with page.expect_response(lambda r: "/members/open-1" in r.url and r.request.method == "GET"):
+        member.click()
+    expect(page.locator("#insp-name")).to_contain_text("open-1")
+    big = page.locator("#insp-body .insp-id > .avatar.h-opencode")
+    glyph(big, word=True)
+    expect(big.locator(".av-word")).to_have_text("OC")
+    boxes = page.evaluate(NAMED_AVATAR_BOXES)
+    a, w = boxes["av"], boxes["word"]
+    assert boxes["wordFits"], boxes
+    assert a["l"] <= w["l"] and w["r"] <= a["r"] and a["t"] <= w["t"] and w["b"] <= a["b"], boxes
+    expect(page.locator("#insp-body .insp-status")).to_contain_text("OpenCode")
+    for place in ("#log", "#insp-body"):
+        expect(page.locator(place)).not_to_contain_text("Unknown")
+    assert page.locator(".avatar.h-unknown").count() == 0
+
+
+@pytest.mark.parametrize("phone", [False, True])
+def test_opencode_s_avatar_follows_the_theme_setting(ui: UI, phone: bool) -> None:
+    """#518: OpenCode's tile and its white glyph are the same in a light and a dark page, however they
+    got there: the system's scheme, or the saved Theme (the page's data-theme) over the opposite
+    system. White on the tile is at least 4.5:1. Fails if the explicit Dark block lacks the tokens, so a
+    person who chose Dark gets the grey unknown tile, or the glyph is not legible."""
+    room = "opencode-theme-phone" if phone else "opencode-theme"
+    an_opencode_room(ui, room)
+    page = ui.open(room=room, color_scheme="light", **(PHONE if phone else {}))
+    if phone:
+        page.click("#buddy-toggle")
+    tile = page.locator('#buddy-list .member[data-name="open-1"] .avatar.h-opencode')
+    for theme, scheme in (("system", "light"), ("dark", "light"), ("light", "dark"), ("system", "dark")):
+        page.emulate_media(color_scheme=scheme)
+        page.evaluate("t => { document.documentElement.dataset.theme = t; }", theme)
+        look = tile.evaluate(
+            "el => { const s = getComputedStyle(el); return {bg: s.backgroundColor, fg: s.color,"
+            " img: s.backgroundImage}; }"
+        )
+        want = {"bg": "rgb(47, 111, 115)", "fg": "rgb(255, 255, 255)", "img": "none"}
+        assert look == want, (theme, scheme, look)
+
+
 # Where the Inspector's avatar, its word and the name beside it sit, in CSS pixels.
 NAMED_AVATAR_BOXES = """() => {
   const box = e => {

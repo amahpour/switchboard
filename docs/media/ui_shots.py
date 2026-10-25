@@ -47,7 +47,8 @@ oauth-consent-{light,dark,phone-light} (the card an agent that signs in through 
 person to, #386), oauth-confirm-light (the same on a hosted broker whose last check ran out: Confirm
 it's you comes first), oauth-signin-light (a browser that isn't signed in yet) and
 settings-agents-signin-light (the sign-in listed beside a token, with Revoke),
-closed-light, inspector-light, inspector-claude-{light,dark,phone-light} (Claude Code's
+opencode-avatar-{light,dark} (an OpenCode session's own avatar in the log and the Inspector, #518),
+opencode-avatar-{log,members}-phone-light, closed-light, inspector-light, inspector-claude-{light,dark,phone-light} (Claude Code's
 bubble with its name written under it, #62), inspector-device-light, inspector-dark-parked,
 room-rename-before-{light,dark,phone-light}, room-rename-after-{light,dark,phone-light} (#316),
 phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (#129),
@@ -409,6 +410,55 @@ def shoot_claude_avatar(browser: Any, out: Path, world: Any) -> None:
             phone_ctx.close()
     finally:
         desk.close()
+
+
+def shoot_opencode_avatar(browser: Any, out: Path, world: Any, stem: str = "opencode-avatar") -> None:
+    """#518: an OpenCode session in a room of its own, with a reply, light and dark on a desktop (the log,
+    Members and the Inspector's large avatar) and on a phone (the log, and the
+    Members sheet). ``stem`` names the files, so the same picture can be made before the change."""
+    from playwright.sync_api import expect
+    from ui_world import wait_js
+
+    b = world.broker
+    world.create_room("#opencode")
+    world.add_agents("#opencode", ("open-1",))
+    first = world.agent_say("#opencode", "open-1", "Starting on the parser.")
+    world.agent_say("#opencode", "open-1", "Parser done: tests pass.", reply_to=first)
+    world.set_member_harness("#opencode", "open-1", "opencode")
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+
+    def open_room(page: Any) -> None:
+        tab = page.locator('#tabs .room[data-room="#opencode"]')
+        if not tab.is_visible():
+            page.click("#rooms-toggle")  # a phone keeps its rooms in a drawer
+        tab.click()
+        expect(page.locator("#room-title")).to_have_text("opencode", timeout=WAIT_MS)
+        if page.locator("#app.nav-open").count():
+            page.keyboard.press("Escape")
+        wait_js(page, "() => document.querySelectorAll('#log .line.k-chat').length >= 2", timeout_ms=WAIT_MS)
+        expect(page.locator('#buddy-list .member[data-name="open-1"]')).to_have_count(1, timeout=WAIT_MS)
+
+    for size, scheme, tag in (
+        (DESKTOP, "light", "light"),
+        (DESKTOP, "dark", "dark"),
+        (PHONE, "light", "phone-light"),
+    ):
+        ctx = browser.new_context(**base, **size, color_scheme=scheme)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, b)
+            open_room(page)
+            if size is PHONE:
+                shot(page, out, f"{stem}-log-{tag}.png")
+                page.click("#buddy-toggle")
+                expect(page.locator("#app")).to_have_class(re.compile(r"\bsheet-open\b"))
+                shot(page, out, f"{stem}-members-{tag}.png")
+            else:
+                inspect(page, "open-1")
+                shot(page, out, f"{stem}-{tag}.png")
+        finally:
+            ctx.close()
 
 
 def shoot_offline(browser: Any, out: Path, world: Any) -> None:
@@ -2455,6 +2505,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_oauth_consent(browser, out, world, consent)
             shoot_confirmed_check(browser, out, world)  # rooms of its own, so last in this world
             shoot_approval(browser, out, world)
+            shoot_opencode_avatar(browser, out, world)  # a room of its own, so after the others
             shoot_hosted(browser, out, hosted)
             shoot_common_password(browser, out, weak)
             shoot_mention_people(browser, out, people)
