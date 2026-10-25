@@ -232,6 +232,37 @@ def test_end_is_offline_and_other_device_cannot_change_it(build: InProcBroker, e
     assert set(members(build, "#build")) == {"opencode-1"}
 
 
+def test_a_reloaded_plugins_startup_reports_bring_an_offline_member_back_and_wake_it(
+    build: InProcBroker,
+) -> None:
+    """#520: a plugin reload reports ``location.shutdown`` (offline) for a session that is still joined and
+    idle; the new instance's startup scan sends what any idle session sends (permission.cleared, then
+    session.execution.succeeded) and starts a listener round. Fails if those reports leave the member offline
+    or the round is refused, in which case a mention after the reload would never wake it. A session in no
+    room is harmless: its reports are accepted and its round refused."""
+    c, token = joined(build)
+    report(build, token, "session.execution.succeeded").raise_for_status()
+    assert report(build, token, "location.shutdown").json() == {}
+    assert participant(build, "opencode-1").status == "offline"
+    # the reloaded plugin's startup, for this session and for one that never joined a room
+    for sid in (SESSION_A, SESSION_B):
+        assert report(build, token, "permission.cleared", sid).json() == {}
+        assert report(build, token, "session.execution.succeeded", sid).json() == {}
+    assert participant(build, "opencode-1").status == "idle"
+    assert listen(build, token, SESSION_B).status_code == 409  # in no room: nothing to listen for
+    peer = OpenCode(build, token)
+    peer.start()
+    assert peer.call("join", SESSION_B, room="#build", screen_name="opencode-2")["ok"]
+    p = participant(build, "opencode-1")
+    with ThreadPoolExecutor(1) as pool:
+        pending = pool.submit(listen, build, token)
+        until(lambda: parked(build, p.id))
+        assert peer.call("say", SESSION_B, room="#build", text="@opencode-1 after the reload")["ok"]
+        r = pending.result(30)
+    assert r.status_code == 200 and "read(" in r.text, r.text
+    assert c.call("read", SESSION_A, room="#build")["ok"]
+
+
 def test_adapter_is_listening_without_permission_mode_or_hook_context() -> None:
     """OpenCode has no approval mode and no mid-tool context path; its guidance promises only actual
     delivery paths."""

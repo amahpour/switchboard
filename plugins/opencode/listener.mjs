@@ -9,6 +9,10 @@ const OWN_TOOLS = new Set(['join', 'leave', 'who', 'say', 'read', 'wait', 'pass'
   'review', 'claim'].map(name => `switchboard_${name}`));
 const IDLE = new Set(['session.execution.succeeded', 'session.execution.failed', 'session.execution.interrupted']);
 const EVENTS = new Set([...IDLE, 'session.execution.started', 'session.deleted', 'permission.asked']);
+// At startup the plugin asks for this location's recent sessions (#520): a session that was idle before the
+// plugin (re)loaded has no event to start its listener. A small cap and a day's recency keep the burst small.
+const SCAN_LIMIT = 20;
+const SCAN_AGE_MS = 24 * 60 * 60 * 1000;
 
 function sleep(ms, signal) {
   return new Promise(resolve => {
@@ -101,6 +105,41 @@ export async function listen({url, token, sessionID, ctx, signal, canWake,
       return; // 401, 409, 410 or any unrecognized response: nothing to wake for
     }
   }
+}
+
+// The rows to look at from ``ctx.session.list`` (measured on OpenCode 2.1.4): a page ``{data: [...], cursor}``,
+// each row ``{id, projectID, model, cost, tokens, outcome, time: {created, updated, idle}, title, location:
+// {directory}}`` with times in milliseconds. A bare array or rows under ``items`` or ``sessions`` are accepted
+// too; anything else is unknown, and an unknown answer lists nothing. Returns ``{id, directory}`` for each row
+// worth a look, in the order listed and without a cap (the caller caps after its location check).
+//
+// A row is left out when it is older than a day (``time.updated``, else ``time.created``) or when it is
+// mid-turn. A row is idle when it has an ``outcome`` or a ``time.idle`` that is not before ``time.updated``;
+// a row whose time carries a ``created`` or ``updated`` but neither ``idle`` nor ``outcome`` is mid-turn, as is
+// one whose ``idle`` is before its ``updated`` (work since it last idled), even with an ``outcome`` (the two
+// contradict, so it is not trusted). A row with no time at all is kept: nothing says it is busy.
+export function listedSessions(page, now = Date.now()) {
+  const rows = Array.isArray(page) ? page : [page?.data, page?.items, page?.sessions].find(Array.isArray);
+  if (!rows) return;
+  const found = [];
+  for (const row of rows) {
+    const id = row?.id ?? row?.sessionID;
+    if (typeof id !== 'string' || !ID.test(id) || found.some(f => f.id === id)) continue;
+    const time = row?.time;
+    let at = time?.updated ?? time?.created;
+    if (typeof at === 'number') {
+      if (at < 1e11) at *= 1000; // seconds
+      if (now - at > SCAN_AGE_MS) continue;
+    }
+    const stamped = typeof time?.updated === 'number' || typeof time?.created === 'number';
+    const hasOutcome = typeof row?.outcome === 'string' && row.outcome !== '';
+    const idleAt = time?.idle;
+    if (stamped && !hasOutcome && typeof idleAt !== 'number') continue; // mid-turn
+    if (typeof idleAt === 'number' && typeof time?.updated === 'number' && idleAt < time.updated) continue;
+    const directory = typeof row?.location?.directory === 'string' ? row.location.directory : undefined;
+    found.push({id, directory});
+  }
+  return found;
 }
 
 function serverURL(raw) {
@@ -242,6 +281,39 @@ export async function setup(ctx, {env = process.env, request = globalThis.fetch,
     for (const r of registrations) await r.dispose();
     sessions.clear();
   }
+  // A session that was idle before this plugin loaded (a restart, a reload, an upgrade) emits nothing until its
+  // next turn, so ask for this location's recent sessions and treat each as an idle report would be treated:
+  // ownership, pending permissions, the report, then the listener (#520). Events and tool hooks that arrive
+  // meanwhile win (a session they already named is skipped), and it all runs in the background.
+  async function scan() {
+    let listed;
+    try {
+      listed = listedSessions(await ctx.session.list({directory: ctx.location.directory, limit: SCAN_LIMIT}));
+    } catch { /* below */ }
+    if (closed) return;
+    if (!listed) {
+      warn('[switchboard] could not list sessions: idle ones are listened for after their next event');
+      return;
+    }
+    // The ``directory`` argument may be ignored: a row that names another location is left out here, so it
+    // neither counts toward the cap nor is asked about. A row that names none is checked by ``own`` as ever.
+    const ids = [];
+    for (const {id, directory} of listed) {
+      if (directory !== undefined && !(await sameLocation(directory))) continue;
+      if (closed) return;
+      ids.push(id);
+      if (ids.length === SCAN_LIMIT) break;
+    }
+    for (const id of ids) {
+      if (closed) return;
+      if (sessions.has(id)) continue;
+      const s = record(id);
+      s.state = 'idle';
+      s.revision++;
+      const revision = s.revision;
+      await enqueue(s, () => handle(s, 'session.execution.succeeded', {}, revision));
+    }
+  }
   for (const hook of ['execute.before', 'execute.after']) {
     registrations.push(await ctx.tool.hook(hook, e => {
       const s = record(e.sessionID);
@@ -276,5 +348,6 @@ export async function setup(ctx, {env = process.env, request = globalThis.fetch,
       }
     } catch { if (!closed) { warn('[switchboard] event stream ended'); await cleanup(); } }
   })();
+  void scan().catch(() => {});
   return cleanup;
 }

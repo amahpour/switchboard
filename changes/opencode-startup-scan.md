@@ -1,0 +1,3 @@
+### Fixed
+
+- **An OpenCode session that was idle when the plugin restarted or reloaded is listened for again.** The plugin now looks at its location's recent sessions (at most 20, updated within a day) at startup, and treats each idle one (not one that is mid-turn) as an idle report does: it checks the location and pending permissions, reports idle and starts the listener. Before, such a session stayed deaf, or showed offline after a reload, until its next turn, so a mention didn't wake it. If OpenCode's session list can't be read, the plugin logs one line and behaves as before. Measured on OpenCode 2.1.4 (#520).
