@@ -322,9 +322,9 @@ class HttpsDevinAdapter(Adapter):
     """Devin over HTTPS, keyed by the session ID its PreToolUse hook puts on each call (§49.7), and
     woken by its wait loop (§9.5).
 
-    Devin has no external way to start a turn in a session the human started, so an idle Devin agent
-    *listens*: it sits in switchboard's ``wait(room, 600)`` (Devin has no MCP tool timeout up to 900
-    s), and a Stop hook re-arms it.
+    Devin CLI 3000.11.205 has no supported background wake for an open terminal session (#514), so
+    an idle agent listens in ``wait(room, 100)``. A Stop hook reminds the model to wait again within
+    the existing caps and room budget; after those reminders run out, a terminal prompt is needed.
 
     - **Idle.** An open ``wait()`` sink is "idle, listening"; the engine fills it (``wait_return``,
       counted). A newer ``wait()`` from the same session supersedes the older one. A wait answer counts
@@ -363,7 +363,13 @@ class HttpsDevinAdapter(Adapter):
         return dataclasses.replace(caps, wait_cap_s=min(caps.wait_cap_s, DEVIN_WAIT_CAP_S))
 
     def tier(self, p: Participant | None) -> tuple[str, str | None]:
-        return DEVIN_TIER, "over HTTPS: listening through wait()"
+        per_prompt, per_hour = self.rearm_caps()
+        limit = (
+            f"Stop reminders {per_prompt}/prompt, {per_hour}/hour"
+            if per_prompt > 0 and per_hour > 0
+            else "Stop reminders disabled"
+        )
+        return DEVIN_TIER, f"over HTTPS: wait() only; {limit}; type in Devin to restart listening"
 
     def wait_drop_means_gone(self) -> bool:
         """Devin loops wait() and its hooks bracket every call, so a dropped wait followed by silence
@@ -381,9 +387,19 @@ class HttpsDevinAdapter(Adapter):
 
     def join_guidance(self, p: Participant, room: str) -> str:
         w = self.caps(p).wait_cap_s
+        per_prompt, per_hour = self.rearm_caps()
+        limit = (
+            f"Stop reminders are limited to {per_prompt} per prompt and {per_hour} per hour per session"
+            ", and spend the room's wake budget. A paused room or an empty budget stops them sooner."
+            if per_prompt > 0 and per_hour > 0
+            else "Stop reminders are disabled."
+        )
         return (
             f'When you have nothing else to do, call wait("{room}", {w}). If it returns paused, end your'
-            " turn. Room messages can also arrive as context after a tool call, or as a message from"
+            f" turn. Devin hears idle mentions only while wait() is open. {limit}"
+            " If you end your turn without wait(), later mentions stay queued"
+            f" until your user types in Devin, for example: read {room} and go back to wait()."
+            " Room messages can also arrive as context after a tool call, or as a message from"
             " switchboard when you stop; kind=human ones are from your user, relayed by switchboard rather"
             " than typed into your prompt, and carry their authority just the same. While you"
             " wait, your user can interject by typing and then pressing Enter on an empty line."
@@ -403,7 +419,10 @@ class HttpsDevinAdapter(Adapter):
             return Route("none", reason=self.taint_why)
         if rel.kind == "priority":
             return Route("pull", reason="next tool call")
-        return Route("none", reason="not listening: no wait() open and the Stop re-arm is used up")
+        return Route(
+            "none",
+            reason="not listening: no wait() open; type in Devin to read the room and call wait() again",
+        )
 
     def starts_subagent(self, ev: HookEvent) -> bool:
         return ev.ev == "PreToolUse" and ev.subagent_bg

@@ -66,7 +66,10 @@ def wait_post(
 def test_tier_context_and_route(w: World, clock: FakeClock) -> None:
     a = ad(w)
     p, _m = devin(w)
-    assert a.tier(w.p(p)) == ("devin:https", "over HTTPS: listening through wait()")
+    tier, note = a.tier(w.p(p))
+    assert tier == "devin:https"
+    assert "wait() only" in note and "2/prompt" in note and "12/hour" in note
+    assert "type in Devin" in note
     assert a.context_events(w.p(p)) == frozenset({"PostToolUse"})
     prio = Release(items=(), kind="priority", counted=False, reason="human")
     wake = Release(items=(), kind="wake", counted=True, reason="human")
@@ -507,6 +510,8 @@ def test_stop_rearms_the_wait_loop_within_budget_and_the_per_prompt_cap(w: World
     assert w.store.room_by_id(w.room.id).budget_remaining == budget - 2
     assert w.store.count_events("rearm") == 2
     assert w.hook(p, "Stop") is None  # rearm_max_per_prompt reached
+    why = ad(w).route(w.p(p), Release(items=(), kind="wake", counted=True, reason="human"), None, 0).reason
+    assert "not listening: no wait() open" in why and "type in Devin" in why
     w.hook(p, "UserPromptSubmit", gen="p2")
     assert w.hook(p, "Stop") is not None
 
@@ -554,6 +559,35 @@ def test_devin_never_gets_a_decision_other_than_block() -> None:
         assert render("devin", ev, {"kind": "continue", "text": "x"}) is None
         assert render("devin", ev, {"kind": "context", "text": "x"}) is None
     assert render("devin", "Stop", {"kind": "continue", "text": "x"}) == {"decision": "block", "reason": "x"}
+
+
+@pytest.mark.parametrize("enabled,per_prompt,per_hour", [(True, 1, 4), (False, 2, 12), (True, 0, 12)])
+def test_join_and_tier_explain_the_configured_idle_limit(
+    w: World, enabled: bool, per_prompt: int, per_hour: int
+) -> None:
+    """#514: the connection guidance must say why idle mentions stop and how to resume, including
+    when the broker changes or disables the Stop reminders. Fails if it promises persistent listening
+    or quotes default caps for a broker with different ones."""
+    cfg = dataclasses.replace(
+        w.cfg,
+        devin=dataclasses.replace(
+            w.cfg.devin, rearm=enabled, rearm_max_per_prompt=per_prompt, rearm_max_per_hour=per_hour
+        ),
+    )
+    a = HttpsDevinAdapter(cfg)
+    p, _m = devin(w)
+    guidance = a.join_guidance(w.p(p), "#build")
+    note = a.tier(w.p(p))[1]
+    assert "only while wait() is open" in guidance
+    assert "later mentions stay queued" in guidance and "types in Devin" in guidance
+    assert "read #build and go back to wait()" in guidance
+    assert "paused, end your turn" in guidance
+    if enabled and per_prompt and per_hour:
+        assert f"{per_prompt} per prompt" in guidance and f"{per_hour} per hour" in guidance
+        assert f"{per_prompt}/prompt" in note and f"{per_hour}/hour" in note
+    else:
+        assert "Stop reminders are disabled" in guidance
+        assert "Stop reminders disabled" in note
 
 
 def test_caps(w: World) -> None:

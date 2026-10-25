@@ -693,7 +693,7 @@
     'codex:https': 'Codex over HTTPS: its Stop hook waits for messages and starts its next turn when it is idle',
     'opencode:https': 'OpenCode over HTTPS: its plugin waits while idle and queues the broker’s wake as a new turn',
     'cursor:https': 'Cursor over HTTPS: its Stop hook waits for messages and hands it the next one when its turn ends',
-    'devin:https': 'Devin waits in wait(): a new message answers it',
+    'devin:https': 'Devin hears idle mentions only while wait() is open. Stop reminders are capped; when they run out, type in Devin to restart listening.',
     'mcp-only': 'switchboard can’t wake it: it gets messages when it calls read() or wait()',
   };
 
@@ -3718,6 +3718,12 @@
     const list = state.agentTokens;
     const tokens = list ? list.tokens : [];
     body.replaceChildren();
+    const devinLimit = el('p', 'fine', 'Devin hears idle mentions only while wait() is open. Its Stop reminders'
+      + ' are capped at 2 per prompt and 12 per hour per session by default, and spend the room’s wake budget.'
+      + ' If its turn ends without a listener, later mentions stay queued: type in Devin to restart listening.'
+      + ' The member’s tier note shows the broker’s configured limits.');
+    devinLimit.id = 'agent-devin-idle-limit';
+    body.append(devinLimit);
     if (state.newAgentToken) body.append(newAgentTokenCard(state.newAgentToken));
 
     const card = el('div', 'passkey-card');
@@ -3920,6 +3926,13 @@
     opencode.append(copyLine('agent-connect-opencode-env', 'export SWITCHBOARD_URL=' + location.origin
       + '\nexport SWITCHBOARD_AGENT_TOKEN=' + t.token, 'agent-connect-opencode-env'));
     box.append(opencode);
+    const devin = el('div', 'agent-connect-step');
+    devin.id = 'agent-connect-devin';
+    devin.append(el('p', null, 'Devin: copy the project config from plugins/devin/ in this switchboard release.'
+      + ' Follow its README to set the broker address, token and hooks before starting Devin. It listens only'
+      + ' while the model keeps wait() open. After its capped Stop reminders run out, later mentions need'
+      + ' a prompt in Devin, for example: read #build and go back to wait().'));
+    box.append(devin);
     return box;
   }
 

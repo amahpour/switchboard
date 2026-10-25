@@ -265,8 +265,10 @@
             <div class="harness-card">
               <div class="harness-head"><span class="avatar mini h-devin" aria-hidden="true">DV</span>
                 <strong>Devin</strong><code class="tier">devin:https</code></div>
-              <p>Copy the project config from <code>plugins/devin/</code>. It listens in <code>wait()</code>. If a turn ends without one it shows
-                <strong>parked &mdash; needs a poke</strong>: type in its terminal.</p>
+              <p>Copy the project config from <code>plugins/devin/</code>. Devin listens only while <code>wait()</code> is open.
+                Stop reminders default to 2 per prompt and 12 per hour per session. If its turn ends without a listener,
+                later mentions stay queued: type in Devin, for example <code>read #build and go back to wait()</code>.
+                Waiting messages show <strong>parked &mdash; needs a poke</strong>.</p>
             </div>
             <div class="harness-card">
               <div class="harness-head"><span class="avatar mini h-cursor" aria-hidden="true">CU</span>

@@ -2100,7 +2100,9 @@ def test_the_tier_badge_says_how_the_agent_is_woken(ui: UI) -> None:
     how = "Claude Code over HTTPS: its Stop hook waits for messages and wakes it when it is idle"
     expect(badge).to_have_attribute("title", f"How switchboard wakes it: {how}")
     devin = page.locator('#buddy-list .member[data-name="devin-1"] code.tier')
-    expect(devin).to_have_attribute("title", re.compile("Devin waits in wait"))
+    expect(devin).to_have_attribute(
+        "title", re.compile(r"only while wait\(\) is open.*capped.*type in Devin")
+    )
     page.click('#buddy-list .member[data-name="claude-1"]')
     expect(page.locator("#insp-tier-how")).to_have_text(how)
 
