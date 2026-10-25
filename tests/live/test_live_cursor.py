@@ -4,7 +4,8 @@ One real ``agent`` session in a private tmux server, with project config made fr
 ``plugins/cursor`` and a temp $HOME (only the login's ``~/.config/cursor`` is the real one), against a
 throwaway broker in a temp home. Cursor's quota may be used up: the first test needs no model (it lists
 the broker's tools over HTTP with the token), and the rest are skipped, with the reason, when a one-word
-call to Cursor's model fails. The real ``~/.cursor`` must not change.
+call to Cursor's model fails (always on macOS, where its login is in the Keychain; run them on Linux, #530).
+The real ``~/.cursor`` must not change.
 """
 
 from __future__ import annotations

@@ -6,12 +6,14 @@ the environment, and ``.cursor/hooks.json`` is the plugin's hook file with the p
 The address and the token reach both the server entry and the hooks through the child's environment, never
 a file or a command line. Cursor runs with a **temp $HOME**, so the user's own ``~/.cursor`` (servers, hooks,
 plugins) is never read or written; its login is the real ``~/.config/cursor`` (``XDG_CONFIG_HOME``), the
-only thing of the real home it is given. The project's server is approved with ``agent mcp enable``, and
-the workspace is trusted per launch with ``--trust`` for the scratch folder only. Approving the server is not
-approving its tools: Cursor asks "Run this MCP tool?" for each call, so the project's ``.cursor/cli.json``
-allows switchboard's eleven tools by name and the scratch script (``sh hold.sh``), as the Claude Code and
-Devin profiles do, and nothing else; any other prompt is declined with Esc. The model is ``auto``, the only
-one a free account has.
+only thing of the real home it is given. That is where Cursor keeps its login on Linux. On macOS it keeps
+it in the Keychain, which a temp $HOME can't see; the run does not read or copy the Keychain, so the tests
+that need the model skip there (``unavailable``) and are run on Linux (#530).
+The project's server is approved with ``agent mcp enable``, and the workspace is trusted per launch with
+``--trust`` for the scratch folder only. Approving the server is not approving its tools: Cursor asks "Run
+this MCP tool?" for each call, so the project's ``.cursor/cli.json`` allows switchboard's eleven tools by
+name and the scratch script (``sh hold.sh``), as the Claude Code and Devin profiles do, and nothing else;
+any other prompt is declined with Esc. The model is ``auto``, the only one a free account has.
 
 Cursor's quota may be used up (the account here had none until 2026-10-22): the connection test needs no
 quota, and everything that asks the model for something is skipped, with the reason, when the account
@@ -23,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 from . import screens
@@ -67,12 +70,21 @@ def argv(resume: bool) -> list[str]:
     return ["agent", "--model", MODEL, "--trust", *(["--continue"] if resume else [])]
 
 
-def unavailable(output: str) -> str | None:
-    """Why a one-word call to Cursor's model failed, in a line, or None when it did not fail."""
+MACOS_LOGIN_NOTE = (
+    " (on macOS its login is in the Keychain, which the private run can't see; run these on Linux)"
+)
+
+
+def unavailable(output: str, platform: str | None = None) -> str | None:
+    """Why a one-word call to Cursor's model failed, in a line, or None when it did not fail. On macOS a
+    login failure says why even a logged-in Cursor fails it: its login is in the Keychain, not under the
+    home the run gives it, and the run never reads or copies the Keychain (#530)."""
     if screens.quota_exhausted(output):
         return "the account has hit its usage limit"
     low = output.lower()
     if "not logged in" in low or "authentication" in low or "log in" in low:
+        if (platform or sys.platform) == "darwin":
+            return f"Cursor is not logged in{MACOS_LOGIN_NOTE}"
         return "Cursor is not logged in (`agent login`)"
     return None
 
