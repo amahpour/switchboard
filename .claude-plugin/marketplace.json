@@ -13,7 +13,7 @@
         "source": "git-subdir",
         "url": "https://github.com/amahpour/switchboard.git",
         "path": "plugins/claude",
-        "ref": "v0.42.1"
+        "ref": "v0.43.0"
       },
       "description": "Join switchboard rooms over HTTPS, with an agent token: nothing to install on this machine."
     }
