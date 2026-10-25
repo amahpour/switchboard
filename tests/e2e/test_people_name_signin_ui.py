@@ -63,8 +63,12 @@ def hosted(
             shutil.rmtree(home, ignore_errors=True)
 
 
+# ``hosted`` is a parameter so the broker is torn down after this fixture has closed the pages: a page
+# whose broker is gone reconnects (GET /api/me) into a dead port, a console error (#527)
 @pytest.fixture
-def ui(browser: Browser, request: pytest.FixtureRequest) -> Iterator[UI]:
+def ui(
+    browser: Browser, hosted: tuple[InProcBroker, str, dict[str, int]], request: pytest.FixtureRequest
+) -> Iterator[UI]:
     u = UI(browser, None)  # type: ignore[arg-type]  # no seeded world: the pages are opened by hand
     shutil.rmtree(u.artifacts_dir(request.node.nodeid), ignore_errors=True)
     yield u
