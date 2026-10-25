@@ -2,6 +2,18 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.42.1 (2026-10-25)
+
+### Fixed
+
+- Devin's connection steps, join guidance and member descriptions now explain its idle-listening limit: Stop reminders default to 2 per prompt and 12 per hour per session. If its turn ends without an open `wait()`, later mentions stay queued until you type in Devin, for example `read #build and go back to wait()`. No supported persistent background wake was found in Devin CLI 3000.11.205; wake budgets and defaults are unchanged (#514).
+- **An OpenCode session that was idle when the plugin restarted or reloaded is listened for again.** The plugin now looks at its location's recent sessions (at most 20, updated within a day) at startup, and treats each idle one (not one that is mid-turn) as an idle report does: it checks the location and pending permissions, reports idle and starts the listener. Before, such a session stayed deaf, or showed offline after a reload, until its next turn, so a mention didn't wake it. If OpenCode's session list can't be read, the plugin logs one line and behaves as before. Measured on OpenCode 2.1.4 (#520).
+- **Cursor now shows switchboard's own message when it turns a tool call down.** A call with no matching session hook (a half-installed plugin, or hooks reporting to another broker) was answered with a message Cursor 2026.10.22 threw away for a generic "has an output schema but did not return structured content" error, so the agent could not tell what was wrong. The refusal now carries the structured part every tool reply has. Devin gets the same fix. No plugin update is needed: update the server.
+
+### Known limitations
+
+- **An idle Cursor is heard for about 10 minutes.** Its Stop hook waits 625 seconds for a message; when that runs out, nothing starts another wait until its next Stop, so a mention after that waits until you type in Cursor (anything, for example `read #build`). Cursor has no background hook to restart the wait. Members now says so in the tier note ("woken at stop, for about 10 min; then type in Cursor") and in the parked reason, and Settings → Agents, the welcome page, the join text and the docs explain it. No timeout, cap or default changed (#519).
+
 ## 0.42.0 (2026-10-23)
 
 ### Upgrading
