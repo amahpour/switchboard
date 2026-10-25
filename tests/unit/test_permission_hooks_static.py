@@ -75,6 +75,51 @@ def test_only_codex_and_devin_register_a_permission_hook_and_each_registers_one(
         assert group.get("matcher") == "" and len(group["hooks"]) == 1, path
 
 
+_ALLOWED_PERMISSION_CALL = re.compile(r"ctx\.permission\.list\s*\(")
+# Comments and string / template literals. Templates with ``${…}`` (no nested braces) are blanked
+# as one span and not recorded as a plain string value. Enough for ordinary refactors (#517).
+_JS_COMMENT_OR_STRING = re.compile(
+    r"""
+    // [^\n]*
+    | /\* [\s\S]*? \*/
+    | ' (?:\\ . | [^'\\])* '
+    | " (?:\\ . | [^"\\])* "
+    | ` (?:\\ . | [^`\\$] | \$(?!\{) | \$\{[^}]*\} )* `
+    """,
+    re.VERBOSE,
+)
+
+
+def _opencode_js_strings_and_code(code: str) -> tuple[list[str], str]:
+    """Exact plain string-literal values, and code with comments and strings blanked (#517)."""
+    strings: list[str] = []
+    parts: list[str] = []
+    pos = 0
+    for m in _JS_COMMENT_OR_STRING.finditer(code):
+        parts.append(code[pos : m.start()])
+        parts.append(" " * (m.end() - m.start()))
+        token = m.group(0)
+        if token[:1] in "'\"`" and "${" not in token:
+            strings.append(token[1:-1])
+        pos = m.end()
+    parts.append(code[pos:])
+    return strings, "".join(parts)
+
+
+def check_opencode_permission_rules(code: str) -> None:
+    """OpenCode may touch pending permissions only as ``ctx.permission.list(`` (#517).
+
+    After comments and string literals are stripped, the identifier ``permission`` may appear
+    only in that call. No string literal may be exactly ``permission`` (blocks ``ctx['permission']``
+    and ``Reflect.get(ctx, 'permission')``). Event names like ``'permission.asked'`` and identifiers
+    like ``permissions`` / ``permissionRevision`` are different and must pass.
+    """
+    strings, stripped = _opencode_js_strings_and_code(code)
+    assert "permission" not in strings, "string literal exactly 'permission'"
+    without_list = _ALLOWED_PERMISSION_CALL.sub("ctx.__LIST__(", stripped)
+    assert not re.search(r"\bpermission\b", without_list), without_list
+
+
 def test_opencode_sources_only_read_permissions_and_never_spawn_or_write() -> None:
     """V2 registers in code, outside the JSON registry: inspect every shipped JS/TS source too.
     Only the literal permission.list call and realpath fs import are permitted; aliases, other
@@ -88,10 +133,7 @@ def test_opencode_sources_only_read_permissions_and_never_spawn_or_write() -> No
     assert {p.name for p in files} >= {"index.ts", "listener.mjs"}
     for path in files:
         code = path.read_text()
-        permission_reads = re.sub(r"ctx\.permission\.list\s*\(", "READ_PENDING(", code)
-        assert not re.search(
-            r"\bctx\s*(?:\??\.\s*permission\b|\[\s*['\"]permission['\"]\s*\])", permission_reads
-        ), path
+        check_opencode_permission_rules(code)
         assert "child_process" not in code, path
         # Read-only canonicalization is the sole fs use. Reject namespace/default/dynamic imports
         # (and aliases) rather than trying to prove which method they might eventually call.
@@ -105,12 +147,49 @@ def test_opencode_sources_only_read_permissions_and_never_spawn_or_write() -> No
         ), path
 
 
+def test_old_ctx_permission_text_patterns_miss_a_destructured_call() -> None:
+    """#517: the pre-fix patterns looked for ``ctx.permission`` / ``ctx['permission']`` as text, so
+    a destructured ``permission.reply`` passed. The tighter rules must refuse it; kept so the hole
+    cannot return by weakening the guard back to those patterns."""
+    code = "const { permission } = ctx; permission.reply({});"
+    permission_reads = re.sub(r"ctx\.permission\.list\s*\(", "READ_PENDING(", code)
+    old_pattern = r"\bctx\s*(?:\??\.\s*permission\b|\[\s*['\"]permission['\"]\s*\])"
+    assert not re.search(old_pattern, permission_reads)
+    with pytest.raises(AssertionError):
+        check_opencode_permission_rules(code)
+
+
 @pytest.mark.parametrize(
     "code",
     [
         "ctx.permission.reply({});",
         "ctx.permission.register({});",
+        "const { permission } = ctx; permission.reply({});",
+        "const { session, permission: p } = ctx; p.reply({});",
+        "const perm = ctx.permission; perm.reply({});",
         "ctx['permission'].reply({});",
+        "Reflect.get(ctx, 'permission').reply({});",
+    ],
+)
+def test_opencode_permission_guard_rejects_aliasing_and_decisions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: str
+) -> None:
+    """Each way to call something other than ``ctx.permission.list(`` must fail the source guard itself,
+    not only the rule function, so a guard that stopped calling the rules couldn't pass silently."""
+    with pytest.raises(AssertionError):
+        check_opencode_permission_rules(code)
+    plugin = tmp_path / "opencode"
+    plugin.mkdir()
+    (plugin / "index.ts").write_text("")
+    (plugin / "listener.mjs").write_text(code)
+    monkeypatch.setattr(sys.modules[__name__], "PLUGINS", tmp_path)
+    with pytest.raises(AssertionError):
+        test_opencode_sources_only_read_permissions_and_never_spawn_or_write()
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
         "import { spawn } from 'child_process';",
         "import cp from 'node:child_process';",
         "import fs from 'node:fs'; fs.writeFileSync('x', 'x');",
@@ -120,10 +199,10 @@ def test_opencode_sources_only_read_permissions_and_never_spawn_or_write() -> No
         "createWriteStream('x');",
     ],
 )
-def test_opencode_static_guard_rejects_decisions_processes_and_file_writes(
+def test_opencode_static_guard_rejects_processes_and_file_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: str
 ) -> None:
-    """Exercise the source guard with forbidden snippets, so a missing scan cannot pass silently."""
+    """Exercise the child_process and fs halves of the source guard with forbidden snippets."""
     plugin = tmp_path / "opencode"
     plugin.mkdir()
     (plugin / "index.ts").write_text("")
