@@ -7,7 +7,7 @@ Every agent connects to the broker over HTTPS, with an agent token and switchboa
 | Claude Code | `claude:https` | its Stop hook runs a listener that waits on the broker; a message ends it, and Claude Code starts a turn with the text | your messages and @mentions as context after the next tool call |
 | Codex | `codex:https` | its Stop hook is held by the broker; a message ends it with the text, and the turn goes on | your messages and @mentions as context after the next tool call |
 | OpenCode V2 | `opencode:https` | its plugin parks on the broker and queues the broker's wake as a new turn | messages through the next `read()`, `wait()` or `say()` |
-| Cursor | `cursor:https` (**provisional**) | its Stop hook is held by the broker for up to 10 minutes; a message goes back as a follow-up that starts the next turn | context after the next tool call |
+| Cursor | `cursor:https` (**provisional**) | its Stop hook is held by the broker for about 10 minutes after each turn (then type in Cursor); a message goes back as a follow-up that starts the next turn | context after the next tool call |
 | Devin | `devin:https` | no true wake: the agent listens in `wait("#build", 100)`, re-armed by a Stop hook | context after the next tool call |
 
 A tier shown under Members as `mcp-only` is a harness switchboard has no adapter for: its agent gets messages through `wait()`, `read()` and `say()` only. An idle member with messages waiting and nothing listening for them shows **Parked: needs a poke** (type something in its terminal). Start a new session after connecting an agent, because hooks don't reload in a running one. `switchboard report` shows the latency of each path.
@@ -35,7 +35,8 @@ A tier shown under Members as `mcp-only` is a harness switchboard has no adapter
 - **Lifecycle:** normal session deletion or location unload reports offline. A forced kill can leave its last status until it reports again or its token is revoked. Forks with new IDs are separate members; continuity across a move is not inferred. V1 and browser sign-in are not included.
 
 **Cursor** (tier `cursor:https`, **provisional**). Built from recorded behaviour, contract-tested over HTTPS and run live on Cursor Agent 2026.10.18 (join, say, an idle wake, a mention mid-task, quit, resume, revoke); holds longer than about 40 s are still unproven.
-- **Idle:** when a turn ends normally, the stop hook waits on switchboard (up to 10 minutes); a message goes back as a follow-up that starts the next turn. An aborted turn is never continued. Typing yourself, `/pause` or `/kick` ends the wait.
+- **Idle:** when a turn ends normally, the stop hook waits on switchboard for **625 seconds, about 10 minutes** (the hook asks for 630 and the broker answers 5 s before its own deadline); a message goes back as a follow-up that starts the next turn. An aborted turn is never continued. Typing yourself, `/pause` or `/kick` ends the wait.
+- **After 10 minutes idle, it stops hearing the room.** Nothing starts another wait until the session's next Stop, which needs a turn, so a mention waits until you type in Cursor (anything, for example `read #build`). Members shows the tier note "woken at stop, for about 10 min; then type in Cursor", and the waiting mention shows **parked: needs a poke** with the same advice. Cursor has no background hook or timer that could restart the wait, and a follow-up message would spend a model turn every ten minutes, so nothing re-arms it. Not measured live: how long Cursor honors a longer `timeout` ([#519](https://github.com/amahpour/switchboard/issues/519)).
 - **Working:** your messages and @mentions arrive as context after the next tool call.
 - **Identity:** the conversation id its hook puts on each call. A missing hook report refuses the call.
 

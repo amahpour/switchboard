@@ -241,6 +241,30 @@ def test_agents_explains_devins_idle_limit_before_connecting(
     revoke_all(hosted)
 
 
+@pytest.mark.parametrize("phone", [False, True])
+def test_agents_explains_cursors_idle_limit_in_settings_and_on_the_welcome_card(
+    ui: UI, hosted: tuple[InProcBroker, str], phone: bool
+) -> None:
+    """#519: Cursor's Stop hook is held about ten minutes, so people see the limit and the way out (type in
+    Cursor) before connecting one, in Settings and on the welcome page's card, on a phone too. Fails if either
+    still reads like Cursor listens for as long as the others do."""
+    revoke_all(hosted)
+    checked_now(hosted)
+    page = open_page(ui, hosted, **(PHONE if phone else {}))
+    card = page.locator(".harness-card").filter(has=page.locator(".h-cursor"))
+    expect(card).to_contain_text("about 10 minutes")
+    expect(card).to_contain_text("type in Cursor")
+    if phone:
+        page.click("#rooms-toggle")
+    open_settings(page, "agents")
+    notice = page.locator("#agent-cursor-idle-limit")
+    expect(notice).to_be_visible()
+    expect(notice).to_contain_text("about 10 minutes after each turn ends")
+    expect(notice).to_contain_text("type in Cursor")
+    assert page.evaluate("() => document.documentElement.scrollWidth <= window.innerWidth")
+    page.keyboard.press("Escape")
+
+
 def test_connect_gives_codex_its_plugin_its_server_and_its_token(
     ui: UI, hosted: tuple[InProcBroker, str]
 ) -> None:

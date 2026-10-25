@@ -299,6 +299,7 @@ span.ic { stroke: none; }
 .bad { color: var(--danger); }
 .fine { font-size: calc(11.5px * var(--text-scale)); color: var(--muted); line-height: 1.45; }
 .fine code { font-size: calc(11px * var(--text-scale)); }
+#agent-cursor-idle-limit { margin: 8px 0; }  /* Settings → Agents: set apart from Devin's note above it */
 
 kbd, .kbd {
   font: calc(11px * var(--text-scale))/1 var(--mono);

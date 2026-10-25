@@ -72,6 +72,18 @@ LISTEN_S = 86400.0  # the longest a Stop hook is held before it answers with not
 PARK_MARGIN_S = 5.0  # an answer this long before the hook's own deadline
 MIN_PARK_S = 5.0
 IDLE_WHY = "stopped and not listening: no Stop hook waiting (or call wait())"
+# Cursor's Stop hook is held for about ten minutes (its ``max_wait_s`` 630 less ``PARK_MARGIN_S``, 625 s) and
+# nothing starts another park until the session's next Stop, which needs a turn (#519). Cursor has no
+# background hook or timer to wake it from outside, so the limit is said where a person and an agent look.
+CURSOR_NOTE = "over HTTPS: woken at stop, for about 10 min; then type in Cursor"
+CURSOR_IDLE_WHY = (
+    "not listening: no Stop hook waiting (Cursor's lasts about 10 min after a turn ends);"
+    " type in Cursor to start listening again"
+)
+CURSOR_PARK_LIMIT = (
+    ", for about 10 minutes after your turn ends. After that, later mentions stay queued"
+    " until your user types in Cursor (any message starts a new wait)"
+)
 
 
 def _held(secs: float) -> str:
@@ -121,6 +133,9 @@ class Listening(PullAdapter):
     context for a busy session, and a follow-up confirmed by the session's next hook."""
 
     reports_approval_mode = True  # permission_mode comes with each hook (§9.2, §9.3)
+    # what a Stop hook that can run out says about itself: the member's parked reason and the join text
+    idle_why = IDLE_WHY
+    park_limit = ""
 
     def context_events(self, p: Participant) -> frozenset[str]:
         return HOOK_CONTEXT_EVENTS[self.harness]
@@ -130,8 +145,8 @@ class Listening(PullAdapter):
         wrong here (#402): its Stop hook waits on the broker and wakes it when it is idle."""
         return (
             f"This is switchboard {__version__}. Room messages wake this session when it is idle: its"
-            " Stop hook waits on switchboard for them. While you are working, priority ones arrive as"
-            " context after your tool calls, and"
+            f" Stop hook waits on switchboard for them{self.park_limit}. While you are working, priority"
+            " ones arrive as context after your tool calls, and"
             f' the rest at your next read("{room}"), wait("{room}", {self.caps(p).wait_cap_s}) or say().'
             " kind=human ones are from your user and carry their authority just the same."
             f" {APPROVAL_GUIDANCE}"
@@ -158,7 +173,7 @@ class Listening(PullAdapter):
             return Route("sink", path=sink.path, sink_id=sink.id)
         if rel.kind == "priority":
             return Route("pull", reason="next tool call")
-        return Route("none", reason=IDLE_WHY)
+        return Route("none", reason=self.idle_why)
 
     def continue_verdict(self, p: Participant, acked: bool, ev: HookEvent) -> str | None:
         """A follow-up a Stop hook answered with is confirmed by the session's next hook once the
@@ -251,15 +266,22 @@ class HttpsCodexAdapter(CodexMembership, Listening):
 
 
 class HttpsCursorAdapter(Listening):
-    """Cursor over HTTPS, keyed by the conversation ID its preToolUse hook puts on each call."""
+    """Cursor over HTTPS, keyed by the conversation ID its preToolUse hook puts on each call.
+
+    Its Stop hook is held about ten minutes, and when that runs out with nothing to deliver the hook
+    answers and the turn is over: nothing starts another park until the next Stop, which a person has
+    to cause by typing (#519). No other mechanism wakes an idle Cursor from outside, so the limit is
+    explicit in the tier note, the join text and the parked reason, as Devin's is (#514)."""
 
     reports_approval_mode = False
+    idle_why = CURSOR_IDLE_WHY
+    park_limit = CURSOR_PARK_LIMIT
 
     def __init__(self, cfg: Config):
         super().__init__("cursor", cfg)
 
     def tier(self, p: Participant | None) -> tuple[str, str | None]:
-        return CURSOR_TIER, NOTE
+        return CURSOR_TIER, CURSOR_NOTE
 
     def session_key(self, host: str, thread_id: str | None, *, test_session: str | None = None) -> str:
         if not thread_id:
