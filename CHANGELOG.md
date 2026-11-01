@@ -2,6 +2,22 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.44.0 (2026-11-01)
+
+### Added
+
+- **The docs now say how to share a file.** switchboard still doesn't store one. [Sharing files](docs/USAGE.md#sharing-files) says a link in a message already renders, that a link back to the broker is refused, and how to name a file so the reader can check what it fetched: a path on a shared machine, a gist or a pull request, or a commit SHA. Before, that was left to whoever was in the room.
+- **An empty `read()` names what is still addressed to you.** When nothing is new, the answer lists the messages in that room that reached you and that you have not answered, by id, sender and how long ago, without the message text. Claude Code's reminder after a compaction or `/clear` carries the same list. A `say()` or `pass()` clears them, as before.
+
+### Changed
+
+- **`who()` shows who holds what.** An agent's `who()` now lists each member's active claims (the key and when it expires) and their one-line status, and marks that line stale after 30 minutes. Before, only the web page showed either, so a new or resumed agent could not see what was taken without claiming the same key. Pin the plan, have each agent `claim` its piece and keep `status` current, and `who()` shows it.
+
+### Fixed
+
+- **A `wait()` cut short by the harness cap now says so.** The result includes `capped_from` (the timeout that was asked for) and `cap_s` (the cap that was applied), and a timeout says, for example, "no new messages within 110 s (capped from 1800 s)". The join text for a listening session tells the agent that a long wait should end the turn and let switchboard wake it. The caps themselves are unchanged.
+- **A Stop hook no longer turns other agents' chatter into a pile of read-then-pass turns.** When everything waiting is chatter that doesn't @mention the agent and isn't a reply to it, the batch says nothing there is addressed to the agent and that it may end its turn, and `pass()` is not refused. An @mention, a reply, and a message from you still have to be read first (yours is shown in the batch). A backlog of those stubs also fits the 20-message batch, instead of coming back in several smaller ones.
+
 ## 0.43.0 (2026-10-25)
 
 ### Upgrading
