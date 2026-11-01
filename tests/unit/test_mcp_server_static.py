@@ -196,3 +196,85 @@ async def test_a_call_with_no_membership_is_a_normal_result_not_an_error() -> No
 )
 def test_wait_caps(harness: str, cap: int) -> None:
     assert srv.WAIT_CAPS[harness] == cap
+
+
+class _WaitBackend(Backend):
+    """A member, so ``wait`` reaches the broker call. ``answer`` is what that call returns."""
+
+    def __init__(self, answer: dict[str, Any]) -> None:
+        super().__init__()
+        self.answer = answer
+
+    async def find_cred(self, room: str, tid: str | None) -> tuple[str, str] | str:
+        return "#build", "m:1"
+
+    async def call(self, method: str, params: dict[str, Any], timeout: float = 15.0) -> dict[str, Any]:
+        self.calls.append((method, {**params, "_rpc_timeout": timeout}))
+        return dict(self.answer)
+
+
+async def test_a_capped_wait_says_what_was_asked_and_an_uncapped_one_does_not() -> None:
+    """#547: ``wait(timeout_s=1800)`` is cut to the harness cap, and the result used to report only
+    that shorter ``timeout_s``, so the agent could not tell a cap from the timeout it asked for.
+    When the cap (the tool's, or a tighter one the broker applied) shortened the request, the result
+    carries ``capped_from`` and ``cap_s`` and the timeout sentence says so. A request under the cap
+    is unchanged. The call the broker sees stays clamped: a higher config cap must not raise it.
+    Fails if the result is still only ``timeout_s``."""
+    text = "[switchboard] #build: no new messages within 110 s."
+    st = _WaitBackend({"ok": True, "status": "timeout", "timeout_s": 110, "text": text, "wait_id": "ab"})
+    server = srv.build_server(st)
+    async with Client(server, mode="legacy") as c:
+        r = await c.call_tool("wait", {"room": "#build", "timeout_s": 1800}, raise_on_error=False)
+    assert not r.is_error
+    got = json.loads(r.content[0].text)
+    assert got["capped_from"] == 1800 and got["cap_s"] == 110
+    assert got["text"] == "[switchboard] #build: no new messages within 110 s (capped from 1800 s)."
+    assert got["timeout_s"] == 110 and got["status"] == "timeout"
+    [(method, params)] = st.calls
+    assert method == "agent.wait" and params["timeout_s"] == 110 and params["_rpc_timeout"] == 125
+
+    # the broker clamped tighter than the tool (Devin: 600 at the tool, 100 over HTTPS)
+    unread = (
+        ' 1 earlier message from a peer agent is still unread ("not shown here"):'
+        ' call read("#build") to see it.'
+    )
+    st = _WaitBackend(
+        {
+            "ok": True,
+            "status": "timeout",
+            "timeout_s": 100,
+            "text": "[switchboard] #build: no new messages within 100 s." + unread,
+            "wait_id": "cd",
+        }
+    )
+    async with Client(srv.build_server(st), mode="legacy") as c:
+        r = await c.call_tool("wait", {"room": "#build", "timeout_s": 1800}, raise_on_error=False)
+    got = json.loads(r.content[0].text)
+    assert got["capped_from"] == 1800 and got["cap_s"] == 100
+    assert got["text"] == (
+        "[switchboard] #build: no new messages within 100 s (capped from 1800 s)." + unread
+    )
+
+    # a message arrived first: the fields are there, the batch text is not a timeout sentence
+    st = _WaitBackend({"ok": True, "status": "messages", "timeout_s": 110, "text": "id=4 hello", "count": 1})
+    async with Client(srv.build_server(st), mode="legacy") as c:
+        r = await c.call_tool("wait", {"room": "#build", "timeout_s": 1800}, raise_on_error=False)
+    got = json.loads(r.content[0].text)
+    assert got["capped_from"] == 1800 and got["cap_s"] == 110 and got["text"] == "id=4 hello"
+
+    # under the cap: nothing to report
+    plain = "[switchboard] #build: no new messages within 30 s."
+    st = _WaitBackend({"ok": True, "status": "timeout", "timeout_s": 30, "text": plain})
+    async with Client(srv.build_server(st), mode="legacy") as c:
+        r = await c.call_tool("wait", {"room": "#build", "timeout_s": 30}, raise_on_error=False)
+    got = json.loads(r.content[0].text)
+    assert "capped_from" not in got and "cap_s" not in got and got["text"] == plain
+
+    # a huge request is quoted only up to a week, and the broker still sees the harness cap
+    st = _WaitBackend({"ok": True, "status": "timeout", "timeout_s": 110, "text": text})
+    async with Client(srv.build_server(st), mode="legacy") as c:
+        r = await c.call_tool("wait", {"room": "#build", "timeout_s": 10**15}, raise_on_error=False)
+    got = json.loads(r.content[0].text)
+    assert got["capped_from"] == srv.WAIT_ASKED_MAX and got["cap_s"] == 110
+    assert f"capped from {srv.WAIT_ASKED_MAX} s" in got["text"]
+    assert st.calls[-1][1]["timeout_s"] == 110

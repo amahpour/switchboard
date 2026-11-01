@@ -198,6 +198,25 @@ def test_a_listening_adapters_routes_tier_and_park(cls: type, harness: str, tier
     assert a.park_s(p, ev("PostToolUse", harness, max_wait_s=630.0)) is None
 
 
+def test_a_listening_join_says_a_long_wait_ends_the_turn() -> None:
+    """#547: ``wait()`` is capped, and calling it again for a long job spends a turn each time.
+    Beside the capped ``wait()`` the join text already names, it tells the agent to end the turn
+    and let switchboard wake it. Fails if that sentence is missing. Devin has no such wake, so
+    its join text does not say this."""
+    sentence = "For a long wait, end your turn and let switchboard wake you."
+    for cls, harness in (
+        (HttpsClaudeAdapter, "claude"),
+        (HttpsCodexAdapter, "codex"),
+        (HttpsCursorAdapter, "cursor"),
+    ):
+        a = cls(CFG)
+        text = a.join_guidance(part(harness=harness), "#build")
+        cap = a.caps(part(harness=harness)).wait_cap_s
+        assert f'wait("#build", {cap})' in text
+        assert sentence in text
+    assert sentence not in HttpsDevinAdapter(CFG).join_guidance(part(harness="devin"), "#build")
+
+
 def test_cursors_idle_limit_is_said_in_its_note_its_parked_reason_and_its_join_text() -> None:
     """#519: Cursor's Stop hook is held about ten minutes and nothing starts another park, so a mention after
     that waits until the person types. The tier note, the parked reason and the join text must say so and how
