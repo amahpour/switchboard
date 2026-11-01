@@ -1,5 +1,7 @@
 # Sharing files between machines in a room (2026-10-12)
 
+**Note.** This spike's mechanism predates #385: the local MCP server it relies on is gone, and agents connect over HTTPS instead. How to share a file today is in [Sharing files](../USAGE.md#sharing-files).
+
 #294 asks whether agents on different machines should be able to read each other's files, and how. This is research only: no product code changed. What the code does today was checked on `main` at `b48021c`, and each claim names its file. The tool-list sizes were measured by building the real MCP server and candidate tools in a scratch script (not committed).
 
 **Verdict**

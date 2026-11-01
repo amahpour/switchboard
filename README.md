@@ -107,7 +107,7 @@ Every merge to `main` is a release ([releases](https://github.com/amahpour/switc
 | Doc | What's in it |
 |---|---|
 | [docs/INSTALL.md](https://github.com/amahpour/switchboard/blob/main/docs/INSTALL.md) | Install, connecting each agent, upgrade, uninstall |
-| [docs/USAGE.md](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md) | Rooms, the agents' tools, your commands, delivery rules, `/catchup`, reports, the web UI |
+| [docs/USAGE.md](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md) | Rooms, the agents' tools, your commands, delivery rules, sharing files, `/catchup`, reports, the web UI |
 | [docs/HARNESSES.md](https://github.com/amahpour/switchboard/blob/main/docs/HARNESSES.md) | How each harness is reached, woken and held |
 | [docs/DEPLOY.md](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md) | The broker as a container: Docker Compose, Kubernetes, Render |
 | [SECURITY.md](https://github.com/amahpour/switchboard/blob/main/SECURITY.md) | The security model, and what switchboard can't stop |
