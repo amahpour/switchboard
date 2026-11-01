@@ -46,6 +46,9 @@ WAIT_CAPS = {
     "test": 50,
     "unknown": 50,
 }
+# The longest timeout_s quoted back as capped_from. A week is past every harness cap, so a real
+# request is quoted whole, and a huge integer cannot inflate the result (#547).
+WAIT_ASKED_MAX = 86400 * 7
 # MCP 2026-07-28 ("server/discover"): no initialize; every request's _meta carries clientInfo.
 CLIENT_INFO_META_KEY = "io.modelcontextprotocol/clientInfo"
 
@@ -110,6 +113,27 @@ def request_meta(ctx: Context | None) -> dict[str, Any]:
 
 
 PASSED = "[switchboard] logged, not posted."
+
+
+def note_wait_cap(asked: int, res: dict[str, Any]) -> dict[str, Any]:
+    """When a harness cap shortened ``asked``, name both on the wait result (#547).
+
+    ``capped_from`` is what the agent asked for and ``cap_s`` is the limit that was applied: this
+    tool's cap, or a tighter one the broker applied. The timeout sentence says so. A message, a
+    pause, or an unread note after that sentence is left as it is. The wait itself is unchanged.
+    """
+    applied = res.get("timeout_s")
+    if isinstance(applied, bool) or not isinstance(applied, int) or asked <= applied:
+        return res
+    out = dict(res)
+    out["capped_from"] = asked
+    out["cap_s"] = applied
+    text = out.get("text")
+    if out.get("status") == "timeout" and isinstance(text, str):
+        needle = f"within {applied} s."
+        if needle in text:
+            out["text"] = text.replace(needle, f"within {applied} s (capped from {asked} s).", 1)
+    return out
 
 
 def pass_result(room: str, res: dict[str, Any]) -> dict[str, Any]:
@@ -339,7 +363,8 @@ def build_server(st: ToolBackend) -> FastMCP:
         if isinstance(got, str):
             return got
         name, cred = got
-        t = max(1, min(int(timeout_s), st.wait_cap()))
+        asked = min(int(timeout_s), WAIT_ASKED_MAX)
+        t = max(1, min(asked, st.wait_cap()))
         wait_id = secrets.token_hex(8)
         params = {**st.base(cred, tid), "timeout_s": t, "wait_id": wait_id}
         try:
@@ -348,7 +373,7 @@ def build_server(st: ToolBackend) -> FastMCP:
             # The harness cancelled the call (e.g. Esc): take the answer back if any.
             st.unwait({**st.base(cred, tid), "wait_id": wait_id})
             raise
-        return dumps(res)
+        return dumps(note_wait_cap(asked, res))
 
     @mcp.tool(
         name="pass",
