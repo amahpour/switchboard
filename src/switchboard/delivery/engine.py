@@ -375,6 +375,8 @@ class Engine:
             return unparked()
         adapter = self.adapter(p)
         caps = adapter.caps(p)
+        # A held Stop hook stubs peer text (#548): cap by that stub, not the inline line.
+        peers_stubbed = sink is not None and sink.kind == "park" and sink.path not in caps.inline_paths
         rel = rules.releasable(
             pending,
             room=room,
@@ -388,13 +390,15 @@ class Engine:
             max_chars=min(self.d.batch_max_chars, caps.ctx_max_chars),
             hold_s=self._hold_s(sink),
             wake_now=self._wake_now(m.id, pending),
+            peers_stubbed=peers_stubbed,
         )
         if rel is None:
             unread = rules.unread_stubs(pending) if sink is not None and sink.kind == "wait" else []
             if unread and sink is not None:
-                # A wait() takes peer messages announced as "not shown here" and never read:
-                # a pull like read() (whole texts, not counted), so a wait loop that skipped
-                # the read() can't sit on them until its timeout (the read-first rule, §24).
+                # A wait() takes an @mention or a reply announced as "not shown here" and
+                # never read (unaddressed chatter does not, #548): a pull like read() (whole
+                # texts, not counted), so a wait loop that skipped the read() can't sit on
+                # them until its timeout (the read-first rule, §24).
                 ids = set(unread)
                 pull = Release(
                     items=tuple(i for i in pending if i.message_id in ids),
@@ -840,8 +844,9 @@ class Engine:
     def check_pass(self, p: Participant, m: Membership) -> list[int]:
         """The read-first rule (§24): [] if pass() may go ahead, else the ids of peer
         messages this member saw only as "call read()" stubs (and a ``pass_refused``
-        event). A refusal is no answer: nothing is handled and the watchdog goes on.
-        read() always shows every such item (they are pending), so it can't wedge."""
+        event). Unaddressed chatter stubs are not in that list (#548). A refusal is
+        no answer: nothing is handled and the watchdog goes on. read() always shows
+        every such item (they are pending), so it can't wedge."""
         ids = rules.unread_stubs(self.store.pending_items(m.id))
         if ids:
             self._event(
@@ -1447,6 +1452,8 @@ class Engine:
                 max_chars=min(self.d.batch_max_chars, caps.ctx_max_chars),
                 hold_s=self.d.unaddressed_hold_s,
                 wake_now=self._wake_now(m.id, pending),
+                # Devin's Stop block stubs peer text, same as a held Stop hook (#548).
+                peers_stubbed="stop_block" not in caps.inline_paths,
             )
             if rel is None or rel.kind != "wake":
                 continue

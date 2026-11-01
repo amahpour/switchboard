@@ -21,7 +21,8 @@ escalated; after every event and at the end, at most ``watchdog_max``
 reminders per delivery, and an escalated @mention never wake-eligible again.
 
 pass() follows the read-first rule (DESIGN.md §24): refused while the member has
-a peer message it saw only as a stub. A random pass that is refused does
+a peer message it saw only as a stub, except unaddressed chatter (prio 0, not a
+reply to the member), which #548 exempts. A random pass that is refused does
 nothing; a cooperative agent (quiescence) reads, then passes, and the simulator
 asserts that the read() lifted the rule unless read() hit its limit.
 """
@@ -290,8 +291,9 @@ class Sim:
 
     def pass_(self, mem: Mem, mid: int | None = None, *, read_first: bool = False) -> None:
         """AgentService.pass_: refused, handling nothing, while the member has a peer
-        message it saw only as a stub (the read-first rule, DESIGN.md §24). With
-        ``read_first`` the agent does what the refusal says: read(), then pass()."""
+        message it saw only as a stub (the read-first rule, DESIGN.md §24).
+        Unaddressed chatter stubs do not refuse (#548). With ``read_first`` the
+        agent does what the refusal says: read(), then pass()."""
         self.before_call(mem)
         mid = mid if mid is not None else self.rng.choice(mem.mids)
         if self.engine.check_pass(self.p(mem), self.store.get_membership(mid)):

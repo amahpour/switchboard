@@ -126,6 +126,38 @@ def test_cap_by_messages_and_characters() -> None:
     assert len(rel([item(1, 2, text="z" * 50000)], chars=100).items) == 1
 
 
+def test_a_stubbed_batch_is_capped_by_the_stub_line_not_the_inline_text() -> None:
+    """#548: Stop shows a peer as a ~122-character stub, but cap charged the inline
+    line (~575 for a 480-character note) against 6,000, so 40 chatter stubs took
+    five blocks. ``peers_stubbed`` charges the stub. A person's message stays inline."""
+    notes = [item(i, 0, text="n" * 480) for i in range(1, 41)]
+    one = notes[0]
+    assert rules.item_cost(one) > 500
+    assert rules.item_cost(one, peers_stubbed=True) < 200
+    assert len(rules.cap(notes, 20, 6000)) < 20
+    assert len(rules.cap(notes, 20, 6000, peers_stubbed=True)) == 20
+    person = item(1, 2, text="p" * 100)
+    assert rules.item_cost(person, peers_stubbed=True) == rules.item_cost(person)
+    mixed = [item(1, 2, text="p" * 2000)] + [item(i, 0, text="n" * 480) for i in range(2, 25)]
+    inline = rules.cap(rules.human_first(mixed), 20, 6000)
+    stubbed = rules.cap(rules.human_first(mixed), 20, 6000, peers_stubbed=True)
+    assert stubbed[0].sender_kind == "human" and len(stubbed) == 20 and len(inline) < 20
+    released = rules.releasable(
+        notes,
+        room=room(),
+        eff="idle",
+        peer_batch_boundary=-1,
+        boundary_seq=0,
+        now=NOW,
+        quiet_s=3.0,
+        max_hold_s=60.0,
+        batch_max_msgs=20,
+        max_chars=6000,
+        peers_stubbed=True,
+    )
+    assert released is not None and len(released.items) == 20
+
+
 def test_notified_stubs_never_wake_again() -> None:
     assert rel([item(1, 1, notified=NOW - 5)]) is None
     assert rel([item(1, 1, notified=NOW - 5)], eff="busy") is None

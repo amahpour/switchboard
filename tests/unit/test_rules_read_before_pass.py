@@ -4,11 +4,14 @@ message arrived as a "call read()" stub, the batch line offered "or pass()", and
 the model passed without ever reading it.
 
 The stub stays (peer text never arrives with user authority), but:
-- every stub path now says read() comes first, and never offers pass() instead;
-- pass() is refused (``read_first``) while the member has a peer message it was
-  only ever shown as a stub; read() (or say()'s unread, or a wait() fill)
-  showing it inline lifts that. Human items and anything shown inline before
-  never block, and nothing here can wedge wait(), a Devin Stop or the watchdog.
+- every stub path now says read() comes first, and never offers pass() instead,
+  except a batch of only unaddressed chatter (#548), which says the agent may
+  end the turn;
+- pass() is refused (``read_first``) while the member has a peer @mention or a
+  reply it was only ever shown as a stub. Unaddressed chatter does not refuse.
+  read() (or say()'s unread, or a wait() fill) showing a blocking stub inline
+  lifts that. Human items and anything shown inline before never block, and
+  nothing here can wedge wait(), a Devin Stop or the watchdog.
 """
 
 from __future__ import annotations
@@ -74,16 +77,21 @@ def says_read_first(text: str, room: str = "#build") -> None:
 
 # ------------------------------------------------------------------ the rule itself (pure)
 def test_only_peer_stubs_never_shown_inline_block() -> None:
+    """Unaddressed chatter (prio 0, not a reply) does not block (#548). An @mention,
+    a reply to this member, and a person's message keep the rule: the first two
+    block until read, and a person's item is never a peer stub."""
     peer = stubbed(item(1, 1))
+    reply = stubbed(dataclasses.replace(item(6, 0), reply_to_me=True))
     assert rules.unread_stubs([peer]) == [1]
-    assert rules.unread_stubs([stubbed(item(2, 0))]) == [2]  # a chatter stub too
+    assert rules.unread_stubs([stubbed(item(2, 0))]) == []  # unaddressed chatter
+    assert rules.unread_stubs([reply]) == [6]
     assert rules.unread_stubs([item(3, 1)]) == []  # pending, but never announced to it
     assert rules.unread_stubs([stubbed(item(4, 2))]) == []  # the human's (a cut text) never blocks
     assert rules.unread_stubs([stubbed(item(5, 1), in_context_at=2.0)]) == []  # shown inline before
     # offered (e.g. in the read() answer the agent holds) or in context: not unread
     assert rules.unread_stubs([dataclasses.replace(peer, state="offered")]) == []
     assert rules.unread_stubs([dataclasses.replace(peer, state="in_context")]) == []
-    assert rules.unread_stubs([stubbed(item(9, 1)), stubbed(item(7, 0))]) == [7, 9]
+    assert rules.unread_stubs([stubbed(item(9, 1)), stubbed(item(7, 0)), reply]) == [6, 9]
 
 
 # ------------------------------------------------------------------ engine: refused, then read
@@ -342,6 +350,100 @@ def test_a_cursor_followup_read_first_finds_the_stub(w: World) -> None:
     w.actions += w.engine.before_call(w.p(p))  # the read call
     text, _rbid = read(w, p, m)
     assert "zebra_parser" in text and "no new messages" not in text
+
+
+def _ids(text: str) -> list[int]:
+    return [int(line.split()[1][3:]) for line in text.splitlines() if line.startswith("- id=")]
+
+
+def _confirm(w: World, p: Any, res: dict[str, Any]) -> None:
+    w.actions += w.engine.on_hook_ack(res["batch_id"], res["ack"])
+    w.hook(p, "PostToolUse", ok=True, tool="Bash")
+
+
+def test_a_stop_backlog_of_chatter_fits_the_message_cap_and_pass_is_allowed(w: World) -> None:
+    """#548: forty 480-character notes pending at Stop came back as five blocks, because
+    the cap charged each its inline size. The stub on the wire is about 122 characters,
+    so the 20-message cap binds: two blocks. The footer says the agent may end the turn,
+    and pass() is not refused. A tool call while busy still delivers none of it."""
+    p, m = session(w, "claude-1", "claude", status="busy")
+    _pp, peer = w.agent("peer")
+    notes = [w.agent_says(peer, "n" * 480) for _ in range(40)]
+    w.clock.advance(270)
+    w.actions += w.engine.tick()
+    assert w.hook(p, "PostToolUse", ok=True) is None  # no chatter at PostToolUse
+    res = result(w, stop(w, p))
+    assert res is not None and res["status"] == "messages"
+    assert _ids(res["text"]) == [n.id for n in notes[:20]]
+    assert "n" * 40 not in res["text"]
+    assert "Nothing here is addressed to you; you may end your turn." in res["text"]
+    assert "before say() or pass()" not in res["text"]
+    assert len(res["text"]) <= w.cfg.delivery.batch_max_chars
+    _confirm(w, p, res)
+    assert blockers(w, p, m) == []
+    res2 = result(w, stop(w, p))
+    assert res2 is not None and _ids(res2["text"]) == [n.id for n in notes[20:]]
+
+
+def test_a_mention_and_a_reply_still_refuse_pass_beside_chatter(w: World) -> None:
+    """The #548 exemption is unaddressed chatter only. An @mention, and a reply to the
+    agent's own message, still refuse pass() until read(), and their batches keep the
+    read-first footer even when chatter rides along. The chatter ids do not."""
+    p, m = session(w, "claude-1", "claude", status="busy")
+    _pp, peer = w.agent("peer")
+    mention = w.agent_says(peer, "@claude-1 please review the diff", mentions=("claude-1",))
+    aside = w.agent_says(peer, "meanwhile " + "n" * 40)
+    res = result(w, stop(w, p))
+    assert res is not None and "please review the diff" not in res["text"]
+    assert _ids(res["text"]) == [mention.id, aside.id]
+    says_read_first(res["text"])
+    assert "you may end your turn" not in res["text"]
+    _confirm(w, p, res)
+    assert blockers(w, p, m) == [mention.id]
+
+    p2, m2 = session(w, "claude-2", "claude", status="busy")
+    own = w.agent_says(m2, "I started the parser")
+    reply = w.agent_says(peer, "following up on the parser", reply_to=own.id)
+    extra = w.agent_says(peer, "unrelated note")
+    res = result(w, stop(w, p2))
+    assert res is not None and "following up on the parser" not in res["text"]
+    says_read_first(res["text"])
+    _confirm(w, p2, res)
+    assert blockers(w, p2, m2) == [reply.id]
+    assert extra.id not in blockers(w, p2, m2)
+
+
+def test_a_persons_message_is_shown_and_is_not_skippable_chatter(w: World) -> None:
+    """A person's message keeps the read-first rule's protection: it is shown inline
+    on the Stop path, and the batch is not dismissed as nothing addressed to the agent.
+    Chatter that rides along does not by itself refuse pass()."""
+    p, m = session(w, "claude-1", "claude", status="busy")
+    _pp, peer = w.agent("peer")
+    aside = w.agent_says(peer, "peers chatting " + "n" * 40)
+    said = w.human("please ship the parser")
+    res = result(w, stop(w, p))
+    assert res is not None and _ids(res["text"]) == [said.id, aside.id]
+    assert "please ship the parser" in res["text"]
+    assert "peers chatting" not in res["text"] and "not shown here" in res["text"]
+    assert "you may end your turn" not in res["text"]
+    assert "before say() or pass()" not in res["text"]
+    _confirm(w, p, res)
+    assert blockers(w, p, m) == []
+
+
+def test_a_devin_stop_block_caps_chatter_by_the_stub_line(w: World) -> None:
+    """Devin's Stop block stubs peer text the same way (#548). Forty notes come back
+    twenty at a time, with the chatter footer, not nine inline-sized chunks."""
+    p, _m = devin(w)
+    w.hook(p, "UserPromptSubmit", gen="g1")
+    _pp, peer = w.agent("peer")
+    notes = [w.agent_says(peer, "n" * 480) for _ in range(40)]
+    w.clock.advance(270)
+    out = w.hook(p, "Stop", gen="g1")
+    assert out is not None and out.kind == "continue"
+    assert _ids(out.text) == [n.id for n in notes[:20]]
+    assert "Nothing here is addressed to you; you may end your turn." in out.text
+    assert "n" * 40 not in out.text
 
 
 def test_a_call_confirms_only_an_acked_followup_of_that_session(w: World) -> None:

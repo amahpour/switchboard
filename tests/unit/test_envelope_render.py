@@ -27,6 +27,7 @@ def test_batch_framing_stays_under_200_characters_without_message_lines() -> Non
         ([item(1, 2)], True),
         ([item(1, 0)], True),
         ([item(1, 2), item(2, 1)], False),
+        ([item(1, 0), item(2, 0)], False),  # chatter-only stub footer (#548)
         ([dataclasses.replace(item(2, 1), redelivered=True, reminders=1)], False),
     )
     for items, inline in cases:
@@ -60,6 +61,26 @@ def test_mixed_peer_only_and_stub_only_headers() -> None:
     stub = render([item(2, 1), item(3, 0)], inline=False).splitlines()[0]
     assert stub == "[switchboard] #build: 2 not shown."
     assert 'Not shown: read("#build") before say() or pass().' in render([item(2, 1)], inline=False)
+
+
+def test_a_chatter_only_stub_batch_says_you_may_end_the_turn() -> None:
+    """#548: a Stop batch of only unaddressed chatter (prio 0, not a reply) does not
+    tell the agent to read before pass. A mention, a reply, or a person's message
+    keeps that footer, and a person's message beside chatter is not "nothing for you"."""
+    note = "Nothing here is addressed to you; you may end your turn."
+    read_first = 'Not shown: read("#build") before say() or pass().'
+    chatter = render([item(1, 0), item(2, 0)], inline=False)
+    assert note in chatter and "before say() or pass()" not in chatter
+    reply = render([dataclasses.replace(item(3, 0), reply_to_me=True)], inline=False)
+    mention = render([item(4, 1), item(5, 0)], inline=False)
+    for text in (reply, mention):
+        assert note not in text and read_first in text
+    # a person's message is shown, so the batch is not "nothing for you", and the
+    # chatter stub beside it does not keep the read-before-pass line
+    person = render([item(6, 2, text="please ship it"), item(7, 0)], inline=False)
+    assert "please ship it" in person and note not in person and read_first not in person
+    # an inline chatter batch has no stub footer to replace
+    assert note not in render([item(1, 0)], inline=True)
 
 
 def test_stubs_make_read_the_first_step_never_pass_instead() -> None:
@@ -104,8 +125,19 @@ def test_every_stub_rendering_puts_read_before_pass() -> None:
         if not any(it.sender_kind == "agent" for it in items):
             assert "not shown here" not in t
             continue
-        foot = next(line for line in t.splitlines() if line.startswith("Not shown:"))
-        assert ", or pass(" not in t and foot.index("read(") < foot.index("pass()")
+        # An @mention or a reply keeps read-before-pass. Only unaddressed chatter
+        # may say to end the turn (#548). A person's message beside that chatter
+        # does neither: the person is shown, and the chatter does not block pass().
+        blocks = any(it.sender_kind == "agent" and it.prio != 0 for it in items)
+        chatter_only = all(it.prio == 0 and not it.reply_to_me for it in items)
+        assert ", or pass(" not in t
+        if blocks:
+            foot = next(line for line in t.splitlines() if line.startswith("Not shown:"))
+            assert foot.index("read(") < foot.index("pass()")
+        elif chatter_only:
+            assert envelope.UNADDRESSED_NOTE in t and "before say() or pass()" not in t
+        else:
+            assert envelope.UNADDRESSED_NOTE not in t and "before say() or pass()" not in t
         assert envelope.frame_reserve("#build", "alice", len(items)) >= len(t) - sum(
             len(x) + 1 for x in t.splitlines()[2:] if x.startswith("- id=")
         )
