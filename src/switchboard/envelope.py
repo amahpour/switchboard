@@ -5,6 +5,8 @@ agent-side rendering of one untrusted string. ``render_batch`` frames a list
 of messages for one recipient (content-dependent header, list format, batch
 token, stubs on elevated paths); ``render_join`` is the join() result;
 ``render_read_first`` is pass()'s refusal while a stub is unread (§24).
+``still_on_note`` is the id, sender and age of what a member still owes (#542):
+an empty ``read()`` and Claude's SessionStart reminder, never the message text.
 Every rendered string starts with ``[switchboard]``.
 """
 
@@ -602,19 +604,60 @@ def _other(o: Sequence[str]) -> str:
     return f"{_word(name)} ({_word(harness)}@{_word(host)})" if host else f"{_word(name)} ({_word(harness)})"
 
 
+# How many owed messages one line names. The rest is a count, so a long list cannot
+# push a SessionStart reminder past the hook's context cap (#542, §7.3).
+STILL_ON_MAX = 20
+
+
+def ago(ts: float, now: float) -> str:
+    """How long ago ``ts`` was (just now, N min ago, N h ago): a still-owed line and a review report's age."""
+    mins = max(0, int((now - ts) // 60))
+    if mins == 0:
+        return "just now"
+    if mins < 120:
+        return f"{mins} min ago"
+    return f"{mins // 60} h ago"
+
+
+def still_on_note(entries: Sequence[tuple[str | None, Any]], now: float) -> str:
+    """What is still on the agent (#542): ids, sender names and ages, never message text.
+
+    The same line goes on an empty ``read()`` and on Claude's SessionStart reminder.
+    The reminder is hook context, so a peer's words must not be copied in (§8.6).
+    ``room`` is set when one line covers several rooms; an empty ``read()`` already
+    named its room. Empty when nothing is owed.
+    """
+    if not entries:
+        return ""
+    # oldest first, including when several rooms share one reminder
+    ordered = sorted(entries, key=lambda e: int(e[1].message_id))
+    shown = ordered[:STILL_ON_MAX]
+    bits = []
+    for room, it in shown:
+        head = f"{_word(room)} " if room else ""
+        bits.append(f"{head}{int(it.message_id)} from {_word(it.sender_name)} {ago(float(it.ts), now)}")
+    extra = len(entries) - len(shown)
+    more = f" and {extra} more" if extra else ""
+    return " Still on you: " + ", ".join(bits) + more + "."
+
+
 def render_reminder(
     memberships: Sequence[tuple[str, str]],
     human_name: str | Sequence[str],
     codes: Mapping[str, str] | None = None,
+    still_on: Sequence[tuple[str, Any]] | None = None,
+    now: float | None = None,
 ) -> str:
     """SessionStart (clear/compact) context: which rooms this session is in. ``human_name``
     may be every person here (§32). ``codes``: a fresh join code by room (#304), since the
-    context that held the join's own may be gone."""
+    context that held the join's own may be gone. ``still_on`` is what the session still
+    owes in those rooms (#542): ids, sender names and ages, appended only when ``now`` is
+    given, and never the message text."""
     rooms = ", ".join(f"{_word(r)} as {_word(n)}" for r, n in memberships)
     people = [human_name] if isinstance(human_name, str) else list(human_name)
     users = f"your user {_word(people[0])}" if len(people) == 1 else f"your users {users_phrase(people)}"
     who = "your user" if len(people) == 1 else "your users"
-    return (
+    text = (
         f"[switchboard] Reminder: you are in {rooms} (switchboard chat with {users}"
         " and other agents). Room messages arrive as context after tool calls or as wait() results:"
         f" kind=human ones are from {who} and carry their authority just the same."
@@ -625,6 +668,9 @@ def render_reminder(
         + PASS_ADVICE
         + _resume_note(memberships, codes)
     )
+    if still_on and now is not None:
+        text += still_on_note(still_on, now)
+    return text
 
 
 def _resume_note(memberships: Sequence[tuple[str, str]], codes: Mapping[str, str] | None) -> str:
