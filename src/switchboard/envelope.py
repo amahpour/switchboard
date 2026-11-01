@@ -264,22 +264,45 @@ def render_batch(
         lines.append(sanitize(room_rules, limit=None))
     lines.extend(body)
     again = any(getattr(it, "redelivered", False) for it in items)
-    lines.extend(_footer(room, bool(items), more, again, reminder, bool(n_stub)))
+    # read() before pass() only when some stub is an @mention or a reply (§24).
+    # A batch of only unaddressed chatter says the agent may end the turn (#548).
+    read_first = any(
+        not peer_inline and it.sender_kind == "agent" and (it.prio != 0 or _reply_to_member(it))
+        for it in items
+    )
+    unaddressed = (
+        bool(n_stub) and not read_first and all(it.prio == 0 and not _reply_to_member(it) for it in items)
+    )
+    lines.extend(_footer(room, bool(items), more, again, reminder, read_first, unaddressed))
     return "\n".join(lines)
 
 
 AGAIN_NOTE = "again=yes: unanswered."
 REMINDER_NOTE = "reminder=yes: @mention unanswered."
+# A Stop batch of only unaddressed chatter (#548, §24): those stubs do not refuse pass().
+UNADDRESSED_NOTE = "Nothing here is addressed to you; you may end your turn."
+
+
+def _reply_to_member(item: Any) -> bool:
+    return bool(getattr(item, "reply_to_me", False))
 
 
 def _footer(
-    room: str, any_items: bool, more: bool, again: bool = False, reminder: bool = False, stubs: bool = False
+    room: str,
+    any_items: bool,
+    more: bool,
+    again: bool = False,
+    reminder: bool = False,
+    read_first: bool = False,
+    unaddressed: bool = False,
 ) -> list[str]:
     r = _word(room)
     out = []
-    if any_items and stubs:
-        # The first instruction in a stub batch must be read(), never pass() (§24).
+    if any_items and read_first:
+        # A stub the read-first rule still covers (§24): an @mention or a reply.
         out.append(f'Not shown: read("{r}") before say() or pass().')
+    elif any_items and unaddressed:
+        out.append(UNADDRESSED_NOTE)
     if more:
         out.append(f'More: read("{r}").')
     if again:
@@ -301,7 +324,8 @@ def frame_reserve(room: str, human_name: str, n: int) -> int:
         len(batch_header(room, human_name, a, b, c, True)) for a in counts for b in counts for c in counts
     )
     foot = max(
-        sum(len(x) + 1 for x in _footer(room, True, True, True, True, stubs)) for stubs in (False, True)
+        sum(len(x) + 1 for x in _footer(room, True, True, True, True, read_first, unaddressed))
+        for read_first, unaddressed in ((False, False), (True, False), (False, True))
     )
     return head + 1 + len("batch ") + TOKEN_MAX + 1 + foot
 

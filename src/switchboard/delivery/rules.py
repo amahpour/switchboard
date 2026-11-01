@@ -133,27 +133,34 @@ def human_first(items: Iterable[Item]) -> list[Item]:
     return sorted(items, key=lambda i: (-i.prio, not i.reply_to_me, i.message_id))
 
 
-def item_cost(item: Item, limit: int | None = envelope.ITEM_LIMIT) -> int:
-    """Characters the item's rendered (inline, sanitized) envelope line takes:
-    escaping can make text up to six times longer than it was typed."""
+def item_cost(item: Item, limit: int | None = envelope.ITEM_LIMIT, *, peers_stubbed: bool = False) -> int:
+    """Characters the item's rendered envelope line takes.
+
+    Inline, escaping can make text up to six times longer than it was typed.
+    ``peers_stubbed`` (a Stop-path batch, #548): an agent-authored item is the
+    stub line that batch actually sends, not the inline line. A person's message
+    is never stubbed, so it keeps its inline cost either way.
+    """
+    if peers_stubbed and item.sender_kind == "agent":
+        return len(envelope.render_item(item, "", "", inline=False)) + 1
     shown_limit = envelope.delivery_limit(item, "", limit)
     return len(envelope.render_item(item, "", "", inline=True, limit=shown_limit)) + 1
 
 
-def cap(items: Sequence[Item], max_msgs: int, max_chars: int) -> list[Item]:
+def cap(items: Sequence[Item], max_msgs: int, max_chars: int, *, peers_stubbed: bool = False) -> list[Item]:
     """Keep a prefix of at most ``max_msgs`` items whose rendered batch fits
     ``max_chars`` (header and footer included).
 
     Always keeps at least one item (the envelope cuts a single oversized item
     to fit, see ``envelope.fit_batch``), so a huge message can never block
-    the queue.
+    the queue. ``peers_stubbed`` charges agent items their stub line (#548).
     """
     out: list[Item] = []
     used = FRAME_RESERVE
     for it in items:
         if len(out) >= max(1, max_msgs):
             break
-        c = item_cost(it)
+        c = item_cost(it, peers_stubbed=peers_stubbed)
         if out and used + c > max_chars:
             break
         out.append(it)
@@ -223,6 +230,7 @@ def releasable(
     max_chars: int,
     hold_s: float = 0.0,
     wake_now: bool = False,
+    peers_stubbed: bool = False,
 ) -> Release | None:
     """What may go out to one member now (DESIGN.md §8.2), or None.
 
@@ -234,6 +242,8 @@ def releasable(
       it doesn't address the member) and needs budget.
     - ``wake_now``: a person asked for this member's chatter now (``/wake``, #137): like
       their own message, it skips the hold, the budget and the one-peer-batch rule.
+    - ``peers_stubbed``: this batch will show agent text as stubs (a Stop path, #548),
+      so the cap charges the stub line rather than the inline one.
     """
     eligible = [d for d in pending if d.notified_at is None]
     prio = [d for d in eligible if d.prio >= 1]
@@ -241,7 +251,7 @@ def releasable(
     ok = peer_ok(peer_batch_boundary, boundary_seq)
 
     def done(items: list[Item], kind: str, counted: bool) -> Release:
-        kept = cap(human_first(items), batch_max_msgs, max_chars)
+        kept = cap(human_first(items), batch_max_msgs, max_chars, peers_stubbed=peers_stubbed)
         return Release(items=tuple(kept), kind=kind, counted=counted, reason=wake_reason(kept))
 
     if eff == "busy":
@@ -462,6 +472,13 @@ def parked_escalation(
 
 
 # ------------------------------------------------------------ read first (§24)
+def unaddressed_chatter(item: Item) -> bool:
+    """Chatter that does not address this member (#548): prio 0, and not a reply to
+    one of its own messages. A person's message is prio 2 and an @mention is prio 1,
+    so neither is. The maintainer approved skipping these on 2026-11-01 (§24)."""
+    return item.sender_kind == "agent" and item.prio == 0 and not item.reply_to_me
+
+
 def unread_stubs(pending: Iterable[Item]) -> list[int]:
     """The read-first rule for pass() (DESIGN.md §24): ids of peer messages the
     member was told about only as a "call read()" stub and has never been shown.
@@ -476,6 +493,8 @@ def unread_stubs(pending: Iterable[Item]) -> list[int]:
       text cut to fit there): a re-delivered or escalated stub of it doesn't
       block again.
     - Human items never block: they are never stubbed.
+    - Unaddressed chatter does not block (#548, maintainer's yes of 2026-11-01).
+      An @mention and a reply to the member still do.
     """
     return sorted(
         i.message_id
@@ -484,4 +503,5 @@ def unread_stubs(pending: Iterable[Item]) -> list[int]:
         and i.notified_at is not None
         and i.sender_kind == "agent"
         and i.in_context_at is None
+        and not unaddressed_chatter(i)
     )
