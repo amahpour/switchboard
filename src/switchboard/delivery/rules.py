@@ -15,6 +15,8 @@ broadcast reaches, not whether it may (the caller's job). Issue #138 adds
 agent, and (unlike ``@here``/``@everyone``) works the same from a person's
 message or an agent's own ``say()``. Issue #507 adds taking turns on a person's message that
 names nobody: which says are a second answer to it, and which post was the first (§8.8).
+Issue #542 adds which of a member's open deliveries are still owed: the same open
+states and the same answer, rendered as ids, senders and ages.
 """
 
 from __future__ import annotations
@@ -341,6 +343,24 @@ def reply_taken(question: Item, sayer: str, answers: Sequence[Answer]) -> Answer
             continue
         return a
     return None
+
+
+def still_owed(item: Item, sayer: str, answers: Sequence[Answer] = ()) -> bool:
+    """True when this delivery is still on ``sayer`` (#542, DESIGN.md §8.5, §8.8).
+
+    It reached the member and was not handled: ``in_context``, or a notified stub
+    (``pending`` with ``notified_at``). It is addressed to the member: ``to_you``
+    (an @mention, or a person's message that names nobody) or a reply to the member's
+    own message. An unaddressed question another agent already answered
+    (``reply_taken``) is not still owed: that is the take-turns rule, not a new one.
+    Anything else addressed stays owed until ``say()`` or ``pass()`` handles the
+    delivery. ``answers`` are that question's, from the store; they matter only for
+    an unaddressed question.
+    """
+    reached = item.state == "in_context" or (item.state == "pending" and item.notified_at is not None)
+    if not reached or not (envelope.to_you(item, sayer) or item.reply_to_me):
+        return False
+    return not (is_unaddressed_question(item) and reply_taken(item, sayer, answers) is not None)
 
 
 def hop_tripped(room: Room) -> bool:

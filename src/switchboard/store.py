@@ -2043,6 +2043,17 @@ class Store:
         ).fetchall()
         return [Item.from_row(r) for r in rows]
 
+    def reached_items(self, membership_id: int) -> list[Item]:
+        """Deliveries that reached this member and aren't handled yet (#542): in context, or a
+        notified stub. Oldest first. Pending items not yet notified are new, so ``read()``
+        returns them instead of listing them here."""
+        rows = self.con.execute(
+            self._ITEM_SQL + " WHERE d.membership_id=? AND (d.state='in_context'"
+            " OR (d.state='pending' AND d.notified_at IS NOT NULL)) ORDER BY d.message_id",
+            (membership_id,),
+        ).fetchall()
+        return [Item.from_row(r) for r in rows]
+
     def requeue(self, membership_id: int, message_ids: Iterable[int], *, redeliver: bool = False) -> int:
         """Put in-context deliveries back to pending for another wake (DESIGN.md §8.5).
 
