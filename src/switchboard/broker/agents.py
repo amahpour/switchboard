@@ -80,11 +80,35 @@ BAD_SCREEN_NAME = "screen names look like claude-1: a-z first, then a-z, 0-9, '_
 # an "@" may carry a version (claude-...@20250514), never a domain (nothing email-shaped)
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:+-]{0,63}(?:@[A-Za-z0-9_:+-]{1,32})?")
 AWAY_MAX = 80
+# status() stores this many characters; who() cuts to the same cap on the way out (#545)
+STATUS_LINE_MAX = 160
 # what who() adds to a member that is waiting-approval (§49.4): what it means, and whose call it is
 WAITING_APPROVAL_WHO = (
     "paused at its person's approval prompt; it answers nobody until they act. Wait for it or move on:"
     " your call"
 )
+
+
+def _expiry(ts: float) -> str:
+    """Unix time for a ``who()`` line. A whole second has no trailing ``.0``."""
+    whole = int(ts)
+    return str(whole) if ts == whole else str(ts)
+
+
+def _work_bits(member: Any) -> list[str]:
+    """One member's status line and active claims, for ``who()`` (#545).
+
+    Both are peer text, so they are quoted and cut with ``sanitize`` the way an away message is.
+    The store already drops a claim at its deadline, so only active ones are here.
+    """
+    bits: list[str] = []
+    if member.status_line:
+        bits.append(f"status_line={sanitize(member.status_line, STATUS_LINE_MAX)}")
+        if member.status_line_stale:
+            bits.append("stale=yes")
+    for c in member.claims:
+        bits.append(f"claim={sanitize(c['key'], claims.KEY_MAX)} expires={_expiry(float(c['expires_at']))}")
+    return bits
 
 
 # the harnesses a hook over HTTPS may name (§49.4): the five, and the scripted test agent
@@ -600,6 +624,7 @@ class AgentService:
                 bits.append("parked=yes")
             if x.away:
                 bits.append(f"away={sanitize(x.away, 80)}")
+            bits.extend(_work_bits(x))  # claims and the status line, which the page already shows (#545)
             line = " ".join(bits)
             if x.status == "waiting-approval":
                 line += f" ({WAITING_APPROVAL_WHO})"
@@ -925,7 +950,7 @@ class AgentService:
         raw = params.get("text")
         if not isinstance(raw, str):
             raise ServiceError("bad_request", "status text must be a string")
-        line = " ".join(clean(raw).split())[:160] or None
+        line = " ".join(clean(raw).split())[:STATUS_LINE_MAX] or None
         self.store.update_participant(
             p.id, status_line=line, status_line_at=self.store.clock.now() if line else None
         )

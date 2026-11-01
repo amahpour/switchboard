@@ -806,6 +806,24 @@ class Engine:
             taken.append((q, a))
         return taken
 
+    def _owed(self, m: Membership) -> list[Item]:
+        """What this member still owes in its room (#542).
+
+        Open delivery state (§8.5) and, for a person's message that names nobody, the
+        take-turns answer (``reply_taken``, §8.8). The rule stays pure; this gathers the
+        answers the way ``reply_taken`` does.
+        """
+        owed: list[Item] = []
+        for item in self.store.reached_items(m.id):
+            answers = (
+                self.store.answers_to(m.room_id, item.message_id, m.id)
+                if rules.is_unaddressed_question(item)
+                else ()
+            )
+            if rules.still_owed(item, m.screen_name, answers):
+                owed.append(item)
+        return owed
+
     def hold_reply(self, p: Participant, m: Membership, taken: list[tuple[Item, Answer]]) -> None:
         """A say was held for these answers (``reply_taken``): nothing is posted. The questions count as
         handled for this member, as a ``pass()`` would make them: it was shown the answer, and a question
@@ -848,7 +866,8 @@ class Engine:
     ) -> tuple[str, int | None, int, bool, list[Action]]:
         """read()/say() answer: every pending item (notified stubs too), oldest first.
 
-        Returns (text, batch_id, count, more, actions).
+        Returns (text, batch_id, count, more, actions). An empty ``read()`` also names what
+        is still owed in the room (#542): ids, senders and ages, no message text.
         """
         out: list[Action] = []
         if path == "read":
@@ -862,7 +881,12 @@ class Engine:
         limit = max(1, min(int(limit), MAX_READ))
         items, more = rules.pull_items(pending, limit)
         if not items:
-            return envelope.batch_header(room.name, self.cfg.human_name, 0, 0, 0), None, 0, False, out
+            text = envelope.batch_header(room.name, self.cfg.human_name, 0, 0, 0)
+            # nothing new: name what is still owed, without its text (#542). A say()'s unread
+            # and a history page (before_id) stay as they were.
+            if path == "read" and before_id is None:
+                text += envelope.still_on_note([(None, i) for i in self._owed(m)], self.now())
+            return text, None, 0, False, out
         # whole texts, up to pull_max_chars rendered; the rest is "more"
         fit = self._fit(
             items, room, m, peer_inline=True, max_chars=self.d.pull_max_chars, item_limit=None, shrink=False
@@ -1525,20 +1549,25 @@ class Engine:
         return out
 
     def _reminder(self, p: Participant) -> HookOut | None:
-        """After /clear or a compaction: which rooms the session is in, and a fresh join code for
-        each (#304). The context that held the join's own code may be gone, and without one a
-        later restart can't take the name back; the earlier code stops working."""
+        """After /clear or a compaction: which rooms the session is in, a fresh join code for
+        each (#304), and what it still owes in them (#542). The context that held the join's
+        own code may be gone, and without one a later restart can't take the name back; the
+        earlier code stops working. The owed line is ids, sender names and ages only: this
+        text is hook context, so a peer's words stay out of it (§8.6)."""
         pairs, codes = [], {}
+        owed: list[tuple[str, Item]] = []
         for m in self.store.participant_memberships(p.id):
             room = self.store.room_by_id(m.room_id)
-            if room is not None:
-                pairs.append((room.name, m.screen_name))
-                code = secrets.token_hex(8)
-                self.store.set_join_code(m.id, join_code_hash(code))
-                codes[room.name] = code
+            if room is None:
+                continue
+            pairs.append((room.name, m.screen_name))
+            code = secrets.token_hex(8)
+            self.store.set_join_code(m.id, join_code_hash(code))
+            codes[room.name] = code
+            owed.extend((room.name, item) for item in self._owed(m))
         if not pairs:
             return None
-        return HookOut("context", envelope.render_reminder(pairs, self._humans(), codes))
+        return HookOut("context", envelope.render_reminder(pairs, self._humans(), codes, owed, self.now()))
 
     def _claim_context(self, p: Participant, path: str) -> tuple[HookOut | None, list[Action]]:
         """Mid-task priority items for the model, as hook context (one room per hook call)."""

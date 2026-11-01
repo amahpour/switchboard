@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote, urlsplit
 
+from switchboard import envelope
+
 # Lengths, cut at the boundary: everything here comes from an agent or a person.
 MAX_URL = 500
 MAX_TITLE = 200
@@ -210,8 +212,7 @@ def report_line(review: dict[str, Any], now: float) -> str:
         bits.append(f"{n} open on the PR" if n else "no threads open on the PR")
     if review.get("pr_ci"):
         bits.append(f"CI {review['pr_ci']}")
-    mins = max(0, int((now - float(review.get("reported_at") or now)) // 60))
-    age = "just now" if mins == 0 else f"{mins} min ago" if mins < 120 else f"{mins // 60} h ago"
+    age = envelope.ago(float(review.get("reported_at") or now), now)
     return f"{', '.join(bits) or review.get('pr_state') or 'reported'} (per {review['reported_by']}, {age})"
 
 
