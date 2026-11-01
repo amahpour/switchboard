@@ -609,8 +609,8 @@ def _other(o: Sequence[str]) -> str:
 STILL_ON_MAX = 20
 
 
-def _ago(ts: float, now: float) -> str:
-    """How long ago ``ts`` was: the same words as a review report's age (just now, N min, N h)."""
+def ago(ts: float, now: float) -> str:
+    """How long ago ``ts`` was (just now, N min ago, N h ago): a still-owed line and a review report's age."""
     mins = max(0, int((now - ts) // 60))
     if mins == 0:
         return "just now"
@@ -635,7 +635,7 @@ def still_on_note(entries: Sequence[tuple[str | None, Any]], now: float) -> str:
     bits = []
     for room, it in shown:
         head = f"{_word(room)} " if room else ""
-        bits.append(f"{head}{int(it.message_id)} from {_word(it.sender_name)} {_ago(float(it.ts), now)}")
+        bits.append(f"{head}{int(it.message_id)} from {_word(it.sender_name)} {ago(float(it.ts), now)}")
     extra = len(entries) - len(shown)
     more = f" and {extra} more" if extra else ""
     return " Still on you: " + ", ".join(bits) + more + "."
