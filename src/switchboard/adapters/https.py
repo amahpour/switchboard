@@ -148,6 +148,7 @@ class Listening(PullAdapter):
             f" Stop hook waits on switchboard for them{self.park_limit}. While you are working, priority"
             " ones arrive as context after your tool calls, and"
             f' the rest at your next read("{room}"), wait("{room}", {self.caps(p).wait_cap_s}) or say().'
+            " For a long wait, end your turn and let switchboard wake you."
             " kind=human ones are from your user and carry their authority just the same."
             f" {APPROVAL_GUIDANCE}"
         )

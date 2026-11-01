@@ -545,6 +545,25 @@ async def test_wait_during_a_pause_returns_paused_at_its_timeout(broker: InProcB
         assert (await a.read("#build"))["count"] == 1
 
 
+async def test_a_capped_wait_names_what_was_asked(broker: InProcBroker) -> None:
+    """#547: the test harness cap is 50 s. A ``wait(500)`` that a message ends still used to report
+    only ``timeout_s: 50``, and a ``wait(1)`` under the cap must not grow a cap report. Fails if the
+    shortened wait leaves out ``capped_from`` and ``cap_s``."""
+    async with FakeAgent(broker.home, "k1") as a:
+        await a.join("#build", "tester")
+        t = a.wait_task("#build", 500)
+        await asyncio.sleep(0.4)
+        say(broker, "soon")
+        r = await asyncio.wait_for(t, 5)
+        assert r["status"] == "messages" and r["timeout_s"] == 50
+        assert r["capped_from"] == 500 and r["cap_s"] == 50
+        assert "capped from" not in r["text"]
+        short = await a.wait("#build", 1)
+        assert short["status"] == "timeout" and short["timeout_s"] == 1
+        assert "capped_from" not in short and "cap_s" not in short
+        assert short["text"] == "[switchboard] #build: no new messages within 1 s."
+
+
 async def test_wait_times_out_and_is_capped(broker: InProcBroker) -> None:
     async with FakeAgent(broker.home, "k1") as a:
         await a.join("#build", "tester")
