@@ -2516,7 +2516,7 @@ def shoot_quiet(browser: Any, out: Path, world: Any) -> None:
     sheet). The agent is made not quiet again after each, so every picture starts the same."""
     from playwright.sync_api import expect
 
-    b, n_chat, name = world.broker, world.n_chat, "claude-1"
+    b, name = world.broker, "claude-1"
     base = {"timezone_id": "UTC", "locale": "en-US"}
     for theme, ctx_args in (
         ("light", {**DESKTOP, "color_scheme": "light"}),
@@ -2529,7 +2529,13 @@ def shoot_quiet(browser: Any, out: Path, world: Any) -> None:
         try:
             page = ctx.new_page()
             sign_in(page, b)
-            open_build(page, n_chat)
+            # the room's tab, as shoot_claims does: in a full run the page reopens the last room an
+            # earlier shot used, after the hash open_build sets
+            tab = page.locator('#tabs .room[data-room="#build"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            expect(page.locator("#room-title")).to_have_text("build")
             if phone:  # Members is a sheet on a phone, with the Inspector inside it
                 page.click("#buddy-toggle")
                 expect(page.locator("#app")).to_have_class(re.compile(r"\bsheet-open\b"))
