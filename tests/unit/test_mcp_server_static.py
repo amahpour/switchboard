@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import pytest
 from fastmcp import Client
 
 from switchboard import __version__, guardrails
@@ -190,14 +189,6 @@ async def test_a_call_with_no_membership_is_a_normal_result_not_an_error() -> No
         assert json.loads(r.content[0].text)["ok"] is False and not r.is_error
 
 
-@pytest.mark.parametrize(
-    "harness,cap",
-    [("claude", 110), ("codex", 240), ("cursor", 50), ("devin", 600), ("test", 50), ("unknown", 50)],
-)
-def test_wait_caps(harness: str, cap: int) -> None:
-    assert srv.WAIT_CAPS[harness] == cap
-
-
 class _WaitBackend(Backend):
     """A member, so ``wait`` reaches the broker call. ``answer`` is what that call returns."""
 
@@ -218,7 +209,8 @@ async def test_a_capped_wait_says_what_was_asked_and_an_uncapped_one_does_not() 
     that shorter ``timeout_s``, so the agent could not tell a cap from the timeout it asked for.
     When the cap (the tool's, or a tighter one the broker applied) shortened the request, the result
     carries ``capped_from`` and ``cap_s`` and the timeout sentence says so. A request under the cap
-    is unchanged. The call the broker sees stays clamped: a higher config cap must not raise it.
+    is unchanged. The call the broker sees stays clamped to the backend's own cap (the broker's adapter
+    answers it: tests/unit/test_wait_cap_source.py).
     Fails if the result is still only ``timeout_s``."""
     text = "[switchboard] #build: no new messages within 110 s."
     st = _WaitBackend({"ok": True, "status": "timeout", "timeout_s": 110, "text": text, "wait_id": "ab"})
