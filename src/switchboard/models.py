@@ -259,6 +259,7 @@ class Member:
     approval_mode: str
     held: bool
     joined_at: float
+    quiet: bool = False  # wake only for what is addressed (#548, §50); off until a person sets it
     queued: int = 0
     inflight: int = 0
     parked: bool = False
@@ -524,12 +525,14 @@ class Membership:
     peer_batch_boundary: int
     rules_seen: int = 0
     join_code_hash: str | None = None  # the join code it was given, hashed (#304)
+    quiet: bool = False  # wake only for what is addressed (#548, §50)
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "Membership":
         d = _row_dict(r)
         d["kicked"] = bool(d["kicked"])
         d["held"] = bool(d["held"])
+        d["quiet"] = bool(d["quiet"])
         return cls(**d)
 
     @property

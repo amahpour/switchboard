@@ -515,6 +515,17 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
   line-height: calc(22px * var(--text-scale));
 }
 .chip-held .ic { width: 12px; height: 12px; }
+.chip-quiet {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 7px;
+  border-radius: 5px;
+  background: var(--tier-bg);
+  color: var(--ink-2);
+  font-size: calc(11.5px * var(--text-scale));
+  font-weight: 500;
+  line-height: calc(22px * var(--text-scale));
+}
 
 /* ==== 4. App layout (spec 1.2) ======================================================= */
 .app {
@@ -1700,7 +1711,7 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 .insp-status { margin-top: 1px; font-size: calc(12.5px * var(--text-scale)); color: var(--muted-2); }
 .insp-owner { margin: 1px 0 0; font-size: calc(12.5px * var(--text-scale)); }
 .insp-chips { display: flex; flex-wrap: wrap; gap: 4px; }
-.insp-chips .host-chip, .insp-chips .chip-held { padding: 0 6px; }  /* tier + "This machine" + Held fit in 264 px */
+.insp-chips .host-chip, .insp-chips .chip-held, .insp-chips .chip-quiet { padding: 0 6px; }  /* tier + host + Held + quiet fit in 264 px */
 .group-label .group-count { font-weight: 400; }     /* "Delivery · last 5": the count is lighter */
 
 .insp-attn, .insp-details, .insp-timeline { display: flex; flex-direction: column; gap: 8px; }

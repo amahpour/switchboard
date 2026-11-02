@@ -619,7 +619,7 @@ class Store:
     def members(self, room_id: int) -> list[Member]:
         rows = self.con.execute(
             "SELECT m.id AS membership_id, m.participant_id, m.room_id, m.screen_name,"
-            " m.held, m.joined_at, p.harness, p.status, p.tier, p.tier_note, p.away,"
+            " m.held, m.quiet, m.joined_at, p.harness, p.status, p.tier, p.tier_note, p.away,"
             " p.status_line, p.status_line_at,"
             " p.approval_mode, p.host,"
             " (SELECT COUNT(*) FROM deliveries d WHERE d.membership_id=m.id"
@@ -643,6 +643,7 @@ class Store:
                 away=r["away"],
                 approval_mode=r["approval_mode"],
                 held=bool(r["held"]),
+                quiet=bool(r["quiet"]),
                 joined_at=r["joined_at"],
                 queued=r["queued"],
                 inflight=r["inflight"],
@@ -713,6 +714,14 @@ class Store:
             self.con.execute(
                 "UPDATE memberships SET held=?, held_at=? WHERE id=? AND left_at IS NULL",
                 (int(held), now if held else None, membership_id),
+            )
+
+    def set_quiet(self, membership_id: int, quiet: bool) -> None:
+        """Wake this member only for what is addressed to it (#548, §50), or not."""
+        with db.tx(self.con):
+            self.con.execute(
+                "UPDATE memberships SET quiet=? WHERE id=? AND left_at IS NULL",
+                (int(quiet), membership_id),
             )
 
     def end_membership(self, membership_id: int, reason: str, *, kicked: bool = False) -> None:

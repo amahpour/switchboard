@@ -508,6 +508,20 @@ async def test_an_agent_slash_is_stored_literally(broker: InProcBroker) -> None:
         assert last["text"] == "/pause" and last["sender_kind"] == "agent"
 
 
+async def test_an_agent_quiet_is_stored_literally(broker: InProcBroker) -> None:
+    """``/quiet`` is a person's command. An agent's say of it stays text, and the
+    membership stays not quiet. Fails if say() is parsed as the command."""
+    async with FakeAgent(broker.home, "k1") as a:
+        await a.join("#build", "tester")
+        await a.say("#build", "/quiet tester")
+        last = broker.web.get("/api/rooms/build/messages").json()["messages"][-1]
+        assert last["text"] == "/quiet tester" and last["sender_kind"] == "agent"
+        room = broker.state.store.get_room("#build")
+        assert room is not None
+        member = broker.state.store.find_member(room.id, "tester")
+        assert member is not None and member.quiet is False
+
+
 # ------------------------------------------------------------------ wait
 async def test_wait_returns_on_a_human_message(broker: InProcBroker) -> None:
     async with FakeAgent(broker.home, "k1") as a:

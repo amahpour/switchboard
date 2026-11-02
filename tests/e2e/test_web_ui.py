@@ -1182,6 +1182,42 @@ def test_inspector_hold_posts_the_command_and_shows_held(ui: UI) -> None:
         )
 
 
+def test_inspector_quiet_posts_the_command_and_shows_quiet(ui: UI) -> None:
+    """#548: Quiet beside Hold submits /quiet, the member is marked quiet, and Unquiet
+    submits /unquiet. Fails if the button posts nothing, or the members frame has no flag."""
+    page = ui.open()
+    page.click('#buddy-list .member[data-name="codex-1"]')
+    expect(page.locator("#insp-name")).to_contain_text("codex-1")
+    quiet = page.locator("#insp-quiet")
+    expect(quiet).to_have_text("Quiet")
+    expect(quiet).to_have_attribute("aria-pressed", "false")
+    expect(quiet).to_have_attribute("title", "Quiet: wake codex-1 only for messages addressed to it")
+    try:
+        with page.expect_request(
+            lambda r: r.method == "POST" and r.url.endswith("/api/rooms/build/command")
+        ) as req:
+            quiet.click()
+        assert req.value.post_data_json == {"text": "/quiet codex-1"}
+        expect(page.locator("#insp-body .chip-quiet")).to_have_text("quiet")
+        expect(quiet).to_have_text("Unquiet")
+        expect(quiet).to_have_attribute("aria-pressed", "true")
+        expect(page.locator('#buddy-list .member[data-name="codex-1"]')).to_contain_text("quiet")
+
+        with page.expect_request(lambda r: r.method == "POST" and r.url.endswith("/command")) as req:
+            quiet.click()
+        assert req.value.post_data_json == {"text": "/unquiet codex-1"}
+        expect(page.locator("#insp-body .chip-quiet")).to_have_count(0)
+        expect(quiet).to_have_text("Quiet")
+        expect(page.locator('#buddy-list .member[data-name="codex-1"]')).not_to_contain_text("quiet")
+    finally:
+        assert ui.world.web is not None
+        ui.world.web.post(
+            "/api/rooms/build/command",
+            json={"text": "/unquiet codex-1"},
+            headers=ui.world.broker.write_headers(),
+        )
+
+
 def test_members_say_when_held_chatter_wakes_an_agent_and_wake_now_sends_it(ui: UI) -> None:
     """#137: another agent's chatter that addresses nobody waits on the hold, and the member list
     says when it wakes the agent ("1 queued · wakes at 20:45") in light, dark and on the phone.

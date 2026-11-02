@@ -7,7 +7,8 @@ that raise it need ``human`` (the web session, or test trust). ``/catchup``
 (§26) and ``/review`` (§37.8) post one chat message as the human, so they need what
 ``switchboard say`` needs: ``human_cli``. (``/review`` was ``/catchup``'s alias in 0.3,
 removed in 0.4; it opens a review board now.) ``/close`` (§28.3) ends every membership,
-so it reduces activity: ``human_cli``.
+so it reduces activity: ``human_cli``. ``/quiet`` reduces what wakes an agent, so
+``human_cli``; ``/unquiet`` raises it, so ``human`` (§50).
 """
 
 from __future__ import annotations
@@ -39,6 +40,8 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
                       (raising it or turning it off is web only)
   /hold <name>        stop delivering to one agent (messages stay queued)
   /release <name>     resume delivery to a held agent (web only)
+  /quiet <name>       wake this agent only for messages addressed to it
+  /unquiet <name>     wake it for every message again (web only)
   /wake <name>        wake an agent now for the messages waiting for it (web only)
   /kick <name>        remove an agent and revoke its membership
   /close              close this room: every agent leaves, the history is kept;
@@ -62,7 +65,7 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
   //text              post text that starts with a single /"""
 
 _NO_ARGS = frozenset({"pause", "resume", "who", "status", "help", "close"})
-_ONE_NAME = frozenset({"kick", "hold", "release", "wake"})
+_ONE_NAME = frozenset({"kick", "hold", "release", "wake", "quiet", "unquiet"})
 _ONE_NUMBER = {"budget": MAX_BUDGET, "hops": MAX_HOPS}  # /name [n], 0 <= n <= max
 _ONE_MESSAGE = frozenset({"pin", "unpin"})  # /name <message id>
 KNOWN = _NO_ARGS | _ONE_NAME | set(_ONE_NUMBER) | _ONE_MESSAGE | {"catchup", "review", "rename"}
@@ -76,6 +79,8 @@ _STATIC_ROLES = {
     "hold": "human_cli",
     "release": "human",
     "wake": "human",  # raises activity: a wake now, past the hold and the budget (#137)
+    "quiet": "human_cli",  # fewer wakes: unaddressed chatter never starts a turn (#548)
+    "unquiet": "human",  # more wakes again, so the web session, like /release
     "who": "human_cli",
     "status": "human_cli",
     "help": "human_cli",
@@ -713,6 +718,30 @@ def apply(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
             f"waking {member.name} for {n} waiting message{'s' if n != 1 else ''}",
             members_changed=True,
             event="wake",
+            event_data={"membership_id": member.membership_id},
+        )
+    if name == "quiet":
+        if member.quiet:
+            return Result(True, f"{member.name} is already quiet")
+        store.set_quiet(member.membership_id, True)
+        return Result(
+            True,
+            f"quieted {member.name}: it wakes only for messages addressed to it",
+            notice=f"quieted {member.name}: it wakes only for messages addressed to it",
+            members_changed=True,
+            event="quiet",
+            event_data={"membership_id": member.membership_id},
+        )
+    if name == "unquiet":
+        if not member.quiet:
+            return Result(True, f"{member.name} is not quiet")
+        store.set_quiet(member.membership_id, False)
+        return Result(
+            True,
+            f"unquieted {member.name}: it wakes for every message again",
+            notice=f"unquieted {member.name}",
+            members_changed=True,
+            event="unquiet",
             event_data={"membership_id": member.membership_id},
         )
     if name == "kick":

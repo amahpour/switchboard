@@ -171,10 +171,11 @@ class Engine:
 
     def wakes_at(self, membership_id: int) -> float | None:
         """When the hold on unaddressed chatter (#137) lets this member's waiting messages wake
-        it, for the member list; None when nothing waits on the hold. Only for a member that
-        such a wake would reach now: idle, not held or parked (no wake path: the Inspector says to
-        poke it instead), in a room that isn't paused and has budget, and not already in its own
-        wait() (which gets chatter without the hold)."""
+        it, for the member list; None when nothing waits on the hold. A quiet member (§50) has
+        none: unaddressed chatter never wakes it. Only for a member that such a wake would reach
+        now: idle, not held or parked (no wake path: the Inspector says to poke it instead), in a
+        room that isn't paused and has budget, and not already in its own wait() (which gets
+        chatter without the hold)."""
         m = self.store.get_membership(membership_id)
         if m is None or not m.active or m.held or membership_id in self.parked:
             return None
@@ -187,7 +188,9 @@ class Engine:
             return None
         if not rules.peer_ok(m.peer_batch_boundary, p.boundary_seq):
             return None
-        return rules.chatter_wakes_at(self.store.pending_items(m.id), self._hold_s(sink))
+        return rules.chatter_wakes_at(
+            self.store.pending_items(m.id), self._hold_s(sink), addressed_only=m.quiet
+        )
 
     # the humans (DESIGN.md §32): the owner, and on a hosted broker everyone the owner added
     def _humans(self) -> list[str]:
@@ -391,6 +394,7 @@ class Engine:
             hold_s=self._hold_s(sink),
             wake_now=self._wake_now(m.id, pending),
             peers_stubbed=peers_stubbed,
+            addressed_only=m.quiet,
         )
         if rel is None:
             unread = rules.unread_stubs(pending) if sink is not None and sink.kind == "wait" else []
@@ -413,6 +417,7 @@ class Engine:
                 eff=eff,
                 peer_batch_boundary=m.peer_batch_boundary,
                 boundary_seq=p.boundary_seq,
+                addressed_only=m.quiet,
             ):
                 out += self._budget_exhausted(room)
             return out + unparked()
@@ -1129,6 +1134,9 @@ class Engine:
         if name == "hold" and membership_id is not None:
             self._unpark(membership_id)
             return [Snapshot(room_id)]
+        if name in ("quiet", "unquiet") and membership_id is not None:
+            # on: a due chatter release stops; off: chatter already past the hold goes now
+            return self.evaluate(membership_id) + [Snapshot(room_id)]
         if name == "wake" and membership_id is not None:
             waiting = [i.message_id for i in self.store.pending_items(membership_id) if i.prio == 0]
             if waiting:
@@ -1454,6 +1462,7 @@ class Engine:
                 wake_now=self._wake_now(m.id, pending),
                 # Devin's Stop block stubs peer text, same as a held Stop hook (#548).
                 peers_stubbed="stop_block" not in caps.inline_paths,
+                addressed_only=m.quiet,
             )
             if rel is None or rel.kind != "wake":
                 continue
@@ -1590,6 +1599,7 @@ class Engine:
                 batch_max_msgs=self.d.batch_max_msgs,
                 max_chars=min(self.d.batch_max_chars, caps.ctx_max_chars),
                 hold_s=self.d.unaddressed_hold_s,
+                addressed_only=m.quiet,
             )
             if rel is None:
                 continue

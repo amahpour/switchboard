@@ -25,6 +25,12 @@ a peer message it saw only as a stub, except unaddressed chatter (prio 0, not a
 reply to the member), which #548 exempts. A random pass that is refused does
 nothing; a cooperative agent (quiescence) reads, then passes, and the simulator
 asserts that the read() lifted the rule unless read() hit its limit.
+
+Quiet (#548, §50) is drawn per membership from a side stream of its own, and
+toggled the same way, so the main seed and the #137 side stream stay what they
+were. Quiescence does not turn it off: unaddressed chatter pending for a quiet
+member is not wake-eligible. A chatter-only wake for one is a violation, including
+into its own ``wait()``, unless a ``/wake`` covers that member.
 """
 
 from __future__ import annotations
@@ -41,6 +47,7 @@ from engine_world import World
 from switchboard import envelope
 from switchboard.adapters.https import HttpsDevinAdapter
 from switchboard.config import Config
+from switchboard.delivery import rules
 from switchboard.models import WATCHDOG_DONE, Action, HookEvent, HookOut, Notice, Room
 
 WAIT_TOOL = HttpsDevinAdapter.wait_tool
@@ -92,6 +99,8 @@ class Sim:
         )
         # /wake (#137) now and then, from the same side stream, so the main one is unchanged
         self.side = random.Random(seed * 104729 + 137)
+        # quiet (#548): its own stream, so neither the main seed nor the #137 one moves
+        self.quiet = random.Random(seed * 54851 + 548)
         self.clock = FakeClock()
         self.w = World(tmp_path, self.clock, cfg)
         self.engine = self.w.engine
@@ -147,6 +156,9 @@ class Sim:
         mids = [m.id]
         if len(self.rooms) > 1 and kind not in SINGLE_ROOM and r.random() < 0.7:
             mids.append(self.store.create_membership(self.rooms[1].id, p.id, name).id)
+        for mid in mids:
+            if self.quiet.random() < 0.5:
+                self.store.set_quiet(mid, True)
         mem = Mem(kind=kind, name=name, pid=p.id, mids=mids, conn=1000 + i, lazy=r.random() < 0.3)
         if kind == "claude":
             mem.mode = r.choice(["prompting", "bypass"])
@@ -419,6 +431,12 @@ class Sim:
                         self.bad.append(
                             f"{where} after {waited:.1f} s of a {hold:.0f} s hold: {self.trace[-5:]}"
                         )
+        # quiet (#548): unaddressed chatter alone never starts a turn, not even a wait()
+        if m.quiet and kw.get("kind") == "wake" and membership_id not in self.engine.wake_now:
+            pend = {i.message_id: i for i in self.store.pending_items(membership_id)}
+            its = [pend[mid] for mid, _inline in kw.get("items", ()) if mid in pend]
+            if its and all(rules.unaddressed_chatter(i) for i in its):
+                self.bad.append(f"{where} is chatter only, and {m.screen_name} is quiet: {self.trace[-5:]}")
 
     def check_watchdog(self) -> list[str]:
         """At most watchdog_max reminders per delivery; escalated @mentions never
@@ -551,6 +569,15 @@ class Sim:
                 m = r.choice(ms)
                 self.store.end_membership(m.id, "kick", kicked=True)
                 self.run(self.engine.on_membership_ended(m.id, "kick"))
+        if self.quiet.random() < 0.35:
+            # /quiet and /unquiet from their own stream (#548): the main seed is unchanged
+            ms = self.store.room_memberships(room.id)
+            if ms:
+                m = ms[self.quiet.randrange(len(ms))]
+                on = not m.quiet
+                self.store.set_quiet(m.id, on)
+                self.trace.append(f"cmd:{'quiet' if on else 'unquiet'}:{m.screen_name}")
+                self.run(self.engine.on_command(room.id, "quiet" if on else "unquiet", m.id))
         if self.side.random() < 0.25:
             # /wake as the command allows it: a member that isn't held, in a room not paused
             ms = [m for m in self.store.room_memberships(room.id) if not m.held]
@@ -699,7 +726,7 @@ class Sim:
         """Lift every cooldown, then let every agent cooperate (confirm what it is
         offered, answer with pass(), end its turn and listen again) while the
         clock runs past the longer of max_hold_s and the hold on unaddressed chatter (#137),
-        plus the largest TTL."""
+        plus the largest TTL. Quiet stays on: that chatter is not wake-eligible (§50)."""
         for room in self.rooms:
             if self.store.room_by_id(room.id).paused:
                 self.store.set_paused(room.id, False)
@@ -819,12 +846,22 @@ class Sim:
     # ------------------------------------------------------------ invariant
     def violations(self) -> list[str]:
         """Deliveries of active memberships that are offered, or pending and wake-eligible;
-        plus any safety rule broken on the way (quiescence included)."""
+        plus any safety rule broken on the way (quiescence included).
+
+        Unaddressed chatter still pending for a quiet member is not wake-eligible (§50):
+        quiescence leaves quiet on, so that chatter may stay."""
         out = self.bad + self.check_watchdog()
         for mem in self.active():
             for mid in mem.mids:
+                mship = self.store.get_membership(mid)
+                held_quiet: set[int] = set()
+                if mship is not None and mship.quiet:
+                    held_quiet = {
+                        i.message_id for i in self.store.pending_items(mid) if rules.unaddressed_chatter(i)
+                    }
                 for d in self.store.deliveries(mid):
-                    if d["state"] == "offered" or (d["state"] == "pending" and d["notified_at"] is None):
+                    pending = d["state"] == "pending" and d["notified_at"] is None
+                    if d["state"] == "offered" or (pending and d["message_id"] not in held_quiet):
                         out.append(
                             f"{mem.name}/{mid} msg {d['message_id']}: {d['state']}"
                             f" (prio {d['prio']}, attempts {d['attempts']}, reminders {d['reminders']})"

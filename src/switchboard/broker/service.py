@@ -174,6 +174,7 @@ def member_dict(m: Member) -> dict[str, Any]:
         "status_line_remaining_s": m.status_line_remaining_s,
         "approval_mode": m.approval_mode,
         "held": m.held,
+        "quiet": m.quiet,  # wake only for what is addressed (#548, §50)
         "queued": m.queued,
         # when the hold on unaddressed chatter (#137) lets the queued messages wake it, or None
         "wakes_at": m.wakes_at,
@@ -1238,6 +1239,8 @@ class RoomService:
                 flags.append("? approval mode unknown (treat like ⚠)")
             if m.held:
                 flags.append("⏸ held")
+            if m.quiet:
+                flags.append("quiet")
             if m.queued:
                 flags.append(f"{m.queued} queued")
             if m.inflight:

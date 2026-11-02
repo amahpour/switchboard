@@ -16,7 +16,9 @@ agent, and (unlike ``@here``/``@everyone``) works the same from a person's
 message or an agent's own ``say()``. Issue #507 adds taking turns on a person's message that
 names nobody: which says are a second answer to it, and which post was the first (§8.8).
 Issue #542 adds which of a member's open deliveries are still owed: the same open
-states and the same answer, rendered as ids, senders and ages.
+states and the same answer, rendered as ids, senders and ages. Issue #548 adds
+``addressed_only``: a quiet membership, for which unaddressed chatter never
+starts a turn (§50).
 """
 
 from __future__ import annotations
@@ -189,7 +191,14 @@ def peer_ok(peer_batch_boundary: int, boundary_seq: int) -> bool:
 
 
 def chatter_due(
-    room: Room, chatter: Sequence[Item], now: float, quiet_s: float, max_hold_s: float, hold_s: float = 0.0
+    room: Room,
+    chatter: Sequence[Item],
+    now: float,
+    quiet_s: float,
+    max_hold_s: float,
+    hold_s: float = 0.0,
+    *,
+    addressed_only: bool = False,
 ) -> bool:
     """Chatter goes out once the room has been quiet for ``quiet_s``, or the oldest
     item has waited ``max_hold_s``.
@@ -197,21 +206,33 @@ def chatter_due(
     With ``hold_s`` set (issue #137), only chatter that addresses the member (a reply to its
     own message) goes by that rule. The rest waits until its oldest item has waited ``hold_s``:
     agents' chatter collects into one batch instead of a turn per message, and the member
-    still gets it sooner at any wake it has for something else."""
+    still gets it sooner at any wake it has for something else.
+
+    ``addressed_only`` (a quiet membership, #548, §50) is stricter than the hold: unaddressed
+    chatter never becomes due, including when ``hold_s`` is 0 (an open ``wait()``). A reply
+    still does, and the caller sends the other chatter along with it."""
     if not chatter:
         return False
-    addressed = [c for c in chatter if c.reply_to_me] if hold_s > 0 else list(chatter)
+    if hold_s > 0 or addressed_only:
+        addressed = [c for c in chatter if c.reply_to_me]
+    else:
+        addressed = list(chatter)
     if addressed:
         quiet = room.last_msg_at is None or now - room.last_msg_at >= quiet_s
         if quiet or now - addressed[0].ts >= max_hold_s:
             return True
+    if addressed_only:
+        return False
     return hold_s > 0 and any(now - c.ts >= hold_s for c in chatter if not c.reply_to_me)
 
 
-def chatter_wakes_at(pending: Sequence[Item], hold_s: float) -> float | None:
+def chatter_wakes_at(pending: Sequence[Item], hold_s: float, *, addressed_only: bool = False) -> float | None:
     """When the hold (issue #137) lets an idle member's waiting chatter wake it, for the member
     list: None when nothing is held, or something other than the hold decides (a priority item
-    wakes at once, a reply by the quiet period)."""
+    wakes at once, a reply by the quiet period). A quiet member (#548) has no such time:
+    unaddressed chatter never     wakes it."""
+    if addressed_only:
+        return None
     eligible = [d for d in pending if d.notified_at is None]
     if hold_s <= 0 or not eligible or any(d.prio >= 1 or d.reply_to_me for d in eligible):
         return None
@@ -233,6 +254,7 @@ def releasable(
     hold_s: float = 0.0,
     wake_now: bool = False,
     peers_stubbed: bool = False,
+    addressed_only: bool = False,
 ) -> Release | None:
     """What may go out to one member now (DESIGN.md §8.2), or None.
 
@@ -246,6 +268,9 @@ def releasable(
       their own message, it skips the hold, the budget and the one-peer-batch rule.
     - ``peers_stubbed``: this batch will show agent text as stubs (a Stop path, #548),
       so the cap charges the stub line rather than the inline one.
+    - ``addressed_only``: a quiet member (#548, §50). Unaddressed chatter never starts
+      the turn. A person's message, an @mention, a reply and ``wake_now`` still do,
+      and they take that chatter along. Busy stays priority only: chatter is not added.
     """
     eligible = [d for d in pending if d.notified_at is None]
     prio = [d for d in eligible if d.prio >= 1]
@@ -265,16 +290,25 @@ def releasable(
     if chatter and wake_now:
         return done(chatter, "wake", True)
     if chatter and ok and room.budget_remaining > 0:
-        if chatter_due(room, chatter, now, quiet_s, max_hold_s, hold_s):
+        if chatter_due(room, chatter, now, quiet_s, max_hold_s, hold_s, addressed_only=addressed_only):
             return done(chatter, "wake", True)
     return None
 
 
 def budget_blocked(
-    pending: Sequence[Item], *, room: Room, eff: str, peer_batch_boundary: int, boundary_seq: int
+    pending: Sequence[Item],
+    *,
+    room: Room,
+    eff: str,
+    peer_batch_boundary: int,
+    boundary_seq: int,
+    addressed_only: bool = False,
 ) -> bool:
     """True when an idle member has wake-eligible non-human items that only the
-    empty budget holds back (drives the once-per-window budget_exhausted notice)."""
+    empty budget holds back (drives the once-per-window budget_exhausted notice).
+
+    Unaddressed chatter a quiet member is holding (#548) does not count: the budget
+    is not what keeps it. A reply still would, once the quiet period let it go."""
     if not is_idle(eff) or room.budget_remaining > 0:
         return False
     eligible = [d for d in pending if d.notified_at is None]
@@ -282,7 +316,8 @@ def budget_blocked(
         return False
     if any(d.prio == 1 for d in eligible):
         return True
-    return any(d.prio == 0 for d in eligible) and peer_ok(peer_batch_boundary, boundary_seq)
+    chatter = [d for d in eligible if d.prio == 0 and (d.reply_to_me or not addressed_only)]
+    return bool(chatter) and peer_ok(peer_batch_boundary, boundary_seq)
 
 
 def pull_items(pending: Sequence[Item], limit: int) -> tuple[list[Item], bool]:
