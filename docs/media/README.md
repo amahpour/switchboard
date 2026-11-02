@@ -59,6 +59,8 @@ For an OpenCode session's own avatar (#518), `opencode-avatar-{light,dark}.png` 
 For an admin's uploaded OpenCode images (#518), `opencode-upload-after-{light,dark}.png` and `opencode-upload-after-{log,members}-phone-light.png` show the same room with the uploaded avatar over the glyph, and `opencode-upload-settings-{light,dark,phone-light}.png` OpenCode's card in Settings → Appearance → Agent icons.
 For a quiet agent (#548), `ui_shots.py` writes `quiet-inspector-{light,dark,phone-light}.png` (the Inspector after Quiet is pressed: the quiet chip and the Unquiet button) and `quiet-members-{light,dark,phone-light}.png` (the agent's Members line ending in "quiet"). `--only quiet` makes just those, in a few seconds.
 
+For an artifact line (#544), `ui_shots.py` writes `link-card-{light,dark,phone-light}.png`: one message with three artifact lines as cards, an https link with its size and checksum, a name and a path that says "on the sender's machine only", and a link back to the broker with the "link blocked" pill. `--only link_card` makes just those, in a few seconds.
+
 For an agent waiting for its person's approval (#472), it writes `approval-board-{before,after}-*` and `approval-inspector-{before,after}-*` (the review card that waits on the agent, and its Inspector, in light, dark and phone light) and `approval-members-{before,after}-phone-light`: busy, as every agent at a prompt looked before, then waiting for approval.
 For the board's confirmed-fix check (#427), it writes `check-waiting-*` and `check-confirmed-*` PNGs in light, dark and phone light: a fix awaiting its raiser's confirmation has no check, and the same card has a green one once confirmed.
 

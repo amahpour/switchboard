@@ -15,10 +15,10 @@ broadcast reaches, not whether it may (the caller's job). Issue #138 adds
 agent, and (unlike ``@here``/``@everyone``) works the same from a person's
 message or an agent's own ``say()``. Issue #507 adds taking turns on a person's message that
 names nobody: which says are a second answer to it, and which post was the first (§8.8).
-Issue #542 adds which of a member's open deliveries are still owed: the same open
-states and the same answer, rendered as ids, senders and ages. Issue #548 adds
-``addressed_only``: a quiet membership, for which unaddressed chatter never
-starts a turn (§50).
+Issue #542 adds which of a member's open deliveries are still owed, and which of
+its own messages an addressee has not handled: the same open states, rendered as
+ids, names and ages. Issue #548 adds ``addressed_only``: a quiet membership, for
+which unaddressed chatter never starts a turn (§50).
 """
 
 from __future__ import annotations
@@ -406,6 +406,21 @@ def still_owed(item: Item, sayer: str, answers: Sequence[Answer] = ()) -> bool:
     if not reached or not (envelope.to_you(item, sayer) or item.reply_to_me):
         return False
     return not (is_unaddressed_question(item) and reply_taken(item, sayer, answers) is not None)
+
+
+def waiting_on(item: Item, addressee: str, answers: Sequence[Answer] = ()) -> bool:
+    """True when ``addressee`` still has this message open (#542, DESIGN.md §8.5).
+
+    The message is addressed to that member: an @mention of them, or a reply to
+    their own message. A person's message that names nobody is not addressed to
+    one member, so it is never waiting, even though ``still_owed`` is true for
+    every agent until someone answers it. Open is ``still_owed``: the delivery
+    reached them and they have not handled it. ``answers`` matter only when the
+    message is also an unaddressed question.
+    """
+    if not (item.mentioned or item.reply_to_me):
+        return False
+    return still_owed(item, addressee, answers)
 
 
 def hop_tripped(room: Room) -> bool:

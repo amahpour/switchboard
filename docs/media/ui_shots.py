@@ -88,6 +88,8 @@ once there are two people; the Inspector naming the owner and the device, #496),
 quiet-inspector-{light,dark,phone-light} and quiet-members-{light,dark,phone-light} (an agent a person
 quieted with the Inspector's Quiet button: the quiet chip and Unquiet, then the agent's line in Members,
 #548),
+link-card-{light,dark,phone-light} (a message with three artifact lines shown as cards: an https link, a
+path that says "on the sender's machine only", and a link back to the broker, blocked, #544),
 confirm-light, signin-light, setup-person-light and
 signin-phone-dark (all .png).
 
@@ -2505,6 +2507,58 @@ def shoot_agent_owner(browser: Any, out: Path, world: Any) -> None:
         loop.close()
 
 
+def shoot_link_card(browser: Any, out: Path, world: Any) -> None:
+    """#544: a message from alice with three artifact lines, each shown as a card in a room of its own: an
+    https link with a size and a checksum, a name and a path (which says "on the sender's machine only"),
+    and a link back to the broker (the usual "link blocked" pill). Light, dark and the phone, clipped to
+    the message so the cards are readable. The same message is what the "before" picture is made from."""
+    import hashlib
+
+    from playwright.sync_api import expect
+
+    room = "#files"
+    sha = hashlib.sha256(b"report.zip").hexdigest()
+    world.create_room(room)
+    world.say(
+        "files",
+        "Build is done. The three files:\n\n"
+        f"artifact: report.zip | 12 KB | sha256:{sha} | https://files.example.com/out/report.zip\n"
+        "artifact: run.log | ~/scratch/run.log\n"
+        "artifact: notes.txt | 3 KB | http://localhost:8765/files/notes.txt",
+    )
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for theme, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator(f'#tabs .room[data-room="{room}"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")  # a phone keeps its rooms in a drawer
+            tab.click()
+            expect(page.locator("#room-title")).to_have_text("files")
+            if page.locator("#app.nav-open").count():
+                page.keyboard.press("Escape")
+            expect(page.locator("#log .md-artifact")).to_have_count(3)
+            expect(page.locator("#log .md-artifact .md-blocked-pill")).to_have_count(1)
+            if theme == "phone-light":  # the cards wrap inside the message: nothing scrolls sideways
+                assert page.evaluate(
+                    "document.documentElement.scrollWidth <= window.innerWidth"
+                    " && [...document.querySelectorAll('#log .md-artifact')]"
+                    ".every(c => c.scrollWidth <= c.clientWidth + 1)"
+                )
+            page.evaluate("document.activeElement && document.activeElement.blur()")
+            settle(page)
+            shot(page, out, f"link-card-{theme}.png", clip=log_clip(page))
+        finally:
+            ctx.close()
+
+
 def shoot_quiet(browser: Any, out: Path, world: Any) -> None:
     """#548: a person quiets an agent from its Inspector. After pressing Quiet the Inspector shows the
     "quiet" chip and an Unquiet button (``quiet-inspector-*``), and Members ends the agent's line with
@@ -2560,7 +2614,7 @@ def shoot_quiet(browser: Any, out: Path, world: Any) -> None:
 
 # The sets ``--only`` can shoot alone: each takes (browser, out, world) and needs only the seeded world,
 # so a pull request that adds one picture set can make it in seconds instead of running all of them.
-ONLY: dict[str, Any] = {"quiet": shoot_quiet}
+ONLY: dict[str, Any] = {"link_card": shoot_link_card, "quiet": shoot_quiet}
 
 
 # -------------------------------------------------------------------- main
@@ -2644,6 +2698,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_approval(browser, out, world)
             shoot_opencode_avatar(browser, out, world)  # a room of its own, so after the others
             shoot_opencode_upload(browser, out, world)  # in that room, so right after
+            shoot_link_card(browser, out, world)  # a room of its own, after the others
             shoot_quiet(browser, out, world)  # quiets a #build agent for a moment: last in this world
             shoot_hosted(browser, out, hosted)
             shoot_common_password(browser, out, weak)

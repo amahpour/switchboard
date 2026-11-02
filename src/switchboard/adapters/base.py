@@ -74,6 +74,7 @@ class Adapter:
             "codex": (c.codex.ctx_max_chars, c.codex.wait_cap_s),
             "cursor": (c.cursor.ctx_max_chars, c.cursor.wait_cap_s),
             "devin": (c.devin.ctx_max_chars, c.devin.wait_cap_s),
+            "opencode": (c.delivery.batch_max_chars, c.opencode.wait_cap_s),
         }
         ctx, wait = table.get(self.harness, (c.delivery.batch_max_chars, 50))
         # never more than the broker prints for this harness (``hook_replies``), so its cut is only

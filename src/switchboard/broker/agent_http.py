@@ -72,7 +72,6 @@ from switchboard.broker.service import ServiceError
 from switchboard.mcp.server import (
     CLIENT_INFO_META_KEY,
     TOOL_NAMES,
-    WAIT_CAPS,
     build_server,
     err,
     request_meta,
@@ -546,7 +545,9 @@ class HttpTools:
         return _id(request_meta(ctx).get("threadId"))
 
     def wait_cap(self) -> int:
-        return WAIT_CAPS.get(self.harness or "unknown", 50)
+        """The caller's harness cap on ``wait()``: the one its adapter applies (``[claude] wait_cap_s`` and
+        the like, §9.1), so a config value raises the tool's cap as well as lowers it (#547)."""
+        return self.state.engine.adapter_for(self.harness or "unknown").caps().wait_cap_s
 
     async def call(self, method: str, params: dict[str, Any], timeout: float = 15.0) -> dict[str, Any]:
         c = self._caller.get()
