@@ -43,6 +43,7 @@ MEMBER_KEYS = {
     "away",
     "approval_mode",
     "held",
+    "quiet",  # wake only for what is addressed (#548); false until a person sets it
     "queued",
     "inflight",
     "parked",

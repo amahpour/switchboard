@@ -2,7 +2,7 @@
 
     uv run python docs/media/ui_shots.py              # writes docs/media/ui/*.png
     uv run python docs/media/ui_shots.py --out /tmp/shots
-    uv run python docs/media/ui_shots.py --out /tmp/shots --only link_card   # one set of pictures
+    uv run python docs/media/ui_shots.py --out /tmp/shots --only quiet   # one set of pictures
 
 Run by hand (and by CI's ``frontend`` job, into a temp dir it uploads), never by pytest: it is
 not under tests/ and nothing imports it. It needs Playwright's Chromium, once per machine::
@@ -85,6 +85,9 @@ approval-inspector-{before,after}-{light,dark,phone-light} and approval-members-
 because its person has a permission prompt open: the card, the Inspector and Members, #472),
 agent-owner-{members,inspector}-{light,dark,phone-light} (Members naming each agent's owner under its name,
 once there are two people; the Inspector naming the owner and the device, #496),
+quiet-inspector-{light,dark,phone-light} and quiet-members-{light,dark,phone-light} (an agent a person
+quieted with the Inspector's Quiet button: the quiet chip and Unquiet, then the agent's line in Members,
+#548),
 link-card-{light,dark,phone-light} (a message with three artifact lines shown as cards: an https link, a
 path that says "on the sender's machine only", and a link back to the broker, blocked, #544),
 confirm-light, signin-light, setup-person-light and
@@ -2556,9 +2559,62 @@ def shoot_link_card(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def shoot_quiet(browser: Any, out: Path, world: Any) -> None:
+    """#548: a person quiets an agent from its Inspector. After pressing Quiet the Inspector shows the
+    "quiet" chip and an Unquiet button (``quiet-inspector-*``), and Members ends the agent's line with
+    "quiet" (``quiet-members-*``). Light, dark and the phone, each clipped to the pane (on a phone, the
+    sheet). The agent is made not quiet again after each, so every picture starts the same."""
+    from playwright.sync_api import expect
+
+    b, name = world.broker, "claude-1"
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for theme, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        phone = theme == "phone-light"
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, b)
+            # the room's tab, as shoot_claims does: in a full run the page reopens the last room an
+            # earlier shot used, after the hash open_build sets
+            tab = page.locator('#tabs .room[data-room="#build"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            expect(page.locator("#room-title")).to_have_text("build")
+            if phone:  # Members is a sheet on a phone, with the Inspector inside it
+                page.click("#buddy-toggle")
+                expect(page.locator("#app")).to_have_class(re.compile(r"\bsheet-open\b"))
+            inspect(page, name)
+            quiet = page.locator("#insp-quiet")
+            expect(quiet).to_have_text("Quiet")
+            quiet.click()
+            expect(page.locator("#insp-body .chip-quiet")).to_have_text("quiet")
+            expect(quiet).to_have_text("Unquiet")
+            page.mouse.move(0, 0)  # the pointer off the button: no hover colour in the picture
+            page.evaluate("document.activeElement && document.activeElement.blur()")
+            # the pane, or on a phone the sheet: not the dimmed page behind it
+            box = page.locator("#pane").bounding_box()
+            assert box is not None
+            vh = page.viewport_size["height"] if page.viewport_size else box["y"] + box["height"]
+            clip = {**box, "height": min(box["height"], vh - box["y"])}
+            shot(page, out, f"quiet-inspector-{theme}.png", clip=clip)
+            back(page)
+            page.mouse.move(0, 0)
+            expect(page.locator(f'#buddy-list .member[data-name="{name}"]')).to_contain_text("quiet")
+            shot(page, out, f"quiet-members-{theme}.png", clip=clip)
+        finally:
+            ctx.close()
+            world.command("build", f"/unquiet {name}")  # a no-op reply when it is not quiet
+
+
 # The sets ``--only`` can shoot alone: each takes (browser, out, world) and needs only the seeded world,
 # so a pull request that adds one picture set can make it in seconds instead of running all of them.
-ONLY: dict[str, Any] = {"link_card": shoot_link_card}
+ONLY: dict[str, Any] = {"link_card": shoot_link_card, "quiet": shoot_quiet}
 
 
 # -------------------------------------------------------------------- main
@@ -2642,7 +2698,8 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_approval(browser, out, world)
             shoot_opencode_avatar(browser, out, world)  # a room of its own, so after the others
             shoot_opencode_upload(browser, out, world)  # in that room, so right after
-            shoot_link_card(browser, out, world)  # a room of its own, last in this world
+            shoot_link_card(browser, out, world)  # a room of its own, after the others
+            shoot_quiet(browser, out, world)  # quiets a #build agent for a moment: last in this world
             shoot_hosted(browser, out, hosted)
             shoot_common_password(browser, out, weak)
             shoot_mention_people(browser, out, people)

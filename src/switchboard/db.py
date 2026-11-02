@@ -36,7 +36,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 35
+SCHEMA_VERSION = 36
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -85,7 +85,8 @@ CREATE TABLE memberships(
   cursor_id INTEGER NOT NULL DEFAULT 0,
   peer_batch_boundary INTEGER NOT NULL DEFAULT -1,
   rules_seen INTEGER NOT NULL DEFAULT 0 CHECK(rules_seen >= 0),
-  join_code_hash TEXT);
+  join_code_hash TEXT,
+  quiet INTEGER NOT NULL DEFAULT 0 CHECK(quiet IN (0, 1)));
 CREATE UNIQUE INDEX memberships_active_name ON memberships(room_id, screen_name) WHERE left_at IS NULL;
 CREATE UNIQUE INDEX memberships_active_part ON memberships(room_id, participant_id) WHERE left_at IS NULL;
 
@@ -719,6 +720,14 @@ V34_TO_V35 = (
     "UPDATE meta SET value='35' WHERE key='schema_version'",
 )
 
+# v35 -> v36 (#548, DESIGN.md §50): a membership can be quiet, so unaddressed chatter never starts
+# a turn for that agent. Every existing membership stays off (0): delivery is unchanged until a
+# person turns it on. NOT NULL and only 0 or 1, so there is no unknown mode to treat as on.
+V35_TO_V36 = (
+    "ALTER TABLE memberships ADD COLUMN quiet INTEGER NOT NULL DEFAULT 0 CHECK(quiet IN (0, 1))",
+    "UPDATE meta SET value='36' WHERE key='schema_version'",
+)
+
 
 class MigrationStep(NamedTuple):
     to: int
@@ -765,6 +774,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         32: MigrationStep(33, V32_TO_V33, ("listener_keys",)),
         33: MigrationStep(34, V33_TO_V34, (), (("participants", "'opencode'"),)),
         34: MigrationStep(35, V34_TO_V35, (), (("agent_icons", "'devin','opencode'"),)),
+        35: MigrationStep(36, V35_TO_V36, ()),
     }
     out = []
     v = frm

@@ -1283,6 +1283,7 @@
     if (m.wakes_at) st += ' · wakes at ' + hhmm(m.wakes_at);
     if (m.inflight) st += ' · ' + m.inflight + ' in flight';
     if (m.held) st += ' · held';
+    if (m.quiet) st += ' · quiet';
     const chips = el('span', 'm-chips');
     chips.append(tierChip(m));
     const owner = showOwners() ? ownerLine(m, false) : null;
@@ -1892,6 +1893,11 @@
       h.title = 'Delivery is held: messages wait until you release it';
       chips.append(h);
     }
+    if (m.quiet) {
+      const q = el('span', 'chip-quiet', 'quiet');
+      q.title = 'Wakes only for messages addressed to it';
+      chips.append(q);
+    }
     const idText = el('div');
     idText.append(nameH, el('p', 'insp-status', statusWord(m) + since + ' · ' + harnessOf(m.harness)[1]));
     const owner = ownerLine(m, true);
@@ -2051,6 +2057,21 @@
       hold.title = 'Hold: stop delivery to ' + m.name + '; messages wait until you release it';
     }
     hold.addEventListener('click', function () { submitText((m.held ? '/release ' : '/hold ') + m.name); });
+    // Quiet (#548): unaddressed chatter never starts a turn. /unquiet raises that again, so web only.
+    const quietBtn = btn('btn');
+    quietBtn.id = 'insp-quiet';
+    quietBtn.dataset.focus = 'quiet';
+    quietBtn.setAttribute('aria-pressed', String(!!m.quiet));
+    if (m.quiet) {
+      quietBtn.append('Unquiet');
+      quietBtn.title = 'Unquiet: wake ' + m.name + ' for every message again (web only)';
+    } else {
+      quietBtn.append('Quiet');
+      quietBtn.title = 'Quiet: wake ' + m.name + ' only for messages addressed to it';
+    }
+    quietBtn.addEventListener('click', function () {
+      submitText((m.quiet ? '/unquiet ' : '/quiet ') + m.name);
+    });
     // Wake now (#137): only while agents' chatter waits on the hold for this member
     let wake = null;
     if (m.wakes_at) {
@@ -2071,8 +2092,9 @@
     cu.append(icon('history'), 'Catch up on…', icon('chev-down'));
     cu.addEventListener('click', function () { setMenu(!ui.menu); });
     if (wake) row.append(wake);
-    row.append(hold, cu);
+    row.append(hold, quietBtn, cu);
     refs.hold = hold;
+    refs.quiet = quietBtn;
     refs.catchup = cu;
 
     const menu = el('div', 'menu' + (ui.menu ? '' : ' hidden'));
@@ -2134,7 +2156,10 @@
     const fine = el('p', 'fine');
     fine.append('Same as ');
     if (wake) fine.append(el('code', null, '/wake'), ', ');
-    fine.append(el('code', null, '/hold'), ', ', el('code', null, '/catchup'), ' and ', el('code', null, '/kick'), ' in the composer.');
+    fine.append(
+      el('code', null, '/hold'), ', ', el('code', null, '/quiet'), ', ',
+      el('code', null, '/catchup'), ' and ', el('code', null, '/kick'), ' in the composer.'
+    );
     actions.append(menu, row, kick, fine);
 
     body.replaceChildren(id);
@@ -2213,6 +2238,11 @@
       detail: 'Nothing is dropped: held messages go out on /release.' },
     { group: 'Agents', cmd: 'release', args: '<name>', desc: 'Resume delivery to a held agent', pill: 'web only', usage: '/release <name>',
       detail: 'Raises agent activity, so it needs this signed-in browser.' },
+    { group: 'Agents', cmd: 'quiet', args: '<name>', desc: 'Wake an agent only for messages addressed to it', pill: '',
+      usage: '/quiet <name>',
+      detail: 'Another agent’s chatter no longer starts a turn. Your messages, an @mention and a reply still do, and that chatter comes along.' },
+    { group: 'Agents', cmd: 'unquiet', args: '<name>', desc: 'Wake that agent for every message again', pill: 'web only',
+      usage: '/unquiet <name>', detail: 'Raises what wakes it, so it needs this signed-in browser.' },
     { group: 'Agents', cmd: 'wake', args: '<name>', desc: 'Wake an agent now for its waiting messages', pill: 'web only',
       usage: '/wake <name>',
       detail: 'Agents’ messages that don’t address it wait a few minutes to arrive together; this sends them now.' },

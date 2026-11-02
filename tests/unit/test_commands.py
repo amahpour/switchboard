@@ -68,6 +68,8 @@ def notices(svc: RoomService) -> list[str]:
         ("/budget 12", "budget", ("12",)),
         ("/budget 0", "budget", ("0",)),
         ("/hold claude-1", "hold", ("claude-1",)),
+        ("/quiet claude-1", "quiet", ("claude-1",)),
+        ("/unquiet @Claude-1", "unquiet", ("claude-1",)),
         ("/release @Claude-1", "release", ("claude-1",)),
         ("/kick codex_2", "kick", ("codex_2",)),
         ("/who", "who", ()),
@@ -117,6 +119,8 @@ def test_required_roles(svc: RoomService) -> None:
             "/budget 60",
             "/budget 61",
             "/hold a",
+            "/quiet a",
+            "/unquiet a",
             "/release a",
             "/wake a",
             "/who",
@@ -134,6 +138,8 @@ def test_required_roles(svc: RoomService) -> None:
         "/budget 60": "human_cli",
         "/budget 61": "human",
         "/hold a": "human_cli",
+        "/quiet a": "human_cli",  # fewer wakes (#548)
+        "/unquiet a": "human",  # more wakes again, like /release
         "/release a": "human",
         "/wake a": "human",  # a wake now raises activity, like /release (#137)
         "/who": "human_cli",
@@ -201,7 +207,14 @@ def test_budget_role_uses_the_refilled_window(svc: RoomService, clock: FakeClock
 
 
 def test_member_commands_on_agent_less_room(svc: RoomService) -> None:
-    for t in ["/kick claude-1", "/hold claude-1", "/release claude-1", "/wake claude-1"]:
+    for t in [
+        "/kick claude-1",
+        "/hold claude-1",
+        "/release claude-1",
+        "/wake claude-1",
+        "/quiet claude-1",
+        "/unquiet claude-1",
+    ]:
         with pytest.raises(ServiceError) as e:
             svc.command("#build", t, WEB)
         assert e.value.code == "not_found" and "no such member" in e.value.message
@@ -211,6 +224,36 @@ def test_release_needs_web(svc: RoomService) -> None:
     with pytest.raises(ServiceError) as e:
         svc.command("#build", "/release claude-1", CLI)
     assert e.value.code == "forbidden"
+
+
+def test_unquiet_needs_web(svc: RoomService) -> None:
+    """Turning quiet off raises what wakes the agent, so the CLI role cannot. ``/quiet``
+    reduces it, so the CLI can. Fails if the roles are swapped or missing."""
+    room = svc.room("#build")
+    add_agent(svc.store, room.id, "claude-1", harness="claude")
+    assert svc.command("#build", "/quiet claude-1", CLI)["ok"]
+    with pytest.raises(ServiceError) as e:
+        svc.command("#build", "/unquiet claude-1", CLI)
+    assert e.value.code == "forbidden" and "web" in e.value.message
+
+
+def test_quiet_and_unquiet_with_a_member(svc: RoomService) -> None:
+    """``/quiet`` stores the flag and says so; ``/unquiet`` clears it. An agent's say is
+    not this path. Fails if the column stays 0, or if ``/unquiet`` is accepted from the CLI."""
+    room = svc.room("#build")
+    add_agent(svc.store, room.id, "claude-1", harness="claude")
+    res = svc.command("#build", "/quiet claude-1", CLI)
+    assert "quieted claude-1" in res["text"] and "addressed" in res["text"]
+    assert svc.store.members(room.id)[0].quiet
+    assert "already quiet" in svc.command("#build", "/quiet claude-1", CLI)["text"]
+    who = svc.command("#build", "/who", WEB)["text"]
+    assert "quiet" in who
+    res = svc.command("#build", "/unquiet claude-1", WEB)
+    assert "unquieted claude-1" in res["text"]
+    assert not svc.store.members(room.id)[0].quiet
+    assert "not quiet" in svc.command("#build", "/unquiet claude-1", WEB)["text"]
+    kinds = [e.kind for e in svc.store.recent_events(room_id=room.id, kinds=["quiet", "unquiet"])]
+    assert kinds == ["unquiet", "quiet"]
 
 
 def test_hold_release_kick_with_a_member(svc: RoomService, rec: Rec) -> None:

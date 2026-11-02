@@ -29,7 +29,7 @@ def test_open_creates_full_schema_with_wal(tmp_path: Path) -> None:
     tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert EXPECTED_TABLES <= tables
     # v2 since M8b (§27.6), v3 since #41 (§31.2), v4 since #61 (§32.2), v5 since #100
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 35
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 36
     indexes = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='index'")}
     assert {
         "memberships_active_name",
@@ -51,7 +51,9 @@ def test_schema_columns_match_design(tmp_path: Path) -> None:
     assert {"approval_mode", "boundary_seq", "gen_tainted", "rearms_in_gen", "hooks_seen_at"} <= cols(
         "participants"
     )
-    assert {"join_msg_id", "kicked", "held", "cursor_id", "peer_batch_boundary"} <= cols("memberships")
+    assert {"join_msg_id", "kicked", "held", "quiet", "cursor_id", "peer_batch_boundary"} <= cols(
+        "memberships"
+    )
     # what only the local agent path used went with it (schema 30, #385)
     assert not {
         "agent_pid",

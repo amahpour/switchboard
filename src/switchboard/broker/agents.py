@@ -620,6 +620,8 @@ class AgentService:
             bits.append(f"approvals={mode}")
             if x.held:
                 bits.append("held=yes")
+            if x.quiet:
+                bits.append("quiet=yes")
             if x.parked:
                 bits.append("parked=yes")
             if x.away:
