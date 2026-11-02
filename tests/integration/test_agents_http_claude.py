@@ -14,11 +14,12 @@ from typing import Any
 
 import httpx
 import pytest
-from conftest import InProcBroker
+from conftest import TEST_HUMAN, InProcBroker
 from test_agents_http import Codex, make_token, members, sse_result
 
 from switchboard import __version__
 from switchboard.broker import agent_http
+from switchboard.config import ClaudeCfg, Config
 from switchboard.mcp.server import TOOL_NAMES
 
 FIX = Path(__file__).resolve().parents[1] / "fixtures" / "mcp_http"
@@ -189,3 +190,25 @@ def test_the_server_tells_an_agent_its_version_behind_the_token(build: InProcBro
         r = Codex(build, bad).start()
         assert r.status_code == 401 and __version__ not in r.text
     assert httpx.get(f"{build.base}/healthz").text == "ok\n"
+
+
+def test_a_config_cap_raises_how_long_claude_may_wait(tmp_home: Path) -> None:
+    """#547: the tool clamped ``timeout_s`` to its own 110 before the broker saw it, so ``[claude]
+    wait_cap_s`` could only lower the cap. With the cap at 400, a ``wait(300)`` reaches the broker as 300
+    and says nothing was capped; at the default it would have been cut to 110. Fails if the tool still keeps
+    a cap of its own."""
+    cfg = Config(human_name=TEST_HUMAN, claude=ClaudeCfg(wait_cap_s=400))
+    b = InProcBroker(tmp_home, cfg).start()
+    try:
+        b.call("room.create", {"name": "#build"})
+        claude = Claude(b, make_token(b, "laptop"), SESSION_1)
+        assert claude.call("join", room="#build", screen_name="claude-1")["ok"]
+        claude.call("read", room="#build")
+        with ThreadPoolExecutor(1) as pool:
+            waiting = pool.submit(claude.call, "wait", room="#build", timeout_s=300)
+            b.call("human.say", {"room": "#build", "text": "@claude-1 you may stop waiting"})
+            got = waiting.result(30)
+        assert got["ok"] and "you may stop waiting" in got["text"], got
+        assert got["timeout_s"] == 300 and "capped_from" not in got and "cap_s" not in got, got
+    finally:
+        b.stop()

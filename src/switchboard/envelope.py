@@ -5,8 +5,10 @@ agent-side rendering of one untrusted string. ``render_batch`` frames a list
 of messages for one recipient (content-dependent header, list format, batch
 token, stubs on elevated paths); ``render_join`` is the join() result;
 ``render_read_first`` is pass()'s refusal while a stub is unread (§24).
-``still_on_note`` is the id, sender and age of what a member still owes (#542):
-an empty ``read()`` and Claude's SessionStart reminder, never the message text.
+``still_on_note`` is the id, sender and age of what a member still owes (#542),
+and ``waiting_on_note`` is the id, addressee and age of what it is waiting on
+someone else to handle. Both go on every ``read()`` and on Claude's SessionStart
+reminder, and neither carries message text.
 Every rendered string starts with ``[switchboard]``.
 """
 
@@ -655,10 +657,10 @@ def ago(ts: float, now: float) -> str:
 def still_on_note(entries: Sequence[tuple[str | None, Any]], now: float) -> str:
     """What is still on the agent (#542): ids, sender names and ages, never message text.
 
-    The same line goes on an empty ``read()`` and on Claude's SessionStart reminder.
+    The same line goes on every ``read()`` and on Claude's SessionStart reminder.
     The reminder is hook context, so a peer's words must not be copied in (§8.6).
-    ``room`` is set when one line covers several rooms; an empty ``read()`` already
-    named its room. Empty when nothing is owed.
+    ``room`` is set when one line covers several rooms; a ``read()`` already named
+    its room. Empty when nothing is owed.
     """
     if not entries:
         return ""
@@ -674,18 +676,42 @@ def still_on_note(entries: Sequence[tuple[str | None, Any]], now: float) -> str:
     return " Still on you: " + ", ".join(bits) + more + "."
 
 
+def waiting_on_note(entries: Sequence[tuple[str | None, Any, str]], now: float) -> str:
+    """What the caller is waiting on someone else to handle (#542).
+
+    Ids, addressee names and ages, never message text: the same cap as
+    ``still_on_note``, and safe in hook context for the same reason (§8.6).
+    One entry per addressee still open, so a message addressed to two members
+    appears twice. ``room`` is set when one line covers several rooms. Empty
+    when nothing is open.
+    """
+    if not entries:
+        return ""
+    ordered = sorted(entries, key=lambda e: (int(e[1].message_id), _word(e[2])))
+    shown = ordered[:STILL_ON_MAX]
+    bits = []
+    for room, it, name in shown:
+        head = f"{_word(room)} " if room else ""
+        bits.append(f"{head}{int(it.message_id)} for {_word(name)} {ago(float(it.ts), now)}")
+    extra = len(entries) - len(shown)
+    more = f" and {extra} more" if extra else ""
+    return " Waiting on others: " + ", ".join(bits) + more + "."
+
+
 def render_reminder(
     memberships: Sequence[tuple[str, str]],
     human_name: str | Sequence[str],
     codes: Mapping[str, str] | None = None,
     still_on: Sequence[tuple[str, Any]] | None = None,
     now: float | None = None,
+    waiting: Sequence[tuple[str, Any, str]] | None = None,
 ) -> str:
     """SessionStart (clear/compact) context: which rooms this session is in. ``human_name``
     may be every person here (§32). ``codes``: a fresh join code by room (#304), since the
     context that held the join's own may be gone. ``still_on`` is what the session still
-    owes in those rooms (#542): ids, sender names and ages, appended only when ``now`` is
-    given, and never the message text."""
+    owes in those rooms, and ``waiting`` is what it is waiting on someone else to handle
+    (#542): ids, names and ages, appended only when ``now`` is given, and never the
+    message text."""
     rooms = ", ".join(f"{_word(r)} as {_word(n)}" for r, n in memberships)
     people = [human_name] if isinstance(human_name, str) else list(human_name)
     users = f"your user {_word(people[0])}" if len(people) == 1 else f"your users {users_phrase(people)}"
@@ -701,8 +727,11 @@ def render_reminder(
         + PASS_ADVICE
         + _resume_note(memberships, codes)
     )
-    if still_on and now is not None:
-        text += still_on_note(still_on, now)
+    if now is not None:
+        if still_on:
+            text += still_on_note(still_on, now)
+        if waiting:
+            text += waiting_on_note(waiting, now)
     return text
 
 

@@ -1,8 +1,8 @@
-"""An empty read() through a real broker names what is still addressed to the agent (#542).
+"""A read() through a real broker names what is still open, both ways (#542).
 
-The engine tests cover the rule and the SessionStart reminder. This one checks the tool result
-an agent actually gets: the second read(), after the first was confirmed, lists the question by
-id, sender and age, and a history page does not.
+The engine tests cover the rule and the SessionStart reminder. These check the tool result
+an agent actually gets: an empty read() lists the question by id, sender and age, a history
+page does not, and a read() that returns a new message still ends with both lines.
 """
 
 from __future__ import annotations
@@ -65,3 +65,45 @@ async def test_an_empty_read_names_the_unanswered_question_and_a_history_page_do
         assert passed["ok"] is True
         cleared = await agent.read("#build")
         assert cleared["text"] == "[switchboard] #build: no new messages."
+
+
+async def test_a_read_with_news_names_both_sides_and_the_ask_clears_when_they_pass(
+    broker: InProcBroker,
+) -> None:
+    """A read() that returns a new message still ends with what this agent owes and what
+    it is waiting on someone else to handle. The ids just returned are left out of
+    Still on you. Once the addressee passes, the waiting line is gone and the owed
+    line is not. Fails if only an empty read carries the lines, or if a handled
+    delivery is still listed as waiting."""
+    async with (
+        FakeAgent(broker.home, "asker", ack="immediate") as asker,
+        FakeAgent(broker.home, "other", ack="immediate") as other,
+    ):
+        await asker.join("#build", "alpha")
+        await other.join("#build", "bravo")
+        said = await asker.say("#build", "@bravo zebra-ask-text")
+        ask_id = int(said["posted_id"])
+        seen = await other.read("#build")
+        assert seen["count"] == 1 and "zebra-ask-text" in seen["text"]
+        owed = person_says(broker, "zebra-owed-text")
+        first = await asker.read("#build")
+        assert first["count"] == 1 and "zebra-owed-text" in first["text"]
+        # the question was just returned, so it is not repeated; the ask already reached bravo
+        assert "Still on you" not in first["text"]
+        assert (
+            f"{ask_id} for bravo" in first["text"]
+            and "zebra-ask-text" not in first["text"].split("Waiting on others:", 1)[-1]
+        )
+        newer = person_says(broker, "zebra-new-text")
+        second = await asker.read("#build")
+        assert second["count"] == 1 and "zebra-new-text" in second["text"]
+        tail = second["text"].splitlines()[-1]
+        assert tail.startswith("Still on you: ") and "Waiting on others: " in tail
+        assert f"{owed} from alice" in tail and f"{ask_id} for bravo" in tail
+        assert f"{newer} from" not in tail
+        assert "zebra-owed-text" not in tail and "zebra-ask-text" not in tail and "zebra-new-text" not in tail
+        passed = await other.pass_("#build")
+        assert passed["ok"] is True
+        cleared = await asker.read("#build")
+        assert "Waiting on others" not in cleared["text"]
+        assert f"{owed} from alice" in cleared["text"]

@@ -584,6 +584,186 @@ def test_a_link_inside_a_link_keeps_only_its_text() -> None:
     assert a["href"] == "https://b.example/" and a["text"] == "see https://a.example/ now"
 
 
+# An artifact line (issue #544): name, optional size, optional sha256, and where it lives.
+# A line that does not match stays ordinary text, so a typo cannot become a half-built card.
+SHA = "0123456789abcdef" * 4  # 64 hex digits
+URL_RAW = "https://Files.Example.com/out/report.zip"
+URL = "https://files.example.com/out/report.zip"
+HINT = "on the sender's machine only"
+
+
+def artifact_line(
+    name: str = "report.zip",
+    size: str | None = "12 KB",
+    sha: str | None = SHA,
+    where: str = URL_RAW,
+) -> str:
+    fields = [name]
+    if size is not None:
+        fields.append(size)
+    if sha is not None:
+        fields.append("sha256:" + sha)
+    fields.append(where)
+    return "artifact: " + " | ".join(fields)
+
+
+def test_an_artifact_line_renders_as_a_card() -> None:
+    """A line on its own in the artifact format is a card: the name, the size as written, the
+    first 12 checksum digits, and a link whose text is the host. The link is mdLink's, so the
+    normalized URL is shown beside it. Without the card, this line would be a paragraph and the
+    URL a bare autolink of the raw address."""
+    tree = render(artifact_line())
+    [card] = top(tree)
+    assert card["tag"] == "div" and classes(card) == ["md-artifact"]
+    [name] = by_cls(tree, "md-artifact-name")
+    assert name["text"] == "report.zip"
+    [size] = by_cls(tree, "md-artifact-size")
+    assert size["text"] == "12 KB"
+    [sha] = by_cls(tree, "md-artifact-sha")
+    assert sha["title"] == "sha256:" + SHA
+    digits = [c["text"] for c in sha["children"] if c["tag"] == "#text"]
+    assert "".join(digits).strip() == SHA[:12]
+    assert SHA not in sha["text"]  # the other 52 digits stay off the card
+    [k] = [c for c in sha["children"] if c.get("cls") == "md-artifact-k"]
+    assert k["text"] == "sha256"
+    [a] = by_tag(tree, "a")
+    assert a["href"] == URL and a["text"] == "files.example.com"
+    [shown] = by_cls(tree, "md-url")
+    assert shown["text"] == URL
+    assert not by_cls(tree, "md-artifact-hint") and not by_cls(tree, "md-blocked")
+
+
+def test_artifact_size_and_checksum_may_be_left_out() -> None:
+    """Size and checksum are optional, in either combination. A parser that required all four
+    fields would drop the short forms back to plain text."""
+    cases = (
+        (artifact_line(size=None, sha=None), False, False),
+        (artifact_line(size="48231", sha=None), True, False),
+        (artifact_line(size="1.5 MiB", sha=None), True, False),
+        (artifact_line(size="12KB", sha=None), True, False),
+        (artifact_line(size=None), False, True),
+    )
+    for src, has_size, has_sha in cases:
+        tree = render(src)
+        assert by_cls(tree, "md-artifact"), src
+        assert bool(by_cls(tree, "md-artifact-size")) is has_size, src
+        assert bool(by_cls(tree, "md-artifact-sha")) is has_sha, src
+        if has_size:
+            assert by_cls(tree, "md-artifact-size")[0]["text"] in {"48231", "1.5 MiB", "12KB", "12 KB"}
+        [a] = by_tag(tree, "a")
+        assert a["href"] == URL, src
+
+
+def test_an_artifact_line_stands_alone_and_a_fence_keeps_the_text() -> None:
+    """The line is a block of its own between paragraphs, including up to three leading spaces.
+    Four spaces, or a fence, leave it as text: a fence that became a card would hide the line
+    the sender meant to show verbatim."""
+    line = artifact_line()
+    tree = render("before\n" + line + "\nafter")
+    assert [c["tag"] for c in top(tree)] == ["p", "div", "p"]
+    assert classes(top(tree)[1]) == ["md-artifact"]
+    assert top(tree)[0]["text"] == "before" and top(tree)[2]["text"] == "after"
+    assert by_cls(render("   " + line), "md-artifact")
+    assert not by_cls(render("    " + line), "md-artifact")
+    fenced = render("```\n" + line + "\n```")
+    assert not by_cls(fenced, "md-artifact")
+    assert line in by_tag(fenced, "code")[0]["text"]
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "artifact: report.zip",
+        "artifact:report.zip | " + URL,
+        "artifact: report.zip, 12 KB, sha256:" + SHA + ", " + URL,
+        "artifact: | " + URL,
+        "artifact: report.zip | not-a-size | " + URL,
+        "artifact: report.zip | sha256:abcd | " + URL,
+        "artifact: report.zip | sha256:" + ("ab" * 33) + " | " + URL,
+        "artifact: report.zip | 12 KB | sha256:" + SHA + " | extra | " + URL,
+        "see artifact: report.zip | " + URL,
+        "Artifact: report.zip | " + URL,
+        "artifact: report.zip | " + ("9" * 33) + " | " + URL,
+    ],
+)
+def test_a_malformed_artifact_line_stays_ordinary_text(src: str) -> None:
+    """A line that does not match the grammar is not a card. The comma form (what the docs used
+    to show), a short hash, a fifth field and a size past 32 characters are all ordinary text."""
+    tree = render(src)
+    assert not by_cls(tree, "md-artifact"), src
+    assert src in tree["text"]
+
+
+def test_an_artifact_link_to_the_broker_host_is_refused() -> None:
+    """A link back to this switchboard, or to a loopback address, is the same blocked pill as
+    any other link. It is not the path hint, and it is not an <a>."""
+    for where, label in (
+        ("http://switchboard.localhost/logout", "switchboard.localhost"),
+        ("http://127.0.0.1/logout", "127.0.0.1"),
+        ("https://user:secret@files.example.com/report.zip", "files.example.com"),
+    ):
+        tree = render(artifact_line(where=where), local_host="switchboard.localhost")
+        assert by_cls(tree, "md-artifact"), where
+        assert not by_tag(tree, "a"), where
+        assert not by_cls(tree, "md-artifact-hint"), where
+        span = blocked(tree)
+        assert label in span["text"], where
+        if "secret" in where:
+            assert span["title"] == TITLE_CREDS
+        else:
+            assert span["title"] == TITLE_LOCAL
+
+
+@pytest.mark.parametrize(
+    "where",
+    [
+        "/Users/someone/out/report.zip",
+        "~/scratch/report.zip",
+        "file:///Users/someone/out/report.zip",
+        "C:\\Users\\someone\\report.zip",
+    ],
+)
+def test_a_path_gets_a_hint_and_no_link(where: str) -> None:
+    """A path, a home shortcut, a file URL or a Windows path is not a link. The hint says the
+    file is only on the sender's machine; the line is still shown, not dropped."""
+    tree = render(artifact_line(where=where))
+    assert by_cls(tree, "md-artifact")
+    assert not by_tag(tree, "a")
+    assert not by_cls(tree, "md-blocked")
+    [path] = by_cls(tree, "md-artifact-path")
+    assert path["text"] == where
+    [hint] = by_cls(tree, "md-artifact-hint")
+    assert hint["text"] == HINT
+
+
+def test_an_overlong_artifact_field_stays_ordinary_text() -> None:
+    """A name past 200 characters, or a where past 2048, does not parse, so the card cannot be
+    fed an unbounded string. A name of exactly 200 still renders."""
+    long_name = "n" * 201
+    tree = render(artifact_line(name=long_name))
+    assert not by_cls(tree, "md-artifact")
+    assert long_name in tree["text"]
+    long_where = "https://example.com/" + ("a" * 2048)
+    assert len(long_where) > 2048
+    tree = render(artifact_line(where=long_where))
+    assert not by_cls(tree, "md-artifact")
+    ok = "n" * 200
+    tree = render(artifact_line(name=ok, where=URL))
+    assert by_cls(tree, "md-artifact-name")[0]["text"] == ok
+
+
+def test_a_mixed_case_checksum_shows_its_first_twelve_lower_digits() -> None:
+    """The card shows 12 hex digits, lowercased, and keeps the full hash on the title only."""
+    mixed = "aBcD" * 16
+    assert len(mixed) == 64
+    tree = render(artifact_line(sha=mixed))
+    [sha] = by_cls(tree, "md-artifact-sha")
+    assert sha["title"] == "sha256:" + mixed.lower()
+    digits = "".join(c["text"] for c in sha["children"] if c["tag"] == "#text").strip()
+    assert digits == mixed[:12].lower()
+    assert mixed.lower() not in sha["text"]
+
+
 def test_safe_url_api() -> None:
     out = harness(
         [

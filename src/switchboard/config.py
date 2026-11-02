@@ -66,6 +66,9 @@ class DeliveryCfg:
     pull_ack_s: float = 10.0
 
 
+# wait() caps, measured with each harness's CLI in November 2026 (#547, DESIGN.md §6.1): Claude Code
+# moves a call past 120 s to the background, where a message arriving mid-wait was offered twice; Codex
+# ends a call at its default tool_timeout_sec of 300 s; Cursor at 60 s; Devin at 120 s (§49.7).
 @dataclass(frozen=True)
 class ClaudeCfg:
     wait_cap_s: int = 110
@@ -73,14 +76,19 @@ class ClaudeCfg:
 
 @dataclass(frozen=True)
 class CodexCfg:
-    wait_cap_s: int = 240
+    wait_cap_s: int = 280
     ctx_max_chars: int = 5000
 
 
 @dataclass(frozen=True)
 class CursorCfg:
-    wait_cap_s: int = 50
+    wait_cap_s: int = 55
     ctx_max_chars: int = 8000
+
+
+@dataclass(frozen=True)
+class OpenCodeCfg:
+    wait_cap_s: int = 50
 
 
 @dataclass(frozen=True)
@@ -133,6 +141,7 @@ class Config:
     codex: CodexCfg = field(default_factory=CodexCfg)
     cursor: CursorCfg = field(default_factory=CursorCfg)
     devin: DevinCfg = field(default_factory=DevinCfg)
+    opencode: OpenCodeCfg = field(default_factory=OpenCodeCfg)
     review: ReviewCfg = field(default_factory=ReviewCfg)
     security: SecurityCfg = field(default_factory=SecurityCfg)
     # the retired keys the file had (``section.key``), ignored: reported once when the broker starts
@@ -151,6 +160,7 @@ _SECTIONS = {
     "codex": CodexCfg,
     "cursor": CursorCfg,
     "devin": DevinCfg,
+    "opencode": OpenCodeCfg,
     "review": ReviewCfg,
     "security": SecurityCfg,
 }

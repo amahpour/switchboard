@@ -53,7 +53,14 @@
  *        with the same cell count. Body rows continue while a line holds '|' and is not blank.
  *        Cells split on '|' that is neither escaped nor inside a code span; outer pipes are
  *        trimmed; missing cells are empty and extra cells dropped.
- *     7. Paragraph: consecutive non-blank lines that start no other block; each line break
+ *     7. Artifact line (issue #544): up to 3 spaces, then "artifact:" and a space, then 2 to 4
+ *        fields separated by " | ". The first is the name (1 to 200 characters), the last is
+ *        where the file lives (1 to 2048). Between them, an optional size (1 to 32 characters:
+ *        a number and an optional unit) and an optional "sha256:" plus exactly 64 hex digits,
+ *        size first. A line that does not match stays a paragraph. The card's link is mdLink,
+ *        so a refused URL is the usual blocked pill. Anything that is not an http(s) URL is
+ *        text plus "on the sender's machine only".
+ *     8. Paragraph: consecutive non-blank lines that start no other block; each line break
  *        inside it is kept as a <br>.
  *   Not supported: indented code, setext headings, HTML blocks, reference links, footnotes,
  *   images, task lists, strikethrough, syntax highlighting.
@@ -93,6 +100,13 @@
   const MAX_NEST = 16;
   const MAX_DEST = 2048;
   const MAX_LANG = 20;
+  const ARTIFACT_NAME_MAX = 200;
+  const ARTIFACT_SIZE_MAX = 32;
+  const ARTIFACT_WHERE_MAX = 2048;
+  const ARTIFACT_HINT = 'on the sender\'s machine only';
+  // On one already-split field, after the length check. No nested quantifier.
+  const SIZE_RE = /^[0-9][0-9.,]*([ ]?[A-Za-z]{1,12})?$/;
+  const SHA_RE = /^[0-9a-fA-F]{64}$/;
 
   const TITLE_SCHEME = 'Not a link: only http(s) URLs are followed';
   const TITLE_LOCAL = 'Not a link: links to this switchboard page are never followed';
@@ -348,16 +362,68 @@
     return { head: head, aligns: aligns };
   }
 
+  function hasControl(s) {
+    for (let k = 0; k < s.length; k++) {
+      const c = s.charCodeAt(k);
+      if (c < 32 || c === 127) return true;
+    }
+    return false;
+  }
+
+  function isSize(s) {
+    return s.length <= ARTIFACT_SIZE_MAX && SIZE_RE.test(s);
+  }
+
+  function isSha(s) {
+    return s.startsWith('sha256:') && SHA_RE.test(s.slice(7));
+  }
+
+  // A line that names a file, or null. A miss stays ordinary text: the grammar is strict so a
+  // typo cannot become a half-built card. Checked before a paragraph swallows the line.
+  function artifactLine(line) {
+    let k = 0;
+    while (k < 3 && line[k] === ' ') k++;
+    if (line[k] === ' ' || line[k] === '\t') return null;
+    const rest = line.slice(k);
+    if (!rest.startsWith('artifact:')) return null;
+    const after = rest.slice('artifact:'.length);
+    if (after[0] !== ' ' && after[0] !== '\t') return null;
+    const body = trimST(after);
+    if (!body || hasControl(body)) return null;
+    const fields = body.split(' | ');
+    if (fields.length < 2 || fields.length > 4) return null;
+    for (let i = 0; i < fields.length; i++) {
+      const f = fields[i];
+      if (!f || f !== trimST(f) || hasControl(f)) return null;
+    }
+    const name = fields[0];
+    const where = fields[fields.length - 1];
+    if (name.length > ARTIFACT_NAME_MAX || where.length > ARTIFACT_WHERE_MAX) return null;
+    let size = '';
+    let sha = '';
+    const mid = fields.slice(1, -1);
+    if (mid.length === 2) {
+      if (!isSize(mid[0]) || !isSha(mid[1])) return null;
+      size = mid[0];
+      sha = mid[1].slice(7).toLowerCase();
+    } else if (mid.length === 1) {
+      if (isSha(mid[0])) sha = mid[0].slice(7).toLowerCase();
+      else if (isSize(mid[0])) size = mid[0];
+      else return null;
+    }
+    return { name: name, size: size, sha: sha, where: where };
+  }
+
   function startsBlock(lines, j, depth) {
     const line = lines[j];
-    if (fenceOpen(line) || atxHeading(line) || isThematicBreak(line)) return true;
+    if (fenceOpen(line) || atxHeading(line) || isThematicBreak(line) || artifactLine(line)) return true;
     if (depth < MAX_DEPTH && (quoteStrip(line) !== null || listItem(line))) return true;
     return !!tableHead(lines, j);
   }
 
   // ------------------------------------------------------------------ block parser
 
-  // lines -> [{t:'p'|'h'|'code'|'hr'|'quote'|'ul'|'ol'|'table', ...}]
+  // lines -> [{t:'p'|'h'|'code'|'hr'|'quote'|'ul'|'ol'|'table'|'artifact', ...}]
   function parseBlocks(lines, depth) {
     const out = [];
     let i = 0;
@@ -382,6 +448,13 @@
       if (h) { out.push({ t: 'h', level: h.level, text: h.text }); i++; continue; }
 
       if (isThematicBreak(line)) { out.push({ t: 'hr' }); i++; continue; }
+
+      const art = artifactLine(line);
+      if (art) {
+        out.push({ t: 'artifact', name: art.name, size: art.size, sha: art.sha, where: art.where });
+        i++;
+        continue;
+      }
 
       if (depth < MAX_DEPTH && quoteStrip(line) !== null) {
         const inner = [];
@@ -970,6 +1043,8 @@
       }
       case 'table':
         return tableDom(b, o);
+      case 'artifact':
+        return artifactDom(b, o);
       default:
         return appendAll(el('p', 'md-p'), [document.createTextNode('')]);
     }
@@ -1030,6 +1105,63 @@
     pre.append(code);
     wrap.append(head, pre);
     return wrap;
+  }
+
+  function looksHttp(s) {
+    return startsWithCI(s, 0, 'https://') || startsWithCI(s, 0, 'http://');
+  }
+
+  // The card's link is mdLink, the one place a target is set. A path is a hint, not a refusal:
+  // the message was posted as written, and nothing here drops it.
+  function artifactWhere(parent, where, o) {
+    const v = safeUrl(where, o.localHost);
+    if (v.ok) {
+      const host = new URL(v.href).hostname;
+      appendAll(parent, mdLink([document.createTextNode(host)], where, o, host));
+      return;
+    }
+    if (looksHttp(where)) {
+      let label = where;
+      try {
+        const host = new URL(where.trim()).hostname;
+        if (host) label = host;
+      } catch (e) { /* not a URL the browser can name; the raw text is the label */ }
+      appendAll(parent, blocked([document.createTextNode(label)], v.why));
+      return;
+    }
+    const path = el('span', 'md-artifact-path');
+    path.textContent = where;
+    const hint = el('span', 'md-artifact-hint');
+    hint.textContent = ARTIFACT_HINT;
+    parent.append(path, hint);
+  }
+
+  function artifactDom(b, o) {
+    const card = el('div', 'md-artifact');
+    const name = el('div', 'md-artifact-name');
+    name.textContent = b.name;
+    card.append(name);
+    if (b.size || b.sha) {
+      const meta = el('div', 'md-artifact-meta');
+      if (b.size) {
+        const s = el('span', 'md-artifact-size');
+        s.textContent = b.size;
+        meta.append(s);
+      }
+      if (b.sha) {
+        const s = el('span', 'md-artifact-sha');
+        s.title = 'sha256:' + b.sha;
+        const k = el('span', 'md-artifact-k');
+        k.textContent = 'sha256';
+        s.append(k, document.createTextNode(b.sha.slice(0, 12)));
+        meta.append(s);
+      }
+      card.append(meta);
+    }
+    const where = el('div', 'md-artifact-where');
+    artifactWhere(where, b.where, o);
+    card.append(where);
+    return card;
   }
 
   function tableDom(b, o) {
