@@ -1676,7 +1676,7 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 .private-rooms-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: calc(13px * var(--text-scale)); }
 .room-people { display: flex; flex-direction: column; gap: 8px; }
 .person-row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; min-width: 0; }
-.person-row .m-name { flex: 1; min-width: 0; }
+.person-row .p-names { flex: 1; min-width: 0; }  /* the real name and @username, together (#563) */
 /* a person with a page open now, and one without (#354): the dot the agents' rows use, smaller */
 .p-dot { flex: 0 0 auto; width: 8px; height: 8px; margin: 0 3px; border-radius: 50%; }
 .p-dot.on { background: var(--green); }

@@ -876,12 +876,12 @@
     toggle.setAttribute('aria-expanded', String(open));
     $('pins-count').textContent = 'Pinned (' + pins.length + ')';
     const newest = pins[pins.length - 1];
-    $('pins-peek').textContent = label(newest.from, newest.host) + ': ' + firstLine(newest.text, 100);
+    $('pins-peek').textContent = senderShown(newest) + ': ' + firstLine(newest.text, 100);
     list.classList.toggle('hidden', !open);
     for (const p of pins) {
       const li = el('li', 'pin-row');
       li.dataset.id = String(p.id);
-      const who = label(p.from, p.host);
+      const who = senderShown(p);  // a person by their real name (#563)
       const link = btn('pin-link');
       link.dataset.focus = 'pin-link:' + p.id;
       const snippet = firstLine(p.text, 160);
@@ -984,7 +984,7 @@
     const g = el('span', 'reply-gutter');
     g.append(icon('reply'));
     b.append(g, avatar(parent.harness, parent.sender_kind, parent.from, 'mini'),
-      el('span', 'reply-nick', label(parent.from, parent.host)),
+      el('span', 'reply-nick', senderShown(parent)),
       el('span', 'reply-snippet', firstLine(parent.text, 80)));
     b.addEventListener('click', function () { jumpTo(parent.id); });
     return b;
@@ -1034,6 +1034,12 @@
     return full ? { text: full, title: '@' + name } : { text: name, title: '' };
   }
 
+  // A message's sender as a line names it (#563): a person by their real name, an agent (or
+  // anyone on another machine) by name@host, as before.
+  function senderShown(m) {
+    return m.sender_kind === 'human' && !m.host ? personShown(m.from).text : label(m.from, m.host);
+  }
+
   // The real name, then the username smaller (m-full). data-name and every other hook stay
   // on the username, on the caller.
   function appendShownPerson(parent, name) {
@@ -1071,9 +1077,7 @@
   // the row takes the focus: the button hides as it expands, which would drop it to the page.
   function collapsedSummary(m, line) {
     const b = btn('collapsed-line');
-    // a person, if one were collapsed, by the same name their message shows (#563)
-    const who = m.sender_kind === 'human' && !m.host ? personShown(m.from).text : label(m.from, m.host);
-    b.append(el('span', 'collapsed-sender', who),
+    b.append(el('span', 'collapsed-sender', senderShown(m)),
       el('span', 'collapsed-snippet', firstLine(m.text, 140)));
     b.title = 'Collapsed by Focus: click to show it in full';
     b.addEventListener('click', function () {
@@ -1351,7 +1355,7 @@
     // a private room's header shows its lock, as the sidebar does (§44)
     const glyph = typeof document.querySelector === 'function' ? document.querySelector('.head-hash path') : null;
     if (glyph) glyph.setAttribute('d', ICONS[r && r.private ? 'lock' : 'hash']);
-    $('room-sub').textContent = r && state.me ? state.me.human + ' and ' + plural(r.members.length, 'agent', 'agents') : '';
+    $('room-sub').textContent = r && state.me ? personShown(state.me.human).text + ' and ' + plural(r.members.length, 'agent', 'agents') : '';
   }
 
   // ------------------------------------------------------------- members
@@ -1448,7 +1452,9 @@
       row.append(av, main);
       li.append(row);
       me.append(li);
-      $('me-name').textContent = state.me.human;
+      const meShown = personShown(state.me.human);  // the real name, @username on hover (#563)
+      $('me-name').textContent = meShown.text;
+      $('me-name').title = meShown.title;
       $('me-avatar').textContent = state.me.human.charAt(0).toUpperCase();
     }
     const list = $('buddy-list');
@@ -1519,8 +1525,9 @@
       dot.setAttribute('role', 'img');
       dot.setAttribute('aria-label', here(n) ? 'online' : 'offline');
       dot.title = here(n) ? 'Has switchboard open now' : 'Not here now';
-      li.append(dot);
-      appendShownPerson(li, n);  // the real name, then @username; data-name stays the username
+      const names = el('span', 'p-names');
+      appendShownPerson(names, n);  // the real name, then @username; data-name stays the username
+      li.append(dot, names);
       if (!isPrivate) {
         if (state.me && n === state.me.human) li.append(el('span', 'p-you', 'you'));
         list.append(li);
@@ -2997,6 +3004,8 @@
       if (showOwners() !== owners || namesChanged) renderBuddies();
       else renderRoomPeople();
       if (namesChanged) {
+        renderPins();
+        updateTitle();
         const log = $('log');
         const stick = nearBottom(log);
         renderRows(activeRoom());

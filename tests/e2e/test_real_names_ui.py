@@ -120,7 +120,8 @@ def test_a_person_is_shown_by_their_real_name(ui: UI, world: HostedWorld) -> Non
     stops when one is typed. Renaming Bob's first name shows on the open page. Fails if the
     sender is still the username, or if the username still follows the first name."""
     page = page_for(ui, world)
-    bob = chat_row(page, "ships Friday")
+    bob_id = chat_row(page, "ships Friday").get_attribute("data-id")
+    bob = page.locator(f'#log .line.k-chat[data-id="{bob_id}"]')  # a reply below quotes his text
     expect(bob).to_have_attribute("data-from", "bob-lee")
     expect(bob.locator(".nick")).to_have_text("Bob Lee")
     expect(bob.locator(".nick")).to_have_attribute("title", "@bob-lee")
@@ -130,13 +131,24 @@ def test_a_person_is_shown_by_their_real_name(ui: UI, world: HostedWorld) -> Non
 
     expect(page.locator("#buddy-me .m-name")).to_have_text("Alice Ng")
     expect(page.locator("#buddy-me .m-full")).to_have_text("@alice")
-    expect(page.locator("#me-name")).to_have_text("alice")  # the footer stays the username
+    expect(page.locator("#me-name")).to_have_text("Alice Ng")  # the footer, @alice on hover
+    expect(page.locator("#me-name")).to_have_attribute("title", "@alice")
+    expect(page.locator("#room-sub")).to_have_text("Alice Ng and 0 agents")
     bob_row = page.locator('#room-people .person-row[data-name="bob-lee"]')
     expect(bob_row.locator(".m-name")).to_have_text("Bob Lee")
     expect(bob_row.locator(".m-full")).to_have_text("@bob-lee")
     carol_row = page.locator('#room-people .person-row[data-name="carol"]')
     expect(carol_row.locator(".m-name")).to_have_text("carol")
     expect(carol_row.locator(".m-full")).to_have_count(0)
+
+    # a reply to Bob, and a pin of his message, name him as his message does
+    with _client(world.origin, world.admin_cookie) as c:  # type: ignore[attr-defined]
+        said = c.post("/api/rooms/build/say", json={"text": "thanks", "reply_to": int(bob_id or 0)})
+        assert said.status_code == 200, said.text
+        pinned = c.post("/api/rooms/build/command", json={"text": f"/pin {bob_id}"})
+        assert pinned.status_code == 200, pinned.text
+    expect(chat_row(page, "thanks").locator(".reply-nick")).to_have_text("Bob Lee")
+    expect(page.locator("#pins-peek")).to_contain_text("Bob Lee: ships Friday")
 
     box = page.locator("#input")
     box.click()
@@ -207,7 +219,7 @@ def test_a_long_real_name_does_not_widen_a_phone(ui: UI, world: HostedWorld) -> 
     # the name wraps inside the log and the People row. The pane's track is two views wide on
     # purpose (Members and the Inspector), so it is not part of this check.
     boxes = page.evaluate(
-        """() => [...document.querySelectorAll('#log, #room-people, #log .nick, #room-people .m-name')]
+        """() => [...document.querySelectorAll('#log, #room-people, #log .nick, #room-people .p-names')]
             .map(n => [n.id || n.className, n.scrollWidth, n.clientWidth])"""
     )
     assert boxes and all(scroll_w <= client_w + 1 for _sel, scroll_w, client_w in boxes), boxes

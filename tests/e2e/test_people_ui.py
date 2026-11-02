@@ -169,7 +169,8 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
     sign_in(bob, "bob@example.com", bob_otp)
     expect(bob.locator("#choose-lead")).to_contain_text("Hi Bob. Your one-time password worked.")
     choose(bob, BOB_PW)
-    expect(bob.locator("#me-name")).to_have_text("bob")
+    expect(bob.locator("#me-name")).to_have_text("Bob Builder")  # the footer, @bob on hover (#563)
+    expect(bob.locator("#me-name")).to_have_attribute("title", "@bob")
     expect(bob.locator("#buddy-me .m-name")).to_have_text("Bob Builder")
     expect(bob.locator("#buddy-me .m-full")).to_have_text("@bob")
     expect(bob.locator("#admin-section")).to_be_hidden()  # the admin section is the admin's
@@ -250,7 +251,7 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
         assert all("403" in p and "/api/signin/password" in p for p in ui.problems), ui.problems
         ui.problems.clear()
     sign_in(again, "robert@example.com", BOB_PW)
-    expect(again.locator("#me-name")).to_have_text("bob")
+    expect(again.locator("#me-name")).to_have_attribute("title", "@bob")  # signed in, as bob
     open_settings(again, "security")
     expect(again.locator("#app-dialog")).to_contain_text(
         "You sign in with your email, robert@example.com, and this password."
