@@ -1915,7 +1915,7 @@ class Store:
         return r is not None
 
     # ------------------------------------------------------------- deliveries
-    _ITEM_SQL = (
+    _ITEM_COLS = (
         "SELECT d.membership_id, d.message_id, d.prio, d.mentioned, d.state, d.batch_id,"
         " d.attempts, d.notified_at, d.redelivered, d.reminders, d.in_context_at,"
         " m.ts, m.sender_name, m.sender_kind,"
@@ -1923,8 +1923,9 @@ class Store:
         # a reply to this member's own message addresses it, like an @mention (#137)
         " COALESCE((SELECT r.sender_membership_id FROM messages r WHERE r.id=m.reply_to)"
         "   = d.membership_id, 0) AS reply_to_me"
-        " FROM deliveries d JOIN messages m ON m.id=d.message_id"
     )
+    _ITEM_FROM = " FROM deliveries d JOIN messages m ON m.id=d.message_id"
+    _ITEM_SQL = _ITEM_COLS + _ITEM_FROM
 
     def pending_items(self, membership_id: int) -> list[Item]:
         rows = self.con.execute(
@@ -2054,24 +2055,22 @@ class Store:
         ).fetchall()
         return [Item.from_row(r) for r in rows]
 
-    def reached_by_others(self, membership_id: int) -> list[tuple[Item, str]]:
+    def reached_by_others(self, room_id: int, membership_id: int) -> list[tuple[Item, str]]:
         """Deliveries of this member's own chat that reached another current member and
         aren't handled yet (#542). One row per addressee, oldest message first, with
         that addressee's screen name. ``mentioned`` and ``reply_to_me`` are theirs.
         Whether the message is addressed to them is ``rules.waiting_on``, not this query.
-        No new index: the schema stays as it is, and a room's own messages are the scan."""
-        # the last FROM is the item query's; an earlier one is the reply_to_me subquery
-        select, rest = self._ITEM_SQL.rsplit(" FROM ", 1)
+        No new index: ``room_id`` keeps the scan to this room's messages (messages_room_id)."""
         rows = self.con.execute(
-            select
-            + ", mm.screen_name AS addressee_name FROM "
-            + rest
+            self._ITEM_COLS
+            + ", mm.screen_name AS addressee_name"
+            + self._ITEM_FROM
             + " JOIN memberships mm ON mm.id=d.membership_id"
-            " WHERE m.sender_membership_id=? AND m.kind='chat' AND d.membership_id<>?"
+            " WHERE m.room_id=? AND m.sender_membership_id=? AND m.kind='chat' AND d.membership_id<>?"
             " AND mm.left_at IS NULL"
             " AND (d.state='in_context' OR (d.state='pending' AND d.notified_at IS NOT NULL))"
             " ORDER BY m.id, mm.screen_name",
-            (membership_id, membership_id),
+            (room_id, membership_id, membership_id),
         ).fetchall()
         return [(Item.from_row(r), str(r["addressee_name"])) for r in rows]
 

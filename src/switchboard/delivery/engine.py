@@ -834,7 +834,7 @@ class Engine:
         ``reply_taken`` does, and only for that case.
         """
         waiting: list[tuple[Item, str]] = []
-        for item, name in self.store.reached_by_others(m.id):
+        for item, name in self.store.reached_by_others(m.room_id, m.id):
             answers = (
                 self.store.answers_to(m.room_id, item.message_id, item.membership_id)
                 if rules.is_unaddressed_question(item)
