@@ -36,16 +36,6 @@ INSTRUCTIONS = (
 )
 
 
-# wait() caps per harness (DESIGN.md §6.1); the broker clamps again.
-WAIT_CAPS = {
-    "claude": 110,
-    "codex": 240,
-    "cursor": 50,
-    "devin": 600,
-    "opencode": 50,
-    "test": 50,
-    "unknown": 50,
-}
 # The longest timeout_s quoted back as capped_from. A week is past every harness cap, so a real
 # request is quoted whole, and a huge integer cannot inflate the result (#547).
 WAIT_ASKED_MAX = 86400 * 7

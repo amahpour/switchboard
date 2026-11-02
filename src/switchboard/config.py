@@ -84,6 +84,11 @@ class CursorCfg:
 
 
 @dataclass(frozen=True)
+class OpenCodeCfg:
+    wait_cap_s: int = 50
+
+
+@dataclass(frozen=True)
 class DevinCfg:
     wait_cap_s: int = 600
     rearm: bool = True
@@ -133,6 +138,7 @@ class Config:
     codex: CodexCfg = field(default_factory=CodexCfg)
     cursor: CursorCfg = field(default_factory=CursorCfg)
     devin: DevinCfg = field(default_factory=DevinCfg)
+    opencode: OpenCodeCfg = field(default_factory=OpenCodeCfg)
     review: ReviewCfg = field(default_factory=ReviewCfg)
     security: SecurityCfg = field(default_factory=SecurityCfg)
     # the retired keys the file had (``section.key``), ignored: reported once when the broker starts
@@ -151,6 +157,7 @@ _SECTIONS = {
     "codex": CodexCfg,
     "cursor": CursorCfg,
     "devin": DevinCfg,
+    "opencode": OpenCodeCfg,
     "review": ReviewCfg,
     "security": SecurityCfg,
 }

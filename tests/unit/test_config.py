@@ -35,6 +35,7 @@ def test_defaults_match_design() -> None:
     assert c.claude.wait_cap_s == 110
     assert (c.codex.wait_cap_s, c.codex.ctx_max_chars) == (240, 5000)
     assert (c.cursor.wait_cap_s, c.cursor.ctx_max_chars) == (50, 8000)
+    assert c.opencode.wait_cap_s == 50  # #547: the one harness that had no key for it
     assert (c.devin.wait_cap_s, c.devin.rearm, c.devin.rearm_max_per_prompt, c.devin.ctx_max_chars) == (
         600,
         True,
@@ -141,6 +142,7 @@ def test_the_keys_only_the_local_agent_path_read_are_accepted_and_reported() -> 
         }
     )
     assert c.claude.wait_cap_s == 90 and c.cursor.wait_cap_s == 40
+    assert from_dict({"opencode": {"wait_cap_s": 300}}).opencode.wait_cap_s == 300
     assert c.retired == (
         "claude.inbox_hold_s",
         "claude.sessions_dir",
