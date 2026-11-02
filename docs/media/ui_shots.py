@@ -2,6 +2,7 @@
 
     uv run python docs/media/ui_shots.py              # writes docs/media/ui/*.png
     uv run python docs/media/ui_shots.py --out /tmp/shots
+    uv run python docs/media/ui_shots.py --out /tmp/shots --only quiet   # one set of pictures
 
 Run by hand (and by CI's ``frontend`` job, into a temp dir it uploads), never by pytest: it is
 not under tests/ and nothing imports it. It needs Playwright's Chromium, once per machine::
@@ -84,6 +85,9 @@ approval-inspector-{before,after}-{light,dark,phone-light} and approval-members-
 because its person has a permission prompt open: the card, the Inspector and Members, #472),
 agent-owner-{members,inspector}-{light,dark,phone-light} (Members naming each agent's owner under its name,
 once there are two people; the Inspector naming the owner and the device, #496),
+quiet-inspector-{light,dark,phone-light} and quiet-members-{light,dark,phone-light} (an agent a person
+quieted with the Inspector's Quiet button: the quiet chip and Unquiet, then the agent's line in Members,
+#548),
 confirm-light, signin-light, setup-person-light and
 signin-phone-dark (all .png).
 
@@ -2501,10 +2505,86 @@ def shoot_agent_owner(browser: Any, out: Path, world: Any) -> None:
         loop.close()
 
 
+def shoot_quiet(browser: Any, out: Path, world: Any) -> None:
+    """#548: a person quiets an agent from its Inspector. After pressing Quiet the Inspector shows the
+    "quiet" chip and an Unquiet button (``quiet-inspector-*``), and Members ends the agent's line with
+    "quiet" (``quiet-members-*``). Light, dark and the phone, each clipped to the pane (on a phone, the
+    sheet). The agent is made not quiet again after each, so every picture starts the same."""
+    from playwright.sync_api import expect
+
+    b, n_chat, name = world.broker, world.n_chat, "claude-1"
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for theme, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        phone = theme == "phone-light"
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, b)
+            open_build(page, n_chat)
+            if phone:  # Members is a sheet on a phone, with the Inspector inside it
+                page.click("#buddy-toggle")
+                expect(page.locator("#app")).to_have_class(re.compile(r"\bsheet-open\b"))
+            inspect(page, name)
+            quiet = page.locator("#insp-quiet")
+            expect(quiet).to_have_text("Quiet")
+            quiet.click()
+            expect(page.locator("#insp-body .chip-quiet")).to_have_text("quiet")
+            expect(quiet).to_have_text("Unquiet")
+            page.mouse.move(0, 0)  # the pointer off the button: no hover colour in the picture
+            page.evaluate("document.activeElement && document.activeElement.blur()")
+            # the pane, or on a phone the sheet: not the dimmed page behind it
+            box = page.locator("#pane").bounding_box()
+            assert box is not None
+            vh = page.viewport_size["height"] if page.viewport_size else box["y"] + box["height"]
+            clip = {**box, "height": min(box["height"], vh - box["y"])}
+            shot(page, out, f"quiet-inspector-{theme}.png", clip=clip)
+            back(page)
+            page.mouse.move(0, 0)
+            expect(page.locator(f'#buddy-list .member[data-name="{name}"]')).to_contain_text("quiet")
+            shot(page, out, f"quiet-members-{theme}.png", clip=clip)
+        finally:
+            ctx.close()
+            world.command("build", f"/unquiet {name}")  # a no-op reply when it is not quiet
+
+
+# The sets ``--only`` can shoot alone: each takes (browser, out, world) and needs only the seeded world,
+# so a pull request that adds one picture set can make it in seconds instead of running all of them.
+ONLY: dict[str, Any] = {"quiet": shoot_quiet}
+
+
 # -------------------------------------------------------------------- main
+def run_only(args: argparse.Namespace, pw: Any, name: str) -> None:
+    """``--only NAME``: the seeded world and one browser, for one set of pictures from ``ONLY``."""
+    from ui_world import UIWorld
+
+    out = Path(args.out).resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    world = UIWorld(keep=args.keep)
+    try:
+        world.start()
+        env = {**os.environ, "TZ": "UTC", "HOME": REAL_HOME or os.environ["HOME"]}
+        browser = pw.chromium.launch(executable_path=args.chrome or None, env=env)
+        try:
+            ONLY[name](browser, out, world)
+        finally:
+            browser.close()
+    finally:
+        world.stop()
+        if args.keep:
+            print(f"kept: {world.home} {world.home2}", file=sys.stderr)
+
+
 def run(args: argparse.Namespace, pw: Any) -> None:
     from ui_world import HostedWorld, UIWorld
 
+    if args.only:
+        run_only(args, pw, args.only)
+        return
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     world = UIWorld(keep=args.keep)
@@ -2558,6 +2638,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_approval(browser, out, world)
             shoot_opencode_avatar(browser, out, world)  # a room of its own, so after the others
             shoot_opencode_upload(browser, out, world)  # in that room, so right after
+            shoot_quiet(browser, out, world)  # quiets a #build agent for a moment: last in this world
             shoot_hosted(browser, out, hosted)
             shoot_common_password(browser, out, weak)
             shoot_mention_people(browser, out, people)
@@ -2585,6 +2666,7 @@ def main() -> None:
         "--chrome", help="a Chrome or Chromium binary to use instead of Playwright's own Chromium"
     )
     ap.add_argument("--keep", action="store_true", help="keep the temp homes")
+    ap.add_argument("--only", choices=sorted(ONLY), help="shoot only this set of pictures, not all of them")
     args = ap.parse_args()
     from playwright.sync_api import sync_playwright
 
