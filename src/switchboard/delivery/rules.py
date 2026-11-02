@@ -230,7 +230,7 @@ def chatter_wakes_at(pending: Sequence[Item], hold_s: float, *, addressed_only: 
     """When the hold (issue #137) lets an idle member's waiting chatter wake it, for the member
     list: None when nothing is held, or something other than the hold decides (a priority item
     wakes at once, a reply by the quiet period). A quiet member (#548) has no such time:
-    unaddressed chatter never     wakes it."""
+    unaddressed chatter never wakes it."""
     if addressed_only:
         return None
     eligible = [d for d in pending if d.notified_at is None]
