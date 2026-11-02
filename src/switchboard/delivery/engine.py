@@ -824,6 +824,37 @@ class Engine:
                 owed.append(item)
         return owed
 
+    def _waiting(self, m: Membership) -> list[tuple[Item, str]]:
+        """This member's own messages an addressee still has open (#542).
+
+        One entry per addressee. Open is ``waiting_on`` (``still_owed`` on that
+        addressee's delivery): an @mention of them, or a reply to their message,
+        that reached them and is not handled. A person's message that names nobody
+        is not addressed to one member. The answers are gathered the way
+        ``reply_taken`` does, and only for that case.
+        """
+        waiting: list[tuple[Item, str]] = []
+        for item, name in self.store.reached_by_others(m.room_id, m.id):
+            answers = (
+                self.store.answers_to(m.room_id, item.message_id, item.membership_id)
+                if rules.is_unaddressed_question(item)
+                else ()
+            )
+            if rules.waiting_on(item, name, answers):
+                waiting.append((item, name))
+        return waiting
+
+    def _open_lines(self, m: Membership, *, skip: Iterable[int] = ()) -> str:
+        """The still-owed and waiting lines for a ``read()`` of this room (#542).
+
+        Ids this read just returned are left out of the owed line: they were shown
+        a moment ago. Both lines are ids, names and ages, never message text.
+        """
+        skip_ids = set(skip)
+        owed = [(None, i) for i in self._owed(m) if i.message_id not in skip_ids]
+        waiting = [(None, item, name) for item, name in self._waiting(m)]
+        return envelope.still_on_note(owed, self.now()) + envelope.waiting_on_note(waiting, self.now())
+
     def hold_reply(self, p: Participant, m: Membership, taken: list[tuple[Item, Answer]]) -> None:
         """A say was held for these answers (``reply_taken``): nothing is posted. The questions count as
         handled for this member, as a ``pass()`` would make them: it was shown the answer, and a question
@@ -866,8 +897,10 @@ class Engine:
     ) -> tuple[str, int | None, int, bool, list[Action]]:
         """read()/say() answer: every pending item (notified stubs too), oldest first.
 
-        Returns (text, batch_id, count, more, actions). An empty ``read()`` also names what
-        is still owed in the room (#542): ids, senders and ages, no message text.
+        Returns (text, batch_id, count, more, actions). A ``read()`` also names what
+        is still owed in the room and what this member is waiting on someone else to
+        handle (#542): ids, names and ages, no message text. Ids this read just
+        returned are left off the owed line.
         """
         out: list[Action] = []
         if path == "read":
@@ -882,10 +915,10 @@ class Engine:
         items, more = rules.pull_items(pending, limit)
         if not items:
             text = envelope.batch_header(room.name, self.cfg.human_name, 0, 0, 0)
-            # nothing new: name what is still owed, without its text (#542). A say()'s unread
+            # nothing new: name what is still open, without its text (#542). A say()'s unread
             # and a history page (before_id) stay as they were.
             if path == "read" and before_id is None:
-                text += envelope.still_on_note([(None, i) for i in self._owed(m)], self.now())
+                text += self._open_lines(m)
             return text, None, 0, False, out
         # whole texts, up to pull_max_chars rendered; the rest is "more"
         fit = self._fit(
@@ -897,6 +930,12 @@ class Engine:
         )
         self.store.mark_posted(b.id)
         text = self._render(b, fit, room, m, peer_inline=True, item_limit=None, more=more)
+        # the messages just returned are the result; what else is still open follows them (#542).
+        # A say()'s unread and a history page (before_id) stay as they were.
+        if path == "read" and before_id is None:
+            note = self._open_lines(m, skip=(i.message_id for i in items))
+            if note:
+                text += "\n" + note.lstrip()
         self._event(
             "offer",
             room_id=room.id,
@@ -1550,12 +1589,14 @@ class Engine:
 
     def _reminder(self, p: Participant) -> HookOut | None:
         """After /clear or a compaction: which rooms the session is in, a fresh join code for
-        each (#304), and what it still owes in them (#542). The context that held the join's
-        own code may be gone, and without one a later restart can't take the name back; the
-        earlier code stops working. The owed line is ids, sender names and ages only: this
-        text is hook context, so a peer's words stay out of it (§8.6)."""
+        each (#304), what it still owes in them, and what it is waiting on someone else to
+        handle (#542). The context that held the join's own code may be gone, and without one
+        a later restart can't take the name back; the earlier code stops working. Both lines
+        are ids, names and ages only: this text is hook context, so nobody's words stay in
+        it (§8.6)."""
         pairs, codes = [], {}
         owed: list[tuple[str, Item]] = []
+        waiting: list[tuple[str, Item, str]] = []
         for m in self.store.participant_memberships(p.id):
             room = self.store.room_by_id(m.room_id)
             if room is None:
@@ -1565,9 +1606,12 @@ class Engine:
             self.store.set_join_code(m.id, join_code_hash(code))
             codes[room.name] = code
             owed.extend((room.name, item) for item in self._owed(m))
+            waiting.extend((room.name, item, name) for item, name in self._waiting(m))
         if not pairs:
             return None
-        return HookOut("context", envelope.render_reminder(pairs, self._humans(), codes, owed, self.now()))
+        return HookOut(
+            "context", envelope.render_reminder(pairs, self._humans(), codes, owed, self.now(), waiting)
+        )
 
     def _claim_context(self, p: Participant, path: str) -> tuple[HookOut | None, list[Action]]:
         """Mid-task priority items for the model, as hook context (one room per hook call)."""
