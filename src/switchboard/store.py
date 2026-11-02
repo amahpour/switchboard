@@ -2054,6 +2054,27 @@ class Store:
         ).fetchall()
         return [Item.from_row(r) for r in rows]
 
+    def reached_by_others(self, membership_id: int) -> list[tuple[Item, str]]:
+        """Deliveries of this member's own chat that reached another current member and
+        aren't handled yet (#542). One row per addressee, oldest message first, with
+        that addressee's screen name. ``mentioned`` and ``reply_to_me`` are theirs.
+        Whether the message is addressed to them is ``rules.waiting_on``, not this query.
+        No new index: the schema stays as it is, and a room's own messages are the scan."""
+        # the last FROM is the item query's; an earlier one is the reply_to_me subquery
+        select, rest = self._ITEM_SQL.rsplit(" FROM ", 1)
+        rows = self.con.execute(
+            select
+            + ", mm.screen_name AS addressee_name FROM "
+            + rest
+            + " JOIN memberships mm ON mm.id=d.membership_id"
+            " WHERE m.sender_membership_id=? AND m.kind='chat' AND d.membership_id<>?"
+            " AND mm.left_at IS NULL"
+            " AND (d.state='in_context' OR (d.state='pending' AND d.notified_at IS NOT NULL))"
+            " ORDER BY m.id, mm.screen_name",
+            (membership_id, membership_id),
+        ).fetchall()
+        return [(Item.from_row(r), str(r["addressee_name"])) for r in rows]
+
     def requeue(self, membership_id: int, message_ids: Iterable[int], *, redeliver: bool = False) -> int:
         """Put in-context deliveries back to pending for another wake (DESIGN.md §8.5).
 
