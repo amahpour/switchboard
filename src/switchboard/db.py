@@ -82,11 +82,11 @@ CREATE TABLE memberships(
   left_at REAL, left_reason TEXT,
   kicked INTEGER NOT NULL DEFAULT 0,
   held INTEGER NOT NULL DEFAULT 0, held_at REAL,
-  quiet INTEGER NOT NULL DEFAULT 0 CHECK(quiet IN (0, 1)),
   cursor_id INTEGER NOT NULL DEFAULT 0,
   peer_batch_boundary INTEGER NOT NULL DEFAULT -1,
   rules_seen INTEGER NOT NULL DEFAULT 0 CHECK(rules_seen >= 0),
-  join_code_hash TEXT);
+  join_code_hash TEXT,
+  quiet INTEGER NOT NULL DEFAULT 0 CHECK(quiet IN (0, 1)));
 CREATE UNIQUE INDEX memberships_active_name ON memberships(room_id, screen_name) WHERE left_at IS NULL;
 CREATE UNIQUE INDEX memberships_active_part ON memberships(room_id, participant_id) WHERE left_at IS NULL;
 
