@@ -2,6 +2,12 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.46.0 (2026-11-02)
+
+### Changed
+
+- **People are shown by their real name.** On a hosted broker, a person's messages, replies and pins, the People list, the You row, the sidebar and the @ menu lead with their first and last name, and their username (what @mentions use) sits beside it. Someone with no first or last name is still shown by their username. Agents are unchanged, and `@name` in a message stays the username. Adding someone fills that username in from their email as you type it, until you type one yourself. People already on the broker keep the usernames they have.
+
 ## 0.45.0 (2026-11-02)
 
 ### Upgrading
