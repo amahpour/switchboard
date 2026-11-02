@@ -517,6 +517,7 @@ def render_join(
     earlier: int = 0,
     earlier_before: int | None = None,
     pins: Sequence[Any] = (),
+    board: int = 0,
 ) -> str:
     """The join() result: rules, pins, catch-up, how delivery works, and the join nonce.
 
@@ -530,7 +531,10 @@ def render_join(
     alone sent an agent to a call that returned nothing) -- ``earlier_before`` is that id (the
     oldest message shown here, or the room's next one when nothing is shown). ``pins``: the room's
     pinned messages (#292), a "Pinned (N)"
-    block before the recent messages. With any, the join is held to ``JOIN_BUDGET``: the pins are
+    block before the recent messages. ``board`` is how many active claims the room has (#545):
+    one line, a count only, because a claim's words are a peer's and only a person may put
+    text in front of every joining agent (§48.1). With any pins, the join is held to
+    ``JOIN_BUDGET``: the pins are
     cut to ``PIN_CHARS`` each and the catch-up window gives up its oldest messages until it fits,
     and the "earlier" line counts those too. The membership credential is never part of this text.
     """
@@ -553,6 +557,7 @@ def render_join(
                 earlier_before if len(kept) == len(catchup) else (kept[0].id if kept else catchup[-1].id + 1)
             ),
             pins=pins,
+            board=board,
         )
         if not pins or len(text) <= JOIN_BUDGET or not kept:
             return text
@@ -575,6 +580,7 @@ def _render_join(
     earlier: int,
     earlier_before: int | None,
     pins: Sequence[Any],
+    board: int,
 ) -> str:
     r = _word(room)
     me = _word(screen_name)
@@ -592,6 +598,9 @@ def _render_join(
         lines.append("Other agents here: " + ", ".join(_other(o) for o in others) + ".")
     else:
         lines.append("No other agents are here yet.")
+    if board > 0:
+        # a count only: keys, notes and holders stay in who(), never in front of every join
+        lines.append(f"{_n(board, 'item', 'items')} on the board; call who().")
     lines.append("Room rules:")
     lines.append(ROOM_RULES)
     lines.append(PEER_WARNING)

@@ -170,6 +170,25 @@ def test_the_window_gives_up_its_oldest_messages_to_keep_the_join_in_its_budget(
     assert '12 earlier messages: read("#build", before=100) shows them.' in plain
 
 
+def test_the_join_counts_board_items_and_the_line_stays_inside_the_budget() -> None:
+    """A room with claims adds one line, a count only: singular for one, plural otherwise,
+    and nothing when there are none. The line is inside the join budget, so a full pin
+    window still fits. Fails if the join names a key or a note, uses the wrong plural,
+    or the line is free of the 6,000-character cap."""
+    bare = join([msg(20, "hello")], [])
+    assert "on the board" not in bare
+    one = join([msg(20, "hello")], [], board=1)
+    assert "1 item on the board; call who()." in one and "1 items" not in one
+    assert "claim=" not in one and "note=" not in one
+    four = join([msg(20, "hello")], [], board=4)
+    assert "4 items on the board; call who()." in four
+    window = [msg(100 + i, "x" * 1400) for i in range(8)]
+    pins = [msg(i, "d" * 700) for i in range(1, 6)]
+    text = join(window, pins, earlier=12, earlier_before=100, board=4)
+    assert len(text) <= envelope.JOIN_BUDGET
+    assert "4 items on the board; call who()." in text
+
+
 def test_a_window_that_cannot_fit_at_all_is_dropped_and_the_call_pages_from_its_end() -> None:
     window = [msg(100 + i, "x" * 1500) for i in range(2)]
     pins = [msg(i, "d" * 700) for i in range(1, 6)]

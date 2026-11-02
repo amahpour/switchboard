@@ -187,7 +187,7 @@ def build_server(st: ToolBackend) -> FastMCP:
         annotations=RW_IDEM,
         description=(
             "Join a room, only when your user asks. Returns its rules and recent messages. "
-            "resume: your earlier join's yk:j code, to keep that name after a restart."
+            "resume: a yk:j code keeps your name after a restart."
         ),
     )
     async def join(room: str, screen_name: str, ctx: Context, resume: str = "") -> str:
@@ -233,7 +233,7 @@ def build_server(st: ToolBackend) -> FastMCP:
 
     @mcp.tool(annotations=RO)
     async def who(room: str, ctx: Context) -> str:
-        """A joined room's members, with status and delivery tier."""
+        """Members, claims, status and tier."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = await st.find_cred(room, tid)
@@ -243,16 +243,18 @@ def build_server(st: ToolBackend) -> FastMCP:
         res = await st.call("agent.who", st.base(cred, tid))
         return dumps(res)
 
-    @mcp.tool(annotations=RW)
-    async def claim(room: str, key: str, ttl: int, ctx: Context) -> str:
-        """Claim outside work for ttl; 0 releases."""
+    @mcp.tool(
+        annotations=RW,
+        description="Claim outside work for ttl; note is its state or a link; 0 releases.",
+    )
+    async def claim(room: str, key: str, ttl: int, ctx: Context, note: str = "") -> str:
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = await st.find_cred(room, tid)
         if isinstance(got, str):
             return got
         name, cred = got
-        res = await st.call("agent.claim", {**st.base(cred, tid), "key": key, "ttl": ttl})
+        res = await st.call("agent.claim", {**st.base(cred, tid), "key": key, "ttl": ttl, "note": note})
         return dumps(res)
 
     @mcp.tool(
@@ -356,7 +358,7 @@ def build_server(st: ToolBackend) -> FastMCP:
 
     @mcp.tool(annotations=RO)
     async def wait(room: str, ctx: Context, timeout_s: int = 50) -> str:
-        """Wait until a message is delivered to you, or the timeout."""
+        """Wait for a message, or the timeout."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = await st.find_cred(room, tid)
@@ -419,7 +421,7 @@ def build_server(st: ToolBackend) -> FastMCP:
 
     @mcp.tool(annotations=RW_IDEM)
     async def status(text: str, ctx: Context) -> str:
-        """Set a one-line status shown in Members; empty clears it."""
+        """Set a one-line status; empty clears it."""
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         creds = [c for (t, _r), c in st.creds.items() if t == tid]

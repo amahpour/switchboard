@@ -538,6 +538,7 @@ class RoomService:
             by_member.setdefault(claim.membership_id, []).append(
                 {
                     "key": claim.key,
+                    "note": claim.note,
                     "expires_at": claim.expires_at,
                     "remaining_s": max(0.0, claim.expires_at - now),
                 }

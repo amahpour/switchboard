@@ -49,6 +49,7 @@
     //           unread: 0 (addressed to me: the red count), quiet: false (other new agent chat) }
     rooms: new Map(),
     pinsOpen: false,   // the header's pinned list is open (#292)
+    claimsOpen: false, // the header's claim board is open (#545)
     closed: 0,         // how many closed rooms there are (GET /api/rooms), for the Closed row
     closedRooms: [],   // GET /api/closed-rooms, as the Closed sheet shows it
     active: null,
@@ -899,6 +900,70 @@
     if (focused && !refocus(box, focused) && !refocus(box, 'pins-toggle')) tryFocus(toggle);
   }
 
+  // A claim note is peer text. A bare http(s) URL goes through md.js (safeUrl, then the one
+  // link assignment). The page's own host is refused there, the same as in a message.
+  function noteNodes(text) {
+    const md = window.SBMarkdown;
+    const host = typeof location === 'object' && location ? location.hostname : '';
+    if (md && md.linkifyNote) return md.linkifyNote(text, host);
+    return document.createTextNode(String(text || ''));
+  }
+
+  // Active claims in the open room, soonest to expire first is not required: key order, the
+  // store's. An entry past its deadline is left out, the same check Members uses.
+  function claimItems(r) {
+    const out = [];
+    for (const m of (r && r.members) || []) {
+      for (const c of m.claims || []) {
+        if (!Number.isFinite(claimDeadline(c)) || claimDeadline(c) <= performance.now()) continue;
+        out.push({
+          key: c.key, note: c.note || '', expires_at: c.expires_at,
+          holder: label(m.name, m.host),
+        });
+      }
+    }
+    out.sort(function (a, b) { return a.key < b.key ? -1 : a.key > b.key ? 1 : 0; });
+    return out;
+  }
+
+  // The room's claims under the pins (#545). Hidden when empty. The toggle keeps the keyboard
+  // focus when the list opens or a row goes away; the last claim sends it to the composer.
+  function renderClaimBoard() {
+    const box = $('claim-board');
+    if (!box) return;
+    const r = activeRoom();
+    const items = claimItems(r);
+    const focused = focusKey(box);
+    box.classList.toggle('hidden', items.length === 0);
+    const list = $('claim-board-list');
+    list.replaceChildren();
+    if (!items.length) {
+      if (focused) tryFocus($('input'));
+      return;
+    }
+    const open = !!state.claimsOpen;
+    const toggle = $('claim-board-toggle');
+    toggle.setAttribute('aria-expanded', String(open));
+    $('claim-board-count').textContent = 'Board (' + items.length + ')';
+    const first = items[0];
+    $('claim-board-peek').textContent = first.holder + ': ' + first.key;
+    list.classList.toggle('hidden', !open);
+    for (const c of items) {
+      const li = el('li', 'claim-board-row');
+      li.dataset.key = c.key;
+      const until = new Date(c.expires_at * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      li.append(el('span', 'claim-board-key', c.key), el('span', 'claim-board-holder', c.holder));
+      if (c.note) {
+        const note = el('span', 'claim-board-note');
+        note.append(noteNodes(c.note));
+        li.append(note);
+      }
+      li.append(el('span', 'claim-board-exp', 'Expires ' + until));
+      list.append(li);
+    }
+    if (focused && !refocus(box, focused) && !refocus(box, 'claim-board-toggle')) tryFocus(toggle);
+  }
+
   function jumpToPin(r, id) {
     if ($('log').querySelector('[data-id="' + String(id) + '"]')) jumpTo(id);
     else renderLocal('Message #' + id + ' is older than the history this page has loaded.');
@@ -1126,6 +1191,7 @@
     updateRoomEmpty();
     renderRows(r);
     renderPins();
+    renderClaimBoard();
     log.scrollTop = log.scrollHeight;
   }
 
@@ -1298,7 +1364,14 @@
     for (const c of m.claims || []) {
       if (!Number.isFinite(claimDeadline(c)) || claimDeadline(c) <= performance.now()) continue;
       const until = new Date(c.expires_at * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-      main.append(el('span', 'm-claim-entry', 'Claim: ' + c.key + ' · Expires ' + until));
+      const entry = el('span', 'm-claim-entry');
+      entry.append(document.createTextNode('Claim: ' + c.key));
+      if (c.note) {
+        entry.append(document.createTextNode(' · '));
+        entry.append(noteNodes(c.note));
+      }
+      entry.append(document.createTextNode(' · Expires ' + until));
+      main.append(entry);
     }
     if (m.away) main.append(el('span', 'm-away', 'Away: ' + m.away));
     if (m.parked) {
@@ -1364,6 +1437,7 @@
       state.statusTimer = setTimeout(renderBuddies, Math.max(1, Math.ceil(Math.min(...nextStatus, ...nextClaims))));
     }
     refocus(list, focused);
+    renderClaimBoard();
     const bypass = members.some(function (m) { return m.approval_mode === 'bypass'; });
     const prompting = members.some(function (m) { return m.approval_mode === 'prompting'; });
     $('banner-bridge').classList.toggle('hidden', !(bypass && prompting));
@@ -6166,6 +6240,10 @@
     $('pins-toggle').addEventListener('click', function () {
       state.pinsOpen = !state.pinsOpen;
       renderPins();
+    });
+    $('claim-board-toggle').addEventListener('click', function () {
+      state.claimsOpen = !state.claimsOpen;
+      renderClaimBoard();
     });
     keepLogPinned();
     try {

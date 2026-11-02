@@ -442,6 +442,41 @@ def test_a_good_link_shows_the_real_url() -> None:
     assert classes(url) == ["md-url"] and url["text"] == a["href"]
 
 
+def test_a_claim_note_links_only_through_the_vetted_path() -> None:
+    """A board note is peer text. A bare http(s) URL becomes a link through safeUrl and
+    mdLink; the rest stays text. A local URL and a non-http scheme do not become links.
+    Fails if the note is one string with no anchor, or a local URL is followed."""
+    plain = harness([{"fn": "linkifyNote", "text": "queued", "localHost": "switchboard.localhost"}])[0]
+    assert_safe(plain)
+    assert by_tag(plain, "a") == []
+    assert "queued" in plain["text"]
+    linked = harness(
+        [
+            {
+                "fn": "linkifyNote",
+                "text": "review https://example.com/pr/56",
+                "localHost": "switchboard.localhost",
+            }
+        ]
+    )[0]
+    assert_safe(linked)
+    [a] = by_tag(linked, "a")
+    assert a["href"] == "https://example.com/pr/56" and a["text"] == "https://example.com/pr/56"
+    assert linked["text"].startswith("review ")
+    local = harness(
+        [
+            {
+                "fn": "linkifyNote",
+                "text": "see http://switchboard.localhost/logout",
+                "localHost": "switchboard.localhost",
+            }
+        ]
+    )[0]
+    assert_safe(local)
+    assert by_tag(local, "a") == []
+    assert blocked(local)["title"] == TITLE_LOCAL
+
+
 def test_link_title_and_angle_destination() -> None:
     tree = render('[a](https://example.com/p?q=1 "the title") and [b](<https://example.com/x y>)')
     assert [a["href"] for a in by_tag(tree, "a")] == [

@@ -160,6 +160,18 @@
       <ul class="pins-list hidden" id="pins-list"></ul>
     </section>
 
+    <!-- The room's claims (#545): drawn by app.js from each member's claims; hidden when none. -->
+    <section class="claim-board hidden" id="claim-board" aria-label="Claim board">
+      <button type="button" class="claim-board-toggle" id="claim-board-toggle" data-focus="claim-board-toggle"
+              aria-expanded="false" aria-controls="claim-board-list">
+        <svg class="ic ic-board" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5h10M3 8h10M3 11.5h6"/></svg>
+        <span class="claim-board-count" id="claim-board-count">Board</span>
+        <span class="claim-board-peek" id="claim-board-peek"></span>
+        <svg class="ic ic-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
+      </button>
+      <ul class="claim-board-list hidden" id="claim-board-list"></ul>
+    </section>
+
     <!-- Bands: shown by app.js. A band without an icon gets a glyph from CSS instead. -->
     <div class="band band-test band-amber hidden" id="banner-test" role="status">
       <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 7.2v4M8 4.9h.01M14 8A6 6 0 1 1 2 8a6 6 0 0 1 12 0Z"/></svg>

@@ -673,15 +673,20 @@ class Store:
     def claims_for_room(self, room_id: int) -> list[claims.Claim]:
         """Active claims for the buddy list and claim policy, with their current holder."""
         rows = self.con.execute(
-            "SELECT c.key, c.membership_id, m.screen_name, c.expires_at"
+            "SELECT c.key, c.membership_id, m.screen_name, c.expires_at, c.note"
             " FROM claims c JOIN memberships m ON m.id=c.membership_id"
             " WHERE c.room_id=? AND c.expires_at>? AND m.left_at IS NULL ORDER BY c.key",
             (room_id, self.clock.now()),
         ).fetchall()
-        return [claims.Claim(r[0], r[1], r[2], r[3]) for r in rows]
+        return [claims.Claim(r[0], r[1], r[2], r[3], r[4]) for r in rows]
 
-    def move_claim(self, room_id: int, membership_id: int, key: str, ttl: int) -> claims.Decision:
-        """Apply the pure policy in one transaction; expired or ended claims cannot block."""
+    def move_claim(
+        self, room_id: int, membership_id: int, key: str, ttl: int, note: str = ""
+    ) -> claims.Decision:
+        """Apply the pure policy in one transaction; expired or ended claims cannot block.
+
+        ``note`` is already cleaned. Empty on a renewal keeps the stored note.
+        """
         now = self.clock.now()
         key_norm = key.casefold()
         with db.tx(self.con):
@@ -690,16 +695,18 @@ class Store:
                 " (SELECT id FROM memberships WHERE left_at IS NOT NULL)",
                 (now,),
             )
-            decision = claims.decide(self.claims_for_room(room_id), membership_id, key, ttl, now)
+            decision = claims.decide(self.claims_for_room(room_id), membership_id, key, ttl, now, note)
             if decision.action == "acquired":
                 self.con.execute(
-                    "INSERT INTO claims(room_id,key_norm,key,membership_id,expires_at) VALUES(?,?,?,?,?)",
-                    (room_id, key_norm, key, membership_id, decision.expires_at),
+                    "INSERT INTO claims(room_id,key_norm,key,membership_id,expires_at,note)"
+                    " VALUES(?,?,?,?,?,?)",
+                    (room_id, key_norm, key, membership_id, decision.expires_at, decision.note),
                 )
             elif decision.action == "renewed":
                 self.con.execute(
-                    "UPDATE claims SET expires_at=? WHERE room_id=? AND key_norm=? AND membership_id=?",
-                    (decision.expires_at, room_id, key_norm, membership_id),
+                    "UPDATE claims SET expires_at=?, note=? WHERE room_id=? AND key_norm=?"
+                    " AND membership_id=?",
+                    (decision.expires_at, decision.note, room_id, key_norm, membership_id),
                 )
             elif decision.action == "released":
                 self.con.execute(

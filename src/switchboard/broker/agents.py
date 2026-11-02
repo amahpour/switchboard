@@ -107,7 +107,14 @@ def _work_bits(member: Any) -> list[str]:
         if member.status_line_stale:
             bits.append("stale=yes")
     for c in member.claims:
-        bits.append(f"claim={sanitize(c['key'], claims.KEY_MAX)} expires={_expiry(float(c['expires_at']))}")
+        # the note is peer text, quoted like the key, and left out when empty
+        key = sanitize(c["key"], claims.KEY_MAX)
+        exp = _expiry(float(c["expires_at"]))
+        note = c.get("note") or ""
+        if note:
+            bits.append(f"claim={key} note={sanitize(note, claims.NOTE_MAX)} expires={exp}")
+        else:
+            bits.append(f"claim={key} expires={exp}")
     return bits
 
 
@@ -548,6 +555,7 @@ class AgentService:
             earlier_before = catchup[0].id if catchup else self.store.last_message_id(room.id) + 1
         text = envelope.render_join(
             pins=[x.message for x in self.store.pins(room.id)],
+            board=len(self.store.claims_for_room(room.id)),
             room=room.name,
             screen_name=m.screen_name,
             human_name=self.cfg.human_name,
@@ -965,9 +973,10 @@ class AgentService:
         try:
             key = claims.normalize_key(params.get("key"))
             ttl = claims.normalize_ttl(params.get("ttl"))
+            note = claims.normalize_note(params.get("note", ""))
         except claims.ClaimError as e:
             raise ServiceError("bad_request", str(e)) from None
-        decision = self.store.move_claim(room.id, m.id, key, ttl)
+        decision = self.store.move_claim(room.id, m.id, key, ttl, note)
         if decision.action == "held":
             raise ServiceError("conflict", f"{key} is claimed by {decision.holder}")
         if decision.action == "limit":
@@ -980,6 +989,7 @@ class AgentService:
             "holder": m.screen_name,
             "released": decision.action == "released",
             "expires_at": decision.expires_at if ttl else None,
+            "note": decision.note,
         }
 
     # =============================================================== hooks
