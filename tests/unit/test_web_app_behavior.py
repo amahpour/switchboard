@@ -634,3 +634,51 @@ def test_a_room_with_several_open_boards_shows_tabs_and_one_board_at_a_time() ->
     assert out["fell_back"]["cards"] == ["F1"] and out["fell_back"]["shown"].endswith("/pull/7")
     assert out["last"]["list"] == 0 and out["last"]["tabs"] == []  # one left: no tabs
     assert out["none"] == {"hidden": True}
+
+
+def test_a_person_is_shown_by_their_real_name() -> None:
+    """#563: a person's message, the You row and the People list lead with the real name, and
+    the username stays the hook (data-from, the @ option's id, what choosing inserts). An agent
+    and a system line stay as they are. A people frame with a new full name redraws an open
+    page, and typing that name matches. Fails if the nick is still the username, or if a rename
+    of the first name waits for a reload."""
+    out = run("real_names_show")
+    assert out["before"]["bob"] == {
+        "text": "Bob Lee",
+        "title": "@bob-lee",
+        "from": "bob-lee",
+        "cls": "nick nick-human",
+    }
+    assert out["before"]["carol"] == {"text": "carol", "title": "", "from": "carol", "cls": "nick nick-human"}
+    assert out["before"]["agent"]["text"] == "claude-1"
+    assert out["before"]["agent"]["title"].startswith("Open ")
+    assert out["before"]["system"]["text"] == "switchboard"
+    assert "nick-system" in out["before"]["system"]["cls"]
+    assert out["before"]["you"] == {"name": "Alice Ng", "handle": "@alice"}
+    assert out["before"]["people"] == [
+        {"name": "alice", "text": "Alice Ng@aliceyou", "handle": "@alice"},
+        {"name": "bob-lee", "text": "Bob Lee@bob-lee", "handle": "@bob-lee"},
+        {"name": "carol", "text": "carol", "handle": ""},
+    ]
+    assert out["collapsed"] == ["claude-1"]  # focus still collapses the agent, by their name
+    assert out["byFull"] == [{"id": "men-bob-lee", "name": "Bob Lee", "handle": "@bob-lee"}]
+    assert out["inserted"] == "@bob-lee "
+    assert out["beforeRename"] is True  # "rob" matches nothing until the first name changes
+    assert out["after"]["text"] == "Robert Lee" and out["after"]["title"] == "@bob-lee"
+    assert out["afterRename"] == [{"id": "men-bob-lee", "name": "Robert Lee", "handle": "@bob-lee"}]
+    assert out["insertedAfter"] == "@bob-lee "
+    assert out["peopleAfter"][1] == {"name": "bob-lee", "text": "Robert Lee@bob-lee", "handle": "@bob-lee"}
+
+
+def test_add_someone_suggests_a_username_from_the_email() -> None:
+    """#563: Add someone's username follows the email's local part (the broker's slug, then a
+    digit), not the first name, and stops following once a name is typed. Fails if the field
+    still fills in from the first name, or if a taken local part is not given a digit."""
+    out = run("suggest_name_from_email")
+    assert out["placeholder"] == "sam-lee"
+    assert out["emailPlaceholder"] == "sam.lee@example.com"
+    assert out["afterFirst"] == ""
+    assert out["free"] == "pat-smith"
+    assert out["plus"] == "extra-person-x"  # a plus address, the same slug as the broker
+    assert out["taken"] == "sam-lee2"  # sam.lee, and sam-lee is already someone
+    assert out["afterHand"] == "chosen"

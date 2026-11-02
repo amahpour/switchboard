@@ -1058,7 +1058,7 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
 
 .msg-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .msg-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 7px; min-width: 0; }
-.nick { font-size: calc(13px * var(--text-scale)); font-weight: 600; color: var(--fg); }
+.nick { font-size: calc(13px * var(--text-scale)); font-weight: 600; color: var(--fg); overflow-wrap: anywhere; min-width: 0; }
 button.nick {
   padding: 0;
   border: 0;
@@ -1675,8 +1675,8 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 /* a private room's people (§44), the admin's list of them, and the dialog's checkbox */
 .private-rooms-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: calc(13px * var(--text-scale)); }
 .room-people { display: flex; flex-direction: column; gap: 8px; }
-.person-row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; }
-.person-row .m-name { flex: 1; min-width: 0; }
+.person-row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; min-width: 0; }
+.person-row .p-names { flex: 1; min-width: 0; }  /* the real name and @username, together (#563) */
 /* a person with a page open now, and one without (#354): the dot the agents' rows use, smaller */
 .p-dot { flex: 0 0 auto; width: 8px; height: 8px; margin: 0 3px; border-radius: 50%; }
 .p-dot.on { background: var(--green); }
@@ -2352,8 +2352,8 @@ body.login {
 .info-card .dialog-buttons .btn, .info-card .dialog-buttons .btn-primary { min-width: 88px; }
 .info-add { display: flex; flex-direction: column; gap: 6px; margin: 0; }
 .info-row { display: flex; align-items: center; gap: 8px; }
-/* a person's full name beside the name in the rooms (#192, §39.6) */
-.m-full, .person-handle { color: var(--muted); font-size: calc(12.5px * var(--text-scale)); margin-left: 6px; }
+/* the username beside a person's real name (#563, §39.6); People cards use the same class */
+.m-full, .person-handle { color: var(--muted); font-size: calc(12.5px * var(--text-scale)); margin-left: 6px; overflow-wrap: anywhere; }
 /* Add someone (#192): first and last name side by side, the email, then the name in the rooms */
 .person-names { display: flex; gap: 8px; }
 .person-field { display: flex; flex: 1 1 0; min-width: 0; flex-direction: column; gap: 6px; }

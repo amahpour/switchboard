@@ -108,7 +108,8 @@ def test_the_admin_sets_a_google_email_and_bob_signs_in_with_it(ui: UI, google) 
     as_google(bob, issuer, origin, "bob@example.com")
     bob.goto(origin + "/")
     bob.click("#sso-btn")
-    expect(bob.locator("#me-name")).to_have_text("bob")  # the Strict cookie came along: the app, signed in
+    # the Strict cookie came along: the app, signed in as bob (his real name, @bob on hover, #563)
+    expect(bob.locator("#me-name")).to_have_attribute("title", "@bob")
     expect(bob.locator("#st-conn")).to_have_text("Connected")  # no "choose a password" step: Google is enough
     admin.reload()
     admin.click("#open-people")

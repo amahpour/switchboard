@@ -131,6 +131,9 @@ function makeWorld(rooms) {
         return [200, { boards: Array.isArray(b) ? b : b ? [b] : [] }];
       };
     }
+    if (method === 'GET' && url === '/api/people') {
+      return function () { return [200, { people: server.people || [] }]; };
+    }
     if (method === 'GET' && url === '/api/rooms') {
       return function () { return [200, { rooms: server.rooms.map(roomDict), closed: server.closed }]; };
     }
@@ -1346,6 +1349,129 @@ const SCENARIOS = {
     await settle();
     return report(w, ws, { shown: shown, label: label, preview: preview, posted: posted, placeholder: w.$('input').placeholder,
                            rooms: orig.length });
+  },
+
+  // #563: a person is shown by their real name. The username stays the hook (data-from, the
+  // option id, what choosing inserts). Agents and a system line stay the name they posted under.
+  // A later people frame with full_names redraws an open page. Typing the real name matches.
+  async real_names_show() {
+    const w = makeWorld([{ id: 1, name: '#build', created_at: 100 }]);
+    w.server.me = {
+      human: 'alice', admin: false, test_mode: false,
+      full_names: { alice: 'Alice Ng', 'bob-lee': 'Bob Lee' },
+    };
+    w.location.hash = '#build';
+    const ws = await boot(w);
+    ws.deliver({ t: 'members', room: '#build', members: [MEMBERS[0]] });
+    ws.deliver({
+      t: 'people', people: ['alice', 'bob-lee', 'carol'], online: ['alice'],
+      full_names: { alice: 'Alice Ng', 'bob-lee': 'Bob Lee' },
+    });
+    const human = function (id, from, text) {
+      return chat(id, from, text, { sender_kind: 'human', harness: null, via: 'web' });
+    };
+    ws.deliver({ t: 'msg', room: '#build', msg: human(1, 'bob-lee', 'from bob') });
+    ws.deliver({ t: 'msg', room: '#build', msg: human(2, 'carol', 'from carol') });
+    ws.deliver({ t: 'msg', room: '#build', msg: chat(3, 'claude-1', 'from claude') });
+    ws.deliver({
+      t: 'msg', room: '#build',
+      msg: chat(4, 'switchboard', 'a notice', { sender_kind: 'system', harness: null }),
+    });
+    await settle();
+    const nickOf = function (text) {
+      const row = findAll(w.$('log'), function (n) {
+        return n.classList.contains('k-chat') && n.textContent.indexOf(text) >= 0;
+      })[0];
+      const nick = findAll(row, function (n) { return n.classList.contains('nick'); })[0];
+      return { text: nick.textContent, title: nick.title || '', from: row.dataset.from, cls: nick.className };
+    };
+    const people = function () {
+      return findAll(w.$('room-people'), function (n) { return n.classList.contains('person-row'); })
+        .map(function (n) {
+          const handle = findAll(n, function (c) { return c.classList.contains('m-full'); })[0];
+          return { name: n.dataset.name, text: n.textContent, handle: handle ? handle.textContent : '' };
+        });
+    };
+    const youName = findAll(w.$('buddy-me'), function (n) { return n.classList.contains('m-name'); })[0];
+    const youHandle = findAll(w.$('buddy-me'), function (n) { return n.classList.contains('m-full'); })[0];
+    const before = {
+      bob: nickOf('from bob'), carol: nickOf('from carol'),
+      agent: nickOf('from claude'), system: nickOf('a notice'),
+      you: { name: youName.textContent, handle: youHandle ? youHandle.textContent : '' },
+      people: people(),
+    };
+    click(w.$('focus-toggle'));
+    await settle();
+    const collapsed = findAll(w.$('log'), function (n) { return n.classList.contains('collapsed-sender'); })
+      .map(function (n) { return n.textContent; });
+    click(w.$('focus-toggle'));
+    type(w, '@lee');
+    const option = function (n) {
+      const handle = findAll(n, function (c) { return c.classList.contains('m-full'); })[0];
+      const name = findAll(n, function (c) { return c.classList.contains('m-name'); })[0];
+      return { id: n.id, name: name ? name.textContent : '', handle: handle ? handle.textContent : '' };
+    };
+    const byFull = findAll(w.$('mentions'), function (n) { return n.attrs.role === 'option'; }).map(option);
+    key(w.$('input'), 'Enter');
+    const inserted = w.$('input').value;
+    type(w, '@rob');  // no match yet: the real name is still Bob Lee
+    const beforeRename = w.$('mentions').classList.contains('hidden');
+    ws.deliver({
+      t: 'people', people: ['alice', 'bob-lee', 'carol'], online: ['alice'],
+      full_names: { alice: 'Alice Ng', 'bob-lee': 'Robert Lee' },
+    });
+    await settle();
+    type(w, '@rob');
+    const afterRename = findAll(w.$('mentions'), function (n) { return n.attrs.role === 'option'; }).map(option);
+    key(w.$('input'), 'Enter');
+    return {
+      before: before, collapsed: collapsed, byFull: byFull, inserted: inserted,
+      beforeRename: beforeRename, after: nickOf('from bob'), afterRename: afterRename,
+      insertedAfter: w.$('input').value, peopleAfter: people(),
+    };
+  },
+
+  // #563: Add someone's username follows the email's local part, the broker's slug and digit
+  // rule, and stops once the admin types a name. The first name does not fill it.
+  async suggest_name_from_email() {
+    const w = makeWorld([{ id: 1, name: '#build', created_at: 100 }]);
+    w.server.me = { human: 'alice', admin: true, signin: true, fresh: true, test_mode: false };
+    w.server.people = [
+      { id: null, name: 'alice', admin: true, email: 'alice@example.com', first_name: 'Alice',
+        last_name: 'Ng', sign_in: 'admin', passkeys: 0, password: true },
+      { id: 2, name: 'sam-lee', admin: false, email: 'taken@example.com', first_name: 'Sam',
+        last_name: 'Lee', sign_in: 'password', passkeys: 0 },
+    ];
+    w.location.hash = '#build';
+    await boot(w);
+    click(w.$('open-people'));
+    await settle();
+    const field = function (id) {
+      return findAll(w.$('people-body'), function (n) { return n.id === id; })[0];
+    };
+    const email = field('person-email');
+    const name = field('person-name');
+    const first = field('person-first');
+    first.value = 'Sam';
+    first.dispatch('input', {});
+    const afterFirst = name.value;
+    email.value = 'pat.smith@example.com';
+    email.dispatch('input', {});
+    const free = name.value;
+    email.value = 'extra.person+x@example.com';
+    email.dispatch('input', {});
+    const plus = name.value;
+    email.value = 'sam.lee@example.com';
+    email.dispatch('input', {});
+    const taken = name.value;
+    name.value = 'chosen';
+    name.dispatch('input', {});
+    email.value = 'other.person@example.com';
+    email.dispatch('input', {});
+    return {
+      placeholder: name.placeholder, emailPlaceholder: email.placeholder,
+      afterFirst: afterFirst, free: free, plus: plus, taken: taken, afterHand: name.value,
+    };
   },
 };
 

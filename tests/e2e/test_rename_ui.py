@@ -195,8 +195,10 @@ def test_rename_yourself_in_settings_and_someone_from_people(ui: UI, hosted: InP
     page.fill("#settings-last", "Liddell-Hart")
     page.click("#settings-name-save")  # fresh from the sign-in: no check asked
     expect(page.locator("#settings-name-status")).to_have_text("Saved")
-    expect(page.locator("#me-name")).to_have_text("ali")
-    expect(page.locator("#buddy-me .m-full")).to_have_text("Alice Liddell-Hart")
+    expect(page.locator("#me-name")).to_have_text("Alice Liddell-Hart")  # @ali on hover (#563)
+    expect(page.locator("#me-name")).to_have_attribute("title", "@ali")
+    expect(page.locator("#buddy-me .m-name")).to_have_text("Alice Liddell-Hart")
+    expect(page.locator("#buddy-me .m-full")).to_have_text("@ali")
     page.keyboard.press("Escape")
     expect(page.locator("#log")).to_contain_text("alice is now ali")
 

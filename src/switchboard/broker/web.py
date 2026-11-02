@@ -1004,7 +1004,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             body = await _json_body(request)
         except ServiceError as e:
             return _svc_err(e)
-        # by email (#192): the name defaults to the email's local part; by name alone, as before
+        # an email's local part wins over a first name (#563); with no email, the first name
         email, why = people.clean_email(body.get("email"))
         if why is not None:
             return _err(400, "bad_email", why)
@@ -1475,7 +1475,11 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             try:
                 people.rename(state, person_id, new, by)
             except ValueError as e:
+                if parts:
+                    people_changed(state)  # the first or last name was saved before the conflict
                 return _err(409, "conflict", str(e))
+        # a new first or last name has to reach open pages (#563); a username change already did
+        if parts or new is not None:
             people_changed(state)
         first, last = people.names_of(state, person_id)
         name = (
@@ -2027,15 +2031,21 @@ def _qint(request: Request, key: str) -> int | None:
 
 def people_frame(state: "BrokerState") -> dict[str, Any] | None:
     """Everyone on a hosted broker, and which of them has a page open (§44.8, #354): what the
-    Members pane lists under People. None on a desktop broker, which has one person. The names
-    are no news to a signed-in page (a room's members answer has them, for @ completion); who
-    is connected is, and every signed-in person gets it, whatever rooms they can see."""
+    Members pane lists under People. ``full_names`` is each person's real name, so a page that
+    is already open shows someone added or renamed without a reload (#563). It never includes
+    an email. None on a desktop broker, which has one person. The names are no news to a
+    signed-in page (a room's members answer has them, for @ completion); who is connected is,
+    and every signed-in person gets it, whatever rooms they can see."""
     if not state.hosted:
         return None
     here = state.hub.online_persons()
     online = [state.cfg.human_name] if 0 in here else []
     online += [p.name for p in state.store.people() if p.id in here]
-    return {"people": people.names(state), "online": online}
+    return {
+        "people": people.names(state),
+        "online": online,
+        "full_names": people.full_names(state),
+    }
 
 
 def icons_changed(state: "BrokerState") -> None:

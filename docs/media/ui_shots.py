@@ -2706,19 +2706,130 @@ def shoot_claim_board(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
-# The sets ``--only`` can shoot alone: each takes (browser, out, world) and needs only the seeded world,
-# so a pull request that adds one picture set can make it in seconds instead of running all of them.
-ONLY: dict[str, Any] = {"link_card": shoot_link_card, "quiet": shoot_quiet, "claim_board": shoot_claim_board}
+def shoot_real_names(browser: Any, out: Path, world: Any) -> None:
+    """#563, on a hosted broker: a room where a person is shown by their real name, and Add
+    someone with the username filled from the email. ``real-names-*`` is the log, the People
+    list and Members. ``real-names-add-*`` is the form. Light, dark and the phone. The phone
+    must not scroll sideways. ``world`` is a HostedWorld, not the seeded desktop one."""
+    import httpx
+    from playwright.sync_api import expect
+
+    origin = world.origin
+    headers = {"Origin": origin, "X-Switchboard": "1"}
+    with httpx.Client(base_url=origin, headers=headers) as c:
+        one_time = world.claim_link().split("#t=", 1)[1]
+        assert c.post("/api/signin/password", json={"name": "admin", "password": one_time}).status_code == 200
+        assert (
+            c.post(
+                "/api/setup/password",
+                json={
+                    "password": "correct horse battery",
+                    "email": "alice@example.com",
+                    "first_name": "Alice",
+                    "last_name": "Ng",
+                },
+            ).status_code
+            == 200
+        )
+        added = c.post(
+            "/api/people",
+            json={"first_name": "Bob", "last_name": "Lee", "email": "bob.lee@example.com"},
+        )
+        assert added.status_code == 200 and added.json()["person"]["name"] == "bob-lee", added.text
+        bob_otp = added.json()["password"]
+        admin_cookie = c.cookies.get("switchboard_session")
+    assert admin_cookie
+    with httpx.Client(base_url=origin, headers=headers) as c:
+        signed = c.post("/api/signin/password", json={"name": "bob.lee@example.com", "password": bob_otp})
+        assert signed.status_code == 200, signed.text
+        assert c.post("/api/me/password", json={"password": "bob's own secret 1"}).status_code == 200
+        assert c.post("/api/rooms/build/say", json={"text": "The port check is in."}).status_code == 200
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+
+    def alice(**ctx_args: Any) -> Any:
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        ctx.add_cookies([{"name": "switchboard_session", "value": admin_cookie, "url": origin}])
+        return ctx
+
+    def open_room(page: Any) -> None:
+        page.goto(origin + "/")
+        connected(page)
+        tab = page.locator('#tabs .room[data-room="#build"]')
+        if not tab.is_visible():
+            page.click("#rooms-toggle")
+        tab.click()
+        expect(page.locator("#room-title")).to_have_text("build")
+        if page.locator("#app.nav-open").count():
+            page.keyboard.press("Escape")
+
+    themes = (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    )
+    for theme, ctx_args in themes:
+        ctx = alice(**ctx_args)
+        try:
+            page = ctx.new_page()
+            open_room(page)
+            expect(page.locator("#log .nick-human").first).to_have_text("Bob Lee")
+            expect(page.locator("#buddy-me .m-name")).to_have_text("Alice Ng")
+            expect(page.locator('#room-people .person-row[data-name="bob-lee"] .m-name')).to_have_text(
+                "Bob Lee"
+            )
+            if theme == "phone-light":
+                page.click("#buddy-toggle")
+                expect(page.locator("#app")).to_have_class(re.compile(r"\bsheet-open\b"))
+                assert page.evaluate(
+                    "document.documentElement.scrollWidth <= window.innerWidth"
+                    " && document.body.scrollWidth <= window.innerWidth"
+                )
+            page.mouse.move(0, 0)
+            page.evaluate("document.activeElement && document.activeElement.blur()")
+            shot(page, out, f"real-names-{theme}.png")
+        finally:
+            ctx.close()
+    for theme, ctx_args in themes:
+        ctx = alice(**ctx_args)
+        try:
+            page = ctx.new_page()
+            open_room(page)
+            if page.locator("#rooms-toggle").is_visible() and page.locator("#app.nav-open").count() == 0:
+                page.click("#rooms-toggle")
+            page.click("#open-people")
+            expect(page.locator("#person-email")).to_be_visible()
+            page.fill("#person-first", "Sam")
+            page.fill("#person-last", "Lee")
+            page.fill("#person-email", "sam.lee@example.com")
+            expect(page.locator("#person-name")).to_have_value("sam-lee")
+            page.evaluate("document.activeElement && document.activeElement.blur()")
+            shot(page, out, f"real-names-add-{theme}.png")
+        finally:
+            ctx.close()
+
+
+# The sets ``--only`` can shoot alone. ``real_names`` needs a hosted broker; the others need the
+# seeded desktop world. A pull request that adds one picture set can make it in seconds.
+ONLY: dict[str, Any] = {
+    "link_card": shoot_link_card,
+    "quiet": shoot_quiet,
+    "claim_board": shoot_claim_board,
+    "real_names": shoot_real_names,
+}
 
 
 # -------------------------------------------------------------------- main
 def run_only(args: argparse.Namespace, pw: Any, name: str) -> None:
-    """``--only NAME``: the seeded world and one browser, for one set of pictures from ``ONLY``."""
-    from ui_world import UIWorld
+    """``--only NAME``: one browser and one set of pictures from ``ONLY``. ``real_names`` starts a
+    hosted broker; the others start the seeded desktop world."""
+    from ui_world import HostedWorld, UIWorld
 
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
-    world = UIWorld(keep=args.keep)
+    hosted = name == "real_names"
+    world = HostedWorld(keep=args.keep) if hosted else UIWorld(keep=args.keep)
     try:
         world.start()
         env = {**os.environ, "TZ": "UTC", "HOME": REAL_HOME or os.environ["HOME"]}
@@ -2730,7 +2841,8 @@ def run_only(args: argparse.Namespace, pw: Any, name: str) -> None:
     finally:
         world.stop()
         if args.keep:
-            print(f"kept: {world.home} {world.home2}", file=sys.stderr)
+            extra = "" if hosted else f" {world.home2}"
+            print(f"kept: {world.home}{extra}", file=sys.stderr)
 
 
 def run(args: argparse.Namespace, pw: Any) -> None:
@@ -2747,6 +2859,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
     people = HostedWorld(keep=args.keep)  # alice, bob and carol, for mentioning a person (#418)
     consent = HostedWorld(keep=args.keep)  # an admin whose check has run out, for the consent page (#386)
     owners = HostedWorld(keep=args.keep)  # alice, bob and an agent each, for whose an agent is (#496)
+    names = HostedWorld(keep=args.keep)  # alice and bob, shown by their real names (#563)
     try:
         world.start()
         hosted.start()
@@ -2754,6 +2867,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
         people.start()
         consent.start()
         owners.start()
+        names.start()
         env = {**os.environ, "TZ": "UTC", "HOME": REAL_HOME or os.environ["HOME"]}
         browser = pw.chromium.launch(executable_path=args.chrome or None, env=env)
         try:
@@ -2798,10 +2912,12 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_hosted(browser, out, hosted)
             shoot_common_password(browser, out, weak)
             shoot_mention_people(browser, out, people)
+            shoot_real_names(browser, out, names)
             shoot_agent_owner(browser, out, owners)
         finally:
             browser.close()
     finally:
+        names.stop()
         owners.stop()
         consent.stop()
         people.stop()
@@ -2810,7 +2926,8 @@ def run(args: argparse.Namespace, pw: Any) -> None:
         world.stop()
         if args.keep:
             print(
-                f"kept: {world.home} {world.home2} {hosted.home} {weak.home} {people.home} {owners.home}",
+                f"kept: {world.home} {world.home2} {hosted.home} {weak.home} {people.home}"
+                f" {owners.home} {names.home}",
                 file=sys.stderr,
             )
 

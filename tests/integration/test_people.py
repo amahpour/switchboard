@@ -28,7 +28,7 @@ from websockets.exceptions import InvalidStatus
 from switchboard.broker import web
 from switchboard.broker.auth import WebOrigin
 from switchboard.broker.passwords import FREE_FAILURES, hash_password
-from switchboard.broker.people import ONE_TIME_TTL_S
+from switchboard.broker.people import ONE_TIME_TTL_S, name_for
 from switchboard.broker.web import WRONG_SIGNIN
 from switchboard.config import Config
 from switchboard.models import NAME_REUSE_S
@@ -704,9 +704,8 @@ def test_someone_added_by_email_signs_in_with_it(hosted: InProcBroker) -> None:
 
 def test_someone_added_with_a_first_and_last_name(hosted: InProcBroker) -> None:
     """#192, §39.6: Add someone takes a first and a last name with the email. The name in the
-    rooms comes from the first name (accents dropped), then with the last name's initial, then
-    a digit, as each is taken; the invite greets them by first name; the People sheet, /api/me
-    and Members carry the names."""
+    rooms comes from the email (#563); what the admin types wins; the invite greets them by
+    first name; the People sheet, /api/me and Members carry the names."""
     admin = set_up(hosted)
 
     def add_named(first: str, last: str, email: str) -> dict[str, Any]:
@@ -721,8 +720,8 @@ def test_someone_added_with_a_first_and_last_name(hosted: InProcBroker) -> None:
         "Martínez",
     )
     assert got["invite"].startswith(f"Hi José, you're invited to switchboard: {PUBLIC}\nSign in with jose@")
-    assert add_named("Jose", "Mendez", "jm@example.com")["person"]["name"] == "jose-m"
-    assert add_named("Jose", "Montoya", "jmo@example.com")["person"]["name"] == "jose2"
+    assert add_named("Jose", "Mendez", "jm@example.com")["person"]["name"] == "jm"
+    assert add_named("Jose", "Montoya", "jmo@example.com")["person"]["name"] == "jmo"
     # what the admin types wins over the default
     r = admin.post(
         "/api/people", {"first_name": "Bob", "last_name": "Smith", "email": "b@example.com", "name": "bobby"}
@@ -736,7 +735,50 @@ def test_someone_added_with_a_first_and_last_name(hosted: InProcBroker) -> None:
     me = jose.get("/api/me").json()
     assert (me["human"], me["first_name"], me["last_name"]) == ("jose", "José", "Martínez")
     full = admin.get("/api/me").json()["full_names"]
-    assert full["jose"] == "José Martínez" and full["jose-m"] == "Jose Mendez" and "alice" not in full
+    assert full["jose"] == "José Martínez" and full["jm"] == "Jose Mendez" and "alice" not in full
+
+
+def test_a_new_persons_username_comes_from_their_email(hosted: InProcBroker) -> None:
+    """#563: with an email, the name in the rooms is the local part (``_slug``), then a digit
+    when that is taken. The last name's initial is not tried for an email's base. With no
+    email it is still the first name, then the initial, then a digit. ``POST /api/people``
+    with an email and no name does the same, and a first name does not win over the email.
+    An open page hears the full name on the people frame, and that frame carries no email.
+    Fails if the first name is still the base, or if a taken email-base becomes ``blee-l``."""
+    admin = set_up(hosted)
+
+    def named(first: str | None, last: str | None, email: str | None) -> str:
+        return hosted.on_loop(lambda: name_for(hosted.state, first, last, email))
+
+    assert named("Bob", "Lee", "blee@example.com") == "blee"
+    assert named("Sam", "Lee", "sam.lee+x@example.com") == "sam-lee-x"
+    assert named("José", "Martínez", None) == "jose"
+    # the route: a first and last name do not override the email, and no name means the same
+    r = admin.post("/api/people", {"email": "blee@example.com", "first_name": "Bob", "last_name": "Lee"})
+    assert r.status_code == 200 and r.json()["person"]["name"] == "blee", r.text
+    assert named("Bea", "Lee", "blee@example.org") == "blee2"  # not blee-l
+    r = admin.post("/api/people", {"email": "blee@example.org", "first_name": "Bea", "last_name": "Lee"})
+    assert r.status_code == 200 and r.json()["person"]["name"] == "blee2", r.text
+    r = admin.post("/api/people", {"first_name": "José", "last_name": "Martínez"})
+    assert r.status_code == 200 and r.json()["person"]["name"] == "jose", r.text
+    r = admin.post("/api/people", {"first_name": "Jose", "last_name": "Mendez"})
+    assert r.status_code == 200 and r.json()["person"]["name"] == "jose-m", r.text
+    r = admin.post("/api/people", {"first_name": "Jose", "last_name": "Montoya"})
+    assert r.status_code == 200 and r.json()["person"]["name"] == "jose2", r.text
+    r = admin.post("/api/people", {"email": "sam.lee+x@example.com"})
+    assert r.status_code == 200 and r.json()["person"]["name"] == "sam-lee-x", r.text
+    sock = public_ws(hosted, admin.cookies["switchboard_session"])
+    try:
+        frame = next_people(sock, lambda f: f.get("full_names", {}).get("blee") == "Bob Lee")
+        assert "email" not in frame
+        assert all("@" not in value for value in frame["full_names"].values())
+        pid = next(p["id"] for p in admin.get("/api/people").json()["people"] if p["name"] == "blee")
+        assert admin.post(f"/api/people/{pid}/name", {"first_name": "Robert"}).status_code == 200
+        frame = next_people(sock, lambda f: f.get("full_names", {}).get("blee") == "Robert Lee")
+        assert frame["full_names"]["jose"] == "José Martínez"
+        assert "@" not in json.dumps(frame["full_names"])
+    finally:
+        sock.close()
 
 
 def test_setup_takes_the_admins_email(hosted: InProcBroker) -> None:
