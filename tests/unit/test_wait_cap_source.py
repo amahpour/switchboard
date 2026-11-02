@@ -39,8 +39,8 @@ def tool_cap(harness: str | None, cfg: Config) -> int:
     "harness,cap",
     [
         ("claude", 110),
-        ("codex", 240),
-        ("cursor", 50),
+        ("codex", 280),
+        ("cursor", 55),
         ("devin", 100),  # 600 in the config, held to 100 over HTTPS (§49.7)
         ("opencode", 50),
         ("test", 50),

@@ -66,6 +66,9 @@ class DeliveryCfg:
     pull_ack_s: float = 10.0
 
 
+# wait() caps, measured with each harness's CLI in November 2026 (#547, DESIGN.md §6.1): Claude Code
+# moves a call past 120 s to the background, where a message arriving mid-wait was offered twice; Codex
+# ends a call at its default tool_timeout_sec of 300 s; Cursor at 60 s; Devin at 120 s (§49.7).
 @dataclass(frozen=True)
 class ClaudeCfg:
     wait_cap_s: int = 110
@@ -73,13 +76,13 @@ class ClaudeCfg:
 
 @dataclass(frozen=True)
 class CodexCfg:
-    wait_cap_s: int = 240
+    wait_cap_s: int = 280
     ctx_max_chars: int = 5000
 
 
 @dataclass(frozen=True)
 class CursorCfg:
-    wait_cap_s: int = 50
+    wait_cap_s: int = 55
     ctx_max_chars: int = 8000
 
 
