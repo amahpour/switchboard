@@ -36,7 +36,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 36
+SCHEMA_VERSION = 37
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -209,6 +209,7 @@ CREATE TABLE claims(
   key TEXT NOT NULL CHECK(length(key) BETWEEN 1 AND 120),
   membership_id INTEGER NOT NULL REFERENCES memberships(id),
   expires_at REAL NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
   PRIMARY KEY(room_id, key_norm)) WITHOUT ROWID;
 CREATE INDEX claims_member ON claims(membership_id);
 CREATE TABLE pins(
@@ -728,6 +729,14 @@ V35_TO_V36 = (
     "UPDATE meta SET value='36' WHERE key='schema_version'",
 )
 
+# v36 -> v37 (#545, DESIGN.md §47): a claim can carry a note, its state or a link. Every
+# existing claim gets '': a missing note is empty, not an unknown value. NOT NULL so a
+# later read never has to treat NULL as a note.
+V36_TO_V37 = (
+    "ALTER TABLE claims ADD COLUMN note TEXT NOT NULL DEFAULT ''",
+    "UPDATE meta SET value='37' WHERE key='schema_version'",
+)
+
 
 class MigrationStep(NamedTuple):
     to: int
@@ -775,6 +784,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         33: MigrationStep(34, V33_TO_V34, (), (("participants", "'opencode'"),)),
         34: MigrationStep(35, V34_TO_V35, (), (("agent_icons", "'devin','opencode'"),)),
         35: MigrationStep(36, V35_TO_V36, ()),
+        36: MigrationStep(37, V36_TO_V37, ()),
     }
     out = []
     v = frm

@@ -4,6 +4,8 @@
  *   SBMarkdown.render(text, {mentions, localHost})  -> DocumentFragment
  *   SBMarkdown.firstLine(text, max)                 -> plain string (reply snippets)
  *   SBMarkdown.safeUrl(raw, localHost)              -> {ok: true, href} | {ok: false, why}
+ *   SBMarkdown.linkifyNote(text, localHost)        -> one span: a claim note's text, with
+ *                                                     bare http(s) URLs through mdLink
  *
  * SECURITY MODEL. Message text comes from agents, and an agent reads untrusted input (web pages,
  * tool output), so every message is treated as hostile. This file therefore:
@@ -1220,6 +1222,21 @@
 
   const NO_OPTS = { mentions: new Set(), localHost: '' };
 
+  // A claim note (#545): peer text, not a message. Bare http(s) URLs go through the one
+  // link path (safeUrl, then mdLink). Everything else is text. A refused URL is the same
+  // inert span and "link blocked" pill a message gets.
+  function linkifyNote(text, localHost) {
+    const src = String(text === null || text === undefined ? '' : text);
+    const o = { mentions: new Set(), localHost: localHost || '' };
+    const span = el('span', 'md-note');
+    try {
+      appendAll(span, inlineDom(parseInline(src, o), o, false));
+    } catch (e) {
+      span.textContent = src;
+    }
+    return span;
+  }
+
   function firstLine(text, max) {
     const src = String(text === null || text === undefined ? '' : text).slice(0, MAX_INPUT).replace(/\r\n?/g, '\n');
     let out = '';
@@ -1245,5 +1262,5 @@
   }
 
   window.SBMarkdown = Object.freeze({ render: render, firstLine: firstLine, safeUrl: safeUrl,
-    externalLink: externalLink });
+    externalLink: externalLink, linkifyNote: linkifyNote });
 })();

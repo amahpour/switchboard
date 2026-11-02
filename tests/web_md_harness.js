@@ -109,6 +109,7 @@ function find(node, cls) {
 function run(c) {
   if (c.fn === 'firstLine') return { value: MDAPI.firstLine(c.text, c.max) };
   if (c.fn === 'safeUrl') return JSON.parse(JSON.stringify(MDAPI.safeUrl(c.raw, c.localHost)));
+  if (c.fn === 'linkifyNote') return dump(MDAPI.linkifyNote(c.text, c.localHost || ''));
   const toggled = [];
   ctx.SBDiagram = c.diagrams ? {
     toggle: function (box, source, button) { toggled.push({ box: box.className, source: source, button: button.textContent }); },

@@ -3,6 +3,7 @@
     uv run python docs/media/ui_shots.py              # writes docs/media/ui/*.png
     uv run python docs/media/ui_shots.py --out /tmp/shots
     uv run python docs/media/ui_shots.py --out /tmp/shots --only quiet   # one set of pictures
+    uv run python docs/media/ui_shots.py --out /tmp/shots --only claim_board
 
 Run by hand (and by CI's ``frontend`` job, into a temp dir it uploads), never by pytest: it is
 not under tests/ and nothing imports it. It needs Playwright's Chromium, once per machine::
@@ -88,6 +89,9 @@ once there are two people; the Inspector naming the owner and the device, #496),
 quiet-inspector-{light,dark,phone-light} and quiet-members-{light,dark,phone-light} (an agent a person
 quieted with the Inspector's Quiet button: the quiet chip and Unquiet, then the agent's line in Members,
 #548),
+claim-board-{light,dark,phone-light} (the room's Board strip open under the Pins strip, listing every active
+claim with its holder, note and expiry) and claim-board-members-{light,dark,phone-light} (the note on the
+holder's claim line in Members, #545),
 link-card-{light,dark,phone-light} (a message with three artifact lines shown as cards: an https link, a
 path that says "on the sender's machine only", and a link back to the broker, blocked, #544),
 confirm-light, signin-light, setup-person-light and
@@ -2612,9 +2616,99 @@ def shoot_quiet(browser: Any, out: Path, world: Any) -> None:
             world.command("build", f"/unquiet {name}")  # a no-op reply when it is not quiet
 
 
+def shoot_claim_board(browser: Any, out: Path, world: Any) -> None:
+    """#545: a room's claims as a Board strip under the Pins strip. Three agents claim a key each (two with a
+    note, one of them a link, one without) in a room that also has a pin, so both strips show. The header and
+    the two strips with the Board open (``claim-board-*``), and the note on the holder's line in Members
+    (``claim-board-members-*``), light, dark and the phone, each clipped. On the phone the strip's rows must
+    wrap inside the page: nothing may scroll sideways."""
+    from playwright.sync_api import expect
+
+    room = "#sprint"
+    world.create_room(room)
+    names = ("claude-1", "codex-1", "devin-1")
+    world.add_agents(room, names)
+    pinned = world.say("sprint", "Decision: the parser fix lands first, then the board.")
+    world.command("sprint", f"/pin {pinned}")
+    for name, key, ttl, note in (
+        ("claude-1", "pr-56", 3600, "review https://example.com/pr/56"),
+        ("codex-1", "parser", 5400, "queued"),
+        ("devin-1", "docs", 7200, ""),
+    ):
+        result = world.agent_call(room, name, "claim", key=key, ttl=ttl, **({"note": note} if note else {}))
+        assert result["ok"], result
+    for name in names:  # after the claims: a scripted agent makes no more calls once its harness is rewritten
+        world.set_member_harness(room, name, name.split("-")[0])
+    # known modes, so no "approval mode unknown" chip or marks get in the way of the strips
+    world.set_approval_modes(room, {name: "prompting" for name in names})
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for theme, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        phone = theme == "phone-light"
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator(f'#tabs .room[data-room="{room}"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")  # a phone keeps its rooms in a drawer
+            tab.click()
+            expect(page.locator("#room-title")).to_have_text("sprint")
+            if page.locator("#app.nav-open").count():
+                page.keyboard.press("Escape")
+            expect(page.locator("#pins-toggle")).to_be_visible()
+            toggle = page.locator("#claim-board-toggle")
+            expect(toggle).to_contain_text("Board (3)")
+            toggle.click()
+            expect(toggle).to_have_attribute("aria-expanded", "true")
+            expect(page.locator("#claim-board-list .claim-board-row")).to_have_count(3)
+            expect(page.locator("#claim-board-list a.md-link")).to_have_attribute(
+                "href", "https://example.com/pr/56"
+            )
+            page.mouse.move(0, 0)  # the pointer off the strip: no hover colour in the picture
+            page.evaluate("document.activeElement && document.activeElement.blur()")
+            settle(page)
+            # from the top of the header to the bottom of the Board strip
+            head = page.evaluate(
+                "(() => { const h = document.querySelector('.conv-head').getBoundingClientRect(),"
+                " b = document.getElementById('claim-board').getBoundingClientRect();"
+                " return {x: h.left, y: h.top, width: h.width, height: b.bottom - h.top}; })()"
+            )
+            shot(page, out, f"claim-board-{theme}.png", clip=head)
+            if phone:  # the rows wrap inside the page
+                assert page.evaluate(
+                    "document.documentElement.scrollWidth <= window.innerWidth && ["
+                    "...document.querySelectorAll('#claim-board-list .claim-board-row')]"
+                    ".every(r => r.scrollWidth <= r.clientWidth + 1)"
+                )
+                page.click("#buddy-toggle")  # Members is a sheet on a phone, over the Board
+                expect(page.locator("#app")).to_have_class(re.compile(r"\bsheet-open\b"))
+            claim = page.locator('#buddy-list .member[data-name="claude-1"] .m-claim-entry')
+            expect(claim).to_contain_text("review")
+            expect(claim.locator("a.md-link")).to_have_attribute("href", "https://example.com/pr/56")
+            page.mouse.move(0, 0)
+            settle(page)  # a phone's sheet is still sliding up: measure it where it stops
+            # the pane, or on a phone the sheet: not the dimmed page behind it
+            box = page.locator("#pane").bounding_box()
+            assert box is not None
+            vh = page.viewport_size["height"] if page.viewport_size else box["y"] + box["height"]
+            shot(
+                page,
+                out,
+                f"claim-board-members-{theme}.png",
+                clip={**box, "height": min(box["height"], vh - box["y"])},
+            )
+        finally:
+            ctx.close()
+
+
 # The sets ``--only`` can shoot alone: each takes (browser, out, world) and needs only the seeded world,
 # so a pull request that adds one picture set can make it in seconds instead of running all of them.
-ONLY: dict[str, Any] = {"link_card": shoot_link_card, "quiet": shoot_quiet}
+ONLY: dict[str, Any] = {"link_card": shoot_link_card, "quiet": shoot_quiet, "claim_board": shoot_claim_board}
 
 
 # -------------------------------------------------------------------- main
@@ -2700,6 +2794,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_opencode_upload(browser, out, world)  # in that room, so right after
             shoot_link_card(browser, out, world)  # a room of its own, after the others
             shoot_quiet(browser, out, world)  # quiets a #build agent for a moment: last in this world
+            shoot_claim_board(browser, out, world)  # a room of its own, after that
             shoot_hosted(browser, out, hosted)
             shoot_common_password(browser, out, weak)
             shoot_mention_people(browser, out, people)

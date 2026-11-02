@@ -149,8 +149,9 @@ def test_the_backup_is_written_before_the_first_statement(tmp_path: Path) -> Non
     con.close()
     alters = [ok for sql, ok in seen if sql.lstrip().upper().startswith(("ALTER", "CREATE TABLE"))]
     # ALTERs and CREATEs per step, v2 to v33 (29 drops two tables and alters none; 30 drops thirteen columns;
-    # 31 adds two columns and a table; 32 and 33 each add a table; 36 adds one column)
-    per_step = [3, 5, 1, 1, 2, 2, 2, 1, 1, 1, 2, 2, 2, 1, 2, 1, 2, 1, 1, 1, 1, 5, 1, 1, 1, 3, 13, 3, 1, 1, 1]
+    # 31 adds two columns and a table; 32 and 33 each add a table; 36 and 37 each add one column)
+    per_step = [3, 5, 1, 1, 2, 2, 2, 1, 1, 1, 2, 2, 2, 1, 2, 1, 2, 1, 1, 1, 1, 5, 1, 1, 1, 3, 13, 3, 1, 1]
+    per_step += [1, 1]  # 36 and 37
     assert len(alters) == sum(per_step) and all(alters)
     assert dump(bak) == original
     c = sqlite3.connect(bak)

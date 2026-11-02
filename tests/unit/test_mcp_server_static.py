@@ -95,6 +95,9 @@ async def test_tool_list_fits_the_review_budget() -> None:
     # #423's Markdown, Mermaid and concur fit inside it by shortening the review tool's own wording
     # and putting it on one line (a newline costs two characters on the wire); the budget did not move.
     assert size <= 3900, size
+    claim = next(t for t in tools if t.name == "claim")
+    assert "note" in claim.input_schema["properties"]
+    assert "note" in (claim.description or "")
     review = next(t for t in tools if t.name == "review")
     assert "where" in review.input_schema["properties"]
     assert "file" not in review.input_schema["properties"]
