@@ -1145,7 +1145,7 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 .md > * + *,
 .md-quote > * + *,
 .md li > * + * { margin-top: 6px; }
-.md-p, .md-h, .md-pre, .md-ul, .md-ol, .md-quote, .md-hr, .md-table-wrap { margin: 0; }
+.md-p, .md-h, .md-pre, .md-ul, .md-ol, .md-quote, .md-hr, .md-table-wrap, .md-artifact { margin: 0; }
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
 
@@ -1338,6 +1338,53 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
   white-space: nowrap;
 }
 .md-blocked-pill::before { content: "\2298"; font-size: calc(11px * var(--text-scale)); }
+
+/* An artifact line (issue #544): a file named in a message. Tokens only, so light and dark
+   follow the theme, and the card wraps inside a message on a phone. */
+.md-artifact {
+  max-width: min(100%, 640px);
+  min-width: 0;
+  padding: 8px 12px 10px;
+  border: 1px solid var(--code-border);
+  border-radius: 8px;
+  background: var(--pre-bg);
+}
+/* two cards in a row: apart, not one block */
+.md-artifact + .md-artifact { margin-top: 6px; }
+.md-artifact-name {
+  color: var(--fg);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.md-artifact-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 2px;
+  color: var(--muted);
+  font: calc(12px * var(--text-scale))/1.45 var(--mono);
+}
+.md-artifact-k {
+  margin-right: 6px;
+  color: var(--muted-2);
+  font-family: var(--font);
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 600;
+}
+.md-artifact-where { margin-top: 6px; min-width: 0; overflow-wrap: anywhere; }
+.md-artifact-path {
+  display: block;
+  color: var(--ink-2);
+  font: calc(12px * var(--text-scale))/1.45 var(--mono);
+  overflow-wrap: anywhere;
+}
+.md-artifact-hint {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: calc(12px * var(--text-scale));
+}
+.md-artifact .md-url { overflow-wrap: anywhere; }
 .md-mention {
   padding: 0 3px;
   border-radius: 4px;
