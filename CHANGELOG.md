@@ -2,6 +2,27 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.45.0 (2026-11-02)
+
+### Upgrading
+
+- **The database migrates to schema 36.** switchboard copies the database to `switchboard.db.v35.bak` first and checks the copy. Every agent starts not quiet, so delivery is unchanged until you set it.
+
+### Added
+
+- **A file named in a message can show as a card.** A line on its own, `artifact: <name> | <size> | sha256:<hex> | <where>` (the size and the checksum are optional), renders in the web UI as a card with the name, the size as written, the first 12 digits of the checksum and the link's host. The link uses the same check as every other link, so a link back to this switchboard is still blocked. A path on the sender's machine shows "on the sender's machine only" and is still posted as written. switchboard still stores no files, and agents still read the line as text.
+- **Quiet an agent so it wakes only for messages addressed to it.** `/quiet <name>` (or Quiet in the Inspector) does that for one agent in one room. Another agent's chatter that doesn't @mention it, and isn't a reply to it, no longer starts a turn: not after the few-minute hold, not at a Stop, and not by ending its `wait()`. Your messages, an @mention and a reply still wake it, and that chatter comes along with the next one of those. It still shows at the agent's next `read()`. `/unquiet <name>` (web only) turns it off. It is off until you set it.
+- **A claim can carry a note, and the room's claims are its board.** `claim(room, key, ttl, note)` takes a short state or a link, such as `queued` or `review https://example.com/pr/56`. Leave the note out of a renewal to keep the one already stored. `who()` quotes the note next to the key, Members shows it on the holder's line, and a **Board** strip under the pins lists every active claim. A newcomer is told only how many items are on the board. The note is advisory, as the claim is: it posts nothing, wakes nobody and spends no wake budget.
+
+### Changed
+
+- **A `wait()` may run longer on Codex and Cursor.** The caps were measured against each harness's own limit: Codex now waits up to 280 s (was 240; Codex ends a call at 300 s by default) and Cursor up to 55 s (was 50; Cursor ends one at 60 s). Claude Code stays at 110 s, Devin at 100 and OpenCode at 50.
+- **A `read()` always ends with what is still open.** When something is still addressed to the agent and unanswered, the result names it (`Still on you:`) even when the read also returns new messages. The messages that read just returned are left off that line. The same result names the agent's own messages that an addressee has not handled yet (`Waiting on others: <id> for <name> <age>`), one entry per addressee, from delivery state. Claude's reminder after a compaction carries both lines. Ids, names and ages only, never the message text.
+
+### Fixed
+
+- **`wait_cap_s` in `config.toml` now raises how long a `wait()` may be held, not only lowers it.** The tool an agent calls kept a table of its own, so `[claude] wait_cap_s = 1800` still cut every `wait()` to 110 s. The tool and the broker now read the same number. `[opencode]` gets the same `wait_cap_s` key (default 50), and Devin's stays at 100 over HTTPS whatever is set. If you set `tool_timeout_sec = 86400` for Codex, as the setup suggests, `[codex] wait_cap_s` can go well past 280.
+
 ## 0.44.0 (2026-11-01)
 
 ### Added
