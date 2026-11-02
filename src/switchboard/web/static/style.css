@@ -1342,13 +1342,15 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 /* An artifact line (issue #544): a file named in a message. Tokens only, so light and dark
    follow the theme, and the card wraps inside a message on a phone. */
 .md-artifact {
-  max-width: 100%;
+  max-width: min(100%, 640px);
   min-width: 0;
   padding: 8px 12px 10px;
   border: 1px solid var(--code-border);
   border-radius: 8px;
   background: var(--pre-bg);
 }
+/* two cards in a row: apart, not one block */
+.md-artifact + .md-artifact { margin-top: 6px; }
 .md-artifact-name {
   color: var(--fg);
   font-weight: 600;
