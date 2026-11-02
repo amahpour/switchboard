@@ -1019,10 +1019,49 @@
     });
   }
 
-  // a person's first and last name by their name in the rooms, from /api/me (§39.6), or null
+  // a person's first and last name by their name in the rooms, from /api/me and the people
+  // frame (§39.6, #563), or null. An empty string is no name.
   function fullNameOf(name) {
     const map = (state.me && state.me.full_names) || {};
-    return Object.prototype.hasOwnProperty.call(map, name) ? map[name] : null;
+    const full = Object.prototype.hasOwnProperty.call(map, name) ? map[name] : null;
+    return full || null;
+  }
+
+  // How a person is shown (#563): the real name, with the username on hover. No real name
+  // means the username, and no hover. Agents never come through here.
+  function personShown(name) {
+    const full = fullNameOf(name);
+    return full ? { text: full, title: '@' + name } : { text: name, title: '' };
+  }
+
+  // The real name, then the username smaller (m-full). data-name and every other hook stay
+  // on the username, on the caller.
+  function appendShownPerson(parent, name) {
+    const shown = personShown(name);
+    parent.append(el('span', 'm-name', shown.text));
+    if (shown.title) parent.append(el('span', 'm-full', shown.title));
+  }
+
+  // Copy full_names off a people frame (#563). Strings only, and a missing map leaves what
+  // the page already has: an older frame must not wipe the names. True when the map changed.
+  function takeFullNames(raw) {
+    if (!state.me || !raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+    const next = {};
+    for (const k of Object.keys(raw)) {
+      const v = raw[k];
+      if (typeof v === 'string' && v) next[k] = v;
+    }
+    const prev = state.me.full_names || {};
+    const nextKeys = Object.keys(next);
+    let changed = Object.keys(prev).length !== nextKeys.length;
+    if (!changed) {
+      for (const k of nextKeys) {
+        if (prev[k] !== next[k]) { changed = true; break; }
+      }
+    }
+    if (!changed) return false;
+    state.me.full_names = next;
+    return true;
   }
 
   // Focus mode (#99): the one-line stand-in for a collapsed message - its sender, then the
@@ -1032,7 +1071,9 @@
   // the row takes the focus: the button hides as it expands, which would drop it to the page.
   function collapsedSummary(m, line) {
     const b = btn('collapsed-line');
-    b.append(el('span', 'collapsed-sender', label(m.from, m.host)),
+    // a person, if one were collapsed, by the same name their message shows (#563)
+    const who = m.sender_kind === 'human' && !m.host ? personShown(m.from).text : label(m.from, m.host);
+    b.append(el('span', 'collapsed-sender', who),
       el('span', 'collapsed-snippet', firstLine(m.text, 140)));
     b.title = 'Collapsed by Focus: click to show it in full';
     b.addEventListener('click', function () {
@@ -1077,9 +1118,10 @@
       nick.title = 'Open ' + who + ' in the inspector';
       nick.addEventListener('click', function () { openInspector(m.from, m.host || ''); });
     } else {
-      nick = el('span', 'nick nick-human' + (m.sender_kind === 'system' ? ' nick-system' : ''), m.from);
-      const full = m.sender_kind === 'human' && !m.host ? fullNameOf(m.from) : null;
-      if (full) nick.title = full;  // a person's full name, on hover (#192, §39.6)
+      const shown = m.sender_kind === 'human' && !m.host ? personShown(m.from) : null;
+      nick = el('span', 'nick nick-human' + (m.sender_kind === 'system' ? ' nick-system' : ''),
+        shown ? shown.text : m.from);
+      if (shown && shown.title) nick.title = shown.title;  // the username, on hover (#563)
     }
     if (m.host) nick.append(el('span', 'host-tag', '@' + m.host));
     head.append(nick);
@@ -1400,9 +1442,7 @@
       av.append(el('span', 'dot ' + (state.wsOpen ? 's-human' : 's-offline')));
       const main = el('span', 'm-main');
       const nl = el('span', 'm-name-line');
-      nl.append(el('span', 'm-name', state.me.human));
-      const meFull = fullNameOf(state.me.human);
-      if (meFull) nl.append(el('span', 'm-full', meFull));
+      appendShownPerson(nl, state.me.human);  // the real name, then @username (#563)
       const conn = state.wsOpen ? 'online' : state.wsEverOpen ? 'reconnecting…' : 'connecting…';
       main.append(nl, el('span', 'm-status', 'Human · ' + conn));
       row.append(av, main);
@@ -1479,7 +1519,8 @@
       dot.setAttribute('role', 'img');
       dot.setAttribute('aria-label', here(n) ? 'online' : 'offline');
       dot.title = here(n) ? 'Has switchboard open now' : 'Not here now';
-      li.append(dot, el('span', 'm-name', n));
+      li.append(dot);
+      appendShownPerson(li, n);  // the real name, then @username; data-name stays the username
       if (!isPrivate) {
         if (state.me && n === state.me.human) li.append(el('span', 'p-you', 'you'));
         list.append(li);
@@ -2518,10 +2559,23 @@
   // name, prefix, word prefix, anywhere -- then a person with a page open now (state.online, the
   // `people` frame) before one who is away, then the broker's own order. A person is
   // { name, person: true, online }; renderPop draws it with a person avatar and no tier chip.
+  // A person matches on their username or their real name (#563), with the same ranks as an
+  // agent. The better rank wins; a tie keeps the username, which is what choosing inserts.
+  function personQuery(name, query) {
+    const onUser = matchInfo(name, query);
+    const full = fullNameOf(name);
+    const onFull = full ? matchInfo(full.toLowerCase(), query) : null;
+    if (!onUser && !onFull) return null;
+    if (onUser && (!onFull || onUser.rank <= onFull.rank)) {
+      return { rank: onUser.rank, where: 'user', start: onUser.start, len: onUser.len };
+    }
+    return { rank: onFull.rank, where: 'full', start: onFull.start, len: onFull.len };
+  }
+
   function matchPeople(r, query) {
     const scored = [];
     mentionablePeople(r).forEach(function (name, i) {
-      const info = matchInfo(name, query);
+      const info = personQuery(name, query);
       if (!info) return;
       scored.push({ p: { name: name, person: true, online: state.online.has(name) }, rank: info.rank, i: i });
     });
@@ -2698,13 +2752,27 @@
         o.setAttribute('aria-selected', String(i === p.sel));
         const main = el('span', 'm-main');
         const nl = el('span', 'm-name-line');
-        const nameEl = el('span', 'm-name');
-        const hit = matchInfo(m.name, p.query || '');
-        appendMatch(nameEl, m.name, hit ? hit.start : 0, hit ? hit.len : 0);
-        nl.append(nameEl);
         if (m.person) {
-          // a person (#418): the round person avatar with the dot of a page open now or not, and
-          // no tier chip -- there is no waking a person, only a badge on their own page
+          // a person (#563): the real name, then @username. Typing either matches; choosing
+          // still inserts the username (choosePop uses m.name). The id stays men-<username>.
+          // The round avatar and the dot are as before (#418): nothing wakes a person.
+          const full = fullNameOf(m.name);
+          const picked = personQuery(m.name, p.query || '');
+          const nameEl = el('span', 'm-name');
+          if (full) {
+            const onFull = picked && picked.where === 'full' ? picked : null;
+            appendMatch(nameEl, full, onFull ? onFull.start : 0, onFull ? onFull.len : 0);
+            nl.append(nameEl);
+            const handle = el('span', 'm-full');
+            handle.append('@');
+            const onUser = picked && picked.where === 'user' ? picked : null;
+            appendMatch(handle, m.name, onUser ? onUser.start : 0, onUser ? onUser.len : 0);
+            nl.append(handle);
+          } else {
+            const hit = picked || { start: 0, len: 0 };
+            appendMatch(nameEl, m.name, hit.start, hit.len);
+            nl.append(nameEl);
+          }
           nl.append(el('span', 'm-status', (m.online ? 'Online' : 'Offline') + ' · Person'));
           main.append(nl);
           o.append(personAvatar(m.name, m.online), main);
@@ -2713,6 +2781,10 @@
           box.append(o);
           return;
         }
+        const nameEl = el('span', 'm-name');
+        const hit = matchInfo(m.name, p.query || '');
+        appendMatch(nameEl, m.name, hit ? hit.start : 0, hit ? hit.len : 0);
+        nl.append(nameEl);
         if (m.broadcast) {
           // @here/@everyone (issue #111): a description where a member's status goes, on the
           // same line, and a plain icon instead of a harness avatar -- it isn't one.
@@ -2920,9 +2992,16 @@
       const owners = showOwners();
       state.everyone = Array.isArray(f.people) ? f.people.filter(function (n) { return typeof n === 'string'; }) : [];
       state.online = new Set(Array.isArray(f.online) ? f.online : []);
+      const namesChanged = takeFullNames(f.full_names);
       // a second person arriving (or the second leaving) shows (or hides) each agent's owner in Members
-      if (showOwners() !== owners) renderBuddies();
-      renderRoomPeople();
+      if (showOwners() !== owners || namesChanged) renderBuddies();
+      else renderRoomPeople();
+      if (namesChanged) {
+        const log = $('log');
+        const stick = nearBottom(log);
+        renderRows(activeRoom());
+        if (stick) log.scrollTop = log.scrollHeight;
+      }
       renderComposerMentions();  // who can be @mentioned (and their dot in the popover) changed
       if (state.pop && state.pop.kind === 'mentions') updatePopover();
     }
@@ -4516,7 +4595,7 @@
     return card;
   }
 
-  // a name in the rooms from a first name, as the broker makes it (people._slug): accents
+  // a screen name, as the broker makes it (people._slug): accents
   // dropped, lowercase, spaces and . + as -, a letter first, at most 24
   function slugName(text) {
     let t = String(text || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase();
@@ -4524,15 +4603,16 @@
     return t.slice(0, 24).replace(/-+$/, '');
   }
 
-  // the name in the rooms Add someone suggests (people.name_for): the first name, else with the
-  // last name's initial, else with a digit, the first that nobody here has
-  function suggestName(first, last) {
-    const base = slugName(first);
+  // the username Add someone suggests (people.name_for, when there is an email, #563): the
+  // local part, then a digit, the first nobody here has. No last-initial try: that was only
+  // for a first-name base, which the page no longer suggests.
+  function suggestName(email) {
+    const raw = String(email || '');
+    const at = raw.indexOf('@');
+    const base = slugName(at < 0 ? raw : raw.slice(0, at));
     if (!base) return '';
     const taken = new Set(state.people.map(function (p) { return p.name; }));
     const tries = [base];
-    const initial = slugName(last).charAt(0);
-    if (initial) tries.push((base + '-' + initial).slice(0, 24));
     for (let n = 2; n <= 9; n++) tries.push(base.slice(0, 23) + n);
     return tries.find(function (t) { return !taken.has(t); }) || base;
   }
@@ -4562,20 +4642,20 @@
     }
     const first = field('first', 'person-first', 'First name', 'text', 'Sam', 64);
     const last = field('last', 'person-last', 'Last name', 'text', 'Lee', 64);
-    const email = field('email', 'person-email', 'Email', 'email', 'sam@example.com', 254);
+    const email = field('email', 'person-email', 'Email', 'email', 'sam.lee@example.com', 254);
     email.input.autocapitalize = 'none';
-    const name = field('name', 'person-name', 'Their name in the rooms', 'text', 'sam', 24);
+    const name = field('name', 'person-name', 'Their name in the rooms', 'text', 'sam-lee', 24);
     name.input.autocapitalize = 'none';
     const names = el('div', 'person-names');
     names.append(first.wrap, last.wrap);
-    function follow() {  // the name in the rooms follows the first and last name until typed by hand
+    function follow() {  // the username follows the email until the admin types a name (#563)
       if (d.nameTyped) return;
-      d.name = suggestName(d.first, d.last);
+      d.name = suggestName(d.email);
       name.input.value = d.name;
     }
-    first.input.addEventListener('input', function () { d.first = first.input.value; follow(); });
-    last.input.addEventListener('input', function () { d.last = last.input.value; follow(); });
-    email.input.addEventListener('input', function () { d.email = email.input.value; });
+    first.input.addEventListener('input', function () { d.first = first.input.value; });
+    last.input.addEventListener('input', function () { d.last = last.input.value; });
+    email.input.addEventListener('input', function () { d.email = email.input.value; follow(); });
     name.input.addEventListener('input', function () { d.name = name.input.value; d.nameTyped = !!name.input.value; });
     const row = el('div', 'info-row');
     const busy = state.peopleBusy.get('add');
@@ -4593,7 +4673,8 @@
     });
     card.append(form);
     card.append(el('p', 'info-step', 'They sign in with that email and a one-time password you send them, then'
-      + ' choose their own password or a passkey. Their name in the rooms is what others @mention.'));
+      + ' choose their own password or a passkey. Their name in the rooms fills in from the email,'
+      + ' and it is what others @mention.'));
     const out = el('div', 'fine info-result');
     out.id = 'people-result-add';
     card.append(out);

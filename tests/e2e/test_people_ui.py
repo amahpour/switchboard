@@ -106,10 +106,11 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
     assert hosted.state.claim is None and hosted.state.store.owner_password_hash() is not None
     assert hosted.state.store.owner_email() == "alice@example.com"
     assert hosted.state.store.owner_names() == ("Alice", "Liddell")
-    expect(page.locator("#buddy-me .m-full")).to_have_text("Alice Liddell")
+    expect(page.locator("#buddy-me .m-name")).to_have_text("Alice Liddell")
+    expect(page.locator("#buddy-me .m-full")).to_have_text("@alice")
 
-    # the admin section: Add someone (their names and email; the name in the rooms follows the
-    # first name), then the invite to send, once
+    # the admin section: Add someone (their names and email; the username follows the email),
+    # then the invite to send, once
     expect(page.locator("#admin-section")).to_be_visible()
     page.click("#open-people")
     expect(page.locator("#people-panel")).to_be_visible()
@@ -169,7 +170,8 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
     expect(bob.locator("#choose-lead")).to_contain_text("Hi Bob. Your one-time password worked.")
     choose(bob, BOB_PW)
     expect(bob.locator("#me-name")).to_have_text("bob")
-    expect(bob.locator("#buddy-me .m-full")).to_have_text("Bob Builder")
+    expect(bob.locator("#buddy-me .m-name")).to_have_text("Bob Builder")
+    expect(bob.locator("#buddy-me .m-full")).to_have_text("@bob")
     expect(bob.locator("#admin-section")).to_be_hidden()  # the admin section is the admin's
     open_settings(bob, "agents")  # everyone makes agent tokens for their own devices
     expect(bob.locator("#agent-token-make")).to_be_visible()
@@ -185,10 +187,9 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
     bob.keyboard.press("Enter")
     expect(page.locator("#log .line.k-chat").last).to_contain_text("hello from bob")
     expect(page.locator("#log .line.k-chat").last).to_contain_text("bob")
-    # his own page knows his full name: it's the hover on his name
-    expect(bob.locator("#log .line.k-chat").last.locator(".nick-human")).to_have_attribute(
-        "title", "Bob Builder"
-    )
+    # his own page shows his real name, and the hover is his username
+    expect(bob.locator("#log .line.k-chat").last.locator(".nick-human")).to_have_text("Bob Builder")
+    expect(bob.locator("#log .line.k-chat").last.locator(".nick-human")).to_have_attribute("title", "@bob")
 
     # the admin's check ran out: adding someone asks for the password first
     hosted.on_loop(lambda: hosted.state.passkey_checks.clear())

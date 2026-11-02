@@ -112,15 +112,26 @@ def name_from_email(email: str) -> str:
 
 
 def name_for(state: "BrokerState", first_name: str | None, last_name: str | None, email: str | None) -> str:
-    """The name in the rooms for someone added with a first and last name (#192, §39.6): the
-    first name (``ari``), else with the last name's initial (``ari-m``), else with a digit
-    (``ari2`` to ``ari9``); from the email when there's no first name. The first that's free;
-    else the plain one, which ``name_problem`` then refuses with its reason."""
-    base = _slug(first_name) if first_name else name_from_email(email or "")
-    tries = [base]
-    if base and last_name and _slug(last_name):
-        tries.append(f"{base}-{_slug(last_name)[0]}"[:24])
-    tries += [f"{base[:23]}{n}" for n in range(2, 10)] if base else []
+    """The name in the rooms for someone new (#563, §39.6).
+
+    With an email, the base is the local part (``name_from_email``): ``blee@example.com``
+    becomes ``blee``, and a taken one becomes ``blee2`` to ``blee9``. The last name's initial
+    is not tried for that base. With no email, it is the first name, then the last name's
+    initial, then a digit, as before. The first that's free; else the plain one, which
+    ``name_problem`` then refuses with its reason. Nothing here renames someone who exists.
+    """
+    if email:
+        base = name_from_email(email)
+        tries = [base] if base else []
+        if base:
+            tries += [f"{base[:23]}{n}" for n in range(2, 10)]
+    else:
+        base = _slug(first_name or "")
+        tries = [base]
+        if base and last_name and _slug(last_name):
+            tries.append(f"{base}-{_slug(last_name)[0]}"[:24])
+        if base:
+            tries += [f"{base[:23]}{n}" for n in range(2, 10)]
     return next((t for t in tries if name_problem(state, t) is None), base)
 
 
@@ -162,8 +173,8 @@ def names_of(state: "BrokerState", person_id: int | None) -> tuple[str | None, s
 
 
 def full_names(state: "BrokerState") -> dict[str, str]:
-    """Each person's name in the rooms -> their full name, for those who have one (the
-    Members panel and the hover on their messages)."""
+    """Each person's name in the rooms -> their full name, for those who have one. The page
+    shows a person by it, and the username stays what @mentions use (#563, §39.6)."""
     out: dict[str, str] = {}
     owner = full_name(*state.store.owner_names())
     if owner:
