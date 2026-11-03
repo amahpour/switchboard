@@ -4500,7 +4500,7 @@
   // everyone here with how they sign in, a New one-time password (a reset) and Remove.
   const PERSON_NAME = /^[a-z][a-z0-9_-]{0,23}$/;
   const SIGN_IN_TEXT = {
-    admin: 'the admin', password: 'signs in with a password', passkey: 'signs in with a passkey',
+    admin: 'the owner', password: 'signs in with a password', passkey: 'signs in with a passkey',
     google: 'signs in with Google',
     'one-time': 'hasn\'t signed in yet: one-time password', expired: 'one-time password expired',
   };
@@ -4508,7 +4508,7 @@
   async function loadPeople(render) {
     const data = await api('GET', '/api/people');
     state.people = data.people || [];
-    // every private room's name and people, for the admin (§44.4); never its contents
+    // every private room's name and people, for an admin (§44.4, §51); never its contents
     try { state.privateRooms = (await api('GET', '/api/private-rooms')).rooms || []; } catch (e) { state.privateRooms = []; }
     if (render !== false) renderPeoplePanel();
     renderComposerMentions();  // a newly added (or removed) person changed who can be @mentioned

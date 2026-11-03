@@ -148,6 +148,7 @@ def test_an_admin_appears_and_goes_without_a_reload(ui: UI, world: HostedWorld) 
     open_people(alice)
     owner = alice.locator(".person-card", has=alice.locator(".person-chip", has_text="Owner"))
     expect(owner).to_be_visible()
+    expect(owner.locator(".info-step")).to_contain_text("the owner")  # not "the admin": there are several
     expect(owner.locator("button", has_text="Make admin")).to_have_count(0)
     expect(owner.locator("button", has_text="Remove admin")).to_have_count(0)
     alice.click(f"#admin-toggle-{world.bob_id}")  # type: ignore[attr-defined]
