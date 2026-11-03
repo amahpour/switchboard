@@ -7,6 +7,7 @@ Waits are Playwright's ``expect`` or ``ui_world.wait_js``, never ``page.wait_for
 
 from __future__ import annotations
 
+import re
 import shutil
 from collections.abc import Iterator
 from typing import Any
@@ -163,6 +164,11 @@ def test_an_admin_appears_and_goes_without_a_reload(ui: UI, world: HostedWorld) 
     bob_owner = bob.locator(".person-card", has=bob.locator(".person-chip", has_text="Owner"))
     expect(bob_owner.locator("button", has_text="Make admin")).to_have_count(0)
     expect(bob_owner.locator("button", has_text="Remove admin")).to_have_count(0)
+    # bob's own card lets him give up admin, but not remove himself or reset his own password
+    bob_self = bob.locator(".person-card", has=bob.locator(f"#admin-toggle-{world.bob_id}"))  # type: ignore[attr-defined]
+    expect(bob_self.locator("button", has_text="Remove admin")).to_be_visible()
+    expect(bob_self.locator("button", has_text="New one-time password")).to_have_count(0)
+    expect(bob_self.locator("button", has_text=re.compile(r"^Remove$"))).to_have_count(0)
     bob.click(f"#admin-toggle-{world.carol_id}")  # type: ignore[attr-defined]
     expect(bob.locator("#confirm-dialog")).to_be_visible()
     bob.fill("#confirm-password", BOB_PW)

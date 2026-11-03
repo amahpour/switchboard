@@ -4959,7 +4959,11 @@
       const rm = btn('btn', busy === 'remove' ? 'Removing…' : 'Remove');
       rm.disabled = !!busy;
       rm.addEventListener('click', function () { removePerson(p); });
-      btns.append(adminBtn, again, rm);
+      // An admin's own card: no Remove and no New one-time password, which would sign them out
+      // with no way back in (their own password is in Settings). Giving up admin stays (§51).
+      const self = !!state.me && p.name === state.me.human;
+      if (self) btns.append(adminBtn);
+      else btns.append(adminBtn, again, rm);
       card.append(btns);
       const noted = state.adminNotes.get(key);
       const out = el('div', 'fine info-result' + (noted && noted.bad ? ' bad' : ''), noted ? noted.text : '');
