@@ -18,7 +18,7 @@ import pytest
 from conftest import sanitize_env
 from playwright.sync_api import Browser, Page, expect
 from test_web_ui import PHASE_REPORTS, PHONE, UI, chat_row, no_horizontal_scroll, open_settings
-from ui_world import HostedWorld
+from ui_world import HostedWorld, wait_js
 
 pytestmark = pytest.mark.e2e
 
@@ -237,13 +237,14 @@ def _person_key(world: HostedWorld, name: str) -> str:
 def _save_names(page: Page, key: str) -> None:
     """Click the card's Save. A session whose fresh check has run out confirms with the password."""
     page.click(f"#names-save-{key}")
-    page.wait_for_function(
+    wait_js(  # not wait_for_function: the page's CSP refuses its eval (test_no_eval_waits.py)
+        page,
         """(key) => {
           const d = document.querySelector('#confirm-dialog');
           const r = document.querySelector('#names-result-' + key);
           return (d && d.open) || (r && r.textContent.length > 0);
         }""",
-        arg=key,
+        key,
     )
     if page.locator("#confirm-dialog").evaluate("d => d.open"):
         page.fill("#confirm-password", ADMIN_PW)
