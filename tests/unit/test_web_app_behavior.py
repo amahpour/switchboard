@@ -682,3 +682,19 @@ def test_add_someone_suggests_a_username_from_the_email() -> None:
     assert out["plus"] == "extra-person-x"  # a plus address, the same slug as the broker
     assert out["taken"] == "sam-lee2"  # sam.lee, and sam-lee is already someone
     assert out["afterHand"] == "chosen"
+
+
+def test_the_owners_real_name_stays_editable_when_the_username_is_locked() -> None:
+    """#566: ``name_locked`` (SWITCHBOARD_HUMAN_NAME) makes the owner's Name field read-only.
+    First name and Last name on that card stay editable, with Save. Fails if those inputs are
+    missing, or if the lock is applied to them too."""
+    out = run("owner_names_editable_when_username_locked")
+    assert out == {
+        "nameReadOnly": True,
+        "firstReadOnly": False,
+        "lastReadOnly": False,
+        "firstLabel": "First name",
+        "lastLabel": "Last name",
+        "save": "Save",
+        "saveDisabled": False,
+    }
