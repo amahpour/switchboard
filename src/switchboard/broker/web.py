@@ -942,8 +942,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return None, unauthorized()
         if not state.hosted:
             return None, _err(404, "not_found", "people sign in to a hosted switchboard only")
-        if not w.owner:
-            return None, _err(403, "forbidden", "only the admin manages people")
+        if not w.is_admin:
+            return None, _err(403, "forbidden", "only an admin manages people")
         if fresh and not state.fresh_check(w.h):
             return None, _err(403, "reauth", "confirm it's you first")
         return w, None
@@ -1117,6 +1117,40 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         state.hub.notice(None, "warn", f"{p.name} removed by {w.name}: signed out everywhere")
         people_changed(state)
         return _ok({"ok": True, "sessions": len(gone)})
+
+    @app.post("/api/people/{pid}/admin")
+    async def people_admin(request: Request, pid: str) -> Response:
+        """Make someone an admin, or take it away (#569, §51). Granting access needs a fresh
+        check. Taking it away needs none: it only takes access away (§32.3). The owner stays
+        an admin, and nobody can remove them."""
+        w, no = admin(request, False)
+        if no is not None:
+            return no
+        assert w is not None
+        try:
+            body = await _json_body(request)
+        except ServiceError as e:
+            return _svc_err(e)
+        if set(body) != {"admin"} or not isinstance(body.get("admin"), bool):
+            return _err(400, "bad_request", "admin must be true or false")
+        grant = body["admin"]
+        if pid in ("owner", "0"):
+            return _err(403, "forbidden", "nobody removes the owner or the owner's admin")
+        p = state.store.person(int(pid)) if ROOM_ID_RE.fullmatch(pid) and int(pid) <= MAX_ROOM_ID else None
+        if p is None or not p.active:
+            return _err(404, "not_found", "no such person")
+        if grant and not state.fresh_check(w.h):
+            return _err(403, "reauth", "confirm it's you first")
+        if p.admin != grant:
+            if not state.store.person_set_admin(p.id, grant):
+                return _err(404, "not_found", "no such person")
+            state.store.add_event(
+                "people", data={"what": "admin", "person": p.name, "by": w.name, "admin": grant}
+            )
+            verb = f"made {p.name} an admin" if grant else f"took {p.name}'s admin away"
+            state.hub.notice(None, "info", f"{w.name} {verb}")
+            people_changed(state)
+        return _ok({"person": next(x for x in people.summary(state) if x["id"] == p.id)})
 
     @app.get("/api/auth/state")
     async def auth_state() -> Response:
@@ -1423,10 +1457,10 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 "full_names": people.full_names(state),
                 # the owner's name is fixed by SWITCHBOARD_HUMAN_NAME: Settings can't rename it (#114)
                 "name_locked": w.owner and state.cfg.human_name_from_env,
-                "admin": w.owner and state.hosted,  # the admin section (§32.3)
-                # may this person upload the agents' avatars (§29.11)? The owner: on a desktop broker the
-                # one person signed in, on a hosted one the admin
-                "can_set_icons": w.owner,
+                "admin": w.is_admin and state.hosted,  # the admin section (§32.3, §51)
+                # may this person upload the agents' avatars (§29.11)? Any admin: on a desktop
+                # broker the one person signed in, on a hosted one an admin (§51)
+                "can_set_icons": w.is_admin,
                 "version": __version__,
                 "commit": build_info.commit(),
                 "test_mode": state.test_mode,
@@ -1523,7 +1557,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         return rename_route(body, p.id, w.name)
 
     # ------------------------------------------------ the agents' avatars (DESIGN.md §29.11, #498)
-    # Everyone signed in reads them (the page's stylesheet and the images it names); only the owner (a
+    # Everyone signed in reads them (the page's stylesheet and the images it names); an admin (a
     # desktop broker's one person, a hosted broker's admin) uploads or resets. The check is the bytes'.
     def icon_session(request: Request) -> tuple[people.Who | None, Response | None]:
         w = who(request)
@@ -1531,10 +1565,10 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return None, unauthorized()
         return w, None
 
-    def icon_owner(request: Request) -> tuple[people.Who | None, Response | None]:
+    def icon_admin(request: Request) -> tuple[people.Who | None, Response | None]:
         w, no = icon_session(request)
-        if no is None and w is not None and not w.owner:
-            return None, _err(403, "forbidden", "only the admin changes the agents' avatars")
+        if no is None and w is not None and not w.is_admin:
+            return None, _err(403, "forbidden", "only an admin changes the agents' avatars")
         return w, no
 
     def icon_unknown(harness: str, scheme: str | None = None) -> Response | None:
@@ -1550,7 +1584,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return no or unauthorized()
         return _ok(
             {
-                "can_change": w.owner,
+                "can_change": w.is_admin,
                 "harnesses": list(agent_icons.HARNESSES),
                 "limits": {
                     "bytes": agent_icons.MAX_BYTES,
@@ -1606,7 +1640,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
     async def agent_icon_put(request: Request, harness: str, scheme: str) -> Response:
         """Upload the avatar for ``harness`` in ``scheme``: the request body is the file, its
         Content-Type what it says it is. Judged by its bytes (``agent_icons.check``) before it is kept."""
-        w, no = icon_owner(request)
+        w, no = icon_admin(request)
         if no is not None or w is None:
             return no or unauthorized()
         if (bad := icon_unknown(harness, scheme)) is not None:
@@ -1638,7 +1672,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
     @app.delete("/api/agent-icons/{harness}")
     async def agent_icon_reset(request: Request, harness: str) -> Response:
         """Reset ``harness``'s avatars, light and dark: the built-in one comes back."""
-        w, no = icon_owner(request)
+        w, no = icon_admin(request)
         if no is not None or w is None:
             return no or unauthorized()
         if (bad := icon_unknown(harness)) is not None:
@@ -1927,7 +1961,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         except ServiceError as e:
             return _svc_err(e)
 
-    # The admin sees every private room's name and people, never its contents (§44.4).
+    # An admin sees every private room's name and people, never its contents (§44.4, §51).
     @app.get("/api/private-rooms")
     async def private_rooms(request: Request) -> Response:
         _w, no = admin(request, False)
@@ -2032,19 +2066,23 @@ def _qint(request: Request, key: str) -> int | None:
 def people_frame(state: "BrokerState") -> dict[str, Any] | None:
     """Everyone on a hosted broker, and which of them has a page open (§44.8, #354): what the
     Members pane lists under People. ``full_names`` is each person's real name, so a page that
-    is already open shows someone added or renamed without a reload (#563). It never includes
-    an email. None on a desktop broker, which has one person. The names are no news to a
-    signed-in page (a room's members answer has them, for @ completion); who is connected is,
-    and every signed-in person gets it, whatever rooms they can see."""
+    is already open shows someone added or renamed without a reload (#563). ``admins`` is the
+    name of everyone who is an admin, the owner first (§51), so an open page can see that its
+    own person was made one or had it taken away. It never includes an email. None on a desktop
+    broker, which has one person. The names are no news to a signed-in page (a room's members
+    answer has them, for @ completion); who is connected, and who is an admin, is not a secret
+    among signed-in people, and every one of them gets it, whatever rooms they can see."""
     if not state.hosted:
         return None
     here = state.hub.online_persons()
     online = [state.cfg.human_name] if 0 in here else []
     online += [p.name for p in state.store.people() if p.id in here]
+    admins = [state.cfg.human_name] + [p.name for p in state.store.people() if p.admin]
     return {
         "people": people.names(state),
         "online": online,
         "full_names": people.full_names(state),
+        "admins": admins,
     }
 
 

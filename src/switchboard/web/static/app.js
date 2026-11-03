@@ -96,6 +96,7 @@
     nameNotes: new Map(),
     namesDrafts: new Map(),  // person key -> {first, last}: First and Last name typed on the card (#566)
     namesNotes: new Map(),
+    adminNotes: new Map(),  // person key -> {text, bad}: Make admin / Remove admin on their card (#569)
     peopleBusy: new Map(),  // person id (or 'add') -> what is running for them
     invite: null,      // { id, name, password, invite } to send, until Done
     copiedInvite: false,
@@ -3015,6 +3016,7 @@
       }
       renderComposerMentions();  // who can be @mentioned (and their dot in the popover) changed
       if (state.pop && state.pop.kind === 'mentions') updatePopover();
+      noteOwnAdmin(f);
     }
   }
 
@@ -3047,6 +3049,27 @@
   // drawer closed as the sheet opened (the opener sits in the now hidden drawer), or when the
   // Closed button went away (the last closed room was reopened elsewhere). Then: the Rooms
   // toggle on a phone, else the composer.
+  // The people frame names every admin (§51). When this page's own person joins or leaves
+  // that list, refetch /api/me and redraw: the sidebar's Admin entry, an open People sheet
+  // and Settings > Appearance > Agent icons follow, with no reload. A name that isn't in
+  // the frame's people list was renamed; that is not admin being taken away.
+  function noteOwnAdmin(f) {
+    if (!state.me || !Array.isArray(f.admins) || !Array.isArray(f.people)) return;
+    if (f.people.indexOf(state.me.human) < 0) return;
+    const mine = f.admins.indexOf(state.me.human) >= 0;
+    if (mine === !!state.me.admin) return;
+    api('GET', '/api/me').then(function (me) {
+      state.me = me;
+      $('admin-section').classList.toggle('hidden', !(me && me.admin));
+      if (!(me && me.admin) && !$('people-panel').classList.contains('hidden')) closeSheet('people-panel');
+      const content = document.querySelector('#settings-panel-appearance .settings-panel-content');
+      if (!content) return;
+      const icons = document.getElementById('settings-agent-icons');
+      if (me.can_set_icons && !icons) buildAgentIcons(content);
+      else if (!me.can_set_icons && icons) icons.remove();
+    }, function () {});
+  }
+
   function closeSheet(id) {
     $(id).classList.add('hidden');
     const back = state.sheetOpener;
@@ -3565,7 +3588,7 @@
   }
 
   // ------------------------------------------- the agents' avatars (#498, DESIGN.md §29.11)
-  // Settings → Appearance → Agent icons, for the owner (the admin on a hosted broker): per harness, a
+  // Settings → Appearance → Agent icons, for an admin (the one person on a desktop broker): per harness, a
   // light and a dark image to upload, a preview of each, and Reset. The wording is the maintainer's.
   const ICON_HEADING = "Customize your coding harnesses' avatars!";
   const ICON_TIP = "Some companies don't allow their logos to be used, so switchboard can't ship them. "
@@ -4511,11 +4534,11 @@
   }
 
   // Who can't sign in (#240, DESIGN.md §39.3): a person with no email, since only an email (or
-  // `admin`) signs anyone in. The admin is told how many there are, and who, so they can set the
-  // emails. The admin isn't counted: `admin` signs them in whatever happens. This follows the
-  // broker's rule (people.account).
+  // `admin`) signs anyone in. An admin is told how many there are, and who, so they can set the
+  // emails. The owner isn't counted: `admin` signs them in whatever happens. Another admin with
+  // no email still can't. This follows the broker's rule (people.account).
   function peopleWithoutEmail() {
-    return state.people.filter(function (p) { return !p.admin && !p.email; });
+    return state.people.filter(function (p) { return !p.owner && !p.email; });
   }
 
   function personLabel(p) {
@@ -4900,24 +4923,35 @@
     const full = [p.first_name, p.last_name].filter(Boolean).join(' ');
     head.append(av, el('span', 'card-name', full || p.name));
     if (full) head.append(el('span', 'person-handle', '@' + p.name));
-    if (p.admin) head.append(el('span', 'chip person-chip', 'admin'));
+    if (p.owner) head.append(el('span', 'chip person-chip', 'Owner'));
+    else if (p.admin) head.append(el('span', 'chip person-chip', 'Admin'));
     else if (p.sign_in === 'one-time' || p.sign_in === 'expired') {
       head.append(el('span', 'chip person-chip' + (p.sign_in === 'expired' ? ' bad' : ' pending'),
         p.sign_in === 'expired' ? 'expired' : 'invited'));
     }
     card.append(head);
     const bits = [SIGN_IN_TEXT[p.sign_in] || p.sign_in];
-    if (!p.admin && p.passkeys && p.sign_in !== 'passkey') bits.push(plural(p.passkeys, 'passkey', 'passkeys'));
-    if (p.admin) bits.push(p.password ? 'password' : 'no password', plural(p.passkeys || 0, 'passkey', 'passkeys'));
+    if (!p.owner && p.passkeys && p.sign_in !== 'passkey') bits.push(plural(p.passkeys, 'passkey', 'passkeys'));
+    if (p.owner) bits.push(p.password ? 'password' : 'no password', plural(p.passkeys || 0, 'passkey', 'passkeys'));
     if (!p.email) {
-      bits.push(p.admin ? 'no email yet: you sign in as admin'
+      bits.push(p.owner ? 'no email yet: you sign in as admin'
         : 'no email yet: can’t sign in until you set one');
     }
     card.append(el('p', 'info-step', bits.join(' · ')));
     card.append(nameRow(p), namesRow(p), emailRow(p));
-    if (!p.admin) {
+    if (!p.owner) {
       const btns = el('div', 'dialog-buttons');
       const busy = state.peopleBusy.get(p.id);
+      const key = String(p.id);
+      const adminLabel = busy === 'admin' ? 'Making admin…' : busy === 'unadmin' ? 'Removing admin…'
+        : (p.admin ? 'Remove admin' : 'Make admin');
+      const adminBtn = btn('btn', adminLabel);
+      adminBtn.id = 'admin-toggle-' + key;
+      adminBtn.dataset.focus = 'admin:' + key;
+      adminBtn.disabled = !!busy;
+      adminBtn.title = p.admin ? 'takes ' + p.name + '’s admin away'
+        : 'asks you to confirm it’s you first, then makes ' + p.name + ' an admin';
+      adminBtn.addEventListener('click', function () { setPersonAdmin(p, !p.admin); });
       const again = btn('btn', busy === 'reset' ? 'Making one…' : 'New one-time password');
       again.disabled = !!busy;
       again.title = 'signs ' + p.name + ' out everywhere, and makes a one-time password to send them';
@@ -4925,9 +4959,10 @@
       const rm = btn('btn', busy === 'remove' ? 'Removing…' : 'Remove');
       rm.disabled = !!busy;
       rm.addEventListener('click', function () { removePerson(p); });
-      btns.append(again, rm);
+      btns.append(adminBtn, again, rm);
       card.append(btns);
-      const out = el('div', 'fine info-result');
+      const noted = state.adminNotes.get(key);
+      const out = el('div', 'fine info-result' + (noted && noted.bad ? ' bad' : ''), noted ? noted.text : '');
       out.id = 'people-result-' + p.id;
       card.append(out);
     }
@@ -5030,6 +5065,27 @@
     }
   }
 
+  async function setPersonAdmin(p, on) {
+    state.peopleBusy.set(p.id, on ? 'admin' : 'unadmin');
+    renderPeoplePanel(true);
+    const key = String(p.id);
+    try {
+      const call = function () { return api('POST', '/api/people/' + p.id + '/admin', { admin: on }); };
+      // granting access asks you to confirm it's you; taking it away does not (§32.3, §51)
+      const res = await (on ? withFreshCheck(call) : call());
+      if (!res) return;
+      const i = state.people.findIndex(function (x) { return x.id === p.id; });
+      if (i >= 0) state.people[i] = res.person;
+      state.adminNotes.set(key, { text: on ? 'Made an admin' : 'Admin removed' });
+      await loadPeople().catch(function () {});
+    } catch (e) {
+      state.adminNotes.set(key, { text: String(e.message || e), bad: true });
+    } finally {
+      state.peopleBusy.delete(p.id);
+      renderPeoplePanel(true);
+    }
+  }
+
   async function removePerson(p) {
     if (!await confirmDialog('Remove ' + p.name + '?',
       'They are signed out everywhere at once, and their password and passkeys stop working. Their messages stay.',
@@ -5057,6 +5113,7 @@
     state.nameNotes.clear();
     state.namesDrafts.clear();
     state.namesNotes.clear();
+    state.adminNotes.clear();
     openSheet('people-panel');
     // Wait for the first refresh before mounting editable inputs. Replacing a form while a
     // person types can drop its selection and append their new text to the old value.
@@ -6447,7 +6504,7 @@
       $('running-release-foot').replaceChildren(release);
       $('brand-name').setAttribute('title', label);
     }
-    // Sign-in controls live in Settings. The admin section: its admin (§32.3)
+    // Sign-in controls live in Settings. The admin section: an admin (§32.3, §51)
     $('admin-section').classList.toggle('hidden', !(state.me && state.me.admin));
     renderBuddies();
     await loadRooms();

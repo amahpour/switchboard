@@ -2893,27 +2893,122 @@ def shoot_admin_names(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
-# The sets ``--only`` can shoot alone. ``real_names`` and ``admin_names`` need a hosted broker;
-# the others need the seeded desktop world. A pull request that adds one picture set can make it
-# in seconds.
+def shoot_admins(browser: Any, out: Path, world: Any) -> None:
+    """#569, on a hosted broker: Admin > People with the Owner badge, an Admin badge and
+    Make admin. ``people-admins-*``. Light, dark and the phone. ``world`` is a HostedWorld."""
+    import httpx
+    from playwright.sync_api import expect
+
+    origin = world.origin
+    headers = {"Origin": origin, "X-Switchboard": "1"}
+    with httpx.Client(base_url=origin, headers=headers) as c:
+        one_time = world.claim_link().split("#t=", 1)[1]
+        assert c.post("/api/signin/password", json={"name": "admin", "password": one_time}).status_code == 200
+        assert (
+            c.post(
+                "/api/setup/password",
+                json={
+                    "password": "correct horse battery",
+                    "email": "alice@example.com",
+                    "first_name": "Alice",
+                    "last_name": "Ng",
+                },
+            ).status_code
+            == 200
+        )
+        # carol first, then bob: her Make admin sits on the second card and his Admin badge on
+        # the next, so one view shows the Owner badge, Make admin and the Admin badge
+        carol = c.post(
+            "/api/people",
+            json={"name": "carol", "email": "carol@example.com", "first_name": "Carol", "last_name": "Ng"},
+        )
+        assert carol.status_code == 200, carol.text
+        bob = c.post(
+            "/api/people",
+            json={"name": "bob", "email": "bob@example.com", "first_name": "Bob", "last_name": "Lee"},
+        )
+        assert bob.status_code == 200, bob.text
+        made = c.post(f"/api/people/{bob.json()['person']['id']}/admin", json={"admin": True})
+        assert made.status_code == 200, made.text
+        admin_cookie = c.cookies.get("switchboard_session")
+    assert admin_cookie
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+
+    def alice(**ctx_args: Any) -> Any:
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        ctx.add_cookies([{"name": "switchboard_session", "value": admin_cookie, "url": origin}])
+        return ctx
+
+    themes = (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    )
+    for theme, ctx_args in themes:
+        ctx = alice(**ctx_args)
+        try:
+            page = ctx.new_page()
+            page.goto(origin + "/")
+            connected(page)
+            if page.locator("#rooms-toggle").is_visible() and page.locator("#app.nav-open").count() == 0:
+                page.click("#rooms-toggle")
+            page.click("#open-people")
+            expect(page.locator(".person-chip", has_text="Owner")).to_be_visible()
+            expect(page.locator(".person-chip", has_text="Admin")).to_be_visible()
+            expect(page.locator("button", has_text="Make admin").first).to_be_visible()
+            # the Add someone card sits above the owner; scroll so the badges and Make admin show
+            page.evaluate(
+                """() => {
+                  const body = document.querySelector('#people-panel .sheet-body');
+                  const owner = [...document.querySelectorAll('.person-chip')]
+                    .find((n) => n.textContent === 'Owner');
+                  const make = [...document.querySelectorAll('button')]
+                    .find((n) => n.textContent === 'Make admin');
+                  const admin = [...document.querySelectorAll('.person-chip')]
+                    .find((n) => n.textContent === 'Admin');
+                  if (!body) return;
+                  if (owner) {
+                    const top = owner.getBoundingClientRect().top - body.getBoundingClientRect().top;
+                    body.scrollTop += top - 12;
+                  }
+                  const edge = body.getBoundingClientRect().bottom - 8;
+                  const lowest = Math.max(
+                    make ? make.getBoundingClientRect().bottom : 0,
+                    admin ? admin.getBoundingClientRect().bottom : 0
+                  );
+                  if (lowest > edge) body.scrollTop += lowest - edge;
+                }"""
+            )
+            page.mouse.move(0, 0)
+            page.evaluate("document.activeElement && document.activeElement.blur()")
+            shot(page, out, f"people-admins-{theme}.png")
+        finally:
+            ctx.close()
+
+
+# The sets ``--only`` can shoot alone. ``real_names``, ``admin_names`` and ``admins`` need a
+# hosted broker; the others need the seeded desktop world. A pull request that adds one picture
+# set can make it in seconds.
 ONLY: dict[str, Any] = {
     "link_card": shoot_link_card,
     "quiet": shoot_quiet,
     "claim_board": shoot_claim_board,
     "real_names": shoot_real_names,
     "admin_names": shoot_admin_names,
+    "admins": shoot_admins,
 }
 
 
 # -------------------------------------------------------------------- main
 def run_only(args: argparse.Namespace, pw: Any, name: str) -> None:
-    """``--only NAME``: one browser and one set of pictures from ``ONLY``. ``real_names`` and
-    ``admin_names`` start a hosted broker; the others start the seeded desktop world."""
+    """``--only NAME``: one browser and one set of pictures from ``ONLY``. ``real_names``,
+    ``admin_names`` and ``admins`` start a hosted broker; the others start the seeded desktop world."""
     from ui_world import HostedWorld, UIWorld
 
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
-    hosted = name in ("real_names", "admin_names")
+    hosted = name in ("real_names", "admin_names", "admins")
     world = HostedWorld(keep=args.keep) if hosted else UIWorld(keep=args.keep)
     try:
         world.start()
@@ -2946,6 +3041,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
     owners = HostedWorld(keep=args.keep)  # alice, bob and an agent each, for whose an agent is (#496)
     names = HostedWorld(keep=args.keep)  # alice and bob, shown by their real names (#563)
     admin_names = HostedWorld(keep=args.keep)  # the admin sets a person's names from their card (#566)
+    admins = HostedWorld(keep=args.keep)  # an Owner badge, an Admin badge and Make admin (#569)
     try:
         world.start()
         hosted.start()
@@ -2955,6 +3051,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
         owners.start()
         names.start()
         admin_names.start()
+        admins.start()
         env = {**os.environ, "TZ": "UTC", "HOME": REAL_HOME or os.environ["HOME"]}
         browser = pw.chromium.launch(executable_path=args.chrome or None, env=env)
         try:
@@ -3001,12 +3098,14 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_mention_people(browser, out, people)
             shoot_real_names(browser, out, names)
             shoot_admin_names(browser, out, admin_names)
+            shoot_admins(browser, out, admins)
             shoot_agent_owner(browser, out, owners)
         finally:
             browser.close()
     finally:
         names.stop()
         admin_names.stop()
+        admins.stop()
         owners.stop()
         consent.stop()
         people.stop()
@@ -3016,7 +3115,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
         if args.keep:
             print(
                 f"kept: {world.home} {world.home2} {hosted.home} {weak.home} {people.home}"
-                f" {owners.home} {names.home} {admin_names.home}",
+                f" {owners.home} {names.home} {admin_names.home} {admins.home}",
                 file=sys.stderr,
             )
 

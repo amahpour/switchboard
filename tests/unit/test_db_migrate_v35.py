@@ -84,7 +84,7 @@ def test_old_icons_and_every_other_row_survive_and_opencode_can_be_stored(
     assert counts["agent_icons"] == 8 and counts["participants"] > 0
 
     con = db.open_db(path)  # through to the current version
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 37
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 38
     assert db.row_counts(con, db.TABLES) == counts
     assert icons_of(con) == icons
     assert list(con.execute("PRAGMA foreign_key_check")) == []

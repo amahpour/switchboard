@@ -165,7 +165,13 @@ def test_the_websocket_needs_the_public_host_and_origin(public: InProcBroker) ->
     try:
         # a hosted broker's first frame says who is on it and who has a page open (#354)
         hello = json.loads(conn.recv(timeout=5))  # type: ignore[attr-defined]
-        assert hello == {"t": "people", "people": ["alice"], "online": ["alice"], "full_names": {}}
+        assert hello == {
+            "t": "people",
+            "people": ["alice"],
+            "online": ["alice"],
+            "full_names": {},
+            "admins": ["alice"],
+        }
         conn.send('{"t":"ping"}')  # type: ignore[attr-defined]
         assert conn.recv(timeout=5) == '{"t": "pong"}'  # type: ignore[attr-defined]
     finally:

@@ -2634,8 +2634,13 @@ body.login {
 /* the People sheet: wide, for the invite text on few lines */
 #people-panel { width: min(640px, calc(100vw - 32px)); }
 .person-card { min-width: 0; }
-.person-card .card-head { align-items: center; }
+.person-card .card-head { align-items: center; flex-wrap: wrap; }
 .person-card .avatar { flex: none; }
+.person-card .person-chip { flex: none; }
+.person-card .dialog-buttons { min-width: 0; max-width: 100%; }
+.person-card .dialog-buttons .btn {
+  white-space: normal; height: auto; min-height: 28px; max-width: 100%; text-align: center;
+}
 .person-chip { height: 22px; padding: 0 9px; border-radius: 11px; font-size: calc(11.5px * var(--text-scale)); font-weight: 600; }
 .person-chip.pending { background: var(--amber-bg); color: var(--amber-fg); }
 .person-chip.bad { background: var(--danger-bg); color: var(--danger); }

@@ -1302,7 +1302,7 @@ class Store:
             if (
                 self.con.execute(
                     "UPDATE people SET removed_at=?, password_hash=NULL, must_reset=0, email=NULL,"
-                    " password_expires_at=NULL WHERE id=? AND removed_at IS NULL",
+                    " password_expires_at=NULL, admin=0 WHERE id=? AND removed_at IS NULL",
                     (now, person_id),
                 ).rowcount
                 != 1
@@ -1314,6 +1314,19 @@ class Store:
                 (now, person_id),
             )
             return self.web_session_delete_person(person_id)
+
+    def person_set_admin(self, person_id: int, admin: bool) -> bool:
+        """Set or clear a person's admin (#569, §51). Returns False when there is no such
+        active person. Removing them clears it too (``person_remove``), and a later add is
+        a new row, so it starts off."""
+        with db.tx(self.con):
+            return (
+                self.con.execute(
+                    "UPDATE people SET admin=? WHERE id=? AND removed_at IS NULL",
+                    (1 if admin else 0, person_id),
+                ).rowcount
+                == 1
+            )
 
     # ------------------------------------------------------ agent tokens (#382, §49.1)
     # NULL ``person_id`` is the owner, as on passkeys and machines. One live token per device.

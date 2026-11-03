@@ -15,7 +15,8 @@ drops the process ids and the stdio credential that only it used; 31 (#386) adds
 register to sign an agent in through the browser, and says how each agent token was made; 32 (#498)
 adds the avatars an admin uploads for each harness (§29.11); 33 (#488) adds the listener keys of Claude
 Code's helper scripts (§49.11); 34 (#513) admits OpenCode in participants (§49.12); 35 (#518) admits it in
-``agent_icons``, so an admin can upload its avatar (§29.11).
+``agent_icons``, so an admin can upload its avatar (§29.11); 38 (#569) adds ``people.admin``,
+so a person the owner chooses is an admin too (§51).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -36,7 +37,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 37
+SCHEMA_VERSION = 38
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -150,7 +151,8 @@ CREATE TABLE people(
   created_at REAL NOT NULL, removed_at REAL,
   email TEXT CHECK(email IS NULL OR length(email) <= 254),
   first_name TEXT CHECK(first_name IS NULL OR length(first_name) <= 64),
-  last_name TEXT CHECK(last_name IS NULL OR length(last_name) <= 64));
+  last_name TEXT CHECK(last_name IS NULL OR length(last_name) <= 64),
+  admin INTEGER NOT NULL DEFAULT 0 CHECK(admin IN (0, 1)));
 CREATE UNIQUE INDEX people_active_name ON people(name) WHERE removed_at IS NULL;
 CREATE UNIQUE INDEX people_email ON people(email) WHERE removed_at IS NULL AND email IS NOT NULL;
 
@@ -737,6 +739,14 @@ V36_TO_V37 = (
     "UPDATE meta SET value='37' WHERE key='schema_version'",
 )
 
+# v37 -> v38 (#569, DESIGN.md §51): a person can be an admin. Every existing person stays
+# off (0), so only the owner is an admin until one is made. NOT NULL and only 0 or 1, so
+# there is no unknown flag to treat as on. The owner has no people row (§32.2).
+V37_TO_V38 = (
+    "ALTER TABLE people ADD COLUMN admin INTEGER NOT NULL DEFAULT 0 CHECK(admin IN (0, 1))",
+    "UPDATE meta SET value='38' WHERE key='schema_version'",
+)
+
 
 class MigrationStep(NamedTuple):
     to: int
@@ -785,6 +795,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         34: MigrationStep(35, V34_TO_V35, (), (("agent_icons", "'devin','opencode'"),)),
         35: MigrationStep(36, V35_TO_V36, ()),
         36: MigrationStep(37, V36_TO_V37, ()),
+        37: MigrationStep(38, V37_TO_V38, ()),
     }
     out = []
     v = frm

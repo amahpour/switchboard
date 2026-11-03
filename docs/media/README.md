@@ -66,6 +66,8 @@ For people shown by their real name (#563), `ui_shots.py` writes `real-names-{li
 
 For the admin setting a person's first and last name (#566), `ui_shots.py` writes `people-card-names-{light,dark,phone-light}.png`: the People sheet with a card's First name and Last name filled and saved. `--only admin_names` makes just those, on a hosted broker.
 
+For admins (#569), `ui_shots.py` writes `people-admins-{light,dark,phone-light}.png`: the People sheet with an Owner badge, an Admin badge and Make admin. `--only admins` makes just those, on a hosted broker.
+
 For an agent waiting for its person's approval (#472), it writes `approval-board-{before,after}-*` and `approval-inspector-{before,after}-*` (the review card that waits on the agent, and its Inspector, in light, dark and phone light) and `approval-members-{before,after}-phone-light`: busy, as every agent at a prompt looked before, then waiting for approval.
 For the board's confirmed-fix check (#427), it writes `check-waiting-*` and `check-confirmed-*` PNGs in light, dark and phone light: a fix awaiting its raiser's confirmation has no check, and the same card has a green one once confirmed.
 
