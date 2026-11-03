@@ -1473,6 +1473,49 @@ const SCENARIOS = {
       afterFirst: afterFirst, free: free, plus: plus, taken: taken, afterHand: name.value,
     };
   },
+
+  // #566: SWITCHBOARD_HUMAN_NAME locks the username only. The owner's Name input is
+  // read-only; First name and Last name on the same card stay editable.
+  async owner_names_editable_when_username_locked() {
+    const w = makeWorld([{ id: 1, name: '#build', created_at: 100 }]);
+    w.server.me = {
+      human: 'alice', admin: true, signin: true, fresh: true, test_mode: false, name_locked: true,
+      first_name: 'Alice', last_name: 'Ng',
+    };
+    w.server.people = [
+      { id: null, name: 'alice', admin: true, email: 'alice@example.com', first_name: 'Alice',
+        last_name: 'Ng', sign_in: 'admin', passkeys: 0, password: true },
+    ];
+    w.location.hash = '#build';
+    await boot(w);
+    click(w.$('open-people'));
+    await settle();
+    const field = function (id) {
+      const n = findAll(w.$('people-body'), function (el) { return el.id === id; })[0];
+      if (!n) throw new Error('no #' + id);
+      return n;
+    };
+    const labelText = function (id) {
+      const n = findAll(w.$('people-body'), function (el) {
+        return el.tag === 'label' && el.attrs.for === id;
+      })[0];
+      if (!n) throw new Error('no label for #' + id);
+      return n.textContent;
+    };
+    const name = field('name-owner');
+    const first = field('first-owner');
+    const last = field('last-owner');
+    const save = field('names-save-owner');
+    return {
+      nameReadOnly: !!name.readOnly,
+      firstReadOnly: !!first.readOnly,
+      lastReadOnly: !!last.readOnly,
+      firstLabel: labelText('first-owner'),
+      lastLabel: labelText('last-owner'),
+      save: save.textContent,
+      saveDisabled: !!save.disabled,
+    };
+  },
 };
 
 async function closeScenario(twoRooms, frameLate) {

@@ -2348,7 +2348,7 @@ body.login {
 .info-card > p { margin: 0; }
 .info-card .card-head { flex-wrap: nowrap; gap: 8px; }
 .info-card .card-head .ic { flex-shrink: 0; }
-.info-card .card-name { flex: 1; min-width: 0; font-size: calc(14px * var(--text-scale)); font-weight: 600; }
+.info-card .card-name { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: calc(14px * var(--text-scale)); font-weight: 600; }
 .info-card .dialog-buttons .btn, .info-card .dialog-buttons .btn-primary { min-width: 88px; }
 .info-add { display: flex; flex-direction: column; gap: 6px; margin: 0; }
 .info-row { display: flex; align-items: center; gap: 8px; }
@@ -2383,7 +2383,7 @@ body.login {
   overflow-wrap: anywhere;
 }
 .info-cmd .copy-btn { margin-left: 0; }
-.info-result.bad, .email-result.bad, .name-result.bad { color: var(--danger); font-weight: 500; }
+.info-result.bad, .email-result.bad, .name-result.bad, .names-result.bad { color: var(--danger); font-weight: 500; }
 .info-result:empty { display: none; }
 
 /* ==== 15. Narrow widths (spec 1.9) =================================================== */
@@ -2633,6 +2633,7 @@ body.login {
 /* ==== 14c. People and passwords in the app (index.html, DESIGN.md §32) ================= */
 /* the People sheet: wide, for the invite text on few lines */
 #people-panel { width: min(640px, calc(100vw - 32px)); }
+.person-card { min-width: 0; }
 .person-card .card-head { align-items: center; }
 .person-card .avatar { flex: none; }
 .person-chip { height: 22px; padding: 0 9px; border-radius: 11px; font-size: calc(11.5px * var(--text-scale)); font-weight: 600; }
@@ -3166,3 +3167,17 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 .email-row label, .name-row label { font-size: calc(12px * var(--text-scale)); color: var(--muted-2); }
 .email-row input, .name-row input { flex: 1 1 200px; min-width: 0; font: inherit; color: var(--fg); background: var(--input-bg);
   border: 1px solid var(--input-border); border-radius: 6px; padding: 5px 8px; }
+/* First and last name on a People card (#566): Add someone's pair, then Save. The pair takes
+   the whole row (a long value must not widen the sheet: an input's min-content is its text). */
+.names-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 6px 8px; margin: 4px 0;
+  min-width: 0; max-width: 100%; }
+.names-row .person-names { flex: 1 1 100%; min-width: 0; max-width: 100%; }
+/* flex-basis auto, not 0: at the phone width the pair stacks, and a 0 basis plus a hidden
+   overflow collapses each field to no height. The input's size attribute keeps a long value
+   from widening the sheet. */
+.names-row .person-field { flex: 1 1 auto; max-width: 100%; min-width: 0; }
+.names-row .person-field label { font-size: calc(12px * var(--text-scale)); color: var(--muted-2); }
+.names-row .person-field input { display: block; width: 100%; max-width: 100%; min-width: 0; font: inherit;
+  color: var(--fg); background: var(--input-bg); border: 1px solid var(--input-border); border-radius: 6px;
+  padding: 5px 8px; }
+.names-row .btn { flex: none; }

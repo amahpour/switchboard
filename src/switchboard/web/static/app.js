@@ -94,6 +94,8 @@
     emailNotes: new Map(),   // person key -> {text, bad}: what the last save on their card said
     nameDrafts: new Map(),   // the same for the name in the rooms on their card (#114)
     nameNotes: new Map(),
+    namesDrafts: new Map(),  // person key -> {first, last}: First and Last name typed on the card (#566)
+    namesNotes: new Map(),
     peopleBusy: new Map(),  // person id (or 'add') -> what is running for them
     invite: null,      // { id, name, password, invite } to send, until Done
     copiedInvite: false,
@@ -4694,6 +4696,8 @@
   // the only Google account that signs them in, when Google sign-in is on.
   // The admin renames someone, or themselves, from their card (#114, §41): their name in the
   // rooms. Their messages keep the name they were sent under; every room gets a notice.
+  // First and last name are the next row (#566, §39.6): the same route, without `name`, so
+  // saving them posts no rename notice. The username lock does not apply to that row.
   function nameRow(p) {
     const key = p.id === null ? 'owner' : String(p.id);
     const row = el('form', 'name-row');
@@ -4743,6 +4747,93 @@
         updateTitle();
       } catch (e) {
         state.nameNotes.set(key, { text: String(e.message || e), bad: true });
+      } finally {
+        save.disabled = false;
+        renderPeoplePanel(true);
+      }
+    });
+    return row;
+  }
+
+  function namesRow(p) {
+    const key = p.id === null ? 'owner' : String(p.id);
+    const row = el('form', 'names-row');
+    row.noValidate = true;
+    const draft = state.namesDrafts.get(key);
+    function part(which, labelText, value) {
+      const wrap = el('div', 'person-field');
+      const input = el('input');
+      input.type = 'text';
+      input.id = which + '-' + key;
+      input.maxLength = 64;  // people.MAX_NAME_PART
+      input.size = 12;  // the value must not set the field's min-content width (#566)
+      input.autocomplete = 'off';
+      input.spellcheck = false;
+      input.value = draft ? draft[which] : (value || '');
+      input.dataset.focus = which + ':' + key;
+      const label = el('label', null, labelText);
+      label.setAttribute('for', input.id);
+      wrap.append(label, input);
+      return { wrap: wrap, input: input };
+    }
+    const first = part('first', 'First name', p.first_name);
+    const last = part('last', 'Last name', p.last_name);
+    const firstInput = first.input;
+    const lastInput = last.input;
+    function keep() {
+      state.namesDrafts.set(key, { first: firstInput.value, last: lastInput.value });
+    }
+    firstInput.addEventListener('input', keep);
+    lastInput.addEventListener('input', keep);
+    const names = el('div', 'person-names');
+    names.append(first.wrap, last.wrap);
+    const save = btn('btn', 'Save');
+    save.type = 'submit';
+    save.id = 'names-save-' + key;
+    save.dataset.focus = 'names-save:' + key;
+    const note = state.namesNotes.get(key);
+    const out = el('span', 'fine names-result' + (note && note.bad ? ' bad' : ''), note ? note.text : '');
+    out.id = 'names-result-' + key;
+    out.setAttribute('role', 'status');
+    row.append(names, save, out);
+    row.addEventListener('submit', async function (ev) {
+      ev.preventDefault();
+      const firstName = String(firstInput.value || '').trim();
+      const lastName = String(lastInput.value || '').trim();
+      if (firstName === (p.first_name || '') && lastName === (p.last_name || '')) return;
+      save.disabled = true;
+      try {
+        const res = await withFreshCheck(function () {
+          return api('POST', '/api/people/' + key + '/name', {
+            first_name: firstName || null, last_name: lastName || null,
+          });
+        });
+        // the people frame may have painted this already, between the post and here
+        const full = [res.first_name, res.last_name].filter(Boolean).join(' ');
+        const painted = (fullNameOf(res.name) || '') === full;
+        state.namesDrafts.delete(key);
+        state.namesNotes.set(key, { text: 'Saved' });
+        if (p.id === null) state.me = await api('GET', '/api/me');
+        else if (!painted && state.me) {
+          const next = Object.assign({}, state.me.full_names || {});
+          if (full) next[res.name] = full;
+          else delete next[res.name];
+          state.me.full_names = next;
+        }
+        await loadPeople().catch(function () {});
+        renderBuddies();
+        updateTitle();
+        if (!painted) {
+          renderPins();
+          const log = $('log');
+          const stick = nearBottom(log);
+          renderRows(activeRoom());
+          if (stick) log.scrollTop = log.scrollHeight;
+          renderComposerMentions();
+          if (state.pop && state.pop.kind === 'mentions') updatePopover();
+        }
+      } catch (e) {
+        state.namesNotes.set(key, { text: String(e.message || e), bad: true });
       } finally {
         save.disabled = false;
         renderPeoplePanel(true);
@@ -4823,7 +4914,7 @@
         : 'no email yet: can’t sign in until you set one');
     }
     card.append(el('p', 'info-step', bits.join(' · ')));
-    card.append(nameRow(p), emailRow(p));
+    card.append(nameRow(p), namesRow(p), emailRow(p));
     if (!p.admin) {
       const btns = el('div', 'dialog-buttons');
       const busy = state.peopleBusy.get(p.id);
@@ -4964,6 +5055,8 @@
     state.emailNotes.clear();
     state.nameDrafts.clear();
     state.nameNotes.clear();
+    state.namesDrafts.clear();
+    state.namesNotes.clear();
     openSheet('people-panel');
     // Wait for the first refresh before mounting editable inputs. Replacing a form while a
     // person types can drop its selection and append their new text to the old value.

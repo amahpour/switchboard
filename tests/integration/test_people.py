@@ -927,6 +927,44 @@ def test_the_admin_renames_someone_and_themselves(hosted: InProcBroker) -> None:
         hosted.start()
 
 
+def test_the_admin_sets_names_without_a_rename_notice(hosted: InProcBroker) -> None:
+    """#566: the admin's name route saves a first and last name alone, for someone and for
+    ``owner``. That is 200, the names stick, ``full_names`` on ``/api/me`` updates, and there
+    is no rename event and no "is now" notice (a changed username is what posts one). A part
+    over 64 characters is a 400 and changes nothing.
+
+    Already covered, so not repeated here: a first-name-only post and the people frame's
+    ``full_names`` (``test_a_new_persons_username_comes_from_their_email``), and
+    ``POST /api/me/name`` with only a first name
+    (``test_a_name_set_by_the_environment_isnt_renamed``)."""
+    admin = set_up(hosted)
+    assert admin.post("/api/rooms", {"name": "#build"}).status_code == 200
+    add(admin, "carol")
+    pid = next(p["id"] for p in admin.get("/api/people").json()["people"] if p["name"] == "carol")
+    r = admin.post(f"/api/people/{pid}/name", {"first_name": " Carol ", "last_name": "Ng"})
+    assert r.status_code == 200 and r.json() == {
+        "name": "carol",
+        "first_name": "Carol",
+        "last_name": "Ng",
+    }, r.text
+    r = admin.post("/api/people/owner/name", {"first_name": "Alice", "last_name": "Ng"})
+    assert r.status_code == 200 and r.json() == {
+        "name": "alice",
+        "first_name": "Alice",
+        "last_name": "Ng",
+    }, r.text
+    me = admin.get("/api/me").json()
+    assert (me["first_name"], me["last_name"]) == ("Alice", "Ng")
+    assert me["full_names"]["carol"] == "Carol Ng" and me["full_names"]["alice"] == "Alice Ng"
+    assert not any("is now" in text for _kind, _who, text in messages(admin))
+    evs = hosted.on_loop(lambda: hosted.state.store.recent_events(kinds=["people"], limit=50))
+    assert not any(e.data.get("what") == "rename" for e in evs)
+    r = admin.post(f"/api/people/{pid}/name", {"last_name": "n" * 65})
+    assert r.status_code == 400 and r.json()["error"] == "bad_name", r.text
+    person = next(p for p in admin.get("/api/people").json()["people"] if p["id"] == pid)
+    assert (person["first_name"], person["last_name"]) == ("Carol", "Ng")
+
+
 def test_a_name_set_by_the_environment_isnt_renamed(tmp_home: Path) -> None:
     """SWITCHBOARD_HUMAN_NAME names the owner when switchboard starts (a deployment's manifest):
     Settings shows it but can't change it, and a rename saved before doesn't win over it."""

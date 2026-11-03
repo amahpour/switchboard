@@ -64,6 +64,8 @@ For an artifact line (#544), `ui_shots.py` writes `link-card-{light,dark,phone-l
 
 For people shown by their real name (#563), `ui_shots.py` writes `real-names-{light,dark,phone-light}.png` (a room whose message, People list and Members lead with the real name, and the username beside it) and `real-names-add-{light,dark,phone-light}.png` (Add someone with an email typed and the username filled from it). `--only real_names` makes just those, on a hosted broker.
 
+For the admin setting a person's first and last name (#566), `ui_shots.py` writes `people-card-names-{light,dark,phone-light}.png`: the People sheet with a card's First name and Last name filled and saved. `--only admin_names` makes just those, on a hosted broker.
+
 For an agent waiting for its person's approval (#472), it writes `approval-board-{before,after}-*` and `approval-inspector-{before,after}-*` (the review card that waits on the agent, and its Inspector, in light, dark and phone light) and `approval-members-{before,after}-phone-light`: busy, as every agent at a prompt looked before, then waiting for approval.
 For the board's confirmed-fix check (#427), it writes `check-waiting-*` and `check-confirmed-*` PNGs in light, dark and phone light: a fix awaiting its raiser's confirmation has no check, and the same card has a green one once confirmed.
 

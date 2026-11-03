@@ -2810,25 +2810,110 @@ def shoot_real_names(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
-# The sets ``--only`` can shoot alone. ``real_names`` needs a hosted broker; the others need the
-# seeded desktop world. A pull request that adds one picture set can make it in seconds.
+def shoot_admin_names(browser: Any, out: Path, world: Any) -> None:
+    """#566, on a hosted broker: Admin > People with a card's First name and Last name filled
+    and saved. ``people-card-names-*``. Light, dark and the phone. The phone must not scroll
+    sideways. ``world`` is a HostedWorld, not the seeded desktop one."""
+    import httpx
+    from playwright.sync_api import expect
+
+    origin = world.origin
+    headers = {"Origin": origin, "X-Switchboard": "1"}
+    with httpx.Client(base_url=origin, headers=headers) as c:
+        one_time = world.claim_link().split("#t=", 1)[1]
+        assert c.post("/api/signin/password", json={"name": "admin", "password": one_time}).status_code == 200
+        assert (
+            c.post(
+                "/api/setup/password",
+                json={
+                    "password": "correct horse battery",
+                    "email": "alice@example.com",
+                    "first_name": "Alice",
+                    "last_name": "Ng",
+                },
+            ).status_code
+            == 200
+        )
+        added = c.post("/api/people", json={"name": "carol", "email": "carol@example.com"})
+        assert added.status_code == 200, added.text
+        carol_id = added.json()["person"]["id"]
+        admin_cookie = c.cookies.get("switchboard_session")
+    assert admin_cookie
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+
+    def alice(**ctx_args: Any) -> Any:
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        ctx.add_cookies([{"name": "switchboard_session", "value": admin_cookie, "url": origin}])
+        return ctx
+
+    themes = (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    )
+    for theme, ctx_args in themes:
+        # Each theme is a fresh page on the same broker. Clear the names first, or the second
+        # save sees no change and posts nothing, so the "Saved" note never appears.
+        with httpx.Client(
+            base_url=origin, headers=headers, cookies={"switchboard_session": admin_cookie}
+        ) as c:
+            cleared = c.post(f"/api/people/{carol_id}/name", json={"first_name": None, "last_name": None})
+            assert cleared.status_code == 200, cleared.text
+        ctx = alice(**ctx_args)
+        try:
+            page = ctx.new_page()
+            page.goto(origin + "/")
+            connected(page)
+            if page.locator("#rooms-toggle").is_visible() and page.locator("#app.nav-open").count() == 0:
+                page.click("#rooms-toggle")
+            page.click("#open-people")
+            first = page.locator(f"#first-{carol_id}")
+            expect(first).to_be_visible()
+            first.scroll_into_view_if_needed()
+            page.fill(f"#first-{carol_id}", "Carol")
+            page.fill(f"#last-{carol_id}", "Ng")
+            page.click(f"#names-save-{carol_id}")
+            expect(page.locator(f"#names-result-{carol_id}")).to_have_text("Saved", timeout=WAIT_MS)
+            card = page.locator(".person-card", has=page.locator(f"#first-{carol_id}"))
+            expect(card.locator(".card-name")).to_have_text("Carol Ng")
+            expect(card.locator(".person-handle")).to_have_text("@carol")
+            card.locator(f"#first-{carol_id}").scroll_into_view_if_needed()
+            if theme == "phone-light":
+                assert page.evaluate(
+                    "document.documentElement.scrollWidth <= window.innerWidth"
+                    " && document.body.scrollWidth <= window.innerWidth"
+                    " && document.querySelector('#people-panel .sheet-body').scrollWidth"
+                    " <= document.querySelector('#people-panel .sheet-body').clientWidth + 1"
+                )
+            page.mouse.move(0, 0)
+            page.evaluate("document.activeElement && document.activeElement.blur()")
+            shot(page, out, f"people-card-names-{theme}.png")
+        finally:
+            ctx.close()
+
+
+# The sets ``--only`` can shoot alone. ``real_names`` and ``admin_names`` need a hosted broker;
+# the others need the seeded desktop world. A pull request that adds one picture set can make it
+# in seconds.
 ONLY: dict[str, Any] = {
     "link_card": shoot_link_card,
     "quiet": shoot_quiet,
     "claim_board": shoot_claim_board,
     "real_names": shoot_real_names,
+    "admin_names": shoot_admin_names,
 }
 
 
 # -------------------------------------------------------------------- main
 def run_only(args: argparse.Namespace, pw: Any, name: str) -> None:
-    """``--only NAME``: one browser and one set of pictures from ``ONLY``. ``real_names`` starts a
-    hosted broker; the others start the seeded desktop world."""
+    """``--only NAME``: one browser and one set of pictures from ``ONLY``. ``real_names`` and
+    ``admin_names`` start a hosted broker; the others start the seeded desktop world."""
     from ui_world import HostedWorld, UIWorld
 
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
-    hosted = name == "real_names"
+    hosted = name in ("real_names", "admin_names")
     world = HostedWorld(keep=args.keep) if hosted else UIWorld(keep=args.keep)
     try:
         world.start()
@@ -2860,6 +2945,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
     consent = HostedWorld(keep=args.keep)  # an admin whose check has run out, for the consent page (#386)
     owners = HostedWorld(keep=args.keep)  # alice, bob and an agent each, for whose an agent is (#496)
     names = HostedWorld(keep=args.keep)  # alice and bob, shown by their real names (#563)
+    admin_names = HostedWorld(keep=args.keep)  # the admin sets a person's names from their card (#566)
     try:
         world.start()
         hosted.start()
@@ -2868,6 +2954,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
         consent.start()
         owners.start()
         names.start()
+        admin_names.start()
         env = {**os.environ, "TZ": "UTC", "HOME": REAL_HOME or os.environ["HOME"]}
         browser = pw.chromium.launch(executable_path=args.chrome or None, env=env)
         try:
@@ -2913,11 +3000,13 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_common_password(browser, out, weak)
             shoot_mention_people(browser, out, people)
             shoot_real_names(browser, out, names)
+            shoot_admin_names(browser, out, admin_names)
             shoot_agent_owner(browser, out, owners)
         finally:
             browser.close()
     finally:
         names.stop()
+        admin_names.stop()
         owners.stop()
         consent.stop()
         people.stop()
@@ -2927,7 +3016,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
         if args.keep:
             print(
                 f"kept: {world.home} {world.home2} {hosted.home} {weak.home} {people.home}"
-                f" {owners.home} {names.home}",
+                f" {owners.home} {names.home} {admin_names.home}",
                 file=sys.stderr,
             )
 
