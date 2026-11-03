@@ -2,6 +2,12 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.48.0 (2026-11-03)
+
+### Added
+
+- **An admin can make other people admins.** On a hosted broker, Admin > People shows an Owner badge on the owner's card and an Admin badge on every other admin's. Every card but the owner's has Make admin or Remove admin. An admin can do everything the owner can: manage people, change the agents' avatars, and see every private room's name. Nobody can remove the owner or take the owner's admin away. Making someone an admin asks you to confirm it's you. Taking admin away does not. An open page shows or hides Admin when that changes, without a reload.
+
 ## 0.47.0 (2026-11-03)
 
 ### Added
