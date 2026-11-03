@@ -121,10 +121,19 @@ def test_the_board_shows_a_note_follows_its_link_and_drops_the_claim_when_it_exp
     # Playwright's mouse click does not open this target=_blank link (rel=noopener). The DOM
     # click does, and the new page is the one the browser would open.
     link = light.locator("#claim-board-list a.md-link")
+
+    # The note's link is answered here, never by the real example.com: on CI that page
+    # answered 404, the console check failed the test at teardown, and a test must not
+    # need the internet anyway.
+    def fulfill(route: Any) -> None:
+        route.fulfill(status=200, content_type="text/html", body="<p>the pull request</p>")
+
+    light.context.route("https://example.com/pr/56", fulfill)
     with light.context.expect_page() as opened:
         link.evaluate("el => el.click()")
     popup = opened.value
     expect(popup).to_have_url("https://example.com/pr/56")
+    expect(popup.locator("p")).to_have_text("the pull request")
     popup.close()
 
     ui.world.agent_call("#" + room, "claude-1", "claim", key="build", ttl=0)
