@@ -423,12 +423,14 @@ class PersonRow:
     email: str | None = None  # who they are: they sign in with it, Google too (#192, §39)
     first_name: str | None = None  # shown in People, Members and the invite (#192, §39.6)
     last_name: str | None = None
+    admin: bool = False  # an admin has every privilege the owner has, except the owner's own (#569, §51)
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "PersonRow":
         d = {k: r[k] for k in r.keys()}
         d["handle"] = bytes(d["handle"] or b"")
         d["must_reset"] = bool(d["must_reset"])
+        d["admin"] = bool(d["admin"])
         return cls(**d)
 
     @property

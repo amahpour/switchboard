@@ -1,11 +1,11 @@
-"""People on a hosted broker (DESIGN.md §32): who a web session is, the names people may
+"""People on a hosted broker (DESIGN.md §32, §51): who a web session is, the names people may
 have, and what the admin section shows.
 
-The owner is whoever set the broker up (the claim, §31.3). Everyone else is a person the
-owner added by name in the admin section, with a one-time password to hand over. Every
+The owner is whoever set the broker up (the claim, §31.3). Everyone else is a person an
+admin added by name in the admin section, with a one-time password to hand over. Every
 signed-in person is a human in every room: they post under their own name, run every
 command, make agent tokens, and every agent takes their messages as its user's (kind=human).
-Only the owner has the admin section.
+An admin (the owner, or a person whose row says so) has the admin section (§51).
 """
 
 from __future__ import annotations
@@ -37,13 +37,24 @@ class Who:
     person_id: int | None
     name: str
     must_reset: bool = False
+    admin: bool = False  # the row's flag; the owner has no row and is an admin anyway (§51)
 
     @property
     def owner(self) -> bool:
+        """The account that claimed the broker: no ``people`` row. Kept for what is theirs
+        alone (their password and passkeys, ``name_locked``, the claim)."""
         return self.person_id is None
+
+    @property
+    def is_admin(self) -> bool:
+        """The owner, or a person whose row says admin (§51)."""
+        return self.owner or self.admin
 
 
 def who_of(state: "BrokerState", h: str | None) -> Who | None:
+    """The session's person, read from the row on this request. A web session stores only
+    its id hash (``auth.SessionStore.check``), never this flag, so taking admin away is
+    seen on the next request."""
     if h is None:
         return None
     pid = state.store.web_session_person(h)
@@ -53,7 +64,7 @@ def who_of(state: "BrokerState", h: str | None) -> Who | None:
     if p is None or not p.active:  # removed: their sessions are gone already; never trust one left
         state.store.web_session_delete(h)
         return None
-    return Who(h, pid, p.name, p.must_reset)
+    return Who(h, pid, p.name, p.must_reset, p.admin)
 
 
 def is_owner_name(state: "BrokerState", name: str) -> bool:
@@ -281,7 +292,8 @@ def summary(state: "BrokerState") -> list[dict[str, Any]]:
         {
             "id": None,
             "name": state.cfg.human_name,
-            "admin": True,
+            "admin": True,  # the owner is always an admin, and has no people row (§51)
+            "owner": True,
             "passkeys": len(state.store.passkeys_of(None)),
             "password": state.store.owner_password_hash() is not None,
             "sign_in": "admin",
@@ -296,7 +308,8 @@ def summary(state: "BrokerState") -> list[dict[str, Any]]:
             {
                 "id": p.id,
                 "name": p.name,
-                "admin": False,
+                "admin": p.admin,
+                "owner": False,
                 "passkeys": len(state.store.passkeys_of(p.id)),
                 "password": p.password_hash is not None and not p.must_reset,
                 "sign_in": password_state(p, now, state.oidc is not None),

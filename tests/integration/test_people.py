@@ -636,8 +636,8 @@ def test_only_an_email_or_admin_signs_anyone_in(hosted: InProcBroker) -> None:
 
 
 def test_the_people_with_no_email_are_the_ones_who_cant_sign_in(hosted: InProcBroker) -> None:
-    """#240: Admin > People tells the admin who has no email (the page works it out from this
-    list: everyone but the admin whose ``email`` is empty), and those are exactly the people who
+    """#240: Admin > People tells an admin who has no email (the page works it out from this
+    list: everyone but the owner whose ``email`` is empty), and those are exactly the people who
     can't sign in. Fails if the list's rule and the sign-in rule part: someone listed who can sign
     in, or someone with an email who can't."""
     admin = set_up(hosted)
@@ -648,7 +648,7 @@ def test_the_people_with_no_email_are_the_ones_who_cant_sign_in(hosted: InProcBr
         == 200
     )
     listed = {p["name"]: p for p in admin.get("/api/people").json()["people"]}
-    no_email = {n for n, p in listed.items() if not p["admin"] and p["email"] is None}
+    no_email = {n for n, p in listed.items() if not p["owner"] and p["email"] is None}
     assert no_email == {"bob", "dave"}
     for name, password in one_time.items():
         who = listed[name]["email"] or name
