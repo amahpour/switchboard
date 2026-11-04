@@ -224,7 +224,8 @@ async def test_an_agents_meeting_command_is_literal_text(broker: InProcBroker, j
 
 
 def test_without_a_meeting_server_the_command_names_the_setup(tmp_home: Path) -> None:
-    """No ``[meeting] joinly_url``: a short hint that names DEPLOY.md, and no join.
+    """No ``[meeting] joinly_url``: a short hint that names DEPLOY.md and both ways to set it (the
+    config key, and ``SWITCHBOARD_JOINLY_URL`` for a manifest, #591), and no join.
     Fails if the command tries a default URL, or stays silent about how to set one."""
     b = InProcBroker(tmp_home, Config(human_name="alice")).start()
     web = b.web_client()
@@ -236,7 +237,8 @@ def test_without_a_meeting_server_the_command_names_the_setup(tmp_home: Path) ->
             headers=b.write_headers(),
         )
         assert r.status_code == 200, r.text
-        assert "DEPLOY.md" in r.json()["text"] and "joinly_url" in r.json()["text"]
+        text = r.json()["text"]
+        assert "DEPLOY.md" in text and "joinly_url" in text and "SWITCHBOARD_JOINLY_URL" in text
         con = sqlite3.connect(b.paths.db)
         assert con.execute("SELECT COUNT(*) FROM meetings").fetchone()[0] == 0
         con.close()

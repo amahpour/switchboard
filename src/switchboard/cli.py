@@ -570,6 +570,13 @@ def _port_number(text: str) -> int:
     except ValueError:
         port = -1
     if not 0 <= port <= 65535:
+        if text.startswith("tcp://"):
+            # Kubernetes' service link for a Service named switchboard (#595): it overrides the image's own
+            # SWITCHBOARD_PORT, so say where it came from rather than only that it isn't a number.
+            raise argparse.ArgumentTypeError(
+                f"{text!r} is not a port number: it looks like Kubernetes' variable for a Service named"
+                " switchboard; set enableServiceLinks: false in the pod spec (docs/DEPLOY.md)"
+            )
         raise argparse.ArgumentTypeError(f"{text!r} is not a port number (0..65535)")
     return port
 

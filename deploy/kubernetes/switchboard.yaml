@@ -11,6 +11,9 @@
 # before starting the new one, which is what a Deployment's `Recreate` strategy would do.
 # The volume must be a block device (EBS, a GCE persistent disk, Azure Disk), never NFS or EFS:
 # SQLite's locking isn't reliable there.
+#
+# To follow live calls (meetings), patch a second container into this pod: see meetings/ in this
+# folder and docs/DEPLOY.md, "Meetings on Kubernetes". Nothing here changes without it.
 apiVersion: v1
 kind: Service
 metadata:
@@ -42,6 +45,10 @@ spec:
       labels:
         app.kubernetes.io/name: switchboard
     spec:
+      # Kubernetes gives every pod a variable per Service in its namespace, and this Service is named
+      # switchboard: SWITCHBOARD_PORT=tcp://<cluster-ip>:7419 overrides the image's SWITCHBOARD_PORT=7419,
+      # and the broker would refuse it as its port and crash-loop (#595). It reads none of them.
+      enableServiceLinks: false
       securityContext:
         runAsUser: 10001        # the image's `switchboard` user, from the start
         runAsGroup: 10001

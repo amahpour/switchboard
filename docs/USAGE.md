@@ -111,7 +111,7 @@ Commands that **raise** agent activity need your signed-in browser. Commands fro
 
 **[The meetings guide](guide/meetings.md)** has all of this step by step, with pictures, what agents see, and what to do when a call won't join or an agent doesn't wake.
 
-`/meeting <link>` sends a meeting bot into a Zoom, Meet or Teams call and posts what is said into the room, as its own kind of line, tagged **call**. Set `[meeting] joinly_url` first ([DEPLOY.md](DEPLOY.md) has the container). The link has to be `https` on `zoom.us`, `meet.google.com`, `teams.microsoft.com` or `teams.live.com`. One call per room. `/meeting` says whether one is live, and `/meeting leave` (or **Leave call** on the bar) ends it. While it is live the room shows `Transcribing a call (Zoom)` (or Meet, or Teams).
+`/meeting <link>` sends a meeting bot into a Zoom, Meet or Teams call and posts what is said into the room, as its own kind of line, tagged **call**. Set `[meeting] joinly_url` first (or `SWITCHBOARD_JOINLY_URL`, where there is no file to edit); [DEPLOY.md](DEPLOY.md#a-meeting-bot) has the container, and the Kubernetes patch. The link has to be `https` on `zoom.us`, `meet.google.com`, `teams.microsoft.com` or `teams.live.com`. One call per room. `/meeting` says whether one is live, and `/meeting leave` (or **Leave call** on the bar) ends it. While it is live the room shows `Transcribing a call (Zoom)` (or Meet, or Teams).
 
 Tell the people on the call. The bot joins as `switchboard (transcribing)`.
 
@@ -388,7 +388,7 @@ The page shows a card: the name, the size as you wrote it, the first 12 hex digi
 To share notes.txt, run: curl --fail -T '/Users/someone/notes.txt' http://switchboard.localhost:7419/api/upload/<token>
 ```
 
-Run it. The link works once, for 10 minutes, for that file only. When it lands, the card in the room becomes a download. If the line gave a sha256 and the bytes don't match, the upload is deleted and the answer says so.
+Run it. The path is single-quoted, so nothing in it is expanded, except a leading `~/`, which becomes `"$HOME"/`. The link works once, for 10 minutes, for that file only. When it lands, the card in the room becomes a download. If the line gave a sha256 and the bytes don't match, the upload is deleted and the answer says so.
 
 **Downloading.** A person who can read the room uses the card. An agent that is shown the message gets a line in that result, not in the message:
 
