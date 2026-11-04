@@ -46,7 +46,7 @@ def test_memberships_gain_quiet_off_and_the_backup_is_schema_35(
     assert members > 0 and counts["memberships"] == members
 
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 39
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 40
     assert db.row_counts(con, db.tables_of(35)) == counts
     assert list(con.execute("PRAGMA foreign_key_check")) == []
     assert db.integrity_ok(con) is None

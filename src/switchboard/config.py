@@ -121,6 +121,28 @@ RETIRED_KEYS: dict[str, frozenset[str]] = {
 
 
 @dataclass(frozen=True)
+class FilesCfg:
+    """How large a file may be, and how much one room may hold (DESIGN.md §53).
+
+    Retention is not here: an admin sets it, and the proxy's body limit has to match ``max_mb``,
+    which a page setting cannot change.
+    """
+
+    max_mb: int = 25
+    room_mb: int = 500
+
+    def __post_init__(self) -> None:
+        if isinstance(self.max_mb, bool) or not isinstance(self.max_mb, int) or not 1 <= self.max_mb <= 1024:
+            raise ConfigError("[files] max_mb must be an integer from 1 to 1024")
+        if (
+            isinstance(self.room_mb, bool)
+            or not isinstance(self.room_mb, int)
+            or not 1 <= self.room_mb <= 1_048_576
+        ):
+            raise ConfigError("[files] room_mb must be an integer from 1 to 1048576")
+
+
+@dataclass(frozen=True)
 class MeetingCfg:
     """Where joinly listens (DESIGN.md §52). Empty: ``/meeting`` says how to set it.
     The URL is the operator's, from this file, never from a room."""
@@ -170,6 +192,7 @@ class Config:
     review: ReviewCfg = field(default_factory=ReviewCfg)
     security: SecurityCfg = field(default_factory=SecurityCfg)
     meeting: MeetingCfg = field(default_factory=MeetingCfg)
+    files: FilesCfg = field(default_factory=FilesCfg)
     # the retired keys the file had (``section.key``), ignored: reported once when the broker starts
     retired: tuple[str, ...] = ()
 
@@ -190,6 +213,7 @@ _SECTIONS = {
     "review": ReviewCfg,
     "security": SecurityCfg,
     "meeting": MeetingCfg,
+    "files": FilesCfg,
 }
 
 

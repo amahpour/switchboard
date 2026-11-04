@@ -28,7 +28,7 @@ from switchboard import __version__
 from switchboard.broker.commands import Actor
 from switchboard.broker.hub import Subscriber
 from switchboard.broker.peer import Peer, PeerPolicy
-from switchboard.broker.service import ServiceError, message_dict
+from switchboard.broker.service import ServiceError
 from switchboard.models import LOCAL_HOST
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -419,7 +419,7 @@ def build_methods(state: "BrokerState") -> dict[str, MethodSpec]:
             rows = state.store.history(room.id, after, limit + 1)  # the oldest after ``after``
             more = len(rows) > limit
             rows = rows[:limit]
-        backlog = [message_dict(m) for m in rows]
+        backlog = svc().message_frames(rows)
         if follow:
             sub = TailSubscriber(conn, room.name)
             conn.tails.append(sub)

@@ -75,6 +75,8 @@ class BrokerState:
     agents: AgentService = None  # type: ignore[assignment]
     boards: Boards = None  # type: ignore[assignment]
     meetings: Any = None  # the call bridge (meeting/bridge.py, §52); None until the lifespan wires it
+    attachments: Any = None  # files a room holds (files.py, §53)
+    files_swept: float = 0.0  # when the retention sweep last ran (broker clock)
     shutdown_cb: Callable[[], None] | None = None
     recovery: dict[str, int] = field(default_factory=dict)
     tasks: list[asyncio.Task[Any]] = field(default_factory=list)
@@ -249,6 +251,16 @@ def create_app(
         state.service.meetings = state.meetings
         state.meetings.recover()
         state.hub.set_board_source(state.boards.boards_named)
+        from switchboard.files import Attachments, FolderStore
+
+        state.attachments = Attachments(
+            state.store, FolderStore(paths.files_dir), clock, cfg, web_origin.origin, state.hub
+        )
+        state.attachments.ensure()
+        state.service.attachments = state.attachments
+        state.engine.attachments = state.attachments
+        state.files_swept = clock.now()
+        state.attachments.sweep()
         state.service.delivery = state.agents
         state.rpc = RpcServer(paths.sock, state)
         try:
@@ -411,6 +423,9 @@ async def _maintenance(state: BrokerState) -> None:
                 del state.passkey_checks[k]
             for k in [k for k, t in state.claim_grace.items() if t <= now]:
                 del state.claim_grace[k]
+            if state.attachments is not None and state.clock.now() - state.files_swept >= 3600:
+                state.attachments.sweep()
+                state.files_swept = state.clock.now()
             for sub in list(state.hub.subs):
                 if (
                     isinstance(sub, WsSubscriber)

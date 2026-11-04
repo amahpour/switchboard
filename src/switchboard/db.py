@@ -17,7 +17,9 @@ adds the avatars an admin uploads for each harness (§29.11); 33 (#488) adds the
 Code's helper scripts (§49.11); 34 (#513) admits OpenCode in participants (§49.12); 35 (#518) admits it in
 ``agent_icons``, so an admin can upload its avatar (§29.11); 38 (#569) adds ``people.admin``,
 so a person the owner chooses is an admin too (§51); 39 (#573) adds a meeting line and the
-``meetings`` table, a live call transcribed into a room (§52).
+``meetings`` table, a live call transcribed into a room (§52); 40 (#544) adds the files a room
+holds, the one-time grants that upload or download them, and a broker setting for how long
+files are kept (§53).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -38,7 +40,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 39
+SCHEMA_VERSION = 40
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -260,6 +262,35 @@ CREATE TABLE meetings(
   platform TEXT NOT NULL CHECK(platform IN ('zoom','meet','teams')),
   error TEXT CHECK(error IS NULL OR length(error) <= 500));
 CREATE UNIQUE INDEX meetings_one_open ON meetings(room_id) WHERE state!='ended';
+
+CREATE TABLE broker_settings(
+  key TEXT PRIMARY KEY CHECK(length(key) BETWEEN 1 AND 64),
+  value TEXT NOT NULL CHECK(length(value) <= 200));
+
+CREATE TABLE files(
+  id TEXT PRIMARY KEY CHECK(length(id) = 32 AND id NOT GLOB '*[^0-9a-f]*'),
+  room_id INTEGER NOT NULL REFERENCES rooms(id),
+  name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 200),
+  size INTEGER CHECK(size IS NULL OR size >= 0),
+  sha256 TEXT CHECK(sha256 IS NULL OR length(sha256) = 64),
+  content_type TEXT NOT NULL DEFAULT '' CHECK(length(content_type) <= 200),
+  uploader_name TEXT NOT NULL CHECK(length(uploader_name) BETWEEN 1 AND 100),
+  uploader_kind TEXT NOT NULL CHECK(uploader_kind IN ('human','agent')),
+  message_id INTEGER REFERENCES messages(id),
+  state TEXT NOT NULL CHECK(state IN ('pending','stored')),
+  created_at REAL NOT NULL,
+  stored_at REAL);
+CREATE INDEX files_room ON files(room_id);
+CREATE INDEX files_message ON files(message_id);
+
+CREATE TABLE file_grants(
+  token_hash TEXT PRIMARY KEY CHECK(length(token_hash) = 64),
+  file_id TEXT NOT NULL REFERENCES files(id),
+  kind TEXT NOT NULL CHECK(kind IN ('upload','download')),
+  expires_at REAL NOT NULL,
+  used_at REAL,
+  membership_id INTEGER);
+CREATE INDEX file_grants_file ON file_grants(file_id);
 """
 
 # The tables of each schema version that a migration must keep the rows of. The older versions'
@@ -292,7 +323,8 @@ V30_TABLES = tuple(t for t in V28_TABLES if t not in DROPPED_AT[29])  # before o
 V31_TABLES = (*V30_TABLES, "oauth_clients")  # before agent_icons (v32)
 V32_TABLES = (*V31_TABLES, "agent_icons")  # before listener_keys (v33)
 V38_TABLES = (*V32_TABLES, "listener_keys")  # schemas 33 through 38, before meetings (v39)
-TABLES = (*V38_TABLES, "meetings")
+V39_TABLES = (*V38_TABLES, "meetings")  # before files (v40)
+TABLES = (*V39_TABLES, "broker_settings", "files", "file_grants")
 
 # v1 -> v2 (DESIGN.md §27.6): one BEGIN IMMEDIATE, after a verified backup. The
 # columns land at the end of their tables, where the fresh schema above puts them too.
@@ -785,6 +817,39 @@ V38_TO_V39 = (
     "UPDATE meta SET value='39' WHERE key='schema_version'",
 )
 
+# v39 -> v40 (#544, DESIGN.md §53): one row per file a room holds, the grants that upload or
+# download it (the sha256 of a token, never the token), and a small table of broker settings
+# (how long files are kept). Empty on an existing database. The bytes are not in SQLite.
+V39_TO_V40 = (
+    "CREATE TABLE broker_settings("
+    " key TEXT PRIMARY KEY CHECK(length(key) BETWEEN 1 AND 64),"
+    " value TEXT NOT NULL CHECK(length(value) <= 200))",
+    "CREATE TABLE files("
+    " id TEXT PRIMARY KEY CHECK(length(id) = 32 AND id NOT GLOB '*[^0-9a-f]*'),"
+    " room_id INTEGER NOT NULL REFERENCES rooms(id),"
+    " name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 200),"
+    " size INTEGER CHECK(size IS NULL OR size >= 0),"
+    " sha256 TEXT CHECK(sha256 IS NULL OR length(sha256) = 64),"
+    " content_type TEXT NOT NULL DEFAULT '' CHECK(length(content_type) <= 200),"
+    " uploader_name TEXT NOT NULL CHECK(length(uploader_name) BETWEEN 1 AND 100),"
+    " uploader_kind TEXT NOT NULL CHECK(uploader_kind IN ('human','agent')),"
+    " message_id INTEGER REFERENCES messages(id),"
+    " state TEXT NOT NULL CHECK(state IN ('pending','stored')),"
+    " created_at REAL NOT NULL,"
+    " stored_at REAL)",
+    "CREATE INDEX files_room ON files(room_id)",
+    "CREATE INDEX files_message ON files(message_id)",
+    "CREATE TABLE file_grants("
+    " token_hash TEXT PRIMARY KEY CHECK(length(token_hash) = 64),"
+    " file_id TEXT NOT NULL REFERENCES files(id),"
+    " kind TEXT NOT NULL CHECK(kind IN ('upload','download')),"
+    " expires_at REAL NOT NULL,"
+    " used_at REAL,"
+    " membership_id INTEGER)",
+    "CREATE INDEX file_grants_file ON file_grants(file_id)",
+    "UPDATE meta SET value='40' WHERE key='schema_version'",
+)
+
 
 class MigrationStep(NamedTuple):
     to: int
@@ -843,6 +908,7 @@ def _steps(frm: int) -> list[MigrationStep]:
                 ("messages", "'web','cli','mcp','system','meeting'"),
             ),
         ),
+        39: MigrationStep(40, V39_TO_V40, ("broker_settings", "files", "file_grants")),
     }
     out = []
     v = frm
@@ -885,6 +951,8 @@ def tables_of(version: int) -> tuple[str, ...]:
         return V32_TABLES
     if version <= 38:
         return V38_TABLES
+    if version == 39:
+        return V39_TABLES
     return TABLES
 
 

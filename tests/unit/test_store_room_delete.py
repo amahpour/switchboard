@@ -96,7 +96,15 @@ def test_delete_removes_the_room_and_nothing_else(store: Store, two) -> None:
     parts_before = snapshot(con)["participants"]
     b_before = rows_of(con, b.id)
     counts = store.room_delete_counts(a.id)
-    assert counts == {"rooms": 1, "messages": 3, "memberships": 3, "deliveries": 5, "batches": 2, "events": 3}
+    assert counts == {
+        "rooms": 1,
+        "messages": 3,
+        "memberships": 3,
+        "deliveries": 5,
+        "batches": 2,
+        "events": 3,
+        "files": 0,
+    }
     assert list(counts) == list(ROOM_DELETE_TABLES)
     total = db.row_counts(con, db.TABLES)
     removed = delete(store, closed)
@@ -149,6 +157,7 @@ def test_an_open_room_without_members_can_go(store: Store) -> None:
         "deliveries": 0,
         "batches": 0,
         "events": 0,
+        "files": 0,
     }
     assert store.get_room("#scratch") is None
 

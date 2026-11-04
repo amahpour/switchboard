@@ -108,9 +108,14 @@ class Paths:
     def test_marker(self) -> Path:
         return self.home / TEST_MARKER
 
+    @property
+    def files_dir(self) -> Path:
+        """Bytes of files a room holds (DESIGN.md §53), beside the database."""
+        return self.home / "files"
+
     def ensure(self) -> None:
         """Create every private directory the broker needs (0700, owner-checked)."""
-        for d in (self.home, self.run_dir, self.logs_dir):
+        for d in (self.home, self.run_dir, self.logs_dir, self.files_dir):
             ensure_private_dir(d)
         sock_dir = self.sock.parent
         if sock_dir != self.run_dir:

@@ -106,6 +106,7 @@ class Engine:
         # batch-token HMAC key: random per broker start, memory only (§2)
         self.key = key or secrets.token_bytes(32)
         self.test_mode = test_mode
+        self.attachments: Any = None  # files a room holds (files.py, §53); set once the broker is up
         self.parked: dict[int, str] = {}  # membership_id -> reason
         # A Stop wait its own side ended (Esc, a timeout in the harness) leaves no wake path until the
         # session's next hook (#449). The adapter's reason is kept even with nothing pending, so
@@ -279,6 +280,12 @@ class Engine:
         )
         if mark_seen and fit.rules_version:
             self.store.mark_rules_seen(m.id, fit.rules_version)
+        # a stored file named by one of these messages: a short-lived link for this agent only,
+        # added beside the text, never written into the message (§53)
+        if self.attachments is not None and fit.items:
+            notes = self.attachments.download_notes(fit.items, m.id)
+            if notes:
+                text += "\n" + notes
         # each caller records ``chars=len(text)`` in the batch's ``offer`` event: what the agent
         # was handed, for ``switchboard report``'s characters by path (DESIGN.md §12.6, #275)
         return text
