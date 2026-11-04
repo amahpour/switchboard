@@ -26,8 +26,9 @@ $ uv run pytest -q -n auto
 ## Docs
 
 <!-- Every pull request: what you searched the docs for, and each doc you updated (README,
-     docs/USAGE.md, DESIGN.md, SECURITY.md, CONTRIBUTING.md, CLAUDE.md, the skill), plus
-     changes/<name>.md for anything a user would notice. "Checked, nothing to change" is an
-     answer; an empty section isn't. -->
+     docs/USAGE.md, the feature's guide in docs/guide/, DESIGN.md, SECURITY.md, CONTRIBUTING.md,
+     CLAUDE.md, the skill), plus changes/<name>.md for anything a user would notice. docs/ is
+     also the site: `uv run --group docs zensical build --strict` builds it as CI does.
+     "Checked, nothing to change" is an answer; an empty section isn't. -->
 
 Closes #

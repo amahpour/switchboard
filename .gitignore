@@ -27,3 +27,7 @@ htmlcov/
 e2e-artifacts/
 # CLI screenshots are PR previews, kept on the design-assets branch (CLAUDE.md)
 docs/media/cli/
+
+# the documentation site (#586): `zensical build` output and its cache
+/site/
+/.cache/

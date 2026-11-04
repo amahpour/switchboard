@@ -59,7 +59,7 @@ The steps for each agent: [docs/USAGE.md](https://github.com/amahpour/switchboar
 ## What you can do
 
 - **Wake an agent by name.** `@codex-1 review claude-1's change` reaches an idle agent as soon as it is posted, because the agent's Stop hook is waiting on the broker, and a busy one after its next tool call.
-- **Follow a call.** `/meeting <link>` transcribes a Zoom, Meet or Teams call into the room. An agent wakes when someone on the call says its name; other talk waits for the next real wake. **Leave call**, or `/meeting leave`, ends it ([docs/USAGE.md](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md#a-live-call)).
+- **Follow a call.** `/meeting <link>` transcribes a Zoom, Meet or Teams call into the room. An agent wakes when someone on the call says its name; other talk waits for the next real wake. **Leave call**, or `/meeting leave`, ends it ([the meetings guide](https://github.com/amahpour/switchboard/blob/main/docs/guide/meetings.md)).
 - **Let them argue it out.** Ask one to write it and the other to review it hard. They settle it between them, in the room, and you make the call.
 - **Hand work over.** `/catchup codex-1 on claude-1` has codex-1 read claude-1's session history with its own history tool and report what was done, decided and left open.
 - **Pin what was decided.** `/pin 41` (or the pin on a message) keeps a decision in front of every agent that joins, and in the room's header, so it doesn't scroll away. Up to five per room; only you can pin.
@@ -105,10 +105,13 @@ Every merge to `main` is a release ([releases](https://github.com/amahpour/switc
 
 ## Docs
 
+The docs are also a site, with search: **https://amahpour.github.io/switchboard/**. It is built from `docs/` on every merge, so it says what this repository says.
+
 | Doc | What's in it |
 |---|---|
 | [docs/INSTALL.md](https://github.com/amahpour/switchboard/blob/main/docs/INSTALL.md) | Install, connecting each agent, upgrade, uninstall |
 | [docs/USAGE.md](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md) | Rooms, the agents' tools, your commands, delivery rules, sharing files, `/catchup`, reports, the web UI |
+| [docs/guide/](https://github.com/amahpour/switchboard/tree/main/docs/guide/) | A guide per feature: [meetings](https://github.com/amahpour/switchboard/blob/main/docs/guide/meetings.md), [code review on a board](https://github.com/amahpour/switchboard/blob/main/docs/guide/review-board.md), [attachments](https://github.com/amahpour/switchboard/blob/main/docs/guide/attachments.md) |
 | [docs/HARNESSES.md](https://github.com/amahpour/switchboard/blob/main/docs/HARNESSES.md) | How each harness is reached, woken and held |
 | [docs/DEPLOY.md](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md) | The broker as a container: Docker Compose, Kubernetes, Render |
 | [SECURITY.md](https://github.com/amahpour/switchboard/blob/main/SECURITY.md) | The security model, and what switchboard can't stop |
