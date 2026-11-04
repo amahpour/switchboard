@@ -2554,6 +2554,9 @@ body.login {
     font-size: max(16px, calc(16px * var(--text-scale))); /* 16 px stops iOS zooming into the field */
     line-height: calc(20px * var(--text-scale));
   }
+  /* 8 lines and the padding: max-height is border-box, so the desktop's 168px held 7.6 lines
+     here, and an 8th scrolled the box and hid the top of the first. */
+  #input { max-height: calc(160px * var(--text-scale) + 16px); }
   .composer-bar { flex-shrink: 0; }
   #mention-btn, #cmd-btn, .composer-spacer, .composer-hint { display: none; }
   #send { width: 40px; height: 40px; margin-bottom: 9px; padding: 0; border-radius: 50%; }

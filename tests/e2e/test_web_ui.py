@@ -3931,6 +3931,23 @@ def test_composer_grows_with_wrapped_text_and_shrinks_after_send(ui: UI) -> None
         assert shrunk_height == one_line_height, (options, shrunk_height, one_line_height)
 
 
+def test_eight_lines_on_a_phone_fit_the_composer_without_scrolling_it(ui: UI) -> None:
+    """The composer grows to 8 lines before it scrolls (autoGrow's cap). On a phone #input has
+    8px of padding above and below, and its 168px max-height, a border-box one, held 7.6 lines
+    of 20px: an 8-line message scrolled the box by 8px and hid the top of its first line (#130's
+    bug again). It showed once the attach button (#544) made the phone's box narrower, so a
+    paragraph wrapped to 8 lines. Eight explicit lines check it whatever the fonts wrap to."""
+    ui.world.create_room("#e2e-composer-eight")
+    page = ui.open(room="e2e-composer-eight", **PHONE)
+    box = page.locator("#input")
+    text = "\n".join(f"line {n}" for n in range(1, 9))
+    box.fill(text)
+    box.dispatch_event("input")
+    expect(box).to_have_value(text)
+    assert box.evaluate("el => el.scrollTop") == 0
+    assert box.evaluate("el => el.scrollHeight - el.clientHeight") <= 1
+
+
 def test_the_mention_mirror_keeps_the_textarea_width_when_it_scrolls(ui: UI) -> None:
     """#110 review: past the composer's 8 lines, #input shows a scrollbar, which takes width on
     Linux and Windows (not with macOS's overlay ones). Unless the mirror behind it loses the same
