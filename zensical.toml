@@ -1,0 +1,111 @@
+# The documentation site (#586): https://amahpour.github.io/switchboard/
+#
+# Built by Zensical from the Markdown in docs/, which stays the only source: the site and the
+# repository can't disagree. `uv run --group docs zensical serve` previews it on localhost:8000.
+# CI runs `zensical build --strict` on every pull request (a broken link or anchor fails it), and
+# .github/workflows/docs.yml publishes it to GitHub Pages on every push to main.
+#
+# A page under docs/ is listed in `nav` below, or excluded: tests/unit/test_docs_site.py fails
+# on one that is neither, and on a relative link that leaves docs/ (the site can't serve it: link
+# to the file on GitHub instead).
+
+[project]
+site_name = "switchboard"
+site_description = "A local group chat where you and your coding agents talk in rooms and hand work to each other."
+site_url = "https://amahpour.github.io/switchboard/"
+repo_url = "https://github.com/amahpour/switchboard"
+repo_name = "amahpour/switchboard"
+edit_uri = "edit/main/docs/"
+docs_dir = "docs"
+site_dir = "site"
+
+# Tooling and notes that live beside the docs but aren't pages of the site.
+exclude_docs = """
+media/*.py
+media/README.md
+media/CREDITS.md
+"""
+
+nav = [
+  { "Home" = "index.md" },
+  { "Get started" = [
+    { "Install and connect" = "INSTALL.md" },
+    { "Using switchboard" = "USAGE.md" },
+  ] },
+  { "Guides" = [
+    { "Meetings" = "guide/meetings.md" },
+    { "Code review on a board" = "guide/review-board.md" },
+    { "Attachments" = "guide/attachments.md" },
+  ] },
+  { "Run it" = [
+    { "On a server" = "DEPLOY.md" },
+    { "Each harness" = "HARNESSES.md" },
+    { "In a sandbox" = "SANDBOX.md" },
+    { "Known limitations" = "LIMITATIONS.md" },
+  ] },
+  { "How it's built" = [
+    { "Architecture" = "ARCHITECTURE.md" },
+    { "Design" = "DESIGN.md" },
+  ] },
+  { "Project notes" = [
+    { "Milestone 0 findings" = "FINDINGS.md" },
+    { "M7 live rehearsal" = "M7-REPORT.md" },
+    { "Research: prior art" = "research/prior-art.md" },
+    { "Research: prior art, critique" = "research/prior-art-critique.md" },
+    { "Research: OpenAgents" = "research/openagents.md" },
+    { "Research: transcript review" = "research/transcript-review.md" },
+    { "Research: the proof rule" = "research/proof-rule.md" },
+    { "Research: file sharing" = "research/file-sharing.md" },
+  ] },
+]
+
+[project.theme]
+language = "en"
+features = [
+  "content.action.edit",
+  "content.action.view",
+  "content.code.copy",
+  "navigation.footer",
+  "navigation.indexes",
+  "navigation.instant",
+  "navigation.path",
+  "navigation.sections",
+  "navigation.top",
+  "navigation.tracking",
+  "search.highlight",
+  "toc.follow",
+]
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme)"
+toggle.icon = "lucide/sun-moon"
+toggle.name = "Switch to light mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to system preference"
+
+[project.markdown_extensions]
+admonition = {}
+attr_list = {}
+def_list = {}
+footnotes = {}
+md_in_html = {}
+tables = {}
+toc.permalink = true
+pymdownx.details = {}
+pymdownx.highlight.anchor_linenums = true
+pymdownx.inlinehilite = {}
+pymdownx.keys = {}
+pymdownx.superfences.custom_fences = [
+  { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },
+]
+pymdownx.tasklist.custom_checkbox = true

@@ -1105,6 +1105,115 @@ def shoot_handoff_board(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def shoot_review_guide(browser: Any, out: Path, world: Any) -> None:
+    """The pictures of docs/guide/review-board.md (#586), light only, each clipped to what it shows: a
+    fixed finding's card, a contested one with both sides and your choices, a room with two open boards
+    as tabs, Hand off unlocked, and its dialog. The pull requests are the made-up shop ones."""
+    from playwright.sync_api import expect
+
+    pr = "https://github.com/example/shop/pull/7"
+    base = {"timezone_id": "UTC", "locale": "en-US", "color_scheme": "light", **DESKTOP}
+
+    def clip_of(page: Any, *selectors: str, pad: int = 8) -> dict[str, float]:
+        """The box around every element ``selectors`` name, with ``pad`` px around it. It waits for the
+        page to settle first and measures in one evaluate: every live frame redraws the board, and a
+        box taken element by element can land between two redraws."""
+        for sel in selectors:
+            expect(page.locator(sel).first).to_be_visible()
+        settle(page)
+        return page.evaluate(
+            "([sels, pad]) => { const r = sels.map(s => document.querySelector(s).getBoundingClientRect());"
+            " const x0 = Math.min(...r.map(b => b.left)) - pad, y0 = Math.min(...r.map(b => b.top)) - pad;"
+            " return {x: x0, y: y0, width: Math.max(...r.map(b => b.right)) + pad - x0,"
+            " height: Math.max(...r.map(b => b.bottom)) + pad - y0}; }",
+            [list(selectors), pad],
+        )
+
+    def open_board(page: Any, room: str) -> None:
+        sign_in(page, world.broker)
+        tab = page.locator('#tabs .room[data-room="' + room + '"]')
+        if not tab.is_visible():
+            page.click("#rooms-toggle")
+        tab.click()
+        page.click("#board-toggle")
+
+    # a fixed finding's card, and a contested one's, from the board with an item in every lane
+    room = "#guide-cards"
+    world.create_room(room)
+    world.add_agents(room, ("claude-1", "codex-1"))
+    world.seed_review(room, pr)
+    ctx = browser.new_context(**base)
+    ctx.set_default_timeout(WAIT_MS)
+    try:
+        page = ctx.new_page()
+        open_board(page, room)
+        page.click('#board .board-card[data-item="F2"]')
+        expect(page.locator("#board .board-detail .board-rows")).to_contain_text("Proof")
+        shot(page, out, "guide-review-card.png", clip_of(page, "#board .board-detail"))
+        page.click('#board .board-card[data-item="F3"]')
+        expect(page.locator("#board .board-side")).to_have_count(2)
+        shot(page, out, "guide-review-contested.png", clip_of(page, "#board .board-detail"))
+    finally:
+        ctx.close()
+
+    # two open boards: tabs on the header's first row, the first on show
+    room = "#guide-tabs"
+    world.create_room(room)
+    world.add_agents(room, ("claude-1", "codex-1"))
+    world.seed_review(room, pr)
+    world.seed_second_review(room)
+    ctx = browser.new_context(**base)
+    ctx.set_default_timeout(WAIT_MS)
+    try:
+        page = ctx.new_page()
+        open_board(page, room)
+        expect(page.locator("#board .board-tab")).to_have_count(2)
+        shot(page, out, "guide-review-tabs.png", clip_of(page, "#board .board-head", "#board .board-lanes"))
+    finally:
+        ctx.close()
+
+    # Hand off unlocked, and the dialog that previews the one review: you rule on a contested finding and
+    # answer the question, and the agents fix and confirm, as in shoot_handoff_board
+    room = "#guide-handoff"
+    world.create_room(room)
+    world.add_agents(room, ("claude-1", "codex-1"))
+    call = world.agent_call
+    call(room, "codex-1", "review", action="open", url=pr, head="4f2c9e1a7b30")
+    call(room, "codex-1", "review", action="raise", title="Discount is taken after tax",
+         where="shop/cart.py:40-58", detail="The receipt uses the discounted total.")  # fmt: skip
+    call(room, "claude-1", "review", action="contest", item="F1", reason="The old order matched the ledger")
+    call(room, "claude-1", "review", action="ask", title="Discount before or after tax?",
+         options=["Before tax", "After tax"], recommend=0)  # fmt: skip
+    ctx = browser.new_context(**base)
+    ctx.set_default_timeout(WAIT_MS)
+    try:
+        page = ctx.new_page()
+        open_board(page, room)
+        page.click('#board .board-card[data-item="F1"]')
+        page.select_option("#board-owner", "claude-1")
+        page.click("#board-concede")
+        expect(page.locator('#board .board-card[data-item="F1"]')).to_contain_text("Being fixed")
+        call(room, "claude-1", "review", action="fix", item="F1", commit="abc1234",
+             proof="tests/test_cart.py::test_tax_order")  # fmt: skip
+        call(room, "codex-1", "review", action="confirm", item="F1")
+        expect(page.locator('#board .lane-settled .board-card[data-item="F1"]')).to_contain_text(
+            "confirmed by codex-1"
+        )
+        page.click('#board .board-card[data-item="Q1"]')
+        page.locator('#board .board-detail button[data-option="0"]').click()
+        expect(page.locator("#board-handoff")).to_be_enabled()
+        page.click('#board .board-card[data-item="Q1"]')  # close the card: the lanes get the width back
+        expect(page.locator("#board .board-detail")).to_have_count(0)
+        shot(
+            page, out, "guide-review-handoff.png", clip_of(page, "#board .board-head", "#board .board-lanes")
+        )
+        page.click("#board-handoff")
+        expect(page.locator("#app-dialog .handoff-comment")).to_contain_text("shop/cart.py:58")
+        shot(page, out, "guide-review-dialog.png", clip_of(page, "#app-dialog", pad=0))
+    finally:
+        ctx.close()
+
+
 def shoot_mentions(browser: Any, out: Path, world: Any) -> None:
     """The @ popover on a mid-name match (issue #112): a room of its own, with agent names long
     enough that "@skill" matches inside one, not at its start. Light, dark and a phone."""
@@ -2987,16 +3096,217 @@ def shoot_admins(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+# The pictures of the meetings and attachments guides (#586): a few small ones, light, a desktop width.
+GUIDE: dict[str, Any] = {"viewport": {"width": 1200, "height": 480}, "device_scale_factor": 1.5}
+
+
+def guide_page(browser: Any, world: Any, room: str) -> Any:
+    """A signed-in page of the desktop world, on ``room``, at the guides' size and in the light theme."""
+    from playwright.sync_api import expect
+
+    ctx = browser.new_context(timezone_id="UTC", locale="en-US", color_scheme="light", **GUIDE)
+    ctx.set_default_timeout(WAIT_MS)
+    page = ctx.new_page()
+    sign_in(page, world.broker)
+    tab = page.locator(f'#tabs .room[data-room="{room}"]')
+    if not tab.is_visible():
+        page.click("#rooms-toggle")
+    tab.click()
+    expect(page.locator("#room-title")).to_have_text(room.lstrip("#"))
+    return page
+
+
+def pane_clip(page: Any, top: str, bottom: str | None = None) -> dict[str, float]:
+    """The box from the top of ``top`` to the bottom of ``bottom`` (the last row of the log when it is
+    None), as wide as the room's pane, with 8 px of margin."""
+    return page.evaluate(
+        """([top, bottom]) => {
+          const a = document.querySelector(top).getBoundingClientRect();
+          const log = document.getElementById('log').getBoundingClientRect();
+          let end;
+          if (bottom) {
+            end = document.querySelector(bottom).getBoundingClientRect().bottom;
+          } else {
+            const rows = [...document.getElementById('log').children]
+              .filter(e => e.classList.contains('line') || e.classList.contains('day'));
+            end = rows[rows.length - 1].getBoundingClientRect().bottom;
+          }
+          const y = Math.max(0, a.top - 8);
+          return {x: log.left, y: y, width: log.width, height: end + 8 - y};
+        }""",
+        [top, bottom],
+    )
+
+
+def hide_rows_before(page: Any, text: str) -> None:
+    """Hide the log's rows ahead of the one that holds ``text`` (the day divider stays): a room's start and
+    the stand-in agents' joins are not what a guide's picture shows."""
+    page.evaluate(
+        """(text) => {
+          const kids = [...document.getElementById('log').children];
+          const at = kids.findIndex(e => e.textContent.includes(text));
+          kids.slice(0, at).forEach(e => { if (!e.classList.contains('day')) e.style.display = 'none'; });
+        }""",
+        text,
+    )
+
+
+def shoot_meeting_guide(browser: Any, out: Path, world: Any) -> None:
+    """#586, the meetings guide: a room of its own with claude-1 and codex-1, and no joinly. The command
+    palette filtered to /meeting (``guide-meeting-command-light``), the bar while the bot joins
+    (``guide-meeting-joining-light``) and a live Meet call with a few call lines, a call-out and the agent's
+    answer (``guide-meeting-call-light``). The call is seeded through the store and the service, as
+    tests/e2e/test_meetings_ui.py does."""
+    from playwright.sync_api import expect
+
+    room, b = "#planning", world.broker
+    world.create_room(room)
+    world.add_agents(room, ("claude-1", "codex-1"))
+    page = guide_page(browser, world, room)
+    try:
+        type_in(page, "/meeting")
+        expect(page.locator("#palette")).to_be_visible()
+        expect(page.locator("#palette")).to_contain_text("Transcribe a Zoom, Meet or Teams call here")
+        page.mouse.move(0, 0)
+        shot(page, out, "guide-meeting-command-light.png", clip=pane_clip(page, "#palette", ".composer-box"))
+        clear_input(page)
+
+        def begin() -> None:
+            r = b.state.store.get_room(room)
+            b.state.store.insert_meeting(r.id, started_by="alice", platform="meet")
+            b.state.service.notice_in(r.id, "alice is joining a Meet call (via web)")
+            b.state.service.publish_settings(r.id)
+
+        def go_live() -> None:
+            r = b.state.store.get_room(room)
+            row = b.state.store.open_meeting(r.id)
+            b.state.store.set_meeting_live(row.id)
+            b.state.service.notice_in(r.id, 'Transcribing a Meet call as "switchboard (transcribing)".')
+            b.state.service.publish_settings(r.id)
+
+        def line(speaker: str, text: str, mentions: tuple[str, ...] = ()) -> None:
+            def post() -> None:
+                r = b.state.store.get_room(room)
+                b.state.service.post_meeting_line(
+                    r.id, sender_name=speaker, text=text, mentions=list(mentions)
+                )
+
+            b.on_loop(post)
+
+        b.on_loop(begin)
+        expect(page.locator("#banner-meeting")).to_contain_text("Joining a Meet call")
+        page.evaluate("document.activeElement && document.activeElement.blur()")
+        shot(
+            page,
+            out,
+            "guide-meeting-joining-light.png",
+            clip=pane_clip(page, "#banner-meeting", "#banner-meeting"),
+        )
+
+        b.on_loop(go_live)
+        expect(page.locator("#banner-meeting")).to_contain_text("Transcribing a call (Meet)")
+        line("bob", "The checkout page is slow on the first load.")
+        line("alice", "I think it is the image sizes. Claude one, can you check them?", ("claude-1",))
+        expect(page.locator("#log .line.k-meeting")).to_have_count(2)
+        world.agent_say(room, "claude-1", "The hero image is 4 MB. I will resize it and open a pull request.")
+        expect(page.locator("#log")).to_contain_text("The hero image is 4 MB")
+        # their own avatars, not the stand-in's (the scripted agents can't call once their harness changes),
+        # so the page is loaded again to show the messages' new harness
+        for name in ("claude-1", "codex-1"):
+            world.set_member_harness(room, name, name.split("-")[0])
+        world.set_approval_modes(room, {"claude-1": "prompting", "codex-1": "prompting"})
+        page.reload()
+        connected(page)
+        page.locator(f'#tabs .room[data-room="{room}"]').click()
+        expect(page.locator("#room-title")).to_have_text("planning")
+        expect(page.locator("#log .line.k-meeting")).to_have_count(2)
+        # the rows before the call (the room's start and the stand-in agents' joins) are not what this shows
+        hide_rows_before(page, "is joining a Meet call")
+        page.mouse.move(0, 0)
+        shot(page, out, "guide-meeting-call-light.png", clip=pane_clip(page, "#banner-meeting"))
+    finally:
+        page.context.close()
+
+
+def shoot_attachments_guide(browser: Any, out: Path, world: Any) -> None:
+    """#586, the attachments guide: a room of its own with claude-1. A file attached from the composer
+    (``guide-attachments-attach-light``), an agent's file that has not been uploaded yet and the same card once
+    the agent ran its one-time command (``guide-attachments-waiting-light``, ``guide-attachments-done-light``),
+    and Settings → Files (``guide-attachments-settings-light``)."""
+    import httpx
+    from playwright.sync_api import expect
+
+    room = "#release"
+    world.create_room(room)
+    world.add_agents(room, ("claude-1",))
+    page = guide_page(browser, world, room)
+    try:
+        page.locator("#attach-file").set_input_files(
+            {"name": "test-report.txt", "mimeType": "text/plain", "buffer": b"412 passed, 0 failed\n"}
+        )
+        expect(page.locator("#log .md-artifact a.md-file")).to_be_visible()
+        hide_rows_before(page, "test-report.txt")
+        page.mouse.move(0, 0)
+        page.evaluate("document.activeElement && document.activeElement.blur()")
+        shot(
+            page,
+            out,
+            "guide-attachments-attach-light.png",
+            clip=pane_clip(page, "#log .day", ".composer-box"),
+        )
+
+        said = world.agent_call(
+            room,
+            "claude-1",
+            "say",
+            text="Build log attached.\nartifact: build.log | /Users/someone/work/build.log",
+        )
+        found = re.search(r"(https?://\S+/api/upload/[A-Za-z0-9_-]+)", said.get("share") or "")
+        assert found, said
+        expect(page.locator("#log .md-artifact")).to_have_count(2)
+        expect(page.locator("#log .md-artifact-hint")).to_have_text("on the sender's machine only")
+        # the agent's own avatar, not the stand-in's (the scripted agent can't call once its harness changes);
+        # the page is loaded again to show the message's new harness
+        world.set_member_harness(room, "claude-1", "claude")
+        world.set_approval_modes(room, {"claude-1": "prompting"})
+        page.reload()
+        connected(page)
+        page.locator(f'#tabs .room[data-room="{room}"]').click()
+        expect(page.locator("#room-title")).to_have_text("release")
+        expect(page.locator("#log .md-artifact-hint")).to_have_text("on the sender's machine only")
+        last = "#log .line.k-chat:last-of-type"
+        shot(page, out, "guide-attachments-waiting-light.png", clip=pane_clip(page, last))
+        put = httpx.put(found.group(1), content=b"compile ok\nlink ok\n", timeout=10.0)
+        assert put.status_code == 201, put.text
+        expect(page.locator("#log .md-artifact").nth(1).locator("a.md-file")).to_be_visible()
+        page.mouse.move(0, 0)
+        shot(page, out, "guide-attachments-done-light.png", clip=pane_clip(page, last))
+
+        page.click("#me-settings")
+        page.click("#settings-tab-files")
+        expect(page.locator("#settings-files-days")).to_have_value("30")
+        page.mouse.move(0, 0)
+        page.evaluate("document.activeElement && document.activeElement.blur()")
+        shot(
+            page, out, "guide-attachments-settings-light.png", clip=page.locator("#app-dialog").bounding_box()
+        )
+    finally:
+        page.context.close()
+
+
 # The sets ``--only`` can shoot alone. ``real_names``, ``admin_names`` and ``admins`` need a
 # hosted broker; the others need the seeded desktop world. A pull request that adds one picture
 # set can make it in seconds.
 ONLY: dict[str, Any] = {
     "link_card": shoot_link_card,
+    "review_guide": shoot_review_guide,
     "quiet": shoot_quiet,
     "claim_board": shoot_claim_board,
     "real_names": shoot_real_names,
     "admin_names": shoot_admin_names,
     "admins": shoot_admins,
+    "meeting": shoot_meeting_guide,
+    "attachments": shoot_attachments_guide,
 }
 
 

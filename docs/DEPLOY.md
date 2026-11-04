@@ -60,7 +60,7 @@ Each example pins a release (`ghcr.io/amahpour/switchboard:0.49.1`). Every relea
 
 ### A VM with Docker Compose
 
-[deploy/compose/](../deploy/compose/) runs the broker with Caddy in front of it. Caddy gets a certificate from Let's Encrypt for your domain and renews it. You need a VM with Docker, a DNS name pointing at it, and ports 80 and 443 open.
+[deploy/compose/](https://github.com/amahpour/switchboard/tree/main/deploy/compose/) runs the broker with Caddy in front of it. Caddy gets a certificate from Let's Encrypt for your domain and renews it. You need a VM with Docker, a DNS name pointing at it, and ports 80 and 443 open.
 
 ```bash
 export SWITCHBOARD_DOMAIN=sb.example.com
@@ -70,7 +70,7 @@ docker compose -f deploy/compose/compose.yaml logs switchboard    # the admin's 
 
 ### Kubernetes (EKS, GKE, AKS)
 
-[deploy/kubernetes/switchboard.yaml](../deploy/kubernetes/switchboard.yaml) is a Service, a one-replica StatefulSet with a 20 GiB volume claim, and an Ingress. Edit `sb.example.com` (the Ingress host, its TLS secret and `SWITCHBOARD_PUBLIC_URL`) first. The claim is 20 GiB because a room's files sit on the same volume as the database. The Ingress sets `nginx.ingress.kubernetes.io/proxy-body-size: "26m"`, one megabyte over the default 25 MB file cap, so an upload is not cut off by the proxy. A proxy in front of the broker needs a body limit at least `[files] max_mb`. Caddy, in the Compose example, has no default body limit.
+[deploy/kubernetes/switchboard.yaml](https://github.com/amahpour/switchboard/blob/main/deploy/kubernetes/switchboard.yaml) is a Service, a one-replica StatefulSet with a 20 GiB volume claim, and an Ingress. Edit `sb.example.com` (the Ingress host, its TLS secret and `SWITCHBOARD_PUBLIC_URL`) first. The claim is 20 GiB because a room's files sit on the same volume as the database. The Ingress sets `nginx.ingress.kubernetes.io/proxy-body-size: "26m"`, one megabyte over the default 25 MB file cap, so an upload is not cut off by the proxy. A proxy in front of the broker needs a body limit at least `[files] max_mb`. Caddy, in the Compose example, has no default body limit.
 
 ```bash
 kubectl create namespace switchboard
@@ -89,7 +89,7 @@ What the manifest relies on:
 
 ### Render
 
-[deploy/render/render.yaml](../deploy/render/render.yaml) is a Blueprint: a web service from the published image, with a 20 GB disk at `/data`. Put it in a repository of yours as `render.yaml` (or point the Blueprint at its path), then choose **New > Blueprint**. Render asks for `SWITCHBOARD_PUBLIC_URL`: the service's `https://<name>.onrender.com` address, or your custom domain. The admin's one-time password is in the service's **Logs** tab. Files a room holds count against that disk, and against its snapshots.
+[deploy/render/render.yaml](https://github.com/amahpour/switchboard/blob/main/deploy/render/render.yaml) is a Blueprint: a web service from the published image, with a 20 GB disk at `/data`. Put it in a repository of yours as `render.yaml` (or point the Blueprint at its path), then choose **New > Blueprint**. Render asks for `SWITCHBOARD_PUBLIC_URL`: the service's `https://<name>.onrender.com` address, or your custom domain. The admin's one-time password is in the service's **Logs** tab. Files a room holds count against that disk, and against its snapshots.
 
 Render's disks need a paid plan and allow only one instance. A deploy stops the old instance before it starts the new one, and Render snapshots the disk daily and keeps each snapshot at least 7 days. Render's router ends TLS and redirects plain HTTP to HTTPS before it reaches the broker. `PORT=7419` in the Blueprint tells Render which port to send traffic to.
 
@@ -142,7 +142,7 @@ The broker reaches out to Google (`accounts.google.com`, `oauth2.googleapis.com`
 
 ## Upgrading
 
-1. Change the image tag in your compose file, manifest or Blueprint to the new release (the [CHANGELOG](../CHANGELOG.md) lists them), and deploy.
+1. Change the image tag in your compose file, manifest or Blueprint to the new release (the [CHANGELOG](https://github.com/amahpour/switchboard/blob/main/CHANGELOG.md) lists them), and deploy.
 2. The platform stops the old container and starts the new one. The broker shuts down cleanly on SIGTERM (`docker stop`) and exits 0.
 3. If the new release changes the database's schema, the broker migrates it on start, after a verified backup copy next to it (`switchboard.db.v2.bak` for the passkeys release, `switchboard.db.v3.bak` for the people release, [DESIGN.md §27.6](DESIGN.md), [§31.2](DESIGN.md), [§32.2](DESIGN.md)). An older release refuses a newer database, so a rollback past a schema change means restoring a backup. The admin, people, passwords and passkeys are in the database, so an upgrade keeps them. The email sign-in release (schema 12, [DESIGN.md §39](DESIGN.md#39-identity-by-email-192)) keeps everyone signing in as before until you set their email in **Admin > People**; then they sign in with the email instead of their name, so tell them first.
 
@@ -160,6 +160,7 @@ Pin releases rather than `:latest`, so an upgrade happens when you choose.
   ```
 
 - **Continuous replication:** [Litestream](https://litestream.io) can stream the database to S3-compatible storage, running beside the broker on the same volume.
+- **Attached files are not in the database.** A room's files live in `$SWITCHBOARD_HOME/files/` beside it ([the attachments guide](guide/attachments.md)), so a copy of `switchboard.db` alone restores the cards without the files. A disk snapshot has both; with the backup API, copy that folder too (`docker cp switchboard:/data/switchboard/files ./files-$(date +%F)`: the image keeps its home in `/data/switchboard`).
 
 To restore, stop the broker, put the copy at `$SWITCHBOARD_HOME/switchboard.db` owned by uid 10001 with mode 0600 (and no `-wal` or `-shm` files next to it), and start it again.
 
@@ -184,7 +185,16 @@ Restart the broker. `/meeting` with no server set names this page.
 
 Beside the server's container, add a service on the same network and do not publish its port. Point `joinly_url` at that service, for example `http://joinly:8000/mcp/`. The broker reaches it; nothing outside the network does.
 
-**Speaker names on Zoom.** joinly 0.5.4 gives no speaker name on Zoom, so every line there shows as `call`; Meet and Teams are unaffected. Its browser has no graphics acceleration, so Zoom shows one tile that follows whoever is talking, and joinly's lookup doesn't know that tile. The fix is [joinly-ai/joinly#187](https://github.com/joinly-ai/joinly/pull/187); until a joinly release has it, the names come through only with that file patched into the image.
+**Speaker names on Zoom.** joinly 0.5.4 gives no speaker name on Zoom, so every line there shows as `call`; Meet and Teams are unaffected. Its browser has no graphics acceleration, so Zoom shows one tile that follows whoever is talking, and joinly's lookup doesn't know that tile. The fix is [joinly-ai/joinly#187](https://github.com/joinly-ai/joinly/pull/187); until a joinly release has it, the names come through only with that file patched into the image. Its `zoom.py` differs from 0.5.4's by the fix alone, so you can mount it over the image's copy, read-only:
+
+```bash
+curl -fsSLo zoom.py https://raw.githubusercontent.com/amahpour/joinly/9fbd07ceccbbfc358d697378c3cb1d7b911b17a5/joinly/providers/browser/platforms/zoom.py
+docker run -d --name joinly -p 127.0.0.1:8010:8000 \
+  -v "$PWD/zoom.py:/app/.venv/lib/python3.12/site-packages/joinly/providers/browser/platforms/zoom.py:ro" \
+  ghcr.io/joinly-ai/joinly:v0.5.4
+```
+
+Drop the mount once a joinly release has the fix, and move to that release.
 
 ## Health checks and logs
 
@@ -196,7 +206,7 @@ Beside the server's container, add a service on the same network and do not publ
 - **Where:** `ghcr.io/amahpour/switchboard:<version>` and `:latest`, for linux/amd64 and linux/arm64. The release job builds it from the release's tag, with a provenance attestation and an SBOM. Inspect them with `docker buildx imagetools inspect ghcr.io/amahpour/switchboard:0.49.1 --format '{{json .Provenance}}'` (or `.SBOM`).
 - **What's in it:** Python 3.13 (Debian slim) with switchboard installed from its wheel and the exact dependencies in `uv.lock`, plus tini. No uv, compiler, git, ssh or shell tools beyond the base image's.
 - **Who it runs as:** the `switchboard` user (uid and gid 10001), always.
-  - Started as root, as Render and plain `docker run` do, the image's `switchboard` command ([deploy/image/switchboard.sh](../deploy/image/switchboard.sh)) first makes `$SWITCHBOARD_HOME` that user's private directory. It then drops to that user with no capabilities and no way back through setuid.
+  - Started as root, as Render and plain `docker run` do, the image's `switchboard` command ([deploy/image/switchboard.sh](https://github.com/amahpour/switchboard/blob/main/deploy/image/switchboard.sh)) first makes `$SWITCHBOARD_HOME` that user's private directory. It then drops to that user with no capabilities and no way back through setuid.
   - `docker exec … switchboard …` drops to the same user.
   - Started as uid 10001, as Kubernetes does with the manifest above, it runs as that user from the start.
-- **Build it yourself:** `docker build -t switchboard -f deploy/image/Dockerfile .` from the repository. CI builds it on every pull request and runs [tests/image](../tests/image/test_image.py) against it, behind a proxy that ends TLS (CONTRIBUTING.md, "The container image").
+- **Build it yourself:** `docker build -t switchboard -f deploy/image/Dockerfile .` from the repository. CI builds it on every pull request and runs [tests/image](https://github.com/amahpour/switchboard/blob/main/tests/image/test_image.py) against it, behind a proxy that ends TLS (CONTRIBUTING.md, "The container image").

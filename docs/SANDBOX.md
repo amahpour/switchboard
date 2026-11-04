@@ -1,6 +1,6 @@
 # Running switchboard in a sandbox
 
-Status (2026-09-25): the Docker layout below is **built and partly verified** on Docker Desktop 29.8 (linux/arm64 VM, kernel 7.0.12-linuxkit). The files are in [`sandbox/`](../sandbox/). Verified: the image builds with switchboard baked in; the firewall comes up under `cap_drop: ALL` and passes every §5 check; the loopback-only broker is reachable from the Mac through `forward.sh` (sign-in link, REST, WebSocket, on `127.0.0.1` and `[::1]`); and the whole test suite runs green in a Linux container (§10). Not run yet: `install-agents.sh` (the four vendor CLIs), the logins in §4, and any agent inside the box; the Tart VM and `sbx` options (§8) are still untested. Open items are in [Known gaps](#9-known-gaps).
+Status (2026-09-25): the Docker layout below is **built and partly verified** on Docker Desktop 29.8 (linux/arm64 VM, kernel 7.0.12-linuxkit). The files are in [`sandbox/`](https://github.com/amahpour/switchboard/tree/main/sandbox/). Verified: the image builds with switchboard baked in; the firewall comes up under `cap_drop: ALL` and passes every §5 check; the loopback-only broker is reachable from the Mac through `forward.sh` (sign-in link, REST, WebSocket, on `127.0.0.1` and `[::1]`); and the whole test suite runs green in a Linux container (§10). Not run yet: `install-agents.sh` (the four vendor CLIs), the logins in §4, and any agent inside the box; the Tart VM and `sbx` options (§8) are still untested. Open items are in [Known gaps](#9-known-gaps).
 
 ## 1. Why a sandbox
 
@@ -27,7 +27,7 @@ Mac                                        Docker Desktop VM (linux/arm64)
 
 ## 3. Setup (Docker Desktop)
 
-The files are in [`sandbox/`](../sandbox/):
+The files are in [`sandbox/`](https://github.com/amahpour/switchboard/tree/main/sandbox/):
 
 | File | What it does |
 |---|---|

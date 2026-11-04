@@ -60,6 +60,11 @@ record = [
     "imageio-ffmpeg>=0.6.0",
     "pillow>=11.0.0",
 ]
+# Not part of the regular setup: the documentation site (#586), built from docs/ by Zensical.
+# `uv run --group docs zensical serve` previews it; CI builds it with --strict on every pull request.
+docs = [
+    "zensical==0.0.74",
+]
 
 [build-system]
 requires = ["hatchling"]
