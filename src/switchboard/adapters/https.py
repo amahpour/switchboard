@@ -26,11 +26,16 @@ name: Claude Code's session id, which its PreToolUse hook reports before each ca
 
 from __future__ import annotations
 
-import dataclasses
 from typing import Any
 
 from switchboard import __version__
-from switchboard.adapters.base import APPROVAL_GUIDANCE, HOOK_CONTEXT_EVENTS, Adapter, Caps, PullAdapter
+from switchboard.adapters.base import (
+    APPROVAL_GUIDANCE,
+    CLIENT_WAIT_LIMIT_S,
+    HOOK_CONTEXT_EVENTS,
+    Adapter,
+    PullAdapter,
+)
 from switchboard.config import Config
 from switchboard.models import (
     HookEvent,
@@ -57,8 +62,9 @@ OPENCODE_TIER = "opencode:https"
 DEVIN_TOOL_PREFIX = "mcp__switchboard_https__"
 # Devin's HTTP client sends a call again after 120 s of silence (measured, Devin CLI 3000.11.92); the
 # one-use hook report is spent by then, so the repeat is refused and the first wait() is orphaned.
-# A wait() under this ends before that.
-DEVIN_WAIT_CAP_S = 100
+# A wait() under this ends before that. It is Devin's entry in ``base.CLIENT_WAIT_LIMIT_S``, which every
+# harness's cap is held to (#559).
+DEVIN_WAIT_CAP_S = CLIENT_WAIT_LIMIT_S["devin"]
 NOTE = "over HTTPS: woken at stop"
 NO_SESSION = (
     "this Claude Code call named no session: switchboard's PreToolUse hook reports it before each"
@@ -380,10 +386,6 @@ class HttpsDevinAdapter(Adapter):
         "a background subagent ran in this prompt: hook delivery is off until your next prompt"
         " (the agent can still read())"
     )
-
-    def caps(self, p: Participant | None = None) -> Caps:
-        caps = super().caps(p)
-        return dataclasses.replace(caps, wait_cap_s=min(caps.wait_cap_s, DEVIN_WAIT_CAP_S))
 
     def tier(self, p: Participant | None) -> tuple[str, str | None]:
         per_prompt, per_hour = self.rearm_caps()

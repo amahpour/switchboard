@@ -20,6 +20,7 @@ from fastapi import FastAPI
 
 from switchboard import db
 from switchboard.adapters import build_adapters
+from switchboard.adapters.base import waits_over_client_limit
 from switchboard.broker import agent_http, listener_keys, oauth, oidc, web
 from switchboard.broker.agents import AgentService
 from switchboard.broker.auth import HostOriginGuard, LoginTokens, SecurityHeaders, Sessions, WebOrigin
@@ -211,6 +212,14 @@ def create_app(
             log.warning(
                 "config.toml: %s are ignored since agents connect over HTTPS (0.38.0); you can remove them",
                 ", ".join(f"[{k.split('.')[0]}] {k.split('.')[1]}" for k in cfg.retired),
+            )
+        for section, asked, limit in waits_over_client_limit(cfg):
+            log.warning(
+                "config.toml: [%s] wait_cap_s = %d is more than its client allows; wait() is held to %d s"
+                " (docs/USAGE.md)",
+                section,
+                asked,
+                limit,
             )
         con = db.open_db(paths.db)  # a version-1 database is migrated here, after a backup (§27.6)
         state.store = Store(con, clock)

@@ -24,6 +24,9 @@ runs on the agent's machine.
   kinds of report (#422): a switchboard tool's own, which carries its result (its batch tokens
   confirm an answer), and any other tool's, which carries no result at all, only that the session
   made a call, so a busy session hears its priority messages after every tool call.
+- **A wait() whose client hung up** is closed at once (#559). The MCP library cancels a tool call when a
+  2026-07-28 request's stream closes, and when a 2025 session posts ``notifications/cancelled``, but not
+  when a 2025 client closes the stream and says nothing; ``HttpTools`` watches the wait's own request.
 - **The listener** (``/mcp/listen``): Claude Code's Stop hook and OpenCode's idle plugin post their
   session id there and wait, round after round, for the broker's wake text (§49.4, §49.12).
 - **OpenCode status** (``/mcp/status``, §49.12): a POST-only report route with fixed fields and events,
@@ -44,7 +47,7 @@ import json
 import logging
 import re
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -95,6 +98,7 @@ CLIENTS = {
     "opencode": "opencode",
 }
 UNSUPPORTED = "switchboard over HTTPS works with Codex, Claude Code, OpenCode, Cursor and Devin"
+HUNG_UP = "the client closed the request before the wait ended"  # nobody reads it: the line is gone (#559)
 # the scripted test agent (§9.6): a client of this name on a test-mode broker, naming its session and
 # how its answers are confirmed in two headers. A broker that isn't in test mode never serves it.
 TEST_CLIENT = "switchboard-test-agent"
@@ -561,12 +565,64 @@ class HttpTools:
         try:
             res = getattr(self.state.agents, name)(c.conn, params)
             if asyncio.iscoroutine(res):
-                res = await asyncio.wait_for(res, timeout)
+                if method == "agent.wait":
+                    res = await self._wait_unless_hung_up(c, params, res, timeout)
+                    if res is None:
+                        return {"ok": False, "error": HUNG_UP, "code": "cancelled"}
+                else:
+                    res = await asyncio.wait_for(res, timeout)
         except ServiceError as e:
             return {"ok": False, "error": e.message, "code": e.code}
         except TimeoutError:
             return {"ok": False, "error": "switchboard took too long to answer", "code": "timeout"}
         return {"ok": True, **res}
+
+    @staticmethod
+    async def _hung_up() -> None:
+        """Return when the client closes the request this call came on; never, for a call that did not
+        come over HTTP. The same ``receive`` the response's own disconnect watch reads: uvicorn answers
+        every ``receive`` with ``http.disconnect`` once the connection is gone (#559)."""
+        try:
+            receive = get_http_request().receive
+        except RuntimeError:  # not over HTTP at all
+            await asyncio.Event().wait()
+        while True:
+            if (await receive())["type"] == "http.disconnect":
+                return
+
+    async def _wait_unless_hung_up(
+        self, c: Caller, params: dict[str, Any], waiting: Coroutine[Any, Any, dict[str, Any]], timeout: float
+    ) -> dict[str, Any] | None:
+        """``agent.wait``'s answer, or None if the client hung up on the call first (#559).
+
+        The MCP library cancels a tool call in two cases: a 2026-07-28 request (Claude Code, Devin) whose
+        response stream closes, and a 2025 session (Codex, Cursor, OpenCode) that posts
+        ``notifications/cancelled``. It does not for a 2025 client that closes the stream and sends nothing:
+        that is a dropped line to it, not a cancel, and the wait stayed open to its own timeout. A message
+        that arrived then went to a wait nobody could read, and came back 10 s later as ``no_confirm``.
+        So the request is watched here as well. A wait whose request is gone has no one to answer, however
+        it came to be: it is taken back at once with ``unwait``, as a cancelled one is, and what it was
+        given goes back to pending. A client that stops waiting but keeps its stream open and reading can't
+        be told from one that is still waiting, and its wait runs to its timeout.
+        """
+        answer = asyncio.ensure_future(asyncio.wait_for(waiting, timeout))
+        gone = asyncio.ensure_future(self._hung_up())
+        hung_up = False
+        try:
+            await asyncio.wait({answer, gone}, return_when=asyncio.FIRST_COMPLETED)
+            hung_up = gone.done()
+        finally:
+            gone.cancel()
+            if not answer.done():
+                answer.cancel()
+        if not hung_up:
+            return await answer
+        # the wait has let go of its sink's future before the sink is closed, and an error that came with the
+        # hang-up is read, so it is not logged as lost
+        await asyncio.gather(answer, return_exceptions=True)
+        log.info("a %s client closed its wait() request: the wait is closed", c.harness)
+        self.unwait({**params})
+        return None
 
     async def find_cred(self, room: str, tid: str | None) -> tuple[str, str] | str:
         """The caller's membership in ``room``, as ``(canonical room, "m:<id>")``, or an error
