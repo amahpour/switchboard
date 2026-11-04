@@ -138,7 +138,7 @@ Someone on the call shares a screen, and you want an agent to see it. There are 
 
 Ask again later to see what changed. At most one picture is taken every 10 seconds, however it was asked for. A click sooner than that is refused with a short message. A line on the call that says "screen" inside that time is still posted, with a notice and without a new picture.
 
-The picture is stored as a [room file](attachments.md), named like `screen-142507.jpg`, and shown as a download card. An agent is given a download link to it the same way as for any file. It is a small image, 512 by 288 pixels, so it shows what is shared, not the fine print. If a picture can't be taken, the room says so, and a line on the call is posted all the same.
+The picture is stored as a [room file](attachments.md), named like `screen-142507.jpg`, and shown as a download card. An agent is given a download link to it the same way as for any file. It is a small image, 1024 by 576 pixels, so it shows what is shared, not the fine print. If a picture can't be taken, the room says so, and a line on the call is posted all the same.
 
 ## What agents see
 
@@ -183,7 +183,7 @@ The long version is in [DESIGN.md §52](../DESIGN.md#52-meetings-a-live-call-in-
 
 - **One call per room**, and only Zoom, Meet and Teams links.
 - **The bot never speaks by itself or shares its own screen.** It speaks an agent's `@call` line when you have voice on, and it takes pictures of what it sees.
-- **A picture is one small frame.** It is 512 by 288 pixels and a screenshot of the bot's own view of the call, the same on Zoom, Meet and Teams. What a shared screen looks like there depends on the platform's page. On Zoom, joinly's browser shows one tile that follows whoever is talking, so a shared screen may not be what the picture shows. It has not been tried on a real Zoom or Teams call.
+- **A picture is one frame.** It is 1024 by 576 pixels and a screenshot of the bot's own view of the call, the same on Zoom, Meet and Teams. What a shared screen looks like there depends on the platform's page. On Zoom, joinly's browser shows one tile that follows whoever is talking, so a shared screen may not be what the picture shows. It has not been tried on a real Zoom or Teams call.
 - **Voice is for the call it was turned on in.** It is kept in memory, so it is off after a restart and in every new call.
 - **At most 600 characters a line, one line at a time, three waiting.**
 - **At most one snapshot every 10 seconds** in a call.
@@ -254,6 +254,6 @@ The long version is in [DESIGN.md §52](../DESIGN.md#52-meetings-a-live-call-in-
 - At most one line a second is posted, and at most 50 wait.
 - The hint list holds at most 100 names.
 - A spoken line is at most 600 characters, one at a time, with up to 3 waiting. Speech may take up to 3 minutes before it is given up.
-- A snapshot is taken at most every 10 seconds, waits up to 8 seconds for the picture, and is 512 by 288 pixels.
+- A snapshot is taken at most every 10 seconds, waits up to 8 seconds for the picture, and is 1024 by 576 pixels.
 
 **More:** [A live call in USAGE.md](../USAGE.md#a-live-call), [A meeting bot in DEPLOY.md](../DEPLOY.md#a-meeting-bot), [DESIGN.md §52](../DESIGN.md#52-meetings-a-live-call-in-a-room-573), and [SECURITY.md](https://github.com/amahpour/switchboard/blob/main/SECURITY.md).

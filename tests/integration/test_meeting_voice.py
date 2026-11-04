@@ -279,13 +279,15 @@ async def test_the_voice_goes_to_joinly_in_its_settings(
     tmp_home: Path, joinly: FakeJoinly, voice: str | None, expected: str
 ) -> None:
     """``[meeting] tts_voice`` reaches joinly in the ``joinly-settings`` header as ``tts_args.voice``,
-    with the earlier keys intact. Fails if the voice is left out, or replaces the hotwords."""
+    with the earlier keys intact, and the snapshot size that makes a shared screen readable (joinly's own
+    default is 512x288). Fails if the voice or the size is left out, or replaces the hotwords."""
     b = make_broker(tmp_home, joinly, voice=voice)
     try:
         await start_call(b, joinly)
         sent = [json.loads(s) for s in joinly.settings]
         assert sent and all(s.get("tts_args") == {"voice": expected} for s in sent), sent
         assert all(s.get("name") == "switchboard (transcribing)" and "stt_args" in s for s in sent)
+        assert all(s.get("meeting_provider_args") == {"snapshot_size": [1024, 576]} for s in sent), sent
     finally:
         b.web.close()  # type: ignore[attr-defined]
         b.stop()

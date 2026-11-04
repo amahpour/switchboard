@@ -40,6 +40,11 @@ from switchboard.meeting.speech import call_text, speakable
 log = logging.getLogger("switchboard.meeting")
 
 PARTICIPANT = "switchboard (transcribing)"
+# joinly screenshots its 1280x720 page, trims a tenth off each edge and fits the rest to this size. Its
+# own default, 512x288, is too small to read text on a shared screen; 1024x576 keeps the 16:9 frame near
+# the trimmed page's own width, as a JPEG of a few hundred KB (checked against joinly v0.5.4, which takes
+# it as a BrowserMeetingProvider argument through meeting_provider_args).
+SNAPSHOT_SIZE = (1024, 576)
 RESOURCE = "transcript://live/segments"
 JOIN_TIMEOUT_S = 45.0
 LEAVE_TIMEOUT_S = 5.0
@@ -241,6 +246,8 @@ class MeetingBridge:
                 "name": PARTICIPANT,
                 "stt_args": {"hotwords": words},
                 "tts_args": {"voice": cfg.tts_voice},  # the Kokoro voice (joinly's settings, §52)
+                # a frame whose text can be read
+                "meeting_provider_args": {"snapshot_size": list(SNAPSHOT_SIZE)},
             },
             ensure_ascii=True,
         )
