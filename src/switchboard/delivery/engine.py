@@ -122,10 +122,11 @@ class Engine:
         self.stalled_told: set[tuple[int, int]] = set()
         self.peer_marks: dict[int, int] = {}  # offered batch with chatter -> the boundary it was made at
         self.hook_acks: dict[int, tuple[str, float]] = {}  # batch_id -> (ack nonce, deadline)
-        self.pull_deadlines: dict[int, float] = {}  # batch_id -> expiry (PostToolUse expected)
+        self.pull_deadlines: dict[int, float] = {}  # batch_id -> expiry (confirmation expected)
         self.ack_modes: dict[int, str] = {}  # participant_id -> test --ack mode
         self.continues: dict[int, Cont] = {}  # batch_id -> unconfirmed stop continuation
         self.wait_calls: dict[int, tuple[str, float]] = {}  # participant_id -> its last wait() PreToolUse
+        self.background_waits: set[int] = set()  # returned batches whose task notification starts a turn
         self.pull_tool_use: dict[int, str] = {}  # batch_id -> the tool_use_id whose PostToolUse confirms it
         self.first_action: dict[int, int] = {}  # participant_id -> wake batch awaiting its first action
         # Devin: prompt ids (gens) that started a background subagent, per participant.
@@ -525,6 +526,8 @@ class Engine:
         self.store.mark_posted(b.id)
         text = self._render(b, fit, room, m, peer_inline=True, item_limit=None)
         sink.batch_id = b.id
+        if sink.meta.get("background"):
+            self.background_waits.add(b.id)
         tu = sink.meta.get("tool_use_id")
         if isinstance(tu, str):
             self.pull_tool_use[b.id] = tu  # Devin: only this call's PostToolUse confirms it
@@ -643,6 +646,7 @@ class Engine:
         self.hook_acks.pop(batch_id, None)
         self.pull_deadlines.pop(batch_id, None)
         self.pull_tool_use.pop(batch_id, None)
+        self.background_waits.discard(batch_id)
         self.continues.pop(batch_id, None)
         peer_mark = self.peer_marks.pop(batch_id, None)
         b = self.store.confirm_batch(batch_id, evidence)
@@ -668,6 +672,7 @@ class Engine:
         self.hook_acks.pop(batch_id, None)
         self.pull_deadlines.pop(batch_id, None)
         self.pull_tool_use.pop(batch_id, None)
+        self.background_waits.discard(batch_id)
         self.peer_marks.pop(batch_id, None)
         cont = self.continues.pop(batch_id, None)
         cur = self.store.get_batch(batch_id)
@@ -1327,6 +1332,25 @@ class Engine:
             if adapter.is_wait_pre(ev):
                 self.wait_calls[p.id] = ((ev.tool_use_id or "")[:128], ev.t if ev.t else now)
 
+        # A Stop while a long call is still open backgrounds it; it does not cancel its answer.
+        # The next prompt after that answer is the task notification (#558). Remember only those
+        # waits, not every pull answer: an unrelated prompt still expires a foreground call.
+        background_after = adapter.background_wait_after_s()
+        if not tainted and background_after is not None:
+            if E == "Stop":
+                for sink in self.sinks.for_participant(p.id):
+                    if sink.kind == "wait" and now - sink.opened_at >= background_after:
+                        sink.meta["background"] = True
+            elif E == "UserPromptSubmit":
+                for m in self.store.participant_memberships(p.id) if self.background_waits else ():
+                    for batch in self.store.offered_batches(m.id, ("wait",)):
+                        if batch.id in self.background_waits and batch.created_at < (ev.t or now):
+                            out += self.on_confirm(batch.id, "hook:UserPromptSubmit:background_wait")
+                # A prompt before the result is ready is not that result's notification. It
+                # starts a new turn, so the old wait no longer has evidence for this shortcut.
+                for sink in self.sinks.for_participant(p.id):
+                    sink.meta.pop("background", None)
+
         # 1. confirmations carried by this event
         confirmed: set[int] = set()
         if E in CONFIRMING_EVENTS and ev.ok is not False:
@@ -1363,7 +1387,7 @@ class Engine:
             self.first_action.pop(p.id, None)
         if E == "UserPromptSubmit" and not mid_turn:
             self._event("turn_start", participant_id=p.id, src="hook")
-        # 2. a turn ended without the PostToolUse that would confirm a pull answer
+        # 2. a turn ended without confirmation of a pull answer
         if E in TURN_BOUNDARY_EVENTS and not mid_turn:
             out += self.expire_pull_batches(p.id, f"hook:{E}", before=ev.t)
         # 3. re-deliver once: priority items the turn saw but didn't answer (§8.5)

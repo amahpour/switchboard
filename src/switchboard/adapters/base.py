@@ -43,14 +43,15 @@ APPROVAL_GUIDANCE = (
 
 # The longest a wait() may be held for each harness: what its own client lets a call run, less a margin
 # (#559, DESIGN.md §6.1). ``wait_cap_s`` in config.toml can lower a harness's cap and raise it, but never
-# past this: a call the client has given up on is cancelled there, and a message that came while it lasted
-# was late. Claude Code moves a call past 120 s to the background (#558); Cursor cancels at 60 s; Devin
-# sends a call again after 120 s (§49.7); OpenCode was not measured. Codex ends a call at its MCP
-# server's ``tool_timeout_sec``, 300 s unless the setup raises it: the setup in USAGE sets 86400, so its
-# limit is that less the 10 s margin its Stop hook's wait keeps. The broker can't see a person's own
-# setting, and a Codex left at the default cancels a longer wait, which the broker now closes (#559).
+# past this: a call the client has given up on is cancelled there, and a message that came while it
+# lasted was late. Claude Code uses a 30-minute plugin timeout and a measured 600 s ceiling (#558);
+# Cursor cancels at 60 s; Devin sends a call again after 120 s (§49.7); OpenCode was not measured. Codex
+# ends a call at its MCP server's ``tool_timeout_sec``, 300 s unless the setup raises it: the setup in
+# USAGE sets 86400, so its limit is that less the 10 s margin its Stop hook's wait keeps. The broker
+# can't see a person's own setting, and a Codex left at the default cancels a longer wait, which the
+# broker now closes (#559).
 CLIENT_WAIT_LIMIT_S: dict[str, int] = {
-    "claude": 110,
+    "claude": 600,
     "codex": 86390,
     "cursor": 55,
     "devin": 100,
@@ -241,6 +242,11 @@ class Adapter:
     def closes_waits(self, p: Participant, ev: HookEvent) -> bool:
         """True if this hook means an open wait() of the session was orphaned (Devin)."""
         return False
+
+    def background_wait_after_s(self) -> float | None:
+        """A Stop after this many seconds leaves wait() running as a background task, whose
+        result arrives with the next prompt (#558). None when the harness does not do this."""
+        return None
 
     def is_wait_pre(self, ev: HookEvent) -> bool:
         """A PreToolUse for switchboard's wait() whose tool_use_id pins its answer (Devin)."""

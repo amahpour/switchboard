@@ -68,11 +68,11 @@ class DeliveryCfg:
 
 
 # wait() caps, measured with each harness's CLI in November 2026 (#547, DESIGN.md §6.1): Claude Code
-# moves a call past 120 s to the background, where a message arriving mid-wait was offered twice; Codex
+# uses the plugin timeout and background-result confirmation for a 600 s wait (#558); Codex
 # ends a call at its default tool_timeout_sec of 300 s; Cursor at 60 s; Devin at 120 s (§49.7).
 @dataclass(frozen=True)
 class ClaudeCfg:
-    wait_cap_s: int = 110
+    wait_cap_s: int = 600
 
 
 @dataclass(frozen=True)

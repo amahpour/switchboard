@@ -2,6 +2,7 @@
   "mcpServers": {
     "switchboard": {
       "type": "http",
+      "timeout": 1800000,
       "url": "${user_config.server_url}/mcp",
       "headers": {"X-Switchboard-Token": "${user_config.token}"},
       "headersHelper": "\"${CLAUDE_PLUGIN_ROOT}/bin/headers\" \"${CLAUDE_PLUGIN_DATA}\""

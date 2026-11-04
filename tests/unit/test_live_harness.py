@@ -716,7 +716,7 @@ def test_a_harness_runs_only_when_named(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_a_plain_pytest_skips_every_live_module() -> None:
-    """With no ``SWITCHBOARD_LIVE`` the six live modules are collected and skipped, each with the line that
+    """With no ``SWITCHBOARD_LIVE`` the seven live modules are collected and skipped, each with the line that
     says how to run it, and nothing is run. Fails if a live module starts a broker or a CLI on import, or if
     one is added without the opt-in."""
     env = {k: v for k, v in os.environ.items() if not k.startswith(("SWITCHBOARD", "CLAUDE", "CODEX"))}
@@ -726,10 +726,15 @@ def test_a_plain_pytest_skips_every_live_module() -> None:
     )  # fmt: skip
     out = r.stdout + r.stderr
     assert r.returncode in (0, 5), out  # 5: no test was collected, every module skipped itself
-    assert "6 skipped" in out and "passed" not in out and "failed" not in out, out
+    assert "7 skipped" in out and "passed" not in out and "failed" not in out, out
     for h in ("claude", "codex", "devin", "cursor", "opencode"):
         assert f"SWITCHBOARD_LIVE={h}" in out, out
     assert sorted(p.name for p in (LIVE).glob("test_live_*.py")) == [
-        "test_live_claude.py", "test_live_claude_signin.py", "test_live_codex.py", "test_live_cursor.py",
-        "test_live_devin.py", "test_live_opencode.py",
-    ]  # fmt: skip
+        "test_live_claude.py",
+        "test_live_claude_long_wait.py",
+        "test_live_claude_signin.py",
+        "test_live_codex.py",
+        "test_live_cursor.py",
+        "test_live_devin.py",
+        "test_live_opencode.py",
+    ]
