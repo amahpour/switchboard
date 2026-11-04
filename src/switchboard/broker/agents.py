@@ -571,6 +571,8 @@ class AgentService:
             room_rules=room.rules_text,
         )
         self.store.mark_rules_seen(m.id, room.rules_version)
+        # the join text is the standing guidance in full: a later /clear's reminder may point to it (#543)
+        self.engine.note_guidance_given(p.id)
         # the join text's length (issue #275, DESIGN.md §12.6): every join() answer, first one
         # or a rejoin/reconnect alike, so a report can add these up as its own path
         self.store.add_event(

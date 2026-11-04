@@ -138,6 +138,11 @@ class Engine:
         # sessions the tick then took offline for it, which any later hook brings back
         self.wait_drops: dict[int, float] = {}
         self.gone_by_drop: set[int] = set()
+        # Sessions the broker knows it gave the standing guidance in full (#543): at their join(), or in a
+        # full SessionStart reminder. Only these may be given the pointer instead. Memory only, so a
+        # restart (every upgrade) makes it unknown and the next reminder is full again; a session that
+        # ended is dropped, because the same id can start over with an empty context.
+        self.guidance_given: set[int] = set()
         # While a hook event is processed, evaluations are collected here and run
         # once its status and context are settled (see claim_for_hook).
         self._deferred: set[int] | None = None
@@ -1374,6 +1379,7 @@ class Engine:
         elif E == "SessionEnd":
             if adapter.ends_session(ev):
                 new = "offline"
+                self.guidance_given.discard(p.id)
         elif revived:
             new = "busy"  # any hook of a session taken offline for a dropped wait() says it is alive (#448)
         elif p.status == "waiting-approval" and E not in REPORT_ONLY_EVENTS:
@@ -1391,7 +1397,7 @@ class Engine:
             pass  # Devin: this hook may be a subagent's (see above)
         elif E in adapter.context_events(p) and p.status != "waiting-approval":
             if E == "SessionStart":
-                hook_out = self._reminder(p)
+                hook_out = self._reminder(p, ev.source)
             else:
                 hook_out, acts = self._claim_context(p, "hook_ups" if E == "UserPromptSubmit" else "hook_ctx")
                 out += acts
@@ -1596,21 +1602,32 @@ class Engine:
                 out.append(Snapshot(m.room_id))
         return out
 
-    def _reminder(self, p: Participant) -> HookOut | None:
-        """After /clear or a compaction: which rooms the session is in, a fresh join code for
-        each (#304), what it still owes in them, and what it is waiting on someone else to
-        handle (#542). The context that held the join's own code may be gone, and without one
-        a later restart can't take the name back; the earlier code stops working. Both lines
-        are ids, names and ages only: this text is hook context, so nobody's words stay in
-        it (§8.6)."""
+    def note_guidance_given(self, participant_id: int) -> None:
+        """A join() just gave this session the standing guidance in full (#543): it may be given
+        the pointer at a later /clear, until the broker restarts or the session ends."""
+        self.guidance_given.add(participant_id)
+
+    def _reminder(self, p: Participant, source: str | None) -> HookOut | None:
+        """After startup, /clear, a resume or a compaction: which rooms the session is in, a fresh
+        join code for each (#304), what it still owes in them, and what it is waiting on someone
+        else to handle (#542). The context that held the join's own code may be gone, and without
+        one a later restart can't take the name back; the earlier code stops working. Both lines
+        are ids, names and ages only: this text is hook context, so nobody's words stay in it (§8.6).
+
+        The standing guidance goes in full unless ``rules.reminder_is_full`` says the session has it
+        (#543); the untrusted-peer line is in the text either way. A full reminder is remembered as
+        given only when it fits what the harness prints, since a longer one would answer nothing
+        (``hook_replies.render``)."""
         pairs, codes = [], {}
         owed: list[tuple[str, Item]] = []
         waiting: list[tuple[str, Item, str]] = []
+        rules_behind = False
         for m in self.store.participant_memberships(p.id):
             room = self.store.room_by_id(m.room_id)
             if room is None:
                 continue
             pairs.append((room.name, m.screen_name))
+            rules_behind = rules_behind or m.rules_seen < room.rules_version
             code = secrets.token_hex(8)
             self.store.set_join_code(m.id, join_code_hash(code))
             codes[room.name] = code
@@ -1618,9 +1635,13 @@ class Engine:
             waiting.extend((room.name, item, name) for item, name in self._waiting(m))
         if not pairs:
             return None
-        return HookOut(
-            "context", envelope.render_reminder(pairs, self._humans(), codes, owed, self.now(), waiting)
+        full = rules.reminder_is_full(
+            p.harness, source, given_in_full=p.id in self.guidance_given, rules_behind=rules_behind
         )
+        text = envelope.render_reminder(pairs, self._humans(), codes, owed, self.now(), waiting, full=full)
+        if full and len(text) <= self.adapter(p).caps(p).ctx_max_chars:
+            self.guidance_given.add(p.id)
+        return HookOut("context", text)
 
     def _claim_context(self, p: Participant, path: str) -> tuple[HookOut | None, list[Action]]:
         """Mid-task priority items for the model, as hook context (one room per hook call)."""

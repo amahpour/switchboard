@@ -90,6 +90,16 @@ def test_the_sessionstart_reminder_says_the_same_for_one_person_and_for_several(
     assert_clean(several, "render_reminder (several people)")
 
 
+def test_the_one_line_pointer_reminder_says_it_consistently_too() -> None:
+    """#543: after a fresh start or /clear the reminder is the pointer, not the standing guidance, and it is
+    still what a session has to go on. It names the person (or people) as the user and must not say anything
+    the other texts are banned from saying. Fails if the pointer's wording reads as "not from your user"."""
+    assert_clean(envelope.render_reminder([("#build", "claude-1")], "alice", full=False), "pointer (one)")
+    assert_clean(
+        envelope.render_reminder([("#build", "claude-1")], ["alice", "bob"], full=False), "pointer (several)"
+    )
+
+
 def test_the_mcp_servers_own_instructions_say_it_consistently_too() -> None:
     """The MCP server's static ``instructions`` (src/switchboard/mcp/server.py) is the
     other place an agent is told, once, what switchboard is; nothing there may contradict
