@@ -507,6 +507,41 @@ class Attachments:
         self, room_id: int, uploader: str, name: str, part: Path, size: int, digest: str, content_type: str
     ) -> Any:
         """A person's upload is stored at once. The message that names it comes after."""
+        return self._keep(room_id, uploader, "human", name, part, size, digest, content_type)
+
+    def store_snapshot(
+        self, room_id: int, uploader: str, kind: str, name: str, data: bytes, content_type: str = ""
+    ) -> Any:
+        """A picture of a call's screen, already in memory, stored at once like a person's upload.
+
+        ``kind`` is who asked: ``human`` for a person's button or command, ``meeting`` for a line
+        on the call. Raises ``ValueError`` with a short reason when it passes a size cap (§53).
+        """
+        if len(data) > self.max_bytes:
+            raise ValueError(f"the picture is larger than {self.cfg.files.max_mb} MB")
+        if self.store.room_stored_bytes(room_id) + len(data) > self.room_cap:
+            raise ValueError(f"this room's files would pass {self.cfg.files.room_mb} MB")
+        part = self.folder.part_path(new_file_id())
+        spool = Spool(part, self.max_bytes)
+        try:
+            spool.write(data)
+            size, digest = spool.finish()
+            return self._keep(room_id, uploader, kind, name, part, size, digest, content_type)
+        except BaseException:
+            spool.abort()
+            raise
+
+    def _keep(
+        self,
+        room_id: int,
+        uploader: str,
+        kind: str,
+        name: str,
+        part: Path,
+        size: int,
+        digest: str,
+        content_type: str,
+    ) -> Any:
         now = self.clock.now()
         file_id = new_file_id()
         self.folder.adopt(file_id, part)
@@ -517,8 +552,8 @@ class Attachments:
             size=size,
             sha256=digest,
             content_type=clean_type(content_type),
-            uploader_name=uploader[:100] or "human",
-            uploader_kind="human",
+            uploader_name=uploader[:100] or kind,
+            uploader_kind=kind,
             state="stored",
             created_at=now,
             stored_at=now,

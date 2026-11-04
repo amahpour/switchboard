@@ -45,7 +45,7 @@ def test_files_and_settings_and_the_backup_is_schema_39(
     before.close()
 
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 40
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 41
     assert db.row_counts(con, db.tables_of(39)) == counts
     assert db.row_counts(con, db.TABLES)["files"] == 0
     assert db.row_counts(con, db.TABLES)["file_grants"] == 0

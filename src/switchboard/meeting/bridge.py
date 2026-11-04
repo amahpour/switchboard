@@ -1,10 +1,15 @@
-"""One live call: a joinly session, and the lines it posts (DESIGN.md §52).
+"""One live call: a joinly session, the lines it posts, and what is said back (DESIGN.md §52).
 
 This is the only async part of a meeting. The broker's lifespan owns one bridge;
 each open call is one task and one MCP session. The task always calls
 ``leave_meeting`` and then closes the client, including when the join fails,
 the connection drops, the room closes, or the broker stops. The meeting link
 lives only in the task, long enough to join, and is never logged.
+
+Two things go back into the call through the same session, both started by a person. While
+voice is on, an agent's ``@call`` line is spoken (``speak_text``), one line at a time off the
+request that posted it. A snapshot (``get_video_snapshot``) is stored as a room file and posted.
+Whether voice is on is memory only: a call does not outlive the process, so neither does it.
 """
 
 from __future__ import annotations
@@ -16,6 +21,7 @@ import re
 import time
 import warnings
 from collections import deque
+from dataclasses import dataclass, field
 from typing import Any
 
 from fastmcp import Client
@@ -27,16 +33,27 @@ from switchboard.envelope import clean
 from switchboard.meeting.lines import Assembler, Line, Segment
 from switchboard.meeting.links import PLATFORM_LABEL
 from switchboard.meeting.names import hotwords, match
+from switchboard.meeting.screen import SNAPSHOT_GAP_S, Asker, NoFrame, frame_from, says_screen
+from switchboard.meeting.speech import QUEUE_MAX as SPEAK_QUEUE_MAX
+from switchboard.meeting.speech import call_text, speakable
 
 log = logging.getLogger("switchboard.meeting")
 
 PARTICIPANT = "switchboard (transcribing)"
+# joinly screenshots its 1280x720 page, trims a tenth off each edge and fits the rest to this size. Its
+# own default, 512x288, is too small to read text on a shared screen; 1024x576 keeps the 16:9 frame near
+# the trimmed page's own width, as a JPEG of a few hundred KB (checked against joinly v0.5.4, which takes
+# it as a BrowserMeetingProvider argument through meeting_provider_args).
+SNAPSHOT_SIZE = (1024, 576)
 RESOURCE = "transcript://live/segments"
 JOIN_TIMEOUT_S = 45.0
 LEAVE_TIMEOUT_S = 5.0
 POLL_S = 3.0
 LINE_GAP_S = 1.0
 QUEUE_MAX = 50
+SPEAK_TIMEOUT_S = 180.0  # speak_text returns when the speech has ended; 600 characters is under a minute
+SNAPSHOT_TIMEOUT_S = 8.0  # a call-out's line waits no longer than this for its picture
+INTERRUPTED = "Interrupted"  # how joinly's reply to speak_text starts when someone spoke over it
 _SECRET = re.compile(r"https?://\S+|pwd=\S+", re.IGNORECASE)
 
 
@@ -126,6 +143,30 @@ def _segments(contents: Any) -> list[Segment]:
     return out
 
 
+@dataclass
+class _Live:
+    """What a joined call holds that a command or a say reaches: its client, the agents' lines
+    waiting to be spoken, and when a snapshot last began (the broker's clock)."""
+
+    client: Any
+    speech: deque[str] = field(default_factory=deque)
+    worker: asyncio.Task[None] | None = None
+    overflowed: bool = False  # told the room this burst of lines was too many
+    last_snapshot: float | None = None
+
+
+def _reply(result: Any) -> str:
+    """The text of a tool result, whatever shape the client library gave it."""
+    data = getattr(result, "data", None)
+    if isinstance(data, str):
+        return data
+    for block in getattr(result, "content", None) or []:
+        text = getattr(block, "text", None)
+        if isinstance(text, str):
+            return text
+    return ""
+
+
 class MeetingBridge:
     """The calls the broker has open. ``start`` and ``stop`` are called on the broker's loop."""
 
@@ -134,6 +175,9 @@ class MeetingBridge:
         self._tasks: dict[int, asyncio.Task[None]] = {}
         self._stops: dict[int, asyncio.Event] = {}
         self._reasons: dict[int, str] = {}
+        self._voice: set[int] = set()  # rooms whose call is speaking agents' @call lines
+        self._live: dict[int, _Live] = {}  # calls the bot has joined
+        self._side: set[asyncio.Task[None]] = set()  # snapshots under way, kept from being collected
         _install_redact()
 
     def recover(self) -> None:
@@ -172,6 +216,11 @@ class MeetingBridge:
         tasks = list(self._tasks.values())
         if tasks:
             await asyncio.wait(tasks, timeout=20)
+        side = list(self._side)  # a snapshot still on its way is not worth waiting for
+        for task in side:
+            task.cancel()
+        if side:
+            await asyncio.gather(*side, return_exceptions=True)
 
     async def _run(self, room_id: int, url: str, stop: asyncio.Event) -> None:
         errors: list[str] = []
@@ -191,10 +240,18 @@ class MeetingBridge:
     async def _session(self, room_id: int, url: str, stop: asyncio.Event, errors: list[str]) -> None:
         names = self.state.store.active_names(room_id)
         words = [w[:40] for w in hotwords(names)[:100]]
-        header = json.dumps({"name": PARTICIPANT, "stt_args": {"hotwords": words}}, ensure_ascii=True)
-        transport = StreamableHttpTransport(
-            self.state.cfg.meeting.joinly_url, headers={"joinly-settings": header}
+        cfg = self.state.cfg.meeting
+        header = json.dumps(
+            {
+                "name": PARTICIPANT,
+                "stt_args": {"hotwords": words},
+                "tts_args": {"voice": cfg.tts_voice},  # the Kokoro voice (joinly's settings, §52)
+                # a frame whose text can be read
+                "meeting_provider_args": {"snapshot_size": list(SNAPSHOT_SIZE)},
+            },
+            ensure_ascii=True,
         )
+        transport = StreamableHttpTransport(cfg.joinly_url, headers={"joinly-settings": header})
         handler = _Updates()
         client = Client(transport, message_handler=handler, mode="legacy")
         async with client:
@@ -216,7 +273,12 @@ class MeetingBridge:
                     errors.append("couldn't join the call")
                     return
                 self._mark_live(room_id)
-                await self._listen(client, handler, room_id, stop, errors)
+                live = self._live[room_id] = _Live(client)
+                try:
+                    await self._listen(live, handler, room_id, stop, errors)
+                finally:
+                    self._live.pop(room_id, None)
+                    await self._stop_speech(live)
             finally:
                 await self._leave(client, room_id)
 
@@ -238,8 +300,9 @@ class MeetingBridge:
         self.state.service.notice_in(room_id, f'Transcribing a {label} call as "{PARTICIPANT}".')
 
     async def _listen(
-        self, client: Any, handler: _Updates, room_id: int, stop: asyncio.Event, errors: list[str]
+        self, live: _Live, handler: _Updates, room_id: int, stop: asyncio.Event, errors: list[str]
     ) -> None:
+        client = live.client
         seen: set[tuple[Any, ...]] = set()
         asm = Assembler()
         queue: deque[Line] = deque()
@@ -265,13 +328,13 @@ class MeetingBridge:
             for line in asm.poll(now):
                 warned = self._enqueue(queue, line, room_id, warned)
             if queue and (not last or now - last >= LINE_GAP_S):
-                self._post_line(room_id, queue.popleft())
+                await self._post_line(room_id, queue.popleft(), live)
                 last = time.monotonic()
             await _wait_for(handler, stop, POLL_S if not queue else min(POLL_S, LINE_GAP_S))
         for line in asm.flush():
             queue.append(line)
         while queue:
-            self._post_line(room_id, queue.popleft())
+            await self._post_line(room_id, queue.popleft(), live, ending=True)
 
     def _enqueue(self, queue: deque[Line], line: Line, room_id: int, warned: bool) -> bool:
         queue.append(line)
@@ -285,13 +348,17 @@ class MeetingBridge:
         )
         return True
 
-    def _post_line(self, room_id: int, line: Line) -> None:
+    async def _post_line(self, room_id: int, line: Line, live: _Live, *, ending: bool = False) -> None:
         text = clean(line.text).strip()
         if not text:
             return
         members = self.state.store.active_names(room_id)
         found = match(text, members)
         mentions = [found.name] if found.outcome == "one" and found.name else []
+        if mentions and says_screen(text) and not ending:
+            # "Claude, look at my screen": the picture is posted first, so the agent this line wakes
+            # is handed it with the line. A picture that fails or is refused never holds the line back.
+            await self._screen_for_line(room_id, live)
         sender = clean(line.speaker).strip()[:40] if line.speaker else ""
         self.state.service.post_meeting_line(
             room_id, sender_name=sender or "call", text=text[:1000], mentions=mentions
@@ -304,7 +371,157 @@ class MeetingBridge:
                 f'Someone on the call said "{heard}", and this room has {who}. Say the number.',
             )
 
+    # ------------------------------------------------------------------ voice (§52)
+    def voice(self, room_id: int) -> bool:
+        """Whether this room's call speaks agents' ``@call`` lines. Off until a person turns it on."""
+        return room_id in self._voice
+
+    def set_voice(self, room_id: int, on: bool) -> bool:
+        """Turn voice on or off for this room's call. True when that changed it. Turning it off
+        drops the lines still waiting; the one being spoken finishes."""
+        if on == (room_id in self._voice):
+            return False
+        if on:
+            self._voice.add(room_id)
+        else:
+            self._voice.discard(room_id)
+            live = self._live.get(room_id)
+            if live is not None:
+                live.speech.clear()
+        return True
+
+    def speak(self, room_id: int, text: str) -> None:
+        """An agent's message, already posted in the room. If voice is on, the bot is in the call and
+        the message starts with ``@call``, what follows is queued to be spoken; otherwise this does
+        nothing and the message is only text. It never waits on speech: a worker task speaks."""
+        if room_id not in self._voice:
+            return
+        live = self._live.get(room_id)
+        body = call_text(text)
+        if live is None or body is None:
+            return
+        line = speakable(body)
+        if not line:
+            return
+        if len(live.speech) >= SPEAK_QUEUE_MAX:
+            if not live.overflowed:
+                live.overflowed = True
+                self.state.service.notice_in(
+                    room_id, "More lines are waiting to be spoken than the call can say. Some were dropped."
+                )
+            return
+        live.speech.append(line)
+        if live.worker is None or live.worker.done():
+            try:
+                live.worker = asyncio.get_running_loop().create_task(self._speak(room_id, live))
+            except RuntimeError:
+                live.speech.clear()
+
+    async def _speak(self, room_id: int, live: _Live) -> None:
+        """Speak the waiting lines one after another. ``speak_text`` returns when the speech has ended."""
+        try:
+            while live.speech:
+                line = live.speech.popleft()
+                try:
+                    result = await live.client.call_tool(
+                        "speak_text", {"text": line}, timeout=SPEAK_TIMEOUT_S
+                    )
+                except Exception:
+                    log.warning("meeting room %s: speak_text failed", room_id)
+                    live.speech.clear()
+                    self.state.service.notice_in(room_id, "Couldn't speak in the call.")
+                    return
+                if _reply(result).startswith(INTERRUPTED):
+                    self.state.service.notice_in(
+                        room_id, "Someone spoke over the line in the call, so it stopped early."
+                    )
+        finally:
+            live.overflowed = False
+
+    async def _stop_speech(self, live: _Live) -> None:
+        live.speech.clear()
+        worker = live.worker
+        if worker is not None and not worker.done():
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+
+    # --------------------------------------------------------------- snapshot (§52)
+    def request_snapshot(self, room_id: int, asker: Asker) -> str | None:
+        """A person asks for a picture of the call. None when it is under way: it is posted in the room
+        as that person's message when it arrives. Otherwise why not, as a sentence for them."""
+        live = self._live.get(room_id)
+        if live is None:
+            return "The bot is not in the call yet."
+        why = self._gate(live)
+        if why is not None:
+            return why
+        try:
+            task = asyncio.get_running_loop().create_task(self._snapshot(room_id, live, asker))
+        except RuntimeError:
+            return "The meeting bridge is not running."
+        self._side.add(task)
+        task.add_done_callback(self._side.discard)
+        return None
+
+    def _gate(self, live: _Live) -> str | None:
+        """At most one snapshot every ``SNAPSHOT_GAP_S`` in a call, from any of the three ways to ask."""
+        now = self.state.clock.now()
+        if live.last_snapshot is not None and now - live.last_snapshot < SNAPSHOT_GAP_S:
+            return f"A snapshot was taken less than {SNAPSHOT_GAP_S:.0f} seconds ago. Try again in a moment."
+        live.last_snapshot = now
+        return None
+
+    async def _screen_for_line(self, room_id: int, live: _Live) -> None:
+        why = self._gate(live)
+        if why is not None:
+            self.state.service.notice_in(room_id, why)
+            return
+        await self._snapshot(room_id, live, None)
+
+    async def _snapshot(self, room_id: int, live: _Live, asker: Asker | None) -> None:
+        """Ask joinly for the picture, keep it as a room file and post it. ``asker`` is the person
+        who asked, or None when a line on the call did: then the file and its message are from the
+        call. Any failure is one sentence in the room."""
+        att = self.state.attachments
+        try:
+            if att is None:
+                raise NoFrame("This broker keeps no files.")
+            result = await asyncio.wait_for(
+                live.client.call_tool("get_video_snapshot", {}, timeout=SNAPSHOT_TIMEOUT_S),
+                SNAPSHOT_TIMEOUT_S + 2,
+            )
+            data, kind = frame_from(result, att.max_bytes)
+            room = self.state.store.room_by_id(room_id)
+            if room is None:
+                return
+            clock = time.strftime("%H%M%S", time.localtime(self.state.clock.now()))
+            name = f"screen-{clock}.{kind}"
+            try:
+                row = att.store_snapshot(
+                    room_id,
+                    asker.name if asker else "call",
+                    "human" if asker else "meeting",
+                    name,
+                    data,
+                )
+            except ValueError as e:
+                raise NoFrame(f"The snapshot was not kept: {e}.") from None
+            artifact = f"artifact: {row.name} | {row.size} | sha256:{row.sha256} | switchboard:file/{row.id}"
+            if asker is not None:
+                self.state.service.human_say(
+                    room.name, artifact, asker.via, person=(asker.name, asker.person_id)
+                )
+            else:
+                self.state.service.post_meeting_line(room_id, sender_name="call", text=artifact, mentions=[])
+        except NoFrame as e:
+            self.state.service.notice_in(room_id, str(e))
+        except Exception:
+            log.warning("meeting room %s: snapshot failed", room_id)
+            self.state.service.notice_in(room_id, "Couldn't get a snapshot of the call.")
+
     def _finish(self, room_id: int, error: str | None) -> None:
+        # a call does not outlive the process, and its voice does not outlive the call
+        self._voice.discard(room_id)
         try:
             row = self.state.store.open_meeting(room_id)
             if row is not None:

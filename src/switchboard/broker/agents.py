@@ -896,6 +896,10 @@ class AgentService:
             sender_host=p.host or None,
             file_ids=file_ids or (),
         )
+        if self.state.meetings is not None:
+            # an "@call" line is spoken in the room's live call while a person has voice on (§52);
+            # otherwise this does nothing. It never waits: a task in the bridge does the speaking.
+            self.state.meetings.speak(room.id, msg.text)
         return msg
 
     def read(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:

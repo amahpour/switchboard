@@ -533,9 +533,24 @@ class PersonRow:
 # are broadcast mentions (delivery/rules.py parse_broadcast); "all" and "channel" match nothing
 # (there is no @all, no @channel) but are reserved against the day they might. "humans" is the
 # @humans mention (delivery/rules.py mentions_humans, issue #138); "people" joins it reserved,
-# though nothing is wired to it, the same way "all" and "channel" are.
+# though nothing is wired to it, the same way "all" and "channel" are. "call" is the @call a spoken
+# line starts with in a live call (meeting/speech.py, DESIGN.md §52) and the sender of a call line
+# when joinly gave no speaker, so it can never be an agent's name.
 RESERVED_NAMES = frozenset(
-    {"system", "user", "human", "admin", "root", "here", "everyone", "all", "channel", "humans", "people"}
+    {
+        "system",
+        "user",
+        "human",
+        "admin",
+        "root",
+        "here",
+        "everyone",
+        "all",
+        "channel",
+        "humans",
+        "people",
+        "call",
+    }
 )
 
 # a room's wake budget and hop limit (/budget, /hops, the room's wake dialog and a person's

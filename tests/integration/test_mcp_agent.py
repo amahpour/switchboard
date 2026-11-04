@@ -254,6 +254,7 @@ async def test_names_taken_and_reserved(broker: InProcBroker) -> None:
             "channel",
             "humans",
             "people",
+            "call",
         ):
             r = await b.join("#build", bad)
             assert r["ok"] is False and r["code"] == "name_reserved", bad

@@ -75,6 +75,12 @@ def notices(svc: RoomService) -> list[str]:
         ("/who", "who", ()),
         ("/status", "status", ()),
         ("/help", "help", ()),
+        ("/meeting", "meeting", ()),
+        ("/meeting LEAVE", "meeting", ("leave",)),
+        ("/meeting snapshot", "meeting", ("snapshot",)),
+        ("/meeting voice on", "meeting", ("voice", "on")),
+        ("/meeting Voice OFF", "meeting", ("voice", "off")),
+        ("/meeting https://meet.google.com/a-b-c", "meeting", ("https://meet.google.com/a-b-c",)),
     ],
 )
 def test_parse_ok(text: str, name: str, args: tuple[str, ...]) -> None:
@@ -98,6 +104,12 @@ def test_parse_ok(text: str, name: str, args: tuple[str, ...]) -> None:
         "/kick a b",
         "/hold 1abc",
         "/who me",
+        "/meeting voice",
+        "/meeting voice loud",
+        "/meeting voice on now",
+        "/meeting snapshot now",
+        "/meeting leave now",
+        "/meeting a b",
     ],
 )
 def test_parse_errors(text: str) -> None:
@@ -129,6 +141,9 @@ def test_required_roles(svc: RoomService) -> None:
             "/close",
             "/meeting",
             "/meeting leave",
+            "/meeting voice on",
+            "/meeting voice off",
+            "/meeting snapshot",
         ]
     }
     assert need == {
@@ -150,6 +165,10 @@ def test_required_roles(svc: RoomService) -> None:
         "/close": "human_cli",
         "/meeting": "human",
         "/meeting leave": "human",
+        # agents speaking in the call, and a picture of its screen: a person's web session, like the call
+        "/meeting voice on": "human",
+        "/meeting voice off": "human",
+        "/meeting snapshot": "human",
     }
 
 

@@ -1,0 +1,7 @@
+### Added
+
+- **An agent can speak in a call, and see a shared screen, when you ask.** Both are off until you turn them on, and an agent can never turn either on. **Voice** is a switch on the call bar (or `/meeting voice on` and `off`), off at the start of every call and for that call only; the room gets a notice each time. While it is on, an agent's `say()` that starts with `@call` is read aloud to everyone on the call, in the Kokoro voice set by the new `[meeting] tts_voice` (default `bm_george`), and the room still shows the message. Code, links, Markdown marks and artifact lines are not read, a line is cut at about 600 characters, and lines wait their turn. **Snapshot**, or `/meeting snapshot`, posts a picture of the call's shared screen as a file card. So does a call line that addresses an agent and says "screen" ("Claude, look at my screen"), before that line, so the agent that wakes has it. The picture is a small frame (512 by 288) from joinly, kept as a room file for the room's retention, at most one every 10 seconds, and only if its bytes are a PNG, JPEG or WebP. Spoken text reaches everyone on the call, and a snapshot can show anything on the screen, so see [the meetings guide](https://amahpour.github.io/switchboard/guide/meetings/) and DESIGN.md §52 before you turn them on. `call` is now a reserved screen name.
+
+### Upgrading
+
+- The database moves to schema 41 at start, after the usual backup: a file may now come from the call itself. Nothing else changes for an existing room.
