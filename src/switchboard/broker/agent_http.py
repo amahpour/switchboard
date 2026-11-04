@@ -519,11 +519,18 @@ class HttpTools:
         params = hook_params(event, fields, self.state.clock.now())
         agents: Any = self.state.agents  # an HttpConn stands in for the socket's Conn
         try:
-            res = await agents.http_hook(c.conn, c.harness, event, params)
+            hung_up, res = await self._unless_hung_up(agents.http_hook(c.conn, c.harness, event, params))
         except asyncio.CancelledError:
             # the hook went away (Codex: Esc while its Stop hook waited): so does its park
             agents.run(self.state.engine.close_conn_sinks(c.conn.id))
             raise
+        if hung_up:
+            # The client closed the hook's request and sent no cancel (#576): a 2025 client that does that has
+            # dropped the line, to the MCP library, and the call ran on. A Stop hook's park would wait to its
+            # own timeout with nobody to answer, so it goes now, as a cancelled one does. Nobody reads this.
+            log.info("a %s client closed its %s hook's request: its park is closed", c.harness, event)
+            agents.run(self.state.engine.close_conn_sinks(c.conn.id))
+            return "{}"
         if c.harness == "test":
             # the scripted test agent (§9.6; a test-mode broker only) reads the engine's own answer,
             # not a shape of the table, so a test sees the text and the batch it was given
@@ -590,22 +597,19 @@ class HttpTools:
             if (await receive())["type"] == "http.disconnect":
                 return
 
-    async def _wait_unless_hung_up(
-        self, c: Caller, params: dict[str, Any], waiting: Coroutine[Any, Any, dict[str, Any]], timeout: float
-    ) -> dict[str, Any] | None:
-        """``agent.wait``'s answer, or None if the client hung up on the call first (#559).
+    async def _unless_hung_up(self, work: Awaitable[Any]) -> tuple[bool, Any]:
+        """``(False, answer)`` of ``work``, or ``(True, None)`` if the client hung up on the call first
+        (#559, #576): then ``work`` is cancelled and finished, so it lets go of its sink's future before the
+        caller closes the sink, and an error that came with the hang-up is read, so it is not logged as lost.
 
         The MCP library cancels a tool call in two cases: a 2026-07-28 request (Claude Code, Devin) whose
         response stream closes, and a 2025 session (Codex, Cursor, OpenCode) that posts
         ``notifications/cancelled``. It does not for a 2025 client that closes the stream and sends nothing:
-        that is a dropped line to it, not a cancel, and the wait stayed open to its own timeout. A message
-        that arrived then went to a wait nobody could read, and came back 10 s later as ``no_confirm``.
-        So the request is watched here as well. A wait whose request is gone has no one to answer, however
-        it came to be: it is taken back at once with ``unwait``, as a cancelled one is, and what it was
-        given goes back to pending. A client that stops waiting but keeps its stream open and reading can't
-        be told from one that is still waiting, and its wait runs to its timeout.
+        that is a dropped line to it, not a cancel, and the call ran on to its own timeout. So the request is
+        watched here as well. A client that stops waiting but keeps its stream open and reading can't be told
+        from one that is still waiting.
         """
-        answer = asyncio.ensure_future(asyncio.wait_for(waiting, timeout))
+        answer = asyncio.ensure_future(work)
         gone = asyncio.ensure_future(self._hung_up())
         hung_up = False
         try:
@@ -616,10 +620,20 @@ class HttpTools:
             if not answer.done():
                 answer.cancel()
         if not hung_up:
-            return await answer
-        # the wait has let go of its sink's future before the sink is closed, and an error that came with the
-        # hang-up is read, so it is not logged as lost
+            return False, await answer
         await asyncio.gather(answer, return_exceptions=True)
+        return True, None
+
+    async def _wait_unless_hung_up(
+        self, c: Caller, params: dict[str, Any], waiting: Coroutine[Any, Any, dict[str, Any]], timeout: float
+    ) -> dict[str, Any] | None:
+        """``agent.wait``'s answer, or None if the client hung up on the call first (#559). A message that
+        arrived after the hang-up went to a wait nobody could read, and came back 10 s later as
+        ``no_confirm``. So a wait whose request is gone is taken back at once with ``unwait``, as a cancelled
+        one is, and what it was given goes back to pending."""
+        hung_up, res = await self._unless_hung_up(asyncio.wait_for(waiting, timeout))
+        if not hung_up:
+            return res
         log.info("a %s client closed its wait() request: the wait is closed", c.harness)
         self.unwait({**params})
         return None
