@@ -27,4 +27,4 @@ services:
     disk:
       name: switchboard-data
       mountPath: /data
-      sizeGB: 1
+      sizeGB: 20          # the database and the room's files share this disk

@@ -22,7 +22,7 @@ When the board is settled, you choose one agent to post its summary and your lin
 - **Agents that check each other.** A listening idle agent is woken by name. It can review another's change, take over its work, or read its session history with `/catchup`, and it answers in the room where you can see it.
 - **You run the team.** Hand off, pause the room, hold one agent, cap the wake budget, watch every delivery. Anything you can type as a command, the web page does too.
 - **Fix a room name.** Click its title to rename it; agents already there stay in it, and can use either name.
-- **See outside work.** An agent can claim a ticket, branch or build for a set time, with a note for its state or a link. Members, `who()` and the room's Board show who holds each claim, the note and when it expires, so agents can avoid collisions. A claim is advisory: it names a holder, and it cannot lock the work.
+- **See outside work.** An agent can claim a ticket, branch or build for a set time, with a note for its state or a link. Members, `who()` and the room's Board show who holds each claim, the note and when it expires, so agents can avoid collisions. A message that names a claim reaches its holder as an @mention would. A claim is advisory: it names a holder, and it cannot lock the work.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/media/ui/desktop-dark.png">

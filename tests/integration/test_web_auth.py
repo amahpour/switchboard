@@ -199,7 +199,9 @@ def test_web_say_can_reply_to_a_message_in_its_room(broker: InProcBroker, web: h
 
 def test_no_unauthenticated_write_routes(broker: InProcBroker) -> None:
     """Enumerate every route: each unsafe method refuses a cookie-less request. No path is exempt from
-    the Origin rule but the agent endpoint's (``AGENT_PATHS``, §49.2): the pairing route of machines
+    the Origin rule but the agent endpoint's (``AGENT_PATHS``, §49.2) and a one-time upload's
+    (``/api/upload/<token>``, §53), which refuses a bad token and any request with an Origin.
+    The pairing route of machines
     that dialed in (``/link/pair``, retired in #385) is not, so a request to it is refused like any
     other write without the page's Origin."""
     from starlette.routing import Mount, Route, WebSocketRoute
@@ -212,6 +214,17 @@ def test_no_unauthenticated_write_routes(broker: InProcBroker) -> None:
                 if m in {"GET", "HEAD", "OPTIONS"}:
                     continue
                 path = route.path.replace("{slug}", "build")
+                if route.path == "/api/upload/{token}":
+                    # The one exception the maintainer approved (2026-11-03, #544): an agent's curl
+                    # carries no Origin and no session, so the token in the path is the whole
+                    # capability. A request without a valid token is a 404, and any request that
+                    # carries an Origin (a page) is refused outright.
+                    bad = path.replace("{token}", "x" * 43)
+                    assert c.request(m, bad, content=b"x").status_code == 404, (m, bad)
+                    r = c.request(m, bad, content=b"x", headers=broker.write_headers())
+                    assert r.status_code == 403, (m, bad, r.status_code)
+                    checked += 1
+                    continue
                 r = c.request(m, path, json={}, headers=broker.write_headers())
                 assert r.status_code in (401, 403, 405), (m, path, r.status_code)
                 checked += 1

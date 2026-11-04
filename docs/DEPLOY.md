@@ -70,7 +70,7 @@ docker compose -f deploy/compose/compose.yaml logs switchboard    # the admin's 
 
 ### Kubernetes (EKS, GKE, AKS)
 
-[deploy/kubernetes/switchboard.yaml](../deploy/kubernetes/switchboard.yaml) is a Service, a one-replica StatefulSet with a 1 GiB volume claim, and an Ingress. Edit `sb.example.com` (the Ingress host, its TLS secret and `SWITCHBOARD_PUBLIC_URL`) first.
+[deploy/kubernetes/switchboard.yaml](../deploy/kubernetes/switchboard.yaml) is a Service, a one-replica StatefulSet with a 20 GiB volume claim, and an Ingress. Edit `sb.example.com` (the Ingress host, its TLS secret and `SWITCHBOARD_PUBLIC_URL`) first. The claim is 20 GiB because a room's files sit on the same volume as the database. The Ingress sets `nginx.ingress.kubernetes.io/proxy-body-size: "26m"`, one megabyte over the default 25 MB file cap, so an upload is not cut off by the proxy. A proxy in front of the broker needs a body limit at least `[files] max_mb`. Caddy, in the Compose example, has no default body limit.
 
 ```bash
 kubectl create namespace switchboard
@@ -89,7 +89,7 @@ What the manifest relies on:
 
 ### Render
 
-[deploy/render/render.yaml](../deploy/render/render.yaml) is a Blueprint: a web service from the published image, with a 1 GB disk at `/data`. Put it in a repository of yours as `render.yaml` (or point the Blueprint at its path), then choose **New > Blueprint**. Render asks for `SWITCHBOARD_PUBLIC_URL`: the service's `https://<name>.onrender.com` address, or your custom domain. The admin's one-time password is in the service's **Logs** tab.
+[deploy/render/render.yaml](../deploy/render/render.yaml) is a Blueprint: a web service from the published image, with a 20 GB disk at `/data`. Put it in a repository of yours as `render.yaml` (or point the Blueprint at its path), then choose **New > Blueprint**. Render asks for `SWITCHBOARD_PUBLIC_URL`: the service's `https://<name>.onrender.com` address, or your custom domain. The admin's one-time password is in the service's **Logs** tab. Files a room holds count against that disk, and against its snapshots.
 
 Render's disks need a paid plan and allow only one instance. A deploy stops the old instance before it starts the new one, and Render snapshots the disk daily and keeps each snapshot at least 7 days. Render's router ends TLS and redirects plain HTTP to HTTPS before it reaches the broker. `PORT=7419` in the Blueprint tells Render which port to send traffic to.
 

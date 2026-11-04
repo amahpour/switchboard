@@ -69,7 +69,7 @@ class WsSubscriber(Subscriber):
     on a hosted broker and who has a page open (§44.8), ``pins``: a room's pinned decisions
     (§48), and ``icons``: an agent's avatar was set or reset (§29.11; the page fetches its stylesheet)."""
 
-    kinds: frozenset[str] = Subscriber.kinds | {"review", "people", "pins", "icons"}
+    kinds: frozenset[str] = Subscriber.kinds | {"review", "people", "pins", "icons", "file"}
 
     def __init__(self) -> None:
         super().__init__()
@@ -150,6 +150,10 @@ class Hub:
         """A room's open review boards after a move, none once the last is closed (§37.5, §37.14);
         the web UI subscribes to it."""
         return self.publish("review", room, {"boards": boards})
+
+    def file_stored(self, room: str, data: dict[str, Any]) -> int:
+        """A pending upload finished: the page turns that message's card into a download (§53)."""
+        return self.publish("file", room, data)
 
     def pins(self, room: str, pins: list[dict[str, Any]]) -> int:
         """A room's pinned messages after a pin or an unpin (§48); the web UI subscribes to it."""

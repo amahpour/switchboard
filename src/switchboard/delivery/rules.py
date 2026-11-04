@@ -18,7 +18,8 @@ names nobody: which says are a second answer to it, and which post was the first
 Issue #542 adds which of a member's open deliveries are still owed, and which of
 its own messages an addressee has not handled: the same open states, rendered as
 ids, names and ages. Issue #548 adds ``addressed_only``: a quiet membership, for
-which unaddressed chatter never starts a turn (§50).
+which unaddressed chatter never starts a turn (§50). Issue #543 adds whether a SessionStart
+reminder carries the standing guidance in full or a one-line pointer (§8.6).
 """
 
 from __future__ import annotations
@@ -112,7 +113,10 @@ def mentions_humans(text: str) -> bool:
 
 
 def classify(sender_kind: str, recipient: str, mentions: Iterable[str]) -> tuple[int, bool]:
-    """(prio, mentioned) for one recipient (DESIGN.md §8.1): 2 human, 1 @mention, 0 chatter."""
+    """(prio, mentioned) for one recipient (DESIGN.md §8.1): 2 human, 1 @mention, 0 chatter.
+
+    ``Store.insert_message`` classifies inline and also counts a recipient whose live claim the
+    text names as @mentioned (#541, ``claims.watchers``); this is the @mention part alone."""
     mentioned = recipient.lower() in {m.lower() for m in mentions}
     if sender_kind == "human":
         return 2, mentioned
@@ -588,4 +592,41 @@ def unread_stubs(pending: Iterable[Item]) -> list[int]:
         and envelope.untrusted_sender(i.sender_kind)
         and i.in_context_at is None
         and not unaddressed_chatter(i)
+    )
+
+
+# ----------------------------------------------- the standing guidance, once (#543, §8.6)
+# The SessionStart sources (Claude Code's) after which a session still has what the broker last gave
+# it: a fresh start and /clear. Claude Code keeps the switchboard instructions in its system prompt
+# through both (mcp/server.py INSTRUCTIONS), and the reminder's pointer names them. Everything else
+# rebuilds the context from a summary or an old transcript ("compact", "resume") or is not a source
+# this code knows (missing, empty, new in a later Claude Code): the guidance goes out in full.
+REMINDER_POINTER_SOURCES = frozenset({"startup", "clear"})
+# The only harness whose SessionStart prints context (§7.3), and so the only one with a reminder. The
+# others (Codex, Devin, Cursor) print nothing there, and their guidance is the join() text, in full each
+# time; a harness not named here is never given a pointer.
+REMINDER_POINTER_HARNESSES = frozenset({"claude"})
+
+
+def reminder_is_full(harness: str, source: str | None, *, given_in_full: bool, rules_behind: bool) -> bool:
+    """Whether a SessionStart reminder carries the standing guidance in full (#543, DESIGN.md §8.6).
+
+    False (a one-line pointer instead) only when every one of these holds, so any doubt is a full
+    reminder:
+
+    - the harness is one whose SessionStart reaches the model (``REMINDER_POINTER_HARNESSES``) and says
+      what began (``source``) in a word this code knows, one that leaves the switchboard instructions in
+      place (``REMINDER_POINTER_SOURCES``), never a compaction or a resume;
+    - ``given_in_full``: the broker knows it gave this session the full text, at its join or in an earlier
+      full reminder (memory only, so a broker restart makes it unknown);
+    - not ``rules_behind``: no room of the session has custom rules (§35) the session has not been shown,
+      so the pointer never stands for rules it has not seen.
+
+    The untrusted-peer line is no part of this decision: ``envelope.render_reminder`` puts it in both.
+    """
+    return not (
+        harness in REMINDER_POINTER_HARNESSES
+        and source in REMINDER_POINTER_SOURCES
+        and given_in_full
+        and not rules_behind
     )

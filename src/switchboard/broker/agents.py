@@ -241,8 +241,8 @@ class AgentService:
         self._models: dict[int, str] = {}  # participant id -> last model recorded
         rec = os.environ.get("SWITCHBOARD_RECORD_PAYLOADS")
         self.record_dir = Path(rec) if rec and state.test_mode else None
-        # membership id -> its rate-limited says waiting their turn: (text, reply_to), oldest first
-        self._queued_says: dict[int, deque[tuple[str, int | None]]] = {}
+        # membership id -> rate-limited says waiting their turn: (text, reply_to, file ids), oldest first
+        self._queued_says: dict[int, deque[tuple[str, int | None, list[str]]]] = {}
 
     # ------------------------------------------------------------ plumbing
     @property
@@ -571,6 +571,8 @@ class AgentService:
             room_rules=room.rules_text,
         )
         self.store.mark_rules_seen(m.id, room.rules_version)
+        # the join text is the standing guidance in full: a later /clear's reminder may point to it (#543)
+        self.engine.note_guidance_given(p.id)
         # the join text's length (issue #275, DESIGN.md §12.6): every join() answer, first one
         # or a rejoin/reconnect alike, so a report can add these up as its own path
         self.store.add_event(
@@ -749,8 +751,8 @@ class AgentService:
                     "stale",
                     lambda _last: "newer messages arrived; revise your post and send it again",
                 )
-        reply_to = params.get("reply_to")
-        target = self.svc.reply_target(room, reply_to)
+        target = self.svc.reply_target(room, params.get("reply_to"))
+        reply_to = target.id if target is not None else None
         # taking turns (DESIGN.md §8.8): a person's message that names nobody reaches every agent, and
         # the first to answer it takes the reply. A later say that is nothing but a second answer is
         # held, with the answer shown, and the agent decides: pass(), or say it again with ``since``.
@@ -776,12 +778,18 @@ class AgentService:
         # the rate limit (DESIGN.md §8.4): a say it refuses waits in a short queue. One it lets
         # through (a reply to a person, or to a mention of this agent) goes now, even ahead of it
         retry = self.engine.check_say(p, m, target)
+        file_ids: list[str] = []
+        share = ""
+        if self.state.attachments is not None:
+            file_ids, share = self.state.attachments.prepare_pending(room.id, m.screen_name, text)
         if retry is not None:
             utext, bid, count, _more, acts = self.engine.pull(p, m, "say", 50)
             self.run(acts)
             unread = {"unread_text": utext if count else None, "batch_id": bid, "count": count}
             queue = self._queued_says.setdefault(m.id, deque())
             if len(queue) >= MAX_QUEUED_SAYS:
+                if self.state.attachments is not None:
+                    self.state.attachments.drop(file_ids)
                 return {
                     "posted_id": None,
                     "reason": "rate_limited",
@@ -789,21 +797,32 @@ class AgentService:
                     "note": f"{len(queue)} of your messages already wait to be posted: this one wasn't",
                     **unread,
                 }
-            queue.append((text, reply_to))
+            queue.append((text, reply_to, file_ids))
             wait = retry + (len(queue) - 1) * self.cfg.delivery.rate_limit_s
             if len(queue) == 1:
                 self._schedule_say(m.id, retry)
-            return {
+            queued = {
                 "posted_id": None,
                 "queued": True,
                 "post_in_s": round(wait, 1),
                 "note": f"rate limited: it's posted for you in about {wait:.0f} s; don't send it again",
                 **unread,
             }
-        msg = self._post_say(p, m, room, text, reply_to)
+            if share:
+                queued["share"] = share
+            return queued
+        msg = self._post_say(p, m, room, text, reply_to, file_ids)
         utext, bid, count, _more, acts = self.engine.pull(p, m, "say", 50, before_id=msg.id)
         self.run(acts)
-        return {"posted_id": msg.id, "unread_text": utext if count else None, "batch_id": bid, "count": count}
+        posted = {
+            "posted_id": msg.id,
+            "unread_text": utext if count else None,
+            "batch_id": bid,
+            "count": count,
+        }
+        if share:
+            posted["share"] = share
+        return posted
 
     def _say_wait(self, p: Participant) -> float | None:
         """Seconds until ``p`` may say again by the rate limit alone (no event: a queued say's
@@ -827,22 +846,31 @@ class AgentService:
         room = self.store.room_by_id(m.room_id) if m is not None else None
         if m is None or p is None or room is None or not m.active:
             log.info("dropped %d queued say(s) of membership %d: it ended", len(queue), membership_id)
+            if self.state.attachments is not None:
+                for _text, _reply, ids in queue:
+                    self.state.attachments.drop(ids)
             self._queued_says.pop(membership_id, None)
             return
         wait = self._say_wait(p)
         if wait is not None:
             self._schedule_say(membership_id, wait)
             return
-        text, reply_to = queue.popleft()
+        text, reply_to, file_ids = queue.popleft()
         target = self.store.get_message(reply_to) if reply_to is not None else None
-        self._post_say(p, m, room, text, reply_to if target is not None else None)
+        self._post_say(p, m, room, text, reply_to if target is not None else None, file_ids)
         if queue:
             self._schedule_say(membership_id, self.cfg.delivery.rate_limit_s)
         else:
             self._queued_says.pop(membership_id, None)
 
     def _post_say(
-        self, p: Participant, m: Membership, room: Room, text: str, reply_to: int | None
+        self,
+        p: Participant,
+        m: Membership,
+        room: Room,
+        text: str,
+        reply_to: int | None,
+        file_ids: list[str] | None = None,
     ) -> Message:
         """Post an agent's say: what it had pending counts as answered, and the message goes out
         like any other (the delivery, the wake budget and the loop guard)."""
@@ -866,6 +894,7 @@ class AgentService:
             reply_to=reply_to,
             mentions=mentions,
             sender_host=p.host or None,
+            file_ids=file_ids or (),
         )
         return msg
 
@@ -885,10 +914,18 @@ class AgentService:
             text = envelope.render_history(
                 room=room.name, recipient=m.screen_name, messages=msgs, earlier=earlier
             )
+            text = self._with_downloads(text, msgs, m.id)
             return {"text": text, "batch_id": None, "count": len(msgs), "more": earlier > 0}
         text, bid, count, more, acts = self.engine.pull(p, m, "read", limit)
         self.run(acts)
         return {"text": text, "batch_id": bid, "count": count, "more": more}
+
+    def _with_downloads(self, text: str, messages: list[Any], membership_id: int) -> str:
+        """A short-lived download link for each stored file these messages name (§53)."""
+        if self.state.attachments is None or not messages:
+            return text
+        notes = self.state.attachments.download_notes(messages, membership_id)
+        return text + "\n" + notes if notes else text
 
     async def wait(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
         p, m, room = self._member(conn, params)

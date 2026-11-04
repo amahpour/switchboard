@@ -140,6 +140,18 @@ def message_dict(m: Message) -> dict[str, Any]:
     return d
 
 
+def with_files(d: dict[str, Any], files: list[Any]) -> dict[str, Any]:
+    """Stored files this message names, so the page can turn the card into a download link.
+
+    Messages are not edited. A local path stays in the text; the page matches it to this list.
+    A ``switchboard:file/<id>`` line is itself the link. Tokens are never included.
+    """
+    shown = [{"id": f.id, "name": f.name, "state": f.state} for f in files if f.state == "stored"]
+    if shown:
+        d["files"] = shown
+    return d
+
+
 PIN_TEXT_MAX = 300  # a pin's text in the room header: the strip shows its first line
 
 
@@ -268,6 +280,7 @@ class RoomService:
         self.delivery: DeliveryHooks | None = None
         self.boards: Any = None  # the review boards (broker/reviews.py Boards), for /review (§37.8)
         self.meetings: Any = None  # the call bridge (meeting/bridge.py), for /meeting (§52)
+        self.attachments: Any = None  # files a room holds (files.py, §53)
         hub.set_members_source(self._members_snapshot)
         hub.set_settings_source(self._settings_snapshot)
 
@@ -523,9 +536,16 @@ class RoomService:
             )
         return out
 
+    def message_frame(self, m: Message) -> dict[str, Any]:
+        return with_files(message_dict(m), self.store.files_for_message(m.id))
+
+    def message_frames(self, msgs: list[Message]) -> list[dict[str, Any]]:
+        grouped = self.store.files_by_message([m.id for m in msgs])
+        return [with_files(message_dict(m), grouped.get(m.id, [])) for m in msgs]
+
     def history(self, name: str, after: int | None = None, limit: int = 100) -> list[dict[str, Any]]:
         room = self.room(name)
-        return [message_dict(m) for m in self.store.history(room.id, after, limit)]
+        return self.message_frames(self.store.history(room.id, after, limit))
 
     def members(self, name: str) -> list[dict[str, Any]]:
         room = self.room(name)
@@ -1004,6 +1024,7 @@ class RoomService:
             )
         except (db.SchemaError, OSError, sqlite3.Error) as e:
             raise ServiceError("internal", f"the backup failed ({e}); nothing was deleted") from None
+        file_ids = self.store.file_ids_of_room(room.id)
         try:
             removed = self.store.delete_room(
                 room.id,
@@ -1022,6 +1043,8 @@ class RoomService:
             raise ServiceError("conflict", f"{e}; nothing was deleted (backup: {dest.name})") from None
         except (StoreError, sqlite3.Error) as e:
             raise ServiceError("internal", f"{e}; nothing was deleted (backup: {dest.name})") from None
+        if self.attachments is not None:
+            self.attachments.delete_bytes(file_ids)
         if not room.closed:
             self.hub.drop_room(room.name)
         self.rooms_changed()
@@ -1037,16 +1060,23 @@ class RoomService:
             "backup": str(dest),
         }
 
-    def _post(self, room: Room, *, level: str | None = None, **kw: Any) -> Message:
+    def _post(
+        self, room: Room, *, level: str | None = None, file_ids: tuple[str, ...] | list[str] = (), **kw: Any
+    ) -> Message:
         """Persist, then publish. Every broker-side message goes through here.
 
         ``level`` (a notice's 'info'/'warn') rides on the published frame only; it
         isn't stored (history re-derives 'warn' for the engine's fixed-phrase warnings,
-        ``WARN_NOTICE_PREFIXES``)."""
+        ``WARN_NOTICE_PREFIXES``). ``file_ids`` are pending uploads this text named; a
+        ``switchboard:file/<id>`` in the text is bound the same way (§53)."""
         msg = self.store.insert_message(room.id, **kw)
+        if file_ids:
+            self.store.bind_files(room.id, msg.id, file_ids)
+        else:
+            self.store.bind_file_refs(room.id, msg.id, msg.text)
         if msg.kind == "chat":
             self.store.add_event("msg", room_id=room.id, data={"id": msg.id, "via": msg.via})
-        frame = message_dict(msg)
+        frame = self.message_frame(msg)
         if level is not None and msg.kind == "notice":
             frame["level"] = level
         self.hub.message(room.name, frame)

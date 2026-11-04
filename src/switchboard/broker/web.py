@@ -46,6 +46,7 @@ import secrets
 import urllib.parse
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import unquote
 
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import (
@@ -61,7 +62,7 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from switchboard import __version__, build_info, db
 from switchboard.broker import agent_icons, agent_tokens, oauth, oidc, people
-from switchboard.broker.auth import COOKIE_NAME, SESSION_TTL_S, app_csp, sha256_hex
+from switchboard.broker.auth import COOKIE_NAME, SESSION_TTL_S, app_csp, sha256_hex, upload_path
 from switchboard.broker.commands import MAX_BUDGET, MAX_HOPS, Actor
 from switchboard.broker.hub import WsSubscriber
 from switchboard.broker.passkeys import CEREMONY_TTL_S, CLAIM_GRACE_S, clean_name, sign_count_ok
@@ -73,7 +74,20 @@ from switchboard.broker.passwords import (
     password_problem,
     verify_password,
 )
-from switchboard.broker.service import ServiceError, message_dict
+from switchboard.broker.service import ServiceError
+from switchboard.files import (
+    FILE_ID_RE,
+    Spool,
+)
+from switchboard.files import (
+    clean_name as file_name,
+)
+from switchboard.files import (
+    content_disposition as file_disposition,
+)
+from switchboard.files import (
+    new_file_id as new_part_id,
+)
 from switchboard.models import InvalidName, normalize_room
 from switchboard.reviews import ReviewError
 from switchboard.store import Conflict
@@ -173,6 +187,19 @@ async def _json_body(request: Request) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ServiceError("bad_request", "body must be a JSON object")
     return data
+
+
+async def _spool_upload(request: Request, dest: Path, limit: int) -> tuple[int, str] | None:
+    """Write the body to ``dest``, hashing it. None when it passes ``limit`` (nothing is kept)."""
+    spool = Spool(dest, limit)
+    try:
+        async for chunk in request.stream():
+            if not spool.write(chunk):
+                return None
+        return spool.finish()
+    except Exception:
+        spool.abort()
+        raise
 
 
 async def _capped_body(request: Request, limit: int) -> bytes | None:
@@ -1917,6 +1944,151 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         except ServiceError as e:
             return _svc_err(e)
 
+    def _files_admin(request: Request) -> tuple[people.Who | None, JSONResponse | None]:
+        """Retention is an admin's setting (the owner, on a desktop broker)."""
+        w = who(request)
+        if w is None or w.must_reset:
+            return None, unauthorized()
+        if not w.is_admin:
+            return None, _err(403, "forbidden", "only an admin sets how long files are kept")
+        return w, None
+
+    @app.get("/api/settings/files")
+    async def files_settings_get(request: Request) -> Response:
+        _w, no = _files_admin(request)
+        if no is not None:
+            return no
+        return _ok({"days": state.attachments.retention_days()})
+
+    @app.put("/api/settings/files")
+    async def files_settings_put(request: Request) -> Response:
+        _w, no = _files_admin(request)
+        if no is not None:
+            return no
+        try:
+            body = await _json_body(request)
+        except ServiceError as e:
+            return _svc_err(e)
+        if set(body) != {"days"}:
+            return _err(400, "bad_request", "days is required")
+        try:
+            days = state.attachments.set_retention(body.get("days"))
+        except ValueError as e:
+            return _err(400, "bad_request", str(e))
+        return _ok({"days": days})
+
+    @app.post("/api/rooms/{slug}/files")
+    async def room_file(request: Request, slug: str) -> Response:
+        """A signed-in person uploads one file. The page then posts the artifact line for it."""
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        try:
+            room = state.service.room_for(slug, viewer(request))
+        except ServiceError as e:
+            return _svc_err(e)
+        att = state.attachments
+        room_left = att.room_cap - state.store.room_stored_bytes(room.id)
+        if room_left <= 0:
+            return _err(413, "too_large", f"this room's files would pass {state.cfg.files.room_mb} MB")
+        limit = min(att.max_bytes, room_left)
+        declared = request.headers.get("content-length")
+        if declared is not None and not declared.isdigit():
+            return _err(400, "bad_request", "content-length must be a number")
+        if declared is not None:
+            why = att.length_refusal(int(declared), limit)
+            if why is not None:
+                return _err(413, "too_large", why[1])
+        part = att.folder.part_path(new_part_id())
+        try:
+            got = await _spool_upload(request, part, limit)
+        except Exception:
+            part.unlink(missing_ok=True)
+            raise
+        if got is None:
+            message = (
+                f"file is larger than {state.cfg.files.max_mb} MB"
+                if limit >= att.max_bytes
+                else f"this room's files would pass {state.cfg.files.room_mb} MB"
+            )
+            return _err(413, "too_large", message)
+        size, digest = got
+        try:
+            row = att.store_human(
+                room.id,
+                w.name,
+                file_name(unquote(request.headers.get("x-switchboard-filename") or "file")),
+                part,
+                size,
+                digest,
+                request.headers.get("content-type") or "",
+            )
+        except Exception:
+            part.unlink(missing_ok=True)
+            raise
+        log.info("file %s stored by %s in room %d", row.id, w.name, room.id)
+        return _ok({"id": row.id, "name": row.name, "size": row.size, "sha256": row.sha256})
+
+    @app.put("/api/upload/{token}")
+    async def upload_put(request: Request, token: str) -> Response:
+        """An agent's one-time upload. The token is the capability; it is not logged."""
+        if not upload_path(request.url.path):
+            return PlainTextResponse("no such upload\n", status_code=404, headers=NO_STORE)
+        att = state.attachments
+        begun = att.begin_upload(token)
+        if begun[0] is None:
+            status, message = begun[1]
+            return PlainTextResponse(message + "\n", status_code=status, headers=NO_STORE)
+        _row, limit = begun
+        declared = request.headers.get("content-length")
+        if declared is not None and not declared.isdigit():
+            return PlainTextResponse("content-length must be a number\n", status_code=400, headers=NO_STORE)
+        if declared is not None:
+            why = att.length_refusal(int(declared), limit)
+            if why is not None:
+                return PlainTextResponse(why[1] + "\n", status_code=why[0], headers=NO_STORE)
+        part = att.folder.part_path(new_part_id())  # its own, so two uploads on one link never share it
+        got = await _spool_upload(request, part, limit)
+        if got is None:
+            message = (
+                f"file is larger than {state.cfg.files.max_mb} MB"
+                if limit >= att.max_bytes
+                else f"this room's files would pass {state.cfg.files.room_mb} MB"
+            )
+            return PlainTextResponse(message + "\n", status_code=413, headers=NO_STORE)
+        size, digest = got
+        status, message = att.accept_upload(
+            token, part, size, digest, request.headers.get("content-type") or ""
+        )
+        return PlainTextResponse(message + "\n", status_code=status, headers=NO_STORE)
+
+    @app.get("/api/files/{file_id}")
+    async def file_get(request: Request, file_id: str) -> Response:
+        """A download. Always an attachment, never a page. A room the caller cannot read is a 404."""
+        att = state.attachments
+        token = request.query_params.get("t")
+        can_read = False
+        if token is None and FILE_ID_RE.fullmatch(file_id):
+            w = who(request)
+            row = state.store.file_get(file_id) if w is not None and not w.must_reset else None
+            room = state.store.room_by_id(row.room_id) if row is not None else None
+            can_read = room is not None and state.service.visible(room, viewer(request))
+        got = att.for_download(file_id, token if token else None, can_read=can_read)
+        if got is None:
+            return _err(404, "not_found", "no such file")
+        path = att.folder.path(got.id)
+        if path is None:
+            return _err(404, "not_found", "no such file")
+        return FileResponse(
+            path,
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": file_disposition(got.name),
+                "Cache-Control": "private, no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
     @app.post("/api/rooms/{slug}/command")
     async def command(request: Request, slug: str) -> Response:
         w = who(request)
@@ -2133,8 +2305,8 @@ def _ws_hello(state: "BrokerState", sub: WsSubscriber, frame: dict[str, Any]) ->
                     "text": f"{skipped} earlier message(s) not shown here; `switchboard tail` has them all",
                 }
             )
-        for m in backlog:
-            sub.offer({"t": "msg", "room": name, "msg": message_dict(m)})
+        for msg in state.service.message_frames(backlog):
+            sub.offer({"t": "msg", "room": name, "msg": msg})
         sub.offer({"t": "room", "room": name, "settings": state.service.settings(room)})
         sub.offer(
             {

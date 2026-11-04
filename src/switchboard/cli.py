@@ -282,7 +282,8 @@ def cmd_rooms_rules(args: argparse.Namespace) -> int:
 def _removed(c: dict[str, int]) -> str:
     return (
         f"{c['rooms']} room, {c['messages']} message(s), {c['memberships']} membership(s),"
-        f" {c['deliveries']} delivery row(s), {c['batches']} batch(es), {c['events']} event(s)"
+        f" {c['deliveries']} delivery row(s), {c['batches']} batch(es), {c['events']} event(s),"
+        f" {c.get('files', 0)} file(s)"
     )
 
 

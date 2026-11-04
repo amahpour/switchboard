@@ -31,6 +31,7 @@ from switchboard.models import (
     Answer,
     Batch,
     Event,
+    FileGrant,
     Item,
     ListenerKeyRow,
     Meeting,
@@ -43,6 +44,7 @@ from switchboard.models import (
     PersonRow,
     Pin,
     Room,
+    StoredFile,
     room_ref,
     split_closed,
     valid_host,
@@ -52,7 +54,7 @@ from switchboard.models import session_key as make_session_key
 OPEN_DELIVERY_STATES = ("pending", "offered", "in_context")
 # What deleting a room removes (DESIGN.md §28.6): the keys of ``room_delete_counts`` and
 # of ``delete_room``'s result. Participants are never deleted.
-ROOM_DELETE_TABLES = ("rooms", "messages", "memberships", "deliveries", "batches", "events")
+ROOM_DELETE_TABLES = ("rooms", "messages", "memberships", "deliveries", "batches", "events", "files")
 STATUS_LINE_STALE_S = 30 * 60
 # a meeting error is a short phrase. A link or a Zoom passcode never lands in the row (§52).
 _MEETING_SECRET = re.compile(r"https?://\S+|pwd=\S+", re.IGNORECASE)
@@ -295,6 +297,12 @@ class Store:
     _ROOM_MEMBERSHIPS = "SELECT id FROM memberships WHERE room_id=?"
     _ROOM_ROWS = (
         (
+            "file_grants",
+            "file_grants WHERE file_id IN (SELECT id FROM files WHERE room_id=?)",
+            1,
+        ),
+        ("files", "files WHERE room_id=?", 1),
+        (
             "deliveries",
             f"deliveries WHERE membership_id IN ({_ROOM_MEMBERSHIPS})"
             " OR message_id IN (SELECT id FROM messages WHERE room_id=?)",
@@ -447,7 +455,10 @@ class Store:
         """Persist a message and its per-recipient delivery rows in one transaction.
 
         Classification (§8.1): for every active membership other than the sender,
-        prio 2 for a human message, 1 when the member is @mentioned, else 0.
+        prio 2 for a human message, 1 when the member is @mentioned, else 0. A member
+        whose live claim the text names (``claims.watchers``, §47) is classified as
+        @mentioned, whoever sent it (a person, an agent or a call), and ``mentions``,
+        the message's own, is not touched.
         Join/leave/notice messages are not delivered to agents, except a room-rename notice
         explicitly passed with ``deliver_notice`` (#316). ``skip_memberships``
         get no delivery row either (the subjects of a ``/catchup`` request, §26).
@@ -505,12 +516,19 @@ class Store:
                     "SELECT id, screen_name FROM memberships WHERE room_id=? AND left_at IS NULL",
                     (room_id,),
                 ).fetchall()
+                # whose live claim the text names (§47); a notice names rooms and people, not work
+                watching: frozenset[int] = frozenset()
+                if kind == "chat":
+                    excluded = skip | ({sender_membership_id} if sender_membership_id is not None else set())
+                    watching = claims.watchers(
+                        sender_kind, text, self.claims_for_room(room_id, now), now, exclude=excluded
+                    )
                 for r in rows:
                     if (sender_membership_id is not None and r["id"] == sender_membership_id) or r[
                         "id"
                     ] in skip:
                         continue
-                    mentioned = r["screen_name"].lower() in mentions_l
+                    mentioned = r["screen_name"].lower() in mentions_l or r["id"] in watching
                     prio = 2 if sender_kind == "human" else (1 if mentioned else 0)
                     self.con.execute(
                         "INSERT INTO deliveries(membership_id, message_id, prio, mentioned) VALUES(?,?,?,?)",
@@ -728,13 +746,15 @@ class Store:
                 return m
         return None
 
-    def claims_for_room(self, room_id: int) -> list[claims.Claim]:
-        """Active claims for the buddy list and claim policy, with their current holder."""
+    def claims_for_room(self, room_id: int, now: float | None = None) -> list[claims.Claim]:
+        """Active claims for the buddy list and claim policy, with their current holder.
+        ``now`` defaults to the clock; a caller that has already read it passes it, so one
+        instant decides what is live."""
         rows = self.con.execute(
             "SELECT c.key, c.membership_id, m.screen_name, c.expires_at, c.note"
             " FROM claims c JOIN memberships m ON m.id=c.membership_id"
             " WHERE c.room_id=? AND c.expires_at>? AND m.left_at IS NULL ORDER BY c.key",
-            (room_id, self.clock.now()),
+            (room_id, self.clock.now() if now is None else now),
         ).fetchall()
         return [claims.Claim(r[0], r[1], r[2], r[3], r[4]) for r in rows]
 
@@ -2747,6 +2767,163 @@ class Store:
             " WHERE m.room_id=? AND d.state IN ('pending','offered')",
             (room_id,),
         ).fetchall()
+
+    # --------------------------------------------------------------- files (§53)
+    def setting_get(self, key: str) -> str | None:
+        row = self.con.execute("SELECT value FROM broker_settings WHERE key=?", (key,)).fetchone()
+        return None if row is None else str(row[0])
+
+    def setting_set(self, key: str, value: str) -> None:
+        with db.tx(self.con):
+            self.con.execute(
+                "INSERT INTO broker_settings(key, value) VALUES(?, ?)"
+                " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, value),
+            )
+
+    def file_insert(
+        self,
+        *,
+        file_id: str,
+        room_id: int,
+        name: str,
+        size: int | None,
+        sha256: str | None,
+        content_type: str,
+        uploader_name: str,
+        uploader_kind: str,
+        state: str,
+        created_at: float,
+        stored_at: float | None,
+        message_id: int | None = None,
+    ) -> StoredFile:
+        with db.tx(self.con):
+            self.con.execute(
+                "INSERT INTO files(id, room_id, name, size, sha256, content_type, uploader_name,"
+                " uploader_kind, message_id, state, created_at, stored_at)"
+                " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    file_id,
+                    room_id,
+                    name,
+                    size,
+                    sha256,
+                    content_type,
+                    uploader_name,
+                    uploader_kind,
+                    message_id,
+                    state,
+                    created_at,
+                    stored_at,
+                ),
+            )
+        got = self.file_get(file_id)
+        assert got is not None
+        return got
+
+    def file_get(self, file_id: str) -> StoredFile | None:
+        row = self.con.execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
+        return None if row is None else StoredFile.from_row(row)
+
+    def file_ids_of_room(self, room_id: int) -> list[str]:
+        return [r[0] for r in self.con.execute("SELECT id FROM files WHERE room_id=?", (room_id,))]
+
+    def room_stored_bytes(self, room_id: int) -> int:
+        row = self.con.execute(
+            "SELECT COALESCE(SUM(size), 0) FROM files WHERE room_id=? AND state='stored'", (room_id,)
+        ).fetchone()
+        return int(row[0])
+
+    def grant_insert(
+        self,
+        *,
+        token_hash: str,
+        file_id: str,
+        kind: str,
+        expires_at: float,
+        membership_id: int | None = None,
+    ) -> None:
+        with db.tx(self.con):
+            self.con.execute(
+                "INSERT INTO file_grants(token_hash, file_id, kind, expires_at, membership_id)"
+                " VALUES(?, ?, ?, ?, ?)",
+                (token_hash, file_id, kind, expires_at, membership_id),
+            )
+
+    def grant_get(self, token_hash: str) -> FileGrant | None:
+        row = self.con.execute("SELECT * FROM file_grants WHERE token_hash=?", (token_hash,)).fetchone()
+        return None if row is None else FileGrant.from_row(row)
+
+    def grant_use(self, token_hash: str, used_at: float) -> bool:
+        """Mark an unused grant used. False when it was already used or is not there."""
+        with db.tx(self.con):
+            n = self.con.execute(
+                "UPDATE file_grants SET used_at=? WHERE token_hash=? AND used_at IS NULL",
+                (used_at, token_hash),
+            ).rowcount
+        return n == 1
+
+    def bind_files(self, room_id: int, message_id: int, file_ids: Sequence[str]) -> None:
+        """Point these files, already in this room, at the message that names them."""
+        if not file_ids:
+            return
+        with db.tx(self.con):
+            for file_id in file_ids:
+                self.con.execute(
+                    "UPDATE files SET message_id=? WHERE id=? AND room_id=? AND message_id IS NULL",
+                    (message_id, file_id, room_id),
+                )
+
+    def bind_file_refs(self, room_id: int, message_id: int, text: str) -> None:
+        from switchboard.files import file_refs
+
+        self.bind_files(room_id, message_id, file_refs(text))
+
+    def files_by_message(self, message_ids: Sequence[int]) -> dict[int, list[StoredFile]]:
+        if not message_ids:
+            return {}
+        marks = ",".join("?" * len(message_ids))
+        rows = self.con.execute(
+            f"SELECT * FROM files WHERE message_id IN ({marks})", tuple(message_ids)
+        ).fetchall()
+        out: dict[int, list[StoredFile]] = {}
+        for row in rows:
+            got = StoredFile.from_row(row)
+            if got.message_id is not None:
+                out.setdefault(got.message_id, []).append(got)
+        return out
+
+    def files_for_message(self, message_id: int) -> list[StoredFile]:
+        return self.files_by_message([message_id]).get(message_id, [])
+
+    def file_mark_stored(
+        self, file_id: str, *, size: int, sha256: str, content_type: str, stored_at: float
+    ) -> StoredFile | None:
+        with db.tx(self.con):
+            self.con.execute(
+                "UPDATE files SET state='stored', size=?, sha256=?, content_type=?,"
+                " stored_at=? WHERE id=? AND state='pending'",
+                (size, sha256, content_type, stored_at, file_id),
+            )
+        return self.file_get(file_id)
+
+    def delete_file(self, file_id: str) -> None:
+        with db.tx(self.con):
+            self.con.execute("DELETE FROM file_grants WHERE file_id=?", (file_id,))
+            self.con.execute("DELETE FROM files WHERE id=?", (file_id,))
+
+    def files_for_sweep(self) -> list[StoredFile]:
+        """Pending files with their upload token's expiry, and every stored file."""
+        rows = self.con.execute(
+            "SELECT f.*, (SELECT MIN(g.expires_at) FROM file_grants g"
+            " WHERE g.file_id=f.id AND g.kind='upload') AS upload_expires_at"
+            " FROM files f WHERE f.state IN ('pending', 'stored')"
+        ).fetchall()
+        return [StoredFile.from_row(r) for r in rows]
+
+    def delete_expired_grants(self, now: float) -> None:
+        with db.tx(self.con):
+            self.con.execute("DELETE FROM file_grants WHERE expires_at<=? AND kind='download'", (now,))
 
     def report_codex_hold_count(self, since: float, until: float) -> int:
         """Codex TUIs that left the daemon (a hold) in the window: these name no room or

@@ -16,11 +16,13 @@
  *   - creates only these elements: p br div span strong em code pre ul ol li blockquote hr table
  *     thead tbody tr th td a button. Never img, iframe, script, form, svg or style: images are not
  *     rendered at all (![alt](url) stays literal text), so nothing is fetched just by viewing;
- *   - sets a link target in exactly one place, mdLink(), after safeUrl() has approved it. Only
- *     absolute http: and https: URLs pass. Links back to this switchboard page (localhost,
+ *   - sets a link target in exactly two places. mdLink(), after safeUrl() has approved it, sets
+ *     only absolute http: and https: URLs. Links back to this switchboard page (localhost,
  *     *.localhost such as switchboard.localhost, 127.x, [::1], 0.0.0.0, or the page's own host)
  *     are refused, so a message cannot make a click do something to the broker (a GET /logout,
- *     say). A refused link is inert text plus a "link blocked" pill that says why;
+ *     say). A refused link is inert text plus a "link blocked" pill that says why.
+ *     fileLink() is the other place, and it sets only `/api/files/` plus the 32 hex digits of
+ *     a stored file (DESIGN.md §53). That is a download of this origin, never an arbitrary URL;
  *   - shows the real, normalized URL beside every link text, so "[CI run](https://evil.example)"
  *     cannot hide where it goes, and an IDN look-alike host shows as its xn-- form;
  *   - refuses URLs with a user name or password (https://github.com@evil.example/): the part
@@ -29,7 +31,7 @@
  *   - opens links in a new tab with rel="noopener noreferrer nofollow" and no referrer;
  *   - gives a ```mermaid code block a "Show diagram" button, when diagram.js (window.SBDiagram)
  *     is loaded, which hands that file the block's raw text. md.js itself never draws a diagram.
- *   The static lint (tests/unit/test_web_static_lint.py) pins the single link path and bans the
+ *   The static lint (tests/unit/test_web_static_lint.py) pins both link paths and bans the
  *   HTML sinks, so a later edit cannot quietly add another way in.
  *
  * GRAMMAR (a small, fixed subset; every sender, human or agent, gets the same rules).
@@ -58,8 +60,10 @@
  *        where the file lives (1 to 2048). Between them, an optional size (1 to 32 characters:
  *        a number and an optional unit) and an optional "sha256:" plus exactly 64 hex digits,
  *        size first. A line that does not match stays a paragraph. The card's link is mdLink,
- *        so a refused URL is the usual blocked pill. Anything that is not an http(s) URL is
- *        text plus "on the sender's machine only".
+ *        so a refused URL is the usual blocked pill. `switchboard:file/` and 32 hex digits is
+ *        a download of that file on this switchboard (fileLink). A local path is that same
+ *        download when the message's files say this name is stored, and otherwise text plus
+ *        "on the sender's machine only".
  *     8. Paragraph: consecutive non-blank lines that start no other block; each line break
  *        inside it is kept as a <br>.
  *   Not supported: indented code, setext headings, HTML blocks, reference links, footnotes,
@@ -107,6 +111,8 @@
   // On one already-split field, after the length check. No nested quantifier.
   const SIZE_RE = /^[0-9][0-9.,]*([ ]?[A-Za-z]{1,12})?$/;
   const SHA_RE = /^[0-9a-fA-F]{64}$/;
+  const FILE_REF = /^switchboard:file\/([0-9a-f]{32})$/;
+  const FILE_ID = /^[0-9a-f]{32}$/;
 
   const TITLE_SCHEME = 'Not a link: only http(s) URLs are followed';
   const TITLE_LOCAL = 'Not a link: links to this switchboard page are never followed';
@@ -123,6 +129,17 @@
   const SPACE = /\s/;
 
   // ------------------------------------------------------------------ small helpers
+
+  // A size of digits only is an exact byte count (#544): shown with a unit. Anything else as written.
+  function shownSize(size) {
+    if (!/^[0-9]{1,15}$/.test(size)) return size;
+    const n = Number(size);
+    if (n < 1024) return n + (n === 1 ? ' byte' : ' bytes');
+    const units = ['KB', 'MB', 'GB'];
+    let v = n / 1024, u = 0;
+    while (v >= 1024 && u < units.length - 1) { v /= 1024; u++; }
+    return (v < 10 ? v.toFixed(1) : String(Math.round(v))) + ' ' + units[u];
+  }
 
   function isSpace(c) { return c === undefined || c === '' || SPACE.test(c); }
   function isPunct(c) { return c !== undefined && c !== '' && PUNCT.test(c); }
@@ -1111,9 +1128,40 @@
     return startsWithCI(s, 0, 'https://') || startsWithCI(s, 0, 'http://');
   }
 
-  // The card's link is mdLink, the one place a target is set. A path is a hint, not a refusal:
-  // the message was posted as written, and nothing here drops it.
-  function artifactWhere(parent, where, o) {
+  // A stored file on this switchboard. The href is only `/api/files/` plus the id: never a
+  // message's own URL, and never safeUrl loosened to allow one (DESIGN.md §53).
+  function fileLink(id) {
+    if (!FILE_ID.test(id)) return null;
+    const a = document.createElement('a');
+    a.className = 'md-file';
+    a.href = '/api/files/' + id;
+    a.setAttribute('download', '');
+    a.textContent = 'Download';
+    return a;
+  }
+
+  // The switchboard form is itself the link. A local path becomes one only when this message's
+  // files say that name is stored. Anything else stays a hint or a blocked URL.
+  function storedId(art, o) {
+    const ref = FILE_REF.exec(art.where);
+    if (ref) return ref[1];
+    const files = o.files || [];
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      if (f && f.state === 'stored' && f.name === art.name && FILE_ID.test(f.id)) return f.id;
+    }
+    return '';
+  }
+
+  // The card's external link is mdLink. A path is a hint, not a refusal: the message was posted
+  // as written, and nothing here drops it.
+  function artifactWhere(parent, art, o) {
+    const id = storedId(art, o);
+    if (id) {
+      const a = fileLink(id);
+      if (a) { parent.append(a); return; }
+    }
+    const where = art.where;
     const v = safeUrl(where, o.localHost);
     if (v.ok) {
       const host = new URL(v.href).hostname;
@@ -1145,7 +1193,7 @@
       const meta = el('div', 'md-artifact-meta');
       if (b.size) {
         const s = el('span', 'md-artifact-size');
-        s.textContent = b.size;
+        s.textContent = shownSize(b.size);
         meta.append(s);
       }
       if (b.sha) {
@@ -1159,7 +1207,7 @@
       card.append(meta);
     }
     const where = el('div', 'md-artifact-where');
-    artifactWhere(where, b.where, o);
+    artifactWhere(where, b, o);
     card.append(where);
     return card;
   }
@@ -1209,6 +1257,7 @@
     const o = {
       mentions: new Set(list.map(function (x) { return String(x).toLowerCase(); })),
       localHost: (opts && opts.localHost) || '',
+      files: opts && Array.isArray(opts.files) ? opts.files : [],
     };
     try {
       const blocks = parseBlocks(src.replace(/\r\n?/g, '\n').split('\n'), 0);

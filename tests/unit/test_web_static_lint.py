@@ -227,18 +227,22 @@ def test_closed_rooms_ui() -> None:
     assert 'id="closed-body"' in html and 'id="empty-title"' in html
 
 
-# Markdown (issue #19): message text is untrusted, so there is exactly one place in all static JS
-# that sets a link target, md.js's mdLink(), and it only runs after safeUrl() accepted an absolute
-# http(s) URL. No script may create an element that fetches or runs something (but the one script
-# below that loads Mermaid), or reach for another HTML/URL sink.
+# Markdown (issue #19, #544): message text is untrusted, so there are exactly two places in all
+# static JS that set a link target, both in md.js. mdLink() only runs after safeUrl() accepted an
+# absolute http(s) URL. fileLink() sets only `/api/files/` plus 32 hex digits. No script may create
+# an element that fetches or runs something (but the one script below that loads Mermaid), or
+# reach for another HTML/URL sink.
 def test_one_vetted_link_path() -> None:
     js = {p.name: p.read_text() for p in files("js")}
     sets = [(n, m.start()) for n, t in js.items() for m in re.finditer(r"\.href\s*=(?!=)", t)]
-    assert [n for n, _ in sets] == ["md.js"], sets  # exactly one assignment, in md.js
+    assert [n for n, _ in sets] == ["md.js", "md.js"], sets  # the two assignments, both in md.js
     md = js["md.js"]
     fn = md[md.index("function mdLink(") :]
     fn = fn[: fn.index("\n  }\n") if "\n  }\n" in fn else 1200]
     assert "a.href = v.href;" in fn and "a.rel = 'noopener noreferrer nofollow';" in fn
+    file_fn = md[md.index("function fileLink(") :]
+    file_fn = file_fn[: file_fn.index("\n  }\n")]
+    assert "a.href = '/api/files/' + id;" in file_fn
     assert "u.protocol === 'http:' || u.protocol === 'https:'" in md
     assert "new URL(" in md
     for n, t in js.items():
