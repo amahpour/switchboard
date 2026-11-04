@@ -3948,6 +3948,24 @@ def test_eight_lines_on_a_phone_fit_the_composer_without_scrolling_it(ui: UI) ->
     assert box.evaluate("el => el.scrollHeight - el.clientHeight") <= 1
 
 
+def test_eight_lines_at_the_largest_text_size_fit_the_composer_without_scrolling_it(ui: UI) -> None:
+    """#580: the composer grows to 8 lines before it scrolls, and its line height grows with Settings >
+    Text size, but its max-height was a fixed 168px: at Larger (1.3) 8 lines need 208px, so an 8-line
+    message scrolled the box and hid the top of its first line (#130's bug again). The cap now scales
+    with the text. Eight explicit lines check it whatever the fonts wrap to."""
+    ui.world.create_room("#e2e-composer-larger")
+    page = ui.open(room="e2e-composer-larger")
+    page.evaluate("() => document.documentElement.setAttribute('data-text-size', 'larger')")
+    box = page.locator("#input")
+    assert box.evaluate("el => parseFloat(getComputedStyle(el).lineHeight)") == 26  # 20px x 1.3
+    text = "\n".join(f"line {n}" for n in range(1, 9))
+    box.fill(text)
+    box.dispatch_event("input")
+    expect(box).to_have_value(text)
+    assert box.evaluate("el => el.scrollTop") == 0
+    assert box.evaluate("el => el.scrollHeight - el.clientHeight") <= 1
+
+
 def test_the_mention_mirror_keeps_the_textarea_width_when_it_scrolls(ui: UI) -> None:
     """#110 review: past the composer's 8 lines, #input shows a scrollbar, which takes width on
     Linux and Windows (not with macOS's overlay ones). Unless the mirror behind it loses the same
