@@ -817,8 +817,9 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
   transition: background-color 200ms;
 }
 .line.k-chat > .avatar { align-self: start; }
-/* A transcript line (#573): smaller than a chat message, one column, a call tag. */
-.line.k-meeting {
+/* A transcript line (#573): smaller than a chat message, one column, a call tag.
+   Two classes, so the phone's .line.k-chat columns (a 28 px avatar slot) don't win. */
+.line.k-chat.k-meeting {
   grid-template-columns: minmax(0, 1fr);
   font-size: calc(12px * var(--text-scale));
   color: var(--ink-2);

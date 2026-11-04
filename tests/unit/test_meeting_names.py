@@ -68,3 +68,16 @@ def test_a_bare_base_name_matches_one_member_and_asks_when_two_share_it() -> Non
     assert match("Codex the build failed", ["claude-1", "claude-2", "codex-1"]).name == "codex-1"
     assert match("Claudette, hello", ["claude-1"]).outcome == "none"
     assert match("claudeone, hello", ["claude-1"]).outcome == "none"
+
+
+def test_the_transcriber_writing_out_its_hint_list_wakes_nobody() -> None:
+    """Whisper wrote the hotwords back twice in the spike (#573): a run of hint words naming
+    two members, or the participant's own name with one, is an echo, not a call-out."""
+    room = ["claude-1", "codex-1", "alice"]
+    assert match("Claude Claude one Codex switchboard", room).outcome == "none"
+    assert match("One Codex Claude", room).outcome == "none"
+    assert match("Codex switchboard transcribing", room).outcome == "none"
+    # A real request that names two agents is still a call-out to the first one.
+    assert match("Claude, ask Codex about the cache", room).name == "claude-1"
+    assert match("Claude one, look into the upload API", room).name == "claude-1"
+    assert match("Hey Codex, can you look into why?", room).name == "codex-1"

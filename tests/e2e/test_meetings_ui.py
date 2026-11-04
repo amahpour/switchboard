@@ -125,6 +125,12 @@ def test_a_live_call_shows_a_bar_a_leave_button_and_a_smaller_transcript_line(
     expect(phone_bar).to_contain_text("Transcribing a call (Zoom)")
     expect(phone.locator("#meeting-leave")).to_be_visible()
     expect(phone.locator("#log .line.k-meeting .call-tag")).to_have_text("call")
+    # The line's text uses the row's width on a phone, not the 28 px avatar column a chat
+    # row reserves (the first build wrapped one word per line there).
+    width = "el => el.getBoundingClientRect().width"
+    body_w = phone.locator("#log .line.k-meeting .msg-body").evaluate(width)
+    row_w = phone.locator("#log .line.k-meeting").evaluate(width)
+    assert body_w > row_w * 0.7, (body_w, row_w)
     fits = phone.evaluate(
         "() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1"
     )

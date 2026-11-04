@@ -184,6 +184,8 @@ Restart the broker. `/meeting` with no server set names this page.
 
 Beside the server's container, add a service on the same network and do not publish its port. Point `joinly_url` at that service, for example `http://joinly:8000/mcp/`. The broker reaches it; nothing outside the network does.
 
+**Speaker names on Zoom.** joinly 0.5.4 gives no speaker name on Zoom, so every line there shows as `call`; Meet and Teams are unaffected. Its browser has no graphics acceleration, so Zoom shows one tile that follows whoever is talking, and joinly's lookup doesn't know that tile. The fix is [joinly-ai/joinly#187](https://github.com/joinly-ai/joinly/pull/187); until a joinly release has it, the names come through only with that file patched into the image.
+
 ## Health checks and logs
 
 - **`GET /healthz`** answers `ok` with status 200. It needs no sign-in, returns no data, and accepts any Host, so platforms can probe the container's own address. The image's Docker `HEALTHCHECK` calls it, and so do the Kubernetes probes and Render's `healthCheckPath`.

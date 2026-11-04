@@ -158,6 +158,44 @@ def _starts(screen: str, phrase: str) -> bool:
     return s.startswith(p) and not s[len(p)].isalpha()
 
 
+_ECHO_RUN = 3  # hint words in a row
+_BOT_WORDS = frozenset({"switchboard", "transcribing"})  # joinly adds its own name to the hints
+
+
+def is_echo(text: str, members: Iterable[str]) -> bool:
+    """True when ``text`` looks like the transcriber writing out its own hint list.
+
+    During unclear audio Whisper sometimes writes the hotwords back ("Claude Claude one
+    Codex Cursor Devin switchboard", seen twice in the spike for #573). That is not a
+    call-out: a run of three or more hint words in a row that names two or more
+    different members, or the participant's own name with a member, wakes nobody."""
+    names = [n for n in members if n]
+    owners: dict[str, set[str]] = {}
+    for name in names:
+        base = base_of(name)
+        for form in (*spoken_forms(name), base):
+            for tok in _tokens(form):
+                owners.setdefault(tok, set()).add(base)
+    run: list[str] = []
+    bases: set[str] = set()
+
+    def echo() -> bool:
+        if len(run) < _ECHO_RUN:
+            return False
+        bot = any(t in _BOT_WORDS for t in run)
+        return len(bases) >= 2 or (bot and len(bases) >= 1)
+
+    for tok in _tokens(text):
+        if tok in owners or tok in _BOT_WORDS:
+            run.append(tok)
+            bases |= owners.get(tok, set())
+            continue
+        if echo():
+            return True
+        run, bases = [], set()
+    return echo()
+
+
 def match(text: str, members: Iterable[str]) -> Match:
     """The one member ``text`` addresses, or ambiguous, or none.
 
@@ -165,7 +203,7 @@ def match(text: str, members: Iterable[str]) -> Match:
     exactly one member's name starts with it; two members ask who was meant.
     """
     names = [n for n in members if n]
-    if not text or not names:
+    if not text or not names or is_echo(text, names):
         return Match("none")
     forms = {n: set(spoken_forms(n)) for n in names}
     for phrase in _phrases(text):
