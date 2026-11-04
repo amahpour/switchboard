@@ -206,7 +206,10 @@ class HttpsClaudeAdapter(Listening):
         super().__init__("claude", cfg)
 
     def background_wait_after_s(self) -> float | None:
-        return 120.0  # Claude Code's background task threshold, measured in #558
+        # Claude Code backgrounds a call at 120 s (#558), timed from before its PreToolUse hook runs
+        # and the call reaches the broker, so the Stop can land a little under 120 s by the
+        # broker's clock. It never backgrounds sooner and fires no Stop on an interrupt: 10 s slack.
+        return 110.0
 
     def tier(self, p: Participant | None) -> tuple[str, str | None]:
         return CLAUDE_TIER, NOTE

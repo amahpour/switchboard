@@ -82,3 +82,24 @@ def test_background_wait_prompt_confirms_only_its_returned_batch(
     w.hook(cancelled, "UserPromptSubmit")
     assert w.store.get_batch(cancelled_answer["batch_id"]).state == "expired"
     assert w.delivery(cm, cancelled_msg)["attempts"] == 1
+
+
+def test_a_stop_just_under_120_s_by_the_brokers_clock_still_marks_the_wait(
+    tmp_path: Path, clock: FakeClock
+) -> None:
+    """Claude Code's 120 s starts before its PreToolUse hook runs and the call reaches the broker,
+    so the backgrounding Stop can land a little under 120 s after the broker opened the wait.
+    Unmarked, the wait's answer expired at the next prompt and came again as hook_ups (#558).
+    Claude never backgrounds sooner and fires no Stop on an interrupt, so a Stop at 115 s marks it."""
+    w = World(tmp_path, clock)
+    p, m = w.agent("claude-1", harness="claude", hooks=True)
+    sink, acts = w.engine.open_wait(w.p(p), w.m(m), "long", 600)
+    w.actions += acts
+    clock.advance(115)
+    w.hook(p, "Stop")
+    msg = w.human("please answer once")
+    [res] = w.resolved(sink.id)
+    clock.advance(0.1)
+    assert w.hook(p, "UserPromptSubmit") is None
+    assert w.store.get_batch(res["batch_id"]).state == "confirmed"
+    assert w.delivery(m, msg)["attempts"] == 0

@@ -1330,7 +1330,7 @@ class Engine:
                     if sink.kind == "wait" and now - sink.opened_at >= background_after:
                         sink.meta["background"] = True
             elif E == "UserPromptSubmit":
-                for m in self.store.participant_memberships(p.id):
+                for m in self.store.participant_memberships(p.id) if self.background_waits else ():
                     for batch in self.store.offered_batches(m.id, ("wait",)):
                         if batch.id in self.background_waits and batch.created_at < (ev.t or now):
                             out += self.on_confirm(batch.id, "hook:UserPromptSubmit:background_wait")
