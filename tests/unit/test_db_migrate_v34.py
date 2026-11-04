@@ -22,7 +22,7 @@ def test_old_rows_and_constraints_survive_and_opencode_can_join(tmp_path: Path) 
     counts = db.row_counts(old, db.kept_tables(28))
     old.close()
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 38
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 39
     assert db.row_counts(con, db.kept_tables(28)) == counts
     assert list(con.execute("PRAGMA foreign_key_check")) == []
     assert con.execute("PRAGMA foreign_keys").fetchone()[0] == 1
@@ -57,13 +57,13 @@ def test_failed_enum_migration_rolls_back_and_turns_schema_editing_off(
         at_33 = db.open_db(path)
         at_33.close()
     con = db.connect(path)
-    counts = db.row_counts(con, db.TABLES)
+    counts = db.row_counts(con, db.tables_of(33))
     monkeypatch.setattr(db, "V33_TO_V34", (*db.V33_TO_V34, "SELECT missing_column FROM participants"))
     try:
         with pytest.raises(db.SchemaError, match="unchanged, still schema version 33"):
             db.migrate(con, backup_to=tmp_path / "before-34.db")
         assert db.schema_version(con) == 33
-        assert db.row_counts(con, db.TABLES) == counts
+        assert db.row_counts(con, db.tables_of(33)) == counts
         assert con.execute("PRAGMA writable_schema").fetchone()[0] == 0
         assert con.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert db.integrity_ok(con) is None
@@ -95,7 +95,7 @@ def test_unmatched_check_fails_closed_with_v33_and_its_backup_intact(tmp_path: P
     )
     con.execute("PRAGMA writable_schema=RESET")
     before_sql = con.execute("SELECT sql FROM sqlite_master WHERE name='participants'").fetchone()[0]
-    counts = db.row_counts(con, db.TABLES)
+    counts = db.row_counts(con, db.tables_of(33))
     backup = tmp_path / "before-34.db"
     try:
         with pytest.raises(db.SchemaError, match="opencode.*unchanged, still schema version 33"):
@@ -104,13 +104,13 @@ def test_unmatched_check_fails_closed_with_v33_and_its_backup_intact(tmp_path: P
         assert (
             con.execute("SELECT sql FROM sqlite_master WHERE name='participants'").fetchone()[0] == before_sql
         )
-        assert db.row_counts(con, db.TABLES) == counts
+        assert db.row_counts(con, db.tables_of(33)) == counts
         assert con.execute("PRAGMA writable_schema").fetchone()[0] == 0
         assert con.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert db.integrity_ok(con) is None
         with sqlite3.connect(backup) as saved:
             assert db.schema_version(saved) == 33
-            assert db.row_counts(saved, db.TABLES) == counts
+            assert db.row_counts(saved, db.tables_of(33)) == counts
             assert (
                 saved.execute("SELECT sql FROM sqlite_master WHERE name='participants'").fetchone()[0]
                 == before_sql

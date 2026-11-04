@@ -7,6 +7,7 @@ import getpass
 import os
 import re
 import tomllib
+import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -120,6 +121,30 @@ RETIRED_KEYS: dict[str, frozenset[str]] = {
 
 
 @dataclass(frozen=True)
+class MeetingCfg:
+    """Where joinly listens (DESIGN.md §52). Empty: ``/meeting`` says how to set it.
+    The URL is the operator's, from this file, never from a room."""
+
+    joinly_url: str = ""
+
+    def __post_init__(self) -> None:
+        url = self.joinly_url.strip()
+        if url != self.joinly_url:
+            object.__setattr__(self, "joinly_url", url)
+        if not url:
+            return
+        parts = urllib.parse.urlsplit(url)
+        if (
+            len(url) > 300
+            or parts.scheme not in ("http", "https")
+            or not parts.netloc
+            or parts.username
+            or parts.password
+        ):
+            raise ConfigError("[meeting] joinly_url must be an http(s) URL")
+
+
+@dataclass(frozen=True)
 class SecurityCfg:
     # DESIGN.md §27.5.7: human commands (switchboard say/cmd/login ...) from a process under a
     # remote login on this machine (sshd, dropbear, mosh-server, ...). Off: refused.
@@ -144,6 +169,7 @@ class Config:
     opencode: OpenCodeCfg = field(default_factory=OpenCodeCfg)
     review: ReviewCfg = field(default_factory=ReviewCfg)
     security: SecurityCfg = field(default_factory=SecurityCfg)
+    meeting: MeetingCfg = field(default_factory=MeetingCfg)
     # the retired keys the file had (``section.key``), ignored: reported once when the broker starts
     retired: tuple[str, ...] = ()
 
@@ -163,6 +189,7 @@ _SECTIONS = {
     "opencode": OpenCodeCfg,
     "review": ReviewCfg,
     "security": SecurityCfg,
+    "meeting": MeetingCfg,
 }
 
 

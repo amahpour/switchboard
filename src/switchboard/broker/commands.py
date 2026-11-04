@@ -8,7 +8,8 @@ that raise it need ``human`` (the web session, or test trust). ``/catchup``
 ``switchboard say`` needs: ``human_cli``. (``/review`` was ``/catchup``'s alias in 0.3,
 removed in 0.4; it opens a review board now.) ``/close`` (§28.3) ends every membership,
 so it reduces activity: ``human_cli``. ``/quiet`` reduces what wakes an agent, so
-``human_cli``; ``/unquiet`` raises it, so ``human`` (§50).
+``human_cli``; ``/unquiet`` raises it, so ``human`` (§50). ``/meeting`` joins a call,
+which raises what the room's agents can be asked to do, so ``human`` (§52).
 """
 
 from __future__ import annotations
@@ -20,8 +21,10 @@ from typing import TYPE_CHECKING, Any
 from switchboard import reviews
 from switchboard.broker import catchup
 from switchboard.delivery.rules import parse_mentions
+from switchboard.meeting.links import PLATFORM_LABEL, LinkError, parse_link
 from switchboard.models import MAX_BUDGET, MAX_HOPS, SCREEN_NAME_RE, Room
 from switchboard.reviews import ReviewError
+from switchboard.store import Conflict
 
 if TYPE_CHECKING:  # pragma: no cover
     from switchboard.broker.service import RoomService
@@ -59,6 +62,9 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
   /pin <id>           pin a chat message (its #number): every agent that joins is shown
                       it, and the web UI lists it in the room header; at most 5 (web only)
   /unpin <id>         unpin it
+  /meeting            say whether this room is transcribing a call
+  /meeting <link>     transcribe a Zoom, Meet or Teams call here (web only)
+  /meeting leave      leave the call and stop transcribing (web only)
   /who                list members
   /status             room and delivery status
   /help               this list
@@ -68,7 +74,7 @@ _NO_ARGS = frozenset({"pause", "resume", "who", "status", "help", "close"})
 _ONE_NAME = frozenset({"kick", "hold", "release", "wake", "quiet", "unquiet"})
 _ONE_NUMBER = {"budget": MAX_BUDGET, "hops": MAX_HOPS}  # /name [n], 0 <= n <= max
 _ONE_MESSAGE = frozenset({"pin", "unpin"})  # /name <message id>
-KNOWN = _NO_ARGS | _ONE_NAME | set(_ONE_NUMBER) | _ONE_MESSAGE | {"catchup", "review", "rename"}
+KNOWN = _NO_ARGS | _ONE_NAME | set(_ONE_NUMBER) | _ONE_MESSAGE | {"catchup", "review", "rename", "meeting"}
 
 _STATIC_ROLES = {
     "pause": "human_cli",
@@ -90,6 +96,7 @@ _STATIC_ROLES = {
     # a person's web session (#292). Taking one away reduces it, as /kick and /hold do.
     "pin": "human",
     "unpin": "human_cli",
+    "meeting": "human",  # joining a call lets anyone on it address an agent (§52)
 }
 
 REVIEW_USAGE = "/review <url> [note]"
@@ -153,6 +160,8 @@ def parse_command(text: str) -> Command:
     name, args = parts[0].lower(), tuple(parts[1:])
     if name not in KNOWN:
         raise CommandError("bad_request", f"unknown command /{name}; try /help")
+    if name == "meeting":
+        return _parse_meeting(args, raw)
     if name == "catchup":
         # parsed from the raw text: a quoted topic keeps its spaces
         return _parse_catchup(raw[1:].split(None, 1)[1] if args else "", raw)
@@ -189,6 +198,18 @@ def parse_command(text: str) -> Command:
             n = int(digits)
             args = (str(n),)
     return Command(name=name, args=args, raw=raw)
+
+
+def _parse_meeting(args: tuple[str, ...], raw: str) -> Command:
+    """``/meeting``, ``/meeting leave``, or ``/meeting <link>``. The link is one argument.
+    It is kept on the command only until ``apply`` has handed it to the bridge."""
+    if not args:
+        return Command(name="meeting", args=(), raw=raw)
+    if len(args) == 1 and args[0].lower() == "leave":
+        return Command(name="meeting", args=("leave",), raw=raw)
+    if len(args) != 1:
+        raise CommandError("bad_request", "usage: /meeting [<link>|leave]")
+    return Command(name="meeting", args=(args[0],), raw=raw)
 
 
 def _screen_name(cmd: str, arg: str) -> str:
@@ -600,6 +621,67 @@ def _pin(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
     )
 
 
+def _meeting(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
+    """Start, leave, or describe the room's call. Nothing returned or recorded contains the link."""
+    if not cmd.args:
+        row = svc.store.open_meeting(room.id)
+        if row is None:
+            return Result(True, f"{room.name}: no call is being transcribed")
+        label = PLATFORM_LABEL.get(row.platform, "call")
+        if row.state == "joining":
+            return Result(True, f"{room.name}: joining a {label} call")
+        return Result(True, f"{room.name}: transcribing a {label} call")
+    if cmd.args == ("leave",):
+        row = svc.store.open_meeting(room.id)
+        if row is None:
+            return Result(True, f"{room.name}: no call is being transcribed")
+        label = PLATFORM_LABEL.get(row.platform, "call")
+        if svc.meetings is not None:
+            svc.meetings.stop(room.id, "leave")
+        else:
+            svc.store.end_meeting(row.id, None)
+        return Result(
+            True,
+            f"{room.name}: leaving the {label} call",
+            notice="stopped transcribing the call",
+            room_changed=True,
+            event="meeting_leave",
+            event_data={"platform": row.platform},
+        )
+    try:
+        link = parse_link(cmd.args[0])
+    except LinkError:
+        raise CommandError("bad_request", "That link isn't a Zoom, Meet or Teams https link.") from None
+    if not svc.cfg.meeting.joinly_url:
+        return Result(
+            True,
+            "No meeting server is set. Add [meeting] joinly_url in config.toml; see DEPLOY.md.",
+        )
+    if svc.store.open_meeting(room.id) is not None:
+        raise CommandError("conflict", f"{room.name} is already transcribing a call. /meeting leave ends it.")
+    label = PLATFORM_LABEL[link.platform]
+    try:
+        row = svc.store.insert_meeting(
+            room.id, started_by=actor.who(svc.cfg.human_name), platform=link.platform
+        )
+    except Conflict:
+        raise CommandError(
+            "conflict", f"{room.name} is already transcribing a call. /meeting leave ends it."
+        ) from None
+    if svc.meetings is None:
+        svc.store.end_meeting(row.id, "the meeting bridge is not running")
+        return Result(True, "No meeting server is running. See DEPLOY.md.")
+    svc.meetings.start(room.id, link.url)
+    return Result(
+        True,
+        f"{room.name}: joining a {label} call",
+        notice=f"is joining a {label} call",
+        room_changed=True,
+        event="meeting_join",
+        event_data={"platform": link.platform},
+    )
+
+
 def apply(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
     """Run a parsed command. Role checks happen here too (defence in depth)."""
     store = svc.store
@@ -608,6 +690,8 @@ def apply(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
     room = store.refill_budget(room.id)
     check_role(cmd, room, actor)
     name = cmd.name
+    if name == "meeting":
+        return _meeting(cmd, room, actor, svc)
     if name == "close":
         return Result(True, svc.close_room(room, actor), done=True)
     if name == "rename":

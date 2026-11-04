@@ -29,6 +29,16 @@ NONCE_RE = re.compile(r"yk:j([0-9a-f]{16})")
 _YK_RE = re.compile(r"yk:", re.IGNORECASE)
 
 ITEM_LIMIT = 1500
+# A person, and switchboard's own notices. An agent, a call transcript and any kind
+# this code doesn't know are untrusted peer text (fail closed, DESIGN.md §52).
+TRUSTED_SENDER_KINDS = frozenset({"human", "system"})
+
+
+def untrusted_sender(kind: str) -> bool:
+    """True when ``kind`` is not a person and not switchboard itself."""
+    return kind not in TRUSTED_SENDER_KINDS
+
+
 ADDRESSED_FULL_LIMIT = 3000
 _DROP_CATEGORIES = frozenset({"Cc", "Cf", "Co", "Cs"})
 _KEEP = frozenset("\n\t")
@@ -233,17 +243,18 @@ def render_batch(
 ) -> str:
     """Frame ``items`` for one recipient (DESIGN.md §8.6).
 
-    Human items are always inline and never framed as untrusted. Agent items
-    are inline only when ``peer_inline`` (inbox, wait, read, say); otherwise
-    they become "call read()" stubs. ``item_limit`` caps each shown text
-    (``limits`` overrides it per message id, see ``fit_batch``).
+    Human items are always inline and never framed as untrusted. Untrusted items
+    (an agent's, a call's, or a kind this code doesn't know) are inline only when
+    ``peer_inline`` (inbox, wait, read, say); otherwise they become "call read()"
+    stubs. ``item_limit`` caps each shown text (``limits`` overrides it per message
+    id, see ``fit_batch``).
     """
     lines: list[str] = []
     n_human = n_peer = n_stub = 0
     body = []
     limits = limits or {}
     for it in items:
-        inline = peer_inline or it.sender_kind != "agent"
+        inline = peer_inline or not untrusted_sender(it.sender_kind)
         if it.sender_kind == "human":
             n_human += 1
         elif inline:
@@ -271,7 +282,7 @@ def render_batch(
     # read() before pass() only when some stub is an @mention or a reply (§24).
     # A batch of only unaddressed chatter says the agent may end the turn (#548).
     read_first = any(
-        not peer_inline and it.sender_kind == "agent" and (it.prio != 0 or _reply_to_member(it))
+        not peer_inline and untrusted_sender(it.sender_kind) and (it.prio != 0 or _reply_to_member(it))
         for it in items
     )
     unaddressed = (
@@ -378,7 +389,7 @@ def fit_batch(
     used = 0
     more = False
     for it in items:
-        inline = peer_inline or it.sender_kind != "agent"
+        inline = peer_inline or not untrusted_sender(it.sender_kind)
         limit = delivery_limit(it, recipient, item_limit) if inline else item_limit
         line = render_item(it, recipient, room, inline=inline, limit=limit)
         need = len(line) + 1
@@ -424,7 +435,7 @@ def inline_flags(
     cut = set(partial)
     out = []
     for it in items:
-        shown = peer_inline or it.sender_kind != "agent"
+        shown = peer_inline or not untrusted_sender(it.sender_kind)
         out.append((it.message_id, STUB if not shown else INLINE_CUT if it.message_id in cut else INLINE))
     return out
 

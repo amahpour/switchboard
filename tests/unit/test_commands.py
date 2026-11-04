@@ -127,6 +127,8 @@ def test_required_roles(svc: RoomService) -> None:
             "/status",
             "/help",
             "/close",
+            "/meeting",
+            "/meeting leave",
         ]
     }
     assert need == {
@@ -146,6 +148,8 @@ def test_required_roles(svc: RoomService) -> None:
         "/status": "human_cli",
         "/help": "human_cli",
         "/close": "human_cli",
+        "/meeting": "human",
+        "/meeting leave": "human",
     }
 
 

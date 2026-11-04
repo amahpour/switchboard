@@ -121,7 +121,7 @@ class Paint:
         """A sender's name: the human bold, the system dim, each agent its own colour."""
         if kind == "human":
             return self.bold(name)
-        if kind == "system":
+        if kind == "system" or kind == "meeting":
             return self.dim(name)
         return self.style(name, nick_colour(name))
 

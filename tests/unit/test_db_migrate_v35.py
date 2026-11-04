@@ -78,14 +78,14 @@ def test_old_icons_and_every_other_row_survive_and_opencode_can_be_stored(
     path = tmp_path / "old.db"
     at_34(path, monkeypatch)
     before = sqlite3.connect(path)
-    counts = db.row_counts(before, db.TABLES)
+    counts = db.row_counts(before, db.tables_of(34))
     icons = icons_of(before)
     before.close()
     assert counts["agent_icons"] == 8 and counts["participants"] > 0
 
     con = db.open_db(path)  # through to the current version
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 38
-    assert db.row_counts(con, db.TABLES) == counts
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 39
+    assert db.row_counts(con, db.tables_of(34)) == counts
     assert icons_of(con) == icons
     assert list(con.execute("PRAGMA foreign_key_check")) == []
     assert db.integrity_ok(con) is None
@@ -105,7 +105,7 @@ def test_old_icons_and_every_other_row_survive_and_opencode_can_be_stored(
     again.close()
     backup = sqlite3.connect(path.with_name("old.db.v34.bak"))
     assert db.schema_version(backup) == 34
-    assert db.row_counts(backup, db.TABLES) == counts
+    assert db.row_counts(backup, db.tables_of(34)) == counts
     assert icons_of(backup) == icons
     with pytest.raises(sqlite3.IntegrityError):
         backup.execute(ROW, icon_row("opencode"))  # the backup is the old schema, untouched
@@ -165,14 +165,14 @@ def test_unmatched_check_fails_closed_with_v34_and_its_backup_intact(
     con = db.connect(path)  # reopened, so the edited schema text is what SQLite parses
     before_sql = table_sql(con, "agent_icons")
     assert "'claude', 'codex'" in before_sql
-    counts = db.row_counts(con, db.TABLES)
+    counts = db.row_counts(con, db.tables_of(34))
     backup = tmp_path / "before-35.db"
     try:
         with pytest.raises(db.SchemaError, match="agent_icons.*opencode.*unchanged, still schema version 34"):
             db.migrate(con, backup_to=backup)
         assert db.schema_version(con) == 34
         assert table_sql(con, "agent_icons") == before_sql
-        assert db.row_counts(con, db.TABLES) == counts
+        assert db.row_counts(con, db.tables_of(34)) == counts
         assert con.execute("PRAGMA writable_schema").fetchone()[0] == 0
         assert con.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert db.integrity_ok(con) is None
@@ -180,7 +180,7 @@ def test_unmatched_check_fails_closed_with_v34_and_its_backup_intact(
             con.execute(ROW, icon_row("opencode"))  # still refused: nothing was half done
         with sqlite3.connect(backup) as saved:
             assert db.schema_version(saved) == 34
-            assert db.row_counts(saved, db.TABLES) == counts
+            assert db.row_counts(saved, db.tables_of(34)) == counts
             assert table_sql(saved, "agent_icons") == before_sql
             assert db.integrity_ok(saved) is None
     finally:
@@ -196,7 +196,7 @@ def test_a_failure_in_the_step_rolls_back_and_turns_schema_editing_off(
     path = tmp_path / "old.db"
     at_34(path, monkeypatch)
     con = db.connect(path)
-    counts = db.row_counts(con, db.TABLES)
+    counts = db.row_counts(con, db.tables_of(34))
     before_sql = table_sql(con, "agent_icons")
     monkeypatch.setattr(db, "V34_TO_V35", (*db.V34_TO_V35, "SELECT missing_column FROM agent_icons"))
     try:
@@ -204,7 +204,7 @@ def test_a_failure_in_the_step_rolls_back_and_turns_schema_editing_off(
             db.migrate(con, backup_to=tmp_path / "before-35.db")
         assert db.schema_version(con) == 34
         assert table_sql(con, "agent_icons") == before_sql
-        assert db.row_counts(con, db.TABLES) == counts
+        assert db.row_counts(con, db.tables_of(34)) == counts
         assert con.execute("PRAGMA writable_schema").fetchone()[0] == 0
         assert con.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert db.integrity_ok(con) is None
