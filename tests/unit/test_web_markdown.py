@@ -669,7 +669,7 @@ def test_artifact_size_and_checksum_may_be_left_out() -> None:
         assert bool(by_cls(tree, "md-artifact-size")) is has_size, src
         assert bool(by_cls(tree, "md-artifact-sha")) is has_sha, src
         if has_size:
-            assert by_cls(tree, "md-artifact-size")[0]["text"] in {"48231", "1.5 MiB", "12KB", "12 KB"}
+            assert by_cls(tree, "md-artifact-size")[0]["text"] in {"47 KB", "1.5 MiB", "12KB", "12 KB"}
         [a] = by_tag(tree, "a")
         assert a["href"] == URL, src
 
@@ -930,3 +930,16 @@ def test_first_line(src: str, max_: int, want: str) -> None:
     [out] = harness([{"fn": "firstLine", "text": src, "max": max_}])
     assert out["value"] == want
     assert len(out["value"]) <= max_
+
+
+def test_a_size_of_digits_is_shown_with_a_unit() -> None:
+    """An exact byte count (what an upload writes, #544) reads as a size, not a bare number."""
+    for raw, shown in (
+        ("21", "21 bytes"),
+        ("1", "1 byte"),
+        ("48231", "47 KB"),
+        ("2500000", "2.4 MB"),
+        ("12 KB", "12 KB"),
+    ):
+        tree = render(f"artifact: a.txt | {raw} | /tmp/a.txt")
+        assert by_cls(tree, "md-artifact-size")[0]["text"] == shown, raw

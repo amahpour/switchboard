@@ -130,6 +130,17 @@
 
   // ------------------------------------------------------------------ small helpers
 
+  // A size of digits only is an exact byte count (#544): shown with a unit. Anything else as written.
+  function shownSize(size) {
+    if (!/^[0-9]{1,15}$/.test(size)) return size;
+    const n = Number(size);
+    if (n < 1024) return n + (n === 1 ? ' byte' : ' bytes');
+    const units = ['KB', 'MB', 'GB'];
+    let v = n / 1024, u = 0;
+    while (v >= 1024 && u < units.length - 1) { v /= 1024; u++; }
+    return (v < 10 ? v.toFixed(1) : String(Math.round(v))) + ' ' + units[u];
+  }
+
   function isSpace(c) { return c === undefined || c === '' || SPACE.test(c); }
   function isPunct(c) { return c !== undefined && c !== '' && PUNCT.test(c); }
   function isAlnum(c) { return c !== undefined && c !== '' && ALNUM.test(c); }
@@ -1182,7 +1193,7 @@
       const meta = el('div', 'md-artifact-meta');
       if (b.size) {
         const s = el('span', 'md-artifact-size');
-        s.textContent = b.size;
+        s.textContent = shownSize(b.size);
         meta.append(s);
       }
       if (b.sha) {

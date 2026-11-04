@@ -4281,8 +4281,8 @@
   // what is now past the new number. The size limits stay in config.toml.
   function buildSettingsFiles(panel) {
     panel.append(el('h3', null, 'Files'),
-      el('p', 'fine', 'How long a room keeps an uploaded file. 0, Never, keeps it until the room is deleted.'
-        + ' The size of one file, and of a room, are set in config.toml.'));
+      el('p', 'fine', 'How long switchboard keeps an uploaded file. With “Never delete”, a file stays until'
+        + ' its room is deleted. The largest file and the most a room holds are set in config.toml.'));
     const row = el('div', 'settings-files');
     const label = el('label', 'settings-label', 'Keep files for');
     label.setAttribute('for', 'settings-files-days');
