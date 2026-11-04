@@ -433,6 +433,68 @@ class AgentIcon:
 
 
 @dataclass(frozen=True)
+class StoredFile:
+    """A ``files`` row (DESIGN.md §53). The bytes are not in the database. ``sha256`` on a pending
+    row is the hash the artifact line claimed, when it gave one; on a stored row it is the bytes."""
+
+    id: str
+    room_id: int
+    name: str
+    size: int | None
+    sha256: str | None
+    content_type: str
+    uploader_name: str
+    uploader_kind: str
+    message_id: int | None
+    state: str
+    created_at: float
+    stored_at: float | None
+    upload_expires_at: float | None = None
+
+    @classmethod
+    def from_row(cls, r: sqlite3.Row) -> "StoredFile":
+        keys = r.keys()
+        return cls(
+            id=r["id"],
+            room_id=r["room_id"],
+            name=r["name"],
+            size=r["size"],
+            sha256=r["sha256"],
+            content_type=r["content_type"],
+            uploader_name=r["uploader_name"],
+            uploader_kind=r["uploader_kind"],
+            message_id=r["message_id"],
+            state=r["state"],
+            created_at=r["created_at"],
+            stored_at=r["stored_at"],
+            upload_expires_at=r["upload_expires_at"] if "upload_expires_at" in keys else None,
+        )
+
+
+@dataclass(frozen=True)
+class FileGrant:
+    """A one-time upload, or a short-lived download, stored as the sha256 of the token."""
+
+    token_hash: str
+    file_id: str
+    kind: str
+    expires_at: float
+    used_at: float | None
+    membership_id: int | None
+
+    @classmethod
+    def from_row(cls, r: sqlite3.Row) -> "FileGrant":
+        return cls(
+            token_hash=r["token_hash"],
+            file_id=r["file_id"],
+            kind=r["kind"],
+            expires_at=r["expires_at"],
+            used_at=r["used_at"],
+            membership_id=r["membership_id"],
+        )
+
+
+@dataclass(frozen=True)
 class PersonRow:
     """A ``people`` row (DESIGN.md §32.2): someone other than the owner, added by the owner in
     the admin section. They sign in with their name and a password (the first one is a

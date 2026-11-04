@@ -11,6 +11,7 @@ missing, except under SWITCHBOARD_REQUIRE_NODE=1 (CI), where that fails."""
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -51,6 +52,7 @@ ALLOWED_TAGS = {
 TITLE_SCHEME = "Not a link: only http(s) URLs are followed"
 TITLE_LOCAL = "Not a link: links to this switchboard page are never followed"
 TITLE_CREDS = "Not a link: a URL with a user name or password can hide its real host"
+FILE_HREF = re.compile(r"^/api/files/[0-9a-f]{32}$")
 
 
 # ------------------------------------------------------------------ helpers
@@ -66,8 +68,16 @@ def harness(cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def render(text: str, mentions: tuple[str, ...] = (), local_host: str = "") -> dict[str, Any]:
-    [tree] = harness([{"text": text, "mentions": list(mentions), "localHost": local_host}])
+def render(
+    text: str,
+    mentions: tuple[str, ...] = (),
+    local_host: str = "",
+    files: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    case: dict[str, Any] = {"text": text, "mentions": list(mentions), "localHost": local_host}
+    if files is not None:
+        case["files"] = files
+    [tree] = harness([case])
     assert_safe(tree)
     return tree
 
@@ -103,12 +113,22 @@ def assert_safe(tree: dict[str, Any]) -> None:
     for n in elements(tree):
         assert n["tag"] in ALLOWED_TAGS, n["tag"]
         if "href" in n:
-            assert n["tag"] == "a" and classes(n) == ["md-link"], n
-        if n["tag"] == "a":
+            if FILE_HREF.fullmatch(n["href"]):
+                assert n["tag"] == "a" and classes(n) == ["md-file"], n
+                assert n["attrs"] == {"download": ""}, n
+                assert "rel" not in n and "target" not in n
+            else:
+                assert n["tag"] == "a" and classes(n) == ["md-link"], n
+        if n["tag"] == "a" and "md-link" in classes(n):
             assert n["href"].startswith(("http://", "https://")), n["href"]
             assert n["rel"] == "noopener noreferrer nofollow" and n["target"] == "_blank"
             assert n["props"]["referrerPolicy"] == "no-referrer"
-        assert set(n["attrs"]) <= {"role", "aria-level", "aria-label", "aria-hidden", "scope"}, n["attrs"]
+        extra = (
+            {"download"} if n["attrs"].keys() <= {"download"} and n["attrs"].get("download") == "" else set()
+        )
+        assert set(n["attrs"]) <= {"role", "aria-level", "aria-label", "aria-hidden", "scope"} | extra, n[
+            "attrs"
+        ]
 
 
 def blocked(tree: dict[str, Any]) -> dict[str, Any]:
@@ -649,7 +669,7 @@ def test_artifact_size_and_checksum_may_be_left_out() -> None:
         assert bool(by_cls(tree, "md-artifact-size")) is has_size, src
         assert bool(by_cls(tree, "md-artifact-sha")) is has_sha, src
         if has_size:
-            assert by_cls(tree, "md-artifact-size")[0]["text"] in {"48231", "1.5 MiB", "12KB", "12 KB"}
+            assert by_cls(tree, "md-artifact-size")[0]["text"] in {"47 KB", "1.5 MiB", "12KB", "12 KB"}
         [a] = by_tag(tree, "a")
         assert a["href"] == URL, src
 
@@ -734,6 +754,34 @@ def test_a_path_gets_a_hint_and_no_link(where: str) -> None:
     assert path["text"] == where
     [hint] = by_cls(tree, "md-artifact-hint")
     assert hint["text"] == HINT
+
+
+def test_a_stored_file_is_a_download_and_every_other_self_link_stays_blocked() -> None:
+    """``switchboard:file/`` and 32 hex digits is a download on this origin. A URL that merely
+    points at this switchboard, including one that looks like the download route, stays blocked.
+    A local path becomes the same download only when the message's files say that name is stored.
+    Fails if safeUrl started allowing this host, or a path with no stored file grew a link."""
+    file_id = "ab" * 16
+    tree = render(artifact_line(size="5", where="switchboard:file/" + file_id))
+    [a] = by_tag(tree, "a")
+    assert a["href"] == "/api/files/" + file_id and a["text"] == "Download"
+    assert a["attrs"]["download"] == ""
+    assert not by_cls(tree, "md-artifact-hint") and not by_cls(tree, "md-blocked")
+    blocked_tree = render(
+        artifact_line(where="http://switchboard.localhost/api/files/" + file_id),
+        local_host="switchboard.localhost",
+    )
+    assert not by_tag(blocked_tree, "a")
+    assert blocked(blocked_tree)["title"] == TITLE_LOCAL
+    named = render(
+        artifact_line(size="5", where="/Users/someone/notes.txt"),
+        files=[{"id": file_id, "name": "report.zip", "state": "stored"}],
+    )
+    [got] = by_tag(named, "a")
+    assert got["href"] == "/api/files/" + file_id
+    still = render(artifact_line(size="5", where="/Users/someone/notes.txt"))
+    assert not by_tag(still, "a")
+    assert by_cls(still, "md-artifact-hint")[0]["text"] == HINT
 
 
 def test_an_overlong_artifact_field_stays_ordinary_text() -> None:
@@ -882,3 +930,16 @@ def test_first_line(src: str, max_: int, want: str) -> None:
     [out] = harness([{"fn": "firstLine", "text": src, "max": max_}])
     assert out["value"] == want
     assert len(out["value"]) <= max_
+
+
+def test_a_size_of_digits_is_shown_with_a_unit() -> None:
+    """An exact byte count (what an upload writes, #544) reads as a size, not a bare number."""
+    for raw, shown in (
+        ("21", "21 bytes"),
+        ("1", "1 byte"),
+        ("48231", "47 KB"),
+        ("2500000", "2.4 MB"),
+        ("12 KB", "12 KB"),
+    ):
+        tree = render(f"artifact: a.txt | {raw} | /tmp/a.txt")
+        assert by_cls(tree, "md-artifact-size")[0]["text"] == shown, raw

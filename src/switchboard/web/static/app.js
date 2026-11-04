@@ -506,6 +506,8 @@
     // Settings' groups (#232): a person (Profile) and a circle split in half (Appearance)
     person: circ(8, 5.6, 2.6) + 'M2.3 13.5c.6-3.3 2.8-5.1 5.7-5.1s5.1 1.8 5.7 5.1',
     contrast: circ(8, 8, 5.5) + 'M8 2.5v11',
+    // Settings' Files group: a paperclip
+    clip: 'M10.2 4.2v6.2a2.2 2.2 0 0 1-4.4 0V4.4a1.2 1.2 0 0 1 2.4 0v5.6',
   };
 
   function icon(name) {
@@ -549,6 +551,8 @@
       opts.headers['X-Switchboard'] = '1';
       if (file) {  // a chosen file goes as the whole body, with the type the browser named it
         opts.headers['Content-Type'] = file.type || 'application/octet-stream';
+        // the download name. A header value is Latin-1; anything else is named by the server.
+        if (file.name) opts.headers['X-Switchboard-Filename'] = encodeURIComponent(file.name);
         opts.body = file;
       } else {
         opts.headers['Content-Type'] = 'application/json';
@@ -778,19 +782,35 @@
   }
 
   // Markdown for every sender (human messages too), via md.js; plain text if md.js is missing.
-  function mdBody(text, mentions) {
+  function mdBody(text, mentions, files) {
     const box = el('div', 'msg-text md');
     const md = window.SBMarkdown;
     if (md && typeof md.render === 'function') {
       try {
         const lower = (mentions || []).map(function (x) { return String(x).toLowerCase(); });
-        box.append(md.render(String(text || ''), { mentions: lower, localHost: location.hostname || '' }));
+        box.append(md.render(String(text || ''), {
+          mentions: lower, localHost: location.hostname || '', files: Array.isArray(files) ? files : [],
+        }));
         return box;
       } catch (e) { box.replaceChildren(); }
     }
     box.textContent = String(text || '');
     box.classList.add('md-plain');  // white-space: pre-wrap
     return box;
+  }
+
+  // An agent's upload finished: the card's path becomes a download, without rebuilding the log
+  // (a rebuild would jump the scroll).
+  function refreshMsgText(m) {
+    const row = $('log').querySelector('[data-id="' + String(m.id) + '"]');
+    const old = row && row.querySelector('.msg-text');
+    if (!old) return;
+    const log = $('log');
+    const stick = nearBottom(log);
+    const top = log.scrollTop;
+    old.replaceWith(mdBody(m.text, m.mentions, m.files));
+    if (stick) log.scrollTop = log.scrollHeight;
+    else log.scrollTop = top;
   }
 
   // Is m a continuation of prev: same sender, host and kind, within 5 minutes, same day, no reply.
@@ -1102,7 +1122,7 @@
     head.append(el('span', 'call-tag', 'call'));
     if (m.from && m.from !== 'call') head.append(el('span', 'nick nick-meeting', m.from));
     head.append(messageMeta(m, false));
-    body.append(head, mdBody(m.text, m.mentions));
+    body.append(head, mdBody(m.text, m.mentions, m.files));
     line.append(body);
     return withPin(line, r, m);
   }
@@ -1125,7 +1145,7 @@
     }
     if (isCont(prev, m)) {
       line.classList.add('cont');
-      line.append(messageMeta(m, true), mdBody(m.text, m.mentions));
+      line.append(messageMeta(m, true), mdBody(m.text, m.mentions, m.files));
       return withPin(line, r, m);
     }
     const reply = m.reply_to ? replyLine(r, m) : null;
@@ -1155,7 +1175,7 @@
     if (m.sender_kind === 'agent') head.append(el('span', 'harness-name', harnessOf(m.harness)[1]));
     if (m.via === 'cli') head.append(el('span', 'via', 'via cli'));
     head.append(messageMeta(m, false));
-    body.append(head, mdBody(m.text, m.mentions));
+    body.append(head, mdBody(m.text, m.mentions, m.files));
     line.append(body);
     return withPin(line, r, m);
   }
@@ -1253,6 +1273,7 @@
     $('send').disabled = noRooms;
     $('cmd-btn').disabled = noRooms;
     $('mention-btn').disabled = noRooms;
+    $('attach-btn').disabled = noRooms;
     composerPlaceholder();
     updateRoomEmpty();
     renderRows(r);
@@ -2982,6 +3003,13 @@
       appendMsg(r, f.msg);
       // the inspected agent spoke: its Last seen and timeline changed
       if (ins && ins.room === f.room && f.msg.from === ins.name && (f.msg.host || '') === (ins.host || '')) scheduleRefetch();
+    } else if (f.t === 'file') {
+      if (!r || !f.file || !f.file.id) return;
+      const m = r.msgs.find(function (x) { return x.id === f.message_id; });
+      if (!m) return;
+      m.files = (m.files || []).filter(function (x) { return x.id !== f.file.id; });
+      m.files.push(f.file);
+      if (r.name === state.active) refreshMsgText(m);
     } else if (f.t === 'members') {
       if (!r) return;
       r.members = f.members || [];
@@ -3429,7 +3457,8 @@
     return 'Leave blank to use config.toml’s value, or the built-in default.';
   }
 
-  // Settings' groups (#232): Profile, Appearance, New rooms, Agents (#382), and Sign-in &
+  // Settings' groups (#232): Profile, Appearance, New rooms, Agents (#382), Files for an admin
+  // (#544), and Sign-in &
   // security where there's a password or passkeys to show today (a hosted broker, or
   // state.me.signin).
   const SETTINGS_GROUPS = [
@@ -3437,6 +3466,7 @@
     { key: 'appearance', label: 'Appearance', icon: 'contrast' },
     { key: 'rooms', label: 'New rooms', icon: 'hash' },
     { key: 'agents', label: 'Agents', icon: 'terminal' },
+    { key: 'files', label: 'Files', icon: 'clip' },
     { key: 'security', label: 'Sign-in & security', icon: 'key' },
   ];
 
@@ -4246,9 +4276,84 @@
     await loadAgentTokens();
   }
 
+  // Settings → Files (#544): how long a room keeps a file. Admins only (the owner, on a desktop
+  // broker). Shortening asks first, with the shared confirm dialog, because the next sweep deletes
+  // what is now past the new number. The size limits stay in config.toml.
+  function buildSettingsFiles(panel) {
+    panel.append(el('h3', null, 'Files'),
+      el('p', 'fine', 'How long switchboard keeps an uploaded file. With “Never delete”, a file stays until'
+        + ' its room is deleted. The largest file and the most a room holds are set in config.toml.'));
+    const row = el('div', 'settings-files');
+    const label = el('label', 'settings-label', 'Keep files for');
+    label.setAttribute('for', 'settings-files-days');
+    const days = el('input');
+    days.type = 'number';
+    days.id = 'settings-files-days';
+    days.min = '1';
+    days.max = '365';
+    days.value = '30';
+    const unit = el('span', null, 'days');
+    const neverRow = el('label', 'check-row');
+    const never = el('input');
+    never.type = 'checkbox';
+    never.id = 'settings-files-never';
+    neverRow.append(never, el('span', null, 'Never delete files on a schedule'));
+    const status = el('p', 'fine');
+    status.id = 'settings-files-status';
+    const save = btn('btn btn-primary', 'Save');
+    save.id = 'settings-files-save';
+    row.append(label, days, unit);
+    panel.append(row, neverRow, status, save);
+    let current = null;
+    function apply(n) {
+      current = n;
+      state.fileDays = n;
+      never.checked = n === 0;
+      days.disabled = n === 0;
+      if (n !== 0) days.value = String(n);
+    }
+    never.addEventListener('change', function () {
+      days.disabled = never.checked;
+      status.textContent = '';
+    });
+    days.addEventListener('input', function () { status.textContent = ''; });
+    api('GET', '/api/settings/files').then(function (res) {
+      apply(res.days);
+    }, function (e) {
+      status.textContent = String(e.message || e);
+      status.classList.add('bad');
+    });
+    save.addEventListener('click', async function () {
+      const next = never.checked ? 0 : Number(days.value);
+      if (next !== 0 && (!Number.isInteger(next) || next < 1 || next > 365)) {
+        status.textContent = 'Choose 1 to 365 days, or never.';
+        status.classList.add('bad');
+        return;
+      }
+      const shortening = current !== null && next !== current && (current === 0 || (next !== 0 && next < current));
+      if (shortening) {
+        if ($('app-dialog').open) $('app-dialog').close('cancel');
+        const ok = await confirmDialog('Keep files for fewer days?',
+          'Files older than ' + next + ' days will be deleted at the next cleanup.', 'Save');
+        if (!ok) { openSettings('files'); return; }
+      }
+      status.classList.remove('bad');
+      try {
+        const res = await api('PUT', '/api/settings/files', { days: next });
+        apply(res.days);
+        status.textContent = 'Saved.';
+      } catch (e) {
+        status.textContent = String(e.message || e);
+        status.classList.add('bad');
+      }
+      if (shortening && !$('app-dialog').open) openSettings('files');
+    });
+  }
+
   const SETTINGS_BUILDERS = {
     profile: buildSettingsProfile, appearance: buildSettingsAppearance,
-    rooms: buildSettingsRooms, agents: buildSettingsAgents, security: buildSettingsSecurity,
+    rooms: buildSettingsRooms, agents: buildSettingsAgents, files: buildSettingsFiles,
+    security: buildSettingsSecurity,
   };
 
   // The phone list's one-line summary for a group, from the current (possibly just-typed) state.
@@ -4277,6 +4382,12 @@
       if (!list) return 'Tokens for your agents';
       return list.tokens.length ? plural(list.tokens.length, 'device', 'devices') : 'No agent tokens yet';
     }
+    if (key === 'files') {
+      const days = state.fileDays;
+      if (days === 0) return 'Kept until the room is deleted';
+      if (typeof days === 'number') return 'Kept for ' + days + ' days';
+      return 'How long files are kept';
+    }
     return (me.password ? 'Password set' : 'No password set') + ' · '
       + (me.passkeys ? plural(me.passkeys, 'passkey', 'passkeys') : 'no passkeys yet');
   }
@@ -4289,7 +4400,11 @@
   function buildSettings(form, head, title, close, requestedGroup) {
     const me = state.me || {};
     const hasSecurity = !!(me.signin || me.hosted);
-    const groups = SETTINGS_GROUPS.filter(function (g) { return g.key !== 'security' || hasSecurity; });
+    const groups = SETTINGS_GROUPS.filter(function (g) {
+      if (g.key === 'security') return hasSecurity;
+      if (g.key === 'files') return !!me.can_set_icons;
+      return true;
+    });
     const initial = groups.some(function (g) { return g.key === requestedGroup; }) ? requestedGroup : 'profile';
     const jumpToGroup = !!requestedGroup;  // a caller that named a group skips the phone list too
     let currentGroup = initial;
@@ -6243,6 +6358,20 @@
     if (state.inspect) closeInspector(true);
   }
 
+  // Upload one file, then post the artifact line that names it. The card's link is the stored form.
+  async function shareFile(file) {
+    const r = activeRoom();
+    if (!r) return;
+    try {
+      const up = await api('POST', '/api/rooms/' + encodeURIComponent(r.slug) + '/files', null, file);
+      const line = 'artifact: ' + up.name + ' | ' + up.size + ' | sha256:' + up.sha256
+        + ' | switchboard:file/' + up.id;
+      await api('POST', '/api/rooms/' + encodeURIComponent(r.slug) + '/say', { text: line });
+    } catch (e) {
+      renderLocal(String(e.message || e), true);
+    }
+  }
+
   function bindInput() {
     const input = $('input');
     state.sendQueue = Promise.resolve();  // sends go out one at a time, in order
@@ -6322,6 +6451,28 @@
       input.focus();
       updatePopover();
       renderComposerMentions();
+    });
+    $('attach-btn').addEventListener('click', function () { $('attach-file').click(); });
+    $('attach-file').addEventListener('change', function () {
+      const picked = $('attach-file').files && $('attach-file').files[0];
+      $('attach-file').value = '';
+      if (picked) shareFile(picked);
+    });
+    ['log', 'composer'].forEach(function (id) {
+      const zone = $(id);
+      zone.addEventListener('dragover', function (ev) {
+        const types = ev.dataTransfer && ev.dataTransfer.types;
+        if (!types || !Array.prototype.includes.call(types, 'Files')) return;
+        ev.preventDefault();
+        zone.classList.add('drop-target');
+      });
+      zone.addEventListener('dragleave', function () { zone.classList.remove('drop-target'); });
+      zone.addEventListener('drop', function (ev) {
+        ev.preventDefault();
+        zone.classList.remove('drop-target');
+        const dropped = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0];
+        if (dropped) shareFile(dropped);
+      });
     });
     $('mention-btn').addEventListener('click', function () {
       const v = String(input.value);

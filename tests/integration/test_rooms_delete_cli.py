@@ -55,7 +55,7 @@ async def test_refused_with_a_member_then_close_and_delete(tmp_home: Path) -> No
         )
         counts = re.fullmatch(
             r"  removes (1 room, \d+ message\(s\), 1 membership\(s\), \d+ delivery row\(s\),"
-            r" \d+ batch\(es\), \d+ event\(s\))",
+            r" \d+ batch\(es\), \d+ event\(s\), \d+ file\(s\))",
             lines[2],
         )
         assert counts, lines[2]

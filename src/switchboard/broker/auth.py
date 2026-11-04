@@ -38,6 +38,9 @@ AGENT_PATHS = frozenset({"/mcp", "/mcp/listen", "/mcp/session", "/mcp/pretool", 
 # always does) and read no cookie. The consent page's own routes (``/oauth/authorize``,
 # ``/api/oauth/*``) are ordinary web routes, with the full rule.
 OAUTH_PATHS = frozenset({"/oauth/register", "/oauth/token"})
+# one-time file upload (DESIGN.md §53): the token in the path is the capability, and curl sends no
+# Origin. A browser always does, so a page cannot use the link.
+_UPLOAD_TOKEN = re.compile(r"[A-Za-z0-9_-]{20,128}")
 _DNS_NAME_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*")
 
 Scope = dict[str, Any]
@@ -199,6 +202,13 @@ def _local_test_host(name: str) -> bool:
     return name in ("localhost", "127.0.0.1") or name.endswith((".localhost", ".test"))
 
 
+def upload_path(path: str | None) -> bool:
+    """``PUT /api/upload/<token>``: the token is the capability, so the page's Origin rule does not apply."""
+    if not path or not path.startswith("/api/upload/"):
+        return False
+    return _UPLOAD_TOKEN.fullmatch(path.removeprefix("/api/upload/")) is not None
+
+
 def csp(origin: WebOrigin, *, inline_styles: bool = False) -> str:
     style = "style-src 'self' 'unsafe-inline'" if inline_styles else "style-src 'self'"
     return (
@@ -280,11 +290,16 @@ class HostOriginGuard:
             else:
                 await _refuse_ws(scope, send, 421, f"open {self.origin}/\n")  # -> 403
             return
+        upload = kind == "http" and upload_path(scope.get("path"))
+        if upload and _header(scope, b"origin"):
+            await _json(send, 403, {"error": "forbidden", "message": "bad origin"})
+            return
         if (
             kind == "http"
             and scope.get("method", "GET").upper() in UNSAFE_METHODS
             and scope.get("path") not in AGENT_PATHS
             and scope.get("path") not in OAUTH_PATHS
+            and not upload
         ):
             if _header(scope, b"origin") != self.origin or _header(scope, b"x-switchboard") != "1":
                 await _json(send, 403, {"error": "forbidden", "message": "bad origin"})

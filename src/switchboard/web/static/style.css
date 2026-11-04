@@ -1386,6 +1386,13 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
   text-underline-offset: 2px;
 }
 .md-link:hover { color: var(--link-hover); text-decoration-thickness: 2px; }
+.md-file {
+  color: var(--link);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.md-file:hover { color: var(--link-hover); }
 .md-ext { margin-left: 2px; color: var(--link); font-size: calc(11px * var(--text-scale)); }
 .md-url {
   margin-left: 8px;
@@ -1535,6 +1542,9 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 #input::placeholder { color: var(--muted); }
 #input:disabled { cursor: not-allowed; }
 .composer-bar { display: flex; align-items: center; gap: 4px; }
+.drop-target { outline: 2px dashed var(--link); outline-offset: -6px; }
+.settings-files { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.settings-files input { width: 6rem; }
 .composer-bar .icon-btn .ic { width: 15px; height: 15px; }
 .composer-spacer { flex: 1; }
 .composer-hint { margin-right: 8px; font-size: calc(11.5px * var(--text-scale)); color: var(--muted); white-space: nowrap; }
@@ -2544,6 +2554,9 @@ body.login {
     font-size: max(16px, calc(16px * var(--text-scale))); /* 16 px stops iOS zooming into the field */
     line-height: calc(20px * var(--text-scale));
   }
+  /* 8 lines and the padding: max-height is border-box, so the desktop's 168px held 7.6 lines
+     here, and an 8th scrolled the box and hid the top of the first. */
+  #input { max-height: calc(160px * var(--text-scale) + 16px); }
   .composer-bar { flex-shrink: 0; }
   #mention-btn, #cmd-btn, .composer-spacer, .composer-hint { display: none; }
   #send { width: 40px; height: 40px; margin-bottom: 9px; padding: 0; border-radius: 50%; }

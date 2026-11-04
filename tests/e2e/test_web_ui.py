@@ -1756,12 +1756,14 @@ def test_wake_defaults_copy_into_a_room_and_its_own_dialog_edits_live(ui: UI) ->
     ui.world.command("e2e-wake", "/close")
 
 
-def test_settings_shows_four_tabs_on_a_desktop_broker(ui: UI) -> None:
+def test_settings_shows_five_tabs_on_a_desktop_broker(ui: UI) -> None:
     """A desktop broker has no password or passkeys to show, so Settings has no Sign-in &
-    security tab, but it has Agents (#382); Sign out still sits in the rail (#232)."""
+    security tab, but it has Agents (#382) and, for its owner, Files (#544); Sign out still sits
+    in the rail (#232)."""
     page = ui.open()
     open_settings(page)
-    expect(page.locator("#settings-rail [role='tab']")).to_have_count(4)
+    expect(page.locator("#settings-rail [role='tab']")).to_have_count(5)
+    expect(page.locator("#settings-tab-files")).to_be_visible()
     expect(page.locator("#settings-tab-agents")).to_be_visible()
     expect(page.locator("#settings-tab-security")).to_have_count(0)
     expect(page.locator("#settings-sign-out")).to_be_visible()
@@ -1796,14 +1798,14 @@ def test_settings_tabs_respond_to_arrow_keys_tab_and_escape(ui: UI) -> None:
     expect(page.locator("#settings-panel-appearance")).to_be_visible()
     expect(page.locator("#settings-tab-profile")).to_have_attribute("aria-selected", "false")
     expect(page.locator("#settings-panel-profile")).to_be_hidden()
-    page.keyboard.press("End")
-    expect(page.locator("#settings-tab-agents")).to_be_focused()
-    expect(page.locator("#settings-panel-agents")).to_be_visible()
+    page.keyboard.press("End")  # the owner's last tab is Files (#544)
+    expect(page.locator("#settings-tab-files")).to_be_focused()
+    expect(page.locator("#settings-panel-files")).to_be_visible()
     page.keyboard.press("Home")
     expect(page.locator("#settings-tab-profile")).to_be_focused()
     expect(page.locator("#settings-panel-profile")).to_be_visible()
     page.keyboard.press("ArrowUp")  # wraps to the last tab
-    expect(page.locator("#settings-tab-agents")).to_be_focused()
+    expect(page.locator("#settings-tab-files")).to_be_focused()
     page.keyboard.press("Home")
     page.keyboard.press("Tab")
     expect(page.locator("#settings-first")).to_be_focused()  # Tab left the rail, into the panel
@@ -3927,6 +3929,23 @@ def test_composer_grows_with_wrapped_text_and_shrinks_after_send(ui: UI) -> None
         expect(box).to_have_value("")
         shrunk_height = box.evaluate("el => el.clientHeight")
         assert shrunk_height == one_line_height, (options, shrunk_height, one_line_height)
+
+
+def test_eight_lines_on_a_phone_fit_the_composer_without_scrolling_it(ui: UI) -> None:
+    """The composer grows to 8 lines before it scrolls (autoGrow's cap). On a phone #input has
+    8px of padding above and below, and its 168px max-height, a border-box one, held 7.6 lines
+    of 20px: an 8-line message scrolled the box by 8px and hid the top of its first line (#130's
+    bug again). It showed once the attach button (#544) made the phone's box narrower, so a
+    paragraph wrapped to 8 lines. Eight explicit lines check it whatever the fonts wrap to."""
+    ui.world.create_room("#e2e-composer-eight")
+    page = ui.open(room="e2e-composer-eight", **PHONE)
+    box = page.locator("#input")
+    text = "\n".join(f"line {n}" for n in range(1, 9))
+    box.fill(text)
+    box.dispatch_event("input")
+    expect(box).to_have_value(text)
+    assert box.evaluate("el => el.scrollTop") == 0
+    assert box.evaluate("el => el.scrollHeight - el.clientHeight") <= 1
 
 
 def test_the_mention_mirror_keeps_the_textarea_width_when_it_scrolls(ui: UI) -> None:

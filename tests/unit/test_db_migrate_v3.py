@@ -153,6 +153,7 @@ def test_the_backup_is_written_before_the_first_statement(tmp_path: Path) -> Non
     # 39 adds the meetings table. The CHECK edits are sqlite_master updates and count as none.)
     per_step = [3, 5, 1, 1, 2, 2, 2, 1, 1, 1, 2, 2, 2, 1, 2, 1, 2, 1, 1, 1, 1, 5, 1, 1, 1, 3, 13, 3, 1, 1]
     per_step += [1, 1, 1, 1]  # 36, 37, 38 and 39
+    per_step += [3]  # 40: broker_settings, files, file_grants
     assert len(alters) == sum(per_step) and all(alters)
     assert dump(bak) == original
     c = sqlite3.connect(bak)
