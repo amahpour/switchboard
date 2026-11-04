@@ -3457,7 +3457,8 @@
     return 'Leave blank to use config.toml’s value, or the built-in default.';
   }
 
-  // Settings' groups (#232): Profile, Appearance, New rooms, Agents (#382), and Sign-in &
+  // Settings' groups (#232): Profile, Appearance, New rooms, Agents (#382), Files for an admin
+  // (#544), and Sign-in &
   // security where there's a password or passkeys to show today (a hosted broker, or
   // state.me.signin).
   const SETTINGS_GROUPS = [

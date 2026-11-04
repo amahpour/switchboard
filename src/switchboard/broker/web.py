@@ -38,8 +38,6 @@ The agents' avatars (§29.11): ``GET /api/agent-icons`` (what is set and the lim
 
 from __future__ import annotations
 
-from urllib.parse import unquote
-
 import asyncio
 import json
 import logging
@@ -48,6 +46,7 @@ import secrets
 import urllib.parse
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import unquote
 
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import (

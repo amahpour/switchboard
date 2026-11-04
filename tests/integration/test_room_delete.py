@@ -21,7 +21,7 @@ from switchboard.config import Config
 from switchboard.mcp.client import RpcError
 
 FAST = Config(human_name="alice").with_delivery(quiet_s=0.0, max_hold_s=0.0)
-TABLES = ("rooms", "messages", "memberships", "deliveries", "batches", "events")
+TABLES = ("rooms", "messages", "memberships", "deliveries", "batches", "events", "files")
 
 
 @pytest.fixture
@@ -81,6 +81,7 @@ def room_rows(path: Path, rid: int, mids: list[int]) -> dict[str, int]:
         ],
         "batches": q(path, f"SELECT COUNT(*) FROM batches WHERE membership_id IN ({marks})", *mids)[0][0],
         "events": q(path, "SELECT COUNT(*) FROM events WHERE room_id=?", rid)[0][0],
+        "files": q(path, "SELECT COUNT(*) FROM files WHERE room_id=?", rid)[0][0],
     }
 
 
