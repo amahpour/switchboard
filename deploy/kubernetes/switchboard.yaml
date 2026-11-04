@@ -97,7 +97,7 @@ spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            storage: 1Gi
+            storage: 20Gi
 ---
 # Your ingress controller terminates TLS for the public URL and passes the browser's Host and
 # Origin through (ingress-nginx and most others do by default). The UI's WebSocket needs no
@@ -114,6 +114,8 @@ metadata:
   annotations:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "960"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "960"
+    # one megabyte over [files] max_mb (25). ingress-nginx's default cuts a body at 1m.
+    nginx.ingress.kubernetes.io/proxy-body-size: "26m"
 spec:
   ingressClassName: nginx
   tls:

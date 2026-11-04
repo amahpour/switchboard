@@ -115,7 +115,9 @@ function run(c) {
     toggle: function (box, source, button) { toggled.push({ box: box.className, source: source, button: button.textContent }); },
   } : undefined;
   const t0 = process.hrtime.bigint();
-  const frag = MDAPI.render(c.text, { mentions: c.mentions || [], localHost: c.localHost || '' });
+  const frag = MDAPI.render(c.text, {
+    mentions: c.mentions || [], localHost: c.localHost || '', files: c.files || [],
+  });
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
   if (c.click) {
     const btn = find(frag, 'md-show-diagram');
