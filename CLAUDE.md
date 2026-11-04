@@ -68,7 +68,7 @@ The shape to keep: SQL only in `store.py`; policy pure in `rules.py` and the eng
 | `tests/engine_sim.py` | a seeded random simulation of the five harness kinds around the real engine, 200 seeds | every run |
 | `tests/e2e/` | the real page in headless Chromium (Playwright) against a seeded broker (`ui_world.py`); any console error, page error or CSP violation fails the test | `-m e2e` |
 | `tests/image/` | the container image behind TLS | `-m image` (Docker) |
-| `tests/live/` | the real Claude Code, Codex, OpenCode V2, Devin and Cursor CLIs over HTTPS in a private tmux, with the plugins from the checkout and a throwaway broker | `SWITCHBOARD_LIVE=<harness>` and `-m live` (a few cents; CONTRIBUTING.md) |
+| `tests/live/` | the real Claude Code, Codex, OpenCode V2, Devin and Cursor CLIs over HTTPS in a private tmux, with the plugins from the checkout and a throwaway broker; and the meeting self-test: two joinly bots in a real call (the `meeting-self-test` skill makes the Zoom meeting) | `SWITCHBOARD_LIVE=<harness>` and `-m live` (a few cents; CONTRIBUTING.md); `SWITCHBOARD_LIVE=meeting` and `SWITCHBOARD_MEETING_URL_FILE` |
 | `tests/evals/` | real Claude Code agents played by a scripted person in a throwaway room and graded from the database, k trials a scenario, two runs compared; its graders and runner are tested with scripted agents in `tests/integration/test_evals_graders.py` | `SWITCHBOARD_EVAL=claude` (a few cents a trial; CONTRIBUTING.md, "Evals") |
 
 What a good test here looks like:
