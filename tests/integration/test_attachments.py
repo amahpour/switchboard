@@ -246,3 +246,54 @@ async def test_the_sweep_removes_expired_files_and_keeps_a_fresh_one(world) -> N
     assert (b.paths.files_dir / fresh_id).is_file()
     pending_left = b.state.store.con.execute("SELECT id FROM files WHERE name='wait.txt'").fetchone()
     assert pending_left is None
+
+
+async def test_two_uploads_on_one_link_at_once_keep_the_winner_whole(world) -> None:
+    """Two PUTs on the same one-time link, overlapping: one is stored, the other is refused, and the
+    stored bytes are exactly the winner's. Both once wrote the same partial file, so the slower one's
+    bytes landed inside the file that had already been stored."""
+    import asyncio
+
+    b, _clock = world
+    async with FakeAgent(b.home, "ada") as ada:
+        assert (await ada.join("#build", "Ada"))["ok"]
+        said = await ada.say("#build", "artifact: race.bin | /Users/someone/race.bin")
+        url = UPLOAD_RE.search(said["share"]).group(1)
+    release = asyncio.Event()
+
+    async def slow_body():
+        yield b"A" * 1000
+        await release.wait()
+        yield b"a" * 1000
+
+    files = b.paths.files_dir
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        first = asyncio.create_task(client.put(url, content=slow_body()))
+        for _ in range(500):  # wait for the broker to start writing the first body
+            if any(p.name.endswith(".part") for p in files.iterdir()):
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("the first upload never started")
+        second = await client.put(url, content=b"B" * 1500)
+        release.set()
+        late = await first
+    assert second.status_code == 201, second.text
+    assert late.status_code == 409, late.text
+    (row,) = b.state.store.con.execute("SELECT id FROM files WHERE name = 'race.bin'").fetchall()
+    got = b.web.get(f"/api/files/{row[0]}")
+    assert got.status_code == 200
+    assert got.content == b"B" * 1500
+
+
+async def test_a_person_uploads_a_file_whose_name_is_not_ascii(world) -> None:
+    """The page sends the name percent-encoded, so "résumé.pdf" keeps its name. It once sent a
+    name only when it was plain ASCII, and anything else became "file"."""
+    from urllib.parse import quote
+
+    b, _clock = world
+    made = b.web.post(
+        "/api/rooms/build/files", content=b"cv", headers=_upload_headers(b, quote("résumé.pdf", safe=""))
+    )
+    assert made.status_code == 200, made.text
+    assert made.json()["name"] == "résumé.pdf"

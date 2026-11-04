@@ -38,6 +38,8 @@ The agents' avatars (§29.11): ``GET /api/agent-icons`` (what is set and the lim
 
 from __future__ import annotations
 
+from urllib.parse import unquote
+
 import asyncio
 import json
 import logging
@@ -2016,7 +2018,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             row = att.store_human(
                 room.id,
                 w.name,
-                file_name(request.headers.get("x-switchboard-filename") or "file"),
+                file_name(unquote(request.headers.get("x-switchboard-filename") or "file")),
                 part,
                 size,
                 digest,
@@ -2046,7 +2048,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             why = att.length_refusal(int(declared), limit)
             if why is not None:
                 return PlainTextResponse(why[1] + "\n", status_code=why[0], headers=NO_STORE)
-        part = att.folder.part_path(_row.id)
+        part = att.folder.part_path(new_part_id())  # its own, so two uploads on one link never share it
         got = await _spool_upload(request, part, limit)
         if got is None:
             message = (

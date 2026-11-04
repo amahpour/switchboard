@@ -552,7 +552,7 @@
       if (file) {  // a chosen file goes as the whole body, with the type the browser named it
         opts.headers['Content-Type'] = file.type || 'application/octet-stream';
         // the download name. A header value is Latin-1; anything else is named by the server.
-        if (file.name && /^[\x20-\x7e]+$/.test(file.name)) opts.headers['X-Switchboard-Filename'] = file.name;
+        if (file.name) opts.headers['X-Switchboard-Filename'] = encodeURIComponent(file.name);
         opts.body = file;
       } else {
         opts.headers['Content-Type'] = 'application/json';
