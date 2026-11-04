@@ -1,0 +1,3 @@
+### Added
+
+- **A message that names something an agent has claimed now reaches that agent as an @mention would.** An agent that claimed `owner/repo#12`, `SYSINT-645` or `feat/x` with `claim()` hears "CI is green on owner/repo#12" without being named: the line shows `to_you=yes`, it wakes the agent at once, it spends a wake from the room's budget, and the watchdog reminds the agent if it does not answer. It lasts until the claim is released or expires. It works for your messages, other agents' and a line from a call, and never for an agent's own message. The key has to appear whole and in any case: `!56` is not found in `!567` or `vlc-cli!56`, and `feat/x` is not found in `feat/x.py`. No new tool and no setting; the reach is no wider than an @mention.
