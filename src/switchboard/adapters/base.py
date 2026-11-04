@@ -41,6 +41,44 @@ APPROVAL_GUIDANCE = (
 )
 
 
+# The longest a wait() may be held for each harness: what its own client lets a call run, less a margin
+# (#559, DESIGN.md §6.1). ``wait_cap_s`` in config.toml can lower a harness's cap and raise it, but never
+# past this: a call the client has given up on is cancelled there, and a message that came while it lasted
+# was late. Claude Code moves a call past 120 s to the background (#558); Cursor cancels at 60 s; Devin
+# sends a call again after 120 s (§49.7); OpenCode was not measured. Codex ends a call at its MCP
+# server's ``tool_timeout_sec``, 300 s unless the setup raises it: the setup in USAGE sets 86400, so its
+# limit is that less the 10 s margin its Stop hook's wait keeps. The broker can't see a person's own
+# setting, and a Codex left at the default cancels a longer wait, which the broker now closes (#559).
+CLIENT_WAIT_LIMIT_S: dict[str, int] = {
+    "claude": 110,
+    "codex": 86390,
+    "cursor": 55,
+    "devin": 100,
+    "opencode": 50,
+    "test": 50,  # the scripted test agent (§9.6) has no client: the old default
+}
+# A harness that is not in the table gets the lowest cap there is: an unrecognized value fails closed.
+UNKNOWN_WAIT_LIMIT_S = min(CLIENT_WAIT_LIMIT_S.values())
+
+
+def client_wait_limit(harness: str) -> int:
+    """The longest wait() the harness's own client allows (``CLIENT_WAIT_LIMIT_S``)."""
+    return CLIENT_WAIT_LIMIT_S.get(harness, UNKNOWN_WAIT_LIMIT_S)
+
+
+def waits_over_client_limit(cfg: Config) -> list[tuple[str, int, int]]:
+    """The ``wait_cap_s`` settings in ``cfg`` above their harness's client limit, as ``(section, set,
+    limit)``: each is held to the limit (``Adapter.caps``), and the broker says so when it starts. Devin's
+    is left out: its default of 600 is documented as held to 100 whatever is set (§49.7), so it isn't news."""
+    sections = {
+        "claude": cfg.claude.wait_cap_s,
+        "codex": cfg.codex.wait_cap_s,
+        "cursor": cfg.cursor.wait_cap_s,
+        "opencode": cfg.opencode.wait_cap_s,
+    }
+    return [(h, v, client_wait_limit(h)) for h, v in sections.items() if v > client_wait_limit(h)]
+
+
 @dataclass(frozen=True)
 class Caps:
     ctx_max_chars: int
@@ -76,7 +114,8 @@ class Adapter:
             "devin": (c.devin.ctx_max_chars, c.devin.wait_cap_s),
             "opencode": (c.delivery.batch_max_chars, c.opencode.wait_cap_s),
         }
-        ctx, wait = table.get(self.harness, (c.delivery.batch_max_chars, 50))
+        ctx, wait = table.get(self.harness, (c.delivery.batch_max_chars, UNKNOWN_WAIT_LIMIT_S))
+        wait = min(wait, client_wait_limit(self.harness))  # never past what the harness's client allows
         # never more than the broker prints for this harness (``hook_replies``), so its cut is only
         # a safety net (it answers nothing rather than cut, §7.3)
         ctx = min(ctx, HOOK_CONTEXT_MAX.get(self.harness, ctx))

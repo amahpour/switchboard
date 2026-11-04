@@ -15,11 +15,11 @@ from typing import Any
 import httpx
 import pytest
 from conftest import TEST_HUMAN, InProcBroker
-from test_agents_http import Codex, make_token, members, sse_result
+from test_agents_http import THREAD_A, Codex, make_token, members, sse_result
 
 from switchboard import __version__
 from switchboard.broker import agent_http
-from switchboard.config import ClaudeCfg, Config
+from switchboard.config import ClaudeCfg, CodexCfg, Config
 from switchboard.mcp.server import TOOL_NAMES
 
 FIX = Path(__file__).resolve().parents[1] / "fixtures" / "mcp_http"
@@ -192,14 +192,17 @@ def test_the_server_tells_an_agent_its_version_behind_the_token(build: InProcBro
     assert httpx.get(f"{build.base}/healthz").text == "ok\n"
 
 
-def test_a_config_cap_raises_how_long_claude_may_wait(tmp_home: Path) -> None:
-    """#547: the tool clamped ``timeout_s`` to its own 110 before the broker saw it, so ``[claude]
-    wait_cap_s`` could only lower the cap. With the cap at 400, a ``wait(300)`` reaches the broker as 300
-    and says nothing was capped; at the default it would have been cut to 110. Fails if the tool still keeps
-    a cap of its own."""
+def test_a_config_cap_cannot_lift_claudes_wait_past_what_claude_code_allows(
+    tmp_home: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#559: Claude Code moves a call past 120 s to the background, so a ``[claude] wait_cap_s`` of 400 is
+    held to 110 where the tool and the broker both read it: a ``wait(300)`` comes back capped from 300 to
+    110, and the broker said at start that it would. Fails if the config can lift the cap past the client's
+    limit, or if it does so without a word in the log."""
     cfg = Config(human_name=TEST_HUMAN, claude=ClaudeCfg(wait_cap_s=400))
     b = InProcBroker(tmp_home, cfg).start()
     try:
+        assert "[claude] wait_cap_s = 400" in caplog.text and "held to 110 s" in caplog.text, caplog.text
         b.call("room.create", {"name": "#build"})
         claude = Claude(b, make_token(b, "laptop"), SESSION_1)
         assert claude.call("join", room="#build", screen_name="claude-1")["ok"]
@@ -207,6 +210,33 @@ def test_a_config_cap_raises_how_long_claude_may_wait(tmp_home: Path) -> None:
         with ThreadPoolExecutor(1) as pool:
             waiting = pool.submit(claude.call, "wait", room="#build", timeout_s=300)
             b.call("human.say", {"room": "#build", "text": "@claude-1 you may stop waiting"})
+            got = waiting.result(30)
+        assert got["ok"] and "you may stop waiting" in got["text"], got
+        assert (got["timeout_s"], got["capped_from"], got["cap_s"]) == (110, 300, 110), got
+    finally:
+        b.stop()
+
+
+def test_a_config_cap_raises_how_long_codex_may_wait(
+    tmp_home: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#547: the tool clamped ``timeout_s`` to a cap of its own before the broker saw it, so ``wait_cap_s``
+    could only lower it. Codex's limit is its ``tool_timeout_sec``, which the setup raises to a day, so with
+    ``[codex] wait_cap_s`` at 400 a ``wait(300)`` reaches the broker as 300 and says nothing was capped, and
+    the broker has nothing to say at start. Fails if the tool still keeps a cap of its own, or if Codex is
+    held to the 280 s of its default timeout (#559)."""
+    cfg = Config(human_name=TEST_HUMAN, codex=CodexCfg(wait_cap_s=400))
+    b = InProcBroker(tmp_home, cfg).start()
+    try:
+        assert "wait_cap_s" not in caplog.text, caplog.text
+        b.call("room.create", {"name": "#build"})
+        codex = Codex(b, make_token(b, "desk"))
+        assert codex.start().status_code == 200
+        assert codex.call("join", THREAD_A, room="#build", screen_name="codex-1")["ok"]
+        codex.call("read", THREAD_A, room="#build")
+        with ThreadPoolExecutor(1) as pool:
+            waiting = pool.submit(codex.call, "wait", THREAD_A, room="#build", timeout_s=300)
+            b.call("human.say", {"room": "#build", "text": "@codex-1 you may stop waiting"})
             got = waiting.result(30)
         assert got["ok"] and "you may stop waiting" in got["text"], got
         assert got["timeout_s"] == 300 and "capped_from" not in got and "cap_s" not in got, got
