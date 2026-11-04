@@ -49,13 +49,13 @@ def test_claims_gain_an_empty_note_and_the_backup_is_schema_36(
         (room, "build", "build", member, 9_000_000_000.0),
     )
     before.commit()
-    counts = db.row_counts(before, db.TABLES)
+    counts = db.row_counts(before, db.tables_of(36))
     assert counts["claims"] == had + 1
     before.close()
 
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 38
-    assert db.row_counts(con, db.TABLES) == counts
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 39
+    assert db.row_counts(con, db.tables_of(36)) == counts
     assert list(con.execute("PRAGMA foreign_key_check")) == []
     assert db.integrity_ok(con) is None
     notes = [row[0] for row in con.execute("SELECT note FROM claims")]

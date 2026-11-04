@@ -223,6 +223,34 @@ class Message:
         )
 
 
+@dataclass(frozen=True)
+class Meeting:
+    """One call transcribed into a room (DESIGN.md §52). The link itself is not a column:
+    only the platform is kept. ``error`` is a short fixed phrase, never a URL."""
+
+    id: int
+    room_id: int
+    state: str  # joining, live, ended
+    started_at: float
+    ended_at: float | None
+    started_by: str
+    platform: str  # zoom, meet, teams
+    error: str | None
+
+    @classmethod
+    def from_row(cls, r: sqlite3.Row) -> "Meeting":
+        return cls(
+            id=r["id"],
+            room_id=r["room_id"],
+            state=r["state"],
+            started_at=r["started_at"],
+            ended_at=r["ended_at"],
+            started_by=r["started_by"],
+            platform=r["platform"],
+            error=r["error"],
+        )
+
+
 MAX_PINS = 5  # a room's pinned decisions (#292, DESIGN.md §48)
 # the avatars an admin may upload (#498, DESIGN.md §29.11): for these harnesses, in these two schemes, as
 # these types, at most this big; ``db.SCHEMA`` says the same in its CHECKs

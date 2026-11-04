@@ -7,6 +7,7 @@ loop; every write is wrapped in ``db.tx`` (``BEGIN IMMEDIATE``).
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from collections.abc import Iterable, Sequence
 from typing import Any
@@ -32,6 +33,7 @@ from switchboard.models import (
     Event,
     Item,
     ListenerKeyRow,
+    Meeting,
     Member,
     Membership,
     Message,
@@ -52,6 +54,8 @@ OPEN_DELIVERY_STATES = ("pending", "offered", "in_context")
 # of ``delete_room``'s result. Participants are never deleted.
 ROOM_DELETE_TABLES = ("rooms", "messages", "memberships", "deliveries", "batches", "events")
 STATUS_LINE_STALE_S = 30 * 60
+# a meeting error is a short phrase. A link or a Zoom passcode never lands in the row (§52).
+_MEETING_SECRET = re.compile(r"https?://\S+|pwd=\S+", re.IGNORECASE)
 
 
 class StoreError(Exception):
@@ -301,6 +305,7 @@ class Store:
         ("pins", "pins WHERE room_id=?", 1),
         ("messages", "messages WHERE room_id=?", 1),
         ("claims", "claims WHERE room_id=?", 1),
+        ("meetings", "meetings WHERE room_id=?", 1),
         ("memberships", "memberships WHERE room_id=?", 1),
         ("rooms", "rooms WHERE id=?", 1),
     )
@@ -491,6 +496,9 @@ class Store:
                         (now, room_id),
                     )
                 else:
+                    # a meeting line, or a kind this code doesn't know: not a person's
+                    # message (that resets the hop count) and not an agent's (that adds
+                    # one). The count stays where it is (§52).
                     self.con.execute("UPDATE rooms SET last_msg_at=? WHERE id=?", (now, room_id))
             if kind == "chat" or deliver_notice:
                 rows = self.con.execute(
@@ -513,6 +521,56 @@ class Store:
         msg = self.get_message(mid)
         assert msg is not None
         return msg
+
+    # --------------------------------------------------------------- meetings (§52)
+    def insert_meeting(self, room_id: int, *, started_by: str, platform: str) -> Meeting:
+        """A call starting in ``room_id``. Conflict when one is already open (joining or live)."""
+        who = started_by.strip()[:80] or "someone"
+        now = self.clock.now()
+        try:
+            with db.tx(self.con):
+                cur = self.con.execute(
+                    "INSERT INTO meetings(room_id, state, started_at, started_by, platform)"
+                    " VALUES(?, 'joining', ?, ?, ?)",
+                    (room_id, now, who, platform),
+                )
+                mid = cur.lastrowid
+        except sqlite3.IntegrityError:
+            raise Conflict("a call is already open in this room") from None
+        got = self.meeting_by_id(int(mid)) if mid is not None else None
+        if got is None:
+            raise StoreError("meeting insert returned no id")
+        return got
+
+    def meeting_by_id(self, meeting_id: int) -> Meeting | None:
+        r = self.con.execute("SELECT * FROM meetings WHERE id=?", (meeting_id,)).fetchone()
+        return Meeting.from_row(r) if r else None
+
+    def open_meeting(self, room_id: int) -> Meeting | None:
+        """The room's call, if one is joining or live."""
+        r = self.con.execute(
+            "SELECT * FROM meetings WHERE room_id=? AND state!='ended' ORDER BY id DESC LIMIT 1",
+            (room_id,),
+        ).fetchone()
+        return Meeting.from_row(r) if r else None
+
+    def open_meetings(self) -> list[Meeting]:
+        rows = self.con.execute("SELECT * FROM meetings WHERE state!='ended' ORDER BY id").fetchall()
+        return [Meeting.from_row(r) for r in rows]
+
+    def set_meeting_live(self, meeting_id: int) -> None:
+        with db.tx(self.con):
+            self.con.execute("UPDATE meetings SET state='live' WHERE id=? AND state='joining'", (meeting_id,))
+
+    def end_meeting(self, meeting_id: int, error: str | None) -> None:
+        """Mark the call ended. A second call is a no-op. ``error`` is a short phrase, never a link."""
+        note = _MEETING_SECRET.sub("[redacted]", (error or "").strip())[:500] or None
+        now = self.clock.now()
+        with db.tx(self.con):
+            self.con.execute(
+                "UPDATE meetings SET state='ended', ended_at=?, error=? WHERE id=? AND state!='ended'",
+                (now, note, meeting_id),
+            )
 
     def get_message(self, message_id: int) -> Message | None:
         r = self.con.execute("SELECT * FROM messages WHERE id=?", (message_id,)).fetchone()
@@ -1971,7 +2029,9 @@ class Store:
         """
         rows = self.con.execute(
             self._ITEM_SQL + " WHERE d.membership_id=? AND d.message_id>? AND m.kind='chat'"
-            " AND m.sender_kind IN ('human', 'agent')"
+            # system notices are not chat an agent was composing against. A meeting line is,
+            # and so is any kind this code doesn't know: it makes the say stale (fail closed).
+            " AND m.sender_kind != 'system'"
             " ORDER BY d.message_id LIMIT ?",
             (membership_id, since, limit),
         ).fetchall()

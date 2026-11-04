@@ -73,6 +73,7 @@ class BrokerState:
     runner: Runner = None  # type: ignore[assignment]
     agents: AgentService = None  # type: ignore[assignment]
     boards: Boards = None  # type: ignore[assignment]
+    meetings: Any = None  # the call bridge (meeting/bridge.py, §52); None until the lifespan wires it
     shutdown_cb: Callable[[], None] | None = None
     recovery: dict[str, int] = field(default_factory=dict)
     tasks: list[asyncio.Task[Any]] = field(default_factory=list)
@@ -233,6 +234,11 @@ def create_app(
         state.agents = AgentService(state)
         state.boards = Boards(state)
         state.service.boards = state.boards
+        from switchboard.meeting.bridge import MeetingBridge
+
+        state.meetings = MeetingBridge(state)
+        state.service.meetings = state.meetings
+        state.meetings.recover()
         state.hub.set_board_source(state.boards.boards_named)
         state.service.delivery = state.agents
         state.rpc = RpcServer(paths.sock, state)
@@ -256,6 +262,10 @@ def create_app(
         try:
             yield
         finally:
+            # a live call leaves the meeting before anything else is torn down (§52)
+            if state.meetings is not None:
+                with contextlib.suppress(Exception):
+                    await state.meetings.shutdown()
             # first: its open streams end before the services they call
             with contextlib.suppress(Exception):
                 await mcp_http.aclose()

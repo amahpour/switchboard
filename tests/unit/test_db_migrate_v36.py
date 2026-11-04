@@ -40,14 +40,14 @@ def test_memberships_gain_quiet_off_and_the_backup_is_schema_35(
     path = tmp_path / "old.db"
     at_35(path, monkeypatch)
     before = sqlite3.connect(path)
-    counts = db.row_counts(before, db.TABLES)
+    counts = db.row_counts(before, db.tables_of(35))
     members = before.execute("SELECT COUNT(*) FROM memberships").fetchone()[0]
     before.close()
     assert members > 0 and counts["memberships"] == members
 
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 38
-    assert db.row_counts(con, db.TABLES) == counts
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 39
+    assert db.row_counts(con, db.tables_of(35)) == counts
     assert list(con.execute("PRAGMA foreign_key_check")) == []
     assert db.integrity_ok(con) is None
     quiet = con.execute("SELECT quiet FROM memberships").fetchall()
@@ -58,6 +58,6 @@ def test_memberships_gain_quiet_off_and_the_backup_is_schema_35(
 
     backup = sqlite3.connect(path.with_name("old.db.v35.bak"))
     assert db.schema_version(backup) == 35
-    assert db.row_counts(backup, db.TABLES) == counts
+    assert db.row_counts(backup, db.tables_of(35)) == counts
     assert "quiet" not in {r[1] for r in backup.execute("PRAGMA table_info(memberships)")}
     backup.close()

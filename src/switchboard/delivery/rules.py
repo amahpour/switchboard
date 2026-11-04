@@ -141,11 +141,11 @@ def item_cost(item: Item, limit: int | None = envelope.ITEM_LIMIT, *, peers_stub
     """Characters the item's rendered envelope line takes.
 
     Inline, escaping can make text up to six times longer than it was typed.
-    ``peers_stubbed`` (a Stop-path batch, #548): an agent-authored item is the
-    stub line that batch actually sends, not the inline line. A person's message
-    is never stubbed, so it keeps its inline cost either way.
+    ``peers_stubbed`` (a Stop-path batch, #548): untrusted text (an agent's, a call's,
+    or a kind this code doesn't know) is the stub line that batch actually sends.
+    A person's message is never stubbed, so it keeps its inline cost either way.
     """
-    if peers_stubbed and item.sender_kind == "agent":
+    if peers_stubbed and envelope.untrusted_sender(item.sender_kind):
         return len(envelope.render_item(item, "", "", inline=False)) + 1
     shown_limit = envelope.delivery_limit(item, "", limit)
     return len(envelope.render_item(item, "", "", inline=True, limit=shown_limit)) + 1
@@ -210,7 +210,11 @@ def chatter_due(
 
     ``addressed_only`` (a quiet membership, #548, §50) is stricter than the hold: unaddressed
     chatter never becomes due, including when ``hold_s`` is 0 (an open ``wait()``). A reply
-    still does, and the caller sends the other chatter along with it."""
+    still does, and the caller sends the other chatter along with it.
+
+    A call line that names nobody is not chatter that can become due (§52): it rides along
+    with the next real wake and never starts one, for every agent, quiet or not."""
+    chatter = [c for c in chatter if not _meeting_aside(c)]
     if not chatter:
         return False
     if hold_s > 0 or addressed_only:
@@ -233,7 +237,7 @@ def chatter_wakes_at(pending: Sequence[Item], hold_s: float, *, addressed_only: 
     unaddressed chatter never wakes it."""
     if addressed_only:
         return None
-    eligible = [d for d in pending if d.notified_at is None]
+    eligible = [d for d in pending if d.notified_at is None and not _meeting_aside(d)]
     if hold_s <= 0 or not eligible or any(d.prio >= 1 or d.reply_to_me for d in eligible):
         return None
     return min(d.ts for d in eligible) + hold_s
@@ -316,7 +320,9 @@ def budget_blocked(
         return False
     if any(d.prio == 1 for d in eligible):
         return True
-    chatter = [d for d in eligible if d.prio == 0 and (d.reply_to_me or not addressed_only)]
+    chatter = [
+        d for d in eligible if d.prio == 0 and not _meeting_aside(d) and (d.reply_to_me or not addressed_only)
+    ]
     return bool(chatter) and peer_ok(peer_batch_boundary, boundary_seq)
 
 
@@ -542,11 +548,19 @@ def parked_escalation(
 
 
 # ------------------------------------------------------------ read first (§24)
+def _meeting_aside(item: Item) -> bool:
+    """A call line that names nobody (§52). It is not a reason to wake, to spend a
+    budget slot on its own, or to show a future wake time."""
+    return item.sender_kind == "meeting" and item.prio == 0
+
+
 def unaddressed_chatter(item: Item) -> bool:
     """Chatter that does not address this member (#548): prio 0, and not a reply to
     one of its own messages. A person's message is prio 2 and an @mention is prio 1,
-    so neither is. The maintainer approved skipping these on 2026-11-01 (§24)."""
-    return item.sender_kind == "agent" and item.prio == 0 and not item.reply_to_me
+    so neither is. A call line is the same kind of untrusted peer text (§52): one that
+    names nobody does not block pass() either. The maintainer approved skipping
+    unaddressed chatter on 2026-11-01 (§24)."""
+    return envelope.untrusted_sender(item.sender_kind) and item.prio == 0 and not item.reply_to_me
 
 
 def unread_stubs(pending: Iterable[Item]) -> list[int]:
@@ -571,7 +585,7 @@ def unread_stubs(pending: Iterable[Item]) -> list[int]:
         for i in pending
         if i.state == "pending"
         and i.notified_at is not None
-        and i.sender_kind == "agent"
+        and envelope.untrusted_sender(i.sender_kind)
         and i.in_context_at is None
         and not unaddressed_chatter(i)
     )

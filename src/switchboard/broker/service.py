@@ -267,6 +267,7 @@ class RoomService:
         # The delivery side (AgentService); None in unit tests of the human side.
         self.delivery: DeliveryHooks | None = None
         self.boards: Any = None  # the review boards (broker/reviews.py Boards), for /review (§37.8)
+        self.meetings: Any = None  # the call bridge (meeting/bridge.py), for /meeting (§52)
         hub.set_members_source(self._members_snapshot)
         hub.set_settings_source(self._settings_snapshot)
 
@@ -297,6 +298,7 @@ class RoomService:
             "hop_count": room.hop_count,
             "hop_limit": room.hop_limit,
             "test_mode": self.info.test_mode,
+            "meeting": self.meeting_state(room),
         }
 
     def room_dict(self, room: Room) -> dict[str, Any]:
@@ -872,6 +874,8 @@ class RoomService:
                 },
             )
             self.store.rename_room(room.id, new, expect=room.name)
+        if self.meetings is not None:
+            self.meetings.stop(room.id, "the room closed")
         for msg in posted:
             self.hub.message(room.name, message_dict(msg))
         self.hub.drop_room(room.name)
@@ -1132,6 +1136,49 @@ class RoomService:
     def people_names(self) -> list[str]:
         """The humans (§32): the owner, then everyone the owner added on a hosted broker."""
         return [self.cfg.human_name] + [p.name for p in self.store.people()]
+
+    def meeting_state(self, room: Room) -> dict[str, str] | None:
+        """What the page shows while a call is open: ``joining`` or ``live``, and the platform.
+        None when there is no call. Never a link."""
+        row = self.store.open_meeting(room.id)
+        if (
+            row is None
+            or row.state not in ("joining", "live")
+            or row.platform not in ("zoom", "meet", "teams")
+        ):
+            return None
+        return {"state": row.state, "platform": row.platform}
+
+    def publish_settings(self, room_id: int) -> None:
+        room = self.store.room_by_id(room_id)
+        if room is not None:
+            self.hub.room_settings(room.name, self.settings(room))
+
+    def notice_in(self, room_id: int, text: str) -> None:
+        room = self.store.room_by_id(room_id)
+        if room is not None:
+            self.post_notice(room, text)
+
+    def post_meeting_line(
+        self, room_id: int, *, sender_name: str, text: str, mentions: list[str]
+    ) -> Message | None:
+        """One finished transcript line. Cleaned and cut like any text from outside.
+        ``mentions`` is the one member the line addressed, or none."""
+        room = self.store.room_by_id(room_id)
+        if room is None:
+            return None
+        body = clean(text).strip()[:1000]
+        if not body:
+            return None
+        who = clean(sender_name).strip()[:40] or "call"
+        return self._post(
+            room,
+            sender_name=who,
+            sender_kind="meeting",
+            via="meeting",
+            text=body,
+            mentions=mentions,
+        )
 
     def post_notice(self, room: Room, text: str, level: str | None = None) -> Message:
         return self._post(

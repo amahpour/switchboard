@@ -43,14 +43,14 @@ def test_people_gain_admin_off_and_the_backup_is_schema_37(
     path = tmp_path / "old.db"
     at_37(path, monkeypatch)
     before = sqlite3.connect(path)
-    counts = db.row_counts(before, db.TABLES)
+    counts = db.row_counts(before, db.tables_of(37))
     assert counts["people"] >= 1
     assert before.execute("SELECT name FROM people WHERE name='bob'").fetchone() is not None
     before.close()
 
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 38
-    assert db.row_counts(con, db.TABLES) == counts
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 39
+    assert db.row_counts(con, db.tables_of(37)) == counts
     assert list(con.execute("PRAGMA foreign_key_check")) == []
     assert db.integrity_ok(con) is None
     admin = con.execute("SELECT admin FROM people WHERE name='bob'").fetchone()[0]
