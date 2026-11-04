@@ -29,7 +29,7 @@ from __future__ import annotations
 import hmac
 import logging
 import secrets
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -40,6 +40,7 @@ from switchboard.clock import Clock
 from switchboard.config import Config
 from switchboard.delivery import rules
 from switchboard.delivery.sinks import Sink, SinkRegistry
+from switchboard.meeting.speech import VOICE_HINT
 from switchboard.models import (
     CONTINUE_PATHS,
     PULL_PATHS,
@@ -107,6 +108,9 @@ class Engine:
         self.key = key or secrets.token_bytes(32)
         self.test_mode = test_mode
         self.attachments: Any = None  # files a room holds (files.py, §53); set once the broker is up
+        # whether a room's live call is speaking agents' @call lines (§52); set once the broker is up.
+        # None, as in the engine tests, means voice is off everywhere.
+        self.voice_on: Callable[[int], bool] | None = None
         self.parked: dict[int, str] = {}  # membership_id -> reason
         # A Stop wait its own side ended (Esc, a timeout in the harness) leaves no wake path until the
         # session's next hook (#449). The adapter's reason is kept even with nothing pending, so
@@ -292,6 +296,14 @@ class Engine:
             notes = self.attachments.download_notes(fit.items, m.id)
             if notes:
                 text += "\n" + notes
+        # a batch with call lines, while a person has voice on in the call: how an agent speaks (§52).
+        # Said here and only here, so there is no tool parameter and no join text for it.
+        if (
+            self.voice_on is not None
+            and any(it.sender_kind == "meeting" for it in fit.items)
+            and self.voice_on(room.id)
+        ):
+            text += "\n" + VOICE_HINT
         # each caller records ``chars=len(text)`` in the batch's ``offer`` event: what the agent
         # was handed, for ``switchboard report``'s characters by path (DESIGN.md §12.6, #275)
         return text

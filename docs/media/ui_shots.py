@@ -3155,8 +3155,9 @@ def shoot_meeting_guide(browser: Any, out: Path, world: Any) -> None:
     """#586, the meetings guide: a room of its own with claude-1 and codex-1, and no joinly. The command
     palette filtered to /meeting (``guide-meeting-command-light``), the bar while the bot joins
     (``guide-meeting-joining-light``) and a live Meet call with a few call lines, a call-out and the agent's
-    answer (``guide-meeting-call-light``). The call is seeded through the store and the service, as
-    tests/e2e/test_meetings_ui.py does."""
+    answer (``guide-meeting-call-light``), then (#593) the voice switch turned on as a person clicks it, a snapshot
+    of the shared screen posted as a card, and an agent's ``@call`` line (``guide-meeting-voice-light``). The call
+    is seeded through the store and the service, as tests/e2e/test_meetings_ui.py does."""
     from playwright.sync_api import expect
 
     room, b = "#planning", world.broker
@@ -3224,6 +3225,43 @@ def shoot_meeting_guide(browser: Any, out: Path, world: Any) -> None:
         hide_rows_before(page, "is joining a Meet call")
         page.mouse.move(0, 0)
         shot(page, out, "guide-meeting-call-light.png", clip=pane_clip(page, "#banner-meeting"))
+
+        # voice on, by the switch; a snapshot of the shared screen as a person's card; claude-1's spoken line.
+        # The scripted agents can't call any more, so the card and the line are posted through the service.
+        page.locator("#meeting-voice").click()
+        expect(page.locator("#meeting-voice")).to_have_attribute("aria-checked", "true")
+        expect(page.locator("#log")).to_contain_text("turned voice on")
+
+        def snapshot_and_reply() -> None:
+            r = b.state.store.get_room(room)
+            kept = b.state.attachments.store_snapshot(
+                r.id,
+                b.state.cfg.human_name,
+                "human",
+                "screen-142507.jpg",
+                b"\xff\xd8\xff\xe0" + b"\x00" * 21000,
+            )
+            card = f"artifact: {kept.name} | {kept.size} | sha256:{kept.sha256} | switchboard:file/{kept.id}"
+            b.state.service.human_say(room, card, "web", person=(b.state.cfg.human_name, None))
+            member = b.state.store.find_member(r.id, "claude-1")
+            b.state.service._post(
+                r,
+                sender_name="claude-1",
+                sender_kind="agent",
+                sender_harness="claude",
+                sender_membership_id=member.membership_id,
+                via="mcp",
+                text="@call The hero image is four megabytes. I will resize it and open a pull request.",
+                mentions=[],
+            )
+
+        b.on_loop(snapshot_and_reply)
+        expect(page.locator("#log .md-artifact a.md-file")).to_be_visible()
+        expect(page.locator("#log")).to_contain_text("@call The hero image is four megabytes")
+        hide_rows_before(page, "turned voice on")
+        page.evaluate("document.activeElement && document.activeElement.blur()")
+        page.mouse.move(0, 0)
+        shot(page, out, "guide-meeting-voice-light.png", clip=pane_clip(page, "#banner-meeting"))
     finally:
         page.context.close()
 

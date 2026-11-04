@@ -1167,9 +1167,9 @@ class RoomService:
         """The humans (§32): the owner, then everyone the owner added on a hosted broker."""
         return [self.cfg.human_name] + [p.name for p in self.store.people()]
 
-    def meeting_state(self, room: Room) -> dict[str, str] | None:
-        """What the page shows while a call is open: ``joining`` or ``live``, and the platform.
-        None when there is no call. Never a link."""
+    def meeting_state(self, room: Room) -> dict[str, str | bool] | None:
+        """What the page shows while a call is open: ``joining`` or ``live``, the platform, and
+        whether agents' ``@call`` lines are spoken (§52). None when there is no call. Never a link."""
         row = self.store.open_meeting(room.id)
         if (
             row is None
@@ -1177,7 +1177,8 @@ class RoomService:
             or row.platform not in ("zoom", "meet", "teams")
         ):
             return None
-        return {"state": row.state, "platform": row.platform}
+        voice = self.meetings is not None and self.meetings.voice(room.id)
+        return {"state": row.state, "platform": row.platform, "voice": voice}
 
     def publish_settings(self, room_id: int) -> None:
         room = self.store.room_by_id(room_id)

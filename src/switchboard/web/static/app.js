@@ -1762,9 +1762,14 @@
     const open = !!(r && call && label && (call.state === 'joining' || call.state === 'live'));
     band.classList.toggle('hidden', !open);
     if (!open) return;
-    $('banner-meeting-text').textContent = call.state === 'live'
+    const voice = call.voice === true;  // anything but true is off: a frame without it is an older broker
+    $('banner-meeting-text').textContent = (call.state === 'live'
       ? 'Transcribing a call (' + label + ')'
-      : 'Joining a ' + label + ' call…';
+      : 'Joining a ' + label + ' call…') + (voice ? ' · agents can speak' : '');
+    // the switch's name stays "Voice": aria-checked says which, so a screen reader doesn't hear both
+    $('meeting-voice').setAttribute('aria-checked', String(voice));
+    // a picture needs the bot to be in the call
+    $('meeting-snapshot').disabled = call.state !== 'live';
   }
 
   function selectRoom(name) {
@@ -2407,8 +2412,8 @@
     { group: 'Room', cmd: 'hops', args: '[n]', desc: 'Show or set the loop-guard limit', pill: 'raise: web only',
       usage: '/hops   /hops <n>   (0–1000, 0 turns it off)', detail: 'A new limit never lifts a loop-guard pause: /resume does.', live: 'hops' },
     { group: 'Room', cmd: 'meeting', args: '[<link>|leave]', desc: 'Transcribe a Zoom, Meet or Teams call here',
-      pill: 'web only', usage: '/meeting   /meeting <link>   /meeting leave',
-      detail: 'The link is not kept. Someone on the call wakes an agent by saying its name.' },
+      pill: 'web only', usage: '/meeting   /meeting <link>   leave   voice on|off   snapshot',
+      detail: 'The link is not kept. Someone on the call wakes an agent by saying its name. Voice lets agents speak with @call; a snapshot posts the shared screen.' },
     { group: 'Room', cmd: 'close', args: '', desc: 'Close the room; the history is kept', pill: '', usage: '/close',
       detail: 'Asks first. Reopen it from Closed rooms.' },
     { group: 'Room', cmd: 'pin', args: '<id>', desc: 'Pin a message for every agent that joins', pill: 'web only',
@@ -6533,6 +6538,14 @@
     $('meeting-leave').addEventListener('click', function () {
       submitText('/meeting leave');
       $('input').focus();
+    });
+    // the same commands a person can type, so the broker checks them the same way (§52)
+    $('meeting-voice').addEventListener('click', function () {
+      const on = this.getAttribute('aria-checked') === 'true';
+      submitText('/meeting voice ' + (on ? 'off' : 'on'));
+    });
+    $('meeting-snapshot').addEventListener('click', function () {
+      submitText('/meeting snapshot');
     });
     $('room-rules').addEventListener('click', openRoomRules);
     $('room-wake').addEventListener('click', openRoomWake);

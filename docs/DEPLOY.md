@@ -183,6 +183,16 @@ joinly_url = "http://127.0.0.1:8010/mcp/"
 
 Restart the broker. `/meeting` with no server set names this page.
 
+**The voice.** When a person lets agents speak in a call (`/meeting voice on`), joinly says their lines with Kokoro, its text-to-speech model. The voice is a setting in the same table:
+
+```toml
+[meeting]
+joinly_url = "http://127.0.0.1:8010/mcp/"
+tts_voice = "bm_george"
+```
+
+`tts_voice` is a short word of lowercase letters, digits and `_`, and `bm_george` is the default. It is sent to joinly each time a call starts, as that call's own setting, so changing it needs a broker restart and a new call, and joinly's container needs nothing. It goes to whatever text-to-speech service joinly runs as its `voice` argument, and the image runs Kokoro. joinly 0.5.4 ships these voices: `af_` and `am_` (American English, women and men), `bf_` and `bm_` (British English), and others for other languages (`ef_dora`, `ff_siwis`, `if_sara`, `jf_`, `pf_`, `zf_` and more). A name joinly does not have makes the speech fail, and the room says it could not speak. Speaking and snapshots need nothing else in the container. A snapshot is a file, so it counts against `[files]` (25 MB a file and 500 MB a room by default, [DESIGN.md §53](DESIGN.md#53-attachments-544)); joinly's frame is a small JPEG, far under that.
+
 Beside the server's container, add a service on the same network and do not publish its port. Point `joinly_url` at that service, for example `http://joinly:8000/mcp/`. The broker reaches it; nothing outside the network does.
 
 **Speaker names on Zoom.** joinly 0.5.4 gives no speaker name on Zoom, so every line there shows as `call`; Meet and Teams are unaffected. Its browser has no graphics acceleration, so Zoom shows one tile that follows whoever is talking, and joinly's lookup doesn't know that tile. The fix is [joinly-ai/joinly#187](https://github.com/joinly-ai/joinly/pull/187); until a joinly release has it, the names come through only with that file patched into the image. Its `zoom.py` differs from 0.5.4's by the fix alone, so you can mount it over the image's copy, read-only:

@@ -14,6 +14,7 @@ from engine_agents import result, waiting, woke
 from engine_world import World
 
 from switchboard.config import Config
+from switchboard.meeting.speech import VOICE_HINT
 from switchboard.models import Message
 
 
@@ -83,3 +84,47 @@ def test_a_meeting_line_does_not_move_the_hop_count(tmp_path: Path, clock: FakeC
     assert w.store.room_by_id(w.room.id).hop_count == 1
     w.agent_says(m, "three")
     assert w.store.room_by_id(w.room.id).hop_count == 2
+
+
+def test_a_wake_with_call_lines_says_how_to_speak_while_voice_is_on(tmp_path: Path, clock: FakeClock) -> None:
+    """With voice on in the room, a batch that holds a call line ends with the one line saying how.
+    With voice off, or no switch at all, or a batch with no call line, it does not. Fails if the
+    hint is always added, never added, or added for another room's call."""
+    w = world(tmp_path, clock)
+    _c, _cm, claude = waiting(w, "claude-1")
+    w.engine.voice_on = lambda room_id: room_id == w.room.id
+    meeting(w, "Claude one, tell me how much", ("claude-1",))
+    text = result(w, claude)["text"]
+    assert text.endswith(VOICE_HINT) and text.count(VOICE_HINT) == 1
+
+    (tmp_path / "other").mkdir()
+    other = world(tmp_path / "other", clock)
+    _c, _cm, claude2 = waiting(other, "claude-1")
+    other.engine.voice_on = lambda room_id: False
+    meeting(other, "Claude one, tell me how much", ("claude-1",))
+    assert VOICE_HINT not in result(other, claude2)["text"]
+
+    (tmp_path / "bare").mkdir()
+    bare = world(tmp_path / "bare", clock)
+    _c, _cm, claude3 = waiting(bare, "claude-1")
+    assert bare.engine.voice_on is None  # the engine alone has no call: off everywhere
+    meeting(bare, "Claude one, tell me how much", ("claude-1",))
+    assert VOICE_HINT not in result(bare, claude3)["text"]
+
+
+def test_a_batch_without_a_call_line_has_no_voice_hint(tmp_path: Path, clock: FakeClock) -> None:
+    """A person's message wakes the agent as before, even with voice on."""
+    w = world(tmp_path, clock)
+    w.engine.voice_on = lambda room_id: True
+    _c, _cm, claude = waiting(w, "claude-1")
+    msg = w.store.insert_message(
+        w.room.id,
+        sender_name="alice",
+        sender_kind="human",
+        via="web",
+        text="@claude-1 hello",
+        mentions=("claude-1",),
+    )
+    w.actions += w.engine.on_message(msg.id)
+    assert woke(w, claude)
+    assert VOICE_HINT not in result(w, claude)["text"]

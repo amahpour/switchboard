@@ -15,6 +15,8 @@ from switchboard.models import RESERVED_NAMES
 from switchboard.paths import Paths
 
 SCREEN_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,23}$")
+# a Kokoro voice name, as joinly takes it (``bm_george``): a short word, nothing else reaches joinly
+VOICE_RE = re.compile(r"[a-z0-9_]{1,32}")
 # Agents may not take a screen name that starts with the human's name, so a login
 # name that prefixes a harness's usual names (claude-1, dev -> devin-1) is not used.
 _AGENT_PREFIXES = ("claude", "codex", "cursor", "devin")
@@ -144,12 +146,18 @@ class FilesCfg:
 
 @dataclass(frozen=True)
 class MeetingCfg:
-    """Where joinly listens (DESIGN.md §52). Empty: ``/meeting`` says how to set it.
-    The URL is the operator's, from this file, never from a room."""
+    """Where joinly listens, and the voice it speaks with (DESIGN.md §52). Empty ``joinly_url``:
+    ``/meeting`` says how to set it. Both are the operator's, from this file, never from a room.
+
+    ``tts_voice`` is a Kokoro voice name (``bm_george``, ``af_bella``): a short word of
+    lowercase letters, digits and underscores, passed to joinly as it connects."""
 
     joinly_url: str = ""
+    tts_voice: str = "bm_george"
 
     def __post_init__(self) -> None:
+        if not VOICE_RE.fullmatch(self.tts_voice):
+            raise ConfigError("[meeting] tts_voice must be a short word of a-z, 0-9 and _, like bm_george")
         url = self.joinly_url.strip()
         if url != self.joinly_url:
             object.__setattr__(self, "joinly_url", url)

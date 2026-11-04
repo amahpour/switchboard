@@ -40,7 +40,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 40
+SCHEMA_VERSION = 41
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -275,7 +275,7 @@ CREATE TABLE files(
   sha256 TEXT CHECK(sha256 IS NULL OR length(sha256) = 64),
   content_type TEXT NOT NULL DEFAULT '' CHECK(length(content_type) <= 200),
   uploader_name TEXT NOT NULL CHECK(length(uploader_name) BETWEEN 1 AND 100),
-  uploader_kind TEXT NOT NULL CHECK(uploader_kind IN ('human','agent')),
+  uploader_kind TEXT NOT NULL CHECK(uploader_kind IN ('human','agent','meeting')),
   message_id INTEGER REFERENCES messages(id),
   state TEXT NOT NULL CHECK(state IN ('pending','stored')),
   created_at REAL NOT NULL,
@@ -850,6 +850,18 @@ V39_TO_V40 = (
     "UPDATE meta SET value='40' WHERE key='schema_version'",
 )
 
+# v40 -> v41 (#593, DESIGN.md §52): a snapshot of a call's shared screen is a room file whose uploader is
+# the call itself, when a line on the call asked for it, so the files CHECK gains 'meeting'. The same
+# schema-text edit as v38 -> v39, on the one table: rows, indexes and foreign keys stay. _migrate brackets
+# it with schema editing and fails closed (rolls back) if the new CHECK is not in the table's text.
+V40_TO_V41 = (
+    "UPDATE sqlite_master SET sql=replace(sql,"
+    " '''human'',''agent'')',"
+    " '''human'',''agent'',''meeting'')')"
+    " WHERE type='table' AND name='files'",
+    "UPDATE meta SET value='41' WHERE key='schema_version'",
+)
+
 
 class MigrationStep(NamedTuple):
     to: int
@@ -909,6 +921,7 @@ def _steps(frm: int) -> list[MigrationStep]:
             ),
         ),
         39: MigrationStep(40, V39_TO_V40, ("broker_settings", "files", "file_grants")),
+        40: MigrationStep(41, V40_TO_V41, (), (("files", "'human','agent','meeting')"),)),
     }
     out = []
     v = frm

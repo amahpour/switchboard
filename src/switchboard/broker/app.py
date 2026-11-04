@@ -249,6 +249,7 @@ def create_app(
 
         state.meetings = MeetingBridge(state)
         state.service.meetings = state.meetings
+        state.engine.voice_on = state.meetings.voice
         state.meetings.recover()
         state.hub.set_board_source(state.boards.boards_named)
         from switchboard.files import Attachments, FolderStore

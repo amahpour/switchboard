@@ -9,7 +9,8 @@ that raise it need ``human`` (the web session, or test trust). ``/catchup``
 removed in 0.4; it opens a review board now.) ``/close`` (§28.3) ends every membership,
 so it reduces activity: ``human_cli``. ``/quiet`` reduces what wakes an agent, so
 ``human_cli``; ``/unquiet`` raises it, so ``human`` (§50). ``/meeting`` joins a call,
-which raises what the room's agents can be asked to do, so ``human`` (§52).
+which raises what the room's agents can be asked to do, so ``human`` (§52); so do its
+``voice on|off`` (agents speaking in the call) and ``snapshot`` (a picture of its shared screen).
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from switchboard import reviews
 from switchboard.broker import catchup
 from switchboard.delivery.rules import parse_mentions
 from switchboard.meeting.links import PLATFORM_LABEL, LinkError, parse_link
+from switchboard.meeting.screen import Asker
 from switchboard.models import MAX_BUDGET, MAX_HOPS, SCREEN_NAME_RE, Room
 from switchboard.reviews import ReviewError
 from switchboard.store import Conflict
@@ -65,6 +67,10 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
   /meeting            say whether this room is transcribing a call
   /meeting <link>     transcribe a Zoom, Meet or Teams call here (web only)
   /meeting leave      leave the call and stop transcribing (web only)
+  /meeting voice on   let agents speak in the call: a say() that starts with @call
+                      is read aloud to everyone on it. Off when a call starts (web only)
+  /meeting voice off  stop that (web only)
+  /meeting snapshot   post a picture of the call's shared screen (web only)
   /who                list members
   /status             room and delivery status
   /help               this list
@@ -200,15 +206,24 @@ def parse_command(text: str) -> Command:
     return Command(name=name, args=args, raw=raw)
 
 
+MEETING_USAGE = "usage: /meeting [<link>|leave|snapshot|voice on|voice off]"
+
+
 def _parse_meeting(args: tuple[str, ...], raw: str) -> Command:
-    """``/meeting``, ``/meeting leave``, or ``/meeting <link>``. The link is one argument.
-    It is kept on the command only until ``apply`` has handed it to the bridge."""
+    """``/meeting``, ``/meeting leave``, ``/meeting snapshot``, ``/meeting voice on|off``, or
+    ``/meeting <link>``. The link is one argument. It is kept on the command only until ``apply``
+    has handed it to the bridge."""
     if not args:
         return Command(name="meeting", args=(), raw=raw)
-    if len(args) == 1 and args[0].lower() == "leave":
-        return Command(name="meeting", args=("leave",), raw=raw)
+    word = args[0].lower()
+    if len(args) == 1 and word in ("leave", "snapshot"):
+        return Command(name="meeting", args=(word,), raw=raw)
+    if word == "voice":
+        if len(args) == 2 and args[1].lower() in ("on", "off"):
+            return Command(name="meeting", args=("voice", args[1].lower()), raw=raw)
+        raise CommandError("bad_request", "usage: /meeting voice on|off")
     if len(args) != 1:
-        raise CommandError("bad_request", "usage: /meeting [<link>|leave]")
+        raise CommandError("bad_request", MEETING_USAGE)
     return Command(name="meeting", args=(args[0],), raw=raw)
 
 
@@ -648,6 +663,10 @@ def _meeting(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Resu
             event="meeting_leave",
             event_data={"platform": row.platform},
         )
+    if cmd.args == ("snapshot",):
+        return _meeting_snapshot(room, actor, svc)
+    if cmd.args[:1] == ("voice",):
+        return _meeting_voice(cmd.args[1] == "on", room, svc)
     try:
         link = parse_link(cmd.args[0])
     except LinkError:
@@ -679,6 +698,49 @@ def _meeting(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Resu
         room_changed=True,
         event="meeting_join",
         event_data={"platform": link.platform},
+    )
+
+
+def _meeting_voice(on: bool, room: Room, svc: "RoomService") -> Result:
+    """Let agents speak in the room's call, or stop them (§52). In memory for this call only."""
+    if svc.store.open_meeting(room.id) is None:
+        return Result(True, f"{room.name}: no call is being transcribed")
+    if svc.meetings is None:
+        return Result(True, "No meeting server is running. See DEPLOY.md.")
+    word = "on" if on else "off"
+    if not svc.meetings.set_voice(room.id, on):
+        return Result(True, f"{room.name}: voice is already {word}")
+    if on:
+        notice = (
+            "turned voice on: an agent's message that starts with @call is read aloud to everyone on the call"
+        )
+    else:
+        notice = "turned voice off: agents no longer speak in the call"
+    return Result(
+        True,
+        f"{room.name}: voice is {word}",
+        notice=notice,
+        room_changed=True,
+        event="meeting_voice",
+        event_data={"on": on},
+    )
+
+
+def _meeting_snapshot(room: Room, actor: Actor, svc: "RoomService") -> Result:
+    """Post a picture of the call's shared screen as this person's message (§52). It arrives a
+    moment later; a refusal (the bot is not in yet, or one was taken lately) is the reply."""
+    if svc.store.open_meeting(room.id) is None:
+        return Result(True, f"{room.name}: no call is being transcribed")
+    if svc.meetings is None:
+        return Result(True, "No meeting server is running. See DEPLOY.md.")
+    asker = Asker(actor.who(svc.cfg.human_name), actor.person_id, actor.via)
+    why = svc.meetings.request_snapshot(room.id, asker)
+    if why is not None:
+        raise CommandError("conflict", why)
+    return Result(
+        True,
+        f"{room.name}: asking the bot for a snapshot of the call",
+        event="meeting_snapshot",
     )
 
 
