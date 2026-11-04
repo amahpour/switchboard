@@ -1,4 +1,5 @@
-"""A client that gives up on a ``wait()`` by closing its connection (#559, DESIGN.md §6.1).
+"""A client that gives up on a ``wait()``, or on a Stop hook, by closing its connection (#559, #576,
+DESIGN.md §6.1).
 
 The broker holds a ``wait()`` open as a sink. When the client is gone, the sink has to go with it: a
 message that arrives meanwhile would be handed to a wait nobody can read, expire ten seconds later as
@@ -9,6 +10,9 @@ message that arrives meanwhile would be handed to a wait nobody can read, expire
 - a 2025-06-18 session (Codex, Cursor, OpenCode) cancels a call with a ``notifications/cancelled`` post,
   and the library treats a stream that closes without one as a dropped line, not a cancel: the tool call
   ran on. ``HttpTools`` watches the request itself for that.
+
+A Codex Stop hook is a call of the same kind (the hidden ``hook`` tool, held as a park, §49.4), and is watched
+the same way.
 
 Each test drives a real client wire against the in-process broker over a real socket, and ends the call
 the way a process dies or a proxy gives up: it closes the connection and sends nothing else.
@@ -30,7 +34,7 @@ from test_agents_http import THREAD_A, Codex, make_token
 from test_agents_http_claude import CALL as CLAUDE_CALL
 from test_agents_http_claude import SESSION_1, USES, Claude
 from test_agents_http_devin import open_waits
-from test_agents_http_wake import until
+from test_agents_http_wake import parked, participant, row, stop_hook_request, until
 from test_mcp_agent import q, states
 
 WAIT_S = 60  # long: the tests end it themselves, so the timeout never does
@@ -196,3 +200,27 @@ def test_closing_a_connection_ends_only_the_wait_it_carried(broker: InProcBroker
     finally:
         line.close()
     assert got["ok"] and "still here?" in got["text"], got
+
+
+def test_a_codex_stop_hook_whose_client_closes_its_connection_ends_its_park(broker: InProcBroker) -> None:
+    """#576: a Codex Stop hook is held as a park. A client that closes the hook's connection and sends no
+    ``notifications/cancelled`` has gone, and the park goes at once, as a cancelled one does: Members says the
+    Stop hook ended, and the next message stays pending for the next way it can be delivered, not handed to a
+    park nobody can read. Fails if the park runs on to its own ``wait_s`` after the connection is closed,
+    which the MCP library takes for a dropped line, not a cancel."""
+    broker.call("room.create", {"name": "#build"})
+    w = CodexWire(broker, "codex-1")
+    w.join()
+    p = participant(broker, "codex-1")
+    _, body = stop_hook_request(w.codex, THREAD_A, wait_s=str(WAIT_S))
+    line = hold_open(broker, w.codex.headers(CODEX_CALL["headers"]), body)
+    try:
+        until(lambda: parked(broker, p.id))
+    finally:
+        line.close()
+    until(lambda: not parked(broker, p.id))
+    assert "not listening: its Stop hook ended" in (row(broker, "codex-1")["parked_reason"] or "")
+    mid = say_to(broker, "codex-1", "anyone there?")
+    assert states(broker, "codex-1")[mid] == "pending"  # nobody was listening
+    got = w.call("read", room="#build")
+    assert got["ok"] and "anyone there?" in got["text"], got  # and nothing was lost
