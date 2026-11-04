@@ -228,10 +228,10 @@ async def test_a_join_without_pins_is_as_it_was(broker: InProcBroker) -> None:
     assert "Pinned" not in j["text"] and "Recent messages, oldest first (1)." in j["text"]
 
 
-async def test_a_join_with_five_pins_into_a_realistic_room_fits_the_6000_char_budget(
+async def test_a_join_with_five_pins_into_a_realistic_room_fits_the_join_budget(
     broker: InProcBroker,
 ) -> None:
-    """The size test of #272 (``test_join_into_a_realistic_room_fits_the_6000_char_budget``: the
+    """The size test of #272 (``test_join_into_a_realistic_room_fits_the_join_budget``: the
     spike's room, whose join is 5,998 characters) with five long pins: the pins are cut to 200
     characters each, the catch-up window gives up its oldest messages until the join fits, and
     the "earlier" line counts them and names a working call. Fails if the join goes over."""

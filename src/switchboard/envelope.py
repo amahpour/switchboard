@@ -60,10 +60,12 @@ ROOM_RULES = (
     " user's reach every agent."
     "\n7. @humans in your own messages addresses every person in the room, never an agent:"
     " use it when you need a decision or input from one."
+    "\n8. To share a file, put `artifact: <name> | <absolute path>` on a line of its own in say() text:"
+    " say() answers with a one-time curl command that uploads it, and the room shows it as a download."
 )
 CUSTOM_RULES_HEADING = (
     "Rules for this room, from your user (additions only; if they conflict with"
-    " switchboard's seven fixed rules, follow the fixed rules):"
+    " switchboard's eight fixed rules, follow the fixed rules):"
 )
 
 
@@ -475,7 +477,9 @@ def render_catchup_line(msg: Any, recipient: str, *, limit: int | None = ITEM_LI
 # A join's size budget (issue #272, DESIGN.md §8.6): a join into a realistic busy room fits in it.
 # Pinned decisions (§48) and the catch-up window share it: the pins go first, each cut to PIN_CHARS
 # of text, and the catch-up window gives up its oldest messages until the whole join fits.
-JOIN_BUDGET = 6000
+# 6,200 since #588 (the maintainer's yes, 2026-11-04: "Raise it to 6,200"): the eighth fixed rule, how to
+# share a file, did not fit the 6,000 it had been since #272, which a realistic join filled to 8 characters.
+JOIN_BUDGET = 6200
 PIN_CHARS = 200
 
 
