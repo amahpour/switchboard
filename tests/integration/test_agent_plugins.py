@@ -27,6 +27,7 @@ from test_agents_http import THREAD_A, Codex, make_token, sse_result
 from test_agents_http_claude import SESSION_1, Claude
 from test_agents_http_wake import claude_hook, codex_hook, member, parked, participant, row, until
 
+from switchboard import envelope
 from switchboard.broker.agent_http import HOOK_FIELDS, HOOK_TOOL, LISTEN_PATH, PATH
 from switchboard.mcp.server import TOOL_NAMES
 
@@ -1209,6 +1210,34 @@ def test_the_session_script_takes_a_quit_session_offline(broker: InProcBroker) -
     r = run_session(broker, token, SESSION_1, "SessionEnd", reason="prompt_input_exit")
     assert (r.returncode, r.stdout, r.stderr) == (0, "", ""), r
     until(lambda: participant(broker, "claude-1").status == "offline")
+
+
+@pytest.mark.usefixtures("impl")
+def test_the_session_script_relays_the_source_so_a_clear_is_pointed_and_a_compaction_is_not(
+    broker: InProcBroker,
+) -> None:
+    """#543 through the plugin's own script, in each implementation: the `source` Claude Code writes in
+    its SessionStart input reaches the server, and the script prints the answer as Claude Code reads it
+    (hook output JSON). After a join, a /clear gets the one-line pointer and a compaction the standing
+    guidance in full; both carry the untrusted-peer line. Fails if the script stops relaying `source`
+    (every reminder would then be full, and the saving never happens) or prints either answer in another
+    shape."""
+    broker.call("room.create", {"name": "#build"})
+    token = make_token(broker, "laptop")
+    claude = Claude(broker, token, SESSION_1)
+    assert claude.call("join", room="#build", screen_name="claude-1")["ok"]
+    printed: dict[str, str] = {}
+    for source in ("clear", "compact"):
+        r = run_session(broker, token, SESSION_1, "SessionStart", source=source)
+        assert (r.returncode, r.stderr) == (0, ""), r
+        reply = json.loads(r.stdout)
+        assert list(reply) == ["hookSpecificOutput"], reply
+        assert reply["hookSpecificOutput"]["hookEventName"] == "SessionStart"
+        printed[source] = reply["hookSpecificOutput"]["additionalContext"]
+    for text in printed.values():
+        assert envelope.PEER_WARNING in text and "you are in #build as claude-1" in text
+    assert envelope.GUIDANCE_POINTER in printed["clear"] and envelope.PASS_ADVICE not in printed["clear"]
+    assert envelope.PASS_ADVICE in printed["compact"] and envelope.GUIDANCE_POINTER not in printed["compact"]
 
 
 def test_the_session_script_keeps_the_token_off_its_command_line() -> None:
