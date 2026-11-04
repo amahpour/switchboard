@@ -250,6 +250,8 @@ def test_each_harness_answers_as_the_engine_did_by_name(w: World) -> None:
     dv = w.cfg.devin
     assert ads[HTTPS_DEVIN].rearm_caps() == (dv.rearm_max_per_prompt, dv.rearm_max_per_hour)
     assert {h for h, a in ads.items() if a.sink_status} == {"test"}
+    assert {h for h, a in ads.items() if a.background_wait_after_s() is not None} == {HTTPS_CLAUDE}
+    assert ads[HTTPS_CLAUDE].background_wait_after_s() == 120.0
     p = w.p(w.agent("bot")[0])
     assert {h for h, a in ads.items() if a.pull_ack(p, None) != "hooks"} == {"test"}
     assert [ads["test"].pull_ack(p, m) for m in (None, "next_call", "immediate", "never", "odd")] == [

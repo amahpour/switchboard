@@ -227,6 +227,7 @@ def test_the_claude_plugin_asks_for_the_server_and_an_optional_secret_token() ->
     assert server["headers"] == {"X-Switchboard-Token": "${user_config.token}"}
     assert not [h for h in server["headers"] if h.lower() == "authorization"]
     assert server["headersHelper"] == HELPER_COMMAND
+    assert server["timeout"] == 1800000  # #558: measured 630 s and 1,230 s waits finish
 
 
 def test_every_hook_calls_the_hook_tool_with_fields_it_takes() -> None:

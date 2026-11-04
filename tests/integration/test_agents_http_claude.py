@@ -195,24 +195,24 @@ def test_the_server_tells_an_agent_its_version_behind_the_token(build: InProcBro
 def test_a_config_cap_cannot_lift_claudes_wait_past_what_claude_code_allows(
     tmp_home: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """#559: Claude Code moves a call past 120 s to the background, so a ``[claude] wait_cap_s`` of 400 is
-    held to 110 where the tool and the broker both read it: a ``wait(300)`` comes back capped from 300 to
-    110, and the broker said at start that it would. Fails if the config can lift the cap past the client's
+    """#559: The plugin timeout permits long waits (#558), but a ``[claude] wait_cap_s`` of 900 is
+    held to 600 where the tool and the broker both read it: a ``wait(800)`` comes back capped from 800 to
+    600, and the broker said at start that it would. Fails if the config can lift the cap past the client's
     limit, or if it does so without a word in the log."""
-    cfg = Config(human_name=TEST_HUMAN, claude=ClaudeCfg(wait_cap_s=400))
+    cfg = Config(human_name=TEST_HUMAN, claude=ClaudeCfg(wait_cap_s=900))
     b = InProcBroker(tmp_home, cfg).start()
     try:
-        assert "[claude] wait_cap_s = 400" in caplog.text and "held to 110 s" in caplog.text, caplog.text
+        assert "[claude] wait_cap_s = 900" in caplog.text and "held to 600 s" in caplog.text, caplog.text
         b.call("room.create", {"name": "#build"})
         claude = Claude(b, make_token(b, "laptop"), SESSION_1)
         assert claude.call("join", room="#build", screen_name="claude-1")["ok"]
         claude.call("read", room="#build")
         with ThreadPoolExecutor(1) as pool:
-            waiting = pool.submit(claude.call, "wait", room="#build", timeout_s=300)
+            waiting = pool.submit(claude.call, "wait", room="#build", timeout_s=800)
             b.call("human.say", {"room": "#build", "text": "@claude-1 you may stop waiting"})
             got = waiting.result(30)
         assert got["ok"] and "you may stop waiting" in got["text"], got
-        assert (got["timeout_s"], got["capped_from"], got["cap_s"]) == (110, 300, 110), got
+        assert (got["timeout_s"], got["capped_from"], got["cap_s"]) == (600, 800, 600), got
     finally:
         b.stop()
 

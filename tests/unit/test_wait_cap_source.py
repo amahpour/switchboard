@@ -47,7 +47,7 @@ def tool_cap(harness: str | None, cfg: Config) -> int:
 @pytest.mark.parametrize(
     "harness,cap",
     [
-        ("claude", 110),
+        ("claude", 600),
         ("codex", 280),
         ("cursor", 55),
         ("devin", 100),  # 600 in the config, held to 100 over HTTPS (§49.7)
@@ -57,8 +57,8 @@ def tool_cap(harness: str | None, cfg: Config) -> int:
         (None, 50),
     ],
 )
-def test_the_defaults_are_the_caps_they_always_were(harness: str | None, cap: int) -> None:
-    """No config at all: each harness waits as long as before the tool shared its adapter's cap. (The tool
+def test_the_defaults_are_the_measured_harness_caps(harness: str | None, cap: int) -> None:
+    """No config at all: each harness uses its measured default, with Claude raised by #558. (The tool
     used to say 600 for Devin, and the broker cut that to 100, so the wait it got was 100 either way.)"""
     assert tool_cap(harness, Config()) == cap
 
@@ -67,7 +67,7 @@ def test_a_config_cap_sets_the_tools_cap_up_to_what_each_client_allows() -> None
     """``wait_cap_s`` in config.toml sets the tool's cap, in both directions, as far as the harness's own
     client lets a call run and no further. Fails if the tool keeps a table of its own (Claude's would stay
     110 under 1800 even with room to spare), or if a value past a client's limit gets through: Claude Code
-    backgrounds a call past 120 s, Cursor cancels at 60 and Devin repeats a call at 120."""
+    is held to the measured 600 s, Cursor cancels at 60 and Devin repeats a call at 120."""
     cfg = from_dict(
         {
             "claude": {"wait_cap_s": 1800},
@@ -78,7 +78,7 @@ def test_a_config_cap_sets_the_tools_cap_up_to_what_each_client_allows() -> None
         }
     )
     assert [tool_cap(h, cfg) for h in ("claude", "codex", "cursor", "opencode", "devin")] == [
-        110,  # Claude Code moves a call past 120 s to the background (#558)
+        600,  # measured with the plugin timeout and background-result confirmation (#558)
         900,  # Codex's limit is its tool_timeout_sec, which the setup raises to a day
         55,  # Cursor cancels a call at 60 s
         50,  # OpenCode was not measured
@@ -135,4 +135,4 @@ def test_the_start_up_report_names_caps_that_are_held_down() -> None:
             "devin": {"wait_cap_s": 600},  # its default: not news (§49.7)
         }
     )
-    assert waits_over_client_limit(cfg) == [("claude", 1800, 110), ("cursor", 300, 55)]
+    assert waits_over_client_limit(cfg) == [("claude", 1800, 600), ("cursor", 300, 55)]

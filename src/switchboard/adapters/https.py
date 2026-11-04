@@ -205,6 +205,9 @@ class HttpsClaudeAdapter(Listening):
     def __init__(self, cfg: Config):
         super().__init__("claude", cfg)
 
+    def background_wait_after_s(self) -> float | None:
+        return 120.0  # Claude Code's background task threshold, measured in #558
+
     def tier(self, p: Participant | None) -> tuple[str, str | None]:
         return CLAUDE_TIER, NOTE
 
