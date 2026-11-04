@@ -16,6 +16,7 @@ import pytest
 from conftest import InProcBroker
 from fakes.fake_agent import FakeAgent, ids_in
 
+from switchboard import envelope
 from switchboard.config import Config
 from switchboard.envelope import NONCE_RE, TOKEN_RE
 
@@ -92,10 +93,11 @@ async def test_join_gives_rules_catchup_nonce_banner_and_never_a_credential(brok
         assert f"m:{row[0]}" not in all_outputs(a) and "cred" not in json.dumps(j)
 
 
-async def test_join_into_a_realistic_room_fits_the_6000_char_budget(broker: InProcBroker) -> None:
+async def test_join_into_a_realistic_room_fits_the_join_budget(broker: InProcBroker) -> None:
     """DESIGN.md's join budget (issue #272, the token-budget spike #141): modeled on the
     spike's measured room (88 chat messages; lengths with median 469 characters, mean 613,
-    p90 1,497), a join must stay within 6,000 characters. With the old last-30 catch-up this
+    p90 1,497), a join must stay within the join budget (6,000 characters until
+    #588 raised it to 6,200). With the old last-30 catch-up this
     same room's join measured about 12,700 characters, over double the budget; the last-8
     catch-up plus the earlier-count line brings it back under."""
     for i in range(80):
@@ -109,7 +111,7 @@ async def test_join_into_a_realistic_room_fits_the_6000_char_budget(broker: InPr
         text = j["text"]
         assert ids_in(text) == ids
         assert f'80 earlier messages: read("#build", before={ids[0]}) shows them.' in text
-        assert len(text) <= 6000
+        assert len(text) <= envelope.JOIN_BUDGET
 
 
 async def test_the_report_counts_what_join_wait_and_read_handed_the_agent(broker: InProcBroker) -> None:
