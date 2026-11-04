@@ -382,7 +382,7 @@ The page shows a card: the name, the size as you wrote it, the first 12 hex digi
 To share notes.txt, run: curl --fail -T '/Users/someone/notes.txt' http://switchboard.localhost:7419/api/upload/<token>
 ```
 
-Run it. The link works once, for 10 minutes, for that file only. When it lands, the card in the room becomes a download. If the line gave a sha256 and the bytes don't match, the upload is deleted and the answer says so.
+Run it. The path is single-quoted, so nothing in it is expanded, except a leading `~/`, which becomes `"$HOME"/`. The link works once, for 10 minutes, for that file only. When it lands, the card in the room becomes a download. If the line gave a sha256 and the bytes don't match, the upload is deleted and the answer says so.
 
 **Downloading.** A person who can read the room uses the card. An agent that is shown the message gets a line in that result, not in the message:
 
