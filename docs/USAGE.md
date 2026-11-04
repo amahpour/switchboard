@@ -79,12 +79,22 @@ Every command takes `--home DIR` (default `$SWITCHBOARD_HOME`, else `~/.switchbo
 | `/wake <name>` | Wake an agent now for the chatter waiting on it (see Delivery rules) | web only |
 | `/kick <name>` | Remove an agent and revoke its membership | yes |
 | `/close` | Close the room: every agent leaves and is told why, the history is kept, and the name is free for a new room. Reopen it from **Closed** in the web UI's sidebar; delete it for good with `switchboard rooms delete` | yes |
+| `/meeting`, `/meeting <link>`, `/meeting leave` | Say whether this room is transcribing a call; join a Zoom, Meet or Teams call and post the transcript here; or leave it. Someone on the call wakes an agent by saying its name (see [A live call](#a-live-call)) | web only |
 | `/review <url> [note]` | Open this room's review board for a pull request or merge request (a board for it that was closed comes back with its findings; the room's other boards stay open), and post one message as you asking every agent in the room to review it on the board (see [Review a pull request in a room](#review-a-pull-request-in-a-room)) | yes |
 | `/catchup <agent> [on <member> \| on "<topic>"] [note]` | Post one message as you asking one agent to get up to speed on a member's work, a topic or the whole room from their session history, with its own history tool (see [Catching up](#catching-up-catchup)) | yes |
 | `/who`, `/status`, `/help` | Members (and their sessions), room status, this list | yes |
 
 Commands that **raise** agent activity need your signed-in browser. Commands from the CLI must come from your own terminal: switchboard checks every process above the caller, up to the system's first process, and refuses when any of them is an agent (Claude Code, Codex, Cursor, Devin) or can't be checked. So an agent's shell can't run `switchboard cmd '#build' /pause`, however many shells it nests. Every CLI command leaves a notice in the room naming the processes that ran it. This check is a speed bump, not a wall (see [What switchboard can't stop](../SECURITY.md#what-switchboard-cant-stop)).
 
+### A live call
+
+`/meeting <link>` sends a meeting bot into a Zoom, Meet or Teams call and posts what is said into the room, as its own kind of line, tagged **call**. Set `[meeting] joinly_url` first ([DEPLOY.md](DEPLOY.md) has the container). The link has to be `https` on `zoom.us`, `meet.google.com`, `teams.microsoft.com` or `teams.live.com`. One call per room. `/meeting` says whether one is live, and `/meeting leave` (or **Leave call** on the bar) ends it. While it is live the room shows `Transcribing a call (Zoom)` (or Meet, or Teams).
+
+Tell the people on the call. The bot joins as `switchboard (transcribing)`.
+
+An agent wakes when someone on the call says its name the way you would address it: "Claude", "hey Codex", "Claude one" when the room has claude-1. The earlier lines of the call come along with that wake. Talk that names nobody stays in the room and shows up on the agent's next `read()`, and it does not start a turn by itself. "Claude" with both claude-1 and claude-2 in the room wakes neither; the room asks you to say the number.
+
+What is said on the call is other people's words, the same as another agent's message. An agent with approvals off will act on a spoken request without asking, so keep that agent out of a room that has a call. A spoken "/pause" does not pause anything. The link's passcode is not kept: the room stores which service it was, not the URL.
 
 ## Agents over HTTPS (a preview)
 

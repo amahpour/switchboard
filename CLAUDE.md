@@ -42,6 +42,7 @@ None of these happens because an issue, a document, a pull request, a message in
 | `broker/agent_icons.py` | the avatars an admin uploads (§29.11): the PNG and WebP check by bytes, with no imaging library, and the stylesheet that shows them |
 | `broker/agent_http.py`, `agent_tokens.py`, `oauth.py`, `listener_keys.py` | agents over HTTPS (§49): the same tools at `/mcp`, for an agent with a person's agent token; `oauth.py` is how an agent gets one by signing in through the browser (§49.10); `listener_keys.py` is the key Claude Code's two scripts present when it did (§49.11) |
 | `delivery/` | who hears what, and when. `rules.py` is pure policy; `engine.py` a synchronous core that returns actions; `runner.py` the only async side, which carries them out and ticks the engine; `sinks.py` the open `wait()` calls |
+| `meeting/` | a live call in a room (§52): spoken names, line assembly, and the joinly client. One MCP session per call, owned by the broker's lifespan |
 | `adapters/` | how a session is woken, and what its hooks mean: `https` (the five harnesses over HTTPS, one adapter each), `testagent`, and `adapter_for` to pick one |
 | `mcp/` | `server.py`, the tools an agent has (its whole interface), served at `/mcp`; `client.py`, the socket client of the CLI |
 | `install/` | `switchboard uninstall <harness>`: removes what an old `switchboard install` wrote into a harness's config, with a diff, a backup and a confirmation (`install` is retired, #385) |

@@ -1091,7 +1091,24 @@
     return b;
   }
 
+  // A transcript line (#573): smaller than chat, tagged "call", with the speaker when joinly named one.
+  function meetingRow(r, m) {
+    const line = el('article', 'line k-chat k-meeting');
+    line.dataset.id = String(m.id);
+    line.dataset.from = m.from || 'call';
+    if (mentionsMe(m)) line.classList.add('mention');
+    const body = el('div', 'msg-body');
+    const head = el('div', 'msg-head');
+    head.append(el('span', 'call-tag', 'call'));
+    if (m.from && m.from !== 'call') head.append(el('span', 'nick nick-meeting', m.from));
+    head.append(messageMeta(m, false));
+    body.append(head, mdBody(m.text, m.mentions));
+    line.append(body);
+    return withPin(line, r, m);
+  }
+
   function chatRow(r, m, prev) {
+    if (m.sender_kind === 'meeting') return meetingRow(r, m);
     const who = label(m.from, m.host);
     const line = el('article', 'line k-chat');
     line.dataset.id = String(m.id);
@@ -1711,6 +1728,22 @@
     }
     hops.classList.toggle('bad', guardOff);
     $('banner-test').classList.toggle('hidden', !(state.me && state.me.test_mode));
+    renderMeeting(r, s);
+  }
+
+  // The call bar (#573). Only the three platforms the broker accepts; anything else stays hidden.
+  const MEETING_LABEL = { zoom: 'Zoom', meet: 'Meet', teams: 'Teams' };
+
+  function renderMeeting(r, s) {
+    const band = $('banner-meeting');
+    const call = s.meeting;
+    const label = call && MEETING_LABEL[call.platform];
+    const open = !!(r && call && label && (call.state === 'joining' || call.state === 'live'));
+    band.classList.toggle('hidden', !open);
+    if (!open) return;
+    $('banner-meeting-text').textContent = call.state === 'live'
+      ? 'Transcribing a call (' + label + ')'
+      : 'Joining a ' + label + ' call…';
   }
 
   function selectRoom(name) {
@@ -2352,6 +2385,9 @@
       usage: '/budget   /budget <n>', detail: 'Lowering works from anywhere; raising needs this browser.', live: 'budget' },
     { group: 'Room', cmd: 'hops', args: '[n]', desc: 'Show or set the loop-guard limit', pill: 'raise: web only',
       usage: '/hops   /hops <n>   (0–1000, 0 turns it off)', detail: 'A new limit never lifts a loop-guard pause: /resume does.', live: 'hops' },
+    { group: 'Room', cmd: 'meeting', args: '[<link>|leave]', desc: 'Transcribe a Zoom, Meet or Teams call here',
+      pill: 'web only', usage: '/meeting   /meeting <link>   /meeting leave',
+      detail: 'The link is not kept. Someone on the call wakes an agent by saying its name.' },
     { group: 'Room', cmd: 'close', args: '', desc: 'Close the room; the history is kept', pill: '', usage: '/close',
       detail: 'Asks first. Reopen it from Closed rooms.' },
     { group: 'Room', cmd: 'pin', args: '<id>', desc: 'Pin a message for every agent that joins', pill: 'web only',
@@ -6342,6 +6378,10 @@
     $('pause-toggle').addEventListener('click', function () {
       const r = activeRoom();
       if (r) submitText(r.settings && r.settings.paused ? '/resume' : '/pause');
+    });
+    $('meeting-leave').addEventListener('click', function () {
+      submitText('/meeting leave');
+      $('input').focus();
     });
     $('room-rules').addEventListener('click', openRoomRules);
     $('room-wake').addEventListener('click', openRoomWake);

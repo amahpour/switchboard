@@ -163,6 +163,27 @@ Pin releases rather than `:latest`, so an upgrade happens when you choose.
 
 To restore, stop the broker, put the copy at `$SWITCHBOARD_HOME/switchboard.db` owned by uid 10001 with mode 0600 (and no `-wal` or `-shm` files next to it), and start it again.
 
+## A meeting bot
+
+A room can follow a Zoom, Meet or Teams call ([DESIGN.md §52](DESIGN.md#52-meetings-a-live-call-in-a-room-573)). The bot is [joinly](https://github.com/joinly-ai/joinly), run beside the broker. It has no sign-in and takes its settings from whoever connects, so publish it on localhost, or only on the compose network, never on an open address.
+
+On one machine:
+
+```bash
+docker run -d --name joinly -p 127.0.0.1:8010:8000 ghcr.io/joinly-ai/joinly:v0.5.4
+```
+
+Then in the broker's `config.toml`:
+
+```toml
+[meeting]
+joinly_url = "http://127.0.0.1:8010/mcp/"
+```
+
+Restart the broker. `/meeting` with no server set names this page.
+
+Beside the server's container, add a service on the same network and do not publish its port. Point `joinly_url` at that service, for example `http://joinly:8000/mcp/`. The broker reaches it; nothing outside the network does.
+
 ## Health checks and logs
 
 - **`GET /healthz`** answers `ok` with status 200. It needs no sign-in, returns no data, and accepts any Host, so platforms can probe the container's own address. The image's Docker `HEALTHCHECK` calls it, and so do the Kubernetes probes and Render's `healthCheckPath`.

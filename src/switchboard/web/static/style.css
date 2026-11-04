@@ -774,6 +774,9 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
 }
 .band-amber { background: var(--amber-bg); color: var(--amber-fg); }
 .band-danger { background: var(--danger-bg); color: var(--danger); font-weight: 500; }
+.band-meeting { background: var(--chip-bg); color: var(--ink-2); flex-wrap: wrap; }
+.band-meeting > span { flex: 1; min-width: 0; }
+.meeting-leave { height: 26px; margin-left: auto; padding: 0 10px; flex-shrink: 0; font-size: calc(12px * var(--text-scale)); }
 .band > .ic { width: 15px; height: 15px; }
 
 /* ==== 7. Log rows (spec 1.3) ========================================================= */
@@ -814,6 +817,25 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
   transition: background-color 200ms;
 }
 .line.k-chat > .avatar { align-self: start; }
+/* A transcript line (#573): smaller than a chat message, one column, a call tag. */
+.line.k-meeting {
+  grid-template-columns: minmax(0, 1fr);
+  font-size: calc(12px * var(--text-scale));
+  color: var(--ink-2);
+}
+.call-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--chip-bg);
+  color: var(--muted);
+  font-size: calc(10.5px * var(--text-scale));
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+.nick-meeting { font-size: calc(12px * var(--text-scale)); font-weight: 600; color: var(--ink-2); }
 .line.cont { margin-top: -8px; }                /* 14 px row gap becomes 6 px */
 
 /* Selected agent (inspected) and messages that mention you: tinted bands with a bar. */
