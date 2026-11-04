@@ -12,6 +12,7 @@ from switchboard.files import (
     artifact_lines,
     content_disposition,
     file_expired,
+    quoted_path,
     share_line,
     shell_quote,
 )
@@ -87,5 +88,18 @@ def test_the_share_line_quotes_the_path() -> None:
     line = share_line("notes.txt", "/Users/someone/it's.txt", "http://switchboard.localhost:7419", "tok")
     assert line == (
         "To share notes.txt, run: curl --fail -T '/Users/someone/it'\\''s.txt'"
+        " http://switchboard.localhost:7419/api/upload/tok"
+    )
+
+
+def test_the_share_line_expands_a_leading_home() -> None:
+    """Agents write home-relative paths all the time: `~/...` becomes a word whose home part
+    the shell still expands, and everything after it stays safely quoted. `~user/...` is
+    another user's home, not the agent's own, so it stays a plain quoted word."""
+    assert quoted_path("~/work/build.log") == '"$HOME"/\'work/build.log\''
+    assert quoted_path("~other/x") == "'~other/x'"
+    line = share_line("build.log", "~/work/build.log", "http://switchboard.localhost:7419", "tok")
+    assert line == (
+        'To share build.log, run: curl --fail -T "$HOME"/\'work/build.log\''
         " http://switchboard.localhost:7419/api/upload/tok"
     )

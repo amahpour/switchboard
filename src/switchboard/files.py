@@ -100,9 +100,21 @@ def shell_quote(path: str) -> str:
     return "'" + path.replace("'", "'\\''") + "'"
 
 
+def quoted_path(path: str) -> str:
+    """A shell word for the path that still expands a leading ``~``.
+
+    Agents write home-relative paths all the time; a plain single-quoted word keeps ``~``
+    literal and curl fails with "no such file". ``"$HOME"/'rest'`` lets the shell expand
+    only the home part, and everything else stays safely quoted.
+    """
+    if path.startswith("~/"):
+        return '"$HOME"/' + shell_quote(path[2:])
+    return shell_quote(path)
+
+
 def share_line(name: str, path: str, base: str, token: str) -> str:
     """The one line ``say()`` adds so the agent can upload this file."""
-    return f"To share {name}, run: curl --fail -T {shell_quote(path)} {base}/api/upload/{token}"
+    return f"To share {name}, run: curl --fail -T {quoted_path(path)} {base}/api/upload/{token}"
 
 
 def download_line(base: str, file_id: str, token: str) -> str:
