@@ -113,7 +113,10 @@ def mentions_humans(text: str) -> bool:
 
 
 def classify(sender_kind: str, recipient: str, mentions: Iterable[str]) -> tuple[int, bool]:
-    """(prio, mentioned) for one recipient (DESIGN.md §8.1): 2 human, 1 @mention, 0 chatter."""
+    """(prio, mentioned) for one recipient (DESIGN.md §8.1): 2 human, 1 @mention, 0 chatter.
+
+    ``Store.insert_message`` classifies inline and also counts a recipient whose live claim the
+    text names as @mentioned (#541, ``claims.watchers``); this is the @mention part alone."""
     mentioned = recipient.lower() in {m.lower() for m in mentions}
     if sender_kind == "human":
         return 2, mentioned
