@@ -2,6 +2,28 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.50.0 (2026-11-04)
+
+### Upgrading
+
+- The database moves to schema 41 at start, after the usual backup: a file may now come from the call itself. Nothing else changes for an existing room.
+
+### Added
+
+- **The docs are a website now, with a guide for each big feature.** https://amahpour.github.io/switchboard/ has search, light and dark, and diagrams. It is built from the repository's `docs/` folder each time a change merges, so it always matches the code. New guides walk through meetings, code review on a board and attachments step by step: how each works, how to set it up, what the agents see, and what to do when something goes wrong.
+- **The meeting bot can run beside the broker on Kubernetes.** `deploy/kubernetes/meetings/joinly.yaml` is a patch of the StatefulSet that adds joinly as a second container in the broker's pod. It listens on the pod's localhost only, with no Service and no declared port, so nothing else in the cluster can reach it, and it runs with a read-only root and no capabilities. The base manifest stays as it is for anyone who doesn't follow calls. Zoom speaker names have a second patch, `joinly-zoom-fix.yaml`, with the ConfigMap. DEPLOY.md's new "Meetings on Kubernetes" has the commands, what the pod needs (about 1 CPU and 2 GiB more, a way out to the internet, a 3.7 GB first pull) and how to check it.
+- **`SWITCHBOARD_JOINLY_URL` sets the meeting bot's address from the environment.** Before, only `[meeting] joinly_url` in `config.toml` could, and a manifest has no file on the volume to write. A non-empty value wins over the file, an empty one leaves it, and a bad one (not `http` or `https`, over 300 characters, a user name or password in it) stops the broker at start with a message that names the variable. `/meeting <link>` with no server set now names both ways to set it.
+- **An agent can speak in a call, and see a shared screen, when you ask.** Both are off until you turn them on, and an agent can never turn either on. **Voice** is a switch on the call bar (or `/meeting voice on` and `off`), off at the start of every call and for that call only; the room gets a notice each time. While it is on, an agent's `say()` that starts with `@call` is read aloud to everyone on the call, in the Kokoro voice set by the new `[meeting] tts_voice` (default `bm_george`), and the room still shows the message. Code, links, Markdown marks and artifact lines are not read, a line is cut at about 600 characters, and lines wait their turn. **Snapshot**, or `/meeting snapshot`, posts a picture of the call's shared screen as a file card. So does a call line that addresses an agent and says "screen" ("Claude, look at my screen"), before that line, so the agent that wakes has it. The picture is a small frame (512 by 288) from joinly, kept as a room file for the room's retention, at most one every 10 seconds, and only if its bytes are a PNG, JPEG or WebP. Spoken text reaches everyone on the call, and a snapshot can show anything on the screen, so see [the meetings guide](https://amahpour.github.io/switchboard/guide/meetings/) and DESIGN.md §52 before you turn them on. `call` is now a reserved screen name.
+
+### Changed
+
+- **Agents now know how to share a file.** Each agent's join gets an eighth fixed room rule: put `artifact: <name> | <absolute path>` on a line of its own in `say()`, and `say()` answers with a one-time upload command. Before, nothing an agent read mentioned the line, so an agent shared a file only when the room's own rules or a pinned message said how.
+
+### Fixed
+
+- **An agent can share a file under its home folder with a `~/` path.** The one-time upload command quoted the path whole, so for `artifact: build.log | ~/work/build.log` the shell never expanded the `~` and `curl` found no such file. A leading `~/` now becomes `"$HOME"/`, and the rest of the path stays quoted, so nothing else in it is expanded.
+- **The Kubernetes example starts on a stock cluster.** Its Service is named `switchboard`, so Kubernetes put `SWITCHBOARD_PORT=tcp://<cluster-ip>:7419` in the pod, over the image's own port, and the broker exited on it and restarted in a loop. The example now sets `enableServiceLinks: false`. If your own manifest names its Service `switchboard`, add that line too. The broker's error now says where such a value came from and what to set.
+
 ## 0.49.1 (2026-11-04)
 
 ### Fixed
