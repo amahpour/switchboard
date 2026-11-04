@@ -447,7 +447,10 @@ class Store:
         """Persist a message and its per-recipient delivery rows in one transaction.
 
         Classification (§8.1): for every active membership other than the sender,
-        prio 2 for a human message, 1 when the member is @mentioned, else 0.
+        prio 2 for a human message, 1 when the member is @mentioned, else 0. A member
+        whose live claim the text names (``claims.watchers``, §47) is classified as
+        @mentioned, whoever sent it (a person, an agent or a call), and ``mentions``,
+        the message's own, is not touched.
         Join/leave/notice messages are not delivered to agents, except a room-rename notice
         explicitly passed with ``deliver_notice`` (#316). ``skip_memberships``
         get no delivery row either (the subjects of a ``/catchup`` request, §26).
@@ -505,12 +508,19 @@ class Store:
                     "SELECT id, screen_name FROM memberships WHERE room_id=? AND left_at IS NULL",
                     (room_id,),
                 ).fetchall()
+                # whose live claim the text names (§47); a notice names rooms and people, not work
+                watching: frozenset[int] = frozenset()
+                if kind == "chat":
+                    excluded = skip | ({sender_membership_id} if sender_membership_id is not None else set())
+                    watching = claims.watchers(
+                        sender_kind, text, self.claims_for_room(room_id, now), now, exclude=excluded
+                    )
                 for r in rows:
                     if (sender_membership_id is not None and r["id"] == sender_membership_id) or r[
                         "id"
                     ] in skip:
                         continue
-                    mentioned = r["screen_name"].lower() in mentions_l
+                    mentioned = r["screen_name"].lower() in mentions_l or r["id"] in watching
                     prio = 2 if sender_kind == "human" else (1 if mentioned else 0)
                     self.con.execute(
                         "INSERT INTO deliveries(membership_id, message_id, prio, mentioned) VALUES(?,?,?,?)",
@@ -728,13 +738,15 @@ class Store:
                 return m
         return None
 
-    def claims_for_room(self, room_id: int) -> list[claims.Claim]:
-        """Active claims for the buddy list and claim policy, with their current holder."""
+    def claims_for_room(self, room_id: int, now: float | None = None) -> list[claims.Claim]:
+        """Active claims for the buddy list and claim policy, with their current holder.
+        ``now`` defaults to the clock; a caller that has already read it passes it, so one
+        instant decides what is live."""
         rows = self.con.execute(
             "SELECT c.key, c.membership_id, m.screen_name, c.expires_at, c.note"
             " FROM claims c JOIN memberships m ON m.id=c.membership_id"
             " WHERE c.room_id=? AND c.expires_at>? AND m.left_at IS NULL ORDER BY c.key",
-            (room_id, self.clock.now()),
+            (room_id, self.clock.now() if now is None else now),
         ).fetchall()
         return [claims.Claim(r[0], r[1], r[2], r[3], r[4]) for r in rows]
 
