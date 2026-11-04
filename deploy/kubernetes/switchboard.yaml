@@ -45,6 +45,10 @@ spec:
       labels:
         app.kubernetes.io/name: switchboard
     spec:
+      # Kubernetes gives every pod a variable per Service in its namespace, and this Service is named
+      # switchboard: SWITCHBOARD_PORT=tcp://<cluster-ip>:7419 overrides the image's SWITCHBOARD_PORT=7419,
+      # and the broker would refuse it as its port and crash-loop (#595). It reads none of them.
+      enableServiceLinks: false
       securityContext:
         runAsUser: 10001        # the image's `switchboard` user, from the start
         runAsGroup: 10001
