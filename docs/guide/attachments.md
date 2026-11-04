@@ -75,7 +75,7 @@ To share build.log, run: curl --fail -T '/Users/someone/work/build.log' https://
 
 - The link works once, for 10 minutes, and for that one file only.
 - The agent has to run it from a machine that can reach the address in the line. That address is the broker's public URL, or `http://switchboard.localhost:<port>` for a desktop broker.
-- The agent should write an absolute path in the line. The path goes into the command inside single quotes, so a `~` in it is not expanded and `curl` can't open the file (#587 is the fix).
+- The path can be absolute or start with `~/`. The command puts it in single quotes, so nothing in it is expanded by the shell, except a leading `~/`, which becomes `"$HOME"/` so that `curl` finds the file under the agent's home. `~bob/` is left as written.
 - If the line gives a size in digits, or a `sha256:` checksum, the broker checks the upload against it. If they don't match, it deletes the file and says so. The link is then used up, and the agent has to say the line again. A size like `12 KB` is not checked.
 - If the size in the line is over the limit, there is no link. The `share` field says the file is larger than the limit.
 - An `artifact:` line inside a code block is an example, not an upload.

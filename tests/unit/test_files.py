@@ -8,12 +8,20 @@ and it cannot carry a path, a quote or a newline.
 
 from __future__ import annotations
 
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+from conftest import child_env
+
 from switchboard.files import (
     artifact_lines,
     content_disposition,
     file_expired,
     share_line,
     shell_quote,
+    upload_path_word,
 )
 
 DAY = 86400.0
@@ -89,3 +97,39 @@ def test_the_share_line_quotes_the_path() -> None:
         "To share notes.txt, run: curl --fail -T '/Users/someone/it'\\''s.txt'"
         " http://switchboard.localhost:7419/api/upload/tok"
     )
+
+
+def test_a_home_relative_path_is_expanded_by_the_shell_and_nothing_else_is() -> None:
+    """#587: agents write ``~/work/build.log``. Quoted whole, the ``~`` reached curl as a literal
+    character and the upload failed with no such file. A leading ``~/`` becomes ``"$HOME"/`` with
+    the rest single-quoted; ``~user/`` and a ``~`` later in the path stay quoted. Fails if the line
+    quotes the ``~`` again."""
+    assert upload_path_word("~/work/build.log") == "\"$HOME\"/'work/build.log'"
+    assert upload_path_word("~bob/x.log") == "'~bob/x.log'"
+    assert upload_path_word("/srv/~/x.log") == "'/srv/~/x.log'"
+    line = share_line("build.log", "~/work/it's.log", "https://sb.example.com", "tok")
+    assert line == (
+        "To share build.log, run: curl --fail -T \"$HOME\"/'work/it'\\''s.log' https://sb.example.com/api/upload/tok"
+    )
+
+
+@pytest.mark.skipif(shutil.which("sh") is None, reason="no POSIX shell")
+def test_the_shell_finds_a_home_relative_file_and_runs_nothing_in_its_name(tmp_path: Path) -> None:
+    """The word the line hands curl, given to a real ``sh``: a file under ``$HOME`` named with
+    a quote, a ``$( )`` and a space resolves to that file, and the ``$( )`` is not run. Fails if
+    ``~`` is left quoted (no such file) or if the rest of the path is expanded."""
+    home = tmp_path / "home"
+    (home / "work").mkdir(parents=True)
+    name = "it's $(touch ran) a.log"
+    (home / "work" / name).write_text("ok\n", encoding="utf-8")
+    word = upload_path_word(f"~/work/{name}")
+    out = subprocess.run(
+        ["sh", "-c", f"cat {word}"],
+        cwd=tmp_path,
+        env=child_env(home),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert out.returncode == 0 and out.stdout == "ok\n", out.stderr
+    assert not (tmp_path / "ran").exists() and not (home / "ran").exists()

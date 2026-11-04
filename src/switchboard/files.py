@@ -100,9 +100,19 @@ def shell_quote(path: str) -> str:
     return "'" + path.replace("'", "'\\''") + "'"
 
 
+def upload_path_word(path: str) -> str:
+    """``path`` as one shell word for the upload command. Agents often write a home-relative path
+    (``~/work/build.log``), and a quoted ``~`` is not expanded, so curl found no such file (#587):
+    ``~/`` becomes ``"$HOME"/`` with the rest still single-quoted. Any other path is quoted whole,
+    ``~user/`` forms included, so nothing else in it is ever expanded."""
+    if path.startswith("~/"):
+        return '"$HOME"/' + shell_quote(path[2:])
+    return shell_quote(path)
+
+
 def share_line(name: str, path: str, base: str, token: str) -> str:
     """The one line ``say()`` adds so the agent can upload this file."""
-    return f"To share {name}, run: curl --fail -T {shell_quote(path)} {base}/api/upload/{token}"
+    return f"To share {name}, run: curl --fail -T {upload_path_word(path)} {base}/api/upload/{token}"
 
 
 def download_line(base: str, file_id: str, token: str) -> str:
