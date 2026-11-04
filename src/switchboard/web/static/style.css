@@ -1522,7 +1522,9 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
   display: block;
   width: 100%;
   min-height: 20px;
-  max-height: 168px;
+  /* 8 lines at any text size (#580): a fixed 168px held 7.3 lines at Large and 6.5 at Larger, and
+     the 8th scrolled the box and hid the top of the first. No padding here, so no more to add. */
+  max-height: calc(160px * var(--text-scale));
   margin: 0;
   padding: 0;
   border: 0;
