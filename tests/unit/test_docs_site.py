@@ -91,3 +91,15 @@ def test_the_check_sees_a_link_that_leaves_docs(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert links(page) == [(1, "../SECURITY.md"), (1, "USAGE.md#x")]
+
+
+def test_the_site_build_is_part_of_the_required_ci_check() -> None:
+    """The ruleset requires `CI` alone, so the `docs site` job counts only if `CI` waits for it and fails
+    without it, on a code PR and on a docs-only one. Fails if the job is dropped from either."""
+    workflow = (ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8")
+    assert "\n  site:\n    name: docs site\n" in workflow
+    aggregate = workflow.split("\n  ci:\n", 1)[1]
+    needs = re.search(r"needs: \[([^\]]*)\]", aggregate)
+    assert needs and "site" in [n.strip() for n in needs.group(1).split(",")]
+    want = re.search(r"want = \((.*)\) if tests == \"true\" else \((.*)\)\n", aggregate)
+    assert want and '"site"' in want.group(1) and '"site"' in want.group(2)

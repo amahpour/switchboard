@@ -328,7 +328,7 @@ jobs:
   # test job passed or (docs only, a release PR) the tree scan did.
   ci:
     name: CI
-    needs: [changes, docs, site, lint, test, frontend, image, coverage]
+    needs: [changes, docs, lint, test, frontend, image, coverage, site]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -344,7 +344,7 @@ jobs:
           tests = needs["changes"].get("outputs", {}).get("tests")
           if needs["changes"]["result"] != "success" or tests not in ("true", "false"):
               sys.exit("`what changed` didn't decide whether to run the tests")
-          want = ("site", "lint", "test", "frontend", "image", "coverage") if tests == "true" else ("docs", "site")
+          want = ("lint", "test", "frontend", "image", "coverage", "site") if tests == "true" else ("docs", "site")
           if failed := [job for job in want if needs[job]["result"] != "success"]:
               sys.exit(f"not passed: {', '.join(failed)}")
           print("tests ran and passed" if tests == "true" else "tests skipped (docs only or a release PR); tree scan and docs site passed")
