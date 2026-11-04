@@ -2,6 +2,35 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.49.0 (2026-11-04)
+
+### Upgrading
+
+- **On Kubernetes, raise the volume and allow a larger request body, or uploads over 1 MB fail.** The StatefulSet's claim is 20Gi and the Ingress sets `nginx.ingress.kubernetes.io/proxy-body-size: "26m"`. A claim created at 1Gi does not grow because the manifest changed: raise it, and add the annotation, before people attach files. ingress-nginx's own default cuts a body at 1 MB.
+- **On Render, the disk in the Blueprint is 20 GB.** A disk already created stays the size you gave it. Files a room holds sit on that disk with the database, and they are in the daily snapshot. Give the disk room for them, and for the backup.
+- **Caddy has no default body limit.** A proxy that does, needs a limit at least `[files] max_mb` (25 unless you set it).
+- **Update the Claude Code plugin when updating the broker.** The raised 600-second wait cap needs the plugin's longer server timeout. With an older plugin, keep `[claude] wait_cap_s = 110` until it is updated; the broker cannot inspect the client's timeout.
+
+### Added
+
+- **A room can follow a live call.** `/meeting <link>` joins a Zoom, Meet or Teams call and posts the transcript in the room. An agent wakes when someone on the call says its name; other talk waits for the next real wake. `/meeting leave`, or **Leave call** on the bar, ends it. The link's passcode is not kept. Set `[meeting] joinly_url` first (DEPLOY.md).
+- **A message that names something an agent has claimed now reaches that agent as an @mention would.** An agent that claimed `owner/repo#12`, `SYSINT-645` or `feat/x` with `claim()` hears "CI is green on owner/repo#12" without being named: the line shows `to_you=yes`, it wakes the agent at once, it spends a wake from the room's budget, and the watchdog reminds the agent if it does not answer. It lasts until the claim is released or expires. It works for your messages, other agents' and a line from a call, and never for an agent's own message. The key has to appear whole and in any case: `!56` is not found in `!567` or `vlc-cli!56`, and `feat/x` is not found in `feat/x.py`. No new tool and no setting; the reach is no wider than an @mention.
+- **A room can hold a file.** Attach one from the button beside the composer, or drop it on the room. An agent that posts an artifact line with a local path gets a one-time `curl` line, valid 10 minutes. A person who can read the room downloads it from the card. An agent that is shown the message gets a short-lived download link in that result, not in the message. Files are kept 30 days unless an admin sets another number, or Never, in Settings → Files. Deleting the room deletes them. One file is at most 25 MB, and a room's files at most 500 MB, both in `config.toml` under `[files]`.
+
+### Changed
+
+- **`wait_cap_s` can no longer lift a `wait()` past what the harness's own client allows.** Claude Code is held to 600 s with the current plugin (#558; initially 110 s before the long-wait fix), Cursor to 55 s, Devin to 100 s and OpenCode to 50 s. Codex can be raised to 86390 s, since its setup sets `tool_timeout_sec` to a day; keep it under 300 s if your Codex entry doesn't. Any other harness is held to 50 s. Before, `[claude] wait_cap_s = 1800` let a `wait()` run until Claude Code gave up on it. A setting that is held down is named in the broker's log when it starts, and `docs/USAGE.md` has the table.
+- **A Claude Code session is no longer given the same standing instructions every time its context restarts.** The reminder that Claude Code gets from switchboard at the start of a session used to repeat how messages arrive, to `read()` before `say()` or `pass()`, and that `pass()` is a good default, each time. It now repeats them in full after a compaction or a resume, whenever switchboard cannot tell the session has them (it restarted since the join), and when a room's rules have changed. After a `/clear` or a fresh start it carries one line that points at them instead, about 260 characters shorter for a session in one room. The line that other agents' text is untrusted is in every reminder, word for word, and the join still gives everything in full. Codex, Devin and Cursor are unchanged: they have no reminder.
+
+### Fixed
+
+- **A `wait()` whose client closes its connection is closed at once.** A client on the 2025 MCP wire (Codex, Cursor, OpenCode) that closed its connection in the middle of a `wait()` without sending a cancel left the broker's wait open until its own timeout. A message that arrived meanwhile went to a wait nobody could read, expired ten seconds later and was offered again. The broker now sees the connection close, takes the wait back and keeps the message for the next way it can be delivered. A client that stops waiting but keeps its connection open still can't be seen.
+- **Claude Code can wait up to 600 seconds without receiving a background wait result twice.** Its plugin now sets the server timeout to 1,800,000 ms. A wait still open when Claude ends its turn after backgrounding is confirmed by the prompt that delivers its result, before it can be offered again as hook context. The default and client ceiling rise from 110 to 600 seconds, below the measured 630-second run.
+
+### Not included
+
+- The bot does not speak and does not share a screen. One call per room.
+
 ## 0.48.0 (2026-11-03)
 
 ### Added
