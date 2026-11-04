@@ -655,7 +655,8 @@ def _meeting(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Resu
     if not svc.cfg.meeting.joinly_url:
         return Result(
             True,
-            "No meeting server is set. Add [meeting] joinly_url in config.toml; see DEPLOY.md.",
+            "No meeting server is set. Add [meeting] joinly_url in config.toml, or set"
+            " SWITCHBOARD_JOINLY_URL; see DEPLOY.md.",
         )
     if svc.store.open_meeting(room.id) is not None:
         raise CommandError("conflict", f"{room.name} is already transcribing a call. /meeting leave ends it.")

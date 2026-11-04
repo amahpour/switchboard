@@ -1,0 +1,131 @@
+# Meetings on Kubernetes (docs/DEPLOY.md, "Meetings on Kubernetes"; DESIGN.md §52): joinly, the
+# meeting bot, as a second container in the broker's pod.
+#
+# This file is a strategic-merge patch of the StatefulSet in ../switchboard.yaml, not a manifest to
+# apply on its own (the API server refuses it: no selector, no serviceName). The base stays as it is
+# for anyone who doesn't follow calls. The patch lives in a directory of its own so that
+# `kubectl apply -f deploy/kubernetes/`, or a GitOps tool that reads that directory, does not take
+# it for a second StatefulSet with the broker's name.
+#
+# Apply it once, after the base:
+#
+#   kubectl -n switchboard patch statefulset switchboard --patch-file deploy/kubernetes/meetings/joinly.yaml
+#
+# Under Argo CD or Flux use kustomize instead, because a patch made by hand is reverted at the next
+# sync (the repository's manifest has no sidecar). In a kustomization.yaml beside copies of
+# switchboard.yaml and this file:
+#
+#   resources: [switchboard.yaml]
+#   patches: [{path: joinly.yaml}]
+#
+# Zoom shows no speaker names without a fix to joinly's zoom.py (joinly-ai/joinly#187):
+# joinly-zoom-fix.yaml, beside this file, is a second patch that mounts it. It is a file of its own
+# because that mount needs its ConfigMap to exist when the pod starts.
+#
+# To take the sidecar out again, apply the base without the patch (kustomize: drop it);
+# `kubectl patch` can't remove a container it added.
+#
+# Why a sidecar. joinly has no sign-in, and it takes its settings (its name, its speech model, which
+# meeting provider) from whoever connects. The containers of a pod share one network namespace, so
+# joinly listens on the pod's own 127.0.0.1 and the broker, beside it, connects there. Nothing else
+# can: there is no Service for it and no containerPort. Its image listens on 0.0.0.0 by default
+# (JOINLY_SERVER_HOST), and that would give every pod in the cluster its port at the pod's IP
+# whether or not a Service names it, so the env below narrows it. No NetworkPolicy is needed (EKS
+# enforces one only when its network policy agent is on).
+#
+# The pod needs about 1 CPU and 2 GiB more than the broker alone, and the node needs a way out to
+# the internet: Zoom, Meet and Teams are reached from joinly's browser. The image is 3.7 GB, so its
+# first pull on a node takes minutes, and the pod waits in ContainerCreating until it is done.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: switchboard
+spec:
+  template:
+    metadata:
+      annotations:
+        # With two containers, `kubectl logs switchboard-0` and `kubectl exec switchboard-0` (DEPLOY.md:
+        # the admin's one-time password, `switchboard login`) must know which one is meant. Without
+        # this they take the first in the list, and kustomize puts joinly first.
+        kubectl.kubernetes.io/default-container: switchboard
+    spec:
+      containers:
+        - name: switchboard
+          env:
+            - name: SWITCHBOARD_JOINLY_URL
+              value: http://127.0.0.1:8000/mcp/   # the broker's `[meeting] joinly_url`: beside it, in the pod
+        - name: joinly
+          image: ghcr.io/joinly-ai/joinly:v0.5.4   # a release, not :latest; the tag DEPLOY.md's `docker run` uses
+          env:
+            - name: JOINLY_SERVER_HOST
+              value: 127.0.0.1                     # the pod's localhost only; the image's own default is 0.0.0.0
+            # PulseAudio keeps its state in $XDG_CONFIG_HOME/pulse, by default under the image user's
+            # home, which a read-only root leaves unwritable: "PulseAudio server did not start in time"
+            # and no session opens. /tmp is writable, and is the only folder joinly needs besides it.
+            - name: XDG_CONFIG_HOME
+              value: /tmp
+          # No `ports`: joinly is not offered to the cluster, not even by name.
+          securityContext:
+            # The image runs as `app` (uid 1001). Its home is mode 0700 and holds the speech models
+            # (Whisper, Silero, Kokoro) and Chromium. As the broker's uid 10001, joinly starts and
+            # every session then dies with "Silero VAD cache directory /.cache/silero does not exist",
+            # because it cannot read the image user's home.
+            runAsUser: 1001
+            runAsGroup: 1001
+            runAsNonRoot: true
+            # Everything else is as tight as the broker's. joinly ran with a read-only root, every
+            # capability dropped, no-new-privileges and the runtime's default seccomp profile: it
+            # served MCP and started Chromium, Xvfb and PulseAudio. Chromium runs with --no-sandbox
+            # (joinly passes it), so it needs no user namespaces and no capabilities.
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # With a read-only root, /tmp is the one place joinly writes (found by taking each
+            # candidate away in turn): Chromium's profile, the X and PulseAudio sockets, about 100 MB
+            # during a join.
+            - name: joinly-tmp
+              mountPath: /tmp
+            # Chromium is known to crash in a container's default 64 MB /dev/shm. joinly passes
+            # --disable-dev-shm-usage (the memory goes to /tmp instead), and a join attempt ran with a
+            # 1 MB one, so v0.5.4 may not need this. It is insurance for a long call with video tiles,
+            # and counts against the memory limit only when used.
+            - name: joinly-shm
+              mountPath: /dev/shm
+          # joinly has GET /health ({"status":"healthy"}). It listens on 127.0.0.1 only, and a
+          # kubelet's httpGet and tcpSocket probes go to the pod's IP, so the probe runs inside the
+          # container, with the image's Python (there is no curl).
+          startupProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=3)
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 36                   # up to 3 minutes
+          # No readinessProbe, on purpose. A pod is Ready only when every container is, so a joinly
+          # that failed one would take the broker out of the Service: the web UI and every agent would
+          # get a 503 because the meeting bot was slow. The startup probe keeps the pod from being
+          # Ready until joinly has answered once.
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=8)
+            periodSeconds: 30
+            timeoutSeconds: 10                     # a call under load answers slowly
+            failureThreshold: 6                    # three minutes of silence; a restart ends the call in progress
+          resources:
+            # A starting point, for Whisper "base" and one call: about 350 MiB with no session, 1.4 GiB
+            # with a session open and Chromium on a page, and more once a call is running. No CPU
+            # limit: throttling an audio pipeline makes the transcript fall behind.
+            requests: {cpu: "1", memory: 2Gi}
+            limits: {memory: 4Gi}
+      volumes:
+        - name: joinly-tmp
+          emptyDir: {sizeLimit: 2Gi}
+        - name: joinly-shm
+          emptyDir: {medium: Memory, sizeLimit: 1Gi}

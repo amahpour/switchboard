@@ -43,9 +43,10 @@ The image sets everything but the public URL.
 | `SWITCHBOARD_HUMAN_NAME` | (unset: `me`) | The admin's name in the rooms. The admin signs in as it, or as `admin`. While it's set, it wins over a rename in Settings, which then shows the name read-only. |
 | `SWITCHBOARD_OIDC_CLIENT_ID` | (unset) | Sign in with Google: your OAuth client's ID ([Sign in with Google](#sign-in-with-google)). Nothing changes until it and the secret are both set. |
 | `SWITCHBOARD_OIDC_CLIENT_SECRET` | (unset) | That client's secret, from your platform's secrets (a Kubernetes Secret, Render's secret environment). Or `SWITCHBOARD_OIDC_CLIENT_SECRET_FILE`, a file holding it. |
+| `SWITCHBOARD_JOINLY_URL` | (unset) | The meeting bot's address, for example `http://127.0.0.1:8000/mcp/` ([A meeting bot](#a-meeting-bot), [Meetings on Kubernetes](#meetings-on-kubernetes)). It sets `[meeting] joinly_url` over `config.toml`, and an empty value leaves the file's. An `http` or `https` address, up to 300 characters, with no user name or password; a bad one stops the broker at start with a message that names the variable. |
 | `SWITCHBOARD_RESET_OWNER` | (unset) | Recovery: set it to a new value and restart to forget the admin, everyone else, and every password, passkey and session ([Signing in](#signing-in)). It acts once per value. |
 
-They are the environment versions of `switchboard start --public-url`, `--listen` and `--port`. `config.toml` can also set `public_url` and `listen`, and a flag or variable wins over it. The container runs `switchboard start --foreground --log-stdout`: logs go to stdout, where the platform collects them, instead of `logs/broker.log`.
+`SWITCHBOARD_PUBLIC_URL`, `SWITCHBOARD_LISTEN` and `SWITCHBOARD_PORT` are the environment versions of `switchboard start --public-url`, `--listen` and `--port`. `config.toml` can also set `public_url` and `listen`, and a flag or variable wins over it. `SWITCHBOARD_JOINLY_URL` is the environment version of `[meeting] joinly_url`, for a manifest that has no file on the volume to write; it wins over the file too. The container runs `switchboard start --foreground --log-stdout`: logs go to stdout, where the platform collects them, instead of `logs/broker.log`.
 
 The admin's name in the rooms is `me` unless you set it. The easiest way is **Settings > Profile** in the web UI, which renames you at once and keeps it across restarts. `SWITCHBOARD_HUMAN_NAME` in the deployment (the Kubernetes and Compose files have it) fixes the name instead, and Settings can't change it while it's set; leave it out to rename from Settings. Or set `human_name` in `config.toml` in the home, then restart the container:
 
@@ -86,6 +87,7 @@ What the manifest relies on:
 - **The Ingress keeps a quiet request open for 16 minutes** (`proxy-read-timeout` and `proxy-send-timeout`, 960 s), for agents over HTTPS: Claude Code's listener waits up to 15 minutes at `/mcp/listen` before it starts its next wait, and ingress-nginx's own default closes a quiet request after 60 seconds. An agent's tool calls and Codex's Stop hook need nothing, because the broker sends them a keepalive every 15 seconds. A proxy that cuts the wait sooner doesn't lose a message: the listener just starts its next wait at once. Another controller has its own setting for this, such as a load balancer's idle timeout.
 - **A Gateway API route needs its timeouts set by hand.** Kubernetes' Gateway API has no annotations: set `timeouts: {request: 960s, backendRequest: 960s}` on the `HTTPRoute` rule that serves `/mcp`. An Envoy-based gateway ends a request that runs longer than its route's timeout whatever is being sent on it, and the default can be much shorter than one of Claude Code's 15-minute listener rounds. `wait()` runs into the same limit: it is one request too, held up to 600 seconds for Claude Code with its current plugin and 280 for Codex (`wait_cap_s` in `config.toml` changes that, but never past what each harness's own client allows, [USAGE.md](USAGE.md) has the limits, and a route's timeout has to stay above whatever it is set to), and a route that cuts sooner fails it with `upstream request timeout`. A cut listener round is harmless (the listener posts again at once), but a short limit makes every round a cut. If an idle agent over HTTPS stops being woken, the broker's log has a warning for a listener it turned away (`listener refused for session …`, with the reason), and the plugin's `listen.log` (in its data folder, or `~/.cache/switchboard`) has a line for each time the listener stopped on something unexpected (#436).
 - **Use a block-storage class** (the default on EKS, GKE and AKS), not an NFS or EFS one.
+- **Following live calls adds a second container to the pod:** a patch of this StatefulSet in [deploy/kubernetes/meetings/](https://github.com/amahpour/switchboard/tree/main/deploy/kubernetes/meetings/), which leaves this manifest as it is. See [Meetings on Kubernetes](#meetings-on-kubernetes).
 
 ### Render
 
@@ -181,7 +183,7 @@ Then in the broker's `config.toml`:
 joinly_url = "http://127.0.0.1:8010/mcp/"
 ```
 
-Restart the broker. `/meeting` with no server set names this page.
+Restart the broker. Or set the environment variable `SWITCHBOARD_JOINLY_URL` to the same address, which is easier where there is no file to edit (a Kubernetes manifest); when both are set, the variable wins. `/meeting <link>` with no server set names this page. `/meeting` alone only says whether a call is live: it does not look for the server.
 
 Beside the server's container, add a service on the same network and do not publish its port. Point `joinly_url` at that service, for example `http://joinly:8000/mcp/`. The broker reaches it; nothing outside the network does.
 
@@ -195,6 +197,69 @@ docker run -d --name joinly -p 127.0.0.1:8010:8000 \
 ```
 
 Drop the mount once a joinly release has the fix, and move to that release.
+
+### Meetings on Kubernetes
+
+[deploy/kubernetes/meetings/joinly.yaml](https://github.com/amahpour/switchboard/blob/main/deploy/kubernetes/meetings/joinly.yaml) adds joinly as a second container in the broker's pod. It is a patch of the StatefulSet, in a folder of its own, so that [the manifest above](#kubernetes-eks-gke-aks) stays as it is for anyone who doesn't follow calls, and so that `kubectl apply -f deploy/kubernetes/` never takes it for a second StatefulSet. Apply it once, after the manifest:
+
+```bash
+kubectl -n switchboard patch statefulset switchboard --patch-file deploy/kubernetes/meetings/joinly.yaml
+kubectl -n switchboard get pod switchboard-0    # 2/2 when both containers are up
+```
+
+The patch replaces the pod, so the broker restarts with it: do it when no call is on. The first start pulls a 3.7 GB image, so the pod waits in `ContainerCreating` for a few minutes.
+
+A patch made by hand is reverted at the next sync of Argo CD or Flux, because the repository's manifest has no sidecar. Under either, use kustomize: a `kustomization.yaml` beside copies of the manifest and the patch.
+
+```yaml
+resources: [switchboard.yaml]
+patches: [{path: joinly.yaml}]
+```
+
+What the patch does, and why:
+
+- **joinly listens on the pod's localhost, and nothing else can reach it.** It has no sign-in and takes its settings from whoever connects. The containers of a pod share one network, so joinly's `127.0.0.1:8000` is the broker's too. There is no Service for it and no port is declared. The image listens on `0.0.0.0` by default, which would give every pod in the cluster its port at the pod's IP, with or without a Service, so the patch sets `JOINLY_SERVER_HOST=127.0.0.1`. No NetworkPolicy is needed (EKS enforces one only when its network policy agent is on). The broker is told where joinly is by `SWITCHBOARD_JOINLY_URL=http://127.0.0.1:8000/mcp/`.
+- **Resources: requests of 1 CPU and 2 GiB, and a 4 GiB memory limit.** That is a starting point for the default Whisper model (`base`) and one call. Measured: about 350 MiB with no call, 1.4 GiB once a call's session is open with the browser on its page, and more while people talk. Each call opens its own session with its own browser, so size it for the most calls you expect at once. There is no CPU limit, because throttling an audio pipeline makes the transcript fall behind.
+- **`/dev/shm` is a 1 GiB memory-backed volume.** Chromium is known to crash in a container's default 64 MB. joinly starts it with `--disable-dev-shm-usage`, which keeps that memory in `/tmp` instead, and a join attempt ran with a 1 MB `/dev/shm`, so joinly 0.5.4 may not need the volume. It is cheap insurance for a long call with video tiles, and counts against the memory limit only when used. `/tmp` (2 GiB) is a volume too, since the root filesystem is read-only.
+- **joinly runs as the image's own user, uid 1001, not the broker's 10001.** Its home is mode 0700 and holds the speech models (Whisper, Silero, Kokoro). As 10001, joinly starts, and every call then fails with `Silero VAD cache directory /.cache/silero does not exist`. Everything else is as tight as the broker's: a read-only root, no capabilities, no privilege escalation, the runtime's default seccomp profile. Chromium runs with `--no-sandbox`, which joinly passes itself, so it needs no capabilities. `/tmp` is the one place it writes, found by taking each candidate away in turn. PulseAudio would also write in the user's home, so the patch sets `XDG_CONFIG_HOME=/tmp`; without a writable place for it, joinly logs `PulseAudio server did not start in time` and no session opens.
+- **The probes run inside the container.** joinly answers `GET /health` with `{"status":"healthy"}`, but it listens on localhost, and a kubelet's HTTP and TCP probes go to the pod's IP. So each probe is one line of the image's own Python. A startup probe keeps the pod from being Ready until joinly has answered once. There is no readiness probe, on purpose: a pod is Ready only when every container is, so a joinly that failed one would take the broker out of its Service, and every browser and agent would get a 503. The liveness probe restarts only joinly, after three minutes of silence. A restart ends the call in progress.
+- **The node needs a way out to the internet.** joinly's browser reaches Zoom, Meet and Teams, and nothing needs to reach it. On EKS in private subnets that is a NAT gateway. Check the vendors' network requirements if your cluster restricts outbound traffic: a policy that lets the page load can still block the call's audio.
+
+**Speaker names on Zoom.** The Zoom fix described above (joinly-ai/joinly#187) is a second patch, [joinly-zoom-fix.yaml](https://github.com/amahpour/switchboard/blob/main/deploy/kubernetes/meetings/joinly-zoom-fix.yaml), because the pod can't start without its ConfigMap. (`optional: true` doesn't help: the file is mounted with `subPath`, and when the ConfigMap is missing the kubelet makes that path a directory, so the container fails with `not a directory`.) Make the ConfigMap from the same pinned file, then patch:
+
+```bash
+curl -fsSLo zoom.py https://raw.githubusercontent.com/amahpour/joinly/9fbd07ceccbbfc358d697378c3cb1d7b911b17a5/joinly/providers/browser/platforms/zoom.py
+kubectl -n switchboard create configmap joinly-zoom-fix --from-file=zoom.py=./zoom.py
+kubectl -n switchboard patch statefulset switchboard --patch-file deploy/kubernetes/meetings/joinly-zoom-fix.yaml
+```
+
+With kustomize, add the patch and a generator for the file; kustomize adds a hash to the ConfigMap's name and rewrites the volume to match:
+
+```yaml
+patches: [{path: joinly.yaml}, {path: joinly-zoom-fix.yaml}]
+configMapGenerator:
+  - name: joinly-zoom-fix
+    files: [zoom.py]
+```
+
+Drop the patch once a joinly release has the fix. To take the whole sidecar out, apply the manifest again without the patch (`kubectl patch` can't remove a container it added).
+
+**Check that it works.**
+
+```bash
+kubectl -n switchboard logs switchboard-0 -c joinly    # "Uvicorn running on http://127.0.0.1:8000"
+kubectl -n switchboard exec switchboard-0 -c switchboard -- \
+  python3 -c 'import urllib.request; print(urllib.request.urlopen("http://127.0.0.1:8000/health").read())'
+kubectl -n switchboard exec switchboard-0 -c joinly -- \
+  grep -c single-main-container__video-frame /app/.venv/lib/python3.12/site-packages/joinly/providers/browser/platforms/zoom.py    # 1 with the Zoom fix
+```
+
+The second command runs in the broker's container and reaches joinly on the pod's localhost. Then, in a room, `/meeting <a test meeting's link>`: the room says it is joining. `/meeting` with no link only says whether a call is live, so it doesn't tell you the broker found joinly. To see that nothing else can reach joinly, run a throwaway pod and fetch the broker pod's IP on port 8000, which must be refused:
+
+```bash
+kubectl -n switchboard run probe --image=busybox:1.37 --restart=Never --rm -it -- \
+  wget -T3 -qO- http://<pod-ip>:8000/health    # "Connection refused"; the same on :7419/healthz answers
+```
 
 ## Health checks and logs
 

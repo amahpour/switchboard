@@ -268,3 +268,84 @@ def test_the_human_name_from_the_environment(tmp_path: Path, monkeypatch: pytest
     monkeypatch.setenv(HUMAN_NAME_ENV, "Not A Name")
     with pytest.raises(ConfigError, match=HUMAN_NAME_ENV):
         load(paths)
+
+
+# the name docs/DEPLOY.md and the Kubernetes patch use, spelled out so a rename in the code fails here
+JOINLY_ENV = "SWITCHBOARD_JOINLY_URL"
+
+
+def test_the_meeting_bot_address_from_the_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Kubernetes manifest points the broker at the joinly sidecar (#591, DESIGN.md §52): the
+    variable sets ``[meeting] joinly_url`` with no config.toml, and wins over the file when both are
+    set, as SWITCHBOARD_HUMAN_NAME does. Set to nothing (a templated value left blank) it is the
+    same as unset: the file's address stays. Fails if ``load`` reads only the file, or if a blank
+    variable blanks the address and so turns /meeting off."""
+    paths = Paths.from_home(tmp_path)
+    assert load(paths).meeting.joinly_url == ""
+    monkeypatch.setenv(JOINLY_ENV, "http://127.0.0.1:8000/mcp/")
+    assert load(paths).meeting.joinly_url == "http://127.0.0.1:8000/mcp/"  # no file at all
+    paths.config.write_text('[meeting]\njoinly_url = "http://127.0.0.1:8010/mcp/"\n')
+    assert load(paths).meeting.joinly_url == "http://127.0.0.1:8000/mcp/"  # the variable wins
+    monkeypatch.setenv(JOINLY_ENV, " http://joinly:8000/mcp/ \n")
+    assert load(paths).meeting.joinly_url == "http://joinly:8000/mcp/"  # padding is cut, as in the file
+    for blank in ("", "   "):
+        monkeypatch.setenv(JOINLY_ENV, blank)
+        assert load(paths).meeting.joinly_url == "http://127.0.0.1:8010/mcp/"  # the file's again
+    monkeypatch.delenv(JOINLY_ENV)
+    assert load(paths).meeting.joinly_url == "http://127.0.0.1:8010/mcp/"
+    paths.config.unlink()
+    assert load(paths).meeting.joinly_url == ""
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "127.0.0.1:8000/mcp/",  # no scheme
+        "ftp://joinly:8000/mcp/",
+        "file:///etc/passwd",
+        "http://",  # no host
+        "http://user:pass@joinly:8000/mcp/",  # userinfo
+        "http://user@joinly:8000/mcp/",
+        "http://[::1/mcp/",  # urlsplit itself refuses it
+        "http://joinly:8000/" + "a" * 300,  # over 300 characters
+    ],
+)
+def test_a_bad_meeting_bot_variable_is_a_startup_error_that_names_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """The variable goes through the checks the config key has (http or https, 300 characters, a
+    host, no user name or password) and a bad one stops the broker with a message naming it. It
+    is never ignored: a typo would otherwise turn /meeting off with no word of why. Fails if a bad
+    value is dropped silently, or if the error names the file's key instead of the variable."""
+    paths = Paths.from_home(tmp_path)
+    paths.config.write_text('[meeting]\njoinly_url = "http://127.0.0.1:8010/mcp/"\n')  # a good file: no help
+    monkeypatch.setenv(JOINLY_ENV, value)
+    with pytest.raises(ConfigError, match=JOINLY_ENV) as e:
+        load(paths)
+    assert "joinly_url" not in str(e.value)
+    assert value not in str(e.value)  # an address with a password in it is not echoed to the log
+
+
+def test_the_meeting_bot_variable_does_not_loosen_the_key(tmp_path: Path) -> None:
+    """The config key still refuses what it did, and now refuses an address ``urlsplit`` cannot read
+    with a ConfigError (it was a bare ValueError that skipped the CLI's ``config error:`` line)."""
+    for bad in ("ftp://joinly/", "http://user:pw@joinly/", "http://[::1/mcp/"):
+        with pytest.raises(ConfigError, match=r"\[meeting\] joinly_url"):
+            from_dict({"meeting": {"joinly_url": bad}})
+
+
+def test_start_stops_on_a_bad_meeting_bot_variable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``switchboard start --foreground`` (a container's command) prints ``config error:`` with the
+    variable's name and exits 1, before it opens anything. Fails if the error is swallowed or the
+    broker starts without a meeting server."""
+    from switchboard import cli
+    from switchboard.broker import daemon
+
+    monkeypatch.setattr(daemon, "run_foreground", lambda *a, **k: pytest.fail("the broker started"))
+    monkeypatch.setenv(JOINLY_ENV, "joinly:8000")
+    assert cli.main(["start", "--foreground", "--home", str(tmp_path)]) == cli.EXIT_ERR
+    assert "config error: SWITCHBOARD_JOINLY_URL must be an http(s) URL" in capsys.readouterr().err

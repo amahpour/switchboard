@@ -142,10 +142,26 @@ class FilesCfg:
             raise ConfigError("[files] room_mb must be an integer from 1 to 1048576")
 
 
+def _joinly_url_ok(url: str) -> bool:
+    """An http(s) URL of at most 300 characters with a host and no user name or password in it.
+    The key in config.toml and ``SWITCHBOARD_JOINLY_URL`` both go through this."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:  # an unbalanced "[" in the host, say
+        return False
+    return (
+        len(url) <= 300
+        and parts.scheme in ("http", "https")
+        and bool(parts.netloc)
+        and not parts.username
+        and not parts.password
+    )
+
+
 @dataclass(frozen=True)
 class MeetingCfg:
     """Where joinly listens (DESIGN.md §52). Empty: ``/meeting`` says how to set it.
-    The URL is the operator's, from this file, never from a room."""
+    The URL is the operator's, from this file or ``SWITCHBOARD_JOINLY_URL``, never from a room."""
 
     joinly_url: str = ""
 
@@ -153,16 +169,7 @@ class MeetingCfg:
         url = self.joinly_url.strip()
         if url != self.joinly_url:
             object.__setattr__(self, "joinly_url", url)
-        if not url:
-            return
-        parts = urllib.parse.urlsplit(url)
-        if (
-            len(url) > 300
-            or parts.scheme not in ("http", "https")
-            or not parts.netloc
-            or parts.username
-            or parts.password
-        ):
+        if url and not _joinly_url_ok(url):
             raise ConfigError("[meeting] joinly_url must be an http(s) URL")
 
 
@@ -291,11 +298,16 @@ def from_dict(data: dict[str, Any]) -> Config:
 # the human's name from the environment: a deployment's manifest names its admin (§32.4),
 # where the container's own user (``switchboard``) would make it ``me``
 HUMAN_NAME_ENV = "SWITCHBOARD_HUMAN_NAME"
+# the meeting bot's address from the environment: a Kubernetes manifest (and Argo with it) points the
+# broker at joinly beside it in the pod, where config.toml sits on the volume and a manifest can't
+# write it (§52, docs/DEPLOY.md). As for the human's name, a non-empty value wins over the file.
+JOINLY_URL_ENV = "SWITCHBOARD_JOINLY_URL"
 
 
 def load(paths: Paths) -> Config:
     """Read ``$SWITCHBOARD_HOME/config.toml`` if it exists; defaults otherwise. A non-empty
-    ``SWITCHBOARD_HUMAN_NAME`` sets ``human_name`` over both."""
+    ``SWITCHBOARD_HUMAN_NAME`` sets ``human_name`` over both, and a non-empty
+    ``SWITCHBOARD_JOINLY_URL`` sets ``[meeting] joinly_url`` over the file."""
     try:
         raw = paths.config.read_bytes()
     except FileNotFoundError:
@@ -311,4 +323,11 @@ def load(paths: Paths) -> Config:
         if not SCREEN_NAME_RE.match(env):
             raise ConfigError(f"{HUMAN_NAME_ENV} must match ^[a-z][a-z0-9_-]{{0,23}}$")
         cfg = cfg.replace(human_name=env, human_name_from_env=True)
+    env = os.environ.get(JOINLY_URL_ENV, "").strip()
+    if env:
+        if not _joinly_url_ok(env):  # never ignored: a typo here would turn /meeting off without a word
+            raise ConfigError(
+                f"{JOINLY_URL_ENV} must be an http(s) URL (300 characters at most, no user name or password)"
+            )
+        cfg = cfg.replace(meeting=dataclasses.replace(cfg.meeting, joinly_url=env))
     return cfg

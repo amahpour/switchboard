@@ -1,0 +1,32 @@
+# The Zoom speaker-name fix for the joinly sidecar (docs/DEPLOY.md, "Meetings on Kubernetes").
+# Apply it after joinly.yaml, and only if you follow Zoom calls and want names on them.
+#
+# joinly 0.5.4 gives no speaker name on Zoom, so every line there reads `call`; Meet and Teams are
+# fine. The fix is joinly-ai/joinly#187, a change to joinly's zoom.py. Until a joinly release has
+# it, the fixed file goes over the image's copy, read-only, from a ConfigMap made from the pinned
+# commit (the same file DEPLOY.md's `docker run` mounts). Create the ConfigMap first, because the
+# pod can't start without it (`kubectl describe pod` says the ConfigMap is not found):
+#
+#   curl -fsSLo zoom.py https://raw.githubusercontent.com/amahpour/joinly/9fbd07ceccbbfc358d697378c3cb1d7b911b17a5/joinly/providers/browser/platforms/zoom.py
+#   kubectl -n switchboard create configmap joinly-zoom-fix --from-file=zoom.py=./zoom.py
+#   kubectl -n switchboard patch statefulset switchboard --patch-file deploy/kubernetes/meetings/joinly-zoom-fix.yaml
+#
+# Drop this patch once joinly has a release with the fix, and move the image in joinly.yaml to it.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: switchboard
+spec:
+  template:
+    spec:
+      containers:
+        - name: joinly
+          volumeMounts:
+            - name: joinly-zoom-fix
+              mountPath: /app/.venv/lib/python3.12/site-packages/joinly/providers/browser/platforms/zoom.py
+              subPath: zoom.py        # one file over the image's copy, not the folder, which holds the other platforms
+              readOnly: true
+      volumes:
+        - name: joinly-zoom-fix
+          configMap:
+            name: joinly-zoom-fix
