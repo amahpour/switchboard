@@ -218,6 +218,30 @@ The long version is in [DESIGN.md §52](../DESIGN.md#52-meetings-a-live-call-in-
 - **The picture shows a person, not the shared screen:** it is a screenshot of the bot's own browser page, so it shows whatever that page shows. On Zoom that can be one tile that follows the speaker. Tell the agent what is on the screen, in the room.
 - **The bot stayed in the call after the broker restarted:** a normal stop asks the bot to leave first, and the room says `The call ended because the broker stopped.`. A crash or a kill can't ask. When the broker starts again, it closes the room's record of the call and says `The call ended because the broker restarted.`, but the bot is still in the call. Remove `switchboard (transcribing)` from the call by hand, as the host. Then run `/meeting` again if you want it back.
 
+## Test it yourself
+
+Once joinly is set up, a self-test can check the whole path in a real call, with no one on it but two test bots. It is written for people who work on switchboard, but anyone with Docker and a test call can run it.
+
+It starts two joinly containers: your bot, and a test speaker named `switchboard self-test speaker`. It also starts a throwaway broker in a temp folder, with a room and a scripted agent called `claude-1`. Both bots join the call. Then it checks, in order:
+
+1. `/meeting <link>` from a person: the bar goes live.
+2. The speaker says a known sentence: the call line reaches the room, with most of its words.
+3. The speaker says "Claude one, can you hear me?": `claude-1` is woken by that line.
+4. With voice on, `claude-1` says `@call I can hear you loud and clear`: the speaker hears most of those words.
+5. `/meeting snapshot`: the room keeps a JPEG file and posts its card.
+6. `/meeting leave`: the bar ends, and the speaker no longer sees the bot.
+
+Speech-to-text of a synthetic voice is close and not exact, so a step with words passes when most of them arrive (60% of the meaningful ones). The result is a table: for each step, pass or fail, what it expected, what it saw, and how many seconds it took.
+
+The easy way is the `meeting-self-test` skill in the repository. A coding agent that has it, and a Zoom connector, makes a 15-minute Zoom meeting, runs the test, deletes that meeting, and gives you the table. To run it by hand, put a call's link in a file that only you can read (mode 0600), and run the test:
+
+```bash
+SWITCHBOARD_LIVE=meeting SWITCHBOARD_MEETING_URL_FILE=<the file> \
+  uv run pytest -m live tests/live/test_meeting_selftest.py -s -q
+```
+
+The link has the call's passcode in it, so the test refuses a file that others can read, keeps the link out of its output and its report, and checks that the broker's database, messages and log never held any of it. For a Meet or Teams call, someone has to admit both bots when they ask to join. The test does not create or delete anything in those. [CONTRIBUTING.md](https://github.com/amahpour/switchboard/blob/main/CONTRIBUTING.md#live-tests-real-agent-clis-opt-in) has the details, and the skill lists the Zoom account settings that stop a guest from joining.
+
 ## Reference
 
 **Commands** (web UI only; see [A live call](../USAGE.md#a-live-call) in USAGE.md and [DESIGN.md §10](../DESIGN.md#10-commands)):

@@ -108,7 +108,7 @@ On Linux, the fixture waits for the Docker bridge and both container links to fi
 SWITCHBOARD_LIVE=claude uv run pytest -m live tests/live/test_live_claude.py -s -q   # or codex, devin, cursor
 SWITCHBOARD_LIVE=claude uv run pytest -m live tests/live/test_live_claude_long_wait.py -s -q  # message at 315 s, about 6 minutes
 SWITCHBOARD_LIVE=claude uv run pytest -m live tests/live/test_live_claude_signin.py -s -q   # Claude Code signed in through the browser
-SWITCHBOARD_LIVE=claude,codex,opencode,devin,cursor uv run pytest -m live tests/live -s -q    # all of them, one after the other
+SWITCHBOARD_LIVE=claude,codex,opencode,devin,cursor uv run pytest -m live tests/live -s -q    # all of them, one after the other (not the meeting self-test, below)
 ```
 
 - **What you need:** the CLI on `PATH`, logged in (`claude`, `codex login`, `devin auth login`, `agent login`), `tmux` and `curl`. tmux is found on the `PATH` pytest was started with, wherever it is installed (Homebrew's `/opt/homebrew/bin` included); the CLIs' own `PATH` is not widened for it. A harness whose CLI or login is missing is skipped with the reason.
@@ -128,6 +128,21 @@ SWITCHBOARD_LIVE=opencode uv run pytest -m live tests/live/test_live_opencode.py
 ```
 
 It needs `opencode` (tested on 2.1.4) and `OPENAI_API_KEY`, uses `openai/gpt-5.4-nano`, and prints `LIVE RESULTS`. It runs `opencode run --standalone` with a temporary HOME, all XDG paths, `OPENCODE_CONFIG_DIR`, project and `OPENCODE_CONFIG_CONTENT`. It never reads or writes the real OpenCode configuration or database, starts no background service, and performs no sign-in. Only the provider key is inherited through the allowlisted environment. A test-only local driver holds the standalone server open while a second real session joins, talks and is woken; it creates a private permission request and never answers it. The shipped plugin supplies all broker status and wake behavior. A plain suite skips this module, as it does the other `live` modules.
+
+**The meeting self-test** (#600) is a live test of a different kind: no agent CLI and no model, but a real call. It starts two [joinly](https://github.com/joinly-ai/joinly) containers (switchboard's meeting bot, and a test speaker named `switchboard self-test speaker`) and a throwaway broker in a temp home with a room and a scripted agent, `claude-1`. Both bots join one Zoom, Meet or Teams call and six steps run in order, each recording pass or fail, what it expected, what it saw and how long it took: the room's bar goes live; a sentence the speaker says reaches the room as a call line; "Claude one, can you hear me?" wakes `claude-1`; with voice on, `claude-1`'s `@call` line is heard by the speaker; `/meeting snapshot` stores a JPEG and posts its card; `/meeting leave` ends the bar and no bot is left in the call. The design is in [DESIGN.md §12.4](docs/DESIGN.md) and the features it checks are in the [meetings guide](docs/guide/meetings.md).
+
+```bash
+SWITCHBOARD_LIVE=meeting SWITCHBOARD_MEETING_URL_FILE=<file> \
+  uv run pytest -m live tests/live/test_meeting_selftest.py -s -q    # three to six minutes, no model
+```
+
+- **The easy way is the skill.** [`.claude/skills/meeting-self-test`](.claude/skills/meeting-self-test/SKILL.md) makes a 15-minute Zoom meeting with the Zoom connector, writes its link to the file, runs the test under the machine's lock, deletes exactly that meeting and the file even after a failure, and reports the table. It is worth running when a change touches `src/switchboard/meeting/`, how joinly is run, or the meetings commands; if you do, put the table in the pull request. By hand, make any Zoom, Meet or Teams call yourself; for Meet or Teams someone has to admit both bots as they ask to join.
+- **What you need:** Docker with the joinly image pulled (`docker pull ghcr.io/joinly-ai/joinly:v0.5.4`, 3.7 GB) and a call whose link you can put in a file. Zoom must let guests join from a browser, with no forced waiting room or sign-in; the skill lists the settings.
+- **On Zoom, both bots run with the speaker-name fix** (joinly-ai/joinly#187), the file DEPLOY.md pins, fetched and checked by its sha256 and mounted read-only, because stock 0.5.4 can't read Zoom's participant list. `SWITCHBOARD_SELFTEST_STOCK_JOINLY=1` runs stock joinly. `SWITCHBOARD_SELFTEST_LOGS=1` keeps both containers' logs, scrubbed of the link, in the output folder, for a failure that needs joinly's side.
+- **The link is a secret.** It carries the call's passcode. It comes from the file named by `SWITCHBOARD_MEETING_URL_FILE`, which must be a plain file of mode 0600 (anything else is refused, and the message never quotes it), never from an argument. The test keeps it out of every output: it prints as a placeholder, errors that might quote it are scrubbed, the report is checked for it, and at the end the broker's database, messages and log are checked for any piece of it. Delete the file when you are done.
+- **The result** is printed as a table and written, as JSON and Markdown, into `$SWITCHBOARD_SELFTEST_OUT` (or a temp folder the run names). A step with words passes on 60% of the expected content words, because speech-to-text of text-to-speech is close, not exact; a step that can't start because an earlier one failed counts as failed. The test fails if any step does, and names them.
+- **Whatever happens,** both bots leave the call and both containers are removed, also when the run is stopped with SIGTERM. A run killed harder can leave containers: `docker ps -a --filter label=switchboard-selftest` lists them, and `docker rm -f <name>` removes one.
+- **`SWITCHBOARD_LIVE=all` does not include it.** It needs a call, and a call needs an account, so only `meeting` runs it. A plain `pytest` skips it with the line that says how. `tests/unit/test_meeting_selftest.py` runs on every run and checks everything about it that needs no call: the word comparison, the link file's checks, the scrubbing and the report. It never runs in CI.
 
 ### Evals (real agents, graded from the database, opt-in)
 
