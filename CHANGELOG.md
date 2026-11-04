@@ -2,6 +2,13 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.49.1 (2026-11-04)
+
+### Fixed
+
+- **A Codex Stop hook whose client closes its connection stops listening at once.** A client on the 2025 MCP wire that closed the connection of its Stop hook without sending a cancel left the broker holding the hook until its own timeout, up to a day. A message that arrived meanwhile went to a hook nobody could read and reached the agent late. The broker now sees the connection close, ends the hold, and keeps the message for the next way it can be delivered. Members shows the session as not listening until its next hook, as it does after Esc.
+- **An 8-line message fits the composer at every text size.** With Settings → Text size at Large or Larger, the composer stopped growing before its eighth line, and the first line slid out of view at the top. The box now grows with the text size, as it already did on a phone.
+
 ## 0.49.0 (2026-11-04)
 
 ### Upgrading
