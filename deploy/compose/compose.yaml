@@ -59,10 +59,15 @@ services:
     # volumes:
     #   - ./zoom.py:/app/.venv/lib/python3.12/site-packages/joinly/providers/browser/platforms/zoom.py:ro
     # A model you name in SWITCHBOARD_MEETING_STT_MODEL is downloaded into the container, and gone when the
-    # container is made again. To keep it, mount a volume at joinly's cache under `volumes:` (and declare
-    # `joinly-models:` in the top-level `volumes:` below), only for a model you name: it hides the model the
-    # image holds. DEPLOY.md, "The speech model, and a GPU", has the command that fetches it first.
-    #   - joinly-models:/home/app/.cache/huggingface
+    # container is made again. To keep it, fetch it once into a volume (the command is in DEPLOY.md, "The
+    # speech model, and a GPU"; the volume belongs to root until then), declare `joinly-models:` in the
+    # top-level `volumes:` below, and uncomment these. With the Zoom fix too, put both mounts under one
+    # `volumes:`. Only for a model you name: with HF_HOME set, joinly no longer looks at the model its
+    # image holds.
+    # environment:
+    #   HF_HOME: /models
+    # volumes:
+    #   - joinly-models:/models
 
   # The same bot on one NVIDIA GPU, only with the `meetings-gpu` profile: joinly's CUDA build of the same
   # release (about 6 GB). It sets its own device (JOINLY_DEVICE=cuda in the image), so nothing else is needed
@@ -80,12 +85,13 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    # The same two optional mounts as above (the Zoom fix, and a volume to keep a model you name), written
-    # out for this service the same way. For the cache use a volume of its own (`joinly-gpu-models`): the
-    # CUDA image holds a different default model than the CPU one.
+    # The same optional lines as above (the Zoom fix, and a volume to keep a model you name), for this
+    # service. The model volume can be the same one: the cache holds whatever was fetched into it.
+    # environment:
+    #   HF_HOME: /models
     # volumes:
     #   - ./zoom.py:/app/.venv/lib/python3.12/site-packages/joinly/providers/browser/platforms/zoom.py:ro
-    #   - joinly-gpu-models:/home/app/.cache/huggingface
+    #   - joinly-models:/models
 
   caddy:
     image: caddy:2.10-alpine

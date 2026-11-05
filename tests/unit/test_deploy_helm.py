@@ -373,7 +373,7 @@ def test_max_calls_sizes_joinly_and_tells_the_broker(render: Callable[..., Rende
         assert (_mi(resources["requests"]["memory"]), _mi(resources["limits"]["memory"])) == anchors[calls]
 
 
-CACHE = "/home/app/.cache/huggingface"  # joinly's image user's Hugging Face cache, as docs/DEPLOY.md names it
+CACHE = "/models"  # where a named model is downloaded: joinly's HF_HOME, as docs/DEPLOY.md names it
 
 
 @needs_helm
@@ -459,13 +459,16 @@ def test_the_model_reaches_the_broker_and_gets_joinly_a_place_to_keep_it(
 ) -> None:
     """``meetings.sttModel`` (#617) is the broker's ``SWITCHBOARD_MEETING_STT_MODEL``, and joinly then
     downloads the model on the first call. joinly's root is read-only and its image keeps its models in the
-    user's home, so the chart gives it a writable folder at the Hugging Face cache (an emptyDir, sized for the
-    largest model with room, gone when the pod is). Fails if the broker is not told, if the download has
-    nowhere to go, or if the folder is mounted into the broker or made read-only."""
+    user's home, so the chart gives it a writable folder (an emptyDir, sized for the largest model with
+    room, gone when the pod is) and points Hugging Face's ``HF_HOME`` at it. Fails if the broker is not
+    told, if the download has nowhere to go or ``HF_HOME`` is somewhere else, or if the folder is mounted
+    into the broker or made read-only."""
     chart = render(*SET_BASE, "meetings.enabled=true", f"meetings.sttModel={model}")
     assert chart.returncode == 0, chart.stderr
     env = {e["name"]: e["value"] for e in chart.container("switchboard")["env"]}
     assert env["SWITCHBOARD_MEETING_STT_MODEL"] == model
+    joinly_env = {e["name"]: e["value"] for e in chart.container("joinly")["env"]}
+    assert joinly_env["HF_HOME"] == CACHE
     (mount,) = [m for m in chart.container("joinly")["volumeMounts"] if m["mountPath"] == CACHE]
     assert "readOnly" not in mount and "subPath" not in mount
     (volume,) = [v for v in chart.pod["volumes"] if v["name"] == mount["name"]]
@@ -481,20 +484,22 @@ def test_no_model_leaves_the_bot_as_it_was_and_the_model_needs_the_bot(
     render: Callable[..., Rendered],
 ) -> None:
     """Unset (the default, or an empty string), joinly keeps its own model from its image: no variable on
-    the broker and no cache folder, so a default install is the one the patch describes. A model with the
-    bot off renders nothing. Fails if an empty value is rendered as ``SWITCHBOARD_MEETING_STT_MODEL=`` or
-    mounts a folder that would hide the image's own copy of its model."""
+    the broker, no ``HF_HOME`` and no cache folder, so a default install is the one the patch describes. A
+    model with the bot off renders nothing. Fails if an empty value is rendered as
+    ``SWITCHBOARD_MEETING_STT_MODEL=``, or sets ``HF_HOME``, which would send joinly looking for its own
+    model in an empty folder."""
     for chart in (
         render(*SET_BASE, "meetings.enabled=true"),
         render(*SET_BASE, "meetings.enabled=true", "meetings.sttModel="),
         render(*SET_BASE, "meetings.enabled=true", "meetings.gpu.enabled=true"),
     ):
         assert chart.returncode == 0, chart.stderr  # a refused render has no documents to find nothing in
-        assert "SWITCHBOARD_MEETING_STT_MODEL" not in json.dumps(chart.docs)
-        assert CACHE not in json.dumps(chart.docs)
+        for needle in ("SWITCHBOARD_MEETING_STT_MODEL", "HF_HOME", CACHE):
+            assert needle not in json.dumps(chart.docs), needle
     off = render(*SET_BASE, "meetings.sttModel=large-v3-turbo")
     assert off.returncode == 0, off.stderr
-    assert "SWITCHBOARD_MEETING_STT_MODEL" not in json.dumps(off.docs) and CACHE not in json.dumps(off.docs)
+    for needle in ("SWITCHBOARD_MEETING_STT_MODEL", "HF_HOME", CACHE):
+        assert needle not in json.dumps(off.docs), needle
 
 
 @needs_helm
