@@ -212,6 +212,9 @@ def test_the_call_bar_has_a_voice_switch_and_a_snapshot_button(
     expect(switch).to_have_attribute("aria-checked", "true")
     expect(bar).to_contain_text("agents can speak")
     expect(page.locator("#log")).to_contain_text("alice turned voice on")
+    # The track eases to its new colour over 120 ms (style.css). A read made before the transition's first
+    # frame finds the colour it left, which made this test fail one run in forty: wait until it has moved.
+    expect(page.locator("#meeting-voice .switch-track")).not_to_have_css("background-color", off_light)
     on_light = _track(page)
     assert on_light != off_light
 
