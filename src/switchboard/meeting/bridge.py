@@ -29,10 +29,11 @@ from fastmcp.client.messages import MessageHandler
 from fastmcp.client.transports import StreamableHttpTransport
 from mcp.shared.exceptions import MCPDeprecationWarning
 
-from switchboard.envelope import clean
+from switchboard.meeting import ingest
+from switchboard.meeting.ingest import LINE_GAP_S
 from switchboard.meeting.lines import Assembler, Line, Segment
 from switchboard.meeting.links import PLATFORM_LABEL
-from switchboard.meeting.names import hotwords, match
+from switchboard.meeting.names import hotwords
 from switchboard.meeting.screen import SNAPSHOT_GAP_S, Asker, NoFrame, frame_from, says_screen
 from switchboard.meeting.speech import QUEUE_MAX as SPEAK_QUEUE_MAX
 from switchboard.meeting.speech import call_text, speakable
@@ -57,8 +58,6 @@ RESOURCE = "transcript://live/segments"
 JOIN_TIMEOUT_S = 45.0
 LEAVE_TIMEOUT_S = 5.0
 POLL_S = 3.0
-LINE_GAP_S = 1.0
-QUEUE_MAX = 50
 SPEAK_TIMEOUT_S = 180.0  # speak_text returns when the speech has ended; 600 characters is under a minute
 SNAPSHOT_TIMEOUT_S = 8.0  # a call-out's line waits no longer than this for its picture
 INTERRUPTED = "Interrupted"  # how joinly's reply to speak_text starts when someone spoke over it
@@ -102,14 +101,6 @@ class _Updates(MessageHandler):
 
     async def on_resource_updated(self, message: Any) -> None:
         self.updated.set()
-
-
-def _listed(names: tuple[str, ...]) -> str:
-    if len(names) <= 1:
-        return names[0] if names else ""
-    if len(names) == 2:
-        return f"{names[0]} and {names[1]}"
-    return ", ".join(names[:-1]) + " and " + names[-1]
 
 
 def _segments(contents: Any) -> list[Segment]:
@@ -354,42 +345,22 @@ class MeetingBridge:
             await self._post_line(room_id, queue.popleft(), live, ending=True)
 
     def _enqueue(self, queue: deque[Line], line: Line, room_id: int, warned: bool) -> bool:
-        queue.append(line)
-        if len(queue) <= QUEUE_MAX:
-            return warned
-        queue.popleft()
-        if warned:
-            return True
-        self.state.service.notice_in(
-            room_id, "The call is coming in faster than the room can show. Some lines were dropped."
+        return ingest.enqueue(
+            queue, line, warned, lambda: self.state.service.notice_in(room_id, ingest.OVERFLOW_NOTICE)
         )
-        return True
 
     async def _post_line(self, room_id: int, line: Line, live: _Live, *, ending: bool = False) -> None:
-        text = clean(line.text).strip()
-        if not text:
+        # what becomes of a line is ``ingest``'s, shared with a call hosted on a person's machine (§52.12):
+        # nothing posted when only the transcriber's hint list came back (#616), an echoed lead-in taken
+        # off and the real words kept (#602)
+        prepared = ingest.prepare(line.text, self.state.store.active_names(room_id))
+        if prepared is None:
             return
-        members = self.state.store.active_names(room_id)
-        found = match(text, members)
-        if found.echo:
-            return  # the transcriber writing out its hint list: nobody said it (#616)
-        text = found.text  # an echoed lead-in is taken off, and only the real words are posted (#602)
-        mentions = [found.name] if found.outcome == "one" and found.name else []
-        if mentions and says_screen(text) and not ending:
+        if prepared.mentions and says_screen(prepared.text) and not ending:
             # "Claude, look at my screen": the picture is posted first, so the agent this line wakes
             # is handed it with the line. A picture that fails or is refused never holds the line back.
             await self._screen_for_line(room_id, live)
-        sender = clean(line.speaker).strip()[:40] if line.speaker else ""
-        self.state.service.post_meeting_line(
-            room_id, sender_name=sender or "call", text=text[:1000], mentions=mentions
-        )
-        if found.outcome == "ambiguous" and found.heard and found.names:
-            heard = found.heard.replace('"', "'")[:40]
-            who = _listed(found.names)
-            self.state.service.notice_in(
-                room_id,
-                f'Someone on the call said "{heard}", and this room has {who}. Say the number.',
-            )
+        ingest.post(self.state, room_id, line, prepared)
 
     # ------------------------------------------------------------------ voice (§52)
     def voice(self, room_id: int) -> bool:

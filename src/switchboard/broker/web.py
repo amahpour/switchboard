@@ -2101,7 +2101,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 raise ServiceError("bad_request", "text is required")
             state.service.room_for(slug, viewer(request))
             res = state.service.command(
-                slug, text, Actor(role="human", via="web", name=w.name, person_id=w.person_id)
+                slug,
+                text,
+                Actor(role="human", via="web", name=w.name, person_id=w.person_id, admin=w.is_admin),
             )
             return _ok(res)
         except ServiceError as e:

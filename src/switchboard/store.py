@@ -451,6 +451,7 @@ class Store:
         sender_host: str | None = None,
         sender_person_id: int | None = None,
         deliver_notice: bool = False,
+        meeting_id: int | None = None,
     ) -> Message:
         """Persist a message and its per-recipient delivery rows in one transaction.
 
@@ -465,6 +466,8 @@ class Store:
         ``sender_host`` is a device agent sender's host (§49); None on this machine.
         ``sender_person_id`` is a human sender other than the owner (§32.2); every person
         is a human to every agent, so it changes nothing about the deliveries.
+        ``meeting_id`` is the hosted call whose key pushed a call line (§52.12): the line is stored
+        with it, and the call's count of lines goes up in the same transaction.
         """
         if sender_host is not None and not valid_host(sender_host):
             raise ValueError(f"not a host name: {sender_host!r}")
@@ -477,7 +480,7 @@ class Store:
             cur = self.con.execute(
                 "INSERT INTO messages(room_id, ts, sender_membership_id, sender_name,"
                 " sender_harness, sender_kind, via, kind, text, reply_to, mentions, sender_host,"
-                " sender_person_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " sender_person_id, meeting_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     room_id,
                     now,
@@ -492,9 +495,12 @@ class Store:
                     json.dumps(mentions_l),
                     sender_host,
                     sender_person_id,
+                    meeting_id,
                 ),
             )
             mid = cur.lastrowid
+            if meeting_id is not None:
+                self.con.execute("UPDATE meetings SET lines_pushed=lines_pushed+1 WHERE id=?", (meeting_id,))
             if kind == "chat":
                 if sender_kind == "human":
                     self.con.execute(
@@ -559,6 +565,59 @@ class Store:
         if got is None:
             raise StoreError("meeting insert returned no id")
         return got
+
+    def insert_hosted_meeting(
+        self,
+        room_id: int,
+        *,
+        started_by: str,
+        platform: str,
+        key_hash: str,
+        token_id: int,
+        owner_person_id: int | None,
+        host: str,
+        model: str,
+    ) -> Meeting:
+        """A call hosted on a person's machine, opened in ``room_id`` (§52.12), joining until its first
+        push. Conflict when the room has a call open or the key's sha256 is already some call's: a key
+        is for one call, ended or not, so it can never be registered twice."""
+        who = started_by.strip()[:80] or "someone"
+        now = self.clock.now()
+        try:
+            with db.tx(self.con):
+                cur = self.con.execute(
+                    "INSERT INTO meetings(room_id, state, started_at, started_by, platform, source,"
+                    " key_hash, token_id, owner_person_id, host, model)"
+                    " VALUES(?, 'joining', ?, ?, ?, 'hosted', ?, ?, ?, ?, ?)",
+                    (room_id, now, who, platform, key_hash, token_id, owner_person_id, host, model or None),
+                )
+                mid = cur.lastrowid
+        except sqlite3.IntegrityError:
+            raise Conflict("a call is already open in this room, or the key was used before") from None
+        got = self.meeting_by_id(int(mid)) if mid is not None else None
+        if got is None:
+            raise StoreError("meeting insert returned no id")
+        return got
+
+    def meeting_by_key(self, key_hash: str) -> Meeting | None:
+        """The call a hosted key's sha256 was registered for, ended or not."""
+        r = self.con.execute("SELECT * FROM meetings WHERE key_hash=?", (key_hash,)).fetchone()
+        return Meeting.from_row(r) if r else None
+
+    def open_hosted_meeting_of(self, owner_person_id: int | None) -> Meeting | None:
+        """The hosted call this person (None: the owner) has joining or live, if any."""
+        r = self.con.execute(
+            "SELECT * FROM meetings WHERE source='hosted' AND state!='ended' AND owner_person_id IS ?"
+            " ORDER BY id DESC LIMIT 1",
+            (owner_person_id,),
+        ).fetchone()
+        return Meeting.from_row(r) if r else None
+
+    def open_hosted_meetings(self) -> list[Meeting]:
+        rows = self.con.execute(
+            "SELECT * FROM meetings WHERE source='hosted' AND state!='ended' ORDER BY id"
+        ).fetchall()
+        return [Meeting.from_row(r) for r in rows]
 
     def meeting_by_id(self, meeting_id: int) -> Meeting | None:
         r = self.con.execute("SELECT * FROM meetings WHERE id=?", (meeting_id,)).fetchone()
@@ -1453,6 +1512,11 @@ class Store:
         r = self.con.execute(
             "SELECT * FROM agent_tokens WHERE device=? AND revoked_at IS NULL", (device,)
         ).fetchone()
+        return AgentTokenRow.from_row(r) if r else None
+
+    def agent_token_by_id(self, token_id: int) -> AgentTokenRow | None:
+        """The token with this id, revoked or not (a hosted call names the token that opened it)."""
+        r = self.con.execute("SELECT * FROM agent_tokens WHERE id=?", (token_id,)).fetchone()
         return AgentTokenRow.from_row(r) if r else None
 
     def agent_token_by_hash(self, token_hash: str) -> AgentTokenRow | None:

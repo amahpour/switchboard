@@ -900,6 +900,9 @@ class AgentService:
             # an "@call" line is spoken in the room's live call while a person has voice on (§52);
             # otherwise this does nothing. It never waits: a task in the bridge does the speaking.
             self.state.meetings.speak(room.id, msg.text)
+        if self.state.hosted_calls is not None:
+            # the same for a call hosted on a person's machine (§52.12): the line waits for its relay's poll
+            self.state.hosted_calls.speak(room.id, msg.text)
         return msg
 
     def read(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
@@ -1007,6 +1010,16 @@ class AgentService:
         )
         self.run([Snapshot(r) for r in {x.room_id for x in self.store.participant_memberships(p.id)}])
         return {"status_line": line}
+
+    def host_call(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
+        """Open a call hosted on this agent's machine in a room it is in (§52.12, #623). The call is the
+        person's whose token this is: their machine's name and their one hosted call come from the token,
+        not from anything the agent says. Only the sha256 of the call's key is taken, never the key."""
+        _p, _m, room = self._member(conn, params)
+        token = getattr(conn, "token", None)
+        if token is None or self.state.hosted_calls is None:
+            raise ServiceError("unauthorized", "hosting a call needs an agent token")
+        return self.state.hosted_calls.open(token, room, params)
 
     def claim(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
         """Advisory outside work, per room: only its member may renew or release it (§47)."""

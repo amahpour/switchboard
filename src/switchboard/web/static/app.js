@@ -1121,6 +1121,8 @@
     const head = el('div', 'msg-head');
     head.append(el('span', 'call-tag', 'call'));
     if (m.from && m.from !== 'call') head.append(el('span', 'nick nick-meeting', m.from));
+    // a line a call hosted on someone's machine pushed (§52.12) says whose machine heard it
+    if (typeof m.host === 'string' && m.host) head.append(el('span', 'via-host', 'via ' + m.host));
     head.append(messageMeta(m, false));
     body.append(head, mdBody(m.text, m.mentions, m.files));
     line.append(body);
@@ -1752,24 +1754,41 @@
     renderMeeting(r, s);
   }
 
-  // The call bar (#573). Only the three platforms the broker accepts; anything else stays hidden.
+  // The call bar (#573). Only the platforms the broker accepts; anything else stays hidden. A call hosted on a
+  // person's machine (§52.12) may not say which platform it is on ('unknown'): the bar then names none.
   const MEETING_LABEL = { zoom: 'Zoom', meet: 'Meet', teams: 'Teams' };
 
   function renderMeeting(r, s) {
     const band = $('banner-meeting');
     const call = s.meeting;
-    const label = call && MEETING_LABEL[call.platform];
-    const open = !!(r && call && label && (call.state === 'joining' || call.state === 'live'));
+    const hosted = !!(call && call.source === 'hosted');
+    const label = call && (MEETING_LABEL[call.platform] || (hosted && call.platform === 'unknown' ? '' : undefined));
+    const open = !!(r && call && label !== undefined && (call.state === 'joining' || call.state === 'live'));
     band.classList.toggle('hidden', !open);
     if (!open) return;
     const voice = call.voice === true;  // anything but true is off: a frame without it is an older broker
-    $('banner-meeting-text').textContent = (call.state === 'live'
-      ? 'Transcribing a call (' + label + ')'
-      : 'Joining a ' + label + ' call…') + (voice ? ' · agents can speak' : '');
+    const named = label ? ' (' + label + ')' : '';
+    let text = call.state === 'live'
+      ? 'Transcribing a call' + named
+      : 'Joining a ' + (label ? label + ' ' : '') + 'call…';
+    if (hosted) {
+      // whose machine runs it, and the key's short fingerprint: what a person checks against the relay's own line
+      if (typeof call.host === 'string' && call.host) text += ' · on ' + call.host;
+      if (typeof call.fingerprint === 'string' && call.fingerprint) text += ' · key ' + call.fingerprint;
+    }
+    $('banner-meeting-text').textContent = text + (voice ? ' · agents can speak' : '');
     // the switch's name stays "Voice": aria-checked says which, so a screen reader doesn't hear both
     $('meeting-voice').setAttribute('aria-checked', String(voice));
-    // a picture needs the bot to be in the call
-    $('meeting-snapshot').disabled = call.state !== 'live';
+    // a picture needs the bot to be in the call, and a hosted bot sends none yet
+    const snap = $('meeting-snapshot');
+    if (snap.dataset.title === undefined) snap.dataset.title = snap.title;
+    snap.disabled = hosted || call.state !== 'live';
+    snap.title = hosted ? 'A snapshot is not available yet for a call hosted on a person\'s machine' : snap.dataset.title;
+    // ending a hosted call ends its key: the next push from its machine is refused
+    const end = $('meeting-leave');
+    end.textContent = hosted ? 'End call' : 'Leave call';
+    if (hosted) end.title = 'End the call: its machine\'s key stops working now';
+    else end.removeAttribute('title');
   }
 
   function selectRoom(name) {

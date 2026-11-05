@@ -193,6 +193,7 @@ METHODS = {
     "agent.pass": "pass_",
     "agent.away": "away",
     "agent.status": "status",
+    "agent.host_call": "host_call",
 }
 
 Scope = dict[str, Any]
@@ -210,6 +211,9 @@ class HttpConn:
     host: str
     agent: AgentConn
     closed: bool = False
+    # the agent token this call came in with: only a call that acts for its person's machine reads it
+    # (``host_call``, §52.12). None for a call that is not over HTTPS
+    token: AgentTokenRow | None = None
 
 
 @dataclass(frozen=True)
@@ -481,7 +485,7 @@ class HttpTools:
             test_session=(test or {}).get("session"),
             ack_mode=(test or {}).get("ack"),
         )
-        return HttpConn(next(self._ids), host, agent)
+        return HttpConn(next(self._ids), host, agent, token=token)
 
     async def on_hook(self, fields: dict[str, Any]) -> str:
         """A harness's hook, by its token (``prime`` ran): Claude Code's PreToolUse names the
