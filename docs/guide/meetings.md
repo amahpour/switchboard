@@ -65,7 +65,7 @@ sequenceDiagram
 
 An admin does this once. If someone already did, skip to [Use it](#use-it).
 
-1. **Run joinly beside the broker.** [DEPLOY.md](../DEPLOY.md#a-meeting-bot) has the container command, for one machine and for a compose network, and [a patch for Kubernetes](../DEPLOY.md#meetings-on-kubernetes) that makes joinly a second container in the broker's pod.
+1. **Run joinly beside the broker.** [DEPLOY.md](../DEPLOY.md#a-meeting-bot) has the container command, for one machine and for the Compose example (its `meetings` profile: two lines in a `.env` file), and [a patch for Kubernetes](../DEPLOY.md#meetings-on-kubernetes) that makes joinly a second container in the broker's pod.
 2. **Keep joinly private.** It has no sign-in, and it takes its settings from whoever connects. Publish its port on `127.0.0.1` only, or only on the compose network. Never on an open address. In a Kubernetes pod it listens on the pod's localhost, and nothing else in the cluster can reach it.
 3. **Tell the broker where joinly is.** In the broker's `config.toml`:
 
