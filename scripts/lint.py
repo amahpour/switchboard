@@ -1,4 +1,6 @@
-"""Run the pinned local lint tools and reject findings added after issue #103."""
+"""Run the pinned local lint tools and reject findings added after issue #103.
+
+Ruff, mypy, ESLint, ShellCheck, actionlint, and Helm (#608) on the chart in deploy/helm/."""
 
 from __future__ import annotations
 
@@ -23,6 +25,22 @@ NO_FINDINGS: dict[str, list[list[str]]] = {"ruff": [], "mypy": []}
 TOOLS = ROOT / ".lint-tools"
 ESLINT = ROOT / "scripts" / "eslint"
 PYTHON_DIRS = ("src", "tests", "scripts", "docs/media")
+CHART = ROOT / "deploy" / "helm" / "switchboard"
+# The value sets the chart is linted with (a chart renders only with a publicUrl): the defaults, then
+# the meeting bot, then the bot with the Zoom fix mounted. tests/unit/test_deploy_helm.py checks what each
+# renders.
+CHART_VALUES = (
+    ("publicUrl=https://sb.example.com",),
+    ("publicUrl=https://sb.example.com", "meetings.enabled=true"),
+    (
+        "publicUrl=https://sb.example.com",
+        "meetings.enabled=true",
+        "meetings.maxCalls=3",
+        "meetings.zoomFix.configMap=joinly-zoom-fix",
+    ),
+)
+# tool -> (version, where it comes from, per platform: archive, sha256, the file to take out of it).
+# "where" is a GitHub repository (releases/download/<version>/<archive>), or a base URL.
 RELEASES = {
     "shellcheck": (
         "v0.11.0",
@@ -66,6 +84,29 @@ RELEASES = {
             ),
         },
     ),
+    # Helm 4's line is the only one still getting minor releases (3.22 is the last of 3). Its checksums are
+    # the ones in the release notes of v4.3.1 (https://github.com/helm/helm/releases/tag/v4.3.1).
+    "helm": (
+        "v4.3.1",
+        "https://get.helm.sh",
+        {
+            "linux-x86_64": (
+                "helm-v4.3.1-linux-amd64.tar.gz",
+                "0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b",
+                "linux-amd64/helm",
+            ),
+            "darwin-arm64": (
+                "helm-v4.3.1-darwin-arm64.tar.gz",
+                "6b4e61c8cd27d99e5a801e63ff25dd5c70b36875c2cd659d3e9ce6b76fc23198",
+                "darwin-arm64/helm",
+            ),
+            "darwin-x86_64": (
+                "helm-v4.3.1-darwin-amd64.tar.gz",
+                "34bec4eba761ba5c16d1965ee6b8f5b0abe5993974a802274e2a4f0418893d89",
+                "darwin-amd64/helm",
+            ),
+        },
+    ),
 }
 
 
@@ -83,7 +124,7 @@ def installed_tool(name: str) -> Path:
     machine = {"amd64": "x86_64", "aarch64": "arm64"}.get(
         platform.machine().lower(), platform.machine().lower()
     )
-    version, repository, releases = RELEASES[name]
+    version, source, releases = RELEASES[name]
     filename, digest, member = releases[f"{system}-{machine}"]
     binary = TOOLS / f"{name}-{version}-{system}-{machine}"
     if binary.exists():
@@ -91,7 +132,10 @@ def installed_tool(name: str) -> Path:
     TOOLS.mkdir(exist_ok=True)
     archive = TOOLS / filename
     if not archive.exists() or hashlib.sha256(archive.read_bytes()).hexdigest() != digest:
-        url = f"https://github.com/{repository}/releases/download/{version}/{filename}"
+        if source.startswith("https://"):
+            url = f"{source}/{filename}"
+        else:
+            url = f"https://github.com/{source}/releases/download/{version}/{filename}"
         archive.write_bytes(urllib.request.urlopen(url, timeout=60).read())
     if hashlib.sha256(archive.read_bytes()).hexdigest() != digest:
         raise ValueError(f"checksum mismatch: {filename}")
@@ -187,6 +231,30 @@ def changed_python(base: str) -> list[str]:
     return sorted(p for p in paths if p.endswith(".py") and (ROOT / p).is_file())
 
 
+def lint_chart(helm: Path) -> bool:
+    """`helm lint --strict` on the chart with each value set, then the chart's own tests with this helm:
+    what each render holds (tests/unit/test_deploy_helm.py). Those tests skip where there is no helm, so
+    here they are made to find this one, and to fail without it."""
+    ok = True
+    for sets in CHART_VALUES:
+        args = [arg for value in sets for arg in ("--set", value)]
+        ok &= run(str(helm), "lint", "--strict", str(CHART), *args, check=False).returncode == 0
+    env = {**os.environ, "SWITCHBOARD_HELM": str(helm), "SWITCHBOARD_REQUIRE_HELM": "1"}
+    tests = (
+        "uv",
+        "run",
+        "--frozen",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "tests/unit/test_deploy_helm.py",
+    )
+    ok &= run(*tests, check=False, env=env).returncode == 0
+    print("helm chart: clean" if ok else "helm chart: failed")
+    return ok
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fix", action="store_true", help="fix JavaScript and format Python files")
@@ -220,6 +288,7 @@ def main() -> int:
         link.symlink_to(shellcheck.name)
     ok &= run(str(actionlint), "-color", check=False, env=env).returncode == 0
     print("shellcheck and actionlint: clean" if ok else "lint failed")
+    ok &= lint_chart(installed_tool("helm"))
     return 0 if ok else 1
 
 

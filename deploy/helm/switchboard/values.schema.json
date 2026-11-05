@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "switchboard chart values",
+  "description": "A key the chart does not know is refused, so a misspelled one fails instead of being ignored (docs/DEPLOY.md, \"Helm\").",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "global": {"type": "object"},
+    "nameOverride": {"type": "string"},
+    "fullnameOverride": {"type": "string"},
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "tag": {"type": "string"},
+        "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}
+      }
+    },
+    "publicUrl": {"type": "string"},
+    "humanName": {"type": "string"},
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "size": {"type": "string", "minLength": 1},
+        "storageClass": {"type": "string"}
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "className": {"type": "string"},
+        "host": {"type": "string"},
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "secretName": {"type": "string"}
+          }
+        },
+        "annotations": {"type": ["object", "null"]}
+      }
+    },
+    "resources": {"type": "object"},
+    "meetings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "maxCalls": {"type": "integer", "minimum": 1, "maximum": 50},
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": {"type": "string", "minLength": 1},
+            "tag": {"type": "string", "minLength": 1},
+            "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}
+          }
+        },
+        "zoomFix": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "configMap": {"type": "string"}
+          }
+        }
+      }
+    }
+  }
+}

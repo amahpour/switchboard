@@ -130,6 +130,27 @@ def test_update_pins() -> None:
         assert rel.update_pins(other, "0.5.0") == other  # not a release pin of this image
 
 
+def test_pin_chart_moves_the_app_version_and_nothing_else() -> None:
+    """The chart installs the image of its appVersion (#608), so a release has to move it with the image pins
+    in the manifests. Fails if appVersion stays on the last release, if the chart's own `version` moves with
+    it, or if a chart with no appVersion line is let through (the release would ship a chart that deploys the
+    last release)."""
+    new = rel.pin_chart(CHART, "0.5.0")
+    assert new == CHART.replace('appVersion: "0.4.0"', 'appVersion: "0.5.0"')
+    assert "version: 0.1.0" in new
+    assert rel.pin_chart(new, "0.5.1") == CHART.replace('appVersion: "0.4.0"', 'appVersion: "0.5.1"')
+    assert rel.is_release_file("deploy/helm/switchboard/Chart.yaml")
+    assert not rel.is_release_file("deploy/helm/switchboard/values.yaml")
+    for broken in (
+        "version: 0.1.0\n",
+        'appVersion: "latest"\n',
+        '# appVersion: "0.4.0"\n',
+        'appVersion: "0.4.0"\nappVersion: "0.4.0"\n',
+    ):
+        with pytest.raises(SystemExit, match="appVersion"):
+            rel.pin_chart(broken, "0.5.0")
+
+
 def test_pin_marketplace_moves_the_release_tag_the_plugins_are_pinned_to() -> None:
     """A release moves each plugin's `ref` to its own tag (#462), so the plugin an installed copy
     updates to is the release's and not whatever main holds. Fails if the ref stays on the last
@@ -206,6 +227,15 @@ MARKETPLACE = """{
 """
 
 
+CHART = """\
+# the chart
+apiVersion: v2
+name: switchboard
+version: 0.1.0
+appVersion: "0.4.0"
+"""
+
+
 def make_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     (repo / "src" / "switchboard").mkdir(parents=True)
@@ -224,6 +254,8 @@ def make_repo(tmp_path: Path) -> Path:
     (repo / "deploy" / "compose" / "compose.yaml").write_text(
         "    image: ghcr.io/amahpour/switchboard:0.4.0\n"
     )
+    (repo / "deploy" / "helm" / "switchboard").mkdir(parents=True)
+    (repo / "deploy" / "helm" / "switchboard" / "Chart.yaml").write_text(CHART)
     for rel_path, folder in (
         (".claude-plugin/marketplace.json", "plugins/claude"),
         (".agents/plugins/marketplace.json", "./plugins/codex"),
@@ -255,6 +287,9 @@ def test_a_release_on_a_real_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         "@v0.5.0" in (repo / "README.md").read_text() and "@v0.5.0" in (repo / "docs/INSTALL.md").read_text()
     )
     assert ":0.5.0\n" in (repo / "deploy/compose/compose.yaml").read_text()  # the image pin
+    # the Helm chart's image tag (#608): appVersion moves, the chart's own version stays
+    chart = (repo / "deploy/helm/switchboard/Chart.yaml").read_text()
+    assert chart == CHART.replace('appVersion: "0.4.0"', 'appVersion: "0.5.0"')
     for market in (".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json"):  # #462
         pinned = json.loads((repo / market).read_text())["plugins"][0]["source"]
         assert pinned["ref"] == "v0.5.0" and pinned["url"].endswith("/switchboard.git"), market

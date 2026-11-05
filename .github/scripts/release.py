@@ -18,6 +18,8 @@ from origin/main, in a temporary worktree (the checkout it runs from is never to
 - points the README's and docs/INSTALL.md's `uv tool install …@vX.Y.Z` lines at the new tag,
   and the deployment examples' and docs/DEPLOY.md's `ghcr.io/amahpour/switchboard:X.Y.Z` at
   the new image;
+- sets `appVersion` in the Helm chart (`deploy/helm/switchboard/Chart.yaml`, #608) to the new version, because
+  it is the image tag the chart defaults to;
 - moves the `ref` of each plugin in the two marketplaces (`.claude-plugin/marketplace.json`,
   `.agents/plugins/marketplace.json`) to the new tag, so a plugin reaches the people who
   installed it with a release, never with a merge to main (#462). The tag is made by release.yml
@@ -56,10 +58,14 @@ IMAGE_PIN_RE = re.compile(r"(ghcr\.io/amahpour/switchboard:)\d+\.\d+\.\d+(?![\w.
 MARKETPLACE_REF_RE = re.compile(r'("ref"\s*:\s*")v\d+\.\d+\.\d+(")')
 VERSION_FILES = ("pyproject.toml", "src/switchboard/__init__.py", "uv.lock")
 MARKETPLACE_FILES = (".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json")
+# the Helm chart's `appVersion` (#608): the image tag its `image.tag` defaults to. The chart's own
+# `version` is the chart's, and stays.
+CHART_FILE = "deploy/helm/switchboard/Chart.yaml"
+CHART_APP_VERSION_RE = re.compile(r'(?m)^(appVersion:[ \t]*")\d+\.\d+\.\d+(")')
 PIN_FILES = ("README.md", "docs/INSTALL.md", "docs/DEPLOY.md", "deploy/compose/compose.yaml",
              "deploy/kubernetes/switchboard.yaml", "deploy/render/render.yaml")
 # with the notes files, all a release PR changes
-RELEASE_FILES = (*VERSION_FILES, "CHANGELOG.md", *PIN_FILES, *MARKETPLACE_FILES)
+RELEASE_FILES = (*VERSION_FILES, "CHANGELOG.md", *PIN_FILES, *MARKETPLACE_FILES, CHART_FILE)
 CHANGES_DIR = "changes"   # a PR's notes: changes/<name>.md (changes/README.md)
 # a release's headings in this order; any other heading follows them, in the order first seen
 HEADING_ORDER = ("Upgrading", "Added", "Changed", "Removed", "Fixed", "Known limitations", "Not included")
@@ -219,6 +225,16 @@ def pin_marketplace(text: str, version: str, where: str = "a marketplace") -> st
     return pinned
 
 
+def pin_chart(text: str, version: str, where: str = CHART_FILE) -> str:
+    """A chart file with its `appVersion` set to the release (#608). The chart installs the image of its
+    appVersion unless told otherwise, so one left on the last release would deploy the last release from the
+    new tag; a file with no `appVersion: "X.Y.Z"` line stops the release instead of passing."""
+    pinned, n = CHART_APP_VERSION_RE.subn(rf"\g<1>{version}\g<2>", text)
+    if n != 1:
+        raise SystemExit(f'{where} has no `appVersion: "X.Y.Z"` line to move')
+    return pinned
+
+
 # ------------------------------------------------------------------ git
 def git(*args: str, root: Path = ROOT) -> str:
     return subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, text=True).stdout
@@ -302,6 +318,9 @@ def release(root: Path, notes_path: Path, today: str) -> str | None:
         p = root / rel
         if p.exists():
             p.write_text(pin_marketplace(p.read_text(), version, rel))
+    chart = root / CHART_FILE
+    if chart.exists():
+        chart.write_text(pin_chart(chart.read_text(), version))
     notes_path.write_text(notes)
     return version
 

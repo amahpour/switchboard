@@ -1,0 +1,221 @@
+{{- /*
+One broker, one volume: a StatefulSet with a single replica and a ReadWriteOnce claim, as
+deploy/kubernetes/switchboard.yaml has it. There is no replicas value, because the broker's lock
+refuses a second broker on the same volume (several brokers are a different design, issue #35). A
+StatefulSet replaces its one pod by stopping it before starting the new one, which is what a
+Deployment's `Recreate` strategy would do.
+*/ -}}
+{{- $publicUrl := include "switchboard.publicUrl" . }}
+{{- $calls := int .Values.meetings.maxCalls }}
+{{- $joinlyMi := include "switchboard.joinlyMemoryMi" . | int }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "switchboard.fullname" . }}
+  labels:
+    {{- include "switchboard.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "switchboard.fullname" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "switchboard.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "switchboard.selectorLabels" . | nindent 8 }}
+      {{- if .Values.meetings.enabled }}
+      annotations:
+        {{- /*
+        With two containers, `kubectl logs` and `kubectl exec` (the admin's one-time password,
+        `switchboard login`) must know which one is meant; without this they take the first.
+        */}}
+        kubectl.kubernetes.io/default-container: switchboard
+      {{- end }}
+    spec:
+      {{- /*
+      Kubernetes gives every pod a variable per Service in its namespace, and a Service named
+      switchboard makes SWITCHBOARD_PORT=tcp://<cluster-ip>:7419, which overrides the image's
+      SWITCHBOARD_PORT=7419; the broker refuses it as its port and crash-loops (#595). It reads none
+      of them, so they stay off whatever the Service is called.
+      */}}
+      enableServiceLinks: false
+      securityContext:
+        runAsUser: 10001        # the image's `switchboard` user, from the start
+        runAsGroup: 10001
+        runAsNonRoot: true
+        fsGroup: 10001          # makes the volume writable by that user...
+        fsGroupChangePolicy: OnRootMismatch   # ...without re-chmodding the broker's private home on every start
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: switchboard
+          image: "{{ .Values.image.repository }}:{{ include "switchboard.imageTag" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: SWITCHBOARD_PUBLIC_URL
+              value: {{ $publicUrl | quote }}
+            {{- with .Values.humanName }}
+            - name: SWITCHBOARD_HUMAN_NAME
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if .Values.meetings.enabled }}
+            - name: SWITCHBOARD_JOINLY_URL
+              value: http://127.0.0.1:8000/mcp/   # the broker's `[meeting] joinly_url`: beside it, in the pod
+            - name: SWITCHBOARD_MEETING_MAX_CALLS
+              value: {{ $calls | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 7419
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+        {{- if .Values.meetings.enabled }}
+        {{- /*
+        joinly, the meeting bot (DESIGN.md §52), as deploy/kubernetes/meetings/joinly.yaml has it. It has
+        no sign-in and takes its settings from whoever connects, so what keeps it private is that
+        nothing but the broker can reach it. The containers of a pod share one network namespace, so
+        joinly listens on the pod's own 127.0.0.1 and the broker, beside it, connects there. There is
+        no Service for it and no containerPort. Its image listens on 0.0.0.0 by default
+        (JOINLY_SERVER_HOST), which would give every pod in the cluster its port at the pod's IP whether
+        or not a Service names it, so the env below narrows it. No NetworkPolicy is needed (EKS enforces
+        one only when its network policy agent is on). The first start pulls a 3.7 GB image, and the pod
+        waits in ContainerCreating until it is done.
+        */}}
+        - name: joinly
+          image: "{{ .Values.meetings.image.repository }}:{{ .Values.meetings.image.tag }}"
+          imagePullPolicy: {{ .Values.meetings.image.pullPolicy }}
+          env:
+            - name: JOINLY_SERVER_HOST
+              value: 127.0.0.1                     # the pod's localhost only; the image's own default is 0.0.0.0
+            # PulseAudio keeps its state in $XDG_CONFIG_HOME/pulse, by default under the image user's
+            # home, which a read-only root leaves unwritable: "PulseAudio server did not start in time"
+            # and no session opens. /tmp is writable, and is the only folder joinly needs besides it.
+            - name: XDG_CONFIG_HOME
+              value: /tmp
+          # No `ports`: joinly is not offered to the cluster, not even by name.
+          securityContext:
+            # The image runs as `app` (uid 1001). Its home is mode 0700 and holds the speech models
+            # (Whisper, Silero, Kokoro) and Chromium. As the broker's uid 10001, joinly starts and every
+            # session then dies with "Silero VAD cache directory /.cache/silero does not exist".
+            runAsUser: 1001
+            runAsGroup: 1001
+            runAsNonRoot: true
+            # Everything else is as tight as the broker's. Chromium runs with --no-sandbox (joinly
+            # passes it), so it needs no user namespaces and no capabilities.
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # With a read-only root, /tmp is the one place joinly writes: Chromium's profile, the X and
+            # PulseAudio sockets, about 100 MB during a join.
+            - name: joinly-tmp
+              mountPath: /tmp
+            # Chromium is known to crash in a container's default 64 MB /dev/shm. joinly passes
+            # --disable-dev-shm-usage, so v0.5.4 may not need this; it is insurance for a long call with
+            # video tiles, and counts against the memory limit only when used.
+            - name: joinly-shm
+              mountPath: /dev/shm
+            {{- with .Values.meetings.zoomFix.configMap }}
+            # joinly 0.5.4 gives no speaker name on Zoom (joinly-ai/joinly#187): the fixed file goes over the
+            # image's copy, read-only. subPath mounts the one file, not the folder, which holds the other
+            # platforms, and means the pod can't start until the ConfigMap exists.
+            - name: joinly-zoom-fix
+              mountPath: /app/.venv/lib/python3.12/site-packages/joinly/providers/browser/platforms/zoom.py
+              subPath: zoom.py
+              readOnly: true
+            {{- end }}
+          # joinly has GET /health ({"status":"healthy"}). It listens on 127.0.0.1 only, and a kubelet's
+          # httpGet and tcpSocket probes go to the pod's IP, so the probe runs inside the container, with
+          # the image's Python (there is no curl).
+          startupProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=3)
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 36                   # up to 3 minutes
+          # No readinessProbe, on purpose. A pod is Ready only when every container is, so a joinly that
+          # failed one would take the broker out of the Service: the web UI and every agent would get a
+          # 503 because the meeting bot was slow. The startup probe keeps the pod from being Ready until
+          # joinly has answered once.
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=8)
+            periodSeconds: 30
+            timeoutSeconds: 10                     # a call under load answers slowly
+            failureThreshold: 6                    # three minutes of silence; a restart ends the call in progress
+          resources:
+            # About 2.7 GiB and 1 CPU for each call that may be live at once (meetings.maxCalls), plus
+            # 0.5 GiB, as _helpers.tpl works out. The limit is 0.5 GiB above the request, so a call that
+            # runs a little over is not killed at once. No CPU limit: throttling an audio pipeline makes
+            # the transcript fall behind.
+            requests: {cpu: {{ $calls | quote }}, memory: {{ $joinlyMi }}Mi}
+            limits: {memory: {{ add $joinlyMi 512 }}Mi}
+        {{- end }}
+      {{- if .Values.meetings.enabled }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: joinly-tmp
+          emptyDir: {sizeLimit: 2Gi}
+        - name: joinly-shm
+          emptyDir: {medium: Memory, sizeLimit: 1Gi}
+        {{- with .Values.meetings.zoomFix.configMap }}
+        - name: joinly-zoom-fix
+          configMap:
+            name: {{ . | quote }}
+        {{- end }}
+      {{- else }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- end }}
+  volumeClaimTemplates:
+    {{- /*
+    apiVersion and kind are stated because the API server writes them into the stored template, and
+    a tool that compares this output with the live object (Argo CD) would otherwise see a difference.
+    The template can't be changed once the StatefulSet exists: Kubernetes refuses an upgrade that
+    changes persistence.size or persistence.storageClass (docs/DEPLOY.md, "Helm").
+    */}}
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size | quote }}

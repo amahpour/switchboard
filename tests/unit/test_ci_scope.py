@@ -54,6 +54,7 @@ def test_a_release_pr_skips_the_tests() -> None:
         "deploy/compose/compose.yaml",
         ".claude-plugin/marketplace.json",  # the plugins' pins move with a release (#462)
         ".agents/plugins/marketplace.json",
+        "deploy/helm/switchboard/Chart.yaml",  # the chart's appVersion moves too (#608)
     ]
     assert not runs_tests(release_files, "release: v0.7.0")
     assert runs_tests(release_files, "chore: bump the version")  # the title makes it a release PR

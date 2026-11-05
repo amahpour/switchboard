@@ -1,0 +1,78 @@
+# Values for the switchboard chart (docs/DEPLOY.md, "Helm"; issue #608). With the defaults, and a
+# publicUrl, it renders what deploy/kubernetes/switchboard.yaml does: a Service, a StatefulSet with
+# one replica and one ReadWriteOnce claim, and an Ingress. The meeting bot is an option
+# (`meetings.enabled`), rendered as deploy/kubernetes/meetings/ does.
+#
+#   helm install switchboard deploy/helm/switchboard -n switchboard --create-namespace \
+#     --set publicUrl=https://sb.example.com
+#
+# One broker, one volume. There is no replica count: the broker's lock refuses a second one on the
+# same volume, and several brokers are a different design (issue #35). The volume must be block
+# storage (EBS, a GCE persistent disk, Azure Disk), never NFS or EFS: SQLite's locking isn't
+# reliable there.
+
+nameOverride: ""
+fullnameOverride: ""     # the release name is the pod's: release "switchboard" gives the pod switchboard-0
+
+image:
+  repository: ghcr.io/amahpour/switchboard
+  tag: ""                # empty is the chart's appVersion, a release; never :latest (DEPLOY.md, "Upgrading")
+  pullPolicy: IfNotPresent
+
+# The https:// address browsers use, an origin only (no path). Required: the chart does not render
+# without it. The broker answers to no other host, accepts writes only from that origin, and marks
+# its session cookie Secure. The Ingress host is taken from it unless ingress.host says otherwise.
+publicUrl: ""
+
+# The admin's name in the rooms (SWITCHBOARD_HUMAN_NAME). Empty leaves it unset, so the admin is
+# `me` and renames in Settings; while it is set, Settings can't change it.
+humanName: ""
+
+persistence:
+  size: 20Gi             # a room's files sit on the same volume as the database
+  storageClass: ""       # empty is the cluster's default class (EKS, GKE and AKS: block storage)
+
+# The Ingress for the public URL. Your controller terminates TLS and passes the browser's Host and
+# Origin through (ingress-nginx and most others do). The TLS secret is yours, or cert-manager's: add
+# its cluster-issuer annotation below.
+ingress:
+  enabled: true
+  className: nginx
+  host: ""               # empty is publicUrl's host; the broker answers to that host alone
+  tls:
+    enabled: true
+    secretName: switchboard-tls
+  # ingress-nginx closes a quiet request after 60 seconds, and an agent over HTTPS has one open
+  # for up to 15 minutes: Claude Code's listener waits that long at /mcp/listen. The UI's WebSocket
+  # needs nothing (the broker pings it every 20 seconds). The body size is one megabyte over
+  # [files] max_mb (25); ingress-nginx's default cuts a body at 1m. Another controller has its own
+  # settings: set a key below to null to drop it from these.
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "960"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "960"
+    nginx.ingress.kubernetes.io/proxy-body-size: "26m"
+
+# The broker's own. A starting point; the joinly container's are worked out from meetings.maxCalls.
+resources:
+  requests: {cpu: 100m, memory: 192Mi}
+  limits: {memory: 512Mi}
+
+# Following live calls (DESIGN.md §52): joinly, the meeting bot, as a second container in the broker's
+# pod. Off by default, so the pod is the broker alone.
+meetings:
+  enabled: false
+  # How many calls may be joining or live at once, 1 to 50. It is the broker's
+  # [meeting] max_calls (SWITCHBOARD_MEETING_MAX_CALLS), and it sizes joinly: a live call holds about
+  # 2.7 GiB and 1 CPU (#604), so joinly's memory is 2.7 GiB x maxCalls + 0.5 GiB rounded up to
+  # 0.5 GiB (its limit is 0.5 GiB above that), and its CPU request is maxCalls. No CPU limit:
+  # throttling an audio pipeline makes the transcript fall behind.
+  maxCalls: 1
+  image:
+    repository: ghcr.io/joinly-ai/joinly
+    tag: v0.5.4          # a release, not :latest; the tag DEPLOY.md's `docker run` uses
+    pullPolicy: IfNotPresent
+  # joinly 0.5.4 gives no speaker name on Zoom (joinly-ai/joinly#187). Name a ConfigMap that holds
+  # the fixed zoom.py as the key `zoom.py`, and it is mounted read-only over the image's copy.
+  # Make it first: the pod can't start without it. DEPLOY.md, "Speaker names on Zoom". Empty mounts nothing.
+  zoomFix:
+    configMap: ""
