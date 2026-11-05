@@ -82,6 +82,7 @@ What a good test here looks like:
 
 ## Conventions
 
+- **Bring your own infra** ([README](README.md#bring-your-own-infra)): the project's premise, and the test for a new feature. It works on infra the user owns, and the user's data stays where they choose. A hosted path may sit beside it as a choice, never as the only way; a feature that works only through someone else's service says why in its issue.
 - **Code reads like its neighbours:** a module docstring naming what it is and its DESIGN section, `from __future__ import annotations`, type hints, lines to about 110 columns, comments that say why. Run `uv run python scripts/lint.py` before review; `--fix` formats changed Python and fixes JavaScript where safe. New Python findings fail (none are pinned: `scripts/lint.py` has no `.lint-baseline.json` to read).
 - **Input from outside** (a hook payload, a message, what an agent says about itself, a web request) is cut to a length, clamped, and treated as a claim. **An unrecognized value fails closed:** a mode the code doesn't know is `unknown` and treated like approvals off, never the permissive default.
 - **Docs change with the code:** the README, `docs/USAGE.md` and the feature's guide in `docs/guide/` for what people see (the same files are the site), DESIGN.md for the design, SECURITY.md when the threat model moves, `changes/<name>.md` for the release notes ([changes/README.md](changes/README.md)). Never CHANGELOG.md: a release writes it, and CI fails a pull request that does.

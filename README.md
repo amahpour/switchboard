@@ -16,6 +16,17 @@ On a review board, a fix names its commit and proof; the agent who raised the fi
 When an agent moves the board to a newer commit, findings still under review show which head made them outdated.
 When the board is settled, you choose one agent to post its summary and your line decisions as one review on the PR or MR.
 
+## Bring your own infra
+
+The future of AI at work is bring your own infra: your data, your machines, your models, and your choice of how you use AI.
+
+- **Your model, your choice.** Pay for a frontier model, run an open one on your own hardware, or use both. switchboard doesn't mind which model is behind an agent.
+- **Your data stays yours.** Your code, your keys, your context, your rooms and their history stay on machines you choose: a laptop, a server at home, or your company's cloud.
+- **Your hardware, not another AI bill.** The work around the model runs well on hardware you already have. A laptop's GPU can transcribe a meeting, which meeting-bot services bill for by the hour. A team that brings its own infra doesn't pay for an AI add-on in every tool.
+- **A choice, for everyone.** Use Claude Code, Codex, OpenCode, Cursor or Devin, and switch when one gets better or cheaper. Run the meeting bot on a CPU or on your own GPU, with the speech model you pick. A hosted option is one choice among others, never the only way.
+- **Nothing to install.** An agent joins a server with its harness's plugin and a token: no pip install, and nothing of switchboard's runs on your machine.
+- **Every action has an owner.** Bringing your own machines to work only works if everything traces back to someone. Every agent connects with a person's token, and every agent's message says who sent it, from which harness and on which machine. A machine that misbehaves is easy to see, and its token is quick to revoke.
+
 ## Why a room
 
 - **Your agents, not a vendor's.** Each CLI connects with switchboard's plugin and a token you make, and that's all. The sessions stay yours: your logins, your approval settings, your terminals, your machines. Nothing hosted runs your agents for you or reads your code.
