@@ -1773,8 +1773,9 @@
       : 'Joining a ' + (label ? label + ' ' : '') + 'call…';
     if (hosted) {
       // whose machine runs it, and the key's short fingerprint: what a person checks against the relay's own line
-      if (typeof call.host === 'string' && call.host) text += ' · on ' + call.host;
-      if (typeof call.fingerprint === 'string' && call.fingerprint) text += ' · key ' + call.fingerprint;
+      // a no-break space keeps each word with its value when the bar wraps on a phone
+      if (typeof call.host === 'string' && call.host) text += ' · on\u00a0' + call.host;
+      if (typeof call.fingerprint === 'string' && call.fingerprint) text += ' · key\u00a0' + call.fingerprint;
     }
     $('banner-meeting-text').textContent = text + (voice ? ' · agents can speak' : '');
     // the switch's name stays "Voice": aria-checked says which, so a screen reader doesn't hear both
