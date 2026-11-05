@@ -119,9 +119,16 @@ spec:
             timeoutSeconds: 10                     # a call under load answers slowly
             failureThreshold: 6                    # three minutes of silence; a restart ends the call in progress
           resources:
-            # A starting point, for Whisper "base" and one call: about 350 MiB with no session, 1.4 GiB
-            # with a session open and Chromium on a page, and more once a call is running. No CPU
-            # limit: throttling an audio pipeline makes the transcript fall behind.
+            # A starting point, for Whisper "base" and ONE live call: the broker's default, `[meeting]
+            # max_calls = 1`. Measured: about 350 MiB with no session, 1.4 GiB with a session open and
+            # Chromium on a page, and about 2.7 GiB and 1 CPU for each call that is live (two calls
+            # took 5.5 GiB). So the memory limit has to be 2.7Gi x max_calls + 0.5Gi, and this 4Gi
+            # fits max_calls = 1 only. The broker refuses a second call at that default, so joinly is
+            # never asked for it. To follow more calls, raise SWITCHBOARD_MEETING_MAX_CALLS on the
+            # switchboard container AND this limit together (3 calls: 9Gi and 3 CPUs; docs/DEPLOY.md,
+            # "Meetings on Kubernetes"). A limit that is too small for max_calls gets joinly killed,
+            # and every call on it with it. No CPU limit: throttling an audio pipeline makes the
+            # transcript fall behind.
             requests: {cpu: "1", memory: 2Gi}
             limits: {memory: 4Gi}
       volumes:

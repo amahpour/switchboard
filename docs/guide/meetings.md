@@ -75,9 +75,17 @@ An admin does this once. If someone already did, skip to [Use it](#use-it).
     ```
 
     Then restart the broker. It reads its config when it starts. Where there is no file to edit, as in a Kubernetes manifest, set the environment variable `SWITCHBOARD_JOINLY_URL` to the same address instead. When both are set, the variable wins. Only the file or the variable sets the address. A message in a room never can.
-4. **Pick a voice, if you want another one.** Agents speak with `bm_george` unless you set `tts_voice` under `[meeting]`: `tts_voice = "af_bella"`. [DEPLOY.md](../DEPLOY.md#a-meeting-bot) says which voices joinly has. It takes effect for the next call after a broker restart. Skip this if the default suits you.
-5. **On Zoom, decide about speaker names.** joinly 0.5.4 gives no speaker names on Zoom, so every line there shows `call` where a name would be. Meet and Teams are fine. The fix is [joinly-ai/joinly#187](https://github.com/joinly-ai/joinly/pull/187), a change to joinly's Zoom file. Until a joinly release has it, mount the fixed file read-only over the image's copy: [DEPLOY.md](../DEPLOY.md#a-meeting-bot) has the two commands, and explains the cause. On Kubernetes, [a second patch](../DEPLOY.md#meetings-on-kubernetes) mounts it, or `meetings.zoomFix.configMap` in [the Helm chart](../DEPLOY.md#meetings-with-helm).
-6. **Try it.** In a room, in the web UI, type `/meeting` and a test meeting's link. If the room says it is joining, you are done. If it says no meeting server is set, see [Troubleshooting](#troubleshooting).
+4. **Say how many calls at once, if you want more than one.** The broker follows one call at a time unless you raise `max_calls` under `[meeting]`, from 1 to 50:
+
+    ```toml
+    [meeting]
+    max_calls = 2
+    ```
+
+    It counts calls in every room, from the moment a call is joining. One joinly can follow several calls, but each live call takes about 2.7 GiB of memory and one CPU in it (measured). Give joinly `2.7 GiB × max_calls + 0.5 GiB`, or a second call can get it killed, and every call with it. [DEPLOY.md](../DEPLOY.md#meetings-on-kubernetes) has the sizes for Kubernetes. Where there is no file to edit, set `SWITCHBOARD_MEETING_MAX_CALLS` to the number instead. When both are set, the variable wins. Skip this step if one call at a time is enough.
+5. **Pick a voice, if you want another one.** Agents speak with `bm_george` unless you set `tts_voice` under `[meeting]`: `tts_voice = "af_bella"`. [DEPLOY.md](../DEPLOY.md#a-meeting-bot) says which voices joinly has. It takes effect for the next call after a broker restart. Skip this if the default suits you.
+6. **On Zoom, decide about speaker names.** joinly 0.5.4 gives no speaker names on Zoom, so every line there shows `call` where a name would be. Meet and Teams are fine. The fix is [joinly-ai/joinly#187](https://github.com/joinly-ai/joinly/pull/187), a change to joinly's Zoom file. Until a joinly release has it, mount the fixed file read-only over the image's copy: [DEPLOY.md](../DEPLOY.md#a-meeting-bot) has the two commands, and explains the cause. On Kubernetes, [a second patch](../DEPLOY.md#meetings-on-kubernetes) mounts it, or `meetings.zoomFix.configMap` in [the Helm chart](../DEPLOY.md#meetings-with-helm).
+7. **Try it.** In a room, in the web UI, type `/meeting` and a test meeting's link. If the room says it is joining, you are done. If it says no meeting server is set, see [Troubleshooting](#troubleshooting).
 
 Who can start a call: any signed-in person who can see the room, in the web UI. Agents can't. If an agent says `/meeting …` in a room, it is only text. The command line can't either, because a call lets anyone on it reach your agents, and that is your decision. This holds even for the plain `/meeting` that asks whether a call is live.
 
@@ -182,6 +190,7 @@ The long version is in [DESIGN.md §52](../DESIGN.md#52-meetings-a-live-call-in-
 ## Limits
 
 - **One call per room**, and only Zoom, Meet and Teams links.
+- **At most `max_calls` calls at once in the whole broker**, in all rooms together. The default is 1. A call counts from the moment it is joining, until it has ended and the bot has left. A start past the limit is refused, and nothing is sent to joinly. Each call needs about 2.7 GiB of memory in joinly, so raise the limit only with the memory to match ([Set it up](#set-it-up)).
 - **The bot never speaks by itself or shares its own screen.** It speaks an agent's `@call` line when you have voice on, and it takes pictures of what it sees.
 - **A picture is one frame.** It is 1024 by 576 pixels and a screenshot of the bot's own view of the call, the same on Zoom, Meet and Teams. What a shared screen looks like there depends on the platform's page. On Zoom, joinly's browser shows one tile that follows whoever is talking, so a shared screen may not be what the picture shows. It has not been tried on a real Zoom or Teams call.
 - **Voice is for the call it was turned on in.** It is kept in memory, so it is off after a restart and in every new call.
@@ -201,9 +210,11 @@ The long version is in [DESIGN.md §52](../DESIGN.md#52-meetings-a-live-call-in-
 - **`/meeting <link>` says "No meeting server is set":** the broker has no `[meeting] joinly_url` and no `SWITCHBOARD_JOINLY_URL`. Add one and restart the broker. See [Set it up](#set-it-up). (A good link is checked first, so a bad link gets the link message even when no server is set.) In the rare case that it says "No meeting server is running", the broker's meeting part did not start. Restart the broker, and look at its log.
 - **`/meeting <link>` says "That link isn't a Zoom, Meet or Teams https link":** a link was refused. Only `https` links on the listed hosts work, with a real path (`https://zoom.us/` alone is refused). Copy the whole invite link again. Put nothing after it, because a second word gives `usage: /meeting [<link>|leave|snapshot|voice on|voice off]`.
 - **"…is already transcribing a call. /meeting leave ends it":** the room has a call already, even one that is still joining. Leave it first.
+- **`/meeting <link>` says "This broker follows at most 1 call at once, and that many are open. Leave one first (/meeting leave in its room).":** other rooms have calls, and together they are as many as `max_calls` allows. The message gives the number and nothing else, because a call may be in a room you can't see. Leave one of them (`/meeting leave` in the room that has it; if you can't see that room, ask someone who can), or raise `max_calls` and give joinly the memory for it ([Set it up](#set-it-up)). A call that is still leaving counts until the bot has left, so if you just left one, try again in a few seconds. The refused start wrote nothing and sent the link nowhere.
 - **The bot waits in the meeting's waiting room:** the host has to admit `switchboard (transcribing)`. Until then it hears nothing. If joining takes longer than 45 seconds, the room says `The call ended: couldn't join the call.`. Ask the host to admit it as soon as it shows up, and start again.
 - **The room says "The call ended: couldn't join the call.":** joinly could not get in, or did not answer within 45 seconds. The meeting may not have started, may need a sign-in, or may refuse guests, or the host did not admit the bot in time. Check the link, then look at joinly's log.
 - **The broker won't start and says `SWITCHBOARD_JOINLY_URL must be an http(s) URL`:** the variable is set to something that is not one: no `http://` or `https://`, a user name or password in it, or more than 300 characters. It is never ignored, so fix it or remove it. (The message does not print the value.)
+- **The broker won't start and says `SWITCHBOARD_MEETING_MAX_CALLS must be a whole number from 1 to 50`:** the variable is set to something else: `0`, `51`, `2.5`, `two`. It is never ignored, so fix it or remove it. The same limits apply to `max_calls` in `config.toml`, which stops the broker the same way.
 - **The room says "The call ended: the call dropped.":** switchboard lost its connection to joinly, or could not make one. Check that joinly is running and that the address is right. On Kubernetes, `kubectl -n switchboard logs switchboard-0 -c joinly` is joinly's log, and `kubectl -n switchboard get pod switchboard-0` should say `2/2`.
 - **Every line says `call` on Zoom:** joinly 0.5.4 has no speaker names on Zoom. Our fix for it is [joinly-ai/joinly#187](https://github.com/joinly-ai/joinly/pull/187). To use it before joinly releases it, patch joinly's Zoom file into the image, as described in [Set it up](#set-it-up). Meet and Teams are not affected.
 - **The bar says Transcribing, but no lines come:** the bot may be in a waiting room, or the call may be quiet, or muted. Check the participant list for `switchboard (transcribing)`, and look at joinly's log.
@@ -256,8 +267,10 @@ The link has the call's passcode in it, so the test refuses a file that others c
 
 - `[meeting] joinly_url`: joinly's address, for example `http://127.0.0.1:8010/mcp/`. An `http` or `https` address, up to 300 characters, with no user name or password in it. Empty by default, which turns the feature off.
 - `[meeting] tts_voice`: the voice agents speak with, for example `af_bella`. A word of 1 to 32 characters from `a-z`, `0-9` and `_`. The default is `bm_george`. It is sent to joinly when a call starts.
+- `[meeting] max_calls`: how many calls the broker follows at once, in all rooms together. An integer from 1 to 50. The default is 1. A start past it is refused. Each live call takes about 2.7 GiB of memory and one CPU in joinly.
 - `[files] max_mb`: the size limit for one file also limits a snapshot ([attachments](attachments.md)).
 - `SWITCHBOARD_JOINLY_URL`: the same address, from the environment. Set to something, it wins over the file; empty or unset, the file's value stays. A bad value stops the broker at start. It is the way to set it in a Kubernetes manifest, which has no file on the volume to write ([DEPLOY.md](../DEPLOY.md#meetings-on-kubernetes)).
+- `SWITCHBOARD_MEETING_MAX_CALLS`: the same limit, from the environment. A non-empty value wins over the file, and an empty or unset one leaves the file's. A value that is not a whole number from 1 to 50 stops the broker at start.
 
 **What the room says:**
 
@@ -265,6 +278,7 @@ The link has the call's passcode in it, so the test refuses a file that others c
 - `Transcribing a Meet call as "switchboard (transcribing)".` when the bot is in.
 - `The call ended: couldn't join the call.` and `The call ended: the call dropped.`
 - `The call ended because the room closed.`, `… because the broker stopped.` and `… because the broker restarted.`
+- `This broker follows at most 1 call at once, and that many are open. Leave one first (/meeting leave in its room).` (`2 calls`, and so on, for a higher limit). It is the answer to `/meeting <link>`, not a room notice.
 - The ambiguous-name notice and the dropped-lines notice, above.
 - `alice turned voice on: an agent's message that starts with @call is read aloud to everyone on the call (via web)` and `alice turned voice off: agents no longer speak in the call (via web)`.
 - `Someone spoke over the line in the call, so it stopped early.`, `More lines are waiting to be spoken than the call can say. Some were dropped.` and `Couldn't speak in the call.`

@@ -576,6 +576,12 @@ class Store:
         rows = self.con.execute("SELECT * FROM meetings WHERE state!='ended' ORDER BY id").fetchall()
         return [Meeting.from_row(r) for r in rows]
 
+    def count_open_meetings(self) -> int:
+        """How many calls are joining or live, across every room (``[meeting] max_calls``, §52). Only a
+        number: the caller must not learn which rooms, because the person asking may not see them."""
+        r = self.con.execute("SELECT COUNT(*) FROM meetings WHERE state!='ended'").fetchone()
+        return int(r[0])
+
     def set_meeting_live(self, meeting_id: int) -> None:
         with db.tx(self.con):
             self.con.execute("UPDATE meetings SET state='live' WHERE id=? AND state='joining'", (meeting_id,))

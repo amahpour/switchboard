@@ -6,7 +6,8 @@ and a subscriber is told it changed. ``speak_text`` records what it was asked to
 like the real one, returns only when the speech is over: ``hold_speech`` keeps it in the
 middle of a line until ``release_speech``, and ``interrupt_next`` makes the next reply the
 one joinly gives when someone talks over it. ``get_video_snapshot`` returns ``frame`` as an
-image, claiming ``frame_type``.
+image, claiming ``frame_type``. ``hold_join`` keeps ``join_meeting`` waiting until ``release_join``,
+so a test can look at a call that is still joining.
 """
 
 from __future__ import annotations
@@ -70,6 +71,11 @@ class FakeJoinly:
         self.settings: list[str] = []
         self.sessions: list[Any] = []
         self.fail_join = False
+        # hold_join: a join_meeting waits (counted in join_attempts) until release_join, so a test can look
+        # at the broker while a call is still "joining". The join then fails if fail_join is set.
+        self.hold_join = False
+        self.join_attempts = 0
+        self._join_gate = asyncio.Event()
         self.drop = False
         self.spoken: list[str] = []
         self.hold_speech = False
@@ -92,6 +98,9 @@ class FakeJoinly:
         @mcp.tool
         async def join_meeting(meeting_url: str, participant_name: str, passcode: str | None = None) -> str:
             fake._note_loop()
+            fake.join_attempts += 1
+            if fake.hold_join:
+                await fake._join_gate.wait()
             if fake.fail_join:
                 raise RuntimeError("could not join")
             fake.joins.append(
@@ -189,6 +198,12 @@ class FakeJoinly:
                 self.loop = asyncio.get_running_loop()
             except RuntimeError:
                 return
+
+    def release_join(self) -> None:
+        """Let every join that is waiting in ``join_meeting``, and every later one, go on."""
+        self.hold_join = False
+        if self.loop is not None:
+            self.loop.call_soon_threadsafe(self._join_gate.set)
 
     def release_speech(self) -> None:
         """Let every line that is waiting in ``speak_text``, and every later one, finish."""
