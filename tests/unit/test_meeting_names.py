@@ -81,3 +81,29 @@ def test_the_transcriber_writing_out_its_hint_list_wakes_nobody() -> None:
     assert match("Claude, ask Codex about the cache", room).name == "claude-1"
     assert match("Claude one, look into the upload API", room).name == "claude-1"
     assert match("Hey Codex, can you look into why?", room).name == "codex-1"
+
+
+def test_a_real_call_out_behind_an_echoed_hint_list_still_wakes_the_agent() -> None:
+    """#602, from a real Zoom call: the speaker said "Okay, Claude one, can you hear me?" and
+    switchboard's bot transcribed "Claude-1 Claude switchboard Claude one can you hear me?". The run
+    of hint words at the front made the whole line an echo, so nobody was woken (2 of 6 runs). Real
+    words after the run mean real speech: the name right before them is the call-out. Fails if the
+    line still counts as all echo."""
+    heard = "Claude-1 Claude switchboard Claude one can you hear me?"
+    assert match(heard, ["claude-1"]).name == "claude-1"
+    assert match(heard, ["claude-1", "codex-1", "alice"]).name == "claude-1"
+    # the spoken form is specific even with two Claudes
+    assert match(heard, ["claude-1", "claude-2"]).name == "claude-1"
+    # a bare base right before the words is ambiguous with two Claudes, as it is anywhere
+    two = ["claude-1", "claude-2"]
+    assert match("Claude-1 switchboard Claude can you hear me?", two).outcome == "ambiguous"
+
+
+def test_an_echo_that_ends_in_no_name_or_ends_the_line_still_wakes_nobody() -> None:
+    """The lead-in rule is narrow: only the name right before real words counts. A run that ends
+    in the bot's own name, or a line that is nothing but hint words, addresses nobody, as before.
+    Fails if an echo of names alone can wake an agent."""
+    room = ["claude-1", "codex-1", "cursor-1"]
+    assert match("Codex Cursor switchboard can you hear me", room).outcome == "none"
+    assert match("Claude Claude one Codex Cursor switchboard", room).outcome == "none"
+    assert match("Claude-1 Claude switchboard Claude one", ["claude-1"]).outcome == "none"

@@ -196,15 +196,71 @@ def is_echo(text: str, members: Iterable[str]) -> bool:
     return echo()
 
 
+def _past_echo(text: str, names: list[str]) -> str | None:
+    """``text`` with an echoed hint list taken off its front, or None when it has none.
+
+    Whisper sometimes writes its hint list in front of what was really said: on a real call (#602)
+    "Okay, Claude one, can you hear me?" came out as "Claude-1 Claude switchboard Claude one can
+    you hear me?". The whole line used to count as an echo, so a real call-out woke nobody. Now a
+    run of hint words that real words follow is a lead-in: the name right before those words is
+    kept, as said ("claude one can you hear me"), and the rest of the run is dropped. A run with no
+    real words after it, or that doesn't end in a name, is still all echo: "" addresses nobody."""
+    owners: dict[str, set[str]] = {}
+    names_said: set[str] = set()
+    for name in names:
+        base = base_of(name)
+        for form in (*spoken_forms(name), base):
+            names_said.add(" ".join(_tokens(form)))
+            for tok in _tokens(form):
+                owners.setdefault(tok, set()).add(base)
+    run: list[re.Match[str]] = []
+    bases: set[str] = set()
+
+    def echo() -> bool:
+        if len(run) < _ECHO_RUN:
+            return False
+        bot = any(m.group(0).lower() in _BOT_WORDS for m in run)
+        return len(bases) >= 2 or (bot and len(bases) >= 1)
+
+    found: list[re.Match[str]] | None = None
+    for m in _TOKEN.finditer(text):
+        tok = m.group(0).lower()
+        if tok in owners or tok in _BOT_WORDS:
+            run.append(m)
+            bases |= owners.get(tok, set())
+            continue
+        if echo():
+            found = run
+            break
+        run, bases = [], set()
+    if found is None:
+        if not echo():
+            return None
+        return ""  # the run ends the line: nothing but hint words
+    rest = text[found[-1].end() :]
+    words = [m.group(0).lower() for m in found]
+    for n in range(min(4, len(words)), 0, -1):
+        phrase = " ".join(words[-n:])
+        if phrase in names_said:
+            return f"{phrase} {rest.strip()}"
+    return ""
+
+
 def match(text: str, members: Iterable[str]) -> Match:
     """The one member ``text`` addresses, or ambiguous, or none.
 
     A spoken form ("claude one") wins over the bare base. The bare base matches when
-    exactly one member's name starts with it; two members ask who was meant.
+    exactly one member's name starts with it; two members ask who was meant. An echoed
+    hint list in front of the words is taken off first (``_past_echo``, #602).
     """
     names = [n for n in members if n]
-    if not text or not names or is_echo(text, names):
+    if not text or not names:
         return Match("none")
+    cleaned = _past_echo(text, names)
+    if cleaned is not None:
+        if not cleaned:
+            return Match("none")
+        text = cleaned
     forms = {n: set(spoken_forms(n)) for n in names}
     for phrase in _phrases(text):
         specific = [n for n in names if phrase in forms[n]]
