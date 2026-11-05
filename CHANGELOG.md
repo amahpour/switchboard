@@ -2,6 +2,12 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.51.1 (2026-11-05)
+
+### Fixed
+
+- **A call-out is no longer lost when the transcript puts hint words in front of it.** The speech-to-text sometimes writes the room's agent names before what was really said, as in "Claude-1 Claude switchboard Claude one can you hear me?". switchboard took the whole line for that kind of echo and woke nobody. Now the name right before the real words wakes its agent. A line of names alone still wakes nobody. Found by the meeting self-test on real Zoom calls (#602).
+
 ## 0.51.0 (2026-11-05)
 
 ### Added
