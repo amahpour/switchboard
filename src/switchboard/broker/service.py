@@ -281,7 +281,7 @@ class RoomService:
         self.delivery: DeliveryHooks | None = None
         self.boards: Any = None  # the review boards (broker/reviews.py Boards), for /review (§37.8)
         self.meetings: Any = None  # the call bridge (meeting/bridge.py), for /meeting (§52)
-        self.hosted_calls: Any = None  # the calls hosted on people's machines (meeting/hosted.py, §52.12)
+        self.hosted_calls: Any = None  # the calls hosted on people's machines (meeting/hosted.py, §54)
         self.attachments: Any = None  # files a room holds (files.py, §53)
         hub.set_members_source(self._members_snapshot)
         hub.set_settings_source(self._settings_snapshot)
@@ -1174,7 +1174,7 @@ class RoomService:
     def meeting_state(self, room: Room) -> dict[str, str | bool] | None:
         """What the page shows while a call is open: ``joining`` or ``live``, the platform, and
         whether agents' ``@call`` lines are spoken (§52). None when there is no call. Never a link.
-        A call hosted on a person's machine (§52.12) also says so, whose machine it is on and the
+        A call hosted on a person's machine (§54) also says so, whose machine it is on and the
         short fingerprint of its key, never the key or its hash."""
         row = self.store.open_meeting(room.id)
         if row is None or row.state not in ("joining", "live"):
@@ -1218,7 +1218,7 @@ class RoomService:
     ) -> Message | None:
         """One finished transcript line. Cleaned and cut like any text from outside.
         ``mentions`` is the one member the line addressed, or none. A line a hosted call pushed
-        (§52.12) is stored with that call and the host that heard it."""
+        (§54) is stored with that call and the host that heard it."""
         room = self.store.room_by_id(room_id)
         if room is None:
             return None

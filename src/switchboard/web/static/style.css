@@ -861,7 +861,7 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
   letter-spacing: .02em;
 }
 .nick-meeting { font-size: calc(12px * var(--text-scale)); font-weight: 600; color: var(--ink-2); }
-/* "via <machine>": whose machine heard a line that a hosted call pushed (§52.12) */
+/* "via <machine>": whose machine heard a line that a hosted call pushed (§54) */
 .via-host { font-size: calc(11px * var(--text-scale)); color: var(--muted); overflow-wrap: anywhere; }
 .line.cont { margin-top: -8px; }                /* 14 px row gap becomes 6 px */
 

@@ -46,7 +46,7 @@ CLIENT_INFO_META_KEY = "io.modelcontextprotocol/clientInfo"
 RO = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 RW = ToolAnnotations(destructive_hint=False, open_world_hint=False)
 RW_IDEM = ToolAnnotations(destructive_hint=False, open_world_hint=False, idempotent_hint=True)
-# host_call opens a way into a room from a machine outside it (§52.12), so unlike every other tool it is open
+# host_call opens a way into a room from a machine outside it (§54), so unlike every other tool it is open
 # world: a harness that skips its approval prompt for the others (Codex, §6.1) asks its person first
 OPEN = ToolAnnotations(destructive_hint=False, open_world_hint=True)
 EMPTY_OPTIONS: Any = Field(default_factory=list)

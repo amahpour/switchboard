@@ -1,4 +1,4 @@
-"""What becomes of a call's finished line, whoever heard it (#623, DESIGN.md §52, §52.12).
+"""What becomes of a call's finished line, whoever heard it (#623, DESIGN.md §52, §54).
 
 ``ingest`` is the one place the broker's own bot (``bridge.py``) and a call hosted on a person's machine
 (``hosted.py``) both post a line through, so these are the rules every source gets: the same hint-list echo
@@ -86,7 +86,7 @@ def test_a_line_is_posted_with_its_speaker_cut_to_forty_characters_and_its_text_
 
 
 def test_a_hosted_lines_call_and_machine_are_passed_on_and_a_servers_are_not() -> None:
-    """A line a hosted call pushed is stored with that call and the machine that heard it (§52.12); the
+    """A line a hosted call pushed is stored with that call and the machine that heard it (§54); the
     broker's own bot's lines carry neither. Fails if the pair is dropped on the way to the service, or
     invented for a line that has none."""
     hosted, _ = post("hello", meeting_id=9, host="alice-laptop")

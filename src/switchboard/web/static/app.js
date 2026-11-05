@@ -1121,7 +1121,7 @@
     const head = el('div', 'msg-head');
     head.append(el('span', 'call-tag', 'call'));
     if (m.from && m.from !== 'call') head.append(el('span', 'nick nick-meeting', m.from));
-    // a line a call hosted on someone's machine pushed (§52.12) says whose machine heard it
+    // a line a call hosted on someone's machine pushed (§54) says whose machine heard it
     if (typeof m.host === 'string' && m.host) head.append(el('span', 'via-host', 'via ' + m.host));
     head.append(messageMeta(m, false));
     body.append(head, mdBody(m.text, m.mentions, m.files));
@@ -1755,7 +1755,7 @@
   }
 
   // The call bar (#573). Only the platforms the broker accepts; anything else stays hidden. A call hosted on a
-  // person's machine (§52.12) may not say which platform it is on ('unknown'): the bar then names none.
+  // person's machine (§54) may not say which platform it is on ('unknown'): the bar then names none.
   const MEETING_LABEL = { zoom: 'Zoom', meet: 'Meet', teams: 'Teams' };
 
   function renderMeeting(r, s) {

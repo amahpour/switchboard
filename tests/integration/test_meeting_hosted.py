@@ -1,4 +1,4 @@
-"""A call hosted on a person's machine, pushed into a room by a scripted relay (#623, DESIGN.md §52.12).
+"""A call hosted on a person's machine, pushed into a room by a scripted relay (#623, DESIGN.md §54).
 
 The broker is the real one. The relay is a plain HTTP client holding a call key, as the host script's relay
 will be: it pushes segments and polls for what is to be spoken, and nothing else. The agent that opens the
@@ -640,8 +640,8 @@ async def test_the_key_and_its_hash_are_nowhere_in_what_is_stored_logged_or_show
             p.read_bytes() for p in w.b.paths.db.parent.glob("*.db-wal")
         )
         assert KEY.encode() not in raw
-        # the key is in no log at all; the hash, which is no secret, is in none of switchboard's own (a library
-        # at DEBUG may print the tool call's arguments, which are the agent's)
+        # the key is in no log at all; the hash, which is no secret, is in none of switchboard's own (a
+        # library at DEBUG may print the tool call's arguments, which are the agent's)
         ours = "\n".join(r.getMessage() for r in caplog.records if r.name.startswith("switchboard"))
         assert KEY not in caplog.text and H not in ours
     finally:

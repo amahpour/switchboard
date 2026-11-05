@@ -1,4 +1,4 @@
-"""A hosted call's key, and what is said of it (DESIGN.md §52.12, #623).
+"""A hosted call's key, and what is said of it (DESIGN.md §54, #623).
 
 A person's machine can run the meeting bot for one call and push what it hears into a room. What lets it
 is a key made for that one call, on that machine, like a listener key (§49.11): the host script makes

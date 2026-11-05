@@ -20,7 +20,7 @@ so a person the owner chooses is an admin too (§51); 39 (#573) adds a meeting l
 ``meetings`` table, a live call transcribed into a room (§52); 40 (#544) adds the files a room
 holds, the one-time grants that upload or download them, and a broker setting for how long
 files are kept (§53); 41 (#593) lets a call be a file's uploader; 42 (#623) lets a call be hosted on a
-person's machine, with a key per call, and stores each line it pushes with that call (§52.12).
+person's machine, with a key per call, and stores each line it pushes with that call (§54).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -874,7 +874,7 @@ V40_TO_V41 = (
 )
 
 
-# v41 -> v42 (#623, DESIGN.md §52.12): a call can be hosted on a person's machine, which pushes its lines in
+# v41 -> v42 (#623, DESIGN.md §54): a call can be hosted on a person's machine, which pushes its lines in
 # with a key made for that one call. Every existing call is the server's own (``source`` 'server'), with no
 # key, token or host. The columns are added the usual way (rows are untouched, the new ones read their
 # default). ``platform`` also admits 'unknown', for a hosted call that doesn't say which platform it is on:

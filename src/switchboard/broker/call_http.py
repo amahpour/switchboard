@@ -1,4 +1,4 @@
-"""The two routes only a call's key opens (DESIGN.md §52.12, #623).
+"""The two routes only a call's key opens (DESIGN.md §54, #623).
 
 A call hosted on a person's machine (``meeting/hosted.py``) is run by a relay with a key made for that
 one call. The key is a bearer here and nowhere else: ``Authorization: Bearer sbc_…`` on
@@ -91,7 +91,7 @@ async def _refused(send: Send, e: Refused) -> None:
 
 
 class MeetingPush(_CallRoute):
-    """``/mcp/meeting/push``: segments in, lines posted (§52.12)."""
+    """``/mcp/meeting/push``: segments in, lines posted (§54)."""
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         got = await self.enter(scope, receive, send)
@@ -108,7 +108,7 @@ class MeetingPush(_CallRoute):
 
 
 class MeetingSpeech(_CallRoute):
-    """``/mcp/meeting/speech``: the long poll for what to say, the hints and the end (§52.12)."""
+    """``/mcp/meeting/speech``: the long poll for what to say, the hints and the end (§54)."""
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         got = await self.enter(scope, receive, send)

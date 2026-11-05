@@ -1,4 +1,4 @@
-"""store: calls hosted on a person's machine, and the lines pushed into them (#623, DESIGN.md §52.12)."""
+"""store: calls hosted on a person's machine, and the lines pushed into them (#623, DESIGN.md §54)."""
 
 from __future__ import annotations
 

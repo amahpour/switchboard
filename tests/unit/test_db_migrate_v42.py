@@ -1,4 +1,4 @@
-"""Schema 42: a call can be hosted on a person's machine, and its lines are stored with it (#623, §52.12).
+"""Schema 42: a call can be hosted on a person's machine, and its lines are stored with it (#623, §54).
 
 ``meetings`` gains the source (the broker's own bot or a hosted call), the sha256 of the call's key, the
 token that opened it and its person, the machine's label, the model and the count of lines pushed;

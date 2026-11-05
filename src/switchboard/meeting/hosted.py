@@ -1,4 +1,4 @@
-"""Calls hosted on a person's machine (DESIGN.md §52.12, #623).
+"""Calls hosted on a person's machine (DESIGN.md §54, #623).
 
 The meeting bot can run on a person's own machine, for one call in one room, and push what it hears to
 the broker instead of the broker pulling it from a bot beside it (§52). The broker's side is here:
@@ -49,7 +49,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 log = logging.getLogger("switchboard.meeting")
 
-# What a source may send (§52.12). Each is a claim from outside, cut or refused; none changes with a setting.
+# What a source may send (§54). Each is a claim from outside, cut or refused; none changes with a setting.
 BODY_MAX = 256 * 1024  # bytes of one push or poll
 BATCH_MAX = 100  # segments in one push
 TEXT_MAX = 2 * CAP  # characters of one segment's text, before the assembler cuts a line at CAP

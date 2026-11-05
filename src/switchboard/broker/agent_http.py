@@ -212,7 +212,7 @@ class HttpConn:
     agent: AgentConn
     closed: bool = False
     # the agent token this call came in with: only a call that acts for its person's machine reads it
-    # (``host_call``, §52.12). None for a call that is not over HTTPS
+    # (``host_call``, §54). None for a call that is not over HTTPS
     token: AgentTokenRow | None = None
 
 

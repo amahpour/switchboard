@@ -197,7 +197,7 @@ class Message:
     reply_to: int | None
     mentions: list[str] = field(default_factory=list)
     # the device host of an agent sender (schema v2); None on this machine. A call line pushed by a hosted
-    # call (§52.12) has the host that heard it, so the page can say "via <host>".
+    # call (§54) has the host that heard it, so the page can say "via <host>".
     sender_host: str | None = None
     sender_person_id: int | None = None  # a human sender other than the owner (schema v4, §32.2)
 
@@ -230,7 +230,7 @@ class Meeting:
     """One call transcribed into a room (DESIGN.md §52). The link itself is not a column:
     only the platform is kept. ``error`` is a short fixed phrase, never a URL.
 
-    A hosted call (§52.12, #623) is one whose lines a person's machine pushes in: ``source`` says so,
+    A hosted call (§54, #623) is one whose lines a person's machine pushes in: ``source`` says so,
     ``token_id``, ``owner_person_id`` (None: the owner) and ``host`` (the token's device name when it
     began) say whose machine, ``key_hash`` is the sha256 of its key (never the key), ``model`` is
     what the host claimed it transcribes with, and ``lines_pushed`` counts the lines it has posted

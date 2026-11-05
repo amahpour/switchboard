@@ -466,7 +466,7 @@ class Store:
         ``sender_host`` is a device agent sender's host (§49); None on this machine.
         ``sender_person_id`` is a human sender other than the owner (§32.2); every person
         is a human to every agent, so it changes nothing about the deliveries.
-        ``meeting_id`` is the hosted call whose key pushed a call line (§52.12): the line is stored
+        ``meeting_id`` is the hosted call whose key pushed a call line (§54): the line is stored
         with it, and the call's count of lines goes up in the same transaction.
         """
         if sender_host is not None and not valid_host(sender_host):
@@ -578,7 +578,7 @@ class Store:
         host: str,
         model: str,
     ) -> Meeting:
-        """A call hosted on a person's machine, opened in ``room_id`` (§52.12), joining until its first
+        """A call hosted on a person's machine, opened in ``room_id`` (§54), joining until its first
         push. Conflict when the room has a call open or the key's sha256 is already some call's: a key
         is for one call, ended or not, so it can never be registered twice."""
         who = started_by.strip()[:80] or "someone"

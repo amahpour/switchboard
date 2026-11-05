@@ -131,7 +131,7 @@ class Actor:
     # every CLI caller, whose name is ``human_name``)
     name: str | None = None
     person_id: int | None = None
-    # an admin (the owner, or a person whose row says so, §51): who may end a call that is not theirs (§52.12)
+    # an admin (the owner, or a person whose row says so, §51): who may end a call that is not theirs (§54)
     admin: bool = False
 
     def who(self, human_name: str) -> str:
@@ -656,7 +656,7 @@ def _meeting(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Resu
             return Result(True, f"{room.name}: no call is being transcribed")
         label = PLATFORM_LABEL.get(row.platform, "call")
         if row.hosted:
-            # a call hosted on a person's machine: only that person, or an admin, may end its key (§52.12)
+            # a call hosted on a person's machine: only that person, or an admin, may end its key (§54)
             if svc.hosted_calls is None or not svc.hosted_calls.may_end(row, actor.person_id, actor.admin):
                 raise CommandError(
                     "forbidden", f"Only {row.started_by}, who hosts it, or an admin can end this call."

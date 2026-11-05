@@ -1,4 +1,4 @@
-"""A hosted call's key and the claims made about it (#623, DESIGN.md §52.12): pure functions."""
+"""A hosted call's key and the claims made about it (#623, DESIGN.md §54): pure functions."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""What becomes of a call's finished line, whoever heard it (DESIGN.md §52, §52.12).
+"""What becomes of a call's finished line, whoever heard it (DESIGN.md §52, §54).
 
 A call's segments are merged into lines (``lines.py``). Each line is then checked and posted the same way
 whether the broker's own bot heard it (``bridge.py``) or a person's machine pushed it (``hosted.py``): the

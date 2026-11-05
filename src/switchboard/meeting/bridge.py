@@ -350,7 +350,7 @@ class MeetingBridge:
         )
 
     async def _post_line(self, room_id: int, line: Line, live: _Live, *, ending: bool = False) -> None:
-        # what becomes of a line is ``ingest``'s, shared with a call hosted on a person's machine (§52.12):
+        # what becomes of a line is ``ingest``'s, shared with a call hosted on a person's machine (§54):
         # nothing posted when only the transcriber's hint list came back (#616), an echoed lead-in taken
         # off and the real words kept (#602)
         prepared = ingest.prepare(line.text, self.state.store.active_names(room_id))

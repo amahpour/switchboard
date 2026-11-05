@@ -39,7 +39,7 @@ AGENT_PATHS = frozenset(
         "/mcp/pretool",
         "/mcp/event",
         "/mcp/status",
-        # the two routes only a call's key opens (§52.12, #623); the maintainer's yes, 2026-11-05
+        # the two routes only a call's key opens (§54, #623); the maintainer's yes, 2026-11-05
         "/mcp/meeting/push",
         "/mcp/meeting/speech",
     }

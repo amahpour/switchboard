@@ -79,7 +79,7 @@ async def test_tools_annotations_and_instructions() -> None:
             assert ann[n] == {"destructiveHint": False, "openWorldHint": False}
         for n in ("join", "leave", "away", "status"):
             assert ann[n] == {"destructiveHint": False, "openWorldHint": False, "idempotentHint": True}
-        # the one tool that opens a way into a room from a machine outside it (§52.12): open world, so a
+        # the one tool that opens a way into a room from a machine outside it (§54): open world, so a
         # harness that skips its approval prompt for the rest (Codex) asks its person first
         assert ann["host_call"] == {"destructiveHint": False, "openWorldHint": True}
         init = c.initialize_result

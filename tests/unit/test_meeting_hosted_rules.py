@@ -1,4 +1,4 @@
-"""Calls hosted on a person's machine: the rules (#623, DESIGN.md §52.12).
+"""Calls hosted on a person's machine: the rules (#623, DESIGN.md §54).
 
 ``HostedCalls`` over a real store and a ``FakeClock``, with a stand-in for the room service that stores
 the lines it is asked to post (so ``meeting_id`` and the counts are the store's own) and records the

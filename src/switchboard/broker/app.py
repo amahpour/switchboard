@@ -75,7 +75,7 @@ class BrokerState:
     agents: AgentService = None  # type: ignore[assignment]
     boards: Boards = None  # type: ignore[assignment]
     meetings: Any = None  # the call bridge (meeting/bridge.py, §52); None until the lifespan wires it
-    # calls hosted on people's machines (meeting/hosted.py, §52.12); None until the lifespan wires it
+    # calls hosted on people's machines (meeting/hosted.py, §54); None until the lifespan wires it
     hosted_calls: Any = None
     attachments: Any = None  # files a room holds (files.py, §53)
     files_swept: float = 0.0  # when the retention sweep last ran (broker clock)
