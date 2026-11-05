@@ -198,6 +198,15 @@ tts_voice = "bm_george"
 
 Beside the server's container, add a service on the same network and do not publish its port. Point `joinly_url` at that service, for example `http://joinly:8000/mcp/`. The broker reaches it; nothing outside the network does.
 
+**With the Compose example** ([deploy/compose/](https://github.com/amahpour/switchboard/tree/main/deploy/compose/)), that service is already there, behind the `meetings` profile: it publishes no port, and only the broker reaches it. Turn it on with a `.env` file beside `compose.yaml`, then `docker compose -f deploy/compose/compose.yaml up -d` as before:
+
+```bash
+COMPOSE_PROFILES=meetings
+SWITCHBOARD_JOINLY_URL=http://joinly:8000/mcp/
+```
+
+Without those two lines the bot doesn't start, and `/meeting` says how to set it up. Each live call takes about 2.7 GiB and 1 CPU on that machine. For Zoom speaker names, download the fix below to `deploy/compose/zoom.py`, then uncomment the two `volumes` lines under `joinly` in `compose.yaml` (a missing file would stop the bot).
+
 **Speaker names on Zoom.** joinly 0.5.4 gives no speaker name on Zoom, so every line there shows as `call`; Meet and Teams are unaffected. Its browser has no graphics acceleration, so Zoom shows one tile that follows whoever is talking, and joinly's lookup doesn't know that tile. The fix is [joinly-ai/joinly#187](https://github.com/joinly-ai/joinly/pull/187); until a joinly release has it, the names come through only with that file patched into the image. Its `zoom.py` differs from 0.5.4's by the fix alone, so you can mount it over the image's copy, read-only:
 
 ```bash

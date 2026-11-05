@@ -8,6 +8,14 @@
 #
 # The broker's data is the `switchboard-data` volume (/data in the container). One broker per
 # volume: its lock refuses a second one, so never scale this service past 1.
+#
+# Meetings (docs/DEPLOY.md, "A meeting bot"): the `meetings` profile adds joinly, the bot that
+# follows a call. Put these two lines in a `.env` file beside this one, then `up -d` as above:
+#
+#   COMPOSE_PROFILES=meetings
+#   SWITCHBOARD_JOINLY_URL=http://joinly:8000/mcp/
+#
+# Each live call takes about 2.7 GiB and 1 CPU on this machine.
 name: switchboard
 
 services:
@@ -19,10 +27,25 @@ services:
       SWITCHBOARD_PUBLIC_URL: https://${SWITCHBOARD_DOMAIN:?set SWITCHBOARD_DOMAIN to your DNS name}
       # the admin's name in the rooms (sign in as it, or as admin); unset, it is `me`
       SWITCHBOARD_HUMAN_NAME: ${SWITCHBOARD_HUMAN_NAME:-}
+      # where the meeting bot listens (the `meetings` profile below); unset, /meeting says how to set it up
+      SWITCHBOARD_JOINLY_URL: ${SWITCHBOARD_JOINLY_URL:-}
     volumes:
       - switchboard-data:/data
     # no `ports:`: only Caddy reaches it, over this project's network
     stop_grace_period: 20s
+
+  # The meeting bot, only with the `meetings` profile. It has no sign-in and takes its settings from whoever
+  # connects, so it publishes no port: only the broker reaches it, as http://joinly:8000/mcp/ on this
+  # project's network.
+  joinly:
+    image: ghcr.io/joinly-ai/joinly:v0.5.4   # the tag DEPLOY.md runs; 3.7 GB, so the first pull takes a while
+    profiles: [meetings]
+    restart: unless-stopped
+    shm_size: "1gb"   # Chromium's shared memory; Docker's default 64 MB is known to crash it
+    # Zoom shows no speaker names without our fix (joinly-ai/joinly#187). To use it, download the pinned file
+    # beside this one as DEPLOY.md says, then uncomment these two lines (a missing file would stop the bot):
+    # volumes:
+    #   - ./zoom.py:/app/.venv/lib/python3.12/site-packages/joinly/providers/browser/platforms/zoom.py:ro
 
   caddy:
     image: caddy:2.10-alpine
