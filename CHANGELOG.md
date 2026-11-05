@@ -2,6 +2,21 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.52.0 (2026-11-05)
+
+### Added
+
+- **You can choose the model that turns a call into text, and run the meeting bot on a GPU.** `[meeting] stt_model` in `config.toml` (or `SWITCHBOARD_MEETING_STT_MODEL`, where there is no file) takes `base`, `small`, `distil-large-v3` or `large-v3-turbo`. Unset, joinly keeps the model it has always used, `base` on a CPU. Any other value stops the broker at start and names the four. In a test with 24 spoken lines, `large-v3-turbo` got 2.4% of the words wrong, and `base` got 4.3%. The big models are too slow on a CPU for a live call, so `large-v3-turbo` is for a GPU: Compose has a `meetings-gpu` profile, the Helm chart has `meetings.gpu.enabled` and `meetings.sttModel`, and the Kubernetes patch has the same as a comment. A model you name is downloaded on the first call (about 1.6 GB for `large-v3-turbo`), so the deploy guide (`docs/DEPLOY.md`, "The speech model, and a GPU") has the cache volume and the command that fetches it ahead of time.
+
+### Changed
+
+- **The meeting bot asks joinly for longer pieces of speech.** joinly cuts a call into pieces after 0.2 s of quiet, once a piece holds 0.4 s, and that cut "Hi Codex," off from the request after it, so it was misheard ("High Codex") and did not wake Codex. switchboard now sends 0.35 s and 1.0 s, two arguments joinly's speech-to-text has always had, so it works with any joinly. On the recorded call of #617, together with the first-word fix below, every call-out woke the right agent (17 of 17), at the cost of about 0.14 s more before a line appears.
+
+### Fixed
+
+- **A call line that is only the speech-to-text's hint list no longer wakes an agent or shows up in the room.** The transcriber sometimes writes back the names it was told to listen for, such as "Claude switchboard", an agent's name and the bot's own. A two-word echo like that was taken for a call-out and woke the agent for nothing, which spent one of the room's wakes. Any longer echo woke nobody but was still posted as a call line, where people and agents read it as part of the call. A line made only of agent names and the bot's own name is now dropped: it is not posted and wakes nobody. A name alone ("Claude one") is still a call-out. When real words follow an echoed list, as in "Claude-1 Claude switchboard Claude one can you hear me?", the agent is still woken and the line is posted without the echoed names. Found while recording the meetings demo on a real Zoom call (#616).
+- **A call line no longer loses its first word, once you mount a file over joinly's.** joinly's voice detection flags speech late, a median of 73 ms after it begins in a recorded call and up to 378 ms, and it kept only 32 ms from before. So the speech-to-text model got the first word cut off, and the room's agent names, which are its hotwords, could turn the clipped word into "Claude": "Our upload page keeps failing on big files" became "Claude page keeps failing…" and woke Claude for nothing, and "Claude, what is the upload limit…" lost its name and woke nobody. The fix, [joinly-ai/joinly#188](https://github.com/joinly-ai/joinly/pull/188), a change to joinly's transcription controller, keeps 0.3 s of the audio from before each utterance and passes it on with it, which adds no waiting. Replayed through joinly's own code on the recorded call of #617 (24 lines, 17 of them call-outs), it took the right agent from 14.8 of 17 call-outs to 16, the false wakes from 1 to 0, and the words wrong from 8.8% to 3.5%, with about 0.01 s more delay. It is not in a joinly release yet, so it is a file you mount over the image's copy, read-only, from a commit of our fork: Compose has a commented line for it, the Helm chart has `meetings.prerollFix.configMap`, and Kubernetes has a third patch, `joinly-preroll-fix.yaml`. `docs/DEPLOY.md` ("First words of a call line") has the commands and the reason. Nothing needs setting in switchboard, and joinly without the file works as before. The meeting self-test now mounts it on both bots.
+
 ## 0.51.1 (2026-11-05)
 
 ### Fixed
