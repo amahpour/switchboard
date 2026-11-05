@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import secrets
+import socket
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
@@ -29,6 +30,7 @@ from test_people import join_as_bob, set_up
 from switchboard.broker.auth import WebOrigin
 from switchboard.config import Config, MeetingCfg
 from switchboard.meeting import hosted, keys
+from switchboard.meeting.speech import VOICE_HINT
 
 KEY = "sbc_" + secrets.token_hex(32)
 H = keys.key_hash(KEY)
@@ -292,6 +294,55 @@ async def test_a_waiting_poll_is_answered_the_moment_an_agent_speaks(world: Worl
         await codex.close()
 
 
+async def test_a_relay_that_hangs_up_mid_poll_ends_its_poll_and_loses_no_line(world: World) -> None:
+    """A long poll whose relay closed the connection is closed at once (as a ``wait()`` is, §49.4), before
+    it is given a line nobody will read: the line an agent speaks next goes to the relay's next poll. Fails
+    if the dead poll stays waiting (and would take the line), or the line is lost."""
+    w = world
+    claude, codex = await hosted_call(w)
+    try:
+        w.command("/meeting voice on")
+        body = json.dumps({"wait": 25}).encode()
+        request = (
+            f"POST {SPEECH} HTTP/1.1\r\nHost: switchboard.localhost:{w.b.port}\r\n"
+            f"Authorization: Bearer {KEY}\r\nContent-Type: application/json\r\n"
+            f"Content-Length: {len(body)}\r\n\r\n"
+        ).encode() + body
+        with socket.create_connection(("127.0.0.1", w.b.port)) as conn:
+            conn.sendall(request)
+            await until(lambda: poll_waiting(w), what="the poll to be waiting")
+        await until(lambda: not poll_waiting(w), what="the hung-up poll to be closed")
+        await claude.say("#build", "@call Still here.")
+        assert w.relay.speech().json()["lines"] == ["Still here."]
+    finally:
+        await claude.close()
+        await codex.close()
+
+
+async def test_a_batch_with_a_pushed_call_line_says_voice_is_on_while_it_is(world: World) -> None:
+    """The one line that tells agents they may be heard (§52) is added to a batch with a call line while
+    the room's voice is on, for a hosted call as for the broker's own bot. Fails if the engine only asks
+    the bot."""
+    w = world
+    claude, codex = await hosted_call(w)
+    try:
+        w.command("/meeting voice on")
+        waiting = codex.wait_task("#build", timeout_s=30)
+        w.relay.push([seg("Codex, are you there?", 0, 2), seg("hello", 10, 11)])
+        got = await asyncio.wait_for(waiting, 10)
+        assert "are you there" in got["text"] and VOICE_HINT in got["text"]
+        w.command("/meeting voice off")
+        waiting = codex.wait_task("#build", timeout_s=30)
+        w.tick(1.1)
+        w.relay.push([seg("Codex, again", 20, 22), seg("bye", 30, 31)])  # "hello" is posted first
+        w.tick(1.1)  # and a second later the call-out
+        got = await asyncio.wait_for(waiting, 10)
+        assert "again" in got["text"] and VOICE_HINT not in got["text"]
+    finally:
+        await claude.close()
+        await codex.close()
+
+
 # ------------------------------------------------------------------------------------------- ending
 async def test_ending_the_call_refuses_the_next_push_answers_the_poll_ended_and_keeps_the_lines_labelled(
     world: World,
@@ -328,6 +379,33 @@ async def test_ending_the_call_refuses_the_next_push_answers_the_poll_ended_and_
         assert (await host(claude, key_hash=keys.key_hash(newer)))["ok"]
         assert w.relay.push([]).status_code == 410  # the old key
         assert Relay(w.b, newer).push([]).status_code == 200
+    finally:
+        await claude.close()
+        await codex.close()
+
+
+async def test_closing_the_room_ends_its_hosted_call(world: World) -> None:
+    """``/close`` ends the room's hosted call as it ends the broker's own bot's: what was being said is posted
+    first, the key is refused from then on, a waiting poll is answered ``ended`` and the room's last notice
+    says why. Fails if a closed room keeps a call a relay can push into, or the end is left to the bridge,
+    which knows nothing of the call's line or its poll."""
+    w = world
+    claude, codex = await hosted_call(w)
+    try:
+        row = w.hosted_row()
+        w.relay.push([seg("the last words", 0, 1)])  # still being assembled
+        poll = asyncio.get_running_loop().run_in_executor(None, lambda: w.relay.speech(wait=25))
+        await until(lambda: poll_waiting(w), what="the poll to be waiting")
+        w.command("/close")
+        assert (await asyncio.wait_for(poll, 10)).json()["ended"] is True
+        assert w.relay.push([seg("into a closed room", 0, 1)]).status_code == 410
+        ended = w.hosted_row()
+        assert ended["state"] == "ended"
+        con = sqlite3.connect(w.b.paths.db)
+        said = [r[0] for r in con.execute("SELECT text FROM messages WHERE room_id=?", (row["room_id"],))]
+        con.close()
+        assert "The call ended because the room closed." in said and "the last words" in said
+        assert ended["lines_pushed"] == 1
     finally:
         await claude.close()
         await codex.close()

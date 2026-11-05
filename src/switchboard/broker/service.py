@@ -896,9 +896,10 @@ class RoomService:
                 },
             )
             self.store.rename_room(room.id, new, expect=room.name)
-        if self.hosted_calls is not None and self.hosted_calls.stop(room.id, "the room closed"):
-            pass  # a call hosted on a person's machine: ended, its key refused from now on, and told
-        elif self.meetings is not None:
+        # a call hosted on a person's machine is ended here (its key refused from then on, and the room told);
+        # when there is none, the broker's own bot is asked, as before
+        ended_hosted = self.hosted_calls is not None and self.hosted_calls.stop(room.id, "the room closed")
+        if not ended_hosted and self.meetings is not None:
             self.meetings.stop(room.id, "the room closed")
         for msg in posted:
             self.hub.message(room.name, message_dict(msg))

@@ -450,6 +450,25 @@ def test_ending_posts_what_is_left_refuses_the_key_and_leaves_the_lines_with_the
     assert len(w.service.notices) == 2  # hosting, and live: a person's /meeting leave says the rest itself
 
 
+async def test_a_request_that_waited_for_its_body_is_refused_when_the_call_ended_meanwhile(w: World) -> None:
+    """A request is checked at the door and then waits for its body, and the call may end in between. What it
+    holds is then the call as it was: it must be refused, and must not bring the ended call's memory back (a
+    ghost that would still say voice is on, and post lines under the ended call). Fails if a push or a poll
+    with the old row is taken."""
+    w.open()
+    w.calls.push(w.row(), [])
+    stale = w.row()
+    w.calls.end(stale, "leave")
+    for attempt in (lambda: w.calls.push(stale, [seg("too late", 0, 1)]), lambda: w.calls.speech(stale, 0)):
+        with pytest.raises(Refused) as e:
+            result = attempt()
+            if asyncio.iscoroutine(result):
+                await result
+        assert (e.value.status, e.value.code) == (410, "ended")
+    assert w.calls._calls == {} and w.calls._rooms == {}
+    assert w.texts() == []
+
+
 def test_stopping_a_room_with_no_hosted_call_does_nothing_and_says_so(w: World) -> None:
     """The room service asks the hosted calls first when a room closes, then the broker's own bot: this
     answers False for a room whose call is the bot's or none. Fails if it ends the bot's call."""

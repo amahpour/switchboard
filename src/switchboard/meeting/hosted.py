@@ -283,6 +283,7 @@ class HostedCalls:
     def push(self, row: Meeting, segments: list[Segment]) -> dict[str, Any]:
         """Take a checked push. The first one, even an empty one, marks the call live. Segments are joined
         into lines, and at most one line is posted now (the rest wait their turn, ``tick`` posts them)."""
+        row = self._fresh(row)
         now = self.state.clock.now()
         st = self._state(row)
         st.last_seen = now
@@ -300,6 +301,14 @@ class HostedCalls:
             self._enqueue(row, st, line)
         self._drain(row, st, now)
         return {"accepted": taken, "duplicate": len(segments) - taken, "ended": False}
+
+    def _fresh(self, row: Meeting) -> Meeting:
+        """The call as it is now. A request is checked at the door and then waits for its body, and the call
+        may end meanwhile: it must not be taken in (or bring the call's memory back) once it is over."""
+        now = self.state.store.meeting_by_id(row.id)
+        if now is None or now.state == "ended":
+            raise Refused(410, "ended", "the call has ended")
+        return now
 
     def _go_live(self, row: Meeting, st: _Call) -> None:
         st.live = True
@@ -384,6 +393,7 @@ class HostedCalls:
         transcriber's hotwords, the voice switch and whether the call is over. Answered at once when there
         is a line to say or the call ended, and otherwise after ``wait_s`` seconds, or when the voice
         switch changes or a newer poll comes. Only the newest poll is given lines."""
+        row = self._fresh(row)
         now = self.state.clock.now()
         st = self._state(row)
         st.last_seen = now

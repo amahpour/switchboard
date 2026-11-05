@@ -17,6 +17,7 @@ that was never registered is ``unknown_key`` (401), one whose machine's sign-in 
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import TYPE_CHECKING, Any
 
@@ -85,6 +86,13 @@ class _CallRoute:
         return got.call, body
 
 
+async def _hung_up(receive: Receive) -> None:
+    """Return when the relay closes the request. The body was read whole, so the next ``receive`` answers
+    ``http.disconnect`` only once the connection is gone, as the listener's does (§49.4)."""
+    while (await receive())["type"] != "http.disconnect":
+        pass
+
+
 async def _refused(send: Send, e: Refused) -> None:
     extra = (b"retry-after", str(max(1, int(e.retry_after + 0.999))).encode()) if e.retry_after else None
     await _reply(send, e.status, {"error": e.code, "message": e.message}, *([extra] if extra else []))
@@ -108,7 +116,8 @@ class MeetingPush(_CallRoute):
 
 
 class MeetingSpeech(_CallRoute):
-    """``/mcp/meeting/speech``: the long poll for what to say, the hints and the end (§54)."""
+    """``/mcp/meeting/speech``: the long poll for what to say, the hints and the end (§54). A relay that
+    hangs up ends its poll at once, before it is given a line it will not read."""
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         got = await self.enter(scope, receive, send)
@@ -116,7 +125,21 @@ class MeetingSpeech(_CallRoute):
             return
         call, body = got
         try:
-            res = await self.state.hosted_calls.speech(call, wait_in(body))
+            poll = asyncio.ensure_future(self.state.hosted_calls.speech(call, wait_in(body)))
+        except Refused as e:
+            await _refused(send, e)
+            return
+        gone = asyncio.ensure_future(_hung_up(receive))
+        try:
+            await asyncio.wait({poll, gone}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            gone.cancel()
+            poll.cancel()  # a no-op once it has answered
+            await asyncio.gather(poll, gone, return_exceptions=True)
+        if poll.cancelled():
+            return  # the relay is gone: nobody to answer
+        try:
+            res = poll.result()
         except Refused as e:
             await _refused(send, e)
             return
